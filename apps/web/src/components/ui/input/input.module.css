@@ -1,0 +1,131 @@
+/*
+ * Shared look for text-like controls (Input, Textarea, NativeSelect).
+ * The 1px boundary uses --color-border-strong (>= 3:1, WCAG 1.4.11); focus
+ * swaps it for the brand ring plus a soft translucent halo.
+ */
+.control {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: var(--control-height-md);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-control);
+  background-color: var(--color-control);
+  color: var(--color-text);
+  box-shadow: var(--shadow-0);
+  font-family: inherit;
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-normal);
+  outline: none;
+  transition:
+    border-color var(--motion-duration-fast) var(--motion-ease-out),
+    box-shadow var(--motion-duration-fast) var(--motion-ease-out),
+    background-color var(--motion-duration-fast) var(--motion-ease-out);
+
+  &::placeholder {
+    color: var(--color-text-subtle);
+    opacity: 1;
+  }
+
+  @media (hover: hover) {
+    &:hover:not(:disabled, :focus) {
+      border-color: var(--color-border-hover);
+    }
+  }
+
+  &:focus,
+  &:focus-visible {
+    outline: none;
+    border-color: var(--color-focus-ring);
+    box-shadow: var(--shadow-focus);
+  }
+
+  &:disabled {
+    background-color: var(--color-control-disabled);
+    color: var(--color-text-subtle);
+    cursor: not-allowed;
+  }
+
+  &:read-only:not(select) {
+    background-color: var(--color-surface-sunken);
+  }
+
+  &[aria-invalid="true"],
+  &[data-invalid] {
+    border-color: var(--color-danger);
+
+    &:focus {
+      box-shadow:
+        0 0 0 1px var(--color-danger),
+        0 0 0 4px color-mix(in srgb, var(--color-danger) 18%, transparent);
+    }
+  }
+
+  &[data-size="sm"] {
+    height: var(--control-height-sm);
+    padding: 0 0.625rem;
+    font-size: var(--font-size-sm);
+  }
+
+  @media (pointer: coarse) {
+    font-size: var(--font-size-lg);
+  }
+}
+
+.textarea {
+  height: auto;
+  min-height: 5rem;
+  padding-block: var(--space-2);
+  resize: vertical;
+}
+
+/* Input with a leading icon */
+.adorned {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+
+  & .control {
+    padding-inline-start: 2.125rem;
+  }
+}
+
+.adornment {
+  position: absolute;
+  inset-inline-start: 0.75rem;
+  display: inline-flex;
+  color: var(--color-text-subtle);
+  pointer-events: none;
+
+  & svg {
+    width: 1rem;
+    height: 1rem;
+  }
+}
+
+/* Native select */
+.selectWrap {
+  position: relative;
+  display: block;
+  width: 100%;
+}
+
+.select {
+  appearance: none;
+  padding-inline-end: 2.25rem;
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+
+.chevron {
+  position: absolute;
+  inset-inline-end: 0.75rem;
+  top: 50%;
+  width: 1rem;
+  height: 1rem;
+  translate: 0 -50%;
+  color: var(--color-text-muted);
+  pointer-events: none;
+}

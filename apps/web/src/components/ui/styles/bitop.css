@@ -1,0 +1,16 @@
+/*
+ * bitop-ui stylesheet entry. Import it once at your app entry, before any
+ * component or page CSS:
+ *
+ *   import "@/components/ui/styles/bitop.css";
+ *   // optional brand override, after bitop.css:
+ *   import "@/components/ui/themes/uf.css";
+ *
+ * Order matters: tokens, then the default theme, then the layered base
+ * styles. Component CSS Modules are unlayered, so they always win over the
+ * reset/base layers in global.css.
+ */
+@import "@fontsource-variable/inter";
+@import "./tokens.css";
+@import "../themes/neutral.css";
+@import "./global.css";

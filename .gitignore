@@ -1,0 +1,13 @@
+/target/
+.env
+.env.*
+!.env.example
+!.env.demo.example
+node_modules/
+apps/web/dist/
+*.tsbuildinfo
+.DS_Store
+coverage/
+*.log
+*.dump
+/image*.png

@@ -1,0 +1,73 @@
+.label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  padding: var(--space-2) var(--space-2) var(--space-2);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-snug);
+  color: var(--color-text-muted);
+
+  & strong {
+    color: var(--color-text);
+    font-weight: var(--font-weight-medium);
+  }
+}
+
+/* Checkbox / radio items: a fixed indicator column keeps labels aligned
+   whether or not the item is checked. The checked state is also exposed as
+   aria-checked, so it is never conveyed by the mark alone. */
+.indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+}
+
+.indicatorMark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.selectable .indicatorMark svg {
+  color: var(--color-text);
+}
+
+.radioDot {
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: var(--radius-full);
+  background-color: var(--color-text);
+}
+
+.selectable[data-disabled] .indicatorMark svg {
+  color: currentColor;
+}
+
+.selectable[data-disabled] .radioDot {
+  background-color: currentColor;
+}
+
+.submenuTrigger {
+  &[data-popup-open]:not([data-highlighted]) {
+    background-color: var(--color-surface-hover);
+  }
+}
+
+.chevron {
+  margin-inline-start: auto;
+}
+
+.chevron:dir(rtl) {
+  transform: scaleX(-1);
+}

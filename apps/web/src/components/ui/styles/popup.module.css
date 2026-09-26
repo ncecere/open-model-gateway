@@ -1,0 +1,117 @@
+/*
+ * Shared surface styles for floating UI: Menu, Select, Popover, Command palette.
+ * Uses Base UI's data-starting-style / data-ending-style for enter/exit
+ * transitions and --transform-origin so popups grow from their anchor.
+ */
+.positioner {
+  z-index: var(--z-popover);
+  outline: 0;
+}
+
+.popup {
+  box-sizing: border-box;
+  min-width: 12rem;
+  max-height: var(--available-height);
+  overflow-y: auto;
+  padding: var(--space-1);
+  border-radius: var(--radius-popover);
+  background-color: var(--color-surface-raised);
+  color: var(--color-text);
+  box-shadow: var(--shadow-3);
+  font-family: var(--font-family-sans);
+  font-feature-settings: var(--font-features);
+  font-size: var(--font-size-md);
+  outline: 0;
+  transform-origin: var(--transform-origin);
+  transition:
+    opacity var(--motion-duration-normal) var(--motion-ease-out),
+    transform var(--motion-duration-normal) var(--motion-ease-out);
+
+  &[data-starting-style],
+  &[data-ending-style] {
+    opacity: 0;
+    transform: scale(0.97) translateY(-4px);
+  }
+
+  &[data-side="top"][data-starting-style],
+  &[data-side="top"][data-ending-style] {
+    transform: scale(0.97) translateY(4px);
+  }
+
+  &[data-instant] {
+    transition: none;
+  }
+}
+
+.item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 2rem;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-2);
+  color: var(--color-text);
+  font-size: var(--font-size-md);
+  line-height: 1.25rem;
+  text-decoration: none;
+  cursor: default;
+  user-select: none;
+  outline: 0;
+  scroll-margin-block: var(--space-1);
+
+  & svg {
+    width: 1rem;
+    height: 1rem;
+    flex-shrink: 0;
+    color: var(--color-text-muted);
+  }
+
+  &[data-highlighted] {
+    background-color: var(--color-surface-active);
+  }
+
+  &[data-disabled] {
+    color: var(--color-text-subtle);
+    cursor: not-allowed;
+  }
+}
+
+.itemDanger {
+  color: var(--color-danger-text);
+
+  & svg {
+    color: currentColor;
+  }
+
+  &[data-highlighted] {
+    background-color: var(--color-danger-subtle);
+  }
+}
+
+.itemShortcut {
+  margin-inline-start: auto;
+  padding-inline-start: var(--space-4);
+  color: var(--color-text-subtle);
+  font-size: var(--font-size-xs);
+  letter-spacing: 0.02em;
+}
+
+.separator {
+  height: 1px;
+  margin: var(--space-1) calc(var(--space-1) * -1);
+  background-color: var(--color-border);
+}
+
+.groupLabel {
+  padding: var(--space-2) var(--space-2) var(--space-1);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-subtle);
+  cursor: default;
+  user-select: none;
+}
+
+.popup[data-width="trigger"] {
+  min-width: var(--anchor-width);
+}

@@ -1,0 +1,90 @@
+/*
+ * bitop-ui structural tokens: spacing, radii, typography, sizes, z-index and
+ * motion. Colours and shadows live in a theme file (themes/neutral.css is the
+ * default) so that re-theming never touches layout.
+ *
+ * Components only read semantic tokens (--color-*, --space-*, --radius-*, …),
+ * never --palette-* primitives or raw hex values.
+ */
+
+:root {
+  /* ---------- Spacing (4px base, 8px rhythm) ---------- */
+  --space-0: 0;
+  --space-1: 0.25rem; /* 4 */
+  --space-2: 0.5rem; /* 8 */
+  --space-3: 0.75rem; /* 12 */
+  --space-4: 1rem; /* 16 */
+  --space-5: 1.25rem; /* 20 */
+  --space-6: 1.5rem; /* 24 */
+  --space-7: 1.75rem; /* 28 */
+  --space-8: 2rem; /* 32 */
+  --space-9: 2.5rem; /* 40 */
+  --space-10: 3rem; /* 48 */
+  --space-11: 4rem; /* 64 */
+  --space-12: 5rem; /* 80 */
+
+  /* ---------- Radii ---------- */
+  --radius-1: 4px;
+  --radius-2: 6px;
+  --radius-3: 8px;
+  --radius-4: 12px;
+  --radius-5: 16px;
+  --radius-full: 9999px;
+  --radius-control: var(--radius-3); /* buttons, inputs */
+  --radius-card: var(--radius-4); /* cards, dialogs */
+  --radius-popover: var(--radius-3);
+  --radius-pill: var(--radius-full);
+
+  /* ---------- Typography ---------- */
+  --font-family-sans: "Inter Variable", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-family-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --font-features: "cv11", "ss01";
+
+  --font-size-xs: 0.75rem; /* 12 */
+  --font-size-sm: 0.8125rem; /* 13 secondary / meta */
+  --font-size-md: 0.875rem; /* 14 base UI text */
+  --font-size-lg: 1rem; /* 16 */
+  --font-size-xl: 1.25rem; /* 20 */
+  --font-size-2xl: 1.5rem; /* 24 */
+  --font-size-3xl: 1.875rem; /* 30 */
+
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  --line-height-tight: 1.2;
+  --line-height-snug: 1.35;
+  --line-height-normal: 1.5;
+
+  --letter-spacing-tight: -0.02em;
+  --letter-spacing-snug: -0.01em;
+  --letter-spacing-caps: 0.06em;
+
+  /* ---------- Sizes ---------- */
+  --control-height-sm: 2rem; /* 32 */
+  --control-height-md: 2.25rem; /* 36 */
+  --control-height-lg: 2.5rem; /* 40 */
+  --content-max-width: 75rem; /* 1200 */
+  --sidebar-width: 15rem;
+  --sidebar-width-collapsed: 3.5rem;
+  --topbar-height: 3.5rem;
+
+  /* ---------- Z-index ---------- */
+  --z-sticky: 10;
+  --z-sidebar: 50;
+  --z-dropdown: 1000;
+  --z-overlay: 1100;
+  --z-modal: 1200;
+  --z-popover: 1300; /* above modals so menus/selects inside dialogs work */
+  --z-toast: 1400;
+  --z-tooltip: 1500;
+
+  /* ---------- Motion ---------- */
+  --motion-duration-fast: 120ms;
+  --motion-duration-normal: 160ms;
+  --motion-duration-slow: 180ms;
+  --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+}

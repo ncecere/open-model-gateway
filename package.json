@@ -1,0 +1,17 @@
+{
+  "name": "open-model-gateway",
+  "private": true,
+  "workspaces": ["apps/web"],
+  "engines": { "node": ">=22.12.0" },
+  "devDependencies": {
+    "openai": "^7.23.0",
+    "@anthropic-ai/sdk": "^0.128.0"
+  },
+  "scripts": {
+    "dev:web": "npm run dev --workspace @omg/web",
+    "build:web": "npm run build --workspace @omg/web",
+    "typecheck:web": "npm run typecheck --workspace @omg/web",
+    "test:web": "npm run test --workspace @omg/web",
+    "test:demo": "node --test tests/demo-oidc.test.mjs"
+  }
+}

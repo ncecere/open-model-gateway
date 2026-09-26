@@ -1,0 +1,148 @@
+/*
+ * bitop-ui base layer: a small modern reset, base typography,
+ * focus ring, utilities and reduced-motion handling.
+ *
+ * Everything lives in cascade layers, so these rules have the lowest
+ * priority. Component and page CSS Modules are unlayered and therefore
+ * always win.
+ */
+@layer ui-reset, ui-base, ui-utilities;
+
+@layer ui-reset {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  * {
+    margin: 0;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    min-height: 100dvh;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  img,
+  picture,
+  video,
+  canvas,
+  svg {
+    display: block;
+    max-width: 100%;
+  }
+
+  input,
+  button,
+  textarea,
+  select {
+    font: inherit;
+    color: inherit;
+  }
+
+  p,
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    overflow-wrap: break-word;
+  }
+
+  table {
+    border-collapse: collapse;
+  }
+}
+
+@layer ui-base {
+  html {
+    font-family: var(--font-family-sans);
+    font-feature-settings: var(--font-features);
+    font-size: 100%;
+    line-height: var(--line-height-normal);
+    color: var(--color-text);
+    background-color: var(--color-bg);
+  }
+
+  body {
+    font-size: var(--font-size-md);
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    line-height: var(--line-height-tight);
+    letter-spacing: var(--letter-spacing-snug);
+    font-weight: var(--font-weight-semibold);
+  }
+
+  code,
+  kbd,
+  samp,
+  pre {
+    font-family: var(--font-family-mono);
+    font-size: 0.9em;
+  }
+
+  ::selection {
+    background-color: var(--color-primary-subtle);
+    color: var(--color-text);
+  }
+
+  /* One focus style everywhere: a solid ring in the accent colour (>= 3:1). */
+  :focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 2px;
+  }
+
+  :focus:not(:focus-visible) {
+    outline: none;
+  }
+}
+
+@layer ui-utilities {
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/*
+ * Reduced motion. For `!important` declarations the cascade order of layers is
+ * reversed: an important rule in the lowest layer beats important rules in
+ * higher layers and in unlayered CSS, so this reliably switches off every
+ * component transition and animation.
+ */
+@layer ui-reset {
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}

@@ -1,0 +1,114 @@
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.labelRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.label {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-snug);
+  color: var(--color-text);
+
+  &[data-disabled] {
+    color: var(--color-text-muted);
+  }
+}
+
+.labelHint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+
+.description {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-snug);
+  color: var(--color-text-muted);
+}
+
+.error {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.375rem;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-snug);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-danger-text);
+  transition: opacity var(--motion-duration-fast) var(--motion-ease-out);
+
+  &[data-starting-style],
+  &[data-ending-style] {
+    opacity: 0;
+  }
+}
+
+.errorIcon {
+  width: 0.875rem;
+  height: 0.875rem;
+  margin-top: 0.1875rem;
+  flex-shrink: 0;
+}
+
+.fieldset {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.legend {
+  padding: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-snug);
+  color: var(--color-text);
+}
+
+.fieldsetBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+
+  &[data-gap="sm"] {
+    gap: var(--space-3);
+  }
+
+  &[data-gap="lg"] {
+    gap: var(--space-6);
+  }
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding-top: var(--space-1);
+
+  &[data-align="start"] {
+    justify-content: flex-start;
+  }
+
+  &[data-align="between"] {
+    justify-content: space-between;
+  }
+}

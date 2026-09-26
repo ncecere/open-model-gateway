@@ -1,0 +1,139 @@
+.wrap {
+  width: 100%;
+  overflow-x: auto;
+
+  &[data-scroll] {
+    overflow: auto;
+  }
+
+  &[data-overflowing]:focus-visible {
+    outline-offset: -2px;
+  }
+
+  &[data-framed] {
+    border-radius: var(--radius-card);
+    background-color: var(--color-surface);
+    box-shadow: var(--shadow-2);
+  }
+}
+
+.table {
+  --cell-py: 0.75rem;
+  --cell-px: var(--space-4);
+
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--font-size-md);
+  color: var(--color-text);
+
+  &[data-density="compact"] {
+    --cell-py: 0.4375rem;
+    --cell-px: var(--space-3);
+  }
+}
+
+.caption {
+  padding: var(--space-3) var(--cell-px);
+  text-align: start;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-muted);
+}
+
+.th {
+  padding: 0.5625rem var(--cell-px);
+  border-bottom: 1px solid var(--color-border);
+  background-color: var(--color-surface-sunken);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: 0.01em;
+  text-align: start;
+  white-space: nowrap;
+
+  &[data-numeric] {
+    text-align: end;
+  }
+
+  &:first-child {
+    padding-inline-start: var(--space-5);
+  }
+
+  &:last-child {
+    padding-inline-end: var(--space-5);
+  }
+}
+
+.table[data-sticky] .th {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+}
+
+.tr {
+  transition: background-color var(--motion-duration-fast) var(--motion-ease-out);
+
+  &[data-selected] {
+    background-color: var(--color-primary-subtle);
+  }
+}
+
+.table tbody tr:hover {
+  background-color: var(--color-surface-hover);
+}
+
+.td,
+.rowHeader {
+  padding: var(--cell-py) var(--cell-px);
+  border-bottom: 1px solid var(--color-border-muted);
+  vertical-align: middle;
+  text-align: start;
+
+  &:first-child {
+    padding-inline-start: var(--space-5);
+  }
+
+  &:last-child {
+    padding-inline-end: var(--space-5);
+  }
+}
+
+.table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.td {
+  &[data-numeric] {
+    text-align: end;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  &[data-muted] {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+  }
+
+  &[data-nowrap] {
+    white-space: nowrap;
+  }
+}
+
+.rowHeader {
+  font-weight: var(--font-weight-medium);
+}
+
+.table tbody tr.emptyRow:hover {
+  background-color: transparent;
+}
+
+.emptyCell {
+  padding: 0;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-1);
+}

@@ -1,0 +1,76 @@
+/* Initials sit on soft tints; every text/tint pair here is >= 4.5:1. */
+.avatar {
+  --avatar-size: 2rem;
+  --avatar-bg: var(--color-primary-subtle);
+  --avatar-fg: var(--color-primary-subtle-text);
+
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: var(--avatar-size);
+  height: var(--avatar-size);
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background-color: var(--avatar-bg);
+  box-shadow: inset 0 0 0 1px var(--color-border);
+  color: var(--avatar-fg);
+  font-size: calc(var(--avatar-size) * 0.38);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.01em;
+  line-height: 1;
+  user-select: none;
+
+  &[data-shape="square"] {
+    border-radius: calc(var(--avatar-size) * 0.25);
+  }
+
+  &[data-size="xs"] {
+    --avatar-size: 1.25rem;
+  }
+  &[data-size="sm"] {
+    --avatar-size: 1.5rem;
+  }
+  &[data-size="lg"] {
+    --avatar-size: 2.5rem;
+  }
+  &[data-size="xl"] {
+    --avatar-size: 3.5rem;
+  }
+
+  &[data-hue="2"] {
+    --avatar-bg: var(--color-success-subtle);
+    --avatar-fg: var(--color-success-text);
+  }
+  &[data-hue="3"] {
+    --avatar-bg: var(--color-warning-subtle);
+    --avatar-fg: var(--color-warning-text);
+  }
+  &[data-hue="4"] {
+    --avatar-bg: var(--color-danger-subtle);
+    --avatar-fg: var(--color-danger-text);
+  }
+  &[data-hue="5"] {
+    --avatar-bg: var(--color-neutral-subtle);
+    --avatar-fg: var(--color-neutral-text);
+  }
+  &[data-hue="6"] {
+    --avatar-bg: var(--color-info-subtle);
+    --avatar-fg: var(--color-info-text);
+  }
+}
+
+.image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
