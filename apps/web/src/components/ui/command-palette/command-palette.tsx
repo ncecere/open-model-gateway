@@ -32,8 +32,6 @@ export type Command = {
 export type CommandGroup = { label: string; items: Command[] };
 
 export type CommandPaletteProps = {
-  /** Gateway composition hook for scoped accessible contrast. */
-  className?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   groups: CommandGroup[];
@@ -47,6 +45,8 @@ export type CommandPaletteProps = {
    * returning the new page's heading when a command navigates.
    */
   finalFocus?: BaseDialog.Popup.Props["finalFocus"];
+  /** Class for the dialog popup, merged with the built-in styles (e.g. to scope token overrides). */
+  className?: string;
 };
 
 type Group = { value: string; items: Command[] };
@@ -59,7 +59,6 @@ function matches(item: Command, query: string): boolean {
 }
 
 export function CommandPalette({
-  className,
   open,
   onOpenChange,
   groups,
@@ -67,6 +66,7 @@ export function CommandPalette({
   label = "Command palette",
   emptyText = "No results found.",
   finalFocus,
+  className,
 }: CommandPaletteProps) {
   const hintId = useId();
   const items: Group[] = groups.filter((g) => g.items.length > 0).map((g) => ({ value: g.label, items: g.items }));

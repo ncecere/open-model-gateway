@@ -1,0 +1,6 @@
+{
+  "aliases": {
+    "ui": "@/components/ui",
+    "lib": "@/lib"
+  }
+}
