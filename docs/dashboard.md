@@ -8,7 +8,7 @@ For passwordless local exploration with fixed Platform Admin/Organization Admin/
 
 The dashboard checks `/api/v1/me`. A 401 displays the OIDC sign-in page; when OIDC is disabled, it explains that an operator must configure authentication. Signing out posts to the logout endpoint with the readable `omg_csrf` cookie in `X-CSRF-Token`. The browser supplies Origin and session cookies.
 
-The dashboard uses locally vendored Bitop UI components and its neutral theme. Its collapsible sidebar, Workspace/Admin mode switch, permission-scoped navigation, breadcrumbs, header jump search, and sidebar account menu follow the Open RAG System layout design, without its API or business logic. See [Bitop provenance and refresh instructions](bitop-ui.md).
+The dashboard uses locally vendored Bitop UI components and its neutral theme. Its collapsible sidebar, Workspace/Admin mode switch, permission-scoped navigation, breadcrumbs, header jump search, and sidebar account menu follow the Open RAG System layout design, without its API or business logic. See [Bitop sources and refresh instructions](bitop-ui.md).
 
 The top-right **Search or jump to…** button (⌘K / Ctrl+K) searches accessible pages, organizations, teams, and the user's own personal workspaces. Arrow keys and Enter select results; Escape closes it. Search is local to the current session inventory, not a search of users, secrets, prompts, or activity. **Refresh access** is available in search and the sidebar account menu. There is no full-width bottom footer.
 

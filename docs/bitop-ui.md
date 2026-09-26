@@ -2,13 +2,9 @@
 
 ## Sources and ownership
 
-This dashboard uses **copy-and-own source**, not a published Bitop npm package or network registry endpoint. The source is the local, read-only checkout:
+This dashboard uses **copy-and-own source**, not a published Bitop npm package or network registry endpoint. The source is a local, read-only bitop-ui checkout (by default `../../../../typescript/bitop-ui` from `apps/web`, i.e. `~/projects/typescript/bitop-ui`); components are copied from its `registry/bitop/ui/` and `registry/bitop/lib/` with bitop-ui's own installer (`packages/cli` in that checkout), which only reads the checkout.
 
-- `/Users/nicholascecere/projects/typescript/bitop-ui/registry.json`
-- Component sources under that checkout’s `registry/bitop/ui/` and `registry/bitop/lib/`.
-- Registry SHA-256 at import: `abeabd2d5c01a7c69a27d86d8e902e29a8342c5ba7d4b9f30e17a9693b32be38`.
-
-`apps/web/bitop-provenance.json` records selected items, recursive registry dependencies, external package dependencies, source paths, target paths, original SHA-256 hashes, and copied SHA-256 hashes. The registry homepage contains a placeholder; it is deliberately not used as a release or installation URL. No source checkout files were changed. The updated source supplies an MIT license, copyright © 2026 Nicholas Cecere. Its notice is copied verbatim to `apps/web/src/components/ui/LICENSE` and included in the provenance manifest; this resolves the earlier missing-upstream-license caveat. It does not assign a license to unrelated gateway code.
+`apps/web/bitop-lock.json` (written by the installer) records every installed item and the SHA-256 of each file it wrote; `apps/web/src/lib/bitop-lock.test.ts` fails if a vendored file no longer matches its recorded hash, so local edits or partial refreshes can't slip in unnoticed. `apps/web/components.json` holds only the import aliases: no registry URL is configured, and the checkout path is passed on each run with `--registry`. The registry homepage contains a placeholder; it is deliberately not used as a release or installation URL. The source's MIT license notice (copyright © 2026 Nicholas Cecere) is kept verbatim in `apps/web/src/components/ui/LICENSE` and checked by the same test. It does not assign a license to unrelated gateway code.
 
 The layout design reference is the read-only file:
 
@@ -20,17 +16,28 @@ The gateway adopts its compact collapsible sidebar, Workspace/Admin mode switch,
 
 ## Reproduce the copy
 
-From the gateway repository root:
+From `apps/web`, with the bitop-ui checkout pulled to the version you want:
 
 ```sh
-node scripts/vendor-bitop.mjs /Users/nicholascecere/projects/typescript/bitop-ui
-npm install
+BITOP="node ../../../../typescript/bitop-ui/packages/cli/bin/bitop.mjs"
+SRC=../../../../typescript/bitop-ui   # any local bitop-ui checkout
+
+$BITOP diff --check --registry $SRC   # exit 1 if anything differs from the checkout (writes nothing)
+$BITOP diff --registry $SRC           # show the differences
+$BITOP update --registry $SRC         # refresh every installed item; locally edited files are skipped and listed
+$BITOP add <item> --registry $SRC     # add another item with its dependencies
+```
+
+Then, from the repository root:
+
+```sh
+npm install              # only if the installer reported new npm dependencies (use --no-install to just print them)
 npm run typecheck:web
 npm run test:web
 npm run build:web
 ```
 
-The script accepts another local checkout path as its only argument and requires the source `LICENSE` before copying anything. It reads `registry.json`, resolves selected items plus all recursive `@bitop/*` dependencies, and copies their declared files to the registry targets:
+The installer resolves the selected items plus all recursive `@bitop/*` dependencies and copies their declared files to the registry targets, found through the `@/*` → `src/*` path in `tsconfig.json`:
 
 - `@ui/*` → `apps/web/src/components/ui/*`
 - `@lib/*` → `apps/web/src/lib/*`
@@ -40,9 +47,11 @@ These source import aliases are rewritten:
 - `@/registry/bitop/ui/` → `@/components/ui/`
 - `@/registry/bitop/lib/` → `@/lib/`
 
-One recorded copy-and-own patch adds an optional `className` to the command-palette popup. This lets gateway composition CSS use the higher-contrast muted-text token for search group labels/hints without changing vendor CSS or global theme tokens. The script applies this exact checked patch reproducibly and records `optional-popup-className` with its copied hash. When upstream already supplies the equivalent hook, it normalizes that known shape before applying the recorded composition patch; unexpected shapes still require review. Everything else—including CSS modules, neutral-theme tokens, Base UI behavior, comments, and client directives—is preserved. `"use client"` is harmless in Vite; it does not introduce Next.js. The script refuses non-local registry dependencies and unsafe targets. It performs no network calls. Rerunning it overwrites vendored files and the manifest, so review the diff before accepting a refresh. Compare hashes with the committed manifest to detect upstream or local drift. Dependency installation is a separate lockfile-managed step.
+CSS modules, neutral-theme tokens, Base UI behavior, comments, and client directives are otherwise copied unchanged. `"use client"` is harmless in Vite; it does not introduce Next.js. The installer refuses targets outside `src/components/ui` and `src/lib`, won't write through symlinks, and makes no network calls for a local checkout. Packages the gateway already lists keep their versions; new npm dependencies are installed through the repository lockfile.
 
-Selected items: app-shell, breadcrumbs, table, card, button, page-header, stat-card, input, field, badge, empty-state, command-palette, tabs, checkbox. Recursive items include core, theme-neutral, avatar, layout, menu, tooltip, spinner, and kbd. The refreshed manifest tracks 47 files: 46 component/support files plus the upstream license notice. Adding Checkbox/CheckboxGroup also refreshes the upstream StatCard's optional link/details support; existing gateway metric tiles remain unlinked. Runtime package dependencies are `@base-ui/react`, `lucide-react`, and `@fontsource-variable/inter`, alongside the existing React stack.
+There are **no local patches**. The earlier copy-and-own patch that added an optional `className` to the command-palette popup (so gateway CSS can use the higher-contrast muted-text token for search group labels and hints) is now upstream in bitop-ui (`CommandPalette` `className`). If the gateway needs a change to a vendored file, make it in bitop-ui with docs and tests, then `update`; don't edit the copy here (the lock test fails, and `update` would skip the file).
+
+Selected items: app-shell, breadcrumbs, table, card, button, page-header, stat-card, input, field, badge, empty-state, command-palette, tabs, checkbox. Recursive items include core, theme-neutral, avatar, layout, menu, tooltip, spinner, and kbd. The lock tracks 46 component/support files; the license notice is kept alongside them. Existing gateway metric tiles remain unlinked. Runtime package dependencies are `@base-ui/react`, `lucide-react`, and `@fontsource-variable/inter`, alongside the existing React stack.
 
 ## Integration boundaries
 
