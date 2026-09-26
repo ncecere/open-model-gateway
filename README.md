@@ -89,6 +89,7 @@ The dashboard supports workspace switching, organization/team membership, invita
 ## Governance, costs, and routing
 
 - Organization, workspace, and key limits share PostgreSQL-backed admission across replicas: fixed-minute attempt/token quotas, leased concurrency, and calendar-month USD budgets.
+- Keys may inherit model access, deny all models, or select up to 200 granted model UUIDs. Restrictions only narrow parent entitlements, are fixed at issuance, and survive rotation alongside budget consumption.
 - Platform operators append immutable deployment prices. Each attempt pins its version and reserves the full configured hard input-token ceiling plus the explicitly requested output limit. **Configure accurate pricing and provider bounds before enabling traffic.**
 - Unpriced usage is unknown, not free. Unknown/partial/failed usage retains its reservation; old unpriced activity can block a newly enabled budget until the next UTC month. Complete successful usage settles at integer micro-USD rates. Costs are configured-rate estimates, not provider invoices.
 - Routing supports priorities, weights, cooldowns, required-residency labels and up to three explicitly allowed attempts. Ambiguous transport failover requires a separate opt-in because it can duplicate charges. No failover occurs after a stream is returned.

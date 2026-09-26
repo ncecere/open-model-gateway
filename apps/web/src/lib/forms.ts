@@ -1,6 +1,6 @@
 export type Values = Record<string, string>;
 export type Option = { value: string; label: string };
-export type Field = { name: string; label: string; type?: "text" | "email" | "number" | "select" | "password" | "textarea"; inputMode?: "decimal" | "numeric"; required?: boolean; value?: string; options?: Option[]; help?: string; placeholder?: string; min?: number; max?: number; maxLength?: number; visibleWhen?: (values: Values) => boolean; validate?: (value: string, values: Values) => string | undefined };
+export type Field = { name: string; label: string; type?: "text" | "email" | "number" | "select" | "password" | "textarea" | "checkboxes"; inputMode?: "decimal" | "numeric"; required?: boolean; value?: string; options?: Option[]; help?: string; placeholder?: string; min?: number; max?: number; maxLength?: number; maxSelections?: number; visibleWhen?: (values: Values) => boolean; validate?: (value: string, values: Values) => string | undefined };
 export const uuidError = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) ? undefined : "Enter a valid user UUID.";
 export const slugError = (value: string) => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value) ? undefined : "Use lowercase letters, numbers, and single hyphens.";
 export const expiryField: Field = { name: "expires_in_days", label: "Expires in (days)", type: "number", value: "30", required: true, min: 1, max: 365, help: "Keys must expire within 1–365 days." };
@@ -9,11 +9,32 @@ export const roleOptions: Option[] = ["member", "admin", "owner"].map((role) => 
 export const roleField: Field = { name: "role", label: "Role", type: "select", value: "member", required: true, options: roleOptions };
 export const enabledField: Field = { name: "enabled", label: "Status", type: "select", value: "true", required: true, options: [{ value: "true", label: "Enabled" }, { value: "false", label: "Disabled" }] };
 export const disabledField: Field = { name: "disabled", label: "Membership status", type: "select", required: true, options: [{ value: "false", label: "Active" }, { value: "true", label: "Disabled" }] };
+// Values stay strings for ActionDialog; never coerce malformed JSON or array items.
+export function parseCheckboxValues(value: string): string[] {
+  let parsed: unknown;
+  try { parsed = JSON.parse(value); } catch { throw new Error("Choose available options (invalid selection)."); }
+  if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === "string")) throw new Error("Choose available options (invalid selection).");
+  if (new Set(parsed).size !== parsed.length) throw new Error("Choose each option only once.");
+  return parsed;
+}
+export function checkboxValues(field: Field, value: string): string[] {
+  const selected = parseCheckboxValues(value);
+  if (field.required && !selected.length) throw new Error(`Select at least one option for ${field.label.toLowerCase()}.`);
+  if (field.maxSelections !== undefined && selected.length > field.maxSelections) throw new Error(`Select at most ${field.maxSelections} options.`);
+  const offered = new Set(field.options?.map((option) => option.value));
+  if (selected.some((item) => !offered.has(item))) throw new Error("Choose only available options.");
+  return selected;
+}
 export function validateFields(fields: Field[], values: Values): Record<string, string> {
   const errors: Record<string, string> = {};
   for (const field of fields) {
     if (field.visibleWhen && !field.visibleWhen(values)) continue;
     const value = (values[field.name] ?? "").trim();
+    if (field.type === "checkboxes") {
+      try { checkboxValues(field, value); } catch (error) { errors[field.name] = (error as Error).message; }
+      if (!errors[field.name]) { const custom = field.validate?.(value, values); if (custom) errors[field.name] = custom; }
+      continue;
+    }
     if (!value) { if (field.required) errors[field.name] = `${field.label} is required.`; continue; }
     if (field.type !== "textarea" && /[\u0000-\u001f\u007f]/.test(value)) errors[field.name] = "Control characters are not allowed.";
     if (field.maxLength && new TextEncoder().encode(value).length > field.maxLength) errors[field.name] = `Use at most ${field.maxLength} UTF-8 bytes (ASCII characters use one byte).`;

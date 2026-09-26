@@ -105,17 +105,29 @@ async fn admit_checked(
         .await
         .map_err(storage)?
         .ok_or(InferenceError::ModelUnavailable)?;
+    // No row lock on restrictions is needed (including absent headers): creation
+    // and entitlement removal take catalog then org locks, and rotation takes
+    // the org lock. Headers are immutable through management. Check the live
+    // deployment UUID, never the alias or a cached candidate's permissions.
     let current = sqlx::query_as::<_, crate::inference::types::Deployment>(
         "SELECT d.id,p.provider,d.upstream_model,p.credential_ref,p.endpoint,p.region
          FROM deployments d JOIN provider_connections p ON p.id=d.provider_connection_id
          JOIN models m ON m.id=d.model_id
          JOIN organization_model_grants g ON g.model_id=m.id AND g.organization_id=$1
          WHERE d.id=$2 AND g.public_name=$3 AND m.enabled AND d.enabled AND p.enabled
+         AND (
+           NOT EXISTS (SELECT 1 FROM key_model_restrictions r WHERE r.organization_id=$1
+             AND r.workspace_id=$4 AND r.governance_key_id=$5)
+           OR EXISTS (SELECT 1 FROM key_model_selections s WHERE s.organization_id=$1
+             AND s.workspace_id=$4 AND s.governance_key_id=$5 AND s.model_id=m.id)
+         )
          FOR SHARE OF d,p,m,g",
     )
     .bind(org)
     .bind(record.deployment_id)
     .bind(&record.model)
+    .bind(workspace)
+    .bind(lineage)
     .fetch_optional(&mut *tx)
     .await
     .map_err(storage)?

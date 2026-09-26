@@ -92,3 +92,56 @@
 .hint {
   color: var(--color-text-muted);
 }
+
+.details {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+/* Linked cards: the label's link covers the card (stretched link). */
+.link {
+  color: inherit;
+  text-decoration: none;
+
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+  }
+
+  &:focus-visible {
+    outline: none;
+  }
+}
+
+.card[data-linked] {
+  transition: box-shadow var(--motion-duration-fast) ease;
+
+  &:hover {
+    box-shadow: var(--shadow-3);
+  }
+
+  &:hover .link {
+    color: var(--color-text);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  &:has(.link:focus-visible) {
+    box-shadow: var(--shadow-2), var(--shadow-focus);
+  }
+
+  /* Keep interactive content inside the details above the stretched link. */
+  & .details :is(a, button) {
+    position: relative;
+    z-index: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card[data-linked] {
+    transition: none;
+  }
+}

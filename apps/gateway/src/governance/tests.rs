@@ -633,6 +633,8 @@ mod db {
             include_str!("../../migrations/0005_routing.sql"),
             include_str!("../../migrations/0006_execution_retention.sql"),
             include_str!("../../migrations/0007_platform_catalog.sql"),
+            include_str!("../../migrations/0008_projects.sql"),
+            include_str!("../../migrations/0009_key_model_restrictions.sql"),
         ] {
             sqlx::raw_sql(migration)
                 .execute(&f.store.pool)

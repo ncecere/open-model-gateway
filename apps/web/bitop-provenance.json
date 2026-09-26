@@ -1,6 +1,6 @@
 {
   "source": "Local bitop-ui checkout (copy-and-own; no network registry)",
-  "registrySha256": "5af97ee48fe868ca5f0bb266d32f76bcb87a873820789d4018acaa35369cf9e2",
+  "registrySha256": "abeabd2d5c01a7c69a27d86d8e902e29a8342c5ba7d4b9f30e17a9693b32be38",
   "selected": [
     "app-shell",
     "breadcrumbs",
@@ -14,7 +14,8 @@
     "badge",
     "empty-state",
     "command-palette",
-    "tabs"
+    "tabs",
+    "checkbox"
   ],
   "items": [
     "app-shell",
@@ -23,6 +24,7 @@
     "breadcrumbs",
     "button",
     "card",
+    "checkbox",
     "command-palette",
     "core",
     "empty-state",
@@ -130,6 +132,18 @@
       "copiedSha256": "51b2f1bbfe7cf32766fcf2318a83ab4d621c1001917a4018334c96eb225433b8"
     },
     {
+      "source": "registry/bitop/ui/checkbox/checkbox.module.css",
+      "target": "apps/web/src/components/ui/checkbox/checkbox.module.css",
+      "sourceSha256": "2b399d49f7a00ad8e815c0445fb3e9de8d8ee7762390404b360828e54781a9c6",
+      "copiedSha256": "2b399d49f7a00ad8e815c0445fb3e9de8d8ee7762390404b360828e54781a9c6"
+    },
+    {
+      "source": "registry/bitop/ui/checkbox/checkbox.tsx",
+      "target": "apps/web/src/components/ui/checkbox/checkbox.tsx",
+      "sourceSha256": "83b3a7091dd429615431e89c65db94b5af2201a84a1c438c1801a0e518fb01d6",
+      "copiedSha256": "f3befff3af64867d542c4fd182d4f8beae8ff073c11803c3f56be1d19a980e8c"
+    },
+    {
       "source": "registry/bitop/ui/command-palette/command-palette.module.css",
       "target": "apps/web/src/components/ui/command-palette/command-palette.module.css",
       "sourceSha256": "c614f81a2939583cd3d593563526bbfd98873a38e664ddf877006c6f4b59bcfa",
@@ -138,7 +152,7 @@
     {
       "source": "registry/bitop/ui/command-palette/command-palette.tsx",
       "target": "apps/web/src/components/ui/command-palette/command-palette.tsx",
-      "sourceSha256": "dbe15f132cba416295a07e27fffa96452013e3e37a632e3e26151a6787bb73ea",
+      "sourceSha256": "61075637a79a5bb1dff93302e576e144fcbd5b516f47ff40ed0c6203b55079cc",
       "copiedSha256": "0fe49a76d986d6f859d72100677cbacbd77c972327a5c0478d67690074f4dc80",
       "patches": [
         "optional-popup-className"
@@ -243,14 +257,14 @@
     {
       "source": "registry/bitop/ui/stat-card/stat-card.module.css",
       "target": "apps/web/src/components/ui/stat-card/stat-card.module.css",
-      "sourceSha256": "de8248c32d1dbba864d4dea8445d466bbefbd3efd04973abfb180d03395f3c44",
-      "copiedSha256": "de8248c32d1dbba864d4dea8445d466bbefbd3efd04973abfb180d03395f3c44"
+      "sourceSha256": "8b1ee9d59849f47ec08e7f7c7c1a8ee581b92b4bc4fbbee6961acfdc14d2f71d",
+      "copiedSha256": "8b1ee9d59849f47ec08e7f7c7c1a8ee581b92b4bc4fbbee6961acfdc14d2f71d"
     },
     {
       "source": "registry/bitop/ui/stat-card/stat-card.tsx",
       "target": "apps/web/src/components/ui/stat-card/stat-card.tsx",
-      "sourceSha256": "b4a658adb68b63ba61fa6654258a9921b704579359cc77bd759a920516e7be1b",
-      "copiedSha256": "93addedff1137d7cb37a57bb37ee51b4cb016f8285f536f7a3717a579614d889"
+      "sourceSha256": "d026448ef39094b2928c9b2fddfb457ec12100417281df7333bfadf27fec4e77",
+      "copiedSha256": "4cda92208ff5e4520b9043dcd7c309b9bac32be2592ccfd935a11eee1606d807"
     },
     {
       "source": "registry/bitop/ui/styles/bitop.css",

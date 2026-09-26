@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api, type Collection, type OneTimeToken, type Session } from "../lib/api";
-import { validateFields, type Field, type Values } from "../lib/forms";
+import { parseCheckboxValues, validateFields, type Field, type Values } from "../lib/forms";
 import { Table as BitopTable, Tr, Td } from "./ui/table/table";
 import { Card, CardBody } from "./ui/card/card";
 import { PageHeader } from "./ui/page-header/page-header";
@@ -10,6 +10,7 @@ import { EmptyState } from "./ui/empty-state/empty-state";
 import { Button } from "./ui/button/button";
 import { Input, NativeSelect, Textarea } from "./ui/input/input";
 import { Field as FormField } from "./ui/field/field";
+import { Checkbox, CheckboxGroup } from "./ui/checkbox/checkbox";
 export { Button, Input, NativeSelect, Textarea, FormField };
 export { StatCard } from "./ui/stat-card/stat-card";
 
@@ -76,7 +77,7 @@ function Modal({ title, children, onClose, busy }: { title: string; children: Re
 function ActionDialog({ action, onClose }: { action: Action; onClose: (success: boolean) => void }) {
   const client = useQueryClient();
   const fields = action.fields ?? [];
-  const [values, setValues] = useState<Values>(() => Object.fromEntries(fields.map((field) => [field.name, field.value ?? ""])));
+  const [values, setValues] = useState<Values>(() => Object.fromEntries(fields.map((field) => [field.name, field.value ?? (field.type === "checkboxes" ? "[]" : "")])));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState<unknown>();
   const [busy, setBusy] = useState(false);
@@ -109,10 +110,22 @@ function ActionDialog({ action, onClose }: { action: Action; onClose: (success: 
     } catch (caught) { if (mounted.current) setError(caught); }
     finally { inFlight.current = false; if (mounted.current) setBusy(false); }
   }
-  return <Modal title={token ? action.secretLabel! : action.title} busy={busy} onClose={close}>{token ? <div className="form-stack"><p className="notice">Copy this token now. It will not be shown again. Store it securely; closing this dialog clears it from this page.</p><label htmlFor={`${id}-token`}>One-time token</label><textarea id={`${id}-token`} className="secret" readOnly value={token} rows={4} spellCheck={false} autoComplete="off" autoFocus onFocus={(event) => event.currentTarget.select()} /><div className="actions"><button className="button" onClick={async () => { try { await navigator.clipboard.writeText(token); setCopied(true); setCopyError(false); } catch { setCopyError(true); } }}>{copied ? "Copied" : "Copy token"}</button><button className="button secondary" onClick={close}>I have saved it</button></div><p role="status">{copyError ? "Clipboard unavailable. Select the token and copy it manually." : copied ? "Copied to your clipboard. Clear your clipboard after storing it securely." : ""}</p></div> : <form className="form-stack" noValidate onSubmit={(event) => void submit(event)}>{action.description && <p className={action.danger ? "notice warning" : "muted"}>{action.description}</p>}{fields.filter((field) => !field.visibleWhen || field.visibleWhen(values)).map((field, index) => {
+  return <Modal title={token ? action.secretLabel! : action.title} busy={busy} onClose={close}>{token ? <div className="form-stack"><p className="notice">Copy this token now. It will not be shown again. Store it securely; closing this dialog clears it from this page.</p><label htmlFor={`${id}-token`}>One-time token</label><textarea id={`${id}-token`} className="secret" readOnly value={token} rows={4} spellCheck={false} autoComplete="off" autoFocus onFocus={(event) => event.currentTarget.select()} /><div className="actions"><button className="button" onClick={async () => { try { await navigator.clipboard.writeText(token); setCopied(true); setCopyError(false); } catch { setCopyError(true); } }}>{copied ? "Copied" : "Copy token"}</button><button className="button secondary" onClick={close}>I have saved it</button></div><p role="status">{copyError ? "Clipboard unavailable. Select the token and copy it manually." : copied ? "Copied to your clipboard. Clear your clipboard after storing it securely." : ""}</p></div> : <form className="form-stack" aria-busy={busy} noValidate onSubmit={(event) => void submit(event)}>{action.description && <p className={action.danger ? "notice warning" : "muted"}>{action.description}</p>}{fields.filter((field) => !field.visibleWhen || field.visibleWhen(values)).map((field, index) => {
     const fieldId = `${id}-${field.name}`;
     const common = { id: fieldId, name: field.name, required: field.required, disabled: busy, value: values[field.name] ?? "", autoFocus: index === 0, onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => setValues((previous) => ({ ...previous, [field.name]: event.target.value })) };
+    if (field.type === "checkboxes") return <CheckboxesField key={field.name} field={field} id={fieldId} value={values[field.name] ?? "[]"} error={errors[field.name]} disabled={busy} autoFocus={index === 0} onChange={(value) => setValues((previous) => ({ ...previous, [field.name]: value }))} />;
     return <FormField key={field.name} name={field.name} label={field.label} labelHint={!field.required ? "Optional" : undefined} description={field.help} error={errors[field.name]}>{field.type === "select" ? <NativeSelect {...common}><option value="">Choose…</option>{field.options?.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</NativeSelect> : field.type === "textarea" ? <Textarea {...common} rows={4} autoComplete="off" spellCheck={false} /> : <Input {...common} type={field.type ?? "text"} inputMode={field.inputMode} min={field.min} max={field.max} step={field.type === "number" ? 1 : undefined} maxLength={field.maxLength} placeholder={field.placeholder} autoComplete="off" spellCheck={field.type === "password" ? false : undefined} />}</FormField>;
   })}{error !== undefined && <ErrorNotice error={error} />}<div className="dialog-footer"><Button variant="secondary" disabled={busy} onClick={close}>Cancel</Button><Button type="submit" variant={action.danger ? "danger" : "primary"} loading={busy}>{busy ? "Saving…" : action.submitLabel ?? "Save"}</Button></div></form>}</Modal>;
+}
+// Gateway composition keeps the vendor primitives untouched. Base UI renders
+// this as a group, not a native fieldset. Explicit labels and a focus target also
+// work before hydration and when there are no granted options to render.
+export function CheckboxesField({ field, id, value, error, disabled, autoFocus, onChange }: { field: Field; id: string; value: string; error?: string; disabled?: boolean; autoFocus?: boolean; onChange: (value: string) => void }) {
+  let selected: string[] = [];
+  try { selected = parseCheckboxValues(value); } catch { /* Submit reports malformed values instead of accepting them. */ }
+  const labelId = `${id}-label`;
+  const descriptionId = `${id}-description`;
+  const errorId = `${id}-error`;
+  return <CheckboxGroup id={id} tabIndex={-1} name={field.name} legend={<span id={labelId}>{field.label}{field.required && " (required)"}</span>} aria-labelledby={labelId} disabled={disabled} value={selected} onValueChange={(next) => onChange(JSON.stringify(next))} aria-invalid={!!error || undefined} aria-describedby={[field.help && descriptionId, error && errorId].filter(Boolean).join(" ") || undefined} description={field.help && <span id={descriptionId}>{field.help}</span>} error={error && <span id={errorId}>{error}</span>} className="gateway-checkbox-group"><div className="gateway-checkbox-options">{field.options?.map((option, index) => <Checkbox key={option.value} value={option.value} label={<span id={`${id}-option-${index}`}>{option.label}</span>} aria-labelledby={`${id}-option-${index}`} disabled={disabled} autoFocus={autoFocus && index === 0} />)}</div></CheckboxGroup>;
 }
 export function RowActions({ children }: { children: ReactNode }) { return <div className="row-actions">{children}</div>; }

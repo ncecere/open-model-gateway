@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const source = resolve(process.argv[2] ?? '/Users/nicholascecere/projects/typescript/bitop-ui');
-const selected = ['app-shell', 'breadcrumbs', 'table', 'card', 'button', 'page-header', 'stat-card', 'input', 'field', 'badge', 'empty-state', 'command-palette', 'tabs'];
+const selected = ['app-shell', 'breadcrumbs', 'table', 'card', 'button', 'page-header', 'stat-card', 'input', 'field', 'badge', 'empty-state', 'command-palette', 'tabs', 'checkbox'];
 const registryText = await readFile(resolve(source, 'registry.json'), 'utf8');
 // Preserve the upstream notice with the copied components; fail before copying
 // if a checkout does not supply its redistribution terms.
@@ -35,6 +35,18 @@ async function copy(name) {
     let copied = original.replaceAll('@/registry/bitop/ui/', '@/components/ui/').replaceAll('@/registry/bitop/lib/', '@/lib/');
     const patches = [];
     if (name === 'command-palette' && file.path.endsWith('.tsx')) {
+      // Newer upstream includes this hook. Normalize it first so our existing
+      // recorded composition patch remains reproducible across both versions.
+      if (copied.includes('className={cx(styles.popup, className)} aria-label={label}')) {
+        for (const [from, to] of [
+          ['  /** Class for the dialog popup, merged with the built-in styles (e.g. to scope token overrides). */\n  className?: string;\n', ''],
+          ['  finalFocus,\n  className,\n', '  finalFocus,\n'],
+          ['className={cx(styles.popup, className)} aria-label={label}', 'className={styles.popup} aria-label={label}'],
+        ]) {
+          if (copied.split(from).length !== 2) throw new Error(`Review upstream command-palette hook: ${from}`);
+          copied = copied.replace(from, to);
+        }
+      }
       for (const [from, to] of [
         ['export type CommandPaletteProps = {', 'export type CommandPaletteProps = {\n  /** Gateway composition hook for scoped accessible contrast. */\n  className?: string;'],
         ['export function CommandPalette({\n', 'export function CommandPalette({\n  className,\n'],

@@ -20,7 +20,8 @@ GRANT SELECT ON public.users, public.organizations, public.organization_membersh
   public.audit_events, public.inference_executions, public.governance_policies,
   public.deployment_prices, public.governance_reservations, public.monetary_ledger,
   public.model_routing_policies, public.deployment_routing, public.deployment_route_health,
-  public.organization_model_grants, public.user_model_grants, public.platform_organization_policies
+  public.organization_model_grants, public.user_model_grants, public.platform_organization_policies,
+  public.key_model_restrictions, public.key_model_selections
 TO gateway_runtime;
 -- The runtime may create ordinary OIDC users, but never set platform privileges,
 -- disable identities, or execute the trusted provision-user command.
@@ -33,7 +34,11 @@ GRANT INSERT ON public.organizations, public.organization_memberships, public.wo
   public.inference_executions, public.governance_policies, public.deployment_prices,
   public.governance_reservations, public.monetary_ledger, public.model_routing_policies,
   public.deployment_routing, public.deployment_route_health, public.organization_model_grants,
-  public.user_model_grants, public.platform_organization_policies TO gateway_runtime;
+  public.user_model_grants, public.platform_organization_policies,
+  public.key_model_restrictions, public.key_model_selections TO gateway_runtime;
+-- FK actions remove selections with parent entitlements without a direct DELETE
+-- grant. Neither restrictions nor selections can be rewritten/deleted directly;
+-- headers survive entitlement revocation and keep explicit deny-all semantics.
 GRANT DELETE ON public.login_attempts, public.governance_policies,
   public.workspace_model_grants, public.organization_model_grants, public.user_model_grants TO gateway_runtime;
 GRANT UPDATE(name) ON public.organizations, public.workspaces TO gateway_runtime;

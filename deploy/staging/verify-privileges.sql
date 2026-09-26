@@ -22,6 +22,12 @@ DO $$ DECLARE r record; t text; BEGIN
     IF has_table_privilege('gateway_runtime','public.'||t,'UPDATE,DELETE,TRUNCATE') OR
        has_any_column_privilege('gateway_runtime','public.'||t,'UPDATE') THEN RAISE EXCEPTION 'runtime can mutate immutable history: %',t; END IF;
   END LOOP;
+  IF has_table_privilege('gateway_runtime','public.key_model_restrictions','UPDATE,DELETE,TRUNCATE') OR
+     has_any_column_privilege('gateway_runtime','public.key_model_restrictions','UPDATE') OR
+     has_table_privilege('gateway_runtime','public.key_model_selections','UPDATE,DELETE,TRUNCATE') OR
+     has_any_column_privilege('gateway_runtime','public.key_model_selections','UPDATE') THEN
+    RAISE EXCEPTION 'runtime can rewrite key model restrictions';
+  END IF;
   IF has_table_privilege('gateway_runtime','public._sqlx_migrations','INSERT') THEN RAISE EXCEPTION 'runtime can write migrations'; END IF;
   FOR t IN SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename <> '_sqlx_migrations' LOOP
     IF NOT has_table_privilege('gateway_runtime','public.'||t,'SELECT') THEN RAISE EXCEPTION 'review privileges for new table: %',t; END IF;
@@ -52,8 +58,18 @@ BEGIN
   INSERT INTO public.organization_model_grants(organization_id,model_id,public_name) VALUES(o,m,'probe');
   INSERT INTO public.workspace_model_grants(organization_id,workspace_id,model_id) VALUES(o,shared,m);
   INSERT INTO public.user_model_grants(organization_id,user_id,model_id) VALUES(o,u,m);
+  INSERT INTO public.key_model_restrictions(organization_id,workspace_id,governance_key_id) VALUES(o,shared,k);
+  INSERT INTO public.key_model_selections(organization_id,workspace_id,governance_key_id,model_id) VALUES(o,shared,k,m);
+  IF NOT EXISTS (SELECT FROM public.key_model_selections WHERE governance_key_id=k AND model_id=m) THEN RAISE EXCEPTION 'key model selection failed'; END IF;
   PERFORM model_id FROM public.workspace_model_grants WHERE organization_id=o FOR SHARE;
   PERFORM model_id FROM public.user_model_grants WHERE organization_id=o FOR SHARE;
+  DELETE FROM public.workspace_model_grants WHERE organization_id=o AND model_id=m;
+  DELETE FROM public.user_model_grants WHERE organization_id=o AND model_id=m;
+  DELETE FROM public.organization_model_grants WHERE organization_id=o AND model_id=m;
+  IF EXISTS (SELECT FROM public.key_model_selections WHERE governance_key_id=k) OR
+     NOT EXISTS (SELECT FROM public.key_model_restrictions WHERE governance_key_id=k) THEN RAISE EXCEPTION 'key restriction cascade failed'; END IF;
+  INSERT INTO public.organization_model_grants(organization_id,model_id,public_name) VALUES(o,m,'probe');
+  IF EXISTS (SELECT FROM public.key_model_selections WHERE governance_key_id=k) THEN RAISE EXCEPTION 'key selection revived'; END IF;
   INSERT INTO public.audit_events(id,organization_id,actor_user_id,action) VALUES(gen_random_uuid(),o,u,'staging.rollback_probe');
   BEGIN
     INSERT INTO public.service_accounts(id,organization_id,workspace_id,name) VALUES(gen_random_uuid(),o,personal,'Must fail');
@@ -68,6 +84,14 @@ DO $$ BEGIN
   BEGIN
     EXECUTE 'UPDATE public.users SET platform_admin=true WHERE false';
     RAISE EXCEPTION 'runtime unexpectedly changed platform privileges';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN
+    EXECUTE 'DELETE FROM public.key_model_restrictions WHERE false';
+    RAISE EXCEPTION 'runtime unexpectedly deleted restriction header';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN
+    EXECUTE 'UPDATE public.key_model_selections SET model_id=model_id WHERE false';
+    RAISE EXCEPTION 'runtime unexpectedly rewrote selections';
   EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   BEGIN
     EXECUTE 'DELETE FROM public.audit_events WHERE false';

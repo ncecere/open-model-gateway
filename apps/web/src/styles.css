@@ -67,6 +67,11 @@ time { font-size: var(--font-size-xs); }
 .dialog-heading h2 { font-size: var(--font-size-xl); }
 .dialog-heading .button { font-size: 23px; padding: 0 var(--space-2); }
 .form-stack { display: flex; flex-direction: column; gap: var(--space-4); }
+.gateway-checkbox-group { min-width: 0; }
+.gateway-checkbox-group [role="group"]:focus { outline: 2px solid var(--color-focus-ring); outline-offset: 4px; }
+.gateway-checkbox-options { display: flex; flex-direction: column; gap: var(--space-3); max-height: min(18rem, 40dvh); overflow-y: auto; overscroll-behavior: contain; padding: var(--space-1); overflow-wrap: anywhere; }
+.key-model-summary { max-width: 24rem; overflow-wrap: anywhere; }
+.key-model-summary summary { cursor: pointer; }
 .dialog-footer { display: flex; justify-content: flex-end; gap: var(--space-2); padding-top: var(--space-4); border-top: 1px solid var(--color-border); margin-top: var(--space-1); }
 .secret { font-family: var(--font-family-mono); font-size: var(--font-size-xs); overflow-wrap: anywhere; resize: vertical; background: var(--color-bg); padding: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-control); }
 .toast { position: fixed; right: var(--space-6); bottom: var(--space-6); background: var(--color-primary); color: var(--color-primary-contrast); border-radius: var(--radius-control); box-shadow: var(--shadow-3); padding: var(--space-4); display: flex; align-items: center; gap: var(--space-6); z-index: var(--z-toast); }

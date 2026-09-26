@@ -1,6 +1,9 @@
 use super::*;
 use crate::auth::NewApiKey;
 
+#[cfg(all(test, feature = "integration-tests"))]
+mod tests;
+
 pub(super) async fn keys(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
@@ -9,7 +12,7 @@ pub(super) async fn keys(
 ) -> ApiResult {
     let a = require_workspace(&s, &u, ws, false).await?;
     let (limit, offset) = page.bounds()?;
-    let data:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',id,'name',name,'issued_to_user_id',issued_to_user_id,'service_account_id',service_account_id,'created_at',created_at,'expires_at',expires_at,'revoked_at',revoked_at) FROM api_keys WHERE organization_id=$1 AND workspace_id=$2 AND ($3 OR issued_to_user_id=$4) ORDER BY created_at DESC,id LIMIT $5 OFFSET $6")
+    let data:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',k.id,'name',k.name,'issued_to_user_id',k.issued_to_user_id,'service_account_id',k.service_account_id,'created_at',k.created_at,'expires_at',k.expires_at,'revoked_at',k.revoked_at,'model_ids',CASE WHEN r.governance_key_id IS NULL THEN NULL ELSE ARRAY(SELECT s.model_id FROM key_model_selections s WHERE s.organization_id=k.organization_id AND s.workspace_id=k.workspace_id AND s.governance_key_id=k.governance_key_id ORDER BY s.model_id) END) FROM api_keys k LEFT JOIN key_model_restrictions r ON r.organization_id=k.organization_id AND r.workspace_id=k.workspace_id AND r.governance_key_id=k.governance_key_id WHERE k.organization_id=$1 AND k.workspace_id=$2 AND ($3 OR k.issued_to_user_id=$4) ORDER BY k.created_at DESC,k.id LIMIT $5 OFFSET $6")
         .bind(a.org).bind(ws).bind(admin(&a.role)).bind(u.user_id).bind(limit).bind(offset).fetch_all(&s.pool).await?;
     Ok(Json(json!({"data":data})))
 }
@@ -19,6 +22,7 @@ pub(super) struct NewKey {
     name: String,
     expires_in_days: i32,
     service_account_id: Option<Uuid>,
+    model_ids: Option<Vec<Uuid>>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -69,14 +73,23 @@ pub(super) async fn create_key(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
     Path(ws): Path<Uuid>,
-    Json(b): Json<NewKey>,
+    Json(mut b): Json<NewKey>,
 ) -> ApiResult {
     let a = require_workspace(&s, &u, ws, false).await?;
     expiry(b.expires_in_days)?;
     if !valid_name(&b.name) {
         return Err(invalid());
     }
+    if let Some(ids) = &mut b.model_ids {
+        // Bound raw input as well as distinct IDs; output is deterministic.
+        if ids.len() > 200 {
+            return Err(invalid());
+        }
+        ids.sort_unstable();
+        ids.dedup();
+    }
     let mut tx = s.pool.begin().await?;
+    resources::catalog_lock(&mut tx, false).await?;
     let a = locked_workspace_access(&mut tx, &u, a.org, ws, false).await?;
     if b.service_account_id.is_some() && (!admin(&a.role) || !shared(&a.kind)) {
         return Err(denied());
@@ -88,6 +101,31 @@ pub(super) async fn create_key(
         }
     } else {
         lock_key_membership(&mut tx, a.org, ws, u.user_id, &a.kind).await?;
+    }
+    if let Some(ids) = &b.model_ids {
+        // Validate assignments, not infrastructure availability: a disabled but
+        // granted model may be selected before activation. Individual grants
+        // contribute only to a human owner's personal scope, never service keys.
+        let granted: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM organization_model_grants g
+             JOIN workspaces w ON w.organization_id=g.organization_id AND w.id=$2
+             WHERE g.organization_id=$1 AND g.model_id=ANY($3) AND (
+               EXISTS (SELECT 1 FROM workspace_model_grants wg WHERE wg.organization_id=$1
+                 AND wg.workspace_id=$2 AND wg.model_id=g.model_id)
+               OR ($5::uuid IS NULL AND w.kind='personal' AND w.owner_user_id=$4 AND EXISTS (
+                 SELECT 1 FROM user_model_grants ug WHERE ug.organization_id=$1
+                   AND ug.user_id=$4 AND ug.model_id=g.model_id)))",
+        )
+        .bind(a.org)
+        .bind(ws)
+        .bind(ids)
+        .bind(u.user_id)
+        .bind(b.service_account_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if granted != ids.len() as i64 {
+            return Err(invalid());
+        }
     }
     let key = insert_key(
         &mut tx,
@@ -103,6 +141,12 @@ pub(super) async fn create_key(
         b.expires_in_days,
     )
     .await?;
+    if let Some(ids) = &b.model_ids {
+        sqlx::query("INSERT INTO key_model_restrictions (organization_id,workspace_id,governance_key_id) VALUES ($1,$2,$3)")
+            .bind(a.org).bind(ws).bind(key.id).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO key_model_selections (organization_id,workspace_id,governance_key_id,model_id) SELECT $1,$2,$3,unnest($4::uuid[])")
+            .bind(a.org).bind(ws).bind(key.id).bind(ids).execute(&mut *tx).await?;
+    }
     audit(
         &mut tx,
         u.user_id,
@@ -113,7 +157,9 @@ pub(super) async fn create_key(
     )
     .await?;
     tx.commit().await?;
-    Ok(Json(json!({"id":key.id,"token":key.token})))
+    Ok(Json(
+        json!({"id":key.id,"token":key.token,"model_ids":b.model_ids}),
+    ))
 }
 pub(super) async fn revoke_key(
     State(s): State<Store>,
