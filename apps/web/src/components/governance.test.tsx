@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { ApiError, type Session, type Organization, type Workspace } from "../lib/api";
-import { ActionProvider, FormField, Input, Panel, Heading, StatCard, Table } from "./ui";
+import { ActionProvider, Button, FormField, Input, Panel, Heading, StatCard, Table } from "./ui";
 import { Costs, Governance, PriceVersions, ModelRoutingPanel, DeploymentRoutingPanel } from "../pages/governance";
 import { AppShell, Main, Sidebar, SidebarContent, SidebarItem, SidebarNav, SidebarSection, TopBar } from "./ui/app-shell/app-shell";
 import { TooltipProvider } from "./ui/tooltip/tooltip";
@@ -84,6 +84,13 @@ describe("governance screen rendering", () => {
   });
 });
 describe("vendored Bitop composition", () => {
+  it("marks rendered links disabled while keeping native button semantics", () => {
+    const link = renderToStaticMarkup(<Button render={<a href="#target" />} loading>Open</Button>);
+    expect(link).toContain('aria-disabled="true"'); expect(link).toContain('aria-busy="true"');
+    expect(link).not.toContain(' disabled=""');
+    const native = renderToStaticMarkup(<Button disabled>Save</Button>);
+    expect(native).toContain(' disabled=""'); expect(native).toContain('type="button"');
+  });
   it("uses real accessible table/card/header/stat/form primitives", () => {
     const html = renderToStaticMarkup(<><Heading title="Example" /><Panel title="Card"><StatCard label="Known" value="Unknown" /><Table label="Rows" rows={["row"]} rowKey={row => row} columns={[{ title: "Name", render: row => row }]} /><FormField label="Budget" description="US dollars" error="Invalid amount"><Input name="budget" defaultValue="bad" /></FormField></Panel></>);
     expect(html).toContain("<caption"); expect(html).toContain('scope="col"');

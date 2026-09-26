@@ -41,6 +41,12 @@ export type CommandPaletteProps = {
   /** Accessible name of the dialog. */
   label?: string;
   emptyText?: ReactNode;
+  /**
+   * Where focus goes when the palette closes (Base UI Dialog.Popup
+   * `finalFocus`). Defaults to the element that opened it. Pass a function
+   * returning the new page's heading when a command navigates.
+   */
+  finalFocus?: BaseDialog.Popup.Props["finalFocus"];
 };
 
 type Group = { value: string; items: Command[] };
@@ -60,6 +66,7 @@ export function CommandPalette({
   placeholder = "Search pages and actions…",
   label = "Command palette",
   emptyText = "No results found.",
+  finalFocus,
 }: CommandPaletteProps) {
   const hintId = useId();
   const items: Group[] = groups.filter((g) => g.items.length > 0).map((g) => ({ value: g.label, items: g.items }));
@@ -74,7 +81,7 @@ export function CommandPalette({
       <BaseDialog.Portal>
         <BaseDialog.Backdrop className={styles.backdrop} />
         <BaseDialog.Viewport className={styles.viewport}>
-          <BaseDialog.Popup className={cx(styles.popup, className)} aria-label={label}>
+          <BaseDialog.Popup className={cx(styles.popup, className)} aria-label={label} finalFocus={finalFocus}>
             <Autocomplete.Root
               open
               inline

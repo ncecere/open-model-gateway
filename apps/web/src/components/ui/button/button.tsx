@@ -1,7 +1,7 @@
 "use client";
 
 import { useRender } from "@base-ui/react/use-render";
-import type { ComponentPropsWithRef, ReactNode } from "react";
+import type { ComponentPropsWithRef, MouseEvent, ReactNode } from "react";
 import { Spinner } from "@/components/ui/spinner/spinner";
 import { cx, dataFlag } from "@/lib/bitop-utils";
 import styles from "./button.module.css";
@@ -31,6 +31,11 @@ type ButtonBaseProps = Omit<ComponentPropsWithRef<"button">, "className"> & {
  */
 export type ButtonProps = ButtonBaseProps &
   ({ iconOnly?: false } | { iconOnly: true; "aria-label": string; children: ReactNode });
+
+function preventActivation(event: MouseEvent) {
+  event.preventDefault();
+  event.stopPropagation();
+}
 
 export function Button(allProps: ButtonProps) {
   const {
@@ -64,11 +69,17 @@ export function Button(allProps: ButtonProps) {
       "data-block": dataFlag(block),
       "data-disabled": dataFlag(inactive),
       "aria-busy": loading || undefined,
-      // Native buttons get real `disabled` and a safe default type; other
-      // elements (links) can't be disabled natively, so use aria-disabled.
+      // Native buttons get real `disabled` and a safe default type. Other
+      // elements (links) can't be disabled natively: mark them aria-disabled
+      // (they stay focusable, so the state is discoverable) and cancel
+      // activation in the capture phase, which stops link navigation and
+      // every click handler, like a disabled <button>.
       ...(native
         ? { type: type ?? "button", disabled: inactive }
-        : { "aria-disabled": inactive || undefined }),
+        : {
+            "aria-disabled": inactive || undefined,
+            ...(inactive && { onClickCapture: preventActivation }),
+          }),
       children: (
         <>
           {loading && <Spinner size={size === "sm" ? "sm" : "md"} className={styles.spinner} />}

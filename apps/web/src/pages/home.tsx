@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { LayoutDashboard, LogOut, Mail, RefreshCw, Shield, UserRound } from "lucide-react";
@@ -53,10 +53,22 @@ function Dashboard({ session, onLogout }: { session: Session; onLogout: () => vo
   const organization = selectedOrganization ? { ...selectedOrganization, membership_role: members.data?.find((member) => member.user_id === session.user.id && !member.disabled_at)?.role ?? null } : undefined;
   const workspaces = session.workspaces.filter((ws) => ws.organization_id === organization?.id);
   const workspace = search.ws ? workspaces.find((ws) => ws.id === search.ws) : workspaces.find((ws) => ws.kind === "personal") ?? workspaces[0];
+  // Search navigation remounts the shell with its dialogs. Restore focus from
+  // this stable parent after that remount, without weakening scope isolation.
+  const searchNavigationFocus = useRef(false);
+  useEffect(() => {
+    if (!searchNavigationFocus.current) return;
+    searchNavigationFocus.current = false;
+    const frame = requestAnimationFrame(() => {
+      const heading = document.querySelector<HTMLElement>("#main h1");
+      if (heading) { heading.tabIndex = -1; heading.focus({ preventScroll: true }); }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [page, organization?.id, workspace?.id]);
   // Context changes destroy dialogs and transient secrets, never reusing them across scopes.
-  return <ActionProvider key={`${session.user.id}:${organization?.id}:${workspace?.id}:${page}`}><DashboardShell collapsed={collapsed} onCollapsedChange={setCollapsed} session={session} organization={organization} workspace={workspace} workspaces={workspaces} page={page} invalidScope={pageScope(page) !== "platform" && !!((search.org && !organization) || (pageScope(page) === "workspace" && search.ws && !workspace))} membershipError={members.error} onLogout={onLogout} /></ActionProvider>;
+  return <ActionProvider key={`${session.user.id}:${organization?.id}:${workspace?.id}:${page}`}><DashboardShell onSearchNavigation={() => { searchNavigationFocus.current = true; }} collapsed={collapsed} onCollapsedChange={setCollapsed} session={session} organization={organization} workspace={workspace} workspaces={workspaces} page={page} invalidScope={pageScope(page) !== "platform" && !!((search.org && !organization) || (pageScope(page) === "workspace" && search.ws && !workspace))} membershipError={members.error} onLogout={onLogout} /></ActionProvider>;
 }
-function DashboardShell({ session, organization, workspace, workspaces, page, invalidScope, membershipError, onLogout, collapsed, onCollapsedChange }: { session: Session; organization?: Organization; workspace?: Workspace; workspaces: Workspace[]; page: Page; invalidScope: boolean; membershipError?: unknown; onLogout: () => void; collapsed: boolean; onCollapsedChange: (value: boolean) => void }) {
+function DashboardShell({ session, organization, workspace, workspaces, page, invalidScope, membershipError, onLogout, collapsed, onCollapsedChange, onSearchNavigation }: { onSearchNavigation: () => void; session: Session; organization?: Organization; workspace?: Workspace; workspaces: Workspace[]; page: Page; invalidScope: boolean; membershipError?: unknown; onLogout: () => void; collapsed: boolean; onCollapsedChange: (value: boolean) => void }) {
   const navigate = useNavigate({ from: "/" });
   const client = useQueryClient();
   const ask = useAction();
@@ -97,7 +109,7 @@ function DashboardShell({ session, organization, workspace, workspaces, page, in
     </SidebarUser></SidebarFooter>
   </Sidebar>;
   const crumbs = [{ label: "Platform" }, ...(pageScope(page) !== "platform" && organization ? [{ label: organization.name }] : []), ...(pageScope(page) === "workspace" && workspace ? [{ label: workspace.name }] : []), { label: currentLabel }];
-  return <TooltipProvider><AppShell collapsed={collapsed} onCollapsedChange={onCollapsedChange} sidebar={sidebar} topbar={<TopBar className="gateway-topbar" start={<Breadcrumbs className="gateway-crumbs" items={crumbs} />} end={<JumpSearch session={session} organization={pageScope(page) === "platform" ? undefined : organization} workspace={pageScope(page) === "platform" ? undefined : workspace} navigate={search => void navigate({ to: "/", search })} refresh={refreshAccess} />} />}>
+  return <TooltipProvider><AppShell collapsed={collapsed} onCollapsedChange={onCollapsedChange} sidebar={sidebar} topbar={<TopBar className="gateway-topbar" start={<Breadcrumbs className="gateway-crumbs" items={crumbs} />} end={<JumpSearch session={session} organization={pageScope(page) === "platform" ? undefined : organization} workspace={pageScope(page) === "platform" ? undefined : workspace} navigate={search => { onSearchNavigation(); void navigate({ to: "/", search }); }} refresh={refreshAccess} />} />}>
     <Main>{membershipError != null && <ErrorNotice error={membershipError} retry={() => void client.invalidateQueries({ queryKey: ["api"] })} />}
       {invalidScope ? <><Heading title="Scope not found" /><Empty title="This scope is not available">It may have been removed, or your access has changed. Select an available organization, team or project.</Empty><Button variant="secondary" onClick={() => go()}>Return to your workspace</Button></>
       : pageScope(page) === "platform" ? canView(page, session) ? <PlatformScreen page={page} session={session} go={go} /> : <><Heading title="Access not available" /><p className="notice">Your current role does not allow this screen.</p></>

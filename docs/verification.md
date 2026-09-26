@@ -1,6 +1,12 @@
 # Verification
 
-## Current pill tabs and US-dollar inputs
+## Current Bitop source refresh
+
+Refreshed the changed Button and CommandPalette sources and preserved the checked search-contrast composition patch. The source now supplies an MIT notice; it is copied verbatim and recorded with the component hashes. Verified all **45** source/copied manifest entries (44 component/support files plus LICENSE). TypeScript, **135 frontend tests**, and the production build passed.
+
+Signed-OIDC browser checks verified that a search navigation focuses the destination heading despite the scope-keyed shell remount, while Escape restores the search opener. Scope-keyed action-dialog teardown remains intact. Governance still uses pill tabs and opens the demo budget as `5.00` USD with a decimal keyboard hint. Sampled axe WCAG2 A/AA checks reported zero violations and the existing keyboard-glyph manual contrast flag. No policy, price, or provider configuration was changed during verification.
+
+## Prior pill tabs and US-dollar inputs
 
 Passed TypeScript, **131 frontend tests**, and the production Vite build. Governance now uses the vendored Bitop pill tabs for scope and detail selection instead of stacked policy panels. Budget and price forms accept USD decimal strings, convert exactly with BigInt, and preserve the existing micro-USD API contract. Tests cover prefills, exact roundtrips, ceiling comparisons, int64 input/reservation boundaries, meaningful subcent precision, and read-only aggregate totals beyond one int64 ledger entry. Verified all **44** vendored file hashes against the provenance manifest.
 

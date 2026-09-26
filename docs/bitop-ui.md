@@ -8,7 +8,7 @@ This dashboard uses **copy-and-own source**, not a published Bitop npm package o
 - Component sources under that checkout’s `registry/bitop/ui/` and `registry/bitop/lib/`.
 - Registry SHA-256 at import: `6c84c3db27ec20b5b7abe26755ca156159fb5288de03900a69e580cbf08d9358`.
 
-`apps/web/bitop-provenance.json` records selected items, recursive registry dependencies, external package dependencies, source paths, target paths, original SHA-256 hashes, and copied SHA-256 hashes. The registry homepage contains a placeholder; it is deliberately not used as a release or installation URL. No source checkout files were changed. No LICENSE file was present at the source root during this import; public redistribution licensing should be confirmed with the source owner rather than inferred from the copy-and-own installation model.
+`apps/web/bitop-provenance.json` records selected items, recursive registry dependencies, external package dependencies, source paths, target paths, original SHA-256 hashes, and copied SHA-256 hashes. The registry homepage contains a placeholder; it is deliberately not used as a release or installation URL. No source checkout files were changed. The updated source supplies an MIT license, copyright © 2026 Nicholas Cecere. Its notice is copied verbatim to `apps/web/src/components/ui/LICENSE` and included in the provenance manifest; this resolves the earlier missing-upstream-license caveat. It does not assign a license to unrelated gateway code.
 
 The layout design reference is the read-only file:
 
@@ -30,7 +30,7 @@ npm run test:web
 npm run build:web
 ```
 
-The script accepts another local checkout path as its only argument. It reads `registry.json`, resolves selected items plus all recursive `@bitop/*` dependencies, and copies their declared files to the registry targets:
+The script accepts another local checkout path as its only argument and requires the source `LICENSE` before copying anything. It reads `registry.json`, resolves selected items plus all recursive `@bitop/*` dependencies, and copies their declared files to the registry targets:
 
 - `@ui/*` → `apps/web/src/components/ui/*`
 - `@lib/*` → `apps/web/src/lib/*`
@@ -42,15 +42,15 @@ These source import aliases are rewritten:
 
 One recorded copy-and-own patch adds an optional `className` to the command-palette popup. This lets gateway composition CSS use the higher-contrast muted-text token for search group labels/hints without changing vendor CSS or global theme tokens. The script applies this exact checked patch reproducibly and records `optional-popup-className` with its copied hash. Everything else—including CSS modules, neutral-theme tokens, Base UI behavior, comments, and client directives—is preserved. `"use client"` is harmless in Vite; it does not introduce Next.js. The script refuses non-local registry dependencies and unsafe targets. It performs no network calls. Rerunning it overwrites vendored files and the manifest, so review the diff before accepting a refresh. Compare hashes with the committed manifest to detect upstream or local drift. Dependency installation is a separate lockfile-managed step.
 
-Selected items: app-shell, breadcrumbs, table, card, button, page-header, stat-card, input, field, badge, empty-state, command-palette, tabs. Recursive items include core, theme-neutral, avatar, layout, menu, tooltip, spinner, and kbd. The refreshed manifest tracks 44 files. Runtime package dependencies are `@base-ui/react`, `lucide-react`, and `@fontsource-variable/inter`, alongside the existing React stack.
+Selected items: app-shell, breadcrumbs, table, card, button, page-header, stat-card, input, field, badge, empty-state, command-palette, tabs. Recursive items include core, theme-neutral, avatar, layout, menu, tooltip, spinner, and kbd. The refreshed manifest tracks 45 files: 44 component/support files plus the upstream license notice. Runtime package dependencies are `@base-ui/react`, `lucide-react`, and `@fontsource-variable/inter`, alongside the existing React stack.
 
 ## Integration boundaries
 
 - `src/main.tsx` imports `components/ui/styles/bitop.css` once, before gateway composition CSS. Core imports structural tokens, the neutral theme, reset, and local Inter font assets.
 - TypeScript and Vite both resolve `@/*` to `apps/web/src/*`.
 - `src/pages/home.tsx` uses the real Bitop `AppShell`, Sidebar parts, `Brand`, `WorkspaceSwitcher`, `TopBar`, `Main`, menus, and breadcrumbs. The native skip target, keyboard controls, collapsed tooltips, and sidebar toggle come from Bitop. Collapse state is memory-only and survives page changes.
-- `src/components/jump-search.tsx` composes Bitop's CommandPalette, CommandPaletteTrigger, and keyboard shortcut hook. `src/lib/search.ts` filters session-scoped destinations with existing UI permissions; searches never fetch secrets or activity. The refreshed Table primitive adds its keyboard-scroll region only when ResizeObserver detects overflow, not during server rendering.
-- `src/components/ui.tsx` preserves gateway-facing wrappers and its original action lifecycle while composing actual Bitop Table/Card/PageHeader/Badge/EmptyState components. Forms use Field/Input/NativeSelect/Textarea and Bitop submit/cancel buttons. Overview and Costs use StatCard. Existing CRUD button classes bridge to the same tokens; they are not a second sidebar implementation.
+- `src/components/jump-search.tsx` composes Bitop's CommandPalette, CommandPaletteTrigger, and keyboard shortcut hook. `src/lib/search.ts` filters session-scoped destinations with existing UI permissions; searches never fetch secrets or activity. The palette's upstream `finalFocus` hook handles in-place focus restoration. For navigation that remounts the scope-keyed shell, the stable dashboard parent focuses the destination heading after the remount; dialog and transient-secret isolation is unchanged. Dismissal and refresh retain default focus restoration. The refreshed Table primitive adds its keyboard-scroll region only when ResizeObserver detects overflow, not during server rendering.
+- `src/components/ui.tsx` preserves gateway-facing wrappers and its original action lifecycle while composing actual Bitop Table/Card/PageHeader/Badge/EmptyState components. Forms use Field/Input/NativeSelect/Textarea and Bitop submit/cancel buttons. Overview and Costs use StatCard. Upstream Button now cancels activation for disabled/loading non-native render targets (such as links), in addition to marking them `aria-disabled`. Existing CRUD button classes bridge to the same tokens; they are not a second sidebar implementation.
 - Governance uses Bitop Tabs with `variant="pills"` for authorized scope selection and effective/local/inherited details. Inactive panels are unmounted; the workspace opens by default. Base UI supplies tab roles, selection, and arrow-key behavior.
 - Gateway-specific CSS is in `src/styles.css`. Vendored component styles are not edited to mimic the reference layout.
 - The gateway owns all queries, permission guards, CSRF/same-origin transport, and CRUD semantics. Rust remains the authorization boundary. No secrets enter browser storage or TanStack query/mutation caches; one-time tokens remain in transient dialog state.

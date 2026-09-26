@@ -8,6 +8,9 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const source = resolve(process.argv[2] ?? '/Users/nicholascecere/projects/typescript/bitop-ui');
 const selected = ['app-shell', 'breadcrumbs', 'table', 'card', 'button', 'page-header', 'stat-card', 'input', 'field', 'badge', 'empty-state', 'command-palette', 'tabs'];
 const registryText = await readFile(resolve(source, 'registry.json'), 'utf8');
+// Preserve the upstream notice with the copied components; fail before copying
+// if a checkout does not supply its redistribution terms.
+const licenseText = await readFile(resolve(source, 'LICENSE'), 'utf8');
 const registry = JSON.parse(registryText);
 const hash = text => createHash('sha256').update(text).digest('hex');
 const seen = new Set();
@@ -48,6 +51,9 @@ async function copy(name) {
   }
 }
 for (const name of selected) await copy(name);
+const licenseTarget = 'apps/web/src/components/ui/LICENSE';
+await writeFile(resolve(root, licenseTarget), licenseText);
+files.push({ source: 'LICENSE', target: licenseTarget, sourceSha256: hash(licenseText), copiedSha256: hash(licenseText) });
 const manifest = { source: 'Local bitop-ui checkout (copy-and-own; no network registry)', registrySha256: hash(registryText), selected, items: [...seen].sort(), dependencies: [...dependencies].sort(), files: files.sort((a, b) => a.source.localeCompare(b.source)) };
 await writeFile(resolve(root, 'apps/web/bitop-provenance.json'), JSON.stringify(manifest, null, 2) + '\n');
 console.log(`Copied ${files.length} files from ${relative(root, source)}; dependencies: ${[...dependencies].join(', ')}`);

@@ -46,6 +46,12 @@
   ],
   "files": [
     {
+      "source": "LICENSE",
+      "target": "apps/web/src/components/ui/LICENSE",
+      "sourceSha256": "51c7c62bdf50b85f8b949295966e69041dc5a97dab4244a7406a6d034070412b",
+      "copiedSha256": "51c7c62bdf50b85f8b949295966e69041dc5a97dab4244a7406a6d034070412b"
+    },
+    {
       "source": "registry/bitop/lib/bitop-utils.ts",
       "target": "apps/web/src/lib/bitop-utils.ts",
       "sourceSha256": "e7bcc9cab1e95eec4d597aaf39cb699f648696f81a777c21c3f1ccffc443e683",
@@ -108,8 +114,8 @@
     {
       "source": "registry/bitop/ui/button/button.tsx",
       "target": "apps/web/src/components/ui/button/button.tsx",
-      "sourceSha256": "0986c3bf6a2dee293950153aceae8c4128fc7529ac98a4f86d8aa90f0e44ee23",
-      "copiedSha256": "01202088ebd2bc56cddcf9247c652ab2f1472b9b62f2f61b8dfbb45c2c40f3ba"
+      "sourceSha256": "67cdba82f4c12f20fba7274cc4b058629e27e2dec9cb142864b40fd741fdfe9e",
+      "copiedSha256": "83ccfb87c7b3978f3a99fbeaee270024445d12c13d2f184551d38c8379c337f1"
     },
     {
       "source": "registry/bitop/ui/card/card.module.css",
@@ -132,8 +138,8 @@
     {
       "source": "registry/bitop/ui/command-palette/command-palette.tsx",
       "target": "apps/web/src/components/ui/command-palette/command-palette.tsx",
-      "sourceSha256": "a724d918cacea5cab36220c27a82c98942bd0d8ab278cfb7e1fc2d478f11efea",
-      "copiedSha256": "b7c97d324758414f01a83fe9977389963eb99f63951e5c2b80149b623aa6fe8f",
+      "sourceSha256": "dbe15f132cba416295a07e27fffa96452013e3e37a632e3e26151a6787bb73ea",
+      "copiedSha256": "0fe49a76d986d6f859d72100677cbacbd77c972327a5c0478d67690074f4dc80",
       "patches": [
         "optional-popup-className"
       ]
