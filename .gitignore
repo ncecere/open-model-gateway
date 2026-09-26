@@ -11,3 +11,5 @@ coverage/
 *.log
 *.dump
 /image*.png
+/.local/
+__pycache__/

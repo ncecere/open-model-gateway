@@ -1,0 +1,6 @@
+# Add only after registering the real HTTPS callback with your identity provider.
+services:
+  gateway:
+    environment:
+      GATEWAY_OIDC_ISSUER: ${GATEWAY_OIDC_ISSUER:?Set your issuer URL}
+      GATEWAY_OIDC_CLIENT_ID: ${GATEWAY_OIDC_CLIENT_ID:?Set your OIDC client ID}

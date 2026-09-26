@@ -34,6 +34,13 @@ Install with `npm ci` and run `npm run dev:web`. Vite listens at `127.0.0.1:3000
 
 For a local production-style preview, run `npm run build:web`, then `GATEWAY_WEB_DIR=apps/web/dist cargo run -p open-model-gateway -- serve`. The UI is on the gateway port. Dashboard sign-in uses Rust-owned OIDC sessions; see `docs/identity.md` and `docs/management-api.md`. Inference keys never authorize management. Native protocol support/limits are in `docs/protocol-matrix.md`.
 
+## Deployment
+
+- `Dockerfile` builds the SPA and Rust binary into a non-root runtime. Never run migrations or bootstrap automatically in `serve`/the container entrypoint.
+- `deploy/staging` and `scripts/staging.py` use a separate Compose project/volume, not the demo. Generated `.local/` secrets/backups must remain ignored and outside image build contexts.
+- Database schema changes or new SQL operations must update and test `deploy/staging/runtime-grants.sql`; runtime has explicit table/column ACLs, never owner credentials. Preserve append-only price/ledger/audit access and protected platform-user columns.
+- Real OIDC/provider acceptance is opt-in; no paid smoke requests, example credentials, or production privilege relaxation in automated tests.
+
 ## Checks
 
 ```sh
@@ -47,6 +54,8 @@ cargo test --workspace --all-features
 npm run typecheck:web
 npm run test:web
 npm run build:web
+npm run test:container
+npm run test:staging
 ```
 
 `npm run test:web` runs Vitest unit tests; do not claim browser tests completed without running them. Use real database integration tests for tenancy constraints and authorization queries. Use mock upstream servers for provider contract tests; do not incur paid provider requests in CI. Keep the roadmap and README honest as features land.

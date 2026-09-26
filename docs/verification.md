@@ -125,6 +125,20 @@ GATEWAY_OIDC_CLIENT_ID=gateway-browser-smoke
 
 Do not set a client secret. Start the gateway, browse to port 18081, and use the sign-in link. Stop both fixtures and remove only their disposable database afterward.
 
+## Single-host staging rehearsal
+
+Verified locally after the Bitop refresh:
+
+- 219 Rust tests, 135 frontend tests, four demo-issuer tests, 33 container-entrypoint cases and nine Python deployment/acceptance-helper tests passed. Frontend typecheck and Rust formatting passed.
+- Built the locked multi-stage Linux/arm64 image with Rust 1.90/Node 22; runtime runs as UID 10001, contains the built SPA and Bitop license, and has no Node/Cargo executable.
+- Booted an independent production-mode Postgres/Caddy/gateway Compose stack at `https://localhost:18443`; CA-verified HTTPS readiness succeeded, OIDC reports disabled, and unauthenticated `/api/v1/me` returns 401.
+- Runtime grants prohibit DDL/schema ownership, maintenance-database connections, platform-user provisioning, migration writes and immutable ledger/price/audit mutation. Rollback-only assertions exercised membership/key triggers and lock permissions under the actual runtime role.
+- Repeated the complete fresh-cluster initialization/migration/privilege/HTTPS/restore sequence on a disposable `omg-staging-cold` project with separate ports/state, then removed only that test project's containers and volumes.
+- Rehearsed private custom-format backups and disposable restoration using a direct migrator-role connection, with schema/history checks. This is a same-host rehearsal, **not encrypted/off-host disaster recovery or measured RTO/RPO acceptance**.
+- Confirmed the retained staging database has zero users, organizations, providers, executions and ledger rows. The existing demo was not reset. The provider helper was tested with mocks only; no paid inference was sent.
+
+CI now includes a Linux image/isolated-stack smoke; the optional manual GHCR publication workflow tests its exact image before pushing. Remote CI/publication is not implied by these local results. See [staging](staging.md) and [live acceptance](live-acceptance.md).
+
 ## Remaining acceptance work
 
-Real enterprise IdP interoperability, live upstream/model permissions, workload credential refresh, production load/security testing, ingress/TLS, provider invoices and customer billing remain unverified or unimplemented. Distributed quotas/budget reservations now have database/concurrency coverage, but have not been production-load validated. Native Responses/Messages content is bounded-buffered rather than token-by-token; see [protocol matrix](protocol-matrix.md). These milestones do not make the service ready for public launch.
+Real enterprise IdP interoperability, live upstream/model permissions, workload credential refresh, production load/security testing, public-host ingress/certificates, provider invoices and customer billing remain unverified or unimplemented. Distributed quotas/budget reservations now have database/concurrency coverage, but have not been production-load validated. Native Responses/Messages content is bounded-buffered rather than token-by-token; see [protocol matrix](protocol-matrix.md). These milestones do not make the service ready for public launch.

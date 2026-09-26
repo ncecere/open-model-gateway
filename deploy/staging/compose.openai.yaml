@@ -1,0 +1,9 @@
+# Existing OpenAI acceptance only; no inference is triggered by this overlay.
+services:
+  gateway:
+    environment:
+      OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
+    secrets: [openai_api_key]
+secrets:
+  openai_api_key:
+    file: ${STAGING_SECRETS_DIR:-../../.local/staging/secrets}/openai_api_key

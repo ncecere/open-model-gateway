@@ -1,0 +1,19 @@
+{
+	# Configuration is file-owned; don't expose an administrative HTTP API.
+	admin off
+}
+
+{$GATEWAY_HOST:localhost} {
+	# Caddy uses its local CA for localhost, public ACME for a real DNS name.
+	# No access log: query strings and auth callbacks may contain login codes.
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	reverse_proxy gateway:8080 {
+		# Stream SSE promptly. Rust owns deadlines, admission and cancellation.
+		flush_interval -1
+	}
+}

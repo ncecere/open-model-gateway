@@ -1,0 +1,137 @@
+name: omg-staging
+
+x-gateway: &gateway
+  image: ${GATEWAY_IMAGE:-open-model-gateway:staging}
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=32m
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 256
+  mem_limit: 1g
+  stop_grace_period: ${GATEWAY_STOP_GRACE_PERIOD:-150s}
+
+services:
+  postgres:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gateway_bootstrap
+      POSTGRES_DB: gateway
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    secrets: [postgres_password, migrator_password, runtime_password]
+    volumes:
+      - database:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/10-gateway.sh:ro
+      - ./init-db.sql:/opt/gateway/init-db.sql:ro
+    networks: [database]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U gateway_bootstrap -d gateway']
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    logging: &logging
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
+
+  migrate:
+    <<: *gateway
+    profiles: [ops]
+    command: [migrate]
+    environment:
+      DATABASE_URL_FILE: /run/secrets/migrator_database_url
+      GATEWAY_ENV: production
+    secrets: [migrator_database_url]
+    networks: [database]
+    depends_on:
+      postgres: {condition: service_healthy}
+    logging: *logging
+
+  grant-runtime:
+    image: postgres:17-bookworm
+    profiles: [ops]
+    user: '999:999'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      PGHOST: postgres
+      PGUSER: gateway_migrator
+      PGDATABASE: gateway
+    entrypoint: [/bin/sh, /opt/gateway/grant-runtime.sh]
+    secrets: [migrator_password]
+    volumes:
+      - ./grant-runtime.sh:/opt/gateway/grant-runtime.sh:ro
+      - ./runtime-grants.sql:/opt/gateway/runtime-grants.sql:ro
+    networks: [database]
+    depends_on:
+      postgres: {condition: service_healthy}
+    logging: *logging
+
+  gateway:
+    <<: *gateway
+    restart: unless-stopped
+    environment:
+      DATABASE_URL_FILE: /run/secrets/runtime_database_url
+      GATEWAY_ENV: production
+      GATEWAY_LISTEN: 0.0.0.0:8080
+      GATEWAY_WEB_DIR: /app/web
+      GATEWAY_PUBLIC_URL: ${GATEWAY_PUBLIC_URL:-https://localhost:18443}
+      GATEWAY_MAX_CONCURRENT_REQUESTS: ${GATEWAY_MAX_CONCURRENT_REQUESTS:-32}
+      GATEWAY_REQUEST_TIMEOUT_SECONDS: ${GATEWAY_REQUEST_TIMEOUT_SECONDS:-120}
+      GATEWAY_SECRET_ENV_ALLOWLIST: ${GATEWAY_SECRET_ENV_ALLOWLIST:-}
+      AWS_EC2_METADATA_DISABLED: 'true'
+      RUST_LOG: open_model_gateway=info
+    secrets: [runtime_database_url]
+    networks: [database, edge]
+    depends_on:
+      postgres: {condition: service_healthy}
+    logging: *logging
+
+  ingress:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ['/tmp:rw,noexec,nosuid,size=16m']
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    mem_limit: 256m
+    environment:
+      GATEWAY_HOST: ${GATEWAY_HOST:-localhost}
+    ports:
+      - '${STAGING_BIND_ADDRESS:-127.0.0.1}:${STAGING_HTTP_PORT:-18080}:80'
+      - '${STAGING_BIND_ADDRESS:-127.0.0.1}:${STAGING_HTTPS_PORT:-18443}:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [edge]
+    depends_on:
+      gateway: {condition: service_healthy}
+    logging: *logging
+
+networks:
+  database: {internal: true}
+  edge: {}
+volumes:
+  database: {}
+  caddy-data: {}
+  caddy-config: {}
+secrets:
+  postgres_password:
+    file: ${STAGING_SECRETS_DIR:-../../.local/staging/secrets}/postgres_password
+  migrator_password:
+    file: ${STAGING_SECRETS_DIR:-../../.local/staging/secrets}/migrator_password
+  runtime_password:
+    file: ${STAGING_SECRETS_DIR:-../../.local/staging/secrets}/runtime_password
+  migrator_database_url:
+    file: ${STAGING_SECRETS_DIR:-../../.local/staging/secrets}/migrator_database_url
+  runtime_database_url:
+    file: ${STAGING_SECRETS_DIR:-../../.local/staging/secrets}/runtime_database_url

@@ -22,6 +22,19 @@ docs/              Architecture, operations/setup, supported protocol contracts
 
 For a local account picker like open-rag-system, see [Local dashboard demo](docs/local-demo.md). It provides **Platform Admin**, **Organization Admin**, **Alex (Team Admin)**, and **Blair (Member)** personas at **http://127.0.0.1:3000**, using an isolated `gateway_demo` database and an explicitly enabled loopback OIDC issuer. Sample providers are disabled; usage/costs are not fabricated. Production authentication is unchanged.
 
+## Staging deployment
+
+See [staging deployment](docs/staging.md) for the multi-stage production image, local HTTPS rehearsal, separate migrator/runtime database roles, private file secrets, backup/restore checks, and OIDC setup. [Live acceptance](docs/live-acceptance.md) lists the information and explicit opt-in checks needed before testing real SSO or paid providers. The default staging stack is loopback-only and does not modify the demo.
+
+```sh
+python3 scripts/staging.py init
+python3 scripts/staging.py build
+python3 scripts/staging.py db
+python3 scripts/staging.py migrate
+python3 scripts/staging.py up
+python3 scripts/staging.py verify
+```
+
 ## Run locally
 
 Prerequisites: current stable Rust, Node.js 22.12+, npm, Docker Compose.

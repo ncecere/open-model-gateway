@@ -53,4 +53,34 @@ jobs:
       - run: npm run typecheck:web
       - run: npm run test:web
       - run: npm run test:demo
+      - run: npm run test:container
+      - run: npm run test:staging
       - run: npm run build:web
+
+  staging-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    needs: [gateway, web]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: open-model-gateway:staging
+          cache-from: type=gha,scope=staging
+          cache-to: type=gha,mode=max,scope=staging
+      - name: Migrate and verify isolated runtime authority over HTTPS
+        run: |
+          python3 scripts/staging.py init
+          python3 scripts/staging.py db
+          python3 scripts/staging.py migrate
+          python3 scripts/staging.py up
+          python3 scripts/staging.py verify
+          python3 scripts/staging.py local-ca
+          curl --fail --silent --show-error --cacert .local/staging/local-ca.crt https://localhost:18443/health/ready
+          python3 scripts/staging.py restore-check
+      - name: Stop isolated staging (retain volumes; runner is disposable)
+        if: always()
+        run: python3 scripts/staging.py down

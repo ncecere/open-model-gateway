@@ -40,7 +40,7 @@ Usage and configured-rate cost accounting are implemented, but neither is provid
 - [x] Real OpenAI/Anthropic client SDK JSON and streaming-helper contract tests.
 - [x] Published supported/unsupported matrix and Bedrock setup.
 
-Deliberate limits: native Responses/Messages frontend content is currently buffered (at most 4 MiB), not delivered token-by-token; upstreams are parsed incrementally. No multimodal content, hosted tools, reasoning, persisted Responses state, or full vendor-option passthrough. Live provider/model/IAM validation remains an operator acceptance step. Additional providers (Azure, Vertex, OpenAI-compatible), finer model capabilities, expanded canonical content, and native extensions are future increments. See [protocol matrix](protocol-matrix.md).
+Deliberate limits: native Responses/Messages frontend content is currently buffered (at most 4 MiB), not delivered token-by-token; upstreams are parsed incrementally. No multimodal content, hosted tools, reasoning, persisted Responses state, or full vendor-option passthrough. Live provider/model/IAM validation remains an operator acceptance step. The next requested provider targets are OpenAI-compatible Chat/Responses endpoints, vLLM, and SGLang, with platform-controlled origin allowlists and explicit adapter capability tests. Finer model capabilities, expanded canonical content, and native extensions remain future increments. See [protocol matrix](protocol-matrix.md).
 
 ## 4. Governance, accounting, and routing — implemented bounded scope
 
@@ -63,10 +63,16 @@ Limits count attempts, including opt-in fallbacks. Reservations require accurate
 
 ## 5. Production operations — next
 
-- [ ] Production images, TLS ingress, least-privilege runtime database roles.
+- [x] Multi-stage non-root image, HTTPS ingress and separate schema-owner/runtime database roles: single-host staging baseline, not public-launch certification.
+- [x] Private generated file secrets, explicit migration/grant jobs, bounded runtime permissions and rollback-only privilege smoke checks.
+- [x] Local custom-format backup/disposable restore rehearsal and release/recovery runbooks.
+- [x] OIDC/provider configuration overlays and an explicit-opt-in bounded live-provider acceptance helper; no real credentials or paid traffic in automation.
 - [ ] Independent security review, load tests, RLS assessment and abuse controls.
-- [ ] Backups/restores, on-call dashboards, alerts, migration/runbook exercises.
-- [ ] Live IdP, credential refresh, upstream provider and IAM acceptance.
+- [ ] Off-host encrypted backup/restore and actual recovery-time/cutover exercises.
+- [ ] On-call dashboards, OpenTelemetry metrics/traces and alerts.
+- [ ] Live IdP, automatic signing-key/credential refresh, upstream provider and IAM acceptance.
 - [ ] Tenant onboarding policies, quotas and financial billing if required.
+
+See [staging](staging.md) and [live acceptance](live-acceptance.md). OIDC remains disabled in the default rehearsal until the actual issuer/client information is supplied. Per-key restrictions, paginated workspace inventory, native streaming, active health/recovery probes and the additional provider adapters remain separate pending implementation phases. Billing scope (internal allocation versus customer invoices/payment collection) still needs a product decision.
 
 Production serves the built SPA from Rust using `GATEWAY_WEB_DIR`; Node is unnecessary at runtime. Do not launch publicly until isolation, credential protection, distributed limits, spending controls, and operations are verified. Marketplace/provider settlement remains out of initial scope.
