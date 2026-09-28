@@ -40,6 +40,13 @@ SELECT version, checksum, success FROM public._sqlx_migrations ORDER BY version;
 SELECT model_id FROM public.workspace_model_grants WHERE false FOR SHARE;
 SELECT model_id FROM public.user_model_grants WHERE false FOR SHARE;
 SELECT id FROM public.users WHERE false FOR UPDATE;
+-- Direct catalog records and pre-pagination search require no new privileges.
+SELECT id,name,provider,endpoint,region,enabled FROM public.provider_connections
+  WHERE false AND strpos(lower(name),'probe') > 0 ORDER BY name,id LIMIT 1;
+SELECT id,public_name,display_name,enabled FROM public.models
+  WHERE false AND strpos(lower(public_name),'probe') > 0 ORDER BY public_name,id LIMIT 1;
+SELECT id,model_id,provider_connection_id,upstream_model,enabled FROM public.deployments
+  WHERE false AND strpos(lower(upstream_model),'probe') > 0 ORDER BY created_at,id LIMIT 1;
 -- Exercise invoker triggers and real grant-row locks with rollback-only data.
 DO $$ DECLARE
   u uuid := gen_random_uuid(); o uuid := gen_random_uuid();
@@ -52,6 +59,19 @@ BEGIN
   INSERT INTO public.workspaces(id,organization_id,name,kind) VALUES(shared,o,'Probe project','project');
   INSERT INTO public.workspaces(id,organization_id,name,kind,owner_user_id) VALUES(personal,o,'Probe personal','personal',u);
   INSERT INTO public.workspace_memberships(organization_id,workspace_id,user_id,role) VALUES(o,personal,u,'owner'),(o,shared,u,'owner');
+  -- /me's additive metadata reads these existing columns and keeps the live
+  -- user FOR SHARE lock. No additional runtime privileges are needed.
+  PERFORM platform_admin FROM public.users WHERE id=u AND disabled_at IS NULL FOR SHARE;
+  IF NOT EXISTS (
+    SELECT org.id,org.name,org.slug,om.role,ws.id,ws.organization_id,ws.name,ws.kind,ws.owner_user_id,wm.role
+    FROM public.organizations org
+    JOIN public.workspaces ws ON ws.organization_id=org.id AND ws.disabled_at IS NULL
+    LEFT JOIN public.organization_memberships om
+      ON om.organization_id=org.id AND om.user_id=u AND om.disabled_at IS NULL
+    LEFT JOIN public.workspace_memberships wm
+      ON wm.organization_id=org.id AND wm.workspace_id=ws.id AND wm.user_id=u AND wm.disabled_at IS NULL
+    WHERE org.id=o AND org.disabled_at IS NULL AND ws.id=shared AND om.role='owner' AND wm.role='owner'
+  ) THEN RAISE EXCEPTION 'session membership projection failed'; END IF;
   INSERT INTO public.api_keys(id,organization_id,workspace_id,issued_to_user_id,name,secret_hash) VALUES(k,o,shared,u,'Never issued',decode(repeat('00',32),'hex'));
   IF (SELECT governance_key_id FROM public.api_keys WHERE id=k) <> k THEN RAISE EXCEPTION 'lineage trigger failed'; END IF;
   INSERT INTO public.models(id,public_name,display_name,enabled) VALUES(m,'probe-'||m,'Disabled probe',false);

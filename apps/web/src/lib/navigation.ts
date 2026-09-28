@@ -1,89 +1,149 @@
-import { Activity, Building2, Coins, Cpu, FileClock, KeyRound, LayoutDashboard, Mail, Network, Plug, Route, Settings, Shield, Users, UserRound } from "lucide-react";
+import { Activity, Building2, Coins, Cpu, FileClock, KeyRound, LayoutDashboard, Network, Plug, Settings, UserRound } from "lucide-react";
 import type { Organization, Session, Workspace } from "./api";
-import { canAdministerOrganization, isAdmin, type DashboardSearch, type Page } from "./permissions";
+import { canView, isAdmin, type DashboardSearch, type Page } from "./permissions";
+import { canonicalSearch, dashboardHref, parseDashboardLocation } from "./locations";
 
 export const navigation = [
   { page: "overview", label: "Overview", icon: LayoutDashboard, group: "Workspace" },
   { page: "keys", label: "API keys", icon: KeyRound, group: "Workspace" },
-  { page: "grants", label: "Model access", icon: Cpu, group: "Workspace" },
-  { page: "service-accounts", label: "Service accounts", icon: Settings, group: "Workspace" },
+  { page: "grants", label: "Models", icon: Cpu, group: "Workspace" },
   { page: "costs", label: "Costs", icon: Coins, group: "Workspace" },
-  { page: "governance", label: "Governance", icon: Shield, group: "Workspace" },
+  { page: "workspace-settings", label: "Workspace settings", icon: Settings, group: "Workspace" },
+  { page: "organization-settings", label: "Organization settings", icon: Building2, group: "Workspace" },
+  { page: "platform-overview", label: "Overview", icon: LayoutDashboard, group: "Platform" },
   { page: "organizations", label: "Organizations", icon: Building2, group: "Platform" },
   { page: "platform-teams", label: "Teams", icon: Network, group: "Platform" },
   { page: "platform-projects", label: "Projects", icon: Network, group: "Platform" },
   { page: "users", label: "Users", icon: UserRound, group: "Platform" },
-  { page: "teams", label: "Teams", icon: Network, group: "Organization" },
-  { page: "projects", label: "Projects", icon: Network, group: "Organization" },
-  { page: "assigned-models", label: "Assigned models", icon: Cpu, group: "Organization" },
-  { page: "organization-policy", label: "Organization limits", icon: Shield, group: "Organization" },
-  { page: "organization-members", label: "Members", icon: Users, group: "Organization" },
-  { page: "invitations", label: "Invitations", icon: Mail, group: "Organization" },
-  { page: "members", label: "Workspace members", icon: Users, group: "Shared workspace" },
-  { page: "model-access", label: "Model access", icon: Shield, group: "Models" },
   { page: "models", label: "Models", icon: Cpu, group: "Models" },
   { page: "providers", label: "Provider connections", icon: Plug, group: "Models" },
   { page: "deployments", label: "Deployments", icon: Activity, group: "Models" },
-  { page: "routing", label: "Routing", icon: Route, group: "Models" },
-  { page: "pricing", label: "Pricing", icon: Coins, group: "Oversight" },
   { page: "platform-audit", label: "Platform audit", icon: FileClock, group: "Oversight" },
-  { page: "audit", label: "Audit history", icon: FileClock, group: "Organization" },
-] satisfies { page: Page; label: string; icon: typeof Users; group: string }[];
+] satisfies { page: Page; label: string; icon: typeof Settings; group: string }[];
 
 export function pageScope(page: Page): "platform" | "organization" | "workspace" {
-  if (["organizations", "users", "platform-teams", "platform-projects", "models", "providers", "deployments", "routing", "pricing", "model-access", "platform-audit"].includes(page)) return "platform";
-  if (["teams", "projects", "organization-members", "invitations", "assigned-models", "organization-policy", "audit"].includes(page)) return "organization";
+  if (["platform-overview", "model-detail", "provider-detail", "deployment-detail", "organizations", "users", "platform-teams", "platform-projects", "models", "providers", "deployments", "routing", "pricing", "model-access", "platform-audit"].includes(page)) return "platform";
+  if (["organization-detail", "organization-settings", "teams", "projects", "organization-members", "invitations", "assigned-models", "organization-policy", "audit"].includes(page)) return "organization";
   return "workspace";
 }
-export function adminGroups(page: Page, platformAdmin = false, organizationAdmin = true) {
-  return platformAdmin
-    ? ["Platform", "Models", "Oversight", ...(pageScope(page) === "workspace" ? ["Shared workspace"] : [])]
-    : [...(organizationAdmin ? ["Organization"] : []), "Shared workspace"];
-}
+export function isAdminPage(page: Page) { return pageScope(page) === "platform" || page === "organization-detail"; }
+export function adminGroups(_page: Page, platformAdmin = false, _organizationAdmin = true) { return platformAdmin ? ["Platform", "Models", "Oversight"] : []; }
 export function scopeSearch(page: Page, org?: string, ws?: string): DashboardSearch {
   const scope = pageScope(page);
-  return { page, org: scope === "platform" ? undefined : org, ws: scope === "workspace" ? ws : undefined };
+  const standalone = page === "profile" || page === "accept-invitation";
+  return canonicalSearch({ page, org: scope === "platform" || standalone ? undefined : org, ws: scope === "workspace" && !standalone ? ws : undefined });
 }
-export function adminLanding(session: Session, org?: Organization): Page {
-  if (session.user.platform_admin || !canAdministerOrganization(session, org)) return "organizations";
-  return organizationLanding(session, org!);
-}
-export function organizationLanding(session: Session, org: Organization): "teams" | "projects" {
-  if (isAdmin(org.role)) return "teams";
-  const shared = session.workspaces.filter(ws => ws.organization_id === org.id && isAdmin(ws.role));
-  return shared.some(ws => ws.kind === "project") && !shared.some(ws => ws.kind === "team") ? "projects" : "teams";
-}
+export function organizationLanding(_session: Session, _org: Organization): Page { return "organization-settings"; }
+export function adminLanding(session: Session, org?: Organization): Page { return adminDestination(session, org).page!; }
 export function adminDestination(session: Session, org?: Organization, workspace?: Workspace): DashboardSearch {
-  if (session.user.platform_admin) return scopeSearch("organizations");
-  if (org && isAdmin(org.role)) return scopeSearch(organizationLanding(session, org), org.id);
+  if (session.user.platform_admin) return scopeSearch("platform-overview");
+  if (org && isAdmin(org.role)) return scopeSearch("organization-settings", org.id);
   const managed = session.workspaces.filter(ws => ws.kind !== "personal" && isAdmin(ws.role) && session.organizations.some(o => o.id === ws.organization_id));
-  const selected = managed.find(ws => ws.id === workspace?.id) ?? managed.find(ws => ws.organization_id === org?.id);
-  if (selected) return scopeSearch("members", selected.organization_id, selected.id);
+  const selected = managed.find(ws => ws.id === workspace?.id) ?? managed.find(ws => ws.organization_id === org?.id) ?? managed[0];
+  if (selected) return scopeSearch("workspace-settings", selected.organization_id, selected.id);
   const administeredOrg = session.organizations.find(o => isAdmin(o.role));
-  if (administeredOrg) return scopeSearch(organizationLanding(session, administeredOrg), administeredOrg.id);
-  const first = managed[0];
-  return first ? scopeSearch("members", first.organization_id, first.id) : scopeSearch("overview", org?.id);
+  return administeredOrg ? scopeSearch("organization-settings", administeredOrg.id) : scopeSearch("overview", org?.id);
 }
 export type ContextItem = { label: string; org?: string; ws?: string; page?: Page };
-// Workspace mode switches all accessible resources. Admin mode only offers
-// administered scopes; parent membership is not organization administration.
 export function contextOptions(session: Session, org?: Organization, admin = false): { label: string; items: ContextItem[] }[] {
-  if (admin) {
-    const managed = session.workspaces.filter(ws => ws.kind !== "personal" && isAdmin(ws.role) && session.organizations.some(o => o.id === ws.organization_id));
-    const item = (ws: Workspace): ContextItem => ({ label: session.organizations.length > 1 ? `${ws.name} · ${session.organizations.find(o => o.id === ws.organization_id)!.name}` : ws.name, org: ws.organization_id, ws: ws.id, page: "members" });
-    return [
-      { label: "Platform", items: session.user.platform_admin ? [{ label: "Platform", page: "organizations" as const }] : [] },
-      { label: "Organizations", items: session.organizations.filter(o => session.user.platform_admin || isAdmin(o.role)).map(o => ({ label: o.name, org: o.id, page: organizationLanding(session, o) })) },
-      { label: "Teams", items: managed.filter(ws => ws.kind === "team").map(item) },
-      { label: "Projects", items: managed.filter(ws => ws.kind === "project").map(item) },
-    ].filter(group => group.items.length);
-  }
+  // Admin has fixed Platform context; objects in that portal never switch its sidebar.
+  if (admin) return session.user.platform_admin ? [{ label: "Platform", items: [{ label: "Platform", page: "platform-overview" }] }] : [];
   const workspaces = session.workspaces.filter(ws => ws.organization_id === org?.id);
   return [
-    { label: "Platform", items: session.user.platform_admin ? [{ label: "Platform", page: "organizations" as const }] : [] },
     { label: "Organizations", items: session.organizations.map(o => ({ label: o.name, org: o.id, ws: undefined as string | undefined })) },
     { label: "Personal · private", items: workspaces.filter(ws => ws.kind === "personal").map(ws => ({ label: ws.name, org: ws.organization_id, ws: ws.id })) },
     { label: "Teams", items: workspaces.filter(ws => ws.kind === "team").map(ws => ({ label: ws.name, org: ws.organization_id, ws: ws.id })) },
     { label: "Projects", items: workspaces.filter(ws => ws.kind === "project").map(ws => ({ label: ws.name, org: ws.organization_id, ws: ws.id })) },
   ].filter(group => group.items.length);
+}
+
+// Old directory bookmarks were also used by scoped administrators. Translate
+// them within the requested organization instead of sending them into Admin.
+export function resolveLegacyDashboardLocation(href: string, session: Session): DashboardSearch | undefined {
+  const parsed = parseDashboardLocation(href);
+  if (!parsed || session.user.platform_admin) return parsed;
+  const url = new URL(href, "https://dashboard.invalid");
+  const legacy = url.pathname === "/" ? url.searchParams.get("page") : null;
+  if (legacy !== "organizations" && legacy !== "teams" && legacy !== "projects") return parsed;
+  const org = parsed.org ? session.organizations.find(item => item.id === parsed.org)
+    : session.organizations.find(item => isAdmin(item.role)) ?? session.organizations.find(item => session.workspaces.some(ws => ws.organization_id === item.id && ws.kind !== "personal" && isAdmin(ws.role)));
+  if (!org) return parsed;
+  if (isAdmin(org.role)) return { page: "organization-settings", org: org.id, tab: legacy === "organizations" ? "overview" : legacy };
+  const managed = session.workspaces.find(ws => ws.organization_id === org.id && ws.kind !== "personal" && isAdmin(ws.role) && (legacy === "organizations" || ws.kind === (legacy === "projects" ? "project" : "team")));
+  return managed ? { page: "workspace-settings", org: org.id, ws: managed.id } : parsed;
+}
+
+export function resolveDashboardSearch(input: DashboardSearch, session: Session): DashboardSearch {
+  const search = canonicalSearch(input);
+  const page = search.page ?? (session.user.platform_admin ? "platform-overview" : "overview");
+  if (pageScope(page) === "platform" || page === "profile" || page === "accept-invitation") return { ...search, page, org: undefined, ws: undefined };
+  // An explicit unavailable scope is preserved for the not-found screen. In
+  // particular, a bad org must never resolve a workspace from the first org.
+  const org = search.org ?? (search.ws ? session.workspaces.find(ws => ws.id === search.ws)?.organization_id : session.organizations[0]?.id);
+  const available = session.organizations.some(item => item.id === org);
+  const workspaces = available ? session.workspaces.filter(ws => ws.organization_id === org) : [];
+  const ws = pageScope(page) === "workspace" ? search.ws ?? workspaces.find(ws => ws.kind === "personal")?.id ?? workspaces[0]?.id : undefined;
+  return { ...search, page, org, ws };
+}
+// Sidebar context is navigation-only. Organization settings keep their own
+// route/API scope and never inherit a workspace's permissions or data.
+export function sidebarWorkspace(session: Session, search: DashboardSearch, remembered?: Workspace): Workspace | undefined {
+  const org = session.organizations.find(item => item.id === search.org);
+  if (!org || !search.page || isAdminPage(search.page) || search.page === "profile" || search.page === "accept-invitation") return undefined;
+  const available = session.workspaces.filter(item => item.organization_id === org.id);
+  if (search.ws) return available.find(item => item.id === search.ws);
+  if (search.page !== "organization-settings" || !canView(search.page, session, org)) return undefined;
+  return available.find(item => item.id === remembered?.id)
+    ?? available.find(item => item.kind === "personal") ?? available[0];
+}
+
+export function authorizedLocation(search: DashboardSearch, session: Session): boolean {
+  const page = search.page;
+  if (!page) return false;
+  const org = session.organizations.find(o => o.id === search.org);
+  const ws = session.workspaces.find(w => w.id === search.ws && w.organization_id === org?.id);
+  if (search.org && !org || search.ws && !ws) return false;
+  if (pageScope(page) === "organization" && !org) return false;
+  return canView(page, session, org, ws);
+}
+const storagePrefix = "omg:portal:";
+type Portal = "admin" | "workspace";
+const storageKey = (session: Session, portal: Portal) => `${storagePrefix}${session.user.id}:${portal}`;
+export function rememberPortal(storage: Pick<Storage, "setItem">, session: Session, search: DashboardSearch) {
+  if (!authorizedLocation(search, session) || search.page === "profile" || search.page === "accept-invitation") return;
+  // Search text is deliberately excluded: storage holds navigation metadata only.
+  const { page, org, ws, record, tab } = canonicalSearch(search);
+  try { storage.setItem(storageKey(session, isAdminPage(page!) ? "admin" : "workspace"), dashboardHref({ page, org, ws, record, tab })); } catch { /* Storage may be disabled. */ }
+}
+export function rememberedPortal(storage: Pick<Storage, "getItem" | "removeItem">, session: Session, portal: Portal): DashboardSearch | undefined {
+  try {
+    const key = storageKey(session, portal);
+    const href = storage.getItem(key);
+    const search = href ? parseDashboardLocation(href) : undefined;
+    if (search?.page && authorizedLocation(search, session) && isAdminPage(search.page) === (portal === "admin") && search.page !== "profile" && search.page !== "accept-invitation") {
+      const { page, org, ws, record, tab } = search;
+      return { page, org, ws, record, tab };
+    }
+    storage.removeItem(key);
+  } catch { /* Storage may be disabled. */ }
+  return undefined;
+}
+const workspaceContextKey = (session: Session, org: string) => `${storagePrefix}${session.user.id}:context:${org}`;
+export function rememberWorkspace(storage: Pick<Storage, "setItem">, session: Session, search: DashboardSearch) {
+  if (!search.org || !search.ws || !search.page || pageScope(search.page) !== "workspace" || search.page === "profile" || search.page === "accept-invitation" || !authorizedLocation(search, session)) return;
+  try { storage.setItem(workspaceContextKey(session, search.org), search.ws); } catch { /* Storage may be disabled. */ }
+}
+export function rememberedWorkspace(storage: Pick<Storage, "getItem" | "removeItem">, session: Session, org: string): Workspace | undefined {
+  try {
+    const key = workspaceContextKey(session, org);
+    const id = storage.getItem(key);
+    const workspace = session.organizations.some(item => item.id === org)
+      ? session.workspaces.find(item => item.organization_id === org && item.id === id) : undefined;
+    if (workspace) return workspace;
+    storage.removeItem(key);
+  } catch { /* Storage may be disabled. */ }
+  return undefined;
+}
+export function clearRememberedPortals(storage: Pick<Storage, "length" | "key" | "removeItem">) {
+  try { for (let i = storage.length - 1; i >= 0; i--) { const key = storage.key(i); if (key?.startsWith(storagePrefix)) storage.removeItem(key); } } catch { /* Storage may be disabled. */ }
 }

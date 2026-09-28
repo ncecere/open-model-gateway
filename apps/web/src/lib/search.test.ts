@@ -13,14 +13,14 @@ describe("permission-scoped jump search", () => {
   });
   it("offers team but not organization administration to team admins", () => {
     const manager: Session = { ...member, workspaces: [{ ...team, role: "admin" }, personal] };
-    expect(ids(manager)).toContain("page:teams");
+    expect(ids(manager)).toContain("page:workspace-settings");
     expect(ids(manager)).not.toContain("page:organization-members");
     expect(ids(manager)).not.toContain("page:platform-teams");
-    expect(jumpTargets(manager, org, manager.workspaces[0]).map(t => t.id)).toContain("page:members");
+    expect(jumpTargets(manager, org, manager.workspaces[0]).map(t => t.id)).toContain("page:workspace-settings");
   });
   it("offers organization management without granting global users to org admins", () => {
     const manager: Session = { ...member, organizations: [{ ...org, role: "admin" }] };
-    expect(ids(manager)).toContain("page:organization-members");
+    expect(ids(manager)).toContain("page:organization-settings");
     expect(ids(manager)).not.toContain("page:users");
   });
   it("uses platform destinations without leftover organization/workspace scope", () => {

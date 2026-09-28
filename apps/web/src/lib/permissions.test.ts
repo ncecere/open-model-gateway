@@ -37,6 +37,22 @@ describe("dashboard permissions (backend remains authoritative)", () => {
     expect(permissions(operator, org, workspace)).toMatchObject({ createOrganization: true, createWorkspace: false, createPersonalWorkspace: false, createUserKey: false, manageProviders: true });
     expect(permissions(operator, { ...org, membership_role: "owner" }, workspace)).toMatchObject({ createWorkspace: true, createUserKey: true });
   });
+  it("uses server capabilities rather than confusing effective authority with membership", () => {
+    const shared = { ...workspace, kind: "team" as const, role: "admin" as const, authority_source: "organization" as const, membership_role: null };
+    const orgAdmin = { ...organization, role: "admin" as const };
+    expect(permissions(session, orgAdmin, shared).createUserKey).toBe(false);
+    expect(permissions(session, orgAdmin, { ...shared, membership_role: "member" }).createUserKey).toBe(true);
+    const capabilities = { issue_own_key: false, manage_members: false, manage_owners: false, manage_service_accounts: false, delegate_models: false, manage_policy: false, view_all_activity: false };
+    expect(permissions(session, orgAdmin, { ...shared, capabilities })).toMatchObject({ createUserKey: false, manageTeam: false, manageServiceAccounts: false, manageGrants: false, managePolicy: false });
+    expect(permissions(session, orgAdmin, { ...shared, capabilities: { ...capabilities, issue_own_key: true } }).createUserKey).toBe(true);
+    expect(permissions(session, { ...orgAdmin, capabilities: { create_workspace: false, create_personal_workspace: false, manage_members: true, manage_owners: false, delegate_models: true, manage_policy: false } })).toMatchObject({ createWorkspace: false, createPersonalWorkspace: false, managePolicy: false });
+  });
+  it("fails closed for unknown direct membership under inherited shared authority", () => {
+    const shared = { ...workspace, kind: "team" as const, role: "admin" as const };
+    expect(permissions(session, { ...organization, role: "admin" }, shared).createUserKey).toBe(false);
+    expect(permissions({ ...session, user: { ...session.user, platform_admin: true } }, organization, shared).createUserKey).toBe(false);
+    expect(permissions(session, organization, { ...shared, authority_source: "direct" }).createUserKey).toBe(true);
+  });
   it("lets admins revoke other humans’ keys, but never rotate them", () => {
     expect(canManageKey(session, workspace, key)).toBe(true);
     expect(canRotateKey(session, workspace, key)).toBe(false);

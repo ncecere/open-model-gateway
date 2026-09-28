@@ -48,9 +48,13 @@ export async function api<T>(path: string, options: { method?: "GET" | "POST" | 
 }
 
 export type Role = "owner" | "admin" | "member";
-// membership_role is UI-derived from /members for an operator, not required in /me.
-export type Organization = { id: string; name: string; slug: string; role: Role | "operator"; membership_role?: Role | null };
-export type Workspace = { id: string; organization_id: string; name: string; kind: "personal" | "team" | "project"; role: Role };
+export type AuthoritySource = "platform" | "organization" | "direct" | "personal";
+export type OrganizationCapabilities = { create_workspace: boolean; create_personal_workspace: boolean; manage_members: boolean; manage_owners: boolean; delegate_models: boolean; manage_policy: boolean };
+export type WorkspaceCapabilities = { issue_own_key: boolean; manage_members: boolean; manage_owners: boolean; manage_service_accounts: boolean; delegate_models: boolean; manage_policy: boolean; view_all_activity: boolean };
+// role remains the effective authority. Actual membership is independent: an
+// inherited administrator is not automatically a member or a human key issuer.
+export type Organization = { id: string; name: string; slug: string; role: Role | "operator"; membership_role?: Role | null; authority_source?: AuthoritySource; capabilities?: OrganizationCapabilities };
+export type Workspace = { id: string; organization_id: string; name: string; kind: "personal" | "team" | "project"; role: Role; membership_role?: Role | null; authority_source?: AuthoritySource; capabilities?: WorkspaceCapabilities; own_key_denial_reason?: "organization_membership_required" | "workspace_membership_required" | null };
 export type Session = { user: { id: string; email: string; platform_admin: boolean }; organizations: Organization[]; workspaces: Workspace[] };
 export type Member = { user_id: string; email: string; role: Role; disabled_at: string | null };
 export type Key = { model_ids?: string[] | null; id: string; name: string; issued_to_user_id: string | null; service_account_id: string | null; created_at: string; expires_at: string; revoked_at: string | null };

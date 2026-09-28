@@ -97,3 +97,22 @@ time { font-size: var(--font-size-xs); }
 @media (max-width: 1100px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 760px) { .section-heading { align-items: flex-start; } .details { grid-template-columns: 1fr; gap: var(--space-2); } .details dd { margin-bottom: var(--space-3); } .dialog { padding: var(--space-5); } .toast { bottom: var(--space-4); right: var(--space-4); left: var(--space-4); justify-content: space-between; } }
 @media (max-width: 480px) { .stats { grid-template-columns: 1fr; } }
+
+/* Resource-oriented composition; vendored Bitop styles remain unchanged. */
+.platform-context { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-3); color: var(--color-text-muted); font-size: var(--font-size-sm); }
+.resource-page { min-width: 0; }
+.resource-tabs { margin-bottom: var(--space-6); }
+.resource-page > [data-tabs-root] { min-width: 0; }
+.resource-link { color: var(--color-primary); text-decoration: underline; text-underline-offset: .2em; overflow-wrap: anywhere; }
+.resource-link:hover { text-decoration-thickness: 2px; }
+.resource-link:focus-visible, .setup-steps a:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 3px; border-radius: var(--radius-1); }
+.setup-steps { padding-inline-start: var(--space-6); }
+.setup-steps > li { padding: var(--space-3) 0; }
+.setup-steps a { color: var(--color-primary); text-decoration: underline; text-underline-offset: .2em; font-weight: var(--font-weight-medium); }
+.setup-steps p { color: var(--color-text-muted); font-size: var(--font-size-sm); margin-top: var(--space-2); }
+.setup-step-heading { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); }
+.collection-filters { display: flex; align-items: flex-end; flex-wrap: wrap; gap: var(--space-3); margin-bottom: var(--space-5); }
+.collection-filters > :first-child { flex: 1 1 15rem; min-width: 0; }
+.collection-filters > :nth-child(2) { min-width: 9rem; }
+.dialog { overscroll-behavior: contain; }
+@media (max-width: 480px) { .collection-filters > * { flex: 1 1 100%; } .resource-tabs { font-size: var(--font-size-sm); } }

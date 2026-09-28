@@ -1,6 +1,27 @@
 # Verification
 
-## Current Bitop source refresh
+## Organization-settings sidebar regression
+
+Fixed Organization settings dropping the workspace navigation. Sidebar links and jump search now retain the selected workspace within the same organization; the main settings route, breadcrumbs, permissions, and data remain organization-scoped. Workspace context is revalidated against fresh session inventory, isolated by user/organization, and cleared on logout. Missing explicit scopes still do not fall back.
+
+Frontend typecheck, **295 tests**, and the production build passed. Read-only browser checks as the existing demo Organization Admin verified Product → Organization settings retains all six sidebar links, reload preserves Product, Members tab navigation retains focus/sidebar links, and API keys returns to Product. No demo configuration, membership, keys, or provider traffic was changed.
+
+## Grounded-inspired dashboard refresh
+
+Passed formatting, strict all-target/all-feature Clippy, **239 Rust tests** with disposable SQLx databases, and the separately invoked **runtime ACL rollback probe**. Frontend typecheck, **287 unit/source-render tests**, the production Vite build, Rust build, demo issuer tests, container-entrypoint tests, staging/helper tests, and diff checks passed. Catalog tests include redacted direct lookups, live operator revocation, literal search beyond the first 200 records, and filtering before pagination. Session tests cover actual versus inherited membership, human-key eligibility, personal privacy, and existing policy authority. No new runtime grants or migrations were necessary; explicit catalog/session read probes exercise the existing ACLs. Bitop component sources and the CLI lock file are unchanged.
+
+Browser acceptance used the compiled SPA, actual PostgreSQL/session middleware, the opt-in signed test OIDC issuer, and a disposable copy of the demo database. One fixture identity was exercised through controlled platform-operator, organization-admin, shared-workspace-admin, and member role changes. Checks covered:
+
+- Platform-only Admin and contextual organization/workspace settings; inherited authority versus direct membership; service-only issuance for an operator without membership, and successful human-key issuance for a direct shared member.
+- Model/provider/deployment detail links, direct missing-record handling without writable child panels, catalog search/status URLs, model/provider-prefilled deployment forms, and disabled-by-default creation.
+- URL-backed resource and nested policy tabs, selected-tab focus, read-only member limits, legacy scoped-admin bookmarks, unauthorized Admin, and unknown paths.
+- Dirty-form Keep editing/Discard behavior. The browser pass found and fixed asynchronous deployment creation losing its opener; dismissing now returns focus to Create deployment.
+- One-time key display without printing/copying the token, followed by browser Back removing the dialog and secret. The disposable key selected No models; no inference was sent.
+- Owner-personal creation/visibility and absence of sharing controls; search Escape focus restoration; 390px settings/catalog layouts without horizontal document overflow.
+
+The browser session, issuer, gateway, and disposable database were removed. The original demo retained **4 users, 6 workspaces, 8 keys, 0 revoked keys, 4 price versions, 0 executions, and 0 ledger rows**. A private local backup remains outside the build context. No provider calls, staging deployment, enterprise-SSO acceptance, or new axe scan were performed. These manual browser checks are not a committed automated end-to-end gate; full paginated session inventory and on-demand selectors remain separate roadmap work.
+
+## Prior Bitop source refresh
 
 Refreshed the changed Button and CommandPalette sources and preserved the checked search-contrast composition patch. The source now supplies an MIT notice; it is copied verbatim and recorded with the component hashes. Verified all **45** source/copied manifest entries (44 component/support files plus LICENSE). TypeScript, **135 frontend tests**, and the production build passed.
 

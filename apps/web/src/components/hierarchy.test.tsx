@@ -26,22 +26,22 @@ describe("hierarchical administration", () => {
   it("has explicit directory pages and separates platform, organization and team scopes", () => {
     expect(navigation.find(item => item.page === "organizations")?.group).toBe("Platform");
     expect(navigation.find(item => item.page === "users")?.group).toBe("Platform");
-    expect(navigation.filter(item => item.group === "Platform").map(item => item.label)).toEqual(["Organizations", "Teams", "Projects", "Users"]);
+    expect(navigation.filter(item => item.group === "Platform").map(item => item.label)).toEqual(["Overview", "Organizations", "Teams", "Projects", "Users"]);
     expect(adminGroups("teams", true)).not.toContain("Organization");
     expect(adminGroups("assigned-models", true)).not.toContain("Organization");
     expect(pageScope("platform-teams")).toBe("platform");
-    expect(navigation.find(item => item.page === "teams")?.group).toBe("Organization");
-    expect(navigation.find(item => item.page === "members")?.group).toBe("Shared workspace");
+    expect(navigation.find(item => item.page === "organization-settings")?.group).toBe("Workspace");
+    expect(navigation.find(item => item.page === "workspace-settings")?.group).toBe("Workspace");
     expect(pageScope("members")).toBe("workspace");
   });
   it("keeps the context selector strictly to existing resources", () => {
     expect(contextOptions(operator, org)).toEqual([
-      { label: "Platform", items: [{ label: "Platform", page: "organizations" }] },
       { label: "Organizations", items: [{ label: org.name, org: "org", ws: undefined }] },
       { label: "Personal · private", items: [{ label: personal.name, org: "org", ws: "private" }] },
       { label: "Teams", items: [{ label: "IT", org: "org", ws: "team" }] },
     ]);
-    expect(contextOptions({ ...operator, organizations: [], workspaces: [] })).toEqual([{ label: "Platform", items: [{ label: "Platform", page: "organizations" }] }]);
+    expect(contextOptions({ ...operator, organizations: [], workspaces: [] })).toEqual([]);
+    expect(contextOptions(operator, org, true)).toEqual([{ label: "Platform", items: [{ label: "Platform", page: "platform-overview" }] }]);
   });
   it("does not include another organization’s teams in the selector", () => {
     const result = contextOptions({ ...session, workspaces: [...session.workspaces, { ...team, id: "foreign", organization_id: "other" }] }, org);
@@ -50,20 +50,20 @@ describe("hierarchical administration", () => {
   it("does not imply an organization context on platform-wide pages", () => {
     expect(adminGroups("users", true)).toEqual(["Platform", "Models", "Oversight"]);
     expect(adminGroups("organizations", true)).toEqual(["Platform", "Models", "Oversight"]);
-    expect(adminGroups("teams")).toContain("Organization");
-    expect(contextOptions(operator).map(group => group.label)).toEqual(["Platform", "Organizations"]);
+    expect(adminGroups("teams")).toEqual([]);
+    expect(contextOptions(operator).map(group => group.label)).toEqual(["Organizations"]);
   });
   it("clears lower-level context when navigating upward", () => {
     expect(scopeSearch("organizations", "org", "private")).toEqual({ page: "organizations", org: undefined, ws: undefined });
     expect(scopeSearch("users", "org", "private").org).toBeUndefined();
-    expect(scopeSearch("teams", "org", "private")).toEqual({ page: "teams", org: "org", ws: undefined });
+    expect(scopeSearch("teams", "org", "private")).toMatchObject({ page: "organization-settings", org: "org", tab: "teams" });
     expect(scopeSearch("members", "org", "team").ws).toBe("team");
     for (const page of ["organizations", "users", "teams"] as const) expect(dashboardSearch({ page, token: "secret" }).page).toBe(page);
   });
   it("allows an operator with no organizations to reach organization creation", () => {
     const empty = { ...operator, organizations: [], workspaces: [] };
     expect(canAdminister(empty)).toBe(true); expect(canView("organizations", empty)).toBe(true);
-    expect(adminLanding(empty)).toBe("organizations");
+    expect(adminLanding(empty)).toBe("platform-overview");
     expect(render(<Organizations session={empty} go={go} />)).toContain("Create organization</button>");
   });
   it("offers organization creation only to operators", () => {
@@ -73,10 +73,10 @@ describe("hierarchical administration", () => {
   it("allows team administrators into their team directory, not platform users or organization management", () => {
     const memberOrg: Organization = { ...org, role: "member" };
     const manager: Session = { ...session, organizations: [memberOrg] };
-    expect(canAdminister(manager)).toBe(true); expect(adminLanding(manager, memberOrg)).toBe("teams");
+    expect(canAdminister(manager)).toBe(false); expect(adminLanding(manager, memberOrg)).toBe("workspace-settings");
     expect(canView("teams", manager, memberOrg)).toBe(true); expect(canView("organization-members", manager, memberOrg)).toBe(false);
     const html = render(<Teams session={manager} organization={memberOrg} go={go} />, [["/api/v1/orgs/org/teams?limit=100&offset=0", { data: [team] }]]);
-    expect(html).toContain("Members</button>"); expect(html).toContain("Rename</button>"); expect(html).not.toContain("Create team</button>");
+    expect(html).toContain("Settings</a>"); expect(html).toContain('aria-label="Actions for IT"'); expect(html).not.toContain("Create team</button>");
   });
   it("personal ownership never grants access to administrative directories", () => {
     const memberOrg: Organization = { ...org, role: "member" };

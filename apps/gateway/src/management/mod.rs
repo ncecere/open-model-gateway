@@ -6,6 +6,8 @@ mod members;
 mod project_tests;
 mod resources;
 #[cfg(all(test, feature = "integration-tests"))]
+mod session_tests;
+#[cfg(all(test, feature = "integration-tests"))]
 mod tests;
 
 use axum::{
@@ -343,6 +345,97 @@ async fn ensure_personal(
     sqlx::query("INSERT INTO workspace_model_grants(organization_id,workspace_id,model_id) SELECT organization_id,$2,model_id FROM organization_model_grants WHERE organization_id=$1 AND personal_enabled ON CONFLICT DO NOTHING").bind(org).bind(id).execute(&mut **tx).await?;
     Ok(id)
 }
+// Session capabilities describe existing endpoint authorization, not new grants.
+// Keep membership distinct from inherited authority: human key issuance needs it.
+#[derive(sqlx::FromRow)]
+struct SessionOrganization {
+    id: Uuid,
+    name: String,
+    slug: String,
+    role: String,
+    membership_role: Option<String>,
+}
+impl SessionOrganization {
+    fn into_json(self, platform_admin: bool) -> Value {
+        let is_admin = admin(&self.role);
+        let is_member = self.membership_role.is_some();
+        json!({
+            "id": self.id, "name": self.name, "slug": self.slug, "role": self.role,
+            "membership_role": self.membership_role,
+            "authority_source": if platform_admin { "platform" } else { "direct" },
+            "capabilities": {
+                "create_workspace": is_admin && is_member,
+                "create_personal_workspace": is_member,
+                "manage_members": is_admin,
+                "manage_owners": owner(&self.role),
+                "delegate_models": is_admin,
+                "manage_policy": is_admin,
+            },
+        })
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct SessionWorkspace {
+    id: Uuid,
+    organization_id: Uuid,
+    name: String,
+    kind: String,
+    role: String,
+    membership_role: Option<String>,
+    organization_membership_role: Option<String>,
+}
+impl SessionWorkspace {
+    fn into_json(self, platform_admin: bool) -> Value {
+        let personal = self.kind == "personal";
+        let is_shared = shared(&self.kind);
+        let is_admin = admin(&self.role);
+        let org_role = self.organization_membership_role.as_deref();
+        let org_admin = platform_admin || org_role.is_some_and(admin);
+        // Match require_workspace's priority, including direct shared ownership
+        // above inherited organization admin. Personal ownership is always local.
+        let authority_source = if personal {
+            "personal"
+        } else if platform_admin {
+            "platform"
+        } else if org_role == Some("owner") {
+            "organization"
+        } else if self.membership_role.as_deref() == Some("owner") {
+            "direct"
+        } else if org_admin {
+            "organization"
+        } else {
+            "direct"
+        };
+        let own_key_denial_reason = if org_role.is_none() {
+            Some("organization_membership_required")
+        } else if !personal && self.membership_role.is_none() {
+            Some("workspace_membership_required")
+        } else {
+            None
+        };
+        json!({
+            "id": self.id, "organization_id": self.organization_id,
+            "name": self.name, "kind": self.kind, "role": self.role,
+            "membership_role": self.membership_role,
+            "authority_source": authority_source,
+            "own_key_denial_reason": own_key_denial_reason,
+            "capabilities": {
+                "issue_own_key": own_key_denial_reason.is_none(),
+                "manage_members": is_shared && is_admin,
+                "manage_service_accounts": is_shared && is_admin,
+                "manage_owners": is_shared && owner(&self.role),
+                "delegate_models": org_admin,
+                // Governance uses the organization role for personal spaces,
+                // not their effective owner role. Existing ceilings and the
+                // shared-admin tightening-only rules still apply.
+                "manage_policy": if personal { org_admin } else { is_admin },
+                "view_all_activity": is_admin,
+            },
+        })
+    }
+}
+
 async fn me(State(store): State<Store>, Extension(user): Extension<BrowserPrincipal>) -> ApiResult {
     let mut tx = store.pool.begin().await?;
     let platform_admin: bool = sqlx::query_scalar(
@@ -352,15 +445,54 @@ async fn me(State(store): State<Store>, Extension(user): Extension<BrowserPrinci
     .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(denied)?;
-    let organizations:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',o.id,'name',o.name,'slug',o.slug,'role',CASE WHEN $2 THEN 'operator' ELSE m.role END) FROM organizations o LEFT JOIN organization_memberships m ON m.organization_id=o.id AND m.user_id=$1 AND m.disabled_at IS NULL WHERE o.disabled_at IS NULL AND ($2 OR m.user_id IS NOT NULL) ORDER BY o.name")
-        .bind(user.user_id).bind(platform_admin).fetch_all(&mut *tx).await?;
-    let workspaces:Vec<Value>=sqlx::query_scalar(r#"SELECT jsonb_build_object('id',w.id,'organization_id',w.organization_id,'name',w.name,'kind',w.kind,'role',CASE WHEN w.kind='personal' OR $2 OR om.role='owner' OR wm.role='owner' THEN 'owner' WHEN om.role='admin' THEN 'admin' ELSE wm.role END)
-        FROM workspaces w JOIN organizations o ON o.id=w.organization_id AND o.disabled_at IS NULL
-        LEFT JOIN organization_memberships om ON om.organization_id=w.organization_id AND om.user_id=$1 AND om.disabled_at IS NULL
-        LEFT JOIN workspace_memberships wm ON wm.organization_id=w.organization_id AND wm.workspace_id=w.id AND wm.user_id=$1 AND wm.disabled_at IS NULL
-        WHERE w.disabled_at IS NULL AND ($2 OR om.user_id IS NOT NULL) AND ((w.kind='personal' AND w.owner_user_id=$1) OR (w.kind IN ('team','project') AND ($2 OR om.role IN ('owner','admin') OR wm.user_id IS NOT NULL))) ORDER BY w.name"#)
-        .bind(user.user_id).bind(platform_admin).fetch_all(&mut *tx).await?;
+    // These projections use only the existing runtime SELECT grants; visibility,
+    // live user locking, and effective roles remain the same as before.
+    let organizations = sqlx::query_as::<_, SessionOrganization>(
+        r#"SELECT o.id, o.name, o.slug,
+                  CASE WHEN $2 THEN 'operator' ELSE m.role END AS role,
+                  m.role AS membership_role
+           FROM organizations o
+           LEFT JOIN organization_memberships m
+             ON m.organization_id=o.id AND m.user_id=$1 AND m.disabled_at IS NULL
+           WHERE o.disabled_at IS NULL AND ($2 OR m.user_id IS NOT NULL)
+           ORDER BY o.name"#,
+    )
+    .bind(user.user_id)
+    .bind(platform_admin)
+    .fetch_all(&mut *tx)
+    .await?;
+    let workspaces = sqlx::query_as::<_, SessionWorkspace>(
+        r#"SELECT w.id, w.organization_id, w.name, w.kind,
+                  CASE WHEN w.kind='personal' OR $2 OR om.role='owner' OR wm.role='owner'
+                       THEN 'owner' WHEN om.role='admin' THEN 'admin' ELSE wm.role END AS role,
+                  CASE WHEN w.kind='personal' THEN 'owner' ELSE wm.role END AS membership_role,
+                  om.role AS organization_membership_role
+           FROM workspaces w
+           JOIN organizations o ON o.id=w.organization_id AND o.disabled_at IS NULL
+           LEFT JOIN organization_memberships om
+             ON om.organization_id=w.organization_id AND om.user_id=$1 AND om.disabled_at IS NULL
+           LEFT JOIN workspace_memberships wm
+             ON wm.organization_id=w.organization_id AND wm.workspace_id=w.id
+             AND wm.user_id=$1 AND wm.disabled_at IS NULL
+           WHERE w.disabled_at IS NULL AND ($2 OR om.user_id IS NOT NULL)
+             AND ((w.kind='personal' AND w.owner_user_id=$1)
+                  OR (w.kind IN ('team','project')
+                      AND ($2 OR om.role IN ('owner','admin') OR wm.user_id IS NOT NULL)))
+           ORDER BY w.name"#,
+    )
+    .bind(user.user_id)
+    .bind(platform_admin)
+    .fetch_all(&mut *tx)
+    .await?;
     tx.commit().await?;
+    let organizations: Vec<Value> = organizations
+        .into_iter()
+        .map(|org| org.into_json(platform_admin))
+        .collect();
+    let workspaces: Vec<Value> = workspaces
+        .into_iter()
+        .map(|ws| ws.into_json(platform_admin))
+        .collect();
     Ok(Json(
         json!({"user":{"id":user.user_id,"email":user.email,"platform_admin":platform_admin},"organizations":organizations,"workspaces":workspaces}),
     ))

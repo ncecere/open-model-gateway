@@ -56,7 +56,7 @@ describe("platform infrastructure boundary", () => {
       expect(canView(page, session, org, project)).toBe(false);
     }
     expect(adminGroups("models", true)).toEqual(["Platform", "Models", "Oversight"]);
-    expect(navigation.filter(item => item.group === "Platform").map(item => item.label)).toEqual(["Organizations", "Teams", "Projects", "Users"]);
+    expect(navigation.filter(item => item.group === "Platform").map(item => item.label)).toEqual(["Overview", "Organizations", "Teams", "Projects", "Users"]);
   });
   it("reads infrastructure at platform paths, never the consuming organization", () => {
     expect(render(<Models session={operator} />, [rows("/api/v1/platform/models", [model])])).toContain("Global Model");
@@ -133,13 +133,13 @@ describe("project parity and inherited limits", () => {
   it("lands project-only admins on Projects and groups their context/search correctly", () => {
     const memberOrg = { ...org, role: "member" as const };
     const manager = { ...session, organizations: [memberOrg] };
-    expect(adminLanding(manager, memberOrg)).toBe("projects");
-    expect(organizationLanding(manager, memberOrg)).toBe("projects");
+    expect(adminLanding(manager, memberOrg)).toBe("workspace-settings");
+    expect(organizationLanding(manager, memberOrg)).toBe("organization-settings");
     expect(contextOptions(manager, memberOrg).find(group => group.label === "Projects")?.items[0].ws).toBe(project.id);
     const targets = jumpTargets(manager, memberOrg, project);
-    expect(targets.find(target => target.id === "org:org")?.search.page).toBe("projects");
+    expect(targets.find(target => target.id === "org:org")?.search.page).toBe("overview");
     expect(targets.find(target => target.id === "workspace:project")?.group).toBe("Projects");
-    expect(targets.find(target => target.id === "page:members")?.label).toBe("Project members");
+    expect(targets.find(target => target.id === "page:workspace-settings")?.label).toBe("Workspace settings");
     expect(permissions(manager, memberOrg, project)).toMatchObject({ manageTeam: true, manageServiceAccounts: true, managePolicy: true, manageGrants: false });
     expect(permissions(manager, memberOrg, { ...project, role: "member" })).toMatchObject({ managePolicy: false, manageTeam: false });
   });

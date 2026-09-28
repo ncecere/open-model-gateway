@@ -1,7 +1,10 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { API, api, orgPath, wsPath, type Organization, type Session, type Workspace } from "../lib/api";
-import { canView, isAdmin, permissions, type Page } from "../lib/permissions";
+import { isAdmin, permissions, type Page } from "../lib/permissions";
+import { authorityLabel } from "../lib/access";
+import { ResourceLink } from "../components/navigation-link";
+import { Menu, MenuItem } from "../components/ui/menu/menu";
 import { nameField, slugError } from "../lib/forms";
 import { Badge, Button, CollectionTable, DateTime, ErrorNotice, FormField, Heading, Id, NativeSelect, RowActions, useAction, useChoices } from "../components/ui";
 
@@ -28,12 +31,12 @@ export function Organizations({ session, go }: { session: Session; go: NavigateS
   return <>
     <Heading title="Organizations" description="Organizations define the consumer tenant boundary. Teams and projects are sibling shared workspaces; infrastructure is owned by the platform." actions={session.user.platform_admin && <Button onClick={create}>Create organization</Button>} />
     <CollectionTable<DirectoryOrganization> path={`${API}/orgs`} label="Organizations" empty={session.user.platform_admin ? "Create the first organization for your platform." : "No accessible organizations are available."} rowKey={org => org.id} columns={[
-      { title: "Organization", render: org => <><strong>{org.name}</strong><div className="muted">{org.slug}</div></> },
+      { title: "Organization", render: org => <><ResourceLink search={{ page: session.user.platform_admin ? "organization-detail" : isAdmin(org.role) ? "organization-settings" : "overview", org: org.id }}><strong>{org.name}</strong></ResourceLink><div className="muted">{org.slug}</div></> },
       { title: "Your access", render: org => <Badge>{org.role === "operator" ? "Platform operator" : org.role}</Badge> },
       { title: "Created", render: org => <DateTime value={org.created_at} /> },
       { title: "Manage", render: org => <RowActions>
-        {canView("teams", session, org) ? <><Button size="sm" variant="secondary" onClick={() => go(org.id, undefined, "teams")}>Teams</Button><Button size="sm" variant="secondary" onClick={() => go(org.id, undefined, "projects")}>Projects</Button></> : <Button size="sm" variant="secondary" onClick={() => go(org.id)}>Open workspace</Button>}
-        {isAdmin(org.role) && <><Button size="sm" variant="secondary" onClick={() => go(org.id, undefined, "assigned-models")}>Assigned models</Button><Button size="sm" variant="secondary" onClick={() => go(org.id, undefined, "organization-policy")}>Local limits</Button><Button size="sm" variant="secondary" onClick={() => go(org.id, undefined, "organization-members")}>Members</Button><Button size="sm" variant="ghost" onClick={() => ask({ title: "Rename organization", fields: [{ ...nameField, value: org.name }], run: values => api(orgPath(org.id), { method: "PATCH", body: { name: values.name } }) })}>Rename</Button></>}
+        <ResourceLink className="button secondary small" search={{ page: session.user.platform_admin ? "organization-detail" : isAdmin(org.role) ? "organization-settings" : "overview", org: org.id }}>Open organization</ResourceLink>
+        {isAdmin(org.role) && <Menu trigger={<Button size="sm" variant="ghost" aria-label={`Actions for ${org.name}`}>Actions</Button>}><MenuItem onClick={() => ask({ title: "Rename organization", fields: [{ ...nameField, value: org.name }], successNotice: "Organization renamed.", run: values => api(orgPath(org.id), { method: "PATCH", body: { name: values.name } }) })}>Rename</MenuItem></Menu>}
       </RowActions> },
     ]} />
   </>;
@@ -60,12 +63,12 @@ export function Teams({ session, organization, go, kind = "team" }: { session: S
     <Heading title={plural} description={`${organization.name} · Shared workspaces within this organization. This directory never includes personal workspaces.`} actions={p.createWorkspace && <Button onClick={create}>Create {kind}</Button>} />
     {!p.createWorkspace && <p className="help">Organization administrators with active organization membership can create {plural.toLowerCase()}. Shared workspace administrators manage their existing workspaces.</p>}
     <CollectionTable<Workspace> path={`${orgPath(organization.id)}/${kind}s`} label={plural} empty={p.createWorkspace ? `Create a ${kind}, then add organization members to it.` : `No shared ${kind}s are accessible in this organization.`} rowKey={workspace => workspace.id} columns={[
-      { title: singular, render: workspace => <><strong>{workspace.name}</strong><Id value={workspace.id} /></> },
+      { title: singular, render: workspace => <><ResourceLink search={{ page: "overview", org: organization.id, ws: workspace.id }}><strong>{workspace.name}</strong></ResourceLink><Id value={workspace.id} /></> },
       { title: "Organization", render: () => organization.name },
-      { title: "Your access", render: workspace => <Badge>{workspace.role}</Badge> },
+      { title: "Your access", render: workspace => <Badge>{authorityLabel(session.workspaces.find(ws => ws.id === workspace.id) ?? workspace)}</Badge> },
       { title: "Manage", render: workspace => <RowActions>
-        <Button size="sm" variant="secondary" onClick={() => go(organization.id, workspace.id, "overview")}>Open workspace</Button>
-        {isAdmin(workspace.role) && <><Button size="sm" variant="secondary" onClick={() => go(organization.id, workspace.id, "members")}>Members</Button><Button size="sm" variant="secondary" onClick={() => go(organization.id, workspace.id, "governance")}>Limits</Button><Button size="sm" variant="ghost" onClick={() => ask({ title: `Rename ${kind}`, description: `This ${kind} belongs to ${organization.name}. Renaming does not move its memberships or data.`, fields: [{ ...nameField, value: workspace.name }], run: values => api(wsPath(workspace.id), { method: "PATCH", body: { name: values.name } }) })}>Rename</Button></>}
+        <ResourceLink className="button secondary small" search={{ page: "workspace-settings", org: organization.id, ws: workspace.id }}>Settings</ResourceLink>
+        {isAdmin(workspace.role) && <Menu trigger={<Button size="sm" variant="ghost" aria-label={`Actions for ${workspace.name}`}>Actions</Button>}><MenuItem onClick={() => ask({ title: `Rename ${kind}`, description: `This ${kind} belongs to ${organization.name}. Renaming does not move its memberships or data.`, fields: [{ ...nameField, value: workspace.name }], successNotice: `${singular} renamed.`, run: values => api(wsPath(workspace.id), { method: "PATCH", body: { name: values.name } }) })}>Rename</MenuItem></Menu>}
       </RowActions> },
     ]} />
   </>;
@@ -96,13 +99,11 @@ export function PlatformTeams({ session, go, kind = "team" }: { session: Session
     {organizations.isError ? <ErrorNotice error={organizations.error} retry={() => void organizations.refetch()} /> : <FormField label="Organization" name={`${kind}-organization-filter`}><NativeSelect id={`${kind}-organization-filter`} value={filter} onChange={event => setFilter(event.target.value)} disabled={organizations.isPending}><option value="">All organizations</option>{organizations.data?.map(org => <option key={org.id} value={org.id}>{org.name}</option>)}</NativeSelect></FormField>}
     {organizations.isSuccess && !eligible.length && <p className="help">To create a {kind}, first create an organization or obtain an active membership in its parent organization.</p>}
     <CollectionTable<PlatformWorkspace> key={path} path={path} label={plural} empty={`No shared ${kind}s are available for this organization filter.`} rowKey={workspace => workspace.id} columns={[
-      { title: singular, render: workspace => <><strong>{workspace.name}</strong><Id value={workspace.id} /></> },
-      { title: "Organization", render: workspace => workspace.organization_name },
+      { title: singular, render: workspace => <><ResourceLink search={{ page: "overview", org: workspace.organization_id, ws: workspace.id }}><strong>{workspace.name}</strong></ResourceLink><Id value={workspace.id} /></> },
+      { title: "Organization", render: workspace => <ResourceLink search={{ page: "organization-detail", org: workspace.organization_id }}>{workspace.organization_name}</ResourceLink> },
       { title: "Manage", render: workspace => <RowActions>
-        <Button size="sm" variant="secondary" onClick={() => go(workspace.organization_id, workspace.id, "overview")}>Open workspace</Button>
-        <Button size="sm" variant="secondary" onClick={() => go(workspace.organization_id, workspace.id, "members")}>Members</Button>
-        <Button size="sm" variant="secondary" onClick={() => go(workspace.organization_id, workspace.id, "governance")}>Limits</Button>
-        <Button size="sm" variant="ghost" onClick={() => ask({ title: `Rename ${kind}`, description: `This ${kind} belongs to ${workspace.organization_name}.`, fields: [{ ...nameField, value: workspace.name }], run: values => api(wsPath(workspace.id), { method: "PATCH", body: { name: values.name } }) })}>Rename</Button>
+        <ResourceLink className="button secondary small" search={{ page: "workspace-settings", org: workspace.organization_id, ws: workspace.id }}>Settings</ResourceLink>
+        <Menu trigger={<Button size="sm" variant="ghost" aria-label={`Actions for ${workspace.name}`}>Actions</Button>}><MenuItem onClick={() => ask({ title: `Rename ${kind}`, description: `This ${kind} belongs to ${workspace.organization_name}.`, fields: [{ ...nameField, value: workspace.name }], successNotice: `${singular} renamed.`, run: values => api(wsPath(workspace.id), { method: "PATCH", body: { name: values.name } }) })}>Rename</MenuItem></Menu>
       </RowActions> },
     ]} />
   </>;

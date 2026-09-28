@@ -11,42 +11,31 @@ const session: Session = { user: { id: "me", email: "me@example.invalid", platfo
 const empty: Policy = { requests_per_minute: null, tokens_per_minute: null, concurrent_requests: null, monthly_budget_microusd: null };
 
 describe("administration context selection", () => {
-  it("lets operators return from an organization or workspace to Platform without stale scope", () => {
+  it("fixes Admin to Platform, including while viewing an organization object", () => {
     const operator = { ...session, user: { ...session.user, platform_admin: true } };
-    const root = contextOptions(operator, org, true).find(group => group.label === "Platform")!.items[0];
-    expect(root).toEqual({ label: "Platform", page: "organizations" });
-    expect(contextOptions(operator, org).find(group => group.label === "Platform")!.items[0]).toEqual(root);
-    expect(scopeSearch(root.page!, root.org, root.ws)).toEqual({ page: "organizations", org: undefined, ws: undefined });
-    expect(contextOptions({ ...operator, organizations: [], workspaces: [] }, undefined, true)).toEqual([{ label: "Platform", items: [root] }]);
+    const groups = [{ label: "Platform", items: [{ label: "Platform", page: "platform-overview" }] }];
+    expect(contextOptions(operator, org, true)).toEqual(groups);
+    expect(contextOptions({ ...operator, organizations: [], workspaces: [] }, undefined, true)).toEqual(groups);
+    expect(adminGroups("organization-detail", true)).toEqual(["Platform", "Models", "Oversight"]);
+    expect(scopeSearch("platform-overview", org.id, team.id)).toEqual({ page: "platform-overview", org: undefined, ws: undefined });
   });
-  it("offers shared admins only managed teams/projects, not parent or personal admin contexts", () => {
-    const groups = contextOptions({ ...session, workspaces: [...session.workspaces, { ...team, id: "ordinary", role: "member" }] }, org, true);
-    expect(groups.map(g => g.label)).toEqual(["Teams", "Projects"]);
-    expect(groups.flatMap(g => g.items).map(i => i.ws)).toEqual(["team", "project"]);
-    expect(groups.flatMap(g => g.items).every(i => i.page === "members")).toBe(true);
-    expect(adminGroups("members", false, false)).toEqual(["Shared workspace"]);
+  it("does not offer a platform portal to organization or shared-workspace admins", () => {
+    expect(contextOptions(session, org, true)).toEqual([]);
+    expect(adminGroups("members", false, false)).toEqual([]);
+    expect(contextOptions({ ...session, organizations: [{ ...org, role: "owner" }] }, org, true)).toEqual([]);
   });
   it("retains ordinary organization and personal switching in Workspace mode", () => {
     expect(contextOptions(session, org).map(g => g.label)).toEqual(["Organizations", "Personal · private", "Teams", "Projects"]);
   });
-  it("handles mixed org-admin and shared-admin roles across organizations without stranding scopes", () => {
-    const other: Organization = { ...org, id: "other", name: "Other", role: "admin" };
-    const mixed = { ...session, organizations: [org, other] };
-    const groups = contextOptions(mixed, other, true);
-    expect(groups.find(g => g.label === "Organizations")!.items.map(i => i.org)).toEqual(["other"]);
-    expect(groups.find(g => g.label === "Teams")!.items[0]).toMatchObject({ label: "Product · Company", org: "org", ws: "team", page: "members" });
-  });
-  it("lands shared admins directly in the selected or first managed workspace", () => {
-    expect(adminDestination(session, org, project)).toEqual({ page: "members", org: "org", ws: "project" });
-    expect(adminDestination(session, org, personal)).toEqual({ page: "members", org: "org", ws: "team" });
-    const other = { ...org, id: "other" };
-    expect(adminDestination({ ...session, organizations: [other, org] }, other)).toEqual({ page: "members", org: "org", ws: "team" });
+  it("lands shared admins in settings for the selected or first managed workspace", () => {
+    expect(adminDestination(session, org, project)).toEqual({ page: "workspace-settings", org: "org", ws: "project" });
+    expect(adminDestination(session, org, personal)).toEqual({ page: "workspace-settings", org: "org", ws: "team" });
     expect(adminDestination({ ...session, workspaces: [personal] }, org)).toEqual({ page: "overview", org: "org", ws: undefined });
   });
-  it("preserves org and platform administration destinations for their actual administrators", () => {
+  it("preserves contextual organization settings and platform destinations", () => {
     const adminOrg = { ...org, role: "admin" as const };
-    expect(adminDestination({ ...session, organizations: [adminOrg] }, adminOrg)).toEqual({ page: "teams", org: "org", ws: undefined });
-    expect(adminDestination({ ...session, user: { ...session.user, platform_admin: true } }, org, team)).toEqual({ page: "organizations", org: undefined, ws: undefined });
+    expect(adminDestination({ ...session, organizations: [adminOrg] }, adminOrg)).toEqual({ page: "organization-settings", org: "org", ws: undefined });
+    expect(adminDestination({ ...session, user: { ...session.user, platform_admin: true } }, org, team)).toEqual({ page: "platform-overview", org: undefined, ws: undefined });
   });
 });
 

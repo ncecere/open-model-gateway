@@ -12,6 +12,9 @@ DO $$ DECLARE c record; BEGIN
 END $$;
 GRANT USAGE ON SCHEMA public TO gateway_runtime;
 GRANT SELECT(version, checksum, success) ON public._sqlx_migrations TO gateway_runtime;
+-- Session membership/capability projections and catalog detail/search reads use
+-- this existing SELECT allowlist. No extra writes or credential projection are
+-- granted for the dashboard refresh; verify-privileges.sql exercises these reads.
 GRANT SELECT ON public.users, public.organizations, public.organization_memberships,
   public.workspaces, public.workspace_memberships, public.api_keys,
   public.provider_connections, public.models, public.deployments,

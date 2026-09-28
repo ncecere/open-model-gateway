@@ -7,6 +7,7 @@ import { saveCsv, usageCsv } from "../lib/usage-export";
 import { Badge, Button, CollectionTable, DateTime, Empty, ErrorNotice, FormField, Heading, Id, NativeSelect, Panel, StatCard, useAction, useApi, useChoices } from "../components/ui";
 import type { Scope } from "./workspace";
 import { Tabs, TabsList, Tab, TabsPanel } from "../components/ui/tabs/tabs";
+import { useDashboardNavigation } from "../components/navigation-link";
 
 type OrgScope = { session: Session; organization: Organization };
 const id = encodeURIComponent;
@@ -14,8 +15,11 @@ const count = (value: number | null) => value == null ? "Unknown" : value.toLoca
 export function PolicyPanel({ title, path, writable, ceilingLabel = "Inherited platform / organization limits", platform = false, organizationPolicy = false }: { title: string; path: string; writable: boolean; ceilingLabel?: string; platform?: boolean; organizationPolicy?: boolean }) {
   const query = useApi<{ policy: Policy; ceiling?: Policy }>(path);
   const ask = useAction();
+  const navigation = useDashboardNavigation();
+  const [localView, setLocalView] = useState<"effective" | "local" | "inherited">("effective");
+  const view = navigation?.search.view ?? localView;
   return <Panel title={title}>{query.isPending ? <p role="status">Loading policy…</p> : query.isError ? <ErrorNotice error={query.error} retry={() => void query.refetch()} /> : <>
-    {platform ? <><h3>Platform-assigned ceiling</h3><PolicyValues policy={query.data.policy} platform /></> : <Tabs key={path} defaultValue="effective" className="gateway-policy-views">
+    {platform ? <><h3>Platform-assigned ceiling</h3><PolicyValues policy={query.data.policy} platform /></> : <Tabs key={path} value={view} onValueChange={value => { const next = value === "local" || value === "inherited" ? value : "effective"; if (navigation) navigation.navigate({ ...navigation.search, view: next }); else setLocalView(next); }} className="gateway-policy-views">
       <TabsList variant="pills" className="gateway-pill-list" aria-label={`${title} details`}>
         <Tab value="effective">Effective</Tab><Tab value="local">{organizationPolicy ? "Additional" : "Local limits"}</Tab><Tab value="inherited">{organizationPolicy ? "Platform" : "Inherited"}</Tab>
       </TabsList>
@@ -33,9 +37,13 @@ function PolicyValues({ policy, inherited = false, platform = false, effective =
 }
 export function Governance({ session, organization, workspace }: OrgScope & { workspace?: Workspace }) {
   const p = permissions(session, organization, workspace);
+  const navigation = useDashboardNavigation();
+  const [localScope, setLocalScope] = useState<"workspace" | "organization" | "keys">("workspace");
+  const selectedScope = navigation?.search.scope ?? localScope;
+  const scope = selectedScope === "organization" && !p.organizationAdmin ? "workspace" : selectedScope;
   return <><Heading title={!workspace && p.organizationAdmin ? "Organization limits" : "Governance"} description={!workspace && p.organizationAdmin ? "Platform maximums are mandatory. Your organization may add stricter caps, but cannot override those maximums." : "Organization, workspace, and key limits compose; a child policy never overrides a parent limit."} />
     {p.managePolicy && !p.organizationAdmin && <p className="help">Delegated administrators can only lower existing scope caps. Ask an organization administrator to raise or remove an explicit limit, even when a tighter parent currently applies.</p>}
-    {workspace ? <Tabs key={`${organization.id}:${workspace.id}:${p.organizationAdmin}`} defaultValue="workspace" className="gateway-policy-scopes">
+    {workspace ? <Tabs key={`${organization.id}:${workspace.id}:${p.organizationAdmin}`} value={scope} onValueChange={value => { const next = value === "organization" || value === "keys" ? value : "workspace"; if (navigation) navigation.navigate({ ...navigation.search, scope: next, record: undefined, view: undefined }); else setLocalScope(next); }} className="gateway-policy-scopes">
       <TabsList variant="pills" className="gateway-pill-list" aria-label="Limit scope">
         <Tab value="workspace">Workspace</Tab>{p.organizationAdmin && <Tab value="organization">Organization</Tab>}<Tab value="keys">API keys</Tab>
       </TabsList>
@@ -49,9 +57,12 @@ export function Governance({ session, organization, workspace }: OrgScope & { wo
 function KeyPolicies({ workspace, writable }: { workspace: Workspace; writable: boolean }) {
   const path = `${wsPath(workspace.id)}/keys`;
   const keys = useChoices<Key>(path);
-  const [selected, setSelected] = useState("");
+  const [localSelected, setLocalSelected] = useState("");
+  const navigation = useDashboardNavigation();
+  const selected = navigation?.search.record ?? localSelected;
+  const setSelected = (record: string) => navigation ? navigation.navigate({ ...navigation.search, record: record || undefined, view: undefined }) : setLocalSelected(record);
   const key = keys.data?.find(key => key.id === selected);
-  return <><Panel title="Key policy selection">{keys.isPending ? <p role="status">Loading visible keys…</p> : keys.isError ? <ErrorNotice error={keys.error} retry={() => void keys.refetch()} /> : keys.data.length ? <FormField label="API key" description="Only visible keys are listed. Rotations share policy and consumption with their predecessors. Separate new keys have separate scopes; use workspace/organization limits for overall ceilings."><NativeSelect value={key?.id ?? ""} onChange={event => setSelected(event.target.value)}><option value="">Choose a key…</option>{keys.data.map(key => <option key={key.id} value={key.id}>{key.name}{key.revoked_at ? " · revoked" : ""}</option>)}</NativeSelect></FormField> : <Empty title="No visible keys">Create a key in the API keys screen to inspect its limits.</Empty>}</Panel>{key && <PolicyPanel key={key.id} title="Key policy" path={`${path}/${id(key.id)}/policy`} writable={writable} />}</>;
+  return <><Panel title="Key policy selection">{keys.isPending ? <p role="status">Loading visible keys…</p> : keys.isError ? <ErrorNotice error={keys.error} retry={() => void keys.refetch()} /> : keys.data.length ? <FormField label="API key" description="Only visible keys are listed. Rotations share policy and consumption with their predecessors. Separate new keys have separate scopes; use workspace/organization limits for overall ceilings."><NativeSelect value={key?.id ?? ""} onChange={event => setSelected(event.target.value)}><option value="">Choose a key…</option>{keys.data.map(key => <option key={key.id} value={key.id}>{key.name}{key.revoked_at ? " · revoked" : ""}</option>)}</NativeSelect></FormField> : <Empty title="No visible keys">Create a key in the API keys screen to inspect its limits.</Empty>}</Panel>{selected && keys.isSuccess && !key && <p className="notice">This key is no longer available in your current scope.</p>}{key && <PolicyPanel key={key.id} title="Key policy" path={`${path}/${id(key.id)}/policy`} writable={writable} />}</>;
 }
 export function Costs({ session, organization, workspace }: Scope) {
   const p = permissions(session, organization, workspace);

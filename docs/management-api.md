@@ -8,7 +8,7 @@ See [platform administration](platform-administration.md) for ownership, inherit
 
 - `GET /api/v1/auth/config` → `{enabled}`; `GET /api/v1/auth/login` starts OIDC; callback returns to `/`.
 - `POST /api/v1/auth/logout` ends the current browser session.
-- `GET /api/v1/me` → `{user:{id,email,platform_admin},organizations:[{id,name,slug,role}],workspaces:[{id,organization_id,name,kind,role}]}`. Workspace kind is `personal|team|project`; private spaces only appear for their owner. Effective roles include inherited shared-workspace administration.
+- `GET /api/v1/me` → `{user:{id,email,platform_admin},organizations:[...],workspaces:[...]}`. Organizations include `id,name,slug,role,membership_role,authority_source,capabilities`; workspaces include `id,organization_id,name,kind,role,membership_role,authority_source,capabilities,own_key_denial_reason`. Kind is `personal|team|project`; private spaces only appear for their owner. `role` remains effective authority; `membership_role` is actual active membership (personal ownership reports `owner`), or null. `authority_source` is `platform|organization|direct|personal`, distinguishing inherited administration from membership. These additive presentation fields do not change authorization.
 - `GET /api/v1/platform/users` → `{data:[{id,email,platform_admin,disabled_at,created_at}]}`. Current operator only; no private workspace, key or activity metadata.
 - `GET /api/v1/platform/teams` and `/api/v1/platform/projects`, optional `organization_id` UUID filter → `{data:[{id,organization_id,organization_name,name,kind,role:"operator"}]}`. Active shared resources only; no personal spaces.
 - `GET /api/v1/orgs` → `{data:[{id,name,slug,role,membership_role,created_at}]}`. `membership_role` is actual active membership, independent of platform-operator access.
@@ -19,19 +19,23 @@ See [platform administration](platform-administration.md) for ownership, inherit
 - `PATCH /api/v1/workspaces/{ws}` `{name}` renames an administered team/project. Personal spaces are not addressable through this shared-directory operation.
 - `POST /api/v1/orgs/{org}/personal-workspace` `{}` creates/retrieves the current member's private workspace.
 
+Organization capabilities are `create_workspace`, `create_personal_workspace`, `manage_members`, `manage_owners`, `delegate_models`, and `manage_policy`. Workspace capabilities are `issue_own_key`, `manage_members`, `manage_owners`, `manage_service_accounts`, `delegate_models`, `manage_policy`, and `view_all_activity`. A denied human-key capability carries `organization_membership_required` or `workspace_membership_required`; an allowed one has null reason. Capabilities reflect the session read, not a durable authorization grant: mutations continue to revalidate under current locks.
+
 ## Central infrastructure — platform operators only
 
 These resources do not require an organization context. Organizations consume assigned models instead of setting up infrastructure.
 
 - `GET/POST /api/v1/platform/providers`; POST `{name,provider,credential_ref,endpoint?,region?,enabled}` → `{id}`. GET projects `{id,name,provider,endpoint,region,enabled}` only. Credential references/values are never returned. Fixed vendor endpoints and allowlisted references remain mandatory.
-- `PATCH /api/v1/platform/providers/{id}` `{enabled,credential_ref?}`.
+- `GET /api/v1/platform/providers/{id}` returns one redacted provider object. `PATCH` accepts `{enabled,credential_ref?}`.
 - `GET/POST /api/v1/platform/models`; POST `{public_name,display_name,enabled}` → `{id}`.
-- `PATCH /api/v1/platform/models/{id}` `{enabled}`.
+- `GET /api/v1/platform/models/{id}` returns one model object. `PATCH` accepts `{enabled}`.
 - `GET/POST /api/v1/platform/deployments`; POST `{model_id,provider_connection_id,upstream_model,enabled}` → `{id}`.
-- `PATCH /api/v1/platform/deployments/{id}` `{enabled}`.
+- `GET /api/v1/platform/deployments/{id}` returns one deployment object. `PATCH` accepts `{enabled}`.
 - `GET/POST /api/v1/platform/deployments/{id}/prices`: immutable configured-rate versions.
 - `GET/PUT /api/v1/platform/models/{id}/routing` and `/api/v1/platform/deployments/{id}/routing`: central routing, residency and passive-health configuration.
 - `GET /api/v1/platform/audit`: bounded administrative events, excluding other users' private workspace activity and credential/prompt metadata.
+
+The three platform catalog collections accept `q` (trimmed, case-insensitive literal substring, at most 200 characters) and `enabled=true|false`. Deployment collections additionally accept `model_id` and `provider_connection_id` UUID filters. Filters apply before pagination and preserve deterministic ordering; `%` and `_` are literal search characters, not wildcards. Direct GETs return an object, not `{data:...}`, and require current platform authority even when the ID is known. Missing authorized records return 404. No credential references/values are added to any response.
 
 Old organization infrastructure endpoints return 403, including for operators. They cannot be used to configure providers, models, deployments, prices or routes. Use platform endpoints for central setup and assigned catalog/grant endpoints for delegation.
 

@@ -84,7 +84,7 @@ cargo run -p open-model-gateway -- provision-user --email operator@example.org -
 
 This permits one initial verified-email link and grants the operator role. It does not authenticate anyone. Existing linked identities are never rebound by this command. Run without `--platform-admin` to authorize first linking of a preprovisioned ordinary user. New SSO users otherwise receive no organization membership or administrative privilege; an invitation grants membership. See [identity setup and security](docs/identity.md).
 
-The dashboard supports workspace switching, organization/team membership, invitations, provider/model/deployment configuration, grants, user and service-account keys, executions, known-token totals, and sanitized audit history. Provider configuration is operator-only; personal workspaces remain private even from organization admins and operators. Provider credentials are references, not secrets uploaded through the browser. See [management API and permission matrix](docs/management-api.md).
+The [dashboard](docs/dashboard.md) separates platform Admin from contextual organization/workspace settings. Resource detail pages, bookmarkable pill tabs, server-side catalog search, and connected model/deployment setup preserve context. Actual membership and inherited authority are shown separately. It supports invitations, grants, user and service-account keys, executions, known-token totals, and sanitized audit history. Provider configuration is operator-only; personal workspaces remain private even from organization admins and operators. Provider credentials are references, not secrets uploaded through the browser. See [management API and permission matrix](docs/management-api.md).
 
 ## Governance, costs, and routing
 

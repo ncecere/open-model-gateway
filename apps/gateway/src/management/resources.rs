@@ -11,20 +11,23 @@ pub(super) fn platform_routes() -> Router<Store> {
         )
         .route(
             "/api/v1/platform/providers/{id}",
-            patch(platform_update_provider),
+            get(platform_provider).patch(platform_update_provider),
         )
         .route(
             "/api/v1/platform/models",
             get(platform_models).post(platform_create_model),
         )
-        .route("/api/v1/platform/models/{id}", patch(platform_update_model))
+        .route(
+            "/api/v1/platform/models/{id}",
+            get(platform_model).patch(platform_update_model),
+        )
         .route(
             "/api/v1/platform/deployments",
             get(platform_deployments).post(platform_create_deployment),
         )
         .route(
             "/api/v1/platform/deployments/{id}",
-            patch(platform_update_deployment),
+            get(platform_deployment).patch(platform_update_deployment),
         )
         .route(
             "/api/v1/platform/orgs/{org}/models/{model}",
@@ -177,12 +180,50 @@ async fn assigned(
         .bind(org).bind(model).fetch_optional(&mut **tx).await?.ok_or_else(missing)?;
     Ok(())
 }
-async fn platform_collection(s: &Store, u: &BrowserPrincipal, p: &Page, query: &str) -> ApiResult {
+// Keep scalar query fields explicit: serde_urlencoded does not support numeric
+// fields flattened through an untyped map. Reuse Page's bounds validation.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CatalogQuery {
+    limit: Option<i64>,
+    offset: Option<i64>,
+    q: Option<String>,
+    enabled: Option<bool>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeploymentQuery {
+    limit: Option<i64>,
+    offset: Option<i64>,
+    q: Option<String>,
+    enabled: Option<bool>,
+    model_id: Option<Uuid>,
+    provider_connection_id: Option<Uuid>,
+}
+fn catalog_search(q: Option<&str>) -> Result<Option<&str>, ApiError> {
+    if q.is_some_and(|q| q.chars().count() > 200) {
+        return Err(invalid());
+    }
+    Ok(q.map(str::trim).filter(|q| !q.is_empty()))
+}
+async fn platform_collection(
+    s: &Store,
+    u: &BrowserPrincipal,
+    p: &CatalogQuery,
+    query: &str,
+) -> ApiResult {
     let mut tx = catalog_tx(s, u, false).await?;
-    let (limit, offset) = p.bounds()?;
+    let (limit, offset) = Page {
+        limit: p.limit,
+        offset: p.offset,
+    }
+    .bounds()?;
+    let q = catalog_search(p.q.as_deref())?;
     let data: Vec<Value> = sqlx::query_scalar(query)
         .bind(limit)
         .bind(offset)
+        .bind(q)
+        .bind(p.enabled)
         .fetch_all(&mut *tx)
         .await?;
     tx.commit().await?;
@@ -191,23 +232,66 @@ async fn platform_collection(s: &Store, u: &BrowserPrincipal, p: &Page, query: &
 async fn platform_providers(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
-    Query(p): Query<Page>,
+    Query(p): Query<CatalogQuery>,
 ) -> ApiResult {
-    platform_collection(&s,&u,&p,"SELECT jsonb_build_object('id',id,'name',name,'provider',provider,'endpoint',endpoint,'region',region,'enabled',enabled) FROM provider_connections ORDER BY name,id LIMIT $1 OFFSET $2").await
+    // strpos is a literal substring match: %, _ and backslash are not patterns.
+    platform_collection(&s,&u,&p,"SELECT jsonb_build_object('id',id,'name',name,'provider',provider,'endpoint',endpoint,'region',region,'enabled',enabled) FROM provider_connections WHERE ($3::text IS NULL OR strpos(lower(name),lower($3))>0 OR strpos(lower(provider),lower($3))>0 OR strpos(lower(endpoint),lower($3))>0 OR strpos(lower(region),lower($3))>0) AND ($4::boolean IS NULL OR enabled=$4) ORDER BY name,id LIMIT $1 OFFSET $2").await
 }
 async fn platform_models(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
-    Query(p): Query<Page>,
+    Query(p): Query<CatalogQuery>,
 ) -> ApiResult {
-    platform_collection(&s,&u,&p,"SELECT jsonb_build_object('id',id,'public_name',public_name,'display_name',display_name,'enabled',enabled) FROM models ORDER BY public_name,id LIMIT $1 OFFSET $2").await
+    platform_collection(&s,&u,&p,"SELECT jsonb_build_object('id',id,'public_name',public_name,'display_name',display_name,'enabled',enabled) FROM models WHERE ($3::text IS NULL OR strpos(lower(public_name),lower($3))>0 OR strpos(lower(display_name),lower($3))>0) AND ($4::boolean IS NULL OR enabled=$4) ORDER BY public_name,id LIMIT $1 OFFSET $2").await
 }
 async fn platform_deployments(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
-    Query(p): Query<Page>,
+    Query(p): Query<DeploymentQuery>,
 ) -> ApiResult {
-    platform_collection(&s,&u,&p,"SELECT jsonb_build_object('id',id,'model_id',model_id,'provider_connection_id',provider_connection_id,'upstream_model',upstream_model,'enabled',enabled) FROM deployments ORDER BY created_at,id LIMIT $1 OFFSET $2").await
+    let mut tx = catalog_tx(&s, &u, false).await?;
+    let (limit, offset) = Page {
+        limit: p.limit,
+        offset: p.offset,
+    }
+    .bounds()?;
+    let q = catalog_search(p.q.as_deref())?;
+    let data: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('id',id,'model_id',model_id,'provider_connection_id',provider_connection_id,'upstream_model',upstream_model,'enabled',enabled) FROM deployments WHERE ($3::text IS NULL OR strpos(lower(upstream_model),lower($3))>0) AND ($4::boolean IS NULL OR enabled=$4) AND ($5::uuid IS NULL OR model_id=$5) AND ($6::uuid IS NULL OR provider_connection_id=$6) ORDER BY created_at,id LIMIT $1 OFFSET $2")
+        .bind(limit).bind(offset).bind(q).bind(p.enabled).bind(p.model_id).bind(p.provider_connection_id)
+        .fetch_all(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(Json(json!({"data":data})))
+}
+async fn platform_detail(s: &Store, u: &BrowserPrincipal, id: Uuid, query: &str) -> ApiResult {
+    let mut tx = catalog_tx(s, u, false).await?;
+    let data: Value = sqlx::query_scalar(query)
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(missing)?;
+    tx.commit().await?;
+    Ok(Json(data))
+}
+async fn platform_provider(
+    State(s): State<Store>,
+    Extension(u): Extension<BrowserPrincipal>,
+    Path(id): Path<Uuid>,
+) -> ApiResult {
+    platform_detail(&s,&u,id,"SELECT jsonb_build_object('id',id,'name',name,'provider',provider,'endpoint',endpoint,'region',region,'enabled',enabled) FROM provider_connections WHERE id=$1").await
+}
+async fn platform_model(
+    State(s): State<Store>,
+    Extension(u): Extension<BrowserPrincipal>,
+    Path(id): Path<Uuid>,
+) -> ApiResult {
+    platform_detail(&s,&u,id,"SELECT jsonb_build_object('id',id,'public_name',public_name,'display_name',display_name,'enabled',enabled) FROM models WHERE id=$1").await
+}
+async fn platform_deployment(
+    State(s): State<Store>,
+    Extension(u): Extension<BrowserPrincipal>,
+    Path(id): Path<Uuid>,
+) -> ApiResult {
+    platform_detail(&s,&u,id,"SELECT jsonb_build_object('id',id,'model_id',model_id,'provider_connection_id',provider_connection_id,'upstream_model',upstream_model,'enabled',enabled) FROM deployments WHERE id=$1").await
 }
 pub(super) async fn models(
     State(s): State<Store>,

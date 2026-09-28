@@ -1,8 +1,8 @@
 # Application roadmap — for review
 
-**Decision status: R07's first release was approved and completed; all other proposals remain unselected.** Choose remaining items by ID (for example, `R06, R11, R12`) or check the boxes below. Priorities are recommendations, not a delivery commitment. Previously requested ideas are included so they can be reviewed alongside new suggestions.
+**Decision status: R07's first release is complete. The Grounded-style dashboard/navigation refresh was separately approved; the remaining full proposals below are not selected.** Choose remaining items by ID (for example, `R06, R11, R12`) or check the boxes below. Priorities are recommendations, not a delivery commitment. Previously requested ideas are included so they can be reviewed alongside new suggestions.
 
-This is a source-level product and engineering review of the Rust gateway, React dashboard, documented contracts, tests and deployment tooling. It is not a new penetration test, live-provider certification or comprehensive browser audit. The original review baseline was staging milestone `dff83d7`. The user subsequently approved completing per-key restrictions (R07); that first release is now verified. Further implementation is paused pending selections.
+This is a source-level product and engineering review of the Rust gateway, React dashboard, documented contracts, tests and deployment tooling. It is not a new penetration test, live-provider certification or comprehensive browser audit. The original review baseline was staging milestone `dff83d7`. The user subsequently approved completing per-key restrictions (R07); that first release is now verified. The subsequent authorized dashboard refresh adds contextual settings, resource routes, explicit session membership/capabilities, direct catalog detail reads, and server-side catalog search. It does not authorize new roles, changes to inherited access, paid inference, or implementation of every proposal below.
 
 ## Assessment
 
@@ -75,7 +75,8 @@ Effort is relative: **S** = narrow change; **M** = several components plus tests
 
 ### R06 — Paginated workspace inventory and server-side search · P1 · L
 
-- [ ] Select R06
+- [ ] Select the remaining R06 scope
+- **Partial delivery through the dashboard refresh:** additive session action capabilities and actual membership, direct platform catalog detail reads, and server-side catalog search/filtering. `/me` inventory and most selectors are still eager; cursor-based inventory/search is not complete.
 - **Value:** keep sign-in, context switching, model delegation and search responsive with thousands of resources.
 - **Scope / done:** compact session capabilities, caller-scoped cursor search, direct selected-resource resolution, and on-demand selector pages. Replace eager `useChoices` loading where large directories feed selectors; do not fetch all pages in the background.
 - **Acceptance:** administration eligibility remains correct when the only managed workspace is off-page; deep links work beyond page one; revocation clears stale scope data; personal resources remain owner-private. Test bounded request counts and cancelled searches with large fixtures.
@@ -115,7 +116,8 @@ Effort is relative: **S** = narrow change; **M** = several components plus tests
 
 ### R11 — Developer quickstart and capability-oriented model catalog · P1 · S–M
 
-- [ ] Select R11
+- [ ] Select the remaining R11 scope
+- **Partial delivery through the dashboard refresh:** role-aware setup links, connected catalog configuration, and explicitly non-inference record-existence checks. This is not a capability catalog, SDK quickstart, or comprehensive configuration preflight.
 - **Value:** shorten the path from receiving access to making a correct first request.
 - **Scope / done:** a permission-scoped “Use this model” view showing alias, supported protocol/subset, relevant limits and configured USD prices where authorized; copyable curl/Python/TypeScript examples with placeholders; an API contract/reference and onboarding checklist linking existing setup screens.
 - **Operator companion:** a no-inference configuration preflight for missing credential references, pricing/bounds, entitlements, unsupported capabilities and routing exclusions. Keep standard vendor-compatible model listing stable; expose richer metadata through an authorized extension.

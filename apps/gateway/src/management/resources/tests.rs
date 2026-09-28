@@ -7,6 +7,8 @@ use axum::{
 use sqlx::PgPool;
 use tower::ServiceExt;
 
+mod catalog_read;
+
 struct Fixture {
     store: Store,
     org: Uuid,

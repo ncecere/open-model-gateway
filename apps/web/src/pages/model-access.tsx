@@ -2,14 +2,16 @@ import { useState } from "react";
 import { API, api, orgPath, platformPath, wsPath, type Grant, type Member, type Model, type Organization, type Session, type Workspace } from "../lib/api";
 import { ActionProvider, Button, CollectionTable, Empty, ErrorNotice, FormField, Heading, NativeSelect, Panel, RowActions, Status, useAction, useChoices } from "../components/ui";
 import { PolicyPanel } from "./governance";
+import { useDashboardNavigation } from "../components/navigation-link";
 
 export function PlatformModelAccess({ session }: { session: Session }) {
   const [selected, setSelected] = useState("");
+  const navigation = useDashboardNavigation();
   const organizations = useChoices<Organization>(`${API}/orgs`, session.user.platform_admin);
   if (!session.user.platform_admin) return <Heading title="Access not available" />;
   const organization = organizations.data?.find(org => org.id === selected);
   return <><Heading title="Model access" description="Assign platform models and a platform ceiling to an organization, then delegate within that entitlement. Assignments do not automatically grant shared workspaces." />
-    {organizations.isError ? <ErrorNotice error={organizations.error} retry={() => void organizations.refetch()} /> : <FormField label="Organization"><NativeSelect value={selected} disabled={organizations.isPending} onChange={event => setSelected(event.target.value)}><option value="">Choose an organization…</option>{organizations.data?.map(org => <option key={org.id} value={org.id}>{org.name}</option>)}</NativeSelect></FormField>}
+    {organizations.isError ? <ErrorNotice error={organizations.error} retry={() => void organizations.refetch()} /> : <FormField label="Organization"><NativeSelect value={selected} disabled={organizations.isPending} onChange={event => { if (event.target.value && navigation) navigation.navigate({ page: "organization-detail", org: event.target.value, tab: "models" }); else setSelected(event.target.value); }}><option value="">Choose an organization…</option>{organizations.data?.map(org => <option key={org.id} value={org.id}>{org.name}</option>)}</NativeSelect></FormField>}
     {organization ? <ActionProvider key={organization.id}><PlatformAssignment organization={organization} /><PolicyPanel title="Platform organization ceiling" path={`${platformPath}/orgs/${encodeURIComponent(organization.id)}/policy`} writable platform /><AssignedModels organization={organization} /></ActionProvider> : <Empty title="Select an organization">Global infrastructure needs no organization context. Choose a consumer organization here to manage its entitlements and ceiling.</Empty>}
   </>;
 }
@@ -45,8 +47,13 @@ export function recipientGrantPath(organization: string, kind: "team" | "project
   return kind === "user" ? `${orgPath(organization)}/users/${encodeURIComponent(recipient)}/grants` : `${wsPath(recipient)}/grants`;
 }
 function Delegation({ organization }: { organization: Organization }) {
-  const [kind, setKind] = useState<"team" | "project" | "user">("team");
-  const [selected, setSelected] = useState("");
+  const [localKind, setLocalKind] = useState<"team" | "project" | "user">("team");
+  const [localSelected, setLocalSelected] = useState("");
+  const navigation = useDashboardNavigation();
+  const kind = navigation?.search.recipientKind ?? localKind;
+  const selected = navigation?.search.recipient ?? localSelected;
+  const selectKind = (next: typeof kind) => { if (navigation) navigation.navigate({ ...navigation.search, recipientKind: next, recipient: undefined }); else { setLocalKind(next); setLocalSelected(""); } };
+  const setSelected = (recipient: string) => navigation ? navigation.navigate({ ...navigation.search, recipient: recipient || undefined }) : setLocalSelected(recipient);
   const path = `${orgPath(organization.id)}/${kind === "user" ? "members" : `${kind}s`}`;
   const targets = useChoices<Workspace | Member>(path);
   const choices = targets.data?.filter(item => !("disabled_at" in item) || !item.disabled_at).map(item => "user_id" in item ? { id: item.user_id, label: item.email } : { id: item.id, label: item.name }) ?? [];
@@ -54,8 +61,9 @@ function Delegation({ organization }: { organization: Organization }) {
   const grantsPath = recipientGrantPath(organization.id, kind, selected);
   return <Panel title="Delegate assigned models">
     <p className="help">Teams and projects receive shared workspace grants. Individual grants authorize only that member’s own personal use within this organization, never their team or project keys. Private workspaces are not listed.</p>
-    <FormField label="Recipient kind"><NativeSelect value={kind} onChange={event => { setKind(event.target.value as typeof kind); setSelected(""); }}><option value="team">Team</option><option value="project">Project</option><option value="user">Individual member · personal use</option></NativeSelect></FormField>
+    <FormField label="Recipient kind"><NativeSelect value={kind} onChange={event => selectKind(event.target.value as typeof kind)}><option value="team">Team</option><option value="project">Project</option><option value="user">Individual member · personal use</option></NativeSelect></FormField>
     {targets.isError ? <ErrorNotice error={targets.error} retry={() => void targets.refetch()} /> : <FormField label={kind === "user" ? "Organization member" : kind === "project" ? "Project" : "Team"}><NativeSelect value={selected} disabled={targets.isPending} onChange={event => setSelected(event.target.value)}><option value="">Choose an existing recipient…</option>{choices.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</NativeSelect></FormField>}
+    {selected && targets.isSuccess && !target && <p className="notice">This recipient is no longer available in the selected organization.</p>}
     {target && <ActionProvider key={`${kind}:${selected}`}><DelegatedGrants organization={organization} path={grantsPath} label={target.label} personal={kind === "user"} /></ActionProvider>}
   </Panel>;
 }
