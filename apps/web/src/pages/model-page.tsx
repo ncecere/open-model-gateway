@@ -48,6 +48,7 @@ import { SectionHeadings } from "../components/ui";
 import { PriceEditorDialog } from "../components/price-editor";
 import { CatalogStatusButton, ConnectionNames, ReadinessBadge, deploymentCreateAction, modelEditBody, modelEditFields, useServerPolicy } from "./catalog";
 import { PriceVersions, deploymentRoutingFields, modelRoutingFields, modelRoutingHelp } from "./governance";
+import { WhoGetsIt } from "./model-access";
 import s from "./shared.module.css";
 import m from "./models.module.css";
 import t from "../components/templates/templates.module.css";
@@ -284,7 +285,8 @@ function ModelAvailability({ model, membership, catalogs }: { model: Model; memb
   if (!membership.data || !catalogs.data) return <p role="status">Loading availability…</p>;
   if (!catalogs.data.length) return <><p className={s.muted}>No catalogs yet. <ResourceLink search={{ page: "catalogs" }}>Create a catalog</ResourceLink> to offer models to workspaces.</p>{directNote}</>;
   const offering = catalogs.data.filter(c => membership.data.catalog_ids.includes(c.id));
-  return <><DescriptionList dividers items={[{ label: "Catalogs offering this model", value: offering.length ? <ul className={s.plainList}>{offering.map(c => <li key={c.id}><ResourceLink search={{ page: "catalog-detail", record: c.id }}>{c.name}</ResourceLink></li>)}</ul> : "None" }]} /><p className={s.note}>{catalogRemovalHelp}</p>{directNote}</>;
+  // Each catalog links to its page, with who gets it (type defaults and workspaces' own catalog choices).
+  return <><DescriptionList dividers items={[{ label: "Catalogs offering this model", value: offering.length ? <ul className={s.plainList}>{offering.map(c => <li key={c.id}><ResourceLink search={{ page: "catalog-detail", record: c.id }}>{c.name}</ResourceLink> <WhoGetsIt catalog={c} /></li>)}</ul> : "None" }]} /><p className={s.note}>{catalogRemovalHelp} <ResourceLink search={{ page: "catalogs" }}>All catalogs</ResourceLink></p>{directNote}</>;
 }
 /** Client endpoints the model serves (docs/protocol-matrix.md), and which routes' adapters can carry each. */
 export function ProtocolsPanel({ protocols, routes }: { protocols: ModelProtocol[]; routes: RouteRow[] }) {

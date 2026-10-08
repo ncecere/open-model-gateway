@@ -3,11 +3,13 @@ mod catalogs;
 mod directory;
 mod governance;
 mod keys;
+mod logs;
 mod me;
 mod members;
 mod models_ux;
 mod requests;
 pub(crate) mod resources;
+mod settings;
 mod setup;
 #[cfg(all(test, feature = "integration-tests"))]
 mod tests;
@@ -42,6 +44,15 @@ const REASONS: &[(&str, &str)] = &[
     (KEY_REVOKED, "key_revoked"),
     (KEY_DISABLED, "key_disabled"),
     (MEMBER_VISIBILITY, "workspace_wide_visibility_required"),
+    (settings::KEY_LIFETIME, "key_lifetime_exceeds_maximum"),
+    (settings::SETTING_LOCKED, "setting_locked_by_environment"),
+    (
+        settings::REFERENCE_NOT_ALLOWED,
+        "credential_reference_not_allowed",
+    ),
+    (settings::PLAINTEXT_REMOTE, "plaintext_requires_loopback"),
+    (settings::EMAIL_NOT_CONFIGURED, "email_not_configured"),
+    (settings::EMAIL_TEST_LIMIT, "email_test_rate_limited"),
 ];
 const PERSONAL_NAME_FIXED: &str = "Personal workspace name is fixed";
 const PERSONAL_LIMITS: &str = "Personal workspace limits are set by the platform";
@@ -266,7 +277,10 @@ struct Name {
     name: String,
 }
 pub fn router(identity: IdentityState) -> Router<Store> {
-    routes().route_layer(middleware::from_fn_with_state(identity, require_session))
+    let sign_in = settings::SignIn(identity.sign_in_summary());
+    routes()
+        .layer(Extension(sign_in))
+        .route_layer(middleware::from_fn_with_state(identity, require_session))
 }
 fn routes() -> Router<Store> {
     Router::new()
@@ -276,6 +290,8 @@ fn routes() -> Router<Store> {
         .merge(setup::routes())
         .merge(governance::routes())
         .merge(governance::platform_routes())
+        .merge(logs::routes())
+        .merge(settings::routes())
         .route("/api/v1/me", get(me))
         .route("/api/v1/me/summary", get(me::summary))
         .route("/api/v1/me/keys", get(me::my_keys))
@@ -290,11 +306,6 @@ fn routes() -> Router<Store> {
         .route(
             "/api/v1/workspaces/{ws}/catalog",
             get(models_ux::workspace_catalog),
-        )
-        .route("/api/v1/workspaces/{ws}/requests", get(requests::requests))
-        .route(
-            "/api/v1/workspaces/{ws}/requests/{root}",
-            get(requests::request_detail),
         )
         .route(
             "/api/v1/workspaces/{ws}/usage/overview",
@@ -383,8 +394,9 @@ pub(crate) type WorkspaceContextRow = (
 async fn me(State(s): State<Store>, Extension(u): Extension<BrowserPrincipal>) -> ApiResult {
     let mut tx = resources::installation_tx(&s).await?;
     let role = resources::platform_role(&mut tx, u.user_id).await?;
+    // Presentation settings (Admin > Settings > General) everyone may see.
     let installation: Value = sqlx::query_scalar(
-        "SELECT jsonb_build_object('id',id,'name',name) FROM installation WHERE singleton",
+        "SELECT jsonb_build_object('id',i.id,'name',i.name,'support_url',s.support_url,'logo_url',s.logo_url,'key_max_lifetime_days',s.human_key_max_lifetime_days) FROM installation i JOIN installation_settings s ON s.singleton WHERE i.singleton",
     )
     .fetch_one(&mut *tx)
     .await?;

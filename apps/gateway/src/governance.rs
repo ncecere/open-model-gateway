@@ -524,8 +524,8 @@ async fn admit_checked(
     if let Some((_, error)) = denial {
         return Err(error);
     }
-    sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,started_at,root_request_id,attempt_number,workload_kind,cost_center_id,cost_center_name,cost_center_code) SELECT $1,w.id,$3,$4,$5,$6,$7,'started',$8,$9,$10,$11,w.cost_center_id,c.name,c.code FROM workspaces w LEFT JOIN cost_centers c ON c.id=w.cost_center_id WHERE w.id=$2")
-        .bind(record.id).bind(workspace).bind(key).bind(record.deployment_id).bind(&record.model).bind(&record.provider).bind(record.streamed).bind(now).bind(record.root_request_id).bind(record.attempt_number).bind(workload.kind.as_str()).execute(&mut *tx).await.map_err(storage)?;
+    sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,started_at,root_request_id,attempt_number,workload_kind,cost_center_id,cost_center_name,cost_center_code,upstream_model,client_session_id,client_app) SELECT $1,w.id,$3,$4,$5,$6,$7,'started',$8,$9,$10,$11,w.cost_center_id,c.name,c.code,$12,$13,$14 FROM workspaces w LEFT JOIN cost_centers c ON c.id=w.cost_center_id WHERE w.id=$2")
+        .bind(record.id).bind(workspace).bind(key).bind(record.deployment_id).bind(&record.model).bind(&record.provider).bind(record.streamed).bind(now).bind(record.root_request_id).bind(record.attempt_number).bind(workload.kind.as_str()).bind(&record.upstream_model).bind(&record.client.session_id).bind(&record.client.app).execute(&mut *tx).await.map_err(storage)?;
     sqlx::query("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,price_id,admitted_at,minute_start,month_start,lease_expires_at,state,reserved_tokens,held_microusd,unbounded_cost) VALUES($1,$2,$3,$4,$5,$6,date_trunc('minute',$6::timestamptz,'UTC'),date_trunc('month',$6::timestamptz,'UTC'),$7,'pending',$8,$9,$10)")
         .bind(record.id).bind(workspace).bind(key).bind(record.deployment_id).bind(price.as_ref().map(|p|p.id)).bind(now).bind(lease).bind(tokens).bind(held).bind(held.is_none()).execute(&mut *tx).await.map_err(storage)?;
     ledger(
@@ -937,6 +937,28 @@ async fn free_rejection(
 }
 /// Identical terminal finishes include the full normalized breakdown, not just raw counts.
 pub async fn finish(store: &Store, record: &ExecutionFinish) -> Result<(), InferenceError> {
+    finish_with_telemetry(
+        store,
+        record,
+        &crate::inference::repository::AttemptTelemetry::default(),
+    )
+    .await
+}
+/// [`finish`] plus attempt telemetry (finish reason, timings, reasoning
+/// tokens), written in the same transaction as the terminal state. Telemetry
+/// is metadata only and never affects accounting or idempotency.
+pub async fn finish_with_telemetry(
+    store: &Store,
+    record: &ExecutionFinish,
+    telemetry: &crate::inference::repository::AttemptTelemetry,
+) -> Result<(), InferenceError> {
+    let telemetry = telemetry.for_outcome(record.outcome);
+    let ms = |v: Option<u64>| v.map(|n| n.min(i64::MAX as u64) as i64);
+    let reasoning = record
+        .usage
+        .reasoning_tokens
+        .filter(|n| *n <= i64::MAX as u64)
+        .map(|n| n as i64);
     let mut tx = store.pool.begin().await.map_err(storage)?;
     lock(&mut tx).await?;
     let r = reservation(&mut tx, record.id).await?;
@@ -979,8 +1001,9 @@ pub async fn finish(store: &Store, record: &ExecutionFinish) -> Result<(), Infer
         None
     };
     let components = value.components.filter(|_| actual.is_some());
-    let changed=sqlx::query("UPDATE inference_executions SET state=$2,error_code=$3,input_tokens=$4,output_tokens=$5,billing_usage=$6,elapsed_ms=$7,completed_at=clock_timestamp(),meter_usage=$8,output_image_variant=$9,provider_cost_microusd=$10 WHERE id=$1 AND state='started'")
-        .bind(record.id).bind(record.outcome.as_str()).bind(record.error.map(|e|e.code())).bind(input).bind(output).bind(&billing).bind(record.elapsed_ms.min(i64::MAX as u64)as i64).bind(&m.meters).bind(&m.variant).bind(m.provider_cost).execute(&mut *tx).await.map_err(storage)?.rows_affected();
+    let changed=sqlx::query("UPDATE inference_executions SET state=$2,error_code=$3,input_tokens=$4,output_tokens=$5,billing_usage=$6,elapsed_ms=$7,completed_at=clock_timestamp(),meter_usage=$8,output_image_variant=$9,provider_cost_microusd=$10,finish_reason=$11,time_to_first_token_ms=$12,generation_ms=$13,reasoning_tokens=$14 WHERE id=$1 AND state='started'")
+        .bind(record.id).bind(record.outcome.as_str()).bind(record.error.map(|e|e.code())).bind(input).bind(output).bind(&billing).bind(record.elapsed_ms.min(i64::MAX as u64)as i64).bind(&m.meters).bind(&m.variant).bind(m.provider_cost)
+        .bind(telemetry.finish_reason.map(|f|f.as_str())).bind(ms(telemetry.time_to_first_token_ms)).bind(ms(telemetry.generation_ms)).bind(reasoning).execute(&mut *tx).await.map_err(storage)?.rows_affected();
     if changed != 1 {
         return Err(InferenceError::Storage);
     }
@@ -1013,7 +1036,7 @@ pub async fn reconcile_expired(store: &Store, limit: i64) -> Result<u64, Inferen
         lock(&mut tx).await?;
         let changed=sqlx::query("UPDATE governance_reservations SET state='unknown' WHERE execution_id=$1 AND state='pending' AND lease_expires_at<=clock_timestamp()").bind(id).execute(&mut *tx).await.map_err(storage)?.rows_affected();
         if changed == 1 {
-            let changed=sqlx::query("UPDATE inference_executions SET state='cancelled',error_code='lease_expired',completed_at=clock_timestamp() WHERE id=$1 AND state='started'").bind(id).execute(&mut *tx).await.map_err(storage)?.rows_affected();
+            let changed=sqlx::query("UPDATE inference_executions SET state='cancelled',error_code='lease_expired',finish_reason='cancelled',completed_at=clock_timestamp() WHERE id=$1 AND state='started'").bind(id).execute(&mut *tx).await.map_err(storage)?.rows_affected();
             if changed != 1 {
                 return Err(InferenceError::Storage);
             }

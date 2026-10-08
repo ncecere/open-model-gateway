@@ -40,6 +40,8 @@ export type StatTileProps = {
   value: ReactNode | null | undefined;
   /** Muted footnote under the value, e.g. "3 unpriced requests". */
   hint?: ReactNode;
+  /** A last line that may hold its own link or button (kept above a linked tile's stretched link), e.g. "View unresolved". */
+  details?: ReactNode;
   /** Decorative icon. */
   icon?: ReactNode;
   /** Oldest-first series for a sparkline (null/NaN = no data gap). Two or more points are needed to draw it. */
@@ -64,7 +66,7 @@ function sentimentOf(direction: Change["direction"], increaseIs: DeltaSemantics)
   return good ? "positive" : "negative";
 }
 
-export function StatTile({ label, value, hint, icon, series, seriesLabel, formatSeriesValue = v => v.toLocaleString(), delta, noComparisonLabel = "No comparison", href, render, onClick, className }: StatTileProps) {
+export function StatTile({ label, value, hint, details, icon, series, seriesLabel, formatSeriesValue = v => v.toLocaleString(), delta, noComparisonLabel = "No comparison", href, render, onClick, className }: StatTileProps) {
   const change = delta ? ("change" in delta ? delta.change : percentChange(delta.current, delta.previous)) : null;
   const points = series?.map(v => (v === null || !Number.isFinite(v) ? Number.NaN : v)) ?? [];
   const finite = points.filter(Number.isFinite);
@@ -83,8 +85,10 @@ export function StatTile({ label, value, hint, icon, series, seriesLabel, format
       chart={chart}
       href={href}
       render={linkRender}
+      details={details}
       delta={change ? { value: change.text, trend: change.direction, sentiment: change.text === "New" ? "neutral" : sentimentOf(change.direction, delta?.increaseIs ?? "good"), label: delta?.label } : undefined}
-      hint={delta && !change ? <>{noComparisonLabel}{hint ? <> · {hint}</> : null}</> : hint}
+      // With a sparkline, always keep the one-line hint row so charts in a row of tiles line up.
+      hint={delta && !change ? <>{noComparisonLabel}{hint ? <> · {hint}</> : null}</> : hint ?? (chart ? <span aria-hidden>{"\u00a0"}</span> : undefined)}
     />
   );
 }

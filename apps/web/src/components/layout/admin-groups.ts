@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-const known = ["People", "Models", "Usage & spend", "Records"];
+const known = ["People", "Models", "Usage & spend", "Records", "Settings"];
 const key = "omg.enterprise.adminNavOpen";
 export function currentGroups(saved: string[]) { return [...new Set(saved)].filter(label => known.includes(label)); }
 function read() { try { const parsed: unknown = JSON.parse(globalThis.localStorage?.getItem(key) ?? "[]"); return currentGroups(Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : []); } catch { return []; } }

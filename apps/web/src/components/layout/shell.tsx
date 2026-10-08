@@ -35,7 +35,9 @@ export function selectedWorkspace(session: Session, workspace?: Workspace, remem
 export function shellCrumbs(session: Session, search: DashboardSearch, label: string, workspace?: Workspace, record?: CrumbParent): (Omit<BreadcrumbItem, "render"> & { to?: DashboardSearch })[] {
   const page = search.page ?? "overview", admin = canAdminister(session) && isAdminPage(page), parent = detailParents[page];
   const between = record ? [{ label: record.label, to: record.to }] : [];
-  if (admin) return [{ label: "Admin", icon: <Shield aria-hidden />, to: { page: "platform-overview" } }, ...(parent ? [{ label: page === "workspace-detail" && search.kind === "project" ? "Projects" : navigation.find(n => n.page === parent)!.label, to: { page: page === "workspace-detail" && search.kind === "project" ? "platform-projects" : parent } as DashboardSearch }] : []), ...between, { label }];
+  // Admin › Settings › <page>: settings pages sit under one Settings crumb (its first page).
+  const settings = navigation.find(n => n.page === page)?.group === "Settings" ? [{ label: "Settings", to: { page: "settings-general" } as DashboardSearch }] : [];
+  if (admin) return [{ label: "Admin", icon: <Shield aria-hidden />, to: { page: "platform-overview" } }, ...settings, ...(parent ? [{ label: page === "workspace-detail" && search.kind === "project" ? "Projects" : navigation.find(n => n.page === parent)!.label, to: { page: page === "workspace-detail" && search.kind === "project" ? "platform-projects" : parent } as DashboardSearch }] : []), ...between, { label }];
   // Workspace records (a request, a key) sit under their list page: Product › Requests › Request 1a2b….
   if (workspace) return [{ label: workspace.name, icon: workspace.kind === "personal" ? <UserRound aria-hidden /> : <Boxes aria-hidden />, to: { page: "overview", ws: workspace.id } }, ...(parent ? [{ label: navigation.find(n => n.page === parent)?.label ?? "", to: { page: parent, ws: workspace.id } as DashboardSearch }] : []), ...between, { label }];
   return [{ label, icon: page === "home" ? <House aria-hidden /> : page === "profile" ? <UserRound aria-hidden /> : undefined }];

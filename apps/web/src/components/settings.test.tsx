@@ -1,0 +1,144 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
+import { dashboardRouteTree } from "../router";
+import { abortRequests } from "../lib/api";
+import { admin, auditor, testClient } from "../lib/test-fixtures";
+import { emailErrors, httpsUrlError, isLoopback, type EmailDraft, type EmailSettings, type PrivacySettings } from "../lib/settings";
+
+beforeEach(() => { document.cookie = "omg_csrf=test-csrf; Path=/"; localStorage.clear(); sessionStorage.clear(); Object.defineProperty(Element.prototype, "getAnimations", { configurable: true, value: () => [] }); vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} }); Object.defineProperty(window, "matchMedia", { configurable: true, value: () => ({ matches: false, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent() { return false; } }) }); });
+afterEach(() => { cleanup(); abortRequests(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+const general = { display_name: "Example gateway", support_url: null, logo_url: null, human_key_max_lifetime_days: 365, timezone: "UTC", updated_at: "2026-10-08T00:00:00Z", updated_by: null };
+const privacy: PrivacySettings = {
+  openrouter_data_collection: { value: "deny", stored: "deny", locked: false, source: "installation", variable: "GATEWAY_OPENROUTER_DATA_COLLECTION" },
+  request_log_retention_days: { value: null, stored: null, locked: false, source: "installation", variable: "GATEWAY_EXECUTION_DETAIL_RETENTION_DAYS", minimum: 30, maximum: 3650 },
+  prompt_response_storage: "never_stored", updated_at: "2026-10-08T00:00:00Z",
+};
+const email: EmailSettings = { configured: false, status: "not_configured", host: null, port: null, tls: null, username: null, password_ref: null, password_ref_allowed: null, from_address: null, from_name: null, public_url_configured: true, last_test: null, updated_at: "2026-10-08T00:00:00Z" };
+const ready: EmailSettings = { ...email, configured: true, status: "ready", host: "smtp.example.com", port: 587, tls: "starttls", from_address: "gateway@example.com" };
+
+type Handler = (path: string, init?: RequestInit) => unknown;
+function serve(session = admin, handler: Handler = () => undefined) {
+  const fetch = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
+    if (path === "/api/v1/me") return Promise.resolve(Response.json(session));
+    const custom = handler(path, init);
+    if (custom instanceof Response) return Promise.resolve(custom);
+    if (custom !== undefined) return Promise.resolve(Response.json(custom));
+    if (path.endsWith("/settings/general")) return Promise.resolve(Response.json(general));
+    if (path.endsWith("/settings/privacy")) return Promise.resolve(Response.json(privacy));
+    if (path.endsWith("/settings/email")) return Promise.resolve(Response.json(email));
+    return Promise.resolve(Response.json({ data: [], has_more: false }));
+  });
+  vi.stubGlobal("fetch", fetch); return fetch;
+}
+async function mount(href: string) {
+  const client = testClient(), router = createRouter({ routeTree: dashboardRouteTree, history: createMemoryHistory({ initialEntries: [href] }) });
+  await router.load();
+  render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>);
+  return { router, client };
+}
+const puts = (fetch: ReturnType<typeof vi.fn>) => fetch.mock.calls.filter(c => (c[1] as RequestInit | undefined)?.method === "PUT").map(c => [String(c[0]), JSON.parse(String((c[1] as RequestInit).body))]);
+
+describe("Admin › Settings", () => {
+  it("adds a Settings sidebar group with its five pages, Limits moved into it", async () => {
+    serve();
+    const { client } = await mount("/admin/settings/general");
+    await screen.findByRole("heading", { name: "General", level: 1 });
+    const nav = screen.getByRole("navigation", { name: "Main" });
+    for (const [label, href] of [["General", "/admin/settings/general"], ["Defaults & limits", "/admin/settings/limits"], ["Data & privacy", "/admin/settings/privacy"], ["Email", "/admin/settings/email"], ["Sign-in", "/admin/settings/sign-in"]]) expect(within(nav).getByRole("link", { name: label }).getAttribute("href")).toBe(href);
+    expect(within(nav).queryByRole("link", { name: "Limits" })).toBeNull();
+    client.clear();
+  });
+  it("validates and saves General, refreshing the session", async () => {
+    const user = userEvent.setup(), fetch = serve();
+    const { client } = await mount("/admin/settings/general");
+    const support = await screen.findByRole("textbox", { name: /Support link/ });
+    await user.type(support, "http://help.example.com");
+    const days = screen.getByRole("textbox", { name: /Longest lifetime/ });
+    await user.clear(days); await user.type(days, "90");
+    await user.click(await screen.findByRole("button", { name: "Save settings" }));
+    expect(await screen.findByText("Use an https:// address.")).toBeTruthy();
+    expect(puts(fetch)).toEqual([]);
+    await user.clear(support); await user.type(support, "https://help.example.com");
+    await user.click(screen.getByRole("button", { name: "Save settings" }));
+    await waitFor(() => expect(puts(fetch)).toEqual([["/api/v1/platform/settings/general", { display_name: "Example gateway", support_url: "https://help.example.com", logo_url: null, human_key_max_lifetime_days: 90 }]]));
+    client.clear();
+  });
+  it("shows Auditors read-only values, never a form", async () => {
+    serve(auditor);
+    const { client } = await mount("/admin/settings/general");
+    expect(await screen.findByText("Longest lifetime for a new personal key")).toBeTruthy();
+    expect(screen.getByText("365 days")).toBeTruthy();
+    expect(document.querySelector("main input")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save settings" })).toBeNull();
+    client.clear();
+  });
+  it("shows an environment-locked privacy setting with its variable and states prompts are never stored", async () => {
+    const user = userEvent.setup(), fetch = serve(admin, path => path.endsWith("/settings/privacy") ? { ...privacy, openrouter_data_collection: { ...privacy.openrouter_data_collection, value: "allow", locked: true, source: "environment" } } : undefined);
+    const { client } = await mount("/admin/settings/privacy");
+    expect(await screen.findByText("GATEWAY_OPENROUTER_DATA_COLLECTION")).toBeTruthy();
+    expect(screen.getByText("Allow")).toBeTruthy();
+    expect(screen.queryByRole("radiogroup")).toBeNull();
+    expect(screen.getByText("Never stored")).toBeTruthy();
+    // Retention stays editable and the save resends the locked value unchanged.
+    await user.type(screen.getByRole("textbox", { name: /Compact details after/ }), "90");
+    await user.click(await screen.findByRole("button", { name: "Save settings" }));
+    await waitFor(() => expect(puts(fetch)).toEqual([["/api/v1/platform/settings/privacy", { openrouter_data_collection: "deny", request_log_retention_days: 90 }]]));
+    client.clear();
+  });
+  it("sets up email with a password reference and places server reasons on the field", async () => {
+    const user = userEvent.setup(), fetch = serve(admin, (path, init) => init?.method === "PUT" && path.endsWith("/settings/email") ? Response.json({ error: { code: "400", message: "The password reference is not on the server allowlist", reason: "credential_reference_not_allowed" } }, { status: 400 }) : undefined);
+    const { client } = await mount("/admin/settings/email");
+    await user.click(await screen.findByRole("switch", { name: /Send email/ }));
+    await user.type(screen.getByRole("textbox", { name: "Host" }), "smtp.example.com");
+    await user.type(screen.getByRole("textbox", { name: /^Username/ }), "relay");
+    await user.type(screen.getByRole("textbox", { name: /Password reference/ }), "env:SMTP_PASSWORD");
+    await user.type(screen.getByRole("textbox", { name: "From address" }), "gateway@example.com");
+    await user.click(screen.getByRole("button", { name: "Save email settings" }));
+    await waitFor(() => expect(puts(fetch)).toEqual([["/api/v1/platform/settings/email", { host: "smtp.example.com", port: 587, tls: "starttls", username: "relay", password_ref: "env:SMTP_PASSWORD", from_address: "gateway@example.com", from_name: null }]]));
+    expect(await screen.findByText(/isn't on the server allowlist/)).toBeTruthy();
+    // The password itself is never asked for.
+    expect(document.querySelector('input[type="password"]')).toBeNull();
+    client.clear();
+  });
+  it("sends a test email to the signed-in admin and reports the outcome", async () => {
+    const user = userEvent.setup(), fetch = serve(admin, (path, init) => path.endsWith("/email/test") && init?.method === "POST" ? { ok: false, error: "authentication", recipient: admin.user.email } : path.endsWith("/settings/email") ? ready : undefined);
+    const { client } = await mount("/admin/settings/email");
+    expect(await screen.findByText(`Sends a short test message to ${admin.user.email}. At most 2 a minute.`)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /Send test email/ }));
+    expect(await screen.findByText("The relay rejected the username or password.")).toBeTruthy();
+    expect(fetch.mock.calls.some(c => String(c[0]) === "/api/v1/platform/settings/email/test" && (c[1] as RequestInit).method === "POST" && new Headers((c[1] as RequestInit).headers).get("X-CSRF-Token") === "test-csrf")).toBe(true);
+    client.clear();
+  });
+  it("shows the read-only sign-in configuration and links to SSO groups", async () => {
+    serve(auditor, path => path.endsWith("/settings/sign-in") ? { enabled: true, issuer: "https://login.example.com", client_id: "gateway", client_type: "confidential", groups_claim: "groups", public_url: "https://gateway.example.com", callback_url: "https://gateway.example.com/api/v1/auth/callback", secure_cookies: true, enabled_group_mappings: 3 } : undefined);
+    const { client } = await mount("/admin/settings/sign-in");
+    expect(await screen.findByText("https://login.example.com")).toBeTruthy();
+    expect(document.querySelector("main")!.innerHTML).toContain("https://gateway.example.com/api/v1/auth/callback");
+    expect(document.querySelector("main")!.textContent).not.toMatch(/secret value/i);
+    expect(screen.getByRole("link", { name: /SSO groups/ }).getAttribute("href")).toBe("/admin/sso-groups");
+    expect(screen.getByText("3")).toBeTruthy();
+    client.clear();
+  });
+});
+
+describe("settings validation", () => {
+  it("mirrors the server's checks", () => {
+    expect(httpsUrlError("")).toBeUndefined();
+    expect(httpsUrlError("https://help.example.com/x")).toBeUndefined();
+    for (const bad of ["http://x.example", "javascript:alert(1)", "https://u:p@x.example", "https://x.example/#frag", "not a url"]) expect(httpsUrlError(bad)).toBeTruthy();
+    expect(isLoopback("localhost") && isLoopback("127.0.0.1") && isLoopback("::1")).toBe(true);
+    expect(isLoopback("10.0.0.1")).toBe(false);
+    const draft: EmailDraft = { host: "smtp.example.com", port: "587", tls: "starttls", username: "", password_ref: "", from_address: "gateway@example.com", from_name: "" };
+    expect(emailErrors(draft)).toEqual({});
+    expect(Object.keys(emailErrors({ ...draft, tls: "none" }))).toEqual(["tls"]);
+    expect(emailErrors({ ...draft, tls: "none", host: "localhost" })).toEqual({});
+    expect(Object.keys(emailErrors({ ...draft, username: "relay" }))).toEqual(["password_ref"]);
+    expect(Object.keys(emailErrors({ ...draft, username: "relay", password_ref: "hunter2" }))).toEqual(["password_ref"]);
+    expect(Object.keys(emailErrors({ ...draft, host: "smtp.example.com:587", port: "0", from_address: "nope" })).sort()).toEqual(["from_address", "host", "port"]);
+  });
+});

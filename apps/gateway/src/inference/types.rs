@@ -193,6 +193,9 @@ pub struct Usage {
     pub output_image_variant: Option<crate::billing::MeterVariant>,
     /// Provider-reported charge, evidence only; never the gateway charge.
     pub provider_cost_microusd: Option<i64>,
+    /// Provider-reported reasoning tokens (a subset of output tokens).
+    /// Telemetry only: never charged separately; `None` = not reported.
+    pub reasoning_tokens: Option<u64>,
 }
 
 pub struct ChatResponse {

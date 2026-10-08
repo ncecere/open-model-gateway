@@ -24,6 +24,10 @@ pub(super) fn routes() -> Router<Store> {
             get(type_catalogs).put(put_type_catalogs),
         )
         .route(
+            "/api/v1/platform/catalog-defaults",
+            get(catalog_defaults).put(put_catalog_defaults),
+        )
+        .route(
             "/api/v1/platform/workspaces/{ws}/catalogs",
             get(workspace_catalogs)
                 .put(put_workspace_catalogs)
@@ -85,6 +89,10 @@ async fn validate_ids(
     }
     Ok(())
 }
+/// A catalog row plus who gets it: model count and the first models (for icons),
+/// the workspace types whose live defaults include it, and how many workspaces
+/// made their own catalog choice that includes it.
+const CATALOG_SUMMARY: &str = "to_jsonb(c) || jsonb_build_object('model_count',(SELECT count(*) FROM catalog_models cm WHERE cm.catalog_id=c.id),'models',coalesce((SELECT jsonb_agg(jsonb_build_object('id',x.id,'public_name',x.public_name,'display_name',x.display_name,'enabled',x.enabled) ORDER BY x.public_name,x.id) FROM (SELECT m.id,m.public_name,m.display_name,m.enabled FROM catalog_models cm JOIN models m ON m.id=cm.model_id WHERE cm.catalog_id=c.id ORDER BY m.public_name,m.id LIMIT 8) x),'[]'::jsonb),'default_for',coalesce((SELECT jsonb_agg(t.kind ORDER BY CASE t.kind WHEN 'personal' THEN 0 WHEN 'team' THEN 1 ELSE 2 END) FROM workspace_type_catalogs t WHERE t.catalog_id=c.id),'[]'::jsonb),'own_choice_count',(SELECT count(*) FROM workspace_catalog_override_items i WHERE i.catalog_id=c.id))";
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CatalogListQuery {
@@ -106,7 +114,7 @@ async fn catalogs(
     if p.q.as_ref().is_some_and(|q| q.chars().count() > 200) {
         return Err(invalid());
     }
-    let data:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(c) FROM catalogs c WHERE $3::text IS NULL OR strpos(lower(name),lower($3))>0 ORDER BY name,id LIMIT $1 OFFSET $2").bind(l).bind(o).bind(p.q).fetch_all(&mut *tx).await?;
+    let data:Vec<Value>=sqlx::query_scalar(&format!("SELECT {CATALOG_SUMMARY} FROM catalogs c WHERE $3::text IS NULL OR strpos(lower(c.name),lower($3))>0 ORDER BY c.name,c.id LIMIT $1 OFFSET $2")).bind(l).bind(o).bind(p.q).fetch_all(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(json!({"data":data})))
 }
@@ -116,7 +124,8 @@ async fn catalog(
     Path(id): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, false).await?;
-    let v: Value = sqlx::query_scalar("SELECT to_jsonb(c) FROM catalogs c WHERE id=$1")
+    // Personal workspaces with their own choice are only counted: owner-private, never listed.
+    let v: Value = sqlx::query_scalar(&format!("SELECT {CATALOG_SUMMARY} || jsonb_build_object('own_choice',jsonb_build_object('workspaces',coalesce((SELECT jsonb_agg(jsonb_build_object('id',w.id,'name',w.name,'kind',w.kind,'disabled',w.disabled_at IS NOT NULL) ORDER BY w.name,w.id) FROM workspace_catalog_override_items i JOIN workspaces w ON w.id=i.workspace_id WHERE i.catalog_id=c.id AND w.kind IN ('team','project')),'[]'::jsonb),'personal_count',(SELECT count(*) FROM workspace_catalog_override_items i JOIN workspaces w ON w.id=i.workspace_id WHERE i.catalog_id=c.id AND w.kind='personal'))) FROM catalogs c WHERE c.id=$1"))
         .bind(id)
         .fetch_optional(&mut *tx)
         .await?
@@ -398,17 +407,7 @@ async fn put_type_catalogs(
     }
     ids_valid(&mut b.catalog_ids)?;
     validate_ids(&mut tx, &b.catalog_ids, "catalogs").await?;
-    sqlx::query("DELETE FROM workspace_type_catalogs WHERE kind=$1")
-        .bind(&kind)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query(
-        "INSERT INTO workspace_type_catalogs(kind,catalog_id) SELECT $1,unnest($2::uuid[])",
-    )
-    .bind(&kind)
-    .bind(&b.catalog_ids)
-    .execute(&mut *tx)
-    .await?;
+    replace_type_defaults(&mut tx, &kind, &b.catalog_ids).await?;
     retire(&mut tx).await?;
     audit(
         &mut tx,
@@ -423,19 +422,111 @@ async fn put_type_catalogs(
     tx.commit().await?;
     Ok(ok())
 }
+/// Replaces one type's live default list (caller holds the exclusive catalog lock and retires afterwards).
+async fn replace_type_defaults(
+    tx: &mut Transaction<'_, Postgres>,
+    kind: &str,
+    ids: &[Uuid],
+) -> Result<(), ApiError> {
+    sqlx::query("DELETE FROM workspace_type_catalogs WHERE kind=$1")
+        .bind(kind)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query(
+        "INSERT INTO workspace_type_catalogs(kind,catalog_id) SELECT $1,unnest($2::uuid[])",
+    )
+    .bind(kind)
+    .bind(ids)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+async fn type_default_ids(
+    tx: &mut Transaction<'_, Postgres>,
+    kind: &str,
+) -> Result<Vec<Uuid>, ApiError> {
+    Ok(sqlx::query_scalar(
+        "SELECT catalog_id FROM workspace_type_catalogs WHERE kind=$1 ORDER BY catalog_id",
+    )
+    .bind(kind)
+    .fetch_all(&mut **tx)
+    .await?)
+}
+/// The Defaults matrix: every type's live default catalogs at once.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DefaultsMatrix {
+    personal: Vec<Uuid>,
+    team: Vec<Uuid>,
+    project: Vec<Uuid>,
+}
+async fn catalog_defaults(
+    State(s): State<Store>,
+    Extension(u): Extension<BrowserPrincipal>,
+) -> ApiResult {
+    let mut tx = resources::catalog_tx(&s, &u, false).await?;
+    let mut v = json!({});
+    for kind in ["personal", "team", "project"] {
+        v[kind] = json!(type_default_ids(&mut tx, kind).await?);
+    }
+    tx.commit().await?;
+    Ok(Json(v))
+}
+/// Saves the whole matrix atomically under one exclusive catalog lock. Only
+/// changed types are replaced and audited; retirement runs once, so models
+/// selected only through an unchecked catalog are retired and never restored.
+async fn put_catalog_defaults(
+    State(s): State<Store>,
+    Extension(u): Extension<BrowserPrincipal>,
+    Json(b): Json<DefaultsMatrix>,
+) -> ApiResult {
+    let mut tx = resources::catalog_tx(&s, &u, true).await?;
+    let mut changed = Vec::new();
+    for (kind, mut ids) in [
+        ("personal", b.personal),
+        ("team", b.team),
+        ("project", b.project),
+    ] {
+        ids_valid(&mut ids)?;
+        validate_ids(&mut tx, &ids, "catalogs").await?;
+        if type_default_ids(&mut tx, kind).await? != ids {
+            replace_type_defaults(&mut tx, kind, &ids).await?;
+            changed.push((kind, ids.len()));
+        }
+    }
+    if !changed.is_empty() {
+        retire(&mut tx).await?;
+    }
+    for (kind, count) in &changed {
+        audit(
+            &mut tx,
+            &u,
+            None,
+            "catalog.type_defaults_replaced",
+            "workspace_type",
+            None,
+            json!({"kind":kind,"count":count}),
+        )
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(Json(
+        json!({"ok":true,"changed":changed.iter().map(|(k,_)|*k).collect::<Vec<_>>()}),
+    ))
+}
 async fn workspace_catalogs(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
     Path(ws): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, false).await?;
-    // Administrative catalog settings contain no private keys or request details.
-    let kind: String =
-        sqlx::query_scalar("SELECT kind FROM workspaces WHERE id=$1 AND disabled_at IS NULL")
-            .bind(ws)
-            .fetch_optional(&mut *tx)
-            .await?
-            .ok_or_else(missing)?;
+    // Administrative catalog settings contain no private keys or request details;
+    // platform readers can still read them while the workspace is disabled.
+    let kind: String = sqlx::query_scalar("SELECT kind FROM workspaces WHERE id=$1")
+        .bind(ws)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(missing)?;
     let replace: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM workspace_catalog_overrides WHERE workspace_id=$1)",
     )
@@ -545,7 +636,9 @@ async fn workspace_models(
     p: ModelQuery,
     available: bool,
 ) -> ApiResult {
-    let (mut tx, a) = resources::workspace_tx(&s, &u, ws).await?;
+    // Read-only listing: platform readers may also read a disabled Team/Project,
+    // whose remaining (unusable) authorizations are listed as configured.
+    let (mut tx, a) = resources::workspace_read_tx(&s, &u, ws).await?;
     a.metadata_read()?;
     let (l, o) = Page {
         limit: p.limit,
@@ -555,7 +648,7 @@ async fn workspace_models(
     if p.q.as_ref().is_some_and(|q| q.chars().count() > 200) {
         return Err(invalid());
     }
-    let data:Vec<Value>=sqlx::query_scalar(&format!("SELECT jsonb_build_object('id',m.id,'model_id',m.id,'public_name',m.public_name,'display_name',m.display_name,'description',m.description,'supported_protocols',m.supported_protocols,'enabled',m.enabled,'available_from_catalog',{ELIGIBLE},'selected',workspace_model_allowed(w.id,m.id),'catalog_granted',EXISTS(SELECT 1 FROM workspace_model_grants g WHERE g.workspace_id=w.id AND g.model_id=m.id AND g.source='catalog'),'direct_granted',EXISTS(SELECT 1 FROM workspace_model_grants g WHERE g.workspace_id=w.id AND g.model_id=m.id AND g.source='direct')) FROM models m CROSS JOIN workspaces w WHERE w.id=$1 AND m.enabled AND (($2 AND {ELIGIBLE}) OR workspace_model_allowed(w.id,m.id)) AND ($3::text IS NULL OR strpos(lower(m.public_name),lower($3))>0 OR strpos(lower(m.display_name),lower($3))>0) ORDER BY m.public_name,m.id LIMIT $4 OFFSET $5")).bind(ws).bind(available).bind(p.q).bind(l).bind(o).fetch_all(&mut *tx).await?;
+    let data:Vec<Value>=sqlx::query_scalar(&format!("SELECT jsonb_build_object('id',m.id,'model_id',m.id,'public_name',m.public_name,'display_name',m.display_name,'description',m.description,'supported_protocols',m.supported_protocols,'enabled',m.enabled,'available_from_catalog',{ELIGIBLE},'selected',workspace_model_allowed(w.id,m.id),'catalog_granted',EXISTS(SELECT 1 FROM workspace_model_grants g WHERE g.workspace_id=w.id AND g.model_id=m.id AND g.source='catalog'),'direct_granted',EXISTS(SELECT 1 FROM workspace_model_grants g WHERE g.workspace_id=w.id AND g.model_id=m.id AND g.source='direct')) FROM models m CROSS JOIN workspaces w WHERE w.id=$1 AND m.enabled AND (($2 AND {ELIGIBLE}) OR workspace_model_allowed(w.id,m.id) OR ($6 AND EXISTS(SELECT 1 FROM workspace_model_grants g WHERE g.workspace_id=w.id AND g.model_id=m.id))) AND ($3::text IS NULL OR strpos(lower(m.public_name),lower($3))>0 OR strpos(lower(m.display_name),lower($3))>0) ORDER BY m.public_name,m.id LIMIT $4 OFFSET $5")).bind(ws).bind(available).bind(p.q).bind(l).bind(o).bind(a.disabled).fetch_all(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(json!({"data":data})))
 }

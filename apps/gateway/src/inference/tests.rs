@@ -90,6 +90,7 @@ const OBSERVED: Usage = Usage {
     meters: None,
     output_image_variant: None,
     provider_cost_microusd: None,
+    reasoning_tokens: None,
 };
 struct Adapter {
     mode: Mode,

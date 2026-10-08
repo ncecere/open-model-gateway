@@ -24,9 +24,18 @@ A model's protocols belong to one workload: Chat/Responses/Messages combine, whi
 
 Unsupported combinations fail explicitly. Local labels do not mean every installed server/model supports all fields. Ollama native embedding follow-up has source and mocked tests, but this documentation refresh does not claim a fresh pass or live-server certification; consult [local profile notes](../apps/gateway/src/providers/local/README.md). [Bedrock](bedrock.md) documents its separate transport.
 
+## Client labels (Logs sessions and apps)
+
+Every inference route accepts two optional, untrusted labels used only to group and display requests in Logs ([management API](management-api.md#logs)):
+
+- **Session id**: the `X-Session-Id` header; otherwise, in the body, OpenAI `metadata.session_id` then `user` (Chat Completions, Responses) or Anthropic `metadata.user_id` (Messages). Embeddings and the other workloads take the header only.
+- **App name**: the `X-Title` header.
+
+A label is recorded only when it is 1–128 (session) or 1–200 (app) characters, valid UTF-8, without control characters or leading/trailing whitespace, and sent once; anything else is silently not recorded and never fails the request. Labels are metadata, not authorization or attribution: they are stored on each attempt of the root request, shown to whoever may see that request, cleared by execution-detail retention, and never forwarded upstream. `user` and `metadata` are not sent to providers (they do not change generation); OpenAI `metadata` keeps its documented bounds (at most 16 pairs, keys 1–64 and values up to 512 characters, else 400) and is not stored beyond `session_id`. Anthropic `metadata` accepts only `user_id` (at most 256 characters). Treat a session id that may identify an end user (such as `user`) as visible to workspace administrators and, for Team/Project workspaces, to Platform Admins and Auditors.
+
 ## Chat Completions
 
-One choice (`n` absent or 1); text-string messages with system/developer/user/assistant/tool roles; function tools and tool-call/results; `temperature`, `max_completion_tokens`, streaming and optional `stream_options.include_usage`. Legacy client `max_tokens`, multimodal arrays, structured output, reasoning, log probabilities and arbitrary extensions are rejected.
+One choice (`n` absent or 1); text-string messages with system/developer/user/assistant/tool roles; function tools and tool-call/results; `temperature`, `max_completion_tokens`, streaming and optional `stream_options.include_usage`; `user` and `metadata` as [client labels](#client-labels-logs-sessions-and-apps) only. Legacy client `max_tokens`, multimodal arrays, structured output, reasoning, log probabilities and arbitrary extensions are rejected.
 
 Local transports translate the accepted maximum to upstream `max_tokens`. All local profiles reject strict function guarantees. Ollama rejects explicit tool choice; generic compatible rejects required/named choice. Anthropic Chat accepts leading system/developer text but rejects strict schemas, temperature above 1 and non-object tool arguments. Adapter defaults do not substitute for explicit generation bounds when a priced admission requires them.
 
@@ -36,7 +45,7 @@ Local transports translate the accepted maximum to upstream `max_tokens`. All lo
 
 ## Responses
 
-Stateless native OpenAI text/function subset: `model`, string or nonempty item-list `input`, `instructions`, `max_output_tokens`, `temperature`, `stream`, `store:false`, flat function `tools`, supported `tool_choice`, and `text:{"format":{"type":"text"}}`.
+Stateless native OpenAI text/function subset: `model`, string or nonempty item-list `input`, `instructions`, `max_output_tokens`, `temperature`, `stream`, `store:false`, flat function `tools`, supported `tool_choice`, and `text:{"format":{"type":"text"}}`; `user` and `metadata` as [client labels](#client-labels-logs-sessions-and-apps) only.
 
 Message items support user/assistant/system/developer and text/input-text (assistant output-text also accepted). Function calls use `call_id,name,arguments` (string); results use `call_id,output` (string). Tools are flat Responses definitions, not nested Chat envelopes. OpenAI strict function schemas can be forwarded where supported.
 
@@ -44,9 +53,9 @@ Upstream requests explicitly set `store:false`. Upstream assistant message items
 
 ## Messages
 
-Requires exactly `anthropic-version: 2023-06-01`; beta headers are rejected. Supports `model,messages,system,max_tokens,temperature,stream,tools,tool_choice`. `max_tokens` is positive/required; temperature is 0–1. Text blocks, assistant object-input `tool_use` and user text/text-block `tool_result` are supported. `tool_choice` can be auto/none/any/named tool within adapter constraints. Because Messages streams are buffered (see below), `message_start` is sent after validated completion. Its `usage` has the Anthropic shape: observed `input_tokens` and cache counters, plus `output_tokens: 0` as the count at stream start. `message_delta` then reports the final cumulative output. Unknown counters are omitted, never sent as zero. Errors before completion send only an `error` event.
+Requires exactly `anthropic-version: 2023-06-01`; beta headers are rejected. Supports `model,messages,system,max_tokens,temperature,stream,tools,tool_choice`, plus `metadata.user_id` as a [client label](#client-labels-logs-sessions-and-apps) only. `max_tokens` is positive/required; temperature is 0–1. Text blocks, assistant object-input `tool_use` and user text/text-block `tool_result` are supported. `tool_choice` can be auto/none/any/named tool within adapter constraints. Because Messages streams are buffered (see below), `message_start` is sent after validated completion. Its `usage` has the Anthropic shape: observed `input_tokens` and cache counters, plus `output_tokens: 0` as the count at stream start. `message_delta` then reports the final cumulative output. Unknown counters are omitted, never sent as zero. Errors before completion send only an `error` event.
 
-Thinking, images/audio, cache controls, metadata, error-marked tool results and unknown fields are rejected. Cache-aware usage accounting does not enable request cache controls. `/v1/messages` accepts one Bearer or `x-api-key`, never both; other inference routes use Bearer only. Repeated/conflicting credential headers fail.
+Thinking, images/audio, cache controls, other metadata fields, error-marked tool results and unknown fields are rejected. Cache-aware usage accounting does not enable request cache controls. `/v1/messages` accepts one Bearer or `x-api-key`, never both; other inference routes use Bearer only. Repeated/conflicting credential headers fail.
 
 ## Embeddings
 

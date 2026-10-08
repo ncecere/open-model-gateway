@@ -1,7 +1,8 @@
 /*
- * Usage & costs filters: one URL-backed FilterToolbar row above every tab and
- * the chart page (no drawer or sheet; on a phone it collapses in place behind
- * "Filters (n)"). Model, key, member (workspace-wide
+ * Usage & costs filters: one URL-backed FilterToolbar row under the pill tabs
+ * (no drawer or sheet; on a phone it collapses in place behind "Filters (n)").
+ * Period (and Admin's workspace) lead the row; everything else sits behind one
+ * "More filters (n)" popover with its chips under the row. Model, key, member (workspace-wide
  * viewers only; never in Personal), status (several at once), cost center
  * (platform scope; a page fact in a workspace) and service account; Records adds the
  * accounting "Cost" state. Filters only narrow what the caller may already
@@ -68,7 +69,10 @@ const first = (v: FilterValues[string]) => Array.isArray(v) ? v[0] : undefined;
 /** Keeps a URL value that isn't among this period's options visible (so it can be seen and cleared). */
 const keep = (list: FacetOption[], current: string | undefined, fallback: string) => current && !list.some(o => o.value === current) ? [...list, { value: current, label: fallback }] : list;
 
-export function UsageFilterBar({ options, ctx, nav, records = false, start, extraChips }: { options: FilterOptions; ctx: UsageContext; nav: UsageNav; records?: boolean; /** Leading controls, e.g. Admin's workspace scope. */ start?: ReactNode; extraChips?: ToolbarChip[] }) {
+/** Facets behind "More filters" (Records' Cost state stays inline: it's that tab's own question). */
+export const moreFacetIds = ["model", "key", "member", "status", "cost_center", "service_account"];
+
+export function UsageFilterBar({ options, ctx, nav, records = false, start, extraChips, extraActive }: { options: FilterOptions; ctx: UsageContext; nav: UsageNav; records?: boolean; /** Leading controls: Period, then Admin's workspace scope. */ start?: ReactNode; extraChips?: ToolbarChip[]; extraActive?: number }) {
   const s = nav.search, f = usageFilters(s, ctx);
   const facets: Facet[] = [
     { id: "model", label: "Model", type: "select", placeholder: "All models", options: keep(options.models, f.model_id, "Selected model") },
@@ -87,5 +91,5 @@ export function UsageFilterBar({ options, ctx, nav, records = false, start, extr
     if (records) patch.cost_status = first(next.cost) as RecordStatus | undefined;
     nav.navigate(patch);
   };
-  return <FilterToolbar facets={facets} values={value} onChange={change} start={start} extraChips={extraChips} />;
+  return <FilterToolbar facets={facets} values={value} onChange={change} start={start} extraChips={extraChips} extraActive={extraActive} more={moreFacetIds} />;
 }

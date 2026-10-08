@@ -612,6 +612,7 @@ pub(super) async fn reconcile(
             .as_deref()
             .map(|v| money(v, false))
             .transpose()?,
+        reasoning_tokens: None,
     };
     crate::governance::resolve_usage(&s, ws, execution, usage, &p.evidence, u.user_id)
         .await

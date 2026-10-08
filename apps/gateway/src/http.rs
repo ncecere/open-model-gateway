@@ -76,6 +76,7 @@ fn build_router(
         .route("/v1/responses", post(responses::handle))
         .route("/v1/messages", post(messages::handle))
         .route("/v1/embeddings", post(embeddings::handle))
+        .route_layer(middleware::from_fn(client_labels))
         .route_layer(middleware::from_fn_with_state(store.clone(), authenticate));
     // Non-generation workloads carry their own configured body caps instead
     // of the shared 2 MiB limit (transcriptions also cap the file part).
@@ -110,6 +111,7 @@ fn build_router(
             "/v1/audio/speech",
             capped(WorkloadKind::AudioSpeech, post(audio::speech)),
         )
+        .route_layer(middleware::from_fn(client_labels))
         .route_layer(middleware::from_fn_with_state(store.clone(), authenticate));
 
     let mut root = Router::new();
@@ -190,6 +192,14 @@ fn credential(headers: &HeaderMap, protocol: Protocol) -> Option<&str> {
         return headers.get("x-api-key")?.to_str().ok();
     }
     None
+}
+
+/// Optional client labels (`X-Session-Id`, `X-Title`) for Logs, visible to
+/// admission through a task-local scope. Never authorization input.
+async fn client_labels(request: Request, next: Next) -> Response {
+    crate::inference::client::ClientMetadata::from_headers(request.headers())
+        .scope(next.run(request))
+        .await
 }
 
 async fn authenticate(State(store): State<Store>, mut request: Request, next: Next) -> Response {

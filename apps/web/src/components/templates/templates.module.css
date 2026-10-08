@@ -266,3 +266,8 @@
 .conflictField {
   font-weight: var(--font-weight-medium);
 }
+
+/* A form page's footer bar (StickySaveBar): Cancel, then the main action, stuck to the viewport bottom. */
+.formFooter {
+  margin-top: 0;
+}

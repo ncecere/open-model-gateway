@@ -302,6 +302,24 @@ impl IdentityState {
         };
         Ok(Self { store, provider })
     }
+
+    /// Read-only sign-in configuration for Admin > Settings > Sign-in:
+    /// public values only (never the client secret).
+    pub fn sign_in_summary(&self) -> serde_json::Value {
+        match &self.provider {
+            Some(provider) => serde_json::json!({
+                "enabled": true,
+                "issuer": provider.config.issuer.as_str(),
+                "client_id": provider.config.client_id,
+                "client_type": if provider.config.client_secret.is_some() { "confidential" } else { "public" },
+                "groups_claim": provider.config.groups_claim,
+                "public_url": provider.config.public_origin,
+                "callback_url": format!("{}/api/v1/auth/callback", provider.config.public_origin),
+                "secure_cookies": provider.config.secure_cookies,
+            }),
+            None => serde_json::json!({ "enabled": false }),
+        }
+    }
 }
 
 #[derive(Clone)]

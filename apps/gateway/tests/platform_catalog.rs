@@ -199,6 +199,8 @@ async fn shared_global_deployment_requires_each_workspace_grant_and_uses_pinned_
         provider: target.provider.clone(),
         model: "company/smart".into(),
         streamed: false,
+        upstream_model: None,
+        client: Default::default(),
     };
     let request = ChatRequest {
         model: "company/smart".into(),

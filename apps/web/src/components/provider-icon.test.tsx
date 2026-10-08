@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { BrandIcon, LabBadge, LabIcon, ProviderBadge, ProviderIcon, WithIcon, inferLab, inferLabFrom, profileBrands } from "./provider-icon";
@@ -68,35 +68,64 @@ describe("ProviderIcon", () => {
 
 describe("Add connection profile picker", () => {
   function Open() { const ask = useAction(); return <Button onClick={() => ask(connectionCreateAction())}>Open</Button>; }
-  it("is a radio-card group with decorative logos and text names", async () => {
+  async function open() {
     const user = userEvent.setup();
     render(<QueryClientProvider client={testClient()}><ActionProvider><Open /></ActionProvider></QueryClientProvider>);
     await user.click(screen.getByRole("button", { name: "Open" }));
-    const group = screen.getByRole("radiogroup", { name: "Provider profile" });
-    expect(group).toBeTruthy();
-    const openai = screen.getByRole("radio", { name: "OpenAI" });
-    expect(openai.getAttribute("aria-checked")).toBe("true");
-    expect(screen.getAllByRole("radio")).toHaveLength(providerOptions.length);
-    expect(group.querySelectorAll('[aria-hidden="true"] svg').length).toBeGreaterThanOrEqual(providerOptions.length);
+    return user;
+  }
+  async function choose(user: ReturnType<typeof userEvent.setup>, label: string, option: string) {
+    await user.click(screen.getByRole("combobox", { name: label }));
+    await user.click(within(await screen.findByRole("listbox")).getByRole("option", { name: option }));
+  }
+  it("is one dropdown with provider logos in the trigger and every option", async () => {
+    const user = await open();
+    expect(screen.queryByRole("radiogroup")).toBeNull();
+    const trigger = screen.getByRole("combobox", { name: "Provider profile" });
+    expect(trigger.textContent).toContain("OpenAI");
+    expect(trigger.querySelector('[aria-hidden="true"] svg')).toBeTruthy();
     expect(screen.queryByLabelText(/^Endpoint/)).toBeNull();
-    await user.click(screen.getByRole("radio", { name: "vLLM" }));
-    expect(screen.getByRole("radio", { name: "vLLM" }).getAttribute("aria-checked")).toBe("true");
+    await user.click(trigger);
+    const options = within(await screen.findByRole("listbox")).getAllByRole("option");
+    expect(options).toHaveLength(providerOptions.length);
+    for (const option of options) expect(option.querySelector('[aria-hidden="true"] svg')).toBeTruthy();
+    await user.click(within(screen.getByRole("listbox")).getByRole("option", { name: "vLLM" }));
+    expect(screen.getByRole("combobox", { name: "Provider profile" }).textContent).toContain("vLLM");
     expect(screen.getByLabelText(/^Endpoint/)).toBeTruthy();
   });
-  it("explains the chosen profile only and enables the connection with a switch, on by default (review #46)", async () => {
-    const user = userEvent.setup();
-    render(<QueryClientProvider client={testClient()}><ActionProvider><Open /></ActionProvider></QueryClientProvider>);
-    await user.click(screen.getByRole("button", { name: "Open" }));
-    expect(screen.getByText(/OpenAI's fixed HTTPS API/)).toBeTruthy(); expect(screen.queryByText(/OpenRouter's fixed/)).toBeNull();
-    await user.click(screen.getByRole("radio", { name: "Anthropic" }));
-    expect(screen.getByText(/Anthropic's fixed HTTPS API/)).toBeTruthy(); expect(screen.queryByText(/OpenAI's fixed/)).toBeNull();
+  it("explains the chosen profile in one line and enables the connection with a switch, on by default (review #46)", async () => {
+    const user = await open();
+    expect(screen.getByText("Uses api.openai.com.")).toBeTruthy(); expect(screen.queryByText("Uses openrouter.ai.")).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Provider profile" }).getAttribute("aria-describedby")).toBeTruthy();
+    await choose(user, "Provider profile", "Anthropic");
+    expect(screen.getByText("Uses api.anthropic.com.")).toBeTruthy(); expect(screen.queryByText("Uses api.openai.com.")).toBeNull();
     expect(screen.queryByRole("combobox", { name: /Status/ })).toBeNull();
     const enable = screen.getByRole("switch", { name: "Enable now" });
     expect(enable.getAttribute("aria-checked")).toBe("true");
     await user.click(enable);
-    expect(enable.getAttribute("aria-checked")).toBe("false"); expect(screen.getByText(/Nothing is sent to this connection/)).toBeTruthy();
+    expect(enable.getAttribute("aria-checked")).toBe("false"); expect(screen.getByText("Nothing is sent until you enable it.")).toBeTruthy();
+  });
+  it("asks Bedrock for a listed region, an AWS identity mode and an optional VPC endpoint", async () => {
+    const user = await open();
+    await choose(user, "Provider profile", "Amazon Bedrock");
+    expect(screen.queryByLabelText(/Credential environment variable/)).toBeNull();
+    const region = screen.getByRole("combobox", { name: "AWS region" }) as HTMLSelectElement;
+    expect(region.value).toBe("us-east-1");
+    await user.selectOptions(region, "other");
+    expect(screen.getByLabelText(/^Region code/)).toBeTruthy();
+    const identity = screen.getByRole("combobox", { name: "AWS identity" }) as HTMLSelectElement;
+    expect([...identity.options].map(o => o.text)).toEqual(expect.arrayContaining(["Server AWS identity (default credential chain)", "Named AWS profile", "Assume IAM role"]));
+    expect(screen.queryByLabelText(/^Role ARN/)).toBeNull();
+    await user.selectOptions(identity, "role");
+    for (const label of [/^Role ARN/, /^External ID/, /^Session name/]) expect(screen.getByLabelText(label)).toBeTruthy();
+    await user.selectOptions(identity, "profile");
+    expect(screen.getByLabelText(/^Profile name/)).toBeTruthy(); expect(screen.queryByLabelText(/^Role ARN/)).toBeNull();
+    expect(screen.getByLabelText(/^VPC endpoint/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Add connection" }));
+    expect(screen.getByLabelText(/^Profile name/).getAttribute("aria-invalid")).toBe("true");
   });
 });
+
 
 describe("LabIcon and labels", () => {
   it("falls back to a neutral glyph or nothing", () => {

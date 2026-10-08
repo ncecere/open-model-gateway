@@ -287,6 +287,8 @@ pub(crate) mod db {
                 provider: "openai".into(),
                 model: "company/smart".into(),
                 streamed: false,
+                upstream_model: None,
+                client: Default::default(),
             }
         }
         pub async fn price(&self, rate: i64) -> Uuid {

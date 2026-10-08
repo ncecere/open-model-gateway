@@ -16,6 +16,10 @@ pub struct ExecutionStart {
     pub provider: String,
     pub model: String,
     pub streamed: bool,
+    /// Configured upstream model id this attempt is sent to (snapshot).
+    pub upstream_model: Option<String>,
+    /// Optional client labels of the root request (see `inference::client`).
+    pub client: super::client::ClientMetadata,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,6 +35,74 @@ impl Outcome {
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
         }
+    }
+}
+
+/// Normalized finish reason of an attempt (stored in `finish_reason`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FinishLabel {
+    Stop,
+    Length,
+    ToolCalls,
+    ContentFilter,
+    Error,
+    Cancelled,
+    Unknown,
+}
+impl FinishLabel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Stop => "stop",
+            Self::Length => "length",
+            Self::ToolCalls => "tool_calls",
+            Self::ContentFilter => "content_filter",
+            Self::Error => "error",
+            Self::Cancelled => "cancelled",
+            Self::Unknown => "unknown",
+        }
+    }
+    pub const ALL: [&'static str; 7] = [
+        "stop",
+        "length",
+        "tool_calls",
+        "content_filter",
+        "error",
+        "cancelled",
+        "unknown",
+    ];
+}
+impl From<super::types::FinishReason> for FinishLabel {
+    fn from(reason: super::types::FinishReason) -> Self {
+        use super::types::FinishReason as F;
+        match reason {
+            F::Stop => Self::Stop,
+            F::Length => Self::Length,
+            F::ToolCalls => Self::ToolCalls,
+            F::ContentFilter => Self::ContentFilter,
+        }
+    }
+}
+
+/// Per-attempt timing and outcome telemetry. Metadata only; `None` = not
+/// observed (never a fabricated zero).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AttemptTelemetry {
+    pub finish_reason: Option<FinishLabel>,
+    /// Streams: upstream dispatch to the first delta.
+    pub time_to_first_token_ms: Option<u64>,
+    /// Upstream dispatch to the end of the upstream response.
+    pub generation_ms: Option<u64>,
+}
+impl AttemptTelemetry {
+    /// The stored finish reason for an outcome: failures are `error`,
+    /// cancellations `cancelled`; a success keeps the provider's reason.
+    pub fn for_outcome(mut self, outcome: Outcome) -> Self {
+        self.finish_reason = match outcome {
+            Outcome::Failed => Some(FinishLabel::Error),
+            Outcome::Cancelled => Some(FinishLabel::Cancelled),
+            Outcome::Succeeded => self.finish_reason,
+        };
+        self
     }
 }
 
@@ -51,6 +123,15 @@ pub trait InferenceRepository: Send + Sync {
     ) -> Result<Vec<Deployment>, InferenceError>;
     async fn start(&self, record: &ExecutionStart) -> Result<(), InferenceError>;
     async fn finish(&self, record: &ExecutionFinish) -> Result<(), InferenceError>;
+    /// Finish with attempt telemetry (finish reason, timings). Telemetry is
+    /// metadata only; repositories without telemetry storage just finish.
+    async fn finish_attempt(
+        &self,
+        record: &ExecutionFinish,
+        _telemetry: &AttemptTelemetry,
+    ) -> Result<(), InferenceError> {
+        self.finish(record).await
+    }
     async fn admit(
         &self,
         record: &ExecutionStart,
@@ -138,17 +219,25 @@ impl InferenceRepository for Store {
 
     async fn start(&self, record: &ExecutionStart) -> Result<(), InferenceError> {
         sqlx::query(r#"INSERT INTO inference_executions
-            (id, workspace_id, api_key_id, deployment_id, public_model, provider, streamed, state, root_request_id, attempt_number)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,'started',$8,$9)"#)
+            (id, workspace_id, api_key_id, deployment_id, public_model, provider, streamed, state, root_request_id, attempt_number, upstream_model, client_session_id, client_app)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,'started',$8,$9,$10,$11,$12)"#)
             .bind(record.id).bind(record.principal.workspace_id)
             .bind(record.principal.key_id).bind(record.deployment_id).bind(&record.model)
-            .bind(&record.provider).bind(record.streamed).bind(record.root_request_id).bind(record.attempt_number).execute(&self.pool).await
+            .bind(&record.provider).bind(record.streamed).bind(record.root_request_id).bind(record.attempt_number)
+            .bind(&record.upstream_model).bind(&record.client.session_id).bind(&record.client.app).execute(&self.pool).await
             .map_err(|_| InferenceError::Storage)?;
         Ok(())
     }
 
     async fn finish(&self, record: &ExecutionFinish) -> Result<(), InferenceError> {
         crate::governance::finish(self, record).await
+    }
+    async fn finish_attempt(
+        &self,
+        record: &ExecutionFinish,
+        telemetry: &AttemptTelemetry,
+    ) -> Result<(), InferenceError> {
+        crate::governance::finish_with_telemetry(self, record, telemetry).await
     }
     async fn admit(
         &self,

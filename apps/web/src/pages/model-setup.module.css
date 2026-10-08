@@ -1,0 +1,47 @@
+/* Admin › Models › Add model (model-setup.tsx). Semantic tokens only. */
+
+/* The connection's provider logo inside the select, before its name. */
+.leading {
+  position: relative;
+  display: block;
+}
+
+.leadingIcon {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: var(--space-3);
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  pointer-events: none;
+}
+
+.leading .withIcon {
+  padding-inline-start: calc(var(--space-3) + 1rem + var(--space-2));
+}
+
+/* Field-style label for controls that aren't a single input (chip rows). */
+.label {
+  display: block;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-snug);
+  color: var(--color-text);
+}
+
+.chips {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  min-width: 0;
+
+  & [role="group"]:focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 2px;
+    border-radius: var(--radius-control);
+  }
+
+  & p {
+    margin: 0;
+  }
+}

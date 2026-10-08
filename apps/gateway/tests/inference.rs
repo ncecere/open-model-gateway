@@ -393,6 +393,92 @@ async fn chat_response_preserves_public_alias_and_records_workspace_usage(pool: 
     );
 }
 
+type TelemetryRow = (
+    Option<String>,
+    Option<i64>,
+    Option<i64>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+async fn telemetry(pool: &PgPool, id: Uuid) -> TelemetryRow {
+    sqlx::query_as("SELECT finish_reason,time_to_first_token_ms,generation_ms,upstream_model,client_session_id,client_app FROM inference_executions WHERE id=$1")
+        .bind(id).fetch_one(pool).await.unwrap()
+}
+async fn send(app: &axum::Router, request: Request<Body>) -> (StatusCode, Option<Uuid>) {
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let id = response
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| Uuid::parse_str(v.to_str().ok()?).ok());
+    to_bytes(response.into_body(), 65536).await.unwrap();
+    (status, id)
+}
+/// Logs telemetry: finish reason, timings, configured upstream snapshot and
+/// optional client labels are recorded per attempt; bodies never are.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn request_telemetry_and_client_labels_are_recorded(pool: PgPool) {
+    let (app, keys, _, _) = fixture(&pool, false).await;
+    let key = &keys.team_key.token;
+    // Header labels win over body candidates.
+    let mut r = request(key, chat(false));
+    r.headers_mut()
+        .insert("x-session-id", "sess-A".parse().unwrap());
+    r.headers_mut()
+        .insert("x-title", "Logs test".parse().unwrap());
+    let (status, id) = send(&app, r).await;
+    assert_eq!(status, StatusCode::OK);
+    let (finish, ttft, generation, upstream, session, app_name) =
+        telemetry(&pool, id.unwrap()).await;
+    assert_eq!(finish.as_deref(), Some("stop"));
+    assert_eq!(ttft, None, "time to first token is for streams only");
+    assert!(generation.is_some());
+    assert_eq!(upstream.as_deref(), Some("private-upstream-id"));
+    assert_eq!(session.as_deref(), Some("sess-A"));
+    assert_eq!(app_name.as_deref(), Some("Logs test"));
+    // Streams: metadata.session_id before user; first delta sets TTFT.
+    let mut body = chat(true);
+    body["user"] = "end-user-7".into();
+    body["metadata"] = json!({"session_id":"conv 42","topic":"x"});
+    let (status, id) = send(&app, request(key, body)).await;
+    assert_eq!(status, StatusCode::OK);
+    let (finish, ttft, generation, _, session, app_name) = telemetry(&pool, id.unwrap()).await;
+    assert_eq!(finish.as_deref(), Some("stop"));
+    assert!(ttft.is_some() && generation.is_some() && ttft <= generation);
+    assert_eq!(session.as_deref(), Some("conv 42"));
+    assert_eq!(app_name, None);
+    let mut body = chat(false);
+    body["user"] = "end-user-7".into();
+    let (_, id) = send(&app, request(key, body)).await;
+    assert_eq!(
+        telemetry(&pool, id.unwrap()).await.4.as_deref(),
+        Some("end-user-7")
+    );
+    // Invalid labels are not recorded and never fail the request.
+    let mut r = request(key, chat(false));
+    r.headers_mut()
+        .insert("x-session-id", " padded".parse().unwrap());
+    r.headers_mut()
+        .insert("x-title", "x".repeat(201).parse().unwrap());
+    let (status, id) = send(&app, r).await;
+    assert_eq!(status, StatusCode::OK);
+    let row = telemetry(&pool, id.unwrap()).await;
+    assert_eq!((row.4, row.5), (None, None));
+    // OpenAI metadata keeps its documented bounds.
+    let mut body = chat(false);
+    body["metadata"] = (0..17)
+        .map(|i| (format!("k{i}"), json!("v")))
+        .collect::<serde_json::Map<_, _>>()
+        .into();
+    assert_eq!(
+        send(&app, request(key, body)).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let stored: i64 = sqlx::query_scalar("SELECT count(*) FROM inference_executions WHERE client_session_id IS NOT NULL AND client_session_id LIKE '%prompt%'").fetch_one(&pool).await.unwrap();
+    assert_eq!(stored, 0);
+}
+
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn streaming_emits_usage_only_when_requested_and_done_only_on_success(pool: PgPool) {
     let (app, keys, _, _) = fixture(&pool, false).await;

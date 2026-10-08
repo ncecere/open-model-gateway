@@ -6,7 +6,7 @@
 
 The interface uses locally installed/locked Bitop components and Grounded's **Workspace/Admin** composition: sidebar, context selector, resource lists/details, breadcrumbs, pill tabs, settings forms and dialogs. Reference projects stay read-only with no cross-repository runtime imports. See [Bitop provenance](bitop-ui.md).
 
-**Workspace** contains Overview, Models, API keys, Usage & costs and Workspace settings. Shared settings group members, invitations, service accounts and limits by capability. Personal workspaces never offer shared members/service accounts.
+**Workspace** contains Overview, Models, API keys, Logs, Usage & costs and Workspace settings. **Logs** (`/workspaces/{ws}/logs`; the old `/requests` list URL redirects) has pill tabs Requests | Generations (one row per upstream attempt) | Sessions (requests grouped by the client session ID), summary tiles for the current filters (requests, error rate, median/p95 latency, average time to first token, tokens per second), one filter row (period, model, key, status, finish reason, streamed, session, request ID) and a table with a column chooser and density. A row opens its request page (`/workspaces/{ws}/requests/{id}`, previous/next within the filters) or session page (`/workspaces/{ws}/session?session_id=`). Admin › Usage & spend › Logs (`/admin/logs`) is the same view over Team/Project workspaces with a Workspace column and filter; personal workspaces never appear as rows. Shared settings group members, invitations, service accounts and limits by capability. Personal workspaces never offer shared members/service accounts.
 
 **Admin** is installation-scoped: Overview; Users, Teams, Projects, SSO groups; Provider connections, Models, Deployments, Catalogs; Costs, Pricing, Limits, Cost centers; Audit log. Platform Admins can write; Auditors enter read-only. Ordinary Platform Users do not receive the Admin portal from personal ownership. Model routing is on model details and deployment thresholds/pricing on deployment details; standalone pricing/routing routes also exist.
 
@@ -21,8 +21,9 @@ Identifiers are UUIDs, not organization paths or public model aliases:
 | Admin overview | `/admin` |
 | Shared directories/details | `/admin/teams[/{uuid}]`, `/admin/projects[/{uuid}]` |
 | Users/model/connection/catalog lists/details | `/admin/users`, `/admin/models`, `/admin/connections`, `/admin/catalogs`, optionally `/{uuid}`; routes are `/admin/routes/{uuid}` |
-| Platform controls | `/admin/limits`, `/admin/cost-centers`, `/admin/costs`, `/admin/sso-groups`, `/admin/audit`, `/admin/pricing` |
-| Old URLs (rewritten in place) | `/admin/providers[/{uuid}]`, `/admin/policies`, `/admin/oidc`, `/admin/deployments/{uuid}` → the new paths; `/admin/deployments` and `/admin/routing` → `/admin/models` |
+| Settings ([settings](settings.md)) | `/admin/settings/general`, `/admin/settings/limits` (defaults & limits), `/admin/settings/privacy`, `/admin/settings/email`, `/admin/settings/sign-in` |
+| Platform controls | `/admin/cost-centers`, `/admin/costs`, `/admin/sso-groups`, `/admin/audit`, `/admin/pricing` |
+| Old URLs (rewritten in place) | `/admin/providers[/{uuid}]`, `/admin/policies`, `/admin/limits`, `/admin/settings`, `/admin/oidc`, `/admin/deployments/{uuid}` → the new paths; `/admin/deployments` and `/admin/routing` → `/admin/models` |
 | Workspace overview | `/workspaces/{uuid}` |
 | Workspace keys/models/costs/settings | `/workspaces/{uuid}/keys`, `/models`, `/costs`, `/settings` |
 | Profile/invitation acceptance | `/profile`, `/invitations/accept` |

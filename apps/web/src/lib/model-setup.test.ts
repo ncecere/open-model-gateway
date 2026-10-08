@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { validateFields } from "./forms";
-import { readinessText, apiNameFrom, chosenConnection, initialSetupValues, modelReadiness, protocolLabel, protocolOptions, protocolSetError, setupBody, setupFields, setupSteps, workloadGroups, type SetupChoices } from "./model-setup";
+import { readinessText, apiNameFrom, chosenConnection, defaultProtocols, protocolSupported, setupIdentityFields, setupSourceFields, workloadSupported, initialSetupValues, modelReadiness, protocolLabel, protocolOptions, protocolSetError, setupBody, setupFields, setupSteps, workloadGroups, type SetupChoices } from "./model-setup";
 import type { ModelReadiness, PlatformOverviewData } from "./api";
 import { draftBody, emptyDraft, validateDraft } from "./pricing";
 
@@ -49,6 +49,28 @@ describe("Add model form", () => {
     expect(price.price_lines).toContainEqual({ meter: "output_images", not_applicable: true });
   });
   it("sends a price only when setting one, and validates the draft separately", () => { expect(Object.keys(validateFields(setupFields(choices, filled), filled))).toEqual([]); expect(setupBody(filled, choices, draftBody({ ...emptyDraft("generation"), inputTokenLimit: "1", outputTokenLimit: "1" })).price).toBeNull(); expect(validateDraft(emptyDraft("generation"))).toHaveProperty(["limits.input"]); });
+  it("defaults text protocols per connection profile, in protocol order, and one protocol for other types", () => {
+    expect(defaultProtocols("generation", "anthropic")).toEqual(["chat_completions", "messages"]);
+    expect(defaultProtocols("generation", "bedrock")).toEqual(["chat_completions", "messages"]);
+    expect(defaultProtocols("generation", "openai")).toEqual(["chat_completions", "responses"]);
+    expect(defaultProtocols("generation", "openrouter")).toEqual(["chat_completions"]);
+    expect(defaultProtocols("generation", "vllm")).toEqual(["chat_completions"]);
+    expect(defaultProtocols("generation")).toEqual(["chat_completions"]);
+    expect(defaultProtocols("embeddings", "openai")).toEqual(["embeddings"]);
+  });
+  it("knows which types and protocols a profile serves, assuming support for an unknown profile", () => {
+    expect(protocolSupported("responses", "anthropic")).toBe(false); expect(protocolSupported("messages", "anthropic")).toBe(true);
+    expect(protocolSupported("responses", undefined)).toBe(true); expect(protocolSupported("responses", "future-profile")).toBe(true);
+    expect(workloadGroups.filter(g => workloadSupported(g.workload, "anthropic")).map(g => g.label)).toEqual(["Text"]);
+    expect(workloadGroups.filter(g => !workloadSupported(g.workload, "openai")).map(g => g.label)).toEqual(["Rerank", "System One"]);
+    expect(workloadGroups.every(g => workloadSupported(g.workload, "openrouter"))).toBe(true);
+  });
+  it("keeps help to the API-name hint and uses examples in the provider's format", () => {
+    const fields = [...setupSourceFields(choices, "anthropic"), ...setupIdentityFields("anthropic")];
+    expect(fields.filter(f => f.help).map(f => [f.name, f.help])).toEqual([["public_name", "What clients send as model."]]);
+    expect(Object.fromEntries(fields.filter(f => f.placeholder).map(f => [f.name, f.placeholder]))).toEqual({ upstream_model: "claude-sonnet-4-5", display_name: "Claude Sonnet 4.5", public_name: "claude-sonnet-4-5", description: "What it's good for" });
+    expect(JSON.stringify(workloadGroups)).not.toMatch(/POST|\/v1\/|priced/);
+  });
   it("rejects unknown connections, catalogs and invalid API names", () => { const errors = validateFields(setupFields(choices, filled), { ...filled, provider_connection_id: "forged", catalog_ids: '["forged"]', public_name: "bad name", supported_protocols: "[]" }); expect(Object.keys(errors).sort()).toEqual(["catalog_ids", "provider_connection_id", "public_name", "supported_protocols"]); });
 });
 

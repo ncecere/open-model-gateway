@@ -43,7 +43,14 @@ pub(super) async fn platform_members(
     Query(p): Query<Page>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, false).await?;
-    platform_shared(&mut tx, ws).await?;
+    // Read-only: platform readers may list members of a disabled Team/Project too.
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM workspaces WHERE id=$1 AND kind IN ('team','project')",
+    )
+    .bind(ws)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(missing)?;
     let (l, o) = p.bounds()?;
     let data: Vec<Value> = sqlx::query_scalar(MEMBERS_SQL)
         .bind(ws)
@@ -272,7 +279,9 @@ pub(super) async fn invite(
     let token = hex::encode(bytes);
     let hash = Sha256::digest(token.as_bytes());
     let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO workspace_invitations(id,workspace_id,email,role,token_hash,expires_at,created_by) VALUES($1,$2,$3,$4,$5,now()+interval '72 hours',$6)").bind(id).bind(ws).bind(email).bind(b.role).bind(hash.as_slice()).bind(u.user_id).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO workspace_invitations(id,workspace_id,email,role,token_hash,expires_at,created_by) VALUES($1,$2,$3,$4,$5,now()+interval '72 hours',$6)").bind(id).bind(ws).bind(&email).bind(&b.role).bind(hash.as_slice()).bind(u.user_id).execute(&mut *tx).await?;
+    // Admin > Settings > Email, when configured; the one-time code is still returned for copying.
+    let mail = super::settings::invitation_mail(&mut tx, ws).await?;
     audit(
         &mut tx,
         &u,
@@ -284,7 +293,11 @@ pub(super) async fn invite(
     )
     .await?;
     tx.commit().await?;
-    Ok(Json(json!({"id":id,"token":token})))
+    // Sent after commit, never while holding the installation lock.
+    let delivery = super::settings::send_invitation(mail, &email, &b.role, &token).await;
+    Ok(Json(
+        json!({"id":id,"token":token,"email_delivery":delivery}),
+    ))
 }
 pub(super) async fn revoke_invite(
     State(s): State<Store>,

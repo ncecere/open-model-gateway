@@ -89,6 +89,9 @@ pub(crate) struct WorkspaceAccess {
     pub(crate) view_all_activity: bool,
     pub(crate) member: bool,
     pub(crate) platform_reader: bool,
+    /// Only from [`workspace_read_tx`]: a disabled shared workspace opened
+    /// read-only by a Platform Admin/Auditor (no member or admin powers).
+    pub(crate) disabled: bool,
 }
 /// Presentation snapshot of workspace powers (shared by `/me` and workspace GET).
 pub(crate) fn capabilities(kind: &str, admin: bool, member: bool) -> Value {
@@ -117,13 +120,51 @@ pub(crate) async fn workspace_tx<'a>(
     let a = workspace_access(&mut tx, u, ws).await?;
     Ok((tx, a))
 }
+/// Read-only variant of [`workspace_tx`]: Platform Admins/Auditors may also
+/// open a disabled Team/Project to read its configuration (limits, catalogs,
+/// models, effective access). Everyone else gets the usual 404, and a disabled
+/// workspace never yields member/admin powers, keys or request details.
+/// Handlers using it must not mutate.
+pub(crate) async fn workspace_read_tx<'a>(
+    s: &'a Store,
+    u: &BrowserPrincipal,
+    ws: Uuid,
+) -> Result<(Transaction<'a, Postgres>, WorkspaceAccess), ApiError> {
+    let mut tx = installation_tx(s).await?;
+    let a = access_inner(&mut tx, u, ws, true).await?;
+    Ok((tx, a))
+}
 pub(crate) async fn workspace_access(
     tx: &mut Transaction<'_, Postgres>,
     u: &BrowserPrincipal,
     ws: Uuid,
 ) -> Result<WorkspaceAccess, ApiError> {
+    access_inner(tx, u, ws, false).await
+}
+async fn access_inner(
+    tx: &mut Transaction<'_, Postgres>,
+    u: &BrowserPrincipal,
+    ws: Uuid,
+    allow_disabled: bool,
+) -> Result<WorkspaceAccess, ApiError> {
     let role = platform_role(tx, u.user_id).await?;
-    let(kind,owner_user):(String,Option<Uuid>)=sqlx::query_as("SELECT kind,owner_user_id FROM workspaces WHERE id=$1 AND disabled_at IS NULL FOR NO KEY UPDATE").bind(ws).fetch_optional(&mut **tx).await?.ok_or_else(missing)?;
+    let platform_reader = matches!(role.as_str(), "admin" | "auditor");
+    let(kind,owner_user,disabled):(String,Option<Uuid>,bool)=sqlx::query_as("SELECT kind,owner_user_id,disabled_at IS NOT NULL FROM workspaces WHERE id=$1 AND ($2 OR disabled_at IS NULL) FOR NO KEY UPDATE").bind(ws).bind(allow_disabled).fetch_optional(&mut **tx).await?.ok_or_else(missing)?;
+    if disabled {
+        // Indistinguishable from a missing workspace unless a platform reader asks about a shared one.
+        if !(platform_reader && shared(&kind)) {
+            return Err(missing());
+        }
+        return Ok(WorkspaceAccess {
+            kind,
+            owner: false,
+            admin: false,
+            view_all_activity: false,
+            member: false,
+            platform_reader,
+            disabled,
+        });
+    }
     if kind == "personal" {
         if owner_user != Some(u.user_id) {
             return Err(denied());
@@ -134,7 +175,8 @@ pub(crate) async fn workspace_access(
             admin: true,
             view_all_activity: true,
             member: true,
-            platform_reader: matches!(role.as_str(), "admin" | "auditor"),
+            platform_reader,
+            disabled,
         });
     }
     if !shared(&kind) {
@@ -147,7 +189,7 @@ pub(crate) async fn workspace_access(
     .bind(u.user_id)
     .fetch_optional(&mut **tx)
     .await?;
-    if membership.is_none() && !matches!(role.as_str(), "admin" | "auditor") {
+    if membership.is_none() && !platform_reader {
         return Err(denied());
     }
     let owner = membership.as_deref() == Some("owner");
@@ -158,7 +200,8 @@ pub(crate) async fn workspace_access(
         admin,
         view_all_activity: admin,
         member: membership.is_some(),
-        platform_reader: matches!(role.as_str(), "admin" | "auditor"),
+        platform_reader,
+        disabled,
     })
 }
 pub(crate) fn detail_access(a: &WorkspaceAccess) -> Result<(), ApiError> {
@@ -307,7 +350,7 @@ async fn providers(
     Extension(u): Extension<BrowserPrincipal>,
     Query(p): Query<CatalogQuery>,
 ) -> ApiResult {
-    collection(&s,&u,p,"SELECT jsonb_build_object('id',id,'name',name,'provider',provider,'endpoint',endpoint,'region',region,'enabled',enabled,'auth_mode',CASE WHEN credential_ref='none' THEN 'none' ELSE 'credential' END,'model_count',(SELECT count(DISTINCT d.model_id) FROM deployments d WHERE d.provider_connection_id=provider_connections.id)) FROM provider_connections WHERE ($3::text IS NULL OR strpos(lower(name),lower($3))>0 OR strpos(lower(provider),lower($3))>0 OR strpos(lower(endpoint),lower($3))>0 OR strpos(lower(region),lower($3))>0) AND ($4::boolean IS NULL OR enabled=$4) ORDER BY name,id LIMIT $1 OFFSET $2").await
+    collection(&s,&u,p,"SELECT jsonb_build_object('id',id,'name',name,'provider',provider,'endpoint',endpoint,'region',region,'enabled',enabled,'auth_mode',CASE WHEN credential_ref='none' THEN 'none' ELSE 'credential' END,'aws_auth',CASE WHEN credential_ref='aws:default' THEN 'default' WHEN credential_ref LIKE 'aws:profile:%' THEN 'profile' WHEN credential_ref LIKE 'aws:role:%' THEN 'role' END,'model_count',(SELECT count(DISTINCT d.model_id) FROM deployments d WHERE d.provider_connection_id=provider_connections.id)) FROM provider_connections WHERE ($3::text IS NULL OR strpos(lower(name),lower($3))>0 OR strpos(lower(provider),lower($3))>0 OR strpos(lower(endpoint),lower($3))>0 OR strpos(lower(region),lower($3))>0) AND ($4::boolean IS NULL OR enabled=$4) ORDER BY name,id LIMIT $1 OFFSET $2").await
 }
 /// A route is usable only while both the deployment and its connection are enabled.
 pub(super) const ENABLED_ROUTE: &str = "d.enabled AND EXISTS(SELECT 1 FROM provider_connections p WHERE p.id=d.provider_connection_id AND p.enabled)";
@@ -365,7 +408,7 @@ async fn provider(
     Extension(u): Extension<BrowserPrincipal>,
     Path(id): Path<Uuid>,
 ) -> ApiResult {
-    detail(&s,&u,id,"SELECT jsonb_build_object('id',id,'name',name,'provider',provider,'endpoint',endpoint,'region',region,'enabled',enabled,'auth_mode',CASE WHEN credential_ref='none' THEN 'none' ELSE 'credential' END,'model_count',(SELECT count(DISTINCT d.model_id) FROM deployments d WHERE d.provider_connection_id=provider_connections.id)) FROM provider_connections WHERE id=$1").await
+    detail(&s,&u,id,"SELECT jsonb_build_object('id',id,'name',name,'provider',provider,'endpoint',endpoint,'region',region,'enabled',enabled,'auth_mode',CASE WHEN credential_ref='none' THEN 'none' ELSE 'credential' END,'aws_auth',CASE WHEN credential_ref='aws:default' THEN 'default' WHEN credential_ref LIKE 'aws:profile:%' THEN 'profile' WHEN credential_ref LIKE 'aws:role:%' THEN 'role' END,'model_count',(SELECT count(DISTINCT d.model_id) FROM deployments d WHERE d.provider_connection_id=provider_connections.id)) FROM provider_connections WHERE id=$1").await
 }
 async fn model(
     State(s): State<Store>,
@@ -389,6 +432,12 @@ struct ProviderInput {
     endpoint: Option<String>,
     region: Option<String>,
     enabled: bool,
+    /// Bedrock `aws:role:` only; stored inside the canonical reference, never returned.
+    #[serde(default)]
+    aws_external_id: Option<String>,
+    /// Bedrock `aws:role:` only (STS `RoleSessionName`).
+    #[serde(default)]
+    aws_session_name: Option<String>,
 }
 /// Fixed OpenRouter HTTPS origin; must match `providers::openrouter::BASE`.
 pub(crate) const OPENROUTER_BASE: &str = "https://openrouter.ai/api/v1";
@@ -400,7 +449,7 @@ fn credential_valid(provider: &str, r: &str) -> bool {
         return true;
     }
     if provider == "bedrock" {
-        return r == "aws:default";
+        return crate::providers::bedrock::auth::AwsAuth::parse(r).is_some();
     }
     let Some(n) = r.strip_prefix("env:") else {
         return false;
@@ -421,6 +470,24 @@ fn credential_valid(provider: &str, r: &str) -> bool {
         )
         .allows(r)
 }
+/// The stored reference: Bedrock role options arrive as separate fields and are folded
+/// into the canonical `aws:role:` reference. Other profiles accept no AWS options.
+fn stored_reference(
+    provider: &str,
+    reference: &str,
+    external_id: Option<&str>,
+    session_name: Option<&str>,
+) -> Option<String> {
+    if provider == "bedrock" {
+        return crate::providers::bedrock::auth::AwsAuth::from_parts(
+            reference,
+            external_id,
+            session_name,
+        )
+        .map(|a| a.reference());
+    }
+    (external_id.is_none() && session_name.is_none()).then(|| reference.to_owned())
+}
 fn provider_valid(b: &ProviderInput) -> bool {
     valid_name(&b.name) && credential_valid(&b.provider, &b.credential_ref) && profile_valid(b)
 }
@@ -438,15 +505,13 @@ fn profile_valid(b: &ProviderInput) -> bool {
                 .is_none_or(|s| s == base || s == format!("{base}/"))
                 && b.region.as_deref().is_none_or(str::is_empty)
         }
-        "bedrock" => {
-            b.endpoint.is_none()
-                && b.region.as_ref().is_some_and(|r| {
-                    !r.is_empty()
-                        && r.len() <= 32
-                        && r.bytes()
-                            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
-                })
-        }
+        // Identity mode, allowlisted profile/endpoint and region (docs/bedrock.md).
+        "bedrock" => crate::providers::bedrock::auth::connection_valid(
+            &crate::providers::bedrock::auth::Policy::from_env(),
+            &b.credential_ref,
+            b.endpoint.as_deref(),
+            b.region.as_deref(),
+        ),
         p if local(p) => b.endpoint.as_deref().is_some_and(|endpoint| {
             crate::providers::local::endpoints::ApprovedEndpoints::from_env(
                 &std::env::var("GATEWAY_ENV").unwrap_or_else(|_| "production".into()),
@@ -463,9 +528,16 @@ fn profile_valid(b: &ProviderInput) -> bool {
 async fn create_provider(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
-    Json(b): Json<ProviderInput>,
+    Json(mut b): Json<ProviderInput>,
 ) -> ApiResult {
     let mut tx = catalog_tx(&s, &u, true).await?;
+    b.credential_ref = stored_reference(
+        &b.provider,
+        &b.credential_ref,
+        b.aws_external_id.as_deref(),
+        b.aws_session_name.as_deref(),
+    )
+    .ok_or_else(invalid)?;
     if !provider_valid(&b) {
         return Err(invalid());
     }
@@ -489,6 +561,13 @@ async fn create_provider(
 struct ProviderUpdate {
     enabled: bool,
     credential_ref: Option<String>,
+    /// With a replacement `aws:role:` reference only; omitted means none.
+    aws_external_id: Option<String>,
+    aws_session_name: Option<String>,
+    /// Bedrock only: an allowlisted HTTPS endpoint, or null for the regional endpoint.
+    /// Omitted keeps the current value.
+    #[serde(default, deserialize_with = "nullable_patch")]
+    endpoint: Option<Option<String>>,
 }
 async fn update_provider(
     State(s): State<Store>,
@@ -498,18 +577,37 @@ async fn update_provider(
 ) -> ApiResult {
     let mut tx = catalog_tx(&s, &u, true).await?;
     let(name,provider,credential_ref,endpoint,region):(String,String,String,Option<String>,Option<String>)=sqlx::query_as("SELECT name,provider,credential_ref,endpoint,region FROM provider_connections WHERE id=$1 FOR UPDATE").bind(id).fetch_optional(&mut *tx).await?.ok_or_else(missing)?;
+    let replacement = match b.credential_ref.as_deref() {
+        Some(r) => Some(
+            stored_reference(
+                &provider,
+                r,
+                b.aws_external_id.as_deref(),
+                b.aws_session_name.as_deref(),
+            )
+            .ok_or_else(invalid)?,
+        ),
+        // Role options belong to a restated role reference.
+        None if b.aws_external_id.is_none() && b.aws_session_name.is_none() => None,
+        None => return Err(invalid()),
+    };
+    if b.endpoint.is_some() && provider != "bedrock" {
+        return Err(invalid());
+    }
     let proposed = ProviderInput {
         name,
         provider,
-        credential_ref: b.credential_ref.clone().unwrap_or(credential_ref),
-        endpoint,
+        credential_ref: replacement.clone().unwrap_or(credential_ref),
+        endpoint: b.endpoint.clone().unwrap_or(endpoint),
         region,
         enabled: b.enabled,
+        aws_external_id: None,
+        aws_session_name: None,
     };
     if !provider_valid(&proposed) {
         return Err(invalid());
     }
-    sqlx::query("UPDATE provider_connections SET enabled=$2,credential_ref=coalesce($3,credential_ref) WHERE id=$1").bind(id).bind(b.enabled).bind(b.credential_ref).execute(&mut *tx).await?;
+    sqlx::query("UPDATE provider_connections SET enabled=$2,credential_ref=coalesce($3,credential_ref),endpoint=CASE WHEN $4 THEN $5 ELSE endpoint END WHERE id=$1").bind(id).bind(b.enabled).bind(replacement).bind(b.endpoint.is_some()).bind(b.endpoint.flatten()).execute(&mut *tx).await?;
     audit(
         &mut tx,
         &u,
@@ -729,6 +827,21 @@ pub(super) async fn insert_deployment(
     {
         return Err(invalid());
     }
+    // Bedrock routes take a model ID, an inference profile ID (`us.…`, `global.…`) or a
+    // Bedrock ARN in the connection's own region. Unknown connections stay FK conflicts.
+    let connection: Option<(String, Option<String>)> =
+        sqlx::query_as("SELECT provider,region FROM provider_connections WHERE id=$1")
+            .bind(b.provider_connection_id)
+            .fetch_optional(&mut **tx)
+            .await?;
+    if let Some((provider, region)) = connection
+        && provider == "bedrock"
+        && !region.as_deref().is_some_and(|r| {
+            crate::providers::bedrock::auth::valid_upstream_model(&b.upstream_model, r)
+        })
+    {
+        return Err(invalid());
+    }
     let id = Uuid::new_v4();
     sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model,enabled) VALUES($1,$2,$3,$4,$5)").bind(id).bind(b.model_id).bind(b.provider_connection_id).bind(b.upstream_model).bind(b.enabled).execute(&mut **tx).await?;
     audit(
@@ -824,6 +937,8 @@ mod profile_tests {
             endpoint: endpoint.map(str::to_owned),
             region: None,
             enabled: false,
+            aws_external_id: None,
+            aws_session_name: None,
         }
     }
     #[test]

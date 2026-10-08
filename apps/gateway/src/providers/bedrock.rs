@@ -19,6 +19,8 @@ use tokio::sync::Mutex;
 use super::ProviderAdapter;
 use crate::inference::{error::InferenceError, types::*};
 
+#[path = "bedrock/auth.rs"]
+pub(crate) mod auth;
 #[path = "bedrock/stream.rs"]
 mod stream;
 #[cfg(test)]
@@ -37,6 +39,8 @@ const MAX_TOOLS: usize = 128;
 pub struct BedrockAdapter {
     http: aws_smithy_runtime_api::client::http::SharedHttpClient,
     clients: Mutex<BTreeMap<String, Client>>,
+    /// Profile and endpoint allowlists, read from the environment at startup.
+    policy: auth::Policy,
     #[cfg(test)]
     test_client: Option<Client>,
 }
@@ -46,30 +50,46 @@ impl BedrockAdapter {
         Ok(Self {
             http: transport::client()?,
             clients: Mutex::new(BTreeMap::new()),
+            policy: auth::Policy::from_env(),
             #[cfg(test)]
             test_client: None,
         })
     }
 
-    async fn client(&self, region: &str) -> Client {
+    async fn client(&self, plan: &auth::Plan) -> Client {
         #[cfg(test)]
         if let Some(client) = &self.test_client {
             return client.clone();
         }
+        let key = plan.key();
         let mut clients = self.clients.lock().await;
-        if let Some(client) = clients.get(region) {
+        if let Some(client) = clients.get(&key) {
             return client.clone();
         }
-        // Build directly rather than copying a shared SDK configuration: environment/profile
-        // endpoint overrides (including AWS_ENDPOINT_URL_BEDROCK_RUNTIME) cannot be inherited.
-        let credentials =
-            aws_config::default_provider::credentials::DefaultCredentialsChain::builder()
-                .region(Region::new(region.to_owned()))
-                .build()
-                .await;
-        let config = aws_sdk_bedrockruntime::Config::builder()
+        let credentials = auth::credentials(&plan.auth, &plan.region).await;
+        let client = Client::from_conf(self.service_config(plan, credentials));
+        // Bound cache cardinality even if catalog configuration changes repeatedly. Evicting
+        // keeps a reused client (and its credential cache) for the current configuration.
+        if clients.len() >= 64 {
+            clients.pop_first();
+        }
+        clients.insert(key, client.clone());
+        client
+    }
+
+    /// Built directly rather than copying a shared SDK configuration: environment/profile
+    /// endpoint overrides (including AWS_ENDPOINT_URL_BEDROCK_RUNTIME) cannot be inherited.
+    /// Only an allowlisted connection endpoint replaces the regional endpoint.
+    fn service_config(
+        &self,
+        plan: &auth::Plan,
+        credentials: aws_sdk_bedrockruntime::config::SharedCredentialsProvider,
+    ) -> aws_sdk_bedrockruntime::Config {
+        let mut builder = aws_sdk_bedrockruntime::Config::builder();
+        builder.set_endpoint_url(plan.endpoint.clone());
+        builder
             .behavior_version(BehaviorVersion::latest())
-            .region(Region::new(region.to_owned()))
+            .region(Region::new(plan.region.clone()))
             .credentials_provider(credentials)
             .http_client(self.http.clone())
             .retry_config(RetryConfig::standard().with_max_attempts(1))
@@ -80,13 +100,7 @@ impl BedrockAdapter {
                     .operation_timeout(Duration::from_secs(300))
                     .build(),
             )
-            .build();
-        let client = Client::from_conf(config);
-        // Bound cache cardinality even if catalog configuration changes repeatedly.
-        if clients.len() < 64 {
-            clients.insert(region.to_owned(), client.clone());
-        }
-        client
+            .build()
     }
 }
 
@@ -109,9 +123,9 @@ impl ProviderAdapter for BedrockAdapter {
         )
     }
     async fn execute(&self, target: &Deployment, request: ChatRequest) -> Result<ProviderOutput> {
-        let region = validate_target(target)?;
+        let plan = auth::Plan::new(target, &self.policy).ok_or(InferenceError::Configuration)?;
         let input = encode(&request)?; // Validate before any credential discovery/network work.
-        let client = self.client(region).await;
+        let client = self.client(&plan).await;
         if request.stream {
             let output = client
                 .converse_stream()
@@ -138,30 +152,6 @@ impl ProviderAdapter for BedrockAdapter {
             Ok(ProviderOutput::Complete(decode_complete(output)?))
         }
     }
-}
-
-fn validate_target(target: &Deployment) -> Result<&str> {
-    let region = target
-        .region
-        .as_deref()
-        .ok_or(InferenceError::Configuration)?;
-    if target.provider != "bedrock"
-        || target.credential_ref != "aws:default"
-        || target.endpoint.is_some()
-        || region.len() < 5
-        || region.len() > 64
-        || !region
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-        || !region.as_bytes()[0].is_ascii_lowercase()
-        || !region.as_bytes()[region.len() - 1].is_ascii_digit()
-        || target.upstream_model.is_empty()
-        || target.upstream_model.len() > 2048
-        || target.upstream_model.chars().any(char::is_control)
-    {
-        return Err(InferenceError::Configuration);
-    }
-    Ok(region)
 }
 
 struct Input {

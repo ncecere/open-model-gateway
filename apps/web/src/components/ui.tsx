@@ -19,6 +19,7 @@ import { Checkbox, CheckboxGroup } from "./ui/checkbox/checkbox";
 import { RadioGroup } from "./ui/radio-group/radio-group";
 import { Switch } from "./ui/switch/switch";
 import { WithIcon } from "./provider-icon";
+import { IconSelect } from "./icon-select";
 import { Dialog, AlertDialog } from "./ui/dialog/dialog";
 import { Stack, Inline } from "./ui/layout/layout";
 import { Time } from "./ui/time/time";
@@ -128,6 +129,7 @@ function ActionDialog({ action, onClose }: { action: Action; onClose: (success: 
       const help = field.helpFor?.(values) ?? field.help;
       if (field.type === "switch") return <Switch key={field.name} id={fieldId} label={field.label} description={help} checked={values[field.name] === "true"} disabled={busy} onCheckedChange={checked => changeValue(field.name, String(checked))} />;
       if (field.type === "checkboxes") return <CheckboxesField key={field.name} field={{ ...field, help }} id={fieldId} value={values[field.name] ?? "[]"} error={errors[field.name]} disabled={busy} onChange={value => changeValue(field.name, value)} />;
+      if (field.type === "select" && field.display === "icon-select") return <IconSelectField key={field.name} field={{ ...field, help }} id={fieldId} value={values[field.name] ?? ""} error={errors[field.name]} disabled={busy} onChange={value => changeValue(field.name, value)} />;
       if (field.type === "select" && field.display === "cards") return <CardChoiceField key={field.name} field={{ ...field, help }} id={fieldId} value={values[field.name] ?? ""} error={errors[field.name]} disabled={busy} onChange={value => changeValue(field.name, value)} />;
       return <FormField key={field.name} name={field.name} label={field.label} labelHint={field.hint ?? (!(field.required || field.requiredWhen?.(values)) ? "Optional" : undefined)} description={help} error={errors[field.name]}>{field.type === "date" ? <DateControl id={fieldId} name={field.name} value={values[field.name] ?? ""} disabled={busy} onChange={value => changeValue(field.name, value)} /> : field.type === "select" ? <NativeSelect {...common}><option value="">Choose…</option>{field.options?.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</NativeSelect> : field.type === "textarea" ? <Textarea {...common} rows={4} autoComplete="off" spellCheck={false} /> : <Input {...common} type={field.type ?? "text"} inputMode={field.inputMode} min={field.min} max={field.max} step={field.type === "number" ? 1 : undefined} maxLength={field.maxLength} placeholder={field.placeholder} autoComplete="off" spellCheck={field.type === "password" ? false : undefined} />}</FormField>;
     })}{error !== undefined && <ErrorNotice error={error} />}</Stack></Form>}
@@ -136,6 +138,10 @@ function ActionDialog({ action, onClose }: { action: Action; onClose: (success: 
 /** A select field as Bitop radio cards: native radio semantics (arrow keys, one tab stop) with optional decorative option icons. */
 export function CardChoiceField({ field, id, value, error, disabled, onChange }: { field: Field; id: string; value: string; error?: string; disabled?: boolean; onChange: (value: string) => void }) {
   return <RadioGroup legend={field.label} description={field.help} error={error} id={id} tabIndex={-1} name={field.name} variant="card" value={value} disabled={disabled} onValueChange={next => onChange(String(next))} options={field.options?.map(option => ({ value: option.value, label: option.icon ? <WithIcon icon={option.icon}>{option.label}</WithIcon> : option.label })) ?? []} />;
+}
+/** A select field as a compact dropdown with each option's icon in the list and the trigger. The field wires help and errors to the trigger. */
+export function IconSelectField({ field, id, value, error, disabled, onChange }: { field: Field; id: string; value: string; error?: string; disabled?: boolean; onChange: (value: string) => void }) {
+  return <FormField name={field.name} description={field.help} error={error}><IconSelect label={field.label} id={id} value={value} disabled={disabled} onChange={onChange} items={field.options?.map(option => ({ value: option.value, label: option.label, icon: option.icon ?? null })) ?? []} /></FormField>;
 }
 export function CheckboxesField({ field, id, value, error, disabled, onChange }: { field: Field; id: string; value: string; error?: string; disabled?: boolean; autoFocus?: boolean; onChange: (value: string) => void }) {
   let selected: string[]; try { selected = parseCheckboxValues(value); } catch { selected = []; }

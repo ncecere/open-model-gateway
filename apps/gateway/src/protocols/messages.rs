@@ -28,6 +28,13 @@ pub struct Request {
     #[serde(default)]
     tools: Vec<Tool>,
     tool_choice: Option<Value>,
+    /// Client label only (session id source for Logs); not forwarded upstream.
+    metadata: Option<WireMetadata>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireMetadata {
+    user_id: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -192,14 +199,25 @@ pub async fn handle(
         }
         Err(_) => return error_response(InferenceError::InvalidRequest),
     };
+    // Anthropic bounds metadata.user_id to 256 characters.
+    if wire
+        .metadata
+        .as_ref()
+        .and_then(|m| m.user_id.as_ref())
+        .is_some_and(|u| u.chars().count() > 256)
+    {
+        return error_response(InferenceError::InvalidRequest);
+    }
+    let labels = crate::inference::client::current()
+        .with_body_session([wire.metadata.as_ref().and_then(|m| m.user_id.as_deref())]);
     let request = match wire.normalize() {
         Ok(v) => v,
         Err(e) => return error_response(e),
     };
     let model = request.model.clone();
     let id = format!("msg_{}", request_id.0.simple());
-    let output = match engine
-        .execute_protocol(principal, request, request_id.0, ApiProtocol::Messages)
+    let output = match labels
+        .scope(engine.execute_protocol(principal, request, request_id.0, ApiProtocol::Messages))
         .await
     {
         Ok(v) => v,

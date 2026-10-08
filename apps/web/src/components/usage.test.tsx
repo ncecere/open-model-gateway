@@ -12,7 +12,7 @@ import { UsageOverviewTab } from "../pages/usage/overview";
 import { UsageExploreTab } from "../pages/usage/explore";
 import { WorkspaceRecords } from "../pages/usage/records";
 import { AccountingReport } from "../pages/usage/accounting";
-import { usageContext, usagePeriod, type ExploreResponse, type UsageOverview } from "../lib/usage";
+import { previousHasData, tileDelta, usageContext, usagePeriod, type ExploreResponse, type UsageOverview } from "../lib/usage";
 import type { DashboardSearch } from "../lib/permissions";
 
 const now = new Date("2026-10-08T12:00:00Z"), period = usagePeriod({}, now), q = "start_date=2026-10-01&end_date=2026-10-09";
@@ -29,22 +29,73 @@ beforeEach(() => { document.cookie = "omg_csrf=test-csrf; Path=/"; localStorage.
 afterEach(() => { cleanup(); abortRequests(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("Usage & costs overview", () => {
-  it("shows exact sub-cent tiles, deltas, the on-hold sentence and a link to unresolved records", () => {
+  it("shows three exact sub-cent tiles with deltas, the on-hold amount on Spend (no banner) and a link to unresolved records", () => {
     const html = markup(<UsageOverviewTab workspace={team} ctx={usageContext(team)} period={period} nav={nav()} />, [[`/api/v1/workspaces/team/usage/overview?${q}`, overview([{ id: "u1", name: "alex@example.invalid", spend_microusd: "2723", requests: "21", tokens: "5000", share: "1" }])], ["/api/v1/workspaces/team/policy", { budgets: [{ layer: "local", period: "month", amount_microusd: "100000000", usage_visible: true, used_microusd: "10323", unresolved_usage: true, window_start: "2026-10-01T00:00:00Z", window_end: "2026-11-01T00:00:00Z" }] }]]);
-    for (const text of ["$0.002723", "$0.0076 on hold", "including 2 retries", "At least 5,000", "25%", "+172.3%", "+25%", "vs previous 8 days", "Top members", "alex@example.invalid", "Laptop key", "$0.000081", "Workspace monthly budget", "$0.010323 / $100.00 · Monthly", "Resets Nov 1, 2026", "Accounting details"]) expect(html).toContain(text);
+    for (const text of ["$0.002723", "+$0.0076 on hold", "including 2 retries", "At least 5,000", "+172.3%", "+110%", "+25%", "vs previous 8 days", "Top members", "alex@example.invalid", "Laptop key", "$0.000081", "Budgets", "Workspace monthly budget", "$0.010323 / $100.00 · Monthly", "Resets Nov 1, 2026", "Accounting details", "View all in Explore", "Estimates from configured prices, not invoices"]) expect(html).toContain(text);
+    // The on-hold explanation is the Spend tile's tooltip (and screen-reader sentence); no "Some costs aren't final yet" banner.
     expect(html).toContain("$0.0076 is on hold for 5 requests whose final cost isn&#x27;t known yet");
-    expect(html).toContain('href="/workspaces/team/costs?tab=records&amp;cost_status=on_hold"');
-    expect(html).toContain('href="/workspaces/team/costs?tab=records&amp;cost_status=cost_unknown"');
-    // Top models: blended cost per 1M tokens, and a drill-down that filters by the model's UUID (keys by key id).
-    expect(html).toContain("$0.0005446 per 1M tokens");
-    expect(html).toContain('href="/workspaces/team/costs?model_id=m-luna"');
-    expect(html).toContain('href="/workspaces/team/costs?key_id=k"');
-    // Names open the key and the model; the filter is a separate button (review #39).
-    expect(html).toContain('href="/workspaces/team/keys/k"'); expect(html).toContain('href="/workspaces/team/models/m-luna"'); expect(html).toContain('aria-label="Filter by Laptop key"');
+    expect(html).not.toContain("Some costs aren"); expect(html).not.toContain('role="alert"');
+    expect(html).toMatch(/<a [^>]*href="\/workspaces\/team\/costs\?tab=records&amp;cost_status=on_hold"[^>]*>View unresolved<\/a>/);
+    // Only Spend, Requests and Tokens are tiles; cache hit rate and $/1M are in Explore and Accounting details.
+    expect(html.match(/role="group" aria-label="Usage summary"/g)).toHaveLength(1);
+    expect(html).not.toContain("Cache hit rate</a>"); expect(html).not.toContain("Cost per 1M tokens</a>"); expect(html).not.toContain("per 1M tokens</");
     expect(html).toContain('href="/workspaces/team/costs?tab=chart&amp;metric=spend"');
-    // Unknown $/M stays Unknown, never $0.
-    expect(html).toMatch(/Cost per 1M tokens[\s\S]*Unknown/);
+    // Top lists: compact rows (name | requests | spend | share); names open the key and the model; no funnel filter button.
+    expect(html).toContain('href="/workspaces/team/keys/k"'); expect(html).toContain('href="/workspaces/team/models/m-luna"');
+    expect(html).not.toContain("Filter by"); expect(html).not.toContain('href="/workspaces/team/costs?key_id=k"');
     expect(html).not.toMatch(/\$0(?![.,\d])/);
+    expect(html).not.toContain("Updated "); expect(html).not.toContain("New");
+  });
+  it("renders top lists as one-line table rows, top 5 with a link to Explore", () => {
+    const o = overview(null); o.top.keys = Array.from({ length: 7 }, (_, i) => ({ id: `k${i}`, name: `Key ${i}`, spend_microusd: String(700 - i * 100), requests: String(i + 1), tokens: "1", share: null }));
+    document.body.innerHTML = markup(<UsageOverviewTab workspace={team} ctx={usageContext(team)} period={period} nav={nav()} />, [[`/api/v1/workspaces/team/usage/overview?${q}`, o]]);
+    const table = screen.getByRole("table", { name: "Top API keys" });
+    expect(within(table).getAllByRole("columnheader").map(h => h.textContent)).toEqual(["API key", "Spend"]); expect(table.textContent).toContain("1 request"); expect(table.textContent).toContain("2 requests");
+    const rows = within(table).getAllByRole("row").slice(1);
+    expect(rows).toHaveLength(5);
+    expect(within(rows[0]!).getByRole("rowheader").textContent).toContain("Key 01 request");
+    expect(within(rows[0]!).getByRole("link", { name: "Key 0" }).getAttribute("href")).toBe("/workspaces/team/keys/k0");
+    expect(rows[0]!.textContent).toContain("$0.0007"); expect(rows[1]!.textContent).toContain("2");
+    expect(screen.queryByText("Key 5")).toBeNull();
+    const all = screen.getAllByRole("link", { name: "View all in Explore" }).map(a => a.getAttribute("href"));
+    expect(all).toContain("/workspaces/team/costs?tab=explore&group=key");
+    document.body.innerHTML = "";
+  });
+  it("shows a tile delta only when the previous period has data (no \"New\", no \"No comparison\")", () => {
+    const o = overview(null);
+    o.tiles.spend = { ...o.tiles.spend, previous: "0" }; o.tiles.requests = { ...o.tiles.requests, previous: null }; o.tiles.tokens = { ...o.tiles.tokens, previous: "4000" };
+    const html = markup(<UsageOverviewTab workspace={team} ctx={usageContext(team)} period={period} nav={nav()} />, [[`/api/v1/workspaces/team/usage/overview?${q}`, o]]);
+    expect(html).not.toContain("New"); expect(html).not.toContain("No comparison"); expect(html).not.toContain("+172.3%");
+    expect(html.match(/vs previous 8 days/g)).toHaveLength(1); expect(html).toContain("+25%");
+    expect(tileDelta("5", "0", "bad", 8)).toBeUndefined(); expect(tileDelta("5", null, "bad", 8)).toBeUndefined(); expect(tileDelta(null, "5", "bad", 8)).toBeUndefined();
+    expect(tileDelta("5", "4", "bad", 8)).toEqual({ current: "5", previous: "4", increaseIs: "bad", label: "vs previous 8 days" });
+    expect(previousHasData("9007199254740993")).toBe(true); expect(previousHasData("0")).toBe(false); expect(previousHasData("1.5")).toBe(false);
+  });
+  it("replaces the daily chart with a one-line note when only one day has data, and omits budgets when none are set", () => {
+    const o = overview(null), one = (daily: { date: string; value: string | null }[]) => daily.map(d => ({ ...d, value: d.date === "2026-10-08" ? d.value : "0" }));
+    o.tiles.spend.daily = one(o.tiles.spend.daily); o.tiles.requests.daily = one(o.tiles.requests.daily); o.tiles.tokens.daily = one(o.tiles.tokens.daily);
+    const html = markup(<UsageOverviewTab workspace={team} ctx={usageContext(team)} period={period} nav={nav()} />, [[`/api/v1/workspaces/team/usage/overview?${q}`, o], ["/api/v1/workspaces/team/policy", { budgets: [] }]]);
+    expect(html).toContain("All activity in this period is on one UTC day"); expect(html).not.toContain("Daily spend"); expect(html).not.toContain("Chart measure");
+    expect(html).not.toContain("Budgets"); expect(html).not.toContain("No budget is set");
+    // Two days: the chart with Spend / Requests / Tokens only.
+    const chart = markup(<UsageOverviewTab workspace={team} ctx={usageContext(team)} period={period} nav={nav()} />, [[`/api/v1/workspaces/team/usage/overview?${q}`, overview(null)]]);
+    expect(chart).toContain("Daily spend"); expect(chart).toContain("Chart measure"); expect(chart).not.toContain(">Cache hit<"); expect(chart).not.toContain(">$/1M<");
+    // Admin: no installation budget configured means no card at all.
+    const admin = markup(<UsageOverviewTab ctx={usageContext()} period={period} nav={nav({ page: "platform-costs" })} />, [[`/api/v1/platform/usage/overview?${q}`, { ...overview([]), installation_budgets: [] }]]);
+    expect(admin).not.toContain("Installation budgets"); expect(admin).not.toContain("No installation-wide budget"); expect(admin).not.toContain("Budgets");
+  });
+  it("orders the page: header, pill tabs, one filter row (Period + More filters), then the tab; no separate period block", () => {
+    vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(now);
+    const html = markup(<Costs session={session} workspace={team} />, [[`/api/v1/workspaces/team/usage/overview?${q}`, overview(null)]]);
+    const at = (needle: string) => { const i = html.indexOf(needle); expect(i, needle).toBeGreaterThan(-1); return i; };
+    expect(at("<h1")).toBeLessThan(at('role="tablist"'));
+    expect(at("Oct 1 – Oct 8, 2026 (UTC, today so far)")).toBeLessThan(at('role="tablist"'));
+    expect(at('role="tablist"')).toBeLessThan(at(">Period<"));
+    expect(at(">Period<")).toBeLessThan(at("More filters"));
+    expect(at("More filters")).toBeLessThan(at('aria-label="Usage summary"'));
+    expect(html).toContain("This month (UTC)"); expect(html).not.toContain("UTC days"); expect(html).not.toContain("Updated ");
+    // Model, API key, Member, Status and Cost center live behind "More filters" (not inline).
+    expect(html).not.toContain(">All models<"); expect(html).not.toContain(">Succeeded<");
   });
   it("never shows member breakdowns or workspace budget meters to ordinary members or in Personal", () => {
     const client = testClient();

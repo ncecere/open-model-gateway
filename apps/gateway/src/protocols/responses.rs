@@ -2,7 +2,7 @@
 use crate::{
     auth::Principal,
     http::RequestId,
-    inference::{Engine, error::InferenceError, types::*},
+    inference::{Engine, client, error::InferenceError, types::*},
 };
 use axum::{
     Extension, Json,
@@ -38,6 +38,9 @@ pub struct Request {
     tools: Vec<Function>,
     tool_choice: Option<Value>,
     text: Option<TextConfig>,
+    /// Client labels only (session id source for Logs); not forwarded upstream.
+    user: Option<String>,
+    metadata: Option<client::OpenAiMetadata>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -258,6 +261,13 @@ pub async fn handle(
         Ok(Json(v)) => v,
         Err(e) => return rejection(e),
     };
+    if !client::valid_openai_metadata(wire.metadata.as_ref()) {
+        return error_response(InferenceError::InvalidRequest);
+    }
+    let labels = client::current().with_body_session(client::openai_session(
+        wire.metadata.as_ref(),
+        wire.user.as_deref(),
+    ));
     let request = match wire.normalize() {
         Ok(v) => v,
         Err(e) => return error_response(e),
@@ -268,8 +278,8 @@ pub async fn handle(
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let output = match engine
-        .execute_protocol(principal, request, request_id.0, ApiProtocol::Responses)
+    let output = match labels
+        .scope(engine.execute_protocol(principal, request, request_id.0, ApiProtocol::Responses))
         .await
     {
         Ok(v) => v,

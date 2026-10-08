@@ -93,7 +93,8 @@ pub(crate) fn inclusive(
     object(&value[details_key])?;
     let details = &value[details_key];
     let write = count(&details[write_key])?;
-    checked(
+    let output = count(&value[output_key])?;
+    let mut usage = checked(
         BillingUsage {
             cache_read_input_tokens: count(&details["cached_tokens"])?,
             cache_write_input_tokens: write,
@@ -105,8 +106,20 @@ pub(crate) fn inclusive(
         },
         true,
         count(&value[input_key])?,
-        count(&value[output_key])?,
-    )
+        output,
+    )?;
+    usage.reasoning_tokens = reasoning_tokens(value, output);
+    Ok(usage)
+}
+/// Telemetry only (Logs): reasoning tokens reported inside the output details
+/// (`completion_tokens_details` for Chat Completions, `output_tokens_details`
+/// for Responses). Never used for charging; an absent or implausible value
+/// (not an integer, or above the output count) is unknown, not an error.
+fn reasoning_tokens(value: &Value, output: Option<u64>) -> Option<u64> {
+    ["completion_tokens_details", "output_tokens_details"]
+        .into_iter()
+        .find_map(|key| value[key]["reasoning_tokens"].as_u64())
+        .filter(|n| *n <= i64::MAX as u64 && output.is_none_or(|o| *n <= o))
 }
 pub(crate) fn anthropic(value: &Value) -> Result<Usage> {
     if value.is_null() {
@@ -352,6 +365,32 @@ mod tests {
         assert_eq!(u.billing.unwrap().cache_write_input_tokens, None);
         assert_eq!(u.billing.unwrap().uncached_input_tokens, None);
         assert!(inclusive(&json!({"input_tokens":1,"input_tokens_details":{"cached_tokens":2,"cache_write_tokens":0}}),"input_tokens","output_tokens","input_tokens_details","cache_write_tokens").is_err());
+    }
+    #[test]
+    fn reasoning_tokens_are_telemetry_only_and_never_guessed() {
+        let chat = |v| {
+            inclusive(
+                &v,
+                "prompt_tokens",
+                "completion_tokens",
+                "prompt_tokens_details",
+                "cache_write_tokens",
+            )
+            .unwrap()
+        };
+        let u = chat(
+            json!({"prompt_tokens":5,"completion_tokens":9,"completion_tokens_details":{"reasoning_tokens":4}}),
+        );
+        assert_eq!(u.reasoning_tokens, Some(4));
+        // Absent, implausible (above output) or malformed values stay unknown without failing.
+        assert_eq!(
+            chat(json!({"prompt_tokens":5,"completion_tokens":9})).reasoning_tokens,
+            None
+        );
+        assert_eq!(chat(json!({"prompt_tokens":5,"completion_tokens":3,"completion_tokens_details":{"reasoning_tokens":4}})).reasoning_tokens, None);
+        assert_eq!(chat(json!({"prompt_tokens":5,"completion_tokens":9,"completion_tokens_details":{"reasoning_tokens":"4"}})).reasoning_tokens, None);
+        let u = inclusive(&json!({"input_tokens":5,"output_tokens":9,"output_tokens_details":{"reasoning_tokens":2}}),"input_tokens","output_tokens","input_tokens_details","cache_write_tokens").unwrap();
+        assert_eq!(u.reasoning_tokens, Some(2));
     }
     #[test]
     fn exclusive_ttl_is_not_double_counted_or_guessed() {

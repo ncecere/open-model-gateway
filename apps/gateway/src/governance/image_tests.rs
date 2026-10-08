@@ -97,6 +97,7 @@ fn usage(input: u64, output: u64, images: u64, variant: &str) -> Usage {
         meters: Some(meters(Some(images))),
         output_image_variant: MeterVariant::new(variant),
         provider_cost_microusd: Some(20_500),
+        reasoning_tokens: None,
     }
 }
 fn finished(id: Uuid, usage: Usage) -> ExecutionFinish {

@@ -5,36 +5,83 @@ The `bedrock` adapter uses the official AWS Rust SDK's **Converse** and
 request serialization, and binary event-stream decoding. It does not use an
 unsigned HTTP approximation of Bedrock.
 
-## Deployment configuration
+## Connection configuration
 
-| Field | Required value |
+| Field | Value |
 | --- | --- |
 | `provider` | `bedrock` |
-| `upstream_model` | A Converse-compatible model ID or inference-profile ID/ARN available to the workload |
-| `credential_ref` | Exactly `aws:default` |
-| `region` | An explicit AWS region, for example `us-east-1` |
-| `endpoint` | Absent/null; even an AWS URL or an empty string is rejected |
+| `region` | An AWS region code, for example `us-east-1`. The dashboard lists common Bedrock regions and accepts any other valid code. |
+| `credential_ref` | `aws:default`, `aws:profile:<name>` or `aws:role:<role-arn>` (below). Never a key. |
+| `aws_external_id`, `aws_session_name` | Optional, `aws:role:` only. |
+| `endpoint` | Null for the regional Bedrock Runtime endpoint, or an allowlisted VPC endpoint (below). |
 
-The adapter uses the **default AWS credential provider chain**, with the
-configured deployment region. Prefer a workload role: ECS task role, EC2 instance
-profile, or EKS/web-identity role. The standard chain also supports operator-managed
-environment credentials and shared AWS profiles; this does not permit deployment
-records to contain keys or arbitrary `env:` credential references. Credential
-refresh is managed by AWS's identity provider/cache.
+Route `upstream_model` is a Converse model ID (`anthropic.claude-…`), an inference
+profile ID (`us.…`, `eu.…`, `apac.…`, `global.…`) or a Bedrock ARN
+(`foundation-model`, `inference-profile`, `application-inference-profile`,
+`provisioned-model`, `custom-model-deployment`, `imported-model`, `prompt`). An ARN
+must be in the connection's region: cross-region inference profiles are invoked from
+their source region and route onward inside AWS. Management rejects other shapes and
+the adapter checks them again.
 
-All deployments using `aws:default` use the gateway workload's authority. Restrict
-that role to the intended models and inference profiles. It needs
-`bedrock:InvokeModel` and, for streaming, `bedrock:InvokeModelWithResponseStream`.
-Cross-region inference profiles can require permission for their destination
-model resources as well. Model access, account quotas, and model-specific tool
-support remain AWS configuration responsibilities.
+### Identity modes
+
+- **Server AWS identity** (`aws:default`): the default AWS credential provider chain
+  in the connection's region. Prefer a workload role: ECS task role, EC2 instance
+  profile or EKS/web-identity role.
+- **Named AWS profile** (`aws:profile:<name>`): exactly that profile from the server's
+  shared AWS config/credentials files, including `source_profile`, `role_arn`,
+  `credential_process` and SSO profiles. Environment credentials do not take
+  precedence. The name must be on `GATEWAY_AWS_PROFILE_ALLOWLIST` (comma-separated;
+  default empty, so no profile is usable). Profiles are server configuration; the
+  dashboard cannot create or list them.
+- **Assume IAM role** (`aws:role:<role-arn>`): the server identity (default chain)
+  calls STS `AssumeRole` at the connection region's STS endpoint, with the optional
+  external ID and session name (default `open-model-gateway`). The STS client is built
+  explicitly: one attempt, 10-second connect and 30-second operation timeouts, no
+  shared endpoint configuration. The server identity needs `sts:AssumeRole` on the
+  role, and the role's trust policy must allow it (and require the external ID when
+  set). Which roles can be assumed is bounded by that IAM policy, not by the gateway.
+
+Role options are folded into one canonical stored reference,
+`aws:role:<arn>[;external_id=<id>][;session_name=<name>]`. Like `env:` references it
+is never returned: reads expose `aws_auth` (`default`, `profile` or `role`) only. To
+change a role option, restate the role (dashboard: connection › Settings › Change AWS
+access). The external ID is not an AWS secret, but it is kept out of reads and logs.
+
+Every deployment on a connection uses that connection's authority. Restrict the role
+to the intended models and inference profiles. It needs `bedrock:InvokeModel` and, for
+streaming, `bedrock:InvokeModelWithResponseStream`. Cross-region inference profiles
+can require permission for their destination model resources as well. Model access,
+account quotas and model-specific tool support remain AWS configuration
+responsibilities. Credential refresh is managed by AWS's identity providers and the
+client's identity cache.
+
+### VPC endpoint (PrivateLink)
+
+`endpoint` may replace the regional Bedrock Runtime endpoint with an interface VPC
+endpoint, for example
+`https://vpce-0abc123-xyz.bedrock-runtime.us-east-1.vpce.amazonaws.com`. It must be an
+exact HTTPS origin (no credentials, path, query, fragment or trailing slash) that
+appears on `GATEWAY_BEDROCK_ENDPOINT_ALLOWLIST` (comma-separated origins; default
+empty). Requests are still signed for `bedrock` in the connection region. Redirects,
+ambient proxies and implicit retries stay disabled. The override applies to Bedrock
+Runtime only; STS for assumed roles uses its regional endpoint.
+
+### Allowlists are enforced twice
+
+Management validates identity mode, profile and endpoint allowlists, region and
+route shape before saving. The adapter reads both allowlists at startup and checks
+every target again before credential discovery or network I/O, so removing an entry
+disables matching connections (`provider_configuration_error`) after a restart. The
+database constrains reference and endpoint shapes only.
 
 The service client is built directly, **not from shared endpoint configuration**.
-`AWS_ENDPOINT_URL`, `AWS_ENDPOINT_URL_BEDROCK_RUNTIME`, profile endpoint overrides,
+`AWS_ENDPOINT_URL`, `AWS_ENDPOINT_URL_BEDROCK_RUNTIME`, profile endpoint overrides
 and Bedrock bearer-token configuration are not inherited by the inference client.
-There is no production endpoint injection API. Tests alone can inject a loopback
-endpoint and fixed fake credentials. Standard credential discovery may contact
-STS, container metadata, or instance metadata as required by the workload chain.
+Tests alone inject loopback endpoints and fixed fake credentials. Standard credential
+discovery may contact STS, SSO, container metadata or instance metadata as the chosen
+identity requires. One Bedrock client and credential cache is kept per region,
+identity reference and endpoint (at most 64; the oldest key is evicted).
 
 ## Supported semantics
 
@@ -95,7 +142,7 @@ retries, no redirects, no ambient proxy, a 10-second connection limit, a 60-seco
 read/stream-event limit, and a 300-second transport/operation deadline. Existing
 gateway deadlines can cancel sooner. No adapter producer task is spawned;
 dropping the returned stream drops the AWS receiver and upstream response body.
-Clients/credential caches are reused per region, with at most 64 cached clients.
+Clients/credential caches are reused per region, identity and endpoint, with at most 64 cached clients.
 
 Errors exposed by the adapter are gateway error enums only. No AWS response body,
 credential, prompt, deployment identifier, or raw SDK error is interpolated into
@@ -116,21 +163,26 @@ aws-config = "1"
 aws-sdk-bedrockruntime = "1"
 aws-smithy-types = { version = "1", features = ["http-body-1-x"] }
 aws-smithy-runtime-api = { version = "1", features = ["client"] }
+aws-smithy-async = "1"
 http-body = "1"
 http-body-util = "0.1"
 ```
 
-The Smithy dependencies bridge AWS document/HTTP types; the body dependencies
+The Smithy dependencies bridge AWS document/HTTP types (`aws-smithy-async` supplies
+the time source and sleep for the explicit STS configuration); the body dependencies
 adapt the bounded stream without implementing a second AWS wire protocol.
 No separate credential or signing dependency is needed.
 
 Local tests use loopback HTTP with **explicit fake credentials**, never the host
-credential chain. They exercise SDK-produced signed requests, JSON request and
+credential chain. Identity tests cover reference parsing and allowlists, a named
+profile read from a temporary credentials file, and AssumeRole against a loopback STS
+mock (role ARN, external ID and session name in the signed STS request) followed by a
+Bedrock request signed with the assumed credentials through an endpoint override. They exercise SDK-produced signed requests, JSON request and
 response mappings, binary AWS frames fragmented across headers/payloads/CRCs,
 canonical text/tool events, the shared adapter contract, malformed/truncated
 streams, safe errors, one-attempt behavior, size bounds, and drop cancellation.
-They do not verify a real AWS account, IAM policy, credential refresh/IMDS/STS,
-model availability, or cross-region inference. Signing tests inspect the actual
+They do not verify a real AWS account, IAM policy, real STS or PrivateLink,
+credential refresh/IMDS, model availability, or cross-region inference. Signing tests inspect the actual
 AWS authorization headers; they do not independently reimplement SigV4 to verify
 the signature cryptographically.
 

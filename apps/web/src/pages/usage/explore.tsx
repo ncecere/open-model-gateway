@@ -2,15 +2,20 @@
  * Usage & costs › Explore: metric × group by × then by × top N (URL-backed) →
  * a daily chart of the top groups and a table with %-of-total bars. The CSV is
  * the current table only, behind an explicit button that states its scope.
+ * The period rates (cache hit rate, cost per 1M tokens; no longer overview
+ * tiles) sit above the breakdown, and a model breakdown adds each top model's
+ * cost per 1M tokens.
  */
 import { wsPath, platformPath, type Workspace } from "../../lib/api";
 import { formatMicroUsd } from "../../lib/governance";
 import { formatCount } from "../../lib/reports";
-import { chartLabeler, chartNumber, dimensionOptions, filterCount, seriesValue, usageFilters, downloadText, exploreCsv, exploreMetrics, exploreQuery, exploreTopN, formatMetric, groupName, longDate, metricInfo, periodLabel, pivotFromUsageSearch, pivotToUsageSearch, shortDate, type Dimension, type ExploreMetric, type ExploreResponse, type ExploreRow, type UsageContext, type UsagePeriod } from "../../lib/usage";
+import { chartLabeler, chartNumber, decimalChange, dimensionOptions, formatRateMicroUsd, rateTexts, usageQuery, type TopRow, type UsageOverview, filterCount, seriesValue, usageFilters, downloadText, exploreCsv, exploreMetrics, exploreQuery, exploreTopN, comparisonLabel, formatMetric, groupName, longDate, metricInfo, periodLabel, pivotFromUsageSearch, pivotToUsageSearch, shortDate, type Dimension, type ExploreMetric, type ExploreResponse, type ExploreRow, type UsageContext, type UsagePeriod } from "../../lib/usage";
 import { Button, ErrorNotice, Stack, useAction, useApi } from "../../components/ui";
 import { PivotControls, PIVOT_NONE } from "../../components/templates/pivot-controls";
 import { PercentBarCell } from "../../components/templates/percent-bar-cell";
 import { ViewDataTable } from "../../components/templates/table-view";
+import { StatTile, StatTileGrid } from "../../components/templates/stat-tile";
+import { ResourceLink } from "../../components/navigation-link";
 import { Card } from "../../components/ui/card/card";
 import { BarChart } from "../../components/ui/bar-chart/bar-chart";
 import { LineChart } from "../../components/ui/line-chart/line-chart";
@@ -26,6 +31,8 @@ export function UsageExploreTab({ workspace, ctx, period, nav, workspaceFilter }
   const ask = useAction(), base = workspace ? wsPath(workspace.id) : platformPath, dims = dimensionOptions(ctx), pivot = pivotFromUsageSearch(nav.search, ctx);
   const filters = usageFilters(nav.search, ctx), filtered = filterCount(filters) > 0;
   const q = useApi<ExploreResponse>(`${base}/usage/explore?${exploreQuery(period, pivot, workspaceFilter, filters)}`);
+  // Same query as the Overview tab (shared cache): period rates and the top models' cost per 1M tokens.
+  const overview = useApi<UsageOverview>(`${base}/usage/overview?${usageQuery(period, workspaceFilter, filters)}`);
   const dimLabel = (d: Dimension | null) => dims.find(o => o.value === d)?.label ?? "Group";
   const controls = <PivotControls value={{ metric: pivot.metric, groupBy: pivot.groupBy, thenBy: pivot.thenBy === "none" ? PIVOT_NONE : pivot.thenBy, topN: String(pivot.top) }} topN={exploreTopN}
     metrics={exploreMetrics.map(m => ({ value: m, label: metricInfo[m].label }))} dimensions={dims}
@@ -34,12 +41,33 @@ export function UsageExploreTab({ workspace, ctx, period, nav, workspaceFilter }
     description: `Downloads the ${rows} row${rows === 1 ? "" : "s"} shown: ${metricInfo[res.metric].label.toLowerCase()} by ${dimLabel(res.group_by).toLowerCase()}${res.then_by ? ` then ${dimLabel(res.then_by).toLowerCase()}` : ""}, ${periodLabel(period)}${res.other ? ", plus one \"Other\" row" : ""}. Totals only: no request records, prompts or responses. Amounts are exact estimates from configured prices.`,
     run: async () => { downloadText(exploreCsv(res, period), `usage-${res.metric}-by-${res.group_by}${res.then_by ? `-${res.then_by}` : ""}-${period.start_date}-${period.last_date}.csv`); } });
   return <Stack gap={6}>
+    {overview.data && <PeriodRateTiles overview={overview.data} nav={nav} days={period.days} />}
     <Card title="Build a breakdown" description="Pick a measure and how to break it down. Top groups are ranked by the measure.">{controls}</Card>
-    {q.isPending ? <p role="status">Loading breakdown…</p> : q.isError ? <ErrorNotice error={q.error} retry={() => void q.refetch()} /> : <ExploreResult res={q.data} period={period} dimLabel={dimLabel} onExport={exportTable} filtered={filtered} />}
+    {q.isPending ? <p role="status">Loading breakdown…</p> : q.isError ? <ErrorNotice error={q.error} retry={() => void q.refetch()} /> : <ExploreResult res={q.data} period={period} dimLabel={dimLabel} onExport={exportTable} filtered={filtered} models={overview.data?.top.models} />}
   </Stack>;
 }
 
-function ExploreResult({ res, period, dimLabel, onExport, filtered }: { res: ExploreResponse; period: UsagePeriod; dimLabel: (d: Dimension | null) => string; onExport: (res: ExploreResponse, rows: number) => void; filtered: boolean }) {
+/** Cache hit rate and cost per 1M tokens for the period (each opens its chart page); Δ only when the previous period has data. */
+function PeriodRateTiles({ overview: o, nav, days }: { overview: UsageOverview; nav: UsageNav; days: number }) {
+  const t = o.tiles, r = rateTexts(o), vs = comparisonLabel(days);
+  const has = (v: string | null) => v != null && !/^0+(?:\.0+)?$/.test(v);
+  const chart = (metric: "cache_hit_rate" | "blended") => <ResourceLink search={{ ...nav.search, tab: "chart", metric, offset: undefined }} />;
+  const delta = (tile: typeof t.cache_hit_rate, increaseIs: "good" | "bad") => has(tile.previous) && tile.value != null ? { change: decimalChange(tile.value, tile.previous, tile.change_ratio), increaseIs, label: vs } : undefined;
+  return <StatTileGrid label="Period rates" columns={2}>
+    <StatTile label="Cache hit rate" value={r.cacheHit} hint="Share of input tokens read from cache" delta={delta(t.cache_hit_rate, "good")} render={chart("cache_hit_rate")} />
+    <StatTile label="Cost per 1M tokens" value={<span title={r.blended.exact !== r.blended.text ? `${r.blended.exact} per 1M tokens (exact)` : undefined}>{r.blended.text}</span>} hint="Final costs over their tokens" delta={delta(t.blended_microusd_per_million, "bad")} render={chart("blended")} />
+  </StatTileGrid>;
+}
+
+/** A model row's cost per 1M tokens from the overview's top models; undefined when the model isn't among them. */
+function modelRate(models: TopRow[] | undefined, id: string | null): string | undefined {
+  const row = models?.find(m => m.id !== null && m.id === id);
+  if (!row || row.blended_microusd_per_million === undefined) return undefined;
+  if (row.blended_microusd_per_million === null) return row.tokens === "0" ? "Not token-priced" : "Unknown";
+  return formatRateMicroUsd(row.blended_microusd_per_million).text;
+}
+
+function ExploreResult({ res, period, dimLabel, onExport, filtered, models }: { res: ExploreResponse; period: UsagePeriod; dimLabel: (d: Dimension | null) => string; onExport: (res: ExploreResponse, rows: number) => void; filtered: boolean; models?: TopRow[] }) {
   const info = metricInfo[res.metric], money = res.metric === "spend";
   if (!res.rows.length) return <Card><EmptyState title="Nothing to break down" titleAs="h2" description={`No ${info.label.toLowerCase()} in ${periodLabel(period)}${filtered ? " with these filters" : ""}.`} /></Card>;
   const rows: TableRow[] = [...res.rows.map((r, i) => ({ ...r, key: String(i) })), ...(res.other ? [{ key: "other", other: true, group: { id: null, name: "Other" }, then: null, value: res.other.value, share: res.other.share, held_microusd: null, unresolved_attempts: null }] : [])];
@@ -48,6 +76,7 @@ function ExploreResult({ res, period, dimLabel, onExport, filtered }: { res: Exp
     ...(res.then_by ? [{ id: "then", header: dimLabel(res.then_by), cell: (r: TableRow) => r.other ? "—" : groupName(r.then, res.then_by) }] : []),
     { id: "value", header: `${info.label} (${info.unit})`, numeric: true, cell: r => formatMetric(res.metric, r.value) },
     ...(info.additive ? [{ id: "share", header: "Share of total", cell: (r: TableRow) => <PercentBarCell part={r.value} total={res.total.value} /> }] : []),
+    ...(res.group_by === "model" && !res.then_by && models ? [{ id: "rate", header: "Cost per 1M tokens", numeric: true, cell: (r: TableRow) => r.other ? "—" : modelRate(models, r.group.id) ?? "—" }] : []),
     ...(money ? [{ id: "held", header: "On hold (USD)", numeric: true, defaultHiddenNarrow: true, cell: (r: TableRow) => r.other ? "—" : formatMicroUsd(r.held_microusd) }, { id: "unknown", header: "Cost unknown (attempts)", numeric: true, defaultHiddenNarrow: true, cell: (r: TableRow) => r.other ? "—" : formatCount(r.unresolved_attempts) }] : []),
   ];
   return <Card title={`${info.label} by ${dimLabel(res.group_by).toLowerCase()}${res.then_by ? ` and ${dimLabel(res.then_by).toLowerCase()}` : ""}`} description={<>Total {formatMetric(res.metric, res.total.value)}{money && res.total.held_microusd && res.total.held_microusd !== "0" ? ` · ${formatMicroUsd(res.total.held_microusd)} on hold` : ""} · {periodLabel(period)}</>}
@@ -55,7 +84,8 @@ function ExploreResult({ res, period, dimLabel, onExport, filtered }: { res: Exp
     <Stack gap={5}>
       <ExploreChart res={res} />
       <ViewDataTable<TableRow> caption={`${info.label} breakdown`} columns={columns} data={rows} getRowId={r => r.key} hideDensity />
-      {(res.truncated || res.then_by) && <p className={u.note}>{res.truncated ? `Showing the top ${new Set(res.rows.map(r => `${r.group.id}|${r.group.name}`)).size} groups; the rest are combined in "Other". ` : ""}{res.then_by ? `Each group lists its top 5 ${dimLabel(res.then_by).toLowerCase()}s.` : ""}</p>}
+      {(res.truncated || !!res.then_by) && <p className={u.note}>{res.truncated ? `Showing the top ${new Set(res.rows.map(r => `${r.group.id}|${r.group.name}`)).size} groups; the rest are combined in "Other". ` : ""}{res.then_by ? `Each group lists its top 5 ${dimLabel(res.then_by).toLowerCase()}s.` : ""}</p>}
+      {res.group_by === "model" && !res.then_by && models && <p className={u.note}>Cost per 1M tokens is final cost over the tokens of the same requests, shown for the top {models.length} models by spend ("—" for the rest).</p>}
     </Stack>
   </Card>;
 }

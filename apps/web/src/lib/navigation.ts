@@ -1,4 +1,4 @@
-import { LayoutDashboard, KeyRound, Cpu, ChartColumn, Settings, Users, UsersRound, FolderKanban, Plug, Library, Gauge, Network, FileClock, Building2, DollarSign, House, ListTree } from "lucide-react";
+import { LayoutDashboard, KeyRound, Cpu, ChartColumn, Settings, Users, UsersRound, FolderKanban, Plug, Library, Gauge, Network, FileClock, Building2, House, ListTree, SlidersHorizontal, ShieldCheck, Mail, LogIn } from "lucide-react";
 import type { Session, Workspace } from "./api";
 import { canView, inWorkspacePortal, platformPages, userPages, type Page, type DashboardSearch } from "./permissions";
 import { canonicalSearch, dashboardHref, parseDashboardLocation } from "./locations";
@@ -10,18 +10,20 @@ import { canonicalSearch, dashboardHref, parseDashboardLocation } from "./locati
 export const SELECTED = "Selected workspace";
 export const navigation = [
   { page: "home", label: "Home", icon: House, group: "Workspace" },
-  { page: "overview", label: "Overview", icon: LayoutDashboard, group: SELECTED }, { page: "grants", label: "Models", icon: Cpu, group: SELECTED }, { page: "keys", label: "API keys", icon: KeyRound, group: SELECTED }, { page: "requests", label: "Requests", icon: ListTree, group: SELECTED }, { page: "costs", label: "Usage & costs", icon: ChartColumn, group: SELECTED }, { page: "workspace-settings", label: "Settings", icon: Settings, group: SELECTED },
+  { page: "overview", label: "Overview", icon: LayoutDashboard, group: SELECTED }, { page: "grants", label: "Models", icon: Cpu, group: SELECTED }, { page: "keys", label: "API keys", icon: KeyRound, group: SELECTED }, { page: "requests", label: "Logs", icon: ListTree, group: SELECTED }, { page: "costs", label: "Usage & costs", icon: ChartColumn, group: SELECTED }, { page: "workspace-settings", label: "Settings", icon: Settings, group: SELECTED },
   { page: "platform-overview", label: "Overview", icon: LayoutDashboard, group: "" },
   { page: "users", label: "Users", icon: Users, group: "People" }, { page: "platform-teams", label: "Teams", icon: UsersRound, group: "People" }, { page: "platform-projects", label: "Projects", icon: FolderKanban, group: "People" }, { page: "oidc", label: "SSO groups", icon: Network, group: "People" },
   // Deployments are a model's routes and routing policy lives on the model page. Their old
   // pages stay reachable by deep link (see hiddenPages) but leave the sidebar and jump search.
   { page: "providers", label: "Connections", icon: Plug, group: "Models" }, { page: "models", label: "Models", icon: Cpu, group: "Models" }, { page: "catalogs", label: "Catalogs", icon: Library, group: "Models" },
-  { page: "platform-costs", label: "Usage & costs", icon: ChartColumn, group: "Usage & spend" }, { page: "pricing", label: "Pricing", icon: DollarSign, group: "Usage & spend" }, { page: "policies", label: "Limits", icon: Gauge, group: "Usage & spend" }, { page: "cost-centers", label: "Cost centers", icon: Building2, group: "Usage & spend" }, { page: "platform-audit", label: "Audit log", icon: FileClock, group: "Records" },
+  { page: "platform-costs", label: "Usage & costs", icon: ChartColumn, group: "Usage & spend" }, { page: "platform-logs", label: "Logs", icon: ListTree, group: "Usage & spend" }, { page: "cost-centers", label: "Cost centers", icon: Building2, group: "Usage & spend" }, { page: "platform-audit", label: "Audit log", icon: FileClock, group: "Records" },
+  // Admin › Settings (docs/settings.md): installation-wide settings; Limits moved here as "Defaults & limits".
+  { page: "settings-general", label: "General", icon: SlidersHorizontal, group: "Settings" }, { page: "policies", label: "Defaults & limits", icon: Gauge, group: "Settings" }, { page: "settings-privacy", label: "Data & privacy", icon: ShieldCheck, group: "Settings" }, { page: "settings-email", label: "Email", icon: Mail, group: "Settings" }, { page: "settings-sign-in", label: "Sign-in", icon: LogIn, group: "Settings" },
 ] satisfies { page: Page; label: string; icon: typeof Settings; group: string }[];
 export type NavItem = typeof navigation[number];
 export function pageScope(page: Page): "platform" | "workspace" { return platformPages.has(page) ? "platform" : "workspace"; }
 export const isAdminPage = (page: Page) => platformPages.has(page);
-export function adminGroups(_page: Page) { return ["", "People", "Models", "Usage & spend", "Records"]; }
+export function adminGroups(_page: Page) { return ["", "People", "Models", "Usage & spend", "Records", "Settings"]; }
 /**
  * Workspace-portal sidebar sections: "Workspace" (user-level) and, when a workspace is selected,
  * one titled with its name. Items are filtered by live /me capabilities.
@@ -32,9 +34,9 @@ export function workspaceSections(session: Session, active?: Workspace): { id: s
   return sections;
 }
 /** Labels of pages outside the sidebar: create forms, records and legacy deep links. */
-export const hiddenPages: Partial<Record<Page, string>> = { "model-new": "Add model", deployments: "All routes", routing: "Routing", "deployment-detail": "Route", "request-detail": "Request", "key-detail": "API key", "workspace-model": "Model" };
+export const hiddenPages: Partial<Record<Page, string>> = { "model-new": "Add model", pricing: "Pricing", deployments: "All routes", routing: "Routing", "deployment-detail": "Route", "request-detail": "Request", "session-detail": "Session", "platform-log-detail": "Request", "platform-log-session": "Session", "key-detail": "API key", "workspace-model": "Model" };
 /** The sidebar item (and breadcrumb parent) a record, form or legacy page belongs to. */
-export const navParents: Partial<Record<Page, Page>> = { "workspace-detail": "platform-teams", "model-new": "models", "model-detail": "models", "provider-detail": "providers", deployments: "models", routing: "models", "deployment-detail": "models", "catalog-detail": "catalogs", "user-detail": "users", "request-detail": "requests", "key-detail": "keys", "workspace-model": "grants" };
+export const navParents: Partial<Record<Page, Page>> = { "workspace-detail": "platform-teams", "model-new": "models", "model-detail": "models", "provider-detail": "providers", deployments: "models", routing: "models", pricing: "models", "deployment-detail": "models", "catalog-detail": "catalogs", "user-detail": "users", "request-detail": "requests", "session-detail": "requests", "platform-log-detail": "platform-logs", "platform-log-session": "platform-logs", "key-detail": "keys", "workspace-model": "grants" };
 export function activeAdminGroup(page: Page): string | undefined {
   return navigation.find(item => item.page === (navParents[page] ?? page))?.group || undefined;
 }

@@ -9,7 +9,7 @@ import { ApiError } from "../lib/api";
 import type { DashboardSearch } from "../lib/permissions";
 import { auditor, grant, markup, member, personal, session, team, testClient } from "../lib/test-fixtures";
 import { reasonText } from "../lib/effective-access";
-import { formatRateMicroUsd, resetsAt, usageContext, usagePeriod, utcBoundary, type UsageOverview } from "../lib/usage";
+import { formatRateMicroUsd, resetsAt, usageContext, usagePeriod, utcBoundary, type ExploreResponse, type UsageOverview } from "../lib/usage";
 import { draftErrors, draftLimitsValid, draftOf, rateError, type Limits } from "../lib/limits";
 import { compactDateTime, tokensText, type RequestDetail, type RequestRow } from "../lib/requests";
 import { modelsAcrossWorkspaces } from "../lib/home";
@@ -22,6 +22,7 @@ import { FilterToolbar } from "./templates/filter-toolbar";
 import { StickySaveBar } from "./templates/sticky-save-bar";
 import { TypeTabs } from "./templates/type-tabs";
 import { InstallationBudgets, UsageOverviewTab } from "../pages/usage/overview";
+import { UsageExploreTab } from "../pages/usage/explore";
 import { Requests, requestView, requestViewSearch } from "../pages/requests";
 import { RequestDetailPage, isShortRequestId, shortIdLookup } from "../pages/request-detail";
 import { KeyUsage } from "../pages/key-detail";
@@ -52,16 +53,24 @@ describe("D-2 blended $/M", () => {
     expect(formatRateMicroUsd("999999.9999999").text).toBe("$1.00");
     expect(formatRateMicroUsd(null).text).toBe("Unknown");
   });
-  it("fits the overview tile and top models, with the exact value in the tooltip", () => {
+  it("moves cost per 1M tokens to Explore (rate tile and model column), with the exact value in the tooltip", () => {
     const tile = (value: string | null) => ({ value, previous: null, delta: null, change_ratio: null, daily: [] });
     const o: UsageOverview = { period: { start_date: "2026-10-01", end_date: "2026-10-09" }, previous_period: { start_date: "2026-09-23", end_date: "2026-10-01" }, tiles: { spend: { ...tile("2723"), held_microusd: "0", unresolved_attempts: "0" }, requests: { ...tile("1"), attempts: "1" }, tokens: { ...tile("5000"), input_tokens: "3000", output_tokens: "2000", unknown_token_attempts: "1" }, cache_hit_rate: tile(null), blended_microusd_per_million: tile("3986822.8404") }, top: { models: [{ id: "m", name: "gpt-6-luna", spend_microusd: "2723", requests: "1", tokens: "5000", share: "1", blended_microusd_per_million: "7807829.1815", model_id: "m" }], keys: [], members: null } };
-    const period = usagePeriod({}, new Date("2026-10-08T12:00:00Z"));
-    const html = markup(<UsageOverviewTab workspace={member} ctx={usageContext(member)} period={period} nav={{ search: { page: "costs", ws: "team" }, navigate: () => {} }} />, [[`${ws}/usage/overview?start_date=${period.start_date}&end_date=${period.end_date}`, o]]);
-    expect(html).toContain('title="$3.9868228404 per 1M tokens (exact)">$3.986823<');
-    expect(html).toContain(">$7.807829<");
-    expect(html).not.toContain(">$3.9868228404<");
+    const period = usagePeriod({}, new Date("2026-10-08T12:00:00Z")), q = `start_date=${period.start_date}&end_date=${period.end_date}`;
+    const explore: ExploreResponse = { metric: "spend", group_by: "model", then_by: null, period: { start_date: period.start_date, end_date: period.end_date }, total: { value: "2723", held_microusd: "0", unresolved_attempts: "0" }, rows: [{ group: { id: "m", name: "gpt-6-luna" }, then: null, value: "2723", share: "1", held_microusd: "0", unresolved_attempts: "0" }], other: null, truncated: false, series: [] };
+    const props = { workspace: member, ctx: usageContext(member), period, nav: { search: { page: "costs" as const, ws: "team" }, navigate: () => {} } };
+    const seeded: [string, unknown][] = [[`${ws}/usage/overview?${q}`, o], [`${ws}/usage/explore?${q}&metric=spend&group_by=model&top=10`, explore]];
+    const html = markup(<UsageOverviewTab {...props} />, seeded);
+    // Not an overview tile any more.
+    expect(html).not.toContain("Cost per 1M tokens</a>"); expect(html).not.toContain(">$3.986823<"); expect(html).not.toContain("Cache hit rate</a>");
+    const exploreHtml = markup(<UsageExploreTab {...props} />, seeded);
+    expect(exploreHtml).toContain('title="$3.9868228404 per 1M tokens (exact)">$3.986823<');
+    expect(exploreHtml).toContain(">$7.807829<");
+    expect(exploreHtml).not.toContain(">$3.9868228404<");
+    // Unknown cache hit rate stays Unknown, never 0%.
+    expect(text(exploreHtml)).toMatch(/Cache hit rate\s*Unknown/);
     // Plurals: "1 request", never "1 requests".
-    expect(text(html)).toContain("1 request ·"); expect(text(html)).toContain("1 request didn't report tokens"); expect(text(html)).not.toMatch(/\b1 requests\b/);
+    expect(text(html)).toContain("1 request didn't report tokens"); expect(text(html)).not.toMatch(/\b1 requests\b/);
     expect(countLabel("2", "request")).toBe("2 requests");
   });
 });
@@ -71,14 +80,14 @@ describe("D-3 Requests list", () => {
   const html = () => markup(nav({ page: "requests", ws: "team" }, <Requests session={session} workspace={team} />), [[`${ws}/requests?limit=50`, { data: [row, { ...row, root_request_id: "2b2b3c4d-0000-0000-0000-000000000002", workload_kind: "audio_speech", input_tokens: "0", output_tokens: "0" }], next_cursor: null }]]);
   it("puts Started (compact, one line), Model, Status, Cost and Latency first, and makes the whole row one link", () => {
     const doc = new DOMParser().parseFromString(html(), "text/html"), table = doc.querySelector("table")!;
-    expect([...table.tHead!.rows[0]!.cells].map(c => c.textContent)).toEqual(["Started", "Model", "Status", "Cost", "Latency", "Tokens", "Attempts", "Key", "Request ID"]);
+    expect([...table.tHead!.rows[0]!.cells].map(c => c.textContent)).toEqual(["Started", "Model", "Key / app", "Tokens", "Cost", "Latency", "TTFT", "Speed", "Finish", "Status", "Attempts"]);
     const first = table.tBodies[0]!.rows[0]!, link = first.cells[0]!.querySelector("a")!;
     expect(link.className).toMatch(/rowLink/);
     expect(link.getAttribute("href")).toBe("/workspaces/team/requests/1a2b3c4d-0000-0000-0000-000000000001");
     expect(link.textContent).toMatch(/^Oct \d{1,2}, \d{1,2}:\d{2} [AP]M$/);
     expect(link.querySelector("time")?.getAttribute("title")).toMatch(/2026/);
     expect(first.querySelectorAll("a")).toHaveLength(1); // one tab stop per row; the copy button stays usable
-    expect(first.cells[3]!.textContent).toBe("$0.000014");
+    expect(first.cells[4]!.textContent).toBe("$0.000014");
     expect(first.cells[1]!.querySelector('[title="demo/a-model-with-a-rather-long-name"]')).not.toBeNull();
     expect(table.getAttribute("data-stack")).not.toBeNull(); // rows stack on a phone instead of overflowing
   });
@@ -197,7 +206,7 @@ describe("D-9 request page not found", () => {
     client.getQueryCache().build(client, { queryKey: ["api", undefined, `${ws}/requests/${id}`] }).setState({ status: "error", error: new ApiError(404, "404", "Not found"), fetchStatus: "idle" });
     const html = markup(nav({ page: "request-detail", ws: "team", record: id }, <RequestDetailPage session={session} workspace={member} id={id} />), [], client);
     expect(html).toContain("This request doesn&#x27;t exist or you can&#x27;t see it");
-    expect(html).toContain("Back to Requests");
+    expect(html).toContain("Back to Logs");
     expect(html).toContain("Members see only requests made with their own keys.");
     expect(html).toContain("Request not found");
     expect(html).not.toContain("Previous request"); expect(html).not.toContain("No next request");

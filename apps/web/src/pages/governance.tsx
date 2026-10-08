@@ -12,7 +12,7 @@ import { Tabs, TabsList, Tab, TabsPanel } from "../components/ui/tabs/tabs";
 import { useDashboardNavigation, ResourceLink } from "../components/navigation-link";
 import { SettingsForm } from "../components/templates/settings-form";
 import type { Scope } from "./workspace";
-import { PlatformLimits } from "./platform-limits";
+import { PlatformLimits } from "./settings/limits";
 import { ScopeLimits } from "../components/scope-limits";
 import { EffectiveAccess } from "../components/effective-access";
 import s from "./shared.module.css";
@@ -25,8 +25,8 @@ export function Governance({ session, workspace }: Scope) {
   // Tabs hold cards, never a second page title (review rule 1): ScopeLimits is the "Workspace limits" card.
   return <Stack gap={6}><ScopeLimits mode="local" path={`${wsPath(workspace.id)}/policy`} writable={writable} kind={workspace.kind} readOnlyReason={workspace.kind === "personal" ? "Personal limits are set by a Platform Admin." : "Only workspace admins change these limits."} /><p className={s.note}>To cap a single key, open it from <ResourceLink search={{ page: "keys", ws: workspace.id }}>API keys</ResourceLink>.</p><EffectiveAccess workspace={workspace} canManageModels={permissions(session, workspace).manageGrants} /></Stack>;
 }
-/** Admin › Limits: one Grounded-style table of installation ceilings and type defaults (pages/platform-limits.tsx). */
-export function PlatformPolicies({ session }: { session: Session }) { return <PlatformLimits session={session} />; }
+/** Admin › Limits: one pill tab per scope (installation ceiling, type defaults), `?tab=` (pages/settings/limits.tsx; Admin › Settings › Defaults & limits). */
+export function PlatformPolicies({ session, tab, onTabChange }: { session: Session; tab?: string; onTabChange?: (tab: string) => void }) { return <PlatformLimits session={session} tab={tab} onTabChange={onTabChange} />; }
 /** Admin › Team/Project › Limits: live type defaults or this workspace's replacement override (components/scope-limits.tsx). */
 export function WorkspacePlatformPolicy({ session, workspace }: Scope) { return <Stack gap={6}><ScopeLimits mode="replacement" path={`${platformWorkspacePath(workspace.id)}/policy`} writable={session.capabilities.platform_write} kind={workspace.kind} /><EffectiveAccess workspace={workspace} /></Stack>; }
 /** Usage & costs moved to pages/usage/* (Overview | Explore | Records + chart page); re-exported for existing imports. */

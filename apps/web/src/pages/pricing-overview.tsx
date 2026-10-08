@@ -1,77 +1,65 @@
 /*
- * Admin › Pricing: the current price of every route in one table (finding #5),
- * instead of a single "Choose…" select. One row per route: model, route and
- * connection, its headline prices (PriceLine, exact micro-USD), pricing
- * version and publish date. Unpriced enabled routes are flagged (their usage
- * is recorded with unknown cost) and every row links to its route page,
- * where prices are published. Prices are estimates, not provider invoices.
+ * Route prices for Admin › Models (Table view). The former Admin › Pricing
+ * page is now the Models table: its "Price" column shows the headline prices
+ * of each model's cheapest priced enabled route (PriceLine, exact micro-USD)
+ * and "Priced routes" flags enabled routes without a price (their usage is
+ * recorded with unknown cost), with an "Unpriced only" filter. `/admin/pricing`
+ * redirects there (lib/locations.ts). Prices are still published on route
+ * pages; they are estimates for budgets, not provider invoices.
  */
+import { useEffect } from "react";
 import { useQueries } from "@tanstack/react-query";
-import { api, platformPath, type Collection, type Deployment, type Model, type Session } from "../lib/api";
-import type { Price } from "../lib/governance";
-import { modelWorkload, type CatalogModel } from "../lib/model-setup";
-import { priceItems, workloadLabels } from "../lib/pricing";
-import type { DashboardSearch } from "../lib/permissions";
-import { DateTime, ErrorNotice, Heading, Stack, Status, useApiScope, useChoices } from "../components/ui";
+import { api, platformPath, type Collection, type Deployment, type Session } from "../lib/api";
+import type { Price, WorkloadKind } from "../lib/governance";
+import { HEADLINE_METERS, basePrice, priceItems } from "../lib/pricing";
+import { useApiScope, useChoices } from "../components/ui";
 import { ResourceLink, useDashboardNavigation } from "../components/navigation-link";
-import { FilterToolbar, type ToolbarFacet } from "../components/templates/filter-toolbar";
-import { InfoBanner } from "../components/templates/notices";
 import { PriceLine } from "../components/templates/price-line";
-import { Badge } from "../components/ui/badge/badge";
-import { Card } from "../components/ui/card/card";
-import { DataTable, type DataTableColumn } from "../components/ui/data-table/data-table";
-import { EmptyState } from "../components/ui/empty-state/empty-state";
+import type { DashboardSearch } from "../lib/permissions";
 import s from "./shared.module.css";
 
-type Row = { route: Deployment; model?: Model; price: Price | null | undefined; failed: boolean };
-/** Unpriced = an enabled route with no price at all (unknown cost). Loading or failed rows are never called unpriced. */
-export const isUnpriced = (r: Row) => r.price === null && r.route.enabled;
+/** Where /admin/pricing now lives: the Models table, unpriced models only. */
+export const pricingSearch: DashboardSearch = { page: "models", layout: "table", pricing: "unpriced" };
 
-export function Pricing({ session }: { session: Session }) {
-  const allowed = session.capabilities.platform_read, scope = useApiScope(), nav = useDashboardNavigation();
-  const routes = useChoices<Deployment>(`${platformPath}/deployments`, allowed), models = useChoices<Model>(`${platformPath}/models`, allowed);
-  const prices = useQueries({ queries: (routes.data ?? []).map(d => {
+/** One route with its latest price: undefined while loading, null when it has none (unknown cost, never free). */
+export type RoutePrice = { route: Deployment; price: Price | null | undefined; failed: boolean };
+/** Every route and its latest price, grouped by model. Only fetched when `enabled` (the Table view). */
+export function useRoutePrices(enabled: boolean) {
+  const scope = useApiScope(), routes = useChoices<Deployment>(`${platformPath}/deployments`, enabled);
+  const prices = useQueries({ queries: (enabled ? routes.data ?? [] : []).map(d => {
     const path = `${platformPath}/deployments/${encodeURIComponent(d.id)}/prices?limit=1&offset=0`;
     return { queryKey: ["api", scope, path], retry: false, queryFn: ({ signal }: { signal: AbortSignal }) => api<Collection<Price>>(path, { signal }) };
   }) });
-  const search = nav?.search ?? { page: "pricing" as const }, q = (search.q ?? "").toLowerCase(), only = search.status === "unknown" ? "unpriced" : undefined;
-  const go = (patch: Partial<DashboardSearch>) => nav?.navigate({ ...search, ...patch });
-  const byId = new Map((models.data ?? []).map(m => [m.id, m]));
-  const rows: Row[] = (routes.data ?? []).map((route, i) => ({ route, model: byId.get(route.model_id), price: prices[i]?.data ? prices[i]!.data!.data[0] ?? null : undefined, failed: !!prices[i]?.isError }));
-  const shown = rows.filter(r => (!q || [r.route.upstream_model, r.route.provider_name, r.model?.display_name, r.model?.public_name, r.route.model_public_name].some(x => x?.toLowerCase().includes(q))) && (!only || isUnpriced(r)))
-    .sort((a, b) => (a.model?.display_name ?? a.route.model_public_name ?? "").localeCompare(b.model?.display_name ?? b.route.model_public_name ?? "", undefined, { sensitivity: "base" }) || a.route.upstream_model.localeCompare(b.route.upstream_model));
-  const unpriced = rows.filter(isUnpriced).length, pricesLoading = prices.some(p => p.isPending);
-  const facets: ToolbarFacet[] = [{ id: "status", label: "Show", type: "toggle", allLabel: "All routes", options: [{ value: "unknown", label: "Unpriced only" }] }];
-  const columns: DataTableColumn<Row>[] = [
-    { id: "model", header: "Model", rowHeader: true, hideable: false, cell: r => r.model ? <><ResourceLink search={{ page: "model-detail", record: r.model.id }}>{r.model.display_name}</ResourceLink><span className={s.secondary}>{r.model.public_name}</span></> : <span>{r.route.model_public_name ?? "Unknown model"}</span> },
-    { id: "route", header: "Route", cell: r => <><ResourceLink search={{ page: "deployment-detail", record: r.route.id }}>{r.route.upstream_model}</ResourceLink><span className={s.secondary}>{r.route.provider_name ?? "Unknown connection"}</span></> },
-    { id: "prices", header: "Current price", cell: r => <RoutePrices row={r} /> },
-    { id: "version", header: "Published", cell: r => r.price ? <>v{r.price.pricing_version}<span className={s.secondary}><DateTime value={r.price.created_at} /></span></> : <span className={s.muted}>—</span> },
-    { id: "status", header: "Status", cell: r => <span className={s.badges}><Status enabled={r.route.enabled} />{isUnpriced(r) && <Badge size="sm" tone="warning" dot>Unpriced</Badge>}</span> },
-  ];
-  if (!allowed) return <Heading title="Access not available" />;
-  return <Stack gap={6} className={s.page}>
-    <Heading title="Pricing" description="Current price for every route. Prices are estimates for budgets, not provider invoices. Publishing a new price never changes past usage." />
-    {unpriced > 0 && !pricesLoading && <InfoBanner tone="warning" title={`${unpriced} enabled route${unpriced === 1 ? " has" : "s have"} no price`}>Requests on {unpriced === 1 ? "it" : "them"} are recorded with unknown cost, which holds budget until resolved. Open a route to publish a price.</InfoBanner>}
-    <Card title="Prices by route" titleAs="h2" description="Open a route to see its price history or publish a new price.">
-      <Stack gap={4}>
-        <FilterToolbar search={{ label: "Search prices", placeholder: "Model, route or connection", value: search.q ?? "", onChange: v => go({ q: v || undefined }) }} facets={facets} values={only ? { status: ["unknown"] } : {}} onChange={v => go({ status: Array.isArray(v.status) && v.status.length ? "unknown" : undefined })} />
-        {routes.isError || models.isError ? <ErrorNotice error={routes.error ?? models.error} retry={() => { void routes.refetch(); void models.refetch(); }} />
-          : routes.isPending ? <p role="status">Loading routes…</p>
-          : !rows.length ? <EmptyState size="compact" title="No routes yet" description="Add a model and its route from a connection, then price the route." action={<ResourceLink search={{ page: "models" }}>Go to Models</ResourceLink>} />
-          : !shown.length ? <EmptyState size="compact" title="No routes match these filters" action={<ResourceLink search={{ page: "pricing" }}>Clear filters</ResourceLink>} />
-          : <DataTable<Row> caption="Current price by route" columns={columns} data={shown} getRowId={r => r.route.id} />}
-      </Stack>
-    </Card>
-  </Stack>;
+  const byModel = new Map<string, RoutePrice[]>();
+  (enabled ? routes.data ?? [] : []).forEach((route, i) => {
+    const q = prices[i], row: RoutePrice = { route, price: q?.data ? q.data.data[0] ?? null : undefined, failed: !!q?.isError };
+    byModel.set(route.model_id, [...byModel.get(route.model_id) ?? [], row]);
+  });
+  return { routes, byModel, loading: routes.isPending || prices.some(p => p.isPending) };
 }
-
-/** The headline price lines of a route (input, output, or the workload's own meters), exact amounts. */
-function RoutePrices({ row }: { row: Row }) {
-  if (row.failed) return <span className={s.muted}>Couldn't load</span>;
-  if (row.price === undefined) return <span className={s.muted}>Loading…</span>;
-  if (row.price === null) return <span className={s.muted}>No price · cost recorded as unknown</span>;
-  const workload = row.model ? modelWorkload(row.model as unknown as CatalogModel) : "generation";
-  const items = priceItems(row.price, workload).filter(i => !i.notApplicable).slice(0, 2);
-  return <span className={s.priceStack}>{items.map(i => <span key={i.key}><span className={s.muted}>{i.label} </span><PriceLine amount={i.amount} unit={i.unit} tiers={i.tiers?.map(t => ({ label: t.label, amount: t.amount, unit: t.unit }))} /></span>)}<span className={s.secondary}>{workloadLabels[workload]}</span></span>;
+/** The amount of the workload's first headline meter, for picking the cheapest route (unknown sorts last). */
+function headlineAmount(price: Price, workload: WorkloadKind): bigint | null {
+  const b = basePrice(price, HEADLINE_METERS[workload][0]!);
+  return b.amount !== null && /^\d+$/.test(b.amount) ? BigInt(b.amount) : null;
+}
+/** Headline prices (input/output, or the workload's own unit) of a model's cheapest priced enabled route. */
+export function ModelHeadlinePrice({ routes, workload }: { routes: RoutePrice[] | undefined; workload: WorkloadKind }) {
+  if (!routes) return <span className={s.muted}>No routes</span>;
+  const enabled = routes.filter(r => r.route.enabled);
+  if (!enabled.length) return <span className={s.muted}>No enabled route</span>;
+  if (enabled.some(r => r.price === undefined && !r.failed)) return <span className={s.muted}>Loading…</span>;
+  const priced = enabled.filter((r): r is RoutePrice & { price: Price } => !!r.price);
+  if (!priced.length) return <span className={s.muted}>{enabled.some(r => r.failed) ? "Couldn't load" : "No price · cost recorded as unknown"}</span>;
+  const cheapest = priced.slice().sort((a, b) => { const x = headlineAmount(a.price, workload), y = headlineAmount(b.price, workload); return x === null ? 1 : y === null ? -1 : x < y ? -1 : x > y ? 1 : 0; })[0]!;
+  const items = priceItems(cheapest.price, workload).filter(i => !i.notApplicable).slice(0, 2);
+  return <span className={s.priceStack}>
+    {items.map(i => <span key={i.key}><span className={s.muted}>{i.label} </span><PriceLine amount={i.amount} unit={i.unit} tiers={i.tiers?.map(t => ({ label: t.label, amount: t.amount, unit: t.unit }))} /></span>)}
+    {priced.length > 1 && <span className={s.secondary}>Cheapest of {priced.length} priced routes · <ResourceLink search={{ page: "deployment-detail", record: cheapest.route.id }}>{cheapest.route.upstream_model}</ResourceLink></span>}
+  </span>;
+}
+/** Legacy Admin › Pricing: opens the Models table with "Unpriced only" (deep links are rewritten before this renders). */
+export function Pricing(_: { session: Session }) {
+  const nav = useDashboardNavigation();
+  useEffect(() => { nav?.navigate(pricingSearch); }, []);
+  return <p role="status">Prices are now in <ResourceLink search={pricingSearch}>Models › Table</ResourceLink>.</p>;
 }

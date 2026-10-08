@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use crate::{
     auth::Principal,
     http::RequestId,
-    inference::{Engine, error::InferenceError, types::*},
+    inference::{Engine, client, error::InferenceError, types::*},
 };
 
 #[derive(Deserialize)]
@@ -36,6 +36,9 @@ pub struct Request {
     #[serde(default)]
     tools: Vec<WireTool>,
     tool_choice: Option<Value>,
+    /// Client labels only (session id source for Logs); not forwarded upstream.
+    user: Option<String>,
+    metadata: Option<client::OpenAiMetadata>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -226,6 +229,13 @@ pub async fn handle(
         }
         Err(_) => return error_response(InferenceError::InvalidRequest),
     };
+    if !client::valid_openai_metadata(wire.metadata.as_ref()) {
+        return error_response(InferenceError::InvalidRequest);
+    }
+    let labels = client::current().with_body_session(client::openai_session(
+        wire.metadata.as_ref(),
+        wire.user.as_deref(),
+    ));
     let include_usage = wire
         .stream_options
         .as_ref()
@@ -240,7 +250,10 @@ pub async fn handle(
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let output = match engine.execute(principal, request, request_id.0).await {
+    let output = match labels
+        .scope(engine.execute(principal, request, request_id.0))
+        .await
+    {
         Ok(output) => output,
         Err(error) => return error_response(error),
     };

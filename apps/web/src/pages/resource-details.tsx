@@ -16,7 +16,9 @@ import { AuditHistory } from "./organization";
 import { EffectiveLimits } from "./workspace-limits";
 import { permissions } from "../lib/permissions";
 import { canRenameWorkspace } from "../lib/access";
-import { Governance, WorkspacePlatformPolicy } from "./governance";
+import { Governance } from "./governance";
+import { ScopeLimits } from "../components/scope-limits";
+import { EffectiveAccess } from "../components/effective-access";
 import { WorkspaceModelAccess } from "./model-access";
 import { ResourceLink } from "../components/navigation-link";
 import type { Scope } from "./workspace";
@@ -84,7 +86,9 @@ export function WorkspaceDetail({ session, id, kind, tab, onTabChange }: { sessi
   if (q.isPending) return <p role="status">Loading shared workspace…</p>; if (q.isError) return <ErrorNotice error={q.error} retry={() => void q.refetch()} />;
   if (q.data.id !== id || q.data.kind === "personal" || kind && kind !== q.data.kind) return <ErrorNotice error={new Error("Shared directory resource does not match this route.")} />;
   // Administrative metadata supplies no invented membership. /me capabilities remain authoritative.
-  const writable = session.capabilities.platform_write;
+  // A disabled workspace stays readable (Members, Models, Limits, General) but read-only until it's enabled.
+  const disabled = !!q.data.disabled_at, writable = session.capabilities.platform_write && !disabled;
+  const readSession: Session = disabled ? { ...session, capabilities: { ...session.capabilities, platform_write: false } } : session;
   const workspace: Workspace = { ...q.data, owner_user_id: null, role: mine?.role ?? null, membership_source: mine?.membership_source ?? null, capabilities: { issue_own_key: false, manage_members: writable, manage_service_accounts: writable, manage_policy: writable, delegate_models: writable, view_all_activity: writable } };
   const data = q.data, noun = kindLabels[workspace.kind], members = data.member_count, center = data.cost_center, centerName = center ? center.name : workspace.cost_center_id ? "Cost center assigned" : "Unallocated";
   const toggle = () => ask({ title: `${workspace.disabled_at ? "Enable" : "Disable"} ${workspace.name}?`, description: workspace.disabled_at ? "Revoked credentials do not reactivate. Issue new keys after enabling." : "Disables new inference and revokes workspace keys. Historical accounting is retained.", danger: !workspace.disabled_at, submitLabel: workspace.disabled_at ? "Enable workspace" : "Disable workspace", run: (_, signal) => api(platformWorkspacePath(id), { method: "PATCH", body: { disabled: !workspace.disabled_at }, signal }) });
@@ -92,21 +96,21 @@ export function WorkspaceDetail({ session, id, kind, tab, onTabChange }: { sessi
   // workspace-mode administration. Member/private operations stay in Workspace.
   return <ResourcePage title={workspace.name} meta={<WorkspaceStatusBadge disabled={!!workspace.disabled_at} />}
     facts={<FactsLine items={[{ label: "Type", value: <Badge size="sm">{noun}</Badge> }, ...(members === undefined ? [] : [{ label: "Members", value: `${members} ${members === 1 ? "member" : "members"}` }]), { label: "Cost center", value: centerName }]} />}
-    actions={<ActionMenu label="More actions" size="md" actions={[{ label: "Open workspace", hidden: !mine?.role, render: <ResourceLink search={{ page: "overview", ws: id }} /> }, { label: "Enable workspace…", hidden: !writable || !workspace.disabled_at, onSelect: toggle }, copyIdAction(id), { label: "Disable workspace…", danger: true, hidden: !writable || !!workspace.disabled_at, onSelect: toggle }]} />}
-    notices={workspace.disabled_at && <Alert tone="warning" title="Disabled">New inference is refused and workspace keys were revoked. Enabling does not restore revoked keys.</Alert>}
+    actions={<ActionMenu label="More actions" size="md" actions={[{ label: "Open workspace", hidden: !mine?.role || disabled, render: <ResourceLink search={{ page: "overview", ws: id }} /> }, { label: "Enable workspace…", hidden: !session.capabilities.platform_write || !disabled, onSelect: toggle }, copyIdAction(id), { label: "Disable workspace…", danger: true, hidden: !writable || !!workspace.disabled_at, onSelect: toggle }]} />}
+    notices={disabled && <Alert tone="warning" title="Disabled">New inference is refused and workspace keys were revoked. Enabling does not restore revoked keys. Settings below are read-only until the {noun.toLowerCase()} is enabled.</Alert>}
     tab={legacyTab ? "model-access" : tab} onTabChange={onTabChange} tabs={[
       { value: "overview", label: "Overview", icon: <LayoutDashboard aria-hidden />, content: <Stack gap={6}>
         <div className={s.stats}>
           <StatCard label="Members" value={members ?? "—"} icon={<UsersRound />} hint={mine?.role ? <>You are <RoleBadge role={mine.role} /></> : "Users holding an active grant"} />
-          <StatCard label="Available catalogs" value={catalogs.data ? catalogs.data.effective_catalog_ids.length : "—"} icon={<Library />} hint={catalogs.data ? catalogs.data.mode === "inherit" ? "Uses team defaults" : "Own catalog choice" : catalogs.isError ? "Unavailable" : undefined} />
+          <StatCard label="Available catalogs" value={catalogs.data ? catalogs.data.effective_catalog_ids.length : "—"} icon={<Library />} hint={catalogs.data ? catalogs.data.mode === "inherit" ? `Uses ${noun.toLowerCase()} defaults` : "Own catalog choice" : catalogs.isError ? "Unavailable" : undefined} />
           {modelsVisible && <StatCard label="Models available" value={models.data ? models.data.length : "—"} icon={<Boxes />} hint={models.data ? `${models.data.filter(g => g.direct_granted).length} assigned directly` : models.isError ? "Unavailable" : undefined} />}
           <StatCard label="Cost center" value={center?.code ?? (workspace.cost_center_id ? "Assigned" : "None")} hint={center ? center.name : workspace.cost_center_id ? "Name unavailable" : "Future usage is unallocated"} />
         </div>
         <Card title="Details"><DescriptionList items={[{ label: "Kind", value: noun }, { label: "Status", value: <WorkspaceStatusBadge disabled={!!workspace.disabled_at} /> }, { label: "Cost center", value: center ? `${center.name} · ${center.code}` : centerName }, { label: "Your membership", value: mine?.role ? <RoleBadge role={mine.role} /> : <span className={s.muted}>None · platform metadata access only</span> }, { label: "Created", value: <DateTime value={workspace.created_at} /> }]} /></Card>
       </Stack> },
-      { value: "members", label: "Members", icon: <UsersRound aria-hidden />, count: members, content: <WorkspaceMembers session={session} workspace={workspace} platform /> },
+      { value: "members", label: "Members", icon: <UsersRound aria-hidden />, count: members, content: <WorkspaceMembers session={readSession} workspace={workspace} platform /> },
       { value: "model-access", label: "Models", icon: <Boxes aria-hidden />, count: modelsVisible ? models.data?.length : undefined, content: <WorkspaceModelAccess session={session} workspace={workspace} /> },
-      { value: "limits", label: "Limits", icon: <Gauge aria-hidden />, content: <WorkspacePlatformPolicy session={session} workspace={workspace} /> },
-      { value: "settings", label: "General", icon: <Settings2 aria-hidden />, content: <Stack gap={6}><Panel title="Administrative settings"><SettingsForm fields={[{ ...nameField, value: workspace.name }, { name: "cost_center_id", label: "Cost center", type: "select", value: workspace.cost_center_id ?? "", options: centers.data?.filter(c => !c.archived_at).map(c => ({ value: c.id, label: `${c.name} · ${c.code}` })) ?? [], help: "Applies to new requests; past usage keeps its label. Leave empty for \"Unallocated\"." }]} writable={session.capabilities.platform_write && centers.isSuccess} onSave={(v, signal) => api(platformWorkspacePath(id), { method: "PATCH", body: { name: v.name, cost_center_id: v.cost_center_id || null }, signal })} />{centers.isError && <ErrorNotice error={centers.error} />}</Panel>{session.capabilities.platform_write && <Panel title="Danger zone"><Button variant="secondary" onClick={toggle}>{workspace.disabled_at ? "Enable workspace" : "Disable workspace"}</Button></Panel>}</Stack> },
+      { value: "limits", label: "Limits", icon: <Gauge aria-hidden />, content: <Stack gap={6}><ScopeLimits mode="replacement" path={`${platformWorkspacePath(id)}/policy`} writable={writable} kind={workspace.kind} /><EffectiveAccess workspace={workspace} /></Stack> },
+      { value: "settings", label: "General", icon: <Settings2 aria-hidden />, content: <Stack gap={6}><Panel title="Administrative settings"><SettingsForm fields={[{ ...nameField, value: workspace.name }, { name: "cost_center_id", label: "Cost center", type: "select", value: workspace.cost_center_id ?? "", options: centers.data?.filter(c => !c.archived_at).map(c => ({ value: c.id, label: `${c.name} · ${c.code}` })) ?? [], help: "Applies to new requests; past usage keeps its label. Leave empty for \"Unallocated\"." }]} writable={writable && centers.isSuccess} onSave={(v, signal) => api(platformWorkspacePath(id), { method: "PATCH", body: { name: v.name, cost_center_id: v.cost_center_id || null }, signal })} />{centers.isError && <ErrorNotice error={centers.error} />}</Panel>{session.capabilities.platform_write && <Panel title="Danger zone"><Button variant="secondary" onClick={toggle}>{workspace.disabled_at ? "Enable workspace" : "Disable workspace"}</Button></Panel>}</Stack> },
     ]} />;
 }

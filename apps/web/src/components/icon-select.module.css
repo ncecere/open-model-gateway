@@ -1,0 +1,25 @@
+/* IconSelect (icon-select.tsx): the chosen option's icon in the trigger, and a full-width option row (tooltip target). */
+.value {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.option {
+  display: inline-flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--color-text-muted);
+
+  & svg {
+    width: 1rem;
+    height: 1rem;
+  }
+}

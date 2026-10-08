@@ -14,7 +14,7 @@ Tests: `ui-kit.test.tsx` (components, jsdom) and `kit-format.test.ts` (exact for
 
 | Element | File | Use for |
 |---|---|---|
-| `StatTile`, `StatTileGrid` | `stat-tile.tsx` | KPI tiles: value, sparkline, Δ vs previous period (`increaseIs: good/bad/neutral`), link/onClick |
+| `StatTile`, `StatTileGrid` | `stat-tile.tsx` | KPI tiles: value, sparkline, Δ vs previous period (`increaseIs: good/bad/neutral`), link/onClick, `details` line that may hold its own link (e.g. "View unresolved") |
 | `PivotControls`, `pivotToSearch`, `pivotFromSearch` | `pivot-controls.tsx` | Explore: metric × group by × then by × top N |
 | `PercentBarCell` | `percent-bar-cell.tsx` | %-of-total cell with a thin bar |
 | `ViewDataTable`, `ColumnChooser`, `DensityToggle`, `useStoredColumns`, `tableViewToSearch`/`FromSearch` | `table-view.tsx` | Column chooser + density for DataTable (wrapper) or hand-built tables; `useStoredColumns` lifts DataTable's remembered Columns menu into a FilterToolbar's `end` |

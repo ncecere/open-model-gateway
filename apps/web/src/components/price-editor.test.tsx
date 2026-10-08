@@ -232,45 +232,84 @@ describe("price display and read-only access", () => {
   });
 });
 
-describe("Add model workload picker", () => {
-  const mount = (profile: string, name: string) => {
-    vi.stubGlobal("fetch", vi.fn());
+describe("Add model type and protocols", () => {
+  const conn = (id: string, profile: string, name: string) => ({ ...provider, id, name, provider: profile, enabled: true });
+  const mount = (list: ReturnType<typeof conn>[], fetch = vi.fn()) => {
+    vi.stubGlobal("fetch", fetch);
     const client = testClient(), user = userEvent.setup();
-    client.setQueryData(["api", undefined, `${platformPath}/providers`, "choices"], [{ ...provider, id: "c1", name, provider: profile, enabled: true }]);
+    client.setQueryData(["api", undefined, `${platformPath}/providers`, "choices"], list);
     client.setQueryData(["api", undefined, `${platformPath}/catalogs`, "choices"], []);
     render(<QueryClientProvider client={client}><DashboardNavigationProvider search={{ page: "model-new" }} navigate={vi.fn()}><ActionProvider><AddModel session={admin} /></ActionProvider></DashboardNavigationProvider></QueryClientProvider>);
     return user;
   };
-  it("picks one workload with radio cards, text protocols as checkboxes, and prices the chosen workload's meters", async () => {
-    const user = mount("openrouter", "OpenRouter");
-    const workload = screen.getByRole("radiogroup", { name: "Workload" });
-    for (const name of ["Text generation", "Embeddings", "Images", "Speech to text", "Text to speech", "Rerank", "System One decisions"]) expect(screen.getByRole("radio", { name: new RegExp(`^${name}`) })).toBeTruthy();
-    expect(workload).toBeTruthy();
-    expect(screen.getByRole("radio", { name: /^Text generation/ }).getAttribute("aria-checked")).toBe("true");
-    const chat = screen.getByRole("checkbox", { name: /^Chat Completions/ });
-    expect(chat.getAttribute("aria-checked")).toBe("true");
-    await user.click(screen.getByRole("checkbox", { name: /^Responses/ }));
-    expect(chat.getAttribute("aria-checked")).toBe("true");
-    expect(screen.getAllByText("Not supported by this connection").length).toBeGreaterThan(0); // Responses and Messages on OpenRouter
-    expect((screen.getByRole("textbox", { name: /Upstream model ID/ }) as HTMLInputElement).placeholder).toBe("openai/gpt-4.1-mini");
-    await user.click(screen.getByRole("radio", { name: "Set a price now" }));
+  const type = () => screen.getByRole("combobox", { name: "Type" });
+  /** Opens the Type list: [label, disabled] per option. */
+  const typeOptions = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(type());
+    return within(await screen.findByRole("listbox")).getAllByRole("option").map(o => [o.textContent, o.getAttribute("aria-disabled") === "true"] as const);
+  };
+  const protocols = () => within(screen.getByRole("group", { name: "Protocols" })).getAllByRole("button").map(b => [b.textContent, b.getAttribute("aria-pressed") === "true"]);
+  const types = ["Text", "Embeddings", "Images", "Speech to text", "Text to speech", "Rerank", "System One"];
+
+  it("is one compact Type select with short labels; types the connection can't serve are disabled with a reason, not red sentences", async () => {
+    const user = mount([conn("a", "anthropic", "Claude")]);
+    expect(type().textContent).toBe("Text");
+    expect(screen.queryByRole("radiogroup")).toBeNull();
+    const options = await typeOptions(user);
+    expect(options.map(([label]) => label?.replace(/\(.*\)/, ""))).toEqual(types);
+    expect(options.filter(([, disabled]) => !disabled).map(([label]) => label)).toEqual(["Text"]);
+    expect(screen.getByRole("option", { name: "Rerank (Not available on Anthropic)" }).getAttribute("aria-disabled")).toBe("true");
+    expect(document.body.textContent).not.toMatch(/can't serve|POST \/v1/);
+  });
+  it("defaults protocols per profile and hides the ones a connection can't serve", async () => {
+    mount([conn("a", "anthropic", "Claude")]);
+    expect(protocols()).toEqual([["Chat Completions", true], ["Messages", true]]);
+    expect((screen.getByRole("textbox", { name: /Upstream model ID/ }) as HTMLInputElement).placeholder).toBe("claude-sonnet-4-5");
+    cleanup(); mount([conn("o", "openai", "OpenAI")]);
+    expect(protocols()).toEqual([["Chat Completions", true], ["Responses", true]]);
+    cleanup(); mount([conn("r", "openrouter", "OpenRouter")]);
+    expect(protocols()).toEqual([["Chat Completions", true]]);
+    cleanup(); const user = mount([conn("v", "vllm", "Local")]);
+    expect(protocols()).toEqual([["Chat Completions", true]]);
+    expect((await typeOptions(user)).filter(([, disabled]) => disabled).map(([label]) => label?.replace(/\(.*\)/, ""))).toEqual(["Images", "Speech to text", "Text to speech", "Rerank", "System One"]);
+  });
+  it("sends the chosen protocols; switching connection follows the new profile and drops a type it can't serve", async () => {
+    const fetch = vi.fn().mockResolvedValue(Response.json({ model_id: "m", deployment_id: "d", price_id: null }, { status: 201 }));
+    const user = mount([conn("o", "openai", "OpenAI"), conn("a", "anthropic", "Claude")], fetch);
+    await user.click(screen.getByRole("button", { name: "Responses" }));
+    expect(protocols()).toEqual([["Chat Completions", true], ["Responses", false]]);
+    await user.click(type()); await user.click(await screen.findByRole("option", { name: "Images" }));
+    await waitFor(() => expect(type().textContent).toBe("Images"));
+    expect(screen.queryByRole("group", { name: "Protocols" })).toBeNull();
+    expect((screen.getByRole("textbox", { name: /Upstream model ID/ }) as HTMLInputElement).placeholder).toBe("gpt-image-1");
+    await user.selectOptions(screen.getByRole("combobox", { name: /Connection/ }), "a");
+    expect(type().textContent).toBe("Text");
+    expect(protocols()).toEqual([["Chat Completions", true], ["Messages", true]]);
+    await user.type(screen.getByRole("textbox", { name: /Upstream model ID/ }), "claude-x");
+    await user.type(screen.getByRole("textbox", { name: /Display name/ }), "Claude X");
+    await user.click(screen.getByRole("button", { name: "Add model" }));
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    expect(JSON.parse(fetch.mock.calls[0][1].body).model.supported_protocols).toEqual(["chat_completions", "messages"]);
+  });
+  it("asks for a protocol when every chip is off", async () => {
+    const fetch = vi.fn(), user = mount([conn("r", "openrouter", "OpenRouter")], fetch);
+    await user.click(screen.getByRole("button", { name: "Chat Completions" }));
+    await user.type(screen.getByRole("textbox", { name: /Upstream model ID/ }), "x");
+    await user.type(screen.getByRole("textbox", { name: /Display name/ }), "X");
+    await user.click(screen.getByRole("button", { name: "Add model" }));
+    expect(await screen.findByText(/at least one option for protocols/)).toBeTruthy();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("prices the chosen type's meters inside the disclosure", async () => {
+    const user = mount([conn("r", "openrouter", "OpenRouter")]);
+    await user.click(screen.getByRole("button", { name: "Add price now (optional)" }));
     expect(screen.getByRole("combobox", { name: "Cache read price" })).toBeTruthy();
-    expect(screen.getByText(/Import current OpenRouter price on the model's Pricing tab/)).toBeTruthy();
-    await user.click(screen.getByRole("radio", { name: /^Images/ }));
-    expect(screen.queryByRole("checkbox", { name: /^Chat Completions/ })).toBeNull();
-    expect(screen.getByRole("combobox", { name: "Image output price" })).toBeTruthy();
+    expect(screen.getByText("Or import OpenRouter's price later from the model's Pricing tab.")).toBeTruthy();
+    await user.click(type()); await user.click(await screen.findByRole("option", { name: "Images" }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Image output price" })).toBeTruthy());
     expect(screen.queryByRole("combobox", { name: "Cache read price" })).toBeNull();
     await user.selectOptions(screen.getByRole("combobox", { name: "Image output price" }), "priced");
-    expect(screen.getByRole("textbox", { name: "$ per image" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Add resolution tier" })).toBeTruthy();
     await user.type(screen.getByRole("textbox", { name: "$ per image" }), "0.0205");
     expect(screen.getByText(/\$0\.0205\/image/, { selector: "span" })).toBeTruthy();
-  });
-  it("defaults an Anthropic connection to Messages with a Claude placeholder", () => {
-    mount("anthropic", "Anthropic");
-    expect(screen.getByRole("checkbox", { name: /^Messages/ }).getAttribute("aria-checked")).toBe("true");
-    expect(screen.getByRole("checkbox", { name: /^Chat Completions/ }).getAttribute("aria-checked")).toBe("false");
-    expect((screen.getByRole("textbox", { name: /Upstream model ID/ }) as HTMLInputElement).placeholder).toBe("claude-sonnet-4-5");
-    expect(screen.getAllByText("This connection can't serve it.").length).toBeGreaterThan(0);
   });
 });

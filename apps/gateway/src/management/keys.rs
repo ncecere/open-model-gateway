@@ -221,6 +221,9 @@ pub(super) async fn create_key(
         sqlx::query_scalar::<_,Uuid>("SELECT id FROM service_accounts WHERE workspace_id=$1 AND id=$2 AND disabled_at IS NULL FOR UPDATE").bind(ws).bind(id).fetch_optional(&mut *tx).await?.ok_or_else(missing)?;
     } else if !a.member {
         return Err(denied());
+    } else {
+        // Human keys follow Admin > Settings > General's maximum lifetime.
+        super::settings::check_human_key_lifetime(&mut tx, b.expires_in_days).await?;
     }
     let limits = governance::initial_key_limits(
         [
@@ -316,6 +319,8 @@ pub(super) async fn rotate_key(
         sqlx::query_scalar::<_,Uuid>("SELECT id FROM service_accounts WHERE workspace_id=$1 AND id=$2 AND disabled_at IS NULL FOR UPDATE").bind(ws).bind(service).fetch_optional(&mut *tx).await?.ok_or_else(denied)?;
     } else if issued != Some(u.user_id) || !a.member {
         return Err(denied());
+    } else {
+        super::settings::check_human_key_lifetime(&mut tx, b.expires_in_days).await?;
     }
     let key = insert_key(
         &mut tx,

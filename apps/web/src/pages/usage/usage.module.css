@@ -1,11 +1,4 @@
 /* Usage & costs layout. Semantic tokens only; everything stacks at 390px. */
-.period {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: var(--space-3);
-  min-width: 0;
-}
 
 .custom {
   display: flex;
@@ -31,46 +24,118 @@
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
   gap: var(--space-4);
-  align-items: start;
+  /* Cards in a row share one height; shorter lists leave space at the bottom, not a ragged edge. */
+  align-items: stretch;
+
+  & > * {
+    height: 100%;
+  }
 }
 
 .budgets {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
   gap: var(--space-5);
+  min-width: 0;
 }
 
-.topList {
-  list-style: none;
+/* The one compact "Budgets" row under the tiles: a small label, then the bars. */
+.budgetRow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-2) var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+}
+
+.rowLabel {
   margin: 0;
-  padding: 0;
-  display: grid;
-  gap: var(--space-3);
+  font-size: var(--font-size-sm, 0.875rem);
+  font-weight: var(--font-weight-medium, 500);
+  color: var(--color-text-muted);
 }
 
-.topItem {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--space-1) var(--space-3);
-  align-items: baseline;
+@media (max-width: 40rem) {
+  .budgetRow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+
+
+/* Top lists: one line per row; a long name ellipsizes (full name in its title). */
+.topMeta {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs, 0.75rem);
+  font-weight: var(--font-weight-regular, 400);
+}
+
+.topTrack {
+  display: block;
+  height: 0.25rem;
+  margin-top: var(--space-1);
+  border-radius: var(--radius-pill);
+  background-color: var(--color-surface-sunken);
+  overflow: hidden;
+}
+
+.topBar {
+  display: block;
+  width: var(--percent, 0%);
+  height: 100%;
+  border-radius: inherit;
+  background-color: var(--color-chart-primary);
 }
 
 .topName {
+  display: block;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: var(--font-weight-medium, 500);
 }
 
-.topAmount {
-  font-variant-numeric: tabular-nums;
+/* Fixed layout: the name column takes what is left and ellipsizes, so a narrow card never scrolls sideways. */
+.topTable {
+  min-width: 0;
+  table-layout: fixed;
 }
 
-.topShare {
-  grid-column: 1 / -1;
+.cardNote {
+  margin: 0;
+  padding: var(--space-4) var(--space-5);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm, 0.875rem);
 }
+
+/* Small muted page footer ("Estimates from configured prices, not invoices · updated …"). */
+.footer {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs, 0.75rem);
+}
+
+.periodSelect {
+  width: 12rem;
+  max-width: 100%;
+}
+
+.error {
+  align-self: center;
+  color: var(--color-danger-text);
+  font-size: var(--font-size-xs, 0.75rem);
+}
+
+
 
 .back {
   align-self: flex-start;
@@ -91,12 +156,4 @@
 .scopeSelect {
   width: 13rem;
   max-width: 100%;
-}
-
-/* Top lists: the name (opens the entity) and its filter button on one line. */
-.topHead {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  min-width: 0;
 }

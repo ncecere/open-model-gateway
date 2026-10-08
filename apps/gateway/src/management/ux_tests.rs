@@ -1,6 +1,8 @@
 //! UX program endpoints: Home (/me), key detail/disable, request logs and usage analytics.
 use super::*;
 use chrono::Utc;
+#[path = "logs_tests.rs"]
+mod logs_tests;
 #[path = "ux_wave2_tests.rs"]
 mod wave2;
 

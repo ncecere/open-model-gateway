@@ -1,7 +1,8 @@
 /*
- * Usage & costs (both portals): one page with pill tabs Overview | Explore |
- * Cost records (Admin: By workspace), a URL-backed UTC period in the header, and a
- * routed chart page per tile (`?tab=chart&metric=…`). Sister-app layout:
+ * Usage & costs (both portals): header (title + one subtitle line with the
+ * period) → pill tabs Overview | Explore | Cost records (Admin: By workspace) →
+ * ONE FilterToolbar row (Period, Admin's Workspace, "More filters") → the tab.
+ * A routed chart page per tile (`?tab=chart&metric=…`). Sister-app layout:
  * Grounded/Bitop header, cards and pill tabs; no drawers or modals for filters.
  *
  * Privacy: the gateway authorizes every number. The page additionally never
@@ -38,27 +39,33 @@ export function UsageCosts({ session, workspace }: { session: Session; workspace
   const options = useFilterOptions(workspace, ctx, period, workspaceFilter);
   // Workspace scope: the cost center is a fact about the page (the platform assigns it), not a filter.
   const centers = options.costCenters.filter(c => c.value !== "unallocated"), centerFact = workspace && centers.length ? centers.length === 1 ? `Cost center: ${String(centers[0]!.label)}` : `${centers.length} cost centers` : undefined;
-  const header = (title: string) => <Heading title={title} description={<span className={u.scope}><span>{scopeLine(workspace)}</span>{period && <span>· {periodLabel(period)}</span>}{centerFact && <span>· {centerFact}</span>}</span>}
-    actions={<PeriodControl key={`${period?.start_date}-${period?.end_date}-${period?.preset}`} period={period} navigate={nav.navigate} />} />;
+  const header = (title: string) => <Heading title={title} description={<span className={u.scope}><span>{scopeLine(workspace)}</span>{period && <span>· {periodLabel(period)}</span>}{centerFact && <span>· {centerFact}</span>}</span>} />;
+  const periodControl = <PeriodControl key={`${period?.start_date}-${period?.end_date}-${period?.preset}`} period={period} navigate={nav.navigate} />;
   // Admin: narrow every tab to one workspace (a leading toolbar control with its own chip).
   const scoped = !workspace && session.capabilities.platform_read && !!period, spaces = useWorkspaceScope(period, scoped);
   const scope = scoped && <WorkspaceScope spaces={spaces} nav={nav} />;
   const scopeChips = scoped && workspaceFilter ? [{ key: "workspace", label: "Workspace", text: spaces.find(w => w.id === workspaceFilter)?.label ?? "Selected workspace", onRemove: () => nav.navigate({ workspace_id: undefined }) }] : [];
-  // One FilterToolbar row; it collapses in place behind "Filters (n)" on a phone (no sheet).
-  const filters = period && <UsageFilterBar options={options} ctx={ctx} nav={nav} records={tab === "records"} start={scope || undefined} extraChips={scopeChips} />;
+  // One FilterToolbar row; it collapses in place behind "Filters (n)" on a phone (no sheet). An invalid custom period
+  // still gets the Period control so it can be fixed.
+  const filters = <UsageFilterBar options={options} ctx={ctx} nav={nav} records={tab === "records"} start={<>{periodControl}{scope || null}</>} extraChips={scopeChips} extraActive={period && period.preset === "month" ? 0 : 1} />;
   if (tab === "chart") {
     const metric: ChartMetric = chartMetrics.includes(nav.search.metric as ChartMetric) ? nav.search.metric as ChartMetric : "spend";
     return <Stack gap={6} className={s.page}><BackToUsage nav={nav} />{header(chartTitle(metric))}{filters}
       {invalid || !period ? <ErrorNotice error={invalid} /> : <UsageChart workspace={workspace} metric={metric} period={period} nav={nav} workspaceFilter={workspaceFilter} />}</Stack>;
   }
   return <Stack gap={6} className={s.page}>
-    {header("Usage & costs")}{filters}
-    {invalid || !period ? <ErrorNotice error={invalid} /> : <Tabs value={tab} onValueChange={v => nav.navigate({ tab: v === "overview" ? undefined : String(v), metric: undefined })}>
+    {header("Usage & costs")}
+    <Tabs value={tab} onValueChange={v => nav.navigate({ tab: v === "overview" ? undefined : String(v), metric: undefined })}>
+      <Stack gap={6}>
       <TabsList variant="pills" overflow="scroll" aria-label="Usage & costs views"><Tab value="overview">Overview</Tab><Tab value="explore">Explore</Tab><Tab value="records">{workspace ? "Cost records" : "By workspace"}</Tab></TabsList>
+      {filters}
+      {invalid || !period ? <ErrorNotice error={invalid} /> : <>
       <TabsPanel value="overview"><UsageOverviewTab workspace={workspace} ctx={ctx} period={period} nav={nav} workspaceFilter={workspaceFilter} /></TabsPanel>
       <TabsPanel value="explore"><UsageExploreTab workspace={workspace} ctx={ctx} period={period} nav={nav} workspaceFilter={workspaceFilter} /></TabsPanel>
       <TabsPanel value="records">{workspace ? <WorkspaceRecords session={session} workspace={workspace} ctx={ctx} period={period} nav={nav} /> : <PlatformRecords session={session} ctx={ctx} period={period} nav={nav} workspaceFilter={workspaceFilter} />}</TabsPanel>
-    </Tabs>}
+      </>}
+      </Stack>
+    </Tabs>
   </Stack>;
 }
 const chartTitle = (metric: ChartMetric) => ({ spend: "Spend", requests: "Requests", tokens: "Tokens", cache_hit_rate: "Cache hit rate", blended: "Cost per 1M tokens" })[metric];

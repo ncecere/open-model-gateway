@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod client;
 mod deadline_stream;
 mod embeddings;
 pub mod error;
@@ -24,7 +25,7 @@ use uuid::Uuid;
 
 use crate::{auth::Principal, providers::ProviderRegistry};
 use error::InferenceError;
-use repository::{ExecutionFinish, ExecutionStart, InferenceRepository, Outcome};
+use repository::{AttemptTelemetry, ExecutionFinish, ExecutionStart, InferenceRepository, Outcome};
 use types::{ApiProtocol, ChatEvent, ChatRequest, ProviderOutput, Usage};
 
 #[derive(Clone, Copy)]
@@ -100,6 +101,7 @@ impl Engine {
         )));
         let started = Instant::now();
         let deadline = started + self.limits.request_timeout;
+        let labels = client::current();
         let deployments = timeout_at(
             deadline,
             self.repository.deployments(&principal, &request.model),
@@ -171,6 +173,8 @@ impl Engine {
                         provider: deployment.provider.clone(),
                         model: request.model.clone(),
                         streamed,
+                        upstream_model: upstream_snapshot(&deployment.upstream_model),
+                        client: labels.clone(),
                     },
                     &request,
                     self.limits
@@ -183,16 +187,13 @@ impl Engine {
             )
             .await
             .map_err(|_| InferenceError::Timeout)??;
-            let mut guard = ExecutionGuard {
-                repository: self.repository.clone(),
-                id: execution_id,
-                deployment_id: deployment.id,
-                started: attempt_started,
-                usage: Usage::default(),
-                finished: false,
-                health_observation: true,
-                _permit: permit.clone(),
-            };
+            let mut guard = ExecutionGuard::new(
+                self.repository.clone(),
+                execution_id,
+                deployment.id,
+                attempt_started,
+                permit.clone(),
+            );
             let (output, invalid_body_usage) = evidence::capture(timeout_at(
                 deadline,
                 adapter.execute_protocol(deployment, request.clone(), protocol),
@@ -229,6 +230,7 @@ impl Engine {
                         return Err(InferenceError::InvalidUpstream);
                     }
                     guard.usage = response.usage;
+                    guard.telemetry.finish_reason = Some(response.finish_reason.into());
                     guard.finish(Outcome::Succeeded, None).await?;
                     return Ok(ProviderOutput::Complete(response));
                 }
@@ -258,8 +260,9 @@ impl Engine {
                             if matches!(next,Err(InferenceError::Timeout)) && Instant::now()>=deadline {guard.health_observation=false;}
                             let item = match next {
                                 Ok(ChatEvent::Delta { .. }) if finished_choice => Err(InferenceError::InvalidUpstream),
+                                Ok(ChatEvent::Delta { text, tool_calls }) => { guard.first_token(text.as_deref(), &tool_calls); Ok(ChatEvent::Delta { text, tool_calls }) }
                                 Ok(ChatEvent::Finish(_)) if finished_choice => Err(InferenceError::InvalidUpstream),
-                                Ok(ChatEvent::Finish(reason)) => { finished_choice = true; Ok(ChatEvent::Finish(reason)) }
+                                Ok(ChatEvent::Finish(reason)) => { finished_choice = true; guard.telemetry.finish_reason = Some(reason.into()); Ok(ChatEvent::Finish(reason)) }
                                 Ok(ChatEvent::Usage(usage)) if reported_usage || !valid_usage(usage) => Err(InferenceError::InvalidUpstream),
                                 Ok(ChatEvent::Usage(usage)) => { reported_usage = true; guard.usage = usage; Ok(ChatEvent::Usage(usage)) }
                                 Ok(ChatEvent::Done) if !finished_choice => Err(InferenceError::InvalidUpstream),
@@ -296,6 +299,13 @@ impl Engine {
     }
 }
 
+/// The configured upstream model id as stored (1..=512 characters), else none.
+fn upstream_snapshot(model: &str) -> Option<String> {
+    (1..=512)
+        .contains(&model.chars().count())
+        .then(|| model.to_owned())
+}
+
 fn valid_usage(usage: Usage) -> bool {
     usage.meters.is_none_or(|m| m.validate().is_ok())
         && usage.provider_cost_microusd.is_none_or(|n| n >= 0)
@@ -325,12 +335,57 @@ struct ExecutionGuard {
     id: Uuid,
     deployment_id: Uuid,
     started: Instant,
+    /// Upstream dispatch (after admission): the origin of attempt timings.
+    dispatched: Instant,
     usage: Usage,
+    telemetry: AttemptTelemetry,
     finished: bool,
     health_observation: bool,
     _permit: SharedPermit,
 }
+fn millis(d: Duration) -> u64 {
+    d.as_millis().min(u64::MAX as u128) as u64
+}
 impl ExecutionGuard {
+    /// Created right after durable admission, immediately before dispatch.
+    fn new(
+        repository: Arc<dyn InferenceRepository>,
+        id: Uuid,
+        deployment_id: Uuid,
+        started: Instant,
+        permit: SharedPermit,
+    ) -> Self {
+        Self {
+            repository,
+            id,
+            deployment_id,
+            started,
+            dispatched: Instant::now(),
+            usage: Usage::default(),
+            telemetry: AttemptTelemetry::default(),
+            finished: false,
+            health_observation: true,
+            _permit: permit,
+        }
+    }
+    /// Streams: the first delta carrying text or a tool call sets time to first token.
+    fn first_token(&mut self, text: Option<&str>, tool_calls: &[types::ToolCallDelta]) {
+        if self.telemetry.time_to_first_token_ms.is_none()
+            && (text.is_some_and(|t| !t.is_empty()) || !tool_calls.is_empty())
+        {
+            self.telemetry.time_to_first_token_ms = Some(millis(self.dispatched.elapsed()));
+        }
+    }
+    /// Telemetry as of now: generation time ends when the attempt finishes.
+    fn telemetry_now(&self) -> AttemptTelemetry {
+        AttemptTelemetry {
+            generation_ms: self
+                .telemetry
+                .generation_ms
+                .or(Some(millis(self.dispatched.elapsed()))),
+            ..self.telemetry
+        }
+    }
     fn record(&self, outcome: Outcome, error: Option<InferenceError>) -> ExecutionFinish {
         ExecutionFinish {
             id: self.id,
@@ -349,7 +404,8 @@ impl ExecutionGuard {
         self.finished = true;
         let result = timeout(
             Duration::from_secs(3),
-            self.repository.finish(&self.record(outcome, error)),
+            self.repository
+                .finish_attempt(&self.record(outcome, error), &self.telemetry_now()),
         )
         .await
         .map_err(|_| InferenceError::Storage)
@@ -381,10 +437,11 @@ impl Drop for ExecutionGuard {
         }
         let repository = self.repository.clone();
         let record = self.record(Outcome::Cancelled, None);
+        let telemetry = self.telemetry_now();
         // Network work is dropped synchronously. Only best-effort accounting is detached.
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
-                if !matches!(timeout(Duration::from_secs(3), repository.finish(&record)).await, Ok(Ok(()))) {
+                if !matches!(timeout(Duration::from_secs(3), repository.finish_attempt(&record, &telemetry)).await, Ok(Ok(()))) {
                     tracing::error!(execution_id = %record.id, "cancelled inference finalization failed; reconciliation required");
                 }
             });

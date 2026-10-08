@@ -19,7 +19,7 @@ Providers are startup registry entries, not engine branches or database enums. M
 | --- | --- |
 | `openai` | Fixed `https://api.openai.com/v1`; native Chat, Responses, string embeddings, `gpt-image-*` image generation, audio transcription and speech. No arbitrary cloud endpoint override. |
 | `anthropic` | Fixed `https://api.anthropic.com/v1`; native Messages, representable Chat subset. |
-| `bedrock` | AWS workload credentials, explicit region, SigV4 Converse/ConverseStream, not an OpenAI URL. |
+| `bedrock` | Server AWS identity, an allowlisted named profile or an assumed IAM role; explicit region; optional allowlisted VPC endpoint; SigV4 Converse/ConverseStream, not an OpenAI URL. |
 | `openai_compatible` | Explicit approved local Chat/embedding subset, not universal compatibility. |
 | `vllm`, `sglang` | Separately declared local Chat/embedding profiles. |
 | `ollama` | Compatible Chat plus **native `/api/embed`**, derived from approved `/v1` base; not compatible embedding fallback. |
@@ -35,13 +35,13 @@ Registry ID `openrouter`; connection profile `openrouter` (fixed base, `env:` ke
 
 | Variable | Meaning |
 | --- | --- |
-| `GATEWAY_OPENROUTER_DATA_COLLECTION` | `deny` (default) or `allow`; sent as `provider.data_collection` on every request. |
+| `GATEWAY_OPENROUTER_DATA_COLLECTION` | Optional override, `deny` or `allow`; sent as `provider.data_collection` on every request. Unset, Admin › Settings › Data & privacy decides (default `deny`); see [settings](settings.md#data--privacy). |
 | `GATEWAY_OPENROUTER_HTTP_REFERER` | Optional absolute http(s) URL sent as `HTTP-Referer` (attribution only). |
 | `GATEWAY_OPENROUTER_TITLE` | Optional 1–128 printable ASCII characters sent as `X-Title`. |
 
 Redirects, ambient proxies and implicit retries are disabled. Non-success bodies are never read: OpenRouter error bodies carry the account `user_id` and embedded provider errors. Statuses map to sanitized kinds: 401/402 (bad key, or no credit on the gateway's account) → `provider_configuration_error`; 403 (moderation) and other 4xx → `upstream_rejected`; 408/524 → `timeout_error`; 429 → `rate_limit_error`; 5xx → `upstream_unavailable`; 3xx → `provider_configuration_error`. A 200 body (or stream frame) carrying `error` fails by its code; a non-JSON 200 is invalid.
 
-OpenRouter `:free` variants may train on prompts. Under the default `deny` they have no eligible endpoint and fail as `upstream_rejected` (upstream 404). Using them requires the operator to set `allow` server-wide.
+OpenRouter `:free` variants may train on prompts. Under the default `deny` they have no eligible endpoint and fail as `upstream_rejected` (upstream 404). Using them requires a Platform Admin (or the operator override) to set `allow` installation-wide.
 
 - **Chat:** OpenAI wire with `max_completion_tokens`, `usage:{include:true}` and `stream_options.include_usage`. Responses normalize OpenRouter-only fields. `native_finish_reason` is dropped. Reasoning traces (`reasoning`, `reasoning_details`) are not returned to clients, but their tokens stay in `completion_tokens`. Other unknown content (images, annotations, non-null refusal) is rejected. The final streaming accounting frame (a repeated finish choice with an empty delta plus `usage`) is treated as usage, not as a second terminal. `: OPENROUTER PROCESSING` comments are skipped. Usage follows the research normalization: `prompt_tokens` is inclusive, `cached_tokens` is cache read, and `cache_write_tokens` is the default write category (no TTL split).
 - **Embeddings:** float string subset. Catalog embedding models advertise no `dimensions`, so overrides are rejected before admission. The exception is a model's fixed native width (`nvidia/nemotron-3-embed-1b[:free]`: only 2048), and response vectors must match it. The reported `private/...` model is never compared.
@@ -85,6 +85,8 @@ OpenRouter `:free` variants may train on prompts. Under the default `deny` they 
 ```
 
 Approvals bind a canonical exact HTTP(S) base ending in `/v1` to pinned destination IPs. They are bounded to 64 endpoints and 16 addresses each. No DNS lookup occurs during approval loading or dispatch. URL credentials, query/fragment, encoded path escapes and noncanonical URLs are rejected. Redirects, environment proxies and automatic retries are disabled. HTTP destinations must be approved private addresses (loopback only in development); forbidden metadata/link-local/multicast/special-use destinations are rejected. HTTPS retains certificate checks. Enforce independent network egress too; application approval is not a complete network policy.
+
+Bedrock references (`aws:default`, `aws:profile:<name>`, `aws:role:<arn>`) name AWS identities, never keys; `GATEWAY_AWS_PROFILE_ALLOWLIST` and `GATEWAY_BEDROCK_ENDPOINT_ALLOWLIST` gate profiles and endpoint overrides (see [Bedrock](bedrock.md#connection-configuration)).
 
 Local `credential_ref:"none"` explicitly sends no authentication and resolves no secret. Optional `env:NAME` uses an operator allowlist and a separate upstream Bearer value. Inference keys and unrelated cloud credentials are never forwarded. Cloud `none` is prohibited. `GATEWAY_SECRET_ENV_ALLOWLIST` defaults empty; references and values are not returned by management. A reference is not a secret manager or per-tenant vault policy.
 

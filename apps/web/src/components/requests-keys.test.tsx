@@ -45,8 +45,8 @@ describe("Request page", () => {
   const html = () => markup(nav(search, <RequestDetailPage session={session} workspace={team} id={row.root_request_id} />), [[`${ws}/requests/${row.root_request_id}?status=failed`, detail]]);
   it("shows tiles, copyable IDs, the current data policy setting and the attempt timeline with failover", () => {
     const page = html();
-    expect(page).toContain("Back to Requests");
-    expect(page).toContain('href="/workspaces/team/requests?status=failed&amp;cols=none"');
+    expect(page).toContain("Back to Logs");
+    expect(page).toContain('href="/workspaces/team/logs?status=failed&amp;cols=none"');
     expect(page).toContain("$0.0019 on hold until the cost is known");
     expect(page).toContain("Unknown");
     expect(page).toContain("1 fallback");
@@ -137,7 +137,7 @@ describe("Key page", () => {
     expect(html).toContain("Only 1 selected model");
     expect(html).toContain("Why can&#x27;t I use this model?");
     expect(html).toContain("Details for Other model");
-    expect(html).toContain('href="/workspaces/team/requests?key_id=key2"');
+    expect(html).toContain('href="/workspaces/team/logs?key_id=key2"');
   });
   it("offers Enable only for a disabled key; a revoked key can never be enabled", () => {
     const disabled = render("key2");
@@ -155,7 +155,7 @@ describe("Key page", () => {
     expect(revoked).not.toContain("Leave a field blank");
     expect(revoked).not.toContain("change its limits below");
     expect(revoked).not.toContain("Rotate the key to set a new expiry");
-    expect(revoked).toMatch(/<a[^>]*href="\/workspaces\/team\/requests\?key_id=key3"[^>]*>View requests<\/a>/);
+    expect(revoked).toMatch(/<a[^>]*href="\/workspaces\/team\/logs\?key_id=key3"[^>]*>View requests<\/a>/);
     const active = render("key1");
     expect(active).toContain(">Disable key<");
     expect(active).toContain(">Rotate key<");

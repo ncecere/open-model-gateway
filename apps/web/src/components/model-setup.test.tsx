@@ -38,16 +38,53 @@ const created = () => Promise.resolve(Response.json({ model_id: "new-model", dep
 const form = () => screen.getByRole("form", { name: "Add model" });
 
 describe("Add model page", () => {
-  it("lays out Grounded form sections with a back link, starting from ?connection=", async () => {
+  it("lays out short two-column Grounded sections with a back link, starting from ?connection=", async () => {
     mountAddModel(vi.fn());
-    for (const section of ["Source", "Identity", "Availability", "Pricing", "Status"]) expect(screen.getByRole("group", { name: section })).toBeTruthy();
+    expect(screen.getByText("Offer a model from one of your connections.")).toBeTruthy();
+    for (const section of ["Source", "Identity", "Availability"]) expect(screen.getByRole("group", { name: section })).toBeTruthy();
+    expect(screen.queryByRole("group", { name: "Pricing" })).toBeNull();
     expect(screen.getByRole("link", { name: "Back to Models" }).getAttribute("href")).toBe("/admin/models");
     cleanup(); mountAddModel(vi.fn(), "c2");
     expect((screen.getByRole("combobox", { name: /Connection/ }) as HTMLSelectElement).value).toBe("c2");
-    expect(screen.getByText(/this connection is disabled/)).toBeTruthy();
-    expect((screen.getByRole("switch", { name: /Enable the model/ }) as HTMLElement).getAttribute("aria-checked")).toBe("false");
-    expect((screen.getByRole("radio", { name: "Leave unpriced" }) as HTMLInputElement).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByText("This connection is disabled.")).toBeTruthy();
+    expect((screen.getByRole("switch", { name: "Enabled" }) as HTMLElement).getAttribute("aria-checked")).toBe("false");
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("combobox", { name: /Connection/ })));
+  });
+  it("keeps help to one hint: placeholders instead of sentences, no API paths or pricing prose, no provider label above Connection", () => {
+    mountAddModel(vi.fn());
+    const text = form().textContent ?? "";
+    expect(screen.getByText("What clients send as model.")).toBeTruthy();
+    for (const gone of ["Where requests for this model are sent", "identifier the connection", "Follows the upstream", "/v1/", "priced per", "Not supported by this connection", "can't serve it", "Each model has one workload", "Leave unpriced", "estimates", "Workspaces see the model"]) expect(text).not.toContain(gone);
+    expect(screen.queryByText("vLLM")).toBeNull(); // the profile is the icon inside the select, not a label above it
+    expect((screen.getByRole("textbox", { name: /Upstream model ID/ }) as HTMLInputElement).placeholder).toBe("meta-llama/Llama-3.1-8B-Instruct");
+    expect((screen.getByRole("textbox", { name: /Display name/ }) as HTMLInputElement).placeholder).not.toBe("");
+    expect((screen.getByRole("textbox", { name: /API model name/ }) as HTMLInputElement).placeholder).toBe("meta-llama/llama-3.1-8b-instruct");
+  });
+  it("hides pricing behind a closed disclosure; opening it shows the price editor and sends a price, closing drops it", async () => {
+    const fetch = vi.fn().mockImplementation(created), { user } = mountAddModel(fetch);
+    const disclosure = screen.getByRole("button", { name: "Add price now (optional)" });
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("combobox", { name: "Input tokens price" })).toBeNull();
+    expect(form().getAttribute("data-dirty")).toBeNull();
+    await user.click(disclosure);
+    expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("combobox", { name: "Input tokens price" })).toBeTruthy();
+    expect(form().getAttribute("data-dirty")).toBe("true");
+    await user.click(disclosure);
+    expect(screen.queryByRole("combobox", { name: "Input tokens price" })).toBeNull();
+    await user.type(screen.getByRole("textbox", { name: /Upstream model ID/ }), "llama3");
+    await user.type(screen.getByRole("textbox", { name: /Display name/ }), "Llama 3");
+    await user.click(screen.getByRole("button", { name: "Add model" }));
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    expect(JSON.parse(fetch.mock.calls[0][1].body).price).toBeNull();
+  });
+  it("puts Cancel and Add model in a footer bar that names unsaved changes", async () => {
+    const { user } = mountAddModel(vi.fn());
+    const status = screen.getAllByRole("status").find(el => el.closest("[data-open]"))!;
+    expect(status.textContent).toBe("");
+    expect(status.closest("[data-open]")!.querySelectorAll("button")).toHaveLength(2);
+    await user.type(screen.getByRole("textbox", { name: /Display name/ }), "Draft");
+    expect(status.textContent).toBe("Unsaved changes");
   });
   it("derives the API name from the upstream model ID, not the display name, until it is edited", async () => {
     const { user } = mountAddModel(vi.fn());
@@ -71,8 +108,9 @@ describe("Add model page", () => {
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("textbox", { name: /Upstream model ID/ })));
     await user.type(screen.getByRole("textbox", { name: /Upstream model ID/ }), "llama3");
     await user.type(screen.getByRole("textbox", { name: /Display name/ }), "Llama 3");
-    await user.click(screen.getByRole("checkbox", { name: "Approved" }));
-    await user.click(screen.getByRole("radio", { name: "Set a price now" }));
+    await user.click(screen.getByRole("button", { name: "Approved" }));
+    expect(screen.getByRole("button", { name: "Approved" }).getAttribute("aria-pressed")).toBe("true");
+    await user.click(screen.getByRole("button", { name: "Add price now (optional)" }));
     await user.selectOptions(screen.getByRole("combobox", { name: "Input tokens price" }), "priced");
     await user.type(screen.getByRole("textbox", { name: "$ per M input tokens" }), "0.123456");
     await user.selectOptions(screen.getByRole("combobox", { name: "Output tokens price" }), "priced");
@@ -80,7 +118,7 @@ describe("Add model page", () => {
     await user.selectOptions(screen.getByRole("combobox", { name: "Requests price" }), "free");
     await user.type(screen.getByRole("textbox", { name: /input token ceiling/ }), "1000");
     await user.type(screen.getByRole("textbox", { name: /output token ceiling/ }), "10");
-    await user.click(screen.getByRole("switch", { name: /Enable the model/ }));
+    await user.click(screen.getByRole("switch", { name: "Enabled" }));
     await user.click(screen.getByRole("button", { name: "Add model" }));
     await waitFor(() => expect(navigate).toHaveBeenCalledWith({ page: "model-detail", record: "new-model" }));
     const [path, init] = fetch.mock.calls[0];

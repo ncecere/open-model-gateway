@@ -6,6 +6,8 @@ use axum::{
 };
 use sqlx::PgPool;
 use tower::ServiceExt;
+#[path = "catalog_ux_tests.rs"]
+mod catalog_ux_tests;
 #[path = "directory/tests.rs"]
 mod directory_tests;
 #[path = "keys/tests.rs"]
@@ -20,6 +22,8 @@ mod project_tests;
 mod resource_tests;
 #[path = "session_tests.rs"]
 mod session_tests;
+#[path = "settings/tests.rs"]
+mod settings_tests;
 #[path = "setup/tests.rs"]
 mod setup_tests;
 #[path = "ux_tests.rs"]

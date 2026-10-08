@@ -1,18 +1,22 @@
 import { dashboardSearch, identifier, type DashboardSearch, type Page } from "./permissions";
-export const platformPaths: Partial<Record<Page, string>> = { "platform-overview": "/admin", "platform-teams": "/admin/teams", "platform-projects": "/admin/projects", users: "/admin/users", models: "/admin/models", "model-new": "/admin/models/new", providers: "/admin/connections", deployments: "/admin/deployments", catalogs: "/admin/catalogs", policies: "/admin/limits", "cost-centers": "/admin/cost-centers", "platform-costs": "/admin/costs", oidc: "/admin/sso-groups", "platform-audit": "/admin/audit", pricing: "/admin/pricing", routing: "/admin/routing" };
+export const platformPaths: Partial<Record<Page, string>> = { "platform-overview": "/admin", "platform-teams": "/admin/teams", "platform-projects": "/admin/projects", users: "/admin/users", models: "/admin/models", "model-new": "/admin/models/new", providers: "/admin/connections", deployments: "/admin/deployments", catalogs: "/admin/catalogs", policies: "/admin/settings/limits", "settings-general": "/admin/settings/general", "settings-privacy": "/admin/settings/privacy", "settings-email": "/admin/settings/email", "settings-sign-in": "/admin/settings/sign-in", "cost-centers": "/admin/cost-centers", "platform-costs": "/admin/costs", oidc: "/admin/sso-groups", "platform-audit": "/admin/audit", "platform-logs": "/admin/logs", "platform-log-session": "/admin/logs/session", pricing: "/admin/pricing", routing: "/admin/routing" };
 /** Workspace pages and their path under /workspaces/{ws}. */
-const workspaceSegments: Partial<Record<Page, string>> = { overview: "", keys: "/keys", grants: "/models", requests: "/requests", costs: "/costs", "workspace-settings": "/settings" };
+const workspaceSegments: Partial<Record<Page, string>> = { overview: "", keys: "/keys", grants: "/models", requests: "/logs", "session-detail": "/session", costs: "/costs", "workspace-settings": "/settings" };
 /** Workspace records routed as /workspaces/{ws}/{collection}/{record}. */
 export const workspaceRecords: Partial<Record<Page, string>> = { "request-detail": "requests", "key-detail": "keys", "workspace-model": "models" };
-const detailCollections: Partial<Record<Page, string>> = { "model-detail": "models", "provider-detail": "connections", "deployment-detail": "routes", "catalog-detail": "catalogs", "user-detail": "users" };
+const detailCollections: Partial<Record<Page, string>> = { "model-detail": "models", "provider-detail": "connections", "deployment-detail": "routes", "catalog-detail": "catalogs", "user-detail": "users", "platform-log-detail": "logs" };
+/** Old workspace list URLs that open (and are rewritten to) their new path: /workspaces/{ws}/requests → /workspaces/{ws}/logs. */
+const legacyWorkspaceSegments: Record<string, Page> = { requests: "requests" };
 /** Old record URLs that still open (and are rewritten to) their new path: /admin/deployments/{id} → /admin/routes/{id}, /admin/providers/{id} → /admin/connections/{id}. */
 const legacyDetailCollections: Record<string, Page> = { deployments: "deployment-detail", providers: "provider-detail" };
 /** Old list URLs (review rule 10: Connections, Limits, SSO groups); they open the page and are rewritten to its new path. */
-export const legacyPlatformPaths: Record<string, Page> = { "/admin/providers": "providers", "/admin/policies": "policies", "/admin/oidc": "oidc" };
+export const legacyPlatformPaths: Record<string, Page> = { "/admin/providers": "providers", "/admin/policies": "policies", "/admin/limits": "policies", "/admin/settings": "settings-general", "/admin/oidc": "oidc" };
 export function canonicalSearch(input: DashboardSearch): DashboardSearch {
   const s = dashboardSearch(input);
   // Legacy pages: the routing picker and the all-routes list now live on each model page.
   if (s.page === "routing" || s.page === "deployments") return { page: "models" };
+  // Admin › Pricing is now the Models table with "Unpriced only" (prices are edited on model/route pages).
+  if (s.page === "pricing") return { page: "models", layout: "table", pricing: "unpriced" };
   if (s.page === "workspace-settings" && (s.tab === "keys" || s.tab === "costs")) return { ...s, page: s.tab === "keys" ? "keys" : "costs", tab: undefined };
   // Key limits moved from Settings › Limits › Key limits to each key's page.
   if (s.page === "workspace-settings" && s.tab === "limits" && s.scope === "keys") return { ...s, page: s.record ? "key-detail" : "keys", tab: undefined, scope: undefined };
@@ -32,7 +36,7 @@ export function dashboardHref(input: DashboardSearch): string {
   const query = new URLSearchParams();
   if (path === "/") for (const key of ["page", "ws"] as const) if (search[key]) query.set(key, search[key]);
   if (record && !(page && (detailCollections[page] || workspaceRecords[page] && path !== "/")) && page !== "workspace-detail") query.set("record", record);
-  for (const key of ["tab", "q", "enabled", "offset", "model", "provider", "scope", "view", "start_date", "end_date", "compare", "workspace_id", "cost_center_id", "actor_user_id", "service_account_id", "connection", "accounting_status", "key_id", "model_id", "status", "range", "cursor", "cols", "density", "type", "sort", "layout", "connections", "min_price", "max_price", "policy", "readiness", "deprecated", "eligibility", "cost_status", "metric", "group", "then", "top", "role", "hide_sign_ins"] as const) if (search[key] !== undefined) query.set(key, String(search[key]));
+  for (const key of ["tab", "q", "enabled", "offset", "model", "provider", "scope", "view", "start_date", "end_date", "compare", "workspace_id", "cost_center_id", "actor_user_id", "service_account_id", "connection", "accounting_status", "key_id", "model_id", "status", "range", "cursor", "cols", "density", "type", "sort", "layout", "connections", "min_price", "max_price", "policy", "readiness", "deprecated", "eligibility", "pricing", "cost_status", "metric", "group", "then", "top", "role", "hide_sign_ins", "finish_reason", "streamed", "session_id"] as const) if (search[key] !== undefined) query.set(key, String(search[key]));
   return path + (query.size ? `?${query}` : "");
 }
 export function parseDashboardLocation(href: string): DashboardSearch | undefined {
@@ -45,7 +49,7 @@ export function parseDashboardLocation(href: string): DashboardSearch | undefine
   }
   const metadata = { ...query, page: undefined, ws: undefined, record: undefined };
   const platform = Object.entries(platformPaths).find(([, p]) => p === path) ?? (legacyPlatformPaths[path] ? [legacyPlatformPaths[path]!, path] as const : undefined);
-  if (platform) return platform[0] === "routing" || platform[0] === "deployments" ? canonicalSearch({ page: platform[0] }) : { ...metadata, page: platform[0] as Page, record: query.record };
+  if (platform) return platform[0] === "routing" || platform[0] === "deployments" || platform[0] === "pricing" ? canonicalSearch({ page: platform[0] }) : { ...metadata, page: platform[0] as Page, record: query.record };
   if (path === "/home") return { ...metadata, page: "home" };
   if (path === "/profile") return { ...metadata, page: "profile" };
   if (path === "/invitations/accept") return { ...metadata, page: "accept-invitation" };
@@ -63,6 +67,6 @@ export function parseDashboardLocation(href: string): DashboardSearch | undefine
     return recordPage && record ? { ...metadata, page: recordPage, ws: id, record } : undefined;
   }
   if (parts[0] !== "workspaces" || parts.length > 3) return;
-  const page = parts.length === 2 ? "overview" : (Object.entries(workspaceSegments).find(([, segment]) => segment === `/${parts[2]}`)?.[0] as Page | undefined);
+  const page = parts.length === 2 ? "overview" : (Object.entries(workspaceSegments).find(([, segment]) => segment === `/${parts[2]}`)?.[0] as Page | undefined ?? legacyWorkspaceSegments[parts[2]!]);
   return page ? { ...metadata, page, ws: id, record: query.record } : undefined;
 }

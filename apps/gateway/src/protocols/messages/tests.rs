@@ -21,13 +21,17 @@ fn parse(v: Value) -> Result<ChatRequest> {
 #[test]
 fn strict_text_tool_subset() {
     let v = json!({"model":"m","max_tokens":32,"system":[{"type":"text","text":"be brief"}],"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":[{"type":"tool_use","id":"c","name":"weather","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c","content":[{"type":"text","text":"sun"}]}]}],"tools":[{"name":"weather","input_schema":{"type":"object"}}],"tool_choice":{"type":"tool","name":"weather"}});
+    let mut labelled = v.clone();
+    labelled["metadata"] = json!({"user_id":"session-1"});
+    assert!(parse(labelled).is_ok());
     let r = parse(v).unwrap();
     assert_eq!(r.messages.len(), 4);
     assert!(r.messages[3].role == Role::Tool);
     assert_eq!(r.messages[2].tool_calls[0].arguments, "{}");
     for extra in [
         json!({"thinking":{}}),
-        json!({"metadata":{}}),
+        // metadata.user_id is a Logs session label; other metadata fields are rejected.
+        json!({"metadata":{"other":"x"}}),
         json!({"temperature":1.1}),
         json!({"max_tokens":0}),
         json!({"system":[{"type":"text","text":"x","cache_control":{"type":"ephemeral"}}]}),

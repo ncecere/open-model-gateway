@@ -352,6 +352,7 @@ impl Engine {
                 .map_err(|_| InferenceError::Busy)?,
         )));
         let deadline = Instant::now() + self.limits.request_timeout;
+        let labels = super::client::current();
         let deployments = timeout_at(
             deadline,
             self.repository.deployments(&principal, request.model()),
@@ -423,6 +424,8 @@ impl Engine {
                         provider: target.provider.clone(),
                         model: request.model().to_owned(),
                         streamed: W::STREAMED,
+                        upstream_model: super::upstream_snapshot(&target.upstream_model),
+                        client: labels.clone(),
                     },
                     &admission,
                     lease_seconds,
@@ -431,16 +434,13 @@ impl Engine {
             )
             .await
             .map_err(|_| InferenceError::Timeout)??;
-            let mut guard = ExecutionGuard {
-                repository: self.repository.clone(),
-                id: execution_id,
-                deployment_id: target.id,
+            let mut guard = ExecutionGuard::new(
+                self.repository.clone(),
+                execution_id,
+                target.id,
                 started,
-                usage: Usage::default(),
-                finished: false,
-                health_observation: true,
-                _permit: permit.clone(),
-            };
+                permit.clone(),
+            );
             let evidence_ok =
                 |u: Usage| valid_usage(u) && (!input_only || u.output_tokens == Some(0));
             let (result, invalid_body_usage) = evidence::capture(timeout_at(

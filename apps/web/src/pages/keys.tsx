@@ -161,7 +161,7 @@ export function CreateKeyDialog({ session, workspace, options, accounts, onClose
   const [extra, setExtra] = useState<BudgetDraft[]>([]), [modelMode, setModelMode] = useState<"inherit" | "selected">("inherit"), [models, setModels] = useState<string[]>([]);
   const [rates, setRates] = useState<Record<RateKey, string>>({ requests_per_minute: "", tokens_per_minute: "", concurrent_requests: "" }), [rejected, setRejected] = useState<DraftErrors>();
   const [submitted, setSubmitted] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState<unknown>(), [result, setResult] = useState<{ id: string; token: string; policy: Policy | null }>(), [copied, setCopied] = useState(false);
-  const limitText = presetChoiceText(limit).trim();
+  const limitText = presetChoiceText(limit).trim(), maxDays = owner === "service" ? 365 : session.installation.key_max_lifetime_days ?? 365;
   const budgets: BudgetDraft[] = [...(limitText ? [{ key: "primary", period, amount: limitText }] : []), ...extra];
   const draft: LimitsDraft = { ...rates, budgets };
   const parents: Parent[] = policy.data?.provenance ? [{ label: "platform", limits: limitsOf(policy.data.provenance.platform) }, { label: "workspace", limits: limitsOf(policy.data.provenance.local) }] : [];
@@ -170,7 +170,8 @@ export function CreateKeyDialog({ session, workspace, options, accounts, onClose
   const anyLimit = budgets.length > 0 || rateRows.some(r => rates[r.key].trim());
   const errors = {
     name: !name.trim() ? "Enter a name." : name.trim().length > 120 ? "Use at most 120 characters." : undefined,
-    expiry: expiry.kind === "custom" ? expiryError(expiry.text) : undefined,
+    // Personal keys follow the installation maximum (Admin › Settings › General); service keys keep 365 days.
+    expiry: (expiry.kind === "custom" ? expiryError(expiry.text) : undefined) ?? (Number(presetChoiceText(expiry).trim()) > maxDays ? `Personal keys can last at most ${maxDays} days here.` : undefined),
     account: owner === "service" && !account ? "Choose a service account." : undefined,
     models: (() => { const r = selectedModelIds(modelMode, models, options); return "error" in r ? r.error : undefined; })(),
   };
@@ -217,7 +218,7 @@ export function CreateKeyDialog({ session, workspace, options, accounts, onClose
         <FormField label="Name" error={shown(errors.name)}><Input value={name} maxLength={120} autoFocus autoComplete="off" disabled={busy} onChange={event => setName(event.target.value)} /></FormField>
         {p.manageServiceAccounts && accounts.length > 0 && <RadioGroup legend="Who is this key for?" orientation="horizontal" value={owner} disabled={busy} onValueChange={v => setOwner(v as Owner)} options={[...(p.createUserKey ? [{ value: "me" as Owner, label: "Me" }] : []), { value: "service" as Owner, label: "A service account" }]} />}
         {owner === "service" && <FormField label="Service account" error={shown(errors.account)}><NativeSelect value={account} disabled={busy} onChange={event => setAccount(event.target.value)}><option value="">Choose…</option>{accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</NativeSelect></FormField>}
-        <PresetChoice legend="Expires in" description="Keys must expire within a year. The expiry can't be changed later; rotate the key to set a new one." presets={expiryPresets.map(d => ({ value: String(d), label: d === 365 ? "1 year" : `${d} days` }))} value={expiry} onChange={setExpiry} disabled={busy} custom={{ label: "Custom expiry (days)", inputMode: "numeric", maxLength: 3, placeholder: "1–365", error: shown(errors.expiry) }} />
+        <PresetChoice legend="Expires in" description="Keys must expire within a year. The expiry can't be changed later; rotate the key to set a new one." presets={expiryPresets.filter(d => d <= maxDays).map(d => ({ value: String(d), label: d === 365 ? "1 year" : `${d} days` }))} value={expiry} onChange={setExpiry} disabled={busy} custom={{ label: "Custom expiry (days)", inputMode: "numeric", maxLength: 3, placeholder: "1–365", error: shown(errors.expiry) }} />
         <PresetChoice legend="Spending limit" description="Spent plus on hold. Workspace and platform limits still apply." presets={[{ value: "", label: "No limit" }, ...limitPresets.map(v => ({ value: v, label: `$${v}` }))]} value={limit} onChange={next => { setLimit(next); setRejected(undefined); }} disabled={busy} custom={{ label: "Custom limit (USD)", prefix: "$", inputMode: "decimal", maxLength: 32, error: shown(budgetErrors.budgets.primary) }} error={limit.kind === "preset" ? shown(budgetErrors.budgets.primary) : undefined} />
         <PeriodPills label="Reset period" value={period} onChange={next => { setPeriod(next); setRejected(undefined); }} periods={stackPeriods.filter(x => x === period || !extra.some(b => b.period === x))} showReset disabled={!limitText || busy} disabledReason="Choose a limit first." />
         {extra.map(b => <div key={b.key} className={k.extraBudget}>

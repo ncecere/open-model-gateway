@@ -95,6 +95,7 @@ impl ProviderAdapter for Fixture {
                 }),
                 output_image_variant: MeterVariant::new("1024x1024"),
                 provider_cost_microusd: None,
+                reasoning_tokens: None,
             },
         })
     }

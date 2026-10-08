@@ -27,6 +27,12 @@ GRANT SELECT ON public.installation,public.users,public.oidc_identities,
  public.inference_executions,public.governance_reservations,public.monetary_ledger,
  public.routing_policies,public.deployment_routing,public.deployment_health,public.audit_events
  TO gateway_runtime;
+-- Installation settings (0010): one seeded row; never inserted, deleted or re-keyed at runtime.
+GRANT SELECT ON public.installation_settings TO gateway_runtime;
+GRANT UPDATE(support_url,logo_url,human_key_max_lifetime_days,openrouter_data_collection,
+ request_log_retention_days,smtp_host,smtp_port,smtp_tls,smtp_username,smtp_password_ref,
+ smtp_from_address,smtp_from_name,smtp_last_test_at,smtp_last_test_ok,smtp_last_test_error,
+ updated_at,updated_by) ON public.installation_settings TO gateway_runtime;
 GRANT EXECUTE ON FUNCTION public.lock_installation(),public.workspace_model_allowed(uuid,uuid),
  public.valid_model_protocols(text[]),public.valid_i64_string(jsonb,boolean),
  public.valid_cache_pricing(jsonb),public.valid_billing_usage(jsonb),
@@ -72,7 +78,9 @@ GRANT UPDATE(revoked_at,accepted_at) ON public.workspace_invitations TO gateway_
 GRANT UPDATE(disabled_at) ON public.service_accounts TO gateway_runtime;
 -- disabled_at (0005) is reversible; revoked_at is set once and never cleared by the application.
 GRANT UPDATE(revoked_at,disabled_at) ON public.api_keys TO gateway_runtime;
-GRANT UPDATE(enabled,credential_ref) ON public.provider_connections TO gateway_runtime;
+-- Bedrock (0008) can replace its identity reference and allowlisted VPC endpoint; the
+-- profile, name and region are immutable.
+GRANT UPDATE(enabled,credential_ref,endpoint) ON public.provider_connections TO gateway_runtime;
 GRANT UPDATE(public_name,display_name,description,enabled,supported_protocols) ON public.models TO gateway_runtime;
 GRANT UPDATE(enabled) ON public.deployments TO gateway_runtime;
 GRANT UPDATE(name,description) ON public.catalogs TO gateway_runtime;
@@ -85,8 +93,11 @@ GRANT UPDATE(requests_per_minute,tokens_per_minute,concurrent_requests)
  ON public.installation_policy,public.workspace_type_policies,
  public.workspace_platform_policy_overrides,public.workspace_local_policies,public.key_policies
  TO gateway_runtime;
+-- 0009 telemetry is written at finish; client labels are cleared by detail
+-- retention. upstream_model is an admission snapshot (INSERT only).
 GRANT UPDATE(state,error_code,input_tokens,output_tokens,billing_usage,elapsed_ms,completed_at,
- public_model,provider,details_redacted_at,meter_usage,output_image_variant,provider_cost_microusd)
+ public_model,provider,details_redacted_at,meter_usage,output_image_variant,provider_cost_microusd,
+ finish_reason,time_to_first_token_ms,generation_ms,reasoning_tokens,client_session_id,client_app)
  ON public.inference_executions TO gateway_runtime;
 GRANT UPDATE(state,actual_microusd,input_tokens,output_tokens,billing_usage,cost_components,
  held_microusd,unbounded_cost,meter_usage,output_image_variant,provider_cost_microusd)

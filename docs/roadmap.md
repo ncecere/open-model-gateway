@@ -137,6 +137,7 @@ Effort is relative: **S** = narrow change; **M** = several components plus tests
 - **Value:** warn users before spending limits or expired credentials interrupt work.
 - **Scope / done:** configurable estimated-budget thresholds, upcoming key expiry and unresolved-hold age notifications; choose an initial channel (in-app, email or signed webhook). Use durable delivery, deduplication, retries, recipient authorization and delivery status.
 - **Guardrails:** separate settled estimates, holds and unpriced unknowns; thresholds must not replace enforcement. Prevent alert storms and disclosure of personal activity to org-wide recipients. Webhook destinations need egress controls.
+- **Status:** an SMTP channel exists (Admin › Settings › Email, [settings](settings.md#email)) and delivers workspace invitations best-effort (no queue or retries). No alerts are sent yet.
 
 ### R13 — Cost trends, filters and internal allocation reports · P1 · M
 
@@ -256,6 +257,7 @@ Operational follow-up: live IdP acceptance, automatic JWKS refresh, session/atte
 - [x] Key creation, one-time disclosure, bounded expiry, atomic rotation, revocation.
 - [x] Service-account lifecycle; disabling a member/account permanently revokes affected keys.
 - [x] Execution history, thirty-day known-token totals and explicit unknown-usage counts.
+- [x] Logs (2026-10-08): per-attempt telemetry (finish reason, time to first token, generation time, reasoning tokens, upstream model snapshot) and optional client session/app labels; request, generation and session views with summary metrics in each workspace and on Admin (Team/Project only, never personal rows). Provider-reported response model ids are not captured yet; reasoning tokens are reported only by OpenAI-compatible usage details.
 - [x] Backend APIs for the UX program (2026-10-08): own-scope Home summary and keys, request logs with attempt timelines, key statistics and reversible key disablement, usage overview/explore analytics, effective-access layers with per-model reasons, member picker and catalog filters. Browser UI for them is in progress.
 - [x] Transactional, sanitized mutation audit records; personal audit privacy.
 - [x] Real PostgreSQL isolation and concurrent lifecycle tests.

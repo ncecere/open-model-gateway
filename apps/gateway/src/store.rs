@@ -52,6 +52,7 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "deployment_routing",
     "deployment_health",
     "audit_events",
+    "installation_settings",
 ];
 
 fn lineage_matches(

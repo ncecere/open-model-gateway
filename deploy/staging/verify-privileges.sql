@@ -19,7 +19,8 @@ DO $$ DECLARE r record; t text; BEGIN
  IF has_column_privilege('gateway_runtime','public.api_keys','governance_key_id','UPDATE') THEN RAISE EXCEPTION 'mutable credential budget lineage'; END IF;
  IF has_any_column_privilege('gateway_runtime','public.policy_budgets','UPDATE') OR has_table_privilege('gateway_runtime','public.policy_budgets','TRUNCATE') THEN RAISE EXCEPTION 'budget rows rewritable in place'; END IF;
  IF has_table_privilege('gateway_runtime','public.key_model_restrictions','UPDATE,DELETE,TRUNCATE') OR has_any_column_privilege('gateway_runtime','public.key_model_restrictions','UPDATE') OR has_any_column_privilege('gateway_runtime','public.key_model_selections','UPDATE') THEN RAISE EXCEPTION 'mutable key restriction provenance'; END IF;
- FOREACH t IN ARRAY ARRAY['workload_kind','cost_center_id','cost_center_name','cost_center_code','workspace_id','api_key_id','deployment_id'] LOOP
+ IF has_table_privilege('gateway_runtime','public.installation_settings','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.installation_settings','singleton','UPDATE') THEN RAISE EXCEPTION 'installation settings row replaceable'; END IF;
+ FOREACH t IN ARRAY ARRAY['workload_kind','cost_center_id','cost_center_name','cost_center_code','workspace_id','api_key_id','deployment_id','upstream_model','root_request_id','attempt_number','streamed'] LOOP
   IF has_column_privilege('gateway_runtime','public.inference_executions',t,'UPDATE') THEN RAISE EXCEPTION 'mutable admission attribution: %',t; END IF;
  END LOOP;
  FOR t IN SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename<>'_sqlx_migrations' LOOP
@@ -91,6 +92,14 @@ BEGIN
  IF NOT workspace_model_allowed(ws,m) OR EXISTS(SELECT FROM key_model_selections WHERE workspace_id=ws) THEN RAISE EXCEPTION 'direct access/key resurrection invariant'; END IF;
  INSERT INTO provider_connections(id,name,provider,credential_ref,endpoint) VALUES(pc,'Rollback local','openai_compatible','none','http://127.0.0.1:19091/v1');
  INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model) VALUES(d,m,pc,'disabled-probe');
+ -- Bedrock identity modes (0008): reference shapes, identity/endpoint replacement, immutable region.
+ INSERT INTO provider_connections(id,name,provider,credential_ref,region) VALUES(gen_random_uuid(),'Rollback Bedrock','bedrock','aws:role:arn:aws:iam::123456789012:role/gateway/bedrock;external_id=probe-external;session_name=gateway-probe','us-east-1');
+ UPDATE provider_connections SET credential_ref='aws:profile:bedrock-prod',endpoint='https://vpce-0probe.bedrock-runtime.us-east-1.vpce.amazonaws.com' WHERE name='Rollback Bedrock';
+ UPDATE provider_connections SET credential_ref='aws:default',endpoint=NULL WHERE name='Rollback Bedrock';
+ BEGIN UPDATE provider_connections SET credential_ref='aws:role:not-an-arn' WHERE name='Rollback Bedrock'; RAISE EXCEPTION 'aws reference shape constraint absent'; EXCEPTION WHEN check_violation THEN NULL; END;
+ BEGIN UPDATE provider_connections SET endpoint='http://bedrock.internal' WHERE name='Rollback Bedrock'; RAISE EXCEPTION 'bedrock https endpoint constraint absent'; EXCEPTION WHEN check_violation THEN NULL; END;
+ BEGIN UPDATE provider_connections SET credential_ref='aws:default' WHERE id=pc; RAISE EXCEPTION 'aws reference outside bedrock allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+ BEGIN UPDATE provider_connections SET region='eu-west-1' WHERE name='Rollback Bedrock'; RAISE EXCEPTION 'connection region rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version,cache_pricing) VALUES(price,d,1,1,100,10,2,rates);
  -- Pricing v3: immutable price lines and per-meter ceilings.
  INSERT INTO deployment_prices(id,deployment_id,input_token_limit,output_token_limit,pricing_version,price_lines,max_units) VALUES(gen_random_uuid(),d,100,10,3,'[{"meter":"input_tokens","microusd_per_batch":"100000","batch":1000000,"unit_label":"/M tokens","sku_label":"Input"},{"meter":"output_images","microusd_per_batch":"20500","batch":1,"unit_label":"/image","sku_label":"Image","variant":"768"},{"meter":"search_units","not_applicable":true}]','{"output_images":"4"}');
@@ -101,6 +110,14 @@ BEGIN
  UPDATE inference_executions SET state='succeeded',meter_usage='{"output_images":"1","input_characters":null,"input_audio_seconds_ms":null,"output_audio_seconds_ms":null,"search_units":null,"requests":"1"}',output_image_variant='768',provider_cost_microusd=20500 WHERE id=e;
  UPDATE governance_reservations SET state='unknown',meter_usage=(SELECT meter_usage FROM inference_executions WHERE id=e),output_image_variant='768',provider_cost_microusd=20500 WHERE execution_id=e;
  INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd,meter_usage,output_image_variant,provider_cost_microusd) SELECT gen_random_uuid(),e,'unknown',1,meter_usage,output_image_variant,provider_cost_microusd FROM inference_executions WHERE id=e;
+ -- Request telemetry (0009): admission snapshot + labels, finish telemetry, retention clearing.
+ INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,attempt_number,upstream_model,client_session_id,client_app) VALUES(gen_random_uuid(),ws,k,d,'rollback','openai_compatible',true,'started',e,2,'disabled-probe','probe session','Probe app');
+ UPDATE inference_executions SET finish_reason='stop',time_to_first_token_ms=1,generation_ms=2,reasoning_tokens=0 WHERE root_request_id=e;
+ UPDATE inference_executions SET client_session_id=NULL,client_app=NULL,details_redacted_at=now() WHERE root_request_id=e AND client_session_id IS NOT NULL;
+ PERFORM count(*) FROM inference_executions WHERE workspace_id=ws AND client_session_id='probe session';
+ BEGIN UPDATE inference_executions SET upstream_model='rewrite' WHERE id=e; RAISE EXCEPTION 'upstream snapshot rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN UPDATE inference_executions SET finish_reason='bogus' WHERE id=e; RAISE EXCEPTION 'finish reason constraint absent'; EXCEPTION WHEN check_violation THEN NULL; END;
+ BEGIN UPDATE inference_executions SET client_session_id=' padded' WHERE id=e; RAISE EXCEPTION 'session label constraint absent'; EXCEPTION WHEN check_violation THEN NULL; END;
  -- Platform overview aggregates are read-only over already-granted relations.
  PERFORM (SELECT count(*) FROM effective_platform_roles),(SELECT count(*) FROM oidc_group_mappings WHERE enabled),(SELECT count(*) FILTER(WHERE kind='team') FROM workspace_type_catalogs),(SELECT count(e2.id)::text||coalesce(sum(r.actual_microusd),0)::text FROM inference_executions e2 LEFT JOIN governance_reservations r ON r.execution_id=e2.id WHERE e2.started_at>=statement_timestamp()-interval '7 days');
  INSERT INTO audit_events(id,actor_user_id,workspace_id,action,resource_type) VALUES(gen_random_uuid(),u,ws,'staging.rollback_probe','workspace');
@@ -121,5 +138,14 @@ BEGIN
  BEGIN UPDATE api_keys SET governance_key_id=k WHERE id=k; RAISE EXCEPTION 'credential budget lineage rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  BEGIN TRUNCATE TABLE monetary_ledger; RAISE EXCEPTION 'ledger truncate allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  BEGIN CREATE TABLE public.runtime_probe_forbidden(i integer); RAISE EXCEPTION 'runtime DDL allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ -- Installation settings (0010): Admin > Settings writes, references only, bounded values.
+ PERFORM support_url FROM installation_settings WHERE singleton FOR NO KEY UPDATE;
+ UPDATE installation SET name='Rollback installation' WHERE singleton;
+ UPDATE installation_settings SET support_url='https://help.example.invalid',logo_url=NULL,human_key_max_lifetime_days=30,openrouter_data_collection='allow',request_log_retention_days=90,smtp_host='127.0.0.1',smtp_port=2525,smtp_tls='none',smtp_username='relay',smtp_password_ref='env:SMTP_PASSWORD',smtp_from_address='gateway@example.invalid',smtp_from_name='Gateway',smtp_last_test_at=now(),smtp_last_test_ok=false,smtp_last_test_error='connection',updated_at=now(),updated_by=u WHERE singleton;
+ BEGIN UPDATE installation_settings SET smtp_password_ref='plain-secret' WHERE singleton; RAISE EXCEPTION 'smtp password stored as a value'; EXCEPTION WHEN check_violation THEN NULL; END;
+ BEGIN UPDATE installation_settings SET request_log_retention_days=1 WHERE singleton; RAISE EXCEPTION 'retention bound absent'; EXCEPTION WHEN check_violation THEN NULL; END;
+ BEGIN UPDATE installation_settings SET logo_url='http://logo.example.invalid/x.png' WHERE singleton; RAISE EXCEPTION 'https logo constraint absent'; EXCEPTION WHEN check_violation THEN NULL; END;
+ BEGIN DELETE FROM installation_settings; RAISE EXCEPTION 'settings row removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN INSERT INTO installation_settings(singleton) VALUES(true); RAISE EXCEPTION 'settings row insert allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
 END $$;
 ROLLBACK;

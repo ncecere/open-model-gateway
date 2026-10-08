@@ -1,6 +1,8 @@
 use super::*;
 #[path = "tests/audit_filters.rs"]
 mod audit_filters;
+#[path = "tests/bedrock_connections.rs"]
+mod bedrock_connections;
 #[path = "tests/catalog_read.rs"]
 mod catalog_read;
 

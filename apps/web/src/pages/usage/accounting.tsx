@@ -11,6 +11,7 @@ import { formatMicroUsd } from "../../lib/governance";
 import { billingLabels, formatCount } from "../../lib/reports";
 import { countNoun, formatAudio, meterComponentLabels, meterUsageLabels } from "../../lib/pricing";
 import { healthLabel } from "../../lib/people";
+import { rateTexts, type UsageOverview } from "../../lib/usage";
 import { ErrorNotice, Stack, Table, useApi } from "../../components/ui";
 import { Card } from "../../components/ui/card/card";
 import { Disclosure } from "../../components/ui/disclosure/disclosure";
@@ -66,12 +67,23 @@ export function AccountingReport({ report }: { report: CostReport }) {
     {report.breakdowns_truncated && <p className={s.note}>Breakdowns are limited to 100 entries per dimension.</p>}
   </Stack>;
 }
-/** Collapsed "Accounting details": in-place disclosure; the cost report loads only when opened. */
-export function AccountingDetails({ path, defaultOpen = false }: { path: string; defaultOpen?: boolean }) {
+/**
+ * Collapsed "Accounting details": in-place disclosure; the cost report loads only when opened. `rates` (the overview)
+ * adds the period's cache hit rate and cost per 1M tokens on top (they are no longer tiles).
+ */
+export function AccountingDetails({ path, defaultOpen = false, rates }: { path: string; defaultOpen?: boolean; rates?: Pick<UsageOverview, "tiles"> }) {
   const [open, setOpen] = useState(defaultOpen);
-  return <Disclosure title="Accounting details" summary="Health, coverage, cache categories, unit meters, provider-reported cost, legacy pricing" open={open} onOpenChange={setOpen}>
-    {open && <LoadedAccounting path={path} />}
+  return <Disclosure title="Accounting details" summary={`${rates ? "Cache hit rate, cost per 1M tokens, health" : "Health"}, coverage, cache categories, unit meters, provider-reported cost, legacy pricing`} open={open} onOpenChange={setOpen}>
+    {open && <Stack gap={6}>{rates && <PeriodRates overview={rates} />}<LoadedAccounting path={path} /></Stack>}
   </Disclosure>;
+}
+/** The period's rates with the same filters as the tiles: exact, Unknown never $0. */
+export function PeriodRates({ overview }: { overview: Pick<UsageOverview, "tiles"> }) {
+  const r = rateTexts(overview);
+  return <Card title="Period rates" titleAs="h3"><dl className={s.details}>
+    <dt>Cache hit rate</dt><dd>{r.cacheHit}<span className={s.secondary}>Share of input tokens read from cache</span></dd>
+    <dt>Cost per 1M tokens</dt><dd><span title={r.blended.exact !== r.blended.text ? `${r.blended.exact} (exact)` : undefined}>{r.blended.text}</span><span className={s.secondary}>Final costs over the tokens of the same requests</span></dd>
+  </dl></Card>;
 }
 function LoadedAccounting({ path }: { path: string }) {
   const report = useApi<CostReport>(path);

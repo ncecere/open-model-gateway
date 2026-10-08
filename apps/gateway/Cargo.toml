@@ -18,6 +18,7 @@ aws-sdk-bedrockruntime = "1"
 aws-smithy-types = { version = "1", features = ["http-body-1-x"] }
 aws-smithy-runtime-api = { version = "1", features = ["client"] }
 aws-smithy-eventstream = "=0.60.18"
+aws-smithy-async = "1"
 http-body = "1"
 http-body-util = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -27,6 +28,8 @@ axum = "0.8"
 clap = { version = "4", features = ["derive", "env"] }
 dotenvy = "0.15"
 hex = "0.4"
+# SMTP delivery (invitations, alerts): rustls, async, one connection per message (no pool).
+lettre = { version = "=0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 percent-encoding = "2"
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }

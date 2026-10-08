@@ -11,7 +11,9 @@ fn strict_stateless_subset() {
         json!({"previous_response_id":"x"}),
         json!({"background":false}),
         json!({"reasoning":{}}),
-        json!({"metadata":{}}),
+        // metadata/user are Logs session labels only: string pairs, else rejected.
+        json!({"metadata":{"k":1}}),
+        json!({"user":7}),
         json!({"tools":[{"type":"web_search"}]}),
         json!({"text":{"format":{"type":"json_object"}}}),
     ] {
@@ -25,6 +27,9 @@ fn strict_stateless_subset() {
     assert!(
         parse(json!({"model":"m","input":"hi","store":false,"text":{"format":{"type":"text"}}}))
             .is_ok()
+    );
+    assert!(
+        parse(json!({"model":"m","input":"hi","user":"u","metadata":{"session_id":"s"}})).is_ok()
     );
 }
 #[test]

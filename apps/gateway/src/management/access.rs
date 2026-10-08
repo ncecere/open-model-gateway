@@ -68,12 +68,16 @@ async fn access(
     key: Option<Uuid>,
     model: Option<Uuid>,
 ) -> ApiResult {
-    let (mut tx, a) = resources::workspace_tx(&s, &u, ws).await?;
+    // Platform readers may inspect a disabled Team/Project read-only; keys stay member-only.
+    let (mut tx, a) = match key {
+        Some(_) => resources::workspace_tx(&s, &u, ws).await?,
+        None => resources::workspace_read_tx(&s, &u, ws).await?,
+    };
     let lineage = match key {
         Some(k) => Some(governance::lineage(&mut tx, &u, ws, k, a.admin || a.owner).await?),
         None => None,
     };
-    let l = governance::layers(&mut tx, ws).await?;
+    let l = governance::layers_with(&mut tx, ws, a.disabled).await?;
     let installation = governance::installation_limits(&mut tx).await?;
     let k = match lineage {
         Some(lineage) => Some(governance::key_limits(&mut tx, ws, lineage).await?),
@@ -97,6 +101,15 @@ async fn access(
         "type_default"
     };
     let mut global: Vec<Reason> = Vec::new();
+    if a.disabled {
+        // A disabled workspace refuses all new inference, whatever its configuration allows.
+        global.push(Reason {
+            code: "workspace_disabled",
+            layer: "platform",
+            period: None,
+            blocking: true,
+        });
+    }
     let mut scopes: Vec<(&'static str, &governance::Limits, Option<Uuid>)> = vec![
         (platform_layer, &l.platform, None),
         ("workspace", &l.local, None),
@@ -207,7 +220,7 @@ async fn access(
         },
     ];
     Ok(Json(
-        json!({"workspace_id":ws,"key_id":key,"layers":layers,"summary":summary(4),"models":models,"truncated":truncated}),
+        json!({"workspace_id":ws,"key_id":key,"workspace_disabled":a.disabled,"layers":layers,"summary":summary(4),"models":models,"truncated":truncated}),
     ))
 }
 pub(super) async fn workspace_access(

@@ -67,16 +67,14 @@ export const protocolOptions: { value: ModelProtocol; label: string; group: stri
   { value: "rerank", label: "Rerank", group: "Rerank" },
   { value: "systemone", label: "System One decisions", group: "System One decisions" },
 ];
-/** The Add model picker: one card per workload, with what each one means. */
-export const workloadGroups: { workload: WorkloadKind; title: string; help: string; protocols: typeof protocolOptions }[] = ([
-  ["generation", "Text generation", "Chat Completions, Responses and Messages can be combined on one model."],
-  ["embeddings", "Embeddings", "Input-only vectors (POST /v1/embeddings). Cannot be combined with other workloads."],
-  ["images", "Images", "Image generation (POST /v1/images/generations), priced per image and/or token."],
-  ["audio_transcriptions", "Speech to text", "Audio transcription uploads (POST /v1/audio/transcriptions), priced per second, minute or hour of audio."],
-  ["audio_speech", "Text to speech", "Speech synthesis (POST /v1/audio/speech), priced per million characters or per minute of audio."],
-  ["rerank", "Rerank", "Document reranking (POST /v1/rerank), priced per search unit or token."],
-  ["systemone", "System One decisions", "TypeSafe System One typed decisions (POST /v1/systemone), priced per token."],
-] as const).map(([workload, title, help]) => ({ workload, title, help, protocols: protocolOptions.filter(o => o.group === title) }));
+/**
+ * The Add model Type choices, short labels only (API paths and units live in docs/protocol-matrix.md and on the
+ * model page). Text protocols combine; every other type is one protocol.
+ */
+export const workloadGroups: { workload: WorkloadKind; label: string; protocols: typeof protocolOptions }[] = ([
+  ["generation", "Text"], ["embeddings", "Embeddings"], ["images", "Images"], ["audio_transcriptions", "Speech to text"],
+  ["audio_speech", "Text to speech"], ["rerank", "Rerank"], ["systemone", "System One"],
+] as const).map(([workload, label]) => ({ workload, label, protocols: protocolOptions.filter(o => workloadOf([o.value]) === workload) }));
 const protocolNames: Record<string, string> = { images: "Image generation", audio_transcriptions: "Speech to text", audio_speech: "Text to speech", rerank: "Rerank", systemone: "System One decisions" };
 export const protocolLabel = (p: string) => protocolNames[p] ?? protocolOptions.find(o => o.value === p)?.label ?? p;
 const generationProtocols = new Set(["chat_completions", "responses", "messages"]);
@@ -98,12 +96,14 @@ export function toggleProtocol(selected: string[], protocol: string, checked: bo
 }
 export type SetupChoices = { connections: { id: string; name: string; provider?: string; enabled?: boolean }[]; catalogs: { id: string; name: string }[] };
 /**
- * Add model defaults that follow the connection's profile (review #23): the protocol a new text model starts with
- * (Messages for Anthropic, Chat Completions elsewhere; the single protocol of any other workload).
+ * Add model defaults that follow the connection's profile (review #23): the protocols a new text model starts with
+ * (Anthropic and Bedrock: Messages + Chat Completions; OpenAI: Chat Completions + Responses; others: Chat Completions),
+ * or the single protocol of any other workload. Always in protocolOptions order.
  */
 export function defaultProtocols(workload: WorkloadKind, profile?: string): ModelProtocol[] {
   if (workload !== "generation") return [workloadGroups.find(g => g.workload === workload)?.protocols[0]?.value ?? "chat_completions"];
-  return profile === "anthropic" ? ["messages"] : ["chat_completions"];
+  const wanted: ModelProtocol[] = profile === "anthropic" || profile === "bedrock" ? ["chat_completions", "messages"] : profile === "openai" ? ["chat_completions", "responses"] : ["chat_completions"];
+  return wanted.filter(p => protocolSupported(p, profile));
 }
 /** An example upstream model ID in the connection provider's own format, per workload. */
 export function upstreamPlaceholder(profile?: string, workload: WorkloadKind = "generation"): string {
@@ -119,24 +119,44 @@ export function upstreamPlaceholder(profile?: string, workload: WorkloadKind = "
   const table = workload === "generation" ? text : byWorkload[workload] ?? text;
   return table[profile ?? "default"] ?? table.default ?? "gpt-4.1-mini";
 }
+/** An example display name matching upstreamPlaceholder, per workload. */
+export function displayPlaceholder(profile?: string, workload: WorkloadKind = "generation"): string {
+  const byWorkload: Partial<Record<WorkloadKind, Record<string, string>>> = {
+    embeddings: { ollama: "Nomic Embed Text", openai: "Text Embedding 3 Small", openrouter: "Text Embedding 3 Small", default: "BGE-M3" },
+    images: { default: "GPT Image 1" },
+    audio_transcriptions: { openai: "GPT-4o Transcribe", default: "Whisper" },
+    audio_speech: { default: "GPT-4o mini TTS" },
+    rerank: { default: "Rerank 3.5" },
+    systemone: { default: "Jev" },
+  };
+  const text: Record<string, string> = { openai: "GPT-4.1 mini", openrouter: "GPT-4.1 mini", anthropic: "Claude Sonnet 4.5", bedrock: "Claude 3.5 Sonnet", ollama: "Llama 3.1 8B", default: "Llama 3.1 8B Instruct" };
+  const table = workload === "generation" ? text : byWorkload[workload] ?? text;
+  return table[profile ?? "default"] ?? table.default;
+}
+/** Whether a connection profile's adapter implements a client protocol (no or unrecognised profile: assume yes). */
+export function protocolSupported(protocol: ModelProtocol, profile?: string): boolean {
+  if (!profile || !Object.values(protocolProfiles).some(list => list.includes(profile))) return true;
+  return protocolProfiles[protocol].includes(profile);
+}
 /** Whether a connection profile's adapter can carry any protocol of the workload (unknown profile: assume yes). */
-export const workloadSupported = (workload: WorkloadKind, profile?: string) => !profile || (workloadGroups.find(g => g.workload === workload)?.protocols ?? []).some(p => protocolProfiles[p.value].includes(profile));
+export const workloadSupported = (workload: WorkloadKind, profile?: string) => (workloadGroups.find(g => g.workload === workload)?.protocols ?? []).some(p => protocolSupported(p.value, profile));
 export function setupSourceFields(choices: SetupChoices, profile?: string, workload: WorkloadKind = "generation"): Field[] {
   return [
-    { name: "provider_connection_id", label: "Connection", type: "select", required: true, options: choices.connections.map(c => ({ value: c.id, label: `${c.name}${c.enabled === false ? " · disabled" : ""}` })), help: "Where requests for this model are sent. A disabled connection keeps the route from serving." },
-    { name: "upstream_model", label: "Upstream model ID", required: true, maxLength: 512, placeholder: upstreamPlaceholder(profile, workload), help: "The model identifier the connection's provider expects." },
-    { name: "supported_protocols", label: "Client protocols", type: "checkboxes", required: true, maxSelections: 3, options: protocolOptions, validate: protocolSetError, help: "Certified client APIs, grouped by workload. Serving also requires the connection's profile to support the protocol; embeddings are input-only." },
+    { name: "provider_connection_id", label: "Connection", type: "select", required: true, options: choices.connections.map(c => ({ value: c.id, label: `${c.name}${c.enabled === false ? " · disabled" : ""}` })) },
+    { name: "upstream_model", label: "Upstream model ID", required: true, maxLength: 512, placeholder: upstreamPlaceholder(profile, workload) },
+    { name: "supported_protocols", label: "Protocols", type: "checkboxes", required: true, maxSelections: 3, options: protocolOptions, validate: protocolSetError },
   ];
 }
-export function setupIdentityFields(): Field[] {
+export function setupIdentityFields(profile?: string, workload: WorkloadKind = "generation"): Field[] {
   return [
-    { name: "display_name", label: "Display name", required: true, maxLength: 120 },
-    { name: "public_name", label: "API model name", required: true, maxLength: 200, help: "What clients send as model. Follows the upstream model ID until you edit it.", validate: v => API_NAME_PATTERN.test(v) ? undefined : "Use letters, digits, slash, hyphen, underscore, dot or colon." },
-    { name: "description", label: "Description", type: "textarea", maxLength: 2000 },
+    { name: "display_name", label: "Display name", required: true, maxLength: 120, placeholder: displayPlaceholder(profile, workload) },
+    // The one hint on the page: the name is easy to confuse with the display name or the upstream ID.
+    { name: "public_name", label: "API model name", required: true, maxLength: 200, placeholder: apiNameFrom(upstreamPlaceholder(profile, workload)), help: "What clients send as model.", validate: v => API_NAME_PATTERN.test(v) ? undefined : "Use letters, digits, slash, hyphen, underscore, dot or colon." },
+    { name: "description", label: "Description", type: "textarea", maxLength: 2000, placeholder: "What it's good for" },
   ];
 }
 export function setupAvailabilityFields(choices: SetupChoices): Field[] {
-  return [{ name: "catalog_ids", label: "Catalogs", type: "checkboxes", maxSelections: 200, options: choices.catalogs.map(c => ({ value: c.id, label: c.name })), help: "Workspaces see the model through the catalogs available to them. Leave all unchecked to keep it unoffered for now." }];
+  return [{ name: "catalog_ids", label: "Catalogs", type: "checkboxes", maxSelections: 200, options: choices.catalogs.map(c => ({ value: c.id, label: c.name })) }];
 }
 /** Every Field-based input. Pricing is a v3 line draft (lib/pricing.ts), validated separately. */
 export function setupFields(choices: SetupChoices, _values?: Values): Field[] {

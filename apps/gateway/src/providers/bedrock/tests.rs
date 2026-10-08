@@ -1,4 +1,6 @@
 use super::*;
+#[path = "auth_tests.rs"]
+mod auth_tests;
 use axum::{
     Router,
     body::{Body, Bytes},

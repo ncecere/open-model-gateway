@@ -38,6 +38,7 @@ import { TypeTabs } from "../components/templates/type-tabs";
 import { ViewDataTable, tableViewFromSearch, tableViewToSearch } from "../components/templates/table-view";
 import { ConnectionNames, ReadinessBadge, readinessNote, useServerPolicy } from "./catalog";
 import { notServing } from "../lib/home";
+import { ModelHeadlinePrice, useRoutePrices, type RoutePrice } from "./pricing-overview";
 import { addModelsAction } from "./workspace";
 import { ActionMenu } from "../components/templates/action-menu";
 import { LayoutList, Table2 } from "lucide-react";
@@ -120,11 +121,11 @@ const joined = (v: FilterValues[string]) => Array.isArray(v) && v.length ? v.joi
 const first = (v: FilterValues[string]) => Array.isArray(v) ? v[0] : undefined;
 /** Facet values from the URL and back. Status is the single `enabled` key. */
 function facetValues(search: DashboardSearch): FilterValues {
-  return { connections: search.connections ? csv(search.connections) : search.connection ? [search.connection] : [], price: search.min_price || search.max_price ? [search.min_price ?? "", search.max_price ?? ""] : [], policy: csv(search.policy), readiness: csv(search.readiness), enabled: search.enabled ? [search.enabled] : [], deprecated: search.deprecated ? ["hide"] : [], eligibility: csv(search.eligibility) };
+  return { connections: search.connections ? csv(search.connections) : search.connection ? [search.connection] : [], price: search.min_price || search.max_price ? [search.min_price ?? "", search.max_price ?? ""] : [], policy: csv(search.policy), readiness: csv(search.readiness), enabled: search.enabled ? [search.enabled] : [], deprecated: search.deprecated ? ["hide"] : [], eligibility: csv(search.eligibility), pricing: search.pricing ? ["unpriced"] : [] };
 }
 function facetSearch(v: FilterValues): Partial<DashboardSearch> {
   const enabled = first(v.enabled), price = Array.isArray(v.price) ? v.price : [];
-  return { connections: joined(v.connections), connection: undefined, min_price: price[0]?.trim() || undefined, max_price: price[1]?.trim() || undefined, policy: joined(v.policy), readiness: joined(v.readiness), enabled: enabled === "true" || enabled === "false" ? enabled : undefined, deprecated: first(v.deprecated) === "hide" ? "hide" : undefined, eligibility: joined(v.eligibility) };
+  return { connections: joined(v.connections), connection: undefined, min_price: price[0]?.trim() || undefined, max_price: price[1]?.trim() || undefined, policy: joined(v.policy), readiness: joined(v.readiness), enabled: enabled === "true" || enabled === "false" ? enabled : undefined, deprecated: first(v.deprecated) === "hide" ? "hide" : undefined, eligibility: joined(v.eligibility), pricing: first(v.pricing) === "unpriced" ? "unpriced" : undefined };
 }
 /** Type tabs: counts only when known; a type with no models at all is hidden (except All and the selected one). */
 export function typeTabItems(counts: Record<string, number> | null, selected: string | undefined, present?: Record<string, number>) {
@@ -137,26 +138,37 @@ const readinessOptions: { value: Readiness["state"]; label: string }[] = (["read
 // Admin › Models
 // ---------------------------------------------------------------------------
 type AdminRow = CatalogModel & { workload: WorkloadKind };
+/** Enabled routes without a price (their usage is recorded with unknown cost); undefined when readiness is unknown. */
+export const unpricedRoutes = (m: Pick<CatalogModel, "readiness">) => m.readiness ? Math.max(0, m.readiness.enabled_routes - m.readiness.priced_enabled_routes) : undefined;
+export const isUnpricedModel = (m: Pick<CatalogModel, "readiness">) => (unpricedRoutes(m) ?? 0) > 0;
+/** "Unpriced" next to a model with an enabled route that has no price. */
+export function UnpricedBadge({ model }: { model: Pick<CatalogModel, "readiness"> }) { const n = unpricedRoutes(model); return n ? <BitopBadge size="sm" tone="warning" dot title={`${n} enabled route${n === 1 ? " has" : "s have"} no price; cost is recorded as unknown`}>Unpriced</BitopBadge> : null; }
 /** Least-used facets: behind "More filters" so the row fits one line at 1440px. */
 export const adminMoreFacets = ["policy", "readiness", "enabled", "deprecated"];
 export function Models({ session }: { session: Session }) {
   const [search, go] = useCatalogSearch("models"), allowed = session.capabilities.platform_read;
   const connections = useChoices<Provider>(`${platformPath}/providers`, allowed), policy = useServerPolicy(session);
   const queries = useChoicesMany<CatalogModel>(catalogQueryPaths(search), allowed);
+  // Route prices only for the Table view's Price column (one request per route, like the former Pricing page).
+  const table = search.layout === "table", routePrices = useRoutePrices(allowed && table);
   if (!allowed) return <Heading title="Access not available" />;
   const failed = queries.find(q => q.isError), loading = queries.some(q => q.isPending);
   const rows: AdminRow[] = mergeById(queries.map(q => q.data)).map(r => ({ ...r, workload: modelWorkload(r) }));
   const filters: CatalogFilters = { connections: search.connections ? csv(search.connections) : search.connection ? [search.connection] : undefined, enabled: search.enabled, readiness: csv(search.readiness) as Readiness["state"][], minPrice: usdPerMillionFilter(search.min_price), maxPrice: usdPerMillionFilter(search.max_price) };
   const sort = search.sort ?? "name", type = search.type;
-  const filtered = sortCatalog(filterCatalog(rows, filters, policy), sort), counts = typeCounts(filtered);
+  // "Unpriced only" (the former Admin › Pricing page) is applied here, from each model's route readiness.
+  const unpricedOnly = search.pricing === "unpriced", priced = (list: AdminRow[]) => unpricedOnly ? list.filter(isUnpricedModel) : list;
+  const filtered = sortCatalog(priced(filterCatalog(rows, filters, policy)), sort), counts = typeCounts(filtered);
   const ofType = (list: AdminRow[]) => type ? list.filter(r => r.workload === type) : list;
   const shown = ofType(filtered);
-  const without = (key: keyof CatalogFilters) => ofType(filterCatalog(rows, { ...filters, [key]: undefined }, policy));
+  const without = (key: keyof CatalogFilters) => ofType(priced(filterCatalog(rows, { ...filters, [key]: undefined }, policy)));
+  const byPricing = ofType(filterCatalog(rows, filters, policy));
   const byConnection = without("connections"), byReadiness = without("readiness"), byStatus = without("enabled");
   // Compact facets: multi-select popovers (with counts) for the longer lists, segmented toggles for the short ones.
   const facets: ToolbarFacet[] = [
     { id: "connections", label: "Connection", type: "select", multiple: true, placeholder: "Any connection", options: (connections.data ?? []).map(c => ({ value: c.id, label: c.name, icon: <ProviderIcon profile={c.provider} size="sm" /> })) },
     priceFacet,
+    { id: "pricing", label: "Pricing", type: "toggle", allLabel: "All", options: [{ value: "unpriced", label: "Unpriced only" }] },
     { id: "policy", label: "Data collection", type: "toggle", multiple: true, allLabel: "All", options: [{ value: "deny", label: "Denied" }, { value: "allow", label: "Allowed" }, { value: "unknown", label: "Unknown" }] },
     { id: "readiness", label: "Readiness", type: "select", multiple: true, placeholder: "Any readiness", options: readinessOptions },
     { id: "enabled", label: "Status", type: "toggle", allLabel: "All", options: [{ value: "true", label: "Enabled" }, { value: "false", label: "Disabled" }] },
@@ -167,13 +179,14 @@ export function Models({ session }: { session: Session }) {
     connections: Object.fromEntries((connections.data ?? []).map(c => [c.id, countBy(byConnection, r => !!r.readiness?.connections.some(x => x.id === c.id))])),
     readiness: Object.fromEntries(readinessOptions.map(o => [o.value, countBy(byReadiness, r => modelReadiness(r, policy).state === o.value)])),
     enabled: { true: countBy(byStatus, r => r.enabled), false: countBy(byStatus, r => !r.enabled) },
+    pricing: { unpriced: countBy(byPricing, isUnpricedModel) },
   };
   // Unknown while loading or after a load error: no counts, never a fabricated 0.
   const known = !loading && !failed, tabs = typeTabItems(known ? counts : null, type, typeCounts(rows));
   return <Stack gap={6} className={s.page}>
     <Heading title="Models" description="Models your users can call. Each model sends requests through one or more routes; workspaces get models from catalogs." actions={session.capabilities.platform_write && <Button render={<ResourceLink search={{ page: "model-new", connection: filters.connections?.length === 1 ? filters.connections[0] : undefined }} />}><Plus aria-hidden />Add model</Button>} />
     <TypeTabs label="Model type" items={tabs} value={type ?? "all"} onChange={v => go({ type: v === "all" ? undefined : v as DashboardSearch["type"] })} />
-    <FilterToolbar search={searchBox(search, go)} facets={facets} more={adminMoreFacets} counts={facetCounts} values={facetValues(search)} onChange={v => go(facetSearch(v))} note={priceNote(search)}
+    <FilterToolbar search={searchBox(search, go)} facets={facets} more={adminMoreFacets} counts={facetCounts} values={facetValues(search)} onChange={v => go(facetSearch(v))} note={priceNote(search) ?? (search.pricing ? "Unpriced: an enabled route has no price, so its usage is recorded with unknown cost. Open the model to publish a price on its route." : undefined)}
       end={<CatalogActions search={search} go={go} />} />
     <div className={m.results}>
       {connections.isError && !failed && <ErrorNotice error={connections.error} retry={() => void connections.refetch()} />}
@@ -181,7 +194,7 @@ export function Models({ session }: { session: Session }) {
       {failed ? <ErrorNotice error={failed.error} retry={() => queries.forEach(q => void q.refetch())} />
         : loading ? <p role="status">Loading models…</p>
         : !shown.length ? <EmptyState size="compact" title={rows.length ? "No models match" : "No models yet"} description={rows.length ? "Change the type or clear filters." : "Add a model from a connection, then offer it through a catalog."} action={rows.length ? <Button variant="secondary" onClick={() => go({ ...facetSearch({}), q: undefined, type: undefined })}>Clear filters</Button> : undefined} />
-        : search.layout === "table" ? <AdminTable rows={shown} search={search} go={go} policy={policy} profiles={connections.data} />
+        : table ? <AdminTable rows={shown} search={search} go={go} policy={policy} profiles={connections.data} prices={routePrices.routes.isError ? undefined : routePrices.byModel} pricesLoading={routePrices.routes.isPending} />
         : <ul className={m.cards} aria-label="Models">{shown.map(row => <AdminCard key={row.id} model={row} policy={policy} profiles={connections.data} />)}</ul>}
     </div>
   </Stack>;
@@ -191,7 +204,7 @@ function AdminCard({ model, policy, profiles }: { model: AdminRow; policy?: Serv
   return <li className={m.card}>
     <span className={m.cardIcon}><LabIcon model={[model.public_name, model.display_name]} size="xl" /></span>
     <div className={m.cardBody}>
-      <h2 className={m.cardTitle}><ResourceLink search={{ page: "model-detail", record: model.id }}>{model.display_name}</ResourceLink><BitopBadge size="sm" variant="outline">{workloadLabels[model.workload]}</BitopBadge><ReadinessBadge model={model} policy={policy} />{!model.enabled && <Status enabled={false} />}</h2>
+      <h2 className={m.cardTitle}><ResourceLink search={{ page: "model-detail", record: model.id }}>{model.display_name}</ResourceLink><BitopBadge size="sm" variant="outline">{workloadLabels[model.workload]}</BitopBadge><ReadinessBadge model={model} policy={policy} /><UnpricedBadge model={model} />{!model.enabled && <Status enabled={false} />}</h2>
       <code className={s.mono}>{model.public_name}</code>
       {model.description && <p className={m.description}>{model.description}</p>}
       {readinessNote(model, policy) && <p className={m.note}>{readinessNote(model, policy)}</p>}
@@ -205,12 +218,14 @@ function AdminCard({ model, policy, profiles }: { model: AdminRow; policy?: Serv
     </div>
   </li>;
 }
-export const adminColumnIds = ["type", "price", "connections", "routes", "readiness", "status", "created"];
-function AdminTable({ rows, search, go, policy, profiles }: { rows: AdminRow[]; search: DashboardSearch; go: (patch: Partial<DashboardSearch>) => void; policy?: ServerPolicy; profiles?: Provider[] }) {
+export const adminColumnIds = ["type", "price", "pricing", "connections", "routes", "readiness", "status", "created"];
+/** Admin table. Price: headline prices of the cheapest priced enabled route (PriceLine; prices are published on route pages). */
+function AdminTable({ rows, search, go, policy, profiles, prices, pricesLoading }: { rows: AdminRow[]; search: DashboardSearch; go: (patch: Partial<DashboardSearch>) => void; policy?: ServerPolicy; profiles?: Provider[]; prices?: Map<string, RoutePrice[]>; pricesLoading?: boolean }) {
   const columns: DataTableColumn<AdminRow>[] = [
     { id: "model", header: "Model", rowHeader: true, hideable: false, sortable: true, accessor: r => r.display_name, cell: r => <IconCell icon={<LabIcon model={[r.public_name, r.display_name]} />}><ResourceLink search={{ page: "model-detail", record: r.id }}>{r.display_name}</ResourceLink><span className={s.secondary}>{r.public_name}</span></IconCell> },
     { id: "type", header: "Type", sortable: true, accessor: r => workloadLabels[r.workload] },
-    { id: "price", header: "Input", label: "Input price", sortable: true, accessor: r => r.min_input_microusd_per_million ?? "", sortFn: (a, b) => compareDecimal(a.min_input_microusd_per_million, b.min_input_microusd_per_million), cell: r => <InputPriceSummary value={r.min_input_microusd_per_million} workload={r.workload} /> },
+    { id: "price", header: "Price", label: "Price", sortable: true, accessor: r => r.min_input_microusd_per_million ?? "", sortFn: (a, b) => compareDecimal(a.min_input_microusd_per_million, b.min_input_microusd_per_million), cell: r => pricesLoading ? <span className={s.muted}>Loading…</span> : prices ? <ModelHeadlinePrice routes={prices.get(r.id)} workload={r.workload} /> : <InputPriceSummary value={r.min_input_microusd_per_million} workload={r.workload} /> },
+    { id: "pricing", header: "Priced routes", label: "Priced routes", accessor: r => unpricedRoutes(r) ?? -1, sortable: true, cell: r => r.readiness ? <><span>{r.readiness.priced_enabled_routes} of {r.readiness.enabled_routes} enabled</span>{isUnpricedModel(r) && <span className={s.badges}><UnpricedBadge model={r} /></span>}</> : <span className={m.unknown}>Unknown</span> },
     { id: "connections", header: "Connections", cell: r => <ConnectionNames model={r} profiles={profiles} /> },
     { id: "routes", header: "Routes", numeric: true, accessor: r => r.readiness?.enabled_routes ?? -1, sortable: true, cell: r => r.readiness ? `${r.readiness.enabled_routes} / ${r.readiness.routes}` : <span className={m.unknown}>Unknown</span> },
     { id: "readiness", header: "Readiness", accessor: r => modelReadiness(r, policy).state, cell: r => <ReadinessBadge model={r} policy={policy} /> },

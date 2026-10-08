@@ -60,7 +60,8 @@ export type BudgetSpan = "day" | "week" | "month" | "lifetime";
 /* ---------------- Period (URL-backed, UTC) ---------------- */
 
 export type UsageRange = "month" | "7d" | "30d" | "custom";
-export const usageRanges: { value: UsageRange; label: string }[] = [{ value: "month", label: "This month" }, { value: "7d", label: "Last 7 days" }, { value: "30d", label: "Last 30 days" }, { value: "custom", label: "Custom" }];
+/** Period presets; every period is whole UTC days, so the labels say so (no separate helper text). */
+export const usageRanges: { value: UsageRange; label: string }[] = [{ value: "month", label: "This month (UTC)" }, { value: "7d", label: "Last 7 days (UTC)" }, { value: "30d", label: "Last 30 days (UTC)" }, { value: "custom", label: "Custom dates (UTC)…" }];
 export const MAX_PERIOD_DAYS = 93;
 export type UsagePeriod = { preset: UsageRange; start_date: string; /** Exclusive (API). */ end_date: string; /** Inclusive (UI). */ last_date: string; days: number; /** Ends today: today's numbers are still growing. */ partial: boolean };
 
@@ -124,6 +125,19 @@ export function periodLabel(p: Pick<UsagePeriod, "start_date" | "last_date" | "p
   return `${range} (UTC${p.partial ? ", today so far" : ""})`;
 }
 export const comparisonLabel = (days: number) => `vs previous ${days} day${days === 1 ? "" : "s"}`;
+/** The previous period has data to compare with: a known, positive integer (zero or unknown means "nothing to compare"). */
+export function previousHasData(previous: string | null | undefined): boolean {
+  const v = typeof previous === "string" && /^\d{1,128}$/.test(previous) ? BigInt(previous) : null;
+  return v !== null && v > 0n;
+}
+/**
+ * A tile's Δ vs the previous period, only when both periods are known and the previous one has data. Otherwise
+ * undefined: the tile shows nothing (no "New", no "No comparison").
+ */
+export function tileDelta(current: string | null | undefined, previous: string | null | undefined, increaseIs: "good" | "bad" | "neutral", days: number): { current: string; previous: string; increaseIs: "good" | "bad" | "neutral"; label: string } | undefined {
+  if (current == null || !/^\d{1,128}$/.test(current) || !previousHasData(previous)) return undefined;
+  return { current, previous: previous!, increaseIs, label: comparisonLabel(days) };
+}
 
 /* ---------------- Exact formatting ---------------- */
 
@@ -166,6 +180,13 @@ export function compareDecimal(a: string, b: string): -1 | 0 | 1 {
   const [ai, af = ""] = a.split("."), [bi, bf = ""] = b.split("."), len = Math.max(af.length, bf.length);
   const x = BigInt(ai + af.padEnd(len, "0")), y = BigInt(bi + bf.padEnd(len, "0"));
   return x === y ? 0 : x > y ? 1 : -1;
+}
+/** Period rates for Explore and Accounting details (not tiles): exact text; Unknown never $0; "—" when idle. */
+export function rateTexts(o: Pick<UsageOverview, "tiles">): { cacheHit: string; blended: { text: string; exact: string } } {
+  const t = o.tiles, zero = (v: string | null) => v != null && /^0+(?:\.0+)?$/.test(v), idle = zero(t.requests.value) && zero(t.spend.value);
+  const rate = formatRatioPercent(t.cache_hit_rate.value), blended = t.blended_microusd_per_million.value;
+  const none = idle ? "—" : "Unknown";
+  return { cacheHit: rate ?? none, blended: blended == null ? { text: none, exact: none } : formatRateMicroUsd(blended) };
 }
 export type Change = { direction: "up" | "down" | "flat"; text: string };
 /**

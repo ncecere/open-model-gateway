@@ -56,11 +56,40 @@ impl DataCollection {
             Some(_) => anyhow::bail!("GATEWAY_OPENROUTER_DATA_COLLECTION must be deny or allow"),
         }
     }
-    /// The server's configured policy for display (no secrets). Invalid values
-    /// fail `serve` startup, so this only falls back to the deny default.
+    /// The operator override from `GATEWAY_OPENROUTER_DATA_COLLECTION`, when set.
+    /// It locks Admin › Settings › Data & privacy. Invalid values fail `serve`
+    /// startup; elsewhere they fall back to the deny override (fail closed).
+    pub fn env_override() -> Option<Self> {
+        static OVERRIDE: std::sync::OnceLock<Option<DataCollection>> = std::sync::OnceLock::new();
+        *OVERRIDE.get_or_init(|| {
+            std::env::var_os("GATEWAY_OPENROUTER_DATA_COLLECTION")
+                .filter(|v| !v.is_empty())
+                .map(|_| Self::from_env().unwrap_or_default())
+        })
+    }
+    /// The installation setting (0010 `installation_settings`), refreshed by the
+    /// maintenance loop and on save. Deny until first loaded.
+    pub fn installation_default() -> Self {
+        if INSTALLATION_ALLOWS.load(std::sync::atomic::Ordering::SeqCst) {
+            Self::Allow
+        } else {
+            Self::Deny
+        }
+    }
+    pub fn set_installation_default(value: Self) {
+        INSTALLATION_ALLOWS.store(value == Self::Allow, std::sync::atomic::Ordering::SeqCst);
+    }
+    /// The effective policy (no secrets): the environment override, else the
+    /// installation setting.
     pub fn configured() -> Self {
-        static POLICY: std::sync::OnceLock<DataCollection> = std::sync::OnceLock::new();
-        *POLICY.get_or_init(|| Self::from_env().unwrap_or_default())
+        Self::env_override().unwrap_or_else(Self::installation_default)
+    }
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "deny" => Some(Self::Deny),
+            "allow" => Some(Self::Allow),
+            _ => None,
+        }
     }
     pub fn as_str(self) -> &'static str {
         match self {
@@ -70,12 +99,17 @@ impl DataCollection {
     }
 }
 
+static INSTALLATION_ALLOWS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Server configuration; never derived from inference requests.
 #[derive(Clone, Default)]
 pub struct OpenRouterConfig {
     http_referer: Option<HeaderValue>,
     title: Option<HeaderValue>,
     data_collection: DataCollection,
+    /// No environment override: follow the live installation setting.
+    follow_installation: bool,
 }
 impl OpenRouterConfig {
     pub fn new(
@@ -110,6 +144,7 @@ impl OpenRouterConfig {
             http_referer: referer,
             title,
             data_collection,
+            follow_installation: false,
         })
     }
     /// `GATEWAY_OPENROUTER_HTTP_REFERER`, `GATEWAY_OPENROUTER_TITLE`,
@@ -117,11 +152,14 @@ impl OpenRouterConfig {
     pub fn from_env() -> anyhow::Result<Self> {
         let get = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
         let data_collection = DataCollection::from_env()?;
-        Self::new(
+        let mut config = Self::new(
             get("GATEWAY_OPENROUTER_HTTP_REFERER").as_deref(),
             get("GATEWAY_OPENROUTER_TITLE").as_deref(),
             data_collection,
-        )
+        )?;
+        // Unset: Admin › Settings › Data & privacy decides, per request.
+        config.follow_installation = get("GATEWAY_OPENROUTER_DATA_COLLECTION").is_none();
+        Ok(config)
     }
 }
 
@@ -171,7 +209,12 @@ impl OpenRouterAdapter {
     }
 
     fn provider_preferences(&self) -> Value {
-        json!({"data_collection": self.config.data_collection.as_str()})
+        let policy = if self.config.follow_installation {
+            DataCollection::configured()
+        } else {
+            self.config.data_collection
+        };
+        json!({"data_collection": policy.as_str()})
     }
 
     /// Validate the connection before resolving credentials, then POST.

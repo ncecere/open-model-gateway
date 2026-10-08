@@ -484,10 +484,20 @@ pub(crate) async fn layers(
     tx: &mut Transaction<'_, Postgres>,
     ws: Uuid,
 ) -> Result<Layers, ApiError> {
+    layers_with(tx, ws, false).await
+}
+/// [`layers`], optionally also for a disabled workspace. Only read-only
+/// platform views pass `include_disabled`; mutations keep refusing them.
+pub(crate) async fn layers_with(
+    tx: &mut Transaction<'_, Postgres>,
+    ws: Uuid,
+    include_disabled: bool,
+) -> Result<Layers, ApiError> {
     let (kind, created_at): (String, DateTime<Utc>) = sqlx::query_as(
-        "SELECT kind,created_at FROM workspaces WHERE id=$1 AND disabled_at IS NULL",
+        "SELECT kind,created_at FROM workspaces WHERE id=$1 AND ($2 OR disabled_at IS NULL)",
     )
     .bind(ws)
+    .bind(include_disabled)
     .fetch_optional(&mut **tx)
     .await?
     .ok_or_else(missing)?;
@@ -667,7 +677,7 @@ async fn response(
         source,
         created_at,
         ..
-    } = layers(tx, ws).await?;
+    } = layers_with(tx, ws, platform).await?;
     let k = match key {
         Some(k) => key_limits(tx, ws, k).await?,
         None => Limits::default(),

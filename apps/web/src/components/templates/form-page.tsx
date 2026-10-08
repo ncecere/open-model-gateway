@@ -1,7 +1,8 @@
 /*
  * FormPage: a long create form on a page of its own (Add model), with a
- * "Back to …" link, titled sections in two columns, and Cancel + submit under
- * the form. Short forms stay in ActionDialog.
+ * "Back to …" link, titled sections in two columns, and Cancel + submit in a
+ * footer bar stuck to the bottom of the viewport (StickySaveBar, which keeps
+ * focused fields clear of it). Short forms stay in ActionDialog.
  *
  * Provenance: layout and section pattern adapted from Grounded
  * web/src/components/templates/form-page.tsx and takeover.tsx (read-only
@@ -27,6 +28,7 @@ import { DateControl } from "../date-control";
 import { NavigationGuard } from "../navigation-guard";
 import { ResourceLink } from "../navigation-link";
 import { useResourceName } from "../layout/breadcrumbs";
+import { StickySaveBar } from "./sticky-save-bar";
 import s from "../../pages/shared.module.css";
 import styles from "./templates.module.css";
 
@@ -70,7 +72,7 @@ export function FormPage({ label, title, description, back, onCancel, onSubmit, 
     <PageHeader title={title} description={description} breadcrumbs={<BackLink {...back} />} />
     <Card><CardBody>{loading ? <div role="status">{loading}</div> : <Form ref={ref} id={id} noValidate aria-label={label} aria-busy={busy} className={styles.formBody} data-dirty={dirty ? "true" : undefined} onSubmit={event => { event.preventDefault(); if (!busy) onSubmit(); }}>{children}</Form>}</CardBody></Card>
     {error !== undefined && <ErrorNotice error={error} />}
-    <div className={styles.formActions}><Button variant="secondary" onClick={onCancel}>Cancel</Button><Button type="submit" form={id} loading={busy} disabled={!!loading}>{submitLabel}</Button></div>
+    <StickySaveBar open message={dirty ? "Unsaved changes" : ""} className={styles.formFooter}><Button variant="secondary" onClick={onCancel}>Cancel</Button><Button type="submit" form={id} loading={busy} disabled={!!loading}>{submitLabel}</Button></StickySaveBar>
     <NavigationGuard dirty={dirty} allow={allowLeave} />
   </Stack>;
 }

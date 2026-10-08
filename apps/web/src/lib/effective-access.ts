@@ -18,7 +18,7 @@ export type AccessLayer = {
 };
 export type AccessReason = { code: string; layer: AccessLayerName; period?: BudgetPeriod };
 export type AccessModel = { model_id: string; public_name: string; display_name: string; status: "available" | "partial" | "unavailable"; reasons: AccessReason[] };
-export type AccessResponse = { workspace_id: string; key_id: string | null; truncated: boolean; layers: AccessLayer[]; summary: AccessCounts; models: AccessModel[] };
+export type AccessResponse = { workspace_id: string; key_id: string | null; /** Only platform readers can open a disabled workspace (read-only). */ workspace_disabled?: boolean; truncated: boolean; layers: AccessLayer[]; summary: AccessCounts; models: AccessModel[] };
 
 export const accessStatusLabel: Record<AccessModel["status"], string> = { available: "Available", partial: "Partly available", unavailable: "Unavailable" };
 export function layerLabel(layer: AccessLayerName, kind: WorkspaceKind): string {
@@ -31,6 +31,7 @@ export function reasonText(reason: AccessReason, kind: WorkspaceKind, canManageM
   const period = reason.period ? periodName[reason.period].toLowerCase() : "";
   switch (reason.code) {
     case "model_disabled": return "A Platform Admin turned this model off.";
+    case "workspace_disabled": return `This ${kindLabels[kind].toLowerCase()} is disabled, so no model can be used until a Platform Admin enables it.`;
     case "no_enabled_route": return "No route to a provider is turned on for this model.";
     case "some_routes_unavailable": return "Some of its routes are turned off. Requests use the remaining routes.";
     case "not_in_catalog": return `It isn't in a catalog available to this ${kindLabels[kind].toLowerCase()}, and a Platform Admin hasn't assigned it directly.`;
