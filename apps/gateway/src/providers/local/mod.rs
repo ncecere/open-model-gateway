@@ -1,0 +1,217 @@
+//! Explicitly approved local profiles; Chat + embeddings only.
+//! Ollama uses compatible Chat and native /api/embed with truncation disabled.
+use super::{ProviderAdapter, embeddings, framing, openai, secrets::SecretResolver};
+use crate::inference::{error::InferenceError, types::*};
+use async_trait::async_trait;
+use std::sync::Arc;
+pub mod endpoints;
+use endpoints::ApprovedEndpoints;
+type Result<T> = std::result::Result<T, InferenceError>;
+#[derive(Clone, Copy)]
+pub enum Profile {
+    OpenAiCompatible,
+    Vllm,
+    Sglang,
+    Ollama,
+}
+impl Profile {
+    fn id(self) -> &'static str {
+        match self {
+            Self::OpenAiCompatible => "openai_compatible",
+            Self::Vllm => "vllm",
+            Self::Sglang => "sglang",
+            Self::Ollama => "ollama",
+        }
+    }
+}
+pub struct LocalAdapter {
+    profile: Profile,
+    resolver: Arc<dyn SecretResolver>,
+    approvals: Arc<ApprovedEndpoints>,
+}
+impl LocalAdapter {
+    pub fn new(
+        profile: Profile,
+        resolver: Arc<dyn SecretResolver>,
+        approvals: Arc<ApprovedEndpoints>,
+    ) -> Self {
+        Self {
+            profile,
+            resolver,
+            approvals,
+        }
+    }
+    fn connection(&self, target: &Deployment) -> Result<(&reqwest::Client, &str)> {
+        if target.provider != self.id() || target.region.as_deref().is_some_and(|s| !s.is_empty()) {
+            return Err(InferenceError::Configuration);
+        }
+        let endpoint = target
+            .endpoint
+            .as_deref()
+            .ok_or(InferenceError::Configuration)?;
+        self.approvals.validate_connection(
+            endpoint,
+            &target.credential_ref,
+            target.region.as_deref(),
+        )?;
+        self.approvals.approved(endpoint)
+    }
+    fn authenticate(
+        &self,
+        builder: reqwest::RequestBuilder,
+        target: &Deployment,
+    ) -> Result<reqwest::RequestBuilder> {
+        if target.credential_ref == "none" {
+            return Ok(builder);
+        }
+        // Only environment references may cross an approved local connection.
+        if !target.credential_ref.starts_with("env:") {
+            return Err(InferenceError::Configuration);
+        }
+        let secret = self.resolver.resolve(&target.credential_ref)?;
+        let mut header =
+            reqwest::header::HeaderValue::from_str(&format!("Bearer {}", secret.expose()))
+                .map_err(|_| InferenceError::Configuration)?;
+        header.set_sensitive(true);
+        Ok(builder.header(reqwest::header::AUTHORIZATION, header))
+    }
+    fn encode_chat(&self, target: &Deployment, request: &ChatRequest) -> Result<serde_json::Value> {
+        if !self.supports_chat_request(request) {
+            return Err(InferenceError::Unsupported);
+        }
+        let mut value = openai::encode(&target.upstream_model, request);
+        // Older compatible servers use max_tokens. Every local profile pins that dialect.
+        if let Some(tokens) = value
+            .as_object_mut()
+            .unwrap()
+            .remove("max_completion_tokens")
+        {
+            value["max_tokens"] = tokens;
+        }
+        Ok(value)
+    }
+}
+pub fn adapters(
+    resolver: Arc<dyn SecretResolver>,
+    approvals: ApprovedEndpoints,
+) -> Vec<Arc<dyn ProviderAdapter>> {
+    let approvals = Arc::new(approvals);
+    [
+        Profile::OpenAiCompatible,
+        Profile::Vllm,
+        Profile::Sglang,
+        Profile::Ollama,
+    ]
+    .into_iter()
+    .map(|profile| {
+        Arc::new(LocalAdapter::new(
+            profile,
+            resolver.clone(),
+            approvals.clone(),
+        )) as Arc<dyn ProviderAdapter>
+    })
+    .collect()
+}
+#[async_trait]
+impl ProviderAdapter for LocalAdapter {
+    fn id(&self) -> &'static str {
+        self.profile.id()
+    }
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            text_chat: true,
+            streaming: true,
+            tools: true,
+        }
+    }
+    fn supports_chat_request(&self, request: &ChatRequest) -> bool {
+        self.capabilities().supports(request)
+            && !request.tools.iter().any(|t| t.strict == Some(true))
+            && !(matches!(self.profile, Profile::Ollama) && request.tool_choice.is_some())
+            && !(matches!(self.profile, Profile::OpenAiCompatible)
+                && matches!(
+                    request.tool_choice,
+                    Some(ToolChoice::Required | ToolChoice::Function(_))
+                ))
+    }
+    fn supports_embedding_request(&self, request: &EmbeddingRequest) -> bool {
+        embeddings::validate(request).is_ok()
+            && !(matches!(self.profile, Profile::OpenAiCompatible | Profile::Ollama)
+                && request.dimensions.is_some())
+    }
+    fn supports_protocol(&self, protocol: ApiProtocol) -> bool {
+        matches!(
+            protocol,
+            ApiProtocol::ChatCompletions | ApiProtocol::Embeddings
+        )
+    }
+    async fn execute(&self, target: &Deployment, request: ChatRequest) -> Result<ProviderOutput> {
+        let payload = self.encode_chat(target, &request)?;
+        let (client, base) = self.connection(target)?;
+        let response = self
+            .authenticate(client.post(format!("{base}/chat/completions")), target)?
+            .json(&payload)
+            .send()
+            .await
+            .map_err(framing::transport)?;
+        framing::status(response.status())?;
+        if request.stream {
+            framing::check_sse(&response)?;
+            Ok(ProviderOutput::Stream(openai::decode_stream_profile(
+                response,
+                Some(self.id()),
+            )))
+        } else {
+            let value = framing::body(response).await?;
+            let response = openai::decode_complete_profile(&value, Some(self.id()))?;
+            Ok(ProviderOutput::Complete(response))
+        }
+    }
+    async fn execute_embeddings(
+        &self,
+        target: &Deployment,
+        request: EmbeddingRequest,
+    ) -> Result<EmbeddingResponse> {
+        embeddings::validate(&request)?;
+        if !self.supports_embedding_request(&request) {
+            return Err(InferenceError::Unsupported);
+        }
+        let (client, base) = self.connection(target)?;
+        let native = matches!(self.profile, Profile::Ollama);
+        let (url, payload) = if native {
+            // The base was canonically approved, including its origin and /v1 suffix.
+            // Strip only that fixed suffix, retaining a reverse-proxy path prefix.
+            let prefix = base
+                .strip_suffix("/v1")
+                .ok_or(InferenceError::Configuration)?;
+            (
+                format!("{prefix}/api/embed"),
+                embeddings::encode_ollama(&target.upstream_model, &request)?,
+            )
+        } else {
+            (
+                format!("{base}/embeddings"),
+                embeddings::encode(&target.upstream_model, &request),
+            )
+        };
+        let response = self
+            .authenticate(client.post(url), target)?
+            .json(&payload)
+            .send()
+            .await
+            .map_err(framing::transport)?;
+        framing::status(response.status())?;
+        let value = framing::body(response).await?;
+        if native {
+            embeddings::decode_ollama(&value, &request)
+        } else {
+            embeddings::decode(&value, &request)
+        }
+    }
+}
+#[cfg(test)]
+mod cancellation_tests;
+#[cfg(test)]
+mod native_tests;
+#[cfg(test)]
+mod tests;

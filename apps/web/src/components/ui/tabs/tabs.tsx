@@ -2,8 +2,8 @@
 
 import { Tabs as BaseTabs } from "@base-ui/react/tabs";
 import { useRender } from "@base-ui/react/use-render";
-import type { ComponentPropsWithRef, ReactNode } from "react";
-import { cx } from "@/lib/bitop-utils";
+import { type ComponentPropsWithRef, type ReactNode, type Ref, useMemo } from "react";
+import { cx, mergeRefs, scrollEdgeAttrs, useScrollEdges } from "@/lib/bitop-utils";
 import styles from "./tabs.module.css";
 
 /*
@@ -13,6 +13,12 @@ import styles from "./tabs.module.css";
  * "tabpanel", arrow-key navigation). Use NavTabs when each tab is a URL: it
  * renders a <nav> of links and marks the current one with aria-current="page"
  * (TanStack Router's <Link> sets that automatically when active).
+ *
+ * A tab list wider than its container (a phone): pill tabs wrap onto more
+ * lines, so every tab stays visible; underline tabs (or `overflow="scroll"`)
+ * scroll sideways (tabs and their icons never shrink), and the edge where
+ * more tabs are hidden fades out as a scroll cue. Arrow keys scroll the
+ * focused tab into view.
  */
 
 export type TabsVariant = "underline" | "pills";
@@ -26,11 +32,23 @@ export function Tabs({ className, ...props }: TabsProps) {
 export type TabsListProps = Omit<BaseTabs.List.Props, "className"> & {
   className?: string;
   variant?: TabsVariant;
+  /** Too many tabs for the width: "wrap" onto more lines (pills' default) or "scroll" sideways with a fade (underline's default). */
+  overflow?: "wrap" | "scroll";
+  ref?: Ref<HTMLDivElement>;
 };
 
-export function TabsList({ className, variant = "underline", children, ...props }: TabsListProps) {
+export function TabsList({ className, variant = "underline", overflow = variant === "pills" ? "wrap" : "scroll", children, ref, ...props }: TabsListProps) {
+  const [edgesRef, edges] = useScrollEdges<HTMLDivElement>();
+  const listRef = useMemo(() => (ref ? mergeRefs(edgesRef, ref) : edgesRef), [edgesRef, ref]);
   return (
-    <BaseTabs.List {...props} data-variant={variant} className={cx(styles.list, className)}>
+    <BaseTabs.List
+      {...props}
+      {...scrollEdgeAttrs(edges)}
+      ref={listRef}
+      data-variant={variant}
+      data-overflow-mode={overflow}
+      className={cx(styles.list, className)}
+    >
       {children}
       <BaseTabs.Indicator className={styles.indicator} data-variant={variant} />
     </BaseTabs.List>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { keyModelBody, keyModelFields, keyModelOptions, keyModelSummary, keyRotationDescription } from "./key-models";
+import { keyModelBody, keyModelFields, keyModelOptions, keyModelSummary, keyRotationDescription, selectedModelIds } from "./key-models";
 import { parseCheckboxValues, validateFields } from "./forms";
 
 const id = (n: number) => `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`;
@@ -10,7 +10,7 @@ const values = (selected: unknown, mode = "selected") => ({ model_access: mode, 
 describe("key model restriction creation", () => {
   it("defaults to inherited workspace access", () => {
     expect(fields[0].value).toBe("inherit");
-    expect(fields[0].options?.map((option) => option.label)).toEqual(["Inherit workspace access", "Selected models", "No models"]);
+    expect(fields[0].options?.map((option) => option.label)).toEqual(["All models in this workspace (updates as models change)", "Only selected models", "No models"]);
     expect(keyModelBody(values([], "inherit"), options)).toEqual({ model_ids: null });
   });
   it("ignores hidden stale or malformed selections for inherit and explicit deny-all", () => {
@@ -54,24 +54,30 @@ describe("key model restriction creation", () => {
       expect(validateFields(keyModelFields([]), values(selection))).toHaveProperty("model_ids");
       expect(() => keyModelBody(values(selection), [])).toThrow();
     }
-    expect(keyModelFields([])[1].help).toContain("No effective model grants");
+    expect(keyModelFields([])[1].help).toContain("no models yet");
   });
   it("retains all effective granted choices irrespective of model availability and deduplicates IDs", () => {
-    const grant = { model_id: id(1), display_name: "Disabled model", public_name: "test/disabled", enabled: false, individual_granted: true, workspace_granted: false };
+    const grant = { model_id: id(1), display_name: "Disabled model", public_name: "test/disabled", enabled: false, selected: true, catalog_granted: false, direct_granted: true, available_from_catalog: false, supported_protocols: ["chat_completions" as const] };
     expect(keyModelOptions([grant, grant])).toEqual([{ value: id(1), label: "Disabled model (test/disabled)" }]);
     expect(keyModelBody(values([id(1)]), keyModelOptions([grant]))).toEqual({ model_ids: [id(1)] });
   });
   it("explains immutable restrictions and budget consumption across rotations", () => {
-    expect(keyRotationDescription).toContain("Rotation retains model restrictions and budget consumption");
-    expect(keyRotationDescription).toContain("repeated rotations");
-    expect(keyRotationDescription).toContain("create a replacement key and revoke the old one instead");
+    expect(keyRotationDescription).toContain("old secret stops working immediately");
+    expect(keyRotationDescription).toContain("Models, limits and usage carry over");
   });
 });
 describe("key model restriction display", () => {
   it("treats missing fixture fields as inherited, without conflating deny-all", () => {
-    expect(keyModelSummary({}).label).toBe("Inherited");
-    expect(keyModelSummary({ model_ids: null }).label).toBe("Inherited");
+    expect(keyModelSummary({}).label).toBe("All workspace models");
+    expect(keyModelSummary({ model_ids: null }).label).toBe("All workspace models");
     expect(keyModelSummary({ model_ids: [] }).label).toBe("No models");
+  });
+  it("create dialog selection: all models (null) or 1-200 offered models, never an empty or foreign list", () => {
+    expect(selectedModelIds("inherit", ["foreign"], options)).toEqual({ model_ids: null });
+    expect(selectedModelIds("selected", [], options)).toHaveProperty("error");
+    expect(selectedModelIds("selected", ["foreign"], options)).toHaveProperty("error");
+    expect(selectedModelIds("selected", [id(1), id(1), "foreign"], options)).toEqual({ model_ids: [id(1)] });
+    expect(selectedModelIds("selected", options.map(o => o.value), options)).toHaveProperty("error");
   });
   it("keeps removed grants visible by UUID when their labels are unavailable", () => {
     expect(keyModelSummary({ model_ids: [id(1), "removed-model"] }, options)).toEqual({ label: "2 selected", models: ["Model 1", "removed-model"] });

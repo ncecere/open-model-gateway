@@ -1,101 +1,25 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { renderToStaticMarkup } from "react-dom/server";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactNode } from "react";
-import type { Organization, Session, Workspace } from "../lib/api";
-import { authorityLabel, membershipLabel } from "../lib/access";
-import { OrganizationDetail, WorkspaceSettings } from "../pages/resource-details";
+import { describe, expect, it } from "vitest";
+import { authorityLabel, ownKeyHelp } from "../lib/access";
+import { WorkspaceDetail, WorkspaceSettings } from "../pages/resource-details";
 import { PlatformOverview } from "../pages/start";
 import { Keys } from "../pages/workspace";
 import { ResourcePage } from "./resource-page";
-import { ActionProvider, Heading } from "./ui";
-
-const org: Organization = { id: "org", name: "Organization", slug: "org", role: "admin", membership_role: "admin", authority_source: "direct" };
-const ws: Workspace = { id: "ws", name: "Shared team", organization_id: "org", kind: "team", role: "admin", membership_role: null, authority_source: "organization", own_key_denial_reason: "workspace_membership_required", capabilities: { issue_own_key: false, manage_members: true, manage_owners: false, manage_service_accounts: true, delegate_models: true, manage_policy: true, view_all_activity: true } };
-const session: Session = { user: { id: "me", email: "me@example.invalid", platform_admin: false }, organizations: [org], workspaces: [ws] };
-const clients: QueryClient[] = [];
+import { Heading } from "./ui";
+import { admin, auditor, session, personal, team, project, member, none, markup, testClient } from "../lib/test-fixtures";
+const tabs = (html: string) => [...html.matchAll(/role="tab"[^>]*>((?:(?!<\/button>).)*)<\/button>/g)].map(m => m[1]!.replace(/<[^>]+>/g, "").trim());
 const noop = () => {};
-function render(node: ReactNode, entries: [string, unknown][] = []) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  clients.push(client);
-  for (const [path, value] of entries) client.setQueryData(["api", path], value);
-  return renderToStaticMarkup(<QueryClientProvider client={client}><ActionProvider>{node}</ActionProvider></QueryClientProvider>);
-}
-afterEach(() => { clients.forEach(client => client.clear()); clients.length = 0; });
-
-describe("resource composition", () => {
-  it("renders only the active panel and nests headings correctly", () => {
-    const html = render(<ResourcePage title="Resource" tab="second" onTabChange={noop} tabs={[
-      { value: "first", label: "First", content: <Heading title="Inactive private section" /> },
-      { value: "second", label: "Second", content: <Heading title="Active section" /> },
-    ]} />);
-    expect(html.match(/<h1\b/g)).toHaveLength(1);
-    expect(html).toMatch(/<h2[^>]*>Active section/);
-    expect(html).not.toContain("Inactive private section");
-    expect(html).toContain('aria-label="Resource sections"');
-  });
-  it("falls back to an available tab without mounting a forbidden panel", () => {
-    const html = render(<ResourcePage title="Resource" tab="forbidden" onTabChange={noop} tabs={[{ value: "overview", label: "Overview", content: "Safe overview" }]} />);
-    expect(html).toContain("Safe overview");
-    expect(html).not.toContain('value="forbidden"');
-  });
-  it("keeps organization administration contextual and excludes private resources", () => {
-    const withPersonal = { ...session, workspaces: [...session.workspaces, { ...ws, id: "private", name: "Secret personal name", kind: "personal" as const }] };
-    const html = render(<OrganizationDetail session={withPersonal} organization={org} go={noop} onTabChange={noop} />);
-    expect(html).toContain("Organization settings");
-    expect(html).toContain("Visible shared workspaces</dt><dd>1");
-    expect(html).not.toContain("Secret personal name");
-    expect(html).toContain("create a project");
-    expect(html).toContain("/organizations/org/settings");
-  });
-  it("does not grant organization or platform access through workspace ownership", () => {
-    expect(render(<OrganizationDetail session={session} organization={{ ...org, role: "member" }} go={noop} onTabChange={noop} />)).toContain("Access not available");
-    expect(render(<OrganizationDetail session={session} organization={org} platform go={noop} onTabChange={noop} />)).toContain("Access not available");
-    expect(render(<PlatformOverview session={session} />)).toContain("Access not available");
-  });
-  it("never offers shared membership or service accounts for a personal workspace", () => {
-    const personal = { ...ws, kind: "personal" as const, role: "owner" as const, authority_source: "personal" as const, membership_role: "owner" as const, capabilities: { ...ws.capabilities!, manage_members: false, manage_service_accounts: false, manage_owners: false } };
-    const html = render(<WorkspaceSettings session={session} organization={org} workspace={personal} onTabChange={noop} />);
-    expect(html).not.toContain('>Members</');
-    expect(html).not.toContain('>Service accounts</');
-    expect(html).toContain("Only you can access this personal workspace");
-    expect(html).toContain("Personal owner · private");
-  });
-  it("separates inherited authority from membership in workspace settings", () => {
-    const html = render(<WorkspaceSettings session={session} organization={org} workspace={ws} onTabChange={noop} />);
-    expect(html).toContain("No direct membership");
-    expect(html).toContain("Organization administration · inherited");
-    expect(html).not.toContain("Add existing member"); // inactive panel is unmounted
-  });
-  it("preserves members' limits view without exposing management panels", () => {
-    const member = { ...ws, role: "member" as const, membership_role: "member" as const, authority_source: "direct" as const, capabilities: { ...ws.capabilities!, manage_members: false, manage_service_accounts: false, manage_policy: false, manage_owners: false, issue_own_key: true, view_all_activity: false, delegate_models: false } };
-    const html = render(<WorkspaceSettings session={session} organization={{ ...org, role: "member" }} workspace={member} tab="limits" onTabChange={noop} />);
-    expect(html).toContain("Loading policy");
-    expect(html).not.toContain('>Members</');
-    expect(html).not.toContain('>Service accounts</');
-  });
-  it("uses server issuance capabilities and never offers a human key to an inherited nonmember", () => {
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-    clients.push(client);
-    client.setQueryData(["api", "/api/v1/workspaces/ws/grants", "choices"], []);
-    client.setQueryData(["api", "/api/v1/workspaces/ws/service-accounts", "choices"], []);
-    const html = renderToStaticMarkup(<QueryClientProvider client={client}><ActionProvider><Keys session={session} organization={org} workspace={ws} /></ActionProvider></QueryClientProvider>);
-    expect(html.match(/<button[^>]*>Create key<\/button>/)?.[0]).toContain("disabled");
-    expect(html).toContain("direct active membership");
-  });
-  it("does not fabricate successful setup checks while loading", () => {
-    const html = render(<PlatformOverview session={{ ...session, user: { ...session.user, platform_admin: true } }} />);
-    expect(html).toContain("Checking configuration");
-    expect(html).not.toContain(">Configured</");
-    expect(html).toContain("never sends provider probes or paid inference");
-  });
+describe("Grounded resource composition", () => {
+  it("renders only the active panel and nests section headings", () => { const html = markup(<ResourcePage title="Resource" tab="second" onTabChange={noop} tabs={[{ value: "first", label: "First", content: <Heading title="Inactive private section" /> }, { value: "second", label: "Second", content: <Heading title="Active section" /> }]} />); expect(html.match(/<h1\b/g)).toHaveLength(1); expect(html).toMatch(/<h2[^>]*>Active section/); expect(html).not.toContain("Inactive private section"); expect(html).toContain('aria-label="Resource sections"'); });
+  it("falls back to an available tab without forbidden content", () => { const html = markup(<ResourcePage title="Resource" tab="forbidden" onTabChange={noop} tabs={[{ value: "overview", label: "Overview", content: "Safe overview" }]} />); expect(html).toContain("Safe overview"); expect(html).not.toContain('value="forbidden"'); });
+  it("loads administrative shared resources by exact ID and rejects personal/mismatched detail", () => { const path = "/api/v1/platform/workspaces/team"; const html = markup(<WorkspaceDetail session={admin} id="team" onTabChange={noop} />, [[path, team]]); expect(html).toContain("Product"); expect(html).toContain("Your membership"); expect(html).not.toContain("Personal"); expect(markup(<WorkspaceDetail session={admin} id="team" onTabChange={noop} />, [[path, personal]])).toContain("does not match"); });
+  it("personal ownership never grants Platform administration", () => expect(markup(<PlatformOverview session={session} />)).toContain("Access not available"));
+  it("never offers members/service accounts/invitations or rename for personal workspaces", () => { const html = markup(<WorkspaceSettings session={session} workspace={personal} onTabChange={noop} />); expect(tabs(html)).toEqual(["Limits", "Audit log"]); expect(html).not.toContain('name="name"'); expect(html).toContain("Platform admins can see its cost totals"); expect(html).toContain("Loading limits"); });
+  it("keeps API keys and Usage & costs out of settings", () => { const html = markup(<WorkspaceSettings session={session} workspace={team} tab="keys" onTabChange={noop} />); expect(tabs(html)).toEqual(["General", "Members", "Service accounts", "Limits", "Audit log"]); expect(html).not.toContain("One-time token"); });
+  it("preserves member limits reads without management panels", () => { const html = markup(<WorkspaceSettings session={session} workspace={member} tab="limits" onTabChange={noop} />); expect(tabs(html)).toEqual(["General", "Members", "Limits", "Audit log"]); expect(html).toContain("Loading limits"); expect(html).not.toContain('>Service accounts</'); expect(html).not.toContain("Save limits"); });
+  it("does not issue a human credential to a nonmember staff admin", () => { const ws = { ...team, role: null, membership_source: null, capabilities: { ...none, manage_service_accounts: true, manage_members: true } }, client = testClient(); client.setQueryData(["api", undefined, "/api/v1/workspaces/team/models", "choices"], []); client.setQueryData(["api", undefined, "/api/v1/workspaces/team/service-accounts", "choices"], []); const html = markup(<Keys session={admin} workspace={ws} />, [], client); expect(html.match(/<button[^>]*>Create key<\/button>/)?.[0]).toContain("disabled"); expect(html).toContain("only create keys for service accounts"); expect(ownKeyHelp(ws)).toContain("aren't a member"); client.clear(); });
+  it("does not fabricate setup success or upstream readiness while loading", () => { const html = markup(<PlatformOverview session={admin} />); expect(html).toContain("Loading platform overview"); expect(html).not.toMatch(/of \d+ done/); expect(html).not.toContain("Ready models"); });
+  it("Auditor cannot write shared administrative settings", () => { const html = markup(<WorkspaceDetail session={auditor} id="team" tab="settings" onTabChange={noop} />, [["/api/v1/platform/workspaces/team", team]]); expect(html).not.toContain("cannot change"); expect(html).not.toContain("<select"); expect(html).not.toContain("Save settings"); expect(html).not.toContain("Disable workspace</button>"); });
 });
-
-describe("authority labels", () => {
-  it("does not present an effective owner as a direct owner", () => {
-    expect(authorityLabel({ role: "owner", authority_source: "platform" })).toBe("Platform administration · inherited");
-    expect(authorityLabel({ role: "owner", authority_source: "organization" })).toBe("Organization administration · inherited");
-    expect(membershipLabel({ role: "owner", membership_role: null })).toBe("No direct membership");
-    expect(membershipLabel({ role: "owner" })).toBe("Membership not reported");
-  });
+describe("authority provenance labels", () => {
+  it("labels kind and role only, never provenance or staff access", () => { expect(authorityLabel({ ...team, role: null, membership_source: null })).toBe("Team"); expect(authorityLabel({ ...team, membership_source: "mixed" })).toBe("Team · Admin"); expect(authorityLabel({ ...project, role: "member" })).toBe("Project · Member"); expect(authorityLabel(personal)).toBe("Private"); for (const ws of [team, project, personal]) expect(authorityLabel(ws)).not.toMatch(/staff|membership|mixed|group/i); });
 });

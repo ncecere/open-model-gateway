@@ -1,104 +1,113 @@
-# Engine and adapter contract
+# Engine and provider adapters
 
 ```text
-Client protocol (protocols/{chat_completions,responses,messages}.rs)
-       ↓ typed ChatRequest
-Engine (inference/)
-  workspace authorization → deterministic eligible deployment → provider registry
-  concurrency permit → durable started record → deadline-bound execution
-       ↓ ProviderAdapter::execute
-Provider (providers/{openai,openai_responses,anthropic,bedrock}.rs)
-  connection validation → secret resolution → HTTP → typed result/events
-       ↑ ChatResponse or EventStream
-Client protocol formats JSON / SSE; engine finalizes execution accounting
+Client codecs: Chat / Responses / Messages / Embeddings / Rerank / System One
+    ↓ typed generation or workload request
+Engine: live workspace/key access → capability checks → routing
+        per-attempt admission → deadline-bound execution/accounting
+    ↓ ProviderAdapter
+Provider: validate connection/options → resolve its credentials → wire transport
+    ↑ normalized result/events and presence-preserving usage
+Client codec: bounded JSON / SSE
 ```
 
-## Adding a provider
+Providers are startup registry entries, not engine branches or database enums. Model protocol declarations and adapter request-specific checks both apply. A profile is a **narrow tested subset**, not a promise that every server/version/model or SDK option works.
 
-1. Add a module under `apps/gateway/src/providers/` implementing `ProviderAdapter`.
-2. Choose a stable lowercase registry ID (letters, digits, underscores, up to 64 characters). Provider IDs are extensible strings in PostgreSQL, not an enumerated provider list.
-3. Implement `capabilities()` and `execute(&Deployment, ChatRequest)`. Override `supports_protocol(ApiProtocol)` and `execute_protocol` for additional supported client protocols; defaults allow Chat Completions only. The engine receives no provider HTTP types, URLs, or credential values.
-4. Validate the provider's connection fields and capability-specific settings. Resolve credentials through injected dependencies; a cloud adapter may use workload identity rather than bearer secrets.
-5. Translate supported inputs and reject anything that cannot be represented faithfully. Keep provider-native extension support explicit when introducing it; do not add an unchecked JSON passthrough.
-6. Return a complete `ChatResponse` or a lazy `EventStream`. Dropping either an execution future or a stream must drop upstream work. Do not spawn detached network producers.
-7. Register the adapter in `main.rs`, the composition root. No engine routing changes or provider-specific database migrations are needed.
-8. Add local upstream fixtures and run `providers::contract::assert_text_chat_contract` along with provider-specific failure, tool, and stream-framing tests.
+## Registered transports
 
-Modules can become crates later without changing the engine contract. Runtime-loaded native plugins are intentionally out of scope.
+| Registry ID | Transport/profile |
+| --- | --- |
+| `openai` | Fixed `https://api.openai.com/v1`; native Chat, Responses, string embeddings, `gpt-image-*` image generation, audio transcription and speech. No arbitrary cloud endpoint override. |
+| `anthropic` | Fixed `https://api.anthropic.com/v1`; native Messages, representable Chat subset. |
+| `bedrock` | AWS workload credentials, explicit region, SigV4 Converse/ConverseStream, not an OpenAI URL. |
+| `openai_compatible` | Explicit approved local Chat/embedding subset, not universal compatibility. |
+| `vllm`, `sglang` | Separately declared local Chat/embedding profiles. |
+| `ollama` | Compatible Chat plus **native `/api/embed`**, derived from approved `/v1` base; not compatible embedding fallback. |
+| `openrouter` | Fixed `https://openrouter.ai/api/v1`; Chat (stream/non-stream), string embeddings, rerank, System One, images, audio transcription (needs account credit) and speech. `env:` key reference only. |
 
-## Current scope
+See [protocol matrix](protocol-matrix.md), [Bedrock](bedrock.md) and the provider-owned [local profile notes](../apps/gateway/src/providers/local/README.md). Ollama native embedding follow-up is present in source; it has not been freshly validated by this documentation refresh or certified against a live Ollama server. Do not extend earlier isolated-provider counts to that follow-up or whole-stack integration.
 
-The service registers `openai`, `anthropic`, and `bedrock`. OpenAI uses `https://api.openai.com/v1`; custom endpoints and regions are rejected. Redirects and environment proxies are disabled. Localhost transport is injectable only inside adapter unit tests, not through production configuration.
+Local Chat maps the gateway's maximum to upstream `max_tokens`. All local profiles reject strict tool guarantees; Ollama rejects every explicit tool-choice option; generic compatible rejects required/named choices. Generic compatible/Ollama reject dimension overrides; vLLM/SGLang accept the bounded tested dimension field, subject to actual model support. Local Responses/Messages are not implied.
 
-The client-facing Chat Completions subset supports:
+## OpenRouter
 
-- One choice (`n` omitted or `1`).
-- Text-string messages with system, developer, user, assistant, and tool roles.
-- Function definitions, function tool calls/results, and tool-choice selection.
-- `temperature` and `max_completion_tokens`.
-- Streaming and non-streaming responses; `stream_options.include_usage` controls client-visible usage.
+Registry ID `openrouter`; connection profile `openrouter` (fixed base, `env:` key, no `none`). Server configuration, never request fields:
 
-Unsupported fields return a sanitized 400. This includes legacy `max_tokens`, multimodal content arrays, structured output settings, reasoning options, log probabilities, and arbitrary provider extensions. Nonempty upstream refusal/audio/reasoning content that cannot fit the current contract is also rejected rather than dropped. Supporting a capability at adapter level does not guarantee that every upstream model supports it; provider rejections remain possible. Model-specific capability metadata is future work.
+| Variable | Meaning |
+| --- | --- |
+| `GATEWAY_OPENROUTER_DATA_COLLECTION` | `deny` (default) or `allow`; sent as `provider.data_collection` on every request. |
+| `GATEWAY_OPENROUTER_HTTP_REFERER` | Optional absolute http(s) URL sent as `HTTP-Referer` (attribution only). |
+| `GATEWAY_OPENROUTER_TITLE` | Optional 1–128 printable ASCII characters sent as `X-Title`. |
 
-Responses and Messages expose native stateless text/tool subsets with an explicit combination matrix. Anthropic and Bedrock also accept the Chat subset where representable. Unsupported combinations fail. This is not complete vendor API compatibility; see [protocol matrix](protocol-matrix.md).
+Redirects, ambient proxies and implicit retries are disabled. Non-success bodies are never read: OpenRouter error bodies carry the account `user_id` and embedded provider errors. Statuses map to sanitized kinds: 401/402 (bad key, or no credit on the gateway's account) → `provider_configuration_error`; 403 (moderation) and other 4xx → `upstream_rejected`; 408/524 → `timeout_error`; 429 → `rate_limit_error`; 5xx → `upstream_unavailable`; 3xx → `provider_configuration_error`. A 200 body (or stream frame) carrying `error` fails by its code; a non-JSON 200 is invalid.
 
-## Stream contract
+OpenRouter `:free` variants may train on prompts. Under the default `deny` they have no eligible endpoint and fail as `upstream_rejected` (upstream 404). Using them requires the operator to set `allow` server-wide.
 
-- `Delta` contains text and/or indexed tool-call fragments.
-- Exactly one `Finish` ends the choice. No deltas may follow it.
-- Optional `Usage` contains provider-reported counts, not estimates. It may follow `Finish`; counts are snapshots, not additive.
-- Exactly one `Done` terminates successful execution.
-- EOF without `Done`, duplicate terminal events, malformed upstream frames, or an explicit error is failure.
-- The Chat frontend emits `[DONE]` only for success. A mid-stream failure emits a sanitized JSON error SSE payload and closes without a success marker; the HTTP status is already 200 at that point.
-- Dropping the stream releases the concurrency permit and drops the upstream connection. This requests cancellation, but cannot guarantee the provider stops generation or charges nothing.
+- **Chat:** OpenAI wire with `max_completion_tokens`, `usage:{include:true}` and `stream_options.include_usage`. Responses normalize OpenRouter-only fields. `native_finish_reason` is dropped. Reasoning traces (`reasoning`, `reasoning_details`) are not returned to clients, but their tokens stay in `completion_tokens`. Other unknown content (images, annotations, non-null refusal) is rejected. The final streaming accounting frame (a repeated finish choice with an empty delta plus `usage`) is treated as usage, not as a second terminal. `: OPENROUTER PROCESSING` comments are skipped. Usage follows the research normalization: `prompt_tokens` is inclusive, `cached_tokens` is cache read, and `cache_write_tokens` is the default write category (no TTL split).
+- **Embeddings:** float string subset. Catalog embedding models advertise no `dimensions`, so overrides are rejected before admission. The exception is a model's fixed native width (`nvidia/nemotron-3-embed-1b[:free]`: only 2048), and response vectors must match it. The reported `private/...` model is never compared.
+- **Rerank:** `POST /rerank` with `top_n` clamped to the document count. `usage.total_tokens` is input-only tokens. `usage.search_units` is observed when reported, otherwise unknown. Echoed documents are discarded.
+- **System One:** `POST /systemone` (not the alpha decisions route). Answers are validated strictly against the questions. `usage.input_tokens`/`output_tokens` are required.
+- **Images:** `POST /images`. The client `size` must be a tier (`512|768|1K|1.5K|2K|4K`), sent as `resolution`. An omitted size sends the gateway default `1K`, so the billed tier is always known. Pixel sizes and `auto` are unsupported on OpenRouter because the billed tier would be ambiguous. `quality` and `seed` pass through. `output_image_variant` uses the endpoint-pricing spelling (`768`, `1k`, `1.5k`, `2k`, `4k`), so imported price lines match. Usage follows the chat normalization: an observed `prompt_tokens: 0` proves all input partitions are zero. `completion_tokens` (synthetic image tokens for per-image models) is recorded as reported, so price it `"0"` when the model is priced per image. A 402 for missing credit maps to `provider_configuration_error` without reading the body. `provider.data_collection` is sent as on every workload, but the Image API schema does not list it, and live verification is blocked by 402. Its enforcement for images is **unverified**.
+- **Audio transcriptions:** `POST /audio/transcriptions` as JSON with `input_audio:{data: raw base64, format}`. The format comes from the validated container (`mp4` is sent as `m4a`). The request also sends `response_format:"json"`, optional `language`/`temperature` and `provider`. OpenRouter documents that it ignores `prompt`, so requests with a prompt are `unsupported_capability` and never sent. `usage.seconds` (exact decimal text, rounded up to ms) is `input_audio_seconds_ms`; `input_tokens`/`output_tokens` are recorded when present (with `total_tokens` checked); `usage.cost` is evidence. Audio needs at least $0.50 of account balance: the 402 maps to `provider_configuration_error` without reading the body. Live behavior beyond the 402 is **unverified**.
+- **Speech:** `POST /audio/speech` with `model, input, voice, response_format` (always explicit; `mp3`/`pcm` only), optional `speed`, and `provider`. The raw audio body (live: chunked `audio/mpeg`) carries no usage or cost, so the attempt is valued locally from the exact `input_characters`. A JSON 200 is mapped by its embedded error code, or fails as invalid. Voices are model-specific (for example `en-US-Harper:MAI-Voice-2`).
+- **Cost evidence:** `usage.cost` is parsed from the JSON number's source text (no f64) into exact micro-USD, rounded up, and stored as `provider_cost_microusd`. It is evidence only, never the gateway charge.
 
-Provider adapters never retry internally. The engine defaults to one attempt and deterministic first-available routing. Explicit model policies may enable weighted selection/cooldowns and up to three separately admitted attempts; only allowlisted pre-stream errors can fail over, with matching residency constraints. Ambiguous transport failover is separately opt-in. No retry/fallback occurs after a stream is returned. See [routing](routing.md).
+## Non-generation workloads
 
-## Credentials and limits
+`inference::workload` is the shared path for embeddings, rerank, System One and images (`inference::images`; adapters implement `supports_image_request`, which defaults to `false`, and `execute_images`). Audio uses it as well (`inference::audio`): adapters opt in with `supports_transcription_request`/`supports_speech_request` (default `false`) and implement `execute_audio_transcription`/`execute_audio_speech`. Speech is the one streamed workload. It sets `Workload::STREAMED`, so the attempt is recorded as streamed. After validation, `Workload::attach` receives a `StreamSettlement` that settles success only after upstream EOF, failure on error, deadline or output overflow, and cancellation when the body is dropped. There is no failover after the body is returned. A workload request implements `Workload` (`PROTOCOL`, `validate`, `admission`, `supported_by`, `dispatch`, `usage`, `valid_response`). `Engine::execute_workload` owns the steps:
 
-`GATEWAY_SECRET_ENV_ALLOWLIST` is a comma-separated operator-controlled list of environment variable names. The default is empty. An `env:NAME` credential reference is resolved only if NAME is allowlisted. Values are not stored in PostgreSQL and are never returned by the API or included in error messages. A reference is not a per-tenant vault policy: only platform operators may configure provider connections through the session-authenticated management API.
+1. Pure validation.
+2. Live catalog/key filtering.
+3. Model-protocol and adapter capability gating. No candidate is an explicit 4xx.
+4. Explicit route plan/failover.
+5. Durable per-attempt admission (`InferenceRepository::admit_workload`).
+6. Deadline/cancellation.
+7. Invalid-body usage evidence.
 
-- `GATEWAY_MAX_CONCURRENT_REQUESTS`: per-process, non-queuing inference limit; default 128.
-- `GATEWAY_REQUEST_TIMEOUT_SECONDS`: inference work deadline; default 120, supported range 1–3600.
-- Provider HTTP connection timeout: 10 seconds.
-- Inbound request limit: 2 MiB.
-- OpenAI response limit: 4 MiB for complete JSON, 1 MiB per SSE frame, and at most 128 tool-call indices.
+`WorkloadAdmission` declares the output reservation (`None` input-only, `Requested`, or the price's `PriceCeiling`) and request-derived unit ceilings, for example `requests: 1`. Those ceilings only tighten v3 `max_units`, and `valid_response` enforces them. Adapters report every meter the workload can produce: meters it cannot produce are semantic zeros, `requests` is 1 per upstream request, and unknown observations stay `None`. Per-route body caps are `GATEWAY_MAX_BODY_BYTES_{IMAGES,AUDIO_TRANSCRIPTIONS,AUDIO_SPEECH,RERANK,SYSTEMONE}` (1 KiB–64 MiB). Defaults are 2 MiB, except transcription at 26 MiB. Image responses have their own upstream cap, `GATEWAY_MAX_RESPONSE_BYTES_IMAGES` (default 20 MiB, 1–64 MiB), which does not raise other workloads' 4 MiB provider cap.
 
-Deadline checks cover repository lookups, provider execution, and awaited stream reads. A watchdog drops upstream transport at the hard deadline even when the returned stream is unpolled. Configure ingress write/idle timeouts to release slow-client HTTP resources. PostgreSQL-backed org/workspace/key quotas and spend reservations apply before every attempt; see [governance](governance.md).
+### OpenAI images
 
-## Accounting is not billing
+`POST /v1/images/generations` is supported only for upstream models named `gpt-image-*`. The request sends `model, prompt, n`, plus `size` (`auto|1024x1024|1536x1024|1024x1536`) and `quality` (`auto|low|medium|high`) when given. No `response_format` is sent, because gpt-image always returns base64. `seed` and tiers are rejected before admission. Usage (live probe shape): `input_tokens` is the total input, and `output_tokens` is the image output. Per-modality details must sum to their totals, and `total_tokens` must equal input plus output. The Images API defines no cache categories, so cache reads are `cached_tokens` when reported and otherwise 0, and cache writes are 0. A missing usage object stays unknown. `output_image_variant` is the generated size. Statuses map like Chat: 400/422/other 4xx → `upstream_rejected` (including moderation blocks), 401/403/3xx → `provider_configuration_error`, 429 → `rate_limit_error`, 5xx → `upstream_unavailable`. Error bodies are never read.
 
-`inference_executions` contains a durable `started` row before each outbound attempt, followed by `succeeded`, `failed`, or `cancelled`. It records organization, workspace, key, deployment, public model, provider, elapsed time, and known token counts. It does not store prompts, output text, tool arguments, credentials, prices, or estimated charges.
+### OpenAI audio
 
-Missing usage stays NULL, including cancelled streams where final usage never arrived. Finalization has a separate three-second storage deadline. Disconnect finalization is best effort; process crashes or failed storage writes can leave `started` rows until lease reconciliation. A bounded reconciliation worker now closes expired leases without refunding unknown cost. Immutable configured-rate price versions and an append-only reservation/settlement ledger support budget admission. They are estimates, not actual vendor charges or customer billing. Unknown unpriced usage blocks newly enabled budgets instead of becoming free; explicit evidence-backed resolution requires a pinned price.
+- **Transcriptions:** `POST /v1/audio/transcriptions` with a multipart body the gateway builds itself. It has fixed fields (`model`, `response_format=json`, optional `language`/`prompt`/`temperature`) and `file` named `audio.<ext>` with the canonical media type. Client headers, filenames and credentials are never forwarded. The response must be JSON `{text, usage}`; content-bearing extras (segments, words, logprobs) fail rather than being dropped. `usage.type:"duration"` gives whole `seconds` → `input_audio_seconds_ms`. `usage.type:"tokens"` gives `input_tokens`/`output_tokens` (with `total_tokens` checked) plus the gateway-measured duration. Transcript bodies are capped at 4 MiB of text.
+- **Speech:** `POST /v1/audio/speech` JSON `model, input, voice, response_format, speed?`. The upstream media type must match the format: `audio/mpeg`, `audio/wav` (or `x-wav`/`wave`), `audio/opus` (or `ogg`), or `audio/pcm` (or `l16`/octet-stream). The body is passed through unbuffered. Non-SSE speech reports no usage, so `gpt-4o-mini-tts` token usage is not observed.
+- Statuses map like Chat. Error bodies are never read.
 
-## Enable the local example deliberately
+## Approve local endpoints out of band
 
-After applying migrations and running `bootstrap-dev`, inject a real OpenAI credential into the **gateway process** as `OPENAI_API_KEY` using your preferred secret mechanism. Set `GATEWAY_SECRET_ENV_ALLOWLIST=OPENAI_API_KEY`. Never put the credential in the web environment or source code.
+`GATEWAY_LOCAL_UPSTREAMS` is server configuration, not an inference request field:
 
-The bootstrap connection and deployment remain disabled by default. To enable only the local example, run this against the disposable local development database:
-
-```sh
-docker compose exec -T postgres psql -U gateway -d gateway -v ON_ERROR_STOP=1 <<'SQL'
-BEGIN;
-UPDATE provider_connections p SET enabled = true
-FROM organizations o
-WHERE p.organization_id = o.id AND o.slug = 'local-dev' AND p.name = 'Example OpenAI';
-UPDATE deployments d SET enabled = true
-FROM provider_connections p, organizations o
-WHERE d.organization_id = o.id AND p.organization_id = o.id
-  AND d.provider_connection_id = p.id AND o.slug = 'local-dev' AND p.name = 'Example OpenAI';
-COMMIT;
-SQL
+```json
+[{"endpoint":"http://models.internal:8000/v1","addresses":["10.10.1.20"]}]
 ```
 
-The seeded upstream model is `gpt-4.1`; select a model supported by your provider account before making calls. The authenticated dashboard is the normal provider/model/key administration path. The SQL above is only an optional disposable-local-fixture shortcut.
+Approvals bind a canonical exact HTTP(S) base ending in `/v1` to pinned destination IPs. They are bounded to 64 endpoints and 16 addresses each. No DNS lookup occurs during approval loading or dispatch. URL credentials, query/fragment, encoded path escapes and noncanonical URLs are rejected. Redirects, environment proxies and automatic retries are disabled. HTTP destinations must be approved private addresses (loopback only in development); forbidden metadata/link-local/multicast/special-use destinations are rejected. HTTPS retains certificate checks. Enforce independent network egress too; application approval is not a complete network policy.
 
-```sh
-curl -N http://127.0.0.1:8080/v1/chat/completions \
-  -H "Authorization: Bearer $GATEWAY_API_KEY" \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"company/smart","messages":[{"role":"user","content":"Hello"}],"max_completion_tokens":32,"stream":true,"stream_options":{"include_usage":true}}'
-```
+Local `credential_ref:"none"` explicitly sends no authentication and resolves no secret. Optional `env:NAME` uses an operator allowlist and a separate upstream Bearer value. Inference keys and unrelated cloud credentials are never forwarded. Cloud `none` is prohibited. `GATEWAY_SECRET_ENV_ALLOWLIST` defaults empty; references and values are not returned by management. A reference is not a secret manager or per-tenant vault policy.
 
-This request incurs upstream usage if enabled with real credentials. Automated tests use mocks; they require no provider secrets or paid calls.
+Ollama embedding requests derive the same approved origin/prefix's `/api/embed` and send `truncate:false`. The proxy/server must serve that path and honor non-truncation; the adapter cannot detect an old server silently ignoring fields. There is no retry on `/v1/embeddings`, legacy `/api/embeddings`, truncation or a different host. Its `prompt_eval_count` is batch input usage when present; missing/null stays unknown. Operators must verify deployment model/server behavior and hard aggregate input bounds.
+
+## Streams, limits and accounting
+
+Generation uses text/tool typed contracts, not arbitrary provider JSON. Unknown request fields/options fail rather than disappear. Upstream refusal/reasoning/audio content outside the subset is rejected. Adapter support never guarantees every upstream model accepts the request.
+
+Streams contain deltas, one Finish, optional cumulative Usage and one terminal Done; EOF/duplicates/malformed frames fail. Usage observations are snapshots, not additive. Chat emits `[DONE]` only on success; midstream sanitized errors close without success. Responses/Messages frontend buffering is documented in the matrix. Dropping execution/stream owns cancellation: no detached network producer or hidden adapter retry.
+
+Inbound HTTP bodies are 2 MiB. Provider complete bodies are 4 MiB; SSE frames 1 MiB; Chat supports at most 128 tool-call indices. Embeddings allow 128 strings, 1 MiB aggregate input content, dimensions at most 16384, finite uniform vectors and a 4 MiB response. OpenAI-wire vectors require complete unique indices; native Ollama arrays preserve batch order.
+
+The default process concurrency cap is 128; request deadline defaults 120 seconds (1–3600 supported), connection timeout ten seconds. Durable policy/price admission occurs before dispatch. Finalization has a separate bounded storage window; crashes or failures can leave started rows for lease reconciliation. No prompts/tool arguments/output bodies are stored in execution accounting.
+
+Raw usage and normalized cache partitions remain separate. Missing counters/rates never become zero. Input-only embedding output zero is semantic non-applicability. Prices and conservative holds are configured estimates, not vendor billing. See [cache pricing](cache-pricing.md) and [governance](governance.md).
+
+## Add an adapter
+
+1. Implement `ProviderAdapter` under `apps/gateway/src/providers/` with a stable registry ID.
+2. Declare protocols and pure request-specific support checks. Embeddings and other non-generation workloads use their `execute_*` methods (default `Unsupported`), not synthetic chat messages.
+3. Validate fields/options before credentials/network. Reject unrepresentable features; never add unchecked passthrough.
+4. Return typed complete output or a lazy stream that owns transport/cancellation. Never retry internally.
+5. Register at the composition root and add shared contracts plus profile-specific wire, usage, framing, cancellation and endpoint tests.
+
+Historical isolated provider work reported **77 provider tests**, not a whole gateway/database/browser integration pass. The current integrated run in [verification](verification.md) included the native Ollama mocked tests; that is still not live-server certification. This refresh ran no paid requests, live certification or fresh acceptance suite; see [verification](verification.md) for explicitly dated checks.

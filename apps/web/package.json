@@ -3,30 +3,26 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run"
-  },
+  "scripts": { "dev": "vite", "build": "tsc --noEmit && vite build", "typecheck": "tsc --noEmit", "test": "vitest run", "ui:check": "node ../../../../typescript/bitop-ui/packages/cli/bin/bitop.mjs diff --check --registry ../../../../typescript/bitop-ui" },
   "dependencies": {
-    "@base-ui/react": "^1.8.0",
-    "@fontsource-variable/inter": "^5.2.0",
-    "lucide-react": "^1.48.0",
-    "@tanstack/react-query": "^5.104.0",
-    "@tanstack/react-router": "^1.170.39",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "@base-ui/react": "1.8.0",
+    "@fontsource-variable/inter": "5.3.0",
+    "lucide-react": "1.48.0",
+    "@tanstack/react-query": "5.104.0",
+    "@tanstack/react-router": "1.170.39",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.3.3",
-    "@types/node": "^22.0.0",
-    "@types/react": "^19.2.0",
-    "@types/react-dom": "^19.2.0",
-    "@vitejs/plugin-react": "^6.1.1",
-    "tailwindcss": "^4.3.3",
-    "typescript": "~5.9.3",
-    "vite": "^8.3.1",
-    "vitest": "^5.0.2"
+    "@testing-library/react": "16.3.3",
+    "@testing-library/user-event": "14.6.7",
+    "jsdom": "30.1.1",
+    "@types/node": "22.20.4",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "typescript": "5.9.3",
+    "vite": "8.3.1",
+    "vitest": "5.0.2"
   }
 }

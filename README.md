@@ -1,163 +1,101 @@
 # Open Model Gateway
 
-A Rust-first, multi-tenant AI gateway with a React + Vite management dashboard. Production serves the compiled SPA and APIs from Rust—no Node.js server.
+A single-enterprise inference gateway: Rust/Axum/Tokio/SQLx + PostgreSQL 17, with a React/Vite management SPA served by Rust. Node.js is a build/test dependency, not a production application server.
 
-**Early development, not ready for public launch.** Implemented: OIDC login, organization/personal/team/project access, platform-owned model infrastructure with delegated organization/workspace/user grants, non-overridable platform organization ceilings plus optional local policies, management APIs and dashboard, key/service-account lifecycle, execution reporting, and three inference protocols. See [platform administration](docs/platform-administration.md). PostgreSQL-backed quotas/budget reservations, versioned cost accounting, reconciliation, and opt-in routing are implemented. Production operations and live provider/IdP validation remain unfinished.
+**Development software.** The enterprise rebuild is undergoing integrated acceptance. Local checks do not establish production readiness, real-IdP acceptance or universal provider compatibility. The approved requirements are in [enterprise rebuild](docs/enterprise-rebuild.md); current execution evidence belongs in [verification](docs/verification.md).
 
-## Stack
+## Enterprise boundaries
 
-- Rust, Axum, Tokio, SQLx, PostgreSQL 17.
-- React, Vite, TypeScript, TanStack Router + Query, and vendored Bitop UI components/tokens.
-- OpenAI and Anthropic HTTP adapters; official AWS SDK/SigV4 for Bedrock.
-- Compile-time provider registry, separate client-protocol adapters, provider-independent engine.
+- One installation is the enterprise boundary. Teams, Projects and owner-private personal workspaces are sibling security scopes; there is no organization picker or organization API.
+- Platform Admin, Auditor and User are explicit entitlements, separate from successful SSO. Admin/Auditor include User. Shared workspaces have independent owner/admin/member grants.
+- Generic, signed OIDC groups synchronize at sign-in. Manual grants survive mapped-source removal. Entitlement loss revokes human sessions/keys, with a 30-day grace period and automatic cleanup retaining accounting/audit history. Group loss is not detected between sign-ins in this release.
+- Personal keys/request details remain private even from Platform Admin/Auditor; platform financial reports may include personal aggregate totals. Shared members see their own activity; administrators see shared-workspace activity.
+- Models are selected from multiple available catalogs or assigned directly. Live type defaults and replacement overrides govern eligibility; losing access never restores retired key selections when eligibility returns.
 
-```text
-apps/gateway/       Rust service, migrations, database/provider tests
-apps/web/           React + Vite management dashboard
-tests/             Official OpenAI/Anthropic SDK contract tests
-docs/              Architecture, operations/setup, supported protocol contracts
-```
+The dashboard follows Grounded's Bitop UI and Workspace/Admin composition, with gateway-specific permissions and resources. See [dashboard](docs/dashboard.md), [management API](docs/management-api.md) and [Bitop provenance](docs/bitop-ui.md).
 
-## Explore with demo accounts
+## Local account picker
 
-For a local account picker like open-rag-system, see [Local dashboard demo](docs/local-demo.md). It provides **Platform Admin**, **Organization Admin**, **Alex (Team Admin)**, and **Blair (Member)** personas at **http://127.0.0.1:3000**, using an isolated `gateway_demo` database and an explicitly enabled loopback OIDC issuer. Sample providers are disabled; usage/costs are not fabricated. Production authentication is unchanged.
+See [local demo](docs/local-demo.md) for the fresh, loopback-only `gateway_enterprise_demo` database and five personas: Platform Admin, Auditor, Alex (workspace administrator), Blair (member), and an authenticated but unentitled SSO user.
 
-## Staging deployment
+The demo has disabled example deployments and illustrative prices, not paid credentials or fabricated usage. Personal workspaces are provisioned on actual entitled sign-in. Existing databases are never reset or upgraded into the enterprise schema.
 
-See [staging deployment](docs/staging.md) for the multi-stage production image, local HTTPS rehearsal, separate migrator/runtime database roles, private file secrets, backup/restore checks, and OIDC setup. [Live acceptance](docs/live-acceptance.md) lists the information and explicit opt-in checks needed before testing real SSO or paid providers. The default staging stack is loopback-only and does not modify the demo.
+## Initialize a new installation
 
-```sh
-python3 scripts/staging.py init
-python3 scripts/staging.py build
-python3 scripts/staging.py db
-python3 scripts/staging.py migrate
-python3 scripts/staging.py up
-python3 scripts/staging.py verify
-```
-
-## Run locally
-
-Prerequisites: current stable Rust, Node.js 22.12+, npm, Docker Compose.
+Prerequisites: current stable Rust, Node.js 22.12+, npm and PostgreSQL 17 (Docker Compose is provided).
 
 ```sh
 cp .env.example .env
-cp apps/web/.env.example apps/web/.env.local
 npm ci
 docker compose up -d --wait postgres
 cargo run -p open-model-gateway -- migrate
-# Optional inference fixtures, NOT dashboard authentication:
-cargo run -p open-model-gateway -- bootstrap-dev
 ```
 
-Development bootstrap prints personal/team inference keys **once** and creates a disabled OpenAI example deployment. It requires `GATEWAY_ENV=development`; never run it against production. `/v1/models` stays empty until an authorized operator enables a connection/deployment and grants the model. No real provider is enabled automatically.
+The explicit migration command performs read-only compatibility checks before DDL. Only an empty database or a recognized enterprise migration prefix is accepted. Legacy migrations remain historical evidence, not an upgrade path. `serve` requires the exact current enterprise lineage and never migrates implicitly.
 
-In separate terminals:
+Configure your registered OIDC issuer/client and `${GATEWAY_PUBLIC_URL}/api/v1/auth/callback`; production requires HTTPS. The signed ID token must contain a verified email and the configured groups claim (default `groups`). Missing/malformed groups fail closed without erasing prior grants. Establish the first administrator through trusted provisioning:
+
+```sh
+cargo run -p open-model-gateway -- provision-user \
+  --email operator@example.org --platform-admin
+```
+
+This grants entitlement and permits one controlled initial verified-email link; it does not authenticate a user or rebind an existing identity. Configure group mappings through Admin afterward. Never put credentials in `VITE_*` variables or upload provider secrets through the browser. See [identity](docs/identity.md).
 
 ```sh
 cargo run -p open-model-gateway -- serve
+# Optional Vite development proxy, in another terminal:
 npm run dev:web
 ```
 
-Web: <http://127.0.0.1:3000>; Rust: <http://127.0.0.1:8080>; PostgreSQL: `127.0.0.1:54329`.
-
-If 8080 is occupied, change `GATEWAY_LISTEN` in `.env` and Vite's server-only `GATEWAY_INTERNAL_URL` in `apps/web/.env.local`. Vite proxies `/api/*`, `/v1/*`, and `/health/*`; browser requests remain same-origin. Never put secrets in `VITE_*` variables.
-
-### Enable dashboard sign-in
-
-For real data, configure an actual OIDC client; no production-login bypass or default administrator exists. For isolated exploration without an IdP, use the [local demo](docs/local-demo.md) instead:
-
-```sh
-# Example values: substitute your registered issuer/client.
-GATEWAY_PUBLIC_URL=http://127.0.0.1:3000
-GATEWAY_OIDC_ISSUER=https://your-issuer.example.org
-GATEWAY_OIDC_CLIENT_ID=your-client-id
-# Inject GATEWAY_OIDC_CLIENT_SECRET securely if your client requires it.
-```
-
-Register `${GATEWAY_PUBLIC_URL}/api/v1/auth/callback`. For a Rust-served build, use the Rust origin instead of port 3000. Production requires HTTPS. The issuer must return a signed, verified email claim.
-
-Before first operator login, use trusted database access to explicitly provision its email:
-
-```sh
-cargo run -p open-model-gateway -- provision-user --email operator@example.org --platform-admin
-```
-
-This permits one initial verified-email link and grants the operator role. It does not authenticate anyone. Existing linked identities are never rebound by this command. Run without `--platform-admin` to authorize first linking of a preprovisioned ordinary user. New SSO users otherwise receive no organization membership or administrative privilege; an invitation grants membership. See [identity setup and security](docs/identity.md).
-
-The [dashboard](docs/dashboard.md) separates platform Admin from contextual organization/workspace settings. Resource detail pages, bookmarkable pill tabs, server-side catalog search, and connected model/deployment setup preserve context. Actual membership and inherited authority are shown separately. It supports invitations, grants, user and service-account keys, executions, known-token totals, and sanitized audit history. Provider configuration is operator-only; personal workspaces remain private even from organization admins and operators. Provider credentials are references, not secrets uploaded through the browser. See [management API and permission matrix](docs/management-api.md).
-
-## Governance, costs, and routing
-
-- Organization, workspace, and key limits share PostgreSQL-backed admission across replicas: fixed-minute attempt/token quotas, leased concurrency, and calendar-month USD budgets.
-- Keys may inherit model access, deny all models, or select up to 200 granted model UUIDs. Restrictions only narrow parent entitlements, are fixed at issuance, and survive rotation alongside budget consumption.
-- Platform operators append immutable deployment prices. Each attempt pins its version and reserves the full configured hard input-token ceiling plus the explicitly requested output limit. **Configure accurate pricing and provider bounds before enabling traffic.**
-- Unpriced usage is unknown, not free. Unknown/partial/failed usage retains its reservation; old unpriced activity can block a newly enabled budget until the next UTC month. Complete successful usage settles at integer micro-USD rates. Costs are configured-rate estimates, not provider invoices.
-- Routing supports priorities, weights, cooldowns, required-residency labels and up to three explicitly allowed attempts. Ambiguous transport failover requires a separate opt-in because it can duplicate charges. No failover occurs after a stream is returned.
-- A bounded worker reconciles expired leases every five seconds without refunding unknown charges. Operator reconciliation uses authoritative token counts and an evidence reference.
-- Optional execution-detail retention compacts only settled records, preserving usage, prices, reservations and the immutable ledger.
-
-Use the dashboard's governance/cost/routing/pricing screens or [management endpoints](docs/governance-api.md). See [enforcement semantics](docs/governance.md), [routing safety](docs/routing.md), and [Bitop integration](docs/bitop-ui.md).
-
-```sh
-# Bounded manual maintenance; normally expiry reconciliation runs in the server.
-cargo run -p open-model-gateway -- reconcile-executions --limit 100
-cargo run -p open-model-gateway -- compact-history --older-than-days 365 --limit 1000
-```
-
-Without policies/prices, inference remains usable with unknown cost; no artificial spending protection is claimed. With pricing, clients must send `max_completion_tokens` (Chat), `max_output_tokens` (Responses), or `max_tokens` (Messages).
-
-## Inference
-
-| Route | Contract |
-| --- | --- |
-| `GET /health/live`, `GET /health/ready` | Liveness and migration-aware readiness |
-| `GET /v1/models` | Workspace-authorized, enabled model aliases |
-| `POST /v1/chat/completions` | Text/function tools; OpenAI, Anthropic, Bedrock |
-| `POST /v1/responses` | Native stateless text/function tools; OpenAI |
-| `POST /v1/messages` | Native text/tool blocks; Anthropic, Bedrock |
-| `/api/v1/*` | OIDC browser sessions, CSRF-protected management; inference keys never accepted |
-
-Inference uses workspace keys, not browser sessions. Messages accepts either Bearer or `x-api-key` and requires `anthropic-version: 2023-06-01`. Other inference routes use Bearer authentication.
-
-```sh
-curl http://127.0.0.1:8080/v1/models \
-  -H "Authorization: Bearer $GATEWAY_API_KEY"
-
-# Requires an enabled/granted compatible deployment and injected credentials.
-curl http://127.0.0.1:8080/v1/responses \
-  -H "Authorization: Bearer $GATEWAY_API_KEY" \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"company/smart","input":"Hello","store":false,"max_output_tokens":128}'
-```
-
-**Not full upstream API compatibility.** Unsupported content, fields, protocols, and provider-specific capabilities fail explicitly. Responses is stateless: no hosted tools, reasoning, images, previous-response retrieval, or stored conversations. Native Responses/Messages SSE starts immediately but currently buffers bounded content before emitting ordered blocks; it is not token-by-token frontend delivery. Chat streams incrementally. See the [protocol matrix](docs/protocol-matrix.md), [adapter guide](docs/provider-adapters.md), and [Bedrock configuration](docs/bedrock.md).
-
-## Verify
-
-```sh
-npm ci
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace
-
-# PostgreSQL role must be allowed to create disposable databases.
-# Node + npm dependencies are required for official SDK contracts.
-DATABASE_URL=postgres://gateway:gateway@127.0.0.1:54329/gateway \
-  cargo test --workspace --all-features
-npm run typecheck:web
-npm run test:web
-npm run build:web
-```
-
-SQLx tests use isolated databases and real migrations. Tests cover tenant isolation, OIDC/CSRF/session lifecycle, membership/invitation/key concurrency, provider wire contracts and cancellation, and official OpenAI/Anthropic SDK JSON/streaming helpers. Mock issuers/providers are loopback-only; tests need no real SSO account or paid API calls. Live-provider and real-enterprise-IdP validation remains an operator acceptance step.
-
-## Deployment direction
+For a matched, Rust-served deployment:
 
 ```sh
 npm run build:web
 GATEWAY_WEB_DIR=apps/web/dist cargo run -p open-model-gateway -- serve
 ```
 
-Open the UI on the gateway port. Configure `GATEWAY_PUBLIC_URL` and the registered OIDC callback for that origin. Node is only a build/test dependency. Unset `GATEWAY_WEB_DIR` for API-only operation. Never point it at source code or a secret-bearing directory. Unknown API routes, missing assets, and traversal attempts do not fall through to SPA HTML.
+Keep the binary and compiled SPA from the same verified revision. Use a separate output directory for acceptance builds; never overwrite a running UI with an unverified build.
 
-The included Compose file runs **only PostgreSQL**. TLS ingress, production images, backups, observability, session cleanup, live JWKS refresh, provider-invoice reconciliation and customer billing still require work. Distributed controls need production load/availability testing; PostgreSQL is on the admission path and outages fail closed. [Architecture](docs/architecture.md) · [Roadmap](docs/roadmap.md).
+## Inference and accounting
+
+| Route | Supported workload |
+| --- | --- |
+| `GET /health/live`, `/health/ready` | Liveness and exact migration readiness |
+| `GET /v1/models` | Live workspace-authorized, enabled aliases |
+| `POST /v1/chat/completions` | Bounded text/function-tool subset |
+| `POST /v1/responses` | Stateless text/function-tool subset; OpenAI |
+| `POST /v1/messages` | Text/tool subset; Anthropic and Bedrock |
+| `POST /v1/embeddings` | String/string-batch input, float vectors; declared embedding profiles |
+| `POST /v1/rerank` | `{model,query,documents,top_n?}` → scored indices; OpenRouter |
+| `POST /v1/systemone` | TypeSafe System One contract (TypeSafe SDK compatible); OpenRouter |
+| `/api/v1/*` | Browser-session management with exact-Origin/CSRF checks |
+
+Inference keys never authorize management. Model-declared protocols must intersect adapter support. OpenAI, Anthropic, AWS Bedrock and OpenRouter have separate adapters; local vLLM, SGLang, Ollama and generic-compatible profiles have explicit, narrow contracts. Local HTTP requires exact server-controlled endpoint approval and pinned IP destinations; cloud requires HTTPS. Redirects, ambient proxies and implicit retries are disabled.
+
+- Fixed-minute request/token quotas, leased concurrency and hard USD budgets per UTC day, ISO week or calendar month (chosen per policy layer) are shared across replicas. Optional installation-wide budgets add another ceiling.
+- Immutable prices pin each attempt. Cache reads and disjoint write allocations are accounted without double charging aggregate writes. Amounts use exact integer micro-USD arithmetic.
+- Unknown usage/rates are not zero. Partial known charges are not finite upper bounds. Monetary-budget requests without a finite admission bound are denied before dispatch; unresolved activity retains conservative holds.
+- Embeddings are an input-only workload, not synthetic chat. Local prices are configured token rates, not measured GPU/electricity costs.
+- Routing supports priority/weight, residency labels, passive cooldown and at most three explicitly permitted attempts. No failover follows a returned stream.
+- Reports use strict UTC date intervals, known actual versus active held amounts, explicit accounting coverage and optional admission-time cost-center snapshots. Costs are configured estimates, not provider invoices.
+
+See [protocol matrix](docs/protocol-matrix.md), [providers](docs/provider-adapters.md), [cache pricing](docs/cache-pricing.md), [governance](docs/governance.md) and [reports](docs/cost-reporting.md). Base64 image generation (`/v1/images/generations`, OpenAI `gpt-image-*` and OpenRouter) is a bounded first increment, as are audio transcription (`/v1/audio/transcriptions`) and speech (`/v1/audio/speech`) for OpenAI and OpenRouter. Image edits, vision, realtime audio, video and asynchronous jobs are later milestones. Native Responses/Messages SSE currently buffers bounded content rather than delivering token-by-token frontend events.
+
+## Verification and deployment
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+# SQLx creates disposable databases; use a dedicated test PostgreSQL role.
+DATABASE_URL=postgres://gateway:gateway@127.0.0.1:54339/gateway \
+  cargo test --workspace --all-features
+npm run typecheck:web
+npm run test:web
+npm run test:demo
+npm run test:container
+npm run test:staging
+npm run build:web
+```
+
+Mock-provider and SDK tests require no paid calls or real enterprise IdP modifications. See [staging](docs/staging.md) for restricted runtime roles, the image, TLS rehearsal and backup/restore tooling. **Use a new enterprise staging database; do not run initialization against an existing legacy deployment.** Production load/availability, real-provider certification, live JWKS refresh, observability and off-host recovery acceptance remain unfinished.

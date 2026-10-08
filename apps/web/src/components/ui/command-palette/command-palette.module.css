@@ -224,6 +224,19 @@
   margin-inline-start: auto;
 }
 
+/* Keyboard hints mean nothing on a touch screen or a phone: the footer goes
+   (its screen-reader hint stays in the DOM, visually hidden as before). */
+@media (max-width: 40rem), (hover: none) and (pointer: coarse) {
+  .footer {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
 /* ----- Top-bar trigger ----- */
 .trigger {
   display: inline-flex;
@@ -267,4 +280,27 @@
 
 .triggerKbd {
   display: inline-flex;
+}
+
+/* On a phone the trigger is an icon button: the label stays its accessible name, the shortcut hint goes. */
+@media (max-width: 37.5rem) {
+  .trigger {
+    width: auto;
+    min-width: var(--control-height-sm);
+    padding: 0 var(--space-2);
+    justify-content: center;
+  }
+
+  .triggerLabel {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .triggerKbd {
+    display: none;
+  }
 }

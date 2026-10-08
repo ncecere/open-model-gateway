@@ -1,0 +1,85 @@
+.item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.label {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  font-size: var(--font-size-md);
+  line-height: 1.25rem;
+  color: var(--color-text);
+  cursor: pointer;
+
+  &[data-disabled] {
+    color: var(--color-text-subtle);
+    cursor: not-allowed;
+  }
+}
+
+.item[data-label-position="start"] .label {
+  flex-direction: row-reverse;
+  justify-content: space-between;
+}
+
+.text {
+  min-width: 0;
+}
+
+/* Unchecked track uses --color-border-strong (>= 3:1 against the surface). */
+.track {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  width: 2rem;
+  height: 1.125rem;
+  margin-top: 0.0625rem;
+  padding: 2px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background-color: var(--color-border-strong);
+  cursor: pointer;
+  transition: background-color var(--motion-duration-normal) var(--motion-ease-out);
+
+  &:focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 2px;
+  }
+
+  &[data-checked] {
+    background-color: var(--color-primary);
+  }
+
+  &[data-disabled] {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+}
+
+.thumb {
+  display: block;
+  width: 0.875rem;
+  height: 0.875rem;
+  border-radius: var(--radius-full);
+  background-color: var(--color-thumb);
+  box-shadow: var(--shadow-1);
+  transition: translate var(--motion-duration-normal) var(--motion-ease-out);
+
+  &[data-checked] {
+    translate: 0.875rem 0;
+  }
+}
+
+.description {
+  padding-inline-start: 2.625rem;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-snug);
+  color: var(--color-text-muted);
+}
+
+.item[data-label-position="start"] .description {
+  padding-inline-start: 0;
+}

@@ -1,8 +1,8 @@
 use super::*;
 use axum::{body::Body, extract::Form};
 use openidconnect::{
-    PrivateSigningKey,
-    core::{CoreEdDsaPrivateSigningKey, CoreIdToken, CoreIdTokenClaims, CoreJwsSigningAlgorithm},
+    IdToken, IdTokenClaims, PrivateSigningKey,
+    core::{CoreEdDsaPrivateSigningKey, CoreJwsSigningAlgorithm},
 };
 use serde_json::{Value, json};
 use std::{
@@ -58,7 +58,8 @@ impl MockProvider {
             .as_secs();
         let claims = Arc::new(Mutex::new(json!({
             "iss": issuer, "sub": "subject-one", "aud": "test-client", "exp": now+300,
-            "iat": now, "nonce": "not-yet-set", "email": "NewUser@Example.test", "email_verified": true
+            "iat": now, "nonce": "not-yet-set", "email": "NewUser@Example.test", "email_verified": true,
+            "groups": ["entitled"]
         })));
         let exchanges = Arc::new(AtomicUsize::new(0));
         let verifier = Arc::new(Mutex::new(None));
@@ -76,8 +77,8 @@ impl MockProvider {
                     }
                     let values = claims.lock().unwrap().clone();
                     let corrupt_signature = values["test_bad_signature"] == json!(true);
-                    let claims: CoreIdTokenClaims = serde_json::from_value(values).unwrap();
-                    let id_token = CoreIdToken::new(claims, &signing_key(), CoreJwsSigningAlgorithm::EdDsa, None, None).unwrap();
+                    let claims: IdTokenClaims<SignedClaims, CoreGenderClaim> = serde_json::from_value(values).unwrap();
+                    let id_token: IdToken<SignedClaims, CoreGenderClaim, CoreJweContentEncryptionAlgorithm, CoreJwsSigningAlgorithm> = IdToken::new(claims, &signing_key(), CoreJwsSigningAlgorithm::EdDsa, None, None).unwrap();
                     let mut encoded = id_token.to_string();
                     if corrupt_signature {
                         let index = encoded.rfind('.').unwrap() + 1;
@@ -327,6 +328,35 @@ async fn disabled_login_and_bearer_rejection_do_not_need_database() {
     ));
 }
 
+#[test]
+fn generic_group_claim_is_strict_and_supports_custom_paths() {
+    let claims: SignedClaims = serde_json::from_value(
+        json!({"roles":{"platform":["one","two"]},"https://claims.test/groups":["uri"]}),
+    )
+    .unwrap();
+    assert_eq!(
+        claims.groups("roles.platform"),
+        Some(vec!["one".into(), "two".into()])
+    );
+    assert_eq!(
+        claims.groups("https://claims.test/groups"),
+        Some(vec!["uri".into()])
+    );
+    assert_eq!(claims.groups("missing"), None);
+    for value in [
+        Value::Null,
+        json!("admin"),
+        json!(["good", 12]),
+        json!({"value":["admin"]}),
+        json!([""]),
+    ] {
+        let claims: SignedClaims = serde_json::from_value(json!({"groups":value})).unwrap();
+        assert_eq!(claims.groups("groups"), None);
+    }
+    let claims: SignedClaims = serde_json::from_value(json!({"groups":[]})).unwrap();
+    assert_eq!(claims.groups("groups"), Some(vec![]));
+}
+
 #[cfg(feature = "integration-tests")]
 mod database {
     use super::*;
@@ -342,11 +372,13 @@ mod database {
             .execute(pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO browser_sessions(token_hash,user_id,csrf_hash,expires_at) VALUES($1,$2,$3,now()+interval '12 hours')").bind(hash(&session)).bind(id).bind(hash(&csrf)).execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO platform_role_grants(id,user_id,role,source) VALUES($1,$2,'user','manual')").bind(Uuid::new_v4()).bind(id).execute(pool).await.unwrap();
+        // Explicit simulated verified claim for session-only tests, not an OIDC sign-in.
+        sqlx::query("INSERT INTO browser_sessions(token_hash,user_id,csrf_hash,expires_at,verified_email) VALUES($1,$2,$3,now()+interval '12 hours',$4)").bind(hash(&session)).bind(id).bind(hash(&csrf)).bind(format!("{id}@example.test")).execute(pool).await.unwrap();
         (id, session, csrf)
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn expiry_revocation_and_disabled_user_are_checked_every_request(pool: sqlx::PgPool) {
         let state = IdentityState::new(Store::new(pool.clone()), None)
             .await
@@ -388,13 +420,44 @@ mod database {
         assert!(verify_session(&state, &headers).await.is_err());
     }
 
-    #[sqlx::test(migrations = "./migrations")]
-    async fn linking_is_explicit_single_use_and_does_not_grant_roles(pool: sqlx::PgPool) {
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn sessions_without_verified_email_cannot_authenticate(pool: sqlx::PgPool) {
+        let state = IdentityState::new(Store::new(pool.clone()), None)
+            .await
+            .unwrap();
+        let (_, session, _) = seed(&pool).await;
+        sqlx::query("UPDATE browser_sessions SET verified_email=NULL WHERE token_hash=$1")
+            .bind(hash(&session))
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(matches!(
+            verify_session(&state, &cookie_header(SESSION, &session)).await,
+            Err(AuthError(StatusCode::UNAUTHORIZED))
+        ));
+        let app = crate::management::router(state.clone()).with_state(state.store.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/me")
+                    .header(header::COOKIE, format!("{SESSION}={session}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn linking_is_explicit_single_use_and_authentication_does_not_infer_roles(
+        pool: sqlx::PgPool,
+    ) {
         let store = Store::new(pool.clone());
         let (id, _, _) = seed(&pool).await;
         let email = format!("{id}@example.test");
         assert_eq!(
-            resolve_identity(&store, "https://issuer.test", "subject", &email)
+            resolve_identity(&store, "https://issuer.test", "subject", &email, &[])
                 .await
                 .unwrap_err()
                 .0,
@@ -410,25 +473,33 @@ mod database {
                 &store,
                 "https://issuer.test",
                 "subject",
-                &email.to_uppercase()
+                &email.to_uppercase(),
+                &[]
             )
             .await
             .unwrap(),
             id
         );
-        let flags: (bool, bool) =
-            sqlx::query_as("SELECT oidc_link_allowed,platform_admin FROM users WHERE id=$1")
+        let allowed: bool = sqlx::query_scalar("SELECT oidc_link_allowed FROM users WHERE id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(!allowed);
+        let role: String =
+            sqlx::query_scalar("SELECT role FROM effective_platform_roles WHERE user_id=$1")
                 .bind(id)
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(flags, (false, false));
+        assert_eq!(role, "user");
         assert_eq!(
             resolve_identity(
                 &store,
                 "https://issuer.test",
                 "subject",
-                "changed@example.test"
+                "changed@example.test",
+                &[]
             )
             .await
             .unwrap(),
@@ -440,49 +511,61 @@ mod database {
             .await
             .unwrap();
         assert_eq!(
-            resolve_identity(&store, "https://issuer.test", "other-subject", &email)
+            resolve_identity(&store, "https://issuer.test", "other-subject", &email, &[])
                 .await
                 .unwrap_err()
                 .0,
             StatusCode::CONFLICT
         );
-        let fresh = resolve_identity(&store, "https://issuer.test", "fresh", "Fresh@Example.test")
-            .await
-            .unwrap();
-        let row: (String, bool) =
-            sqlx::query_as("SELECT email,platform_admin FROM users WHERE id=$1")
-                .bind(fresh)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(row, ("fresh@example.test".into(), false));
-        let memberships: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM organization_memberships WHERE user_id=$1")
-                .bind(fresh)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(memberships, 0);
-        sqlx::query("UPDATE users SET disabled_at=now() WHERE id=$1")
-            .bind(id)
-            .execute(&pool)
-            .await
-            .unwrap();
         assert_eq!(
-            resolve_identity(&store, "https://issuer.test", "subject", &email)
+            resolve_identity(
+                &store,
+                "https://issuer.test",
+                "fresh",
+                "Fresh@Example.test",
+                &[]
+            )
+            .await
+            .unwrap_err()
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        let fresh: Uuid =
+            sqlx::query_scalar("SELECT user_id FROM oidc_identities WHERE subject='fresh'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let row: (String, bool) =
+            sqlx::query_as("SELECT email,disabled_at IS NOT NULL FROM users WHERE id=$1")
+                .bind(fresh)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(row, ("fresh@example.test".into(), true));
+        let counts: (i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM platform_role_grants WHERE user_id=$1),(SELECT count(*) FROM workspaces WHERE owner_user_id=$1)").bind(fresh).fetch_one(&pool).await.unwrap();
+        assert_eq!(counts, (0, 0));
+        sqlx::query(
+            "UPDATE users SET disabled_at=now(),disable_reason='admin_suspension' WHERE id=$1",
+        )
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            resolve_identity(&store, "https://issuer.test", "subject", &email, &[])
                 .await
                 .unwrap_err()
                 .0,
-            StatusCode::UNAUTHORIZED
+            StatusCode::FORBIDDEN
         );
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn attempts_are_bound_expiring_and_single_use(pool: sqlx::PgPool) {
         let store = Store::new(pool.clone());
         let oauth_state = random_token();
         let browser = random_token();
-        sqlx::query("INSERT INTO login_attempts VALUES($1,$2,'nonce','verifier',now()+interval '10 minutes')").bind(hash(&oauth_state)).bind(hash(&browser)).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO oidc_login_attempts VALUES($1,$2,'nonce','verifier',now()+interval '10 minutes')").bind(hash(&oauth_state)).bind(hash(&browser)).execute(&pool).await.unwrap();
         assert!(
             consume_attempt(&store, &oauth_state, &random_token())
                 .await
@@ -494,7 +577,7 @@ mod database {
         );
         assert_ne!(a.is_ok(), b.is_ok());
         sqlx::query(
-            "INSERT INTO login_attempts VALUES($1,$2,'nonce','verifier',now()-interval '1 second')",
+            "INSERT INTO oidc_login_attempts VALUES($1,$2,'nonce','verifier',now()-interval '1 second')",
         )
         .bind(hash(&oauth_state))
         .bind(hash(&browser))
@@ -508,7 +591,7 @@ mod database {
         );
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn middleware_and_logout_enforce_csrf_and_exact_origin(pool: sqlx::PgPool) {
         let mock = MockProvider::start(None).await;
         let state = mock.state(pool.clone()).await;
@@ -605,7 +688,9 @@ mod database {
     }
 
     async fn begin_login(state: &IdentityState, mock: &MockProvider) -> (String, String, String) {
-        let response = login(State(state.clone())).await.unwrap();
+        let response = login(State(state.clone()), Ok(Query(LoginQuery::default())))
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
         let url = Url::parse(response.headers()[header::LOCATION].to_str().unwrap()).unwrap();
         let params: HashMap<_, _> = url
@@ -639,10 +724,72 @@ mod database {
         .await
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    #[test]
+    fn display_names_are_trimmed_bounded_and_printable() {
+        assert_eq!(display_name("  Alex Example "), Some("Alex Example".into()));
+        assert_eq!(display_name("   "), None);
+        assert_eq!(display_name("Alex\u{7}"), None);
+        assert_eq!(display_name(&"a".repeat(200)).map(|n| n.len()), Some(200));
+        assert_eq!(display_name(&"a".repeat(201)), None);
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn sign_in_records_the_verified_display_name_and_cleanup_clears_it(pool: sqlx::PgPool) {
+        let mock = MockProvider::start(None).await;
+        let state = mock.state(pool.clone()).await;
+        sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES($1,$2,'entitled','platform','user')")
+            .bind(Uuid::new_v4()).bind(&mock.issuer).execute(&pool).await.unwrap();
+        mock.claims.lock().unwrap()["name"] = json!("  Alex Example ");
+        let (oauth_state, browser, _) = begin_login(&state, &mock).await;
+        finish_login(&state, &oauth_state, &browser, "good")
+            .await
+            .unwrap();
+        let (id, name): (Uuid, Option<String>) =
+            sqlx::query_as("SELECT id,display_name FROM users")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(name.as_deref(), Some("Alex Example"));
+        // A later sign-in without the claim drops the stored name rather than keeping a stale one.
+        mock.claims
+            .lock()
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("name");
+        let (oauth_state, browser, _) = begin_login(&state, &mock).await;
+        finish_login(&state, &oauth_state, &browser, "good")
+            .await
+            .unwrap();
+        let name: Option<String> = sqlx::query_scalar("SELECT display_name FROM users WHERE id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(name, None);
+        sqlx::query("UPDATE users SET display_name='Alex Example' WHERE id=$1")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        crate::lifecycle::cleanup_user(&mut tx, id).await.unwrap();
+        tx.commit().await.unwrap();
+        let (email, name): (Option<String>, Option<String>) =
+            sqlx::query_as("SELECT email,display_name FROM users WHERE id=$1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!((email, name), (None, None));
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn complete_oidc_flow_uses_pkce_and_fresh_hashed_sessions(pool: sqlx::PgPool) {
         let mock = MockProvider::start(None).await;
         let state = mock.state(pool.clone()).await;
+        sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES($1,$2,'entitled','platform','user')")
+            .bind(Uuid::new_v4()).bind(&mock.issuer).execute(&pool).await.unwrap();
         let (oauth_state, browser, challenge) = begin_login(&state, &mock).await;
         let response = finish_login(&state, &oauth_state, &browser, "good")
             .await
@@ -676,7 +823,322 @@ mod database {
         );
     }
 
-    #[sqlx::test(migrations = "./migrations")]
+    // Exercises the public auth routes, signed token exchange, persisted session,
+    // production require_session middleware and actual management handlers.
+    async fn http_sign_in(app: &Router, mock: &MockProvider) -> (String, String) {
+        let (session, csrf, _) = http_sign_in_from(app, mock, "/api/v1/auth/login").await;
+        (session, csrf)
+    }
+
+    /// Signs in through `login` (which may carry `return_to`); also returns the callback's Location.
+    async fn http_sign_in_from(
+        app: &Router,
+        mock: &MockProvider,
+        login: &str,
+    ) -> (String, String, String) {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(login).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let url = Url::parse(response.headers()[header::LOCATION].to_str().unwrap()).unwrap();
+        let params: HashMap<_, _> = url
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        mock.claims.lock().unwrap()["nonce"] = json!(params["nonce"]);
+        let browser = response_cookie(&response, BROWSER);
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/auth/callback?state={}&code=good",
+                        params["state"]
+                    ))
+                    .header(header::COOKIE, format!("{BROWSER}={browser}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        (
+            response_cookie(&response, SESSION),
+            response_cookie(&response, CSRF),
+            response.headers()[header::LOCATION]
+                .to_str()
+                .unwrap()
+                .to_owned(),
+        )
+    }
+
+    #[test]
+    fn return_paths_are_same_origin_dashboard_paths_only() {
+        for (input, expected) in [
+            ("/workspaces/abc/keys", Some("/workspaces/abc/keys")),
+            (
+                "/workspaces/abc/requests?status=failed&q=3cbf",
+                Some("/workspaces/abc/requests?status=failed&q=3cbf"),
+            ),
+            (
+                "/admin/models/x?tab=routes",
+                Some("/admin/models/x?tab=routes"),
+            ),
+            ("/home", Some("/home")),
+            ("/a/../admin", Some("/admin")),
+        ] {
+            assert_eq!(safe_return_path(input).as_deref(), expected, "{input}");
+        }
+        for bad in [
+            "",
+            "home",
+            "//evil.example/x",
+            "/\\evil.example",
+            "/\\/evil.example",
+            "https://evil.example/",
+            "javascript:alert(1)",
+            "/api/v1/me",
+            "/api",
+            "/v1/chat/completions",
+            "/health/ready",
+            "/a/../api/v1/me",
+            "/x\ny",
+            "/x\u{7}",
+        ] {
+            assert_eq!(safe_return_path(bad), None, "{bad:?}");
+        }
+        assert_eq!(safe_return_path(&format!("/{}", "a".repeat(2048))), None);
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn sign_in_returns_to_the_validated_deep_link(pool: sqlx::PgPool) {
+        let mock = MockProvider::start(None).await;
+        let state = mock.state(pool.clone()).await;
+        let app = router(state.clone())
+            .merge(crate::management::router(state.clone()))
+            .with_state(state.store.clone());
+        sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES($1,$2,'entitled','platform','user')")
+            .bind(Uuid::new_v4()).bind(&mock.issuer).execute(&pool).await.unwrap();
+        let deep = "/workspaces/abc/keys?status=all";
+        let (_, _, location) = http_sign_in_from(
+            &app,
+            &mock,
+            &format!("/api/v1/auth/login?return_to={}", urlencoding(deep)),
+        )
+        .await;
+        assert_eq!(location, deep);
+        // Unsafe targets are dropped: sign-in still works and lands on "/".
+        for bad in [
+            "//evil.example/",
+            "https://evil.example/",
+            "/api/v1/me",
+            "/\\evil",
+        ] {
+            let (_, _, location) = http_sign_in_from(
+                &app,
+                &mock,
+                &format!("/api/v1/auth/login?return_to={}", urlencoding(bad)),
+            )
+            .await;
+            assert_eq!(location, "/", "{bad}");
+        }
+        let (_, _, location) = http_sign_in_from(&app, &mock, "/api/v1/auth/login").await;
+        assert_eq!(location, "/");
+        // The database rejects an unsafe stored value even if the handler were bypassed.
+        let rejected = sqlx::query("INSERT INTO oidc_login_attempts VALUES($1,$2,'n','v',now()+interval '1 minute','//evil.example')")
+            .bind(hash(&random_token())).bind(hash(&random_token())).execute(&pool).await;
+        assert!(rejected.is_err());
+    }
+
+    fn urlencoding(value: &str) -> String {
+        let mut url = Url::parse("https://x.invalid/").unwrap();
+        url.query_pairs_mut().append_pair("v", value);
+        url.query().unwrap()[2..].to_owned()
+    }
+
+    async fn http_management(
+        app: &Router,
+        credentials: &(String, String),
+        method: &str,
+        path: &str,
+        body: Value,
+    ) -> (StatusCode, Value) {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header(header::COOKIE, format!("{SESSION}={}", credentials.0))
+                    .header("origin", "http://127.0.0.1:3000")
+                    .header("x-csrf-token", &credentials.1)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn fresh_signed_session_accepts_claim_email_not_admin_edited_profile_email(
+        pool: sqlx::PgPool,
+    ) {
+        let mock = MockProvider::start(None).await;
+        let state = mock.state(pool.clone()).await;
+        let app = router(state.clone())
+            .merge(crate::management::router(state.clone()))
+            .with_state(state.store.clone());
+        for (group, role) in [("entitled", "user"), ("administrators", "admin")] {
+            sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES($1,$2,$3,'platform',$4)")
+                .bind(Uuid::new_v4()).bind(&mock.issuer).bind(group).bind(role).execute(&pool).await.unwrap();
+        }
+        let original_claims = mock.claims.lock().unwrap().clone();
+        let initial = http_sign_in(&app, &mock).await;
+        let user = verify_session(&state, &cookie_header(SESSION, &initial.0))
+            .await
+            .unwrap()
+            .principal
+            .user_id;
+        {
+            let mut claims = mock.claims.lock().unwrap();
+            claims["sub"] = json!("admin-subject");
+            claims["email"] = json!("administrator@example.test");
+            claims["groups"] = json!(["administrators"]);
+        }
+        let administrator = http_sign_in(&app, &mock).await;
+        let shared = Uuid::new_v4();
+        sqlx::query("INSERT INTO workspaces(id,name,kind) VALUES($1,'Shared','team')")
+            .bind(shared)
+            .execute(&pool)
+            .await
+            .unwrap();
+        // Invitations need actual workspace authority, not platform administration.
+        let administrator_id = verify_session(&state, &cookie_header(SESSION, &administrator.0))
+            .await
+            .unwrap()
+            .principal
+            .user_id;
+        sqlx::query("INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source) VALUES($1,$2,'owner','manual')")
+            .bind(shared)
+            .bind(administrator_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let path = format!("/api/v1/workspaces/{shared}/invitations");
+        let mut invites = Vec::new();
+        for email in ["NewUser@Example.test", "profile-only@example.test"] {
+            let (status, invite) = http_management(
+                &app,
+                &administrator,
+                "POST",
+                &path,
+                json!({"email":email,"role":"member"}),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{invite}");
+            invites.push(invite);
+        }
+        let (status, body) = http_management(
+            &app,
+            &administrator,
+            "PATCH",
+            &format!("/api/v1/platform/users/{user}"),
+            json!({"email":"profile-only@example.test"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            http_management(&app, &initial, "GET", "/api/v1/me", json!({}))
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+
+        // A fresh signature-verified claim still says A, while the profile now says B.
+        *mock.claims.lock().unwrap() = original_claims;
+        let fresh = http_sign_in(&app, &mock).await;
+        let principal = verify_session(&state, &cookie_header(SESSION, &fresh.0))
+            .await
+            .unwrap()
+            .principal;
+        assert_eq!(principal.user_id, user);
+        assert_eq!(principal.email, "newuser@example.test");
+        let profile: String = sqlx::query_scalar("SELECT email FROM users WHERE id=$1")
+            .bind(user)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(profile, "profile-only@example.test");
+        let proof: String =
+            sqlx::query_scalar("SELECT verified_email FROM browser_sessions WHERE token_hash=$1")
+                .bind(hash(&fresh.0))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(proof, "newuser@example.test");
+        let binding: Uuid = sqlx::query_scalar(
+            "SELECT user_id FROM oidc_identities WHERE issuer=$1 AND subject='subject-one'",
+        )
+        .bind(&mock.issuer)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(binding, user);
+        let (status, me) = http_management(&app, &fresh, "GET", "/api/v1/me", json!({})).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(me["user"]["email"], "newuser@example.test");
+        assert_eq!(
+            http_management(
+                &app,
+                &fresh,
+                "POST",
+                "/api/v1/invitations/accept",
+                json!({"token":invites[1]["token"]})
+            )
+            .await
+            .0,
+            StatusCode::NOT_FOUND
+        );
+        let members: i64 = sqlx::query_scalar("SELECT count(*) FROM effective_workspace_memberships WHERE workspace_id=$1 AND user_id=$2")
+            .bind(shared).bind(user).fetch_one(&pool).await.unwrap();
+        assert_eq!(members, 0);
+        let (status, accepted) = http_management(
+            &app,
+            &fresh,
+            "POST",
+            "/api/v1/invitations/accept",
+            json!({"token":invites[0]["token"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{accepted}");
+        assert_eq!(accepted, json!({"workspace_id":shared}));
+        let accepted_emails: Vec<String> = sqlx::query_scalar(
+            "SELECT email FROM workspace_invitations WHERE accepted_at IS NOT NULL",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(accepted_emails, vec!["newuser@example.test"]);
+        let role: String = sqlx::query_scalar(
+            "SELECT role FROM effective_workspace_memberships WHERE workspace_id=$1 AND user_id=$2",
+        )
+        .bind(shared)
+        .bind(user)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(role, "member");
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn invalid_tokens_and_failed_exchange_consume_attempt_without_session(
         pool: sqlx::PgPool,
     ) {
@@ -728,5 +1190,451 @@ mod database {
             .await
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn browser_access_denial_redirects_without_callback_secrets_or_logout_csrf(
+        pool: sqlx::PgPool,
+    ) {
+        let mock = MockProvider::start(None).await;
+        let state = mock.state(pool.clone()).await;
+        let (oauth, browser, _) = begin_login(&state, &mock).await;
+        let mut headers = cookie_header(BROWSER, &browser);
+        headers.insert(header::ACCEPT, HeaderValue::from_static("text/html"));
+        let response = callback(
+            State(state.clone()),
+            headers,
+            Ok(Query(CallbackQuery {
+                state: oauth,
+                code: Some("good".into()),
+                error: None,
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response.headers()[header::LOCATION],
+            "/?auth_error=access_denied"
+        );
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert!(
+            response
+                .headers()
+                .get_all(header::SET_COOKIE)
+                .iter()
+                .all(|v| v.to_str().unwrap().contains("Max-Age=0"))
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM workspaces")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM browser_sessions")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+        sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES($1,$2,'entitled','platform','user')").bind(Uuid::new_v4()).bind(&mock.issuer).execute(&pool).await.unwrap();
+        let (oauth, browser, _) = begin_login(&state, &mock).await;
+        let session = response_cookie(
+            &finish_login(&state, &oauth, &browser, "good")
+                .await
+                .unwrap(),
+            SESSION,
+        );
+        // An unverified callback cannot revoke the preceding valid session.
+        let (oauth, browser, _) = begin_login(&state, &mock).await;
+        mock.claims.lock().unwrap()["nonce"] = json!("incorrect");
+        let mut headers = cookie_header(BROWSER, &browser);
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_str(&format!("{BROWSER}={browser}; {SESSION}={session}")).unwrap(),
+        );
+        headers.insert(header::ACCEPT, HeaderValue::from_static("text/html"));
+        assert_eq!(
+            callback(
+                State(state.clone()),
+                headers,
+                Ok(Query(CallbackQuery {
+                    state: oauth,
+                    code: Some("good".into()),
+                    error: None
+                }))
+            )
+            .await
+            .unwrap_err()
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert!(
+            verify_session(&state, &cookie_header(SESSION, &session))
+                .await
+                .is_ok()
+        );
+        // A verified switch to an unauthorized account clears the old browser
+        // session but must not provision a personal workspace for the new one.
+        mock.claims.lock().unwrap()["sub"] = json!("different-unentitled-subject");
+        mock.claims.lock().unwrap()["email"] = json!("denied@example.test");
+        mock.claims.lock().unwrap()["groups"] = json!([]);
+        let (oauth, browser, _) = begin_login(&state, &mock).await;
+        let mut headers = cookie_header(BROWSER, &browser);
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_str(&format!("{BROWSER}={browser}; {SESSION}={session}")).unwrap(),
+        );
+        headers.insert(header::ACCEPT, HeaderValue::from_static("text/html"));
+        let response = callback(
+            State(state.clone()),
+            headers,
+            Ok(Query(CallbackQuery {
+                state: oauth,
+                code: Some("good".into()),
+                error: None,
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            response.headers()[header::LOCATION],
+            "/?auth_error=access_denied"
+        );
+        assert!(
+            verify_session(&state, &cookie_header(SESSION, &session))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM workspaces")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn custom_signed_groups_entitlement_loss_commits_before_forbidden_and_malformed_does_not_revoke(
+        pool: sqlx::PgPool,
+    ) {
+        let mock = MockProvider::start(None).await;
+        let mut config = mock.config();
+        config.groups_claim = "entitlements.roles".into();
+        let state = IdentityState::new(Store::new(pool.clone()), Some(config))
+            .await
+            .unwrap();
+        mock.claims.lock().unwrap()["entitlements"] = json!({"roles":["staff"]});
+        // Valid authentication alone cannot create a personal workspace.
+        let (oauth, browser, _) = begin_login(&state, &mock).await;
+        assert_eq!(
+            finish_login(&state, &oauth, &browser, "good")
+                .await
+                .unwrap_err()
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM workspaces")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES($1,$2,'staff','platform','admin')")
+            .bind(Uuid::new_v4()).bind(&mock.issuer).execute(&pool).await.unwrap();
+        let (oauth, browser, _) = begin_login(&state, &mock).await;
+        let response = finish_login(&state, &oauth, &browser, "good")
+            .await
+            .unwrap();
+        let session = response_cookie(&response, SESSION);
+        let principal = verify_session(&state, &cookie_header(SESSION, &session))
+            .await
+            .unwrap()
+            .principal;
+        assert!(principal.platform_admin && principal.platform_auditor);
+        let ws: Uuid = sqlx::query_scalar("SELECT id FROM workspaces WHERE owner_user_id=$1")
+            .bind(principal.user_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let key = crate::auth::NewApiKey::generate();
+        sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash) VALUES($1,$2,$3,'Mine',$4)")
+            .bind(key.id).bind(ws).bind(principal.user_id).bind(key.digest.as_slice()).execute(&pool).await.unwrap();
+        // Profile divergence and even another account owning the signed email must not
+        // short-circuit authoritative empty-group revocation for this issuer/subject.
+        sqlx::query("UPDATE users SET email='profile-only@example.test' WHERE id=$1")
+            .bind(principal.user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO users(id,email) VALUES($1,$2)")
+            .bind(Uuid::new_v4())
+            .bind(&principal.email)
+            .execute(&pool)
+            .await
+            .unwrap();
+        for malformed in [
+            Value::Null,
+            json!({"roles":"staff"}),
+            json!({"roles":["staff",1]}),
+        ] {
+            mock.claims.lock().unwrap()["entitlements"] = malformed;
+            let (oauth, browser, _) = begin_login(&state, &mock).await;
+            assert_eq!(
+                finish_login(&state, &oauth, &browser, "good")
+                    .await
+                    .unwrap_err()
+                    .0,
+                StatusCode::FORBIDDEN
+            );
+            assert!(
+                verify_session(&state, &cookie_header(SESSION, &session))
+                    .await
+                    .is_ok()
+            );
+            assert!(
+                state
+                    .store
+                    .authenticate(&key.token)
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+        }
+        mock.claims
+            .lock()
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("entitlements");
+        let (oauth, browser, _) = begin_login(&state, &mock).await;
+        assert_eq!(
+            finish_login(&state, &oauth, &browser, "good")
+                .await
+                .unwrap_err()
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        assert!(
+            state
+                .store
+                .authenticate(&key.token)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        mock.claims.lock().unwrap()["entitlements"] = json!({"roles":[]});
+        let (oauth, browser, _) = begin_login(&state, &mock).await;
+        assert_eq!(
+            finish_login(&state, &oauth, &browser, "good")
+                .await
+                .unwrap_err()
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        assert!(
+            verify_session(&state, &cookie_header(SESSION, &session))
+                .await
+                .is_err()
+        );
+        assert!(
+            state
+                .store
+                .authenticate(&key.token)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let disabled: bool = sqlx::query_scalar(
+            "SELECT disabled_at IS NOT NULL AND cleanup_due_at IS NOT NULL FROM users WHERE id=$1",
+        )
+        .bind(principal.user_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(disabled);
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn cleaned_identity_rebinds_to_new_uuid_without_resurrecting_old_access(
+        pool: sqlx::PgPool,
+    ) {
+        let store = Store::new(pool.clone());
+        let issuer = "https://id.test";
+        sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES($1,$2,'staff','platform','user')").bind(Uuid::new_v4()).bind(issuer).execute(&pool).await.unwrap();
+        let old = resolve_identity(
+            &store,
+            issuer,
+            "subject",
+            "user@test.invalid",
+            &["staff".into()],
+        )
+        .await
+        .unwrap();
+        let old_ws: Uuid = sqlx::query_scalar("SELECT id FROM workspaces WHERE owner_user_id=$1")
+            .bind(old)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            resolve_identity(&store, issuer, "subject", "user@test.invalid", &[])
+                .await
+                .unwrap_err()
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        sqlx::query("UPDATE users SET cleanup_due_at=now()-interval '1 second' WHERE id=$1")
+            .bind(old)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            lifecycle::cleanup_inactive_accounts(&store).await.unwrap(),
+            1
+        );
+        let new = resolve_identity(
+            &store,
+            issuer,
+            "subject",
+            "user@test.invalid",
+            &["staff".into()],
+        )
+        .await
+        .unwrap();
+        assert_ne!(old, new);
+        let binding: Uuid = sqlx::query_scalar(
+            "SELECT user_id FROM oidc_identities WHERE issuer=$1 AND subject='subject'",
+        )
+        .bind(issuer)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(binding, new);
+        let old_disabled: bool =
+            sqlx::query_scalar("SELECT disabled_at IS NOT NULL FROM workspaces WHERE id=$1")
+                .bind(old_ws)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(old_disabled);
+        let inherited: i64=sqlx::query_scalar("SELECT count(*) FROM workspace_membership_grants WHERE user_id=$1 AND workspace_id=$2 AND revoked_at IS NULL").bind(new).bind(old_ws).fetch_one(&pool).await.unwrap();
+        assert_eq!(inherited, 0);
+        let user_count: i64 = sqlx::query_scalar("SELECT count(*) FROM users")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(user_count, 2);
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn expired_grace_callback_cleans_old_account_even_when_worker_has_not_run(
+        pool: sqlx::PgPool,
+    ) {
+        let store = Store::new(pool.clone());
+        let issuer = "https://id.test";
+        sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES($1,$2,'staff','platform','user')").bind(Uuid::new_v4()).bind(issuer).execute(&pool).await.unwrap();
+        let old = resolve_identity(
+            &store,
+            issuer,
+            "subject",
+            "old@test.invalid",
+            &["staff".into()],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            resolve_identity(&store, issuer, "subject", "old@test.invalid", &[])
+                .await
+                .unwrap_err()
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        sqlx::query("UPDATE users SET cleanup_due_at=now()-interval '1 second' WHERE id=$1")
+            .bind(old)
+            .execute(&pool)
+            .await
+            .unwrap();
+        // A still-unentitled callback keeps the old binding tombstoned rather than creating a new user.
+        assert_eq!(
+            resolve_identity(&store, issuer, "subject", "old@test.invalid", &[])
+                .await
+                .unwrap_err()
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        let bound: Uuid =
+            sqlx::query_scalar("SELECT user_id FROM oidc_identities WHERE subject='subject'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(bound, old);
+        let new = resolve_identity(
+            &store,
+            issuer,
+            "subject",
+            "old@test.invalid",
+            &["staff".into()],
+        )
+        .await
+        .unwrap();
+        assert_ne!(old, new);
+        let cleaned: bool = sqlx::query_scalar(
+            "SELECT cleaned_at IS NOT NULL AND disabled_at IS NOT NULL FROM users WHERE id=$1",
+        )
+        .bind(old)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(cleaned);
+        let old_active: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM platform_role_grants WHERE user_id=$1 AND revoked_at IS NULL",
+        )
+        .bind(old)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(old_active, 0);
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn sessions_require_current_entitlement_not_stale_admin_presentation(pool: sqlx::PgPool) {
+        let state = IdentityState::new(Store::new(pool.clone()), None)
+            .await
+            .unwrap();
+        let (user, session, _) = seed(&pool).await;
+        sqlx::query("UPDATE platform_role_grants SET role='admin' WHERE user_id=$1")
+            .bind(user)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(
+            verify_session(&state, &cookie_header(SESSION, &session))
+                .await
+                .unwrap()
+                .principal
+                .platform_admin
+        );
+        sqlx::query("UPDATE platform_role_grants SET role='auditor' WHERE user_id=$1")
+            .bind(user)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let principal = verify_session(&state, &cookie_header(SESSION, &session))
+            .await
+            .unwrap()
+            .principal;
+        assert!(!principal.platform_admin && principal.platform_auditor);
+        sqlx::query("UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1")
+            .bind(user)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(
+            verify_session(&state, &cookie_header(SESSION, &session))
+                .await
+                .is_err()
+        );
     }
 }

@@ -1,0 +1,114 @@
+// @vitest-environment jsdom
+import { renderToStaticMarkup } from "react-dom/server";
+import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { BrandIcon, LabBadge, LabIcon, ProviderBadge, ProviderIcon, WithIcon, inferLab, inferLabFrom, profileBrands } from "./provider-icon";
+import { ActionProvider, Button, useAction } from "./ui";
+import { connectionCreateAction, providerOptions } from "../pages/catalog";
+import { testClient } from "../lib/test-fixtures";
+
+afterEach(cleanup);
+
+const html = (node: React.ReactElement) => renderToStaticMarkup(node);
+
+describe("inferLab", () => {
+  it.each([
+    ["z-ai/glm-4.6", "zai", "zai"], ["anthropic/claude-sonnet-4.5", "anthropic", "claude"], ["black-forest-labs/flux-1.1-pro", "bfl", "flux"],
+    ["nvidia/llama-3.1-nemotron-70b-instruct", "nvidia", "nvidia"], ["microsoft/phi-4", "microsoft", "microsoft"], ["cloudflare/some-model", "cloudflare", "cloudflare"],
+    ["qwen/qwen3-235b-a22b", "qwen", "qwen"], ["meta-llama/Llama-3.1-8B-Instruct", "meta", "meta"], ["mistralai/mistral-large", "mistral", "mistral"],
+    ["deepseek-ai/DeepSeek-R1", "deepseek", "deepseek"], ["x-ai/grok-4", "xai", "grok"], ["google/gemma-3-27b-it", "google", "google"], ["openrouter/auto", "openrouter", "openrouter"],
+    ["gpt-4.1-mini", "openai", "openai"], ["o3", "openai", "openai"], ["o4-mini", "openai", "openai"], ["gpt-image-1", "openai", "openai"], ["whisper-1", "openai", "openai"], ["tts-1-hd", "openai", "openai"], ["text-embedding-3-small", "openai", "openai"],
+    ["claude-haiku-4-5", "anthropic", "claude"], ["gemini-2.5-pro", "google", "gemini"], ["llama3.2:3b", "meta", "meta"], ["mistral-small-latest", "mistral", "mistral"], ["glm-4.5-air", "zai", "zai"],
+    ["flux-schnell", "bfl", "flux"], ["qwen2.5-coder:7b", "qwen", "qwen"], ["deepseek-r1:14b", "deepseek", "deepseek"], ["grok-3-mini", "xai", "grok"], ["command-r-plus", "cohere", "cohere"],
+    ["voyage-3-large", "voyage", "voyage"], ["lfm-40b", "liquid", "liquid"], ["sonar-pro", "perplexity", "perplexity"],
+    ["us.anthropic.claude-3-5-sonnet-20240620-v1:0", "anthropic", "claude"], ["meta.llama3-1-70b-instruct-v1:0", "meta", "meta"], ["amazon.nova-pro-v1:0", "amazon", "aws"], ["cohere.command-r-v1:0", "cohere", "cohere"],
+    ["@cf/meta/llama-3.1-8b-instruct", "meta", "meta"], ["@cf/baai/bge-base-en-v1.5", "cloudflare", "cloudflare"],
+  ])("%s → %s", (id, key, icon) => {
+    expect(inferLab(id)).toMatchObject({ key, icon });
+  });
+
+  it("leaves unknown models unknown", () => {
+    for (const id of ["", null, undefined, "my-private-model", "acme/secret-v2", "ollama-thing"]) expect(inferLab(id)).toBeUndefined();
+    expect(inferLabFrom(["my-alias", "anthropic/claude-opus-4"])).toMatchObject({ key: "anthropic" });
+  });
+});
+
+describe("ProviderIcon", () => {
+  it("covers every connection profile the form offers", () => {
+    for (const option of providerOptions) expect(option.value in profileBrands).toBe(true);
+  });
+
+  it("renders a decorative SVG without inline styles, titles or HTML injection", () => {
+    const markup = html(<ProviderIcon profile="openai" size="lg" />);
+    expect(markup).toMatch(/^<span aria-hidden="true"[^>]*data-brand="openai"><svg /);
+    expect(markup).toContain('width="20"');
+    expect(markup).toContain('fill="currentColor"');
+    expect(markup).not.toMatch(/style=|<title|xmlns:xlink|href=/);
+  });
+
+  it("uses the neutral glyph for generic and unknown profiles", () => {
+    for (const profile of ["openai_compatible", "sglang", "unknown", null]) expect(html(<ProviderIcon profile={profile} />)).toContain('data-brand="none"');
+  });
+
+  it("prefixes gradient IDs per instance so repeated icons do not collide", () => {
+    const markup = html(<><BrandIcon brand="gemini" /><BrandIcon brand="gemini" /></>);
+    const ids = [...markup.matchAll(/ id="([^"]+)"/g)].map(m => m[1]);
+    expect(ids.length).toBe(6);
+    expect(new Set(ids).size).toBe(6);
+    for (const [, ref] of markup.matchAll(/url\(#([^)]+)\)/g)) expect(ids).toContain(ref);
+  });
+
+  it("shows the mono mark in dark mode for brands whose color mark needs a light surface", () => {
+    const markup = html(<BrandIcon brand="cohere" />);
+    expect(markup.match(/<svg /g)).toHaveLength(2);
+  });
+});
+
+describe("Add connection profile picker", () => {
+  function Open() { const ask = useAction(); return <Button onClick={() => ask(connectionCreateAction())}>Open</Button>; }
+  it("is a radio-card group with decorative logos and text names", async () => {
+    const user = userEvent.setup();
+    render(<QueryClientProvider client={testClient()}><ActionProvider><Open /></ActionProvider></QueryClientProvider>);
+    await user.click(screen.getByRole("button", { name: "Open" }));
+    const group = screen.getByRole("radiogroup", { name: "Provider profile" });
+    expect(group).toBeTruthy();
+    const openai = screen.getByRole("radio", { name: "OpenAI" });
+    expect(openai.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getAllByRole("radio")).toHaveLength(providerOptions.length);
+    expect(group.querySelectorAll('[aria-hidden="true"] svg').length).toBeGreaterThanOrEqual(providerOptions.length);
+    expect(screen.queryByLabelText(/^Endpoint/)).toBeNull();
+    await user.click(screen.getByRole("radio", { name: "vLLM" }));
+    expect(screen.getByRole("radio", { name: "vLLM" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByLabelText(/^Endpoint/)).toBeTruthy();
+  });
+  it("explains the chosen profile only and enables the connection with a switch, on by default (review #46)", async () => {
+    const user = userEvent.setup();
+    render(<QueryClientProvider client={testClient()}><ActionProvider><Open /></ActionProvider></QueryClientProvider>);
+    await user.click(screen.getByRole("button", { name: "Open" }));
+    expect(screen.getByText(/OpenAI's fixed HTTPS API/)).toBeTruthy(); expect(screen.queryByText(/OpenRouter's fixed/)).toBeNull();
+    await user.click(screen.getByRole("radio", { name: "Anthropic" }));
+    expect(screen.getByText(/Anthropic's fixed HTTPS API/)).toBeTruthy(); expect(screen.queryByText(/OpenAI's fixed/)).toBeNull();
+    expect(screen.queryByRole("combobox", { name: /Status/ })).toBeNull();
+    const enable = screen.getByRole("switch", { name: "Enable now" });
+    expect(enable.getAttribute("aria-checked")).toBe("true");
+    await user.click(enable);
+    expect(enable.getAttribute("aria-checked")).toBe("false"); expect(screen.getByText(/Nothing is sent to this connection/)).toBeTruthy();
+  });
+});
+
+describe("LabIcon and labels", () => {
+  it("falls back to a neutral glyph or nothing", () => {
+    expect(html(<LabIcon model="private-model" />)).toContain('data-brand="none"');
+    expect(html(<LabIcon model="private-model" fallback={false} />)).toBe("");
+    expect(html(<LabIcon model={["alias", "gpt-4o"]} />)).toContain('data-brand="openai"');
+  });
+
+  it("keeps the text label beside the decorative icon", () => {
+    expect(html(<WithIcon icon={<ProviderIcon profile="anthropic" />}>Anthropic</WithIcon>)).toMatch(/aria-hidden="true".*>Anthropic<\/span><\/span>$/);
+    expect(html(<ProviderBadge profile="vllm" label="vLLM" />)).toContain("vLLM");
+    expect(html(<LabBadge model={["z-ai/glm-4.6"]} />)).toContain("Z.ai");
+    expect(html(<LabBadge model={["private"]} />)).toBe("");
+  });
+});

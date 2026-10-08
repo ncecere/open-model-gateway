@@ -1,0 +1,164 @@
+/* Timeline: vertical rail of status icons; tones from semantic status tokens. */
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  --step-color: var(--color-text-muted);
+
+  position: relative;
+  display: grid;
+  grid-template-columns: 1.5rem minmax(0, 1fr);
+  gap: var(--space-3);
+  padding-bottom: var(--space-4);
+
+  &:last-child {
+    padding-bottom: 0;
+  }
+
+  /* The connecting line between steps. */
+  &:not(:last-child)::before {
+    content: "";
+    position: absolute;
+    top: 1.5rem;
+    bottom: 0.25rem;
+    left: calc(0.75rem - 0.5px);
+    width: 1px;
+    background-color: var(--color-border);
+  }
+
+  &[data-status="success"] {
+    --step-color: var(--color-success);
+  }
+
+  &[data-status="failed"] {
+    --step-color: var(--color-danger);
+  }
+
+  &[data-status="cancelled"],
+  &[data-status="unknown"] {
+    --step-color: var(--color-warning);
+  }
+
+  &[data-status="pending"] {
+    --step-color: var(--color-info);
+  }
+}
+
+.rail {
+  display: flex;
+  justify-content: center;
+  padding-top: 0.0625rem;
+}
+
+.icon {
+  width: 1.25rem;
+  height: 1.25rem;
+  color: var(--step-color);
+  background-color: var(--color-surface);
+  border-radius: var(--radius-full);
+
+  .item[data-status="pending"] & {
+    animation: spin 1s linear infinite;
+  }
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+
+.title {
+  min-width: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+.duration {
+  margin-inline-start: auto;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+
+  &[data-unknown] {
+    font-family: var(--font-family-sans);
+    color: var(--color-warning-text);
+  }
+}
+
+.meta {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.track {
+  display: block;
+  height: 0.25rem;
+  border-radius: var(--radius-pill);
+  background-color: var(--color-surface-sunken);
+  overflow: hidden;
+}
+
+.bar {
+  display: block;
+  width: var(--width, 0%);
+  height: 100%;
+  border-radius: inherit;
+  background-color: var(--step-color);
+}
+
+.detail {
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+}
+
+.total {
+  margin: 0;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border-muted);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+  text-align: end;
+}
+
+.empty {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .item[data-status="pending"] .icon {
+    animation: none;
+  }
+}

@@ -2,9 +2,12 @@
   min-width: 0;
 }
 
+/* One line: while the trail fits, every crumb shows in full; only when it
+   doesn't do crumbs shrink and cut their text with an ellipsis, so a long
+   record name never wraps the trail out of a top bar. */
 .list {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 0.25rem;
   margin: 0;
@@ -13,27 +16,59 @@
   font-size: var(--font-size-sm);
 }
 
+.nav[data-wrap] .list {
+  flex-wrap: wrap;
+}
+
+/* No width caps: a crumb is cut only when the trail overflows the room it
+   has (a percentage cap resolved against the trail itself cut "Admin" in a
+   two-crumb trail with a thousand pixels free). Then, in order: the current
+   page gives up room first (its shrink factor is 10,000 times the others'),
+   down to its floor; then the crumbs before it, down to theirs (flexbox
+   freezes an item at its minimum and hands the rest to the others). The
+   floors are a crumb's own width when it is shorter (measured into
+   --crumb-width, so nothing is stretched): 5.5rem for the crumbs before
+   ("Demo t…", never "D…"), and min(12rem, 25vw) for the current page. */
 .item {
   display: inline-flex;
+  flex: 0 1 auto;
   align-items: center;
   gap: 0.25rem;
   min-width: 0;
 }
 
+.item:not(:last-child) {
+  min-width: min(var(--crumb-width, 0px), 5.5rem);
+}
+
+.item:last-child {
+  flex-shrink: 10000;
+  min-width: min(var(--crumb-width, 0px), 12rem, 25vw);
+}
+
+/* Block boxes, so the icon and the text cut together with one ellipsis. */
 .link,
 .current {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.375rem;
+  display: block;
+  min-width: 0;
   padding: 0.125rem 0.25rem;
   margin: -0.125rem -0.25rem;
+  overflow: hidden;
   border-radius: var(--radius-1);
+  text-overflow: ellipsis;
   white-space: nowrap;
 
   & svg {
+    display: inline-block;
     width: 0.875rem;
     height: 0.875rem;
+    margin-inline-end: 0.375rem;
+    vertical-align: -0.125em;
   }
+}
+
+.nav[data-wrap] :is(.link, .current) {
+  overflow: visible;
 }
 
 .link {
@@ -59,8 +94,50 @@
 }
 
 .separator {
+  flex: none;
   width: 0.875rem;
   height: 0.875rem;
   margin-inline: 0.125rem;
   color: var(--color-text-subtle);
+}
+
+/* A collapsed item: "…" opening a menu of the hidden crumbs. */
+.more {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  min-width: 1.5rem;
+  min-height: 1.5rem;
+  justify-content: center;
+  padding: 0 0.25rem;
+  margin: -0.125rem -0.125rem;
+  border: 0;
+  border-radius: var(--radius-1);
+  background: none;
+  color: var(--color-text-muted);
+  font: inherit;
+  cursor: pointer;
+
+  &:hover,
+  &[data-popup-open] {
+    background-color: var(--color-surface-hover);
+    color: var(--color-text);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 1px;
+  }
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }

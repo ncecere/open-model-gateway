@@ -1,0 +1,22 @@
+.root {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.input {
+  font-variant-numeric: tabular-nums;
+}
+
+.root .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.unit {
+  flex: none;
+  white-space: nowrap;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}

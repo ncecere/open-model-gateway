@@ -1,0 +1,17 @@
+/* PresetChoice: radios, then the Custom input in place. */
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.custom {
+  max-width: 20rem;
+}
+
+.prefix {
+  font-size: var(--font-size-sm);
+  font-style: normal;
+  color: var(--color-text-muted);
+}

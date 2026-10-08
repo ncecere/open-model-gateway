@@ -1,0 +1,244 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 100%;
+  min-width: 0;
+}
+
+/* Controls line up on their bottom edge, so buttons sit level with a labelled search box. */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.filter {
+  flex: 1 1 14rem;
+  max-width: 20rem;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-inline-start: auto;
+}
+
+/* The sort button fills the header cell and inherits its type style. */
+.sort {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: calc(var(--space-1) * -1) calc(var(--space-2) * -1);
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-1);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-duration-fast) var(--motion-ease-out),
+    color var(--motion-duration-fast) var(--motion-ease-out);
+
+  @media (hover: hover) {
+    &:hover {
+      background-color: var(--color-surface-hover);
+      color: var(--color-text);
+    }
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 0;
+  }
+
+  &[data-active] {
+    color: var(--color-text);
+  }
+
+  th[data-numeric] & {
+    flex-direction: row-reverse;
+  }
+}
+
+.sortIcon {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  opacity: 0.7;
+
+  .sort[data-active] & {
+    opacity: 1;
+  }
+}
+
+.check {
+  display: inline-flex;
+}
+
+.message {
+  padding: var(--space-8) var(--space-4);
+  text-align: center;
+  font-size: var(--font-size-md);
+  color: var(--color-text-muted);
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.summary {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.footer > nav {
+  width: auto;
+  margin-inline-start: auto;
+}
+
+/* Focus lands on the table when a focused control goes away (see data-table.tsx). */
+.table:focus {
+  outline: none;
+}
+
+.table:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: -2px;
+}
+
+/* Stale rows stay visible, slightly dimmed, while fresh data loads. */
+.table tbody {
+  transition: opacity var(--motion-duration-fast) var(--motion-ease-out);
+}
+
+.root[data-stale] .table tbody {
+  opacity: 0.6;
+}
+
+/* onRowClick: the whole row opens the record; the row header's content is its button. */
+.table tbody tr[data-clickable] {
+  cursor: pointer;
+}
+
+.rowOpen {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-1);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  cursor: pointer;
+
+  &:focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 2px;
+  }
+}
+
+.table tbody tr[data-clickable]:hover .rowOpen {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.table tbody tr.skeletonRow:hover {
+  background-color: transparent;
+}
+
+.errorCell {
+  padding: var(--space-4);
+}
+
+.more {
+  display: flex;
+  justify-content: center;
+}
+
+/* CellText: a name over a muted subtitle. */
+.cellText {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+  max-width: 100%;
+  vertical-align: middle;
+}
+
+/* break-word (not anywhere): long tokens still wrap, but a column is never
+   squeezed below its longest word, so words don't break mid-word. */
+.cellPrimary {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text);
+  overflow-wrap: break-word;
+}
+
+.cellSecondary {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--line-height-snug);
+  color: var(--color-text-muted);
+  overflow-wrap: break-word;
+}
+
+/* On a phone a name-and-description cell keeps a readable width and the
+   table scrolls sideways, instead of wrapping a word per line. */
+@media (max-width: 37.5rem) {
+  .cellText {
+    min-width: min(11rem, 70vw);
+  }
+}
+
+/* wrap="anywhere": long ids and URLs break instead of widening the column. */
+.cellText[data-wrap="anywhere"] :is(.cellPrimary, .cellSecondary) {
+  overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sort,
+  .table tbody {
+    transition: none;
+  }
+}
+
+/* Bulk action bar: shown while rows are selected. */
+.bulk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-3);
+  background-color: var(--color-primary-subtle);
+}
+
+.bulkCount {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-primary-subtle-text);
+}
+
+.bulkActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.bulkClear {
+  margin-inline-start: auto;
+}

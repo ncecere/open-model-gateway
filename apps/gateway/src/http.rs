@@ -5,11 +5,11 @@ use std::{
 
 use axum::{
     Extension, Json, Router,
-    extract::{Request, State},
+    extract::{DefaultBodyLimit, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{MethodRouter, get, post},
 };
 use serde_json::json;
 use tower_http::limit::RequestBodyLimitLayer;
@@ -19,8 +19,10 @@ use uuid::Uuid;
 use crate::{
     auth::Principal,
     identity::IdentityState,
-    inference::{Engine, EngineLimits},
-    protocols::{chat_completions, messages, responses},
+    inference::{Engine, EngineLimits, types::WorkloadKind},
+    protocols::{
+        audio, chat_completions, embeddings, images, messages, rerank, responses, systemone,
+    },
     providers::ProviderRegistry,
     store::Store,
     web::WebAssets,
@@ -73,6 +75,41 @@ fn build_router(
         .route("/v1/chat/completions", post(chat_completions::handle))
         .route("/v1/responses", post(responses::handle))
         .route("/v1/messages", post(messages::handle))
+        .route("/v1/embeddings", post(embeddings::handle))
+        .route_layer(middleware::from_fn_with_state(store.clone(), authenticate));
+    // Non-generation workloads carry their own configured body caps instead
+    // of the shared 2 MiB limit (transcriptions also cap the file part).
+    let limits = engine.limits().workloads;
+    let capped = |kind: WorkloadKind, route: MethodRouter<Store>| -> MethodRouter<Store> {
+        let bytes = limits.body_bytes(kind).expect("workload body cap");
+        route
+            .layer::<_, std::convert::Infallible>(DefaultBodyLimit::max(bytes))
+            .layer(RequestBodyLimitLayer::new(bytes))
+    };
+    let workloads = Router::new()
+        .route(
+            "/v1/images/generations",
+            capped(WorkloadKind::Images, post(images::handle)),
+        )
+        .route(
+            "/v1/rerank",
+            capped(WorkloadKind::Rerank, post(rerank::handle)),
+        )
+        .route(
+            "/v1/systemone",
+            capped(WorkloadKind::Systemone, post(systemone::handle)),
+        )
+        .route(
+            "/v1/audio/transcriptions",
+            capped(
+                WorkloadKind::AudioTranscriptions,
+                post(audio::transcriptions),
+            ),
+        )
+        .route(
+            "/v1/audio/speech",
+            capped(WorkloadKind::AudioSpeech, post(audio::speech)),
+        )
         .route_layer(middleware::from_fn_with_state(store.clone(), authenticate));
 
     let mut root = Router::new();
@@ -96,8 +133,9 @@ fn build_router(
             }
         }
     })
-    .layer(Extension(engine))
     .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024))
+    .merge(workloads)
+    .layer(Extension(engine))
     .layer(middleware::from_fn(request_context))
     .with_state(store)
 }
@@ -286,6 +324,12 @@ mod tests {
             ("/v1/chat/completions", "POST"),
             ("/v1/responses", "POST"),
             ("/v1/messages", "POST"),
+            ("/v1/embeddings", "POST"),
+            ("/v1/rerank", "POST"),
+            ("/v1/systemone", "POST"),
+            ("/v1/images/generations", "POST"),
+            ("/v1/audio/transcriptions", "POST"),
+            ("/v1/audio/speech", "POST"),
         ] {
             let response = app()
                 .oneshot(
@@ -320,6 +364,27 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn audio_routes_reject_bad_credentials_before_parsing() {
+        // Every workload kind now has a served route; audio is key-authenticated
+        // before any multipart/JSON parsing.
+        for path in ["/v1/audio/transcriptions", "/v1/audio/speech"] {
+            let response = app()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(path)
+                        .header(header::AUTHORIZATION, "Bearer synthetic")
+                        .header(header::CONTENT_TYPE, "multipart/form-data")
+                        .body(Body::from("not a form"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+        }
     }
 
     #[test]

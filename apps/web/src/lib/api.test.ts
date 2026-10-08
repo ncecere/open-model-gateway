@@ -15,10 +15,11 @@ describe("management API", () => {
   it("uses same-origin cookies, bypasses HTTP caching, and passes cancellation", async () => {
     const fetch = vi.fn().mockResolvedValue(Response.json({ user: { id: "me" } }));
     vi.stubGlobal("fetch", fetch);
-    const signal = new AbortController().signal;
+    const controller = new AbortController(), signal = controller.signal;
     await api(`${API}/me`, { signal });
-    expect(fetch).toHaveBeenCalledWith("/api/v1/me", expect.objectContaining({ method: "GET", credentials: "same-origin", cache: "no-store", signal }));
+    expect(fetch).toHaveBeenCalledWith("/api/v1/me", expect.objectContaining({ method: "GET", credentials: "same-origin", cache: "no-store", signal: expect.any(AbortSignal) }));
     expect(fetch.mock.calls[0][1].headers).toEqual({ Accept: "application/json" });
+    controller.abort(); expect(fetch.mock.calls[0][1].signal.aborted).toBe(true);
   });
   it.each(["POST", "PATCH", "DELETE"] as const)("sends readable CSRF cookie for %s without overriding browser Origin", async (method) => {
     cookie();
@@ -69,7 +70,7 @@ describe("management API", () => {
     vi.stubGlobal("fetch", vi.fn().mockImplementation(() => Promise.resolve(Response.json({ error: { message: "Sign in" } }, { status: 401 }))));
     await expect(api(`${API}/me`)).rejects.toBeInstanceOf(ApiError);
     expect(dispatchEvent).not.toHaveBeenCalled();
-    await expect(api(`${API}/orgs/id/models`)).rejects.toBeInstanceOf(ApiError);
+    await expect(api(`${API}/workspaces/id/models`)).rejects.toBeInstanceOf(ApiError);
     expect(dispatchEvent.mock.calls[0][0].type).toBe("omg:unauthorized");
   });
   it("sanitizes network errors while preserving cancellation", async () => {

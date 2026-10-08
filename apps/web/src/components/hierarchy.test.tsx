@@ -1,109 +1,22 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { renderToStaticMarkup } from "react-dom/server";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactNode } from "react";
-import type { Organization, Session, Workspace } from "../lib/api";
-import { ActionProvider, CollectionTable } from "./ui";
-import { Organizations, PlatformTeams, PlatformUsers, Teams } from "../pages/hierarchy";
-import { OrganizationMembers } from "../pages/organization";
-import { adminGroups, adminLanding, contextOptions, navigation, pageScope, scopeSearch } from "../lib/navigation";
-import { canAdminister, canView, dashboardSearch } from "../lib/permissions";
-
-const org: Organization = { id: "org", name: "College of Business", slug: "business", role: "admin" };
-const team: Workspace = { id: "team", organization_id: "org", name: "IT", kind: "team", role: "admin" };
-const personal: Workspace = { ...team, id: "private", name: "My personal", kind: "personal", role: "owner" };
-const session: Session = { user: { id: "me", email: "me@example.invalid", platform_admin: false }, organizations: [org], workspaces: [personal, team] };
-const operator: Session = { ...session, user: { ...session.user, platform_admin: true } };
-const go = () => {};
-const clients: QueryClient[] = [];
-function render(node: ReactNode, entries: [string, unknown][] = []) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } }); clients.push(client);
-  for (const [path, data] of entries) client.setQueryData(["api", path], data);
-  return renderToStaticMarkup(<QueryClientProvider client={client}><ActionProvider>{node}</ActionProvider></QueryClientProvider>);
-}
-afterEach(() => { clients.forEach(client => client.clear()); clients.length = 0; });
-describe("hierarchical administration", () => {
-  it("has explicit directory pages and separates platform, organization and team scopes", () => {
-    expect(navigation.find(item => item.page === "organizations")?.group).toBe("Platform");
-    expect(navigation.find(item => item.page === "users")?.group).toBe("Platform");
-    expect(navigation.filter(item => item.group === "Platform").map(item => item.label)).toEqual(["Overview", "Organizations", "Teams", "Projects", "Users"]);
-    expect(adminGroups("teams", true)).not.toContain("Organization");
-    expect(adminGroups("assigned-models", true)).not.toContain("Organization");
-    expect(pageScope("platform-teams")).toBe("platform");
-    expect(navigation.find(item => item.page === "organization-settings")?.group).toBe("Workspace");
-    expect(navigation.find(item => item.page === "workspace-settings")?.group).toBe("Workspace");
-    expect(pageScope("members")).toBe("workspace");
-  });
-  it("keeps the context selector strictly to existing resources", () => {
-    expect(contextOptions(operator, org)).toEqual([
-      { label: "Organizations", items: [{ label: org.name, org: "org", ws: undefined }] },
-      { label: "Personal · private", items: [{ label: personal.name, org: "org", ws: "private" }] },
-      { label: "Teams", items: [{ label: "IT", org: "org", ws: "team" }] },
-    ]);
-    expect(contextOptions({ ...operator, organizations: [], workspaces: [] })).toEqual([]);
-    expect(contextOptions(operator, org, true)).toEqual([{ label: "Platform", items: [{ label: "Platform", page: "platform-overview" }] }]);
-  });
-  it("does not include another organization’s teams in the selector", () => {
-    const result = contextOptions({ ...session, workspaces: [...session.workspaces, { ...team, id: "foreign", organization_id: "other" }] }, org);
-    expect(JSON.stringify(result)).not.toContain("foreign");
-  });
-  it("does not imply an organization context on platform-wide pages", () => {
-    expect(adminGroups("users", true)).toEqual(["Platform", "Models", "Oversight"]);
-    expect(adminGroups("organizations", true)).toEqual(["Platform", "Models", "Oversight"]);
-    expect(adminGroups("teams")).toEqual([]);
-    expect(contextOptions(operator).map(group => group.label)).toEqual(["Organizations"]);
-  });
-  it("clears lower-level context when navigating upward", () => {
-    expect(scopeSearch("organizations", "org", "private")).toEqual({ page: "organizations", org: undefined, ws: undefined });
-    expect(scopeSearch("users", "org", "private").org).toBeUndefined();
-    expect(scopeSearch("teams", "org", "private")).toMatchObject({ page: "organization-settings", org: "org", tab: "teams" });
-    expect(scopeSearch("members", "org", "team").ws).toBe("team");
-    for (const page of ["organizations", "users", "teams"] as const) expect(dashboardSearch({ page, token: "secret" }).page).toBe(page);
-  });
-  it("allows an operator with no organizations to reach organization creation", () => {
-    const empty = { ...operator, organizations: [], workspaces: [] };
-    expect(canAdminister(empty)).toBe(true); expect(canView("organizations", empty)).toBe(true);
-    expect(adminLanding(empty)).toBe("platform-overview");
-    expect(render(<Organizations session={empty} go={go} />)).toContain("Create organization</button>");
-  });
-  it("offers organization creation only to operators", () => {
-    expect(render(<Organizations session={session} go={go} />)).not.toContain("Create organization</button>");
-    expect(canView("users", session, org, team)).toBe(false); expect(canView("users", operator)).toBe(true);
-  });
-  it("allows team administrators into their team directory, not platform users or organization management", () => {
-    const memberOrg: Organization = { ...org, role: "member" };
-    const manager: Session = { ...session, organizations: [memberOrg] };
-    expect(canAdminister(manager)).toBe(false); expect(adminLanding(manager, memberOrg)).toBe("workspace-settings");
-    expect(canView("teams", manager, memberOrg)).toBe(true); expect(canView("organization-members", manager, memberOrg)).toBe(false);
-    const html = render(<Teams session={manager} organization={memberOrg} go={go} />, [["/api/v1/orgs/org/teams?limit=100&offset=0", { data: [team] }]]);
-    expect(html).toContain("Settings</a>"); expect(html).toContain('aria-label="Actions for IT"'); expect(html).not.toContain("Create team</button>");
-  });
-  it("personal ownership never grants access to administrative directories", () => {
-    const memberOrg: Organization = { ...org, role: "member" };
-    const member: Session = { ...session, organizations: [memberOrg], workspaces: [personal, { ...team, role: "member" }] };
-    expect(canAdminister(member)).toBe(false); expect(canView("organizations", member)).toBe(false); expect(canView("teams", member, memberOrg)).toBe(false);
-  });
-  it("offers team creation to active org admins but not unjoined operators", () => {
-    expect(render(<Teams session={session} organization={org} go={go} />)).toContain("Create team</button>");
-    expect(render(<Teams session={operator} organization={{ ...org, role: "operator", membership_role: null }} go={go} />)).not.toContain("Create team</button>");
-  });
-  it("labels the global user directory read-only and sends membership management to organizations", () => {
-    const html = render(<PlatformUsers go={go} />, [["/api/v1/platform/users?limit=100&offset=0", { data: [{ id: "me", email: "person@example.invalid", platform_admin: false, disabled_at: null, created_at: "2026-01-01T00:00:00Z" }] }]]);
-    expect(html).toContain("person@example.invalid"); expect(html).toContain("read-only directory"); expect(html).toContain("Manage memberships by organization"); expect(html).not.toContain("Create user</button>");
-  });
-  it("offers a platform teams directory with explicit organization filtering", () => {
-    const html = render(<PlatformTeams session={operator} go={go} />, [["/api/v1/platform/teams?limit=100&offset=0", { data: [{ ...team, organization_name: org.name }] }]]);
-    expect(html).toContain("All organizations"); expect(html).toContain("College of Business"); expect(html).toContain("Personal workspaces are never included");
-    expect(canView("platform-teams", operator)).toBe(true);
-    expect(canView("platform-teams", session, org)).toBe(false);
-    expect(scopeSearch("platform-teams", "org", "private")).toEqual({ page: "platform-teams", org: undefined, ws: undefined });
-  });
-  it("preserves organization filters when paginating a collection", () => {
-    const html = render(<CollectionTable<{ id: string }> path="/api/v1/platform/teams?organization_id=org" label="Filtered teams" empty="Empty" rowKey={row => row.id} columns={[{ title: "ID", render: row => row.id }]} />, [["/api/v1/platform/teams?organization_id=org&limit=100&offset=0", { data: [{ id: "filtered-team" }] }]]);
-    expect(html).toContain("filtered-team");
-  });
-  it("places invitation creation entry on the organization members page", () => {
-    const html = render(<OrganizationMembers organization={org} onInvite={go} />);
-    expect(html).toContain("Invite member</button>"); expect(html).toContain("College of Business");
-  });
+import { describe, expect, it } from "vitest";
+import { PlatformTeams, PlatformUsers, OidcMappings, CostCenters, workspaceCreateBody, mappingBody, mappingFields } from "../pages/hierarchy";
+import { Invitations } from "../pages/organization";
+import { CollectionTable } from "./ui";
+import { contextOptions, navigation, pageScope, scopeSearch } from "../lib/navigation";
+import { canAdminister, canView } from "../lib/permissions";
+import { admin, auditor, session, team, project, personal, markup } from "../lib/test-fixtures";
+describe("sibling enterprise management", () => {
+  it("groups explicit shared directories in People, infrastructure in Models", () => { expect(navigation.filter(n => n.group === "People").map(n => n.label)).toEqual(["Users", "Teams", "Projects", "SSO groups"]); expect(pageScope("platform-teams")).toBe("platform"); expect(pageScope("members")).toBe("workspace"); expect(navigation.map(n => n.label)).not.toContain("Organizations"); });
+  it("selector contains only existing sibling resources", () => { expect(contextOptions(session).map(g => g.items.map(i => i.ws))).toEqual([[personal.id], [team.id], [project.id]]); expect(contextOptions({ ...admin, workspaces: [] })).toEqual([]); });
+  it("global destinations clear contextual workspace", () => { expect(scopeSearch("users", personal.id)).toEqual({ page: "users", ws: undefined }); expect(scopeSearch("members", team.id)).toMatchObject({ page: "workspace-settings", ws: team.id, tab: "members" }); });
+  it("allows Admin-only shared creation, including with no memberships", () => { const empty = { ...admin, workspaces: [] }; expect(canAdminister(empty)).toBe(true); expect(markup(<PlatformTeams session={empty} kind="team" />)).toContain("Create team"); expect(markup(<PlatformTeams session={auditor} kind="team" />)).not.toContain("Create team</button>"); expect(markup(<PlatformTeams session={session} kind="team" />)).not.toContain("Create team</button>"); });
+  it("personal ownership does not unlock administrative directories", () => { expect(canView("platform-teams", session, personal)).toBe(false); expect(canView("users", session, team)).toBe(false); });
+  it("creates Projects without Team parents", () => { expect(workspaceCreateBody({ name: "Research", owner_user_id: "owner" }, "project")).toEqual({ name: "Research", kind: "project", owner_user_id: "owner" }); const html = markup(<PlatformTeams session={admin} kind="project" />, [["/api/v1/platform/workspaces?kind=project&limit=50&offset=0", { data: [project] }]]); expect(html).toContain("Research"); expect(html).toContain("being in a team doesn&#x27;t add you"); expect(html).toContain("/admin/projects/project"); });
+  it("renders entitled user provenance rather than a read-only dead directory", () => { const html = markup(<PlatformUsers session={admin} />, [["/api/v1/platform/users?limit=50&offset=0", { data: [{ id: "me", email: "person@example.invalid", platform_role: "admin", disabled_at: null, role_grants: [{ role: "admin", source: "group" }] }] }]]); expect(html).toContain("person@example.invalid"); expect(html).toContain("Admin · group"); expect(html).toContain("Add user"); expect(markup(<PlatformUsers session={auditor} />)).not.toContain("Add user</button>"); });
+  it("never lists personal workspaces in shared directories", () => { const html = markup(<PlatformTeams session={admin} kind="team" />, [["/api/v1/platform/workspaces?kind=team&limit=50&offset=0", { data: [team] }]]); expect(html).toContain("Product"); expect(html).not.toContain("/workspaces/personal"); });
+  it("preserves shared-kind filtering before collection pagination", () => { const html = markup(<CollectionTable<{ id: string }> path="/api/v1/platform/workspaces?kind=team" label="Teams" empty="Empty" rowKey={r => r.id} columns={[{ title: "ID", render: r => r.id }]} />, [["/api/v1/platform/workspaces?kind=team&limit=50&offset=0", { data: [{ id: "filtered-team" }] }]]); expect(html).toContain("filtered-team"); });
+  it("puts invitations in shared membership settings, never personal sharing", () => { const html = markup(<Invitations session={session} workspace={team} />); expect(html).toContain("Invite by email"); expect(html).toContain("no email is sent"); expect(html).toContain("3 days"); });
+  it("maps platform and workspace grants as independent exclusive targets", () => { expect(mappingBody({ issuer: "https://idp", group_value: "staff", target_kind: "platform", platform_role: "auditor", workspace_id: "ignored", enabled: "true" })).toEqual({ issuer: "https://idp", group_value: "staff", target_kind: "platform", platform_role: "auditor", workspace_id: null, workspace_role: null, enabled: true }); expect(mappingFields(admin).find(f => f.name === "workspace_id")?.options?.map(o => o.value)).toEqual([team.id, project.id]); });
+  it("shows honest generic OIDC synchronization boundaries", () => { expect(markup(<OidcMappings session={admin} />)).toContain("not continuously"); expect(markup(<OidcMappings session={auditor} />)).not.toContain("Create mapping</button>"); });
+  it("keeps cost allocation optional and historic labels pinned", () => { const html = markup(<CostCenters session={admin} />); expect(html).toContain("Unallocated"); expect(html).toContain("new requests only"); expect(html).toContain("Assign workspace"); expect(markup(<CostCenters session={auditor} />)).not.toContain("Assign workspace</button>"); });
 });

@@ -1,7 +1,5 @@
 //! Anthropic Messages version 2023-06-01: stateless text and function tools only.
-use super::responses::{
-    Accumulator, Result, event, fields, message, name, status, string, validate,
-};
+use super::responses::{Accumulator, Result, event, fields, message, name, string, validate};
 use crate::{
     auth::Principal,
     http::RequestId,
@@ -217,7 +215,38 @@ fn usage_json(usage: Usage) -> Value {
     if let Some(n) = usage.output_tokens {
         value["output_tokens"] = n.into();
     }
+    if let Some(b) = usage.billing {
+        if let Some(n) = b.cache_read_input_tokens {
+            value["cache_read_input_tokens"] = n.into();
+        }
+        if let Some(n) = b.cache_write_input_tokens {
+            value["cache_creation_input_tokens"] = n.into();
+        }
+        let mut allocation = json!({});
+        if let Some(n) = b.cache_write_5m_input_tokens {
+            allocation["ephemeral_5m_input_tokens"] = n.into();
+        }
+        if let Some(n) = b.cache_write_1h_input_tokens {
+            allocation["ephemeral_1h_input_tokens"] = n.into();
+        }
+        if allocation.as_object().is_some_and(|d| !d.is_empty()) {
+            value["cache_creation"] = allocation;
+        }
+    }
     value
+}
+/// `message_start` usage: observed input-side counters only. `output_tokens` is
+/// the vendor's cumulative count at stream start (0) and is emitted only when the
+/// final count is known, because `message_delta` must then replace it; unknown
+/// output stays absent rather than becoming an SDK-visible zero.
+fn start_usage(terminal: &Value) -> Value {
+    let mut usage = terminal.clone();
+    if let Some(fields) = usage.as_object_mut()
+        && fields.contains_key("output_tokens")
+    {
+        fields.insert("output_tokens".into(), 0.into());
+    }
+    usage
 }
 fn snapshot(id: &str, model: &str, response: &ChatResponse) -> Result<Value> {
     let mut content = vec![];
@@ -250,16 +279,18 @@ fn render(output: ProviderOutput, id: String, model: String) -> Response {
         },
         ProviderOutput::Stream(mut stream) => {
             let events = async_stream::stream! {
-                yield Ok::<_,Infallible>(event("message_start", json!({"message":{"id":id,"type":"message","role":"assistant","model":model,"content":[],"stop_reason":null,"stop_sequence":null,"usage":{}}})));
                 let mut accumulator = Accumulator::default(); let mut done = false;
                 while let Some(next) = stream.next().await {
                     match next.and_then(|e| accumulator.push(e)) {
                         Ok(false) => continue, Ok(true) => { done = true; break; }
-                        Err(e) => { yield Ok(event("error", error_body(e))); return; }
+                        Err(e) => { yield Ok::<_, Infallible>(event("error", error_body(e))); return; }
                     }
                 }
                 if !done { yield Ok(event("error", error_body(InferenceError::InvalidUpstream))); return; }
                 let terminal = match accumulator.finish().and_then(|r| snapshot(&id, &model, &r)) { Ok(v) => v, Err(e) => { yield Ok(event("error", error_body(e))); return; } };
+                // Output is buffered, so message_start follows validated completion
+                // and carries the observed input-side usage (vendor shape).
+                yield Ok(event("message_start", json!({"message":{"id":id,"type":"message","role":"assistant","model":model,"content":[],"stop_reason":null,"stop_sequence":null,"usage":start_usage(&terminal["usage"])}})));
                 // Serial blocks avoid illegal interleaving of parallel function argument deltas.
                 for (index, block) in terminal["content"].as_array().unwrap().iter().enumerate() {
                     let mut start = block.clone();
@@ -283,14 +314,18 @@ fn error_body(e: InferenceError) -> Value {
         | InferenceError::UpstreamRejected
         | InferenceError::Unsupported => "invalid_request_error",
         InferenceError::ModelUnavailable => "not_found_error",
-        InferenceError::Busy => "rate_limit_error",
+        // Anthropic has no budget type for HTTP 429; the message distinguishes it.
+        InferenceError::Busy
+        | InferenceError::BudgetExceeded(_)
+        | InferenceError::UnresolvedUsage(_)
+        | InferenceError::TokenReservationExceedsLimit(_) => "rate_limit_error",
         InferenceError::UpstreamUnavailable => "overloaded_error",
         _ => "api_error",
     };
     json!({"type":"error","error":{"type":kind,"message":e.message()}})
 }
 fn error_response(e: InferenceError) -> Response {
-    (status(e), Json(error_body(e))).into_response()
+    super::error_with_body(e, error_body(e))
 }
 #[cfg(test)]
 mod tests;

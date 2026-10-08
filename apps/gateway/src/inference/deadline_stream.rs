@@ -1,8 +1,5 @@
 //! Deadline cancellation independent of downstream polling; never produces network data in a task.
-use super::{
-    error::InferenceError,
-    types::{ChatEvent, EventStream},
-};
+use super::{error::InferenceError, types::ChatEvent};
 use futures_util::{Stream, task::AtomicWaker};
 use std::{
     pin::Pin,
@@ -10,26 +7,24 @@ use std::{
     task::{Context, Poll},
 };
 use tokio::{task::JoinHandle, time::Instant};
-struct State {
-    stream: Option<EventStream>,
+/// Any boxed fallible stream; generation uses [`EventStream`], speech bytes.
+pub(super) type Boxed<T> = Pin<Box<dyn Stream<Item = Result<T, InferenceError>> + Send>>;
+struct State<T> {
+    stream: Option<Boxed<T>>,
     expired: bool,
     error_emitted: bool,
 }
-struct Shared {
-    state: Mutex<State>,
+struct Shared<T> {
+    state: Mutex<State<T>>,
     waker: AtomicWaker,
     permit: Option<super::SharedPermit>,
 }
-pub(super) struct DeadlineStream {
-    shared: Arc<Shared>,
+pub(super) struct DeadlineStream<T: Send + 'static = ChatEvent> {
+    shared: Arc<Shared<T>>,
     watchdog: JoinHandle<()>,
 }
-impl DeadlineStream {
-    pub fn new(
-        stream: EventStream,
-        deadline: Instant,
-        permit: Option<super::SharedPermit>,
-    ) -> Self {
+impl<T: Send + 'static> DeadlineStream<T> {
+    pub fn new(stream: Boxed<T>, deadline: Instant, permit: Option<super::SharedPermit>) -> Self {
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 stream: Some(stream),
@@ -58,8 +53,8 @@ impl DeadlineStream {
         Self { shared, watchdog }
     }
 }
-impl Stream for DeadlineStream {
-    type Item = Result<ChatEvent, InferenceError>;
+impl<T: Send + 'static> Stream for DeadlineStream<T> {
+    type Item = Result<T, InferenceError>;
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.shared.waker.register(cx.waker());
         let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -73,7 +68,7 @@ impl Stream for DeadlineStream {
         }
     }
 }
-impl Drop for DeadlineStream {
+impl<T: Send + 'static> Drop for DeadlineStream<T> {
     fn drop(&mut self) {
         self.watchdog.abort();
         self.shared

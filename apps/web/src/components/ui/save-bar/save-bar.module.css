@@ -1,0 +1,63 @@
+/*
+ * Closed, the bar collapses to nothing but stays in the DOM, so its live
+ * region exists before the message is inserted (and is announced). It is
+ * taken out of the flow, so a parent's gap leaves no hole where it sits.
+ */
+.bar {
+  position: sticky;
+  bottom: var(--space-4);
+  z-index: var(--z-sticky);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+
+  &:not([data-open]) {
+    position: absolute;
+    width: 1px;
+    height: 0;
+    margin: 0;
+    overflow: hidden;
+  }
+
+  &[data-open] {
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-card);
+    background-color: var(--color-surface);
+    box-shadow: var(--shadow-4);
+    animation: rise var(--motion-duration-normal) var(--motion-ease-out);
+  }
+}
+
+.message {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-inline-start: auto;
+
+  &[hidden] {
+    display: none;
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bar[data-open] {
+    animation: none;
+  }
+}

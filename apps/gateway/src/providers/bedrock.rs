@@ -26,6 +26,8 @@ mod stream;
 mod tests;
 #[path = "bedrock/transport.rs"]
 mod transport;
+#[path = "bedrock/wire.rs"]
+mod wire;
 
 type Result<T> = std::result::Result<T, InferenceError>;
 const OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
@@ -446,14 +448,23 @@ fn usage(value: &aws::TokenUsage) -> Result<Usage> {
     {
         return Err(InferenceError::InvalidUpstream);
     }
-    Ok(Usage {
-        input_tokens: Some(
-            u64::try_from(value.input_tokens).map_err(|_| InferenceError::InvalidUpstream)?,
-        ),
-        output_tokens: Some(
-            u64::try_from(value.output_tokens).map_err(|_| InferenceError::InvalidUpstream)?,
-        ),
-    })
+    let mut wire =
+        serde_json::json!({"inputTokens":value.input_tokens,"outputTokens":value.output_tokens});
+    if let Some(n) = value.cache_read_input_tokens {
+        wire["cacheReadInputTokens"] = n.into();
+    }
+    if let Some(n) = value.cache_write_input_tokens {
+        wire["cacheWriteInputTokens"] = n.into();
+    }
+    if let Some(details) = &value.cache_details {
+        wire["cacheDetails"] = Value::Array(
+            details
+                .iter()
+                .map(|d| serde_json::json!({"ttl":d.ttl.as_str(),"inputTokens":d.input_tokens}))
+                .collect(),
+        );
+    }
+    super::metering::bedrock(&wire)
 }
 fn decode_complete(
     output: aws_sdk_bedrockruntime::operation::converse::ConverseOutput,

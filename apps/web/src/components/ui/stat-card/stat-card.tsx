@@ -10,6 +10,7 @@ import styles from "./stat-card.module.css";
  * A metric tile. With `href` or `render` the label becomes a link whose hit
  * area is stretched over the whole card (one tab stop, named by the label),
  * so the tile opens a page without nesting the <dl> inside an <a>.
+ * `chart` puts a small trend (a Sparkline) under the value.
  */
 
 export type StatTrend = "up" | "down" | "flat";
@@ -33,6 +34,8 @@ export type StatCardProps = {
   hint?: ReactNode;
   /** Block content under the value, e.g. a breakdown list. */
   details?: ReactNode;
+  /** A small chart under the value, e.g. `<Sparkline values={daily} label="…" />`. */
+  chart?: ReactNode;
   /** Makes the card a link to this URL. */
   href?: string;
   /** Makes the card a link rendered by another element, e.g. `render={<Link to="/sources" />}`. */
@@ -48,7 +51,7 @@ function StatLink({ href, render, children }: { href?: string; render?: useRende
 }
 
 /** A metric tile: label, big number, optional delta, icon and link. Uses <dl> semantics. */
-export function StatCard({ label, value, delta, icon, hint, details, href, render, className }: StatCardProps) {
+export function StatCard({ label, value, delta, icon, hint, details, chart, href, render, className }: StatCardProps) {
   const sentiment = delta?.sentiment ?? (delta?.trend === "up" ? "positive" : delta?.trend === "down" ? "negative" : "neutral");
   const TrendIcon = delta ? trendIcons[delta.trend] : null;
   const linked = href !== undefined || render !== undefined;
@@ -83,6 +86,7 @@ export function StatCard({ label, value, delta, icon, hint, details, href, rende
             {hint && <span className={styles.hint}>{hint}</span>}
           </dd>
         )}
+        {chart && <dd className={styles.chart}>{chart}</dd>}
         {details && <dd className={styles.details}>{details}</dd>}
       </dl>
     </div>

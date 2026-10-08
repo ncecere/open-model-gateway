@@ -64,14 +64,28 @@ impl HttpConnector for Connector {
                 .try_into()
                 .map_err(|_| failure())?;
             let headers = response.headers().clone();
+            let successful = response.status().is_success();
+            let event_stream = headers
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|h| h.to_str().ok())
+                .is_some_and(|h| h.split(';').next() == Some("application/vnd.amazon.eventstream"));
             let body = async_stream::try_stream! {
                 let mut stream = response.bytes_stream();
                 let mut size = 0usize;
+                let mut guard = super::wire::StreamGuard::default();
+                let mut complete = Vec::new();
                 while let Some(chunk) = stream.next().await {
                     let chunk = chunk.map_err(|_| std::io::Error::other("Provider body failed"))?;
                     if chunk.len() > WIRE_LIMIT - size { Err(std::io::Error::other("Provider body limit"))?; }
                     size += chunk.len();
-                    yield http_body::Frame::data(chunk);
+                    if !successful { yield http_body::Frame::data(chunk); }
+                    else if event_stream {
+                        for frame in guard.push(&chunk)? { yield http_body::Frame::data(axum::body::Bytes::from(frame)); }
+                    } else { complete.extend_from_slice(&chunk); }
+                }
+                if successful {
+                    if event_stream { guard.end()?; }
+                    else { super::wire::complete(&complete)?; yield http_body::Frame::data(axum::body::Bytes::from(complete)); }
                 }
             };
             let body: std::pin::Pin<

@@ -1,5 +1,7 @@
 # Repository guidance
 
+The single-enterprise rebuild is in progress. `docs/enterprise-rebuild.md` records the approved product decisions and scope; it supersedes legacy multi-organization assumptions. Implement the new schema on fresh, explicitly selected databases only. Never reset or migrate an old installation implicitly.
+
 ## Layout
 
 - `apps/gateway`: Rust modular monolith; owns all database access and authorization.
@@ -10,18 +12,22 @@
 
 ## Invariants
 
-- Organization is the consuming tenant boundary. Tenant relationships use composite foreign keys; provider/model/deployment infrastructure is platform-owned and requires explicit organization entitlements.
+- One installation serves one enterprise; there are no selectable organizations. Workspaces are the resource/security boundary. Team and Project are equivalent sibling shared kinds; personal workspaces are owner-private. Enforce workspace relationships with scoped foreign keys and live authorization.
 - Inference keys belong to one workspace. Derive tenant and workspace from validated credentials, never client-selected headers or body fields.
-- Personal workspaces cannot be shared. Teams and projects are sibling shared workspace kinds; their access requires current membership. Individual model grants apply within the user's own personal scope and never bypass shared workspace grants.
-- Platform-assigned organization policy ceilings are separate from editable organization/workspace/key policies. All applicable limits compose; absent child limits inherit the shared parent allowance, never remove or reserve it.
+- Personal workspaces cannot be shared. Platform Admins/Auditors may see personal usage/cost totals, never another owner's keys or request details. Shared-workspace members see their own activity; workspace admins see workspace-wide activity. Global metadata authority does not satisfy human-key membership requirements.
+- Platform roles are User, Auditor and Admin; Auditor/Admin include User entitlement. OIDC authentication alone does not grant platform access. Group/manual grant provenance must remain separate. Revoked keys never reactivate when an account returns.
+- Live workspace-type defaults and replacement platform overrides are separate from tighten-only local/key policies. All applicable limits compose; absent child limits inherit, never remove or reserve allowance. The installation-wide monthly budget is optional and additional. Increasing limits never resets spending.
+- Catalog availability follows live type defaults unless replaced per workspace. Catalog-sourced model selection requires current catalog eligibility; direct platform assignment is independent. Removal must not silently resurrect old selections when later reassigned.
+- Optional cost-center assignment is platform-controlled and snapshotted at admission; changes affect future usage only, never rewrite history.
 - Inference API keys are not management credentials.
 - Never store or log plaintext upstream credentials, inference tokens, or prompt/response bodies by default.
 - Provider credentials are references; validate secret access and upstream endpoints before implementing resolution/execution.
 - Client protocols and upstream providers are different layers. Do not silently discard unsupported capabilities.
 - Add providers through `ProviderAdapter` and `ProviderRegistry`; do not add provider switches to the engine. Run shared and provider-specific mock contract tests.
 - Dropping an inference future/stream must cancel upstream work. Never fabricate successful stream termination, retry implicitly, or treat unknown usage as zero. Failover requires explicit policy and must never occur after a stream is returned.
-- Global catalog changes use the exclusive catalog transaction lock; admission takes its shared form before the consuming organization row. Governance admission/scoped configuration/settlement serialize on the organization row; every upstream attempt needs its own durable reservation. Unknown cost retains holds. Never delete unknown reservations or mutate immutable pricing/ledger history.
-- Monetary API values are integer micro-USD strings, never JavaScript/Rust floats. Prices are estimates, not provider invoices. Preserve personal-workspace privacy in cost reporting/reconciliation.
+- Global catalog changes use the exclusive catalog transaction lock; admission takes its shared form before the singleton installation row. Admission/scoped configuration/settlement initially serialize on that installation boundary; every upstream attempt needs its own durable reservation. Unknown cost retains holds. Never delete unknown reservations or mutate immutable pricing/ledger history.
+- Monetary API values are integer micro-USD strings, never JavaScript/Rust floats. Prices are estimates, not provider invoices. Cache aggregates overlap their write allocations and must not be double charged. Missing rates/usage are not zero; a known held floor is not a proven upper bound. Embeddings are input-only workloads, not synthetic chat requests.
+- Local HTTP endpoints require explicit server-controlled approval and pinned permitted destinations. Disable redirects, ambient proxies and implicit retries; never forward inference credentials upstream. Cloud connections require HTTPS.
 - Routes that are not implemented must stay explicit about that; no fabricated inference responses or dashboard metrics.
 - Production is one Rust service serving APIs and optionally the built SPA, with no Node.js runtime. Inference goes directly to Rust.
 - `GATEWAY_WEB_DIR` points to a built `apps/web/dist` directory; unset means API-only. Invalid configured distributions must fail startup.

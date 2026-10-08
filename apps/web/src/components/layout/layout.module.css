@@ -1,0 +1,152 @@
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.crumbs {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.search {
+  min-width: 15rem;
+}
+
+@media (max-width: 48rem) {
+  .search {
+    min-width: 0;
+  }
+}
+
+.adminBadge {
+  white-space: nowrap;
+}
+
+@media (max-width: 30rem) {
+  .adminBadge {
+    gap: 0;
+  }
+
+  .adminBadgeText {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+.menuTeam {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: var(--line-height-snug);
+}
+
+.menuTeamName {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.menuTeamRole {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+/* Without a team: how to get onto one, wrapped to the menu's width. */
+.menuNoTeam {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-width: 16rem;
+  white-space: normal;
+}
+
+/* Admin mode: static context block where the team switcher sits in workspace mode. */
+.adminHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 2.5rem;
+  padding: var(--space-1) var(--space-2);
+}
+
+.adminHeaderIcon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: var(--radius-2);
+  background-color: var(--color-primary-subtle);
+  /* The tint's own text colour: --color-primary is under 3:1 on it in dark. */
+  color: var(--color-primary-subtle-text);
+
+  & svg {
+    width: 0.875rem;
+    height: 0.875rem;
+  }
+}
+
+.adminHeaderText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.adminHeaderName {
+  color: var(--color-text);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+}
+
+.adminHeaderDescription {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+}
+
+/* An instance logo (UI_LOGO_URL) keeps its aspect ratio inside the brand tile. */
+.brandLogo {
+  object-fit: contain;
+}
+
+/* The chat page: no padding or max width, exactly the viewport under the top bar. */
+.fullBleed {
+  display: flex;
+  /* A fixed height, not the shell's flex: 1 (which would grow with the thread). */
+  flex: none;
+  flex-direction: column;
+  height: calc(100dvh - var(--topbar-height));
+  min-height: 24rem;
+  padding: 0;
+}
+
+
+/* Whatever the browser scrolls into view (a field focused after a failed submit, an
+   anchor) lands below the sticky top bar, not under it (WCAG 2.4.11, focus not obscured),
+   and above an open sticky save bar (StickySaveBar publishes its height). */
+:global(html) {
+  scroll-padding-block-start: calc(var(--topbar-height) + var(--space-4));
+  scroll-padding-block-end: calc(var(--save-bar-space, 0px) + var(--space-2));
+}
+
+/* The account menu's Theme items: an icon before the label, like the items above them (VI2-14). */
+.themeItem {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+
+  & svg {
+    width: 1rem;
+    height: 1rem;
+    flex: none;
+  }
+}

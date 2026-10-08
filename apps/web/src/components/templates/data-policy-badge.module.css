@@ -1,0 +1,16 @@
+/* DataPolicyBadge: Bitop Badge with a shield icon and optional detail. */
+.badge {
+  gap: var(--space-1);
+  max-width: 100%;
+}
+
+.icon {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.detail {
+  font-weight: var(--font-weight-regular);
+  overflow-wrap: anywhere;
+}

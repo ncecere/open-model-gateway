@@ -1,336 +1,318 @@
 use super::*;
-
-async fn catalog_rows(pool: &PgPool) -> [(String, Uuid, Value); 3] {
-    let provider = Uuid::new_v4();
-    let model = Uuid::new_v4();
-    let deployment = Uuid::new_v4();
-    sqlx::query("INSERT INTO provider_connections(id,name,provider,credential_ref,region,enabled) VALUES($1,'zz Needle%_','bedrock','aws:private-sentinel','us-east-1',false)")
-        .bind(provider).execute(pool).await.unwrap();
-    sqlx::query("INSERT INTO models(id,public_name,display_name,enabled) VALUES($1,'zz/Needle%_','Display sentinel',false)")
-        .bind(model).execute(pool).await.unwrap();
-    sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model,enabled,created_at) VALUES($1,$2,$3,'zz Needle%_',false,'2100-01-01')")
-        .bind(deployment).bind(model).bind(provider).execute(pool).await.unwrap();
-    [
-        (
-            "providers".into(),
-            provider,
-            json!({"id":provider,"name":"zz Needle%_","provider":"bedrock","endpoint":null,"region":"us-east-1","enabled":false}),
-        ),
-        (
-            "models".into(),
-            model,
-            json!({"id":model,"public_name":"zz/Needle%_","display_name":"Display sentinel","enabled":false}),
-        ),
-        (
-            "deployments".into(),
-            deployment,
-            json!({"id":deployment,"model_id":model,"provider_connection_id":provider,"upstream_model":"zz Needle%_","enabled":false}),
-        ),
-    ]
-}
-
-#[sqlx::test]
-async fn details_match_redacted_collections_and_require_live_operator(pool: PgPool) {
-    let f = fixture(&pool).await;
-    let rows = catalog_rows(&pool).await;
-    let foreign = BrowserPrincipal {
-        user_id: Uuid::new_v4(),
-        email: "foreign-admin@example.invalid".into(),
-        platform_admin: false,
-    };
-    let foreign_org = Uuid::new_v4();
-    sqlx::query("INSERT INTO users(id,email) VALUES($1,$2)")
-        .bind(foreign.user_id)
-        .bind(&foreign.email)
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO organizations(id,slug,name) VALUES($1,'foreign','Foreign')")
-        .bind(foreign_org)
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query(
-        "INSERT INTO organization_memberships(organization_id,user_id,role) VALUES($1,$2,'owner')",
+async fn catalog(f: &Fixture, name: &str, models: &[Uuid]) -> Uuid {
+    let (status, v) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        "/api/v1/platform/catalogs",
+        json!({"name":name}),
     )
-    .bind(foreign_org)
-    .bind(foreign.user_id)
-    .execute(&pool)
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let id = id(&v);
+    assert_eq!(
+        call(
+            &f.s,
+            &f.admin,
+            "PUT",
+            &format!("/api/v1/platform/catalogs/{id}/models"),
+            json!({"model_ids":models})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    id
+}
+async fn defaults(f: &Fixture, kind: &str, catalogs: &[Uuid]) {
+    assert_eq!(
+        call(
+            &f.s,
+            &f.admin,
+            "PUT",
+            &format!("/api/v1/platform/workspace-types/{kind}/catalogs"),
+            json!({"catalog_ids":catalogs})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+}
+async fn select(f: &Fixture, ws: Uuid, m: Uuid) -> StatusCode {
+    call(
+        &f.s,
+        &f.owner,
+        "POST",
+        &format!("/api/v1/workspaces/{ws}/models"),
+        json!({"model_id":m}),
+    )
+    .await
+    .0
+}
+async fn allowed(pool: &PgPool, ws: Uuid, m: Uuid) -> bool {
+    sqlx::query_scalar("SELECT workspace_model_allowed($1,$2)")
+        .bind(ws)
+        .bind(m)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn live_multi_catalog_defaults_replace_override_and_no_selection_resurrection(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let m1 = model(&pool, "local").await;
+    let m2 = model(&pool, "cloud").await;
+    let c1 = catalog(&f, "Local", &[m1]).await;
+    let c2 = catalog(&f, "Cloud", &[m1, m2]).await;
+    defaults(&f, "team", &[c1, c2]).await;
+    // Presence in a catalog is availability, not workspace authorization.
+    assert!(!allowed(&pool, f.team, m1).await);
+    assert_eq!(select(&f, f.team, m1).await, StatusCode::OK);
+    assert_eq!(select(&f, f.team, m2).await, StatusCode::OK);
+    assert_eq!(select(&f, f.project, m1).await, StatusCode::FORBIDDEN);
+    assert_eq!(select(&f, f.personal, m1).await, StatusCode::FORBIDDEN);
+    let (status, k) = key(&f, &f.owner, f.team, json!([m1, m2])).await;
+    assert_eq!(status, StatusCode::OK, "{k}");
+    let lineage = id(&k);
+    defaults(&f, "team", &[c1]).await;
+    assert!(allowed(&pool, f.team, m1).await);
+    assert!(!allowed(&pool, f.team, m2).await);
+    let selections: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT model_id FROM key_model_selections WHERE governance_key_id=$1 ORDER BY model_id",
+    )
+    .bind(lineage)
+    .fetch_all(&pool)
     .await
     .unwrap();
-    let identity = crate::identity::IdentityState::new(f.store.clone(), None)
+    assert_eq!(selections, vec![m1]);
+    defaults(&f, "team", &[c1, c2]).await;
+    assert!(!allowed(&pool, f.team, m2).await);
+    assert_eq!(select(&f, f.team, m2).await, StatusCode::OK);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM key_model_selections WHERE governance_key_id=$1 AND model_id=$2"
+        )
+        .bind(lineage)
+        .bind(m2)
+        .fetch_one(&pool)
         .await
-        .unwrap();
-    let authenticated = super::super::super::router(identity).with_state(f.store.clone());
-    for (resource, id, expected) in &rows {
-        let collection = format!("/api/v1/platform/{resource}");
-        let detail = format!("{collection}/{id}");
-        let missing = format!("{collection}/{}", Uuid::new_v4());
-        assert_eq!(
-            call(&f, &f.operator, "GET", &detail, json!({})).await,
-            (StatusCode::OK, expected.clone())
-        );
-        let (status, list) = call(&f, &f.operator, "GET", &collection, json!({})).await;
-        assert_eq!(status, StatusCode::OK);
-        assert!(list["data"].as_array().unwrap().contains(expected));
-        assert!(!list.to_string().contains("credential_ref"));
-        assert!(!list.to_string().contains("private-sentinel"));
-        assert_eq!(
-            call(&f, &f.operator, "GET", &missing, json!({})).await.0,
-            StatusCode::NOT_FOUND
-        );
-        for path in [&collection, &detail, &missing] {
-            for caller in [&f.admin, &foreign] {
-                assert_eq!(
-                    call(&f, caller, "GET", path, json!({})).await.0,
-                    StatusCode::FORBIDDEN
-                );
-            }
-            for token in [None, Some(&f.personal_token), Some(&f.team_token)] {
-                let mut request = Request::builder().uri(path);
-                if let Some(token) = token {
-                    request = request.header("authorization", format!("Bearer {token}"));
-                }
-                let response = authenticated
-                    .clone()
-                    .oneshot(request.body(Body::empty()).unwrap())
-                    .await
-                    .unwrap();
-                assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-            }
-        }
-    }
-    // The injected principal deliberately remains stale after each live change.
-    for update in [
-        "UPDATE users SET platform_admin=false WHERE id=$1",
-        "UPDATE users SET platform_admin=true,disabled_at=now() WHERE id=$1",
-    ] {
-        sqlx::query(update)
-            .bind(f.operator.user_id)
-            .execute(&pool)
-            .await
-            .unwrap();
-        for (resource, id, _) in &rows {
-            for path in [
-                format!("/api/v1/platform/{resource}?q=needle"),
-                format!("/api/v1/platform/{resource}/{id}"),
-            ] {
-                assert_eq!(
-                    call(&f, &f.operator, "GET", &path, json!({})).await.0,
-                    StatusCode::FORBIDDEN
-                );
-            }
-        }
-    }
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        call(
+            &f.s,
+            &f.admin,
+            "PUT",
+            &format!("/api/v1/platform/workspaces/{}/catalogs", f.team),
+            json!({"mode":"replace","catalog_ids":[]})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert!(!allowed(&pool, f.team, m1).await);
+    assert!(!allowed(&pool, f.team, m2).await);
+    let (_, settings) = call(
+        &f.s,
+        &f.auditor,
+        "GET",
+        &format!("/api/v1/platform/workspaces/{}/catalogs", f.team),
+        json!({}),
+    )
+    .await;
+    assert_eq!(
+        settings,
+        json!({"mode":"replace","catalog_ids":[],"effective_catalog_ids":[]})
+    );
+    assert_eq!(
+        call(
+            &f.s,
+            &f.admin,
+            "DELETE",
+            &format!("/api/v1/platform/workspaces/{}/catalogs", f.team),
+            json!({})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert!(!allowed(&pool, f.team, m1).await);
+    assert_eq!(select(&f, f.team, m1).await, StatusCode::OK);
+    let (_, keys) = call(
+        &f.s,
+        &f.owner,
+        "GET",
+        &format!("/api/v1/workspaces/{}/keys", f.team),
+        json!({}),
+    )
+    .await;
+    assert_eq!(keys["data"][0]["model_ids"], json!([]));
+    // Header survives retirement: restriction is deny-all rather than inherit.
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM key_model_restrictions WHERE governance_key_id=$1"
+        )
+        .bind(lineage)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        1
+    );
 }
-
-#[sqlx::test]
-async fn catalog_search_filters_before_paging_and_treats_patterns_literally(pool: PgPool) {
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn direct_source_survives_catalog_loss_and_catalog_source_survives_direct_revocation(
+    pool: PgPool,
+) {
     let f = fixture(&pool).await;
-    let rows = catalog_rows(&pool).await;
-    let provider = rows[0].1;
-    let model = rows[1].1;
-    // More than the maximum page size, all sorting before the searched target.
-    sqlx::query("INSERT INTO provider_connections(id,name,provider,credential_ref,enabled) SELECT gen_random_uuid(),'aa provider '||lpad(n::text,3,'0'),'openai','env:PRIVATE_SENTINEL',true FROM generate_series(1,205) n")
-        .execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO models(id,public_name,display_name,enabled) SELECT gen_random_uuid(),'aa/model/'||lpad(n::text,3,'0'),'Model '||n,true FROM generate_series(1,205) n")
-        .execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model,enabled,created_at) SELECT gen_random_uuid(),$1,$2,'aa upstream '||n,true,'2000-01-01'::timestamptz + n*interval '1 second' FROM generate_series(1,205) n")
-        .bind(model).bind(provider).execute(&pool).await.unwrap();
-    for (resource, _, expected) in &rows {
-        let base = format!("/api/v1/platform/{resource}");
-        let (status, first) = call(&f, &f.operator, "GET", &base, json!({})).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(first["data"].as_array().unwrap().len(), 100);
-        assert!(!first["data"].as_array().unwrap().contains(expected));
-        let (_, max_page) = call(
-            &f,
-            &f.operator,
-            "GET",
-            &format!("{base}?limit=200"),
-            json!({}),
+    let m = model(&pool, "approved").await;
+    let c1 = catalog(&f, "One", &[m]).await;
+    let c2 = catalog(&f, "Two", &[m]).await;
+    defaults(&f, "team", &[c1, c2]).await;
+    assert_eq!(select(&f, f.team, m).await, StatusCode::OK);
+    assert_eq!(
+        call(
+            &f.s,
+            &f.admin,
+            "POST",
+            &format!("/api/v1/platform/workspaces/{}/models", f.team),
+            json!({"model_id":m})
         )
-        .await;
-        assert_eq!(max_page["data"].as_array().unwrap().len(), 200);
-        for query in [
-            "q=%20nEeDlE%20",
-            "q=%25",
-            "q=_",
-            "q=%25_",
-            "enabled=false&q=needle",
-            "limit=1&offset=0&q=needle",
-        ] {
-            let result = call(
-                &f,
-                &f.operator,
-                "GET",
-                &format!("{base}?{query}"),
-                json!({}),
-            )
-            .await;
-            assert_eq!(
-                result,
-                (StatusCode::OK, json!({"data":[expected]})),
-                "{resource}: {query}"
-            );
-        }
-        for query in [
-            "q=needle&enabled=true",
-            "q=needle&offset=1",
-            "q=PRIVATE_SENTINEL",
-            "q=private-sentinel",
-            "offset=100000",
-        ] {
-            assert_eq!(
-                call(
-                    &f,
-                    &f.operator,
-                    "GET",
-                    &format!("{base}?{query}"),
-                    json!({})
-                )
-                .await,
-                (StatusCode::OK, json!({"data":[]})),
-                "{resource}: {query}"
-            );
-        }
-        // Blank search inherits ordinary collection behavior, and offsets are stable.
-        assert_eq!(
-            call(
-                &f,
-                &f.operator,
-                "GET",
-                &format!("{base}?q=%20%20"),
-                json!({})
-            )
-            .await
-            .1,
-            first
-        );
-        let second = call(
-            &f,
-            &f.operator,
-            "GET",
-            &format!("{base}?limit=1&offset=1"),
-            json!({}),
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let (status, k) = key(&f, &f.owner, f.team, json!([m])).await;
+    assert_eq!(status, StatusCode::OK);
+    let lineage = id(&k);
+    assert_eq!(
+        call(
+            &f.s,
+            &f.admin,
+            "DELETE",
+            &format!("/api/v1/platform/catalogs/{c1}"),
+            json!({})
         )
-        .await;
-        assert_eq!(second, (StatusCode::OK, json!({"data":[first["data"][1]]})));
-        for query in [
-            "limit=0".into(),
-            "limit=201".into(),
-            "offset=-1".into(),
-            "offset=100001".into(),
-            "enabled=yes".into(),
-            "unknown=value".into(),
-            format!("q={}", "x".repeat(201)),
-        ] {
-            assert_eq!(
-                call(
-                    &f,
-                    &f.operator,
-                    "GET",
-                    &format!("{base}?{query}"),
-                    json!({})
-                )
-                .await
-                .0,
-                StatusCode::BAD_REQUEST,
-                "{resource}: {query}"
-            );
-        }
-        assert_eq!(
-            call(
-                &f,
-                &f.operator,
-                "GET",
-                &format!("{base}?q={}", "x".repeat(200)),
-                json!({})
-            )
-            .await
-            .0,
-            StatusCode::OK
-        );
-        let (_, enabled) = call(
-            &f,
-            &f.operator,
-            "GET",
-            &format!("{base}?enabled=true"),
-            json!({}),
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert!(allowed(&pool, f.team, m).await);
+    defaults(&f, "team", &[]).await;
+    assert!(allowed(&pool, f.team, m).await);
+    assert_eq!(
+        call(
+            &f.s,
+            &f.owner,
+            "DELETE",
+            &format!("/api/v1/workspaces/{}/models/{m}", f.team),
+            json!({})
         )
-        .await;
-        assert!(
-            enabled["data"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|row| row["enabled"] == true)
-        );
-    }
-    // Search covers safe human-readable fields, not credential references.
-    for (resource, query, expected) in [
-        ("providers", "q=us-east-1", &rows[0].2),
-        ("models", "q=display%20sentinel", &rows[1].2),
-    ] {
-        assert_eq!(
-            call(
-                &f,
-                &f.operator,
-                "GET",
-                &format!("/api/v1/platform/{resource}?{query}"),
-                json!({})
-            )
-            .await,
-            (StatusCode::OK, json!({"data":[expected]}))
-        );
-    }
-    let base = "/api/v1/platform/deployments";
-    for query in [
-        format!("q=needle&model_id={model}"),
-        format!("q=needle&provider_connection_id={provider}"),
-        format!("enabled=false&model_id={model}&provider_connection_id={provider}"),
-    ] {
-        assert_eq!(
-            call(
-                &f,
-                &f.operator,
-                "GET",
-                &format!("{base}?{query}"),
-                json!({})
-            )
-            .await,
-            (StatusCode::OK, json!({"data":[rows[2].2]}))
-        );
-    }
-    for query in [
-        format!("model_id={}", Uuid::new_v4()),
-        format!("provider_connection_id={}", Uuid::new_v4()),
-        format!("model_id={model}&provider_connection_id={}", Uuid::new_v4()),
-    ] {
-        assert_eq!(
-            call(
-                &f,
-                &f.operator,
-                "GET",
-                &format!("{base}?{query}"),
-                json!({})
-            )
-            .await,
-            (StatusCode::OK, json!({"data":[]}))
-        );
-    }
-    for field in ["model_id", "provider_connection_id"] {
-        assert_eq!(
-            call(
-                &f,
-                &f.operator,
-                "GET",
-                &format!("{base}?{field}=not-a-uuid"),
-                json!({})
-            )
-            .await
-            .0,
-            StatusCode::BAD_REQUEST
-        );
-    }
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert!(allowed(&pool, f.team, m).await);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM key_model_selections WHERE governance_key_id=$1"
+        )
+        .bind(lineage)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        1
+    );
+    defaults(&f, "team", &[c2]).await;
+    assert_eq!(select(&f, f.team, m).await, StatusCode::OK);
+    assert_eq!(
+        call(
+            &f.s,
+            &f.admin,
+            "DELETE",
+            &format!("/api/v1/platform/workspaces/{}/models/{m}", f.team),
+            json!({})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert!(allowed(&pool, f.team, m).await);
+    assert_eq!(
+        call(
+            &f.s,
+            &f.member,
+            "POST",
+            &format!("/api/v1/workspaces/{}/models", f.team),
+            json!({"model_id":m})
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(
+            &f.s,
+            &f.owner,
+            "POST",
+            &format!("/api/v1/platform/workspaces/{}/models", f.team),
+            json!({"model_id":m})
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+}
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn self_service_directory_flags_literal_queries_and_personal_defaults(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let m1 = model(&pool, "model_a").await;
+    let m2 = model(&pool, "model%b").await;
+    let m3 = model(&pool, "outside").await;
+    let c = catalog(&f, "Personal", &[m1, m2]).await;
+    defaults(&f, "personal", &[c]).await;
+    direct(&pool, f.personal, m3).await;
+    let (status, v) = call(
+        &f.s,
+        &f.owner,
+        "GET",
+        &format!("/api/v1/workspaces/{}/available-models?q=%25", f.personal),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(v["data"].as_array().unwrap().len(), 1);
+    assert_eq!(v["data"][0]["model_id"], m2.to_string());
+    assert_eq!(v["data"][0]["selected"], false);
+    assert_eq!(v["data"][0]["available_from_catalog"], true);
+    assert_eq!(select(&f, f.personal, m1).await, StatusCode::OK);
+    let (_, v) = call(
+        &f.s,
+        &f.owner,
+        "GET",
+        &format!("/api/v1/workspaces/{}/models", f.personal),
+        json!({}),
+    )
+    .await;
+    assert_eq!(v["data"].as_array().unwrap().len(), 2);
+    let outside = v["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["model_id"] == m3.to_string())
+        .unwrap();
+    assert_eq!(outside["direct_granted"], true);
+    assert_eq!(outside["available_from_catalog"], false);
+    assert_eq!(
+        call(
+            &f.s,
+            &f.owner,
+            "POST",
+            &format!("/api/v1/workspaces/{}/models", f.personal),
+            json!({"model_id":m3})
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
 }

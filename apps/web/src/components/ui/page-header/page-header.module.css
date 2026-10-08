@@ -9,10 +9,12 @@
   min-width: 0;
 }
 
+/* Actions line up with the title, not the end of a long description, so
+   they sit at the same height on every page. */
 .row {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
+  align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-4);
 }
@@ -57,4 +59,11 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
+  /* Never wider than the header: a wide control (date presets) scrolls inside instead. */
+  min-width: 0;
+  max-width: 100%;
+}
+
+.facts {
+  min-width: 0;
 }

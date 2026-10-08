@@ -9,16 +9,20 @@ use open_model_gateway::{
     identity::{IdentityConfig, IdentityState},
     inference::Engine,
     providers::{
-        ProviderRegistry, anthropic::AnthropicAdapter, bedrock::BedrockAdapter,
-        openai::OpenAiAdapter, secrets::EnvSecrets,
+        ProviderRegistry,
+        anthropic::AnthropicAdapter,
+        bedrock::BedrockAdapter,
+        openai::OpenAiAdapter,
+        openrouter::{OpenRouterAdapter, OpenRouterConfig},
+        secrets::EnvSecrets,
     },
-    store::{MIGRATOR, Store},
+    store::Store,
     web::WebAssets,
 };
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
-#[command(version, about = "Multi-tenant model gateway")]
+#[command(version, about = "Single-enterprise model gateway")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -61,7 +65,12 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    dotenvy::dotenv().ok();
+    if let Some(path) = std::env::var_os("GATEWAY_ENV_FILE") {
+        dotenvy::from_path(path)
+            .map_err(|_| anyhow::anyhow!("Could not load selected environment file"))?;
+    } else {
+        dotenvy::dotenv().ok();
+    }
     let cli = Cli::parse();
     tracing_subscriber::fmt()
         .json()
@@ -81,30 +90,34 @@ async fn main() -> Result<()> {
     let store = Store::new(pool.clone());
     match cli.command.unwrap_or(Command::Serve) {
         Command::Migrate => {
-            MIGRATOR
-                .run(&pool)
+            store
+                .migrate_enterprise()
                 .await
-                .context("database migration failed")?;
+                .context("enterprise database initialization failed")?;
             println!("Migrations applied.");
         }
-        Command::BootstrapDev => match bootstrap::seed(&store, config.environment).await? {
-            Some(keys) => {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "notice": "Development keys: save these now. They cannot be retrieved again.",
-                        "organization_id": keys.organization_id,
-                        "personal_workspace_id": keys.personal_workspace_id,
-                        "team_workspace_id": keys.team_workspace_id,
-                        "personal_api_key": keys.personal_key.token,
-                        "team_api_key": keys.team_key.token,
-                    }))?
-                );
+        Command::BootstrapDev => {
+            store.preflight_enterprise().await?;
+            let seeded = bootstrap::seed(&store, config.environment).await?;
+            match seeded {
+                Some(keys) => {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "notice": "Development keys: save these now. They cannot be retrieved again.",
+                            "installation_id": keys.installation_id,
+                            "personal_workspace_id": keys.personal_workspace_id,
+                            "team_workspace_id": keys.team_workspace_id,
+                            "personal_api_key": keys.personal_key.token,
+                            "team_api_key": keys.team_key.token,
+                        }))?
+                    );
+                }
+                None => println!(
+                    "Local development installation already initialized. No changes or key rotation performed."
+                ),
             }
-            None => println!(
-                "Local development organization already exists. No changes or key rotation performed."
-            ),
-        },
+        }
         Command::BootstrapDemo {
             add_missing_personas,
         } => {
@@ -115,9 +128,9 @@ async fn main() -> Result<()> {
                 println!(
                     "{}",
                     if created {
-                        "Missing Organization Admin persona added; existing data unchanged. No inference tokens were printed."
+                        "Enterprise demo personas added; no inference tokens were printed."
                     } else {
-                        "Organization Admin email already exists; no privileges, linking state, or other data changed."
+                        "Enterprise demo already exists; no data changed."
                     }
                 );
             } else {
@@ -133,6 +146,7 @@ async fn main() -> Result<()> {
             }
         }
         Command::ReconcileExecutions { limit } => {
+            store.preflight_enterprise().await?;
             let n = open_model_gateway::governance::reconcile_expired(&store, limit).await?;
             println!("Reconciled {n} expired executions; unknown cost holds retained.");
         }
@@ -140,6 +154,7 @@ async fn main() -> Result<()> {
             older_than_days,
             limit,
         } => {
+            store.preflight_enterprise().await?;
             let n =
                 open_model_gateway::maintenance::compact_history(&store, older_than_days, limit)
                     .await?;
@@ -149,6 +164,7 @@ async fn main() -> Result<()> {
             email,
             platform_admin,
         } => {
+            store.preflight_enterprise().await?;
             let id = bootstrap::provision_user(&store, &email, platform_admin).await?;
             println!(
                 "Provisioned user {id}. OIDC must provide the same verified email on first sign-in."
@@ -167,14 +183,45 @@ async fn main() -> Result<()> {
             let mut registry = ProviderRegistry::default();
             let secrets = Arc::new(EnvSecrets::new(config.secret_env_allowlist));
             registry.register(Arc::new(OpenAiAdapter::new(secrets.clone())?))?;
-            registry.register(Arc::new(AnthropicAdapter::new(secrets)?))?;
+            registry.register(Arc::new(AnthropicAdapter::new(secrets.clone())?))?;
             registry.register(Arc::new(BedrockAdapter::new()?))?;
+            registry.register(Arc::new(OpenRouterAdapter::new(
+                secrets.clone(),
+                OpenRouterConfig::from_env()?,
+            )?))?;
+            let approvals =
+                open_model_gateway::providers::local::endpoints::ApprovedEndpoints::from_env(
+                    config.environment.as_str(),
+                )?;
+            for adapter in open_model_gateway::providers::local::adapters(secrets, approvals) {
+                registry.register(adapter)?;
+            }
             let engine = Engine::new(Arc::new(store.clone()), registry, config.inference_limits)?;
             let identity = IdentityState::new(store.clone(), IdentityConfig::from_env()?).await?;
             let retention = open_model_gateway::maintenance::retention_from_env()?;
             let listener = tokio::net::TcpListener::bind(config.listen).await?;
             tracing::info!(address = %listener.local_addr()?, serving_web = web.is_some(), "gateway listening");
             let maintenance = open_model_gateway::maintenance::start(store.clone(), retention);
+            let lifecycle_store = store.clone();
+            let lifecycle = tokio::spawn(async move {
+                let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    tick.tick().await;
+                    if !matches!(
+                        tokio::time::timeout(
+                            std::time::Duration::from_secs(30),
+                            open_model_gateway::lifecycle::cleanup_inactive_accounts(
+                                &lifecycle_store
+                            )
+                        )
+                        .await,
+                        Ok(Ok(_))
+                    ) {
+                        tracing::error!("account lifecycle cleanup failed; will retry");
+                    }
+                }
+            });
             let served = axum::serve(
                 listener,
                 http::router_with_identity(store, web, engine, identity),
@@ -182,7 +229,9 @@ async fn main() -> Result<()> {
             .with_graceful_shutdown(shutdown_signal())
             .await;
             maintenance.abort();
+            lifecycle.abort();
             let _ = maintenance.await;
+            let _ = lifecycle.await;
             served?;
         }
     }
@@ -198,8 +247,8 @@ fn ensure_demo_config(config: &Config) -> Result<()> {
         config.environment == open_model_gateway::config::Environment::Development
             && config.listen.ip().is_loopback()
             && matches!(options.get_host(), "127.0.0.1" | "::1")
-            && options.get_database() == Some("gateway_demo"),
-        "local demo requires development mode, loopback binding/database, and the dedicated gateway_demo database"
+            && options.get_database() == Some(open_model_gateway::demo::DEMO_DATABASE),
+        "local demo requires development mode, loopback binding/database, and the dedicated gateway_enterprise_demo database"
     );
     Ok(())
 }
@@ -251,7 +300,8 @@ mod demo {
     #[test]
     fn local_demo_guard_rejects_real_databases_and_nonlocal_bindings() {
         let mut config = Config {
-            database_url: "postgres://gateway:gateway@127.0.0.1:54329/gateway_demo".into(),
+            database_url: "postgres://gateway:gateway@127.0.0.1:54339/gateway_enterprise_demo"
+                .into(),
             listen: "127.0.0.1:3000".parse().unwrap(),
             environment: open_model_gateway::config::Environment::Development,
             web_directory: None,
@@ -261,13 +311,14 @@ mod demo {
         assert!(ensure_demo_config(&config).is_ok());
         for url in [
             "postgres://gateway:gateway@127.0.0.1:54329/gateway",
-            "postgres://gateway:gateway@database.example/gateway_demo",
-            "postgres://gateway:gateway@127.0.0.1:54329/gateway_demo?host=database.example",
+            "postgres://gateway:gateway@database.example/gateway_enterprise_demo",
+            "postgres://gateway:gateway@127.0.0.1:54339/gateway_enterprise_demo?host=database.example",
         ] {
             config.database_url = url.into();
             assert!(ensure_demo_config(&config).is_err());
         }
-        config.database_url = "postgres://gateway:gateway@127.0.0.1:54329/gateway_demo".into();
+        config.database_url =
+            "postgres://gateway:gateway@127.0.0.1:54339/gateway_enterprise_demo".into();
         config.listen = "0.0.0.0:3000".parse().unwrap();
         assert!(ensure_demo_config(&config).is_err());
         config.listen = "127.0.0.1:3000".parse().unwrap();

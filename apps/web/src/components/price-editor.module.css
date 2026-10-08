@@ -1,0 +1,130 @@
+/* Pricing v3 line editor (components/price-editor.tsx). Semantic tokens only. */
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: var(--space-3) var(--space-4);
+  align-items: start;
+}
+
+.meter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border-muted);
+  border-radius: var(--radius-control);
+
+  &[data-review="true"] {
+    border-color: var(--color-warning-border);
+    background-color: var(--color-warning-subtle);
+  }
+}
+
+.meterTitle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text);
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: var(--space-2) var(--space-3);
+  align-items: end;
+  padding-inline-start: var(--space-3);
+  border-inline-start: 2px solid var(--color-border-muted);
+
+  &[data-review="true"] {
+    border-inline-start-color: var(--color-warning);
+  }
+}
+
+.rowActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  padding-block-end: var(--space-1);
+}
+
+.importBar {
+  margin-block-end: var(--space-4);
+}
+
+.reviewNote {
+  font-size: var(--font-size-sm);
+  color: var(--color-warning-text);
+}
+
+.error {
+  font-size: var(--font-size-sm);
+  color: var(--color-danger-text);
+}
+
+.preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-control);
+  background-color: var(--color-surface-sunken);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.protocolGroups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: var(--space-4);
+}
+
+.protocolGroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-muted);
+  border-radius: var(--radius-control);
+
+  &[data-active="true"] {
+    border-color: var(--color-primary);
+  }
+}
+
+.priceLines {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-1) var(--space-6);
+  margin: 0;
+
+  & dt {
+    color: var(--color-text-muted);
+  }
+
+  & dd {
+    margin: 0;
+    font-variant-numeric: tabular-nums;
+  }
+}

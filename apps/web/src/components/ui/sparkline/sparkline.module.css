@@ -1,0 +1,70 @@
+/* Series colours: the --color-chart-* tokens (>= 3:1 on surface and bg), as in chart. */
+.root {
+  --sparkline-color: var(--color-chart-primary);
+  --sparkline-height: 2.5rem;
+
+  position: relative;
+  display: inline-block;
+  width: 100%;
+  min-width: 3rem;
+  height: var(--sparkline-height);
+  vertical-align: middle;
+
+  &[data-size="sm"] {
+    --sparkline-height: 1.5rem;
+  }
+
+  &[data-tone="info"] {
+    --sparkline-color: var(--color-chart-info);
+  }
+
+  &[data-tone="success"] {
+    --sparkline-color: var(--color-chart-success);
+  }
+
+  &[data-tone="warning"] {
+    --sparkline-color: var(--color-chart-warning);
+  }
+
+  &[data-tone="danger"] {
+    --sparkline-color: var(--color-chart-danger);
+  }
+
+  &[data-tone="neutral"] {
+    --sparkline-color: var(--color-chart-neutral);
+  }
+}
+
+.svg {
+  position: absolute;
+  inset: 0.1875rem;
+  width: calc(100% - 0.375rem);
+  height: calc(100% - 0.375rem);
+  overflow: visible;
+}
+
+.line {
+  fill: none;
+  stroke: var(--sparkline-color);
+  stroke-width: 1.5px;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.fill {
+  fill: var(--sparkline-color);
+  fill-opacity: 0.14;
+  stroke: none;
+}
+
+/* The last point, inside the same inset as the line. */
+.last {
+  position: absolute;
+  left: calc(0.1875rem + (100% - 0.375rem) * var(--x, 0));
+  top: calc(0.1875rem + (100% - 0.375rem) * var(--y, 0));
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: var(--radius-full);
+  background-color: var(--sparkline-color);
+  translate: -50% -50%;
+}

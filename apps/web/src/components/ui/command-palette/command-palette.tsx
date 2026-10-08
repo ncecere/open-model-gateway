@@ -3,7 +3,7 @@
 import { Autocomplete } from "@base-ui/react/autocomplete";
 import { Dialog as BaseDialog } from "@base-ui/react/dialog";
 import { Search } from "lucide-react";
-import { type ReactNode, useEffect, useId } from "react";
+import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { KbdShortcut } from "@/components/ui/kbd/kbd";
 import { cx } from "@/lib/bitop-utils";
 import styles from "./command-palette.module.css";
@@ -12,7 +12,9 @@ import styles from "./command-palette.module.css";
  * Command palette: Base UI Dialog + an inline Base UI Autocomplete (the
  * pattern from Base UI's "Command palette" example). Keyboard-first: type to
  * filter, ↑/↓ to move, Enter to run, Esc to close. Open it with ⌘K / Ctrl+K
- * via useCommandPaletteShortcut().
+ * via useCommandPaletteShortcut(). While typing, the best matches come first
+ * (an exact name, then names starting with the text, then keywords), so
+ * Enter runs the command that was named.
  */
 
 export type Command = {
@@ -29,7 +31,15 @@ export type Command = {
   onSelect: () => void;
 };
 
-export type CommandGroup = { label: string; items: Command[] };
+export type CommandGroup = {
+  label: string;
+  items: Command[];
+  /**
+   * Keep the items in the given order while typing (results a server search
+   * already ranked). The group still moves up when it holds the best match.
+   */
+  keepOrder?: boolean;
+};
 
 export type CommandPaletteProps = {
   open: boolean;
@@ -47,15 +57,78 @@ export type CommandPaletteProps = {
   finalFocus?: BaseDialog.Popup.Props["finalFocus"];
   /** Class for the dialog popup, merged with the built-in styles (e.g. to scope token overrides). */
   className?: string;
+  /**
+   * The typed text, controlled: pass it with `onQueryChange` when results
+   * depend on it (e.g. a server search as you type). Uncontrolled by default.
+   * Reset it to "" when the palette closes.
+   */
+  query?: string;
+  onQueryChange?: (query: string) => void;
 };
 
 type Group = { value: string; items: Command[] };
 
-function matches(item: Command, query: string): boolean {
+/** A typed word and its singular forms: "members" also looks for "member", "policies" for "policy", "searches" for "search". */
+function wordForms(word: string): string[] {
+  const forms = [word];
+  if (word.length > 4 && word.endsWith("ies")) forms.push(word.slice(0, -3) + "y");
+  if (word.length > 4 && word.endsWith("es")) forms.push(word.slice(0, -2));
+  if (word.length > 3 && word.endsWith("s") && !word.endsWith("ss")) forms.push(word.slice(0, -1));
+  return forms;
+}
+
+/**
+ * Whether a command matches what was typed: every word of the query appears
+ * in its label or keywords (case-insensitive), as a whole word, the start of
+ * one ("memb") or anywhere inside, in the singular or the plural ("members"
+ * finds "Add member").
+ */
+export function commandMatches(item: Pick<Command, "label" | "keywords">, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
   const haystack = [item.label, ...(item.keywords ?? [])].join(" ").toLowerCase();
-  return q.split(/\s+/).every((word) => haystack.includes(word));
+  return q.split(/\s+/).every((word) => wordForms(word).some((form) => haystack.includes(form)));
+}
+
+const words = (text: string) => text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+
+/**
+ * How well a matching command fits what was typed, best first: 0 its label is
+ * the query ("legal holds" → Legal holds), 1 its label starts with it
+ * ("budget" → Budgets), 2 every typed word starts a word of the label
+ * ("migrations" → Profile migrations), 3 a keyword is the query, 4 any
+ * other match (a word inside a keyword).
+ */
+export function commandRank(item: Pick<Command, "label" | "keywords">, query: string): number {
+  const q = query.trim().toLowerCase().replace(/\s+/g, " ");
+  if (!q) return 0;
+  const label = item.label.trim().toLowerCase();
+  const forms = wordForms(q);
+  if (forms.includes(label)) return 0;
+  if (label.startsWith(q)) return 1;
+  const labelWords = words(label);
+  const typed = words(q);
+  if (typed.length > 0 && typed.every((w) => wordForms(w).some((f) => labelWords.some((l) => l.startsWith(f))))) return 2;
+  if ((item.keywords ?? []).some((k) => forms.includes(k.trim().toLowerCase()))) return 3;
+  return 4;
+}
+
+/**
+ * The groups with the best matches first: items sorted by commandRank, and
+ * groups by their best matching item (ties keep their order). A group with
+ * `keepOrder` keeps its items' order. An exact name
+ * comes first, so Enter runs it rather than a page that only lists the word
+ * among its keywords.
+ */
+export function rankCommandGroups(groups: CommandGroup[], query: string): CommandGroup[] {
+  if (!query.trim()) return groups;
+  const ranked = groups.map((g, i) => {
+    const items = g.items
+      .map((item, j) => ({ item, j, rank: commandMatches(item, query) ? commandRank(item, query) : 5 }))
+      .sort((a, b) => (g.keepOrder ? a.j - b.j : a.rank - b.rank || a.j - b.j));
+    return { group: { ...g, items: items.map((x) => x.item) }, i, best: Math.min(5, ...items.map((x) => x.rank)) };
+  });
+  return ranked.sort((a, b) => a.best - b.best || a.i - b.i).map((x) => x.group);
 }
 
 export function CommandPalette({
@@ -67,9 +140,28 @@ export function CommandPalette({
   emptyText = "No results found.",
   finalFocus,
   className,
+  query,
+  onQueryChange,
 }: CommandPaletteProps) {
   const hintId = useId();
-  const items: Group[] = groups.filter((g) => g.items.length > 0).map((g) => ({ value: g.label, items: g.items }));
+  const [ownQuery, setOwnQuery] = useState("");
+  useEffect(() => {
+    if (!open) setOwnQuery("");
+  }, [open]);
+  const text = query ?? ownQuery;
+  // Best matches first (rankCommandGroups). The list stays the same object
+  // while the groups and their order don't change, so typing or a parent's
+  // re-render doesn't hand Autocomplete a new collection to re-index.
+  const last = useRef<{ groups: CommandGroup[]; key: string; items: Group[] } | null>(null);
+  const items: Group[] = useMemo(() => {
+    const next = rankCommandGroups(groups, text)
+      .filter((g) => g.items.length > 0)
+      .map((g) => ({ value: g.label, items: g.items }));
+    const key = next.map((g) => `${g.value}\n${g.items.map((i) => i.id).join("\n")}`).join("\n\n");
+    if (last.current && last.current.groups === groups && last.current.key === key) return last.current.items;
+    last.current = { groups, key, items: next };
+    return next;
+  }, [groups, text]);
 
   function run(cmd: Command) {
     onOpenChange(false);
@@ -89,7 +181,12 @@ export function CommandPalette({
               autoHighlight="always"
               keepHighlight
               itemToStringValue={(item: Command) => item.label}
-              filter={(item: Command, query: string) => matches(item, query)}
+              filter={(item: Command, text: string) => commandMatches(item, text)}
+              {...(query !== undefined ? { value: query } : {})}
+              onValueChange={(next: string) => {
+                setOwnQuery(next);
+                onQueryChange?.(next);
+              }}
             >
               <div className={styles.inputRow}>
                 <Search aria-hidden className={styles.searchIcon} />

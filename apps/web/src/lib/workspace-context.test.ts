@@ -1,95 +1,28 @@
 import { describe, expect, it } from "vitest";
-import type { Session, Workspace } from "./api";
-import { canView, type DashboardSearch } from "./permissions";
+import { canView } from "./permissions";
 import { dashboardHref } from "./locations";
-import { clearRememberedPortals, navigation, rememberedWorkspace, rememberWorkspace, scopeSearch, sidebarWorkspace } from "./navigation";
-
-const personal: Workspace = { id: "personal", organization_id: "org", name: "Personal", kind: "personal", role: "owner" };
-const team: Workspace = { id: "team", organization_id: "org", name: "Product", kind: "team", role: "admin" };
-const project: Workspace = { ...team, id: "project", name: "Research", kind: "project" };
-const foreign: Workspace = { ...personal, id: "foreign", organization_id: "other" };
-const session: Session = {
-  user: { id: "me", email: "me@example.invalid", platform_admin: false },
-  organizations: [{ id: "org", name: "Organization", slug: "org", role: "admin" }, { id: "other", name: "Other", slug: "other", role: "admin" }],
-  workspaces: [personal, team, project, foreign],
-};
-const settings: DashboardSearch = { page: "organization-settings", org: "org" };
-function storage() {
-  const entries = new Map<string, string>();
-  return { entries, get length() { return entries.size; }, key: (index: number) => [...entries.keys()][index] ?? null, getItem: (key: string) => entries.get(key) ?? null, setItem: (key: string, value: string) => { entries.set(key, value); }, removeItem: (key: string) => { entries.delete(key); } };
-}
-
-describe("workspace navigation beside organization settings", () => {
-  it("keeps the full sidebar linked to the selected workspace without changing organization scope", () => {
-    const context = sidebarWorkspace(session, settings, team);
-    const links = navigation.filter(item => item.group === "Workspace" && canView(item.page, session, session.organizations[0], context));
-    expect(links.map(item => item.label)).toEqual(["Overview", "API keys", "Models", "Costs", "Workspace settings", "Organization settings"]);
-    expect(links.map(item => dashboardHref(scopeSearch(item.page, "org", context?.id)))).toEqual([
-      "/organizations/org/workspaces/team", "/organizations/org/workspaces/team/keys", "/organizations/org/workspaces/team/models",
-      "/organizations/org/workspaces/team/costs", "/organizations/org/workspaces/team/settings", "/organizations/org/settings",
-    ]);
-    expect(settings).toEqual({ page: "organization-settings", org: "org" });
+import { clearRememberedPortals, contextOptions, landingSearch, portalWorkspaces, rememberedWorkspace, rememberWorkspace, resolveDashboardSearch, scopeSearch, sidebarWorkspace, workspaceSections } from "./navigation";
+import { member, none, auditor } from "./test-fixtures";
+import { session, admin, personal, team, project, storage } from "./test-fixtures";
+describe("two-level Workspace portal sidebar", () => {
+  const labels = (actor: typeof session, ws?: typeof team) => workspaceSections(actor, ws).map(s => [s.label, s.items.map(i => i.label)]);
+  it("puts Home in a user-level group and the selected workspace's pages in a group named after it", () => {
+    expect(labels(session, personal)).toEqual([["Workspace", ["Home"]], ["Personal", ["Overview", "Models", "API keys", "Requests", "Usage & costs", "Settings"]]]);
+    expect(labels(session, project)).toEqual([["Workspace", ["Home"]], ["Research", ["Overview", "Models", "API keys", "Requests", "Usage & costs", "Settings"]]]);
+    expect(labels({ ...session, workspaces: [personal, member] }, member)[1]).toEqual(["Product", ["Overview", "Models", "API keys", "Requests", "Usage & costs", "Settings"]]);
+    expect(labels({ ...session, workspaces: [] })).toEqual([["Workspace", ["Home"]]]);
   });
-  it("remembers a team or project across organization tabs and reloads, with metadata only", () => {
-    const store = storage();
-    for (const ws of [team, project]) {
-      rememberWorkspace(store, session, { page: "keys", org: "org", ws: ws.id, record: "private-key-id", q: "sensitive text" });
-      rememberWorkspace(store, session, settings);
-      rememberWorkspace(store, session, { ...settings, tab: "members" });
-      expect([...store.entries.values()]).toEqual([ws.id]);
-      expect(sidebarWorkspace(session, settings, rememberedWorkspace(store, session, "org"))).toEqual(ws);
-    }
-  });
-  it("uses an accessible same-organization default on a fresh deep link", () => {
-    expect(sidebarWorkspace(session, settings)).toEqual(personal);
-    expect(sidebarWorkspace({ ...session, workspaces: [team, project, foreign] }, settings)).toEqual(team);
-    expect(sidebarWorkspace({ ...session, workspaces: [foreign] }, settings)).toBeUndefined();
-  });
-  it("isolates remembered contexts by user and organization and never carries a foreign workspace into settings", () => {
-    const store = storage();
-    rememberWorkspace(store, session, { page: "overview", org: "other", ws: foreign.id });
-    rememberWorkspace(store, session, { page: "overview", org: "org", ws: team.id });
-    expect(rememberedWorkspace(store, session, "other")).toEqual(foreign);
-    expect(rememberedWorkspace(store, { ...session, user: { ...session.user, id: "another-user" } }, "org")).toBeUndefined();
-    expect(sidebarWorkspace(session, settings, foreign)).toEqual(personal);
-    expect(sidebarWorkspace(session, { ...settings, org: "missing" }, team)).toBeUndefined();
-  });
-  it("validates fresh inventory, removes revoked context, and clears all context on logout", () => {
-    const store = storage();
-    rememberWorkspace(store, session, { page: "overview", org: "org", ws: team.id });
-    expect(rememberedWorkspace(store, { ...session, workspaces: [personal] }, "org")).toBeUndefined();
-    expect(store.length).toBe(0);
-    rememberWorkspace(store, session, { page: "overview", org: "org", ws: personal.id });
-    expect(rememberedWorkspace(store, { ...session, organizations: [] }, "org")).toBeUndefined();
-    rememberWorkspace(store, session, { page: "overview", org: "org", ws: team.id });
-    rememberWorkspace(store, session, { page: "overview", org: "other", ws: foreign.id });
-    store.setItem("unrelated", "keep");
-    clearRememberedPortals(store);
-    expect([...store.entries]).toEqual([["unrelated", "keep"]]);
-  });
-  it("never substitutes remembered context for an explicit unavailable workspace or platform scope", () => {
-    expect(sidebarWorkspace(session, { page: "keys", org: "org", ws: "missing" }, team)).toBeUndefined();
-    expect(sidebarWorkspace(session, { page: "keys", org: "org", ws: foreign.id }, team)).toBeUndefined();
-    expect(sidebarWorkspace(session, { page: "organization-detail", org: "org" }, team)).toBeUndefined();
-    expect(sidebarWorkspace(session, { page: "models", org: "org", ws: team.id }, team)).toBeUndefined();
-    expect(sidebarWorkspace(session, { page: "keys", org: "org", ws: personal.id }, team)).toEqual(personal);
-  });
-  it("does not grant settings authority or restore absent private workspaces from stale metadata", () => {
-    const member: Session = { ...session, organizations: [{ ...session.organizations[0], role: "member" }], workspaces: [team] };
-    expect(sidebarWorkspace(member, settings, personal)).toBeUndefined();
-    const operator = { ...session, user: { ...session.user, platform_admin: true }, workspaces: [team] };
-    expect(sidebarWorkspace(operator, settings, personal)).toEqual(team);
-  });
-  it("ignores invalid context writes and tolerates disabled storage", () => {
-    const store = storage();
-    rememberWorkspace(store, session, { page: "keys", org: "org", ws: foreign.id });
-    rememberWorkspace(store, session, { page: "keys", org: "org", ws: "missing" });
-    rememberWorkspace(store, session, { page: "models", org: "org", ws: team.id });
-    rememberWorkspace(store, session, { ...settings, ws: team.id });
-    rememberWorkspace(store, session, { page: "profile", org: "org", ws: team.id });
-    expect(store.length).toBe(0);
-    const blocked = { getItem() { throw new Error("disabled"); }, setItem() { throw new Error("disabled"); }, removeItem() { throw new Error("disabled"); } };
-    expect(() => rememberWorkspace(blocked, session, { page: "keys", org: "org", ws: team.id })).not.toThrow();
-    expect(rememberedWorkspace(blocked, session, "org")).toBeUndefined();
-  });
+  it("never shows a non-member shared workspace, even to Platform Admins", () => { const staff = { ...project, role: null, membership_source: null, capabilities: { ...none, manage_members: true, manage_service_accounts: true, view_all_activity: true } }, actor = { ...admin, workspaces: [personal, team, staff] }; expect(portalWorkspaces(actor).map(w => w.id)).toEqual(["personal", "team"]); expect(contextOptions(actor).flatMap(g => g.items.map(i => i.ws))).toEqual(["personal", "team"]); expect(labels(actor, staff)).toEqual([["Workspace", ["Home"]]]); expect(canView("overview", actor, staff)).toBe(false); expect(canView("workspace-settings", actor, staff)).toBe(false); expect(sidebarWorkspace(actor, {}, staff)).toEqual(personal); });
+  it("lands on Home with Personal selected and keeps Home user-level", () => { const store = storage(); rememberWorkspace(store, session, { page: "overview", ws: "team" }); expect(landingSearch(session, store)).toEqual({ page: "home" }); expect(rememberedWorkspace(store, session)).toEqual(personal); expect(resolveDashboardSearch({ page: "home", ws: "team" }, session)).toEqual({ page: "home", ws: undefined }); expect(scopeSearch("home", "team")).toEqual({ page: "home", ws: undefined }); expect(canView("home", { ...auditor, workspaces: [] })).toBe(true); const none2 = storage(); expect(landingSearch({ ...session, workspaces: [team] }, none2)).toEqual({ page: "home" }); expect(none2.length).toBe(0); });
+});
+describe("sibling workspace context beside settings", () => {
+  it("keeps the full sidebar canonically linked to the selected workspace", () => { const context = sidebarWorkspace(session, { page: "workspace-settings" }, team); const [user, selected] = workspaceSections(session, context); expect(user.items.map(n => dashboardHref(scopeSearch(n.page, context?.id)))).toEqual(["/home"]); expect(selected.label).toBe("Product"); expect(selected.items.filter(n => canView(n.page, session, context)).map(n => dashboardHref(scopeSearch(n.page, context?.id)))).toEqual(["/workspaces/team", "/workspaces/team/models", "/workspaces/team/keys", "/workspaces/team/requests", "/workspaces/team/costs", "/workspaces/team/settings"]); });
+  it("groups Personal, Teams and Projects with no inferred hierarchy", () => { expect(contextOptions(session).map(g => g.label)).toEqual(["Personal", "Teams", "Projects"]); expect(contextOptions(session)[2].items[0].workspace).toEqual(project); });
+  it("remembers shared context across settings tabs and reloads, metadata only", () => { const store = storage(); for (const ws of [team, project]) { rememberWorkspace(store, session, { page: "keys", ws: ws.id, record: "private-key", q: "sensitive" }); expect([...store.entries.values()]).toEqual([ws.id]); expect(sidebarWorkspace(session, { page: "workspace-settings" }, rememberedWorkspace(store, session))).toEqual(ws); } });
+  it("defaults to an accessible private or shared workspace", () => { expect(sidebarWorkspace(session, { page: "overview" })).toEqual(personal); expect(sidebarWorkspace({ ...session, workspaces: [team, project] }, { page: "overview" })).toEqual(team); });
+  it("isolates context by identity and never selects foreign personal metadata", () => { const store = storage(); rememberWorkspace(store, session, { page: "overview", ws: "team" }); expect(rememberedWorkspace(store, { ...session, user: { ...session.user, id: "another" } })).toBeUndefined(); const foreign = { ...personal, id: "foreign", owner_user_id: "other" }; expect(sidebarWorkspace({ ...admin, workspaces: [foreign] }, {}, foreign)).toBeUndefined(); expect(contextOptions({ ...admin, workspaces: [foreign] })).toEqual([]); });
+  it("drops revoked or disabled inventory and clears all context on logout", () => { const store = storage(); rememberWorkspace(store, session, { page: "overview", ws: "team" }); expect(rememberedWorkspace(store, { ...session, workspaces: [personal] })).toBeUndefined(); expect(store.length).toBe(0); rememberWorkspace(store, session, { page: "overview", ws: "personal" }); expect(rememberedWorkspace(store, { ...session, workspaces: [{ ...personal, disabled_at: "now" }] })).toBeUndefined(); store.setItem("unrelated", "keep"); clearRememberedPortals(store); expect([...store.entries]).toEqual([["unrelated", "keep"]]); });
+  it("never substitutes remembered context for explicitly unavailable workspaces", () => { expect(sidebarWorkspace(session, { page: "keys", ws: "missing" }, team)).toBeUndefined(); expect(sidebarWorkspace(session, { page: "keys", ws: "personal" }, team)).toEqual(personal); });
+  it("cannot restore absent private workspaces from stale metadata", () => { expect(sidebarWorkspace({ ...session, workspaces: [team] }, {}, personal)).toEqual(team); });
+  it("ignores invalid writes and tolerates disabled storage", () => { const store = storage(); for (const search of [{ page: "keys" as const, ws: "missing" }, { page: "models" as const, ws: "team" }, { page: "profile" as const, ws: "team" }]) rememberWorkspace(store, session, search); expect(store.length).toBe(0); const blocked = { getItem() { throw new Error("disabled"); }, setItem() { throw new Error("disabled"); }, removeItem() { throw new Error("disabled"); } }; expect(() => rememberWorkspace(blocked, session, { page: "keys", ws: "team" })).not.toThrow(); expect(rememberedWorkspace(blocked, session)).toBeUndefined(); });
 });

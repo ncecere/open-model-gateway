@@ -1,0 +1,188 @@
+/* ---------------- DescriptionList ---------------- */
+
+.list {
+  --description-label-width: 10rem;
+  --description-gap: var(--space-3);
+  --description-columns: 1;
+
+  margin: 0;
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-normal);
+  color: var(--color-text);
+
+  &[data-size="sm"] {
+    --description-gap: var(--space-2);
+
+    font-size: var(--font-size-sm);
+  }
+
+  &[data-columns="2"] {
+    --description-columns: 2;
+  }
+
+  &[data-columns="3"] {
+    --description-columns: 3;
+  }
+
+  &[data-columns="4"] {
+    --description-columns: 4;
+  }
+}
+
+.term {
+  color: var(--color-text-muted);
+  font-weight: var(--font-weight-medium);
+}
+
+.detail {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+
+  &[data-empty] {
+    color: var(--color-text-muted);
+  }
+}
+
+/* Grid: labels in a fixed column; the value drops below the label when the container is narrow. */
+.list[data-layout="grid"] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--description-gap);
+
+  & .item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-1) var(--space-4);
+  }
+
+  & .term {
+    flex: 0 0 var(--description-label-width);
+  }
+
+  & .detail {
+    flex: 1 1 14rem;
+  }
+}
+
+.list[data-layout="grid"][data-dividers] {
+  gap: 0;
+
+  & .item {
+    padding-block: var(--description-gap);
+    border-bottom: 1px solid var(--color-border-muted);
+  }
+
+  & .item:first-child {
+    padding-top: 0;
+  }
+
+  & .item:last-child {
+    padding-bottom: 0;
+    border-bottom: 0;
+  }
+}
+
+/* Stacked: label above value, in up to --description-columns columns. */
+.list[data-layout="stacked"] {
+  display: grid;
+  grid-template-columns: repeat(
+    auto-fill,
+    minmax(max(10rem, calc((100% - (var(--description-columns) - 1) * var(--space-6)) / var(--description-columns))), 1fr)
+  );
+  gap: var(--space-4) var(--space-6);
+
+  & .item {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+
+  & .term {
+    font-size: var(--font-size-sm);
+  }
+}
+
+/* ---------------- FactsLine ---------------- */
+
+/*
+ * Each fact carries its "·" separator in its start padding. The list is
+ * pulled back by one separator width and the wrapper clips it, so the
+ * separator in front of the first fact on every line is cut off. The
+ * wrapper's padding/negative margin keeps focus rings inside the clip.
+ */
+.factsClip {
+  --facts-separator: 1.25rem;
+
+  overflow: hidden;
+  margin: -0.25rem;
+  padding: 0.25rem;
+  font-size: var(--font-size-md);
+  color: var(--color-text-muted);
+
+  &[data-size="sm"] {
+    --facts-separator: 1rem;
+
+    font-size: var(--font-size-sm);
+  }
+}
+
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  row-gap: var(--space-1);
+  margin: 0;
+  margin-inline-start: calc(var(--facts-separator) * -1);
+  padding: 0;
+  list-style: none;
+}
+
+.fact {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  padding-inline-start: var(--facts-separator);
+
+  &::before {
+    content: "·";
+    content: "·" / "";
+    position: absolute;
+    inset-inline-start: 0;
+    width: var(--facts-separator);
+    text-align: center;
+    color: var(--color-text-muted);
+  }
+}
+
+.factIcon {
+  display: inline-flex;
+  flex: none;
+
+  & svg {
+    width: 1em;
+    height: 1em;
+  }
+}
+
+.factValue {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Labels are read before the value; shown only with showLabels. */
+.facts:not([data-show-labels]) .factLabel {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

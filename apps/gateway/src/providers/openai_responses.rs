@@ -10,6 +10,7 @@ pub(super) async fn execute(
     request: ChatRequest,
 ) -> Result<ProviderOutput> {
     if target.provider != "openai"
+        || target.credential_ref == "none"
         || target
             .endpoint
             .as_deref()
@@ -94,7 +95,60 @@ fn encode(model: &str, request: &ChatRequest) -> Value {
     }
     value
 }
+fn usage(value: &Value) -> Result<Usage> {
+    super::metering::inclusive(
+        value,
+        "input_tokens",
+        "output_tokens",
+        "input_tokens_details",
+        "cache_write_tokens",
+    )
+}
+/// Structural failure still fails, but a valid usage object is kept as evidence.
 fn decode(value: &Value) -> Result<ChatResponse> {
+    crate::inference::evidence::preserve(decode_shape(value), || {
+        value["usage"].is_object().then(|| usage(&value["usage"]))
+    })
+}
+/// Responses message `phase` labels assistant text: `commentary` (preamble) or
+/// `final_answer`. Both are assistant output text, kept in output order; any
+/// other phase is an unsupported capability and fails rather than being dropped.
+fn message_fields(item: &Value) -> Result<()> {
+    fields(item, &["type", "id", "status", "role", "content", "phase"])?;
+    match &item["phase"] {
+        Value::Null => Ok(()),
+        Value::String(s) if s == "final_answer" || s == "commentary" => Ok(()),
+        _ => Err(InferenceError::InvalidUpstream),
+    }
+}
+/// Reasoning models emit opaque `reasoning` items (encrypted content, no summary
+/// unless requested). They are not answer content and the gateway never asks for
+/// summaries, so only the opaque empty shape is accepted; reasoning tokens are
+/// accounted through `usage.output_tokens_details`. Visible reasoning text or a
+/// summary is an unsupported capability and fails rather than being dropped.
+fn reasoning_fields(item: &Value) -> Result<()> {
+    fields(
+        item,
+        &[
+            "type",
+            "id",
+            "status",
+            "content",
+            "encrypted_content",
+            "summary",
+        ],
+    )?;
+    for key in ["content", "summary"] {
+        if !item[key].is_null() && item[key].as_array().is_none_or(|v| !v.is_empty()) {
+            return Err(InferenceError::InvalidUpstream);
+        }
+    }
+    if !item["encrypted_content"].is_null() && !item["encrypted_content"].is_string() {
+        return Err(InferenceError::InvalidUpstream);
+    }
+    Ok(())
+}
+fn decode_shape(value: &Value) -> Result<ChatResponse> {
     if !value["error"].is_null() {
         return Err(InferenceError::InvalidUpstream);
     }
@@ -118,7 +172,7 @@ fn decode(value: &Value) -> Result<ChatResponse> {
     for item in output {
         match item["type"].as_str() {
             Some("message") => {
-                fields(item, &["type", "id", "status", "role", "content"])?;
+                message_fields(item)?;
                 if item["role"] != "assistant" {
                     return Err(InferenceError::InvalidUpstream);
                 }
@@ -153,6 +207,7 @@ fn decode(value: &Value) -> Result<ChatResponse> {
                     arguments: string(&item["arguments"])?.into(),
                 });
             }
+            Some("reasoning") => reasoning_fields(item)?,
             _ => return Err(InferenceError::InvalidUpstream),
         }
     }
@@ -210,7 +265,7 @@ impl State {
                 }
                 match item["type"].as_str() {
                     Some("message") if item["role"] == "assistant" => {
-                        fields(item, &["type", "id", "status", "role", "content"])?;
+                        message_fields(item)?;
                         if item["content"].as_array().is_none_or(|v| !v.is_empty()) {
                             return Err(InferenceError::InvalidUpstream);
                         }
@@ -239,6 +294,7 @@ impl State {
                         });
                         self.calls.insert(index, call);
                     }
+                    Some("reasoning") => reasoning_fields(item)?,
                     _ => return Err(InferenceError::InvalidUpstream),
                 }
                 self.items.insert(index, item.clone());
@@ -357,6 +413,8 @@ impl State {
                 decode(&json!({"status":"completed","output":[value["item"]]}))?;
                 if value["item"]["id"] != item["id"]
                     || value["item"]["type"] != item["type"]
+                    // A phase announced at item start must not change at done.
+                    || (!item["phase"].is_null() && value["item"]["phase"] != item["phase"])
                     || (item["type"] == "message"
                         && self.parts.contains(&index)
                         && !self.closed_parts.contains(&index))
@@ -386,7 +444,11 @@ impl State {
                             a.id != b.id || a.name != b.name || a.arguments != b.arguments
                         })
                 {
-                    return Err(InferenceError::InvalidUpstream);
+                    // The terminal snapshot's validated usage is still evidence.
+                    return crate::inference::evidence::preserve(
+                        Err(InferenceError::InvalidUpstream),
+                        || Some(Ok(response.usage)),
+                    );
                 }
                 events.push(ChatEvent::Finish(response.finish_reason));
                 events.push(ChatEvent::Usage(response.usage));

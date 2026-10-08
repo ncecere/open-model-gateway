@@ -20,8 +20,17 @@ import styles from "./field.module.css";
  * aria-describedby, and `error` makes the control aria-invalid. Works with
  * Input, Textarea, NativeSelect and any Base UI form control.
  *
+ * Without `error`, the field shows Base UI's own validation message once it
+ * has been validated (on submit inside a Form): the browser's constraint
+ * message (required, type="email", min, pattern…) or the string returned by
+ * `validate`, so an invalid field never shows only a red border:
+ *
+ *   <Field label="Slug" validate={(v) => (/^[a-z0-9-]+$/.test(String(v)) ? null : "Use lowercase letters, digits and hyphens.")}>
+ *
  * The parts are also exported (FieldRoot, FieldLabel, ...) for custom layouts.
  */
+
+const hasText = (node: ReactNode) => node !== undefined && node !== null && node !== false && node !== "";
 
 export type FieldProps = Omit<BaseField.Root.Props, "className" | "children"> & {
   className?: string;
@@ -50,11 +59,23 @@ export function Field({ label, hideLabel, labelHint, description, error, classNa
       )}
       {children}
       {description && <BaseField.Description className={styles.description}>{description}</BaseField.Description>}
-      {hasError && (
+      {hasError ? (
         <BaseField.Error match className={styles.error}>
           <CircleAlert aria-hidden className={styles.errorIcon} />
           <span>{error}</span>
         </BaseField.Error>
+      ) : (
+        // Without `error`: the constraint-validation or `validate` message, once the field is
+        // validated (on submit inside a Form), so an invalid field never shows only a red border.
+        <BaseField.Error
+          className={styles.error}
+          render={(errorProps) => (
+            <div {...errorProps}>
+              {hasText(errorProps.children) && <CircleAlert aria-hidden className={styles.errorIcon} />}
+              <span>{errorProps.children}</span>
+            </div>
+          )}
+        />
       )}
     </BaseField.Root>
   );

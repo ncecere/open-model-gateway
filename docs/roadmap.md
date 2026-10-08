@@ -1,5 +1,13 @@
 # Application roadmap — for review
 
+## Approved enterprise rebuild
+
+The approved next direction is a **single-enterprise installation with sibling Teams, Projects and private personal workspaces**, multiple scoped catalogs, OIDC platform entitlement/group mappings, and optional cost-center allocation. The first rebuild also recreates richer cost reporting and cache-aware accounting and adds embeddings and local provider profiles. See [the confirmed decisions and eight-milestone plan](enterprise-rebuild.md).
+
+This direction supersedes the multi-organization product assumptions for new development, but is **not yet implemented**. The restored code at `6598602` and the implemented-state inventory below remain the current baseline. Images, speech, video and further proxy capabilities are staged follow-ups, not claims of existing support. Production/security gates remain necessary.
+
+## Historical proposal and restored baseline
+
 **Decision status: R07's first release is complete. The Grounded-style dashboard/navigation refresh was separately approved; the remaining full proposals below are not selected.** Choose remaining items by ID (for example, `R06, R11, R12`) or check the boxes below. Priorities are recommendations, not a delivery commitment. Previously requested ideas are included so they can be reviewed alongside new suggestions.
 
 This is a source-level product and engineering review of the Rust gateway, React dashboard, documented contracts, tests and deployment tooling. It is not a new penetration test, live-provider certification or comprehensive browser audit. The original review baseline was staging milestone `dff83d7`. The user subsequently approved completing per-key restrictions (R07); that first release is now verified. The subsequent authorized dashboard refresh adds contextual settings, resource routes, explicit session membership/capabilities, direct catalog detail reads, and server-side catalog search. It does not authorize new roles, changes to inherited access, paid inference, or implementation of every proposal below.
@@ -184,7 +192,7 @@ Effort is relative: **S** = narrow change; **M** = several components plus tests
 ### R20 — Additional inference capabilities, selected by use case · P2 · L per slice
 
 - [ ] Select R20 and specify a slice
-- **Options:** structured JSON output for application integrations; embeddings for retrieval workloads; image input for vision use cases. Add reranking/audio/batch only when a concrete consumer needs them.
+- **Options:** structured JSON output for application integrations; embeddings for retrieval workloads; image input for vision use cases. Rerank (`/v1/rerank`) and TypeSafe System One (`/v1/systemone`) are implemented through the OpenRouter adapter on the shared non-generation workload path. Base64-only image generation (`/v1/images/generations`) is implemented for OpenAI `gpt-image-*` (one capped live check) and OpenRouter `/images`. OpenRouter images are mock-tested only, because live calls return 402 without account credit. Speech is implemented on the same path, without realtime. `/v1/audio/transcriptions` (multipart, server-measured WAV/MP3/Ogg/FLAC duration) uses OpenAI and OpenRouter; OpenRouter is mock-tested only, because live calls return 402. `/v1/audio/speech` (streamed binary, exact character metering) uses OpenAI and OpenRouter. One capped live check covered `whisper-1`, `tts-1` and `mai-voice-2-flash`. Batch only when a concrete consumer needs it.
 - **Acceptance:** explicit typed protocol and adapter support, capability metadata, payload/output bounds, usage/pricing semantics and SDK fixtures for the chosen slice. Preserve unsupported-feature errors; do not silently drop options or label every provider compatible.
 - **Depends on:** a named consuming application, required models and realistic acceptance examples. Avoid expanding all protocols simultaneously.
 
@@ -248,6 +256,7 @@ Operational follow-up: live IdP acceptance, automatic JWKS refresh, session/atte
 - [x] Key creation, one-time disclosure, bounded expiry, atomic rotation, revocation.
 - [x] Service-account lifecycle; disabling a member/account permanently revokes affected keys.
 - [x] Execution history, thirty-day known-token totals and explicit unknown-usage counts.
+- [x] Backend APIs for the UX program (2026-10-08): own-scope Home summary and keys, request logs with attempt timelines, key statistics and reversible key disablement, usage overview/explore analytics, effective-access layers with per-model reasons, member picker and catalog filters. Browser UI for them is in progress.
 - [x] Transactional, sanitized mutation audit records; personal audit privacy.
 - [x] Real PostgreSQL isolation and concurrent lifecycle tests.
 
@@ -270,7 +279,7 @@ Deliberate limits: native Responses/Messages frontend content is currently buffe
 
 - [x] PostgreSQL-backed org/workspace/key attempt, token and leased concurrency limits across replicas.
 - [x] Separately-owned platform organization ceilings; optional child restrictions share parent allowance and cannot remove or exceed effective parent limits.
-- [x] UTC monthly USD budgets with serialized reservations; unknown usage retains holds.
+- [x] Stacked UTC daily/weekly (ISO)/monthly/lifetime USD budgets (one per period at every policy layer, all enforced) with serialized reservations; unknown usage retains holds; budget changes never reset consumption.
 - [x] Immutable deployment price versions and append-only integer-micro cost ledger.
 - [x] Pinned-rate settlement, crash/expiry reconciliation worker, evidence-backed manual usage resolution.
 - [x] Scoped known/held/unknown cost views and bounded CSV export.

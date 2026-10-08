@@ -1,0 +1,1 @@
+(function(){try{var m=localStorage.getItem("bitop-color-mode");var d=m==="dark"||(m!=="light"&&window.matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.dataset.theme=d?"dark":"light"}catch(e){}})();

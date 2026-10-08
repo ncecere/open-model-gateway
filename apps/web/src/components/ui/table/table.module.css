@@ -1,6 +1,28 @@
+/* The frame holds the scroll box and the edge shadows (which stay put while
+   the table scrolls under them). */
+.frame {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+
+  &[data-framed] {
+    --table-background: var(--color-surface);
+
+    border-radius: var(--radius-card);
+    background-color: var(--color-surface);
+    box-shadow: var(--shadow-2);
+  }
+}
+
 .wrap {
+  /* Contains absolutely positioned content (visually hidden labels), so a
+     wide table scrolls inside the wrapper and never widens the page. */
+  position: relative;
   width: 100%;
   overflow-x: auto;
+  border-radius: inherit;
+  /* Its width is the visible width (100cqi) that an empty state centres on. */
+  container-type: inline-size;
 
   &[data-scroll] {
     overflow: auto;
@@ -9,12 +31,45 @@
   &[data-overflowing]:focus-visible {
     outline-offset: -2px;
   }
+}
 
-  &[data-framed] {
-    border-radius: var(--radius-card);
-    background-color: var(--color-surface);
-    box-shadow: var(--shadow-2);
+/* Columns hidden to the side: a shadow on that edge shows the table scrolls. */
+.edge {
+  --table-edge-dir: to right;
+
+  position: absolute;
+  z-index: calc(var(--z-sticky) + 1);
+  inset-block: 0;
+  width: var(--space-5);
+  pointer-events: none;
+  background-image: linear-gradient(var(--table-edge-dir), color-mix(in srgb, var(--color-text) 14%, transparent), transparent);
+
+  &[data-side="start"] {
+    inset-inline-start: 0;
+    border-start-start-radius: inherit;
+    border-end-start-radius: inherit;
   }
+
+  &[data-side="end"] {
+    --table-edge-dir: to left;
+
+    inset-inline-end: 0;
+    border-start-end-radius: inherit;
+    border-end-end-radius: inherit;
+  }
+
+  &:dir(rtl) {
+    --table-edge-dir: to left;
+  }
+
+  &[data-side="end"]:dir(rtl) {
+    --table-edge-dir: to right;
+  }
+}
+
+/* The pinned end column casts the end shadow itself (at its start edge). */
+.frame[data-sticky-end] .edge[data-side="end"] {
+  display: none;
 }
 
 .table {
@@ -130,6 +185,111 @@
 
 .emptyCell {
   padding: 0;
+}
+
+/* Centred on the visible part of a table wider than its scroll box, not on the table's full width. */
+.emptyContent {
+  position: sticky;
+  inset-inline-start: 0;
+  width: 100cqi;
+  max-width: 100%;
+}
+
+/* Pinned to the end edge: row actions stay on screen while the columns scroll under them. */
+.th[data-sticky-end],
+.td[data-sticky-end] {
+  position: sticky;
+  inset-inline-end: 0;
+  z-index: 1;
+  /* What the table sits on: the page, or a card, dialog or framed table (they set --table-background). */
+  background-color: var(--table-background, var(--color-bg));
+}
+
+.th[data-sticky-end] {
+  background-color: var(--color-surface-sunken);
+}
+
+.table[data-sticky] .th[data-sticky-end] {
+  z-index: calc(var(--z-sticky) + 1);
+}
+
+.table tbody tr:hover > .td[data-sticky-end] {
+  background-image: linear-gradient(var(--color-surface-hover), var(--color-surface-hover));
+}
+
+.tr[data-selected] > .td[data-sticky-end] {
+  background-color: var(--color-primary-subtle);
+}
+
+/* Columns scrolled under it: a shadow on its start edge. */
+.wrap[data-overflowing] :is(.th, .td)[data-sticky-end] {
+  box-shadow: calc(var(--space-3) * -1) 0 var(--space-3) calc(var(--space-3) * -1) color-mix(in srgb, var(--color-text) 22%, transparent);
+}
+
+.wrap[data-overflowing] :is(.th, .td)[data-sticky-end]:dir(rtl) {
+  box-shadow: var(--space-3) 0 var(--space-3) calc(var(--space-3) * -1) color-mix(in srgb, var(--color-text) 22%, transparent);
+}
+
+/*
+ * Stacked (a settings table on a phone): each row is a block, the first cell
+ * on its own line and the others in a grid under it, each named by its
+ * column (data-label, set from the header). A grid, so every row lays its
+ * cells out the same way whatever their text (a wrapping flex row put them
+ * side by side in one row and under each other in the next). The header row
+ * stays for screen readers only.
+ */
+@media (max-width: 37.5rem) {
+  .table[data-stack] {
+    & thead {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+
+    & tbody > tr {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(min(8rem, 100%), 1fr));
+      gap: var(--space-2) var(--space-4);
+      padding: var(--cell-py) var(--space-5);
+      border-bottom: 1px solid var(--color-border-muted);
+    }
+
+    & tbody > tr:last-child {
+      border-bottom: 0;
+    }
+
+    & tbody > tr > :is(td, th) {
+      display: block;
+      min-width: 0;
+      padding: 0;
+      border-bottom: 0;
+      text-align: start;
+    }
+
+    & tbody > tr > :is(td, th):first-child {
+      grid-column: 1 / -1;
+    }
+
+    & tbody > tr > :is(td, th)[data-label]::before {
+      content: attr(data-label);
+      display: block;
+      margin-bottom: var(--space-1);
+      color: var(--color-text-muted);
+      font-size: var(--font-size-xs);
+      font-weight: var(--font-weight-medium);
+    }
+
+    & .emptyCell {
+      grid-column: 1 / -1;
+    }
+  }
+
+  .table[data-stack] tbody > tr.emptyRow {
+    padding: 0;
+  }
 }
 
 .actions {

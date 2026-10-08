@@ -298,10 +298,26 @@ fn snapshot(id: &str, model: &str, created: u64, response: &ChatResponse) -> Val
     if incomplete {
         v["incomplete_details"] = json!({"reason":if response.finish_reason == FinishReason::Length { "max_output_tokens" } else { "content_filter" }});
     }
-    if let (Some(input), Some(output)) = (response.usage.input_tokens, response.usage.output_tokens)
+    let input = match response.usage.billing {
+        Some(b) => b.total_input_tokens,
+        None => response.usage.input_tokens,
+    };
+    if let (Some(input), Some(output)) = (input, response.usage.output_tokens)
         && let Some(total) = input.checked_add(output)
     {
         v["usage"] = json!({"input_tokens":input,"output_tokens":output,"total_tokens":total});
+        if let Some(b) = response.usage.billing {
+            let mut details = json!({});
+            if let Some(n) = b.cache_read_input_tokens {
+                details["cached_tokens"] = n.into();
+            }
+            if let Some(n) = b.cache_write_input_tokens {
+                details["cache_write_tokens"] = n.into();
+            }
+            if details.as_object().is_some_and(|d| !d.is_empty()) {
+                v["usage"]["input_tokens_details"] = details;
+            }
+        }
     }
     v
 }
@@ -435,25 +451,13 @@ impl Accumulator {
     }
 }
 pub(super) fn status(error: InferenceError) -> StatusCode {
-    match error {
-        InferenceError::InvalidRequest | InferenceError::UpstreamRejected => {
-            StatusCode::BAD_REQUEST
-        }
-        InferenceError::ModelUnavailable => StatusCode::NOT_FOUND,
-        InferenceError::Unsupported => StatusCode::NOT_IMPLEMENTED,
-        InferenceError::Busy => StatusCode::TOO_MANY_REQUESTS,
-        InferenceError::Timeout => StatusCode::GATEWAY_TIMEOUT,
-        InferenceError::InvalidUpstream | InferenceError::UpstreamUnavailable => {
-            StatusCode::BAD_GATEWAY
-        }
-        InferenceError::Configuration | InferenceError::Storage => StatusCode::SERVICE_UNAVAILABLE,
-    }
+    super::http_status(error)
 }
 fn error_body(e: InferenceError) -> Value {
-    json!({"error":{"message":e.message(),"type":e.code(),"code":e.code(),"param":null}})
+    super::openai_error_body(e)
 }
 fn error_response(e: InferenceError) -> Response {
-    (status(e), Json(error_body(e))).into_response()
+    super::error_with_body(e, error_body(e))
 }
 fn rejection(e: JsonRejection) -> Response {
     if e.status() == StatusCode::PAYLOAD_TOO_LARGE {

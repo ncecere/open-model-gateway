@@ -1,0 +1,328 @@
+/* Page-level helpers shared by the team and admin pages. Semantic tokens only. */
+
+/* Table cells: a primary line and muted secondary lines. */
+.primary {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text);
+}
+
+.secondary {
+  display: block;
+  margin-top: 0.125rem;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.mono {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+
+.muted {
+  color: var(--color-text-subtle);
+}
+
+.dangerText {
+  display: block;
+  max-width: 20rem;
+  margin-top: var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-danger-text);
+}
+
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+/* Metric tiles. */
+/*
+ * Metric tiles in fixed columns, so a row never ends with an orphan: .stats
+ * for groups of four (4 → 2 → 1 columns), .stats3 for groups of three or six
+ * (3 → 1).
+ */
+.stats,
+.stats3 {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.stats3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+@media (max-width: 68rem) {
+  .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 44rem) {
+  .stats,
+  .stats3 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Filters above a table. */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-4);
+}
+
+.filter {
+  width: 14rem;
+}
+
+.filterWide {
+  width: 20rem;
+  max-width: 100%;
+}
+
+/* Forms inside cards. */
+.form {
+  max-width: 36rem;
+}
+
+.grid2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: var(--space-4);
+}
+
+.span2 {
+  grid-column: 1 / -1;
+}
+
+/* A settings row: text on the left, an action on the right. */
+.settingRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding-block: var(--space-4);
+  border-top: 1px solid var(--color-border);
+
+  &:first-child {
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  &:last-child {
+    padding-bottom: 0;
+  }
+}
+
+.settingText {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+  max-width: 40rem;
+}
+
+.settingTitle {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+}
+
+.settingDescription {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+/* "Load more" under a list. */
+.more {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+
+/* Small print under a form or list. */
+.note {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.details {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-2) var(--space-6);
+  font-size: var(--font-size-md);
+
+  & dt {
+    color: var(--color-text-muted);
+  }
+}
+
+.pre {
+  max-width: 36rem;
+  max-height: 20rem;
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  overflow: auto;
+  border-radius: var(--radius-control);
+  background-color: var(--color-surface-sunken);
+  font-size: var(--font-size-xs);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.inlineForm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-3);
+
+  & > :first-child {
+    flex: 1;
+    min-width: 16rem;
+    max-width: 28rem;
+  }
+}
+
+/* Padding for states rendered inside a flush card. */
+.pad {
+  padding: var(--space-4) var(--space-5);
+}
+
+.person {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.personText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.you {
+  margin-left: var(--space-1);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-muted);
+}
+
+.roleSelect {
+  width: 8.5rem;
+}
+
+.attach {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+
+/* Lines a button up with the control of a labelled Field next to it. */
+.alignControl {
+  margin-top: calc(var(--font-size-sm) * var(--line-height-snug) + 0.375rem);
+}
+
+/*
+ * Page root: a vertical stack whose first child is the PageHeader. A record page's root holds one stack, which
+ * gets no margin: it made Version history 8 px taller than its content (VI2-07).
+ */
+.page > :first-child:not(:only-child) {
+  margin-bottom: var(--space-2);
+}
+
+.inUseList {
+  margin: var(--space-1) 0 0;
+  padding-inline-start: var(--space-5);
+}
+
+.dateFilter {
+  width: 10.5rem;
+}
+
+/* Previous / Next under a long list. */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--color-border);
+}
+
+.pagerRange {
+  margin-inline-end: auto;
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+}
+
+/* "N sources can't be attached" under a knowledge base's attach form. */
+.unavailable {
+  font-size: var(--font-size-sm);
+}
+
+/* One line, cut with an ellipsis (pair with a Tooltip showing the full text). */
+.truncate {
+  display: inline-block;
+  max-width: 11rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+/* Heading inside a grouped checkbox list (e.g. protocol workloads). */
+.groupHeading {
+  margin-top: 0.25rem;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--color-text-subtle);
+}
+
+/* An unbulleted list inside a table cell (e.g. price lines). */
+/* Headline price lines in a table cell (Admin › Pricing). */
+.priceStack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.plainList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* A FilterToolbar above its DataTable: DataTable's own toolbar-to-table spacing (Grounded's ListPage). */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 100%;
+  min-width: 0;
+}
+
+/* Phone: low-priority columns start hidden (defaultHiddenNarrow), and the row header keeps a readable width so names and emails don't break per word. */
+@media (max-width: 40rem) {
+  .list th[scope="row"] {
+    min-width: 9rem;
+  }
+}
+
+/* An icon on the same line as its text (e.g. the Overview Access summary). */
+.iconLine {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.iconLine > svg {
+  flex: none;
+}

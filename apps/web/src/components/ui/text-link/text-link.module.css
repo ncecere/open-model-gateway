@@ -1,0 +1,40 @@
+.link {
+  display: inline;
+  color: var(--color-link);
+  font-weight: var(--font-weight-medium);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 30%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  border-radius: 2px;
+  cursor: pointer;
+  transition:
+    color var(--motion-duration-fast) var(--motion-ease-out),
+    text-decoration-color var(--motion-duration-fast) var(--motion-ease-out);
+
+  &:hover {
+    color: var(--color-link-hover);
+    text-decoration-color: currentColor;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 2px;
+  }
+
+  &[data-tone="muted"] {
+    color: var(--color-text-muted);
+
+    &:hover {
+      color: var(--color-text);
+    }
+  }
+}
+
+.icon {
+  display: inline-block;
+  width: 0.875em;
+  height: 0.875em;
+  margin-inline-start: 0.125em;
+  vertical-align: -0.1em;
+}

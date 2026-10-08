@@ -1,0 +1,219 @@
+/*
+ * Calendar month grid. Selection uses a filled day (plus aria-selected),
+ * today is bold and underlined, unavailable days are struck through, so no
+ * state relies on colour alone.
+ */
+.root {
+  --calendar-cell: 2.25rem;
+
+  position: relative;
+  display: inline-block;
+  padding: var(--space-3);
+  color: var(--color-text);
+  font-family: var(--font-family-sans);
+  font-feature-settings: var(--font-features);
+  font-size: var(--font-size-md);
+}
+
+.nav {
+  position: absolute;
+  inset-inline: var(--space-3);
+  top: var(--space-3);
+  display: flex;
+  justify-content: space-between;
+  height: var(--control-height-sm);
+  pointer-events: none;
+
+  & > * {
+    pointer-events: auto;
+  }
+}
+
+.navButton {
+  z-index: 1;
+}
+
+.months {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-6);
+}
+
+.month {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.caption {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  height: var(--control-height-sm);
+  padding-inline: var(--control-height-sm);
+}
+
+.captionLabel {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-snug);
+  white-space: nowrap;
+}
+
+.selectWrap {
+  display: inline-flex;
+}
+
+.select {
+  height: 1.75rem;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-2);
+  background-color: var(--color-control);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+
+  &:focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 1px;
+  }
+
+  &:disabled {
+    background-color: var(--color-control-disabled);
+    color: var(--color-text-subtle);
+    cursor: not-allowed;
+  }
+}
+
+.grid {
+  border-collapse: collapse;
+  border-spacing: 0;
+  table-layout: fixed;
+}
+
+.weekday {
+  width: var(--calendar-cell);
+  height: 1.75rem;
+  padding: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  text-align: center;
+}
+
+.cell {
+  width: var(--calendar-cell);
+  height: var(--calendar-cell);
+  padding: 0;
+  text-align: center;
+
+  &[data-range-middle] {
+    background-color: var(--color-primary-subtle);
+  }
+
+  &[data-range-start] {
+    border-start-start-radius: var(--radius-control);
+    border-end-start-radius: var(--radius-control);
+    background-color: var(--color-primary-subtle);
+  }
+
+  &[data-range-end] {
+    border-start-end-radius: var(--radius-control);
+    border-end-end-radius: var(--radius-control);
+    background-color: var(--color-primary-subtle);
+  }
+}
+
+.day {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: var(--calendar-cell);
+  height: var(--calendar-cell);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-control);
+  background-color: transparent;
+  color: var(--color-text);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-duration-fast) var(--motion-ease-out),
+    color var(--motion-duration-fast) var(--motion-ease-out);
+
+  @media (hover: hover) {
+    &:hover:not([data-disabled], [data-selected]) {
+      background-color: var(--color-surface-hover);
+    }
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 1px;
+    z-index: 1;
+  }
+
+  &[data-today] {
+    font-weight: var(--font-weight-bold);
+
+    & .dayNumber {
+      text-decoration: underline;
+      text-decoration-thickness: 2px;
+      text-underline-offset: 3px;
+    }
+  }
+
+  &[data-outside] {
+    color: var(--color-text-subtle);
+  }
+
+  &[data-selected] {
+    background-color: var(--color-primary);
+    color: var(--color-primary-contrast);
+  }
+
+  &[data-range-middle] {
+    background-color: transparent;
+    color: var(--color-primary-subtle-text);
+    border-radius: 0;
+  }
+
+  &[data-disabled] {
+    color: var(--color-text-subtle);
+    cursor: not-allowed;
+
+    & .dayNumber {
+      text-decoration: line-through;
+    }
+  }
+
+  &[data-selected][data-disabled] {
+    color: var(--color-primary-contrast);
+  }
+}
+
+.dayNumber {
+  display: block;
+}
+
+.dayContent {
+  display: block;
+  margin-top: 0.125rem;
+  font-size: 0.625rem;
+  line-height: 1;
+  opacity: 0.85;
+}
+
+.root[data-disabled] {
+  & .day {
+    cursor: not-allowed;
+  }
+}

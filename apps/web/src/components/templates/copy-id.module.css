@@ -1,0 +1,25 @@
+/* CopyId: short monospace id + icon copy button on one line. */
+.root {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  vertical-align: middle;
+}
+
+.code {
+  min-width: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+  white-space: nowrap;
+}
+
+.button {
+  flex: none;
+}
+
+.unknown {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}

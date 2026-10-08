@@ -1,0 +1,115 @@
+/* BudgetRing: SVG ring + text. Colour from --ring-color per level; offset from --ring-offset. */
+.root {
+  --ring-color: var(--color-primary);
+  --ring-size: 3rem;
+
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+
+  &[data-size="sm"] {
+    --ring-size: 2.25rem;
+  }
+
+  &[data-level="warning"] {
+    --ring-color: var(--color-warning);
+  }
+
+  &[data-level="critical"],
+  &[data-level="over"] {
+    --ring-color: var(--color-danger);
+  }
+}
+
+.ring {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: var(--ring-size);
+  height: var(--ring-size);
+}
+
+.svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.track {
+  fill: none;
+  stroke: var(--color-surface-sunken);
+  stroke-width: 4;
+
+  .root[data-unknown] & {
+    stroke: var(--color-warning-border);
+    stroke-dasharray: 3 3;
+  }
+}
+
+.fill {
+  fill: none;
+  stroke: var(--ring-color);
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-dashoffset: var(--ring-offset);
+  transition: stroke-dashoffset var(--motion-duration-slow) var(--motion-ease-out);
+}
+
+.center {
+  position: relative;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+
+  .root[data-size="sm"] & {
+    font-size: 0.625rem;
+  }
+
+  .root[data-unknown] & {
+    color: var(--color-warning-text);
+  }
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.amounts {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+.status {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+
+  .root[data-level="warning"] & {
+    color: var(--color-warning-text);
+  }
+
+  .root[data-level="critical"] &,
+  .root[data-level="over"] & {
+    color: var(--color-danger-text);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fill {
+    transition: none;
+  }
+}

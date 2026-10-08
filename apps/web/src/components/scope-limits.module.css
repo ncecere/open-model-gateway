@@ -1,0 +1,77 @@
+/* Limits tables (stacked budgets). Provenance: Grounded web/src/pages/admin/limits/limits.module.css. Semantic tokens only. */
+.amountField {
+  min-width: 9rem;
+}
+
+.amount {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.amountInput {
+  width: 8.5rem;
+}
+
+.unit {
+  min-width: 4.5rem;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.cellNote {
+  display: block;
+  margin-top: 0.125rem;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.periodField {
+  max-width: 10rem;
+}
+
+.budgetHead {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.addRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+
+.formErrors {
+  margin: 0;
+  padding: var(--space-3) var(--space-4) 0;
+  list-style: none;
+  font-size: var(--font-size-sm);
+  color: var(--color-danger-text);
+}
+
+.meters {
+  display: grid;
+  gap: var(--space-4);
+}
+
+/* A phone (the table stacks): the editable cell takes the row's full width so inputs and placeholders aren't cut. */
+@media (max-width: 37.5rem) {
+  td:has(> .amountField) {
+    grid-column: 1 / -1;
+  }
+
+  .amountField {
+    min-width: 0;
+  }
+
+  .amountInput {
+    flex: 1;
+    width: auto;
+    min-width: 0;
+  }
+}

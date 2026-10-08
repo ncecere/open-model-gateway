@@ -1,0 +1,61 @@
+/* PercentBarCell: value + share over a thin bar; width comes from --percent. */
+.root {
+  --bar-color: var(--color-chart-primary);
+
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 6rem;
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+
+  &[data-tone="neutral"] {
+    --bar-color: var(--color-chart-neutral);
+  }
+
+  &[data-tone="warning"] {
+    --bar-color: var(--color-chart-warning);
+  }
+
+  &[data-tone="danger"] {
+    --bar-color: var(--color-chart-danger);
+  }
+}
+
+.text {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.value {
+  color: var(--color-text);
+  white-space: nowrap;
+}
+
+.share {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+
+  &[data-unknown] {
+    color: var(--color-warning-text);
+  }
+}
+
+.track {
+  display: block;
+  height: 0.25rem;
+  border-radius: var(--radius-pill);
+  background-color: var(--color-surface-sunken);
+  overflow: hidden;
+}
+
+.bar {
+  display: block;
+  width: var(--percent, 0%);
+  height: 100%;
+  border-radius: inherit;
+  background-color: var(--bar-color);
+}

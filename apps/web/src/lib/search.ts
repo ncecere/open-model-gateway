@@ -1,33 +1,18 @@
-import type { Organization, Session, Workspace } from "./api";
-import { navigation, scopeSearch } from "./navigation";
-import { canView, type DashboardSearch } from "./permissions";
-
+import type { Session, Workspace } from "./api";
+import { authorityLabel } from "./access";
+import { SELECTED, navigation, portalWorkspaces, scopeSearch } from "./navigation";
+import { canView, inWorkspacePortal, type DashboardSearch } from "./permissions";
+// Old names still find their new homes (Deployments and Routing live on model pages).
+const aliases: Partial<Record<string, string[]>> = { providers: ["provider connections", "providers", "endpoints"], models: ["deployments", "routes", "routing", "aliases"], catalogs: ["availability", "defaults"], home: ["start", "dashboard", "welcome"], "workspace-settings": ["workspace settings", "members", "limits", "audit"], requests: ["executions", "activity", "logs"] };
 export type JumpTarget = { id: string; label: string; group: string; hint?: string; keywords: string[]; search: DashboardSearch };
-
-// Only /me's current-user resources are searched. This never queries a user
-// directory or uses operator access to enumerate someone else's personal scope.
-export function jumpTargets(session: Session, organization?: Organization, workspace?: Workspace): JumpTarget[] {
-  const org = session.organizations.find(item => item.id === organization?.id);
-  const ws = session.workspaces.find(item => item.id === workspace?.id && item.organization_id === org?.id);
-  const pages = navigation.filter(item => canView(item.page, session, org, ws));
-  const targets: JumpTarget[] = pages.map(item => ({
-    id: `page:${item.page}`, label: item.page === "platform-overview" ? "Platform overview" : item.label, group: "Pages", hint: item.group,
-    keywords: [item.group, item.page], search: scopeSearch(item.page, org?.id, ws?.id),
-  }));
-  if (session.user.platform_admin) for (const [page, label] of [["routing", "Routing"], ["pricing", "Pricing"], ["model-access", "Model access"]] as const) targets.push({ id: `page:${page}`, label, group: "Pages", hint: "Platform", keywords: [page], search: scopeSearch(page) });
-  targets.push({ id: "page:profile", label: "Your profile", group: "Pages", keywords: ["account", "memberships"], search: scopeSearch("profile") });
-  targets.push({ id: "page:accept-invitation", label: "Accept invitation", group: "Pages", keywords: ["join", "organization"], search: scopeSearch("accept-invitation") });
-  for (const org of session.organizations) targets.push({
-    id: `org:${org.id}`, label: org.name, group: "Organizations", hint: "Organization",
-    keywords: [org.slug], search: scopeSearch(session.user.platform_admin ? "organization-detail" : canView("organization-settings", session, org) ? "organization-settings" : "overview", org.id),
-  });
-  for (const ws of session.workspaces) {
-    const org = session.organizations.find(item => item.id === ws.organization_id);
-    if (!org) continue;
-    targets.push({
-      id: `workspace:${ws.id}`, label: ws.name, group: ws.kind === "personal" ? "Personal · private" : ws.kind === "project" ? "Projects" : "Teams", hint: org.name,
-      keywords: [org.name, org.slug, ws.kind], search: scopeSearch("overview", ws.organization_id, ws.id),
-    });
-  }
+// Search only /me inventory. Platform cost dimensions never hydrate private workspace pages.
+export function jumpTargets(session: Session, workspace?: Workspace): JumpTarget[] {
+  const found = session.workspaces.find(item => item.id === workspace?.id), ws = found && inWorkspacePortal(session, found) ? found : undefined;
+  const targets: JumpTarget[] = navigation.filter(item => canView(item.page, session, ws) && (item.group !== SELECTED || ws)).map(item => ({ id: `page:${item.page}`, label: item.page === "platform-overview" ? "Admin overview" : item.label, group: "Pages", hint: item.group === SELECTED ? ws!.name : item.group, keywords: [item.page, item.group === SELECTED ? ws!.name : item.group, ...(aliases[item.page] ?? [])], search: scopeSearch(item.page, ws?.id) }));
+  // Create forms are Admin-only actions; Auditors (platform_read only) never get mutation shortcuts.
+  if (session.capabilities.platform_write) targets.push({ id: "page:model-new", label: "Add model", group: "Pages", hint: "Models", keywords: ["create", "new model", "route", "deployment", "connection"], search: { page: "model-new" } });
+  // Invitations arrive by link; "Accept invitation" is not a destination you search for.
+  targets.push({ id: "page:profile", label: "Your profile", group: "Pages", keywords: ["account", "roles"], search: { page: "profile" } });
+  for (const w of portalWorkspaces(session)) targets.push({ id: `workspace:${w.id}`, label: w.name, group: w.kind === "personal" ? "Personal" : w.kind === "team" ? "Teams" : "Projects", hint: authorityLabel(w), keywords: [w.kind, w.role ?? ""], search: { page: "overview", ws: w.id } });
   return targets;
 }

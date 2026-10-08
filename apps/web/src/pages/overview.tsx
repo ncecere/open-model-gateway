@@ -1,25 +1,82 @@
-import { wsPath, type Usage, type Execution, type Session } from "../lib/api";
+/*
+ * Workspace Overview: this month at a glance, access and a short list of
+ * recent requests. The header holds the page's one primary action, Create key,
+ * and Settings (Grounded team overview); the sidebar already lists every page,
+ * so there is no grid of navigation cards.
+ * Scope follows /me: workspace admins and the Personal owner see the whole
+ * workspace; members see their own activity only (the server filters).
+ *
+ * Provenance: Grounded web/src/pages/team/overview/{page,stats,member,recent}.tsx
+ * (read-only reference).
+ */
+import { ArrowRight, KeyRound, Settings, Activity } from "lucide-react";
+import type { ReactNode } from "react";
+import { wsPath, type Collection, type Session, type Execution, type Workspace } from "../lib/api";
+import { formatMicroUsd, type CostReport } from "../lib/governance";
+import { formatCount, reportQuery } from "../lib/reports";
+import { tokensText } from "../lib/requests";
+import { canView, inWorkspacePortal, type Page } from "../lib/permissions";
+import { authorityLabel } from "../lib/access";
+import { kindLabels, platformRoleLabels } from "../lib/people";
+import { useRef, useState } from "react";
+import type { Grant, ServiceAccount } from "../lib/api";
+import { keyModelOptions } from "../lib/key-models";
 import { permissions } from "../lib/permissions";
-import { authorityLabel, membershipLabel, ownKeyHelp } from "../lib/access";
+import { CreateKeyDialog } from "./keys";
+import { ErrorNotice, Heading, Panel, Stack, useApi, useChoices } from "../components/ui";
 import { ResourceLink } from "../components/navigation-link";
-import { Badge, CollectionTable, DateTime, ErrorNotice, Heading, Id, Panel, StatCard, useApi } from "../components/ui";
+import { RoleBadge } from "../components/people";
+import { StatTile, StatTileGrid } from "../components/templates/stat-tile";
+import { AccessCard } from "../components/effective-access";
+import { Badge, StatusBadge } from "../components/ui/badge/badge";
+import { Button } from "../components/ui/button/button";
+import { Card } from "../components/ui/card/card";
+import { EmptyState } from "../components/ui/empty-state/empty-state";
+import { PageHeader } from "../components/ui/page-header/page-header";
+import { Time } from "../components/ui/time/time";
 import type { Scope } from "./workspace";
+import s from "./shared.module.css";
+import h from "./home-portal.module.css";
 
-const count = (n: number | null | undefined) => n == null ? "Unknown" : n.toLocaleString();
-export function Overview({ session, workspace, organization }: Scope) {
-  const path = wsPath(workspace.id);
-  const usage = useApi<Usage>(`${path}/usage`);
-  const p = permissions(session, organization, workspace);
-  return <><Heading title={workspace.name} description={`${workspace.kind === "personal" ? "Your private workspace" : workspace.kind === "project" ? "Project workspace" : "Team workspace"} · ${p.workspaceAdmin ? "Showing workspace-wide activity" : "Showing activity from your own keys"}`} actions={<button className="button secondary" disabled={usage.isFetching} onClick={() => void usage.refetch()}>Refresh usage</button>} /><Panel title="Your next steps"><div className="actions"><ResourceLink className="button secondary" search={{ page: "grants", org: organization.id, ws: workspace.id }}>Explore available models</ResourceLink>{(p.createUserKey || p.manageServiceAccounts) && <ResourceLink className="button" search={{ page: "keys", org: organization.id, ws: workspace.id }}>Manage API keys</ResourceLink>}<ResourceLink className="button secondary" search={{ page: "workspace-settings", org: organization.id, ws: workspace.id }}>Workspace settings</ResourceLink></div><p className="help">{p.manageGrants ? "Delegate an assigned model before issuing credentials for it. Infrastructure availability and all parent limits still apply." : "Use the models granted to this workspace. Ask an organization administrator if the model you need is missing."}</p>{!p.createUserKey && workspace.capabilities && <p className="notice">{ownKeyHelp(workspace)}</p>}</Panel><section aria-labelledby="usage-title"><div className="section-heading"><h2 id="usage-title">Usage · last 30 days</h2><span className="muted">Accounting, not billing</span></div>{usage.isPending ? <p className="loading" role="status">Loading usage…</p> : usage.isError ? <ErrorNotice error={usage.error} retry={() => void usage.refetch()} /> : <><div className="stats"><StatCard label="Upstream attempts" value={count(usage.data.requests)} /><StatCard label="Known input tokens" value={count(usage.data.input_tokens)} /><StatCard label="Known output tokens" value={count(usage.data.output_tokens)} /><StatCard label="Attempts with unknown usage" value={count(usage.data.unknown_usage_requests)} /></div><p className="help">Attempt counts include fallbacks. Token totals include only reported counts. Missing usage is not zero; these totals do not represent cost or a bill.</p></>}</section><CollectionTable<Execution> path={`${path}/executions`} label="Executions" empty={p.manageGrants ? "No inference executions are visible yet. Delegate a model and issue an eligible API key to get started." : "No inference executions are visible yet. Review available models and your API keys, or ask an administrator for access."} pageSize={50} rowKey={(e) => e.id} columns={[
-    { title: "Started", render: (e) => <DateTime value={e.started_at} /> },
-    { title: "Model / provider", render: (e) => <><code>{e.public_model}</code><div className="muted">{e.provider}</div></> },
-    { title: "State", render: (e) => <Badge tone={e.state === "succeeded" ? "good" : e.state === "failed" ? "bad" : "neutral"}>{e.state}</Badge> },
-    { title: "Mode", render: (e) => e.streamed ? "Streamed" : "Standard" },
-    { title: "Input / output tokens", render: (e) => `${count(e.input_tokens)} / ${count(e.output_tokens)}` },
-    { title: "Duration", render: (e) => e.elapsed_ms == null ? "Unknown" : `${count(e.elapsed_ms)} ms` },
-    { title: "Error", render: (e) => e.error_code ? <code>{e.error_code}</code> : <span className="muted">—</span> },
-  ]} /><p className="help">Execution history never includes prompts or generated content. A “started” record may be in progress or awaiting reconciliation.</p></>;
+/** The header line: who the workspace is shared with and whose activity this page shows. */
+export function overviewDescription(workspace: Workspace) {
+  if (workspace.kind === "personal") return "Only you can see this workspace's keys and requests.";
+  return `${kindLabels[workspace.kind]} · showing ${workspace.capabilities.view_all_activity ? "everyone's" : "your"} activity`;
+}
+export function Overview({ session, workspace }: Scope) {
+  const canDetails = inWorkspacePortal(session, workspace), p = permissions(session, workspace);
+  const grants = useChoices<Grant>(`${wsPath(workspace.id)}/models`, canDetails), accounts = useChoices<ServiceAccount>(`${wsPath(workspace.id)}/service-accounts`, canDetails && p.manageServiceAccounts);
+  const options = keyModelOptions(grants.data ?? []), activeAccounts = accounts.data?.filter(a => !a.disabled_at) ?? [];
+  const [creating, setCreating] = useState(false), trigger = useRef<HTMLButtonElement>(null);
+  const canIssue = p.createUserKey || p.manageServiceAccounts && activeAccounts.length > 0;
+  const ready = grants.isSuccess && options.length > 0 && (!p.manageServiceAccounts || accounts.isSuccess);
+  const settings = canView("workspace-settings", session, workspace) && <Button variant="secondary" render={<ResourceLink search={{ page: "workspace-settings", ws: workspace.id }} />}><Settings aria-hidden />Settings</Button>;
+  const create = canDetails && canIssue && <Button ref={trigger} disabled={!ready} title={grants.isSuccess && !options.length ? "Add a model first" : undefined} onClick={() => setCreating(true)}><KeyRound aria-hidden />Create key</Button>;
+  const q = useApi<CostReport>(`${wsPath(workspace.id)}/cost-report?${reportQuery({ ws: workspace.id }, false)}`, canDetails);
+  return <Stack gap={6} className={s.page}>
+    <PageHeader title={workspace.name} description={overviewDescription(workspace)} meta={workspace.kind === "personal" ? <Badge variant="outline">Private</Badge> : <RoleBadge role={workspace.role} />} actions={(settings || create) && <>{settings}{create}</>} />
+    <section aria-label="This month (UTC)">
+      {q.isPending ? <p role="status">Loading this month's totals…</p> : q.isError ? <ErrorNotice error={q.error} retry={() => void q.refetch()} /> : <StatTileGrid columns={3} label="This month (UTC)">
+        <StatTile label="Spent this month" value={formatMicroUsd(q.data.totals.known_cost_microusd)} hint="Estimated from configured prices" render={<ResourceLink search={{ page: "costs", ws: workspace.id }} />} />
+        <StatTile label="On hold" value={formatMicroUsd(q.data.totals.held_microusd)} hint={q.data.totals.unresolved_attempts !== "0" ? `${formatCount(q.data.totals.unresolved_attempts)} cost unknown` : "Final cost not known yet"} />
+        <StatTile label="Requests" value={formatCount(q.data.totals.root_requests)} hint={q.data.totals.attempts !== q.data.totals.root_requests ? `${formatCount(q.data.totals.attempts)} attempts including retries` : undefined} />
+      </StatTileGrid>}
+    </section>
+    {canDetails && <AccessCard workspace={workspace} />}
+    {canDetails && <RecentActivity workspace={workspace} />}
+    {creating && <CreateKeyDialog session={session} workspace={workspace} options={options} accounts={activeAccounts} onClose={navigated => { setCreating(false); if (!navigated) requestAnimationFrame(() => trigger.current?.focus()); }} />}
+  </Stack>;
+}
+const stateTone = (state: string) => state === "succeeded" ? "success" : state === "failed" ? "danger" : state === "cancelled" ? "neutral" : "warning";
+const stateLabel = (state: string) => ({ succeeded: "Succeeded", failed: "Failed", cancelled: "Cancelled", in_progress: "In progress", indeterminate: "Unknown result" } as Record<string, string>)[state] ?? state;
+/** The five latest requests the caller may see (the server scopes members to their own keys). */
+function RecentActivity({ workspace }: { workspace: Workspace }) {
+  const q = useApi<Collection<Execution>>(`${wsPath(workspace.id)}/executions?limit=5&offset=0`);
+  const body: ReactNode = q.isPending ? <p role="status" className={h.activityRow}>Loading recent requests…</p> : q.isError ? <ErrorNotice error={q.error} retry={() => void q.refetch()} /> : q.data.data.length === 0 ? <EmptyState size="compact" icon={<Activity />} title="No requests yet." description={workspace.capabilities.view_all_activity && workspace.kind !== "personal" ? "Requests made with this workspace's keys appear here." : "Requests made with your keys appear here."} /> :
+    <ul className={h.activity} aria-label="Recent requests">{q.data.data.map(e => <li key={e.id} className={h.activityRow}><span className={h.activityText}><span className={s.primary}>{e.public_model}</span><StatusBadge tone={stateTone(e.state)}>{stateLabel(e.state)}</StatusBadge><span className={s.muted}>{tokensText(e.input_tokens, e.output_tokens)} · {e.elapsed_ms == null ? "Unknown" : `${e.elapsed_ms.toLocaleString("en-US")} ms`}</span></span><span className={h.activityWhen}><Time value={e.started_at} format="relative" /></span></li>)}</ul>;
+  return <Card title="Recent activity" description={workspace.capabilities.view_all_activity ? "The latest requests in this workspace." : "Your latest requests in this workspace."} actions={<Button variant="ghost" size="sm" render={<ResourceLink search={{ page: "requests", ws: workspace.id }} />}>All requests <ArrowRight aria-hidden /></Button>} flush>{body}</Card>;
 }
 export function Profile({ session }: { session: Session }) {
-  return <><Heading title="Your profile" description="Identity and current access from your signed-in session. Roles are enforced by the gateway." /><Panel title="Identity"><dl className="details"><dt>Email</dt><dd>{session.user.email}</dd><dt>User ID</dt><dd><Id value={session.user.id} /></dd><dt>Platform access</dt><dd><Badge>{session.user.platform_admin ? "Platform operator" : "Standard user"}</Badge></dd><dt>Authentication</dt><dd>Organization identity provider (OIDC)</dd></dl><p className="help">Profile edits and password changes are managed by your identity provider.</p></Panel><Panel title="Organization access">{session.organizations.length ? <ul className="membership-list">{session.organizations.map((org) => <li key={org.id}><div><strong>{org.name}</strong><span className="muted">{org.slug}</span></div><div><Badge>{authorityLabel(org)}</Badge><div className="muted">Membership: {membershipLabel(org)}</div></div></li>)}</ul> : <p>No organization memberships. Accept an invitation to get started.</p>}</Panel><Panel title="Workspace access">{session.workspaces.length ? <ul className="membership-list">{session.workspaces.map((ws) => <li key={ws.id}><div><strong>{ws.name}</strong><span className="muted">{session.organizations.find((org) => org.id === ws.organization_id)?.name} · {ws.kind === "personal" ? "Private personal workspace" : ws.kind === "project" ? "Project workspace" : "Team workspace"}</span></div><div><Badge>{authorityLabel(ws)}</Badge><div className="muted">Membership: {membershipLabel(ws)}</div></div></li>)}</ul> : <p>No workspace memberships.</p>}</Panel></>;
+  const mine = session.workspaces.filter(w => inWorkspacePortal(session, w));
+  return <Stack gap={6} className={s.page}><Heading title="Your profile" description="Your platform role and the workspaces you belong to." /><Panel title="Identity"><dl className={s.details}><dt>Email</dt><dd>{session.user.email}</dd><dt>Platform role</dt><dd>{platformRoleLabels[session.user.platform_role] ?? "No platform role"}</dd><dt>Installation</dt><dd>{session.installation.name}</dd></dl><p>Admin and Auditor include User access. Team and project membership is separate from your platform role. Personal workspaces can't be shared.</p></Panel><Panel title="Your workspaces"><ul>{mine.map(w => <li key={w.id}><ResourceLink search={{ page: "overview", ws: w.id }}>{w.name}</ResourceLink> · {authorityLabel(w)}</li>)}</ul></Panel></Stack>;
 }

@@ -1,126 +1,93 @@
 import { useEffect, useRef, useState } from "react";
-import { ResourceLink } from "../components/navigation-link";
-import { api, platformPath, type Session, type Organization, type Model, type Provider, type Deployment } from "../lib/api";
-import { enabledField, nameField, type Field } from "../lib/forms";
-import { permissions } from "../lib/permissions";
-import { ActionProvider, CollectionTable, ErrorNotice, Heading, Id, RowActions, Status, Panel, useAction, useApi, useChoices, type Action } from "../components/ui";
-
-type OrgScope = { session: Session; organization?: Organization };
-function toggle(ask: (action: Action) => void, path: string, name: string, enabled: boolean) {
-  ask({ title: `${enabled ? "Disable" : "Enable"} ${name}?`, description: enabled ? "Disabling this resource makes it unavailable for new inference requests that depend on it." : "Enabling permits eligible inference requests to use this resource. Provider calls may incur charges.", danger: enabled, submitLabel: enabled ? "Disable" : "Enable", run: () => api(path, { method: "PATCH", body: { enabled: !enabled } }) });
+import { Plus } from "lucide-react";
+import { ActionMenu } from "../components/templates/action-menu";
+import { Inline } from "../components/ui/layout/layout";
+import { Badge as BitopBadge } from "../components/ui/badge/badge";
+import { ResourceLink, useDashboardNavigation } from "../components/navigation-link";
+import { IconCell, LabIcon, ProviderIcon, WithIcon } from "../components/provider-icon";
+import { api, platformPath, type Session, type Model, type Provider, type Deployment, type ModelProtocol, type ServerPolicy } from "../lib/api";
+import { enabledField, nameField, checkboxValues, parseCheckboxValues, type Field } from "../lib/forms";
+import { modelReadiness, protocolOptions, protocolLabel, protocolSetError, readinessLabels, readinessText } from "../lib/model-setup";
+import { ActionProvider, Button, CollectionTable, ErrorNotice, FormField, Heading, Id, NativeSelect, Status, Stack, Panel, useAction, useApi, useChoices, type Action } from "../components/ui";
+import s from "./shared.module.css";
+export { protocolOptions };
+export function modelFields(model?: Model): Field[] { return [{ name: "public_name", label: "API model name", required: true, value: model?.public_name ?? "", maxLength: 200, validate: v => /^[A-Za-z0-9/_.:-]+$/.test(v) ? undefined : "Use letters, digits, slash, hyphen, underscore, dot or colon." }, { name: "display_name", label: "Display name", value: model?.display_name ?? "", required: true, maxLength: 120 }, { name: "description", label: "Description", type: "textarea", value: model?.description ?? "", maxLength: 2000 }, { name: "supported_protocols", label: "Supported client protocols", type: "checkboxes", required: true, maxSelections: 3, value: JSON.stringify(model?.supported_protocols ?? ["chat_completions"]), options: protocolOptions, validate: protocolSetError, help: "Select the model's certified protocols. Serving also requires the route's connection profile to support the protocol; embeddings are input-only workloads." }, { ...enabledField, value: String(model?.enabled ?? false) }]; }
+export function modelBody(values: Record<string, string>) { return { public_name: values.public_name, display_name: values.display_name, description: values.description || null, supported_protocols: checkboxValues(modelFields().find(f => f.name === "supported_protocols")!, values.supported_protocols) as ModelProtocol[], enabled: values.enabled === "true" }; }
+/** Edit leaves status out: Enable/Disable is its own header action, and a PATCH without `enabled` preserves it. */
+export const modelEditFields = (model: Model) => modelFields(model).filter(f => f.name !== "enabled");
+export function modelEditBody(values: Record<string, string>) { const { enabled: _enabled, ...body } = modelBody({ ...values, enabled: "false" }); return body; }
+/** Ready / Needs setup / Needs attention / Not serving (readinessText), from server readiness counts only (contract §2). */
+export function ReadinessBadge({ model, policy }: { model: Model; policy?: ServerPolicy }) {
+  const r = modelReadiness(model, policy);
+  return <BitopBadge tone={r.state === "ready" ? "success" : r.state === "needs_setup" || r.state === "needs_attention" || r.state === "not_serving" ? "warning" : "neutral"} dot>{readinessText[r.state]}</BitopBadge>;
 }
-export const referenceField: Field = { name: "credential_variable", label: "Credential environment variable name", required: true, maxLength: 128, placeholder: "OPENAI_API_KEY", help: "Reference only — never paste a secret value. The gateway must already have this variable configured and allowlisted. Stored as env:NAME; references are never returned.", validate: (v) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(v) ? undefined : "Enter an environment variable name only, not a secret, URL, or env: prefix." };
-const workloadField: Field = { name: "workload_identity", label: "Credential reference", type: "select", required: true, value: "aws:default", options: [{ value: "aws:default", label: "AWS default workload identity (aws:default)" }], help: "Uses the gateway’s configured AWS workload identity. No static secret is entered here." };
-export function Models({ session }: OrgScope) {
-  const ask = useAction();
-  const [created, setCreated] = useState<string>();
-  const path = `${platformPath}/models`;
-  if (!session.user.platform_admin) return <Heading title="Access not available" />;
-  return <><Heading title="Models" description="Platform-owned model catalog. Configure global deployments here, then assign models to organizations from Model access." actions={<button className="button" onClick={() => ask({ title: "Create model alias", fields: [{ name: "public_name", label: "API model name", required: true, maxLength: 200, placeholder: "company/smart", validate: (v) => /^[A-Za-z0-9/_.:-]+$/.test(v) ? undefined : "Use letters, digits, slash, hyphen, underscore, dot, or colon." }, { name: "display_name", label: "Display name", required: true, maxLength: 120 }, enabledField], submitLabel: "Create alias", successNotice: "Model alias created. Add a deployment, then configure routing and organization access.", after: result => setCreated(createdId(result)), run: (v) => api(path, { method: "POST", body: { public_name: v.public_name, display_name: v.display_name, enabled: v.enabled === "true" } }) })}>Create alias</button>} />{created !== undefined && <CreationOutcome kind="model" id={created} />}<CollectionTable<Model> searchable statusFilter path={path} label="Model aliases" empty="Create an alias to decouple client model names from upstream deployments." rowKey={(m) => m.id} columns={[
-    { title: "Name", render: (m) => <><ResourceLink search={{ page: "model-detail", record: m.id }}><strong>{m.display_name}</strong></ResourceLink><Id value={m.id} /></> },
-    { title: "API model name", render: (m) => <code>{m.public_name}</code> },
-    { title: "Status", render: (m) => <Status enabled={m.enabled} /> },
-    { title: "Actions", render: (m) => <button className="button secondary small" onClick={() => toggle(ask, `${path}/${m.id}`, m.public_name, m.enabled)}>{m.enabled ? "Disable" : "Enable"}</button> },
-  ]} /></>;
+export const readinessNote = (model: Model, policy?: ServerPolicy) => modelReadiness(model, policy).warnings.map(w => readinessLabels[w]).join(" · ");
+/** The server's provider policy for readiness checks; unknown (undefined) until loaded. */
+export const useServerPolicy = (session: Session) => useApi<ServerPolicy>(`${platformPath}/server-policy`, session.capabilities.platform_read).data;
+/** `profiles` (when loaded) adds each connection's profile logo; the name stays the link text. */
+export function ConnectionNames({ model, profiles }: { model: Model; profiles?: Provider[] }) {
+  const list = model.readiness?.connections;
+  if (!list) return <span className={s.muted}>Unknown</span>;
+  if (!list.length) return <span className={s.muted}>No routes</span>;
+  return <span className={s.badges}>{list.map((c, i) => { const profile = profiles?.find(p => p.id === c.id)?.provider, link = <ResourceLink search={{ page: "provider-detail", record: c.id }}>{c.name}</ResourceLink>; return <span key={c.id}>{profile ? <WithIcon icon={<ProviderIcon profile={profile} size="sm" />}>{link}</WithIcon> : link}{i < list.length - 1 ? "," : ""}</span>; })}</span>;
 }
-export function Providers({ session, organization }: OrgScope) {
-  const ask = useAction();
-  const [created, setCreated] = useState<string>();
-  const path = `${platformPath}/providers`;
-  const allowed = permissions(session, organization).manageProviders;
-  if (!allowed) return <Heading title="Access not available" />;
-  return <><Heading title="Provider connections" description="Upstream provider configuration. Credential values and references are never returned by the gateway." actions={allowed && <button className="button" onClick={() => ask({ title: "Create provider connection", description: "Configure credentials on the gateway first. Only allowlisted secret references and provider-approved endpoints are accepted.", fields: [nameField, { name: "provider", label: "Provider", type: "select", required: true, value: "openai", options: [{ value: "openai", label: "OpenAI" }, { value: "anthropic", label: "Anthropic" }, { value: "bedrock", label: "Amazon Bedrock" }] }, { ...referenceField, visibleWhen: (v) => v.provider !== "bedrock" }, { ...workloadField, visibleWhen: (v) => v.provider === "bedrock" }, { name: "endpoint", label: "Endpoint", visibleWhen: (v) => v.provider !== "bedrock", help: "Leave blank for the provider’s public API endpoint. Custom endpoints are not supported.", maxLength: 2048, validate: (v, values) => { const expected = values.provider === "anthropic" ? "https://api.anthropic.com/v1" : "https://api.openai.com/v1"; return v === expected || v === `${expected}/` ? undefined : `Only ${expected} is supported.`; } }, { name: "region", label: "AWS region", required: true, visibleWhen: (v) => v.provider === "bedrock", maxLength: 32, placeholder: "us-east-1", validate: (v) => /^[a-z0-9-]+$/.test(v) ? undefined : "Use a valid lowercase AWS region name." },  { ...enabledField, value: "false" }], submitLabel: "Create connection", successNotice: "Provider connection created. Review its status and add a deployment. Credentials remain hidden.", after: result => setCreated(createdId(result)), run: (v) => api(path, { method: "POST", body: { name: v.name, provider: v.provider, credential_ref: v.provider === "bedrock" ? "aws:default" : `env:${v.credential_variable}`, enabled: v.enabled === "true", ...(v.endpoint && v.provider !== "bedrock" ? { endpoint: v.endpoint } : {}), ...(v.provider === "bedrock" ? { region: v.region } : {}) } }) })}>Create connection</button>} />{created !== undefined && <CreationOutcome kind="provider" id={created} />}{!allowed && <p className="notice">Read-only access. Only platform operators can create, enable, disable, or rotate provider credentials.</p>}<CollectionTable<Provider> searchable statusFilter path={path} label="Provider connections" empty={allowed ? "Create a connection using a credential reference configured by your operator." : "Ask a platform operator to configure a provider connection."} rowKey={(p) => p.id} columns={[
-    { title: "Name", render: (p) => <><ResourceLink search={{ page: "provider-detail", record: p.id }}><strong>{p.name}</strong></ResourceLink><Id value={p.id} /></> },
-    { title: "Provider", render: (p) => <code>{p.provider}</code> },
-    { title: "Endpoint / region", render: (p) => <><div className="break-word">{p.endpoint ?? "Provider default"}</div><span className="muted">{p.region ?? "No region"}</span></> },
-    { title: "Credentials", render: (p) => <span className="muted">{p.provider === "bedrock" ? "AWS workload identity; rotate through AWS" : "Secret reference (hidden)"}</span> },
-    { title: "Status", render: (p) => <Status enabled={p.enabled} /> },
-    ...(allowed ? [{ title: "Actions", render: (p: Provider) => <RowActions><button className="button secondary small" onClick={() => toggle(ask, `${path}/${p.id}`, p.name, p.enabled)}>{p.enabled ? "Disable" : "Enable"}</button>{p.provider !== "bedrock" && <button className="button secondary small" onClick={() => ask({ title: `Rotate reference for ${p.name}`, description: "New requests will resolve the new credential reference. The existing reference is not exposed. Connection status will be preserved.", danger: true, fields: [p.provider === "bedrock" ? workloadField : referenceField], submitLabel: "Rotate reference", run: (v) => api(`${path}/${p.id}`, { method: "PATCH", body: { enabled: p.enabled, credential_ref: p.provider === "bedrock" ? "aws:default" : `env:${v.credential_variable}` } }) })}>Rotate reference</button>}</RowActions> }] : []),
-  ]} /></>;
+/** Admin › Models: the catalog page (type tabs, filters, list/table) lives in model-catalog.tsx. */
+export { Models } from "./model-catalog";
+export const referenceField: Field = { name: "credential_variable", label: "Credential environment variable name", required: true, maxLength: 128, placeholder: "UPSTREAM_API_KEY", help: "Reference only. Never paste a secret; the server must already allowlist this environment variable. References are hidden on reads.", validate: v => /^[A-Za-z_][A-Za-z0-9_]*$/.test(v) ? undefined : "Enter an environment variable name only, not a secret or env: prefix." };
+export const localProfiles = ["openai_compatible", "vllm", "sglang", "ollama"];
+export const providerOptions = [{ value: "openai", label: "OpenAI" }, { value: "anthropic", label: "Anthropic" }, { value: "openrouter", label: "OpenRouter" }, { value: "bedrock", label: "Amazon Bedrock" }, { value: "openai_compatible", label: "Approved OpenAI-compatible server" }, { value: "vllm", label: "vLLM" }, { value: "sglang", label: "SGLang" }, { value: "ollama", label: "Ollama · compatible profile" }];
+export const providerLabel = (provider: string) => providerOptions.find(o => o.value === provider)?.label ?? provider;
+export function providerFields(provider?: Provider): Field[] {
+  return [{ ...nameField, value: provider?.name }, { name: "provider", label: "Provider profile", type: "select", display: "cards", required: true, value: provider?.provider ?? "openai", options: providerOptions.map(o => ({ ...o, icon: <ProviderIcon profile={o.value} /> })), helpFor: v => profileHelp[v.provider] ?? (localProfiles.includes(v.provider) ? profileHelp.local : undefined) }, { name: "auth_mode", label: "Authentication", type: "select", required: true, value: "environment", options: [{ value: "environment", label: "Environment secret reference" }, { value: "none", label: "No authentication · approved local profiles only" }], visibleWhen: v => v.provider !== "bedrock", validate: (v, values) => v === "none" && !localProfiles.includes(values.provider) ? "Cloud profiles require authenticated credentials." : undefined }, { ...referenceField, visibleWhen: v => v.provider !== "bedrock" && v.provider !== "openrouter" && v.auth_mode !== "none" }, { ...referenceField, placeholder: "OPENROUTER_API_KEY", help: "Reference to the server environment variable holding your OpenRouter API key, never the key itself. The server must already allowlist it; references are hidden on reads. Price imports use OpenRouter's public catalog and need no key.", visibleWhen: v => v.provider === "openrouter" && v.auth_mode !== "none" }, { name: "endpoint", label: "Endpoint", requiredWhen: v => localProfiles.includes(v.provider), value: provider?.endpoint ?? "", maxLength: 2048, visibleWhen: v => !(v.provider in fixedEndpoints) && v.provider !== "bedrock", help: "Local URLs must exactly match server-configured GATEWAY_LOCAL_UPSTREAMS approvals, including pinned destination addresses. This form cannot approve an endpoint or verify upstream readiness.", validate: (v, values) => { if (!v && localProfiles.includes(values.provider)) return "An explicitly approved local endpoint is required."; if (!v) return; try { const u = new URL(v); if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password || u.search || u.hash) return "Use an HTTP(S) endpoint without credentials, query or fragment."; if (!localProfiles.includes(values.provider) && u.protocol !== "https:") return "Cloud endpoints require HTTPS."; } catch { return "Enter a valid approved endpoint URL."; } } }, { name: "region", label: "AWS region", required: true, value: provider?.region ?? "", maxLength: 32, visibleWhen: v => v.provider === "bedrock", help: "Bedrock uses the server's AWS default workload identity (aws:default), not a browser credential.", validate: v => /^[a-z0-9-]+$/.test(v) ? undefined : "Use a lowercase AWS region name." }, provider ? { ...enabledField, value: String(provider.enabled) } : { name: "enabled", label: "Enable now", type: "switch", value: "true", helpFor: v => v.enabled === "true" ? "Routes on this connection can serve requests as soon as their models are enabled." : "Nothing is sent to this connection until you enable it." }];
 }
-type DeploymentScope = OrgScope & { modelId?: string; providerId?: string; embedded?: boolean };
-export function Deployments({ session, modelId, providerId, embedded = false }: DeploymentScope) {
-  const allowed = session.user.platform_admin;
-  const model = useApi<Model>(`${platformPath}/models/${encodeURIComponent(modelId ?? "")}`, allowed && !!modelId);
-  const provider = useApi<Provider>(`${platformPath}/providers/${encodeURIComponent(providerId ?? "")}`, allowed && !!providerId);
+/** What each profile connects to, shown under the profile choice (review #46). */
+const profileHelp: Record<string, string> = {
+  openai: "Uses OpenAI's fixed HTTPS API (https://api.openai.com/v1). There's no custom base URL.",
+  anthropic: "Uses Anthropic's fixed HTTPS API (https://api.anthropic.com/v1). There's no custom base URL.",
+  openrouter: "Uses OpenRouter's fixed HTTPS API (https://openrouter.ai/api/v1). Routes on it can import OpenRouter's current public price as a draft.",
+  bedrock: "Uses Amazon Bedrock in the AWS region you choose, signed with the server's AWS identity.",
+  local: "Sends requests to an endpoint the server already approves (GATEWAY_LOCAL_UPSTREAMS). This form can't approve one.",
+};
+/**
+ * Cloud profiles whose endpoint the server fixes: it accepts only null or this exact base URL, never a custom one.
+ * The form hides Endpoint for them, keeping a stored fixed base unchanged and sending null otherwise.
+ */
+export const fixedEndpoints: Record<string, string> = { openai: "https://api.openai.com/v1", anthropic: "https://api.anthropic.com/v1", openrouter: "https://openrouter.ai/api/v1" };
+function endpointBody(v: Record<string, string>) {
+  const fixed = fixedEndpoints[v.provider];
+  if (v.provider === "bedrock") return null;
+  if (fixed) return v.endpoint === fixed || v.endpoint === `${fixed}/` ? v.endpoint : null;
+  return v.endpoint || null;
+}
+export function providerBody(v: Record<string, string>) { return { name: v.name, provider: v.provider, credential_ref: v.provider === "bedrock" ? "aws:default" : v.auth_mode === "none" ? "none" : `env:${v.credential_variable}`, endpoint: endpointBody(v), region: v.provider === "bedrock" ? v.region : null, enabled: v.enabled === "true" }; }
+export const connectionCreateAction = (): Action => ({ title: "Add connection", description: "Credentials stay on the server as an environment reference. Nothing here calls the provider.", fields: providerFields(), submitLabel: "Add connection", run: (v, signal) => api(`${platformPath}/providers`, { method: "POST", body: providerBody(v), signal }) });
+export function Providers({ session }: { session: Session }) {
+  const ask = useAction(); if (!session.capabilities.platform_read) return <Heading title="Access not available" />;
+  return <Stack gap={6} className={s.page}><Heading title="Connections" description="Where models send requests. Credentials stay on the server; nothing here calls the provider." actions={session.capabilities.platform_write && <Button onClick={() => ask(connectionCreateAction())}><Plus aria-hidden />Add connection</Button>} /><CollectionTable<Provider> searchable statusFilter path={`${platformPath}/providers`} label="Connections" empty="Add an approved endpoint with a server-side credential reference, then add models from it." rowKey={p => p.id} columns={[{ title: "Connection", render: p => <WithIcon icon={<ProviderIcon profile={p.provider} />}><ResourceLink search={{ page: "provider-detail", record: p.id }}>{p.name}</ResourceLink></WithIcon> }, { title: "Profile", render: p => providerLabel(p.provider) }, { title: "Endpoint / region", narrow: true, render: p => <>{p.endpoint ?? "Provider default"}<span className={s.secondary}>{p.region}</span></> }, { title: "Models", numeric: true, render: p => p.model_count === undefined ? <span className={s.muted}>Unknown</span> : <ResourceLink search={{ page: "models", connections: p.id }}>{String(p.model_count)}</ResourceLink> }, { title: "Status", render: p => <Status enabled={p.enabled} /> }]} /></Stack>;
+}
+export function deploymentCreateAction({ model, provider, models, providers, after }: { model?: Model; provider?: Provider; models: Model[]; providers: Provider[]; after?: (result: unknown) => void }): Action { return { title: "Add route", description: [model ? `Model: ${model.display_name} (${model.public_name}).` : "", provider ? `Connection: ${provider.name}.` : "", "Disabled by default. Review protocol support, routing and pricing before enabling."].filter(Boolean).join(" "), fields: [...(!model ? [{ name: "model_id", label: "Model", type: "select", required: true, options: models.map(m => ({ value: m.id, label: `${m.display_name} · ${m.public_name}` })) } satisfies Field] : []), ...(!provider ? [{ name: "provider_connection_id", label: "Connection", type: "select", required: true, options: providers.map(p => ({ value: p.id, label: `${p.name} · ${providerLabel(p.provider)}${p.enabled ? "" : " · disabled"}` })) } satisfies Field] : []), { name: "upstream_model", label: "Upstream model ID", required: true, maxLength: 512 }, { ...enabledField, value: "false" }], submitLabel: "Add route", after, run: (v, signal) => api(`${platformPath}/deployments`, { method: "POST", body: { model_id: model?.id ?? v.model_id, provider_connection_id: provider?.id ?? v.provider_connection_id, upstream_model: v.upstream_model, enabled: v.enabled === "true" }, signal }) }; }
+export function Deployments({ session, modelId, providerId, embedded = false }: { session: Session; modelId?: string; providerId?: string; embedded?: boolean }) {
+  const allowed = session.capabilities.platform_read;
+  const model = useApi<Model>(`${platformPath}/models/${encodeURIComponent(modelId ?? "")}`, allowed && !!modelId), provider = useApi<Provider>(`${platformPath}/providers/${encodeURIComponent(providerId ?? "")}`, allowed && !!providerId);
   if (!allowed) return <Heading title="Access not available" />;
   if (modelId && model.isError) return <ErrorNotice error={model.error} retry={() => void model.refetch()} />;
   if (providerId && provider.isError) return <ErrorNotice error={provider.error} retry={() => void provider.refetch()} />;
-  if ((modelId && model.isPending) || (providerId && provider.isPending)) return <p role="status">Loading deployment context…</p>;
-  if ((modelId && model.data?.id !== modelId) || (providerId && provider.data?.id !== providerId)) return <ErrorNotice error={new Error("The gateway returned a different parent. Deployment controls are unavailable.")} />;
-  return <ActionProvider key={`${modelId ?? ""}:${providerId ?? ""}`}><DeploymentCollection model={modelId ? model.data : undefined} provider={providerId ? provider.data : undefined} embedded={embedded} /></ActionProvider>;
+  if (modelId && model.isPending || providerId && provider.isPending) return <p role="status">Loading route context…</p>;
+  if (modelId && model.data?.id !== modelId || providerId && provider.data?.id !== providerId) return <ErrorNotice error={new Error("The gateway returned a different parent. Controls are unavailable.")} />;
+  return <ActionProvider key={`${modelId}:${providerId}`}><DeploymentCollection model={modelId ? model.data : undefined} provider={providerId ? provider.data : undefined} writable={session.capabilities.platform_write} embedded={embedded} /></ActionProvider>;
 }
-function DeploymentCollection({ model, provider, embedded }: { model?: Model; provider?: Provider; embedded: boolean }) {
-  const createTrigger = useRef<HTMLButtonElement>(null);
-  const [creating, setCreating] = useState(false);
-  const [created, setCreated] = useState<string>();
-  const filters = new URLSearchParams();
-  if (model) filters.set("model_id", model.id);
-  if (provider) filters.set("provider_connection_id", provider.id);
-  const path = `${platformPath}/deployments${filters.size ? `?${filters}` : ""}`;
-  const create = <button ref={createTrigger} className="button" onClick={() => setCreating(true)} disabled={creating}>Create deployment</button>;
-  return <>{embedded ? <div className="table-toolbar"><h2>Deployments</h2>{create}</div> : <Heading title="Deployments" description="Connect a public model alias to a provider’s upstream model. Disabled dependencies prevent inference even when a deployment is enabled." actions={create} />}
-    {(model || provider) && <p className="notice">Fixed creation context (read-only): {model && <>Model <strong>{model.public_name}</strong> (<Id value={model.id} />). </>}{provider && <>Provider <strong>{provider.name}</strong> (<Id value={provider.id} />).</>} A new deployment stays attached to this context.</p>}
-    {created !== undefined && <CreationOutcome kind="deployment" id={created} />}
-    {creating && <PrepareDeployment model={model} provider={provider} returnFocus={createTrigger.current ?? undefined} onClose={() => setCreating(false)} onCreated={result => setCreated(createdId(result))} />}
-    <CollectionTable<Deployment> key={path} searchable statusFilter path={path} label="Deployments" empty="Add a deployment after configuring a model alias and provider connection." rowKey={d => d.id} columns={[
-      { title: "Upstream model", render: d => <><ResourceLink search={{ page: "deployment-detail", record: d.id }}><code>{d.upstream_model}</code></ResourceLink><Id value={d.id} /></> },
-      { title: "Model alias", render: d => <ResourceLink search={{ page: "model-detail", record: d.model_id }}>{model && model.id === d.model_id ? model.public_name : <Id value={d.model_id} />}</ResourceLink> },
-      { title: "Provider connection", render: d => <ResourceLink search={{ page: "provider-detail", record: d.provider_connection_id }}>{provider && provider.id === d.provider_connection_id ? provider.name : <Id value={d.provider_connection_id} />}</ResourceLink> },
-      { title: "Status", render: d => <Status enabled={d.enabled} /> },
-      { title: "Actions", render: d => <CatalogStatusButton kind="deployments" record={d} name={d.upstream_model} /> },
-    ]} />
-  </>;
+function DeploymentCollection({ model, provider, writable, embedded }: { model?: Model; provider?: Provider; writable: boolean; embedded: boolean }) {
+  const [creating, setCreating] = useState(false), trigger = useRef<HTMLButtonElement>(null);
+  const filters = new URLSearchParams(); if (model) filters.set("model_id", model.id); if (provider) filters.set("provider_connection_id", provider.id);
+  const create = writable && <Button ref={trigger} onClick={() => setCreating(true)} disabled={creating}><Plus aria-hidden />Add route</Button>;
+  return <Stack gap={6} className={s.page}>{embedded ? <Heading title="Routes" actions={create} /> : <Heading title="All routes" description="Every model route on every connection. Routes are usually managed from their model's page. A disabled model or connection still prevents inference." actions={create} />}{creating && <PrepareDeployment model={model} provider={provider} returnFocus={trigger.current ?? undefined} onClose={() => setCreating(false)} />}<CollectionTable<Deployment> searchable statusFilter path={`${platformPath}/deployments${filters.size ? `?${filters}` : ""}`} label="Routes" empty="Add a model from a connection to create its first route." rowKey={d => d.id} columns={[{ title: "Upstream model", render: d => <IconCell icon={<LabIcon model={[d.upstream_model, d.model_public_name]} />}><ResourceLink search={{ page: "deployment-detail", record: d.id }}>{d.upstream_model}</ResourceLink><Id value={d.id} /></IconCell> }, { title: "Model", render: d => <ResourceLink search={{ page: "model-detail", record: d.model_id }}>{model?.public_name ?? d.model_public_name ?? d.model_id}</ResourceLink> }, { title: "Connection", render: d => { const link = <ResourceLink search={{ page: "provider-detail", record: d.provider_connection_id }}>{provider?.name ?? d.provider_name ?? d.provider_connection_id}</ResourceLink>; return provider ? <WithIcon icon={<ProviderIcon profile={provider.provider} size="sm" />}>{link}</WithIcon> : link; } }, { title: "Status", render: d => <Status enabled={d.enabled} /> }]} /></Stack>;
 }
-// Catalog choices are fetched only after an explicit creation request, never to
-// locate a detail record. Fixed parents are omitted from editable form fields.
-function PrepareDeployment({ model, provider, onClose, onCreated, returnFocus }: { model?: Model; provider?: Provider; onClose: () => void; onCreated: (result: unknown) => void; returnFocus?: HTMLElement }) {
-  const ask = useAction();
-  const models = useChoices<Model>(`${platformPath}/models`, !model);
-  const providers = useChoices<Provider>(`${platformPath}/providers`, !provider);
-  const availableModels = model ? [model] : models.data;
-  const availableProviders = provider ? [provider] : providers.data;
-  const failed = (!model && models.isError) || (!provider && providers.isError);
-  const ready = !failed && !!availableModels?.length && !!availableProviders?.length;
-  useEffect(() => {
-    if (!ready) return;
-    ask({ ...deploymentCreateAction({ model, provider, models: availableModels!, providers: availableProviders!, after: onCreated }), returnFocus });
-    onClose();
-  }, [ready, ask, model, provider, availableModels, availableProviders, onCreated, onClose, returnFocus]);
-  return <Panel title="Prepare deployment">
-    {!model && models.isError && <ErrorNotice error={models.error} retry={() => void models.refetch()} />}
-    {!provider && providers.isError && <ErrorNotice error={providers.error} retry={() => void providers.refetch()} />}
-    {!failed && (!availableModels || !availableProviders) && <p role="status">Loading creation options…</p>}
-    {availableModels?.length === 0 && <p>Create a <ResourceLink search={{ page: "models" }}>model alias</ResourceLink> first.</p>}
-    {availableProviders?.length === 0 && <p>Create a <ResourceLink search={{ page: "providers" }}>provider connection</ResourceLink> first.</p>}
-    <button className="button secondary" onClick={() => { onClose(); queueMicrotask(() => returnFocus?.focus()); }}>Cancel</button>
-  </Panel>;
+function PrepareDeployment({ model, provider, returnFocus, onClose }: { model?: Model; provider?: Provider; returnFocus?: HTMLElement; onClose: () => void }) {
+  const ask = useAction(), models = useChoices<Model>(`${platformPath}/models`, !model), providers = useChoices<Provider>(`${platformPath}/providers`, !provider);
+  const ms = model ? [model] : models.data, ps = provider ? [provider] : providers.data, ready = !!ms?.length && !!ps?.length;
+  useEffect(() => { if (ready) { ask({ ...deploymentCreateAction({ model, provider, models: ms!, providers: ps! }), returnFocus }); onClose(); } }, [ready]);
+  return <Panel title="Prepare route">{models.isError && !model && <ErrorNotice error={models.error} retry={() => void models.refetch()} />}{providers.isError && !provider && <ErrorNotice error={providers.error} retry={() => void providers.refetch()} />}{!ms || !ps ? <p role="status">Loading creation options…</p> : <p>{!ms.length ? "Add a model first. " : ""}{!ps.length ? "Add a connection first." : ""}</p>}<Button variant="secondary" onClick={onClose}>Cancel</Button></Panel>;
 }
-export function deploymentCreateAction({ model, provider, models, providers, after }: { model?: Model; provider?: Provider; models: Model[]; providers: Provider[]; after?: (result: unknown) => void }): Action {
-  return {
-    title: "Create deployment",
-    description: [model ? `Model (read-only): ${model.public_name} (${model.id}).` : "", provider ? `Provider (read-only): ${provider.name} (${provider.id}).` : "", "New deployments are disabled by default. Configure routing and pricing before enabling; disabled parents still prevent inference."].filter(Boolean).join(" "),
-    fields: [
-      ...(!model ? [{ name: "model_id", label: "Model alias", type: "select", required: true, options: models.map(m => ({ value: m.id, label: `${m.public_name}${m.enabled ? "" : " — disabled"}` })) } satisfies Field] : []),
-      ...(!provider ? [{ name: "provider_connection_id", label: "Provider connection", type: "select", required: true, options: providers.map(p => ({ value: p.id, label: `${p.name} (${p.provider})${p.enabled ? "" : " — disabled"}` })) } satisfies Field] : []),
-      { name: "upstream_model", label: "Upstream model identifier", required: true, maxLength: 300, help: "Use the exact model ID supported by the provider account." },
-      { ...enabledField, value: "false" },
-    ],
-    submitLabel: "Create deployment",
-    successNotice: "Deployment created. Review routing and publish a price version before enabling inference.",
-    after,
-    run: values => api(`${platformPath}/deployments`, { method: "POST", body: { model_id: model?.id ?? values.model_id, provider_connection_id: provider?.id ?? values.provider_connection_id, upstream_model: values.upstream_model, enabled: values.enabled === "true" } }),
-  };
-}
-export function CatalogStatusButton({ kind, record, name }: { kind: "models" | "providers" | "deployments"; record: { id: string; enabled: boolean }; name: string }) {
-  const ask = useAction();
-  return <button className="button secondary small" onClick={() => toggle(ask, `${platformPath}/${kind}/${encodeURIComponent(record.id)}`, name, record.enabled)}>{record.enabled ? "Disable" : "Enable"}</button>;
-}
-function createdId(result: unknown): string {
-  // Retain only the identifier for navigation; never retain a whole provider response.
-  return result && typeof result === "object" && "id" in result && typeof result.id === "string" ? result.id : "";
-}
-function CreationOutcome({ kind, id }: { kind: "model" | "provider" | "deployment"; id: string }) {
-  const page = kind === "model" ? "model-detail" : kind === "provider" ? "provider-detail" : "deployment-detail";
-  return <div className="notice" role="status"><p>{kind === "model" ? "Model alias created. Add a deployment and configure organization access." : kind === "provider" ? "Provider connection created. Credential values and references remain hidden. Add a deployment and review status before use." : "Deployment created. Review routing, publish pricing, and check parent status before enabling inference."}</p>{id ? <div className="row-actions"><ResourceLink search={{ page, record: id }}>Open {kind}</ResourceLink>{kind === "deployment" ? <><ResourceLink search={{ page, record: id, tab: "routing" }}>Configure routing</ResourceLink><ResourceLink search={{ page, record: id, tab: "pricing" }}>Publish pricing</ResourceLink></> : <ResourceLink search={{ page, record: id, tab: "deployments" }}>Add deployment</ResourceLink>}</div> : <p>No identifier was returned. Check the refreshed list before creating another resource.</p>}</div>;
-}
+export function CatalogStatusButton({ kind, record, name }: { kind: "models" | "providers" | "deployments"; record: { id: string; enabled: boolean }; name: string }) { const ask = useAction(); return <Inline gap={2}><Button variant="secondary" onClick={() => ask({ title: `${record.enabled ? "Disable" : "Enable"} ${name}?`, description: "This changes eligibility for new inference requests. It is not a readiness test.", danger: record.enabled, submitLabel: record.enabled ? "Disable" : "Enable", run: (_, signal) => api(`${platformPath}/${kind}/${encodeURIComponent(record.id)}`, { method: "PATCH", body: { enabled: !record.enabled }, signal }) })}>{record.enabled ? "Disable" : "Enable"}</Button><ActionMenu label={`Actions for ${name}`} actions={[{ label: "Retire resource…", danger: true, hidden: !record.enabled, onSelect: () => ask({ title: `Retire ${name}?`, description: "Disables live inference eligibility. Records, immutable prices and historical executions are retained, not physically deleted.", danger: true, submitLabel: "Retire resource", run: (_, signal) => api(`${platformPath}/${kind}/${encodeURIComponent(record.id)}`, { method: "DELETE", signal }) }) }]} /></Inline>; }
+// Exposed for protocol/form tests without making an upstream call.
+export const selectedProtocols = (value: string) => parseCheckboxValues(value);

@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod billing;
 pub mod bootstrap;
 pub mod catalog;
 pub mod config;
@@ -7,6 +8,7 @@ pub mod governance;
 pub mod http;
 pub mod identity;
 pub mod inference;
+pub mod lifecycle;
 pub mod maintenance;
 pub mod management;
 pub mod protocols;

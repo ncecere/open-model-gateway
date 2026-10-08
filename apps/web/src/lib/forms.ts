@@ -1,6 +1,7 @@
+import type { ReactNode } from "react";
 export type Values = Record<string, string>;
-export type Option = { value: string; label: string };
-export type Field = { name: string; label: string; type?: "text" | "email" | "number" | "select" | "password" | "textarea" | "checkboxes"; inputMode?: "decimal" | "numeric"; required?: boolean; value?: string; options?: Option[]; help?: string; placeholder?: string; min?: number; max?: number; maxLength?: number; maxSelections?: number; visibleWhen?: (values: Values) => boolean; validate?: (value: string, values: Values) => string | undefined };
+export type Option = { value: string; label: string; /** Optional heading; consecutive options sharing a group render together. */ group?: string; /** Decorative icon shown beside the label where the control can render one (select `display: "cards"`). */ icon?: ReactNode };
+export type Field = { name: string; label: string; /** `switch`: an on/off toggle whose value is "true" or "false". */ type?: "text" | "email" | "number" | "select" | "password" | "textarea" | "checkboxes" | "date" | "switch"; /** Help that depends on the other values (e.g. the chosen profile); replaces `help` when it returns text. */ helpFor?: (values: Values) => string | undefined; /** A select rendered as a radio-card grid (options can show icons). Validation is unchanged. */ display?: "cards"; inputMode?: "decimal" | "numeric"; required?: boolean; requiredWhen?: (values: Values) => boolean; value?: string; options?: Option[]; help?: string; /** Short label hint replacing the default "Optional" marker, e.g. a stored-cap note. */ hint?: string; placeholder?: string; min?: number; max?: number; maxLength?: number; maxSelections?: number; visibleWhen?: (values: Values) => boolean; validate?: (value: string, values: Values) => string | undefined };
 export const uuidError = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) ? undefined : "Enter a valid user UUID.";
 export const slugError = (value: string) => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value) ? undefined : "Use lowercase letters, numbers, and single hyphens.";
 export const expiryField: Field = { name: "expires_in_days", label: "Expires in (days)", type: "number", value: "30", required: true, min: 1, max: 365, help: "Keys must expire within 1–365 days." };
@@ -35,7 +36,7 @@ export function validateFields(fields: Field[], values: Values): Record<string, 
       if (!errors[field.name]) { const custom = field.validate?.(value, values); if (custom) errors[field.name] = custom; }
       continue;
     }
-    if (!value) { if (field.required) errors[field.name] = `${field.label} is required.`; continue; }
+    if (!value) { if (field.required || field.requiredWhen?.(values)) errors[field.name] = `${field.label} is required.`; continue; }
     if (field.type !== "textarea" && /[\u0000-\u001f\u007f]/.test(value)) errors[field.name] = "Control characters are not allowed.";
     if (field.maxLength && new TextEncoder().encode(value).length > field.maxLength) errors[field.name] = `Use at most ${field.maxLength} UTF-8 bytes (ASCII characters use one byte).`;
     if (field.type === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) errors[field.name] = "Enter a valid email address.";

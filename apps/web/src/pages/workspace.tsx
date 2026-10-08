@@ -1,73 +1,130 @@
-import { api, wsPath, orgPath, type Session, type Workspace, type Organization, type Key, type ServiceAccount, type Grant, type Model, type Member } from "../lib/api";
-import { canManageKey, canRotateKey, permissions } from "../lib/permissions";
-import { ownKeyHelp } from "../lib/access";
-import { expiryField, nameField, roleField, disabledField, uuidError, type Field } from "../lib/forms";
-import { Badge, CollectionTable, DateTime, ErrorNotice, Heading, Id, RowActions, useAction, useChoices } from "../components/ui";
-
-import { keyModelBody, keyModelFields, keyModelOptions, keyModelRestrictionHelp, keyModelSummary, keyRotationDescription } from "../lib/key-models";
-
-export type Scope = { session: Session; workspace: Workspace; organization: Organization };
-export function Keys({ session, workspace, organization }: Scope) {
-  const ask = useAction();
-  const path = `${wsPath(workspace.id)}/keys`;
-  const p = permissions(session, organization, workspace);
-  const accounts = useChoices<ServiceAccount>(`${wsPath(workspace.id)}/service-accounts`, p.manageServiceAccounts);
-  const teamMembers = useChoices<Member>(`${wsPath(workspace.id)}/members`, workspace.capabilities === undefined && workspace.kind !== "personal" && p.workspaceAdmin);
-  const canIssueUserKey = workspace.capabilities ? workspace.capabilities.issue_own_key : (p.createUserKey && (workspace.kind === "personal" || !p.workspaceAdmin)) || (p.createPersonalWorkspace && workspace.kind !== "personal" && !!teamMembers.data?.some((member) => member.user_id === session.user.id && !member.disabled_at));
-  const grants = useChoices<Grant>(`${wsPath(workspace.id)}/grants`);
-  const modelOptions = keyModelOptions(grants.data ?? []);
-  const grantsReady = grants.isSuccess && !grants.isFetching;
-  const create = () => ask({ title: "Create API key", description: "This key authorizes inference only in this workspace. It cannot sign in to the dashboard.", fields: [nameField, expiryField, ...keyModelFields(modelOptions), ...(p.manageServiceAccounts ? [{ name: "service_account_id", label: "Service account", type: "select", required: !canIssueUserKey, help: canIssueUserKey ? "Leave blank to issue a personal user key." : "User keys require active organization and explicit shared workspace membership. Choose a service account.", options: accounts.data?.filter((a) => !a.disabled_at).map((a) => ({ value: a.id, label: a.name })) ?? [] } satisfies Field] : [])], submitLabel: "Create key", secretLabel: "Save your API key", run: (v) => api(path, { method: "POST", body: { name: v.name, expires_in_days: Number(v.expires_in_days), ...keyModelBody(v, modelOptions), ...(v.service_account_id ? { service_account_id: v.service_account_id } : {}) } }) });
-  return <><Heading title="API keys" description={p.workspaceAdmin ? "Workspace inference credentials. You can manage all keys in this workspace." : "Your inference credentials for this workspace. Keys have a required expiry."} actions={<button className="button" disabled={!grantsReady || (!canIssueUserKey && !(p.manageServiceAccounts && accounts.data?.some((a) => !a.disabled_at)))} onClick={create}>Create key</button>} /><p className="help">{keyModelRestrictionHelp}</p>{grants.isFetching && <p role="status" className="loading">Loading effective model access before creating a key…</p>}{grants.isError && <><p className="notice">Effective model access could not be fully loaded. Retry before creating a key.</p><ErrorNotice error={grants.error} retry={() => void grants.refetch()} /></>}{accounts.isError && <ErrorNotice error={accounts.error} retry={() => void accounts.refetch()} />}{teamMembers.isError && <ErrorNotice error={teamMembers.error} retry={() => void teamMembers.refetch()} />}{!canIssueUserKey && (workspace.capabilities || teamMembers.data) && <p className="notice">{ownKeyHelp(workspace)}</p>}<CollectionTable<Key> path={path} label="API keys" empty="Create a key to call the inference API using a granted model." rowKey={(key) => key.id} columns={[
-    { title: "Name", render: (key) => <><strong>{key.name}</strong><Id value={key.id} /></> },
-    { title: "Issued to", render: (key) => key.service_account_id ? <><Badge>Service account</Badge><Id value={key.service_account_id} /></> : <><Badge>{key.issued_to_user_id === session.user.id ? "You" : "User"}</Badge><Id value={key.issued_to_user_id} /></> },
-    { title: "Status", render: (key) => <Badge tone={key.revoked_at ? "neutral" : new Date(key.expires_at).getTime() <= Date.now() ? "bad" : "good"}>{key.revoked_at ? "Revoked" : new Date(key.expires_at).getTime() <= Date.now() ? "Expired" : "Active"}</Badge> },
-    { title: "Model access", render: (key) => { const summary = keyModelSummary(key, grants.isSuccess ? modelOptions : []); return summary.models.length ? <details className="key-model-summary"><summary>{summary.label}</summary><ul>{summary.models.map((label, index) => <li key={key.model_ids![index]}>{label}</li>)}</ul></details> : summary.label; } },
-    { title: "Created", render: (key) => <DateTime value={key.created_at} /> },
-    { title: "Expires", render: (key) => <DateTime value={key.expires_at} /> },
-    { title: "Actions", render: (key) => !key.revoked_at && canManageKey(session, workspace, key) ? <RowActions>{canRotateKey(session, workspace, key) && (canIssueUserKey || !!key.service_account_id) && <button className="button secondary small" onClick={() => ask({ title: `Rotate ${key.name}?`, description: keyRotationDescription, danger: true, fields: [expiryField], submitLabel: "Rotate key", secretLabel: "Save your replacement key", run: (v) => api(`${path}/${key.id}/rotate`, { method: "POST", body: { expires_in_days: Number(v.expires_in_days) } }) })}>Rotate</button>}<button className="button ghost destructive small" onClick={() => ask({ title: `Revoke ${key.name}?`, description: "This permanently revokes the key. Clients using it will no longer be able to make inference requests.", danger: true, submitLabel: "Revoke key", run: () => api(`${path}/${key.id}`, { method: "DELETE" }) })}>Revoke</button></RowActions> : <span className="muted">—</span> },
-  ]} /></>;
+import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Plus, UserPlus, UsersRound } from "lucide-react";
+import { StatusPill } from "../components/templates/status-pill";
+import { api, wsPath, platformPath, platformWorkspacePath, type Collection, type Session, type Workspace, type Key, type ServiceAccount, type Grant, type Member } from "../lib/api";
+import { permissions } from "../lib/permissions";
+import { nameField, parseCheckboxValues, roleField, roleOptions, type Field } from "../lib/forms";
+import { addEach, batchFailureMessage } from "../lib/grants";
+import { protocolLabel } from "../lib/model-setup";
+import { toast } from "../components/ui/toast/toast";
+import { Badge, Button, CollectionTable, DateTime, ErrorNotice, FormField, Heading, Id, NativeSelect, Stack, Alert, useAction, useApi, useChoices, type Action } from "../components/ui";
+import { ActionMenu } from "../components/templates/action-menu";
+import { IconCell, LabIcon } from "../components/provider-icon";
+import { GrantBadges, LocalTable, PersonCell, PersonIdentity, RoleBadge, UserStatusBadge, copyIdAction } from "../components/people";
+import { Card } from "../components/ui/card/card";
+import { CellText, type DataTableColumn } from "../components/ui/data-table/data-table";
+import { workspaceRoleLabels, type DirectoryUser } from "../lib/people";
+import { notAvailable } from "../lib/home";
+import { Invitations } from "./organization";
+import { ResourceLink } from "../components/navigation-link";
+import { Dialog } from "../components/ui/dialog/dialog";
+import { EmptyState } from "../components/ui/empty-state/empty-state";
+import { Combobox, type ComboboxOption } from "../components/ui/combobox/combobox";
+import { WorkspaceModels } from "./model-catalog";
+import s from "./shared.module.css";
+export type Scope = { session: Session; workspace: Workspace };
+/** API keys moved to pages/keys.tsx (list, create dialog) and pages/key-detail.tsx (key page). */
+export { Keys } from "./keys";
+export function ServiceAccounts({ session, workspace }: Scope) {
+  const ask = useAction(), path = `${wsPath(workspace.id)}/service-accounts`, allowed = permissions(session, workspace).manageServiceAccounts;
+  if (!allowed) return <Alert tone="info">Only workspace admins manage service accounts.</Alert>;
+  // A card like Members (review rule 2): the action sits in the card header; status is a pill, never plain text.
+  return <Card title="Service accounts" description="Accounts for apps and automations. Their keys keep working when people leave the team. Disable the account to stop them." actions={<Button size="sm" variant="secondary" onClick={() => ask({ title: "Create service account", fields: [nameField], submitLabel: "Create account", run: (v, signal) => api(path, { method: "POST", body: { name: v.name }, signal }) })}><Plus aria-hidden /> Create account</Button>}><CollectionTable<ServiceAccount> path={path} label="Service accounts" empty="Create an account, then create its key from API keys." rowKey={a => a.id} columns={[{ title: "Name", render: a => a.name }, { title: "Status", render: a => <StatusPill status={a.disabled_at ? "disabled" : "active"} /> }, { title: "Actions", render: a => <ActionMenu label={`Actions for ${a.name}`} actions={[{ label: "Create a key in API keys", hidden: !!a.disabled_at, render: <ResourceLink search={{ page: "keys", ws: workspace.id }} /> }, copyIdAction(a.id, "Copy account ID"), { label: a.disabled_at ? "Enable account" : "Disable account…", danger: !a.disabled_at, onSelect: () => ask({ title: `${a.disabled_at ? "Enable" : "Disable"} ${a.name}?`, description: a.disabled_at ? "Enabling doesn't restore revoked keys. Create new keys afterwards." : "All of this account's keys are revoked. Enabling it again doesn't restore them.", danger: !a.disabled_at, submitLabel: a.disabled_at ? "Enable account" : "Disable account", run: (_, signal) => api(`${path}/${encodeURIComponent(a.id)}`, { method: "PATCH", body: { disabled: !a.disabled_at }, signal }) }) }]} /> }]} /></Card>;
 }
-
-export function ServiceAccounts({ workspace }: Scope) {
-  const ask = useAction();
-  const path = `${wsPath(workspace.id)}/service-accounts`;
-  return <><Heading title="Service accounts" description={`Non-human identities for ${workspace.kind} workloads. Disabling an account also revokes its keys.`} actions={<button className="button" onClick={() => ask({ title: "Create service account", fields: [nameField], submitLabel: "Create account", run: (v) => api(path, { method: "POST", body: { name: v.name } }) })}>Create account</button>} /><CollectionTable<ServiceAccount> path={path} label="Service accounts" empty="Create an account for a shared application, then issue its key from API keys." rowKey={(a) => a.id} columns={[
-    { title: "Name", render: (a) => <><strong>{a.name}</strong><Id value={a.id} /></> },
-    { title: "Status", render: (a) => <Badge tone={a.disabled_at ? "neutral" : "good"}>{a.disabled_at ? "Disabled" : "Active"}</Badge> },
-    { title: "Disabled at", render: (a) => <DateTime value={a.disabled_at} /> },
-    { title: "Actions", render: (a) => <button className={`button ${a.disabled_at ? "secondary" : "ghost destructive"} small`} onClick={() => ask({ title: `${a.disabled_at ? "Enable" : "Disable"} ${a.name}?`, description: a.disabled_at ? "Enabling the account does not restore revoked keys. Issue a new key after enabling." : "All keys for this service account will be revoked. This cannot be undone by re-enabling the account.", danger: !a.disabled_at, submitLabel: a.disabled_at ? "Enable account" : "Disable account", run: () => api(`${path}/${a.id}`, { method: "PATCH", body: { disabled: !a.disabled_at } }) })}>{a.disabled_at ? "Enable" : "Disable"}</button> },
-  ]} /></>;
+/*
+ * Members as a card (Grounded admin team › Members): description, "Add member"
+ * in the card header, search, Columns, avatar + email, role and grant-source
+ * badges and a row "…" menu; pending invitations below for workspace admins.
+ * People are added by choosing a person (email search), never by pasting an
+ * ID. Workspace mode searches `member-candidates` (ux-api-contract §3); Admin
+ * › Teams/Projects uses the platform member routes and the user directory
+ * (contract §2). Provenance: Grounded web/src/pages/admin/people/team-members.tsx
+ * (read-only reference).
+ */
+export function WorkspaceMembers({ session, workspace, platform = false }: Scope & { platform?: boolean }) {
+  const [adding, setAdding] = useState(false);
+  const writable = platform ? session.capabilities.platform_write : workspace.capabilities.manage_members;
+  // Owner grants: actual owners in Workspace mode; Platform Admins through the platform routes.
+  const canManageOwners = platform ? session.capabilities.platform_write : workspace.role === "owner";
+  const path = platform ? `${platformWorkspacePath(workspace.id)}/members` : `${wsPath(workspace.id)}/members`;
+  const readable = platform || workspace.capabilities.manage_members || (workspace.capabilities as { view_members?: boolean }).view_members === true;
+  const title = workspace.kind === "project" ? "Project members" : "Team members";
+  if (!readable) return <Card title="Members" description={`People with access to ${workspace.name}.`}><EmptyState size="compact" icon={<UsersRound />} title={workspace.role ? `You're ${workspace.role === "admin" ? "an" : "a"} ${workspaceRoleLabels[workspace.role]} of ${workspace.name}.` : "Members"} description="Only workspace admins can see the full member list and add people. Ask one if you need someone added." /></Card>;
+  return <Stack gap={6}>
+    <Card title="Members" description="People with access. Access from an SSO group updates when they sign in and can't be removed here." actions={writable && <Button size="sm" variant="secondary" onClick={() => setAdding(true)}><UserPlus aria-hidden /> Add member</Button>}>
+      <MembersTable path={path} title={title} writable={writable} canManageOwners={canManageOwners} selfId={session.user.id} />
+    </Card>
+    {!platform && workspace.capabilities.manage_members && <Invitations session={session} workspace={workspace} />}
+    {adding && <AddMemberDialog workspace={workspace} path={path} platform={platform} canManageOwners={canManageOwners} onClose={() => setAdding(false)} />}
+  </Stack>;
 }
-
-export function WorkspaceMembers({ session, workspace, organization }: Scope) {
-  const ask = useAction();
-  const path = `${wsPath(workspace.id)}/members`;
-  const orgAdmin = permissions(session, organization, workspace).organizationAdmin;
-  const members = useChoices<Member>(`${orgPath(organization.id)}/members`, orgAdmin);
-  const addField: Field = orgAdmin ? { name: "user_id", label: "Organization member", type: "select", required: true, options: members.data?.filter((m) => !m.disabled_at).map((m) => ({ value: m.user_id, label: m.email })) ?? [] } : { name: "user_id", label: "Organization member user ID", required: true, validate: uuidError, help: "Ask an organization admin for the active member’s user UUID. Shared workspace admins cannot browse organization membership." };
-  return <><Heading title={workspace.kind === "project" ? "Project members" : "Team members"} description="Only active organization members can join. Personal workspaces cannot be shared." actions={<button className="button" disabled={orgAdmin && !members.data} onClick={() => ask({ title: `Add ${workspace.kind} member`, fields: [addField, { ...roleField, options: roleField.options?.filter((option) => option.value !== "owner" || workspace.role === "owner") }], submitLabel: "Add member", run: (v) => api(path, { method: "POST", body: { user_id: v.user_id, role: v.role } }) })}>Add existing member</button>} />{members.isError && <ErrorNotice error={members.error} retry={() => void members.refetch()} />}<MembersTable path={path} title={workspace.kind === "project" ? "Project members" : "Team members"} canManageOwners={workspace.role === "owner"} /></>;
+type Candidate = { user_id: string; email: string };
+/** Choose a person by email, then a role. Never asks for a user ID. */
+export function AddMemberDialog({ workspace, path, platform, canManageOwners, onClose }: { workspace: Workspace; path: string; platform: boolean; canManageOwners: boolean; onClose: () => void }) {
+  const client = useQueryClient(), [text, setText] = useState(""), [q, setQ] = useState(""), [picked, setPicked] = useState<ComboboxOption | null>(null), [role, setRole] = useState("member"), [busy, setBusy] = useState(false), [error, setError] = useState<unknown>();
+  useEffect(() => { const timer = setTimeout(() => setQ(text.trim()), 250); return () => clearTimeout(timer); }, [text]);
+  const searchable = !platform && q.length > 0 && q.length <= 200;
+  const candidates = useApi<Collection<Candidate>>(`${wsPath(workspace.id)}/member-candidates?q=${encodeURIComponent(q)}`, searchable);
+  // Platform Admins choose from the entitled directory; workspace admins never browse it.
+  const directory = useChoices<DirectoryUser>(`${platformPath}/users?status=active`, platform);
+  const unavailable = !platform && notAvailable(candidates.error);
+  const items: ComboboxOption[] = platform ? (directory.data ?? []).filter(u => u.platform_role && u.email && !u.disabled_at).map(u => ({ value: u.id, label: u.email! })) : searchable ? (candidates.data?.data ?? []).map(c => ({ value: c.user_id, label: c.email })) : [];
+  const options = picked && !items.some(i => i.value === picked.value) ? [picked, ...items] : items;
+  const emptyText = platform ? (directory.isPending ? "Loading people…" : "No one matches.") : !q ? "Type part of an email address." : candidates.isFetching ? "Searching…" : "No one matches. People need platform access first, and can't already be members.";
+  async function submit() {
+    if (!picked || busy) return;
+    setBusy(true); setError(undefined);
+    try { await api(path, { method: "POST", body: { user_id: picked.value, role } }); void client.invalidateQueries({ queryKey: ["api"] }); toast.success(`${picked.label} added`); onClose(); }
+    catch (caught) { setError(caught); }
+    finally { setBusy(false); }
+  }
+  return <Dialog open title={`Add someone to ${workspace.name}`} description="Choose a person by email. They get access straight away." onOpenChange={open => { if (!open && !busy) onClose(); }} hideClose={busy}
+    footer={<><Button variant="secondary" disabled={busy} onClick={onClose}>Cancel</Button><Button loading={busy} disabled={!picked || unavailable} onClick={() => void submit()}>Add member</Button></>}>
+    <Stack gap={4}>
+      {unavailable ? <Alert tone="info" title="People search isn't available yet">This gateway can't search people yet. Invite them by email from the Invitations section instead.</Alert> : <>
+        <FormField label="Person" description={platform ? "Active people with platform access." : "Search by email. Only people with platform access who aren't members yet are listed."}>
+          <Combobox<string> items={options} filter={platform ? undefined : null} value={picked?.value ?? null} onValueChange={(_, option) => setPicked(option)} onInputValueChange={setText} placeholder="name@example.com" emptyText={emptyText} disabled={busy} limit={50} />
+        </FormField>
+        {candidates.isError && !unavailable && <ErrorNotice error={candidates.error} retry={() => void candidates.refetch()} />}
+        {directory.isError && <ErrorNotice error={directory.error} retry={() => void directory.refetch()} />}
+        <FormField label="Role"><NativeSelect value={role} disabled={busy} onChange={event => setRole(event.target.value)}>{roleOptions.filter(o => o.value !== "owner" || canManageOwners).map(o => <option key={o.value} value={o.value}>{o.label}</option>)}</NativeSelect></FormField>
+      </>}
+      {error !== undefined && <ErrorNotice error={error} />}
+    </Stack>
+  </Dialog>;
 }
-export function MembersTable({ path, title, canManageOwners }: { path: string; title: string; canManageOwners: boolean }) {
+export function MembersTable({ path, title, canManageOwners, writable, selfId }: { path: string; title: string; canManageOwners: boolean; writable: boolean; /** The viewer, shown as "(you)". */ selfId?: string }) {
   const ask = useAction();
-  return <CollectionTable<Member> path={path} label={title} empty="No members are visible in this scope." rowKey={(m) => m.user_id} columns={[
-    { title: "Member", render: (m) => <><strong>{m.email}</strong><Id value={m.user_id} /></> },
-    { title: "Role", render: (m) => <Badge>{m.role}</Badge> },
-    { title: "Status", render: (m) => <Badge tone={m.disabled_at ? "neutral" : "good"}>{m.disabled_at ? "Disabled" : "Active"}</Badge> },
-    { title: "Actions", render: (m) => m.role === "owner" && !canManageOwners ? <span className="muted">Owner protected</span> : <button className="button secondary small" onClick={() => ask({ title: `Manage ${m.email}`, description: "Changes affect access immediately. Disabling also revokes this member’s keys in this scope; enabling does not restore those keys. The gateway prevents removal of the last owner.", danger: true, fields: [{ ...roleField, value: m.role, options: roleField.options?.filter((option) => option.value !== "owner" || canManageOwners) }, { ...disabledField, value: String(!!m.disabled_at) }], submitLabel: "Update membership", run: (v) => api(`${path}/${m.user_id}`, { method: "PATCH", body: { role: v.role, disabled: v.disabled === "true" } }) })}>Manage</button> },
-  ]} />;
+  const columns: DataTableColumn<Member>[] = [
+    { id: "member", header: "Person", accessor: m => [m.display_name, m.email].filter(Boolean).join(" "), rowHeader: true, hideable: false, sortable: true, cell: m => <PersonIdentity person={m} self={m.user_id === selfId} /> },
+    { id: "role", header: "Role", accessor: m => m.role ?? "", sortable: true, cell: m => <RoleBadge role={m.role} /> },
+    { id: "sources", header: "Access", defaultHiddenNarrow: true, accessor: m => m.membership_source ?? "", cell: m => <GrantBadges grants={m.grants} empty="Unknown source" /> },
+    { id: "status", header: "Status", accessor: m => m.disabled_at ? "suspended" : "active", cell: m => <UserStatusBadge user={{ disabled_at: m.disabled_at ?? null }} /> },
+  ];
+  return <LocalTable<Member> path={path} label={title} storageKey="workspace-members" search={{ placeholder: "Name or email" }} rowKey={m => m.user_id} rowLabel={m => m.email} columns={columns}
+    rowActions={m => [
+      { label: "Set manual role…", hidden: !writable, disabled: m.role === "owner" && !canManageOwners, disabledReason: "Only a workspace owner or Platform Admin can change owners", onSelect: () => ask({ title: `Set manual role for ${m.email}`, description: "Changes only the manual grant. Group-granted access remains independently effective. The server protects the last owner.", fields: [{ ...roleField, value: m.grants?.find(g => g.source === "manual")?.role ?? "member", options: roleField.options?.filter(o => o.value !== "owner" || canManageOwners) }], submitLabel: "Set manual role", run: (v, signal) => api(path, { method: "POST", body: { user_id: m.user_id, role: v.role }, signal }) }) },
+      copyIdAction(m.user_id, "Copy user ID"),
+      { label: "Remove manual access…", danger: true, hidden: !writable || !m.grants?.some(g => g.source === "manual"), disabled: m.role === "owner" && !canManageOwners, disabledReason: "Owner protected", onSelect: () => ask({ title: `Remove manual access for ${m.email}?`, description: "Group grants are retained. Keys are revoked only when effective workspace membership is lost. Removing the last owner is rejected.", danger: true, submitLabel: "Remove manual grant", run: (_, signal) => api(`${path}/${encodeURIComponent(m.user_id)}`, { method: "DELETE", signal }) }) },
+    ]}
+    empty={{ icon: <UsersRound />, title: "No members yet.", description: "No active grants are visible in this scope." }} />;
 }
-export function Grants({ session, workspace, organization }: Scope) {
-  const ask = useAction();
-  const path = `${wsPath(workspace.id)}/grants`;
-  const allowed = permissions(session, organization, workspace).manageGrants;
-  const models = useChoices<Model>(`${orgPath(organization.id)}/models`, allowed);
-  const grants = useChoices<Grant>(path, allowed);
-  const choices = models.data?.filter((model) => !grants.data?.some((g) => g.model_id === model.id)) ?? [];
-  return <><Heading title="Model access" description="Models delegated from the organization’s assigned catalog. Grants cannot enlarge the parent entitlement and do not guarantee an enabled deployment is available." actions={allowed && <button className="button" disabled={!models.data || !grants.data || !choices.length} onClick={() => ask({ title: "Grant model access", fields: [{ name: "model_id", label: "Model alias", type: "select", required: true, options: choices.map((m) => ({ value: m.id, label: `${m.display_name} (${m.public_name})${m.enabled ? "" : " — disabled"}` })) }], submitLabel: "Grant access", run: (v) => api(path, { method: "POST", body: { model_id: v.model_id } }) })}>Grant model</button>} />{allowed && models.isError && <ErrorNotice error={models.error} retry={() => void models.refetch()} />}{allowed && grants.isError && <ErrorNotice error={grants.error} retry={() => void grants.refetch()} />}{allowed && models.data && grants.data && !choices.length && <p className="notice">{models.data.length ? "All organization model aliases are already granted." : "Ask a platform operator to assign a model to this organization before delegating access."}</p>}<CollectionTable<Grant> path={path} label="Model grants" empty={allowed ? "Grant a model alias to allow inference from this workspace." : "Ask an organization administrator to grant model access."} rowKey={(g) => g.model_id} columns={[
-    { title: "Model", render: (g) => <strong>{g.display_name}</strong> },
-    { title: "API model name", render: (g) => <code>{g.public_name}</code> },
-    ...(workspace.kind === "personal" ? [{ title: "Grant source", render: (g: Grant) => g.individual_granted ? g.workspace_granted ? "Personal workspace and individual" : "Individual · organization-managed" : "Personal workspace" }] : []),
-    ...(allowed ? [{ title: "Actions", render: (g: Grant) => g.workspace_granted === false ? <span className="muted">Manage individual access under Assigned models</span> : <button className="button ghost destructive small" onClick={() => ask({ title: `Remove access to ${g.public_name}?`, description: g.individual_granted ? "Removes the workspace grant only. Your individual grant will continue to authorize this model." : "This workspace’s keys will no longer be authorized to use this model alias.", danger: true, submitLabel: "Remove grant", run: () => api(`${path}/${g.model_id}`, { method: "DELETE" }) })}>Remove grant</button> }] : []),
-  ]} /></>;
+/**
+ * Select several available models at once. The API adds one model per request, so this loops with a progress
+ * notice; each model succeeds or fails on its own, and a retry only re-sends the ones not yet added.
+ */
+export function addModelsAction(path: string, choices: Grant[]): Action {
+  const added = new Set<string>(), label = (id: string) => choices.find(g => g.model_id === id)?.display_name ?? id;
+  return { title: "Add approved models", description: "Choose one or more models from your available catalogs.", fields: [{ name: "model_ids", label: "Available models", type: "checkboxes", required: true, value: "[]", maxSelections: choices.length, options: choices.map(g => ({ value: g.model_id, label: `${g.display_name} · ${g.public_name}` })) }], submitLabel: "Add selected models", successNotice: "Models added.",
+    run: async (v, signal) => {
+      const selected = parseCheckboxValues(v.model_ids), pending = selected.filter(id => !added.has(id));
+      let notice = toast.add({ title: `Adding models: 0 of ${pending.length}`, timeout: 0 });
+      const result = await addEach(pending, id => api(path, { method: "POST", body: { model_id: id }, signal }), signal, (done, total) => { toast.close(notice); notice = toast.add({ title: `Adding models: ${done} of ${total}`, timeout: done === total ? 3000 : 0 }); });
+      toast.close(notice);
+      result.added.forEach(id => added.add(id));
+      if (result.failed.length || result.stopped) throw new Error(batchFailureMessage({ ...result, added: selected.filter(id => added.has(id)) }, selected.length, label));
+    } };
 }
+/** Workspace › Models: the eligible catalog with Select/Remove (model-catalog.tsx). */
+export function Grants({ session, workspace }: Scope) { return <WorkspaceModels session={session} workspace={workspace} />; }

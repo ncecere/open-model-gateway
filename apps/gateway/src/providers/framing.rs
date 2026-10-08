@@ -149,23 +149,7 @@ pub(super) fn fields(value: &Value, allowed: &[&str]) -> Result<()> {
     Ok(())
 }
 pub(super) fn usage(value: &Value) -> Result<crate::inference::types::Usage> {
-    if !value.is_null() && !value.is_object() {
-        return Err(InferenceError::InvalidUpstream);
-    }
-    let count = |key| {
-        if value[key].is_null() {
-            Ok(None)
-        } else {
-            value[key]
-                .as_u64()
-                .map(Some)
-                .ok_or(InferenceError::InvalidUpstream)
-        }
-    };
-    Ok(crate::inference::types::Usage {
-        input_tokens: count("input_tokens")?,
-        output_tokens: count("output_tokens")?,
-    })
+    super::metering::anthropic(value)
 }
 #[cfg(test)]
 mod tests {

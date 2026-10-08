@@ -2,107 +2,60 @@
 
 ## Product boundary
 
-A multi-user gateway service operated by platform engineers. Users work in personal or shared team/project spaces. Platform administrators own infrastructure; organization administrators delegate assigned model access and impose stricter policies. See [platform administration](platform-administration.md). Administrators configure upstream access, expose a governed model catalog, and set scoped quotas/budgets, versioned prices, and explicit routing policies.
+One installation serves one enterprise. The installation is the identity and administration boundary, not a selectable tenant. Teams, Projects and private personal workspaces sit directly beneath it; Projects are not children of Teams. There are no enterprise organization tables, memberships or management endpoints.
 
-Start as a modular monolith, with a separately built React + Vite SPA served by Rust in production. Separate the control and data planes logically before separating deployments.
-
-## Services
+[Enterprise rebuild](enterprise-rebuild.md) is the approved direction. This page describes the current source; it is not new acceptance evidence or a production-readiness claim. Earlier milestones and checks in [verification](verification.md) are historical unless explicitly rerun for this lineage.
 
 ```text
-                       TLS ingress
-                            |
-                      Rust / Axum
-                  /         |          \
-           SPA + assets   /api/*     /v1/*, /health/*
-                            |
-                PostgreSQL / provider APIs
+TLS ingress
+    └─ Rust / Axum
+       ├─ SPA + assets          React / Vite, browser sessions
+       ├─ /api/v1/*             management and financial reporting
+       ├─ /v1/*                 API-key inference
+       └─ /health/*             liveness and readiness
+                ├─ PostgreSQL  identity, configuration, admission, accounting
+                └─ adapters    approved cloud/local upstreams
 ```
 
-- **React + Vite SPA:** TypeScript, TanStack Router + Query, and copied Bitop UI primitives/tokens for browser rendering and interaction. The dashboard shell follows the user's open-rag-system reference; source projects are not runtime dependencies. No direct database access or provider credentials. Rust serves the built files; no Node.js runtime or frontend inference proxy runs in production.
-- **Rust management API:** implemented OIDC sessions, membership and role authorization, configuration, key lifecycle, audit records, reporting. A workspace inference key must never become an administrative credential.
-- **Rust data plane:** API-key authorization, capability-aware routing, provider execution, streaming, usage events. Text/tool subsets of Chat Completions, Responses, and Messages use the provider-independent engine and registered OpenAI, Anthropic, and Bedrock adapters. See the explicit protocol matrix; broader content remains future work. Distributed admission/accounting and opt-in routing policies live outside provider adapters.
-- **PostgreSQL:** ownership, authorization, configuration, distributed admission leases, immutable pricing versions and monetary events. Organization-row locks serialize each tenant's admissions/settlements/configuration.
-- **Redis:** not required by current distributed controls; PostgreSQL is their source of truth. Consider a distributed fast path only after measurement, without weakening durable spend reservations.
+The gateway is a modular monolith with logically separate control and data planes. Production serves the separately built SPA from Rust; no Node.js inference proxy is required. The UI uses locally installed Bitop components and Grounded's Workspace/Admin composition patterns. Reference repositories are not runtime imports. Redis is not required by the durable controls.
 
-Reqwest handles OpenAI/Anthropic HTTP. Bedrock uses the official AWS SDK, workload credentials, SigV4, Converse and binary event streams; it is not another OpenAI-compatible URL.
+## Installation and storage
 
-### Web serving and development
+`apps/gateway/enterprise_migrations/0001_enterprise.sql` starts a new `enterprise_v1` lineage. The old `apps/gateway/migrations/` files remain legacy evidence, not an upgrade path.
 
-`GATEWAY_WEB_DIR` optionally points to a built `apps/web/dist` directory. Unset, Rust runs API-only; an invalid configured distribution directory must fail startup. Axum owns `/api/*`, `/v1/*`, and `/health/*` regardless of static serving. SPA fallback is for browser navigation only and must not swallow unknown API paths or missing assets.
+`migrate` is explicit. A read-only preflight runs **before DDL**, including before SQLx creates its tracking table. It refuses legacy or unrelated nonempty public schemas and dirty, changed or unexpected migration lineages. A recognized enterprise prefix can be upgraded explicitly. `serve` and readiness require the exact current lineage/checksums and installation family; neither migrates. This is lineage checking, not complete tamper-proof attestation of every index/function.
 
-During development, Vite listens at `127.0.0.1:3000` and proxies `/api/*`, `/v1/*`, and `/health/*` to `GATEWAY_INTERNAL_URL` (default `http://127.0.0.1:8080`). This server-only setting is loaded from `apps/web/.env.local`. Browser requests use same-origin relative URLs, never absolute API URLs. `VITE_*` variables are public bundle configuration and must never contain secrets. The public readiness request exposes only coarse status. Private dashboard calls require Rust-owned browser sessions; mutations require CSRF and the exact configured public origin.
+Use a separately approved fresh target for enterprise staging. Do not point the rebuild at an old database, automatically migrate it, reset it, or delete history. A development/test database owner is not an appropriate production runtime identity; review the release's runtime grants and privilege probes separately.
 
-Build with `npm run build:web`, then preview with `GATEWAY_WEB_DIR=apps/web/dist cargo run -p open-model-gateway -- serve`; the UI and APIs share the gateway port. Apart from optional static serving, the Rust backend and its security boundaries are unchanged.
+Catalog advisory locks precede the singleton installation row lock. Admission, settlement, entitlement and policy changes serialize around this installation boundary rather than obsolete organization locks. Reports also use installation serialization; bounded output does not imply bounded scans or measured contention.
 
-## Ownership and tenancy
+## Identity and authorization
 
-Users are global identities. Organizations are tenant boundaries. Organization memberships determine whether a user can act within a tenant. Platform-wide operator roles are distinct from organization roles; only explicitly provisioned operators configure provider connections.
+OIDC authentication is distinct from entitlement. Active `user`, `auditor` or `admin` platform grants are required. Manual/bootstrap and signed-group grants remain independently represented. Group mappings synchronize at sign-in; background identity provisioning is not implemented by generic OIDC. See [identity](identity.md).
 
-A workspace owns keys and model grants. Service accounts, execution attribution, and scoped quota/budget policies attach here.
+A personal workspace is created on an entitled user's successful sign-in. It is owner-private for keys and request details, including against Platform Admins/Auditors. Their financial reporting may include personal totals without granting private-detail access. Ordinary shared members see their own human-key activity; shared administrators see workspace-wide activity.
 
-- **Personal:** exactly one owner from that organization; one personal space per user per organization.
-- **Team / Project:** sibling shared workspace kinds under an organization, with explicit memberships. Projects do not require a parent team.
-- A user can have memberships in multiple organizations, teams and projects.
-- Each API key belongs to exactly one organization and workspace.
-- Keys have exactly one user or service-account owner. User keys require live membership; service-account keys require an active account and a team/project workspace, not a live employee. Membership/account removal revokes affected keys; re-enabling does not resurrect them.
+Human inference keys require live platform entitlement and actual shared membership, even for a Platform Admin. Shared service-account keys require an active account/workspace, not continued employment of their creator. Removal/disablement revokes affected credentials; later reactivation never revives revoked keys. Rotation retains budget/model-restriction lineage.
 
-Tenant-owned foreign keys include `organization_id`; PostgreSQL rejects cross-tenant workspace ownership, key associations and delegated grants outside organization entitlements. Deployments are global platform infrastructure rather than tenant-owned resources. Queries derive tenant/workspace IDs only from authenticated server-side state.
+Every attempt rechecks keys, membership, live model authorization and enabled target configuration under locks. The dispatched target must still match the loaded endpoint, credential reference, model and protocol metadata. Already-admitted work may complete after revocation; there is no promise of retroactive cancellation. Query scoping is still essential: this is not PostgreSQL row-level security.
 
-This is not PostgreSQL row-level security. Correct query scoping is still required; cross-tenant isolation tests must accompany every new repository operation. Review RLS and a restricted application database role before general availability. The local Compose role has migration/test privileges and is not a production runtime role.
+## Models, catalogs and execution
 
-## Authorization
+A model has one global public alias and an explicit `supported_protocols` list. Provider connections hold redacted credential references and approved transport configuration. Deployments bind a model to an upstream identifier. Adapter capability checks further narrow the model's declared protocols; declaring a protocol does not make an incompatible deployment support it.
 
-Tokens contain a random UUID lookup identifier and a cryptographically random 256-bit secret. Store only SHA-256 of the complete token, compare the digest in constant time, and display the full token once. These are random API credentials, not human passwords; password hashing is a separate concern if passwords are ever introduced.
+Catalogs have live defaults per workspace kind and replacement overrides. Personal owners/shared administrators select available catalog models; Platform Admins can assign models directly. Catalog presence alone is not permission. Catalog/direct provenance, current enabled state and key restrictions are checked during discovery and admission. Losing authorization retires affected selections without turning a restricted key into an unrestricted one.
 
-Each request checks:
+The engine separates protocol codecs, typed generation/embedding requests, registry selection and provider transports. Registered profiles cover bounded Chat, Responses, Messages and embeddings combinations, not arbitrary SDK options. See [protocol matrix](protocol-matrix.md) and [provider adapters](provider-adapters.md).
 
-1. The key exists, is unrevoked, and has not expired.
-2. Its organization and workspace are active.
-3. For user keys, user and organization membership are active and the user owns the personal space or has active team/project membership. For service keys, the workspace is a team/project and the account is active.
-4. For model visibility and inference deployment resolution: a platform-assigned organization entitlement, appropriate workspace or own-personal individual grant, and enabled global model/deployment/provider exist.
+Admission records one execution and reservation per actual upstream attempt. Prices are immutable configured estimates, not invoices. Cache-aware settlement uses disjoint categories and exact integers; incomplete evidence retains conservative holds. Embeddings are input-only workloads, not chat requests with synthetic messages. Cost-center attribution is snapshotted at admission. See [governance](governance.md) and [cost reporting](cost-reporting.md).
 
-No authorization cache yet. Already-admitted work may complete after concurrent revocation. Routing plans are request snapshots, but every attempt revalidates current credentials, memberships and entitlements before admission against all applicable platform and local limits. Stream watchdogs drop transport at the request deadline even when the downstream is not polling.
+## Serving and operations
 
-Requests cannot override their workspace with headers or query parameters. Conflicting or repeated credential headers are rejected. `/v1/messages` accepts `x-api-key` or Bearer, never both together. Other current routes accept Bearer only.
+- `GATEWAY_WEB_DIR` enables built SPA serving; invalid configured assets fail startup. API paths and missing assets must not be swallowed by SPA fallback.
+- Development Vite proxies relative `/api/*`, `/v1/*`, `/health/*` requests via server-only `GATEWAY_INTERNAL_URL`. Never put secrets in `VITE_*` variables.
+- Management uses Rust-owned sessions, exact Origin and CSRF checks. Inference keys are not administrative credentials. No CORS is enabled.
+- `/health/live` needs no database; `/health/ready` has a two-second deadline and reports only coarse readiness.
+- Request bodies are limited to 2 MiB; adapters separately bound complete bodies and frames. Generated request IDs, method, status and elapsed timing are logged, not prompts, bodies, query strings or credentials.
+- No default prompt/response-body retention is introduced. Account cleanup retains financial attribution and audit history. Optional settled-detail compaction is not monetary deletion.
 
-## Models, providers, and protocols
-
-Keep these independent:
-
-- **Model:** a platform catalog resource with a canonical name; organization entitlements provide the stable client-facing alias, such as `company/smart`.
-- **Provider connection:** provider type, endpoint/region, and a credential reference. No plaintext upstream credentials in the schema.
-- **Deployment:** an upstream model identifier attached to a provider connection and a public alias.
-- **Client protocol:** Chat Completions, Responses, or Messages.
-- **Capabilities:** the adapter contract currently distinguishes text chat, streaming, and function tools. Model-specific metadata, images, structured output, reasoning, and state need further design.
-
-An allowlisted `env:` secret resolver is implemented; it is not a secret manager or a per-tenant vault policy. OpenAI/Anthropic adapters accept only fixed vendor HTTPS bases, disable redirects/proxies, and reject regions. Management validates references and endpoint URLs; credential references are never returned in list responses. Bedrock requires `aws:default` and an explicit region and rejects production endpoint overrides. Prefer workload identity for cloud providers. Platform administrators provision shared global connections and assign models explicitly to organizations. Nullable legacy catalog organization IDs are provenance only: organization entitlements and per-consumer grants, not those IDs, authorize inference.
-
-The engine now uses narrow typed chat/message/tool/usage/event contracts. Client protocol codecs and provider transports are separate. Adapters are registered at startup; adding a provider does not require changing engine routing or a provider enum in the database. Do not stretch the chat contract into a universal Responses/agent representation: extract shared concepts only where semantics genuinely match. Provider-native extensions must be explicit, not silently dropped or blindly passed through. See [provider adapters](provider-adapters.md).
-
-## Compatibility promises
-
-The implemented bounded frontends are:
-
-- OpenAI Chat Completions: `/v1/chat/completions`
-- OpenAI Responses: `/v1/responses`
-- Anthropic Messages: `/v1/messages`
-
-All support documented text/function-tool subsets and execution accounting. Unknown or unsupported request fields are rejected. Responses is stateless and Messages pins the Anthropic version header. Native Responses/Messages frontend content is buffered with a 4 MiB bound before ordered SSE delivery; Chat streams incrementally. `/v1/models` returns only the OpenAI list shape. See [protocol matrix](protocol-matrix.md).
-
-Responses support must explicitly define stateful operations, previous-response references, hosted tools, reasoning items, and streaming event sequences. A Chat-to-Responses field mapping is not sufficient. Publish supported/unsupported capability matrices per frontend and upstream.
-
-Never silently discard unsupported content. Reject or route according to explicit policy. Cross-provider fallbacks are opt-in and require capability and data-residency checks. Do not restart a response after emitting client-visible content. Even pre-response retries can duplicate upstream charges.
-
-## Operations and security
-
-- Migrate as an explicit deployment step, not on every replica startup.
-- Refuse startup and readiness on missing or mismatched migration state.
-- Liveness is independent of the database; readiness has a two-second deadline.
-- Structured request logs contain generated request IDs, method, status, and elapsed time—not tokens, bodies, query strings, or prompts. Avoid enabling verbose dependency logs in production without reviewing their contents.
-- Current request body limit is 2 MiB. Provider adapters independently bound complete bodies and stream frames.
-- No CORS is enabled. Production dashboard and management requests should share one origin.
-- Browser auth: Rust-owned OIDC/session validation, Secure/HttpOnly cookies, CSRF protection, and logout invalidation. JWKS refresh currently requires restart; session cleanup is operational follow-up. Do not store inference credentials as dashboard login tokens.
-- Usage events, versioned pricing, cost estimates, reservations, and financial charges are separate concepts. Never use floating point for money.
-- Prompt/response content retention is opt-in, separately permissioned, and subject to tenant retention policies.
-
-Before public service: load-test the implemented distributed limits/reservations/deadlines, verify upstream input ceilings/prices and real SSO/IAM, enforce network egress and credential rotation, and add backups, restore testing, and workload observability. Configured-rate estimates are not vendor-invoice or customer-billing guarantees. See [governance](governance.md) and [routing](routing.md).
+Real identity-provider interoperability, live local/server profile certification, load/lock contention, network egress, backup/restore and release gates require separate operational validation. Source tests and isolated provider checks are not whole-stack certification.

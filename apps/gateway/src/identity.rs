@@ -10,20 +10,26 @@ use axum::{
     routing::{get, post},
 };
 use openidconnect::{
-    AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointMaybeSet, EndpointNotSet,
-    EndpointSet, HttpRequest, HttpResponse, IssuerUrl, Nonce, PkceCodeChallenge, PkceCodeVerifier,
-    RedirectUrl, Scope, TokenResponse,
-    core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata},
+    AdditionalClaims, AuthorizationCode, Client, ClientId, ClientSecret, CsrfToken,
+    EmptyExtraTokenFields, EndpointMaybeSet, EndpointNotSet, EndpointSet, HttpRequest,
+    HttpResponse, IdTokenFields, IssuerUrl, Nonce, PkceCodeChallenge, PkceCodeVerifier,
+    RedirectUrl, Scope, StandardErrorResponse, StandardTokenResponse, TokenResponse,
+    core::{
+        CoreAuthDisplay, CoreAuthPrompt, CoreAuthenticationFlow, CoreErrorResponseType,
+        CoreGenderClaim, CoreJsonWebKey, CoreJweContentEncryptionAlgorithm,
+        CoreJwsSigningAlgorithm, CoreProviderMetadata, CoreRevocableToken,
+        CoreRevocationErrorResponse, CoreTokenIntrospectionResponse, CoreTokenType,
+    },
 };
 use rand::{RngCore, rngs::OsRng};
 use reqwest::Url;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{Postgres, Transaction};
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
-use crate::store::Store;
+use crate::{lifecycle, store::Store};
 
 const SESSION: &str = "omg_session";
 const CSRF: &str = "omg_csrf";
@@ -31,14 +37,69 @@ const BROWSER: &str = "omg_oidc";
 const SESSION_SECONDS: u32 = 12 * 60 * 60;
 const LOGIN_SECONDS: u32 = 10 * 60;
 
-type DiscoveredClient = CoreClient<
-    EndpointSet,
-    EndpointNotSet,
-    EndpointNotSet,
-    EndpointNotSet,
-    EndpointMaybeSet,
-    EndpointMaybeSet,
+/// Unknown claims are captured inside the signature-verified ID token, never from userinfo.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct SignedClaims {
+    #[serde(flatten)]
+    values: std::collections::BTreeMap<String, serde_json::Value>,
+}
+impl AdditionalClaims for SignedClaims {}
+type EnterpriseTokenFields = IdTokenFields<
+    SignedClaims,
+    EmptyExtraTokenFields,
+    CoreGenderClaim,
+    CoreJweContentEncryptionAlgorithm,
+    CoreJwsSigningAlgorithm,
 >;
+type EnterpriseClient<A = EndpointNotSet, T = EndpointNotSet, U = EndpointNotSet> = Client<
+    SignedClaims,
+    CoreAuthDisplay,
+    CoreGenderClaim,
+    CoreJweContentEncryptionAlgorithm,
+    CoreJsonWebKey,
+    CoreAuthPrompt,
+    StandardErrorResponse<CoreErrorResponseType>,
+    StandardTokenResponse<EnterpriseTokenFields, CoreTokenType>,
+    CoreTokenIntrospectionResponse,
+    CoreRevocableToken,
+    CoreRevocationErrorResponse,
+    A,
+    EndpointNotSet,
+    EndpointNotSet,
+    EndpointNotSet,
+    T,
+    U,
+>;
+type DiscoveredClient = EnterpriseClient<EndpointSet, EndpointMaybeSet, EndpointMaybeSet>;
+
+impl SignedClaims {
+    fn groups(&self, path: &str) -> Option<Vec<String>> {
+        // Prefer the literal claim name (URI and dot-containing claim names are legal).
+        let value = if let Some(value) = self.values.get(path) {
+            value
+        } else {
+            let mut parts = path.split('.');
+            let mut value = self.values.get(parts.next()?)?;
+            for part in parts {
+                value = value.as_object()?.get(part)?;
+            }
+            value
+        };
+        let values = value.as_array()?;
+        if values.len() > 2048 {
+            return None;
+        }
+        values
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .filter(|s| !s.is_empty() && s.len() <= 1024)
+                    .map(str::to_owned)
+            })
+            .collect()
+    }
+}
 
 /// Intentionally not Debug: contains a confidential-client secret.
 #[derive(Clone)]
@@ -49,6 +110,7 @@ pub struct IdentityConfig {
     client_secret: Option<String>,
     allow_loopback_http: bool,
     secure_cookies: bool,
+    groups_claim: String,
 }
 
 impl IdentityConfig {
@@ -75,15 +137,22 @@ impl IdentityConfig {
             }
             return Ok(None);
         }
-        Self::parse(
+        let mut config = Self::parse(
             public.ok_or_else(|| anyhow::anyhow!("GATEWAY_PUBLIC_URL is required for OIDC"))?,
             issuer.ok_or_else(|| anyhow::anyhow!("GATEWAY_OIDC_ISSUER is required for OIDC"))?,
             client_id
                 .ok_or_else(|| anyhow::anyhow!("GATEWAY_OIDC_CLIENT_ID is required for OIDC"))?,
             secret,
             env::var("GATEWAY_ENV").as_deref() == Ok("development"),
-        )
-        .map(Some)
+        )?;
+        if let Some(path) = read("GATEWAY_OIDC_GROUPS_CLAIM")? {
+            anyhow::ensure!(
+                path.len() <= 512 && !path.chars().any(|c| c.is_whitespace() || c.is_control()),
+                "Invalid OIDC groups claim path"
+            );
+            config.groups_claim = path;
+        }
+        Ok(Some(config))
     }
 
     fn validate_origin(value: &str, development: bool) -> anyhow::Result<Url> {
@@ -124,6 +193,7 @@ impl IdentityConfig {
             client_secret,
             allow_loopback_http: development,
             secure_cookies: public.scheme() == "https",
+            groups_claim: "groups".into(),
         })
     }
 }
@@ -216,7 +286,7 @@ impl IdentityState {
             let redirect =
                 RedirectUrl::new(format!("{}/api/v1/auth/callback", config.public_origin))
                     .map_err(|_| anyhow::anyhow!("Invalid OIDC callback URL"))?;
-            let client = CoreClient::from_provider_metadata(
+            let client = EnterpriseClient::from_provider_metadata(
                 metadata,
                 ClientId::new(config.client_id.clone()),
                 config.client_secret.clone().map(ClientSecret::new),
@@ -237,8 +307,10 @@ impl IdentityState {
 #[derive(Clone)]
 pub struct BrowserPrincipal {
     pub user_id: Uuid,
+    /// Normalized, signature-verified email claim from this browser session, not users.email.
     pub email: String,
     pub platform_admin: bool,
+    pub platform_auditor: bool,
 }
 
 pub fn router(state: IdentityState) -> Router<Store> {
@@ -342,11 +414,62 @@ async fn auth_config(State(state): State<IdentityState>) -> Response {
     private(Json(serde_json::json!({ "enabled": state.provider.is_some() })).into_response())
 }
 
-async fn login(State(state): State<IdentityState>) -> Result<Response, AuthError> {
+#[derive(Deserialize, Default)]
+struct LoginQuery {
+    return_to: Option<String>,
+}
+
+/// A same-origin dashboard path to return to after sign-in, or `None`.
+/// Only relative paths are accepted: never a scheme, host, protocol-relative
+/// `//`, backslash or control character, and never an API/inference/health
+/// path (Axum owns those; returning there would show raw JSON).
+pub(crate) fn safe_return_path(value: &str) -> Option<String> {
+    let path = value.trim();
+    if path.is_empty()
+        || path.len() > 2048
+        || !path.starts_with('/')
+        || path.starts_with("//")
+        || path.contains('\\')
+        || path.chars().any(char::is_control)
+    {
+        return None;
+    }
+    // Same-origin check: resolving against a placeholder origin must keep it.
+    let base = Url::parse("https://dashboard.invalid/").ok()?;
+    let url = base.join(path).ok()?;
+    if url.origin() != base.origin() {
+        return None;
+    }
+    let route = url.path();
+    if ["/api", "/v1", "/health"]
+        .iter()
+        .any(|p| route == *p || route.starts_with(&format!("{p}/")))
+    {
+        return None;
+    }
+    let mut out = route.to_owned();
+    if let Some(query) = url.query() {
+        out.push('?');
+        out.push_str(query);
+    }
+    (out.len() <= 2048).then_some(out)
+}
+
+async fn login(
+    State(state): State<IdentityState>,
+    query: Result<Query<LoginQuery>, QueryRejection>,
+) -> Result<Response, AuthError> {
     let provider = state
         .provider
         .as_ref()
         .ok_or(AuthError(StatusCode::SERVICE_UNAVAILABLE))?;
+    // An unsafe or malformed return path is dropped (sign-in still works and lands on Home).
+    let return_to = query
+        .ok()
+        .and_then(|Query(q)| q.return_to)
+        .as_deref()
+        .and_then(safe_return_path)
+        .filter(|p| p != "/");
     let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
     let (url, oauth_state, nonce) = provider
         .client
@@ -356,11 +479,13 @@ async fn login(State(state): State<IdentityState>) -> Result<Response, AuthError
             || Nonce::new(random_token()),
         )
         .add_scope(Scope::new("email".into()))
+        // `profile` carries the optional display name; it is presentation only.
+        .add_scope(Scope::new("profile".into()))
         .set_pkce_challenge(challenge)
         .url();
     let browser = random_token();
-    sqlx::query("INSERT INTO login_attempts(state_hash,browser_hash,nonce,pkce_verifier,expires_at) VALUES($1,$2,$3,$4,now()+interval '10 minutes')")
-        .bind(hash(oauth_state.secret())).bind(hash(&browser)).bind(nonce.secret()).bind(verifier.secret())
+    sqlx::query("INSERT INTO oidc_login_attempts(state_hash,browser_hash,nonce,pkce_verifier,expires_at,return_to) VALUES($1,$2,$3,$4,now()+interval '10 minutes',$5)")
+        .bind(hash(oauth_state.secret())).bind(hash(&browser)).bind(nonce.secret()).bind(verifier.secret()).bind(return_to)
         .execute(&state.store.pool).await.map_err(internal)?;
     let mut response = private(Redirect::to(url.as_str()).into_response());
     set_cookie(
@@ -385,15 +510,21 @@ async fn consume_attempt(
     store: &Store,
     oauth_state: &str,
     browser: &str,
-) -> Result<(String, String), AuthError> {
+) -> Result<(String, String, Option<String>), AuthError> {
     let mut tx = store.pool.begin().await.map_err(internal)?;
-    let attempt = sqlx::query_as::<_, (String, String)>("DELETE FROM login_attempts WHERE state_hash=$1 AND browser_hash=$2 AND expires_at>now() RETURNING nonce,pkce_verifier")
+    let attempt = sqlx::query_as::<_, (String, String, Option<String>)>("DELETE FROM oidc_login_attempts WHERE state_hash=$1 AND browser_hash=$2 AND expires_at>now() RETURNING nonce,pkce_verifier,return_to")
         .bind(hash(oauth_state)).bind(hash(browser)).fetch_optional(&mut *tx).await.map_err(internal)?;
     // Commit before ANY token endpoint request: replay is impossible even if exchange fails.
     tx.commit().await.map_err(internal)?;
     attempt.ok_or_else(invalid)
 }
 
+/** A display name worth showing: trimmed, 1–200 characters, no control characters; anything else is dropped. */
+pub(crate) fn display_name(raw: &str) -> Option<String> {
+    let name = raw.trim();
+    (!name.is_empty() && name.chars().count() <= 200 && !name.chars().any(char::is_control))
+        .then(|| name.to_owned())
+}
 async fn callback(
     State(state): State<IdentityState>,
     headers: HeaderMap,
@@ -408,7 +539,8 @@ async fn callback(
         return Err(invalid());
     }
     let browser = cookie(&headers, BROWSER)?.ok_or_else(invalid)?;
-    let (nonce, verifier) = consume_attempt(&state.store, &query.state, &browser).await?;
+    let (nonce, verifier, return_to) =
+        consume_attempt(&state.store, &query.state, &browser).await?;
     if query.error.is_some() {
         return Err(invalid());
     }
@@ -446,30 +578,61 @@ async fn callback(
             !email.is_empty()
                 && email.len() <= 320
                 && email.contains('@')
-                && !email.chars().any(char::is_whitespace)
+                && !email.chars().any(|c| c.is_whitespace() || c.is_control())
         })
         .ok_or_else(invalid)?;
     let subject = claims.subject().as_str();
-    if subject.is_empty() {
+    if subject.is_empty() || subject.len() > 2048 || subject.chars().any(char::is_control) {
         return Err(invalid());
     }
-    let user_id = resolve_identity(
+    let groups = claims
+        .additional_claims()
+        .groups(&provider.config.groups_claim)
+        .ok_or(AuthError(StatusCode::FORBIDDEN))?;
+    let user_id = match resolve_identity(
         &state.store,
         provider.config.issuer.as_str(),
         subject,
         &email,
+        &groups,
     )
-    .await?;
+    .await
+    {
+        Ok(id) => id,
+        Err(AuthError(status)) if status == StatusCode::FORBIDDEN && wants_html(&headers) => {
+            return denied_browser_callback(&state, &headers, provider.config.secure_cookies).await;
+        }
+        Err(error) => return Err(error),
+    };
+    // Presentation only: the verified token's display name (or none) replaces the stored one.
+    let display_name = claims
+        .name()
+        .and_then(|name| name.get(None))
+        .and_then(|name| display_name(name.as_str()));
+    sqlx::query("UPDATE users SET display_name=$2 WHERE id=$1 AND cleaned_at IS NULL AND display_name IS DISTINCT FROM $2")
+        .bind(user_id)
+        .bind(display_name)
+        .execute(&state.store.pool)
+        .await
+        .map_err(internal)?;
     // Upstream access/refresh tokens are never persisted or forwarded.
     drop(tokens);
     let session = random_token();
     let csrf = random_token();
-    let inserted = sqlx::query("INSERT INTO browser_sessions(token_hash,user_id,csrf_hash,expires_at) SELECT $1,id,$3,now()+interval '12 hours' FROM users WHERE id=$2 AND disabled_at IS NULL")
-        .bind(hash(&session)).bind(user_id).bind(hash(&csrf)).execute(&state.store.pool).await.map_err(internal)?;
+    let inserted = sqlx::query("INSERT INTO browser_sessions(token_hash,user_id,csrf_hash,expires_at,verified_email) SELECT $1,id,$3,now()+interval '12 hours',$4 FROM users WHERE id=$2 AND disabled_at IS NULL AND cleaned_at IS NULL AND EXISTS(SELECT 1 FROM effective_platform_roles p WHERE p.user_id=users.id)")
+        .bind(hash(&session)).bind(user_id).bind(hash(&csrf)).bind(&email).execute(&state.store.pool).await.map_err(internal)?;
     if inserted.rows_affected() != 1 {
+        if wants_html(&headers) {
+            return denied_browser_callback(&state, &headers, provider.config.secure_cookies).await;
+        }
         return Err(AuthError(StatusCode::UNAUTHORIZED));
     }
-    let mut response = private(Redirect::to("/").into_response());
+    // Validated again on the way out; anything else lands on "/" (Home).
+    let target = return_to
+        .as_deref()
+        .and_then(safe_return_path)
+        .unwrap_or_else(|| "/".into());
+    let mut response = private(Redirect::to(&target).into_response());
     set_cookie(
         &mut response,
         SESSION,
@@ -511,71 +674,106 @@ async fn resolve_identity(
     issuer: &str,
     subject: &str,
     email: &str,
+    groups: &[String],
 ) -> Result<Uuid, AuthError> {
     let email = email.to_lowercase();
     let mut tx = store.pool.begin().await.map_err(internal)?;
-    // Serialize identical subjects and case-insensitive emails, including first-login races.
+    lifecycle::lock(&mut tx).await.map_err(internal)?;
     advisory_lock(&mut tx, &format!("oidc:{}:{issuer}{subject}", issuer.len())).await?;
-    let existing = sqlx::query_as::<_, (Uuid, bool)>("SELECT u.id,u.disabled_at IS NULL FROM oidc_identities i JOIN users u ON u.id=i.user_id WHERE i.issuer=$1 AND i.subject=$2 FOR UPDATE OF u")
-        .bind(issuer).bind(subject).fetch_optional(&mut *tx).await.map_err(internal)?;
-    if let Some((id, active)) = existing {
-        if !active {
-            return Err(AuthError(StatusCode::UNAUTHORIZED));
+    let existing = sqlx::query_as::<_, (Uuid, bool, bool, Option<String>)>(
+        "SELECT u.id,u.cleaned_at IS NOT NULL,coalesce(u.cleanup_due_at<=now(),false),u.disable_reason FROM oidc_identities i JOIN users u ON u.id=i.user_id WHERE i.issuer=$1 AND i.subject=$2 FOR UPDATE OF u",
+    ).bind(issuer).bind(subject).fetch_optional(&mut *tx).await.map_err(internal)?;
+    let mut rebind = false;
+    let existing_id = if let Some((id, cleaned, expired, reason)) = existing {
+        if cleaned || expired {
+            if !cleaned {
+                lifecycle::cleanup_user(&mut tx, id)
+                    .await
+                    .map_err(internal)?;
+            }
+            if reason.as_deref() != Some("entitlement_loss") {
+                tx.commit().await.map_err(internal)?;
+                return Err(AuthError(StatusCode::FORBIDDEN));
+            }
+            let reentitled: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM oidc_group_mappings WHERE issuer=$1 AND enabled AND target_kind='platform' AND group_value=ANY($2))")
+                .bind(issuer).bind(groups).fetch_one(&mut *tx).await.map_err(internal)?;
+            if !reentitled {
+                tx.commit().await.map_err(internal)?;
+                return Err(AuthError(StatusCode::FORBIDDEN));
+            }
+            rebind = true;
+            None
+        } else {
+            Some(id)
         }
-        tx.commit().await.map_err(internal)?;
-        return Ok(id);
-    }
-    advisory_lock(&mut tx, &format!("email:{email}")).await?;
-    let created = sqlx::query_scalar::<_, Uuid>(
-        "INSERT INTO users(id,email) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING id",
-    )
-    .bind(Uuid::new_v4())
-    .bind(&email)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(internal)?;
-    let id = if let Some(id) = created {
+    } else {
+        None
+    };
+    let id = if let Some(id) = existing_id {
         id
     } else {
-        let (id, active, allowed) = sqlx::query_as::<_, (Uuid, bool, bool)>("SELECT id,disabled_at IS NULL,oidc_link_allowed FROM users WHERE lower(email)=$1 FOR UPDATE")
-            .bind(&email).fetch_one(&mut *tx).await.map_err(internal)?;
-        if !active {
-            return Err(AuthError(StatusCode::UNAUTHORIZED));
-        }
-        let linked = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM oidc_identities WHERE user_id=$1)",
+        advisory_lock(&mut tx, &format!("email:{email}")).await?;
+        let created = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO users(id,email) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING id",
         )
-        .bind(id)
-        .fetch_one(&mut *tx)
+        .bind(Uuid::new_v4())
+        .bind(&email)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(internal)?;
-        if !allowed || linked {
-            return Err(AuthError(StatusCode::CONFLICT));
+        let id = if let Some(id) = created {
+            id
+        } else {
+            let (id, active, allowed) = sqlx::query_as::<_, (Uuid, bool, bool)>("SELECT id,disabled_at IS NULL AND cleaned_at IS NULL,oidc_link_allowed FROM users WHERE lower(email)=$1 FOR UPDATE")
+                .bind(&email).fetch_one(&mut *tx).await.map_err(internal)?;
+            if !active {
+                return Err(AuthError(StatusCode::FORBIDDEN));
+            }
+            let linked: bool =
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM oidc_identities WHERE user_id=$1)")
+                    .bind(id)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(internal)?;
+            if !allowed || linked {
+                return Err(AuthError(StatusCode::CONFLICT));
+            }
+            sqlx::query("UPDATE users SET oidc_link_allowed=false WHERE id=$1")
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .map_err(internal)?;
+            id
+        };
+        if rebind {
+            sqlx::query("UPDATE oidc_identities SET user_id=$3 WHERE issuer=$1 AND subject=$2")
+                .bind(issuer)
+                .bind(subject)
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .map_err(internal)?;
+            sqlx::query("INSERT INTO audit_events(id,actor_user_id,action,resource_type,resource_id) VALUES($1,$2,'identity.rebound','user',$2)")
+                .bind(Uuid::new_v4()).bind(id).execute(&mut *tx).await.map_err(internal)?;
+        } else {
+            sqlx::query("INSERT INTO oidc_identities(issuer,subject,user_id) VALUES($1,$2,$3)")
+                .bind(issuer)
+                .bind(subject)
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .map_err(internal)?;
         }
-        sqlx::query("UPDATE users SET oidc_link_allowed=false WHERE id=$1")
-            .bind(id)
-            .execute(&mut *tx)
-            .await
-            .map_err(internal)?;
         id
     };
-    sqlx::query("INSERT INTO oidc_identities(issuer,subject,user_id) VALUES($1,$2,$3)")
-        .bind(issuer)
-        .bind(subject)
-        .bind(id)
-        .execute(&mut *tx)
+    let active = lifecycle::synchronize_groups(&mut tx, id, issuer, groups)
         .await
-        .map_err(|error| {
-            if error
-                .as_database_error()
-                .is_some_and(|error| error.is_unique_violation())
-            {
-                AuthError(StatusCode::CONFLICT)
-            } else {
-                internal(error)
-            }
-        })?;
+        .map_err(internal)?;
+    // Entitlement loss MUST commit session/key revocation before returning the 403.
     tx.commit().await.map_err(internal)?;
+    if !active {
+        return Err(AuthError(StatusCode::FORBIDDEN));
+    }
     Ok(id)
 }
 
@@ -592,13 +790,14 @@ async fn verify_session(
         .map_err(|_| AuthError(StatusCode::UNAUTHORIZED))?
         .ok_or(AuthError(StatusCode::UNAUTHORIZED))?;
     let token_hash = hash(&token);
-    let row = sqlx::query_as::<_, (Uuid, String, bool, Vec<u8>)>("SELECT u.id,u.email,u.platform_admin,s.csrf_hash FROM browser_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>now() AND u.disabled_at IS NULL")
+    let row = sqlx::query_as::<_, (Uuid, String, String, Vec<u8>)>("SELECT u.id,s.verified_email,p.role,s.csrf_hash FROM browser_sessions s JOIN users u ON u.id=s.user_id JOIN effective_platform_roles p ON p.user_id=u.id WHERE s.token_hash=$1 AND s.verified_email IS NOT NULL AND s.revoked_at IS NULL AND s.expires_at>now() AND u.disabled_at IS NULL AND u.cleaned_at IS NULL")
         .bind(&token_hash).fetch_optional(&state.store.pool).await.map_err(internal)?.ok_or(AuthError(StatusCode::UNAUTHORIZED))?;
     Ok(VerifiedSession {
         principal: BrowserPrincipal {
             user_id: row.0,
             email: row.1,
-            platform_admin: row.2,
+            platform_admin: row.2 == "admin",
+            platform_auditor: matches!(row.2.as_str(), "admin" | "auditor"),
         },
         token_hash,
         csrf_hash: row.3,
@@ -653,6 +852,39 @@ pub async fn require_session(
     }
     request.extensions_mut().insert(session.principal);
     private(next.run(request).await)
+}
+
+fn wants_html(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|h| h.to_str().ok())
+        .is_some_and(|h| {
+            h.split(',')
+                .any(|part| part.trim().split(';').next() == Some("text/html"))
+        })
+}
+
+// Only called after nonce-bound signature verification and a live access denial.
+// Do not turn malformed/unverified callbacks into a cross-site logout primitive.
+async fn denied_browser_callback(
+    state: &IdentityState,
+    headers: &HeaderMap,
+    secure: bool,
+) -> Result<Response, AuthError> {
+    if let Some(token) = cookie(headers, SESSION)? {
+        sqlx::query(
+            "UPDATE browser_sessions SET revoked_at=coalesce(revoked_at,now()) WHERE token_hash=$1",
+        )
+        .bind(hash(&token))
+        .execute(&state.store.pool)
+        .await
+        .map_err(internal)?;
+    }
+    let mut response = private(Redirect::to("/?auth_error=access_denied").into_response());
+    set_cookie(&mut response, SESSION, "", 0, secure, true);
+    set_cookie(&mut response, CSRF, "", 0, secure, false);
+    set_cookie(&mut response, BROWSER, "", 0, secure, true);
+    Ok(response)
 }
 
 async fn logout(

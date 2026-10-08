@@ -55,6 +55,7 @@ impl ProviderAdapter for AnthropicAdapter {
     }
     async fn execute(&self, target: &Deployment, request: ChatRequest) -> Result<ProviderOutput> {
         if target.provider != "anthropic"
+            || target.credential_ref == "none"
             || target.endpoint.is_some()
             || target.region.as_deref().is_some_and(|v| !v.is_empty())
         {
@@ -170,7 +171,13 @@ fn finish(value: &Value) -> Result<FinishReason> {
         _ => Err(InferenceError::InvalidUpstream),
     }
 }
+/// Structural failure still fails, but a valid usage object is kept as evidence.
 fn decode(value: &Value) -> Result<ChatResponse> {
+    crate::inference::evidence::preserve(decode_shape(value), || {
+        value["usage"].is_object().then(|| usage(&value["usage"]))
+    })
+}
+fn decode_shape(value: &Value) -> Result<ChatResponse> {
     fields(
         value,
         &[
@@ -230,6 +237,7 @@ fn decode(value: &Value) -> Result<ChatResponse> {
 struct State {
     started: bool,
     finished: bool,
+    done: bool,
     active: Option<(u64, bool)>,
     blocks: u64,
     tools: u32,
@@ -238,6 +246,9 @@ struct State {
 }
 impl State {
     fn push(&mut self, value: Value) -> Result<Vec<ChatEvent>> {
+        if self.done {
+            return Err(InferenceError::InvalidUpstream);
+        }
         let mut events = vec![];
         match value["type"].as_str() {
             Some("ping") => {}
@@ -265,6 +276,10 @@ impl State {
                 }
                 self.started = true;
                 self.usage = usage(&message["usage"])?;
+                // Start counts are preliminary; only cumulative message_delta usage
+                // is evidence of generated output. Do not settle a missing final
+                // output count using the usual start-event zero.
+                self.usage.output_tokens = None;
             }
             Some("content_block_start")
                 if self.started && !self.finished && self.active.is_none() =>
@@ -375,16 +390,14 @@ impl State {
             }
             Some("message_delta") if self.started && !self.finished && self.active.is_none() => {
                 fields(&value["delta"], &["stop_reason", "stop_sequence"])?;
-                self.finished = true;
-                let u = usage(&value["usage"])?;
-                if u.input_tokens.is_some() {
-                    self.usage.input_tokens = u.input_tokens;
+                self.usage = super::metering::merge(self.usage, usage(&value["usage"])?)?;
+                if !value["delta"]["stop_reason"].is_null() {
+                    self.finished = true;
+                    events.push(ChatEvent::Finish(finish(&value["delta"]["stop_reason"])?));
                 }
-                // message_start output_tokens is an intermediate count, not final usage.
-                self.usage.output_tokens = u.output_tokens;
-                events.push(ChatEvent::Finish(finish(&value["delta"]["stop_reason"])?));
             }
             Some("message_stop") if self.finished => {
+                self.done = true;
                 events.push(ChatEvent::Usage(self.usage));
                 events.push(ChatEvent::Done);
             }

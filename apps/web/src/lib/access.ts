@@ -1,20 +1,26 @@
-import type { Organization, Workspace } from "./api";
-
-type Access = Pick<Organization | Workspace, "role" | "membership_role" | "authority_source">;
-const title = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
-
-export function authorityLabel(scope: Access): string {
-  if (scope.authority_source === "personal") return "Personal owner · private";
-  if (scope.authority_source === "platform" || scope.role === "operator") return "Platform administration · inherited";
-  if (scope.authority_source === "organization") return "Organization administration · inherited";
-  return `${title(scope.role)} · ${scope.authority_source === "direct" ? "direct membership" : "effective access"}`;
+import type { Workspace } from "./api";
+import { kindLabels, workspaceRoleLabels } from "./people";
+/**
+ * The switcher/Home subtitle: kind and the caller's role only ("Team · Owner"), never the
+ * membership source (that belongs in Settings › Members). Personal workspaces are "Private".
+ * The Workspace portal lists memberships only, so a shared workspace without a role is never
+ * presented as a membership.
+ */
+export function authorityLabel(workspace: Workspace) {
+  if (workspace.kind === "personal") return "Private";
+  return workspace.role ? `${kindLabels[workspace.kind]} · ${workspaceRoleLabels[workspace.role]}` : kindLabels[workspace.kind];
 }
-export function membershipLabel(scope: Access): string {
-  if (scope.membership_role === undefined) return "Membership not reported";
-  return scope.membership_role === null ? "No direct membership" : title(scope.membership_role);
+export function ownKeyHelp(workspace: Workspace) {
+  return workspace.kind === "personal" ? "Only the owner can issue keys in a private personal workspace." : "You aren't a member, so you can only create keys for service accounts.";
 }
-export function ownKeyHelp(workspace: Workspace): string {
-  return workspace.own_key_denial_reason === "organization_membership_required"
-    ? "A human key requires active organization membership. Platform administration alone does not authorize one."
-    : "A human key requires direct active membership in this shared workspace, not just inherited administration. Ask an authorized administrator to manage membership, or use an eligible service account.";
+/** Optional capabilities newer gateways advertise; older ones omit them. */
+type Extra = { rename?: boolean; manage_settings?: boolean; view_members?: boolean };
+/**
+ * Rename is never inferred for Personal (its name is fixed). Shared workspaces use the explicit
+ * `rename`/`manage_settings` capability when the gateway serves one, else `manage_policy`.
+ */
+export function canRenameWorkspace(workspace: Workspace) {
+  if (workspace.kind === "personal") return false;
+  const extra = workspace.capabilities as Workspace["capabilities"] & Extra;
+  return extra.rename ?? extra.manage_settings ?? workspace.capabilities.manage_policy;
 }

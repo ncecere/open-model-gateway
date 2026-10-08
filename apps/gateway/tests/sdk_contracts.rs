@@ -34,6 +34,8 @@ impl ProviderAdapter for Fixture {
         let usage = Usage {
             input_tokens: Some(3),
             output_tokens: Some(4),
+            billing: None,
+            ..Default::default()
         };
         if request.stream {
             Ok(ProviderOutput::Stream(Box::pin(
@@ -57,7 +59,7 @@ impl ProviderAdapter for Fixture {
         }
     }
 }
-#[sqlx::test]
+#[sqlx::test(migrations = "./enterprise_migrations")]
 async fn real_client_sdks_accept_all_three_protocols(pool: sqlx::PgPool) {
     let store = Store::new(pool.clone());
     let keys = bootstrap::seed(&store, Environment::Development)
@@ -68,6 +70,12 @@ async fn real_client_sdks_accept_all_three_protocols(pool: sqlx::PgPool) {
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::query(
+        "UPDATE models SET supported_protocols=ARRAY['chat_completions','responses','messages']",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::query("UPDATE deployments SET enabled=true")
         .execute(&pool)
         .await

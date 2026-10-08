@@ -1,105 +1,39 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { groupedInteger } from "./scope-limits";
+import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactNode } from "react";
-import { ApiError, type Session, type Organization, type Workspace } from "../lib/api";
-import { ActionProvider, Button, FormField, Input, Panel, Heading, StatCard, Table } from "./ui";
-import { Costs, Governance, PriceVersions, ModelRoutingPanel, DeploymentRoutingPanel } from "../pages/governance";
+import { ApiError } from "../lib/api";
+import { Button, FormField, Input, Panel, Heading, StatCard, Table } from "./ui";
+import { Costs, Governance, PriceVersions, ModelRoutingPanel, DeploymentRoutingPanel, CacheAccounting, PlatformPolicies } from "../pages/governance";
 import { AppShell, Main, Sidebar, SidebarContent, SidebarItem, SidebarNav, SidebarSection, TopBar } from "./ui/app-shell/app-shell";
 import { TooltipProvider } from "./ui/tooltip/tooltip";
-
-const org: Organization = { id: "org", name: "Acme", slug: "acme", role: "member" };
-const workspace: Workspace = { id: "ws", organization_id: "org", name: "Team", kind: "team", role: "member" };
-const session: Session = { user: { id: "me", email: "me@example.org", platform_admin: false }, organizations: [org], workspaces: [workspace] };
-const clients: QueryClient[] = [];
-function render(node: ReactNode, entries: [string, unknown][] = [], errors: [string, Error][] = []) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, retryOnMount: false, staleTime: Infinity } } }); clients.push(client);
-  for (const [path, data] of entries) client.setQueryData(["api", path], data);
-  for (const [path, error] of errors) client.getQueryCache().build(client, { queryKey: ["api", path] }).setState({ status: "error", error, fetchStatus: "idle" });
-  return renderToStaticMarkup(<QueryClientProvider client={client}><ActionProvider>{node}</ActionProvider></QueryClientProvider>);
-}
-afterEach(() => { for (const client of clients) client.clear(); clients.length = 0; });
-describe("governance screen rendering", () => {
-  it("shows a member's workspace policy read-only without reading organization policy", () => {
-    const html = render(<Governance session={session} organization={org} workspace={workspace} />, [["/api/v1/workspaces/ws/policy", { policy: { requests_per_minute: 20, tokens_per_minute: null, concurrent_requests: null, monthly_budget_microusd: "9007199254740993" }, ceiling: { requests_per_minute: null, tokens_per_minute: null, concurrent_requests: null, monthly_budget_microusd: null } }]]);
-    expect(html).toContain("Read-only"); expect(html).toContain("$9,007,199,254.740993");
-    expect(html).not.toContain("Edit workspace policy"); expect(html).not.toContain("Organization limits</h2>");
-    expect(html).toContain("full upstream input ceiling");
+import { admin, auditor, session, team, member, policy, report, markup, testClient } from "../lib/test-fixtures";
+import { AccountingReport } from "../pages/usage/accounting";
+import { usagePeriod, usageQuery } from "../lib/usage";
+import { budgetAmountError, draftLimits, draftOf, limitsBody, limitsOf, rateError } from "../lib/limits";
+import { ScopeLimits } from "./scope-limits";
+const policyResponse = { policy: { ...policy, requests_per_minute: 20, monthly_budget_microusd: "9007199254740993" }, effective: { ...policy, requests_per_minute: 20, monthly_budget_microusd: "9007199254740993" }, provenance: { platform_source: "type_default", platform: policy, local: policy, key: null } };
+describe("enterprise financial rendering", () => {
+  it("shows local policy read-only for members without fetching installation headroom", () => { const client = testClient(), html = markup(<Governance session={session} workspace={member} />, [["/api/v1/workspaces/team/policy", policyResponse]], client); expect(html).toContain("Only workspace admins change these limits."); expect(html).not.toContain(">Read-only<"); expect(html).toContain("$9,007,199,254.740993"); expect(client.getQueryCache().getAll().some(q => String(q.queryKey).includes("installation"))).toBe(false); client.clear(); });
+  it("shows limit inputs with group separators, as the read-only cells do (review #45)", () => {
+    const seeded: [string, unknown][] = [["/api/v1/platform/installation/policy", { policy }], ...["personal", "team", "project"].map(k => [`/api/v1/platform/workspace-types/${k}/policy`, { policy: { ...policy, tokens_per_minute: k === "team" ? 100000 : null } }] as [string, unknown])];
+    const html = markup(<PlatformPolicies session={admin} />, seeded);
+    expect(html).toContain('value="100,000"'); expect(html).not.toContain('value="100000"');
+    expect(groupedInteger("100000")).toBe("100,000"); expect(groupedInteger("12a")).toBe("12a"); expect(groupedInteger("")).toBe("");
   });
-  it("offers organization policy edits even without a selected workspace", () => {
-    const html = render(<Governance session={session} organization={{ ...org, role: "admin" }} />, [["/api/v1/orgs/org/policy", { policy: { requests_per_minute: null, tokens_per_minute: null, concurrent_requests: null, monthly_budget_microusd: null } }]]);
-    expect(html).toContain("Edit additional organization limits"); expect(html).not.toContain("No workspace selected");
-    expect(html).toContain("Clearing these fields never removes a platform maximum");
-  });
-  it("uses pill tabs and opens only workspace limits, not a stack of organization and key panels", () => {
-    const html = render(<Governance session={session} organization={{ ...org, role: "admin" }} workspace={workspace} />, [["/api/v1/workspaces/ws/policy", { policy: { requests_per_minute: 20, tokens_per_minute: null, concurrent_requests: null, monthly_budget_microusd: "10000000" }, ceiling: { requests_per_minute: 120, tokens_per_minute: null, concurrent_requests: null, monthly_budget_microusd: "50000000" } }]]);
-    expect(html).toContain('aria-label="Limit scope"'); expect(html).toContain('data-variant="pills"');
-    expect(html).toContain('aria-label="Workspace policy details"');
-    expect(html).toContain("Organization</button>"); expect(html).toContain("API keys</button>");
-    expect(html).toContain("Effective limits"); expect(html).toContain("$10.00");
-    expect(html).not.toContain("$50.00"); expect(html).not.toContain("Key policy selection");
-    expect(html).not.toContain("Edit additional organization limits");
-    const member = render(<Governance session={session} organization={org} workspace={workspace} />);
-    expect(member).not.toContain("Organization</button>");
-  });
-  it("does not invent effective caps when inherited limits are unavailable", () => {
-    const html = render(<Governance session={session} organization={org} workspace={workspace} />, [["/api/v1/workspaces/ws/policy", { policy: { requests_per_minute: null, tokens_per_minute: null, concurrent_requests: null, monthly_budget_microusd: null } }]]);
-    expect(html).toContain("Effective limits unavailable"); expect(html).not.toContain("No configured cap");
-  });
-  it("does not fabricate zero costs while loading or on forbidden reads", () => {
-    const props = { session, organization: org, workspace };
-    const loading = render(<Costs {...props} />);
-    expect(loading).toContain("Loading cost summary"); expect(loading).not.toContain("$0");
-    const denied = render(<Costs {...props} />, [], [["/api/v1/workspaces/ws/cost-summary", new ApiError(403, "forbidden", "No access")]]);
-    expect(denied).toContain("Access denied"); expect(denied).not.toContain("$0");
-  });
-  it("separates known estimates from held and unknown usage without member reconcile controls", () => {
-    const entries: [string, unknown][] = [
-      ["/api/v1/workspaces/ws/cost-summary", { currency: "USD", known_cost_microusd: "1234567", held_microusd: "9999999", unknown_cost_requests: 2, requests: 10 }],
-      ["/api/v1/workspaces/ws/costs?limit=100&offset=0", { data: [{ id: "execution", state: "failed", public_model: "model", provider: "openai", started_at: "2026-01-01T00:00:00Z", input_tokens: null, output_tokens: null, price_id: "price", cost_microusd: null, reserved_microusd: "9999999", cost_status: "unknown" }] }],
-    ];
-    const html = render(<Costs session={session} organization={org} workspace={workspace} />, entries);
-    expect(html).toContain("Only activity from your own human keys"); expect(html).toContain("Estimates, not vendor invoices");
-    expect(html).toContain("$1.234567"); expect(html).toContain("$9.999999"); expect(html).toContain("Unknown / Unknown");
-    expect(html).not.toContain("Reconcile</button>");
-    const operator = render(<Costs session={{ ...session, user: { ...session.user, platform_admin: true } }} organization={org} workspace={workspace} />, entries);
-    expect(operator).toContain("Reconcile</button>");
-  });
-  it("shows immutable paginated price history with explicit publication capability", () => {
-    const path = "/api/v1/platform/deployments/deployment/prices";
-    const entries: [string, unknown][] = [[`${path}?limit=100&offset=0`, { data: [{ id: "price", input_microusd_per_million: "1000000", output_microusd_per_million: "2000000", input_token_limit: 128000, output_token_limit: 4096, created_at: "2026-01-01T00:00:00Z" }] }]];
-    const html = render(<PriceVersions path={path} writable={false} />, entries);
-    expect(html).toContain("Read-only access"); expect(html).toContain("$1.00"); expect(html).toContain("Page 1");
-    expect(html).not.toContain("Publish price version</button>"); expect(html).not.toContain("Delete");
-    expect(render(<PriceVersions path={path} writable />, entries)).toContain("Publish price version</button>");
-  });
-  it("renders required residency, read-only assertions and unknown passive health honestly", () => {
-    const path = "/api/v1/platform/deployments/d/routing";
-    const html = render(<DeploymentRoutingPanel path={path} operator={false} />, [[path, { routing: { priority: 0, weight: 1, residency: "us-east" }, health: { consecutive_failures: 0, open_until: null } }]]);
-    expect(html).toContain("operator-managed (read-only)"); expect(html).toContain("Unknown · no recorded observation");
-    expect(html).not.toContain("Healthy");
-    const modelPath = "/api/v1/platform/models/m/routing";
-    const model = render(<ModelRoutingPanel path={modelPath} />, [[modelPath, { policy: { strategy: "weighted", max_attempts: 3, allow_ambiguous_failover: true, failure_threshold: 3, cooldown_seconds: 30, required_residency: "us-east" } }]]);
-    expect(model).toContain("duplicate charges possible"); expect(model).toContain("Required residency"); expect(model).toContain("us-east");
-  });
+  it("separates installation ceilings from live type defaults in one limits table", () => { const seeded: [string, unknown][] = [["/api/v1/platform/installation/policy", { policy: { ...policy, monthly_budget_microusd: "9007199254740993" } }], ...["personal", "team", "project"].map(k => [`/api/v1/platform/workspace-types/${k}/policy`, { policy: { ...policy, requests_per_minute: k === "team" ? 60 : null } }] as [string, unknown])]; const html = markup(<PlatformPolicies session={admin} />, seeded); for (const label of ["Installation ceiling", "Personal default", "Team default", "Project default", "Requests per minute", "Tokens per minute", "Monthly budget", "Resets monthly on the 1st at 00:00 UTC", "Add budget"]) expect(html).toContain(label); expect(html).toContain('value="9007199254.740993"'); expect(html).toContain('value="60"'); expect(html).not.toContain("Local restrictions can only tighten"); expect(html).not.toContain("Key policy"); const read = markup(<PlatformPolicies session={auditor} />, seeded); expect(read).not.toContain(">Read-only<"); expect(read).not.toContain("<input"); expect(read).toContain("$9,007,199,254.740993"); expect(read).not.toContain("<input"); expect(read).not.toContain("Save limits"); });
+  it("validates limit inputs and converts stacked budgets exactly", () => { expect(rateError("")).toBeUndefined(); expect(rateError("1e3")).toBeDefined(); expect(rateError("0")).toBeDefined(); expect(rateError("2147483648")).toBeDefined(); expect(budgetAmountError("")).toContain("remove"); expect(budgetAmountError("0")).toContain("more than"); expect(budgetAmountError("1.1234567")).toBeDefined(); const draft = { requests_per_minute: " 5 ", tokens_per_minute: "", concurrent_requests: "3", budgets: [{ key: "a", period: "month" as const, amount: "9007199254.740993" }, { key: "b", period: "day" as const, amount: "1.5" }] }; expect(limitsBody(draftLimits(draft))).toEqual({ requests_per_minute: 5, tokens_per_minute: null, concurrent_requests: 3, budgets: [{ period: "day", amount_microusd: "1500000" }, { period: "month", amount_microusd: "9007199254740993" }] }); expect(draftOf(limitsOf({ ...policy, monthly_budget_microusd: "1500000" })).budgets).toMatchObject([{ period: "month", amount: "1.50" }]); expect(draftOf(limitsOf({ ...policy, monthly_budget_microusd: "1", budgets: [{ period: "lifetime", amount_microusd: "1000000" }, { period: "week", amount_microusd: "2500000" }] })).budgets.map(b => [b.period, b.amount])).toEqual([["week", "2.50"], ["lifetime", "1.00"]]); });
+  it("humanizes cost-report health in the accounting details", () => { const html = markup(<AccountingReport report={report} />); expect(html).toContain("Unknown-cost attempts"); expect(html).toContain("Attempts missing a reservation"); expect(html).not.toContain("missing reservation attempts"); });
+  it("edits workspace caps in one table without a key picker or key inventories", () => { const client = testClient(), html = markup(<Governance session={session} workspace={team} />, [["/api/v1/workspaces/team/policy", policyResponse]], client); expect(html).not.toContain('aria-label="Limit scope"'); expect(html).not.toContain("Choose a key"); expect(html).toContain("Effective"); expect(html).toContain("This workspace"); expect(html).toContain("Inherited"); expect(html).toContain("Monthly budget"); expect(html).toContain("Effective access"); expect(client.getQueryCache().getAll().some(q => String(q.queryKey).includes("/keys"))).toBe(false); client.clear(); });
+  it("does not invent composed caps when provenance is absent", () => { const html = markup(<ScopeLimits mode="local" path="/api/v1/workspaces/team/policy" writable={false} />, [["/api/v1/workspaces/team/policy", { policy }]]); expect(html).toContain("Limit sources are unavailable"); expect(html).not.toContain("Effective</th>"); });
+  it("never fabricates zero costs while loading or denied", () => { const page = <Costs session={session} workspace={team} />, path = `/api/v1/workspaces/team/usage/overview?${usageQuery(usagePeriod({}))}`; const html = markup(page); expect(html).toContain("Loading usage"); expect(html).not.toContain("$0"); const client = testClient(); client.getQueryCache().build(client, { queryKey: ["api", undefined, path] }).setState({ status: "error", error: new ApiError(403, "denied", "No access"), fetchStatus: "idle" }); const denied = markup(page, [], client); expect(denied).toContain("Access denied"); expect(denied).not.toContain("$0"); client.clear(); });
+  it("keeps estimates, active holds, null usage and legacy charges distinct", () => { expect(markup(<Costs session={session} workspace={member} />)).toContain("Your usage in Product"); const html = markup(<AccountingReport report={report} />); expect(html).toContain("$9,007,199,254.740993"); expect(html).toContain("Unknown"); expect(html).toContain("Legacy pinned pricing"); expect(html).toContain("incomplete billing"); expect(html).not.toContain("Reconcile</button>"); });
+  it("renders pricing-v3 lines read-only from exact server display strings", () => { const path = "/api/v1/platform/deployments/d/prices", entries: [string, unknown][] = [[`${path}?limit=50&offset=0`, { data: [{ id: "v3", deployment_id: "d", pricing_version: 3, cache_pricing: null, input_microusd_per_million: null, output_microusd_per_million: null, input_token_limit: 100, output_token_limit: 50, price_lines: [{ meter: "input_tokens", microusd_per_batch: "100000", batch: 1000000, unit_label: "/M tokens", sku_label: "Input" }, { meter: "output_images", microusd_per_batch: "20500", batch: 1, unit_label: "/image", sku_label: "Image", variant: "768" }, { meter: "search_units", not_applicable: true }], max_units: { output_images: "4" }, display_lines: ["$0.10/M input tokens", "$0.0205/image (768)", "Search units: not applicable"], display_summary: "", created_at: "2026-01-01T00:00:00Z" }] }]]; const html = markup(<PriceVersions path={path} writable={false} />, entries); expect(html).toContain("$0.10/M input tokens"); expect(html).toContain("$0.0205/image (768)"); expect(html).toContain("Not applicable: Search units"); expect(html).not.toContain("See price lines"); expect(html).not.toContain("Unknown"); });
+  it("shows immutable exact price versions with explicit publication capability", () => { const path = "/api/v1/platform/deployments/d/prices", entries: [string, unknown][] = [[`${path}?limit=50&offset=0`, { data: [{ id: "price", deployment_id: "d", pricing_version: 2, cache_pricing: { read: { status: "priced", microusd_per_million: "1" } }, input_microusd_per_million: "1000000", output_microusd_per_million: "2000000", input_token_limit: 128000, output_token_limit: 4096, created_at: "2026-01-01T00:00:00Z" }] }]]; const html = markup(<PriceVersions path={path} writable={false} />, entries); expect(html).toContain("$1/M input tokens"); expect(html).toContain("past usage keeps its price"); expect(html).not.toContain("Publish price version</button>"); expect(markup(<PriceVersions path={path} writable />, entries)).toContain("Publish price version"); });
+  it("uses read-only residency and unknown passive observations honestly", () => { const path = "/api/v1/platform/deployments/d/routing", html = markup(<DeploymentRoutingPanel path={path} operator={false} />, [[path, { routing: { priority: 0, weight: 1, residency: "us-east", failure_threshold: 3, cooldown_seconds: 30 }, health: { consecutive_failures: 0, open_until: null } }]]); expect(html).not.toContain("cannot change"); expect(html).toContain("us-east"); expect(html).not.toContain("<input"); expect(html).toContain("Unknown · no recorded observation"); expect(html).not.toContain("Healthy"); const mp = "/api/v1/platform/models/m/routing"; expect(markup(<ModelRoutingPanel path={mp} writable={false} />, [[mp, { policy: { strategy: "weighted", max_attempts: 3, allow_ambiguous_failover: true, required_residency: "us-east" } }]])).toContain("duplicate charges possible"); });
+  it("labels overlapping cache-write aggregates without treating missing counts as zero", () => { const html = markup(<CacheAccounting billing={null} components={null} />); expect(html).toContain("Cache writes (total of the three rows below)"); expect(html).toContain("never charged again"); expect(html).toContain("Unknown"); expect(html).not.toContain("$0.00"); expect(markup(<CacheAccounting billing={null} components={null} attempts="0" />)).toContain("—"); });
 });
 describe("vendored Bitop composition", () => {
-  it("marks rendered links disabled while keeping native button semantics", () => {
-    const link = renderToStaticMarkup(<Button render={<a href="#target" />} loading>Open</Button>);
-    expect(link).toContain('aria-disabled="true"'); expect(link).toContain('aria-busy="true"');
-    expect(link).not.toContain(' disabled=""');
-    const native = renderToStaticMarkup(<Button disabled>Save</Button>);
-    expect(native).toContain(' disabled=""'); expect(native).toContain('type="button"');
-  });
-  it("uses real accessible table/card/header/stat/form primitives", () => {
-    const html = renderToStaticMarkup(<><Heading title="Example" /><Panel title="Card"><StatCard label="Known" value="Unknown" /><Table label="Rows" rows={["row"]} rowKey={row => row} columns={[{ title: "Name", render: row => row }]} /><FormField label="Budget" description="US dollars" error="Invalid amount"><Input name="budget" defaultValue="bad" /></FormField></Panel></>);
-    expect(html).toContain("<caption"); expect(html).toContain('scope="col"');
-    // Bitop adds a keyboard-scroll region after measuring actual overflow in the browser.
-    expect(html).toContain('data-scroll=""'); expect(html).not.toContain('role="region"');
-    expect(html).toContain("<dl"); expect(html).toContain("<h1"); expect(html).toContain('aria-invalid="true"'); expect(html).toContain("Invalid amount");
-  });
-  it("renders a collapsible sidebar with skip target and labelled toggle", () => {
-    const html = renderToStaticMarkup(<TooltipProvider><AppShell sidebar={<Sidebar><SidebarContent><SidebarNav aria-label="Dashboard"><SidebarSection label="People"><SidebarItem label="Members" href="#members" current /></SidebarSection></SidebarNav></SidebarContent></Sidebar>} topbar={<TopBar />}><Main>Real content</Main></AppShell></TooltipProvider>);
-    expect(html).toContain('href="#main"'); expect(html).toContain('id="main"'); expect(html).toContain('aria-label="Collapse sidebar"'); expect(html).toContain('aria-current="page"'); expect(html).toContain("People");
-  });
+  it("marks rendered links disabled while preserving native button semantics", () => { const link = renderToStaticMarkup(<Button render={<a href="#target" />} loading>Open</Button>); expect(link).toContain('aria-disabled="true"'); expect(link).toContain('aria-busy="true"'); expect(link).not.toContain(' disabled=""'); const native = renderToStaticMarkup(<Button disabled>Save</Button>); expect(native).toContain(' disabled=""'); expect(native).toContain('type="button"'); });
+  it("uses accessible table/card/header/stat/form primitives", () => { const html = renderToStaticMarkup(<><Heading title="Example" /><Panel title="Card"><StatCard label="Known" value="Unknown" /><Table label="Rows" rows={["row"]} rowKey={r => r} columns={[{ title: "Name", render: r => r }]} /><FormField label="Budget" description="US dollars" error="Invalid amount"><Input name="budget" defaultValue="bad" /></FormField></Panel></>); expect(html).toContain("<caption"); expect(html).toContain('scope="col"'); expect(html).toContain('scope="row"'); expect(html).toContain("<dl"); expect(html).toContain("<h1"); expect(html).toContain('aria-invalid="true"'); });
+  it("renders a collapsible sidebar with skip target and labelled toggle", () => { const html = renderToStaticMarkup(<TooltipProvider><AppShell sidebar={<Sidebar><SidebarContent><SidebarNav aria-label="Dashboard"><SidebarSection label="People"><SidebarItem label="Members" href="#members" current /></SidebarSection></SidebarNav></SidebarContent></Sidebar>} topbar={<TopBar />}><Main>Real content</Main></AppShell></TooltipProvider>); expect(html).toContain('href="#main"'); expect(html).toContain('id="main"'); expect(html).toContain('aria-label="Collapse sidebar"'); expect(html).toContain('aria-current="page"'); expect(html).toContain("People"); });
 });

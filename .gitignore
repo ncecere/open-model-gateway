@@ -13,3 +13,9 @@ coverage/
 /image*.png
 /.local/
 __pycache__/
+
+# Local provider keys (never commit)
+ai.env
+
+# Local screenshots of third-party accounts (may contain account details)
+_images/openrouter/

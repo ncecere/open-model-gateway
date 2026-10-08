@@ -21,7 +21,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def request_body(protocol, model):
     if protocol == "chat":
-        return "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": "Reply with OK."}], "max_tokens": 8, "stream": False}
+        return "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": "Reply with OK."}], "max_completion_tokens": 8, "stream": False}
     if protocol == "responses":
         return "/v1/responses", {"model": model, "input": "Reply with OK.", "max_output_tokens": 8, "store": False, "stream": False}
     return "/v1/messages", {"model": model, "messages": [{"role": "user", "content": "Reply with OK."}], "max_tokens": 8, "stream": False}

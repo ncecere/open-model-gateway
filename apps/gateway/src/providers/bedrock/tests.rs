@@ -107,6 +107,7 @@ fn target() -> Deployment {
         credential_ref: "aws:default".into(),
         endpoint: None,
         region: Some("us-east-1".into()),
+        supported_protocols: vec!["chat_completions".into(), "messages".into()],
     }
 }
 fn message(role: Role, text: &str) -> Message {
@@ -628,4 +629,44 @@ fn document_numeric_roundtrip_and_invalid_usage() {
         )
         .is_err()
     );
+}
+
+#[tokio::test]
+async fn wire_missing_usage_never_becomes_sdk_zero_and_ttl_is_preserved() {
+    for missing in [
+        json!(null),
+        json!({}),
+        json!({"inputTokens":null,"outputTokens":0,"totalTokens":0}),
+    ] {
+        let mut body = complete(false);
+        body["usage"] = missing.clone();
+        let mock = Mock::serve(body, vec![], 200).await;
+        assert!(mock.adapter().execute(&target(), request()).await.is_err());
+        let mut e = events(false);
+        e.last_mut().unwrap().1["usage"] = missing;
+        let mock = Mock::serve(complete(false), wire(e), 200).await;
+        let mut r = request();
+        r.stream = true;
+        let ProviderOutput::Stream(stream) = mock.adapter().execute(&target(), r).await.unwrap()
+        else {
+            panic!()
+        };
+        let events: Vec<_> = stream.collect().await;
+        assert!(events.last().unwrap().is_err());
+        assert!(!events.iter().any(|e| matches!(e, Ok(ChatEvent::Done))));
+    }
+    let mut body = complete(false);
+    body["usage"] = json!({"inputTokens":3,"outputTokens":5,"totalTokens":38,"cacheReadInputTokens":10,"cacheWriteInputTokens":20,"cacheDetails":[{"ttl":"1h","inputTokens":12},{"ttl":"5m","inputTokens":8}]});
+    let mock = Mock::serve(body, vec![], 200).await;
+    let ProviderOutput::Complete(response) =
+        mock.adapter().execute(&target(), request()).await.unwrap()
+    else {
+        panic!()
+    };
+    let b = response.usage.billing.unwrap();
+    assert_eq!(response.usage.input_tokens, Some(3));
+    assert_eq!(b.total_input_tokens, Some(33));
+    assert_eq!(b.cache_write_1h_input_tokens, Some(12));
+    assert_eq!(b.cache_write_5m_input_tokens, Some(8));
+    assert_eq!(b.cache_write_default_input_tokens, Some(0));
 }

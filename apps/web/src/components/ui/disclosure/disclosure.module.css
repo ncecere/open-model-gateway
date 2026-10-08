@@ -1,0 +1,98 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow-ring);
+  background-color: var(--color-surface);
+}
+
+.trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--control-height-lg);
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--font-size-md);
+  text-align: start;
+  cursor: pointer;
+  transition: background-color var(--motion-duration-fast) var(--motion-ease-out);
+
+  @media (hover: hover) {
+    &:hover {
+      background-color: var(--color-surface-hover);
+    }
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 2px;
+  }
+
+  &[data-panel-open] {
+    border-end-start-radius: 0;
+    border-end-end-radius: 0;
+  }
+}
+
+.icon {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  color: var(--color-text-muted);
+  transition: transform var(--motion-duration-fast) var(--motion-ease-out);
+
+  .trigger[data-panel-open] & {
+    transform: rotate(90deg);
+  }
+}
+
+.title {
+  font-weight: var(--font-weight-medium);
+}
+
+.summary {
+  min-width: 0;
+  margin-inline-start: auto;
+  overflow: hidden;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel {
+  height: var(--collapsible-panel-height);
+  overflow: hidden;
+  transition: height var(--motion-duration-normal) var(--motion-ease-out);
+
+  &[hidden]:not([hidden="until-found"]) {
+    display: none;
+  }
+
+  &[data-starting-style],
+  &[data-ending-style] {
+    height: 0;
+  }
+}
+
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trigger,
+  .icon,
+  .panel {
+    transition: none;
+  }
+}

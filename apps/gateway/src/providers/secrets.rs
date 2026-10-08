@@ -30,6 +30,12 @@ impl EnvSecrets {
             allowed: names.into_iter().collect(),
         }
     }
+    /// Validate a reference without resolving or exposing its credential.
+    pub fn allows(&self, reference: &str) -> bool {
+        reference
+            .strip_prefix("env:")
+            .is_some_and(|name| self.allowed.contains(name))
+    }
 }
 impl SecretResolver for EnvSecrets {
     fn resolve(&self, reference: &str) -> Result<Secret, InferenceError> {

@@ -1,0 +1,79 @@
+/* API keys list and key page. Semantic tokens only. */
+.name {
+  display: block;
+  min-width: 0;
+}
+
+/* Revoked and expired keys read as inactive (the word in the Status column carries the meaning). */
+.name[data-status="revoked"],
+.name[data-status="expired"],
+.name[data-status="disabled"] {
+  color: var(--color-text-muted);
+}
+
+.usage {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 10rem;
+}
+
+.usage > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.extraBudget {
+  display: grid;
+  grid-template-columns: minmax(8rem, 12rem) minmax(8rem, 1fr) auto;
+  align-items: start;
+  gap: var(--space-3);
+}
+
+@media (max-width: 37.5rem) {
+  .extraBudget {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+}
+
+.rings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-6);
+}
+
+.settings {
+  display: grid;
+  gap: var(--space-4);
+}
+
+/* Create key: optional rate limits, three across on wide screens. */
+.rates {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: var(--space-3);
+  padding-block-start: var(--space-3);
+}
+
+/* Bulk actions bar (the list owns selection so revoked/expired rows can't be picked; same look as DataTable's). */
+.bulk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-3);
+  background-color: var(--color-primary-subtle);
+}
+
+.bulkCount {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-primary-subtle-text);
+}
+
+.bulkClear {
+  margin-inline-start: auto;
+}

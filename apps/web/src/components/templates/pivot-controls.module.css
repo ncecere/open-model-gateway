@@ -1,0 +1,30 @@
+/* PivotControls: one wrapping row of labelled selects; stacked on a phone. */
+.root {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+
+.field {
+  flex: 1 1 10rem;
+  min-width: 0;
+  max-width: 16rem;
+}
+
+.narrowField {
+  flex: 0 1 6rem;
+  min-width: 5rem;
+}
+
+@media (max-width: 37.5rem) {
+  .root {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .field,
+  .narrowField {
+    max-width: none;
+  }
+}

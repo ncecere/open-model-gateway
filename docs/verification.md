@@ -1,5 +1,27 @@
 # Verification
 
+## Single-enterprise rebuild — current evidence
+
+The organization-free rebuild uses fresh enterprise migrations. Existing installations and the legacy demo were not reset, migrated or reseeded. The current local demo is `gateway_enterprise_demo` on loopback PostgreSQL 54349, served by an explicitly verified restricted runtime role; 54339 is the separate disposable regression cluster.
+
+Current integrated validation passed formatting, strict workspace/all-target/all-feature Clippy, Rust build, **291 Rust checks including the separately invoked runtime ACL rollback probe**, frontend typecheck, **477 frontend tests**, isolated SPA build, container/staging helpers and the guarded runtime-provisioning tests. The served SPA is that verified 477-test build, promoted only after the gateway was stopped; prior builds are preserved privately.
+
+Fresh signed-OIDC browser passes exercised Admin, Auditor, Alex, Blair and unentitled accounts. Checks covered actual versus global membership, private credential boundaries, direct user details, own key rotation/revocation, service-account disable/non-resurrection, six-decimal policy values, zero-data CSV and desktop/390px navigation. Browser review found and drove fixes for pristine empty replacement creation, corrected-input validation retries, and unentitled callback UX. Parent retests confirmed price retry/publication with immutable prior versions, direct empty catalog replacement, readable deployment labels and friendly denied login with `/me` remaining 401. Pristine settings now refresh after a server-side reset without overwriting edited drafts (confirmed in the browser). A freshly issued inherited key returned 200 from `/v1/models`, 401 against `/api/v1/me`, and 401 after revocation; a browser session alone returned 401 for inference. The test-only Acceptance Project was disabled afterwards; its configuration endpoints then return 404. The all-blank replacement-policy path is covered by component and governance tests; its browser attempt was inconclusive because automation did not clear the numeric inputs.
+
+No paid/provider inference, production IdP changes, fabricated usage/ledger data, remote CI, container deployment, accessibility certification or production-readiness claim is implied. Browser evidence remains private under `.local/enterprise-rebuild/`.
+
+## Multimodal increment and OpenRouter (2026-10-08)
+
+Added Grounded-style model setup (Connections \u2192 Models with routes, readiness and pill-tab record pages), People/Records restyle, OpenRouter provider, OpenRouter-style v3 price lines with public-catalog import, and new workloads: `/v1/images/generations`, `/v1/audio/transcriptions`, `/v1/audio/speech`, `/v1/rerank`, `/v1/systemone`. Migrations 0002 and 0003 were applied explicitly to the fresh demo database only; runtime grants were reapplied and verified.
+
+Integrated gates: fmt, strict Clippy, **458 Rust checks** (disposable PostgreSQL, including the runtime ACL rollback probe), **572 frontend tests**, typecheck and isolated SPA build. Live, user-authorized, capped tests used cheap models through real adapters and the running gateway: OpenAI `gpt-6-luna` (Chat, Responses incl. opaque reasoning items), `gpt-image-1-mini`, `whisper-1`, `tts-1`; Anthropic `claude-haiku-5-5`; OpenRouter GLM 5.3 Flash, Nemotron embed/rerank, Clef Flash (System One), MAI-Voice-2-Flash. Recorded costs matched usage \u00d7 configured rates exactly; total live spend across runs was well under $0.05. Reports: `.local/enterprise-rebuild/{live-acceptance,openrouter-live,images-live,audio-live,multimodal-acceptance}-report*.md`.
+
+Known limits: OpenRouter images and transcription are mock-verified only (account has no purchased credit, upstream 402); OpenRouter `:free` models are blocked while the server data-collection policy is `deny`; provider-reported cost is stored as evidence, never the charge; video, realtime audio and asynchronous jobs remain unimplemented.
+
+## Archived pre-rebuild verification
+
+**Everything below describes the superseded multi-organization implementation and historical test runs. It is not current rebuild acceptance, and its old demo/migration reproduction commands must not be used as enterprise upgrade instructions.**
+
 ## Organization-settings sidebar regression
 
 Fixed Organization settings dropping the workspace navigation. Sidebar links and jump search now retain the selected workspace within the same organization; the main settings route, breadcrumbs, permissions, and data remain organization-scoped. Workspace context is revalidated against fresh session inventory, isolated by user/organization, and cleared on logout. Missing explicit scopes still do not fall back.

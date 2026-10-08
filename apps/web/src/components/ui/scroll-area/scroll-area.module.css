@@ -1,0 +1,80 @@
+.root {
+  --scroll-area-bar-size: 0.625rem;
+
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: inherit;
+
+  &[data-max-height] {
+    max-height: var(--scroll-area-max-height);
+  }
+}
+
+.viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: inherit;
+  border-radius: inherit;
+  overscroll-behavior: contain;
+
+  &:focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: -2px;
+  }
+}
+
+.content {
+  min-width: 100%;
+}
+
+.scrollbar {
+  display: flex;
+  padding: 0.125rem;
+  opacity: 0;
+  pointer-events: none;
+  touch-action: none;
+  user-select: none;
+  transition: opacity var(--motion-duration-normal) var(--motion-ease-out);
+
+  &[data-orientation="vertical"] {
+    width: var(--scroll-area-bar-size);
+  }
+
+  &[data-orientation="horizontal"] {
+    height: var(--scroll-area-bar-size);
+  }
+
+  &[data-hovering],
+  &[data-scrolling] {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  &[data-scrolling] {
+    transition-duration: 0ms;
+  }
+}
+
+/* The thumb uses --color-border-strong (>= 3:1 against surfaces). */
+.thumb {
+  flex: 1;
+  border-radius: var(--radius-full);
+  background-color: var(--color-border-strong);
+
+  &:hover {
+    background-color: var(--color-border-hover);
+  }
+}
+
+.corner {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scrollbar {
+    transition: none;
+  }
+}

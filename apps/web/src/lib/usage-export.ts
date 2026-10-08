@@ -3,9 +3,12 @@ import { ApiError, wsPath } from "./api";
 export const EXPORT_MAX_ROWS = 1000;
 export const EXPORT_MAX_BYTES = 10 * 1024 * 1024;
 /** One bounded page, never cached. No off-origin redirects or arbitrary download URLs. */
-export async function usageCsv(workspace: string, limit: number, offset: number, signal?: AbortSignal): Promise<Blob> {
+export async function usageCsv(workspace: string, limit: number, offset: number, signal?: AbortSignal, reportFilters?: string): Promise<Blob> {
   if (!Number.isInteger(limit) || limit < 1 || limit > EXPORT_MAX_ROWS || !Number.isInteger(offset) || offset < 0 || offset > 100000) throw new Error("Invalid export page.");
-  const response = await fetch(`${wsPath(workspace)}/usage-export?limit=${limit}&offset=${offset}`, { credentials: "same-origin", cache: "no-store", redirect: "error", headers: { Accept: "text/csv" }, signal });
+  const params = new URLSearchParams(reportFilters);
+  params.delete("compare"); params.set("limit", String(limit)); params.set("offset", String(offset));
+  if (!params.has("start_date") || !params.has("end_date")) throw new Error("CSV export requires an explicit UTC period.");
+  const response = await fetch(`${wsPath(workspace)}/usage-export?${params}`, { credentials: "same-origin", cache: "no-store", redirect: "error", headers: { Accept: "text/csv" }, signal });
   if (response.status === 401 && typeof window !== "undefined") window.dispatchEvent(new Event("omg:unauthorized"));
   if (!response.ok) throw new ApiError(response.status, "export_failed", `CSV export failed (${response.status}).`);
   if (!response.headers.get("content-type")?.toLowerCase().startsWith("text/csv")) throw new Error("Gateway did not return CSV; nothing was downloaded.");

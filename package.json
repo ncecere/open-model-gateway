@@ -12,7 +12,7 @@
     "build:web": "npm run build --workspace @omg/web",
     "typecheck:web": "npm run typecheck --workspace @omg/web",
     "test:web": "npm run test --workspace @omg/web",
-    "test:demo": "node --test tests/demo-oidc.test.mjs",
+    "test:demo": "node --test tests/demo-oidc.test.mjs && python3 tests/demo-runtime.test.py",
     "test:container": "node --test tests/container-entrypoint.test.mjs",
     "test:staging": "python3 tests/staging.test.py && python3 tests/provider-acceptance.test.py"
   }

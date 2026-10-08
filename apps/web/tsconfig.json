@@ -3,7 +3,7 @@
     "target": "ES2022",
     "baseUrl": ".",
     "paths": { "@/*": ["src/*"] },
-    "lib": ["dom", "dom.iterable", "es2022"],
+    "lib": ["dom", "dom.iterable", "es2022", "es2023.intl"],
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true,

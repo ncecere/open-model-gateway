@@ -1,0 +1,131 @@
+/*
+ * Fill colours: primary, then --color-warning and --color-danger (both
+ * >= 3:1 on surface, checked in tests/contrast.test.ts). The level is always
+ * also written out ("Near limit") with an icon.
+ */
+.root {
+  --meter-color: var(--color-primary);
+  --meter-height: 0.5rem;
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+
+  &[data-size="sm"] {
+    --meter-height: 0.375rem;
+
+    gap: var(--space-1);
+  }
+
+  &[data-level="warning"] {
+    --meter-color: var(--color-warning);
+  }
+
+  &[data-level="critical"],
+  &[data-level="over"] {
+    --meter-color: var(--color-danger);
+  }
+}
+
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+}
+
+.label {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text);
+}
+
+.value {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-weight: var(--font-weight-medium);
+
+  .root[data-level="warning"] & {
+    color: var(--color-warning-text);
+  }
+
+  .root[data-level="critical"] &,
+  .root[data-level="over"] & {
+    color: var(--color-danger-text);
+  }
+}
+
+.statusIcon {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.track {
+  position: relative;
+  height: var(--meter-height);
+  border-radius: var(--radius-full);
+  background-color: var(--color-surface-active);
+}
+
+.indicator {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background-color: var(--meter-color);
+  transition:
+    width var(--motion-duration-slow) var(--motion-ease-out),
+    background-color var(--motion-duration-fast) var(--motion-ease-out);
+}
+
+/* The limit marker: a tick taller than the track, in the text colour. */
+.marker {
+  position: absolute;
+  top: 50%;
+  left: var(--meter-marker);
+  width: 2px;
+  height: calc(var(--meter-height) + 0.5rem);
+  border-radius: var(--radius-full);
+  background-color: var(--color-text);
+  box-shadow: 0 0 0 1px var(--color-surface);
+  translate: -50% -50%;
+}
+
+.description {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.markerText {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.markerKey {
+  width: 2px;
+  height: 0.75rem;
+  border-radius: var(--radius-full);
+  background-color: var(--color-text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .indicator {
+    transition: none;
+  }
+}

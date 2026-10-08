@@ -5,12 +5,118 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::error::InferenceError;
+pub use super::workload_types::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ApiProtocol {
     ChatCompletions,
     Responses,
     Messages,
+    Embeddings,
+    /// Non-generation workloads; see `inference::workload`. Images, audio
+    /// (`inference::audio`), rerank and System One are served.
+    Images,
+    AudioTranscriptions,
+    AudioSpeech,
+    Rerank,
+    Systemone,
+}
+
+impl ApiProtocol {
+    pub const ALL: [ApiProtocol; 9] = [
+        Self::ChatCompletions,
+        Self::Responses,
+        Self::Messages,
+        Self::Embeddings,
+        Self::Images,
+        Self::AudioTranscriptions,
+        Self::AudioSpeech,
+        Self::Rerank,
+        Self::Systemone,
+    ];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ChatCompletions => "chat_completions",
+            Self::Responses => "responses",
+            Self::Messages => "messages",
+            Self::Embeddings => "embeddings",
+            Self::Images => "images",
+            Self::AudioTranscriptions => "audio_transcriptions",
+            Self::AudioSpeech => "audio_speech",
+            Self::Rerank => "rerank",
+            Self::Systemone => "systemone",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.as_str() == s)
+    }
+    /// Execution workload; protocols of different workloads never share a model.
+    pub fn workload(self) -> WorkloadKind {
+        match self {
+            Self::ChatCompletions | Self::Responses | Self::Messages => WorkloadKind::Generation,
+            Self::Embeddings => WorkloadKind::Embeddings,
+            Self::Images => WorkloadKind::Images,
+            Self::AudioTranscriptions => WorkloadKind::AudioTranscriptions,
+            Self::AudioSpeech => WorkloadKind::AudioSpeech,
+            Self::Rerank => WorkloadKind::Rerank,
+            Self::Systemone => WorkloadKind::Systemone,
+        }
+    }
+    /// A valid model protocol set is nonempty, distinct and within one workload.
+    pub fn valid_set<S: AsRef<str>>(protocols: &[S]) -> bool {
+        let Some(parsed) = protocols
+            .iter()
+            .map(|p| Self::parse(p.as_ref()))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return false;
+        };
+        let distinct = parsed
+            .iter()
+            .map(|p| p.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+        !parsed.is_empty()
+            && distinct == parsed.len()
+            && parsed.iter().all(|p| p.workload() == parsed[0].workload())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkloadKind {
+    Generation,
+    Embeddings,
+    Images,
+    AudioTranscriptions,
+    AudioSpeech,
+    Rerank,
+    Systemone,
+}
+impl WorkloadKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Generation => "generation",
+            Self::Embeddings => "embeddings",
+            Self::Images => "images",
+            Self::AudioTranscriptions => "audio_transcriptions",
+            Self::AudioSpeech => "audio_speech",
+            Self::Rerank => "rerank",
+            Self::Systemone => "systemone",
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct EmbeddingRequest {
+    pub model: String,
+    pub input: Vec<String>,
+    pub dimensions: Option<u32>,
+}
+
+pub struct EmbeddingResponse {
+    pub embeddings: Vec<Vec<f32>>,
+    pub usage: Usage,
 }
 
 // These types describe gateway semantics, not any provider's HTTP payload.
@@ -81,6 +187,12 @@ pub struct Usage {
     // None means unknown, never a fabricated zero or estimate.
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
+    pub billing: Option<crate::billing::BillingUsage>,
+    /// Non-token meters; `None` means no meter observation at all.
+    pub meters: Option<crate::billing::MeterUsage>,
+    pub output_image_variant: Option<crate::billing::MeterVariant>,
+    /// Provider-reported charge, evidence only; never the gateway charge.
+    pub provider_cost_microusd: Option<i64>,
 }
 
 pub struct ChatResponse {
@@ -98,6 +210,8 @@ pub struct ToolCallDelta {
     pub arguments: Option<String>,
 }
 
+// `Usage` is a copyable, fixed-size metering record; events are short-lived.
+#[allow(clippy::large_enum_variant)]
 pub enum ChatEvent {
     Delta {
         text: Option<String>,
@@ -111,6 +225,7 @@ pub enum ChatEvent {
 
 pub type EventStream = Pin<Box<dyn Stream<Item = Result<ChatEvent, InferenceError>> + Send>>;
 
+#[allow(clippy::large_enum_variant)]
 pub enum ProviderOutput {
     Complete(ChatResponse),
     Stream(EventStream),
@@ -124,6 +239,8 @@ pub struct Deployment {
     pub credential_ref: String,
     pub endpoint: Option<String>,
     pub region: Option<String>,
+    #[sqlx(default)]
+    pub supported_protocols: Vec<String>,
 }
 
 #[derive(Clone, Copy)]

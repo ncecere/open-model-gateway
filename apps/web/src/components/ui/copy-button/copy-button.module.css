@@ -1,0 +1,5 @@
+.button {
+  &[data-state="copied"] {
+    color: var(--color-success-text);
+  }
+}

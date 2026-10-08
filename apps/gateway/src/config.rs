@@ -19,6 +19,15 @@ pub enum Environment {
     Production,
 }
 
+impl Environment {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Development => "development",
+            Self::Production => "production",
+        }
+    }
+}
+
 impl Config {
     pub fn from_env() -> Result<Self> {
         let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL is required")?;
@@ -60,6 +69,12 @@ impl Config {
         let inference_limits = crate::inference::EngineLimits {
             max_concurrent,
             request_timeout: Duration::from_secs(seconds),
+            workloads: crate::inference::workload::WorkloadLimits::from_lookup(|name| {
+                std::env::var(name).ok()
+            })?,
+            audio: crate::inference::audio::AudioLimits::from_lookup(|name| {
+                std::env::var(name).ok()
+            })?,
         };
         Ok(Self {
             database_url,

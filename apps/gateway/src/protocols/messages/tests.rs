@@ -80,6 +80,7 @@ async fn native_message_blocks_and_usage() {
         Ok(ChatEvent::Usage(Usage {
             input_tokens: Some(5),
             output_tokens: None,
+            ..Usage::default()
         })),
         Ok(ChatEvent::Done),
     ]);
@@ -106,6 +107,46 @@ async fn native_message_blocks_and_usage() {
     assert!(b.contains("東京"));
     assert!(!b.contains("output_tokens"));
     assert!(b.contains("input_tokens"));
+    let start = sse_data(&b, "message_start");
+    assert_eq!(start["message"]["usage"], json!({"input_tokens":5}));
+}
+fn sse_data(body: &str, name: &str) -> Value {
+    let mut lines = body.lines();
+    while let Some(line) = lines.next() {
+        if line == format!("event: {name}") {
+            let data = lines.next().unwrap().strip_prefix("data: ").unwrap();
+            return serde_json::from_str(data).unwrap();
+        }
+    }
+    panic!("{name} missing")
+}
+/// D3: message_start carries the Anthropic usage shape, never `{}` when known.
+#[tokio::test]
+async fn message_start_usage_has_vendor_shape() {
+    let output = stream(vec![
+        Ok(ChatEvent::Delta {
+            text: Some("hi".into()),
+            tool_calls: vec![],
+        }),
+        Ok(ChatEvent::Finish(FinishReason::Stop)),
+        Ok(ChatEvent::Usage(Usage {
+            input_tokens: Some(13),
+            output_tokens: Some(14),
+            ..Usage::default()
+        })),
+        Ok(ChatEvent::Done),
+    ]);
+    let b = body(render(output, "msg_test".into(), "public".into())).await;
+    let start = sse_data(&b, "message_start");
+    assert_eq!(
+        start["message"]["usage"],
+        json!({"input_tokens":13,"output_tokens":0})
+    );
+    let delta = sse_data(&b, "message_delta");
+    assert_eq!(delta["usage"]["output_tokens"], 14);
+    assert!(
+        b.find("event: message_start").unwrap() < b.find("event: content_block_start").unwrap()
+    );
 }
 #[tokio::test]
 async fn malformed_tool_json_and_eof_never_stop() {
@@ -135,4 +176,26 @@ async fn malformed_tool_json_and_eof_never_stop() {
 #[test]
 fn missing_usage_not_zero() {
     assert_eq!(usage_json(Usage::default()), json!({}));
+}
+#[test]
+fn exclusive_and_ttl_counts_remain_protocol_native_numbers() {
+    let usage = Usage {
+        input_tokens: Some(4),
+        output_tokens: Some(3),
+        billing: Some(crate::billing::BillingUsage {
+            total_input_tokens: Some(34),
+            uncached_input_tokens: Some(4),
+            cache_read_input_tokens: Some(10),
+            cache_write_input_tokens: Some(20),
+            cache_write_default_input_tokens: Some(0),
+            cache_write_5m_input_tokens: Some(8),
+            cache_write_1h_input_tokens: Some(12),
+        }),
+        ..Default::default()
+    };
+    let value = usage_json(usage);
+    assert_eq!(value["input_tokens"], 4);
+    assert_eq!(value["cache_creation_input_tokens"], 20);
+    assert_eq!(value["cache_creation"]["ephemeral_1h_input_tokens"], 12);
+    assert!(value.get("total_input_tokens").is_none());
 }

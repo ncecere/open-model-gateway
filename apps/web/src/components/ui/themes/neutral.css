@@ -7,7 +7,7 @@
  * Two tiers:
  *   1. Primitive palette (--palette-*): raw colours. Components never read these.
  *   2. Semantic tokens (--color-*, --shadow-*): what components use. A theme
- *      (or a brand override such as themes/uf.css) only changes semantic tokens.
+ *      (or a brand override such as themes/acme.css) only changes semantic tokens.
  *
  * Contrast (WCAG 2.1 AA) uses the WCAG relative-luminance formula and is
  * checked by tests/contrast.test.ts. Ratios are noted next to each pair:
@@ -60,19 +60,23 @@
   /* Status hues */
   --palette-blue-50: #eff5ff;
   --palette-blue-500: #3b82f6;
+  --palette-blue-600: #1d6fd8; /* 4.86:1 on white, 4.58:1 on neutral-50 */
   --palette-blue-700: #1d55c9; /* on blue-50 6.00:1 */
 
   --palette-red-50: #fef2f2;
   --palette-red-500: #e5484d;
+  --palette-red-600: #d1352b; /* 4.94:1 on white, 4.64:1 on neutral-50 */
   --palette-red-700: #b42318; /* white text 6.57:1 */
   --palette-red-800: #8f1d16; /* on red-50 8.15:1 */
 
   --palette-green-50: #edfbf3;
   --palette-green-500: #22a06b;
+  --palette-green-600: #16834f; /* 4.78:1 on white, 4.50:1 on neutral-50 */
   --palette-green-700: #0e6b3f; /* on green-50 6.17:1 */
 
   --palette-amber-50: #fff8eb;
   --palette-amber-500: #f5a524;
+  --palette-amber-600: #b0690b; /* 4.31:1 on white, 4.06:1 on neutral-50 */
   --palette-amber-700: #92560a;
   --palette-amber-800: #7a4508; /* on amber-50 7.41:1 */
 
@@ -144,6 +148,30 @@
   --color-neutral-text: var(--palette-neutral-700); /* 9.0:1 on neutral-100 */
   --color-neutral-dot: var(--palette-neutral-400);
 
+  /*
+   * Chart series (line, area, bar, sparkline). Graphical objects: >= 3:1 on
+   * surface and bg (WCAG 1.4.11), so a line or bar is visible without its
+   * legend. Charts also carry a text summary and never rely on colour alone.
+   */
+  --color-chart-primary: var(--color-primary); /* 6.20:1 on surface, 5.83:1 on bg */
+  --color-chart-info: var(--palette-blue-600); /* 4.86:1 / 4.58:1 */
+  --color-chart-success: var(--palette-green-600); /* 4.78:1 / 4.50:1 */
+  --color-chart-warning: var(--palette-amber-600); /* 4.31:1 / 4.06:1 */
+  --color-chart-danger: var(--palette-red-600); /* 4.94:1 / 4.64:1 */
+  --color-chart-neutral: var(--palette-neutral-500); /* 5.29:1 / 4.97:1 */
+  --color-chart-accent: #a21caf; /* 6.32:1 / 6.00:1, magenta: apart from primary and info */
+  /*
+   * Paler series colours (back series of an overlapping bar chart and its
+   * legend swatch): still >= 3:1 on surface and bg, unlike an opacity.
+   */
+  --color-chart-primary-soft: #7e81e2; /* 3.43:1 / 3.23:1 */
+  --color-chart-info-soft: #4a8ce0; /* 3.43:1 / 3.23:1 */
+  --color-chart-success-soft: #439b71; /* 3.41:1 / 3.21:1 */
+  --color-chart-warning-soft: #bb7e2d; /* 3.42:1 / 3.22:1 */
+  --color-chart-danger-soft: #dc665f; /* 3.44:1 / 3.23:1 */
+  --color-chart-neutral-soft: #858b97; /* 3.42:1 / 3.22:1 */
+  --color-chart-accent-soft: #c65fcf; /* 3.54:1 / 3.36:1 */
+
   --color-focus-ring: var(--palette-accent-600); /* 5.83:1 on bg: always >= 3:1 */
   --color-focus-halo: rgba(75, 79, 214, 0.2); /* soft glow around the solid ring (decorative) */
   --color-overlay: rgba(11, 13, 18, 0.45);
@@ -187,7 +215,7 @@
 
   --color-text: #eceef2; /* 15.98:1 */
   --color-text-muted: #9ba3b0; /* 7.30:1; 6.85:1 on raised */
-  --color-text-subtle: #8a92a0; /* 5.55:1 on raised, 6.2:1 on bg */
+  --color-text-subtle: #9098a6; /* 5.99:1 on raised, 6.69:1 on bg, 4.80:1 on a highlighted menu item (raised + surface-active) */
   --color-text-inverse: #0b0d12;
 
   --color-border: rgba(255, 255, 255, 0.08);
@@ -237,6 +265,23 @@
   --color-neutral-subtle: #1c2029;
   --color-neutral-text: #c4cad4;
   --color-neutral-dot: #6b7383;
+
+  /* Chart series: >= 3:1 on surface and bg. */
+  --color-chart-primary: #7f86f2; /* 5.83:1 on surface, 6.10:1 on bg */
+  --color-chart-info: #5b9cf8; /* 6.68:1 / 6.99:1 */
+  --color-chart-success: #3fbf86; /* 7.96:1 / 8.34:1 */
+  --color-chart-warning: #f5a524; /* 9.10:1 / 9.52:1 */
+  --color-chart-danger: #f06a6a; /* 6.17:1 / 6.45:1 */
+  --color-chart-neutral: #8a92a0; /* 5.92:1 / 6.20:1 */
+  --color-chart-accent: #e879f9; /* 7.55:1 / 7.90:1 */
+  /* Dimmer series colours (overlapping bars' back series): >= 3:1 on surface and bg. */
+  --color-chart-primary-soft: #5a5fa8; /* 3.22:1 / 3.37:1 */
+  --color-chart-info-soft: #3e67a1; /* 3.24:1 / 3.39:1 */
+  --color-chart-success-soft: #2a7255; /* 3.22:1 / 3.37:1 */
+  --color-chart-warning-soft: #865e1f; /* 3.21:1 / 3.36:1 */
+  --color-chart-danger-soft: #a14b4d; /* 3.21:1 / 3.36:1 */
+  --color-chart-neutral-soft: #606671; /* 3.22:1 / 3.37:1 */
+  --color-chart-accent-soft: #9a44a6; /* 3.32:1 / 3.47:1 */
 
   --color-focus-ring: #8f95f5; /* 6.45:1 on raised, 7.21:1 on bg */
   --color-focus-halo: rgba(143, 149, 245, 0.28);

@@ -40,6 +40,8 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --workspace --all-features
+      - name: Verify enterprise runtime ACLs on disposable PostgreSQL
+        run: cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored
 
   web:
     runs-on: ubuntu-latest

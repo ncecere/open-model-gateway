@@ -2,9 +2,9 @@
 
 import { Menu as BaseMenu } from "@base-ui/react/menu";
 import { Check, ChevronRight } from "lucide-react";
-import type { ReactElement, ReactNode } from "react";
+import { createContext, type ReactElement, type ReactNode, useContext, useRef } from "react";
 import popup from "@/components/ui/styles/popup.module.css";
-import { cx } from "@/lib/bitop-utils";
+import { cx, useLandmarkContainer } from "@/lib/bitop-utils";
 import styles from "./menu.module.css";
 
 /*
@@ -20,6 +20,12 @@ import styles from "./menu.module.css";
  *
  * The item parts (MenuItem, MenuCheckboxItem, MenuRadioGroup, MenuSubmenu…)
  * also work inside ContextMenu and Menubar, which share Base UI's Menu parts.
+ *
+ * The popup is portalled into the outermost landmark around its trigger
+ * (the page's <main>, the sidebar's <nav>…), not the end of <body>, so it
+ * is inside the page's landmarks like the trigger (axe `region`); outside
+ * any landmark, or from a dialog, it goes to <body>. `container` overrides
+ * the choice.
  */
 
 export type MenuProps = {
@@ -34,8 +40,13 @@ export type MenuProps = {
   sideOffset?: number;
   /** Popup width hint. */
   width?: "auto" | "trigger";
+  /** Where the popup is portalled: an element, or null for <body> (default: the trigger's outermost landmark, else <body>). */
+  container?: HTMLElement | null;
   className?: string;
 };
+
+/** Whether the menu around is portalled into a landmark (its submenus are positioned the same way). */
+const InLandmark = createContext(false);
 
 export function Menu({
   trigger,
@@ -47,15 +58,26 @@ export function Menu({
   align = "start",
   sideOffset = 6,
   width = "auto",
+  container,
   className,
 }: MenuProps) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const landmark = useLandmarkContainer(triggerRef);
+  const into = container === undefined ? landmark : container;
   return (
     <BaseMenu.Root open={open} defaultOpen={defaultOpen} onOpenChange={onOpenChange ? (o) => onOpenChange(o) : undefined}>
-      <BaseMenu.Trigger render={trigger} />
-      <BaseMenu.Portal>
-        <BaseMenu.Positioner className={popup.positioner} side={side} align={align} sideOffset={sideOffset}>
+      <BaseMenu.Trigger ref={triggerRef} render={trigger} />
+      <BaseMenu.Portal container={into ?? undefined} className={popup.portal}>
+        <BaseMenu.Positioner
+          className={popup.positioner}
+          side={side}
+          align={align}
+          sideOffset={sideOffset}
+          // Inside a landmark that scrolls or clips its content, a fixed popup isn't clipped.
+          positionMethod={into ? "fixed" : "absolute"}
+        >
           <BaseMenu.Popup className={cx(popup.popup, className)} data-width={width}>
-            {children}
+            <InLandmark.Provider value={Boolean(into)}>{children}</InLandmark.Provider>
           </BaseMenu.Popup>
         </BaseMenu.Positioner>
       </BaseMenu.Portal>
@@ -89,10 +111,15 @@ export function MenuItem({ icon, shortcut, tone = "default", className, children
 
 export type MenuLinkItemProps = Omit<BaseMenu.LinkItem.Props, "className"> & ItemExtras;
 
-/** A menu item that navigates. Pass `href`, or `render={<Link to=… />}` for router links. */
-export function MenuLinkItem({ icon, shortcut, tone = "default", className, children, ...props }: MenuLinkItemProps) {
+/**
+ * A menu item that navigates. Pass `href`, or `render={<Link to=… />}` for
+ * router links. It closes the menu when clicked (Base UI's default keeps it
+ * open, which suits full page loads but leaves it open over a client-side
+ * route); pass `closeOnClick={false}` to keep it.
+ */
+export function MenuLinkItem({ icon, shortcut, tone = "default", className, children, closeOnClick = true, ...props }: MenuLinkItemProps) {
   return (
-    <BaseMenu.LinkItem {...props} className={cx(popup.item, tone === "danger" && popup.itemDanger, className)}>
+    <BaseMenu.LinkItem {...props} closeOnClick={closeOnClick} className={cx(popup.item, tone === "danger" && popup.itemDanger, className)}>
       {icon}
       <span className={styles.label}>{children}</span>
       {shortcut && (
@@ -216,6 +243,8 @@ export function MenuSubmenu({
   className,
   children,
 }: MenuSubmenuProps) {
+  // Base UI portals a submenu into its parent menu's portal, so it is in the same landmark.
+  const inLandmark = useContext(InLandmark);
   return (
     <BaseMenu.SubmenuRoot
       open={open}
@@ -232,8 +261,8 @@ export function MenuSubmenu({
         <span className={styles.label}>{label}</span>
         <ChevronRight aria-hidden className={styles.chevron} />
       </BaseMenu.SubmenuTrigger>
-      <BaseMenu.Portal>
-        <BaseMenu.Positioner className={popup.positioner} alignOffset={-4}>
+      <BaseMenu.Portal className={popup.portal}>
+        <BaseMenu.Positioner className={popup.positioner} alignOffset={-4} positionMethod={inLandmark ? "fixed" : "absolute"}>
           <BaseMenu.Popup className={cx(popup.popup, className)}>{children}</BaseMenu.Popup>
         </BaseMenu.Positioner>
       </BaseMenu.Portal>

@@ -1,0 +1,50 @@
+/* Gateway-owned people compositions (not a vendored Bitop primitive). */
+
+/* The inline "×" inside a removable grant badge. */
+.remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: 14px;
+  block-size: 14px;
+  margin-inline: 2px -3px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.65;
+
+  & svg {
+    inline-size: 10px;
+    block-size: 10px;
+  }
+
+  &:hover {
+    opacity: 1;
+    background: color-mix(in srgb, currentColor 16%, transparent);
+  }
+
+  &:focus-visible {
+    opacity: 1;
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 1px;
+  }
+}
+
+/* A group-grant badge that explains itself on hover/focus. */
+.hinted {
+  cursor: help;
+
+  &:focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 1px;
+  }
+}
+
+.usageTotals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-4);
+}

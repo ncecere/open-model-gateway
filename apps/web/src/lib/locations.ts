@@ -1,79 +1,68 @@
-import { dashboardSearch, type DashboardSearch, type Page } from "./permissions";
-
-const platformPaths = {
-  "platform-overview": "/admin", organizations: "/admin/organizations", "platform-teams": "/admin/teams", "platform-projects": "/admin/projects", users: "/admin/users",
-  models: "/admin/models", providers: "/admin/providers", deployments: "/admin/deployments", routing: "/admin/routing", pricing: "/admin/pricing", "model-access": "/admin/model-access", "platform-audit": "/admin/audit",
-} satisfies Partial<Record<Page, string>>;
-const orgAliases: Partial<Record<Page, string>> = { teams: "teams", projects: "projects", "organization-members": "members", invitations: "invitations", "assigned-models": "models", "organization-policy": "limits", audit: "audit" };
-const workspaceAliases: Partial<Record<Page, string>> = { members: "members", "service-accounts": "service-accounts", governance: "limits" };
-
-/** Legacy page names remain accepted by callbacks, but never become new URLs. */
+import { dashboardSearch, identifier, type DashboardSearch, type Page } from "./permissions";
+export const platformPaths: Partial<Record<Page, string>> = { "platform-overview": "/admin", "platform-teams": "/admin/teams", "platform-projects": "/admin/projects", users: "/admin/users", models: "/admin/models", "model-new": "/admin/models/new", providers: "/admin/connections", deployments: "/admin/deployments", catalogs: "/admin/catalogs", policies: "/admin/limits", "cost-centers": "/admin/cost-centers", "platform-costs": "/admin/costs", oidc: "/admin/sso-groups", "platform-audit": "/admin/audit", pricing: "/admin/pricing", routing: "/admin/routing" };
+/** Workspace pages and their path under /workspaces/{ws}. */
+const workspaceSegments: Partial<Record<Page, string>> = { overview: "", keys: "/keys", grants: "/models", requests: "/requests", costs: "/costs", "workspace-settings": "/settings" };
+/** Workspace records routed as /workspaces/{ws}/{collection}/{record}. */
+export const workspaceRecords: Partial<Record<Page, string>> = { "request-detail": "requests", "key-detail": "keys", "workspace-model": "models" };
+const detailCollections: Partial<Record<Page, string>> = { "model-detail": "models", "provider-detail": "connections", "deployment-detail": "routes", "catalog-detail": "catalogs", "user-detail": "users" };
+/** Old record URLs that still open (and are rewritten to) their new path: /admin/deployments/{id} → /admin/routes/{id}, /admin/providers/{id} → /admin/connections/{id}. */
+const legacyDetailCollections: Record<string, Page> = { deployments: "deployment-detail", providers: "provider-detail" };
+/** Old list URLs (review rule 10: Connections, Limits, SSO groups); they open the page and are rewritten to its new path. */
+export const legacyPlatformPaths: Record<string, Page> = { "/admin/providers": "providers", "/admin/policies": "policies", "/admin/oidc": "oidc" };
 export function canonicalSearch(input: DashboardSearch): DashboardSearch {
-  const search = dashboardSearch(input);
-  const page = search.page;
-  if (page && orgAliases[page]) return { ...search, page: "organization-settings", ws: undefined, tab: orgAliases[page] };
-  if (page && workspaceAliases[page]) return { ...search, page: "workspace-settings", tab: workspaceAliases[page] };
-  return search;
+  const s = dashboardSearch(input);
+  // Legacy pages: the routing picker and the all-routes list now live on each model page.
+  if (s.page === "routing" || s.page === "deployments") return { page: "models" };
+  if (s.page === "workspace-settings" && (s.tab === "keys" || s.tab === "costs")) return { ...s, page: s.tab === "keys" ? "keys" : "costs", tab: undefined };
+  // Key limits moved from Settings › Limits › Key limits to each key's page.
+  if (s.page === "workspace-settings" && s.tab === "limits" && s.scope === "keys") return { ...s, page: s.record ? "key-detail" : "keys", tab: undefined, scope: undefined };
+  const aliases: Partial<Record<Page, string>> = { members: "members", "service-accounts": "service-accounts", invitations: "invitations", governance: "limits", audit: "audit" };
+  return s.page && aliases[s.page] ? { ...s, page: "workspace-settings", tab: aliases[s.page] } : s;
 }
-
-/** Pure, same-origin location builder. Only explicitly supported metadata survives. */
 export function dashboardHref(input: DashboardSearch): string {
-  const search = canonicalSearch(input);
-  const { page, org, ws, record } = search;
-  let path = "/";
-  if (page && page in platformPaths) path = platformPaths[page as keyof typeof platformPaths];
+  const search = canonicalSearch(input), { page, ws, record } = search;
+  let path = page && platformPaths[page] || "/";
+  if (page === "home") path = "/home";
   else if (page === "profile") path = "/profile";
   else if (page === "accept-invitation") path = "/invitations/accept";
-  else if (page === "organization-detail" && org) path = `/admin/organizations/${encodeURIComponent(org)}`;
-  else if (page === "organization-settings" && org) path = `/organizations/${encodeURIComponent(org)}/settings`;
-  else if (record && ["model-detail", "provider-detail", "deployment-detail"].includes(page ?? "")) path = `/admin/${page === "model-detail" ? "models" : page === "provider-detail" ? "providers" : "deployments"}/${encodeURIComponent(record)}`;
-  else if (org && (!page || ["overview", "keys", "grants", "costs", "workspace-settings"].includes(page))) {
-    path = `/organizations/${encodeURIComponent(org)}/workspaces`;
-    if (ws) path += `/${encodeURIComponent(ws)}${page === "keys" ? "/keys" : page === "grants" ? "/models" : page === "costs" ? "/costs" : page === "workspace-settings" ? "/settings" : ""}`;
-  }
+  else if (page === "workspace-detail" && record) path = `/admin/${search.kind === "project" ? "projects" : "teams"}/${encodeURIComponent(record)}`;
+  else if (page && detailCollections[page] && record) path = `/admin/${detailCollections[page]}/${encodeURIComponent(record)}`;
+  else if (page && workspaceRecords[page] && ws && record) path = `/workspaces/${encodeURIComponent(ws)}/${workspaceRecords[page]}/${encodeURIComponent(record)}`;
+  else if (ws && (!page || page in workspaceSegments)) path = `/workspaces/${encodeURIComponent(ws)}${page ? workspaceSegments[page] : ""}`;
   const query = new URLSearchParams();
-  // Incomplete callback destinations are resolved against /me on the root route.
-  if (path === "/") for (const key of ["page", "org", "ws", "record"] as const) if (search[key]) query.set(key, search[key]);
-  if (record && !["model-detail", "provider-detail", "deployment-detail"].includes(page ?? "")) query.set("record", record);
-  for (const key of ["tab", "q", "enabled", "offset", "model", "provider", "scope", "view", "recipientKind", "recipient"] as const) if (search[key] !== undefined) query.set(key, String(search[key]));
+  if (path === "/") for (const key of ["page", "ws"] as const) if (search[key]) query.set(key, search[key]);
+  if (record && !(page && (detailCollections[page] || workspaceRecords[page] && path !== "/")) && page !== "workspace-detail") query.set("record", record);
+  for (const key of ["tab", "q", "enabled", "offset", "model", "provider", "scope", "view", "start_date", "end_date", "compare", "workspace_id", "cost_center_id", "actor_user_id", "service_account_id", "connection", "accounting_status", "key_id", "model_id", "status", "range", "cursor", "cols", "density", "type", "sort", "layout", "connections", "min_price", "max_price", "policy", "readiness", "deprecated", "eligibility", "cost_status", "metric", "group", "then", "top", "role", "hide_sign_ins"] as const) if (search[key] !== undefined) query.set(key, String(search[key]));
   return path + (query.size ? `?${query}` : "");
 }
-
-/** Undefined means a real 404, never an implicit overview fallback. */
 export function parseDashboardLocation(href: string): DashboardSearch | undefined {
-  if (!href.startsWith("/") || href.startsWith("//") || href.includes("\\")) return undefined;
-  let url: URL;
-  try { url = new URL(href, "https://dashboard.invalid"); } catch { return undefined; }
-  const raw = Object.fromEntries(url.searchParams);
-  const query = dashboardSearch(raw);
-  const path = url.pathname;
+  if (!href.startsWith("/") || href.startsWith("//") || href.includes("\\")) return;
+  let url: URL; try { url = new URL(href, "https://dashboard.invalid"); } catch { return; }
+  const raw = Object.fromEntries(url.searchParams), query = dashboardSearch(raw), path = url.pathname;
   if (path === "/") {
-    if ((raw.page !== undefined && !query.page) || (raw.org !== undefined && !query.org) || (raw.ws !== undefined && !query.ws) || (raw.record !== undefined && !query.record)) return undefined;
+    if (raw.org !== undefined || raw.page !== undefined && !query.page || raw.ws !== undefined && !query.ws) return;
     return canonicalSearch(query);
   }
-  // Scope in canonical URLs comes exclusively from the path, never the query.
-  const metadata = { ...query, page: undefined, org: undefined, ws: undefined };
-  const platform = Object.entries(platformPaths).find(([, value]) => value === path);
-  if (platform) return { ...metadata, page: platform[0] as Page };
+  const metadata = { ...query, page: undefined, ws: undefined, record: undefined };
+  const platform = Object.entries(platformPaths).find(([, p]) => p === path) ?? (legacyPlatformPaths[path] ? [legacyPlatformPaths[path]!, path] as const : undefined);
+  if (platform) return platform[0] === "routing" || platform[0] === "deployments" ? canonicalSearch({ page: platform[0] }) : { ...metadata, page: platform[0] as Page, record: query.record };
+  if (path === "/home") return { ...metadata, page: "home" };
   if (path === "/profile") return { ...metadata, page: "profile" };
   if (path === "/invitations/accept") return { ...metadata, page: "accept-invitation" };
-  const parts = path.split("/").slice(1);
-  let id: string | undefined;
-  try { id = dashboardSearch({ record: decodeURIComponent(parts[2] ?? "") }).record; } catch { return undefined; }
-  if (parts[0] === "admin" && parts.length === 3 && id) {
-    if (parts[1] === "organizations") return { ...metadata, page: "organization-detail", org: id };
-    const page = parts[1] === "models" ? "model-detail" : parts[1] === "providers" ? "provider-detail" : parts[1] === "deployments" ? "deployment-detail" : undefined;
-    if (page) return { ...metadata, page, record: id };
+  const parts = path.split("/").slice(1); let id: string | undefined;
+  try { id = identifier(decodeURIComponent(parts[parts[0] === "admin" ? 2 : 1] ?? "")); } catch { return; }
+  if (!id) return;
+  if (parts[0] === "admin" && parts.length === 3) {
+    if (parts[1] === "teams" || parts[1] === "projects") return { ...metadata, page: "workspace-detail", record: id, kind: parts[1] === "projects" ? "project" : "team" };
+    const detail = Object.entries(detailCollections).find(([, c]) => c === parts[1])?.[0] as Page | undefined ?? legacyDetailCollections[parts[1]!];
+    return detail ? { ...metadata, page: detail, record: id } : undefined;
   }
-  if (parts[0] !== "organizations") return undefined;
-  let org: string | undefined;
-  let ws: string | undefined;
-  try { org = dashboardSearch({ org: decodeURIComponent(parts[1] ?? "") }).org; ws = dashboardSearch({ ws: decodeURIComponent(parts[3] ?? "") }).ws; } catch { return undefined; }
-  if (!org) return undefined;
-  if (parts.length === 3 && parts[2] === "settings") return { ...metadata, page: "organization-settings", org };
-  if (parts[2] !== "workspaces") return undefined;
-  if (parts.length === 3) return { ...metadata, page: "overview", org };
-  if (!ws || parts.length > 5) return undefined;
-  const page = parts.length === 4 ? "overview" : ({ keys: "keys", models: "grants", costs: "costs", settings: "workspace-settings" } as const)[parts[4] as "keys"];
-  return page ? { ...metadata, page, org, ws } : undefined;
+  if (parts[0] === "workspaces" && parts.length === 4) {
+    const recordPage = Object.entries(workspaceRecords).find(([, c]) => c === parts[2])?.[0] as Page | undefined;
+    let record: string | undefined; try { record = identifier(decodeURIComponent(parts[3]!)); } catch { return; }
+    return recordPage && record ? { ...metadata, page: recordPage, ws: id, record } : undefined;
+  }
+  if (parts[0] !== "workspaces" || parts.length > 3) return;
+  const page = parts.length === 2 ? "overview" : (Object.entries(workspaceSegments).find(([, segment]) => segment === `/${parts[2]}`)?.[0] as Page | undefined);
+  return page ? { ...metadata, page, ws: id, record: query.record } : undefined;
 }

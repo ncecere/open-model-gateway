@@ -69,6 +69,7 @@ async fn native_lifecycle_sequence_and_final_snapshot() {
         Ok(ChatEvent::Usage(Usage {
             input_tokens: Some(2),
             output_tokens: Some(3),
+            ..Usage::default()
         })),
         Ok(ChatEvent::Done),
     ]);

@@ -2,16 +2,22 @@
   "version": 1,
   "registry": "../../../../typescript/bitop-ui",
   "items": {
+    "alert": {
+      "files": {
+        "src/components/ui/alert/alert.module.css": "ed5c38090071c7afee63b99f33c80d68d8fd0de596b2c41c374ffc994d45169c",
+        "src/components/ui/alert/alert.tsx": "9577d9a17a8554267838ede1b8c5126a5346a639082930625b6a2723814bd6bc"
+      }
+    },
     "app-shell": {
       "files": {
-        "src/components/ui/app-shell/app-shell.module.css": "9f5a3c4763ce56b6dae0364fd444cc174f2ea0d6cb98499b85606773b9ffb4a7",
-        "src/components/ui/app-shell/app-shell.tsx": "59c76cb1a7ac329d0feeffbecd65a23bc2531a05eff222ab8a6255309009f81d"
+        "src/components/ui/app-shell/app-shell.module.css": "75f85501fe0773095547eacb11760c9ff0c1444624874ace7acbd9f8269c7fad",
+        "src/components/ui/app-shell/app-shell.tsx": "9eced5b10ccbc69d9579553ded2f7cf10572189c34858a6f309e481ee73d5a7d"
       }
     },
     "avatar": {
       "files": {
         "src/components/ui/avatar/avatar.module.css": "29ea708c8a33763fd77b101d61331d8dff2a8d32051108f79e7c1b628d77ac1d",
-        "src/components/ui/avatar/avatar.tsx": "4efc85c4082771ca0039660606c459622122538654f0f09cd2f81ba8d0488a0c"
+        "src/components/ui/avatar/avatar.tsx": "25315b06ed6717e28197c86700cbb6ad1f31718140e160c792d66236b1c4bf2a"
       }
     },
     "badge": {
@@ -20,10 +26,16 @@
         "src/components/ui/badge/badge.tsx": "179e82f9c467d511a5d0f473994ce295c856d11d7a714602c7effe539bcecd1f"
       }
     },
+    "bar-chart": {
+      "files": {
+        "src/components/ui/bar-chart/bar-chart.module.css": "64ebd5981be6325c3b9639ded03625559f59f176d6636a21e3ae6f293b9c8c82",
+        "src/components/ui/bar-chart/bar-chart.tsx": "6c235e6df958f62b41fe38d39abe68cd631aa6f80e5e3a03d909056410357c8d"
+      }
+    },
     "breadcrumbs": {
       "files": {
-        "src/components/ui/breadcrumbs/breadcrumbs.module.css": "07f41b9ab88be834c5fa49a4e1e41760e0b4c089e855fe30f79043d29eb4d9ca",
-        "src/components/ui/breadcrumbs/breadcrumbs.tsx": "76755adea13ab371fae208b75c9837a50d518260e262ce5c6690144c78bcaa4f"
+        "src/components/ui/breadcrumbs/breadcrumbs.module.css": "ca7c5fb3c9bb3a2a1c5674148031bb09aa4acff00f961d27429aef7cc1a6b0df",
+        "src/components/ui/breadcrumbs/breadcrumbs.tsx": "eae13383058b0f112515fc5d7052e850104e60622a334c8fec6bda14616ccd36"
       }
     },
     "button": {
@@ -32,10 +44,22 @@
         "src/components/ui/button/button.tsx": "83ccfb87c7b3978f3a99fbeaee270024445d12c13d2f184551d38c8379c337f1"
       }
     },
+    "calendar": {
+      "files": {
+        "src/components/ui/calendar/calendar.module.css": "dcaa46bde803d3f55292c62bd95ae5f3f7121c00247042fbb40413cc88cfd8df",
+        "src/components/ui/calendar/calendar.tsx": "48f5ff4a15311f5e49c1d4596ab2ba1eeae0f0ac1e29ca47dc7f5f48eca175c1"
+      }
+    },
     "card": {
       "files": {
-        "src/components/ui/card/card.module.css": "031d0fd4ec044f2df700320b8aa3b21375109dce741c62121e1265220b9f89dc",
+        "src/components/ui/card/card.module.css": "1f2d77f632de0ab33e98c3f1da7749be238a0fb33f0d595b052123bc9b51e1c0",
         "src/components/ui/card/card.tsx": "51b2f1bbfe7cf32766fcf2318a83ab4d621c1001917a4018334c96eb225433b8"
+      }
+    },
+    "chart": {
+      "files": {
+        "src/components/ui/chart/chart.module.css": "b7c2fd00ebe13ac67e2e415157d1e57cf9aa9ec847f2f7e9dd7d7d1f805c9de4",
+        "src/components/ui/chart/chart.tsx": "d6728809eb4a857faa62f2fdfb5bc0409df97a28a0f5d55eebd5360420170f86"
       }
     },
     "checkbox": {
@@ -44,19 +68,72 @@
         "src/components/ui/checkbox/checkbox.tsx": "f3befff3af64867d542c4fd182d4f8beae8ff073c11803c3f56be1d19a980e8c"
       }
     },
+    "color-mode": {
+      "files": {
+        "src/components/ui/color-mode/color-mode.tsx": "53b42149c0a4a7fa0900531a599dd1a6f971b3905f30f95ecf5c976554db22c7"
+      }
+    },
+    "combobox": {
+      "files": {
+        "src/components/ui/combobox/combobox.module.css": "05823dbbd565c94c75fc34d89003c4545fe03ca41fbb3462d538023014cd66b2",
+        "src/components/ui/combobox/combobox.tsx": "05bc8b89696fc4e201eecdc2437d1182d9cd65e65b4c5b751a4df31c67a182fb"
+      }
+    },
     "command-palette": {
       "files": {
-        "src/components/ui/command-palette/command-palette.module.css": "c614f81a2939583cd3d593563526bbfd98873a38e664ddf877006c6f4b59bcfa",
-        "src/components/ui/command-palette/command-palette.tsx": "f3be575228d0a3c5a07fa7b6224b394a1391fa54b64a4c87f3e40a5156fe1239"
+        "src/components/ui/command-palette/command-palette.module.css": "aa8b3d9c37c7d96d4b4ccacf0f0a2a67f21c271729a8b2c1e5138a8e4c93a5c9",
+        "src/components/ui/command-palette/command-palette.tsx": "f64c2330866caa0d92870e15afd54dd59b3982a0d864a693ab14c89671299f1b"
+      }
+    },
+    "copy-button": {
+      "files": {
+        "src/components/ui/copy-button/copy-button.module.css": "2f6d33bc5ca3d660f5847b9a753ab212847020443a885350875b9c85229732db",
+        "src/components/ui/copy-button/copy-button.tsx": "1bd0e12bac68e30ccc45a608dccfeb6141cade9e28d3633c024de426a111542e"
+      }
+    },
+    "copy-field": {
+      "files": {
+        "src/components/ui/copy-field/copy-field.module.css": "f3714fa0a5f259db72e77cf277b6e8df05758507c1e5bc0f3d56f8180a161f5b",
+        "src/components/ui/copy-field/copy-field.tsx": "9616f7ca7b46537b7680540514652662c968c439ed624d12b2b2f5bc1e162371"
       }
     },
     "core": {
       "files": {
-        "src/components/ui/styles/bitop.css": "4c715fe164cdc3e6dfe884a7e8aeec02ae9ab5b8cba4e1e0cb254c36ffe5711a",
+        "src/components/ui/styles/bitop.css": "3b8adf734e8c7bbc17991c2bd5ef226befb17f92fa9bde251cb15f156da9804e",
         "src/components/ui/styles/global.css": "2b5c7218cbebf7b490884a24fa1ed55e73ab601d99daced4a1bd0814c60f5eaa",
-        "src/components/ui/styles/popup.module.css": "7d106f3e18699cd41e2a5ad77334cb2cf021fa069bfd984494e4d610b89a6cbf",
+        "src/components/ui/styles/popup.module.css": "5039820b8a2adb3a2a9e3dbbde80b1d53e4c3ec9998ddd9cce819320b3082e9d",
         "src/components/ui/styles/tokens.css": "73e4e9e64a0d7edba4172440e9bb8de43238e58a5c0753eb2a9a6c7eb183b694",
-        "src/lib/bitop-utils.ts": "b235723b7fd0051fc6a1814121b2adf918449dfbdcf338a3daa1e28bbd74a645"
+        "src/lib/bitop-utils.ts": "938dab60c1759605afe1d36da895a493f2da6788c3f337af471def2fa6a81854"
+      }
+    },
+    "data-table": {
+      "files": {
+        "src/components/ui/data-table/data-table.module.css": "b01f8baa9607737c13883f6bcb4c4ca5049b6dd406ba757d65c47830e101a801",
+        "src/components/ui/data-table/data-table.tsx": "cc04eb53e8c708113971dc121bf5789a718653cad331e7c1dd387c527ac8b337"
+      }
+    },
+    "date-picker": {
+      "files": {
+        "src/components/ui/date-picker/date-picker.module.css": "eba73e9541d64db4992d5d8a9db3d2f66adf0e719d7edfb3984799104fb7a24b",
+        "src/components/ui/date-picker/date-picker.tsx": "2f4605f4bc40c0f2dc12948c45527ec7ed7bf87d4835b6ce04a598169ab7a8b3"
+      }
+    },
+    "description-list": {
+      "files": {
+        "src/components/ui/description-list/description-list.module.css": "cf9f6bf55916c345e81e958589ad3b406e9a66d0fed028434e08dc8fcb9e13fe",
+        "src/components/ui/description-list/description-list.tsx": "51f5a7cab916271de049e3e6070a6b8e685568e56e00eb50505b2db274c55d60"
+      }
+    },
+    "dialog": {
+      "files": {
+        "src/components/ui/dialog/dialog.module.css": "d87cc6706be422a533afdb2ce37efa026c65597d6fb5aaff530296cae0fa4ccd",
+        "src/components/ui/dialog/dialog.tsx": "691fdee53dd7ed1a33453071ba6819f934038b8d34e7e9d8717f4b9d11e3d2a3"
+      }
+    },
+    "disclosure": {
+      "files": {
+        "src/components/ui/disclosure/disclosure.module.css": "223dd1158142284277be8dd69e6cf347ceb02c6a5130cdcdca18ab324d8027dc",
+        "src/components/ui/disclosure/disclosure.tsx": "30e75547f4c757f64b8873a0401c12a892f643f2801fdc517e75442e27ece261"
       }
     },
     "empty-state": {
@@ -68,7 +145,13 @@
     "field": {
       "files": {
         "src/components/ui/field/field.module.css": "a9c4097c87b65b81006333684fc8bea073c83a5843b50511a6aea4321d1c0143",
-        "src/components/ui/field/field.tsx": "9cce32484883e23d877335b7b3187281d6519dbd7b70ebb6f8a8a093b280c8ea"
+        "src/components/ui/field/field.tsx": "13fd908058562a40abdd1fa012d972fc0b16c97cc73e24af78af003319dcdda9"
+      }
+    },
+    "filter-bar": {
+      "files": {
+        "src/components/ui/filter-bar/filter-bar.module.css": "007a26e2415ea105d63957168ea94a639e2a6fc00dd4cdedb7686f5951e9fee5",
+        "src/components/ui/filter-bar/filter-bar.tsx": "8ba63fde43fe5b1dea6452d566aef06901640fcbbb89f13a203723af8cec5584"
       }
     },
     "input": {
@@ -89,16 +172,82 @@
         "src/components/ui/layout/layout.tsx": "b5db3937db40a8dbdd95b926bea5719fcfdd7fe4011bd747d5117d5da617a697"
       }
     },
+    "line-chart": {
+      "files": {
+        "src/components/ui/line-chart/line-chart.module.css": "63e6544b55c03ad9d8106abe99febe3c48efc1b07418f48a70cf9760cbc77f11",
+        "src/components/ui/line-chart/line-chart.tsx": "f29e5824f6845846f6daa5f5428478305488d0c3f56accfe817a2be04653e169"
+      }
+    },
     "menu": {
       "files": {
         "src/components/ui/menu/menu.module.css": "4570ae6da4d79db75583a70c35c0a80286a78519da32f6b2e7f20f54f8edfec3",
-        "src/components/ui/menu/menu.tsx": "8146e13881b48c3b85017efa5ae8f5c724c3ab821ec05a0e2fac5fe9b8c0212d"
+        "src/components/ui/menu/menu.tsx": "bdb333c02a4999c784ef765e452e8169c9b1107cfda0af32675a8603c3b2b66c"
+      }
+    },
+    "meter": {
+      "files": {
+        "src/components/ui/meter/meter.module.css": "b78ff2529fdc597beed351c6914653ed70aea24c21d5fa9e07e4fbd749caa009",
+        "src/components/ui/meter/meter.tsx": "5cede48e30c0beb255eded0841dbcbb71ac2d939c62c3cbfbcb3d25800a24298"
+      }
+    },
+    "number-input": {
+      "files": {
+        "src/components/ui/number-input/number-input.module.css": "b76075895383b1ae5d10595d278a2e88fe37bbece1658bffb6983b91e8f72ef9",
+        "src/components/ui/number-input/number-input.tsx": "1206be4854ccc49da7d302203deee35b1c17e4790494b42a9bc297fb2be18e6d"
       }
     },
     "page-header": {
       "files": {
-        "src/components/ui/page-header/page-header.module.css": "ebfd113b902cf31da7af5af10560a902903f209e840a33d20119c89b3a3eaccb",
-        "src/components/ui/page-header/page-header.tsx": "e2a81afdc705e60e4acea42d9859de2aeb4697a0addda136f32da81b5507e114"
+        "src/components/ui/page-header/page-header.module.css": "ac0a7970b38b060f05212adbc46ab7bb5c30851e6b648730186bc0b5809bb0a3",
+        "src/components/ui/page-header/page-header.tsx": "e9ffdc7acb15c1f4698879bbbdacbc0c575c1bc22046316663217ba68827d3f5"
+      }
+    },
+    "pagination": {
+      "files": {
+        "src/components/ui/pagination/pagination.module.css": "9c4d51555fc5018cae5f465337a0803d7ed4839b5c5462234eaa59d116d4418c",
+        "src/components/ui/pagination/pagination.tsx": "e2e4fd7dfdbca790c50e3ac5e697659a86458ff96e71cd0f9767fb1025339b49"
+      }
+    },
+    "popover": {
+      "files": {
+        "src/components/ui/popover/popover.module.css": "ec1c552558faba46242652a10c7f7793f99e8e454d902a206b17cf0ea73cdb8d",
+        "src/components/ui/popover/popover.tsx": "1f6482dee380e63900dcfa3daec4b49054f640d11197948cfe3eb405d0f0cc24"
+      }
+    },
+    "radio-group": {
+      "files": {
+        "src/components/ui/radio-group/radio-group.module.css": "929738bb8fd89b534072f4c88d9d6f01f765afb1a82b56edb6f8cb4735de6607",
+        "src/components/ui/radio-group/radio-group.tsx": "686bab4458d7de0d0012178d5304e7301fad5958a7dfe1fa3c499cf52920547d"
+      }
+    },
+    "save-bar": {
+      "files": {
+        "src/components/ui/save-bar/save-bar.module.css": "9848c4834651e52af6c889845ee2c91dfd95bac30311bf67a9bb6a1061a79e6e",
+        "src/components/ui/save-bar/save-bar.tsx": "db46dc281945f1e074d5e49fee3674be7c41a46a56672a471857b346b86ef9d7"
+      }
+    },
+    "scroll-area": {
+      "files": {
+        "src/components/ui/scroll-area/scroll-area.module.css": "9a42a2233e3399fd14446da969b2ff34789b12e24ff6c6827996ac774927980b",
+        "src/components/ui/scroll-area/scroll-area.tsx": "006f690b75977a2484e8a51876b3f43ea852f6663d91b38d464a03fe669ec7bf"
+      }
+    },
+    "select": {
+      "files": {
+        "src/components/ui/select/select.module.css": "af8e34132cc5bb942dce92b9a67fa27677686ce9f12f8686837bcb20c7761b3a",
+        "src/components/ui/select/select.tsx": "cbed92f84715c61d25c6a9e630c08fe6af95651c81c36b6286efa805552ee0e1"
+      }
+    },
+    "skeleton": {
+      "files": {
+        "src/components/ui/skeleton/skeleton.module.css": "8e3a26c5514c0f4ca76ce51f6d5c0b67ebc545806a93a010f1e7460e2451f24d",
+        "src/components/ui/skeleton/skeleton.tsx": "48647f14c0ef3ae7f62674efd58245eb2b75619d54c27a98dfe8f662c5190a4a"
+      }
+    },
+    "sparkline": {
+      "files": {
+        "src/components/ui/sparkline/sparkline.module.css": "4bfcd7bec40ca97e0832ad90e952d135f42f39a4413cb71ad05dd76f53569bdd",
+        "src/components/ui/sparkline/sparkline.tsx": "5104ca1a5b2ea0909b11d79a4976737925c20616466e6bf2db2db4a26ca228fb"
       }
     },
     "spinner": {
@@ -109,31 +258,67 @@
     },
     "stat-card": {
       "files": {
-        "src/components/ui/stat-card/stat-card.module.css": "8b1ee9d59849f47ec08e7f7c7c1a8ee581b92b4bc4fbbee6961acfdc14d2f71d",
-        "src/components/ui/stat-card/stat-card.tsx": "4cda92208ff5e4520b9043dcd7c309b9bac32be2592ccfd935a11eee1606d807"
+        "src/components/ui/stat-card/stat-card.module.css": "ea2504d4a09d9e15df14efd193cbf53f71c1b69fdfa935cab80e1ecbb16bcf10",
+        "src/components/ui/stat-card/stat-card.tsx": "6e697105d2d2ec7931acfc65475d9e79c704204a1bd9e4a9f925b9b5b4c25370"
+      }
+    },
+    "switch": {
+      "files": {
+        "src/components/ui/switch/switch.module.css": "52f00fc3e501dc14b29fb4b1e7483fa5a53952f1e92f8d3c275b9c46201a379f",
+        "src/components/ui/switch/switch.tsx": "02089aabd24a95aa85da578585b0cf46722deb5d203adc0f662e4ebfa195b78f"
       }
     },
     "table": {
       "files": {
-        "src/components/ui/table/table.module.css": "97f53b930a0959c48669c718e9c462596c011a1080927fb8cdfff8c7790c42cb",
-        "src/components/ui/table/table.tsx": "a6ee05df032b4c9b290abc0d140a13f3ed028c75ae79d3297e0b11ae36863477"
+        "src/components/ui/table/table.module.css": "5c9f582e5b2afc6af519a6060e76bdfc0d1809db78f84f0a98c1b55c33216917",
+        "src/components/ui/table/table.tsx": "17937503044779b087e576642b6501d1dd93509b03d2cabe8b1f606b4b6eef13"
       }
     },
     "tabs": {
       "files": {
-        "src/components/ui/tabs/tabs.module.css": "64592d0d92ddedb26cd916a3f3040d43ae956a3dbb152104252d181ee10573ec",
-        "src/components/ui/tabs/tabs.tsx": "b50689a4ccc40fbad57ac94c3e0316d38644c86fd145f5de5e8660bb85b5ff2d"
+        "src/components/ui/tabs/tabs.module.css": "8752755fbdd42ad0584616adbf85c31c12a44674d61afb5bac49a5bb57d4bca6",
+        "src/components/ui/tabs/tabs.tsx": "bfbec4bfb11bd894d90fb702e1ad99c7daa9eb0428568539dfa5d08a061b1b5e"
+      }
+    },
+    "text-link": {
+      "files": {
+        "src/components/ui/text-link/text-link.module.css": "7ee8436bfb2be3cff98853df5ceb1be085b1101d97f84d2c0065c88440d73824",
+        "src/components/ui/text-link/text-link.tsx": "52ff9a85e94bea8546f24d2d4d7ccf466cf48e29caf3f87883e0a5d6a7163620"
       }
     },
     "theme-neutral": {
       "files": {
-        "src/components/ui/themes/neutral.css": "df3f024e10856d23a628833d4ef921783849485fe0f77424b7ae31625ac0fd77"
+        "src/components/ui/themes/neutral.css": "e712ef716b9e53ce3000374f085717e3b56c1438e9a6deb3022a791510480029"
+      }
+    },
+    "time": {
+      "files": {
+        "src/components/ui/time/time.module.css": "d44aa80f53549f000acb483d0373d3f7f59435439f469aa320f590b8134a1191",
+        "src/components/ui/time/time.tsx": "20e92c0fedf0fcc6dc757cd41bd8888ebf38dd74758608d4017cf1feb205d349"
+      }
+    },
+    "toast": {
+      "files": {
+        "src/components/ui/toast/toast.module.css": "a5f339bf16dba913db1b84fecd3830f471c085a15a02ebc743b571dc518ea3ce",
+        "src/components/ui/toast/toast.tsx": "4718249525da3fa96e7ad5255e280b212b0290c5f649cd139934f57683ad271a"
+      }
+    },
+    "toggle": {
+      "files": {
+        "src/components/ui/toggle/toggle.module.css": "eb323753d321126d430a49c8d44300144850a36235bb8181ce48c61a0b8e8024",
+        "src/components/ui/toggle/toggle.tsx": "90b1b736a40c9ec6379fa24323ed393ae6e7be050bbd7ca3a2fa107e9ea77bfb"
+      }
+    },
+    "toggle-group": {
+      "files": {
+        "src/components/ui/toggle-group/toggle-group.module.css": "c5791e35f5b979a71365b9466feced637f5a49371781a6f295f30cbc67c686da",
+        "src/components/ui/toggle-group/toggle-group.tsx": "81b1315a278fc3f295393bd1e3ed0704b2693024e1999ac9a13ea89bd53ad4a0"
       }
     },
     "tooltip": {
       "files": {
-        "src/components/ui/tooltip/tooltip.module.css": "2183ecf91e3ddca3a233bacf63a408b908e335ecef34f8e169449143ef1c51fc",
-        "src/components/ui/tooltip/tooltip.tsx": "30b5027693925c90739dc16ac01eb962fdd9ecdfeb61b239e6caadb1e7e25485"
+        "src/components/ui/tooltip/tooltip.module.css": "92ca36149da18a85744d002de7511d1c6b7e28028298be7503ea2035afa16462",
+        "src/components/ui/tooltip/tooltip.tsx": "2efbad6aa9551e5ca9d424873b98939cc753ceb8a9b7a271b32dfcb71f9eaa55"
       }
     }
   }

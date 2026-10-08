@@ -4,7 +4,7 @@
  *
  *   import "@/components/ui/styles/bitop.css";
  *   // optional brand override, after bitop.css:
- *   import "@/components/ui/themes/uf.css";
+ *   import "@/components/ui/themes/acme.css";   // your own brand theme, if any
  *
  * Order matters: tokens, then the default theme, then the layered base
  * styles. Component CSS Modules are unlayered, so they always win over the

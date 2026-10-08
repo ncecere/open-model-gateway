@@ -1,0 +1,246 @@
+/* Stacked toasts, bottom-right, bottom-centre or bottom-left. Stacking math follows the Base UI Toast demo. */
+.viewport {
+  position: fixed;
+  z-index: var(--z-toast);
+  right: var(--space-4);
+  bottom: var(--space-4);
+  width: min(24rem, calc(100vw - 2rem));
+  outline: 0;
+  font-family: var(--font-family-sans);
+  font-feature-settings: var(--font-features);
+
+  @media (min-width: 640px) {
+    right: var(--space-6);
+    bottom: var(--space-6);
+  }
+
+  /* Centred along the bottom edge, clear of right-aligned actions. */
+  &[data-position="bottom-center"] {
+    right: 0;
+    left: 0;
+    margin-inline: auto;
+  }
+
+  /* Over the sidebar's footer: as wide as the sidebar once there is one, so
+     page content stays uncovered. */
+  &[data-position="bottom-left"] {
+    right: auto;
+    left: var(--space-4);
+
+    @media (min-width: 48rem) {
+      left: var(--space-2);
+      bottom: var(--space-2);
+      width: calc(var(--sidebar-width) - 2 * var(--space-2));
+    }
+  }
+}
+
+/* bottom-left while an AppShell sidebar is collapsed to its icon rail: too
+   narrow to hold a toast (which would cover the page beside it in a thin
+   box), so toasts take the bottom-right corner at their normal width. */
+@media (min-width: 48rem) {
+  :global(body:has(aside[data-collapsed])) .viewport[data-position="bottom-left"] {
+    right: var(--space-6);
+    bottom: var(--space-6);
+    left: auto;
+    width: min(24rem, calc(100vw - 2rem));
+  }
+}
+
+.toast {
+  --gap: 0.625rem;
+  --peek: 0.625rem;
+  --scale: calc(max(0, 1 - (var(--toast-index) * 0.06)));
+  --shrink: calc(1 - var(--scale));
+  --height: var(--toast-frontmost-height, var(--toast-height));
+  --offset-y: calc(
+    var(--toast-offset-y) * -1 + (var(--toast-index) * var(--gap) * -1) + var(--toast-swipe-movement-y)
+  );
+
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: calc(1000 - var(--toast-index));
+  box-sizing: border-box;
+  width: 100%;
+  height: var(--height);
+  border-radius: var(--radius-card);
+  background-color: var(--color-surface-raised);
+  color: var(--color-text);
+  box-shadow: var(--shadow-3);
+  transform-origin: bottom center;
+  user-select: none;
+  cursor: default;
+  transform: translateX(var(--toast-swipe-movement-x))
+    translateY(calc(var(--toast-swipe-movement-y) - (var(--toast-index) * var(--peek)) - (var(--shrink) * var(--height))))
+    scale(var(--scale));
+  transition:
+    transform 400ms var(--motion-ease-out),
+    opacity 300ms var(--motion-ease-out),
+    height var(--motion-duration-normal) var(--motion-ease-out);
+
+  /* hover gap so the stack doesn't collapse between toasts */
+  &::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 0;
+    width: 100%;
+    height: calc(var(--gap) + 1px);
+  }
+
+  &[data-expanded] {
+    height: var(--toast-height);
+    transform: translateX(var(--toast-swipe-movement-x)) translateY(var(--offset-y));
+  }
+
+  &[data-starting-style],
+  &[data-ending-style] {
+    transform: translateY(120%);
+    opacity: 0;
+  }
+
+  &[data-limited] {
+    opacity: 0;
+  }
+
+  &[data-ending-style] {
+    &[data-swipe-direction="right"] {
+      transform: translateX(calc(var(--toast-swipe-movement-x) + 120%)) translateY(var(--offset-y));
+    }
+    &[data-swipe-direction="down"] {
+      transform: translateY(calc(var(--toast-swipe-movement-y) + 120%));
+    }
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 2px;
+  }
+}
+
+.content {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  height: 100%;
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+  overflow: hidden;
+  transition: opacity var(--motion-duration-normal) var(--motion-ease-out);
+
+  &[data-behind] {
+    opacity: 0;
+  }
+
+  &[data-expanded] {
+    opacity: 1;
+  }
+}
+
+.icon {
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.125rem;
+  flex-shrink: 0;
+}
+
+.toast[data-tone="info"] .icon {
+  color: var(--color-info-dot);
+}
+.toast[data-tone="success"] .icon {
+  color: var(--color-success-dot);
+}
+.toast[data-tone="warning"] .icon {
+  color: var(--color-warning-dot);
+}
+.toast[data-tone="danger"] .icon {
+  color: var(--color-danger-dot);
+}
+
+.text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+/* A long name in a narrow toast (the sidebar's width) is cut after a few
+   lines instead of growing the toast down the screen; the text stays whole
+   for screen readers. */
+.title {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25rem;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.description {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-snug);
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+
+.action {
+  flex-shrink: 0;
+  height: 1.75rem;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-2);
+  background-color: var(--color-surface-sunken);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+
+  &:hover {
+    background-color: var(--color-surface-active);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 1px;
+  }
+}
+
+.close {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-2);
+  background: transparent;
+  color: var(--color-text-subtle);
+  cursor: pointer;
+
+  & svg {
+    width: 0.875rem;
+    height: 0.875rem;
+  }
+
+  &:hover {
+    background-color: var(--color-surface-hover);
+    color: var(--color-text);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 1px;
+  }
+}

@@ -16,11 +16,43 @@ export type AvatarProps = {
   className?: string;
 };
 
+/** A letter or digit (any script), with any combining marks after it. */
+const WORD_START = /[\p{L}\p{N}][\p{M}]*/u;
+
+/**
+ * Lowercase name particles and joining words passed over for the second
+ * initial ("Ludwig van Beethoven" → "LB", "Office of the Registrar" → "OR").
+ * Capitalised, they count ("Van Morrison" → "VM").
+ */
+const PARTICLES = new Set([
+  "a", "al", "and", "bin", "bint", "da", "das", "de", "del", "della", "der", "des", "di", "do", "dos", "du", "el", "for",
+  "ibn", "la", "le", "of", "the", "ten", "ter", "van", "von", "y", "zu",
+]);
+
+/** A word's first letter or digit, and whether the word is a lowercase particle. */
+function wordStart(word: string): { start: string; particle: boolean } | null {
+  const start = word.match(WORD_START)?.[0];
+  if (!start) return null;
+  return { start, particle: PARTICLES.has(word.replace(/[^\p{L}]/gu, "")) };
+}
+
+/**
+ * Up to two initials: the first letter or digit of the first two words
+ * ("IT Help Desk" → "IH", "Ada Lovelace" → "AL"). Punctuation and symbols
+ * are skipped ("Go docs (signed-in)" → "GD", not "G("), and a word with no
+ * letters or digits ("—", "(", "&") doesn't count. The second initial skips
+ * lowercase particles ("Charles de Gaulle" → "CG") unless only particles
+ * follow ("Maria de" → "MD").
+ */
 export function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  const first = parts[0]?.[0] ?? "";
-  const last = parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? "") : "";
-  return (first + last).toUpperCase() || "?";
+  const words = name
+    .split(/\s+/)
+    .map(wordStart)
+    .filter((w): w is { start: string; particle: boolean } => w !== null);
+  const [first, ...rest] = words;
+  if (!first) return "?";
+  const second = rest.find((w) => !w.particle) ?? rest[0];
+  return (first.start + (second?.start ?? "")).toUpperCase();
 }
 
 /** Deterministic tint (1–6) so the same name always gets the same colour. */

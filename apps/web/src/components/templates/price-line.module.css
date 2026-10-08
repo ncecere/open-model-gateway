@@ -1,0 +1,86 @@
+/* PriceLine: amount in tabular figures, muted unit, amber unknown. */
+.price {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--space-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.amount {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text);
+}
+
+.unit {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.list {
+  color: var(--color-text-muted);
+  text-decoration-thickness: 1px;
+}
+
+.unknown {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-warning-text);
+}
+
+.na {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.tiers {
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.tier {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4);
+}
+
+.tierLabel {
+  min-width: 4.5rem;
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.lines {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.lineRow {
+  display: grid;
+  grid-template-columns: minmax(8rem, 12rem) minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: baseline;
+}
+
+.lineLabel {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.lineValue {
+  margin: 0;
+  min-width: 0;
+}
+
+@media (max-width: 37.5rem) {
+  .lineRow {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-1);
+  }
+}

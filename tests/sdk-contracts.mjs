@@ -26,7 +26,16 @@ const message = await anthropic.messages.create({ model: "company/smart", messag
 assert.equal(message.content[0].text, "Hello from fixture");
 assert.equal(message.stop_reason, "end_turn");
 const messageStream = anthropic.messages.stream({ model: "company/smart", messages, max_tokens: 32 });
+let startUsage;
+messageStream.on("streamEvent", (event) => {
+  // The SDK later mutates this snapshot with message_delta usage; copy it now.
+  if (event.type === "message_start") startUsage = { ...event.message.usage };
+});
 const finalMessage = await messageStream.finalMessage();
+// Vendor shape: observed input at start, cumulative output replaced by message_delta.
+assert.deepEqual(startUsage, { input_tokens: 3, output_tokens: 0 });
+assert.equal(finalMessage.usage.input_tokens, 3);
+assert.equal(finalMessage.usage.output_tokens, 4);
 assert.equal(finalMessage.content[0].text, "Hello from fixture");
 assert.equal(finalMessage.stop_reason, "end_turn");
 console.log("OpenAI Chat, Responses, and Anthropic Messages SDK contracts passed (JSON + streaming helpers)");

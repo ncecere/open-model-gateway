@@ -1,0 +1,37 @@
+/* LayerTable: layer name with icon; muted inherited values; emphasised Effective row. */
+.layer {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.icon {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  color: var(--color-text-muted);
+}
+
+.value {
+  font-variant-numeric: tabular-nums;
+
+  &[data-state="inherited"],
+  &[data-state="none"] {
+    color: var(--color-text-muted);
+  }
+}
+
+.count[data-unknown] {
+  color: var(--color-warning-text);
+}
+
+.muted {
+  color: var(--color-text-muted);
+}
+
+.effective {
+  background-color: var(--color-surface-sunken);
+  font-weight: var(--font-weight-semibold);
+}

@@ -20,6 +20,7 @@ fn target() -> Deployment {
         credential_ref: "ref".into(),
         endpoint: None,
         region: None,
+        supported_protocols: vec!["chat_completions".into(), "messages".into()],
     }
 }
 fn request(stream: bool) -> ChatRequest {
@@ -212,7 +213,8 @@ fn tool_deltas_and_ordering() {
         events[0],
         ChatEvent::Usage(Usage {
             input_tokens: Some(4),
-            output_tokens: None
+            output_tokens: None,
+            ..
         })
     ));
     assert!(matches!(events[1], ChatEvent::Done));
@@ -226,4 +228,44 @@ async fn rejects_custom_endpoint_before_network() {
         adapter.execute(&t, request(false)).await,
         Err(InferenceError::Configuration)
     ));
+}
+
+#[test]
+fn cumulative_cache_usage_has_one_finish_and_one_final_usage() {
+    let mut state = State::default();
+    state.push(json!({"type":"message_start","message":{"type":"message","role":"assistant","content":[],"stop_reason":null,"usage":{"input_tokens":4,"output_tokens":0,"cache_read_input_tokens":10,"cache_creation_input_tokens":20,"cache_creation":{"ephemeral_5m_input_tokens":8,"ephemeral_1h_input_tokens":12}}}})).unwrap();
+    assert!(state.push(json!({"type":"message_delta","delta":{"stop_reason":null},"usage":{"output_tokens":2}})).unwrap().is_empty());
+    assert!(state.push(json!({"type":"message_delta","delta":{"stop_reason":null},"usage":{"output_tokens":5,"input_tokens":6}})).unwrap().is_empty());
+    let finished=state.push(json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}})).unwrap();
+    assert_eq!(finished.len(), 1);
+    assert!(matches!(finished[0], ChatEvent::Finish(_)));
+    assert!(
+        state
+            .push(json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}}))
+            .is_err()
+    );
+    let terminal = state.push(json!({"type":"message_stop"})).unwrap();
+    let ChatEvent::Usage(u) = terminal[0] else {
+        panic!()
+    };
+    assert_eq!(u.input_tokens, Some(6));
+    assert_eq!(u.output_tokens, Some(7));
+    assert_eq!(u.billing.unwrap().total_input_tokens, Some(36));
+    assert_eq!(u.billing.unwrap().cache_write_1h_input_tokens, Some(12));
+    assert!(matches!(terminal[1], ChatEvent::Done));
+    assert!(state.push(json!({"type":"message_stop"})).is_err());
+}
+#[tokio::test]
+async fn invalid_messages_body_preserves_validated_usage_as_evidence() {
+    use crate::inference::evidence::capture;
+    let bad = json!({"id":"m","type":"message","role":"assistant","model":"private",
+        "content":[{"type":"thinking","thinking":"x"}],"stop_reason":"end_turn","stop_sequence":null,
+        "usage":{"input_tokens":13,"output_tokens":14,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}});
+    let (result, observed) = capture(async { decode(&bad) }).await;
+    assert_eq!(result.err(), Some(InferenceError::InvalidUpstream));
+    let observed = observed.unwrap();
+    assert_eq!(
+        (observed.input_tokens, observed.output_tokens),
+        (Some(13), Some(14))
+    );
 }

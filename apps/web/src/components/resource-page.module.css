@@ -1,0 +1,20 @@
+.list { margin-bottom: var(--space-6); flex-wrap: wrap; max-width: 100%; }
+
+/* Phone: one scrollable row of pill tabs with an overflow fade (like the model section nav), never 2–3 wrapped lines. */
+@media (max-width: 40rem) {
+  .list {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding-inline-end: 2rem;
+    mask-image: linear-gradient(to right, #000 calc(100% - 2rem), transparent);
+  }
+
+  .list::-webkit-scrollbar {
+    display: none;
+  }
+
+  .list > * {
+    flex: none;
+  }
+}

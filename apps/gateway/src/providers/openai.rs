@@ -67,8 +67,49 @@ impl ProviderAdapter for OpenAiAdapter {
     fn supports_protocol(&self, protocol: ApiProtocol) -> bool {
         matches!(
             protocol,
-            ApiProtocol::ChatCompletions | ApiProtocol::Responses
+            ApiProtocol::ChatCompletions
+                | ApiProtocol::Responses
+                | ApiProtocol::Embeddings
+                | ApiProtocol::Images
+                | ApiProtocol::AudioTranscriptions
+                | ApiProtocol::AudioSpeech
         )
+    }
+
+    fn supports_transcription_request(&self, _: &Deployment, _: &TranscriptionRequest) -> bool {
+        true
+    }
+
+    fn supports_speech_request(&self, _: &Deployment, _: &SpeechRequest) -> bool {
+        true
+    }
+
+    async fn execute_audio_transcription(
+        &self,
+        target: &Deployment,
+        request: TranscriptionRequest,
+    ) -> Result<TranscriptionResponse> {
+        audio::transcribe(self, target, request).await
+    }
+
+    async fn execute_audio_speech(
+        &self,
+        target: &Deployment,
+        request: SpeechRequest,
+    ) -> Result<SpeechResponse> {
+        audio::speak(self, target, request).await
+    }
+
+    fn supports_image_request(&self, target: &Deployment, request: &ImageRequest) -> bool {
+        images::supports(target, request)
+    }
+
+    async fn execute_images(
+        &self,
+        target: &Deployment,
+        request: ImageRequest,
+    ) -> Result<ImageResponse> {
+        images::execute(self, target, request).await
     }
 
     async fn execute_protocol(
@@ -80,13 +121,46 @@ impl ProviderAdapter for OpenAiAdapter {
         match protocol {
             ApiProtocol::ChatCompletions => self.execute(target, request).await,
             ApiProtocol::Responses => super::openai_responses::execute(self, target, request).await,
-            ApiProtocol::Messages => Err(InferenceError::Unsupported),
+            _ => Err(InferenceError::Unsupported),
         }
+    }
+
+    async fn execute_embeddings(
+        &self,
+        target: &Deployment,
+        request: EmbeddingRequest,
+    ) -> Result<EmbeddingResponse> {
+        super::embeddings::validate(&request)?;
+        if target.provider != self.id()
+            || target.credential_ref == "none"
+            || target
+                .endpoint
+                .as_deref()
+                .is_some_and(|v| v != BASE && v != "https://api.openai.com/v1/")
+            || target.region.as_deref().is_some_and(|v| !v.is_empty())
+        {
+            return Err(InferenceError::Configuration);
+        }
+        let secret = self.resolver.resolve(&target.credential_ref)?;
+        let mut auth = header::HeaderValue::from_str(&format!("Bearer {}", secret.expose()))
+            .map_err(|_| InferenceError::Configuration)?;
+        auth.set_sensitive(true);
+        let response = self
+            .client
+            .post(format!("{}/embeddings", self.base))
+            .header(header::AUTHORIZATION, auth)
+            .json(&super::embeddings::encode(&target.upstream_model, &request))
+            .send()
+            .await
+            .map_err(transport_error)?;
+        check_status(response.status())?;
+        super::embeddings::decode(&super::framing::body(response).await?, &request)
     }
 
     async fn execute(&self, target: &Deployment, request: ChatRequest) -> Result<ProviderOutput> {
         // Validate before resolving credentials, even when using the test transport.
         if target.provider != self.id()
+            || target.credential_ref == "none"
             || target
                 .endpoint
                 .as_deref()
@@ -170,7 +244,7 @@ fn check_status(status: StatusCode) -> Result<()> {
     })
 }
 
-fn encode(model: &str, request: &ChatRequest) -> Value {
+pub(super) fn encode(model: &str, request: &ChatRequest) -> Value {
     let messages: Vec<Value> = request
         .messages
         .iter()
@@ -295,24 +369,44 @@ fn finish(value: &Value) -> Result<FinishReason> {
 }
 
 fn usage(value: &Value) -> Result<Usage> {
-    if value.is_null() {
-        return Ok(Usage::default());
-    }
-    object(value)?;
-    let count = |v: &Value| {
-        if v.is_null() {
-            Ok(None)
+    super::metering::inclusive(
+        value,
+        "prompt_tokens",
+        "completion_tokens",
+        "prompt_tokens_details",
+        "cache_write_tokens",
+    )
+}
+pub(super) fn local_usage(value: &Value, profile: &str) -> Result<Usage> {
+    super::metering::inclusive(
+        value,
+        "prompt_tokens",
+        "completion_tokens",
+        "prompt_tokens_details",
+        if profile == "vllm" {
+            "created_cache_tokens"
         } else {
-            v.as_u64().map(Some).ok_or(InferenceError::InvalidUpstream)
-        }
-    };
-    Ok(Usage {
-        input_tokens: count(&value["prompt_tokens"])?,
-        output_tokens: count(&value["completion_tokens"])?,
-    })
+            "cache_write_tokens"
+        },
+    )
 }
 
-fn decode_complete(value: &Value) -> Result<ChatResponse> {
+pub(super) fn decode_complete(value: &Value) -> Result<ChatResponse> {
+    decode_complete_profile(value, None)
+}
+/// Structural failure still fails, but a valid usage object is kept as evidence.
+pub(super) fn decode_complete_profile(
+    value: &Value,
+    profile: Option<&str>,
+) -> Result<ChatResponse> {
+    crate::inference::evidence::preserve(decode_shape(value, profile), || {
+        value["usage"].is_object().then(|| match profile {
+            Some(profile) => local_usage(&value["usage"], profile),
+            None => usage(&value["usage"]),
+        })
+    })
+}
+fn decode_shape(value: &Value, profile: Option<&str>) -> Result<ChatResponse> {
     object(value)?;
     if !empty(&value["error"]) {
         return Err(InferenceError::InvalidUpstream);
@@ -360,18 +454,22 @@ fn decode_complete(value: &Value) -> Result<ChatResponse> {
         content,
         tool_calls,
         finish_reason: finish(&choice["finish_reason"])?,
-        usage: usage(&value["usage"])?,
+        usage: match profile {
+            Some(profile) => local_usage(&value["usage"], profile)?,
+            None => usage(&value["usage"])?,
+        },
     })
 }
 
 #[derive(Default)]
-struct StreamState {
+pub(super) struct StreamState {
+    profile: Option<&'static str>,
     finished: bool,
     used: bool,
 }
 
 impl StreamState {
-    fn decode(&mut self, data: &[u8]) -> Result<Vec<ChatEvent>> {
+    pub(super) fn decode(&mut self, data: &[u8]) -> Result<Vec<ChatEvent>> {
         if data == b"[DONE]" {
             if !self.finished {
                 return Err(InferenceError::InvalidUpstream);
@@ -442,7 +540,10 @@ impl StreamState {
             if self.used || !self.finished {
                 return Err(InferenceError::InvalidUpstream);
             }
-            events.push(ChatEvent::Usage(usage(&value["usage"])?));
+            events.push(ChatEvent::Usage(match self.profile {
+                Some(profile) => local_usage(&value["usage"], profile)?,
+                None => usage(&value["usage"])?,
+            }));
             self.used = true;
         }
         Ok(events)
@@ -453,7 +554,7 @@ impl StreamState {
 /// codepoint, CRLF pair, or event may span any number of network chunks. The
 /// entire frame (including comments and ignored fields) has a hard byte bound.
 #[derive(Default)]
-struct SseDecoder {
+pub(super) struct SseDecoder {
     line: Vec<u8>,
     data: Vec<u8>,
     event_bytes: usize,
@@ -462,14 +563,14 @@ struct SseDecoder {
 }
 
 impl SseDecoder {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             first_line: true,
             ..Self::default()
         }
     }
 
-    fn push(&mut self, byte: u8) -> Result<Option<Vec<u8>>> {
+    pub(super) fn push(&mut self, byte: u8) -> Result<Option<Vec<u8>>> {
         if self.skip_lf {
             self.skip_lf = false;
             if byte == b'\n' {
@@ -521,10 +622,16 @@ impl SseDecoder {
 }
 
 fn decode_stream(response: reqwest::Response) -> EventStream {
+    decode_stream_profile(response, None)
+}
+pub(super) fn decode_stream_profile(
+    response: reqwest::Response,
+    profile: Option<&'static str>,
+) -> EventStream {
     Box::pin(async_stream::try_stream! {
         let mut chunks = response.bytes_stream();
         let mut decoder = SseDecoder::new();
-        let mut state = StreamState::default();
+        let mut state = StreamState { profile, ..StreamState::default() };
         while let Some(chunk) = chunks.next().await {
             let chunk = chunk.map_err(transport_error)?;
             for &byte in chunk.iter() {
@@ -542,5 +649,7 @@ fn decode_stream(response: reqwest::Response) -> EventStream {
     })
 }
 
+mod audio;
+mod images;
 #[cfg(test)]
 mod tests;

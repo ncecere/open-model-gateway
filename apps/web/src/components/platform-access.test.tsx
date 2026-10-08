@@ -1,196 +1,73 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { renderToStaticMarkup } from "react-dom/server";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactNode } from "react";
-import { api, type Model, type Organization, type Session, type Workspace } from "../lib/api";
+import { api } from "../lib/api";
 import { type Action } from "./ui";
-import { AssignedModels, DelegatedGrants, PlatformAssignment, PlatformModelAccess, recipientGrantPath } from "../pages/model-access";
+import { PlatformAssignment, Catalogs, WorkspaceCatalogs, WorkspaceModelAccess, recipientGrantPath, catalogOverrideBody } from "../pages/model-access";
+import { ScopeLimits } from "./scope-limits";
 import { Models, Providers, Deployments } from "../pages/catalog";
-import { PolicyPanel, Governance, Pricing, Routing, PriceVersions } from "../pages/governance";
-import { Teams, PlatformTeams } from "../pages/hierarchy";
-import { WorkspaceMembers, ServiceAccounts, Grants } from "../pages/workspace";
+import { Governance, Pricing, Routing, PriceVersions } from "../pages/governance";
+import { PlatformTeams } from "../pages/hierarchy";
+import { WorkspaceMembers, ServiceAccounts, Grants, addModelsAction } from "../pages/workspace";
 import { Overview } from "../pages/overview";
-import { adminGroups, adminLanding, contextOptions, navigation, organizationLanding, scopeSearch } from "../lib/navigation";
+import { contextOptions, scopeSearch } from "../lib/navigation";
 import { canView, permissions } from "../lib/permissions";
 import { jumpTargets } from "../lib/search";
-import { policyFields } from "../lib/governance";
-
+import { policyFields, policyBody } from "../lib/governance";
+import { admin, auditor, session, project, member, model, provider, policy, grant, markup, testClient } from "../lib/test-fixtures";
 const captures = vi.hoisted(() => ({ ask: vi.fn(), clicks: new Map<string, () => void>() }));
-vi.mock("./ui", async importOriginal => {
-  const original = await importOriginal<typeof import("./ui")>();
-  return { ...original, useAction: () => captures.ask, Button: (props: React.ComponentProps<typeof original.Button>) => {
-    const label = Array.isArray(props.children) ? props.children.join("") : String(props.children);
-    if (props.onClick) captures.clicks.set(label, props.onClick as () => void);
-    return <original.Button {...props} />;
-  } };
+vi.mock("./ui", async original => { const ui = await original<typeof import("./ui")>(); return { ...ui, useAction: () => captures.ask, Button: (props: React.ComponentProps<typeof ui.Button>) => { const label = Array.isArray(props.children) ? props.children.filter(c => typeof c === "string").join("") : String(props.children); if (props.onClick && !props.disabled) captures.clicks.set(label, props.onClick as () => void); return <ui.Button {...props} />; } }; });
+vi.mock("../lib/api", async original => ({ ...await original<typeof import("../lib/api")>(), api: vi.fn().mockResolvedValue({ ok: true }) }));
+function action(label: string): Action { const click = captures.clicks.get(label); expect(click).toBeDefined(); click!(); return captures.ask.mock.lastCall![0]; }
+const catalogRow = (g: typeof grant) => ({ model_id: g.model_id, public_name: g.public_name, display_name: g.display_name, description: null, protocols: g.supported_protocols, workload: "generation", eligibility: "selected", reason: "Added to this workspace from an available catalog", min_input_microusd_per_million: null, min_output_microusd_per_million: null, routes: 1 });
+function choices(path: string, data: unknown[]) { const client = testClient(); client.setQueryData(["api", undefined, path, "choices"], data); return client; }
+const signal = new AbortController().signal;
+afterEach(() => { captures.clicks.clear(); vi.clearAllMocks(); });
+describe("installation infrastructure boundary", () => {
+  it("keeps legacy route and routing pages reachable by deep link but out of jump search", () => { const empty = { ...admin, workspaces: [] }; for (const page of ["deployments", "routing"] as const) { expect(canView(page, empty)).toBe(true); expect(canView(page, session, project)).toBe(false); expect(jumpTargets(empty).find(t => t.id === `page:${page}`)).toBeUndefined(); } expect(jumpTargets(empty).find(t => t.id === "page:models")?.keywords).toContain("deployments"); });
+  it.each(["models", "providers", "pricing", "platform-audit", "catalogs", "platform-projects"] as const)("offers %s without memberships and clears stale workspace context", page => { const empty = { ...admin, workspaces: [] }; expect(canView(page, empty)).toBe(true); expect(scopeSearch(page, "private")).toEqual({ page, ws: undefined }); expect(jumpTargets(empty).find(t => t.id === `page:${page}`)).toBeDefined(); expect(canView(page, session, project)).toBe(false); });
+  it("reads infrastructure only from platform paths", () => { expect(markup(<Models session={admin} />, [], choices("/api/v1/platform/models?sort=name", [model]))).toContain("Smart model"); expect(markup(<Providers session={admin} />, [["/api/v1/platform/providers?limit=50&offset=0", { data: [provider] }]])).toContain("Production provider"); expect(markup(<Deployments session={admin} />, [["/api/v1/platform/deployments?limit=50&offset=0", { data: [{ id: "d", upstream_model: "global-deployment", model_id: model.id, provider_connection_id: provider.id, enabled: true }] }]])).toContain("global-deployment"); });
+  it("Pricing is a price overview: every route with its current price, unpriced enabled routes flagged, links to the route (finding #5)", () => {
+    const client = choices("/api/v1/platform/deployments", [{ id: "d", model_id: model.id, upstream_model: "priced-up", provider_name: "OpenAI", enabled: true }, { id: "u", model_id: model.id, upstream_model: "bare-up", provider_name: "OpenAI", enabled: true }]);
+    client.setQueryData(["api", undefined, "/api/v1/platform/models", "choices"], [model]);
+    client.setQueryData(["api", undefined, "/api/v1/platform/deployments/d/prices?limit=1&offset=0"], { data: [{ id: "p", pricing_version: 1, created_at: "2026-10-01T00:00:00Z", input_microusd_per_million: "8100", output_microusd_per_million: "500000" }] });
+    client.setQueryData(["api", undefined, "/api/v1/platform/deployments/u/prices?limit=1&offset=0"], { data: [] });
+    const html = markup(<Pricing session={admin} />, [], client);
+    for (const text of ["Current price for every route", "priced-up", "bare-up", "$0.0081", "$0.50", 'href="/admin/routes/d"', "1 enabled route has no price", "Unpriced"]) expect(html).toContain(text);
+    expect(html).not.toContain("OpenRouter"); expect(html).not.toContain("Choose…");
+  });
+  it("uses platform-wide routing and pricing choices", () => { const models = choices("/api/v1/platform/models", [model]); expect(markup(<Routing session={admin} />, [], models)).toContain(model.public_name); models.clear(); const deployments = choices("/api/v1/platform/deployments", [{ id: "d", upstream_model: "priced" }]); expect(markup(<Pricing session={admin} />, [], deployments)).toContain("priced"); deployments.clear(); });
+  it("offers the v3 price editor, and the OpenRouter import only for OpenRouter routes", () => { const path = "/api/v1/platform/deployments/d/prices", d = { id: "d", model_id: model.id, provider_connection_id: provider.id, upstream_model: "openai/gpt-x", enabled: true }, fixtures = (profile: string): [string, unknown][] => [[`/api/v1/platform/models/${model.id}`, model], [`/api/v1/platform/providers/${provider.id}`, { ...provider, provider: profile }], [`${path}?limit=1&offset=0`, { data: [] }]]; const openrouter = markup(<PriceVersions path={path} writable deployment={d} />, fixtures("openrouter")); expect(openrouter).toContain("Publish price version"); expect(openrouter).toContain("Import current OpenRouter price"); expect(captures.clicks.get("Publish price version")).toBeDefined(); expect(captures.ask).not.toHaveBeenCalled(); expect(markup(<PriceVersions path={path} writable deployment={d} />, fixtures("openai"))).not.toContain("Import current OpenRouter price"); expect(markup(<PriceVersions path={path} writable={false} deployment={d} />, fixtures("openrouter"))).not.toContain("Import current OpenRouter price"); });
+  it("replaces obsolete organization assignments with approved catalog collections", () => { const html = markup(<Catalogs session={admin} />); expect(html).toContain("Catalogs"); expect(html).toContain("Personal defaults"); expect(html).toContain("Project defaults"); expect(html).not.toContain("organization"); });
+  it("selected workspace models contain no infrastructure writes", () => { const html = markup(<Grants session={session} workspace={member} />, [], choices("/api/v1/workspaces/team/catalog", [catalogRow(grant)])); expect(html).toContain("Smart model"); expect(html).not.toContain("Create alias"); expect(html).not.toContain("Disable</button>"); });
 });
-vi.mock("../lib/api", async importOriginal => ({ ...await importOriginal<typeof import("../lib/api")>(), api: vi.fn().mockResolvedValue({ ok: true }) }));
-const org: Organization = { id: "org", name: "Consumer", slug: "consumer", role: "admin" };
-const project: Workspace = { id: "project", name: "Research", organization_id: org.id, kind: "project", role: "admin" };
-const session: Session = { user: { id: "me", email: "me@example.invalid", platform_admin: false }, organizations: [org], workspaces: [project] };
-const operator: Session = { ...session, user: { ...session.user, platform_admin: true } };
-const model: Model = { id: "model", public_name: "global/model", display_name: "Global Model", enabled: true, personal_enabled: false };
-const policy = { requests_per_minute: null, tokens_per_minute: null, concurrent_requests: null, monthly_budget_microusd: null };
-const clients: QueryClient[] = [];
-type Entry = [unknown[], unknown];
-const choices = (path: string, data: unknown[]): Entry => [["api", path, "choices"], data];
-const rows = (path: string, data: unknown[]): Entry => [["api", `${path}?limit=100&offset=0`], { data }];
-function render(node: ReactNode, entries: Entry[] = []) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } }); clients.push(client);
-  for (const [key, value] of entries) client.setQueryData(key, value);
-  return renderToStaticMarkup(<QueryClientProvider client={client}>{node}</QueryClientProvider>);
-}
-function action(label: string): Action {
-  const click = captures.clicks.get(label); expect(click, `button ${label}`).toBeDefined(); click!();
-  return captures.ask.mock.lastCall![0] as Action;
-}
-afterEach(() => { clients.forEach(client => client.clear()); clients.length = 0; captures.clicks.clear(); vi.clearAllMocks(); });
-
-describe("platform infrastructure boundary", () => {
-  it("offers global infrastructure without an organization and drops stale scope", () => {
-    const empty = { ...operator, organizations: [], workspaces: [] };
-    for (const page of ["models", "providers", "deployments", "routing", "pricing", "platform-audit", "model-access", "platform-projects"] as const) {
-      expect(canView(page, empty)).toBe(true);
-      expect(scopeSearch(page, "stale-org", "private")).toEqual({ page, org: undefined, ws: undefined });
-      expect(jumpTargets(empty).find(target => target.id === `page:${page}`)).toBeDefined();
-      expect(canView(page, session, org, project)).toBe(false);
-    }
-    expect(adminGroups("models", true)).toEqual(["Platform", "Models", "Oversight"]);
-    expect(navigation.filter(item => item.group === "Platform").map(item => item.label)).toEqual(["Overview", "Organizations", "Teams", "Projects", "Users"]);
+describe("independent model sources and live availability", () => {
+  it("adds several available models at once with human protocol labels and per-item retry", async () => {
+    const html = markup(<Grants session={session} workspace={member} />, [], choices("/api/v1/workspaces/team/catalog", [{ ...catalogRow(grant), protocols: ["audio_speech"], workload: "audio_speech" }]));
+    expect(html).toContain("Text to speech"); expect(html).not.toContain("audio_speech");
+    const choicesList = [{ ...grant, model_id: "m1", display_name: "One" }, { ...grant, model_id: "m2", display_name: "Two" }, { ...grant, model_id: "m3", display_name: "Three" }];
+    const add = addModelsAction("/api/v1/workspaces/team/models", choicesList);
+    expect(add.fields?.[0]).toMatchObject({ type: "checkboxes", maxSelections: 3 });
+    vi.mocked(api).mockResolvedValueOnce({ ok: true }).mockRejectedValueOnce(new Error("Model is no longer available")).mockResolvedValueOnce({ ok: true });
+    await expect(add.run({ model_ids: JSON.stringify(["m1", "m2", "m3"]) }, signal)).rejects.toThrow("Added 2 of 3 models. Not added: Two (Model is no longer available).");
+    expect(vi.mocked(api).mock.calls.map(c => (c[1] as { body: { model_id: string } }).body.model_id)).toEqual(["m1", "m2", "m3"]);
+    vi.mocked(api).mockClear();
+    await add.run({ model_ids: JSON.stringify(["m1", "m2", "m3"]) }, signal);
+    expect(vi.mocked(api).mock.calls.map(c => (c[1] as { body: { model_id: string } }).body.model_id)).toEqual(["m2"]);
   });
-  it("reads infrastructure at platform paths, never the consuming organization", () => {
-    expect(render(<Models session={operator} />, [rows("/api/v1/platform/models", [model])])).toContain("Global Model");
-    expect(render(<Providers session={operator} />, [rows("/api/v1/platform/providers", [{ id: "provider", name: "Global provider", provider: "openai", enabled: true }])])).toContain("Global provider");
-    expect(render(<Deployments session={operator} />, [rows("/api/v1/platform/deployments", [{ id: "d", upstream_model: "global-deployment", enabled: true }])])).toContain("global-deployment");
-    expect(render(<Routing session={operator} />, [choices("/api/v1/platform/models", [model])])).toContain("Global Model");
-    expect(render(<Pricing session={operator} />, [choices("/api/v1/platform/deployments", [{ id: "d", upstream_model: "global-priced-deployment" }])])).toContain("global-priced-deployment");
-  });
-  it("publishes dollar-denominated rates as exact integer micro-USD without changing the API contract", async () => {
-    const path = "/api/v1/platform/deployments/d/prices";
-    render(<PriceVersions path={path} writable />);
-    const publish = action("Publish price version");
-    expect(publish.fields?.map(field => field.name)).toContain("input_usd_per_million");
-    expect(publish.fields?.map(field => field.label).join(" ")).not.toContain("micro-USD");
-    await publish.run({ input_usd_per_million: "0.123456", output_usd_per_million: "0.500001", input_token_limit: "1000", output_token_limit: "100" });
-    expect(api).toHaveBeenCalledWith(path, { method: "POST", body: { input_microusd_per_million: "123456", output_microusd_per_million: "500001", input_token_limit: 1000, output_token_limit: 100 } });
-  });
-  it("requires explicit organization selection for assignments, not infrastructure", () => {
-    const html = render(<PlatformModelAccess session={operator} />, [choices("/api/v1/orgs", [org])]);
-    expect(html).toContain("Select an organization");
-    expect(html).toContain("Choose an organization…");
-    expect(html).not.toContain("Platform-assigned ceiling");
-    expect(html).not.toContain("Delegate model</button>");
-  });
-  it("does not expose infrastructure actions in the assigned organization catalog", () => {
-    const html = render(<AssignedModels organization={org} />, [rows("/api/v1/orgs/org/models", [model])]);
-    expect(html).toContain("Global Model"); expect(html).toContain("Allow personal access");
-    expect(html).not.toContain("Disable</button>"); expect(html).not.toContain("Create alias");
-    expect(html).toContain("Private workspaces are not listed");
-  });
+  it("does not offer catalog removal for direct-only models", () => { const client = choices("/api/v1/workspaces/project/catalog", [{ ...catalogRow(grant), eligibility: "direct", reason: "Assigned to this workspace by a Platform Admin" }]); client.setQueryData(["api", undefined, "/api/v1/workspaces/project/models", "choices"], [{ ...grant, catalog_granted: false, direct_granted: true, available_from_catalog: false }]); const html = markup(<Grants session={session} workspace={project} />, [], client); expect(html).toContain("Assigned by admin"); expect(html).toContain("Assigned to this workspace by a Platform Admin"); expect(html).not.toContain("Remove</button>"); client.clear(); });
+  it("directly assigns several global aliases, excluding already assigned ones", async () => { const other = { ...model, id: "other", public_name: "company/other", display_name: "Other" }, client = choices("/api/v1/platform/models", [model, other]); client.setQueryData(["api", undefined, "/api/v1/workspaces/project/models", "choices"], [{ ...grant, model_id: model.id, catalog_granted: false, direct_granted: true, supported_protocols: ["chat_completions"] }]); const html = markup(<PlatformAssignment session={admin} workspace={project} />, [], client); expect(html).toContain("Direct"); expect(html).toContain("Remove</button>"); const assign = action("Assign models"); expect(assign.fields?.[0]).toMatchObject({ type: "checkboxes" }); expect(assign.fields?.[0].options?.map(o => o.value)).toEqual(["other"]); await assign.run({ model_ids: JSON.stringify(["other"]) }, signal); expect(api).toHaveBeenCalledWith("/api/v1/platform/workspaces/project/models", { method: "POST", body: { model_id: "other" }, signal }); client.clear(); });
+  it("removes only the direct source, never a catalog source", async () => { const client = choices("/api/v1/platform/models", [model]); client.setQueryData(["api", undefined, "/api/v1/workspaces/project/models", "choices"], [{ ...grant, model_id: "both", catalog_granted: true, direct_granted: true }, { ...grant, model_id: "catalog", public_name: "company/catalog", catalog_granted: true, direct_granted: false }]); const html = markup(<PlatformAssignment session={admin} workspace={project} />, [], client); expect(html.match(/Remove<\/button>/g)).toHaveLength(1); expect(html).toContain("Catalog"); const remove = action("Remove"); expect(remove.description).toContain("stays available through"); await remove.run({}, signal); expect(api).toHaveBeenCalledWith("/api/v1/platform/workspaces/project/models/both", { method: "DELETE", signal }); client.clear(); });
+  it("keeps direct and self-service source endpoints distinct", () => { expect(recipientGrantPath("project")).toBe("/api/v1/platform/workspaces/project/models"); expect(recipientGrantPath("personal")).toBe("/api/v1/platform/workspaces/personal/models"); expect(recipientGrantPath("project")).not.toBe("/api/v1/workspaces/project/models"); });
+  it("uses replacement headers, including deliberate empty overrides", () => { expect(catalogOverrideBody({ catalog_ids: "[]" })).toEqual({ mode: "replace", catalog_ids: [] }); expect(catalogOverrideBody({ catalog_ids: '["one","two"]' })).toEqual({ mode: "replace", catalog_ids: ["one", "two"] }); });
+  it("shows live defaults by name and an explicit none state, without a stray reset button", () => { const client = choices("/api/v1/platform/catalogs", [{ id: "one", name: "Approved" }, { id: "two", name: "Local" }]); const html = markup(<WorkspaceCatalogs session={admin} workspaceId="project" kind="project" />, [["/api/v1/platform/workspaces/project/catalogs", { mode: "replace", catalog_ids: [], effective_catalog_ids: [] }], ["/api/v1/platform/workspace-types/project/catalogs", { kind: "project", catalog_ids: ["one", "two"] }]], client); expect(html).toContain("Use Project defaults"); expect(html).toContain("Defaults: Approved · Local"); expect(html).toContain("Choose catalogs"); expect(html).toContain("No catalogs"); expect(html).toContain("Not added to the defaults"); expect(html).not.toContain("Reset to inheritance"); expect(html).not.toContain("Effective availability"); client.clear(); });
+  it("combines catalogs and specific models in one Model access tab", () => { const client = choices("/api/v1/platform/catalogs", []); const html = markup(<WorkspaceModelAccess session={admin} workspace={project} />, [["/api/v1/platform/workspaces/project/catalogs", { mode: "inherit", catalog_ids: [], effective_catalog_ids: [] }]], client); expect(html).toContain("Catalogs"); expect(html).toContain("Specific models"); expect(html).toContain("Use Project defaults"); client.clear(); });
+  it("Auditor has no assignment writes", () => { const html = markup(<PlatformAssignment session={auditor} workspace={project} />); expect(html).not.toContain("Assign models</button>"); });
 });
-
-describe("assignment and delegation forms", () => {
-  it("shows individual personal grants without offering the wrong workspace removal action", () => {
-    const personal: Workspace = { ...project, id: "personal", kind: "personal", role: "owner" };
-    const html = render(<Grants session={session} organization={org} workspace={personal} />, [rows("/api/v1/workspaces/personal/grants", [{ model_id: "model", public_name: "alias", display_name: "Individual model", workspace_granted: false, individual_granted: true }])]);
-    expect(html).toContain("Individual model");
-    expect(html).toContain("Individual · organization-managed");
-    expect(html).toContain("Manage individual access under Assigned models");
-    expect(html).not.toContain("Remove grant</button>");
-  });
-  it("assigns a global model using PUT with optional organization alias", async () => {
-    render(<PlatformAssignment organization={org} />, [choices("/api/v1/platform/models", [model]), choices("/api/v1/orgs/org/models", [])]);
-    const assign = action("Assign model");
-    expect(assign.fields?.find(field => field.name === "model_id")?.options).toEqual([{ value: "model", label: "Global Model (global/model)" }]);
-    await assign.run({ model_id: "model", public_name: "consumer/alias" });
-    expect(api).toHaveBeenLastCalledWith("/api/v1/platform/orgs/org/models/model", { method: "PUT", body: { public_name: "consumer/alias" } });
-    await assign.run({ model_id: "model", public_name: "" });
-    expect(api).toHaveBeenLastCalledWith("/api/v1/platform/orgs/org/models/model", { method: "PUT", body: {} });
-  });
-  it("revokes the parent assignment with clear child-grant removal warning", async () => {
-    render(<PlatformAssignment organization={org} />, [rows("/api/v1/orgs/org/models", [model])]);
-    const revoke = action("Revoke assignment"); expect(revoke.description).toContain("all child workspace and individual grants");
-    await revoke.run({}); expect(api).toHaveBeenCalledWith("/api/v1/platform/orgs/org/models/model", { method: "DELETE" });
-  });
-  it("uses only assigned catalog choices for individual and shared delegation", async () => {
-    for (const kind of ["team", "project", "user"] as const) {
-      const path = recipientGrantPath("org", kind, "recipient");
-      expect(path).toBe(kind === "user" ? "/api/v1/orgs/org/users/recipient/grants" : "/api/v1/workspaces/recipient/grants");
-      render(<DelegatedGrants organization={org} path={path} label="Recipient" personal={kind === "user"} />, [choices("/api/v1/platform/models", [{ ...model, id: "not-assigned" }]), choices("/api/v1/orgs/org/models", [model]), choices(path, [])]);
-      const delegate = action("Delegate model");
-      expect(delegate.fields?.[0].options?.map(option => option.value)).toEqual(["model"]);
-      await delegate.run({ model_id: "model" }); expect(api).toHaveBeenLastCalledWith(path, { method: "POST", body: { model_id: "model" } });
-    }
-  });
-  it("removes individual grants without enumerating personal workspaces", async () => {
-    const path = recipientGrantPath("org", "user", "user");
-    render(<DelegatedGrants organization={org} path={path} label="Person" personal />, [rows(path, [{ model_id: "model", public_name: "alias", display_name: "Model" }])]);
-    await action("Remove grant").run({}); expect(api).toHaveBeenLastCalledWith(`${path}/model`, { method: "DELETE" });
-  });
-});
-
-describe("project parity and inherited limits", () => {
-  it("lands project-only admins on Projects and groups their context/search correctly", () => {
-    const memberOrg = { ...org, role: "member" as const };
-    const manager = { ...session, organizations: [memberOrg] };
-    expect(adminLanding(manager, memberOrg)).toBe("workspace-settings");
-    expect(organizationLanding(manager, memberOrg)).toBe("organization-settings");
-    expect(contextOptions(manager, memberOrg).find(group => group.label === "Projects")?.items[0].ws).toBe(project.id);
-    const targets = jumpTargets(manager, memberOrg, project);
-    expect(targets.find(target => target.id === "org:org")?.search.page).toBe("overview");
-    expect(targets.find(target => target.id === "workspace:project")?.group).toBe("Projects");
-    expect(targets.find(target => target.id === "page:workspace-settings")?.label).toBe("Workspace settings");
-    expect(permissions(manager, memberOrg, project)).toMatchObject({ manageTeam: true, manageServiceAccounts: true, managePolicy: true, manageGrants: false });
-    expect(permissions(manager, memberOrg, { ...project, role: "member" })).toMatchObject({ managePolicy: false, manageTeam: false });
-  });
-  it("creates project siblings with kind=project and uses project directory endpoints", async () => {
-    const go = vi.fn();
-    expect(render(<Teams session={session} organization={org} kind="project" go={go} />, [rows("/api/v1/orgs/org/projects", [project])])).toContain("Research");
-    await action("Create project").run({ name: "New project" });
-    expect(api).toHaveBeenCalledWith("/api/v1/orgs/org/workspaces", { method: "POST", body: { name: "New project", kind: "project" } });
-    expect(render(<PlatformTeams session={operator} kind="project" go={go} />, [rows("/api/v1/platform/projects", [{ ...project, organization_name: "Consumer" }])])).toContain("Research");
-  });
-  it("uses project labels for overview, membership and service accounts", () => {
-    const props = { session, organization: org, workspace: project };
-    expect(render(<Overview {...props} />)).toContain("Project workspace");
-    expect(render(<WorkspaceMembers {...props} />)).toContain("Project members");
-    expect(render(<ServiceAccounts {...props} />)).toContain("project workloads");
-  });
-  it("separates read-only inherited ceiling from editable shared scope allowance", async () => {
-    const path = "/api/v1/workspaces/project/policy";
-    const ceiling = { ...policy, requests_per_minute: 120, monthly_budget_microusd: "50000000" };
-    const html = render(<PolicyPanel title="Project policy" path={path} writable />, [[["api", path], { policy, ceiling }]]);
-    expect(html).toContain('data-variant="pills"'); expect(html).toContain("Effective limits"); expect(html).toContain("$50.00"); expect(html).toContain("Local limits"); expect(html).toContain("Inherited");
-    expect(html).not.toContain("Inherited platform / organization limits · read-only");
-    const edit = action("Edit project policy"); expect(edit.description).toContain("not reserved allocations");
-    await edit.run({ requests_per_minute: "", tokens_per_minute: "", concurrent_requests: "", monthly_budget_usd: "" });
-    expect(api).toHaveBeenCalledWith(path, { method: "PUT", body: policy });
-    expect(policyFields(policy, ceiling)[0].validate?.("121", {})).toContain("cannot exceed");
-    expect(policyFields(policy, ceiling)[3].validate?.("50.000001", {})).toContain("cannot exceed");
-  });
-  it("edits the platform organization ceiling through its operator-only endpoint", async () => {
-    const path = "/api/v1/platform/orgs/org/policy";
-    const html = render(<PolicyPanel title="Platform organization ceiling" path={path} writable platform />, [[["api", path], { policy }]]);
-    expect(html).toContain("Platform-assigned ceiling");
-    const edit = action("Edit platform organization ceiling");
-    expect(edit.fields?.find(field => field.name === "monthly_budget_usd")?.label).toBe("Monthly budget (USD)");
-    await edit.run({ requests_per_minute: "120", tokens_per_minute: "", concurrent_requests: "", monthly_budget_usd: "50.00" });
-    expect(api).toHaveBeenCalledWith(path, { method: "PUT", body: { ...policy, requests_per_minute: 120, monthly_budget_microusd: "50000000" } });
-    const local = render(<Governance session={session} organization={org} />, [[["api", "/api/v1/orgs/org/policy"], { policy, ceiling: { ...policy, requests_per_minute: 120 } }]]);
-    expect(local).toContain('aria-label="Organization limits details"');
-    expect(local).toContain("Additional"); expect(local).toContain("Platform");
-    expect(local).not.toContain("Platform maximums (cannot be overridden) · read-only");
-    expect(local).toContain("Effective organization caps");
-    expect(local).not.toContain("No workspace selected");
-    await action("Edit additional organization limits").run({ requests_per_minute: "100", tokens_per_minute: "", concurrent_requests: "", monthly_budget_usd: "" });
-    expect(api).toHaveBeenLastCalledWith("/api/v1/orgs/org/policy", { method: "PUT", body: { ...policy, requests_per_minute: 100 } });
-  });
-  it("lets project admins tighten their scope, not organization policy; members read only", () => {
-    const memberOrg = { ...org, role: "member" as const };
-    const entries: Entry[] = [[["api", "/api/v1/workspaces/project/policy"], { policy, ceiling: policy }]];
-    const adminHtml = render(<Governance session={session} organization={memberOrg} workspace={project} />, entries);
-    expect(adminHtml).toContain("Edit workspace policy"); expect(adminHtml).not.toContain("Edit additional organization limits");
-    const memberHtml = render(<Governance session={session} organization={memberOrg} workspace={{ ...project, role: "member" }} />, entries);
-    expect(memberHtml).not.toContain("Edit workspace policy"); expect(memberHtml).toContain("Read-only");
-  });
+describe("Project parity and composed limits", () => {
+  it("groups project-only access without inferred Team membership", () => { const manager = { ...session, workspaces: [project] }; expect(contextOptions(manager).map(g => g.label)).toEqual(["Projects"]); expect(jumpTargets(manager, project).find(t => t.id === "workspace:project")?.group).toBe("Projects"); expect(permissions(manager, project)).toMatchObject({ manageTeam: true, manageServiceAccounts: true, managePolicy: true, manageGrants: true }); expect(permissions(manager, { ...member, kind: "project" })).toMatchObject({ managePolicy: false, manageTeam: false }); });
+  it("creates Project siblings with explicit owner membership", async () => { const client = choices("/api/v1/platform/users?status=active", [{ id: "owner", email: "owner@example.invalid", platform_role: "user", disabled_at: null }, { id: "gone", email: "gone@example.invalid", platform_role: null, disabled_at: "2026-01-01T00:00:00Z" }]); markup(<PlatformTeams session={admin} kind="project" />, [], client); const create = action("Create project"); expect(create.fields?.find(f => f.name === "owner_user_id")?.options).toEqual([{ value: "owner", label: "owner@example.invalid" }]); client.clear(); await create.run({ name: "Research", owner_user_id: "owner" }, signal); expect(api).toHaveBeenCalledWith("/api/v1/platform/workspaces", { method: "POST", body: { name: "Research", kind: "project", owner_user_id: "owner" }, signal }); });
+  it("uses Project context for overview, membership and service accounts", () => { expect(markup(<Overview session={session} workspace={project} />)).toContain("Project · showing everyone&#x27;s activity"); expect(markup(<WorkspaceMembers session={session} workspace={project} />)).toContain("Project members"); expect(markup(<ServiceAccounts session={session} workspace={project} />)).toContain("apps and automations"); });
+  it("keeps editable local restrictions below inherited ceilings", () => { const ceiling = { ...policy, requests_per_minute: 120, monthly_budget_microusd: "50000000" }; expect(policyFields(policy, ceiling)[0].validate?.("121", {})).toContain("cannot exceed"); expect(policyFields(policy, ceiling)[3].validate?.("50.000001", {})).toContain("cannot exceed"); expect(policyBody({ requests_per_minute: "100", tokens_per_minute: "", concurrent_requests: "", monthly_budget_usd: "" })).toEqual({ ...policy, requests_per_minute: 100 }); });
+  it("labels replacement override provenance and consumption honestly", () => { const typeDefault = { ...policy, requests_per_minute: 60, monthly_budget_microusd: "100000000", budget_period: "month" }; const html = markup(<ScopeLimits mode="replacement" kind="project" path="/api/v1/platform/workspaces/project/policy" writable />, [["/api/v1/platform/workspaces/project/policy", { policy: { ...policy, budget_period: "week" }, effective: policy, mode: "replace", provenance: { platform_source: "workspace_override", platform: policy, local: policy, key: null, type_default: typeDefault }, budgets: [{ layer: "platform", monthly_budget_microusd: "5000000", budget_period: "week", window_start: "2026-10-05T00:00:00Z", window_end: "2026-10-12T00:00:00Z", usage_visible: true, used_microusd: "1250000", unresolved_usage: false }] }]]); expect(html).toContain("Use Project defaults"); expect(html).toContain("Override for this project"); expect(html).toContain("Current Project defaults: 60 RPM"); expect(html).toContain("$100.00 monthly"); expect(html).toContain("No limit · default 60"); expect(html).toContain("Platform override weekly budget"); expect(html).toContain("Monthly budget"); expect(html).toContain("Budget used this period"); expect(html).toContain("$1.25"); expect(html).toContain("Platform override"); expect(html).not.toContain("Reset to inheritance"); });
+  it("shows inherited placeholders for tighten-only workspace limits", () => { const platform = { ...policy, requests_per_minute: 60, monthly_budget_microusd: "100000000", budget_period: "month" }; const html = markup(<ScopeLimits mode="local" path="/api/v1/workspaces/project/policy" writable />, [["/api/v1/workspaces/project/policy", { policy, effective: platform, provenance: { platform_source: "type_default", platform, local: policy, key: null } }]]); expect(html).toContain('placeholder="Inherited: 60"'); expect(html).toContain("Add monthly cap"); expect(html).toContain("$100.00"); expect(html).not.toContain("Override for this"); });
+  it("allows Project admins to tighten only their own scope, members read-only", () => { const path = "/api/v1/workspaces/project/policy", response = { policy, effective: policy, provenance: { platform_source: "type_default", platform: policy, local: policy, key: null } }; expect(markup(<Governance session={session} workspace={project} />, [[path, response]])).not.toContain("Only workspace admins change these limits."); expect(markup(<Governance session={session} workspace={{ ...member, id: "project", kind: "project" }} />, [[path, response]])).toContain("Only workspace admins change these limits."); });
 });

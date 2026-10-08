@@ -8,7 +8,6 @@ use crate::store::Store;
 #[derive(Clone, Copy, Debug)]
 pub struct Principal {
     pub key_id: Uuid,
-    pub organization_id: Uuid,
     pub workspace_id: Uuid,
     pub user_id: Option<Uuid>,
 }
@@ -55,49 +54,27 @@ fn token_id(token: &str) -> Option<Uuid> {
 #[derive(sqlx::FromRow)]
 struct KeyRecord {
     id: Uuid,
-    organization_id: Uuid,
     workspace_id: Uuid,
     issued_to_user_id: Option<Uuid>,
     secret_hash: Vec<u8>,
 }
 
 impl Store {
-    /// No authorization cache: membership removal and revocation apply on the next request.
+    /// No authorization cache: entitlement, membership and revocation are live.
     pub async fn authenticate(&self, token: &str) -> Result<Option<Principal>, sqlx::Error> {
         let Some(id) = token_id(token) else {
             return Ok(None);
         };
         let record = sqlx::query_as::<_, KeyRecord>(
-            r#"
-            SELECT k.id, k.organization_id, k.workspace_id, k.issued_to_user_id, k.secret_hash
-            FROM api_keys k
-            JOIN organizations o ON o.id = k.organization_id AND o.disabled_at IS NULL
-            LEFT JOIN users u ON u.id = k.issued_to_user_id AND u.disabled_at IS NULL
-            LEFT JOIN organization_memberships om
-              ON om.organization_id = k.organization_id AND om.user_id = k.issued_to_user_id
-             AND om.disabled_at IS NULL
-            JOIN workspaces w ON w.organization_id = k.organization_id AND w.id = k.workspace_id
-             AND w.disabled_at IS NULL
-            WHERE k.id = $1 AND k.revoked_at IS NULL
-              AND (k.expires_at IS NULL OR k.expires_at > now())
-              AND (
-                (k.issued_to_user_id IS NOT NULL AND u.id IS NOT NULL AND om.user_id IS NOT NULL AND (
-                (w.kind = 'personal' AND w.owner_user_id = k.issued_to_user_id)
-                OR (w.kind IN ('team','project') AND EXISTS (
-                    SELECT 1 FROM workspace_memberships wm
-                    WHERE wm.organization_id = k.organization_id AND wm.workspace_id = k.workspace_id
-                      AND wm.user_id = k.issued_to_user_id AND wm.disabled_at IS NULL
-                ))))
-                OR (k.service_account_id IS NOT NULL AND w.kind IN ('team','project') AND EXISTS (
-                    SELECT 1 FROM service_accounts sa WHERE sa.organization_id=k.organization_id
-                    AND sa.workspace_id=k.workspace_id AND sa.id=k.service_account_id AND sa.disabled_at IS NULL
-                ))
-              )
-            "#,
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await?;
+            "SELECT k.id,k.workspace_id,k.issued_to_user_id,k.secret_hash FROM api_keys k
+             JOIN workspaces w ON w.id=k.workspace_id AND w.disabled_at IS NULL
+             WHERE k.id=$1 AND k.revoked_at IS NULL AND k.disabled_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now())
+             AND ((k.issued_to_user_id IS NOT NULL AND EXISTS(SELECT 1 FROM effective_platform_roles p WHERE p.user_id=k.issued_to_user_id)
+               AND ((w.kind='personal' AND w.owner_user_id=k.issued_to_user_id) OR (w.kind IN ('team','project') AND EXISTS(
+                 SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=w.id AND m.user_id=k.issued_to_user_id))))
+               OR (k.service_account_id IS NOT NULL AND w.kind IN ('team','project') AND EXISTS(
+                 SELECT 1 FROM service_accounts a WHERE a.workspace_id=w.id AND a.id=k.service_account_id AND a.disabled_at IS NULL)))",
+        ).bind(id).fetch_optional(&self.pool).await?;
         let Some(record) = record else {
             return Ok(None);
         };
@@ -106,40 +83,47 @@ impl Store {
         }
         Ok(Some(Principal {
             key_id: record.id,
-            organization_id: record.organization_id,
             workspace_id: record.workspace_id,
             user_id: record.issued_to_user_id,
         }))
     }
 }
 
-/// Admission runs after the shared catalog lock and consuming organization lock.
-/// SHARE (not KEY SHARE) prevents non-key revocations while the reservation commits.
-/// Separate inner-join queries avoid locking the nullable side of an outer join.
+/// Caller holds catalog advisory lock (72419502), then installation row lock.
+/// SHARE prevents concurrent non-key revocation until admission commits.
 pub(crate) async fn revalidate(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     principal: &Principal,
 ) -> Result<Option<Uuid>, sqlx::Error> {
     let row: Option<(Uuid, Option<Uuid>, String, Option<Uuid>)> = sqlx::query_as(
-        "SELECT k.governance_key_id,k.service_account_id,w.kind,w.owner_user_id
-         FROM api_keys k JOIN workspaces w ON w.organization_id=k.organization_id AND w.id=k.workspace_id
-         JOIN organizations o ON o.id=k.organization_id
-         WHERE k.organization_id=$1 AND k.workspace_id=$2 AND k.id=$3
-         AND k.issued_to_user_id IS NOT DISTINCT FROM $4::uuid
-         AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>clock_timestamp())
-         AND w.disabled_at IS NULL AND o.disabled_at IS NULL FOR SHARE OF k,w",
-    ).bind(principal.organization_id).bind(principal.workspace_id).bind(principal.key_id)
-        .bind(principal.user_id).fetch_optional(&mut **tx).await?;
+        "SELECT k.governance_key_id,k.service_account_id,w.kind,w.owner_user_id FROM api_keys k
+         JOIN workspaces w ON w.id=k.workspace_id WHERE k.workspace_id=$1 AND k.id=$2
+         AND k.issued_to_user_id IS NOT DISTINCT FROM $3::uuid
+         AND k.revoked_at IS NULL AND k.disabled_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>clock_timestamp())
+         AND w.disabled_at IS NULL FOR SHARE OF k,w",
+    )
+    .bind(principal.workspace_id)
+    .bind(principal.key_id)
+    .bind(principal.user_id)
+    .fetch_optional(&mut **tx)
+    .await?;
     let Some((lineage, service_account, kind, owner)) = row else {
         return Ok(None);
     };
     if let Some(user) = principal.user_id {
         let active: Option<Uuid> = sqlx::query_scalar(
-            "SELECT u.id FROM users u JOIN organization_memberships om ON om.user_id=u.id
-             WHERE u.id=$1 AND om.organization_id=$2 AND u.disabled_at IS NULL AND om.disabled_at IS NULL
-             FOR SHARE OF u,om",
-        ).bind(user).bind(principal.organization_id).fetch_optional(&mut **tx).await?;
+            "SELECT id FROM users WHERE id=$1 AND disabled_at IS NULL AND cleaned_at IS NULL FOR SHARE",
+        ).bind(user).fetch_optional(&mut **tx).await?;
         if active.is_none() {
+            return Ok(None);
+        }
+        let roles: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM platform_role_grants WHERE user_id=$1 AND revoked_at IS NULL FOR SHARE",
+        )
+        .bind(user)
+        .fetch_all(&mut **tx)
+        .await?;
+        if roles.is_empty() {
             return Ok(None);
         }
         if kind == "personal" {
@@ -148,36 +132,28 @@ pub(crate) async fn revalidate(
         if !matches!(kind.as_str(), "team" | "project") {
             return Ok(None);
         }
-        let member: Option<Uuid> = sqlx::query_scalar(
-            "SELECT user_id FROM workspace_memberships WHERE organization_id=$1 AND workspace_id=$2
-             AND user_id=$3 AND disabled_at IS NULL FOR SHARE",
-        )
-        .bind(principal.organization_id)
-        .bind(principal.workspace_id)
-        .bind(user)
-        .fetch_optional(&mut **tx)
-        .await?;
-        Ok(member.map(|_| lineage))
+        // Global administrative authority is deliberately NOT shared-workspace membership.
+        let grants: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM workspace_membership_grants WHERE workspace_id=$1 AND user_id=$2 AND revoked_at IS NULL FOR SHARE",
+        ).bind(principal.workspace_id).bind(user).fetch_all(&mut **tx).await?;
+        Ok((!grants.is_empty()).then_some(lineage))
     } else if matches!(kind.as_str(), "team" | "project") {
         let account: Option<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM service_accounts WHERE organization_id=$1 AND workspace_id=$2
-             AND id=$3 AND disabled_at IS NULL FOR SHARE",
-        )
-        .bind(principal.organization_id)
-        .bind(principal.workspace_id)
-        .bind(service_account)
-        .fetch_optional(&mut **tx)
-        .await?;
+            "SELECT id FROM service_accounts WHERE workspace_id=$1 AND id=$2 AND disabled_at IS NULL FOR SHARE",
+        ).bind(principal.workspace_id).bind(service_account).fetch_optional(&mut **tx).await?;
         Ok(account.map(|_| lineage))
     } else {
         Ok(None)
     }
 }
 
+#[cfg(all(test, feature = "integration-tests"))]
+#[path = "auth/enterprise_tests.rs"]
+mod enterprise_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn keys_have_expected_format_and_independent_random_secrets() {
         let first = NewApiKey::generate();
@@ -187,7 +163,6 @@ mod tests {
         assert_ne!(first.digest, second.digest);
         assert_ne!(first.id, second.id);
     }
-
     #[test]
     fn malformed_tokens_are_rejected_before_database_access() {
         for token in ["", "omg_bad.secret", "Bearer abc", &"é".repeat(101)] {

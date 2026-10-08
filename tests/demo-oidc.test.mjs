@@ -2,7 +2,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { createHash, createPublicKey, verify } from "node:crypto";
-import { createDemoIssuer, ISSUER, CALLBACK, CLIENT } from "../scripts/demo-oidc.mjs";
+import { createDemoIssuer, DEMO_ACCOUNTS, ISSUER, CALLBACK, CLIENT } from "../scripts/demo-oidc.mjs";
 const server = createDemoIssuer();
 let port;
 before(async () => { await new Promise(resolve => server.listen(0, "127.0.0.1", resolve)); port = server.address().port; });
@@ -26,14 +26,15 @@ async function choose(account = "operator") {
   return location.searchParams.get("code");
 }
 const tokenBody = code => new URLSearchParams({ code, grant_type: "authorization_code", client_id: CLIENT, redirect_uri: CALLBACK, code_verifier: verifier });
-test("picker advertises four scoped demo roles without passwords or external resources", async () => {
+test("picker advertises enterprise roles and an unentitled account without passwords or external resources", async () => {
   const res = await request(`/authorize?${parameters()}`);
   assert.equal(res.status, 200);
-  for (const [account, title] of [["operator", "Platform Admin"], ["orgadmin", "Organization Admin"], ["alex", "Team Admin · Alex"], ["blair", "Member · Blair"]]) {
-    assert.ok(res.text.includes(`<button name="account" value="${account}"><strong>${title}</strong>`));
+  for (const [account, { title }] of Object.entries(DEMO_ACCOUNTS)) {
+    assert.match(res.text, new RegExp(`<button name="account" value="${account}"[^>]*>(?:(?!</button>).)*<strong>${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}</strong>`));
   }
-  assert.equal((res.text.match(/<button /g) ?? []).length, 4);
-  assert.match(res.text, /no platform-wide access/); assert.match(res.text, /no organization administration/);
+  assert.equal((res.text.match(/<button /g) ?? []).length, 5);
+  assert.match(res.text, /no platform mutations/); assert.match(res.text, /platform access must be denied/);
+  assert.doesNotMatch(res.text, /Organization Admin|organization administration/);
   assert.match(res.text, /No password/); assert.doesNotMatch(res.text, /type="password"|<script|<link/);
   assert.equal(res.headers["cache-control"], "no-store"); assert.match(res.headers["content-security-policy"], /default-src 'none'/);
   assert.equal(res.headers["referrer-policy"], "origin");
@@ -50,7 +51,7 @@ test("rejects rebinding hosts, arbitrary redirects, and cross-origin account sel
 });
 test("signed persona claims preserve nonce and authorization codes are single use", async () => {
   const jwks = JSON.parse((await request("/jwks")).text);
-  for (const account of ["operator", "orgadmin", "alex", "blair"]) {
+  for (const account of Object.keys(DEMO_ACCOUNTS)) {
     const code = await choose(account); const body = tokenBody(code).toString();
     const res = await request("/token", { method: "POST", body }); assert.equal(res.status, 200);
     const [header, payload, signature] = JSON.parse(res.text).id_token.split(".");
@@ -59,12 +60,15 @@ test("signed persona claims preserve nonce and authorization codes are single us
     assert.equal(claims.sub, account); assert.equal(claims.email_verified, true);
     assert.equal(claims.email, `${account}@demo.invalid`); assert.equal(claims.nonce, "browser-nonce"); assert.equal(claims.aud, CLIENT); assert.equal(claims.iss, ISSUER);
     assert.equal(claims.exp - claims.iat, 300);
+    assert.deepEqual(claims.groups, DEMO_ACCOUNTS[account].groups);
+    assert.equal(claims.name, DEMO_ACCOUNTS[account].name); // presentation only (profile scope)
+    if (account === "unentitled") assert.deepEqual(claims.groups, []);
     for (const field of ["platform_admin", "role", "roles", "memberships"]) assert.equal(claims[field], undefined);
     assert.equal((await request("/token", { method: "POST", body })).status, 400);
   }
 });
 test("wrong PKCE verifier cannot redeem a code", async () => {
-  for (const account of ["operator", "orgadmin", "alex", "blair"]) {
+  for (const account of Object.keys(DEMO_ACCOUNTS)) {
     const body = tokenBody(await choose(account)); body.set("code_verifier", "x".repeat(43));
     assert.equal((await request("/token", { method: "POST", body: body.toString() })).status, 400);
   }

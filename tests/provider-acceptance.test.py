@@ -22,7 +22,7 @@ class AcceptanceTests(unittest.TestCase):
             network.assert_not_called()
 
     def test_protocol_bodies_are_bounded_and_stateless(self):
-        for protocol, path, cap in [("chat", "/v1/chat/completions", "max_tokens"), ("responses", "/v1/responses", "max_output_tokens"), ("messages", "/v1/messages", "max_tokens")]:
+        for protocol, path, cap in [("chat", "/v1/chat/completions", "max_completion_tokens"), ("responses", "/v1/responses", "max_output_tokens"), ("messages", "/v1/messages", "max_tokens")]:
             endpoint, body = acceptance.request_body(protocol, "chosen")
             self.assertEqual(endpoint, path)
             self.assertEqual(body[cap], 8)

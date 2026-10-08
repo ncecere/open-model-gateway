@@ -97,7 +97,7 @@ struct Candidate {
 }
 
 /// The caller owns current authorization and capability checks. The database query
-/// additionally fences candidate IDs to this organization and model. Planning does
+/// additionally fences candidate IDs to live workspace authorization and model. Planning does
 /// not reserve a half-open probe or leak a lease if the request is cancelled.
 /// Routing configuration and passive health are platform-global resource state.
 pub async fn plan(
@@ -114,11 +114,11 @@ pub async fn plan(
     validate_ids(&ids)?;
     let policy = sqlx::query_as::<_, RoutingPolicy>(
         r#"SELECT r.strategy, r.max_attempts, r.allow_ambiguous_failover,
-                  r.failure_threshold, r.cooldown_seconds, r.required_residency
-           FROM model_routing_policies r JOIN organization_model_grants g ON g.model_id=r.model_id
-           WHERE g.organization_id=$1 AND g.public_name=$2"#,
+                  3 AS failure_threshold, 30 AS cooldown_seconds, r.required_residency
+           FROM routing_policies r JOIN models m ON m.id=r.model_id
+           WHERE workspace_model_allowed($1,m.id) AND m.public_name=$2"#,
     )
-    .bind(principal.organization_id)
+    .bind(principal.workspace_id)
     .bind(model)
     .fetch_optional(&store.pool)
     .await
@@ -127,26 +127,25 @@ pub async fn plan(
     let rows = sqlx::query_as::<_, Candidate>(
         r#"SELECT d.id AS deployment_id, COALESCE(r.priority,0) AS priority,
                   COALESCE(r.weight,1) AS weight, COALESCE(r.residency,'unspecified') AS residency,
-                  COALESCE(r.operator_disabled,false) AS operator_disabled,
+                  false AS operator_disabled,
                   COALESCE(h.open_until > statement_timestamp(),false) AS circuit_open
            FROM unnest($3::uuid[]) WITH ORDINALITY AS input(id, position)
            JOIN deployments d ON d.id=input.id
            JOIN models m ON m.id=d.model_id
-           JOIN organization_model_grants g ON g.model_id=m.id AND g.organization_id=$1
            JOIN provider_connections p ON p.id=d.provider_connection_id
            LEFT JOIN deployment_routing r ON r.deployment_id=d.id
-           LEFT JOIN deployment_route_health h ON h.deployment_id=d.id
-           WHERE g.public_name=$2 AND m.enabled AND d.enabled AND p.enabled
+           LEFT JOIN deployment_health h ON h.deployment_id=d.id
+           WHERE m.public_name=$2 AND workspace_model_allowed($1,m.id) AND d.enabled AND p.enabled
            ORDER BY input.position"#,
     )
-    .bind(principal.organization_id)
+    .bind(principal.workspace_id)
     .bind(model)
     .bind(&ids)
     .fetch_all(&store.pool)
     .await
     .map_err(|_| InferenceError::Storage)?;
     let mut seed = Sha256::new();
-    seed.update(principal.organization_id.as_bytes());
+    seed.update(principal.workspace_id.as_bytes());
     seed.update(request_id.as_bytes());
     seed.update(model.as_bytes());
     order_candidates(&policy, rows, seed.finalize().into())
@@ -259,7 +258,6 @@ fn affects_health(error: Option<InferenceError>) -> bool {
 /// not merely opening a response/stream. Updates serialize atomically in PostgreSQL.
 pub async fn record_result(
     store: &Store,
-    _org: Uuid,
     deployment: Uuid,
     error: Option<InferenceError>,
 ) -> Result<(), InferenceError> {
@@ -270,11 +268,11 @@ pub async fn record_result(
         r#"WITH policy AS (
             SELECT COALESCE(p.failure_threshold,3) AS threshold,
                    COALESCE(p.cooldown_seconds,30) AS cooldown
-            FROM deployments d LEFT JOIN model_routing_policies p
-              ON p.model_id=d.model_id
+            FROM deployments d LEFT JOIN deployment_routing p
+              ON p.deployment_id=d.id
             WHERE d.id=$1
         )
-        INSERT INTO deployment_route_health AS h
+        INSERT INTO deployment_health AS h
             (deployment_id, consecutive_failures, open_until, last_observed_at)
         SELECT $1, CASE WHEN $2 THEN 1 ELSE 0 END,
             CASE WHEN $2 AND threshold <= 1 THEN clock_timestamp() + make_interval(secs => cooldown) ELSE NULL END,
@@ -307,21 +305,17 @@ pub struct RouteHealth {
     pub circuit_open: bool,
 }
 
-/// Caller must enforce platform operator authorization; org is a legacy argument.
+/// Caller must enforce live platform read authorization.
 /// An expired circuit is eligible again, not declared healthy.
-pub async fn health(
-    store: &Store,
-    _org: Uuid,
-    deployment: Uuid,
-) -> Result<RouteHealth, InferenceError> {
+pub async fn health(store: &Store, deployment: Uuid) -> Result<RouteHealth, InferenceError> {
     sqlx::query_as::<_, RouteHealth>(
-        r#"SELECT d.id AS deployment_id, COALESCE(r.operator_disabled,false) AS operator_disabled,
+        r#"SELECT d.id AS deployment_id, NOT d.enabled AS operator_disabled,
                   COALESCE(h.consecutive_failures,0) AS consecutive_failures,
                   h.open_until, h.last_observed_at,
                   COALESCE(h.open_until > statement_timestamp(),false) AS circuit_open
            FROM deployments d
            LEFT JOIN deployment_routing r ON r.deployment_id=d.id
-           LEFT JOIN deployment_route_health h ON h.deployment_id=d.id
+           LEFT JOIN deployment_health h ON h.deployment_id=d.id
            WHERE d.id=$1"#,
     )
     .bind(deployment)

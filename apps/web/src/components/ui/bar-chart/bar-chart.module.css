@@ -1,0 +1,94 @@
+.root {
+  --bar-chart-height: 10rem;
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+
+  &[data-size="sm"] {
+    --bar-chart-height: 6rem;
+  }
+
+  &[data-size="lg"] {
+    --bar-chart-height: 14rem;
+  }
+}
+
+/* Series colours come from chart (--chart-color, the --color-chart-* tokens). */
+.bar {
+  background-color: var(--chart-color, var(--color-chart-primary));
+}
+
+.plot {
+  position: relative;
+  height: var(--bar-chart-height);
+  padding-top: var(--space-5);
+  border-bottom: 1px solid var(--color-border-strong);
+}
+
+/* The peak value, on a faint line at the top of the scale. */
+.peak {
+  position: absolute;
+  inset: 0 0 auto;
+  padding-bottom: var(--space-1);
+  border-bottom: 1px dashed var(--color-border);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+}
+
+.bars {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  height: 100%;
+}
+
+.slot {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column-reverse;
+  min-width: 2px;
+}
+
+.bar {
+  height: var(--bar-size, 0%);
+  border-radius: var(--radius-1) var(--radius-1) 0 0;
+}
+
+/* Overlapping series share the slot; later series are drawn in front. */
+.bars[data-layout="overlap"] .bar {
+  position: absolute;
+  inset: auto 0 0;
+}
+
+/*
+ * The back series is paler, in the plot and in its legend swatch: a real
+ * colour (--chart-color-soft, >= 3:1 on surface and bg), not an opacity,
+ * so it keeps graphical-object contrast and is checked by the contrast test.
+ */
+.bars[data-layout="overlap"] .bar:first-child,
+.root[data-layout="overlap"] .legend > li:first-child > span {
+  background-color: var(--chart-color-soft, var(--color-chart-primary-soft));
+}
+
+/* A stack taller than a fixed domain's top is cut there. */
+.bars[data-layout="stack"] > .slot {
+  overflow: hidden;
+}
+
+/* Stacked series grow upwards; only the top one is rounded. */
+.bars[data-layout="stack"] .bar:not(:last-child) {
+  border-radius: 0;
+}
+
+.axis {
+  display: flex;
+  justify-content: space-between;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+}

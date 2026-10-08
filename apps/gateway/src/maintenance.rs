@@ -22,7 +22,7 @@ pub async fn compact_history(store: &Store, days: i32, limit: i64) -> Result<u64
     if !(30..=3650).contains(&days) || !(1..=1000).contains(&limit) {
         return Err(InferenceError::InvalidRequest);
     }
-    let changed=sqlx::query("WITH old AS (SELECT e.id FROM inference_executions e JOIN governance_reservations r ON r.execution_id=e.id AND r.organization_id=e.organization_id WHERE e.completed_at < now()-make_interval(days=>$1) AND e.details_redacted_at IS NULL AND r.state='settled' ORDER BY e.completed_at,e.id LIMIT $2 FOR UPDATE OF e SKIP LOCKED) UPDATE inference_executions e SET public_model='[retained-accounting]',provider='[retained-accounting]',error_code=NULL,elapsed_ms=NULL,details_redacted_at=clock_timestamp() FROM old WHERE e.id=old.id")
+    let changed=sqlx::query("WITH old AS (SELECT e.id FROM inference_executions e JOIN governance_reservations r ON r.execution_id=e.id WHERE e.completed_at < now()-make_interval(days=>$1) AND e.details_redacted_at IS NULL AND r.state='settled' ORDER BY e.completed_at,e.id LIMIT $2 FOR UPDATE OF e SKIP LOCKED) UPDATE inference_executions e SET error_code=NULL,elapsed_ms=NULL,details_redacted_at=clock_timestamp() FROM old WHERE e.id=old.id")
         .bind(days).bind(limit).execute(&store.pool).await.map_err(|_|InferenceError::Storage)?.rows_affected();
     Ok(changed)
 }
@@ -70,7 +70,7 @@ pub fn start(store: Store, retention_days: Option<i32>) -> tokio::task::JoinHand
 #[cfg(all(test, feature = "integration-tests"))]
 mod tests {
     use super::*;
-    #[sqlx::test]
+    #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn bounds_reject_unsafe_retention(pool: sqlx::PgPool) {
         let store = Store::new(pool);
         assert!(compact_history(&store, 0, 100).await.is_err());

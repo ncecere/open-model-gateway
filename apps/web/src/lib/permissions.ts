@@ -1,74 +1,99 @@
-import type { Organization, Session, Workspace, Key } from "./api";
-
-export const isAdmin = (role?: string | null) => role === "owner" || role === "admin" || role === "operator";
-export function permissions(session: Session, org?: Organization, workspace?: Workspace) {
-  const organizationAdmin = !!org && isAdmin(org.role);
-  const workspaceAdmin = !!workspace && isAdmin(workspace.role);
-  const shared = workspace?.kind === "team" || workspace?.kind === "project";
-  // Older /me payloads do not distinguish inherited workspace authority. Never
-  // infer human membership from an inherited admin role in that case.
-  const organizationMember = !!org && (org.membership_role !== undefined ? !!org.membership_role : org.role !== "operator" && org.authority_source !== "platform");
-  const inherited = workspace?.authority_source ? workspace.authority_source === "platform" || workspace.authority_source === "organization" : shared && (session.user.platform_admin || organizationAdmin);
-  const workspaceMember = !!workspace && (workspace.membership_role !== undefined ? !!workspace.membership_role : !inherited);
-  const oc = org?.capabilities;
-  const wc = workspace?.capabilities;
+import type { Session, Workspace, Key } from "./api";
+export const isAdmin = (role?: string | null) => role === "owner" || role === "admin";
+export function permissions(session: Session, workspace?: Workspace) {
+  const privateAccess = !workspace || workspace.kind !== "personal" || workspace.owner_user_id === session.user.id;
+  const c = privateAccess ? workspace?.capabilities : undefined;
   return {
-    organizationAdmin, workspaceAdmin,
-    createOrganization: session.user.platform_admin,
-    manageProviders: session.user.platform_admin,
-    managePricing: session.user.platform_admin,
-    managePolicy: workspace ? (wc?.manage_policy ?? (organizationAdmin || (workspaceAdmin && shared))) : (oc?.manage_policy ?? organizationAdmin),
-    reconcileCosts: session.user.platform_admin && !!workspace,
-    manageTeam: shared && (wc?.manage_members ?? workspaceAdmin),
-    manageServiceAccounts: shared && (wc?.manage_service_accounts ?? workspaceAdmin),
-    manageGrants: !!workspace && (wc?.delegate_models ?? organizationAdmin),
-    createWorkspace: oc?.create_workspace ?? (organizationAdmin && organizationMember),
-    createPersonalWorkspace: oc?.create_personal_workspace ?? organizationMember,
-    createUserKey: !!workspace && (wc?.issue_own_key ?? (organizationMember && workspaceMember)),
+    platformRead: session.capabilities.platform_read, platformWrite: session.capabilities.platform_write,
+    workspaceAdmin: !!c?.view_all_activity, manageProviders: session.capabilities.platform_write,
+    managePricing: session.capabilities.platform_write, managePolicy: !!c?.manage_policy,
+    reconcileCosts: session.capabilities.platform_write && !!workspace && privateAccess,
+    manageTeam: !!c?.manage_members && workspace?.kind !== "personal",
+    manageServiceAccounts: !!c?.manage_service_accounts && workspace?.kind !== "personal",
+    manageGrants: !!c?.delegate_models, createWorkspace: session.capabilities.create_workspace,
+    createUserKey: !!c?.issue_own_key, privateAccess,
   };
 }
 export function canManageKey(session: Session, workspace: Workspace, key: Key) {
-  return isAdmin(workspace.role) || key.issued_to_user_id === session.user.id;
+  return permissions(session, workspace).privateAccess && (key.issued_to_user_id === session.user.id || workspace.capabilities.manage_service_accounts || (workspace.capabilities.manage_members && workspace.kind !== "personal"));
 }
 export function canRotateKey(session: Session, workspace: Workspace, key: Key) {
-  return key.issued_to_user_id === session.user.id || (!!key.service_account_id && (workspace.capabilities?.manage_service_accounts ?? isAdmin(workspace.role)));
+  return permissions(session, workspace).privateAccess && (key.issued_to_user_id === session.user.id && workspace.capabilities.issue_own_key || !!key.service_account_id && workspace.capabilities.manage_service_accounts);
 }
-// Admin is a platform portal, not a synonym for administration of a workspace.
-export function canAdminister(session: Session) { return session.user.platform_admin; }
-export function canAdministerOrganization(session: Session, org?: Organization) {
-  return !!org && (isAdmin(org.role) || session.workspaces.some(ws => ws.organization_id === org.id && ws.kind !== "personal" && isAdmin(ws.role)));
-}
-export const pages = ["platform-overview", "organization-detail", "organization-settings", "workspace-settings", "model-detail", "provider-detail", "deployment-detail", "organizations", "teams", "projects", "platform-teams", "platform-projects", "model-access", "assigned-models", "organization-policy", "platform-audit", "users", "overview", "keys", "service-accounts", "members", "grants", "organization-members", "invitations", "models", "providers", "deployments", "audit", "governance", "costs", "routing", "pricing", "profile", "accept-invitation"] as const;
+export const canAdminister = (session: Session) => session.capabilities.platform_read;
+export const pages = ["home", "requests", "request-detail", "key-detail", "workspace-model", "platform-overview", "workspace-settings", "workspace-detail", "model-new", "model-detail", "provider-detail", "deployment-detail", "catalog-detail", "user-detail", "platform-teams", "platform-projects", "catalogs", "policies", "cost-centers", "platform-costs", "oidc", "platform-audit", "users", "overview", "keys", "service-accounts", "members", "grants", "invitations", "models", "providers", "deployments", "audit", "governance", "costs", "routing", "pricing", "profile", "accept-invitation"] as const;
 export type Page = typeof pages[number];
-export function canView(page: Page, session: Session, org?: Organization, workspace?: Workspace) {
-  const p = permissions(session, org, workspace);
-  if (page === "profile" || page === "accept-invitation") return true;
-  if (["platform-overview", "organization-detail", "model-detail", "provider-detail", "deployment-detail", "organizations", "users", "platform-teams", "platform-projects", "models", "providers", "deployments", "routing", "pricing", "platform-audit", "model-access"].includes(page)) return session.user.platform_admin;
-  if (page === "teams" || page === "projects") return canAdministerOrganization(session, org);
-  if (["organization-settings", "organization-members", "invitations", "assigned-models", "organization-policy", "audit"].includes(page)) return p.organizationAdmin;
-  if (page === "governance") return p.organizationAdmin || !!workspace;
-  if (!workspace) return false;
-  if (page === "workspace-settings") return true; // Overview and inherited limits remain readable by members.
-  if (page === "members") return p.manageTeam;
-  if (page === "service-accounts") return p.manageServiceAccounts;
+export const platformPages = new Set<Page>(["platform-overview", "workspace-detail", "model-new", "model-detail", "provider-detail", "deployment-detail", "catalog-detail", "user-detail", "platform-teams", "platform-projects", "catalogs", "policies", "cost-centers", "platform-costs", "oidc", "platform-audit", "users", "models", "providers", "deployments", "routing", "pricing"]);
+/** User-level pages: no workspace in the URL (Home, profile, invitation acceptance). */
+export const userPages = new Set<Page>(["home", "profile", "accept-invitation"]);
+/**
+ * The Workspace portal follows membership only: the caller's own Personal workspace and the
+ * Teams/Projects they actually belong to. Platform authority over other shared workspaces is
+ * exercised from Admin, never by presenting staff as members here.
+ */
+export function inWorkspacePortal(session: Session, workspace: Workspace) {
+  if (workspace.disabled_at) return false;
+  return workspace.kind === "personal" ? workspace.owner_user_id === session.user.id : workspace.role !== null;
+}
+export function canView(page: Page, session: Session, workspace?: Workspace) {
+  if (userPages.has(page)) return true;
+  if (platformPages.has(page)) return session.capabilities.platform_read;
+  if (!workspace || workspace.kind === "personal" && workspace.owner_user_id !== session.user.id || workspace.kind !== "personal" && workspace.role === null) return false;
+  if (page === "members" || page === "invitations") return workspace.kind !== "personal" && workspace.capabilities.manage_members;
+  if (page === "service-accounts") return workspace.kind !== "personal" && workspace.capabilities.manage_service_accounts;
+  // No inherited operator authority may authorize personal keys/activity.
+  if (page === "keys" || page === "key-detail") return workspace.role !== null || workspace.capabilities.manage_service_accounts;
   return true;
 }
-export type DashboardSearch = { org?: string; ws?: string; page?: Page; record?: string; tab?: string; q?: string; enabled?: "true" | "false"; offset?: number; model?: string; provider?: string; scope?: "workspace" | "organization" | "keys"; view?: "effective" | "local" | "inherited"; recipientKind?: "team" | "project" | "user"; recipient?: string };
-export const dashboardTabs = ["overview", "teams", "projects", "members", "invitations", "models", "policy", "audit", "service-accounts", "governance", "settings", "deployments", "pricing", "access", "routing", "limits"] as const;
-const identifier = (value: unknown) => typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._~-]{0,127}$/.test(value) ? value : undefined;
+export type DashboardSearch = { ws?: string; page?: Page; record?: string; tab?: string; q?: string; enabled?: "true" | "false"; offset?: number; model?: string; provider?: string; scope?: "workspace" | "keys"; view?: "effective" | "local" | "inherited"; kind?: "personal" | "team" | "project"; start_date?: string; end_date?: string; compare?: "none" | "previous_period"; workspace_id?: string; cost_center_id?: string; actor_user_id?: string; service_account_id?: string; connection?: string; accounting_status?: "pending" | "unknown" | "settled" | "missing"; /** Requests/keys lists (wave 2). `status`: one key status, or a comma list of request (attempt) statuses. */ key_id?: string; status?: string; /** Usage & costs filter: one model (route's model UUID). */ model_id?: string; range?: RangePreset; cursor?: string; cols?: string; density?: "compact"; /** Models catalog (wave 2): workload tab, sort, list/table and URL-backed facets. */ type?: CatalogType; sort?: "name" | "price" | "newest"; layout?: "table"; connections?: string; min_price?: string; max_price?: string; policy?: string; readiness?: string; deprecated?: "hide"; eligibility?: string; /** Usage & costs (wave 2): records status, explore pivot / chart metric. */ cost_status?: CostStatusFilter; metric?: string; group?: string; then?: string; top?: string; /** Directory filters (Admin › Users, Audit log). */ role?: DirectoryRole; hide_sign_ins?: "true" | "false" };
+export const directoryRoles = ["none", "user", "auditor", "admin"] as const;
+export type DirectoryRole = typeof directoryRoles[number];
+export const costStatusFilters = ["final", "on_hold", "cost_unknown", "not_recorded"] as const;
+export type CostStatusFilter = typeof costStatusFilters[number];
+export const catalogTypes = ["generation", "embeddings", "images", "audio_transcriptions", "audio_speech", "rerank", "systemone"] as const;
+export type CatalogType = typeof catalogTypes[number];
+/** Comma-separated subset of `allowed` (deduplicated), else undefined. */
+const subset = (value: unknown, allowed: readonly string[]) => { if (typeof value !== "string" || value.length > 200) return; const picked = [...new Set(value.split(","))].filter(v => allowed.includes(v)); return picked.length ? picked.join(",") : undefined; };
+/** Request statuses (requests list) and key statuses (API keys list) share the `status` URL key. */
+export const listStatuses = ["succeeded", "failed", "cancelled", "indeterminate", "in_progress", "active", "disabled", "revoked", "expired", "all", "suspended", "enabled", "archived"] as const;
+export const attemptStatuses = ["succeeded", "failed", "cancelled", "indeterminate", "in_progress"] as const;
+export type ListStatus = typeof listStatuses[number];
+export const rangePresets = ["today", "7d", "30d", "90d", "month", "custom"] as const;
+export type RangePreset = typeof rangePresets[number];
+export const dashboardTabs = ["overview", "members", "invitations", "models", "policy", "audit", "service-accounts", "settings", "deployments", "pricing", "routing", "limits", "catalogs", "model-access", "groups", "roles", "general", "effective", "local", "inherited", "installation", "personal", "team", "project", "costs", "keys", "routes", "availability", "workspaces", "explore", "records", "chart", "activity"] as const;
+export const identifier = (value: unknown) => typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._~-]{0,127}$/.test(value) ? value : undefined;
 export function dashboardSearch(search: Record<string, unknown>): DashboardSearch {
-  const result: DashboardSearch = {
-    org: identifier(search.org), ws: identifier(search.ws),
-    page: typeof search.page === "string" && pages.includes(search.page as Page) ? search.page as Page : undefined,
-  };
-  for (const key of ["record", "model", "provider", "recipient"] as const) { const value = identifier(search[key]); if (value) result[key] = value; }
+  const result: DashboardSearch = { ws: identifier(search.ws), page: typeof search.page === "string" && pages.includes(search.page as Page) ? search.page as Page : undefined };
+  for (const key of ["record", "workspace_id", "cost_center_id", "actor_user_id", "service_account_id", "connection", "key_id", "model_id", "cursor"] as const) { const value = identifier(search[key]); if (value) result[key] = value; }
+  if (listStatuses.includes(search.status as ListStatus)) result.status = search.status as ListStatus;
+  else { const several = subset(search.status, attemptStatuses); if (several) result.status = several; }
+  if (rangePresets.includes(search.range as RangePreset)) result.range = search.range as RangePreset;
+  if (typeof search.cols === "string" && /^[a-z0-9_-]{1,40}(?:,[a-z0-9_-]{1,40}){0,19}$/.test(search.cols)) result.cols = search.cols;
+  if (search.density === "compact") result.density = "compact";
+  if (costStatusFilters.includes(search.cost_status as CostStatusFilter)) result.cost_status = search.cost_status as CostStatusFilter;
+  for (const key of ["metric", "group", "then"] as const) if (typeof search[key] === "string" && /^[a-z_]{1,32}$/.test(search[key])) result[key] = search[key];
+  const top = typeof search.top === "number" ? String(search.top) : search.top; if (typeof top === "string" && /^\d{1,2}$/.test(top)) result.top = top;
+  if (catalogTypes.includes(search.type as CatalogType)) result.type = search.type as CatalogType;
+  if (search.sort === "name" || search.sort === "price" || search.sort === "newest") result.sort = search.sort;
+  if (search.layout === "table") result.layout = "table";
+  if (search.deprecated === "hide") result.deprecated = "hide";
+  if (typeof search.connections === "string") { const ids = search.connections.split(",").slice(0, 20).map(identifier).filter(Boolean); if (ids.length) result.connections = ids.join(","); }
+  for (const key of ["min_price", "max_price"] as const) if (typeof search[key] === "string" && /^\d{0,13}(?:\.\d{0,6})?$/.test(search[key]) && search[key] !== "") result[key] = search[key];
+  const policy = subset(search.policy, ["allow", "deny", "unknown"]), readiness = subset(search.readiness, ["ready", "needs_attention", "needs_setup", "not_serving", "unknown"]), eligibility = subset(search.eligibility, ["selected", "direct", "available_from_catalog"]);
+  if (policy) result.policy = policy; if (readiness) result.readiness = readiness; if (eligibility) result.eligibility = eligibility;
+  for (const key of ["model", "provider", "q"] as const) if (typeof search[key] === "string" && search[key].length <= 200 && !/[\u0000-\u001f\u007f]/.test(search[key])) result[key] = search[key];
   if (typeof search.tab === "string" && dashboardTabs.includes(search.tab as typeof dashboardTabs[number])) result.tab = search.tab;
-  if (typeof search.q === "string" && search.q.length <= 200 && !/[\u0000-\u001f\u007f]/.test(search.q)) result.q = search.q;
   if (search.enabled === "true" || search.enabled === "false") result.enabled = search.enabled;
-  if (search.scope === "workspace" || search.scope === "organization" || search.scope === "keys") result.scope = search.scope;
+  if (directoryRoles.includes(search.role as DirectoryRole)) result.role = search.role as DirectoryRole;
+  if (search.hide_sign_ins === "true" || search.hide_sign_ins === true) result.hide_sign_ins = "true";
+  else if (search.hide_sign_ins === "false" || search.hide_sign_ins === false) result.hide_sign_ins = "false";
+  if (search.scope === "workspace" || search.scope === "keys") result.scope = search.scope;
   if (search.view === "effective" || search.view === "local" || search.view === "inherited") result.view = search.view;
-  if (search.recipientKind === "team" || search.recipientKind === "project" || search.recipientKind === "user") result.recipientKind = search.recipientKind;
+  if (search.kind === "personal" || search.kind === "team" || search.kind === "project") result.kind = search.kind;
+  for (const key of ["start_date", "end_date"] as const) if (typeof search[key] === "string" && /^\d{4}-\d{2}-\d{2}$/.test(search[key])) result[key] = search[key];
+  if (search.compare === "none" || search.compare === "previous_period") result.compare = search.compare;
+  if (["pending", "unknown", "settled", "missing"].includes(String(search.accounting_status))) result.accounting_status = search.accounting_status as DashboardSearch["accounting_status"];
   const offset = typeof search.offset === "number" ? search.offset : typeof search.offset === "string" && /^\d{1,7}$/.test(search.offset) ? Number(search.offset) : undefined;
-  if (offset !== undefined && Number.isSafeInteger(offset) && offset >= 0 && offset <= 100_000) result.offset = offset;
+  if (offset !== undefined && Number.isSafeInteger(offset) && offset >= 0 && offset <= 100000) result.offset = offset;
   return result;
 }

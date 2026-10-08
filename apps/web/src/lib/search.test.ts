@@ -1,44 +1,14 @@
 import { describe, expect, it } from "vitest";
-import type { Organization, Session, Workspace } from "./api";
 import { jumpTargets } from "./search";
-const org: Organization = { id: "college", slug: "college", name: "College", role: "member" };
-const team: Workspace = { id: "product", organization_id: org.id, name: "Product", kind: "team", role: "member" };
-const personal: Workspace = { ...team, id: "personal", name: "My workspace", kind: "personal", role: "owner" };
-const member: Session = { user: { id: "me", email: "me@example.invalid", platform_admin: false }, organizations: [org], workspaces: [team, personal] };
-const ids = (s: Session, o = s.organizations[0]) => jumpTargets(s, o, personal).map(target => target.id);
+import { session, admin, auditor, personal, team, project, member } from "./test-fixtures";
 describe("permission-scoped jump search", () => {
-  it("does not offer administrative destinations to ordinary members", () => {
-    expect(ids(member)).toContain("page:keys");
-    for (const page of ["users", "platform-teams", "organizations", "teams", "organization-members", "members"]) expect(ids(member)).not.toContain(`page:${page}`);
-  });
-  it("offers team but not organization administration to team admins", () => {
-    const manager: Session = { ...member, workspaces: [{ ...team, role: "admin" }, personal] };
-    expect(ids(manager)).toContain("page:workspace-settings");
-    expect(ids(manager)).not.toContain("page:organization-members");
-    expect(ids(manager)).not.toContain("page:platform-teams");
-    expect(jumpTargets(manager, org, manager.workspaces[0]).map(t => t.id)).toContain("page:workspace-settings");
-  });
-  it("offers organization management without granting global users to org admins", () => {
-    const manager: Session = { ...member, organizations: [{ ...org, role: "admin" }] };
-    expect(ids(manager)).toContain("page:organization-settings");
-    expect(ids(manager)).not.toContain("page:users");
-  });
-  it("uses platform destinations without leftover organization/workspace scope", () => {
-    const admin = { ...member, user: { ...member.user, platform_admin: true } };
-    const targets = jumpTargets(admin, org, personal);
-    for (const page of ["organizations", "platform-teams", "users"]) expect(targets.find(t => t.id === `page:${page}`)?.search).toEqual({ page, org: undefined, ws: undefined });
-    expect(targets.filter(t => t.label === "Teams")).toHaveLength(1);
-  });
-  it("jumps across authorized contexts using each workspace's own organization", () => {
-    const other = { ...org, id: "science", slug: "science", name: "Science" };
-    const otherTeam = { ...team, id: "it", name: "IT", organization_id: other.id };
-    const targets = jumpTargets({ ...member, organizations: [org, other], workspaces: [team, personal, otherTeam] }, org, personal);
-    expect(targets.find(t => t.id === "workspace:it")).toMatchObject({ hint: "Science", keywords: ["Science", "science", "team"], search: { page: "overview", org: "science", ws: "it" } });
-    expect(targets.filter(t => t.group === "Personal · private")).toHaveLength(1);
-    expect(new Set(targets.map(t => t.id)).size).toBe(targets.length);
-  });
-  it("supports account destinations with no organization and no invented resources", () => {
-    const targets = jumpTargets({ ...member, organizations: [], workspaces: [] });
-    expect(targets.map(t => t.id)).toEqual(["page:profile", "page:accept-invitation"]);
-  });
+  it("does not offer platform destinations to ordinary members", () => { const ids = jumpTargets({ ...session, workspaces: [member, personal] }, personal).map(t => t.id); expect(ids).toContain("page:keys"); for (const page of ["users", "platform-teams", "oidc", "models", "policies"]) expect(ids).not.toContain(`page:${page}`); });
+  it("offers contextual settings to shared admins, not platform administration", () => { const targets = jumpTargets(session, team); expect(targets.map(t => t.id)).toContain("page:workspace-settings"); expect(targets.map(t => t.id)).not.toContain("page:users"); });
+  it("personal ownership does not grant global administration", () => { expect(jumpTargets(session, personal).map(t => t.id)).not.toContain("page:users"); });
+  it.each([admin, auditor])("uses platform destinations without leftover workspace scope", actor => { const targets = jumpTargets(actor, personal); for (const page of ["catalogs", "platform-teams", "users"] as const) expect(targets.find(t => t.id === `page:${page}`)?.search).toEqual({ page, ws: undefined }); });
+  it("jumps among sibling authorized contexts, without invented hierarchy", () => { const targets = jumpTargets(session, personal); expect(targets.find(t => t.id === `workspace:${project.id}`)?.search).toEqual({ page: "overview", ws: project.id }); expect(targets.filter(t => t.group === "Personal")).toHaveLength(1); expect(new Set(targets.map(t => t.id)).size).toBe(targets.length); });
+  it("offers Home and the selected workspace's pages, and only real memberships", () => { const staff = { ...project, role: null, membership_source: null }, actor = { ...admin, workspaces: [personal, team, staff] }, targets = jumpTargets(actor, team); expect(targets.find(t => t.id === "page:home")?.search).toEqual({ page: "home", ws: undefined }); expect(targets.find(t => t.id === "page:requests")).toMatchObject({ hint: "Product", search: { page: "requests", ws: "team" } }); expect(targets.find(t => t.id === "page:workspace-settings")?.label).toBe("Settings"); expect(targets.map(t => t.id)).not.toContain("workspace:project"); expect(targets.find(t => t.id === "workspace:team")?.hint).toBe("Team · Admin"); expect(jumpTargets(actor, staff).map(t => t.id)).not.toContain("page:keys"); });
+  it("never hydrates foreign personal metadata from global search", () => { const targets = jumpTargets({ ...admin, workspaces: [...admin.workspaces, { ...personal, id: "foreign", owner_user_id: "other" }] }); expect(targets.map(t => t.id)).not.toContain("workspace:foreign"); });
+  it("supports account destinations without any workspace or invented resources", () => { expect(jumpTargets({ ...session, workspaces: [] }).map(t => t.id)).toEqual(["page:home", "page:profile"]); });
+  it("offers Add model to Platform Admins only and finds old names", () => { const ids = (actor: typeof admin) => jumpTargets(actor).map(t => t.id); expect(ids(admin)).toContain("page:model-new"); expect(ids(auditor)).not.toContain("page:model-new"); expect(ids(session)).not.toContain("page:model-new"); for (const legacy of ["page:deployments", "page:routing"]) expect(ids(admin)).not.toContain(legacy); const connections = jumpTargets(admin).find(t => t.id === "page:providers"); expect(connections?.label).toBe("Connections"); expect(connections?.keywords).toContain("provider connections"); });
 });

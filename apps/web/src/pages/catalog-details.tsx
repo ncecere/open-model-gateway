@@ -1,53 +1,52 @@
-import { useEffect, type ReactNode } from "react";
+import { type ReactNode } from "react";
+import { Boxes, Plus, Settings } from "lucide-react";
+import { api, platformPath, type Model, type Provider, type Session } from "../lib/api";
 import { ResourceLink } from "../components/navigation-link";
-import { ResourcePage } from "../components/resource-page";
-import { ActionProvider, ErrorNotice, Heading, Id, Panel, Status, useAction, useApi } from "../components/ui";
-import { api, platformPath, type Deployment, type Model, type Provider, type Session } from "../lib/api";
-import { CatalogStatusButton, Deployments, referenceField } from "./catalog";
-import { DeploymentRoutingPanel, ModelRoutingPanel, PriceVersions } from "./governance";
-
+import { ActionProvider, Button, ErrorNotice, Heading, Status, Alert, useAction, useApi, useChoices } from "../components/ui";
+import { RecordPage } from "../components/templates/record-page";
+import { CatalogStatusButton, ReadinessBadge, providerLabel, referenceField } from "./catalog";
+import { ProviderBadge, ProviderIcon, WithIcon } from "../components/provider-icon";
+import { ModelPage, ModelReadinessChecklist, RoutePage, type RouteDetail } from "./model-page";
+import s from "./shared.module.css";
+import t from "../components/templates/templates.module.css";
+const enc = encodeURIComponent;
 type DetailProps = { session: Session; id: string; tab?: string; onTabChange: (tab: string) => void };
-// Parent lookup is direct, not a paginated catalog scan. Even cached data must
-// match the requested parent and a failed refresh cannot expose writable panels.
-function CatalogRecord<T extends { id: string }>({ session, id, kind, children }: { session: Session; id: string; kind: "models" | "providers" | "deployments"; children: (record: T, path: string) => ReactNode }) {
-  const path = `${platformPath}/${kind}/${encodeURIComponent(id)}`;
-  const query = useApi<T>(path, session.user.platform_admin && !!id);
-  useEffect(() => {
-    if (query.isPending || (document.activeElement && document.activeElement !== document.body)) return;
-    const heading = document.querySelector<HTMLElement>("#main h1");
-    if (heading) { heading.tabIndex = -1; heading.focus({ preventScroll: true }); }
-  }, [id, query.isPending, query.isError]);
-  if (!session.user.platform_admin) return <Heading title="Access not available" description="Only platform operators can manage catalog infrastructure." />;
-  if (!id) return <Heading title="No resource selected" description="Open a resource from the catalog." />;
-  if (query.isPending) return <><Heading title="Loading resource…" /><p role="status">Loading {kind === "models" ? "model" : kind === "providers" ? "provider connection" : "deployment"}…</p></>;
-  if (query.isError) return <><Heading title="Resource unavailable" /><ErrorNotice error={query.error} retry={() => void query.refetch()} /></>;
-  if (!query.data || query.data.id !== id) return <ErrorNotice error={new Error("The gateway returned a different resource. Detail controls are unavailable.")} />;
-  return <ActionProvider key={path}>{children(query.data, path)}</ActionProvider>;
+export function CatalogRecord<T extends { id: string }>({ session, id, kind, children }: { session: Session; id: string; kind: "models" | "providers" | "deployments"; children: (record: T, path: string) => ReactNode }) {
+  const path = `${platformPath}/${kind}/${enc(id)}`, q = useApi<T>(path, session.capabilities.platform_read && !!id);
+  if (!session.capabilities.platform_read) return <Heading title="Access not available" />;
+  if (q.isPending) return <p role="status">Loading resource…</p>; if (q.isError) return <ErrorNotice error={q.error} retry={() => void q.refetch()} />;
+  if (q.data.id !== id) return <ErrorNotice error={new Error("The gateway returned a different resource. Detail controls are unavailable.")} />;
+  return <ActionProvider key={path}>{children(q.data, path)}</ActionProvider>;
 }
+const code = (value: string) => <code className={s.mono}>{value}</code>;
 
-export function ModelDetail({ session, id, tab, onTabChange }: DetailProps) {
-  return <CatalogRecord<Model> session={session} id={id} kind="models">{(model, path) => <ResourcePage title={model.display_name} description={<><ResourceLink search={{ page: "models" }}>Models</ResourceLink> / <code>{model.public_name}</code></>} actions={<CatalogStatusButton kind="models" record={model} name={model.public_name} />} tab={tab} onTabChange={onTabChange} tabs={[
-    { value: "overview", label: "Overview", content: <Panel title="Model alias"><dl className="details"><dt>API model name</dt><dd><code>{model.public_name}</code></dd><dt>Display name</dt><dd>{model.display_name}</dd><dt>Identifier</dt><dd><Id value={model.id} /></dd><dt>Status</dt><dd><Status enabled={model.enabled} /></dd></dl><p>Clients request this public alias. An enabled deployment and provider connection are also required; organization and workspace grants still apply.</p><div className="row-actions"><ResourceLink search={{ page: "model-detail", record: model.id, tab: "deployments" }}>Manage deployments</ResourceLink><ResourceLink search={{ page: "model-detail", record: model.id, tab: "routing" }}>Configure model routing</ResourceLink><ResourceLink search={{ page: "organizations" }}>Manage organization access</ResourceLink></div></Panel> },
-    { value: "deployments", label: "Deployments", content: <Deployments session={session} modelId={model.id} embedded /> },
-    { value: "routing", label: "Routing", content: <><p className="notice">Every fallback requires matching explicit residency. Ambiguous failover may duplicate provider charges; failover never occurs after a stream is returned.</p><ModelRoutingPanel key={path} path={`${path}/routing`} /></> },
-  ]} />}</CatalogRecord>;
-}
+// ---------------------------------------------------------------------------
+// Model page: one long page with a sticky section nav (model-page.tsx).
+// Old ?tab= links (routes, pricing, routing, availability) open at that section.
+// ---------------------------------------------------------------------------
+export function ModelDetail({ session, id, tab }: DetailProps) { return <CatalogRecord<Model> session={session} id={id} kind="models">{(model, path) => <ModelPage session={session} model={model} path={path} tab={tab} />}</CatalogRecord>; }
+export { ModelReadinessChecklist };
 
-export function ProviderDetail({ session, id, tab, onTabChange }: DetailProps) {
-  return <CatalogRecord<Provider> session={session} id={id} kind="providers">{provider => <ResourcePage title={provider.name} description={<><ResourceLink search={{ page: "providers" }}>Provider connections</ResourceLink> / {provider.provider}</>} actions={<CatalogStatusButton kind="providers" record={provider} name={provider.name} />} tab={tab} onTabChange={onTabChange} tabs={[
-    { value: "overview", label: "Overview", content: <Panel title="Provider connection"><dl className="details"><dt>Identifier</dt><dd><Id value={provider.id} /></dd><dt>Provider</dt><dd>{provider.provider}</dd><dt>Endpoint</dt><dd className="break-word">{provider.endpoint ?? "Provider default"}</dd><dt>Region</dt><dd>{provider.region ?? "No region"}</dd><dt>Status</dt><dd><Status enabled={provider.enabled} /></dd><dt>Credentials</dt><dd>{provider.provider === "bedrock" ? "AWS workload identity; rotate through AWS" : "Secret reference (hidden)"}</dd></dl><p>Credential values and references are never returned. The gateway must have the configured credentials available; this page does not test paid inference or claim provider health.</p><div className="row-actions"><ResourceLink search={{ page: "provider-detail", record: provider.id, tab: "deployments" }}>Manage deployments</ResourceLink>{provider.provider !== "bedrock" && <RotateProviderReference provider={provider} />}</div></Panel> },
-    { value: "deployments", label: "Deployments", content: <Deployments session={session} providerId={provider.id} embedded /> },
-  ]} />}</CatalogRecord>;
+// ---------------------------------------------------------------------------
+// Connection record: Details, Models on this connection, Authentication.
+// ---------------------------------------------------------------------------
+export function ProviderDetail({ session, id, tab, onTabChange }: DetailProps) { return <CatalogRecord<Provider> session={session} id={id} kind="providers">{p => <ConnectionRecord session={session} provider={p} tab={tab} onTabChange={onTabChange} />}</CatalogRecord>; }
+function ConnectionRecord({ session, provider: p, tab, onTabChange }: { session: Session; provider: Provider; tab?: string; onTabChange: (tab: string) => void }) {
+  const writable = session.capabilities.platform_write, models = useChoices<Model>(`${platformPath}/models?provider_connection_id=${enc(p.id)}`);
+  const add = <Button render={<ResourceLink search={{ page: "model-new", connection: p.id }} />}><Plus aria-hidden />Add model</Button>;
+  return <RecordPage title={p.name} meta={<><ProviderBadge profile={p.provider} label={providerLabel(p.provider)} /><Status enabled={p.enabled} /></>} description={`${providerLabel(p.provider)} connection. Configuration only: this page makes no upstream call or readiness claim.`} back={{ label: "Connections", search: { page: "providers" } }} tab={tab} onTabChange={onTabChange}
+    actions={writable && <><CatalogStatusButton kind="providers" record={p} name={p.name} />{add}</>}
+    facts={[{ label: "Profile", value: <WithIcon icon={<ProviderIcon profile={p.provider} />}>{providerLabel(p.provider)}</WithIcon> }, { label: "Endpoint", value: p.provider === "bedrock" ? undefined : p.endpoint ? code(p.endpoint) : "Provider default" }, { label: "Region", value: p.region ?? undefined }, { label: "Authentication", value: p.auth_mode === "none" ? "Explicit no authentication · approved local endpoint" : p.provider === "bedrock" ? "AWS workload identity" : "Environment credential reference · hidden" }, { label: "Status", value: <Status enabled={p.enabled} /> }, { label: "Models", value: p.model_count === undefined ? "Unknown" : String(p.model_count) }, { label: "Identifier", value: code(p.id) }]}
+    sections={[
+      { id: "models", title: "Models on this connection", tabLabel: "Models", icon: <Boxes aria-hidden />, count: models.data?.length ?? p.model_count, content: models.isError ? <ErrorNotice error={models.error} retry={() => void models.refetch()} /> : !models.data ? <p role="status">Loading models…</p> : models.data.length ? <ul className={t.linkList}>{models.data.map(m => <li key={m.id}><ResourceLink search={{ page: "model-detail", record: m.id }}>{m.display_name}</ResourceLink> <span className={s.muted}>({m.public_name})</span> <ReadinessBadge model={m} /></li>)}</ul> : <p className={s.muted}>No models yet.{writable ? " Add one to start routing requests through this connection." : ""}</p> },
+      { id: "settings", title: "Authentication reference", tabLabel: "Settings", icon: <Settings aria-hidden />, hidden: !writable || p.provider === "bedrock", content: <RotateProviderReference provider={p} /> },
+    ]}>
+    <Alert tone="info">Endpoint approval, pinned network destinations and credential allowlists are enforced by the server.</Alert>
+  </RecordPage>;
 }
-function RotateProviderReference({ provider }: { provider: Provider }) {
-  const ask = useAction();
-  return <button className="button secondary" onClick={() => ask({ title: `Rotate reference for ${provider.name}`, description: "New requests will resolve the new credential reference. The existing reference is not exposed. Connection status will be preserved.", danger: true, fields: [referenceField], submitLabel: "Rotate reference", successNotice: "Credential reference updated. The reference remains hidden; connection status is unchanged.", run: values => api(`${platformPath}/providers/${encodeURIComponent(provider.id)}`, { method: "PATCH", body: { enabled: provider.enabled, credential_ref: `env:${values.credential_variable}` } }) })}>Rotate reference</button>;
-}
+function RotateProviderReference({ provider }: { provider: Provider }) { const ask = useAction(); return <div className={t.inlineActions}><p className={s.note}>The existing reference is never returned. New requests resolve the replacement; the connection's status is preserved.</p><Button variant="secondary" onClick={() => ask({ title: `Rotate reference for ${provider.name}`, fields: [referenceField], submitLabel: "Rotate reference", run: (v, signal) => api(`${platformPath}/providers/${enc(provider.id)}`, { method: "PATCH", body: { enabled: provider.enabled, credential_ref: `env:${v.credential_variable}` }, signal }) })}>Rotate credential reference</Button></div>; }
 
-export function DeploymentDetail({ session, id, tab, onTabChange }: DetailProps) {
-  return <CatalogRecord<Deployment> session={session} id={id} kind="deployments">{(deployment, path) => <ResourcePage title={deployment.upstream_model} description={<><ResourceLink search={{ page: "deployments" }}>Deployments</ResourceLink> / <Id value={deployment.id} /></>} actions={<CatalogStatusButton kind="deployments" record={deployment} name={deployment.upstream_model} />} tab={tab} onTabChange={onTabChange} tabs={[
-    { value: "overview", label: "Overview", content: <Panel title="Deployment"><dl className="details"><dt>Identifier</dt><dd><Id value={deployment.id} /></dd><dt>Upstream model</dt><dd><code>{deployment.upstream_model}</code></dd><dt>Model alias</dt><dd><ResourceLink search={{ page: "model-detail", record: deployment.model_id }}><Id value={deployment.model_id} /></ResourceLink></dd><dt>Provider connection</dt><dd><ResourceLink search={{ page: "provider-detail", record: deployment.provider_connection_id }}><Id value={deployment.provider_connection_id} /></ResourceLink></dd><dt>Status</dt><dd><Status enabled={deployment.enabled} /></dd></dl><p>Disabled model or provider dependencies prevent inference even when this deployment is enabled. Review routing and pricing before enabling; no paid test request is sent by this page.</p><div className="row-actions"><ResourceLink search={{ page: "deployment-detail", record: deployment.id, tab: "routing" }}>Configure routing</ResourceLink><ResourceLink search={{ page: "deployment-detail", record: deployment.id, tab: "pricing" }}>Manage price versions</ResourceLink></div></Panel> },
-    { value: "routing", label: "Routing", content: <><p className="notice">Residency labels are operator assertions, not verified provider geography. Passive observations are not an uptime guarantee.</p><DeploymentRoutingPanel key={path} path={`${path}/routing`} operator /></> },
-    { value: "pricing", label: "Pricing", content: <><p className="notice">Enter rates in US dollars per million tokens. Versions are immutable estimates, not invoices. Input limits must be accurate hard upstream ceilings; admission reserves the full ceiling.</p><PriceVersions key={path} path={`${path}/prices`} writable /></> },
-  ]} />}</CatalogRecord>;
-}
+// ---------------------------------------------------------------------------
+// Route page (/admin/deployments/{id}): Back to the model, Previous/Next across its routes.
+// ---------------------------------------------------------------------------
+export function DeploymentDetail({ session, id, tab }: DetailProps) { return <CatalogRecord<RouteDetail> session={session} id={id} kind="deployments">{(d, path) => <RoutePage session={session} route={d} path={path} tab={tab} />}</CatalogRecord>; }

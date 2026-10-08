@@ -1,0 +1,132 @@
+.group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  width: fit-content;
+  max-width: 100%;
+
+  &[data-orientation="vertical"] {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  &[data-disabled] {
+    cursor: not-allowed;
+  }
+}
+
+.item {
+  .group[data-orientation="vertical"] > & {
+    justify-content: flex-start;
+  }
+}
+
+/*
+ * Joined: a segmented control. Items overlap by 1px so neighbouring inset
+ * rings read as one shared border; the focused / pressed item is raised so
+ * its ring is never covered.
+ */
+.group[data-joined] {
+  flex-wrap: nowrap;
+  gap: 0;
+
+  /* overflow="scroll", too wide for its container (a phone): scroll sideways, and
+     fade the edge where more items are hidden so it's clear the control scrolls. */
+  --toggle-group-fade-dir: to right;
+  --toggle-group-fade-start: 0px;
+  --toggle-group-fade-end: 0px;
+
+  &:dir(rtl) {
+    --toggle-group-fade-dir: to left;
+  }
+
+  &[data-overflowing] {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+    mask-image: linear-gradient(
+      var(--toggle-group-fade-dir),
+      transparent,
+      currentColor var(--toggle-group-fade-start),
+      currentColor calc(100% - var(--toggle-group-fade-end)),
+      transparent
+    );
+
+    /* The scroll box clips anything outside it: keep the focus ring inside the item. */
+    & > .item:focus-visible {
+      outline-offset: -2px;
+    }
+  }
+
+  /* Wide enough to fade part of an item's text even when the edge falls
+     between two items, where a narrow fade only softens a border. */
+  &[data-overflow-start] {
+    --toggle-group-fade-start: var(--space-10);
+  }
+
+  &[data-overflow-end] {
+    --toggle-group-fade-end: var(--space-10);
+  }
+
+  & > .item {
+    flex-shrink: 0;
+    border-radius: 0;
+  }
+
+  & > .item:is([data-pressed], :hover) {
+    z-index: 1;
+  }
+
+  & > .item:focus-visible {
+    z-index: 2;
+  }
+
+  &[data-orientation="horizontal"] {
+    & > .item:first-child {
+      border-start-start-radius: var(--radius-control);
+      border-end-start-radius: var(--radius-control);
+    }
+
+    & > .item:last-child {
+      border-start-end-radius: var(--radius-control);
+      border-end-end-radius: var(--radius-control);
+    }
+
+    & > .item + .item {
+      margin-inline-start: -1px;
+    }
+  }
+
+  &[data-orientation="vertical"] {
+    & > .item:first-child {
+      border-start-start-radius: var(--radius-control);
+      border-start-end-radius: var(--radius-control);
+    }
+
+    & > .item:last-child {
+      border-end-start-radius: var(--radius-control);
+      border-end-end-radius: var(--radius-control);
+    }
+
+    & > .item + .item {
+      margin-block-start: -1px;
+    }
+  }
+}
+
+/* overflow="wrap" (default): too wide for its container, the items wrap onto
+   more lines and stand apart (each with its own rounded border), so no
+   choice is cut off. Later than the joined rules, so it overrides them. */
+.group[data-joined][data-overflow-mode="wrap"] {
+  flex-wrap: wrap;
+}
+
+.group[data-joined][data-wrapped][data-orientation] {
+  gap: var(--space-1);
+
+  & > .item {
+    margin: 0;
+    border-radius: var(--radius-control);
+  }
+}

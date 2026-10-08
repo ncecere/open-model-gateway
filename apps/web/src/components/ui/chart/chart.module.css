@@ -1,0 +1,88 @@
+/*
+ * Series colours: --chart-color from the --color-chart-* tokens (>= 3:1 on
+ * surface and bg in every theme; see themes/neutral.css), and
+ * --chart-color-soft, a paler variant that is also >= 3:1 (it falls back to
+ * the full colour with a theme from before the -soft tokens).
+ */
+.tone {
+  --chart-color: var(--color-chart-primary);
+  --chart-color-soft: var(--color-chart-primary-soft, var(--color-chart-primary));
+
+  &[data-tone="info"] {
+    --chart-color: var(--color-chart-info);
+    --chart-color-soft: var(--color-chart-info-soft, var(--color-chart-info));
+  }
+
+  &[data-tone="success"] {
+    --chart-color: var(--color-chart-success);
+    --chart-color-soft: var(--color-chart-success-soft, var(--color-chart-success));
+  }
+
+  &[data-tone="warning"] {
+    --chart-color: var(--color-chart-warning);
+    --chart-color-soft: var(--color-chart-warning-soft, var(--color-chart-warning));
+  }
+
+  &[data-tone="danger"] {
+    --chart-color: var(--color-chart-danger);
+    --chart-color-soft: var(--color-chart-danger-soft, var(--color-chart-danger));
+  }
+
+  &[data-tone="neutral"] {
+    --chart-color: var(--color-chart-neutral);
+    --chart-color-soft: var(--color-chart-neutral-soft, var(--color-chart-neutral));
+  }
+
+  /* Falls back to primary with a theme from before the accent tokens. */
+  &[data-tone="accent"] {
+    --chart-color: var(--color-chart-accent, var(--color-chart-primary));
+    --chart-color-soft: var(--color-chart-accent-soft, var(--color-chart-accent, var(--color-chart-primary)));
+  }
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.swatch {
+  flex: none;
+
+  &[data-shape="square"] {
+    width: 0.75rem;
+    height: 0.75rem;
+    border-radius: var(--radius-1);
+    background-color: var(--chart-color);
+  }
+
+  /* A short stroke in the series' line pattern. */
+  &[data-shape="line"] {
+    width: 1.25rem;
+    height: 0;
+    border-top: 2px solid var(--chart-color);
+  }
+
+  &[data-pattern="dashed"] {
+    border-top-style: dashed;
+  }
+
+  &[data-pattern="dotted"] {
+    border-top-style: dotted;
+  }
+}
+
+.data {
+  font-size: var(--font-size-sm);
+}

@@ -1,0 +1,65 @@
+/* StatTile: Bitop StatCard plus a button reset for onClick tiles. Semantic tokens only. */
+.tile {
+  min-width: 0;
+  /* A long value wraps inside its tile rather than widening the grid (or the page). */
+  overflow-wrap: anywhere;
+}
+
+.unknown {
+  color: var(--color-text-muted);
+}
+
+/* A <button> rendered as StatCard's stretched link: no native button chrome. */
+.button {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+  gap: var(--space-4);
+
+  &[data-columns="2"] {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  }
+}
+
+@media (min-width: 75rem) {
+  .grid[data-columns="3"] {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .grid[data-columns="4"] {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .grid[data-columns="5"] {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+/* Phone (≤640px): compact tiles two to a row, so tiles don't push the content a screen down (review #26). */
+@media (max-width: 40rem) {
+  .grid,
+  .grid[data-columns="2"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-2);
+  }
+
+  .tile {
+    padding: var(--space-3);
+  }
+
+  .tile dd {
+    font-size: var(--font-size-sm);
+  }
+
+  .tile dd:first-of-type {
+    font-size: var(--font-size-lg);
+  }
+}

@@ -3,6 +3,11 @@
  * Uses Base UI's data-starting-style / data-ending-style for enter/exit
  * transitions and --transform-origin so popups grow from their anchor.
  */
+/* A portal inside a landmark (useLandmarkContainer) takes no room in its layout (a flex or grid gap). */
+.portal {
+  display: contents;
+}
+
 .positioner {
   z-index: var(--z-popover);
   outline: 0;

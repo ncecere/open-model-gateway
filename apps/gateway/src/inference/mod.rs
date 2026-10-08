@@ -1,7 +1,13 @@
+pub mod audio;
 mod deadline_stream;
+mod embeddings;
 pub mod error;
+pub(crate) mod evidence;
+pub mod images;
 pub mod repository;
 pub mod types;
+pub mod workload;
+pub mod workload_types;
 
 use std::{
     sync::{Arc, Mutex},
@@ -25,12 +31,16 @@ use types::{ApiProtocol, ChatEvent, ChatRequest, ProviderOutput, Usage};
 pub struct EngineLimits {
     pub max_concurrent: usize,
     pub request_timeout: Duration,
+    pub workloads: workload::WorkloadLimits,
+    pub audio: audio::AudioLimits,
 }
 impl Default for EngineLimits {
     fn default() -> Self {
         Self {
             max_concurrent: 128,
             request_timeout: Duration::from_secs(120),
+            workloads: workload::WorkloadLimits::default(),
+            audio: audio::AudioLimits::default(),
         }
     }
 }
@@ -52,7 +62,9 @@ impl Engine {
         anyhow::ensure!(
             limits.max_concurrent > 0
                 && limits.max_concurrent <= Semaphore::MAX_PERMITS
-                && !limits.request_timeout.is_zero(),
+                && !limits.request_timeout.is_zero()
+                && limits.workloads.validate()
+                && limits.audio.validate(),
             "invalid inference limits"
         );
         Ok(Self {
@@ -100,12 +112,17 @@ impl Engine {
         let candidates: Vec<_> = deployments
             .into_iter()
             .filter(|deployment| {
-                self.registry
-                    .get(&deployment.provider)
-                    .is_some_and(|adapter| {
-                        adapter.supports_protocol(protocol)
-                            && adapter.capabilities().supports(&request)
-                    })
+                deployment
+                    .supported_protocols
+                    .iter()
+                    .any(|p| p == protocol.as_str())
+                    && self
+                        .registry
+                        .get(&deployment.provider)
+                        .is_some_and(|adapter| {
+                            adapter.supports_protocol(protocol)
+                                && adapter.supports_chat_request(&request)
+                        })
             })
             .collect();
         if candidates.is_empty() {
@@ -169,7 +186,6 @@ impl Engine {
             let mut guard = ExecutionGuard {
                 repository: self.repository.clone(),
                 id: execution_id,
-                organization_id: principal.organization_id,
                 deployment_id: deployment.id,
                 started: attempt_started,
                 usage: Usage::default(),
@@ -177,12 +193,17 @@ impl Engine {
                 health_observation: true,
                 _permit: permit.clone(),
             };
-            let output = match timeout_at(
+            let (output, invalid_body_usage) = evidence::capture(timeout_at(
                 deadline,
                 adapter.execute_protocol(deployment, request.clone(), protocol),
-            )
-            .await
-            {
+            ))
+            .await;
+            // A body that failed validation still fails, but its valid usage
+            // object is retained as observed evidence (the hold is kept).
+            if let Some(observed) = invalid_body_usage.filter(|u| valid_usage(*u)) {
+                guard.usage = observed;
+            }
+            let output = match output {
                 Ok(result) => result,
                 Err(_) => {
                     guard.health_observation = false;
@@ -225,7 +246,11 @@ impl Engine {
                         let mut finished_choice = false;
                         let mut reported_usage = false;
                         loop {
-                            let next = match timeout_at(deadline, upstream.next()).await {
+                            let (polled, invalid_body_usage) = evidence::capture(timeout_at(deadline, upstream.next())).await;
+                            if let Some(observed) = invalid_body_usage.filter(|u| !reported_usage && valid_usage(*u)) {
+                                guard.usage = observed;
+                            }
+                            let next = match polled {
                                 Ok(Some(item)) => item,
                                 Ok(None) => Err(InferenceError::InvalidUpstream),
                                 Err(_) => Err(InferenceError::Timeout),
@@ -272,16 +297,32 @@ impl Engine {
 }
 
 fn valid_usage(usage: Usage) -> bool {
+    usage.meters.is_none_or(|m| m.validate().is_ok())
+        && usage.provider_cost_microusd.is_none_or(|n| n >= 0)
+        && valid_token_usage(usage)
+}
+fn valid_token_usage(usage: Usage) -> bool {
     [usage.input_tokens, usage.output_tokens]
         .into_iter()
         .flatten()
         .all(|n| n <= i64::MAX as u64)
+        && u128::from(usage.input_tokens.unwrap_or(0))
+            + u128::from(usage.output_tokens.unwrap_or(0))
+            <= i64::MAX as u128
+        && usage.billing.is_none_or(|billing| {
+            billing.input_lower_bound().is_ok_and(|n| {
+                u128::from(n) + u128::from(usage.output_tokens.unwrap_or(0)) <= i64::MAX as u128
+            }) && billing.validate().is_ok()
+                && match (billing.total_input_tokens, usage.input_tokens) {
+                    (Some(total), Some(raw)) => total >= raw,
+                    _ => true,
+                }
+        })
 }
 
 struct ExecutionGuard {
     repository: Arc<dyn InferenceRepository>,
     id: Uuid,
-    organization_id: Uuid,
     deployment_id: Uuid,
     started: Instant,
     usage: Usage,
@@ -322,8 +363,7 @@ impl ExecutionGuard {
             && !matches!(
                 timeout(
                     Duration::from_millis(250),
-                    self.repository
-                        .route_result(self.organization_id, self.deployment_id, error)
+                    self.repository.route_result(self.deployment_id, error)
                 )
                 .await,
                 Ok(Ok(()))

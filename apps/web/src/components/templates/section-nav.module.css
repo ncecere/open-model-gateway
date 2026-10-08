@@ -1,0 +1,112 @@
+/* SectionNav: sticky list beside content; a scrolling sticky row on a phone. Current item uses the sidebar's active look. */
+.root {
+  position: sticky;
+  top: var(--space-4);
+  z-index: var(--z-sticky);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  display: flex;
+}
+
+.link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-control);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-muted);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background-color var(--motion-duration-fast) ease, color var(--motion-duration-fast) ease;
+
+  &:hover {
+    background-color: var(--color-surface-hover);
+    color: var(--color-text);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--shadow-focus);
+  }
+
+  &[aria-current="location"] {
+    background-color: var(--color-surface-active);
+    color: var(--color-text);
+  }
+}
+
+.icon {
+  display: inline-flex;
+  color: var(--color-text-muted);
+
+  & svg {
+    width: 1rem;
+    height: 1rem;
+  }
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 12rem minmax(0, 1fr);
+  gap: var(--space-8);
+  align-items: start;
+}
+
+.navColumn {
+  position: sticky;
+  top: var(--space-4);
+  min-width: 0;
+}
+
+.content {
+  min-width: 0;
+}
+
+@media (max-width: 56rem) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-4);
+  }
+
+  .navColumn {
+    top: 0;
+    z-index: var(--z-sticky);
+    margin-inline: calc(-1 * var(--space-1));
+    padding: var(--space-1);
+    background-color: var(--color-bg);
+  }
+
+  .root {
+    position: static;
+  }
+
+  .list {
+    flex-direction: row;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .item {
+    flex: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .link {
+    transition: none;
+  }
+}

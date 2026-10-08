@@ -305,31 +305,32 @@ pub async fn handle(
 
 fn usage_json(usage: Usage) -> Option<Value> {
     // OpenAI's three required counts are emitted only when actually known.
-    let input = usage.input_tokens?;
+    let input = match usage.billing {
+        Some(b) => b.total_input_tokens?,
+        None => usage.input_tokens?,
+    };
     let output = usage.output_tokens?;
-    Some(
-        json!({"prompt_tokens":input,"completion_tokens":output,"total_tokens":input.checked_add(output)?}),
-    )
+    let mut value = json!({"prompt_tokens":input,"completion_tokens":output,"total_tokens":input.checked_add(output)?});
+    if let Some(b) = usage.billing {
+        let mut details = json!({});
+        if let Some(n) = b.cache_read_input_tokens {
+            details["cached_tokens"] = n.into();
+        }
+        if let Some(n) = b.cache_write_input_tokens {
+            details["cache_write_tokens"] = n.into();
+        }
+        if details.as_object().is_some_and(|d| !d.is_empty()) {
+            value["prompt_tokens_details"] = details;
+        }
+    }
+    Some(value)
 }
 
 fn error_body(error: InferenceError) -> Value {
-    json!({"error":{"message":error.message(),"type":error.code(),"code":error.code(),"param":null}})
+    super::openai_error_body(error)
 }
-fn error_response(error: InferenceError) -> Response {
-    let status = match error {
-        InferenceError::InvalidRequest | InferenceError::UpstreamRejected => {
-            StatusCode::BAD_REQUEST
-        }
-        InferenceError::ModelUnavailable => StatusCode::NOT_FOUND,
-        InferenceError::Unsupported => StatusCode::NOT_IMPLEMENTED,
-        InferenceError::Busy => StatusCode::TOO_MANY_REQUESTS,
-        InferenceError::Timeout => StatusCode::GATEWAY_TIMEOUT,
-        InferenceError::InvalidUpstream | InferenceError::UpstreamUnavailable => {
-            StatusCode::BAD_GATEWAY
-        }
-        InferenceError::Configuration | InferenceError::Storage => StatusCode::SERVICE_UNAVAILABLE,
-    };
-    (status, Json(error_body(error))).into_response()
+pub(super) fn error_response(error: InferenceError) -> Response {
+    super::error_with_body(error, super::openai_error_body(error))
 }
 
 #[cfg(test)]
@@ -369,5 +370,34 @@ mod tests {
     #[test]
     fn missing_usage_is_not_fabricated_as_zero() {
         assert!(usage_json(Usage::default()).is_none());
+    }
+    #[test]
+    fn exclusive_provider_usage_is_rendered_as_inclusive_chat_numbers() {
+        let usage = Usage {
+            input_tokens: Some(4),
+            output_tokens: Some(3),
+            billing: Some(crate::billing::BillingUsage {
+                total_input_tokens: Some(34),
+                uncached_input_tokens: Some(4),
+                cache_read_input_tokens: Some(10),
+                cache_write_input_tokens: Some(20),
+                cache_write_default_input_tokens: Some(0),
+                cache_write_5m_input_tokens: Some(8),
+                cache_write_1h_input_tokens: Some(12),
+            }),
+            ..Default::default()
+        };
+        let value = usage_json(usage).unwrap();
+        assert_eq!(value["prompt_tokens"], 34);
+        assert_eq!(value["total_tokens"], 37);
+        assert_eq!(value["prompt_tokens_details"]["cache_write_tokens"], 20);
+        let usage = Usage {
+            billing: Some(crate::billing::BillingUsage {
+                total_input_tokens: None,
+                ..usage.billing.unwrap()
+            }),
+            ..usage
+        };
+        assert!(usage_json(usage).is_none());
     }
 }

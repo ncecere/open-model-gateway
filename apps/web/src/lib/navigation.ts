@@ -1,149 +1,92 @@
-import { Activity, Building2, Coins, Cpu, FileClock, KeyRound, LayoutDashboard, Network, Plug, Settings, UserRound } from "lucide-react";
-import type { Organization, Session, Workspace } from "./api";
-import { canView, isAdmin, type DashboardSearch, type Page } from "./permissions";
+import { LayoutDashboard, KeyRound, Cpu, ChartColumn, Settings, Users, UsersRound, FolderKanban, Plug, Library, Gauge, Network, FileClock, Building2, DollarSign, House, ListTree } from "lucide-react";
+import type { Session, Workspace } from "./api";
+import { canView, inWorkspacePortal, platformPages, userPages, type Page, type DashboardSearch } from "./permissions";
 import { canonicalSearch, dashboardHref, parseDashboardLocation } from "./locations";
-
+/**
+ * Sidebar items. Workspace portal (Grounded's two-level pattern): a user-level "Workspace" group
+ * (Home), then a group titled with the selected workspace's name holding that workspace's pages
+ * (`group: SELECTED`). Admin groups are unchanged.
+ */
+export const SELECTED = "Selected workspace";
 export const navigation = [
-  { page: "overview", label: "Overview", icon: LayoutDashboard, group: "Workspace" },
-  { page: "keys", label: "API keys", icon: KeyRound, group: "Workspace" },
-  { page: "grants", label: "Models", icon: Cpu, group: "Workspace" },
-  { page: "costs", label: "Costs", icon: Coins, group: "Workspace" },
-  { page: "workspace-settings", label: "Workspace settings", icon: Settings, group: "Workspace" },
-  { page: "organization-settings", label: "Organization settings", icon: Building2, group: "Workspace" },
-  { page: "platform-overview", label: "Overview", icon: LayoutDashboard, group: "Platform" },
-  { page: "organizations", label: "Organizations", icon: Building2, group: "Platform" },
-  { page: "platform-teams", label: "Teams", icon: Network, group: "Platform" },
-  { page: "platform-projects", label: "Projects", icon: Network, group: "Platform" },
-  { page: "users", label: "Users", icon: UserRound, group: "Platform" },
-  { page: "models", label: "Models", icon: Cpu, group: "Models" },
-  { page: "providers", label: "Provider connections", icon: Plug, group: "Models" },
-  { page: "deployments", label: "Deployments", icon: Activity, group: "Models" },
-  { page: "platform-audit", label: "Platform audit", icon: FileClock, group: "Oversight" },
+  { page: "home", label: "Home", icon: House, group: "Workspace" },
+  { page: "overview", label: "Overview", icon: LayoutDashboard, group: SELECTED }, { page: "grants", label: "Models", icon: Cpu, group: SELECTED }, { page: "keys", label: "API keys", icon: KeyRound, group: SELECTED }, { page: "requests", label: "Requests", icon: ListTree, group: SELECTED }, { page: "costs", label: "Usage & costs", icon: ChartColumn, group: SELECTED }, { page: "workspace-settings", label: "Settings", icon: Settings, group: SELECTED },
+  { page: "platform-overview", label: "Overview", icon: LayoutDashboard, group: "" },
+  { page: "users", label: "Users", icon: Users, group: "People" }, { page: "platform-teams", label: "Teams", icon: UsersRound, group: "People" }, { page: "platform-projects", label: "Projects", icon: FolderKanban, group: "People" }, { page: "oidc", label: "SSO groups", icon: Network, group: "People" },
+  // Deployments are a model's routes and routing policy lives on the model page. Their old
+  // pages stay reachable by deep link (see hiddenPages) but leave the sidebar and jump search.
+  { page: "providers", label: "Connections", icon: Plug, group: "Models" }, { page: "models", label: "Models", icon: Cpu, group: "Models" }, { page: "catalogs", label: "Catalogs", icon: Library, group: "Models" },
+  { page: "platform-costs", label: "Usage & costs", icon: ChartColumn, group: "Usage & spend" }, { page: "pricing", label: "Pricing", icon: DollarSign, group: "Usage & spend" }, { page: "policies", label: "Limits", icon: Gauge, group: "Usage & spend" }, { page: "cost-centers", label: "Cost centers", icon: Building2, group: "Usage & spend" }, { page: "platform-audit", label: "Audit log", icon: FileClock, group: "Records" },
 ] satisfies { page: Page; label: string; icon: typeof Settings; group: string }[];
-
-export function pageScope(page: Page): "platform" | "organization" | "workspace" {
-  if (["platform-overview", "model-detail", "provider-detail", "deployment-detail", "organizations", "users", "platform-teams", "platform-projects", "models", "providers", "deployments", "routing", "pricing", "model-access", "platform-audit"].includes(page)) return "platform";
-  if (["organization-detail", "organization-settings", "teams", "projects", "organization-members", "invitations", "assigned-models", "organization-policy", "audit"].includes(page)) return "organization";
-  return "workspace";
+export type NavItem = typeof navigation[number];
+export function pageScope(page: Page): "platform" | "workspace" { return platformPages.has(page) ? "platform" : "workspace"; }
+export const isAdminPage = (page: Page) => platformPages.has(page);
+export function adminGroups(_page: Page) { return ["", "People", "Models", "Usage & spend", "Records"]; }
+/**
+ * Workspace-portal sidebar sections: "Workspace" (user-level) and, when a workspace is selected,
+ * one titled with its name. Items are filtered by live /me capabilities.
+ */
+export function workspaceSections(session: Session, active?: Workspace): { id: string; label: string; items: NavItem[] }[] {
+  const sections = [{ id: "user", label: "Workspace", items: navigation.filter(n => n.group === "Workspace") }];
+  if (active && inWorkspacePortal(session, active)) sections.push({ id: "selected", label: active.name, items: navigation.filter(n => n.group === SELECTED && canView(n.page, session, active)) });
+  return sections;
 }
-export function isAdminPage(page: Page) { return pageScope(page) === "platform" || page === "organization-detail"; }
-export function adminGroups(_page: Page, platformAdmin = false, _organizationAdmin = true) { return platformAdmin ? ["Platform", "Models", "Oversight"] : []; }
-export function scopeSearch(page: Page, org?: string, ws?: string): DashboardSearch {
-  const scope = pageScope(page);
-  const standalone = page === "profile" || page === "accept-invitation";
-  return canonicalSearch({ page, org: scope === "platform" || standalone ? undefined : org, ws: scope === "workspace" && !standalone ? ws : undefined });
+/** Labels of pages outside the sidebar: create forms, records and legacy deep links. */
+export const hiddenPages: Partial<Record<Page, string>> = { "model-new": "Add model", deployments: "All routes", routing: "Routing", "deployment-detail": "Route", "request-detail": "Request", "key-detail": "API key", "workspace-model": "Model" };
+/** The sidebar item (and breadcrumb parent) a record, form or legacy page belongs to. */
+export const navParents: Partial<Record<Page, Page>> = { "workspace-detail": "platform-teams", "model-new": "models", "model-detail": "models", "provider-detail": "providers", deployments: "models", routing: "models", "deployment-detail": "models", "catalog-detail": "catalogs", "user-detail": "users", "request-detail": "requests", "key-detail": "keys", "workspace-model": "grants" };
+export function activeAdminGroup(page: Page): string | undefined {
+  return navigation.find(item => item.page === (navParents[page] ?? page))?.group || undefined;
 }
-export function organizationLanding(_session: Session, _org: Organization): Page { return "organization-settings"; }
-export function adminLanding(session: Session, org?: Organization): Page { return adminDestination(session, org).page!; }
-export function adminDestination(session: Session, org?: Organization, workspace?: Workspace): DashboardSearch {
-  if (session.user.platform_admin) return scopeSearch("platform-overview");
-  if (org && isAdmin(org.role)) return scopeSearch("organization-settings", org.id);
-  const managed = session.workspaces.filter(ws => ws.kind !== "personal" && isAdmin(ws.role) && session.organizations.some(o => o.id === ws.organization_id));
-  const selected = managed.find(ws => ws.id === workspace?.id) ?? managed.find(ws => ws.organization_id === org?.id) ?? managed[0];
-  if (selected) return scopeSearch("workspace-settings", selected.organization_id, selected.id);
-  const administeredOrg = session.organizations.find(o => isAdmin(o.role));
-  return administeredOrg ? scopeSearch("organization-settings", administeredOrg.id) : scopeSearch("overview", org?.id);
+export function scopeSearch(page: Page, ws?: string): DashboardSearch { return canonicalSearch({ page, ws: platformPages.has(page) || userPages.has(page) ? undefined : ws }); }
+/** Workspaces the Workspace portal offers: own Personal plus actual Team/Project memberships. */
+export function portalWorkspaces(session: Session): Workspace[] { return session.workspaces.filter(ws => inWorkspacePortal(session, ws)); }
+export const personalWorkspace = (session: Session) => session.workspaces.find(w => w.kind === "personal" && w.owner_user_id === session.user.id && !w.disabled_at);
+export type ContextItem = { label: string; ws: string; workspace: Workspace };
+export function contextOptions(session: Session): { label: string; items: ContextItem[] }[] {
+  const eligible = portalWorkspaces(session);
+  return ([["personal", "Personal"], ["team", "Teams"], ["project", "Projects"]] as const).map(([kind, label]) => ({ label, items: eligible.filter(ws => ws.kind === kind).map(workspace => ({ label: workspace.name, ws: workspace.id, workspace })) })).filter(g => g.items.length);
 }
-export type ContextItem = { label: string; org?: string; ws?: string; page?: Page };
-export function contextOptions(session: Session, org?: Organization, admin = false): { label: string; items: ContextItem[] }[] {
-  // Admin has fixed Platform context; objects in that portal never switch its sidebar.
-  if (admin) return session.user.platform_admin ? [{ label: "Platform", items: [{ label: "Platform", page: "platform-overview" }] }] : [];
-  const workspaces = session.workspaces.filter(ws => ws.organization_id === org?.id);
-  return [
-    { label: "Organizations", items: session.organizations.map(o => ({ label: o.name, org: o.id, ws: undefined as string | undefined })) },
-    { label: "Personal · private", items: workspaces.filter(ws => ws.kind === "personal").map(ws => ({ label: ws.name, org: ws.organization_id, ws: ws.id })) },
-    { label: "Teams", items: workspaces.filter(ws => ws.kind === "team").map(ws => ({ label: ws.name, org: ws.organization_id, ws: ws.id })) },
-    { label: "Projects", items: workspaces.filter(ws => ws.kind === "project").map(ws => ({ label: ws.name, org: ws.organization_id, ws: ws.id })) },
-  ].filter(group => group.items.length);
-}
-
-// Old directory bookmarks were also used by scoped administrators. Translate
-// them within the requested organization instead of sending them into Admin.
-export function resolveLegacyDashboardLocation(href: string, session: Session): DashboardSearch | undefined {
-  const parsed = parseDashboardLocation(href);
-  if (!parsed || session.user.platform_admin) return parsed;
-  const url = new URL(href, "https://dashboard.invalid");
-  const legacy = url.pathname === "/" ? url.searchParams.get("page") : null;
-  if (legacy !== "organizations" && legacy !== "teams" && legacy !== "projects") return parsed;
-  const org = parsed.org ? session.organizations.find(item => item.id === parsed.org)
-    : session.organizations.find(item => isAdmin(item.role)) ?? session.organizations.find(item => session.workspaces.some(ws => ws.organization_id === item.id && ws.kind !== "personal" && isAdmin(ws.role)));
-  if (!org) return parsed;
-  if (isAdmin(org.role)) return { page: "organization-settings", org: org.id, tab: legacy === "organizations" ? "overview" : legacy };
-  const managed = session.workspaces.find(ws => ws.organization_id === org.id && ws.kind !== "personal" && isAdmin(ws.role) && (legacy === "organizations" || ws.kind === (legacy === "projects" ? "project" : "team")));
-  return managed ? { page: "workspace-settings", org: org.id, ws: managed.id } : parsed;
-}
-
 export function resolveDashboardSearch(input: DashboardSearch, session: Session): DashboardSearch {
-  const search = canonicalSearch(input);
-  const page = search.page ?? (session.user.platform_admin ? "platform-overview" : "overview");
-  if (pageScope(page) === "platform" || page === "profile" || page === "accept-invitation") return { ...search, page, org: undefined, ws: undefined };
-  // An explicit unavailable scope is preserved for the not-found screen. In
-  // particular, a bad org must never resolve a workspace from the first org.
-  const org = search.org ?? (search.ws ? session.workspaces.find(ws => ws.id === search.ws)?.organization_id : session.organizations[0]?.id);
-  const available = session.organizations.some(item => item.id === org);
-  const workspaces = available ? session.workspaces.filter(ws => ws.organization_id === org) : [];
-  const ws = pageScope(page) === "workspace" ? search.ws ?? workspaces.find(ws => ws.kind === "personal")?.id ?? workspaces[0]?.id : undefined;
-  return { ...search, page, org, ws };
+  const search = canonicalSearch(input), page = search.page ?? "overview";
+  if (platformPages.has(page) || userPages.has(page)) return { ...search, page, ws: undefined };
+  return { ...search, page, ws: search.ws ?? personalWorkspace(session)?.id ?? portalWorkspaces(session).find(w => w.kind !== "personal")?.id };
 }
-// Sidebar context is navigation-only. Organization settings keep their own
-// route/API scope and never inherit a workspace's permissions or data.
-export function sidebarWorkspace(session: Session, search: DashboardSearch, remembered?: Workspace): Workspace | undefined {
-  const org = session.organizations.find(item => item.id === search.org);
-  if (!org || !search.page || isAdminPage(search.page) || search.page === "profile" || search.page === "accept-invitation") return undefined;
-  const available = session.workspaces.filter(item => item.organization_id === org.id);
-  if (search.ws) return available.find(item => item.id === search.ws);
-  if (search.page !== "organization-settings" || !canView(search.page, session, org)) return undefined;
-  return available.find(item => item.id === remembered?.id)
-    ?? available.find(item => item.kind === "personal") ?? available[0];
+export const resolveLegacyDashboardLocation = (href: string, _session?: Session) => parseDashboardLocation(href);
+export function authorizedLocation(search: DashboardSearch, session: Session) {
+  if (!search.page) return false;
+  const workspace = session.workspaces.find(ws => ws.id === search.ws);
+  if (search.ws && (!workspace || workspace.disabled_at)) return false;
+  return canView(search.page, session, workspace);
 }
-
-export function authorizedLocation(search: DashboardSearch, session: Session): boolean {
-  const page = search.page;
-  if (!page) return false;
-  const org = session.organizations.find(o => o.id === search.org);
-  const ws = session.workspaces.find(w => w.id === search.ws && w.organization_id === org?.id);
-  if (search.org && !org || search.ws && !ws) return false;
-  if (pageScope(page) === "organization" && !org) return false;
-  return canView(page, session, org, ws);
-}
-const storagePrefix = "omg:portal:";
-type Portal = "admin" | "workspace";
-const storageKey = (session: Session, portal: Portal) => `${storagePrefix}${session.user.id}:${portal}`;
+const prefix = "omg:enterprise:portal:";
+const key = (session: Session, portal: "admin" | "workspace") => `${prefix}${session.user.id}:${portal}`;
+const contextKey = (session: Session) => `${prefix}${session.user.id}:context`;
 export function rememberPortal(storage: Pick<Storage, "setItem">, session: Session, search: DashboardSearch) {
   if (!authorizedLocation(search, session) || search.page === "profile" || search.page === "accept-invitation") return;
-  // Search text is deliberately excluded: storage holds navigation metadata only.
-  const { page, org, ws, record, tab } = canonicalSearch(search);
-  try { storage.setItem(storageKey(session, isAdminPage(page!) ? "admin" : "workspace"), dashboardHref({ page, org, ws, record, tab })); } catch { /* Storage may be disabled. */ }
+  const { page, ws, record, tab, kind } = canonicalSearch(search);
+  try { storage.setItem(key(session, isAdminPage(page!) ? "admin" : "workspace"), dashboardHref({ page, ws, record, tab, kind })); } catch { /* Storage is optional. */ }
 }
-export function rememberedPortal(storage: Pick<Storage, "getItem" | "removeItem">, session: Session, portal: Portal): DashboardSearch | undefined {
-  try {
-    const key = storageKey(session, portal);
-    const href = storage.getItem(key);
-    const search = href ? parseDashboardLocation(href) : undefined;
-    if (search?.page && authorizedLocation(search, session) && isAdminPage(search.page) === (portal === "admin") && search.page !== "profile" && search.page !== "accept-invitation") {
-      const { page, org, ws, record, tab } = search;
-      return { page, org, ws, record, tab };
-    }
-    storage.removeItem(key);
-  } catch { /* Storage may be disabled. */ }
-  return undefined;
+export function rememberedPortal(storage: Pick<Storage, "getItem" | "removeItem">, session: Session, portal: "admin" | "workspace") {
+  const k = key(session, portal); let saved: string | null; try { saved = storage.getItem(k); } catch { return; } const parsed = parseDashboardLocation(saved ?? "");
+  if (parsed?.page && authorizedLocation(parsed, session) && isAdminPage(parsed.page) === (portal === "admin") && parsed.page !== "profile" && parsed.page !== "accept-invitation") return parsed;
+  try { storage.removeItem(k); } catch { /* Storage is optional. */ } return;
 }
-const workspaceContextKey = (session: Session, org: string) => `${storagePrefix}${session.user.id}:context:${org}`;
-export function rememberWorkspace(storage: Pick<Storage, "setItem">, session: Session, search: DashboardSearch) {
-  if (!search.org || !search.ws || !search.page || pageScope(search.page) !== "workspace" || search.page === "profile" || search.page === "accept-invitation" || !authorizedLocation(search, session)) return;
-  try { storage.setItem(workspaceContextKey(session, search.org), search.ws); } catch { /* Storage may be disabled. */ }
+export function clearRememberedPortals(storage: Pick<Storage, "length" | "key" | "removeItem">) { try { for (let i = storage.length - 1; i >= 0; i--) { const k = storage.key(i); if (k?.startsWith(prefix)) storage.removeItem(k); } } catch { /* Unavailable storage. */ } }
+export function sidebarWorkspace(session: Session, search: DashboardSearch, remembered?: Workspace) {
+  const eligible = portalWorkspaces(session);
+  if (search.ws) return eligible.find(w => w.id === search.ws);
+  return eligible.find(w => w.id === remembered?.id) ?? eligible.find(w => w.kind === "personal") ?? eligible[0];
 }
-export function rememberedWorkspace(storage: Pick<Storage, "getItem" | "removeItem">, session: Session, org: string): Workspace | undefined {
-  try {
-    const key = workspaceContextKey(session, org);
-    const id = storage.getItem(key);
-    const workspace = session.organizations.some(item => item.id === org)
-      ? session.workspaces.find(item => item.organization_id === org && item.id === id) : undefined;
-    if (workspace) return workspace;
-    storage.removeItem(key);
-  } catch { /* Storage may be disabled. */ }
-  return undefined;
-}
-export function clearRememberedPortals(storage: Pick<Storage, "length" | "key" | "removeItem">) {
-  try { for (let i = storage.length - 1; i >= 0; i--) { const key = storage.key(i); if (key?.startsWith(storagePrefix)) storage.removeItem(key); } } catch { /* Storage may be disabled. */ }
+export function rememberWorkspace(storage: Pick<Storage, "setItem">, session: Session, search: DashboardSearch) { if (search.ws && authorizedLocation(search, session) && !isAdminPage(search.page!) && !userPages.has(search.page!)) try { storage.setItem(contextKey(session), search.ws); } catch { /* Storage is optional. */ } }
+export function rememberedWorkspace(storage: Pick<Storage, "getItem" | "removeItem">, session: Session) { const k = contextKey(session); try { const w = portalWorkspaces(session).find(w => w.id === storage.getItem(k)); if (!w) storage.removeItem(k); return w; } catch { return; } }
+/**
+ * Where sign-in lands: Home, with the caller's Personal workspace selected in the sidebar (the
+ * selection is reset so a previous user's or session's context never carries over). Without a
+ * Personal workspace the remembered or first membership stays selected.
+ */
+export function landingSearch(session: Session, storage?: Pick<Storage, "setItem">): DashboardSearch {
+  const personal = personalWorkspace(session);
+  if (personal && storage) rememberWorkspace(storage, session, { page: "overview", ws: personal.id });
+  return { page: "home" };
 }

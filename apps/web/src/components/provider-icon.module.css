@@ -1,0 +1,64 @@
+/* Provider and lab logos. Semantic tokens only; see provider-icon.tsx. */
+.icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  color: var(--color-text);
+
+  & > svg {
+    display: block;
+    flex: none;
+  }
+}
+
+.fallback {
+  color: var(--color-text-subtle);
+}
+
+/* Brands whose colored mark only reads on light surfaces show their mono mark in dark mode. */
+.darkOnly {
+  display: none !important;
+}
+
+:global([data-theme="dark"]) .darkOnly {
+  display: block !important;
+}
+
+:global([data-theme="dark"]) .lightOnly {
+  display: none !important;
+}
+
+.inline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
+  vertical-align: middle;
+}
+
+.text {
+  min-width: 0;
+}
+
+.cell {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+
+  & > .icon {
+    margin-top: 0.125rem;
+  }
+}
+
+.cellText {
+  display: block;
+  min-width: 0;
+}
+
+.badge {
+  gap: 0.375rem;
+}

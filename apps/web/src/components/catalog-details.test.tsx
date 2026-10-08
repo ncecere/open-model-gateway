@@ -1,192 +1,65 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { renderToStaticMarkup } from "react-dom/server";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactNode } from "react";
-import { ApiError, platformPath, type Deployment, type Model, type Provider, type Session } from "../lib/api";
+import { ApiError, platformPath, type Deployment } from "../lib/api";
 import { validateFields } from "../lib/forms";
-import { ActionProvider } from "./ui";
 import { DashboardNavigationProvider } from "./navigation-link";
 import { DeploymentDetail, ModelDetail, ProviderDetail } from "../pages/catalog-details";
-import { Deployments, Models, Providers, deploymentCreateAction } from "../pages/catalog";
-
-const session: Session = { user: { id: "operator", email: "operator@example.invalid", platform_admin: true }, organizations: [], workspaces: [] };
-const model: Model = { id: "model-beyond-page-one", public_name: "company/smart", display_name: "Smart model", enabled: true, personal_enabled: false };
-const provider: Provider = { id: "provider", name: "Production provider", provider: "openai", endpoint: null, region: null, enabled: false };
-const deployment: Deployment = { id: "deployment", model_id: model.id, provider_connection_id: provider.id, upstream_model: "upstream-v2", enabled: false };
-const go = () => {};
-const clients: QueryClient[] = [];
-function client() {
-  const result = new QueryClient({ defaultOptions: { queries: { retry: false, retryOnMount: false, staleTime: Infinity } } });
-  clients.push(result);
-  return result;
-}
-function render(node: ReactNode, entries: [string, unknown][] = [], errors: [string, Error][] = [], cache = client()) {
-  for (const [path, data] of entries) cache.setQueryData(["api", path], data);
-  for (const [path, error] of errors) cache.getQueryCache().build(cache, { queryKey: ["api", path] }).setState({ status: "error", error, fetchStatus: "idle" });
-  return renderToStaticMarkup(<QueryClientProvider client={cache}><ActionProvider>{node}</ActionProvider></QueryClientProvider>);
-}
-afterEach(() => { clients.forEach(cache => cache.clear()); clients.length = 0; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
-
-describe("catalog detail records", () => {
-  it("looks up a model beyond page one directly and never scans catalog choices", async () => {
-    const cache = client();
-    cache.setQueryData(["api", `${platformPath}/models?limit=100&offset=0`], { data: Array.from({ length: 100 }, (_, i) => ({ ...model, id: `first-page-${i}`, display_name: "Other model" })) });
-    const path = `${platformPath}/models/${model.id}`;
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(model), { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-    const page = <ModelDetail session={session} id={model.id} onTabChange={go} />;
-    expect(render(page, [], [], cache)).toContain("Loading model");
-    await cache.getQueryCache().find({ queryKey: ["api", path], exact: true })!.fetch();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0][0]).toBe(path);
-    const html = render(page, [], [], cache);
-    expect(html).toContain("Smart model");
-    expect(html).toContain("Manage deployments");
-    expect(html).toContain("Configure model routing");
-    expect(html).toContain('data-variant="pills"');
-    expect(html).not.toContain("Create deployment</button>");
-    expect(cache.getQueryCache().getAll().some(query => query.queryKey.includes("choices"))).toBe(false);
-    expect(cache.getQueryCache().getAll()).toHaveLength(2);
-  });
-  it.each([
-    ["models", ModelDetail, "routing", "Edit model routing"],
-    ["providers", ProviderDetail, "deployments", "Create deployment"],
-    ["deployments", DeploymentDetail, "pricing", "Publish price version"],
-  ] as const)("keeps %s writes unmounted for loading, missing, denied and mismatched reads", (kind, Detail, tab, control) => {
-    const path = `${platformPath}/${kind}/requested`;
-    const page = <Detail session={session} id="requested" tab={tab} onTabChange={go} />;
-    const cache = client();
-    expect(render(page, [], [], cache)).toContain("Loading");
-    expect(cache.getQueryCache().getAll().map(query => query.queryKey)).toEqual([["api", path]]);
-    for (const status of [403, 404]) {
-      const failed = render(page, [], [[path, new ApiError(status, "unavailable", "No resource access")]]);
-      expect(failed).toContain(status === 403 ? "Access denied" : "Not found");
-      expect(failed).not.toContain(control);
-    }
-    const mismatch = render(page, [[path, { ...model, ...provider, ...deployment, id: "another-resource" }]]);
-    expect(mismatch).toContain("different resource");
-    expect(mismatch).not.toContain(control);
-    expect(mismatch).not.toContain("Enable</button>");
-  });
-  it("denies cached data to a non-operator and hides stale writes after a failed refresh", () => {
-    const path = `${platformPath}/deployments/${deployment.id}`;
-    const denied = render(<DeploymentDetail session={{ ...session, user: { ...session.user, platform_admin: false } }} id={deployment.id} tab="pricing" onTabChange={go} />, [[path, deployment]]);
-    expect(denied).toContain("Access not available");
-    expect(denied).not.toContain("Publish price version");
-    const stale = render(<DeploymentDetail session={session} id={deployment.id} tab="pricing" onTabChange={go} />, [[path, deployment]], [[path, new ApiError(403, "denied", "Authorization changed")]]);
-    expect(stale).toContain("Access denied");
-    expect(stale).not.toContain("Publish price version");
-  });
-  it("shows safe provider fields, not credentials even if a malformed response includes them", () => {
-    const html = render(<ProviderDetail session={session} id={provider.id} onTabChange={go} />, [[`${platformPath}/providers/${provider.id}`, { ...provider, credential_ref: "env:DO_NOT_RENDER", api_key: "DO_NOT_RENDER_SECRET" }]]);
-    expect(html).toContain("Production provider");
-    expect(html).toContain("Secret reference (hidden)");
-    expect(html).toContain("Rotate reference");
-    expect(html).not.toContain("DO_NOT_RENDER");
-    const workload = render(<ProviderDetail session={session} id={provider.id} onTabChange={go} />, [[`${platformPath}/providers/${provider.id}`, { ...provider, provider: "bedrock" }]]);
-    expect(workload).toContain("rotate through AWS");
-    expect(workload).not.toContain("Rotate reference</button>");
-  });
-  it("uses existing routing panels for the matched model and deployment", () => {
-    const modelPath = `${platformPath}/models/${model.id}`;
-    const modelHtml = render(<ModelDetail session={session} id={model.id} tab="routing" onTabChange={go} />, [[modelPath, model], [`${modelPath}/routing`, { policy: { strategy: "priority", max_attempts: 1, allow_ambiguous_failover: false, failure_threshold: 3, cooldown_seconds: 30, required_residency: "us-east" } }]]);
-    expect(modelHtml).toContain("Edit model routing");
-    expect(modelHtml).toContain("us-east");
-    const deploymentPath = `${platformPath}/deployments/${deployment.id}`;
-    const html = render(<DeploymentDetail session={session} id={deployment.id} tab="routing" onTabChange={go} />, [[deploymentPath, deployment], [`${deploymentPath}/routing`, { routing: { priority: 0, weight: 1, residency: "us-east" }, health: { consecutive_failures: 0, open_until: null } }]]);
-    expect(html).toContain("Edit deployment routing");
-    expect(html).toContain("Unknown · no recorded observation");
-    expect(html).not.toContain("Healthy");
-  });
-  it("uses immutable pricing with exact USD and leaves inactive writable panels unmounted", () => {
-    const path = `${platformPath}/deployments/${deployment.id}`;
-    const price = { id: "price", input_microusd_per_million: "9007199254740993", output_microusd_per_million: "1", input_token_limit: 128000, output_token_limit: 4096, created_at: "2026-01-01T00:00:00Z" };
-    const html = render(<DeploymentDetail session={session} id={deployment.id} tab="pricing" onTabChange={go} />, [[path, deployment], [`${path}/prices?limit=100&offset=0`, { data: [price] }]]);
-    expect(html).toContain("$9,007,199,254.740993");
-    expect(html).toContain("$0.000001");
-    expect(html).toContain("Publish price version");
-    expect(html).toContain("Versions are immutable");
-    expect(html).not.toContain("Edit deployment routing");
-    expect(html).not.toContain("Delete");
-    const overview = render(<DeploymentDetail session={session} id={deployment.id} onTabChange={go} />, [[path, deployment]]);
-    expect(overview).toContain(`href="/admin/models/${model.id}"`);
-    expect(overview).toContain(`href="/admin/providers/${provider.id}"`);
-    expect(overview).not.toContain("Publish price version</button>");
+import { Deployments, Models, Providers, deploymentCreateAction, modelFields, modelBody, providerFields, providerBody } from "../pages/catalog";
+import { admin, auditor, session, model, provider, markup, testClient } from "../lib/test-fixtures";
+const deployment: Deployment = { id: "deployment", model_id: model.id, provider_connection_id: provider.id, provider_name: provider.name, upstream_model: "upstream-v2", enabled: false }, go = () => {};
+const readiness = { routes: 1, enabled_routes: 0, priced_enabled_routes: 0, catalogs: 1, direct_workspaces: 0, connections: [{ id: provider.id, name: provider.name }] };
+afterEach(() => vi.unstubAllGlobals());
+describe("direct connected catalog records", () => {
+  it("loads a record beyond page one by exact ID, never catalog scanning", () => { const client = testClient(), id = "beyond-page-one", path = `${platformPath}/models/${id}`; client.setQueryData(["api", undefined, `${platformPath}/models?limit=50&offset=0`], { data: [model] }); const loading = markup(<ModelDetail session={admin} id={id} onTabChange={go} />, [], client); expect(loading).toContain("Loading resource"); expect(client.getQueryCache().find({ queryKey: ["api", undefined, path], exact: true })).toBeDefined(); const html = markup(<ModelDetail session={admin} id={id} onTabChange={go} />, [[path, { ...model, id }]], client); expect(html).toContain("Smart model"); expect(html).toContain('aria-label="On this page"'); expect(html).toContain('href="#routes"'); expect(client.getQueryCache().getAll().some(q => q.queryKey.includes("choices") && String(q.queryKey[2]).startsWith(`${platformPath}/models`))).toBe(false); expect(client.getQueryCache().getAll().some(q => q.queryKey[2] === `${platformPath}/deployments?model_id=${id}`)).toBe(true); client.clear(); });
+  it.each([["models", ModelDetail, "routing", "Add route"], ["providers", ProviderDetail, "deployments", "Add model"], ["deployments", DeploymentDetail, "pricing", "Publish price version"]] as const)("keeps %s writes unmounted for loading, denied, missing and mismatched records", (kind, Detail, tab, control) => { const path = `${platformPath}/${kind}/requested`, page = <Detail session={admin} id="requested" tab={tab} onTabChange={go} />; expect(markup(page)).toContain("Loading"); for (const status of [403, 404]) { const client = testClient(); client.getQueryCache().build(client, { queryKey: ["api", undefined, path] }).setState({ status: "error", error: new ApiError(status, "unavailable", "No access"), fetchStatus: "idle" }); const html = markup(page, [], client); expect(html).toContain(status === 403 ? "Access denied" : "Not found"); expect(html).not.toContain(control); client.clear(); } const mismatch = markup(page, [[path, { ...model, ...provider, ...deployment, id: "other" }]]); expect(mismatch).toContain("different resource"); expect(mismatch).not.toContain(control); });
+  it("denies cached infrastructure to a non-platform user", () => { const html = markup(<DeploymentDetail session={session} id={deployment.id} tab="pricing" onTabChange={go} />, [[`${platformPath}/deployments/${deployment.id}`, deployment]]); expect(html).toContain("Access not available"); expect(html).not.toContain("Publish price version"); });
+  it("Auditor views model cards without write controls", () => { const path = `${platformPath}/models/${model.id}`, client = testClient(); client.setQueryData(["api", undefined, `${platformPath}/deployments?model_id=${model.id}`, "choices"], [deployment]); client.setQueryData(["api", undefined, `${platformPath}/catalogs`, "choices"], [{ id: "cat", name: "Approved" }]); const fixtures: [string, unknown][] = [[path, { ...model, readiness }], [`${path}/routing`, { policy: { strategy: "priority", max_attempts: 1, allow_ambiguous_failover: false, required_residency: null } }], [`${path}/catalogs`, { catalog_ids: ["cat"] }]]; const html = [undefined, "routes", "pricing", "routing", "availability"].map(tab => markup(<ModelDetail session={auditor} id={model.id} tab={tab} onTabChange={go} />, fixtures, client)).join(""); expect(html).not.toContain("cannot change"); expect(html).toContain("Maximum attempts"); expect(html).toContain("upstream-v2"); for (const control of ["Disable</button>", "Edit</button>", "Add route", "Set price", "Publish new price", "Edit routing", "Publish price", "Review routes", "<select", ">Details<"]) expect(html).not.toContain(control); client.clear(); });
+  it("renders safe provider fields, never returned secret/reference accidents", () => { const html = markup(<ProviderDetail session={admin} id={provider.id} onTabChange={go} />, [[`${platformPath}/providers/${provider.id}`, { ...provider, credential_ref: "env:DO_NOT_RENDER", api_key: "DO_NOT_RENDER_SECRET" }]]); expect(html).toContain("Production provider"); expect(html).toContain("hidden"); expect(html).not.toContain("DO_NOT_RENDER"); const bedrock = markup(<ProviderDetail session={admin} id={provider.id} onTabChange={go} />, [[`${platformPath}/providers/${provider.id}`, { ...provider, provider: "bedrock" }]]); expect(bedrock).toContain("AWS workload identity"); });
+  it("uses connected routing settings with explicit circuit configuration", () => { const path = `${platformPath}/deployments/${deployment.id}`; const html = markup(<DeploymentDetail session={admin} id={deployment.id} tab="routing" onTabChange={go} />, [[path, deployment], [`${path}/routing`, { routing: { priority: 0, weight: 1, residency: "us-east", failure_threshold: 3, cooldown_seconds: 30 }, health: { consecutive_failures: 0, open_until: null } }]]); expect(html).toContain("Routing settings"); expect(html).toContain("0 / 1"); expect(html).toContain("Unknown · no recorded observation"); expect(html).toContain("Failure threshold"); expect(html).not.toContain("Healthy"); });
+  it("uses exact immutable price history and leaves inactive write panels unmounted", () => { const path = `${platformPath}/deployments/${deployment.id}`, price = { id: "price", deployment_id: deployment.id, pricing_version: 1, cache_pricing: null, input_microusd_per_million: "9007199254740993", output_microusd_per_million: "1", input_token_limit: 128000, output_token_limit: 4096, created_at: "2026-01-01T00:00:00Z" }; const html = markup(<DeploymentDetail session={admin} id={deployment.id} tab="pricing" onTabChange={go} />, [[`${platformPath}/models/${model.id}`, model], [path, { ...deployment, provider: "openai", connection_enabled: true, data_policy: { data_collection: "unknown", basis: "not_configured" }, price: { ...price, pricing_version: 1 } }], [`${path}/prices?limit=50&offset=0`, { data: [price] }]]); expect(html).toContain("$9007199254.740993/M input tokens"); expect(html).toContain("$0.000001"); expect(html).toContain("$9,007,199,254.740993"); expect(html).toContain("Publish price version"); expect(html).toContain("past usage keeps its price"); expect(html).toContain("Routing settings"); expect(html).toContain("Data policy unknown"); expect(html).toContain("Retention and training are unknown"); expect(html).toContain(`href="/admin/models/${model.id}"`); expect(html).toContain(`href="/admin/connections/${provider.id}"`); expect(html).toContain("Back to Smart model"); expect(html).toMatch(/<h1[^>]*>[^<]*route<\/h1>/); expect(html).not.toContain(">Status</h2>"); expect(html).toContain('href="#price-history"');
+    const unpriced = markup(<DeploymentDetail session={admin} id={deployment.id} onTabChange={go} />, [[path, { ...deployment, price: null }]]); expect(unpriced).toContain("Unpriced"); expect(unpriced).not.toContain("$0.00");
+    const read = markup(<DeploymentDetail session={auditor} id={deployment.id} onTabChange={go} />, [[path, deployment]]); expect(read).not.toContain("Publish price version"); expect(read).not.toContain("Disable</button>"); });
+  it("steps through the model's routes in table order with Back to the model", () => { const path = (id: string) => `${platformPath}/deployments/${id}`, client = testClient(), a = { ...deployment, id: "a", upstream_model: "first", enabled: true }, b = { ...deployment, id: "b", upstream_model: "second", enabled: true };
+    client.setQueryData(["api", undefined, `${platformPath}/deployments?model_id=${model.id}`, "choices"], [b, a]);
+    const routing = (priority: number) => ({ routing: { priority, weight: 1, residency: null, failure_threshold: 3, cooldown_seconds: 30 }, health: { consecutive_failures: 0, open_until: null } });
+    const html = markup(<DeploymentDetail session={admin} id="b" onTabChange={go} />, [[path("a"), { ...a, connection_enabled: true }], [path("b"), { ...b, connection_enabled: true }], [`${path("a")}/routing`, routing(0)], [`${path("b")}/routing`, routing(5)], [`${platformPath}/models/${model.id}/routing`, { policy: { strategy: "priority", max_attempts: 1, allow_ambiguous_failover: false, required_residency: null } }]], client);
+    expect(html).toContain("2 / 2"); expect(html).toContain('aria-label="Previous route: first on Production provider"'); expect(html).toContain("Fallback only"); expect(html).toContain('aria-label="No next route"'); client.clear(); });
+});
+describe("model page routes", () => {
+  it("orders routes, separates fallback-only and not-serving routes with reasons, and shows per-unit prices and data policy", () => {
+    const path = (id: string) => `${platformPath}/deployments/${id}`, client = testClient(), modelPath = `${platformPath}/models/${model.id}`;
+    const route = (id: string, enabled = true) => ({ ...deployment, id, upstream_model: `up-${id}`, enabled, provider_name: provider.name });
+    const routing = (priority: number) => ({ routing: { priority, weight: 2, residency: null, failure_threshold: 3, cooldown_seconds: 30 }, health: { consecutive_failures: 0, open_until: null } });
+    const price = { id: "p", pricing_version: 3, input_microusd_per_million: null, output_microusd_per_million: null, input_token_limit: 128000, output_token_limit: 4096, cache_pricing: null, created_at: "2026-01-01T00:00:00Z", price_lines: [{ meter: "input_tokens", microusd_per_batch: "8100", batch: 1000000, unit_label: "/M tokens", sku_label: "Input" }] };
+    client.setQueryData(["api", undefined, `${platformPath}/deployments?model_id=${model.id}`, "choices"], [route("b"), route("a"), route("off", false)]);
+    const html = markup(<ModelDetail session={auditor} id={model.id} onTabChange={go} />, [[modelPath, { ...model, readiness: { ...readiness, routes: 3, enabled_routes: 2 } }], [`${modelPath}/routing`, { policy: { strategy: "priority", max_attempts: 2, allow_ambiguous_failover: false, required_residency: null } }],
+      [path("a"), { ...route("a"), provider: "openrouter", connection_enabled: true, data_policy: { data_collection: "deny", basis: "current_configuration" }, price }], [path("b"), { ...route("b"), provider: "openai", connection_enabled: true, data_policy: { data_collection: "unknown", basis: "not_configured" }, price: null }], [path("off"), { ...route("off", false), connection_enabled: true, price: null }],
+      [`${path("a")}/routing`, routing(0)], [`${path("b")}/routing`, routing(1)], [`${path("off")}/routing`, routing(0)]], client);
+    const order = ["up-a", "Fallback only · not used by default", "up-b", "Not serving", "up-off"].map(text => html.indexOf(text));
+    expect(order.every((at, i) => at > 0 && (i === 0 || at > order[i - 1]))).toBe(true);
+    expect(html).toContain("up to 2 attempts"); expect(html).toContain("Data collection denied"); expect(html).toContain("Data policy unknown");
+    expect(html).toContain("$0.0081"); expect(html).toContain("M input tokens"); expect(html).toContain("Unpriced"); expect(html).toContain("128,000 in · 4,096 out");
+    expect(html).toContain(`href="/admin/routes/a"`); expect(html).not.toContain(">Details<"); client.clear();
   });
 });
-
-describe("catalog collections and contextual creation", () => {
-  it("links catalog names with native fallback links", () => {
-    const models = render(<Models session={session} />, [[`${platformPath}/models?limit=100&offset=0`, { data: [model] }]]);
-    const providers = render(<Providers session={session} />, [[`${platformPath}/providers?limit=100&offset=0`, { data: [provider] }]]);
-    const deployments = render(<Deployments session={session} />, [[`${platformPath}/deployments?limit=100&offset=0`, { data: [deployment] }]]);
-    expect(models).toContain(`href="/admin/models/${model.id}"`);
-    expect(providers).toContain(`href="/admin/providers/${provider.id}"`);
-    expect(deployments).toContain(`href="/admin/deployments/${deployment.id}"`);
-    expect(models).toContain("Smart model");
-    expect(providers).toContain("Production provider");
-    expect(deployments).toContain("upstream-v2");
-  });
-  it.each(["model", "provider"] as const)("filters deployments on the server for a fixed %s", kind => {
-    const cache = client();
-    const isModel = kind === "model";
-    const filter = isModel ? `model_id=${model.id}` : `provider_connection_id=${provider.id}`;
-    const path = `${platformPath}/deployments?${filter}&limit=100&offset=0`;
-    const html = render(<Deployments session={session} modelId={isModel ? model.id : undefined} providerId={isModel ? undefined : provider.id} embedded />, [[`${platformPath}/${isModel ? "models" : "providers"}/${isModel ? model.id : provider.id}`, isModel ? model : provider], [path, { data: [deployment] }]], [], cache);
-    expect(html).toContain("Fixed creation context (read-only)");
-    expect(html).toContain(isModel ? model.public_name : provider.name);
-    expect(html).toContain("Create deployment</button>");
-    expect(html).toContain("upstream-v2");
-    expect(cache.getQueryCache().getAll().some(query => query.queryKey.includes("choices"))).toBe(false);
-    expect(cache.getQueryCache().find({ queryKey: ["api", path], exact: true })).toBeDefined();
-    expect(cache.getQueryCache().find({ queryKey: ["api", `${platformPath}/deployments?limit=100&offset=0`], exact: true })).toBeUndefined();
-  });
-  it("combines URL-backed search and status with the fixed deployment parent before pagination", () => {
-    const cache = client();
-    const path = `${platformPath}/deployments?model_id=${model.id}&limit=100&offset=100&q=upstream%25_&enabled=false`;
-    const html = render(<DashboardNavigationProvider search={{ page: "model-detail", record: model.id, tab: "deployments", q: "upstream%_", enabled: "false", offset: 100 }} navigate={go}><Deployments session={session} modelId={model.id} embedded /></DashboardNavigationProvider>, [[`${platformPath}/models/${model.id}`, model], [path, { data: [deployment] }]], [], cache);
-    expect(html).toContain("upstream-v2");
-    expect(html).toContain("Page 2");
-    expect(html).toContain('value="upstream%_"');
-    expect(cache.getQueryCache().find({ queryKey: ["api", path], exact: true })).toBeDefined();
-  });
-  it("does not mount deployment creation for a mismatched or failed fixed parent", () => {
-    const path = `${platformPath}/models/${model.id}`;
-    const page = <Deployments session={session} modelId={model.id} embedded />;
-    const mismatch = render(page, [[path, { ...model, id: "other-model" }]]);
-    expect(mismatch).toContain("different parent");
-    expect(mismatch).not.toContain("Create deployment");
-    const failed = render(page, [], [[path, new ApiError(403, "denied", "No access")]]);
-    expect(failed).toContain("Access denied");
-    expect(failed).not.toContain("Create deployment");
-  });
-  it.each(["model", "provider", "both"] as const)("locks the %s creation context in the body rather than trusting form values", async kind => {
-    const action = deploymentCreateAction({ model: kind !== "provider" ? model : undefined, provider: kind !== "model" ? provider : undefined, models: [model], providers: [provider] });
-    const fields = action.fields!;
-    expect(fields.find(field => field.name === "enabled")?.value).toBe("false");
-    if (kind !== "provider") {
-      expect(action.description).toContain(`Model (read-only): ${model.public_name}`);
-      expect(fields.some(field => field.name === "model_id")).toBe(false);
+describe("catalog collection context and validation", () => {
+  it("links native canonical model/provider/deployment names", () => { const models = testClient(); models.setQueryData(["api", undefined, `${platformPath}/models?sort=name`, "choices"], [model]); expect(markup(<Models session={admin} />, [], models)).toContain(`href="/admin/models/${model.id}"`); expect(markup(<Providers session={admin} />, [[`${platformPath}/providers?limit=50&offset=0`, { data: [provider] }]])).toContain(`href="/admin/connections/${provider.id}"`); expect(markup(<Deployments session={admin} />, [[`${platformPath}/deployments?limit=50&offset=0`, { data: [deployment] }]])).toContain(`href="/admin/routes/${deployment.id}"`); });
+  it.each(["model", "provider"] as const)("applies fixed %s server filtering before pagination", kind => { const isModel = kind === "model", filter = isModel ? `model_id=${model.id}` : `provider_connection_id=${provider.id}`, path = `${platformPath}/deployments?${filter}&limit=50&offset=0`, client = testClient(); const html = markup(<Deployments session={admin} modelId={isModel ? model.id : undefined} providerId={isModel ? undefined : provider.id} embedded />, [[`${platformPath}/${isModel ? "models" : "providers"}/${isModel ? model.id : provider.id}`, isModel ? model : provider], [path, { data: [deployment] }]], client); expect(html).toContain("upstream-v2"); expect(client.getQueryCache().find({ queryKey: ["api", undefined, path], exact: true })).toBeDefined(); expect(client.getQueryCache().getAll().some(q => q.queryKey.includes("choices"))).toBe(false); client.clear(); });
+  it("combines URL-backed search/status/fixed parent before pagination", () => { const path = `${platformPath}/deployments?model_id=${model.id}&limit=50&offset=50&q=upstream%25_&enabled=false`; const html = markup(<DashboardNavigationProvider search={{ page: "model-detail", record: model.id, tab: "deployments", q: "upstream%_", enabled: "false", offset: 50 }} navigate={go}><Deployments session={admin} modelId={model.id} embedded /></DashboardNavigationProvider>, [[`${platformPath}/models/${model.id}`, model], [path, { data: [deployment] }]]); expect(html).toContain("upstream-v2"); expect(html).toContain("Rows 51\u201351 of 51"); });
+  it("does not create a deployment under a mismatched parent", () => { const html = markup(<Deployments session={admin} modelId={model.id} embedded />, [[`${platformPath}/models/${model.id}`, { ...model, id: "wrong" }]]); expect(html).toContain("different parent"); expect(html).not.toContain("Add route"); });
+  it.each(["model", "provider", "both"] as const)("locks %s creation context independently of submitted fields", async kind => { const action = deploymentCreateAction({ model: kind !== "provider" ? model : undefined, provider: kind !== "model" ? provider : undefined, models: [model], providers: [provider] }); expect(action.fields?.find(f => f.name === "enabled")?.value).toBe("false"); if (kind !== "provider") expect(action.fields?.some(f => f.name === "model_id")).toBe(false); if (kind !== "model") expect(action.fields?.some(f => f.name === "provider_connection_id")).toBe(false); vi.stubGlobal("document", { cookie: "omg_csrf=test" }); const fetch = vi.fn().mockResolvedValue(Response.json({ id: "new" })); vi.stubGlobal("fetch", fetch); await action.run({ model_id: kind !== "provider" ? "wrong" : model.id, provider_connection_id: kind !== "model" ? "wrong" : provider.id, upstream_model: "upstream-v2", enabled: "false" }, new AbortController().signal); expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ model_id: model.id, provider_connection_id: provider.id, upstream_model: "upstream-v2", enabled: false }); });
+  it("validates unscoped choices rather than trusting arbitrary IDs", () => { const fields = deploymentCreateAction({ models: [model], providers: [provider] }).fields!; expect(validateFields(fields, { model_id: model.id, provider_connection_id: provider.id, upstream_model: "upstream-v2", enabled: "false" })).toEqual({}); expect(validateFields(fields, { model_id: "wrong", provider_connection_id: provider.id, upstream_model: "upstream-v2", enabled: "false" }).model_id).toBeDefined(); });
+  it("requires nonempty distinct protocol certification, including embeddings-only", () => { const fields = modelFields(), values = { public_name: "embed", display_name: "Embed", description: "", enabled: "false", supported_protocols: '["embeddings"]' }; expect(validateFields(fields, values)).toEqual({}); expect(modelBody(values).supported_protocols).toEqual(["embeddings"]); for (const bad of ["[]", '["embeddings","embeddings"]', '["unknown"]']) expect(validateFields(fields, { ...values, supported_protocols: bad })).toHaveProperty("supported_protocols"); });
+  it("supports explicit approved local no-auth without dummy credential references", () => { const v = { name: "Local", provider: "vllm", auth_mode: "none", credential_variable: "", endpoint: "http://127.0.0.1:8000/v1", region: "", enabled: "false" }; expect(validateFields(providerFields(), v)).toEqual({}); expect(providerBody(v).credential_ref).toBe("none"); expect(validateFields(providerFields(), { ...v, provider: "openai" })).toHaveProperty("auth_mode"); expect(validateFields(providerFields(), { ...v, endpoint: "" })).toHaveProperty("endpoint"); });
+  it("hides the fixed endpoint for OpenAI/Anthropic and never sends a stale custom one", () => {
+    const endpoint = providerFields().find(f => f.name === "endpoint")!;
+    const base = { name: "Cloud", auth_mode: "environment", credential_variable: "OPENAI_KEY", region: "", enabled: "true" };
+    for (const provider of ["openai", "anthropic"]) {
+      const v = { ...base, provider, endpoint: "http://127.0.0.1:8000/v1" };
+      expect(endpoint.visibleWhen!(v)).toBe(false);
+      expect(validateFields(providerFields(), v)).toEqual({});
+      expect(providerBody(v).endpoint).toBeNull();
     }
-    if (kind !== "model") {
-      expect(action.description).toContain(`Provider (read-only): ${provider.name}`);
-      expect(fields.some(field => field.name === "provider_connection_id")).toBe(false);
-    }
-    expect(action.successNotice).toContain("Review routing and publish a price version");
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "created-deployment" }), { status: 201 }));
-    vi.stubGlobal("fetch", fetchMock);
-    vi.stubGlobal("document", { cookie: "omg_csrf=test-csrf" });
-    await action.run({ model_id: kind !== "provider" ? "wrong-model" : model.id, provider_connection_id: kind !== "model" ? "wrong-provider" : provider.id, upstream_model: "upstream-v2", enabled: "false" });
-    expect(fetchMock.mock.calls[0][0]).toBe(`${platformPath}/deployments`);
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ model_id: model.id, provider_connection_id: provider.id, upstream_model: "upstream-v2", enabled: false });
-    expect(fetchMock.mock.calls[0][1].method).toBe("POST");
-  });
-  it("keeps unscoped deployment creation usable and validates choice fields", () => {
-    const action = deploymentCreateAction({ models: [model], providers: [provider] });
-    const fields = action.fields!;
-    expect(fields.find(field => field.name === "model_id")?.options?.[0].value).toBe(model.id);
-    expect(fields.find(field => field.name === "provider_connection_id")?.options?.[0].label).toContain("disabled");
-    expect(validateFields(fields, { model_id: model.id, provider_connection_id: provider.id, upstream_model: "upstream-v2", enabled: "false" })).toEqual({});
-    expect(validateFields(fields, { model_id: "wrong", provider_connection_id: provider.id, upstream_model: "upstream-v2", enabled: "false" }).model_id).toBeDefined();
+    expect(providerBody({ ...base, provider: "openai", endpoint: "https://api.openai.com/v1" }).endpoint).toBe("https://api.openai.com/v1");
+    for (const provider of ["vllm", "openai_compatible"]) expect(endpoint.visibleWhen!({ ...base, provider, endpoint: "" })).toBe(true);
   });
 });

@@ -118,6 +118,11 @@ fn target() -> Deployment {
         credential_ref: "test-key-reference".into(),
         endpoint: None,
         region: None,
+        supported_protocols: vec![
+            "chat_completions".into(),
+            "responses".into(),
+            "embeddings".into(),
+        ],
     }
 }
 
@@ -325,8 +330,8 @@ async fn nonstream_tools_usage_and_unknown_usage() {
         response.usage,
         Usage {
             input_tokens: Some(12),
-            output_tokens: Some(7)
-        }
+            output_tokens: Some(7),
+            billing: usage(&json!({"prompt_tokens":12,"completion_tokens":7,"prompt_tokens_details":{"cached_tokens":3}})).unwrap().billing, ..Default::default() }
     );
     assert_eq!(response.tool_calls.len(), 1);
     assert_eq!(response.tool_calls[0].id, "call-2");
@@ -346,7 +351,13 @@ async fn nonstream_tools_usage_and_unknown_usage() {
         usage(&json!({"completion_tokens":0})).unwrap(),
         Usage {
             input_tokens: None,
-            output_tokens: Some(0)
+            output_tokens: Some(0),
+            billing: Some(crate::billing::BillingUsage {
+                cache_write_5m_input_tokens: Some(0),
+                cache_write_1h_input_tokens: Some(0),
+                ..Default::default()
+            }),
+            ..Default::default()
         }
     );
 }
@@ -457,7 +468,8 @@ async fn chunked_sse_preserves_unicode_tools_usage_and_done() {
             events[4],
             ChatEvent::Usage(Usage {
                 input_tokens: Some(9),
-                output_tokens: Some(4)
+                output_tokens: Some(4),
+                ..
             })
         ));
         assert!(matches!(events[5], ChatEvent::Done));
@@ -775,4 +787,57 @@ fn supported_finish_reasons_and_sse_cr_framing() {
         }
     }
     assert_eq!(output, vec![b"first\nsecond".to_vec(), vec![]]);
+}
+
+#[tokio::test]
+async fn cloud_embeddings_native_path_auth_payload_and_numeric_usage() {
+    let mock = Mock::json(json!({"object":"list","model":"private","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"usage":{"prompt_tokens":4,"total_tokens":4}})).await;
+    let adapter = mock.adapter();
+    let request = EmbeddingRequest {
+        model: "public".into(),
+        input: vec!["hello".into()],
+        dimensions: Some(2),
+    };
+    let response = adapter
+        .execute_embeddings(&target(), request.clone())
+        .await
+        .unwrap();
+    assert_eq!(response.embeddings[0].len(), 2);
+    assert_eq!(response.usage.input_tokens, Some(4));
+    assert_eq!(response.usage.output_tokens, Some(0));
+    assert!(response.usage.billing.unwrap().is_complete());
+    {
+        let captured = mock.requests.lock().unwrap();
+        assert_eq!(captured[0].uri.path(), "/v1/embeddings");
+        assert_eq!(
+            captured[0].headers["authorization"],
+            "Bearer local-mock-key"
+        );
+        assert_eq!(captured[0].body["encoding_format"], "float");
+        assert_eq!(captured[0].body["dimensions"], 2);
+        assert_eq!(captured[0].body["model"], "private-upstream-model");
+    }
+    let mut target = target();
+    target.credential_ref = "none".into();
+    assert!(matches!(
+        adapter.execute_embeddings(&target, request).await,
+        Err(InferenceError::Configuration)
+    ));
+    assert_eq!(mock.requests.lock().unwrap().len(), 1);
+}
+#[tokio::test]
+async fn invalid_chat_body_preserves_validated_usage_as_evidence() {
+    use crate::inference::evidence::capture;
+    let bad = serde_json::json!({"choices":[{"index":0,"message":{"role":"assistant","content":"hi","audio":{"id":"x"}},"finish_reason":"stop"}],
+        "usage":{"prompt_tokens":9,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":0}}});
+    let (result, observed) = capture(async { decode_complete(&bad) }).await;
+    assert_eq!(result.err(), Some(InferenceError::InvalidUpstream));
+    let observed = observed.unwrap();
+    assert_eq!(
+        (observed.input_tokens, observed.output_tokens),
+        (Some(9), Some(5))
+    );
+    let (result, observed) = capture(async { decode_complete_profile(&bad, Some("vllm")) }).await;
+    assert!(result.is_err());
+    assert_eq!(observed.unwrap().input_tokens, Some(9));
 }

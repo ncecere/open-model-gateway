@@ -1,0 +1,46 @@
+.skeleton {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 1rem;
+  overflow: hidden;
+  border-radius: var(--radius-2);
+  background-color: var(--color-skeleton);
+
+  &[data-shape="text"] {
+    height: 0.75rem;
+    border-radius: var(--radius-1);
+  }
+
+  &[data-shape="circle"] {
+    border-radius: var(--radius-full);
+  }
+
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: linear-gradient(90deg, transparent, var(--color-skeleton-shine), transparent);
+    transform: translateX(-100%);
+    animation: shimmer 1.4s var(--motion-ease-in-out) infinite;
+  }
+}
+
+@keyframes shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton::after {
+    display: none;
+  }
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+}

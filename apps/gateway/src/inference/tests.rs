@@ -39,7 +39,6 @@ impl InferenceRepository for MemoryRepository {
     async fn route_result(
         &self,
         _: Uuid,
-        _: Uuid,
         error: Option<InferenceError>,
     ) -> Result<(), InferenceError> {
         self.health.lock().unwrap().push(error);
@@ -81,7 +80,17 @@ enum Mode {
     BadOrder,
     Error,
     Throttled,
+    InvalidBody,
+    InvalidStream,
 }
+const OBSERVED: Usage = Usage {
+    input_tokens: Some(9),
+    output_tokens: Some(16),
+    billing: None,
+    meters: None,
+    output_image_variant: None,
+    provider_cost_microusd: None,
+};
 struct Adapter {
     mode: Mode,
     calls: AtomicUsize,
@@ -114,11 +123,23 @@ impl ProviderAdapter for Adapter {
                     usage: Usage {
                         input_tokens: Some(3),
                         output_tokens: Some(1),
+                        billing: None,
+                        ..Default::default()
                     },
                 }));
             }
             Mode::Error => return Err(InferenceError::UpstreamUnavailable),
             Mode::Throttled => return Err(InferenceError::Busy),
+            Mode::InvalidBody => {
+                return evidence::preserve(Err(InferenceError::InvalidUpstream), || {
+                    Some(Ok(OBSERVED))
+                });
+            }
+            Mode::InvalidStream => {
+                return Ok(ProviderOutput::Stream(Box::pin(stream::once(async {
+                    evidence::preserve(Err(InferenceError::InvalidUpstream), || Some(Ok(OBSERVED)))
+                }))));
+            }
             Mode::Connecting => return std::future::pending().await,
             Mode::Pending => return Ok(ProviderOutput::Stream(Box::pin(stream::pending()))),
             Mode::Stream => vec![
@@ -130,6 +151,8 @@ impl ProviderAdapter for Adapter {
                 Ok(ChatEvent::Usage(Usage {
                     input_tokens: Some(3),
                     output_tokens: Some(1),
+                    billing: None,
+                    ..Default::default()
                 })),
                 Ok(ChatEvent::Done),
             ],
@@ -158,7 +181,6 @@ fn request(stream: bool) -> ChatRequest {
 fn principal() -> Principal {
     Principal {
         key_id: Uuid::new_v4(),
-        organization_id: Uuid::new_v4(),
         workspace_id: Uuid::new_v4(),
         user_id: Some(Uuid::new_v4()),
     }
@@ -172,6 +194,7 @@ fn fixture(mode: Mode, limits: EngineLimits) -> (Engine, Arc<MemoryRepository>, 
         credential_ref: "unused".into(),
         endpoint: None,
         region: None,
+        supported_protocols: vec!["chat_completions".into()],
     });
     let adapter = Arc::new(Adapter {
         mode,
@@ -187,6 +210,202 @@ fn fixture(mode: Mode, limits: EngineLimits) -> (Engine, Arc<MemoryRepository>, 
     )
 }
 
+#[test]
+fn billing_partitions_and_raw_inclusive_bounds_fail_closed() {
+    let billing = crate::billing::BillingUsage {
+        total_input_tokens: Some(3),
+        uncached_input_tokens: Some(1),
+        cache_read_input_tokens: Some(2),
+        cache_write_input_tokens: Some(0),
+        cache_write_default_input_tokens: Some(0),
+        cache_write_5m_input_tokens: Some(0),
+        cache_write_1h_input_tokens: Some(0),
+    };
+    let usage = Usage {
+        input_tokens: Some(3),
+        output_tokens: Some(1),
+        billing: Some(billing),
+        ..Default::default()
+    };
+    assert!(valid_usage(usage));
+    assert!(!valid_usage(Usage {
+        input_tokens: Some(4),
+        ..usage
+    }));
+    assert!(!valid_usage(Usage {
+        billing: Some(crate::billing::BillingUsage {
+            cache_read_input_tokens: Some(4),
+            ..billing
+        }),
+        ..usage
+    }));
+    assert!(valid_usage(Usage {
+        billing: Some(crate::billing::BillingUsage::default()),
+        ..usage
+    }));
+    assert!(!valid_usage(Usage {
+        input_tokens: Some(i64::MAX as u64),
+        output_tokens: Some(1),
+        billing: None,
+        ..Default::default()
+    }));
+    assert!(!valid_usage(Usage {
+        input_tokens: Some(0),
+        output_tokens: Some(1),
+        billing: Some(crate::billing::BillingUsage {
+            total_input_tokens: Some(i64::MAX as u64),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }));
+}
+struct EmbeddingAdapter {
+    malformed: bool,
+}
+#[async_trait]
+impl ProviderAdapter for EmbeddingAdapter {
+    fn id(&self) -> &'static str {
+        "embedding_mock"
+    }
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            text_chat: false,
+            streaming: false,
+            tools: false,
+        }
+    }
+    fn supports_protocol(&self, protocol: ApiProtocol) -> bool {
+        protocol == ApiProtocol::Embeddings
+    }
+    async fn execute(
+        &self,
+        _: &Deployment,
+        _: ChatRequest,
+    ) -> Result<ProviderOutput, InferenceError> {
+        Err(InferenceError::Unsupported)
+    }
+    async fn execute_embeddings(
+        &self,
+        _: &Deployment,
+        request: EmbeddingRequest,
+    ) -> Result<EmbeddingResponse, InferenceError> {
+        Ok(EmbeddingResponse {
+            embeddings: request
+                .input
+                .iter()
+                .map(|_| vec![if self.malformed { f32::NAN } else { 0.1 }, 0.2])
+                .collect(),
+            usage: Usage {
+                input_tokens: Some(3),
+                output_tokens: Some(0),
+                billing: None,
+                ..Default::default()
+            },
+        })
+    }
+}
+#[tokio::test]
+async fn embeddings_require_declared_model_support_and_account_their_real_workload() {
+    let (mut engine, repo, _) = fixture(Mode::Complete, EngineLimits::default());
+    engine
+        .registry
+        .register(Arc::new(EmbeddingAdapter { malformed: false }))
+        .unwrap();
+    repo.deployments.lock().unwrap()[0].provider = "embedding_mock".into();
+    let request = EmbeddingRequest {
+        model: "public/alias".into(),
+        input: vec!["text".into()],
+        dimensions: Some(2),
+    };
+    assert!(matches!(
+        engine
+            .execute_embeddings(principal(), request.clone(), Uuid::new_v4())
+            .await,
+        Err(InferenceError::Unsupported)
+    ));
+    assert_eq!(repo.starts.load(Ordering::SeqCst), 0);
+    repo.deployments.lock().unwrap()[0].supported_protocols = vec!["embeddings".into()];
+    let response = engine
+        .execute_embeddings(principal(), request, Uuid::new_v4())
+        .await
+        .unwrap();
+    assert_eq!(response.embeddings, vec![vec![0.1, 0.2]]);
+    let rows = repo.finishes.lock().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].outcome, Outcome::Succeeded);
+    assert_eq!(rows[0].usage.output_tokens, Some(0));
+    assert_eq!(rows[0].usage.input_tokens, Some(3));
+}
+#[tokio::test]
+async fn planned_workload_models_never_serve_chat_or_embeddings() {
+    for kind in [
+        "images",
+        "audio_transcriptions",
+        "audio_speech",
+        "rerank",
+        "systemone",
+    ] {
+        let (engine, repo, _) = fixture(Mode::Complete, EngineLimits::default());
+        repo.deployments.lock().unwrap()[0].supported_protocols = vec![kind.into()];
+        assert!(matches!(
+            engine
+                .execute(principal(), request(false), Uuid::new_v4())
+                .await,
+            Err(InferenceError::Unsupported)
+        ));
+        let embedding = EmbeddingRequest {
+            model: "public/alias".into(),
+            input: vec!["text".into()],
+            dimensions: None,
+        };
+        assert!(matches!(
+            engine
+                .execute_embeddings(principal(), embedding, Uuid::new_v4())
+                .await,
+            Err(InferenceError::Unsupported)
+        ));
+        assert_eq!(repo.starts.load(Ordering::SeqCst), 0, "{kind}");
+    }
+    assert!(ApiProtocol::valid_set(&[
+        "chat_completions",
+        "responses",
+        "messages"
+    ]));
+    assert!(!ApiProtocol::valid_set(&["chat_completions", "embeddings"]));
+    assert!(!ApiProtocol::valid_set(&["images", "rerank"]));
+    assert!(!ApiProtocol::valid_set::<&str>(&[]));
+    assert!(ApiProtocol::valid_set(&["systemone"]));
+}
+#[tokio::test]
+async fn malformed_embedding_vectors_fail_but_preserve_valid_metering_evidence() {
+    let (mut engine, repo, _) = fixture(Mode::Complete, EngineLimits::default());
+    engine
+        .registry
+        .register(Arc::new(EmbeddingAdapter { malformed: true }))
+        .unwrap();
+    {
+        let mut targets = repo.deployments.lock().unwrap();
+        targets[0].provider = "embedding_mock".into();
+        targets[0].supported_protocols = vec!["embeddings".into()];
+    }
+    let result = engine
+        .execute_embeddings(
+            principal(),
+            EmbeddingRequest {
+                model: "public/alias".into(),
+                input: vec!["text".into()],
+                dimensions: None,
+            },
+            Uuid::new_v4(),
+        )
+        .await;
+    assert!(matches!(result, Err(InferenceError::InvalidUpstream)));
+    let rows = repo.finishes.lock().unwrap();
+    assert_eq!(rows[0].outcome, Outcome::Failed);
+    assert_eq!(rows[0].usage.input_tokens, Some(3));
+    assert_eq!(rows[0].usage.output_tokens, Some(0));
+}
+
 #[tokio::test]
 async fn expired_unpolled_stream_releases_capacity_without_poisoning_health() {
     let (engine, repo, _) = fixture(
@@ -194,6 +413,7 @@ async fn expired_unpolled_stream_releases_capacity_without_poisoning_health() {
         EngineLimits {
             max_concurrent: 1,
             request_timeout: Duration::from_millis(20),
+            ..EngineLimits::default()
         },
     );
     let Ok(ProviderOutput::Stream(mut old)) = engine
@@ -390,6 +610,7 @@ async fn total_deadline_bounds_stalled_streams() {
         EngineLimits {
             max_concurrent: 1,
             request_timeout: Duration::from_millis(20),
+            ..EngineLimits::default()
         },
     );
     let ProviderOutput::Stream(mut output) = engine
@@ -442,6 +663,38 @@ async fn dropping_unpolled_stream_releases_capacity_and_records_cancellation() {
             .is_ok()
     );
 }
+/// D1b: a body that fails validation still fails, but its valid usage object
+/// is recorded on the failed attempt instead of being lost.
+#[tokio::test]
+async fn invalid_upstream_body_fails_but_preserves_observed_usage() {
+    let (engine, repository, _) = fixture(Mode::InvalidBody, EngineLimits::default());
+    assert!(matches!(
+        engine
+            .execute(principal(), request(false), Uuid::new_v4())
+            .await,
+        Err(InferenceError::InvalidUpstream)
+    ));
+    let (engine, stream_repository, _) = fixture(Mode::InvalidStream, EngineLimits::default());
+    let ProviderOutput::Stream(output) = engine
+        .execute(principal(), request(true), Uuid::new_v4())
+        .await
+        .unwrap()
+    else {
+        panic!("stream expected")
+    };
+    let events: Vec<_> = output.collect().await;
+    assert!(matches!(
+        events.last(),
+        Some(Err(InferenceError::InvalidUpstream))
+    ));
+    for repository in [repository, stream_repository] {
+        let finishes = repository.finishes.lock().unwrap();
+        assert_eq!(finishes.len(), 1);
+        assert_eq!(finishes[0].outcome, Outcome::Failed);
+        assert_eq!(finishes[0].error, Some(InferenceError::InvalidUpstream));
+        assert_eq!(finishes[0].usage, OBSERVED);
+    }
+}
 #[tokio::test]
 async fn provider_errors_are_recorded_without_retry() {
     let (engine, repository, adapter) = fixture(Mode::Error, EngineLimits::default());
@@ -464,6 +717,7 @@ async fn deadline_and_client_cancellation_cover_provider_setup() {
         EngineLimits {
             max_concurrent: 1,
             request_timeout: Duration::from_millis(20),
+            ..EngineLimits::default()
         },
     );
     assert!(matches!(

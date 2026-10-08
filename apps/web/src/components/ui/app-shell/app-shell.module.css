@@ -55,20 +55,25 @@
 }
 
 .sidebarHeader {
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
   padding: var(--space-3) var(--space-2) var(--space-2);
 }
 
-.sidebarContent {
-  flex: 1;
+/* The content scrolls in a ScrollArea between the pinned header and footer. */
+.sidebarScroll {
+  flex: 1 1 0;
   min-height: 0;
-  overflow-y: auto;
+}
+
+.sidebarContent {
   padding: var(--space-2);
 }
 
 .sidebarFooter {
+  flex-shrink: 0;
   padding: var(--space-2);
   border-top: 1px solid var(--color-border);
 }
@@ -94,6 +99,60 @@
   color: var(--color-text-subtle);
 }
 
+/* A collapsible section's label: the same look, as a button with a chevron. */
+.sectionToggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  min-height: 1.5rem;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-1);
+  background: transparent;
+  color: var(--color-text-subtle);
+  font: inherit;
+  font-size: 0.6875rem;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-caps);
+  text-align: start;
+  text-transform: uppercase;
+  cursor: pointer;
+
+  &:hover {
+    color: var(--color-text);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 0;
+  }
+}
+
+.sectionToggleText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.sectionChevron {
+  flex-shrink: 0;
+  width: 0.875rem;
+  height: 0.875rem;
+  transition: rotate var(--motion-duration-fast) var(--motion-ease-out);
+
+  [aria-expanded="true"] > & {
+    rotate: 90deg;
+  }
+}
+
+/* Closed sections sit closer together: a header each. */
+.nav:has(> .section[data-collapsible]) {
+  gap: var(--space-3);
+}
+
 .items {
   display: flex;
   flex-direction: column;
@@ -101,6 +160,11 @@
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+/* A closed collapsible section (display: flex above would override the hidden attribute). */
+.items[hidden] {
+  display: none;
 }
 
 .itemRow {
@@ -177,6 +241,30 @@
   text-overflow: ellipsis;
 }
 
+/* An item with a second line (description). */
+.item[data-description] {
+  height: auto;
+  min-height: 2.5rem;
+  padding-block: var(--space-1);
+}
+
+.itemText {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  line-height: var(--line-height-snug);
+}
+
+.itemDescription {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-subtle);
+}
+
 .itemTrailing {
   display: inline-flex;
   font-size: var(--font-size-xs);
@@ -200,6 +288,97 @@
   position: absolute;
   top: 0.375rem;
   right: 0.5rem;
+}
+
+/* ---------------- Drawer (narrow windows) ---------------- */
+
+.drawerBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay);
+  min-height: 100dvh;
+  background-color: var(--color-overlay);
+  transition: opacity var(--motion-duration-normal) var(--motion-ease-out);
+
+  &[data-starting-style],
+  &[data-ending-style] {
+    opacity: 0;
+  }
+}
+
+.drawerPopup {
+  position: fixed;
+  inset-block: 0;
+  inset-inline-start: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  width: min(var(--sidebar-width), 85vw);
+  box-shadow: var(--shadow-4);
+  outline: 0;
+  transition: transform var(--motion-duration-normal) var(--motion-ease-out);
+
+  &[data-starting-style],
+  &[data-ending-style] {
+    transform: translateX(-100%);
+  }
+
+  &:dir(rtl)[data-starting-style],
+  &:dir(rtl)[data-ending-style] {
+    transform: translateX(100%);
+  }
+
+  /* A flex item with a z-index stacks even when static: drop the rail's, so the close button shows. */
+  & .sidebar {
+    position: static;
+    z-index: auto;
+    flex: 1;
+    width: auto;
+    min-width: 0;
+  }
+}
+
+.drawerClose {
+  position: absolute;
+  z-index: 1;
+  top: var(--space-3);
+  inset-inline-end: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+
+  &:hover {
+    background-color: var(--color-surface-active);
+    color: var(--color-text);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 0;
+  }
+
+  & svg {
+    width: 1rem;
+    height: 1rem;
+  }
+}
+
+/* The brand line leaves room for the drawer's close button. */
+.drawerPopup .sidebarHeader {
+  padding-inline-end: 2.75rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drawerBackdrop,
+  .drawerPopup {
+    transition: none;
+  }
 }
 
 /* ---------------- Brand ---------------- */
@@ -427,5 +606,5 @@
 }
 
 .modeOption[aria-current="page"] .modeIcon {
-  color: var(--color-primary);
+  color: var(--color-primary-subtle-text);
 }

@@ -1,0 +1,136 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay);
+  min-height: 100dvh;
+  background-color: var(--color-overlay);
+  backdrop-filter: blur(2px);
+  transition: opacity var(--motion-duration-slow) var(--motion-ease-out);
+
+  &[data-starting-style],
+  &[data-ending-style] {
+    opacity: 0;
+  }
+}
+
+.viewport {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: max(4rem, 10vh) var(--space-4) var(--space-4);
+  overflow-y: auto;
+}
+
+.popup {
+  --dialog-width: 32rem;
+
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: var(--dialog-width);
+  max-height: calc(100dvh - max(4rem, 10vh) - var(--space-4));
+  border-radius: var(--radius-card);
+  background-color: var(--color-surface-raised);
+  --table-background: var(--color-surface-raised);
+  color: var(--color-text);
+  box-shadow: var(--shadow-4);
+  font-family: var(--font-family-sans);
+  font-feature-settings: var(--font-features);
+  font-size: var(--font-size-md);
+  outline: 0;
+  transition:
+    opacity var(--motion-duration-slow) var(--motion-ease-out),
+    transform var(--motion-duration-slow) var(--motion-ease-out);
+
+  &[data-starting-style],
+  &[data-ending-style] {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+
+  &[data-size="sm"] {
+    --dialog-width: 26rem;
+  }
+
+  &[data-size="lg"] {
+    --dialog-width: 42rem;
+  }
+
+  &[data-size="xl"] {
+    --dialog-width: 56rem;
+  }
+
+  /* Nested dialogs push the parent back slightly. */
+  /* A parent behind a nested dialog shrinks slightly. No opacity change: its
+     text must keep 4.5:1 contrast (it stays in the accessibility tree). */
+  &[data-nested-dialog-open] {
+    transform: scale(0.97);
+  }
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-6) 0;
+}
+
+.heading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.title {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-snug);
+  letter-spacing: var(--letter-spacing-snug);
+  color: var(--color-text);
+}
+
+.description {
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-normal);
+  color: var(--color-text-muted);
+}
+
+.close {
+  position: absolute;
+  top: var(--space-4);
+  right: var(--space-4);
+}
+
+.popup[data-closable] .header {
+  padding-right: 3.5rem;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-6);
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.header + .footer {
+  margin-top: var(--space-5);
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-6);
+  border-top: 1px solid var(--color-border);
+  border-radius: 0 0 var(--radius-card) var(--radius-card);
+  background-color: var(--color-surface-sunken);
+}
