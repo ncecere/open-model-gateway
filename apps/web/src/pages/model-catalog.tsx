@@ -44,6 +44,8 @@ import { notServing } from "../lib/home";
 import { ModelHeadlinePrice, useRoutePrices, type RoutePrice } from "./pricing-overview";
 import { addModelsAction } from "./workspace";
 import { ActionMenu } from "../components/templates/action-menu";
+import { CompareBar, CompareSelect } from "./model-compare";
+import { MAX_COMPARE, toggleCompare } from "../lib/model-compare";
 import s from "./shared.module.css";
 import m from "./models.module.css";
 
@@ -145,6 +147,14 @@ export function typeTabItems(counts: Record<string, number> | null, selected: st
   return catalogTypeTabs.filter(t => !counts || !present || t.value === "all" || t.value === (selected ?? "all") || (present[t.value] ?? 0) > 0).map(t => ({ value: t.value, label: t.label, count: counts ? counts[t.value] ?? 0 : null }));
 }
 const countBy = <T,>(rows: T[], test: (row: T) => boolean) => rows.reduce((n, r) => n + (test(r) ? 1 : 0), 0);
+/** Wraps a row's name with its compare checkbox (Model compare). */
+type Select = (id: string, name: string, children: ReactNode) => ReactNode;
+/** Picked models for Compare (2 to 4), local to the page. */
+function useCompareSelection() {
+  const [picked, setPicked] = useState<string[]>([]);
+  const select: Select = (id, name, children) => <CompareSelect name={name} checked={picked.includes(id)} full={picked.length >= MAX_COMPARE} onChange={on => setPicked(current => toggleCompare(current, id, on))}>{children}</CompareSelect>;
+  return { picked, select, clear: () => setPicked([]) };
+}
 const readinessOptions: { value: Readiness["state"]; label: string }[] = (["ready", "needs_setup", "needs_attention", "not_serving", "unknown"] as const).map(value => ({ value, label: readinessText[value] }));
 /** The model's icon, display name and (when different) its mono API name: the first cell of every row. */
 function ModelName({ display, api, search }: { display: string; api: string; search: DashboardSearch }) {
@@ -170,7 +180,7 @@ export function adminStatus(model: CatalogModel, policy?: ServerPolicy): { label
   return { label: readinessText[r.state], tone: r.state === "ready" ? "success" : r.state === "unknown" ? "neutral" : "warning", hint: reasons.join(" · ") || undefined };
 }
 export function Models({ session }: { session: Session }) {
-  const [search, go] = useCatalogSearch("models"), allowed = session.capabilities.platform_read;
+  const [search, go] = useCatalogSearch("models"), allowed = session.capabilities.platform_read, compare = useCompareSelection();
   const connections = useChoices<Provider>(`${platformPath}/providers`, allowed), policy = useServerPolicy(session);
   const queries = useChoicesMany<CatalogModel>(catalogQueryPaths(search), allowed);
   // Route prices only for the Table view's Price column (one request per route, like the former Pricing page).
@@ -207,29 +217,30 @@ export function Models({ session }: { session: Session }) {
   };
   // Unknown while loading or after a load error: no counts, never a fabricated 0.
   const known = !loading && !failed, tabs = typeTabItems(known ? counts : null, type, typeCounts(rows));
-  const columns = adminColumns({ policy, profiles: connections.data, prices: routePrices.routes.isError ? undefined : routePrices.byModel, pricesLoading: routePrices.routes.isPending });
+  const columns = adminColumns({ policy, profiles: connections.data, prices: routePrices.routes.isError ? undefined : routePrices.byModel, pricesLoading: routePrices.routes.isPending, select: compare.select });
   return <Stack gap={6} className={s.page}>
     <Heading title="Models" description="Models your users can call, and the routes they use." actions={session.capabilities.platform_write && <Button render={<ResourceLink search={{ page: "model-new", connection: filters.connections?.length === 1 ? filters.connections[0] : undefined }} />}><Plus aria-hidden />Add model</Button>} />
     <TypeTabs label="Model type" items={tabs} value={type ?? "all"} onChange={v => go({ type: v === "all" ? undefined : v as DashboardSearch["type"] })} end={resultCount(known, filtered.length, shown.length)} />
     <FilterToolbar search={searchBox(search, go)} facets={facets} more={adminMoreFacets} counts={facetCounts} values={facetValues(search)} onChange={v => go(facetSearch(v))} note={priceNote(search) ?? (search.pricing ? "Unpriced: usage is recorded with unknown cost. Publish a price on the model's route." : undefined)}
       end={<CatalogActions search={search} go={go} columns={chooserColumns(columns)} columnIds={adminColumnIds} />} />
+    <CompareBar count={compare.picked.length} target={{ page: "platform-model-compare", ids: compare.picked.join(",") }} onClear={compare.clear} />
     <div className={m.results}>
       {connections.isError && !failed && <ErrorNotice error={connections.error} retry={() => void connections.refetch()} />}
       {failed ? <ErrorNotice error={failed.error} retry={() => queries.forEach(q => void q.refetch())} />
         : loading ? <p role="status">Loading models…</p>
         : !shown.length ? <EmptyState size="compact" title={rows.length ? "No models match" : "No models yet"} description={rows.length ? "Change the type or clear filters." : "Add a model from a connection."} action={rows.length ? <Button variant="secondary" onClick={() => go({ ...facetSearch({}), q: undefined, type: undefined })}>Clear filters</Button> : undefined} />
         : table ? <ViewDataTable<AdminRow> caption="Models" columns={columns} data={shown} getRowId={r => r.id} hideViewControls view={tableViewFromSearch({ cols: search.cols, density: search.density }, adminColumnIds)} onViewChange={v => go(tableViewToSearch(v) as Partial<DashboardSearch>)} />
-        : <ul className={m.rows} aria-label="Models">{shown.map(row => <AdminListRow key={row.id} model={row} policy={policy} profiles={connections.data} />)}</ul>}
+        : <ul className={m.rows} aria-label="Models">{shown.map(row => <AdminListRow key={row.id} model={row} policy={policy} profiles={connections.data} select={compare.select} />)}</ul>}
     </div>
   </Stack>;
 }
 /** Two-line row (Grounded's models list): name + API name | type | status | price | connection | ⋯. Details live on the model page. */
-function AdminListRow({ model, policy, profiles }: { model: AdminRow; policy?: ServerPolicy; profiles?: Provider[] }) {
+function AdminListRow({ model, policy, profiles, select }: { model: AdminRow; policy?: ServerPolicy; profiles?: Provider[]; select?: Select }) {
   const r = model.readiness, status = adminStatus(model, policy), conns = r?.connections ?? [], lead = conns[0];
   const profile = lead && profiles?.find(p => p.id === lead.id)?.provider, unpriced = unpricedRoutes(model);
   const detail = { page: "model-detail", record: model.id } as const;
   return <li className={`${m.row} ${m.adminRow}`}>
-    <span className={m.rowName}><ModelName display={model.display_name} api={model.public_name} search={detail} /></span>
+    <span className={m.rowName}>{select ? select(model.id, model.display_name || model.public_name, <ModelName display={model.display_name} api={model.public_name} search={detail} />) : <ModelName display={model.display_name} api={model.public_name} search={detail} />}</span>
     <span className={m.rowType}><BitopBadge size="sm" variant="outline">{workloadLabels[model.workload]}</BitopBadge></span>
     <span className={m.rowStatus}><HintBadge tone={status.tone} hint={status.hint}>{status.label}</HintBadge></span>
     <span className={m.rowPrice}><PriceSummary input={model.min_input_microusd_per_million} workload={model.workload} from={(r?.enabled_routes ?? 0) > 1} noRoutes={r?.enabled_routes === 0} />{!!unpriced && formatDecimalMicroUsd(model.min_input_microusd_per_million) && <> <TooltipText content={`${unpriced} enabled route${unpriced === 1 ? " has" : "s have"} no price; its cost is recorded as unknown`} className={m.unknown}>· Unpriced</TooltipText></>}</span>
@@ -239,9 +250,10 @@ function AdminListRow({ model, policy, profiles }: { model: AdminRow; policy?: S
 }
 export const adminColumnIds = ["type", "price", "pricing", "connections", "routes", "readiness", "status", "created"];
 /** Admin table columns. Price: headline prices of the cheapest priced enabled route (PriceLine; prices are published on route pages). */
-function adminColumns({ policy, profiles, prices, pricesLoading }: { policy?: ServerPolicy; profiles?: Provider[]; prices?: Map<string, RoutePrice[]>; pricesLoading?: boolean }): DataTableColumn<AdminRow>[] {
+function adminColumns({ policy, profiles, prices, pricesLoading, select }: { policy?: ServerPolicy; profiles?: Provider[]; prices?: Map<string, RoutePrice[]>; pricesLoading?: boolean; select?: Select }): DataTableColumn<AdminRow>[] {
+  const name = (r: AdminRow) => <IconCell icon={<LabIcon model={[r.public_name, r.display_name]} />}><ResourceLink search={{ page: "model-detail", record: r.id }}>{r.display_name}</ResourceLink><span className={s.secondary}>{r.public_name}</span></IconCell>;
   return [
-    { id: "model", header: "Model", rowHeader: true, hideable: false, sortable: true, accessor: r => r.display_name, cell: r => <IconCell icon={<LabIcon model={[r.public_name, r.display_name]} />}><ResourceLink search={{ page: "model-detail", record: r.id }}>{r.display_name}</ResourceLink><span className={s.secondary}>{r.public_name}</span></IconCell> },
+    { id: "model", header: "Model", rowHeader: true, hideable: false, sortable: true, accessor: r => r.display_name, cell: r => select ? select(r.id, r.display_name || r.public_name, name(r)) : name(r) },
     { id: "type", header: "Type", sortable: true, accessor: r => workloadLabels[r.workload] },
     { id: "price", header: "Price", label: "Price", sortable: true, accessor: r => r.min_input_microusd_per_million ?? "", sortFn: (a, b) => compareDecimal(a.min_input_microusd_per_million, b.min_input_microusd_per_million), cell: r => pricesLoading ? <span className={s.muted}>Loading…</span> : prices ? <ModelHeadlinePrice routes={prices.get(r.id)} workload={r.workload} /> : <InputPriceSummary value={r.min_input_microusd_per_million} workload={r.workload} /> },
     { id: "pricing", header: "Priced routes", label: "Priced routes", accessor: r => unpricedRoutes(r) ?? -1, sortable: true, cell: r => r.readiness ? <><span>{r.readiness.priced_enabled_routes} of {r.readiness.enabled_routes} enabled</span>{isUnpricedModel(r) && <span className={s.badges}><UnpricedBadge model={r} /></span>}</> : <span className={m.unknown}>Unknown</span> },
@@ -267,7 +279,7 @@ export function NotServingBadge({ hint }: { hint?: string }) { return <HintBadge
 /** The Add dialog's one line: Personal has no members; shared workspaces' keys get it unless limited to other models. */
 export const addModelText = (workspace: Pick<Workspace, "kind">) => workspace.kind === "personal" ? "Your keys can call it, unless a key is limited to other models." : "Members' keys can call it, unless a key is limited to other models.";
 export function WorkspaceModels({ session, workspace }: { session: Session; workspace: Workspace }) {
-  const [search, go] = useCatalogSearch("grants"), ask = useAction(), canSelect = permissions(session, workspace).manageGrants;
+  const [search, go] = useCatalogSearch("grants"), ask = useAction(), canSelect = permissions(session, workspace).manageGrants, compare = useCompareSelection();
   const catalog = useChoices<WorkspaceCatalogModel>(`${wsPath(workspace.id)}/catalog`), grants = useChoices<Grant>(`${wsPath(workspace.id)}/models`);
   const grantPath = `${wsPath(workspace.id)}/models`;
   const rows: WorkspaceRow[] = (catalog.data ?? []).map(r => ({ ...r, selection: grants.data?.find(g => g.model_id === r.model_id) }));
@@ -288,27 +300,28 @@ export function WorkspaceModels({ session, workspace }: { session: Session; work
     priceFacet,
   ];
   const facetCounts: FacetCounts | undefined = !known ? undefined : { eligibility: Object.fromEntries(eligibilities.map(e => [e, countBy(ofType(base), r => r.eligibility === e)])) };
-  const columns = workspaceColumns(workspace.id);
+  const columns = workspaceColumns(workspace.id, compare.select);
   return <Stack gap={6} className={s.page}>
     <Heading title="Models" description={workspace.kind === "personal" ? "Models you can call from your personal workspace." : "Models this workspace can call. Keys can be limited further."} actions={canSelect && <Button variant="secondary" disabled={!available.length} onClick={() => ask(addModelsAction(grantPath, available.map(r => ({ model_id: r.model_id, display_name: r.display_name, public_name: r.public_name }) as Grant)))}><Plus aria-hidden />Add models</Button>} />
     <TypeTabs label="Model type" items={typeTabItems(known ? counts : null, search.type, typeCounts(rows))} value={search.type ?? "all"} onChange={v => go({ type: v === "all" ? undefined : v as DashboardSearch["type"] })} end={resultCount(known, filtered.length, shown.length)} />
     <FilterToolbar search={searchBox(search, go)} facets={facets} counts={facetCounts} values={facetValues(search)} onChange={v => { const next = facetSearch(v); go({ eligibility: next.eligibility, min_price: next.min_price, max_price: next.max_price }); }} note={priceNote(search)}
       end={<CatalogActions search={search} go={go} sorts={catalogSorts} columns={chooserColumns(columns)} columnIds={workspaceColumnIds} />} />
+    <CompareBar count={compare.picked.length} target={{ page: "model-compare", ws: workspace.id, ids: compare.picked.join(",") }} onClear={compare.clear} />
     <div className={m.results}>
       {grants.isError && !catalog.isError && <ErrorNotice error={grants.error} retry={() => void grants.refetch()} />}
       {catalog.isError ? <ErrorNotice error={catalog.error} retry={() => void catalog.refetch()} />
         : loading ? <p role="status">Loading models…</p>
         : !shown.length ? <EmptyState size="compact" title={rows.length ? "No models match" : "No models available"} description={rows.length ? "Change the type or clear filters." : "No catalog offers models here yet. Ask a Platform Admin."} />
         : search.layout === "table" ? <ViewDataTable<WorkspaceRow> caption="Models" columns={columns} data={shown} getRowId={r => r.model_id} rowActions={r => actions(r)} hideViewControls view={tableViewFromSearch({ cols: search.cols, density: search.density }, workspaceColumnIds)} onViewChange={v => go(tableViewToSearch(v) as Partial<DashboardSearch>)} />
-        : <ul className={m.rows} aria-label="Models">{shown.map(row => <WorkspaceListRow key={row.model_id} model={row} ws={workspace.id} actions={actions(row)} />)}</ul>}
+        : <ul className={m.rows} aria-label="Models">{shown.map(row => <WorkspaceListRow key={row.model_id} model={row} ws={workspace.id} actions={actions(row)} select={compare.select} />)}</ul>}
     </div>
   </Stack>;
 }
 /** Two-line row: name + API name | type | Ready / Not serving | price | Added / Assigned / Available to add | action. */
-function WorkspaceListRow({ model, ws, actions }: { model: WorkspaceRow; ws: string; actions: ReactNode }) {
-  const off = notServing(model);
+function WorkspaceListRow({ model, ws, actions, select }: { model: WorkspaceRow; ws: string; actions: ReactNode; select?: Select }) {
+  const off = notServing(model), name = <ModelName display={model.display_name} api={model.public_name} search={workspaceModelSearch(ws, model.model_id)} />;
   return <li className={m.row}>
-    <span className={m.rowName}><ModelName display={model.display_name} api={model.public_name} search={workspaceModelSearch(ws, model.model_id)} /></span>
+    <span className={m.rowName}>{select ? select(model.model_id, model.display_name || model.public_name, name) : name}</span>
     <span className={m.rowType}><BitopBadge size="sm" variant="outline">{workloadLabels[model.workload] ?? model.workload}</BitopBadge></span>
     <span className={m.rowStatus}>{off ? <NotServingBadge hint={notServingNote} /> : <HintBadge tone="success">{readinessText.ready}</HintBadge>}</span>
     <span className={m.rowPrice}><PriceSummary input={model.min_input_microusd_per_million} output={model.min_output_microusd_per_million} workload={model.workload} from={Number(model.routes) > 1} noRoutes={off} /></span>
@@ -323,9 +336,10 @@ function WorkspacePrices({ model }: { model: WorkspaceRow }) {
   return <><InputPriceSummary value={model.min_input_microusd_per_million} workload={model.workload} from={Number(model.routes) > 1} />{output && model.workload !== "embeddings" && <span> · {output}<span className={s.muted}> / M output tokens</span></span>}</>;
 }
 const workspaceColumnIds = ["type", "price", "protocols", "eligibility", "created"];
-function workspaceColumns(ws: string): DataTableColumn<WorkspaceRow>[] {
+function workspaceColumns(ws: string, select?: Select): DataTableColumn<WorkspaceRow>[] {
+  const name = (r: WorkspaceRow) => <IconCell icon={<LabIcon model={[r.public_name, r.display_name]} />}><ResourceLink search={workspaceModelSearch(ws, r.model_id)}>{r.display_name}</ResourceLink><span className={s.secondary}>{r.public_name}</span></IconCell>;
   return [
-    { id: "model", header: "Model", rowHeader: true, hideable: false, sortable: true, accessor: r => r.display_name, cell: r => <IconCell icon={<LabIcon model={[r.public_name, r.display_name]} />}><ResourceLink search={workspaceModelSearch(ws, r.model_id)}>{r.display_name}</ResourceLink><span className={s.secondary}>{r.public_name}</span></IconCell> },
+    { id: "model", header: "Model", rowHeader: true, hideable: false, sortable: true, accessor: r => r.display_name, cell: r => select ? select(r.model_id, r.display_name || r.public_name, name(r)) : name(r) },
     { id: "type", header: "Type", sortable: true, accessor: r => workloadLabels[r.workload] ?? r.workload },
     { id: "price", header: "Price", label: "Price", sortable: true, accessor: r => r.min_input_microusd_per_million ?? "", sortFn: (a, b) => compareDecimal(a.min_input_microusd_per_million, b.min_input_microusd_per_million), cell: r => <WorkspacePrices model={r} /> },
     { id: "protocols", header: "Protocols", accessor: r => r.protocols.map(protocolLabel).join(" · ") },

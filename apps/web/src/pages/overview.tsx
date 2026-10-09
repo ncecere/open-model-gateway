@@ -33,7 +33,7 @@ import { Button } from "../components/ui/button/button";
 import { Card } from "../components/ui/card/card";
 import { EmptyState } from "../components/ui/empty-state/empty-state";
 import { DescriptionList } from "../components/ui/description-list/description-list";
-import { PageHeader } from "../components/ui/page-header/page-header";
+import { PageHeader } from "../components/templates/page-header";
 import { Time } from "../components/ui/time/time";
 import type { Scope } from "./workspace";
 import s from "./shared.module.css";

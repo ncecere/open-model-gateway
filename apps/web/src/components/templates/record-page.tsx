@@ -20,7 +20,7 @@ import { SectionHeadings } from "../ui";
 import { Card } from "../ui/card/card";
 import { DescriptionList, type DescriptionEntry } from "../ui/description-list/description-list";
 import { Stack } from "../ui/layout/layout";
-import { PageHeader } from "../ui/page-header/page-header";
+import { PageHeader } from "./page-header";
 import { useResourceName } from "../layout/breadcrumbs";
 import { BackLink } from "./form-page";
 import { TitleWithIcon } from "../provider-icon";
@@ -43,7 +43,7 @@ export function RecordPage({ title, icon, meta, description, back, actions, fact
     const visible = sections?.filter(section => !section.hidden) ?? [];
     const overview = <Stack gap={6}>{shown && shown.length > 0 && <Card title="Details" titleAs="h2"><DescriptionList items={shown} dividers /></Card>}{visible.filter(section => section.overview).map(sectionCard)}{children}</Stack>;
     const tabs: ResourceTab[] = [{ value: "overview", label: "Overview", icon: <LayoutDashboard aria-hidden />, content: overview }, ...visible.filter(section => !section.overview).map(section => ({ value: section.id, label: section.tabLabel ?? section.title, icon: section.icon, count: section.count, content: sectionCard(section) }))];
-    return <ResourcePage title={title} icon={icon} meta={meta} description={description} actions={actions ? <div className={styles.headerActions}>{actions}</div> : undefined} tabs={tabs} tab={tab} onTabChange={onTabChange} />;
+    return <ResourcePage title={title} icon={icon} meta={meta} description={description} actions={actions} tabs={tabs} tab={tab} onTabChange={onTabChange} />;
   }
   return <RecordStack title={title} icon={icon} meta={meta} description={description} back={back} actions={actions} shown={shown} sections={sections}>{children}</RecordStack>;
 }
@@ -51,7 +51,7 @@ export function RecordPage({ title, icon, meta, description, back, actions, fact
 function RecordStack({ title, icon, meta, description, back, actions, shown, sections, children }: { title: string; icon?: ReactNode; meta?: ReactNode; description?: ReactNode; back: { label: string; search: DashboardSearch }; actions?: ReactNode; shown?: DescriptionEntry[]; sections?: RecordSection[]; children?: ReactNode }) {
   useResourceName(title);
   return <Stack gap={6} className={`${s.page} ${styles.takeover}`}>
-    <PageHeader title={icon ? <TitleWithIcon icon={icon}>{title}</TitleWithIcon> : title} meta={meta} description={description} breadcrumbs={<BackLink {...back} />} actions={actions ? <div className={styles.headerActions}>{actions}</div> : undefined} />
+    <PageHeader title={icon ? <TitleWithIcon icon={icon}>{title}</TitleWithIcon> : title} meta={meta} description={description} breadcrumbs={<BackLink {...back} />} actions={actions} />
     {shown && shown.length > 0 && <Card title="Details" titleAs="h2"><DescriptionList items={shown} dividers /></Card>}
     {sections?.filter(section => !section.hidden).map(sectionCard)}
     {children}

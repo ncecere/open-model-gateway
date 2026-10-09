@@ -49,6 +49,8 @@ import { RadioGroup } from "../components/ui/radio-group/radio-group";
 import { Time } from "../components/ui/time/time";
 import { toast } from "../components/ui/toast/toast";
 import type { Scope } from "./workspace";
+import { KeyRiskBadge, useKeySafety } from "./key-safety";
+import { findingsByKey } from "../lib/key-safety";
 import s from "./shared.module.css";
 import k from "./keys.module.css";
 
@@ -83,6 +85,8 @@ export function keyMenu(session: Scope["session"], workspace: Scope["workspace"]
 const selectableKey = (key: KeyRow) => { const st = keyStatus(key); return st === "active" || st === "disabled"; };
 const keyStatuses = [{ value: "active", label: "Active" }, { value: "disabled", label: "Disabled" }, { value: "expired", label: "Expired" }, { value: "revoked", label: "Revoked" }];
 const statusFacet: Facet = { id: "status", label: "Status", type: "toggle", allLabel: "All", options: keyStatuses };
+/** Keys with key-safety findings (docs/key-safety.md). */
+const riskFacet: Facet = { id: "risk", label: "Safety", type: "toggle", allLabel: "All", options: [{ value: "attention", label: "Needs attention" }] };
 
 export function Keys({ session, workspace }: Scope) {
   const ask = useAction(), nav = useDashboardNavigation(), search: DashboardSearch = nav?.search ?? { page: "keys", ws: workspace.id }, p = permissions(session, workspace);
@@ -98,11 +102,12 @@ export function Keys({ session, workspace }: Scope) {
   const status = keyListStatus(search.status);
   // Workspace admins see every key: name the people who hold them (members see only their own keys).
   const members = useChoices<Member>(`${wsPath(workspace.id)}/members`, workspace.kind !== "personal" && workspace.capabilities.view_all_activity);
-  const rows = useMemo(() => filterKeys(keys.data ?? [], status, search.q), [keys.data, status, search.q]);
+  const safety = useKeySafety(workspace), risks = useMemo(() => findingsByKey(safety.data), [safety.data]);
+  const rows = useMemo(() => { const list = filterKeys(keys.data ?? [], status, search.q); return search.risk === "attention" ? list.filter(x => risks.has(x.id)) : list; }, [keys.data, status, search.q, search.risk, risks]);
   const activeAccounts = accounts.data?.filter(a => !a.disabled_at) ?? [];
   const canIssue = p.createUserKey || p.manageServiceAccounts && activeAccounts.length > 0, noModels = grants.isSuccess && options.length === 0;
   const ready = grants.isSuccess && !grants.isFetching && (!p.manageServiceAccounts || accounts.isSuccess);
-  const rowSearch = { status: search.status, q: search.q }, narrow = useMediaQuery(NARROW_QUERY);
+  const rowSearch = { status: search.status, q: search.q, risk: search.risk }, narrow = useMediaQuery(NARROW_QUERY);
   // Selection is ours (not DataTable's): revoked and expired keys can't be picked, and with no
   // selectable rows there is no checkbox column and no "0 of 0 selected" footer (review #17).
   const selectableIds = rows.filter(selectableKey).map(x => x.id), picked = selected.filter(id => selectableIds.includes(id));
@@ -115,7 +120,7 @@ export function Keys({ session, workspace }: Scope) {
     // On a phone rows become cards (review #27): the name leads the card, the checkbox comes after the details.
     ...(selectableIds.length && !narrow ? [selectColumn] : []),
     { id: "name", header: "Key", rowHeader: true, hideable: false, cell: key => { const st = keyStatus(key); return <span className={k.name} data-status={st}><ResourceLink search={{ ...rowSearch, page: "key-detail", ws: workspace.id, record: key.id }}>{key.name}</ResourceLink><span className={s.secondary}>{issuedTo(key, session, accounts.data, members.data)}</span></span>; } },
-    { id: "status", header: "Status", cell: key => <StatusPill {...keyPill(keyStatus(key))} explain /> },
+    { id: "status", header: "Status", cell: key => <span className={s.badges}><StatusPill {...keyPill(keyStatus(key))} explain /><KeyRiskBadge row={risks.get(key.id)} /></span> },
     { id: "usage", header: "Spent", label: "Spent (includes on hold)", cell: key => key.usage ? <span className={k.usage}><UsageBar label={`${key.name} budget`} size="sm" used={key.usage.used_microusd} limit={key.usage.limit_microusd} />{key.usage.limit_microusd !== null && <PeriodBadge period={key.usage.period} />}</span> : <span className={s.muted}>Unknown</span> },
     { id: "restrictions", header: "Restrictions", defaultHiddenNarrow: true, cell: key => { const m = keyModelSummary(key, options); return <CellText primary={<span title={m.models.join(", ") || undefined}>{m.label}</span>} secondary={key.usage?.limit_microusd ? "Budget limit" : "No key budget"} />; } },
     { id: "last_used", header: "Last used", cell: key => key.last_used_at ? <Time value={key.last_used_at} format="relative" /> : <span className={s.muted}>{key.last_used_at === null ? "Never" : "Unknown"}</span> },
@@ -134,7 +139,7 @@ export function Keys({ session, workspace }: Scope) {
     {failure ? <ErrorNotice error={failure} retry={retryAll} /> : <div className={s.list}>
     {/* No keys at all: just the empty state (nothing to search or filter yet). */}
     {keys.data?.length !== 0 && <FilterToolbar search={{ label: "Search keys", placeholder: "Name or key ID", value: search.q ?? "", onChange: next => go({ q: next || undefined }), debounceMs: 250 }}
-      facets={[statusFacet]} values={{ status: status ? [status] : [] }} onChange={next => { const picked = Array.isArray(next.status) ? next.status[0] : undefined; go({ status: picked === "active" ? undefined : picked ?? "all" }); }} end={cols.menu} />}
+      facets={[statusFacet, riskFacet]} values={{ status: status ? [status] : [], risk: search.risk ? [search.risk] : [] }} onChange={next => { const picked = Array.isArray(next.status) ? next.status[0] : undefined, risk = Array.isArray(next.risk) && next.risk[0] === "attention" ? "attention" as const : undefined; go({ status: picked === "active" ? undefined : picked ?? "all", risk }); }} end={cols.menu} />}
     {picked.length > 0 && (() => { const eligible = rows.filter(x => picked.includes(x.id) && canDisable(session, workspace, x)), clear = () => setSelected([]); return <div className={k.bulk} role="group" aria-label="Bulk actions">
       <span className={k.bulkCount}>{picked.length} selected</span>
       <Button size="sm" variant="danger" disabled={!eligible.length} title={eligible.length ? undefined : "Only active keys you manage can be disabled"} onClick={() => ask({ ...bulkDisableAction(workspace.id, eligible), after: clear })}>{eligible.length ? `Disable ${eligible.length === 1 ? "key" : `${eligible.length} keys`}…` : "Nothing to disable"}</Button>
@@ -143,8 +148,8 @@ export function Keys({ session, workspace }: Scope) {
     <DataTable<KeyRow> caption="API keys" stack columns={columns} data={rows} getRowId={x => x.id} rowLabel={x => x.name} hiddenColumns={cols.hidden} onHiddenColumnsChange={cols.setHidden} manual
       rowActions={key => <ActionMenu label={`Actions for ${key.name}`} actions={keyMenu(session, workspace, key, ask, rowSearch)} />}
       loading={keys.isFetching}
-      empty={<EmptyState size="compact" icon={<KeyRound />} title={keys.data?.length ? status === "active" && !search.q ? "No active keys" : "No keys match these filters" : "No API keys yet"} description={keys.data?.length ? status === "active" && !search.q ? "Disabled, expired and revoked keys are hidden." : undefined : "Create a key to call this workspace's models from your code."}
-        action={keys.data?.length ? status === "active" && !search.q ? <Button size="sm" variant="secondary" onClick={() => go({ status: "all" })}>Show all keys ({keys.data.length})</Button> : <Button size="sm" variant="ghost" onClick={() => go({ status: undefined, q: undefined })}>Clear filters</Button> : undefined} />} />
+      empty={<EmptyState size="compact" icon={<KeyRound />} title={keys.data?.length ? status === "active" && !search.q && !search.risk ? "No active keys" : search.risk && !search.q ? "No keys need attention" : "No keys match these filters" : "No API keys yet"} description={keys.data?.length ? status === "active" && !search.q && !search.risk ? "Disabled, expired and revoked keys are hidden." : undefined : "Create a key to call this workspace's models from your code."}
+        action={keys.data?.length ? status === "active" && !search.q && !search.risk ? <Button size="sm" variant="secondary" onClick={() => go({ status: "all" })}>Show all keys ({keys.data.length})</Button> : <Button size="sm" variant="ghost" onClick={() => go({ status: undefined, q: undefined, risk: undefined })}>Clear filters</Button> : undefined} />} />
     </div>}
     {creating && <CreateKeyDialog session={session} workspace={workspace} options={options} accounts={activeAccounts} onClose={closeCreate} />}
   </Stack>;

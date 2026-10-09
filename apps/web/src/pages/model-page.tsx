@@ -31,7 +31,7 @@ import { Card } from "../components/ui/card/card";
 import { DescriptionList, type DescriptionEntry } from "../components/ui/description-list/description-list";
 import { Stack } from "../components/ui/layout/layout";
 import { Disclosure } from "../components/ui/disclosure/disclosure";
-import { PageHeader } from "../components/ui/page-header/page-header";
+import { PageHeader } from "../components/templates/page-header";
 import { Table, Td, Th, Tr, type TableColumn } from "../components/ui/table/table";
 import { useResourceName, useResourceParent } from "../components/layout/breadcrumbs";
 import { ActionMenu } from "../components/templates/action-menu";
@@ -47,12 +47,11 @@ import { PrevNext } from "../components/templates/prev-next";
 import { CopyId } from "../components/templates/copy-id";
 import { SectionHeadings } from "../components/ui";
 import { PriceEditorDialog } from "../components/price-editor";
-import { CatalogStatusButton, ConnectionNames, ReadinessBadge, deploymentCreateAction, modelEditBody, modelEditFields, useServerPolicy } from "./catalog";
+import { catalogStatusActions, ConnectionNames, ReadinessBadge, deploymentCreateAction, modelEditBody, modelEditFields, useServerPolicy } from "./catalog";
 import { PriceVersions, deploymentRoutingFields, modelRoutingFields, modelRoutingHelp } from "./governance";
 import { WhoGetsIt } from "./model-access";
 import s from "./shared.module.css";
 import m from "./models.module.css";
-import t from "../components/templates/templates.module.css";
 
 const enc = encodeURIComponent;
 const code = (value: string) => <code className={s.mono}>{value}</code>;
@@ -143,7 +142,7 @@ export function ModelPage({ session, model, path, tab }: ModelPageProps) {
   ];
   return <Stack gap={6} className={s.page}>
     <PageHeader title={<TitleWithIcon icon={<LabIcon model={labIds} size="xl" />}>{model.display_name}</TitleWithIcon>} meta={<><LabBadge model={labIds} icon={false} /><ReadinessBadge model={model} policy={policy} /></>} description={<>{code(model.public_name)}{model.description ? <> · {model.description}</> : null}</>} breadcrumbs={<BackLink label="Models" search={{ page: "models" }} />}
-      actions={writable ? <div className={t.headerActions}><CatalogStatusButton kind="models" record={model} name={model.display_name} /></div> : undefined} />
+      actions={writable ? catalogStatusActions(ask, "models", model, model.display_name) : undefined} />
     <StatTileGrid label="Model summary" columns={4}>
       <StatTile label="Type" value={workloadModalities[workload]} hint={model.supported_protocols.map(protocolLabel).join(" · ")} />
       <ModelPriceTile workload={workload} prices={servingPrices} loading={set.list.isPending} />
@@ -337,7 +336,7 @@ export function RoutePage({ session, route: d, path, tab }: { session: Session; 
     <PageHeader title={<TitleWithIcon icon={<ProviderIcon profile={d.provider} size="xl" />}>{title}</TitleWithIcon>} meta={<><Badge tone={d.enabled ? "good" : "neutral"}>{d.enabled ? "Enabled" : "Disabled"}</Badge>{tier && tierBadge[tier]}</>}
       description={<>{code(d.upstream_model)} · Route of <ResourceLink search={{ page: "model-detail", record: d.model_id }}>{modelName}</ResourceLink> on <ResourceLink search={{ page: "provider-detail", record: d.provider_connection_id }}>{d.provider_name ?? "its connection"}</ResourceLink></>}
       breadcrumbs={<BackLink label={modelName} search={{ page: "model-detail", record: d.model_id }} />}
-      actions={<div className={m.headerRight}>{set.list.data && <PrevNext noun="route" position={index >= 0 ? { index, total: set.ordered.length } : undefined} prev={target(prev)} next={target(next)} shortcuts />}{writable && <CatalogStatusButton kind="deployments" record={d} name={d.upstream_model} />}</div>} />
+      actions={<>{set.list.data && <PrevNext noun="route" position={index >= 0 ? { index, total: set.ordered.length } : undefined} prev={target(prev)} next={target(next)} shortcuts />}{writable && catalogStatusActions(ask, "deployments", d, d.upstream_model)}</>} />
     <StatTileGrid label="Route summary" columns={5}>
       <StatTile label="Connection" value={d.provider_name ?? null} hint={d.connection_enabled === false ? "Connection disabled · route can't serve" : d.region ? `Region ${d.region}` : d.connection_enabled ? "Connection enabled" : undefined} />
       <RoutePriceTile price={price} meters={meters} />

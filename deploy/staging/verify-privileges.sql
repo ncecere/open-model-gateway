@@ -20,6 +20,18 @@ DO $$ DECLARE r record; t text; BEGIN
  IF has_any_column_privilege('gateway_runtime','public.policy_budgets','UPDATE') OR has_table_privilege('gateway_runtime','public.policy_budgets','TRUNCATE') THEN RAISE EXCEPTION 'budget rows rewritable in place'; END IF;
  IF has_table_privilege('gateway_runtime','public.key_model_restrictions','UPDATE,DELETE,TRUNCATE') OR has_any_column_privilege('gateway_runtime','public.key_model_restrictions','UPDATE') OR has_any_column_privilege('gateway_runtime','public.key_model_selections','UPDATE') THEN RAISE EXCEPTION 'mutable key restriction provenance'; END IF;
  IF has_table_privilege('gateway_runtime','public.installation_settings','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.installation_settings','singleton','UPDATE') THEN RAISE EXCEPTION 'installation settings row replaceable'; END IF;
+ -- Alerts (0011): no removal; incidents resolve once; rule identity/scope fixed.
+ FOREACH t IN ARRAY ARRAY['alert_rules','alert_events','alert_deliveries','alert_reads'] LOOP
+  IF has_table_privilege('gateway_runtime','public.'||t,'DELETE,TRUNCATE') THEN RAISE EXCEPTION 'alert history removable: %',t; END IF;
+ END LOOP;
+ IF has_any_column_privilege('gateway_runtime','public.alert_reads','UPDATE') THEN RAISE EXCEPTION 'read marks rewritable'; END IF;
+ FOREACH t IN ARRAY ARRAY['id','scope','workspace_id','kind','created_by','created_at'] LOOP
+  IF has_column_privilege('gateway_runtime','public.alert_rules',t,'UPDATE') THEN RAISE EXCEPTION 'mutable alert rule identity: %',t; END IF;
+ END LOOP;
+ FOREACH t IN ARRAY ARRAY['id','rule_id','builtin','kind','subject_key','level','severity','workspace_id','provider_connection_id','summary','details','fired_at'] LOOP
+  IF has_column_privilege('gateway_runtime','public.alert_events',t,'UPDATE') THEN RAISE EXCEPTION 'mutable alert incident: %',t; END IF;
+ END LOOP;
+ IF has_column_privilege('gateway_runtime','public.alert_deliveries','event_id','UPDATE') OR has_column_privilege('gateway_runtime','public.alert_deliveries','transition','UPDATE') THEN RAISE EXCEPTION 'mutable alert delivery identity'; END IF;
  FOREACH t IN ARRAY ARRAY['workload_kind','cost_center_id','cost_center_name','cost_center_code','workspace_id','api_key_id','deployment_id','upstream_model','root_request_id','attempt_number','streamed'] LOOP
   IF has_column_privilege('gateway_runtime','public.inference_executions',t,'UPDATE') THEN RAISE EXCEPTION 'mutable admission attribution: %',t; END IF;
  END LOOP;
@@ -147,5 +159,34 @@ BEGIN
  BEGIN UPDATE installation_settings SET logo_url='http://logo.example.invalid/x.png' WHERE singleton; RAISE EXCEPTION 'https logo constraint absent'; EXCEPTION WHEN check_violation THEN NULL; END;
  BEGIN DELETE FROM installation_settings; RAISE EXCEPTION 'settings row removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  BEGIN INSERT INTO installation_settings(singleton) VALUES(true); RAISE EXCEPTION 'settings row insert allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ -- Alerts (0011): rules, incidents resolved once, delivery outcomes, read marks.
+ DECLARE ar uuid:=gen_random_uuid(); ev uuid:=gen_random_uuid(); BEGIN
+  INSERT INTO alert_rules(id,scope,workspace_id,kind,name,budget_layers,thresholds,notify_workspace_admins,notify_emails,created_by,updated_by) VALUES(ar,'workspace',ws,'budget_threshold','Rollback budgets',ARRAY['local','key'],ARRAY[50,80,100],true,ARRAY['ops@example.invalid'],u,u);
+  INSERT INTO alert_rules(id,scope,kind,name,window_minutes,consecutive_failures,provider_connection_id,notify_platform_admins) VALUES(gen_random_uuid(),'installation','provider_failing','Rollback upstream',15,3,pc,true);
+  INSERT INTO alert_rules(id,scope,kind,name,spike_factor_percent,min_spend_microusd) VALUES(gen_random_uuid(),'installation','spend_spike','Rollback spike',300,1000000);
+  UPDATE alert_rules SET name='Rollback budgets 2',enabled=false,thresholds=ARRAY[90],notify_emails='{}',updated_at=now(),updated_by=u WHERE id=ar;
+  PERFORM id FROM alert_rules WHERE id=ar FOR UPDATE;
+  INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary,details) VALUES(ev,ar,'budget_threshold','local:'||ws||':-:month',80,'warning',ws,'Workspace monthly budget reached 80%','{"used_microusd":"8"}');
+  INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary) VALUES(gen_random_uuid(),ar,'budget_threshold','local:'||ws||':-:month',100,'critical',ws,'Duplicate') ON CONFLICT DO NOTHING;
+  IF (SELECT count(*) FROM alert_events WHERE rule_id=ar AND resolved_at IS NULL)<>1 THEN RAISE EXCEPTION 'duplicate open alert allowed'; END IF;
+  INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,workspace_id,summary) VALUES(gen_random_uuid(),'personal_budget','budget_threshold','key:'||personal||':-:day',100,'critical',personal,'API key daily budget reached 100%');
+  PERFORM id FROM alert_events WHERE id=ev FOR UPDATE;
+  INSERT INTO alert_deliveries(id,event_id,transition) VALUES(gen_random_uuid(),ev,'fired');
+  UPDATE alert_deliveries SET status='partial',recipients=2,sent=1,failed=1,error='rejected',completed_at=now() WHERE event_id=ev;
+  UPDATE alert_events SET resolved_at=now(),resolution='cleared' WHERE id=ev;
+  INSERT INTO alert_reads(user_id,event_id) VALUES(u,ev);
+  INSERT INTO alert_reads(user_id,event_id) VALUES(u,ev) ON CONFLICT DO NOTHING;
+  PERFORM count(*) FROM alert_events e LEFT JOIN alert_rules r ON r.id=e.rule_id LEFT JOIN alert_reads x ON x.event_id=e.id AND x.user_id=u WHERE r.scope='workspace' AND EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=e.workspace_id AND m.user_id=u);
+  PERFORM pg_try_advisory_xact_lock(72419507);
+  BEGIN UPDATE alert_events SET resolved_at=now(),resolution='cleared' WHERE id=ev; RAISE EXCEPTION 'alert re-resolve allowed'; EXCEPTION WHEN raise_exception THEN IF SQLERRM NOT LIKE 'alert events resolve once%' THEN RAISE; END IF; END;
+  BEGIN UPDATE alert_events SET summary='rewrite' WHERE id=ev; RAISE EXCEPTION 'alert summary rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN DELETE FROM alert_events WHERE id=ev; RAISE EXCEPTION 'alert removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN DELETE FROM alert_rules WHERE id=ar; RAISE EXCEPTION 'alert rule removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE alert_rules SET kind='spend_spike' WHERE id=ar; RAISE EXCEPTION 'alert rule kind rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE alert_reads SET read_at=now() WHERE user_id=u; RAISE EXCEPTION 'read mark rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN INSERT INTO alert_rules(id,scope,workspace_id,kind,name,spike_factor_percent,min_spend_microusd) VALUES(gen_random_uuid(),'workspace',personal,'spend_spike','Personal rule',300,1); RAISE EXCEPTION 'personal alert rule allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN INSERT INTO alert_rules(id,scope,workspace_id,kind,name,window_minutes,consecutive_failures) VALUES(gen_random_uuid(),'workspace',ws,'provider_failing','Workspace upstream',15,3); RAISE EXCEPTION 'workspace connection rule allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN INSERT INTO alert_events(id,rule_id,builtin,kind,subject_key,level,severity,summary) VALUES(gen_random_uuid(),ar,'personal_budget','budget_threshold','x',1,'warning','x'); RAISE EXCEPTION 'ambiguous alert source allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+ END;
 END $$;
 ROLLBACK;

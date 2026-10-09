@@ -2,7 +2,7 @@ import { useEffect, type ReactNode } from "react";
 import { ActionProvider, Heading, SectionHeadings } from "./ui";
 import { Tabs, TabsList, Tab, TabsPanel } from "./ui/tabs/tabs";
 import { Stack } from "./ui/layout/layout";
-import { PageHeader } from "./ui/page-header/page-header";
+import { PageHeader } from "./templates/page-header";
 import { TitleWithIcon } from "./provider-icon";
 import { useCrumbTail, useResourceName } from "./layout/breadcrumbs";
 import s from "../pages/shared.module.css";

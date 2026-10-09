@@ -5,7 +5,7 @@ import { ResourceLink } from "../components/navigation-link";
 import { ActionProvider, Button, ErrorNotice, Heading, Status, useAction, useApi, useChoices } from "../components/ui";
 import { RecordPage } from "../components/templates/record-page";
 import { CopyId } from "../components/templates/copy-id";
-import { CatalogStatusButton, ReadinessBadge, providerLabel, referenceField } from "./catalog";
+import { catalogStatusActions, ReadinessBadge, providerLabel, referenceField } from "./catalog";
 import { ProviderBadge, ProviderIcon } from "../components/provider-icon";
 import { awsAccessBody, awsAccessFields, awsAuthLabel } from "../lib/bedrock";
 import { ModelPage, ModelReadinessChecklist, RoutePage, type RouteDetail } from "./model-page";
@@ -34,12 +34,12 @@ export { ModelReadinessChecklist };
 // ---------------------------------------------------------------------------
 export function ProviderDetail({ session, id, tab, onTabChange }: DetailProps) { return <CatalogRecord<Provider> session={session} id={id} kind="providers">{p => <ConnectionRecord session={session} provider={p} tab={tab} onTabChange={onTabChange} />}</CatalogRecord>; }
 function ConnectionRecord({ session, provider: p, tab, onTabChange }: { session: Session; provider: Provider; tab?: string; onTabChange: (tab: string) => void }) {
-  const writable = session.capabilities.platform_write, models = useChoices<Model>(`${platformPath}/models?provider_connection_id=${enc(p.id)}`);
+  const writable = session.capabilities.platform_write, ask = useAction(), models = useChoices<Model>(`${platformPath}/models?provider_connection_id=${enc(p.id)}`);
   const add = <Button render={<ResourceLink search={{ page: "model-new", connection: p.id }} />}><Plus aria-hidden />Add model</Button>;
   // The profile's logo is left of the title (ui-principles 11); its name is a badge only when the title doesn't already say it.
   const profile = providerLabel(p.provider), sameName = profile.trim().toLowerCase() === p.name.trim().toLowerCase();
   return <RecordPage title={p.name} icon={<ProviderIcon profile={p.provider} size="xl" />} meta={<>{!sameName && <ProviderBadge profile={p.provider} label={profile} icon={false} />}<Status enabled={p.enabled} /></>} back={{ label: "Connections", search: { page: "providers" } }} tab={tab} onTabChange={onTabChange}
-    actions={writable && <><CatalogStatusButton kind="providers" record={p} name={p.name} />{add}</>}
+    actions={writable && <>{catalogStatusActions(ask, "providers", p, p.name)}{add}</>}
     // Profile and status are header badges and the model count is the tab count: Details holds only what they don't say.
     facts={[{ label: "Endpoint", value: p.endpoint ? code(p.endpoint) : p.provider === "bedrock" ? "Regional endpoint" : "Provider default" }, { label: "Region", value: p.region ?? undefined }, { label: "Authentication", value: p.auth_mode === "none" ? "None (approved local endpoint)" : p.provider === "bedrock" ? awsAuthLabel(p.aws_auth) : "Environment variable (hidden)" }, { label: "ID", value: <CopyId value={p.id} label="connection ID" /> }]}
     sections={[

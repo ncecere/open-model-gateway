@@ -35,7 +35,7 @@ import { Timeline, type TimelineItem } from "../components/templates/timeline";
 import { StatusBadge } from "../components/ui/badge/badge";
 import { Card } from "../components/ui/card/card";
 import { DescriptionList } from "../components/ui/description-list/description-list";
-import { PageHeader } from "../components/ui/page-header/page-header";
+import { PageHeader } from "../components/templates/page-header";
 import { Time } from "../components/ui/time/time";
 import type { Scope } from "./workspace";
 import s from "./shared.module.css";

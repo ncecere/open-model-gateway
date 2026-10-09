@@ -1,7 +1,10 @@
 mod access;
+mod alerts;
 mod catalogs;
+mod compare;
 mod directory;
 mod governance;
+mod key_safety;
 mod keys;
 mod logs;
 mod me;
@@ -53,6 +56,9 @@ const REASONS: &[(&str, &str)] = &[
     (settings::PLAINTEXT_REMOTE, "plaintext_requires_loopback"),
     (settings::EMAIL_NOT_CONFIGURED, "email_not_configured"),
     (settings::EMAIL_TEST_LIMIT, "email_test_rate_limited"),
+    (alerts::PERSONAL_BUILTIN_ONLY, "personal_alerts_built_in"),
+    (alerts::RULE_LIMIT, "alert_rule_limit"),
+    (alerts::KIND_FIXED, "alert_rule_kind_fixed"),
 ];
 const PERSONAL_NAME_FIXED: &str = "Personal workspace name is fixed";
 const PERSONAL_LIMITS: &str = "Personal workspace limits are set by the platform";
@@ -292,6 +298,9 @@ fn routes() -> Router<Store> {
         .merge(governance::platform_routes())
         .merge(logs::routes())
         .merge(settings::routes())
+        .merge(key_safety::routes())
+        .merge(compare::routes())
+        .merge(alerts::routes())
         .route("/api/v1/me", get(me))
         .route("/api/v1/me/summary", get(me::summary))
         .route("/api/v1/me/keys", get(me::my_keys))

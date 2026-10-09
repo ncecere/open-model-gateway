@@ -53,6 +53,11 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "deployment_health",
     "audit_events",
     "installation_settings",
+    // 0011 alerts
+    "alert_rules",
+    "alert_events",
+    "alert_deliveries",
+    "alert_reads",
 ];
 
 fn lineage_matches(

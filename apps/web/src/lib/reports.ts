@@ -37,6 +37,13 @@ export function formatCount(value: string | number | null | undefined): string {
 export function countLabel(value: string | number | null | undefined, singular: string, plural = `${singular}s`): string {
   return `${formatCount(value)} ${value != null && String(value) === "1" ? singular : plural}`;
 }
+/**
+ * Known spend beside its unresolved attempts: a known zero with attempts whose cost isn't known yet is "Unknown",
+ * never "$0.00" (unknown is not zero); otherwise the exact amount (a lower bound the row's unknown count qualifies).
+ */
+export function knownSpendText(known: string | null | undefined, unresolved: string | null | undefined): string {
+  return known != null && /^0+$/.test(known) && unresolved != null && /^\d+$/.test(unresolved) && BigInt(unresolved) > 0n ? "Unknown" : formatMicroUsd(known);
+}
 export function exactDifference(a: string, b: string, money = false): string {
   if (!/^\d+$/.test(a) || !/^\d+$/.test(b)) return "Unknown";
   const value = BigInt(a) - BigInt(b), abs = value < 0n ? -value : value;

@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from "react";
-import { Bot, Boxes, Gauge, LayoutDashboard, Library, ScrollText, Settings2, ShieldCheck, UsersRound } from "lucide-react";
+import { BellRing, Bot, Boxes, Gauge, LayoutDashboard, Library, ScrollText, Settings2, ShieldCheck, UsersRound } from "lucide-react";
 import { api, wsPath, platformWorkspacePath, type Session, type Workspace, type CostCenter, type CatalogAvailability, type Grant } from "../lib/api";
 import { ResourcePage } from "../components/resource-page";
 import { DateTime, ErrorNotice, Panel, Stack, Alert, StatCard, useApi, useChoices, Button, useAction } from "../components/ui";
@@ -22,6 +22,7 @@ import { ScopeLimits } from "../components/scope-limits";
 import { EffectiveAccess } from "../components/effective-access";
 import { WorkspaceModelAccess } from "./model-access";
 import { ResourceLink } from "../components/navigation-link";
+import { WorkspaceAlerts } from "./alerts";
 import type { Scope } from "./workspace";
 import s from "./shared.module.css";
 /*
@@ -35,8 +36,8 @@ import s from "./shared.module.css";
  * Members, Limits and Audit log.
  */
 export function workspaceSettingsTabs(session: Session, workspace: Workspace): string[] {
-  if (workspace.kind === "personal") return ["limits", "access", "audit"];
-  return ["overview", "members", ...(permissions(session, workspace).manageServiceAccounts ? ["service-accounts"] : []), "limits", "access", "audit"];
+  if (workspace.kind === "personal") return ["limits", "access", "alerts", "audit"];
+  return ["overview", "members", ...(permissions(session, workspace).manageServiceAccounts ? ["service-accounts"] : []), "limits", "access", ...(permissions(session, workspace).managePolicy ? ["alerts"] : []), "audit"];
 }
 export function WorkspaceSettings({ session, workspace, tab, onTabChange }: Scope & { tab?: string; onTabChange: (tab: string) => void }) {
   const personal = workspace.kind === "personal", editLimits = !personal && permissions(session, workspace).managePolicy;
@@ -47,6 +48,7 @@ export function WorkspaceSettings({ session, workspace, tab, onTabChange }: Scop
     "service-accounts": { label: "Service accounts", icon: <Bot aria-hidden />, content: <ServiceAccounts session={session} workspace={workspace} /> },
     limits: { label: "Limits", icon: <Gauge aria-hidden />, content: editLimits ? <Governance session={session} workspace={workspace} /> : <EffectiveLimits workspace={workspace} /> },
     access: { label: "Access", icon: <ShieldCheck aria-hidden />, content: <EffectiveAccess workspace={workspace} title="Access" canManageModels={permissions(session, workspace).manageGrants} /> },
+    alerts: { label: "Alerts", icon: <BellRing aria-hidden />, content: <WorkspaceAlerts session={session} workspace={workspace} /> },
     audit: { label: "Audit log", icon: <ScrollText aria-hidden />, content: <AuditHistory session={session} workspace={workspace} /> },
   };
   // Invitations now live in Members.

@@ -1,3 +1,4 @@
+pub mod alerts;
 pub mod auth;
 pub mod billing;
 pub mod bootstrap;

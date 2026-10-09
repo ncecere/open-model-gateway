@@ -31,7 +31,7 @@ Retention compacts settled request metadata older than the window (error code an
 
 ## Email
 
-SMTP delivery for workspace invitations (and later, alerts). Set host, port, TLS mode, optional username and password reference, and the From address and name.
+SMTP delivery for workspace invitations and [alerts](alerts.md). Set host, port, TLS mode, optional username and password reference, and the From address and name.
 
 - **TLS**: `starttls` (required, never opportunistic; usually port 587) or `implicit` (usually 465), through rustls with the platform's web PKI roots. `none` is accepted only for a relay on the same machine (`localhost`, `127.0.0.1`, `::1`); otherwise `400 reason:"plaintext_requires_loopback"`.
 - **Password**: never stored or returned. Enter a reference `env:NAME` whose variable name is on `GATEWAY_SECRET_ENV_ALLOWLIST`, as for provider credentials; it is resolved at send time. A reference that isn't allowlisted is rejected (`reason:"credential_reference_not_allowed"`). Username and reference go together.

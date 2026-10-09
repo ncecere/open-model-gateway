@@ -6,10 +6,14 @@ use axum::{
 };
 use sqlx::PgPool;
 use tower::ServiceExt;
+#[path = "alerts/tests.rs"]
+mod alert_tests;
 #[path = "catalog_ux_tests.rs"]
 mod catalog_ux_tests;
 #[path = "directory/tests.rs"]
 mod directory_tests;
+#[path = "key_safety_tests.rs"]
+mod key_safety_tests;
 #[path = "keys/tests.rs"]
 mod key_tests;
 #[path = "members/tests.rs"]

@@ -9,7 +9,7 @@ import { useState } from "react";
 import { api, platformPath, platformWorkspacePath, wsPath, type Catalog, type Collection, type CostCenter, type Model, type Session, type Workspace } from "../../lib/api";
 import { canReconcile, formatMicroUsd, type Breakdown, type Cost, type CostReport } from "../../lib/governance";
 import { parseCheckboxValues } from "../../lib/forms";
-import { formatCount, reconciliationBody, reconciliationFields } from "../../lib/reports";
+import { formatCount, knownSpendText, reconciliationBody, reconciliationFields } from "../../lib/reports";
 import { permissions } from "../../lib/permissions";
 import { saveCsv, usageCsv, EXPORT_MAX_ROWS } from "../../lib/usage-export";
 import { filterCount, periodLabel, recordCostText, recordStatuses, recordStatusText, recordsQuery, usageFilters, usageStatuses, workloadLabels, type RecordFilters, type UsageContext, type UsagePeriod } from "../../lib/usage";
@@ -85,7 +85,7 @@ export function WorkspaceRecords({ session, workspace, ctx, period, nav }: { ses
 /** By workspace's columns (module-level, so the page can lift the Columns menu onto its FilterToolbar row). */
 const platformColumns: DataTableColumn<Breakdown>[] = [
   { id: "workspace", header: "Workspace", rowHeader: true, cell: r => r.name },
-  { id: "spent", header: "Spent", numeric: true, cell: r => formatMicroUsd(r.totals.known_cost_microusd) },
+  { id: "spent", header: "Spent", numeric: true, cell: r => knownSpendText(r.totals.known_cost_microusd, r.totals.unresolved_attempts) },
   { id: "held", header: "On hold", numeric: true, cell: r => formatMicroUsd(r.totals.held_microusd) },
   { id: "requests", header: "Requests", numeric: true, defaultHiddenNarrow: true, cell: r => formatCount(r.totals.root_requests) },
   { id: "unknown", header: "Cost unknown (attempts)", numeric: true, defaultHiddenNarrow: true, cell: r => formatCount(r.totals.unresolved_attempts) },

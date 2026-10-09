@@ -8,7 +8,7 @@ import type { Facet } from "./ui/filter-bar/filter-bar";
 import { FilterToolbar } from "./templates/filter-toolbar";
 import { useStoredColumns } from "./templates/table-view";
 import { Card, CardBody } from "./ui/card/card";
-import { PageHeader } from "./ui/page-header/page-header";
+import { PageHeader } from "./templates/page-header";
 import { Badge as BitopBadge } from "./ui/badge/badge";
 import { EmptyState } from "./ui/empty-state/empty-state";
 import { Alert, ErrorAlert } from "./ui/alert/alert";

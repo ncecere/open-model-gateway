@@ -63,8 +63,10 @@ export function CacheAccounting({ billing, components, attempts, legacy }: { bil
   // A row is hidden only when both its tokens and its spend are a known zero (unknown is shown as "Unknown").
   const rows = cacheRows.filter(r => { const noTokens = !r.tokens || attempts === "0" || isZero(billing?.[r.tokens]); return !noTokens || !isZero(components?.[r.cost]); });
   if (!rows.length && !showLegacy) return <p className={u.note}>No charges this period</p>;
+  // Unknown tokens make a zero charge unknown too (a sum of what was known is not a proven $0).
+  const spent = (r: CacheRow) => r.tokens && attempts !== "0" && exact(billing?.[r.tokens]) === null && isZero(components?.[r.cost]) ? "Unknown" : formatMicroUsd(components?.[r.cost]);
   return <Table caption="Charges by category" stack className={u.acctTable} columns={["Category", { label: "Tokens", numeric: true, width: "9rem" }, { label: "Spent", numeric: true, width: "10rem" }]}>
-    {rows.map(r => <Tr key={r.key}><Th scope="row">{r.label}</Th><Td numeric>{r.tokens ? tokenText(billing?.[r.tokens], attempts) : "—"}</Td><Td numeric>{formatMicroUsd(components?.[r.cost])}</Td></Tr>)}
+    {rows.map(r => <Tr key={r.key}><Th scope="row">{r.label}</Th><Td numeric>{r.tokens ? tokenText(billing?.[r.tokens], attempts) : "—"}</Td><Td numeric>{spent(r)}</Td></Tr>)}
     {showLegacy && <Tr><Th scope="row"><TooltipText content="Pricing-v1 charges, kept apart from the six categories.">Legacy pinned pricing</TooltipText></Th><Td numeric>—</Td><Td numeric>{formatMicroUsd(legacy)}</Td></Tr>}
   </Table>;
 }
@@ -80,17 +82,40 @@ export function meterUsageText(key: UnitMeter, usage: MeterUsage | null, relevan
   if (unknown[key] !== "0") return value == null || /^0+$/.test(value) && unknown[key] === relevant[key] ? "Unknown" : `Unknown · partial (at least ${show(value)})`;
   return show(value ?? "0");
 }
+/** Tooltip for a used meter with no charge of its own (e.g. an image model priced per output token). */
+export const NO_METER_CHARGE = "No separate charge for this meter. Any cost for these requests is in the token categories above.";
+export type MeterRow = { key: UnitMeter; label: string; usage: string; spent: string; /** Shown as the spent cell's tooltip. */ note?: string };
+/**
+ * The meter table's rows. Unknown is never zero: a meter whose usage is unknown (or partial) has unknown spend, or
+ * "At least" its known charge. A used meter with a known zero charge is "—" (charged elsewhere, see NO_METER_CHARGE),
+ * never "$0.00". Rows with a known zero usage and a known zero charge are hidden. Amounts are exact micro-USD.
+ */
+export function meterRows(usage: MeterUsage | null, components: Partial<MeterCostComponents> | null, relevant?: Record<UnitMeter, string>, unknown?: Record<UnitMeter, string>): MeterRow[] {
+  return meterUsageLabels.flatMap((r, i): MeterRow[] => {
+    const text = meterUsageText(r.key, usage, relevant, unknown);
+    if (text === undefined) return [];
+    const cost = components?.[meterComponentLabels[i]!.key], charged = exact(cost);
+    const row = { key: r.key, label: r.label, usage: text };
+    if (text.startsWith("Unknown")) return [{ ...row, spent: charged !== null && charged > 0n ? `At least ${formatMicroUsd(cost)}` : "Unknown" }];
+    if (charged === null) return [{ ...row, spent: "Unknown" }];
+    // Fully observed here, so an absent counter is a known zero (meterUsageText shows it as 0).
+    const used = exact(usage?.[r.key] ?? "0");
+    if (used === 0n && charged === 0n) return [];
+    if (charged === 0n) return [{ ...row, spent: "—", note: NO_METER_CHARGE }];
+    return [{ ...row, spent: formatMicroUsd(cost) }];
+  });
+}
 /**
  * Non-token meters (one table: usage and spend side by side), plus provider-reported cost as evidence only (never the
- * charge). Nothing at all when no workload could produce a meter and the provider reported nothing.
+ * charge). Nothing at all when no meter was used (or is unknown) and the provider reported nothing.
  */
 export function MeterAccounting({ usage, components, providerCost, relevant, unknown }: { usage: MeterUsage | null; components: Partial<MeterCostComponents> | null; providerCost: string | null; relevant?: Record<UnitMeter, string>; unknown?: Record<UnitMeter, string> }) {
-  const rows = meterUsageLabels.flatMap((r, i) => { const text = meterUsageText(r.key, usage, relevant, unknown); return text === undefined ? [] : [{ ...r, text, cost: meterComponentLabels[i]!.key }]; });
+  const rows = meterRows(usage, components, relevant, unknown);
   if (!rows.length && providerCost == null) return null;
   return <Stack gap={3}>
     <h3 className={u.subhead}>Media and unit meters</h3>
     {rows.length > 0 && <Table caption="Media and unit meters" stack className={u.acctTable} columns={["Meter", { label: "Usage", numeric: true, width: "12rem" }, { label: "Spent", numeric: true, width: "10rem" }]}>
-      {rows.map(r => <Tr key={r.key}><Th scope="row">{r.label}</Th><Td numeric>{r.text}</Td><Td numeric>{formatMicroUsd(components?.[r.cost])}</Td></Tr>)}
+      {rows.map(r => <Tr key={r.key}><Th scope="row">{r.label}</Th><Td numeric>{r.usage}</Td><Td numeric>{r.note ? <TooltipText content={r.note}>{r.spent}</TooltipText> : r.spent}</Td></Tr>)}
     </Table>}
     {providerCost != null && <p className={u.note}><TooltipText content="What the provider says it charged (for example OpenRouter usage.cost). Used to check estimates, never billed: spent amounts come from configured prices.">Provider-reported (for checking only)</TooltipText>: <span className={u.num}>{formatMicroUsd(providerCost)}</span></p>}
   </Stack>;

@@ -1,4 +1,4 @@
-import { LayoutDashboard, KeyRound, Cpu, ChartColumn, Settings, Users, UsersRound, FolderKanban, Plug, Library, Gauge, Network, FileClock, Building2, House, ListTree, SlidersHorizontal, ShieldCheck, Mail, LogIn } from "lucide-react";
+import { BellRing, LayoutDashboard, KeyRound, Cpu, ChartColumn, Settings, Users, UsersRound, FolderKanban, Plug, Library, Gauge, Network, FileClock, Building2, House, ListTree, SlidersHorizontal, ShieldCheck, Mail, LogIn, ShieldAlert } from "lucide-react";
 import type { Session, Workspace } from "./api";
 import { canView, inWorkspacePortal, platformPages, userPages, type Page, type DashboardSearch } from "./permissions";
 import { canonicalSearch, dashboardHref, parseDashboardLocation } from "./locations";
@@ -16,9 +16,9 @@ export const navigation = [
   // Deployments are a model's routes and routing policy lives on the model page. Their old
   // pages stay reachable by deep link (see hiddenPages) but leave the sidebar and jump search.
   { page: "providers", label: "Connections", icon: Plug, group: "Models" }, { page: "models", label: "Models", icon: Cpu, group: "Models" }, { page: "catalogs", label: "Catalogs", icon: Library, group: "Models" },
-  { page: "platform-costs", label: "Usage & costs", icon: ChartColumn, group: "Usage & spend" }, { page: "platform-logs", label: "Logs", icon: ListTree, group: "Usage & spend" }, { page: "cost-centers", label: "Cost centers", icon: Building2, group: "Usage & spend" }, { page: "platform-audit", label: "Audit log", icon: FileClock, group: "Records" },
+  { page: "platform-costs", label: "Usage & costs", icon: ChartColumn, group: "Usage & spend" }, { page: "platform-logs", label: "Logs", icon: ListTree, group: "Usage & spend" }, { page: "cost-centers", label: "Cost centers", icon: Building2, group: "Usage & spend" }, { page: "platform-audit", label: "Audit log", icon: FileClock, group: "Records" }, { page: "key-safety", label: "Key safety", icon: ShieldAlert, group: "Records" },
   // Admin › Settings (docs/settings.md): installation-wide settings; Limits moved here as "Defaults & limits".
-  { page: "settings-general", label: "General", icon: SlidersHorizontal, group: "Settings" }, { page: "policies", label: "Defaults & limits", icon: Gauge, group: "Settings" }, { page: "settings-privacy", label: "Data & privacy", icon: ShieldCheck, group: "Settings" }, { page: "settings-email", label: "Email", icon: Mail, group: "Settings" }, { page: "settings-sign-in", label: "Sign-in", icon: LogIn, group: "Settings" },
+  { page: "settings-general", label: "General", icon: SlidersHorizontal, group: "Settings" }, { page: "policies", label: "Defaults & limits", icon: Gauge, group: "Settings" }, { page: "settings-privacy", label: "Data & privacy", icon: ShieldCheck, group: "Settings" }, { page: "settings-email", label: "Email", icon: Mail, group: "Settings" }, { page: "settings-alerts", label: "Alerts", icon: BellRing, group: "Settings" }, { page: "settings-sign-in", label: "Sign-in", icon: LogIn, group: "Settings" },
 ] satisfies { page: Page; label: string; icon: typeof Settings; group: string }[];
 export type NavItem = typeof navigation[number];
 export function pageScope(page: Page): "platform" | "workspace" { return platformPages.has(page) ? "platform" : "workspace"; }
@@ -34,9 +34,9 @@ export function workspaceSections(session: Session, active?: Workspace): { id: s
   return sections;
 }
 /** Labels of pages outside the sidebar: create forms, records and legacy deep links. */
-export const hiddenPages: Partial<Record<Page, string>> = { "model-new": "Add model", pricing: "Pricing", deployments: "All routes", routing: "Routing", "deployment-detail": "Route", "request-detail": "Request", "session-detail": "Session", "platform-log-detail": "Request", "platform-log-session": "Session", "key-detail": "API key", "workspace-model": "Model" };
+export const hiddenPages: Partial<Record<Page, string>> = { "alert-rule-detail": "Alert rule", "workspace-alert-detail": "Alert rule", notifications: "Notifications", "model-new": "Add model", pricing: "Pricing", deployments: "All routes", routing: "Routing", "deployment-detail": "Route", "request-detail": "Request", "session-detail": "Session", "platform-log-detail": "Request", "platform-log-session": "Session", "key-detail": "API key", "workspace-model": "Model", "model-compare": "Compare models", "platform-model-compare": "Compare models" };
 /** The sidebar item (and breadcrumb parent) a record, form or legacy page belongs to. */
-export const navParents: Partial<Record<Page, Page>> = { "workspace-detail": "platform-teams", "model-new": "models", "model-detail": "models", "provider-detail": "providers", deployments: "models", routing: "models", pricing: "models", "deployment-detail": "models", "catalog-detail": "catalogs", "user-detail": "users", "request-detail": "requests", "session-detail": "requests", "platform-log-detail": "platform-logs", "platform-log-session": "platform-logs", "key-detail": "keys", "workspace-model": "grants" };
+export const navParents: Partial<Record<Page, Page>> = { "alert-rule-detail": "settings-alerts", "workspace-alert-detail": "workspace-settings", "workspace-detail": "platform-teams", "model-new": "models", "model-detail": "models", "provider-detail": "providers", deployments: "models", routing: "models", pricing: "models", "deployment-detail": "models", "catalog-detail": "catalogs", "user-detail": "users", "request-detail": "requests", "session-detail": "requests", "platform-log-detail": "platform-logs", "platform-log-session": "platform-logs", "key-detail": "keys", "workspace-model": "grants", "model-compare": "grants", "platform-model-compare": "models" };
 export function activeAdminGroup(page: Page): string | undefined {
   return navigation.find(item => item.page === (navParents[page] ?? page))?.group || undefined;
 }

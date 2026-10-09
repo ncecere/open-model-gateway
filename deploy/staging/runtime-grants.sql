@@ -105,6 +105,19 @@ GRANT UPDATE(state,actual_microusd,input_tokens,output_tokens,billing_usage,cost
 GRANT UPDATE(strategy,max_attempts,allow_ambiguous_failover,required_residency) ON public.routing_policies TO gateway_runtime;
 GRANT UPDATE(priority,weight,residency,failure_threshold,cooldown_seconds) ON public.deployment_routing TO gateway_runtime;
 GRANT UPDATE(consecutive_failures,open_until,last_observed_at) ON public.deployment_health TO gateway_runtime;
+-- Alerts (0011). Rules are soft-deleted (deleted_at), never removed; scope,
+-- workspace and kind are fixed at creation. Incidents are inserted by the
+-- evaluator and only ever resolved once (resolved_at/resolution; a trigger
+-- refuses everything else). Deliveries record counts and a category. Read
+-- marks are insert-only. No DELETE/TRUNCATE on any alert table.
+GRANT SELECT,INSERT ON public.alert_rules,public.alert_events,public.alert_deliveries,
+ public.alert_reads TO gateway_runtime;
+GRANT UPDATE(name,enabled,budget_layers,thresholds,spike_factor_percent,min_spend_microusd,
+ window_minutes,error_rate_percent,min_requests,consecutive_failures,provider_connection_id,
+ notify_workspace_admins,notify_platform_admins,notify_emails,updated_by,updated_at,deleted_at)
+ ON public.alert_rules TO gateway_runtime;
+GRANT UPDATE(resolved_at,resolution) ON public.alert_events TO gateway_runtime;
+GRANT UPDATE(status,recipients,sent,failed,error,completed_at) ON public.alert_deliveries TO gateway_runtime;
 -- No UPDATE/DELETE/TRUNCATE of immutable prices, ledger or audit; no removal of
 -- users/workspaces/keys/history and no rewrite of immutable admission snapshots.
 COMMIT;

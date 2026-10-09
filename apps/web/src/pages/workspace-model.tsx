@@ -23,7 +23,7 @@ import { Badge } from "../components/ui/badge/badge";
 import { Card } from "../components/ui/card/card";
 import { DescriptionList } from "../components/ui/description-list/description-list";
 import { EmptyState } from "../components/ui/empty-state/empty-state";
-import { PageHeader } from "../components/ui/page-header/page-header";
+import { PageHeader } from "../components/templates/page-header";
 import { LabIcon, TitleWithIcon } from "../components/provider-icon";
 import { EligibilityBadge, NotServingBadge, notServingNote, workspaceModelSearch } from "./model-catalog";
 import type { Scope } from "./workspace";

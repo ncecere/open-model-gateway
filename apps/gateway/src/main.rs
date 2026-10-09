@@ -54,12 +54,27 @@ enum Command {
         #[arg(long, default_value_t = 1000)]
         limit: i64,
     },
+    /// Alert rules (docs/alerts.md).
+    Alerts {
+        #[command(subcommand)]
+        action: AlertsCommand,
+    },
     /// Explicitly provision an email for first OIDC linking; requires trusted database access.
     ProvisionUser {
         #[arg(long)]
         email: String,
         #[arg(long)]
         platform_admin: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum AlertsCommand {
+    /// Evaluate every alert rule once and send pending alert email (`serve` runs this on an interval).
+    Evaluate {
+        /// Required: run one evaluation and exit.
+        #[arg(long)]
+        once: bool,
     },
 }
 
@@ -160,6 +175,25 @@ async fn main() -> Result<()> {
                     .await?;
             println!("Compacted {n} settled execution records; financial history retained.");
         }
+        Command::Alerts {
+            action: AlertsCommand::Evaluate { once },
+        } => {
+            anyhow::ensure!(
+                once,
+                "pass --once; `serve` evaluates alerts every GATEWAY_ALERT_INTERVAL_SECONDS"
+            );
+            store.preflight_enterprise().await?;
+            match open_model_gateway::alerts::evaluate_once(&store).await? {
+                Some(report) => {
+                    let emails = open_model_gateway::alerts::deliver_pending(&store, 1000).await;
+                    println!(
+                        "Evaluated {} alert rules: {} fired, {} resolved, {} failed; {} email deliveries processed.",
+                        report.rules, report.fired, report.resolved, report.failed_rules, emails
+                    );
+                }
+                None => println!("Another replica is evaluating alerts right now; nothing done."),
+            }
+        }
         Command::ProvisionUser {
             email,
             platform_admin,
@@ -199,9 +233,12 @@ async fn main() -> Result<()> {
             let engine = Engine::new(Arc::new(store.clone()), registry, config.inference_limits)?;
             let identity = IdentityState::new(store.clone(), IdentityConfig::from_env()?).await?;
             let retention = open_model_gateway::maintenance::retention_from_env()?;
+            let alert_interval = open_model_gateway::alerts::interval_from_env()?;
             let listener = tokio::net::TcpListener::bind(config.listen).await?;
             tracing::info!(address = %listener.local_addr()?, serving_web = web.is_some(), "gateway listening");
             let maintenance = open_model_gateway::maintenance::start(store.clone(), retention);
+            let alerts =
+                alert_interval.map(|every| open_model_gateway::alerts::start(store.clone(), every));
             let lifecycle_store = store.clone();
             let lifecycle = tokio::spawn(async move {
                 let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
@@ -228,6 +265,10 @@ async fn main() -> Result<()> {
             )
             .with_graceful_shutdown(shutdown_signal())
             .await;
+            if let Some(alerts) = alerts {
+                alerts.abort();
+                let _ = alerts.await;
+            }
             maintenance.abort();
             lifecycle.abort();
             let _ = maintenance.await;
@@ -295,6 +336,19 @@ mod demo {
             })
         ));
         assert!(Cli::try_parse_from(["gateway", "serve", "--add-missing-personas"]).is_err());
+    }
+
+    #[test]
+    fn alert_evaluation_is_an_explicit_one_shot_command() {
+        assert!(matches!(
+            Cli::try_parse_from(["gateway", "alerts", "evaluate", "--once"])
+                .unwrap()
+                .command,
+            Some(Command::Alerts {
+                action: AlertsCommand::Evaluate { once: true }
+            })
+        ));
+        assert!(Cli::try_parse_from(["gateway", "alerts"]).is_err());
     }
 
     #[test]

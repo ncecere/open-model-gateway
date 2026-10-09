@@ -43,9 +43,10 @@ import { TypeTabs } from "../components/templates/type-tabs";
 import { BarChart } from "../components/ui/bar-chart/bar-chart";
 import { Card } from "../components/ui/card/card";
 import { DescriptionList } from "../components/ui/description-list/description-list";
-import { PageHeader } from "../components/ui/page-header/page-header";
+import { PageHeader } from "../components/templates/page-header";
 import { Time } from "../components/ui/time/time";
 import { keyActions } from "./keys";
+import { KeyFindings } from "./key-safety";
 import type { Scope } from "./workspace";
 import s from "./shared.module.css";
 import k from "./keys.module.css";
@@ -91,7 +92,7 @@ export function KeyDetail({ session, workspace, id }: Scope & { id: string }) {
   const one = useApi<KeyRow>(`${wsPath(workspace.id)}/keys/${encodeURIComponent(id)}`), key = one.data?.id === id ? one.data : undefined;
   const keys = useChoices<KeyRow>(`${wsPath(workspace.id)}/keys`), grants = useChoices<Grant>(`${wsPath(workspace.id)}/models`), accounts = useChoices<ServiceAccount>(`${wsPath(workspace.id)}/service-accounts`, p.manageServiceAccounts);
   useResourceName(key?.name ?? "API key");
-  const listSearch = { status: search.status, q: search.q };
+  const listSearch = { status: search.status, q: search.q, risk: search.risk };
   const back = { label: "API keys", search: { page: "keys", ws: workspace.id, ...listSearch } as DashboardSearch };
   const members = useChoices<Member>(`${wsPath(workspace.id)}/members`, workspace.kind !== "personal" && workspace.capabilities.view_all_activity);
   // Previous/next within the list's current filters and order (every key when this one isn't in the filtered list).
@@ -111,6 +112,7 @@ export function KeyDetail({ session, workspace, id }: Scope & { id: string }) {
   const tab = keyTabs.some(x => x.value === search.tab) ? search.tab! : "overview";
   const setTab = (next: string) => nav?.navigate({ ...search, tab: next === "overview" ? undefined : next });
   const overview = <Stack gap={6}>
+    {!final && <KeyFindings session={session} workspace={workspace} keyRow={key} />}
     <Card title="Settings" titleAs="h2" description={settingsCopy}>
       <DescriptionList dividers items={[
         { label: "Name", value: key.name },
