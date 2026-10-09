@@ -640,3 +640,87 @@ async fn runtime_builds_a_local_store_and_describes_it_without_paths() {
     rt.store().unwrap().health().await.unwrap();
     assert_eq!(FileStoreRuntime::off().backend_name(), "off");
 }
+
+// ---------- on-disk format fixtures ----------
+//
+// Objects encrypted by the format-v1 implementation as built with aes-gcm
+// 0.10.3 and sha2 0.10.9 (gateway v0.3.2), committed as bytes. Every object
+// already written to a store must stay readable across crypto dependency
+// upgrades, so these are never regenerated: a failure here means the upgrade
+// changed the format or the primitives, not that the fixtures are stale.
+
+const FIXTURE_OBJECTS: [(&str, &[u8]); 3] = [
+    (
+        "user_file/0b6f7c1e-5d0a-4c7e-9a43-2f1d8e6b4a10/6a1c9e47-2b3d-4f85-8e0c-71d5a9b3c2e4",
+        include_bytes!("testdata/format-v1-empty.bin"),
+    ),
+    (
+        "batch_input/0b6f7c1e-5d0a-4c7e-9a43-2f1d8e6b4a10/3f8e2d1c-7a6b-4c59-b0e4-9d2a1f6c8e73",
+        include_bytes!("testdata/format-v1-short.bin"),
+    ),
+    (
+        "export/installation/c4d2e1f0-8b7a-4e6d-9c5b-1a0f3e2d7b68",
+        include_bytes!("testdata/format-v1-two-chunks.bin"),
+    ),
+];
+
+fn fixture_plaintext(index: usize) -> Vec<u8> {
+    match index {
+        0 => Vec::new(),
+        1 => b"open-model-gateway file-store format v1 fixture\n".to_vec(),
+        _ => data(CHUNK + 17, 7),
+    }
+}
+
+/// The fixtures' master key ("k2025", now decrypt-only behind a newer active key).
+fn fixture_ring() -> Arc<KeyRing> {
+    ring(&format!("k2026:{},k2025:{}", key_b64(0x26), key_b64(0x25)))
+}
+
+#[tokio::test]
+async fn format_v1_fixtures_from_earlier_releases_still_decrypt() {
+    let (s, backend) = store(fixture_ring());
+    for (index, (object_key, raw)) in FIXTURE_OBJECTS.into_iter().enumerate() {
+        let key = ObjectKey::parse(object_key).unwrap();
+        let plain = fixture_plaintext(index);
+        assert_eq!(&raw[..4], b"OMGF", "{object_key}");
+        assert_eq!(crypto::header_key_id(raw).as_deref(), Some("k2025"));
+        assert_eq!(
+            raw.len() as u64,
+            crypto::stored_len(plain.len() as u64).unwrap()
+        );
+        backend.set_raw(&key, Bytes::from_static(raw));
+        assert_eq!(
+            s.head(&key).await.unwrap(),
+            Some(ObjectInfo {
+                size: plain.len() as u64,
+                stored_size: raw.len() as u64
+            }),
+            "{object_key}"
+        );
+        assert_eq!(
+            collect(s.get(&key).await.unwrap()).await.unwrap(),
+            plain,
+            "{object_key}"
+        );
+        // Still authenticated: one flipped bit in the wrapped key or the last
+        // tag fails, and so does the same object under another object key.
+        for at in [HEADER_LEN - 1, raw.len() - 1] {
+            let mut tampered = raw.to_vec();
+            tampered[at] ^= 1;
+            backend.set_raw(&key, Bytes::from(tampered));
+            assert_eq!(
+                collect(s.get(&key).await.unwrap()).await,
+                Err(FileStoreError::Integrity),
+                "{object_key} bit {at}"
+            );
+        }
+        let moved = workspace_key(Purpose::UserFile);
+        backend.set_raw(&moved, Bytes::from_static(raw));
+        assert_eq!(
+            collect(s.get(&moved).await.unwrap()).await,
+            Err(FileStoreError::Integrity),
+            "{object_key} moved"
+        );
+    }
+}
