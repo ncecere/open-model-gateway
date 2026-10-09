@@ -7,7 +7,7 @@ The gateway proxies two kinds of long-running provider job:
 
 A video job and a native batch are **one upstream attempt**, with one execution and one durable reservation, admitted when created and settled when the provider reports a terminal state. A gateway-run batch's lines are separate attempts with their own reservations ([batches](batches.md#pricing-and-budgets)). Migrations `0016_async_jobs.sql` and `0021_batch_engine.sql` store metadata only: never prompts, batch lines, outputs, `metadata` values, provider messages or media.
 
-This page describes the current source. It is mock-tested only. No live or paid video or batch request has been made.
+This page describes the current source. It is mock-tested. No live video request has been made. Batches had one small capped live check (see [batches](batches.md)).
 
 > **Video: no supported provider.** OpenAI shut down the Sora 2 models and the Videos API on 2026-09-24, with no replacement ([OpenAI video generation guide](https://developers.openai.com/api/docs/guides/video-generation)). The gateway's video adapter targeted that API, so OpenAI connections no longer offer the `videos` protocol:
 >
@@ -109,7 +109,7 @@ Failures back off per job, up to 32 × the interval. With the poller disabled, v
 | --- | --- | --- |
 | `GATEWAY_JOB_POLL_INTERVAL_SECONDS` | `30` | Poller interval, `0`–`3600`; `0` disables the poller. |
 | `GATEWAY_MAX_BODY_BYTES_VIDEOS` | 2 MiB | `POST /v1/videos` body cap (1 KiB–64 MiB). |
-| `GATEWAY_BATCH_WORKERS`, `GATEWAY_BATCH_CONCURRENCY` | `4`, `2` | Gateway-run batch lines at once per process and per batch ([batches](batches.md#configuration)). |
+| `GATEWAY_BATCH_WORKERS`, `GATEWAY_BATCH_CONCURRENCY` | `4`, `2` | Gateway-run batch lines at once per process and per batch ([batches](batches.md#configuration)). Each route also has its own batch capacity and gates ([scheduling](batches.md#scheduling-on-self-hosted-models)). |
 | `GATEWAY_MAX_BATCH_FILE_BYTES`, `GATEWAY_BATCH_MAX_OUTPUT_SCAN_BYTES` | 200 MiB, 1 GiB | Still validated at startup but no longer used: inputs are Files API uploads and native outputs are decoded line by line. |
 
 ## Model setup and grants

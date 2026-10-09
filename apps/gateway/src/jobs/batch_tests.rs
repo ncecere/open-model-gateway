@@ -403,6 +403,7 @@ impl World {
                     input_file_id: file.into(),
                     endpoint,
                     metadata: metadata.and_then(|m| m.as_object().cloned()),
+                    completion_window_hours: None,
                 },
             )
             .await
@@ -966,7 +967,27 @@ async fn native_openai_batch_charges_published_batch_prices(pool: PgPool) {
     );
     let job = w.reload(&job).await;
     assert_eq!(job.upstream_id.as_deref(), Some("batch_native1"));
-    // Poll 2: in progress; poll 3: completed → results stored and settled.
+    // Poll 2: OpenAI reports `total: 0` while validating; the gateway's own
+    // line count is kept (seen live: the total dropped from 2 to 0).
+    let mut validating = upstream(BatchStatus::Validating);
+    validating.counts = Some(RequestCounts {
+        total: 0,
+        completed: 0,
+        failed: 0,
+    });
+    w.openai
+        .script
+        .lock()
+        .unwrap()
+        .batches
+        .push_back(validating);
+    w.poll().await;
+    let validated = w.reload(&job).await;
+    assert_eq!(
+        (validated.request_total, validated.request_completed),
+        (Some(2), Some(0))
+    );
+    // Poll 3: in progress; poll 4: completed → results stored and settled.
     let mut running = upstream(BatchStatus::InProgress);
     running.counts = Some(RequestCounts {
         total: 2,
@@ -999,7 +1020,7 @@ async fn native_openai_batch_charges_published_batch_prices(pool: PgPool) {
     );
     assert_eq!(
         w.openai.calls(),
-        ["submit", "retrieve", "retrieve", "delete"]
+        ["submit", "retrieve", "retrieve", "retrieve", "delete"]
     );
     assert!(file_deleted(f, job.work_file_id).await);
     consistent(f).await;

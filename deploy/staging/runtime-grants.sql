@@ -199,6 +199,23 @@ GRANT UPDATE(upstream_id,output_file_id,error_file_id,runner_id,runner_lease_unt
 GRANT SELECT,INSERT ON public.batch_lines,public.batch_segments TO gateway_runtime;
 GRANT UPDATE(state,attempts,execution_id,status_code,error_code,segment,finished_at)
  ON public.batch_lines TO gateway_runtime;
+-- Batch scheduling (0022). Route settings are upserted by platform writers
+-- (never deleted; the route key is fixed). The last gate evaluation of a
+-- route is upserted by runners. Demand rows are scheduling state, replaced
+-- and removed by runners (heartbeat). A line's route (batch_lines.deployment_id)
+-- is written once at INSERT; the completion window is fixed at INSERT. The
+-- stall alert reads last_waited_at, written by runners.
+GRANT SELECT,INSERT ON public.deployment_batch_scheduling,public.deployment_batch_signals TO gateway_runtime;
+GRANT UPDATE(max_concurrency,yield_live_threshold,metrics_url,metrics_max_waiting,
+ metrics_max_running,metrics_max_kv_cache_percent,priority,window_timezone,window_days,
+ window_start_minute,window_end_minute,updated_at,updated_by)
+ ON public.deployment_batch_scheduling TO gateway_runtime;
+GRANT UPDATE(paused_reason,checked_at,live_in_flight,metrics_checked_at,metrics_ok,
+ metrics_waiting,metrics_running,metrics_kv_cache_permille,metrics_error)
+ ON public.deployment_batch_signals TO gateway_runtime;
+GRANT SELECT,INSERT,DELETE ON public.batch_route_waits TO gateway_runtime;
+GRANT UPDATE(waiting_lines,reason,ready,last_claim_at,updated_at) ON public.batch_route_waits TO gateway_runtime;
+GRANT UPDATE(last_waited_at) ON public.async_jobs TO gateway_runtime;
 -- No UPDATE/DELETE/TRUNCATE of immutable prices, ledger or audit; no removal of
 -- users/workspaces/keys/history and no rewrite of immutable admission snapshots.
 COMMIT;

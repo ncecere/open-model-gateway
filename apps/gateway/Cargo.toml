@@ -3,6 +3,7 @@ name = "open-model-gateway"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
+license = "MIT"
 publish = false
 
 [features]
@@ -38,6 +39,9 @@ axum = { version = "0.8", features = ["ws"] }
 clap = { version = "4", features = ["derive", "env"] }
 dotenvy = "0.15"
 hex = "0.4"
+# Batch scheduling time windows (IANA zones, DST): the bundled tz database, so
+# window evaluation never depends on the host's zoneinfo.
+jiff = { version = "=0.2.37", default-features = false, features = ["std", "tzdb-bundle-always"] }
 # SMTP delivery (invitations, alerts): rustls, async, one connection per message (no pool).
 lettre = { version = "=0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 percent-encoding = "2"

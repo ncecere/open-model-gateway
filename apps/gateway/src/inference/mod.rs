@@ -7,6 +7,7 @@ pub(crate) mod evidence;
 pub mod images;
 pub mod realtime;
 pub mod repository;
+pub mod scheduling;
 pub mod types;
 pub mod workload;
 pub mod workload_types;

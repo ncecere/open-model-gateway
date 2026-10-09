@@ -95,6 +95,15 @@ DO $$ DECLARE r record; t text; BEGIN
  END LOOP;
  IF has_column_privilege('gateway_runtime','public.governance_reservations','price_tier','UPDATE') OR has_column_privilege('gateway_runtime','public.inference_executions','batch_job_id','UPDATE') OR has_column_privilege('gateway_runtime','public.deployment_prices','batch_price_lines','UPDATE') THEN RAISE EXCEPTION 'mutable batch pricing snapshot'; END IF;
  IF (SELECT count(*) FROM pg_trigger WHERE tgname IN ('batch_lines_guard','batch_lines_no_delete','batch_segments_no_update') AND tgenabled='O' AND NOT tgisinternal)<>3 THEN RAISE EXCEPTION 'batch guards missing or disabled'; END IF;
+ -- Batch scheduling (0022): a line's route and a batch's window are fixed; settings and signals are never removed or re-keyed; demand rows keep their identity.
+ IF has_column_privilege('gateway_runtime','public.batch_lines','deployment_id','UPDATE') OR has_column_privilege('gateway_runtime','public.async_jobs','completion_window_hours','UPDATE') THEN RAISE EXCEPTION 'mutable batch scheduling snapshot'; END IF;
+ FOREACH t IN ARRAY ARRAY['deployment_batch_scheduling','deployment_batch_signals'] LOOP
+  IF has_table_privilege('gateway_runtime','public.'||t,'DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.'||t,'deployment_id','UPDATE') THEN RAISE EXCEPTION 'batch route state removable or re-keyable: %',t; END IF;
+ END LOOP;
+ FOREACH t IN ARRAY ARRAY['job_id','workspace_id','deployment_id','since'] LOOP
+  IF has_column_privilege('gateway_runtime','public.batch_route_waits',t,'UPDATE') THEN RAISE EXCEPTION 'mutable batch demand identity: %',t; END IF;
+ END LOOP;
+ IF has_table_privilege('gateway_runtime','public.batch_route_waits','TRUNCATE') THEN RAISE EXCEPTION 'batch demand truncatable'; END IF;
  IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units','valid_model_protocols_base','valid_cost_components_base','valid_price_lines_base','valid_upstream_job_id')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
 END $$;
 BEGIN;
@@ -436,6 +445,41 @@ BEGIN
   BEGIN INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,price_tier) VALUES(gen_random_uuid(),ws,k,d,now(),now(),now(),now(),'pending','batch'); RAISE EXCEPTION 'unpinned batch tier allowed'; EXCEPTION WHEN check_violation OR foreign_key_violation THEN NULL; END;
   BEGIN INSERT INTO async_jobs(id,kind,workspace_id,api_key_id,deployment_id,execution_id,public_model,provider,upstream_id,poll_deadline_at,batch_endpoint,batch_mode,input_file_id,work_file_id) VALUES(gen_random_uuid(),'batch',ws,k,d,gen_random_uuid(),'x','x','batch_y',now(),'/v1/chat/completions','gateway',fin,fw); RAISE EXCEPTION 'gateway batch with upstream id allowed'; EXCEPTION WHEN check_violation OR foreign_key_violation THEN NULL; END;
   PERFORM coalesce(batch_mode,'native'),count(*) FROM async_jobs WHERE kind='batch' AND settled_at IS NULL GROUP BY 1;
+ END;
+ -- Batch scheduling (0022): route settings, gate signal, the per-route claim
+ -- lock and fair-share order, demand heartbeat, the stall clock and reads.
+ DECLARE sj uuid:=gen_random_uuid(); senv uuid:=gen_random_uuid(); sin uuid:=gen_random_uuid(); swk uuid:=gen_random_uuid(); BEGIN
+  INSERT INTO deployment_batch_scheduling(deployment_id,max_concurrency,yield_live_threshold,metrics_url,metrics_max_waiting,metrics_max_running,metrics_max_kv_cache_percent,priority,window_timezone,window_days,window_start_minute,window_end_minute,updated_by) VALUES(d,2,1,'http://127.0.0.1:19091/metrics',0,NULL,90,10,'America/New_York',31,1140,420,u) ON CONFLICT(deployment_id) DO UPDATE SET max_concurrency=excluded.max_concurrency,yield_live_threshold=excluded.yield_live_threshold,metrics_url=excluded.metrics_url,metrics_max_waiting=excluded.metrics_max_waiting,metrics_max_running=excluded.metrics_max_running,metrics_max_kv_cache_percent=excluded.metrics_max_kv_cache_percent,priority=excluded.priority,window_timezone=excluded.window_timezone,window_days=excluded.window_days,window_start_minute=excluded.window_start_minute,window_end_minute=excluded.window_end_minute,updated_at=clock_timestamp(),updated_by=excluded.updated_by;
+  UPDATE deployment_batch_scheduling SET max_concurrency=3,updated_at=clock_timestamp() WHERE deployment_id=d;
+  BEGIN UPDATE deployment_batch_scheduling SET metrics_max_waiting=NULL,metrics_max_kv_cache_percent=NULL WHERE deployment_id=d; RAISE EXCEPTION 'metrics without threshold allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE deployment_batch_scheduling SET window_days=NULL WHERE deployment_id=d; RAISE EXCEPTION 'partial window allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE deployment_batch_scheduling SET priority=-1 WHERE deployment_id=d; RAISE EXCEPTION 'priority ahead of live traffic allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN DELETE FROM deployment_batch_scheduling WHERE deployment_id=d; RAISE EXCEPTION 'batch scheduling removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  INSERT INTO deployment_batch_signals(deployment_id,paused_reason,checked_at,live_in_flight,metrics_checked_at,metrics_ok,metrics_waiting,metrics_running,metrics_kv_cache_permille,metrics_error) VALUES(d,'server_busy',clock_timestamp(),0,clock_timestamp(),true,1,2,913,NULL) ON CONFLICT(deployment_id) DO UPDATE SET paused_reason=excluded.paused_reason,checked_at=excluded.checked_at,live_in_flight=excluded.live_in_flight,metrics_checked_at=excluded.metrics_checked_at,metrics_ok=excluded.metrics_ok,metrics_waiting=excluded.metrics_waiting,metrics_running=excluded.metrics_running,metrics_kv_cache_permille=excluded.metrics_kv_cache_permille,metrics_error=excluded.metrics_error;
+  PERFORM count(*) FROM inference_executions e JOIN governance_reservations r ON r.execution_id=e.id WHERE e.deployment_id=d AND e.state='started' AND e.batch_job_id IS NULL AND e.workload_kind NOT IN('batches','videos') AND r.state='pending' AND r.lease_expires_at>clock_timestamp();
+  INSERT INTO stored_files(id,object_key,purpose,workspace_id,created_by_api_key_id,backend,encryption_key_id,api_purpose) VALUES(sin,'batch_input/'||ws||'/'||sin,'batch_input',ws,k,'s3','k2026','batch');
+  INSERT INTO stored_files(id,object_key,purpose,workspace_id,created_by_api_key_id,backend,encryption_key_id) VALUES(swk,'batch_output/'||ws||'/'||swk,'batch_output',ws,k,'s3','k2026');
+  INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,workload_kind) VALUES(senv,ws,k,d,'mixed','mixed',false,'started',senv,'batches');
+  INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,reserved_tokens,held_microusd,request_count,price_tier) VALUES(senv,ws,k,d,now(),date_trunc('minute',now()),date_trunc('month',now()),now()+interval '50 hours','pending',110,5,1,'standard');
+  INSERT INTO async_jobs(id,kind,workspace_id,api_key_id,deployment_id,execution_id,public_model,provider,poll_deadline_at,batch_endpoint,batch_mode,user_id,input_file_id,work_file_id,request_total,request_completed,request_failed,upstream_status,completion_window_hours) VALUES(sj,'batch',ws,k,d,senv,'mixed','mixed',now()+interval '50 hours','/v1/chat/completions','gateway',u,sin,swk,1,0,0,'validating',48);
+  BEGIN UPDATE async_jobs SET completion_window_hours=24 WHERE id=sj; RAISE EXCEPTION 'batch window rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  PERFORM pg_advisory_xact_lock(hashtextextended('omg_batch_route:'||d::text,0));
+  PERFORM count(*) FROM batch_lines WHERE deployment_id=d AND state='running';
+  INSERT INTO batch_route_waits(job_id,workspace_id,deployment_id,waiting_lines,ready) VALUES(sj,ws,d,1,true) ON CONFLICT(deployment_id,job_id) DO UPDATE SET ready=true,updated_at=clock_timestamp();
+  PERFORM job_id FROM (SELECT w.job_id,coalesce(jr.n,0) jn,max(w.last_claim_at) OVER (PARTITION BY w.workspace_id) wl,w.last_claim_at,w.since FROM batch_route_waits w LEFT JOIN (SELECT job_id,count(*) n FROM batch_lines WHERE deployment_id=d AND state='running' GROUP BY job_id) jr ON jr.job_id=w.job_id WHERE w.deployment_id=d AND w.ready AND w.updated_at>clock_timestamp()-make_interval(secs=>10)) x ORDER BY jn,wl NULLS FIRST,last_claim_at NULLS FIRST,since,job_id LIMIT 1;
+  INSERT INTO batch_lines(job_id,workspace_id,line_no,state,execution_id,deployment_id) VALUES(sj,ws,0,'running',gen_random_uuid(),d) ON CONFLICT DO NOTHING;
+  UPDATE batch_route_waits SET last_claim_at=clock_timestamp() WHERE deployment_id=d AND job_id=sj;
+  BEGIN UPDATE batch_lines SET deployment_id=NULL WHERE job_id=sj; RAISE EXCEPTION 'batch line route rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE batch_route_waits SET deployment_id=gen_random_uuid() WHERE job_id=sj; RAISE EXCEPTION 'batch demand re-keyed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  DELETE FROM batch_route_waits WHERE job_id=sj AND deployment_id<>ALL(ARRAY[d]);
+  INSERT INTO batch_route_waits(job_id,workspace_id,deployment_id,waiting_lines,reason,ready) SELECT sj,ws,x,n,r,y FROM unnest(ARRAY[d],ARRAY[3],ARRAY['outside_window'],ARRAY[false]) AS v(x,n,r,y) ON CONFLICT(deployment_id,job_id) DO UPDATE SET waiting_lines=excluded.waiting_lines,reason=excluded.reason,ready=excluded.ready,updated_at=clock_timestamp();
+  UPDATE async_jobs SET last_waited_at=clock_timestamp() WHERE id=sj AND state IN('queued','in_progress');
+  UPDATE batch_lines SET state='failed',status_code=429,error_code='rate_limit_error',finished_at=clock_timestamp() WHERE job_id=sj AND line_no=0 AND state='running';
+  UPDATE batch_lines SET state='running',attempts=attempts+1,execution_id=gen_random_uuid(),status_code=NULL,error_code=NULL,finished_at=NULL WHERE job_id=sj AND line_no=0 AND state='failed' AND attempts=1 AND segment IS NULL;
+  PERFORM coalesce(sum(waiting_lines),0),count(*) FROM batch_route_waits WHERE deployment_id=d AND updated_at>clock_timestamp()-make_interval(secs=>10);
+  PERFORM s.paused_reason,s.metrics_kv_cache_permille FROM (SELECT 1) one LEFT JOIN deployment_batch_signals s ON s.deployment_id=d;
+  PERFORM count(*) FROM batch_lines l WHERE l.job_id=sj AND l.state='running';
+  DELETE FROM batch_route_waits WHERE job_id=sj;
  END;
 END $$;
 ROLLBACK;

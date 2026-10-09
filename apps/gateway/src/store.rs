@@ -95,6 +95,10 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     // 0021 batch engine
     "batch_lines",
     "batch_segments",
+    // 0022 batch scheduling
+    "deployment_batch_scheduling",
+    "deployment_batch_signals",
+    "batch_route_waits",
 ];
 
 fn lineage_matches(

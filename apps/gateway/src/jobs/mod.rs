@@ -25,6 +25,7 @@ pub mod native;
 pub mod plan;
 pub mod poller;
 pub mod runner;
+pub mod schedule;
 mod store;
 pub mod types;
 pub mod video;
@@ -197,6 +198,9 @@ pub struct Jobs {
     pub(crate) limits: JobLimits,
     pub(crate) files: Option<FileStorage>,
     pub(crate) engine: Option<Engine>,
+    /// Approved local endpoints: batch scheduling reads server load signals
+    /// only from their origins (pinned addresses).
+    pub(crate) approvals: Option<Arc<crate::providers::local::endpoints::ApprovedEndpoints>>,
 }
 impl Jobs {
     pub fn new(store: Store, engine: &Engine) -> Self {
@@ -211,7 +215,16 @@ impl Jobs {
             limits,
             files: None,
             engine: None,
+            approvals: None,
         }
+    }
+    /// Attach the approved local endpoints (batch scheduling load signals).
+    pub fn with_approvals(
+        mut self,
+        approvals: crate::providers::local::endpoints::ApprovedEndpoints,
+    ) -> Self {
+        self.approvals = Some(Arc::new(approvals));
+        self
     }
     /// Attach the file store (batch inputs and results).
     pub fn with_files(mut self, runtime: Option<FileStoreRuntime>) -> Self {
@@ -474,5 +487,7 @@ pub(crate) async fn call<T>(
 mod batch_tests;
 #[cfg(all(test, feature = "integration-tests"))]
 mod db_tests;
+#[cfg(all(test, feature = "integration-tests"))]
+mod schedule_db_tests;
 #[cfg(test)]
 mod tests;

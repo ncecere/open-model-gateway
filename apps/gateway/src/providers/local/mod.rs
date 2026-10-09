@@ -88,7 +88,18 @@ impl LocalAdapter {
         {
             value["max_tokens"] = tokens;
         }
+        if let Some(priority) = self.batch_priority(target) {
+            value["priority"] = priority.into();
+        }
         Ok(value)
+    }
+    /// vLLM `priority` of a batch line, only when the batch runner scoped it
+    /// to this exact route (its scheduling settings opt in) and the profile
+    /// is vLLM-compatible. Never sent otherwise.
+    fn batch_priority(&self, target: &Deployment) -> Option<i32> {
+        matches!(self.profile, Profile::Vllm | Profile::OpenAiCompatible)
+            .then(|| crate::inference::scheduling::priority_for(target.id))
+            .flatten()
     }
 }
 pub fn adapters(
@@ -189,10 +200,11 @@ impl ProviderAdapter for LocalAdapter {
                 embeddings::encode_ollama(&target.upstream_model, &request)?,
             )
         } else {
-            (
-                format!("{base}/embeddings"),
-                embeddings::encode(&target.upstream_model, &request),
-            )
+            let mut payload = embeddings::encode(&target.upstream_model, &request);
+            if let Some(priority) = self.batch_priority(target) {
+                payload["priority"] = priority.into();
+            }
+            (format!("{base}/embeddings"), payload)
         };
         let response = self
             .authenticate(client.post(url), target)?

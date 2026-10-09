@@ -16,7 +16,7 @@
  */
 import { useEffect, useState, type ReactNode } from "react";
 import { useQueries } from "@tanstack/react-query";
-import { Activity, CircleDollarSign, FileCode2, LayoutDashboard, Library, Pencil, Plus, Route as RouteIcon, ShieldQuestion, Split, History } from "lucide-react";
+import { Activity, CircleDollarSign, FileCode2, Layers, LayoutDashboard, Library, Pencil, Plus, Route as RouteIcon, ShieldQuestion, Split, History } from "lucide-react";
 import { api, platformPath, type Catalog, type Deployment, type Model, type ModelProtocol, type Provider, type ServerPolicy, type Session } from "../lib/api";
 import { deploymentRoutingBody, formatMicroUsd, modelRoutingBody, passiveHealth, type DeploymentRouting, type ModelRouting, type Price, type WorkloadKind } from "../lib/governance";
 import { HEADLINE_METERS, METER_SPECS, basePrice, cheapestPrice, countNoun, formatAudio, priceItems, priceTokenCeilings, unitFor, workloadLabels, workloadOf, type BasePrice } from "../lib/pricing";
@@ -47,6 +47,7 @@ import { PrevNext } from "../components/templates/prev-next";
 import { CopyId } from "../components/templates/copy-id";
 import { SectionHeadings } from "../components/ui";
 import { PriceEditorDialog } from "../components/price-editor";
+import { RouteBatchScheduling, editBatchScheduling, useBatchScheduling } from "../components/batch-scheduling";
 import { catalogStatusActions, ConnectionNames, ReadinessBadge, deploymentCreateAction, modelEditBody, modelEditFields, useServerPolicy } from "./catalog";
 import { PriceVersions, deploymentRoutingFields, modelRoutingFields, modelRoutingHelp } from "./governance";
 import { WhoGetsIt } from "./model-access";
@@ -316,7 +317,7 @@ function UsageLink({ model }: { model: Model }) {
 // ---------------------------------------------------------------------------
 export function RoutePage({ session, route: d, path, tab }: { session: Session; route: RouteDetail; path: string; tab?: string }) {
   const writable = session.capabilities.platform_write, ask = useAction();
-  const model = useApi<Model>(`${platformPath}/models/${enc(d.model_id)}`), set = useModelRoutes(d.model_id), routing = useApi<DeploymentRouting>(routingPath(d.id));
+  const model = useApi<Model>(`${platformPath}/models/${enc(d.model_id)}`), set = useModelRoutes(d.model_id), routing = useApi<DeploymentRouting>(routingPath(d.id)), batch = useBatchScheduling(d.id);
   const workload = d.workload ?? (model.data ? workloadOf(model.data.supported_protocols) : workloadOf(d.protocols ?? []));
   const price = asPrice(d), modelName = model.data?.display_name ?? d.model_public_name ?? "Model", tier = tierOf(set.tiers, d.id);
   const connectionName = d.provider_name ?? "Connection", title = `${connectionName} route`;
@@ -332,6 +333,7 @@ export function RoutePage({ session, route: d, path, tab }: { session: Session; 
     { id: "data-policy", label: "Data policy", icon: <ShieldQuestion aria-hidden />, title: "Data policy", content: <RouteDataPolicy route={d} /> },
     { id: "protocols", label: "Protocols & features", icon: <FileCode2 aria-hidden />, title: "Protocols & features", content: <RouteFeatures route={d} workload={workload} /> },
     { id: "routing", label: "Routing", icon: <Split aria-hidden />, title: "Routing settings", description: "Fallback follows the model's routing policy.", actions: writable ? <Button size="sm" variant="secondary" disabled={!routing.data} aria-label="Edit routing settings" onClick={() => routing.data && ask({ title: `Routing · ${title}`, description: "No implicit retries: fallback attempts follow the model's routing policy only.", fields: deploymentRoutingFields(routing.data.routing), submitLabel: "Save routing", successNotice: "Routing saved.", run: (v, signal) => api(routingPath(d.id), { method: "PUT", body: deploymentRoutingBody(v, routing.data!.routing, true), signal }) })}><Pencil aria-hidden />Edit</Button> : undefined, content: <RouteRouting query={routing} /> },
+    { id: "batch-scheduling", label: "Batch scheduling", icon: <Layers aria-hidden />, title: "Batch scheduling", description: "When gateway-run batch lines may start here.", actions: writable ? <Button size="sm" variant="secondary" disabled={!batch.data} aria-label="Edit batch scheduling" onClick={() => batch.data && editBatchScheduling(ask, d.id, batch.data, title)}><Pencil aria-hidden />Edit</Button> : undefined, content: <RouteBatchScheduling query={batch} /> },
     { id: "price-history", label: "Price history", icon: <History aria-hidden />, title: "Price history", content: <PriceVersions path={`${path}/prices`} writable={false} deployment={d} /> },
   ];
   return <Stack gap={6} className={s.page}>

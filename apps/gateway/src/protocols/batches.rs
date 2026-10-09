@@ -1,6 +1,6 @@
 //! OpenAI-compatible Batch API (`crate::jobs`, docs/batches.md):
-//! - `POST /v1/batches` `{input_file_id, endpoint, completion_window:"24h",
-//!   metadata?}` where `input_file_id` is a gateway file (`purpose=batch`,
+//! - `POST /v1/batches` `{input_file_id, endpoint, completion_window:"24h"
+//!   (or 48h, 72h, 168h: gateway-run), metadata?}` where `input_file_id` is a gateway file (`purpose=batch`,
 //!   `/v1/files`) and `endpoint` is `/v1/chat/completions`, `/v1/responses`,
 //!   `/v1/embeddings` or `/v1/messages`. An invalid file is rejected with a
 //!   line-numbered report (`errors.data[].line`).
@@ -24,7 +24,7 @@ use crate::{
     jobs::{
         Jobs,
         batch::{CreateBatch, CreateError},
-        types::{BATCH_COMPLETION_WINDOW, BatchEndpoint},
+        types::{BatchEndpoint, completion_window_hours},
     },
     store::Store,
 };
@@ -80,9 +80,10 @@ pub async fn create(
     if request.output_expires_after.is_some() {
         return job_error(InferenceError::Unsupported.into());
     }
-    if request.completion_window != BATCH_COMPLETION_WINDOW {
+    // 24h (default), 48h, 72h or 168h; longer windows run gateway-side.
+    let Some(window_hours) = completion_window_hours(&request.completion_window) else {
         return job_error(InferenceError::InvalidRequest.into());
-    }
+    };
     let Some(endpoint) = BatchEndpoint::parse(&request.endpoint) else {
         return job_error(InferenceError::Unsupported.into());
     };
@@ -95,6 +96,7 @@ pub async fn create(
                 input_file_id: request.input_file_id,
                 endpoint,
                 metadata: request.metadata,
+                completion_window_hours: Some(window_hours),
             },
         )
         .await

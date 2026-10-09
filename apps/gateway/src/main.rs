@@ -365,7 +365,14 @@ async fn main() -> Result<()> {
             // Async jobs: the provider poller (video, native batches) and the
             // gateway-run batch runner (GATEWAY_BATCH_WORKERS).
             let batch_jobs = open_model_gateway::jobs::Jobs::new(store.clone(), &engine)
-                .with_files(Some(files.clone()));
+                .with_files(Some(files.clone()))
+                // Batch scheduling reads server load signals only from
+                // approved local origins (GATEWAY_LOCAL_UPSTREAMS).
+                .with_approvals(
+                    open_model_gateway::providers::local::endpoints::ApprovedEndpoints::from_env(
+                        config.environment.as_str(),
+                    )?,
+                );
             let job_poller = open_model_gateway::jobs::poller::start(batch_jobs.clone());
             let batch_runner = open_model_gateway::jobs::runner::start(batch_jobs);
             let alerts =

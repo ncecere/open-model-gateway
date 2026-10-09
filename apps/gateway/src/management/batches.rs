@@ -61,7 +61,9 @@ const ROW: &str = "jsonb_build_object(
  'finalizing_at',j.finalizing_at,'completed_at',j.completed_at,'cancel_requested_at',j.cancel_requested_at,
  'last_progress_at',j.last_progress_at,'input_file',j.input_file_id,'output_file',j.output_file_id,
  'error_file',j.error_file_id,'user_id',j.user_id,
- 'settled_microusd',(c.settled)::text,'held_microusd',(c.held)::text,'cost_unknown',c.unknown,'key_name',k.name)
+ 'settled_microusd',(c.settled)::text,'held_microusd',(c.held)::text,'cost_unknown',c.unknown,'key_name',k.name,
+ 'running_lines',(SELECT count(*) FROM batch_lines l WHERE l.job_id=j.id AND l.state='running'),
+ 'waiting_reason',(SELECT b.reason FROM batch_route_waits b WHERE b.job_id=j.id AND b.reason IS NOT NULL AND j.settled_at IS NULL AND b.updated_at>clock_timestamp()-interval '10 seconds' ORDER BY b.waiting_lines DESC,b.deployment_id LIMIT 1))
  FROM async_jobs j JOIN workspaces w ON w.id=j.workspace_id LEFT JOIN api_keys k ON k.id=j.api_key_id
  CROSS JOIN LATERAL (SELECT coalesce(sum(r.actual_microusd) FILTER(WHERE r.state='settled'),0) settled,
   coalesce(sum(r.held_microusd) FILTER(WHERE r.state<>'settled'),0) held, coalesce(bool_or(r.state='unknown'),false) unknown
@@ -175,8 +177,11 @@ async fn detail(
         .into_iter()
         .map(|(state, code, n)| json!({"state": state, "code": code, "lines": n}))
         .collect();
+    // Capacity-aware scheduling (0022): why lines wait, per model route,
+    // with the batch's place in each route's queue.
+    let scheduling = crate::jobs::schedule::batch_waits(&s.pool, job).await?;
     Ok(Json(
-        json!({"batch": render(row, u.user_id), "outcomes": outcomes}),
+        json!({"batch": render(row, u.user_id), "outcomes": outcomes, "scheduling": scheduling}),
     ))
 }
 

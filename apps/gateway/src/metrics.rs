@@ -77,6 +77,10 @@ pub struct Metrics {
     batch_lines: Family<L3, Counter>,
     batch_queue: Family<L1, Gauge>,
     batch_workers: Family<L1, Gauge>,
+    batch_route_lines: Family<L2, Gauge>,
+    batch_paused_routes: Family<L1, Gauge>,
+    batch_route_pauses: Family<L1, Counter>,
+    batch_route_providers: Mutex<HashSet<String>>,
     providers: Mutex<HashSet<String>>,
     models: Mutex<HashSet<String>>,
     reservations_refreshed: Mutex<Option<Instant>>,
@@ -176,6 +180,10 @@ impl Metrics {
             batch_lines: Family::default(),
             batch_queue: Family::default(),
             batch_workers: Family::default(),
+            batch_route_lines: Family::default(),
+            batch_paused_routes: Family::default(),
+            batch_route_pauses: Family::default(),
+            batch_route_providers: Mutex::default(),
             providers: Mutex::default(),
             models: Mutex::default(),
             reservations_refreshed: Mutex::default(),
@@ -292,6 +300,21 @@ impl Metrics {
             "batch_workers",
             "Gateway-run batch line workers of this process: capacity and busy",
             metrics.batch_workers.clone(),
+        );
+        registry.register(
+            "batch_route_lines",
+            "Gateway-run batch lines by route provider kind and state (waiting for capacity, running); installation-wide",
+            metrics.batch_route_lines.clone(),
+        );
+        registry.register(
+            "batch_paused_routes",
+            "Routes with batch lines waiting, by pause reason; installation-wide",
+            metrics.batch_paused_routes.clone(),
+        );
+        registry.register(
+            "batch_route_pauses",
+            "Times this process saw a route's batch gate close, by reason",
+            metrics.batch_route_pauses.clone(),
         );
         Self {
             registry,
@@ -481,6 +504,54 @@ impl Metrics {
         self.batch_queue
             .get_or_create(&[("mode", mode.to_owned())])
             .set(unfinished.min(i64::MAX as u64) as i64);
+    }
+    /// Batch lines waiting and running per provider kind (`provider`,
+    /// waiting, running); kinds no longer present read 0.
+    pub fn set_batch_route_lines(&self, rows: &[(String, u64, u64)]) {
+        let mut seen = self
+            .batch_route_providers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        for provider in seen.iter() {
+            for state in ["waiting", "running"] {
+                self.batch_route_lines
+                    .get_or_create(&[("provider", provider.clone()), ("state", state.to_owned())])
+                    .set(0);
+            }
+        }
+        for (provider, waiting, running) in rows {
+            let provider = bounded(&self.providers, provider);
+            seen.insert(provider.clone());
+            for (state, n) in [("waiting", waiting), ("running", running)] {
+                self.batch_route_lines
+                    .get_or_create(&[("provider", provider.clone()), ("state", state.to_owned())])
+                    .set((*n).min(i64::MAX as u64) as i64);
+            }
+        }
+    }
+    /// Routes paused per reason (fixed set); absent reasons read 0.
+    pub fn set_batch_paused_routes(&self, rows: &[(&'static str, u64)]) {
+        for reason in [
+            "outside_window",
+            "live_traffic",
+            "server_busy",
+            "metrics_unavailable",
+            "concurrency",
+            "fair_share",
+            "workers",
+            "rate_limited",
+        ] {
+            let n = rows.iter().find(|r| r.0 == reason).map_or(0, |r| r.1);
+            self.batch_paused_routes
+                .get_or_create(&[("reason", reason.to_owned())])
+                .set(n.min(i64::MAX as u64) as i64);
+        }
+    }
+    /// A route's batch gate closed (`reason` from a fixed set).
+    pub fn observe_batch_route_pause(&self, reason: &'static str) {
+        self.batch_route_pauses
+            .get_or_create(&[("reason", reason.to_owned())])
+            .inc();
     }
     pub fn set_batch_workers(&self, capacity: u64, busy: u64) {
         self.batch_workers

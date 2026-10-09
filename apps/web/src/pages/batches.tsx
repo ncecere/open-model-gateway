@@ -14,6 +14,7 @@ import { Layers } from "lucide-react";
 import { api, type Session, type Workspace } from "../lib/api";
 import { batchCancelPath, batchPath, batchStatus, batchStatusLabel, batchStatusTone, batchStatuses, batchesPath, costSoFar, endpointLabel, isActive, isBatchStatus, modeHint, modeLabel, priceListLabel, progress, stopReason, type BatchDetail, type BatchPage, type BatchRow } from "../lib/batches";
 import { fileContentPath } from "../lib/files";
+import { pauseLabel, type BatchRouteWait } from "../lib/batch-scheduling";
 import type { DashboardSearch } from "../lib/permissions";
 import type { LogsScope } from "../lib/requests";
 import { Button, ErrorNotice, Stack, useAction, useApi } from "../components/ui";
@@ -33,7 +34,7 @@ import s from "./shared.module.css";
 export const batchSearch = (ws: string, id: string): DashboardSearch => ({ page: "batch-detail", ws, record: id });
 
 function StatusCell({ b }: { b: BatchRow }) {
-  const status = batchStatus(b), reason = stopReason(b.error_code);
+  const status = batchStatus(b), reason = stopReason(b.error_code) ?? (isActive(b) ? pauseLabel(b.waiting_reason) : null);
   return <StatusBadge tone={batchStatusTone(status)} size="sm" pulse={isActive(b)} title={reason ?? undefined}>{batchStatusLabel(status)}</StatusBadge>;
 }
 function ModeCell({ b }: { b: BatchRow }) {
@@ -83,6 +84,13 @@ export function BatchesPanel({ scope }: { scope: LogsScope }) {
   </Stack>;
 }
 
+/** Why lines wait, per model route, with the batch's place in each queue. */
+function WaitList({ waits }: { waits: BatchRouteWait[] }) {
+  return <ul className={s.plainList}>{waits.map((w, i) => <li key={`${w.model}:${i}`}>
+    <span className={s.primary}>{w.model}</span> · {pauseLabel(w.reason) ?? "Starting lines"}{w.queue > 1 ? ` · #${w.position} of ${w.queue} in queue` : ""} · {w.waiting_lines.toLocaleString("en-US")} waiting{w.running_lines ? ` · ${w.running_lines} running` : ""}
+  </li>)}</ul>;
+}
+
 /** A batch's own page: summary, files and line outcomes. */
 export function BatchDetailPage({ workspace, id }: { session: Session; workspace: Workspace; id: string }) {
   const ask = useAction();
@@ -90,7 +98,8 @@ export function BatchDetailPage({ workspace, id }: { session: Session; workspace
   const back = { label: "Batches", search: { page: "requests", ws: workspace.id, tab: "batches" } as DashboardSearch };
   if (detail.error && !b) return <ErrorNotice error={detail.error} retry={() => void detail.refetch()} />;
   if (!b) return <p role="status" className={s.note}>Loading batch…</p>;
-  const status = batchStatus(b), p = progress(b), cost = costSoFar(b), price = priceListLabel(b), reason = stopReason(b.error_code);
+  const status = batchStatus(b), p = progress(b), cost = costSoFar(b), price = priceListLabel(b), reason = stopReason(b.error_code) ?? (isActive(b) ? pauseLabel(b.waiting_reason) : null);
+  const waits = isActive(b) ? detail.data?.scheduling ?? [] : [];
   const canCancel = isActive(b) && !b.cancel_requested_at && (b.mine || workspace.capabilities.view_all_activity);
   const cancel = () => ask({ title: `Cancel ${b.id}?`, description: "No new lines start. Lines already running finish; the rest are listed in the error file.", danger: true, submitLabel: "Cancel batch", successNotice: "Cancelling batch.",
     run: (_, signal) => api(batchCancelPath(workspace.id, b.id), { method: "POST", signal }) });
@@ -109,7 +118,7 @@ export function BatchDetailPage({ workspace, id }: { session: Session; workspace
       { label: "Output", value: file(b.output_file_id, "Output file") },
       { label: "Errors", value: file(b.error_file_id, "Error file") },
     ]}
-    sections={[{ id: "outcomes", title: "Line outcomes", hidden: !detail.data?.outcomes.length, content: <ul className={s.plainList}>{detail.data?.outcomes.map(o => <li key={`${o.state}:${o.code}`}>{batchStatusLabel(o.state)}{o.code ? ` · ${o.code.replace(/_/g, " ")}` : ""}: {o.lines.toLocaleString("en-US")}</li>)}</ul> }]}>
+    sections={[{ id: "scheduling", title: "Scheduling", hidden: !waits.length, content: <WaitList waits={waits} /> }, { id: "outcomes", title: "Line outcomes", hidden: !detail.data?.outcomes.length, content: <ul className={s.plainList}>{detail.data?.outcomes.map(o => <li key={`${o.state}:${o.code}`}>{batchStatusLabel(o.state)}{o.code ? ` · ${o.code.replace(/_/g, " ")}` : ""}: {o.lines.toLocaleString("en-US")}</li>)}</ul> }]}>
     <StatTileGrid columns={4} label="Batch summary">
       <StatTile label="Progress" value={p.text} hint={p.total ? `${Math.floor((p.done * 100) / p.total)}% of lines finished` : undefined} />
       <StatTile label="Completed" value={b.completed.toLocaleString("en-US")} />

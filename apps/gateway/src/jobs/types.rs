@@ -22,6 +22,25 @@ pub const VIDEO_MAX_PROMPT_BYTES: usize = 32 * 1024;
 pub const BATCH_MAX_REQUESTS: u32 = 50_000;
 pub const BATCH_MAX_LINE_BYTES: usize = 4 * 1024 * 1024;
 pub const BATCH_COMPLETION_WINDOW: &str = "24h";
+/// Accepted `completion_window` values (0022). `24h` is the OpenAI value and
+/// the default; longer windows (for routes that only run batch lines in a
+/// time window) always run gateway-side.
+pub const BATCH_COMPLETION_WINDOWS: [(&str, i16); 4] =
+    [("24h", 24), ("48h", 48), ("72h", 72), ("168h", 168)];
+/// Hours of an accepted `completion_window`.
+pub fn completion_window_hours(value: &str) -> Option<i16> {
+    BATCH_COMPLETION_WINDOWS
+        .iter()
+        .find(|(name, _)| *name == value)
+        .map(|(_, hours)| *hours)
+}
+/// The `completion_window` string of `hours`.
+pub fn completion_window_name(hours: i16) -> &'static str {
+    BATCH_COMPLETION_WINDOWS
+        .iter()
+        .find(|(_, h)| *h == hours)
+        .map_or(BATCH_COMPLETION_WINDOW, |(name, _)| *name)
+}
 
 /// Endpoints a batch's lines may target (every line of a batch uses the
 /// batch's endpoint). Each is the gateway's normal inference contract.

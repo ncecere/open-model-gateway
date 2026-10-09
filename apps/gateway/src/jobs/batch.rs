@@ -56,6 +56,9 @@ pub struct CreateBatch {
     pub input_file_id: String,
     pub endpoint: BatchEndpoint,
     pub metadata: Option<Map<String, Value>>,
+    /// `completion_window` in hours (`None`: 24). A window other than 24 h
+    /// always runs gateway-side (provider batch APIs only offer 24 h).
+    pub completion_window_hours: Option<i16>,
 }
 
 /// Why a batch was not created.
@@ -147,13 +150,13 @@ pub fn render_batch(
         "model": job.public_model,
         "errors": Value::Null,
         "input_file_id": file(input),
-        "completion_window": BATCH_COMPLETION_WINDOW,
+        "completion_window": completion_window_name(job.completion_window_hours.unwrap_or(24)),
         "status": status(job),
         "output_file_id": file(output),
         "error_file_id": file(error),
         "created_at": job.created_at.timestamp(),
         "in_progress_at": unix(job.in_progress_at),
-        "expires_at": job.expires_at.map(|t| t.timestamp()).or(Some((job.created_at + BATCH_WINDOW).timestamp())),
+        "expires_at": job.expires_at.map(|t| t.timestamp()).or(Some((job.created_at + job.completion_window()).timestamp())),
         "finalizing_at": unix(job.finalizing_at),
         "completed_at": terminal(JobState::Completed),
         "failed_at": terminal(JobState::Failed),
@@ -179,6 +182,16 @@ impl Jobs {
         request: CreateBatch,
     ) -> Result<JobRow, CreateError> {
         let (force_gateway, retries) = options(request.metadata.as_ref())?;
+        let window_hours = request.completion_window_hours.unwrap_or(24);
+        if completion_window_hours(completion_window_name(window_hours)) != Some(window_hours) {
+            return Err(JobError::Invalid(
+                "invalid_completion_window",
+                "completion_window must be 24h, 48h, 72h or 168h",
+            )
+            .into());
+        }
+        // Provider batch APIs only offer 24 h: longer windows run gateway-side.
+        let force_gateway = force_gateway || window_hours != 24;
         let files = self.files()?;
         if !files
             .accepts(Purpose::BatchOutput)
@@ -258,7 +271,9 @@ impl Jobs {
                 return Err(e.into());
             }
         };
-        let deadline = Utc::now() + BATCH_POLL_WINDOW;
+        // The window plus finalization (26 h for the default 24 h window).
+        let deadline = Utc::now() + BATCH_POLL_WINDOW - BATCH_WINDOW
+            + chrono::TimeDelta::hours(i64::from(window_hours));
         let mode = if plan.native.is_some() {
             BatchMode::Native
         } else {
@@ -283,6 +298,7 @@ impl Jobs {
                 price_tier: (mode == BatchMode::Native).then_some(hold.tier.as_str()),
                 retry_limit: retries,
                 requests: plan.requests as i32,
+                window_hours,
             },
         )
         .await

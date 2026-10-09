@@ -42,6 +42,9 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         "storage_usage_hours",
         "batch_lines",
         "batch_segments",
+        "deployment_batch_scheduling",
+        "deployment_batch_signals",
+        "batch_route_waits",
     ] {
         assert_eq!(
             sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
@@ -904,6 +907,8 @@ async fn async_jobs_run_as_runtime(pool: &PgPool) {
                 .cloned()
                 .unwrap()
         }),
+        // 0022: a longer completion window (gateway-run) is stored once.
+        completion_window_hours: gateway.then_some(48),
     };
     let first = uuid::Uuid::new_v4();
     let job = jobs
@@ -951,14 +956,76 @@ async fn async_jobs_run_as_runtime(pool: &PgPool) {
         )
         .await
         .unwrap();
+    // Batch scheduling (0022): route settings written as runtime; the runner
+    // gates, claims under the route lock, publishes demand and clears it.
+    {
+        use open_model_gateway::jobs::schedule;
+        let deployment: uuid::Uuid =
+            sqlx::query_scalar("SELECT deployment_id FROM async_jobs WHERE id=$1")
+                .bind(gateway.id)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let runtime = runtime_pool(pool).await;
+        let mut tx = runtime.begin().await.unwrap();
+        schedule::save_settings(
+            &mut tx,
+            deployment,
+            &schedule::RouteSettings {
+                max_concurrency: 1,
+                yield_live_threshold: Some(5),
+                ..schedule::RouteSettings::default()
+            },
+            user,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(
+            schedule::load_settings(&runtime, deployment)
+                .await
+                .unwrap()
+                .max_concurrency,
+            1
+        );
+    }
     assert!(Runner::new(jobs.clone()).run_next().await.unwrap());
-    let done: (String, Option<i32>) =
-        sqlx::query_as("SELECT state,request_completed FROM async_jobs WHERE id=$1")
+    let done: (String, Option<i32>, Option<i16>) = sqlx::query_as(
+        "SELECT state,request_completed,completion_window_hours FROM async_jobs WHERE id=$1",
+    )
+    .bind(gateway.id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        (done.0.as_str(), done.1, done.2),
+        ("completed", Some(1), Some(48))
+    );
+    {
+        use open_model_gateway::jobs::schedule;
+        let runtime = runtime_pool(pool).await;
+        let store = open_model_gateway::store::Store::new(runtime.clone());
+        let (deployment, routed): (uuid::Uuid, Option<uuid::Uuid>) = sqlx::query_as("SELECT j.deployment_id,l.deployment_id FROM async_jobs j JOIN batch_lines l ON l.job_id=j.id WHERE j.id=$1")
             .bind(gateway.id)
             .fetch_one(pool)
             .await
             .unwrap();
-    assert_eq!((done.0.as_str(), done.1), ("completed", Some(1)));
+        assert_eq!(
+            routed,
+            Some(deployment),
+            "the line was claimed on its route"
+        );
+        let status = schedule::route_status(&runtime, deployment).await.unwrap();
+        assert_eq!(status["running_lines"], 0);
+        assert_eq!(status["live_in_flight"], 0);
+        assert!(
+            schedule::batch_waits(&runtime, gateway.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        schedule::observe_metrics(&store).await.unwrap();
+    }
     assert_eq!(
         *fake.0.lock().unwrap(),
         ["submit", "delete", "line"],

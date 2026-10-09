@@ -25,6 +25,10 @@ describe("batches", () => {
   it("counts finished lines and never shows unknown cost as zero", () => {
     expect(progress(row())).toEqual({ done: 12, total: 40, text: "12 / 40" });
     expect(costSoFar(row()).text).toBe("$0.00125");
+    // A running native batch with nothing settled yet shows its hold, never a bare $0.00 (seen live).
+    const running = costSoFar(row({ mode: "native", settled_microusd: "0", held_microusd: "1888" }));
+    expect(running.text).toBe("$0.00 + $0.001888 on hold");
+    expect(running.detail).toBe("$0.00 settled · $0.001888 on hold");
     const unknown = costSoFar(row({ cost_unknown: true, held_microusd: "500" }));
     expect(unknown.text).toBe("Unknown");
     expect(unknown.detail).toContain("on hold");

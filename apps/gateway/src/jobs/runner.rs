@@ -7,6 +7,12 @@
 //!   lease (a crashed runner's batches resume elsewhere). Lines run on a
 //!   bounded pool (`GATEWAY_BATCH_WORKERS`, default 4) with a per-batch cap
 //!   (`GATEWAY_BATCH_CONCURRENCY`, default 2).
+//! - **Scheduling (0022, [`super::schedule`]):** a line starts only when its
+//!   route has capacity: the route's window, live traffic and server load
+//!   gates are open and a fair-share claim under the route's concurrency
+//!   succeeds. Each line is pinned to the route it was scheduled on (no
+//!   failover after dispatch). Lines of different models (routes) progress
+//!   independently; within a batch, models take turns.
 //! - **Exactly once:** a line is claimed by inserting its `batch_lines` row
 //!   before it runs. A line a crashed runner left `running` becomes
 //!   `interrupted` and is never executed again (its result is reported as
@@ -15,19 +21,19 @@
 //!   opt into up to two retries of retryable failures (`omg_retries`), each a
 //!   new attempt with its own reservation. Upstream rate limiting (429)
 //!   pauses the batch's dispatch with backoff; nothing is resent.
-//! - **Stops:** cancel (running lines finish, `cancelled`), the 24 h window
-//!   (`expired`) and budget exhaustion (`failed`, `budget_exceeded`). Lines
+//! - **Stops:** cancel (running lines finish, `cancelled`), the completion
+//!   window (24 h by default; `expired`) and budget exhaustion (`failed`, `budget_exceeded`). Lines
 //!   that never ran are listed in the error file.
 //! - **Results:** finished lines are written to encrypted segments
 //!   (internal files) as they complete, then merged into the `batch_output`
 //!   output and error files. Bodies are never stored in PostgreSQL.
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU32, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
@@ -36,9 +42,9 @@ use serde_json::{Value, json};
 use tokio::sync::{Semaphore, mpsc};
 
 use super::{
-    batch::BATCH_WINDOW,
     io::{LazySink, LineReader, RESULT_LINE_BYTES},
     lines::{self, NotRun},
+    schedule::{Claim, Pause, Scheduler, WaitRow},
     store::Finished,
     *,
 };
@@ -61,6 +67,13 @@ const MAX_ACTIVE: usize = 16;
 const SEGMENT_LINES: usize = 256;
 const SEGMENT_BYTES: usize = 8 * 1024 * 1024;
 const SEGMENT_AGE: Duration = Duration::from_secs(10);
+/// How long a dispatch pass that started nothing waits before looking again.
+const POLL: Duration = Duration::from_millis(500);
+/// A waiting line's route is planned again after this long (routes can be
+/// disabled or cool down meanwhile).
+const REPLAN: Duration = Duration::from_secs(10);
+/// Unchanged demand rows are re-published (heartbeat) at least this often.
+const HEARTBEAT: Duration = Duration::from_secs(3);
 
 /// Start the runner when workers are configured and the file store and
 /// engine are attached.
@@ -88,17 +101,24 @@ pub struct Runner {
     id: Uuid,
     pool: Arc<Semaphore>,
     active: Arc<Mutex<HashSet<Uuid>>>,
+    /// Route gates and fair-share claims (capacity-aware scheduling).
+    pub(crate) scheduler: Arc<Scheduler>,
+    /// Wait between dispatch passes that started nothing.
+    pub(crate) poll: Duration,
 }
 
 impl Runner {
     pub fn new(jobs: Jobs) -> Self {
         let workers = jobs.limits.batch_workers.max(1);
         crate::metrics::METRICS.set_batch_workers(workers as u64, 0);
+        let scheduler = Arc::new(Scheduler::new(jobs.store.clone(), jobs.approvals.clone()));
         Self {
             jobs,
             id: Uuid::new_v4(),
             pool: Arc::new(Semaphore::new(workers)),
             active: Arc::default(),
+            scheduler,
+            poll: POLL,
         }
     }
 
@@ -138,6 +158,12 @@ impl Runner {
                 let n = rows.iter().find(|r| r.0 == mode).map_or(0, |r| r.1);
                 crate::metrics::METRICS.set_batch_queue(mode, n.max(0) as u64);
             }
+        }
+        if super::schedule::observe_metrics(&self.jobs.store)
+            .await
+            .is_err()
+        {
+            tracing::warn!("batch route gauges not refreshed");
         }
         let capacity = self.jobs.limits.batch_workers.max(1);
         crate::metrics::METRICS.set_batch_workers(
@@ -238,10 +264,13 @@ impl Runner {
                 envelope: job.execution_id,
                 job: job.id,
             },
+            pins: Mutex::default(),
         });
         let line = Arc::new(LineRun {
             store: store.clone(),
-            engine: engine.with_repository(repository, self.jobs.limits.batch_concurrency),
+            engine: engine.with_repository(repository.clone(), self.jobs.limits.batch_concurrency),
+            repository,
+            scheduler: self.scheduler.clone(),
             job: job.clone(),
             endpoint,
             state: state.clone(),
@@ -255,42 +284,145 @@ impl Runner {
         ));
         let per_batch = Arc::new(Semaphore::new(self.jobs.limits.batch_concurrency));
         let mut tasks = tokio::task::JoinSet::new();
+        let principal = job.principal();
+        // Capacity-aware dispatch: lanes (one per model) take turns; a lane's
+        // next line starts only when its route's gates are open and the
+        // fair-share claim succeeds. Nothing starts after a stop.
         let dispatched = async {
-            let mut reader =
-                LineReader::stored(files, work, job.workspace_id, BATCH_MAX_LINE_BYTES)
-                    .await
-                    .map_err(|_| InferenceError::Storage)?;
-            let mut n: i32 = -1;
-            while let Some(raw) = reader.next_request().await? {
-                n += 1;
-                if claimed.contains(&n) {
-                    continue;
-                }
-                if state.should_stop(job) {
-                    break;
-                }
-                state.wait_pause().await;
-                let local = per_batch
-                    .clone()
-                    .acquire_owned()
-                    .await
-                    .map_err(|_| InferenceError::Storage)?;
-                let global = self
-                    .pool
-                    .clone()
-                    .acquire_owned()
-                    .await
-                    .map_err(|_| InferenceError::Storage)?;
-                if state.should_stop(job) {
-                    break;
-                }
-                let line = line.clone();
-                let records = records.clone();
-                tasks.spawn(async move {
-                    let _permits = (local, global);
-                    line.run(n, raw, records).await;
-                });
+            let mut lanes = Lane::scan(files, work, job.workspace_id, endpoint, &claimed).await?;
+            let mut published: Option<(Instant, Vec<WaitRow>)> = None;
+            let mut turn = 0usize;
+            loop {
                 while tasks.try_join_next().is_some() {}
+                lanes.retain(|l| !l.lines.is_empty());
+                if lanes.is_empty() || state.should_stop(job) {
+                    break;
+                }
+                let mut started = false;
+                let mut report: BTreeMap<Uuid, WaitRow> = BTreeMap::new();
+                let count = lanes.len();
+                for k in 0..count {
+                    if state.should_stop(job) {
+                        break;
+                    }
+                    let lane = &mut lanes[(turn + k) % count];
+                    lane.load(files, work, job.workspace_id, endpoint).await?;
+                    let waiting = lane.lines.len() as i32;
+                    let Some(head) = lane.head.as_mut() else {
+                        continue;
+                    };
+                    if head.planned.is_none_or(|t| t.elapsed() >= REPLAN) {
+                        head.route = match &head.request {
+                            Some(request) => {
+                                self.plan_route(&principal, endpoint, request, head.execution)
+                                    .await
+                            }
+                            None => None,
+                        };
+                        head.planned = Some(Instant::now());
+                    }
+                    let (n, execution) = (head.n, head.execution);
+                    let route = head.route.as_ref().map(|d| d.id);
+                    let Some(route) = route else {
+                        // No route serves the line right now: it runs ungated
+                        // and fails in the engine exactly like an interactive
+                        // request would (nothing reaches a provider).
+                        let Some(permits) = permits(&per_batch, &self.pool) else {
+                            continue;
+                        };
+                        match store::claim_line(store, job.id, job.workspace_id, n, execution).await
+                        {
+                            Ok(true) => {
+                                let head = lane.take().ok_or(InferenceError::Storage)?;
+                                spawn_line(&mut tasks, &line, &records, head, None, permits);
+                                started = true;
+                            }
+                            Ok(false) => {
+                                lane.take();
+                            }
+                            Err(_) => {}
+                        }
+                        continue;
+                    };
+                    if state.paused() {
+                        note(&mut report, route, waiting, Some(Pause::RateLimited), false);
+                        continue;
+                    }
+                    let gate = match self.scheduler.gate(route).await {
+                        Ok(g) => g,
+                        Err(_) => {
+                            note(&mut report, route, waiting, None, false);
+                            continue;
+                        }
+                    };
+                    if let Some(pause) = gate.pause {
+                        note(&mut report, route, waiting, Some(pause), false);
+                        continue;
+                    }
+                    let Some(permits) = permits(&per_batch, &self.pool) else {
+                        note(&mut report, route, waiting, Some(Pause::Workers), false);
+                        continue;
+                    };
+                    let settings = &gate.settings.settings;
+                    match self
+                        .scheduler
+                        .claim(job, n, execution, route, settings.max_concurrency)
+                        .await
+                    {
+                        Ok(Claim::Claimed) => {
+                            let head = lane.take().ok_or(InferenceError::Storage)?;
+                            let pin = Pin {
+                                deployment: route,
+                                priority: settings.priority,
+                                max_concurrency: settings.max_concurrency,
+                            };
+                            spawn_line(&mut tasks, &line, &records, head, Some(pin), permits);
+                            started = true;
+                            note(&mut report, route, waiting - 1, None, true);
+                        }
+                        Ok(Claim::Taken) => {
+                            // Claimed elsewhere: never run it again.
+                            lane.take();
+                        }
+                        Ok(Claim::Full) => {
+                            note(&mut report, route, waiting, Some(Pause::Concurrency), true)
+                        }
+                        Ok(Claim::Wait) => {
+                            note(&mut report, route, waiting, Some(Pause::FairShare), true)
+                        }
+                        Err(_) => note(&mut report, route, waiting, None, false),
+                    }
+                }
+                turn = turn.wrapping_add(1);
+                let rows: Vec<WaitRow> = report
+                    .into_values()
+                    .filter(|r| r.waiting_lines > 0)
+                    .collect();
+                let due = published
+                    .as_ref()
+                    .is_none_or(|(at, last)| *last != rows || at.elapsed() >= HEARTBEAT);
+                if due {
+                    let legit = rows.iter().any(|r| r.reason.is_some_and(Pause::legitimate));
+                    if self
+                        .scheduler
+                        .publish_waits(job, &rows, legit)
+                        .await
+                        .is_err()
+                    {
+                        tracing::warn!(job_id = %job.id, "batch demand not recorded");
+                    }
+                    published = Some((Instant::now(), rows));
+                }
+                if !started {
+                    if tasks.is_empty() {
+                        tokio::time::sleep(self.poll).await;
+                    } else {
+                        tokio::select! {
+                            _ = tasks.join_next() => {}
+                            _ = tokio::time::sleep(self.poll) => {}
+                        }
+                    }
+                }
             }
             Ok::<_, InferenceError>(())
         }
@@ -318,6 +450,9 @@ impl Runner {
         stop: Option<Stop>,
     ) -> JobResult<()> {
         let store = &self.jobs.store;
+        if self.scheduler.clear_waits(job.id).await.is_err() {
+            tracing::warn!(job_id = %job.id, "batch demand not cleared; it goes stale");
+        }
         if job.cancel_requested_at.is_none() && stop != Some(Stop::Cancelled) {
             store::set_status(store, job.id, "finalizing").await?;
         }
@@ -454,6 +589,214 @@ impl Runner {
         self.jobs.discard_work_file(job).await;
         Ok(())
     }
+
+    /// The route a line would use right now: the engine's own candidate
+    /// filter (live catalog and key access, protocol, adapter support) and
+    /// route plan, first candidate. `None`: nothing serves it.
+    async fn plan_route(
+        &self,
+        principal: &Principal,
+        endpoint: BatchEndpoint,
+        request: &BatchRequest,
+        execution: Uuid,
+    ) -> Option<Deployment> {
+        let protocol = endpoint.protocol();
+        let model = request.model();
+        let store = &self.jobs.store;
+        let candidates: Vec<Deployment> = store
+            .deployments(principal, model)
+            .await
+            .ok()?
+            .into_iter()
+            .filter(|d| {
+                d.supported_protocols.iter().any(|p| p == protocol.as_str())
+                    && self.jobs.registry.get(&d.provider).is_some_and(|a| {
+                        a.supports_protocol(protocol)
+                            && match request {
+                                BatchRequest::Chat(r) => a.supports_chat_request(r),
+                                BatchRequest::Embeddings(r) => a.supports_embedding_target(d, r),
+                            }
+                    })
+            })
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+        let plan = store
+            .route_plan(principal, model, &candidates, execution)
+            .await
+            .ok()?;
+        let first = *plan.deployment_ids.first()?;
+        candidates.into_iter().find(|d| d.id == first)
+    }
+}
+
+/// The route a claimed line is pinned to.
+#[derive(Clone, Copy, Debug)]
+struct Pin {
+    deployment: Uuid,
+    /// vLLM `priority` hint (route setting), sent on this line only.
+    priority: Option<i32>,
+    max_concurrency: i32,
+}
+
+/// The next line of a lane, read and planned.
+struct Head {
+    n: i32,
+    raw: Vec<u8>,
+    execution: Uuid,
+    request: Option<BatchRequest>,
+    route: Option<Deployment>,
+    planned: Option<Instant>,
+}
+
+/// The unclaimed lines of one model, read in order from the batch's copy.
+struct Lane {
+    lines: VecDeque<i32>,
+    reader: Option<LineReader>,
+    read: i32,
+    head: Option<Head>,
+}
+impl Lane {
+    /// One pass over the batch's copy: unclaimed line numbers per model
+    /// (metadata only; lines are read again when they are due).
+    async fn scan(
+        files: &crate::filestore::FileStorage,
+        work: Uuid,
+        workspace: Uuid,
+        endpoint: BatchEndpoint,
+        claimed: &HashSet<i32>,
+    ) -> Result<Vec<Lane>, InferenceError> {
+        let mut reader = LineReader::stored(files, work, workspace, BATCH_MAX_LINE_BYTES)
+            .await
+            .map_err(|_| InferenceError::Storage)?;
+        let mut lanes: Vec<Lane> = Vec::new();
+        let mut index: HashMap<String, usize> = HashMap::new();
+        let mut n: i32 = -1;
+        while let Some(raw) = reader.next_request().await? {
+            n += 1;
+            if claimed.contains(&n) {
+                continue;
+            }
+            let model = lines::parse_line(&raw, endpoint)
+                .map(|l| l.request.model().to_owned())
+                .unwrap_or_default();
+            let i = *index.entry(model).or_insert_with(|| {
+                lanes.push(Lane {
+                    lines: VecDeque::new(),
+                    reader: None,
+                    read: -1,
+                    head: None,
+                });
+                lanes.len() - 1
+            });
+            lanes[i].lines.push_back(n);
+        }
+        Ok(lanes)
+    }
+    /// Read (and parse) the lane's next line if it is not loaded yet.
+    async fn load(
+        &mut self,
+        files: &crate::filestore::FileStorage,
+        work: Uuid,
+        workspace: Uuid,
+        endpoint: BatchEndpoint,
+    ) -> Result<(), InferenceError> {
+        if self.head.is_some() {
+            return Ok(());
+        }
+        let Some(&n) = self.lines.front() else {
+            return Ok(());
+        };
+        if self.reader.is_none() {
+            self.reader = Some(
+                LineReader::stored(files, work, workspace, BATCH_MAX_LINE_BYTES)
+                    .await
+                    .map_err(|_| InferenceError::Storage)?,
+            );
+            self.read = -1;
+        }
+        let reader = self.reader.as_mut().ok_or(InferenceError::Storage)?;
+        while self.read < n {
+            let raw = reader
+                .next_request()
+                .await?
+                .ok_or(InferenceError::Storage)?;
+            self.read += 1;
+            if self.read == n {
+                let request = lines::parse_line(&raw, endpoint).ok().map(|l| l.request);
+                self.head = Some(Head {
+                    n,
+                    raw,
+                    execution: Uuid::new_v4(),
+                    request,
+                    route: None,
+                    planned: None,
+                });
+                return Ok(());
+            }
+        }
+        Err(InferenceError::Storage)
+    }
+    /// Remove the head (claimed, or claimed elsewhere).
+    fn take(&mut self) -> Option<Head> {
+        self.lines.pop_front();
+        self.head.take()
+    }
+}
+
+/// This batch's and this process's worker permits, if both are free.
+fn permits(
+    per_batch: &Arc<Semaphore>,
+    pool: &Arc<Semaphore>,
+) -> Option<(
+    tokio::sync::OwnedSemaphorePermit,
+    tokio::sync::OwnedSemaphorePermit,
+)> {
+    let local = per_batch.clone().try_acquire_owned().ok()?;
+    let global = pool.clone().try_acquire_owned().ok()?;
+    Some((local, global))
+}
+
+/// Merge one lane's state into the batch's demand on a route.
+fn note(
+    report: &mut BTreeMap<Uuid, WaitRow>,
+    deployment: Uuid,
+    waiting: i32,
+    reason: Option<Pause>,
+    ready: bool,
+) {
+    let row = report.entry(deployment).or_insert(WaitRow {
+        deployment,
+        waiting_lines: 0,
+        reason,
+        ready: false,
+    });
+    row.waiting_lines = row.waiting_lines.saturating_add(waiting.max(0));
+    // A route this batch is dispatching to shows no reason.
+    if row.reason.is_some() {
+        row.reason = reason;
+    }
+    row.ready |= ready;
+}
+
+fn spawn_line(
+    tasks: &mut tokio::task::JoinSet<()>,
+    line: &Arc<LineRun>,
+    records: &mpsc::Sender<Record>,
+    head: Head,
+    pin: Option<Pin>,
+    permits: (
+        tokio::sync::OwnedSemaphorePermit,
+        tokio::sync::OwnedSemaphorePermit,
+    ),
+) {
+    let (line, records) = (line.clone(), records.clone());
+    tasks.spawn(async move {
+        let _permits = permits;
+        line.run(head.n, head.raw, head.execution, pin, records)
+            .await;
+    });
 }
 
 /// Why a batch stopped dispatching.
@@ -482,7 +825,7 @@ impl RunState {
             Some(Stop::Budget)
         } else if self.cancel.load(Ordering::SeqCst) {
             Some(Stop::Cancelled)
-        } else if Utc::now() >= job.created_at + BATCH_WINDOW {
+        } else if Utc::now() >= job.created_at + job.completion_window() {
             Some(Stop::Expired)
         } else {
             None
@@ -501,11 +844,12 @@ impl RunState {
     fn succeeded(&self) {
         self.busy_streak.store(0, Ordering::SeqCst);
     }
-    async fn wait_pause(&self) {
-        let until = *self.pause_until.lock().expect("pause");
-        if let Some(until) = until {
-            tokio::time::sleep_until(until).await;
-        }
+    /// Whether the batch is backing off after provider rate limiting.
+    fn paused(&self) -> bool {
+        self.pause_until
+            .lock()
+            .expect("pause")
+            .is_some_and(|until| tokio::time::Instant::now() < until)
     }
 }
 
@@ -519,6 +863,8 @@ struct Record {
 struct LineRun {
     store: Store,
     engine: Engine,
+    repository: Arc<LineRepository>,
+    scheduler: Arc<Scheduler>,
     job: JobRow,
     endpoint: BatchEndpoint,
     state: Arc<RunState>,
@@ -546,21 +892,15 @@ impl LineRun {
         );
     }
 
-    async fn run(&self, n: i32, raw: Vec<u8>, records: mpsc::Sender<Record>) {
-        let mut execution = Uuid::new_v4();
-        match store::claim_line(
-            &self.store,
-            self.job.id,
-            self.job.workspace_id,
-            n,
-            execution,
-        )
-        .await
-        {
-            Ok(true) => {}
-            // Already claimed elsewhere, or not recorded: never run it.
-            _ => return,
-        }
+    /// Run a claimed line (its `batch_lines` row exists) on its pinned route.
+    async fn run(
+        &self,
+        n: i32,
+        raw: Vec<u8>,
+        mut execution: Uuid,
+        pin: Option<Pin>,
+        records: mpsc::Sender<Record>,
+    ) {
         let line = match lines::parse_line(&raw, self.endpoint) {
             Ok(l) => l,
             Err(_) => {
@@ -576,7 +916,7 @@ impl LineRun {
         let model = line.request.model().to_owned();
         let mut attempt: i16 = 1;
         loop {
-            let result = self.execute(line.request.clone(), execution).await;
+            let result = self.execute(line.request.clone(), execution, pin).await;
             match result {
                 Ok(response) => {
                     self.state.succeeded();
@@ -626,10 +966,7 @@ impl LineRun {
                         .await;
                         tokio::time::sleep(Duration::from_secs(1u64 << attempt)).await;
                         let next = Uuid::new_v4();
-                        if matches!(
-                            store::retry_line(&self.store, self.job.id, n, attempt, next).await,
-                            Ok(true)
-                        ) {
+                        if self.claim_retry(n, attempt, next, pin).await {
                             attempt += 1;
                             execution = next;
                             continue;
@@ -663,7 +1000,61 @@ impl LineRun {
         self.emit(records, n, true, value).await;
     }
 
+    /// Claim an explicit retry: on its route, within the route's concurrency
+    /// (waiting for room; a stop leaves the failure standing).
+    async fn claim_retry(&self, n: i32, attempts: i16, execution: Uuid, pin: Option<Pin>) -> bool {
+        let Some(pin) = pin else {
+            return matches!(
+                store::retry_line(&self.store, self.job.id, n, attempts, execution).await,
+                Ok(true)
+            );
+        };
+        loop {
+            match self
+                .scheduler
+                .claim_retry(
+                    self.job.id,
+                    n,
+                    attempts,
+                    execution,
+                    pin.deployment,
+                    pin.max_concurrency,
+                )
+                .await
+            {
+                Ok(Some(claimed)) => return claimed,
+                Ok(None) if !self.state.should_stop(&self.job) => {
+                    tokio::time::sleep(POLL).await;
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    /// Execute one attempt pinned to its route, with the route's priority
+    /// hint (if any) scoped to this attempt.
     async fn execute(
+        &self,
+        request: BatchRequest,
+        execution: Uuid,
+        pin: Option<Pin>,
+    ) -> Result<BatchResponse, InferenceError> {
+        let Some(pin) = pin else {
+            return self.execute_attempt(request, execution).await;
+        };
+        self.repository.pin(execution, pin.deployment);
+        let attempt = self.execute_attempt(request, execution);
+        let result = match pin.priority {
+            Some(priority) => {
+                crate::inference::scheduling::with_priority(pin.deployment, priority, attempt).await
+            }
+            None => attempt.await,
+        };
+        self.repository.unpin(execution);
+        result
+    }
+
+    async fn execute_attempt(
         &self,
         request: BatchRequest,
         execution: Uuid,
@@ -768,6 +1159,19 @@ async fn write_segments(
 struct LineRepository {
     store: Store,
     batch: LineContext,
+    /// Attempt (execution id) → the route the scheduler claimed it on.
+    pins: Mutex<HashMap<Uuid, Uuid>>,
+}
+impl LineRepository {
+    fn pin(&self, execution: Uuid, deployment: Uuid) {
+        self.pins
+            .lock()
+            .expect("pins")
+            .insert(execution, deployment);
+    }
+    fn unpin(&self, execution: Uuid) {
+        self.pins.lock().expect("pins").remove(&execution);
+    }
 }
 #[async_trait]
 impl InferenceRepository for LineRepository {
@@ -860,9 +1264,21 @@ impl InferenceRepository for LineRepository {
         candidates: &[Deployment],
         request_id: Uuid,
     ) -> Result<crate::routing::RoutePlan, InferenceError> {
-        self.store
-            .route_plan(principal, model, candidates, request_id)
-            .await
+        // A scheduled line runs only on the route its capacity was claimed
+        // on (one attempt, no failover); if that route no longer serves it,
+        // the line fails like an interactive request to a missing model.
+        let pinned = self.pins.lock().expect("pins").get(&request_id).copied();
+        match pinned {
+            Some(d) if candidates.iter().any(|c| c.id == d) => {
+                Ok(crate::routing::RoutePlan::single(vec![d]))
+            }
+            Some(_) => Err(InferenceError::ModelUnavailable),
+            None => {
+                self.store
+                    .route_plan(principal, model, candidates, request_id)
+                    .await
+            }
+        }
     }
     async fn route_result(
         &self,

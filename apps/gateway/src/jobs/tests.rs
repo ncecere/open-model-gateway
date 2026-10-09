@@ -84,6 +84,7 @@ fn row(state: &str) -> JobRow {
         in_progress_at: None,
         finalizing_at: None,
         last_progress_at: None,
+        completion_window_hours: None,
     }
 }
 fn upstream(state: JobState, seconds: Option<u32>) -> UpstreamVideo {

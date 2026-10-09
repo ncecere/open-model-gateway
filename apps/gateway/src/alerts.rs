@@ -610,7 +610,11 @@ async fn batch_failed_conditions(
         .collect())
 }
 
-/// One incident per unfinished batch without progress for the window.
+/// One incident per unfinished batch without progress for the window. A
+/// gateway-run batch legitimately waiting for its routes (time window, live
+/// traffic, server load, concurrency: `last_waited_at`, 0022) is not
+/// stalled; its clock starts when the wait ends. An unreadable server load
+/// signal is not a legitimate wait.
 async fn batch_stalled_conditions(
     tx: &mut Transaction<'_, Postgres>,
     rule: &Rule,
@@ -619,7 +623,7 @@ async fn batch_stalled_conditions(
     let Some(window) = rule.window_minutes else {
         return Ok(vec![]);
     };
-    let rows: Vec<StalledBatch> = sqlx::query_as(&format!("SELECT j.id,j.workspace_id,j.batch_mode,j.request_total,coalesce(j.request_completed,0)+coalesce(j.request_failed,0),coalesce(j.last_progress_at,j.in_progress_at,j.created_at) FROM async_jobs j JOIN workspaces w ON w.id=j.workspace_id WHERE {BATCH_SCOPE} AND j.settled_at IS NULL AND j.state IN('queued','in_progress') AND coalesce(j.last_progress_at,j.in_progress_at,j.created_at)<=$2 ORDER BY 6 LIMIT 100"))
+    let rows: Vec<StalledBatch> = sqlx::query_as(&format!("SELECT j.id,j.workspace_id,j.batch_mode,j.request_total,coalesce(j.request_completed,0)+coalesce(j.request_failed,0),greatest(coalesce(j.last_progress_at,j.in_progress_at,j.created_at),j.last_waited_at) FROM async_jobs j JOIN workspaces w ON w.id=j.workspace_id WHERE {BATCH_SCOPE} AND j.settled_at IS NULL AND j.state IN('queued','in_progress') AND greatest(coalesce(j.last_progress_at,j.in_progress_at,j.created_at),j.last_waited_at)<=$2 ORDER BY 6 LIMIT 100"))
         .bind(rule.workspace_id)
         .bind(now - TimeDelta::minutes(i64::from(window)))
         .fetch_all(&mut **tx)

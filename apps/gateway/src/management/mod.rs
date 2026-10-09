@@ -1,5 +1,6 @@
 mod access;
 mod alerts;
+mod batch_scheduling;
 mod batches;
 mod catalogs;
 mod compare;
@@ -347,6 +348,7 @@ fn routes() -> Router<Store> {
         .merge(alerts::routes())
         .merge(files::routes())
         .merge(batches::routes())
+        .merge(batch_scheduling::routes())
         .route("/api/v1/me", get(me))
         .route("/api/v1/me/summary", get(me::summary))
         .route("/api/v1/me/keys", get(me::my_keys))

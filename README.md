@@ -110,3 +110,7 @@ npm run test:browser
 ```
 
 Mock-provider and SDK tests require no paid calls or real enterprise IdP modifications. See [staging](docs/staging.md) for restricted runtime roles, the image, TLS rehearsal and backup/restore tooling. **Use a new enterprise staging database; do not run initialization against an existing legacy deployment.** Production load/availability, real-provider certification, live IdP/SCIM acceptance, observability and off-host recovery acceptance remain unfinished.
+
+## License
+
+[MIT](LICENSE). Copyright (c) 2026 Nicholas Cecere.

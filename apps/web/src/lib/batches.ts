@@ -7,6 +7,7 @@
  */
 import { platformPath, wsPath } from "./api";
 import { formatMicroUsd } from "./governance";
+import type { BatchRouteWait } from "./batch-scheduling";
 
 export type BatchState = "queued" | "in_progress" | "completed" | "failed" | "cancelled" | "expired";
 export type BatchMode = "native" | "gateway";
@@ -18,9 +19,11 @@ export type BatchRow = {
   input_file_id: string | null; output_file_id: string | null; error_file_id: string | null;
   settled_microusd: string; held_microusd: string; cost_unknown: boolean;
   workspace_id: string; workspace_name: string; workspace_kind: string; key_name?: string | null; mine?: boolean;
+  /** Gateway-run scheduling (0022): lines running now, and why lines wait (null: not waiting). */
+  running_lines?: number; waiting_reason?: string | null;
 };
 export type BatchPage = { data: BatchRow[]; has_more: boolean; scope?: "workspace" | "own"; personal?: { active: number; finished: number; failed: number; lines: number } };
-export type BatchDetail = { batch: BatchRow; outcomes: { state: string; code: string | null; lines: number }[] };
+export type BatchDetail = { batch: BatchRow; outcomes: { state: string; code: string | null; lines: number }[]; scheduling?: BatchRouteWait[] };
 export const batchStatuses = [{ value: "active", label: "Running" }, { value: "finished", label: "Finished" }] as const;
 export type BatchStatusFilter = typeof batchStatuses[number]["value"];
 export const isBatchStatus = (v: unknown): v is BatchStatusFilter => batchStatuses.some(s => s.value === v);
@@ -34,12 +37,16 @@ export function batchesPath(scope: { kind: "platform" } | { kind: "workspace"; w
 export const batchPath = (ws: string, id: string) => `${wsPath(ws)}/batches/${encodeURIComponent(id)}`;
 export const batchCancelPath = (ws: string, id: string) => `${batchPath(ws, id)}/cancel`;
 
-/** The OpenAI status shown for a batch (the provider's step while running). */
-export function batchStatus(b: Pick<BatchRow, "state" | "upstream_status" | "cancel_requested_at">): string {
-  if (b.state === "queued" || b.state === "in_progress") return b.cancel_requested_at ? "cancelling" : b.upstream_status ?? (b.state === "queued" ? "validating" : "in_progress");
+/** The OpenAI status shown for a batch (the provider's step while running); a gateway-run batch with nothing running and lines held back by its routes is waiting for capacity. */
+export function batchStatus(b: Pick<BatchRow, "state" | "upstream_status" | "cancel_requested_at"> & Partial<Pick<BatchRow, "running_lines" | "waiting_reason">>): string {
+  if (b.state === "queued" || b.state === "in_progress") {
+    if (b.cancel_requested_at) return "cancelling";
+    if (b.waiting_reason && !b.running_lines && b.upstream_status !== "finalizing") return "waiting_capacity";
+    return b.upstream_status ?? (b.state === "queued" ? "validating" : "in_progress");
+  }
   return b.state;
 }
-const statusLabels: Record<string, string> = { validating: "Validating", in_progress: "Running", finalizing: "Finalizing", cancelling: "Cancelling", completed: "Completed", failed: "Failed", cancelled: "Cancelled", expired: "Expired" };
+const statusLabels: Record<string, string> = { waiting_capacity: "Queued — waiting for capacity", validating: "Validating", in_progress: "Running", finalizing: "Finalizing", cancelling: "Cancelling", completed: "Completed", failed: "Failed", cancelled: "Cancelled", expired: "Expired" };
 export const batchStatusLabel = (status: string) => statusLabels[status] ?? status.replace(/_/g, " ");
 export function batchStatusTone(status: string): "success" | "danger" | "warning" | "info" | "neutral" {
   if (status === "completed") return "success";
@@ -64,7 +71,8 @@ export function progress(b: Pick<BatchRow, "total" | "completed" | "failed">) {
 export function costSoFar(b: Pick<BatchRow, "settled_microusd" | "held_microusd" | "cost_unknown">) {
   const held = /^\d+$/.test(b.held_microusd) && BigInt(b.held_microusd) > 0n ? formatMicroUsd(b.held_microusd) : null;
   if (b.cost_unknown) return { text: "Unknown", detail: held ? `At least ${formatMicroUsd(b.settled_microusd)} · ${held} on hold` : `At least ${formatMicroUsd(b.settled_microusd)}` };
-  return { text: formatMicroUsd(b.settled_microusd), detail: held ? `${held} on hold` : null };
+  // A running batch's hold is part of its cost so far: never show it as a bare "$0.00".
+  return { text: held ? `${formatMicroUsd(b.settled_microusd)} + ${held} on hold` : formatMicroUsd(b.settled_microusd), detail: held ? `${formatMicroUsd(b.settled_microusd)} settled · ${held} on hold` : null };
 }
 const reasons: Record<string, string> = { budget_exceeded: "A budget was exhausted", submission_failed: "The provider refused the batch", submission_interrupted: "The submission was interrupted", batch_failed: "The provider failed the batch" };
 export const stopReason = (code: string | null) => code ? reasons[code] ?? code.replace(/_/g, " ") : null;

@@ -9,7 +9,7 @@ use crate::{inference::types::Deployment, store::Store};
 
 type Result<T> = std::result::Result<T, sqlx::Error>;
 
-pub(crate) const JOB_COLUMNS: &str = "id,kind,workspace_id,api_key_id,deployment_id,execution_id,public_model,provider,upstream_id,state,upstream_status,progress,error_code,created_at,completed_at,expires_at,cancel_requested_at,deleted_at,poll_deadline_at,settled_at,video_seconds,video_size,batch_endpoint,request_total,request_completed,request_failed,batch_mode,user_id,input_file_id,work_file_id,output_file_id,error_file_id,price_tier,retry_limit,submit_started_at,in_progress_at,finalizing_at,last_progress_at";
+pub(crate) const JOB_COLUMNS: &str = "id,kind,workspace_id,api_key_id,deployment_id,execution_id,public_model,provider,upstream_id,state,upstream_status,progress,error_code,created_at,completed_at,expires_at,cancel_requested_at,deleted_at,poll_deadline_at,settled_at,video_seconds,video_size,batch_endpoint,request_total,request_completed,request_failed,batch_mode,user_id,input_file_id,work_file_id,output_file_id,error_file_id,price_tier,retry_limit,submit_started_at,in_progress_at,finalizing_at,last_progress_at,completion_window_hours";
 
 #[derive(Clone, Debug, FromRow)]
 pub struct JobRow {
@@ -54,8 +54,14 @@ pub struct JobRow {
     pub in_progress_at: Option<DateTime<Utc>>,
     pub finalizing_at: Option<DateTime<Utc>>,
     pub last_progress_at: Option<DateTime<Utc>>,
+    /// Batches (0022): the completion window in hours (`None`: 24).
+    pub completion_window_hours: Option<i16>,
 }
 impl JobRow {
+    /// A batch's completion window (24 h unless created with a longer one).
+    pub fn completion_window(&self) -> chrono::TimeDelta {
+        chrono::TimeDelta::hours(i64::from(self.completion_window_hours.unwrap_or(24)))
+    }
     pub fn mode(&self) -> Option<BatchMode> {
         match self.batch_mode.as_deref() {
             Some("native") => Some(BatchMode::Native),
@@ -144,10 +150,11 @@ pub(crate) struct NewBatch<'a> {
     pub price_tier: Option<&'a str>,
     pub retry_limit: i16,
     pub requests: i32,
+    pub window_hours: i16,
 }
 pub(crate) async fn insert_batch(store: &Store, b: &NewBatch<'_>) -> Result<JobRow> {
-    sqlx::query_as(&format!("INSERT INTO async_jobs(id,kind,workspace_id,api_key_id,deployment_id,execution_id,public_model,provider,upstream_id,poll_deadline_at,batch_endpoint,batch_mode,user_id,input_file_id,work_file_id,price_tier,retry_limit,request_total,request_completed,request_failed,upstream_status) VALUES($1,'batch',$2,$3,$4,$5,$6,$7,NULL,$8,$9,$10,$11,$12,$13,$14,$15,$16,0,0,'validating') RETURNING {JOB_COLUMNS}"))
-        .bind(b.id).bind(b.workspace_id).bind(b.api_key_id).bind(b.deployment_id).bind(b.execution_id).bind(b.public_model).bind(b.provider).bind(b.poll_deadline_at).bind(b.endpoint.as_str()).bind(b.mode.as_str()).bind(b.user_id).bind(b.input_file_id).bind(b.work_file_id).bind(b.price_tier).bind(b.retry_limit).bind(b.requests)
+    sqlx::query_as(&format!("INSERT INTO async_jobs(id,kind,workspace_id,api_key_id,deployment_id,execution_id,public_model,provider,upstream_id,poll_deadline_at,batch_endpoint,batch_mode,user_id,input_file_id,work_file_id,price_tier,retry_limit,request_total,request_completed,request_failed,upstream_status,completion_window_hours) VALUES($1,'batch',$2,$3,$4,$5,$6,$7,NULL,$8,$9,$10,$11,$12,$13,$14,$15,$16,0,0,'validating',$17) RETURNING {JOB_COLUMNS}"))
+        .bind(b.id).bind(b.workspace_id).bind(b.api_key_id).bind(b.deployment_id).bind(b.execution_id).bind(b.public_model).bind(b.provider).bind(b.poll_deadline_at).bind(b.endpoint.as_str()).bind(b.mode.as_str()).bind(b.user_id).bind(b.input_file_id).bind(b.work_file_id).bind(b.price_tier).bind(b.retry_limit).bind(b.requests).bind(b.window_hours)
         .fetch_one(&store.pool).await
 }
 /// A job of `kind` owned by `workspace` (anything else is not found).
@@ -377,9 +384,11 @@ pub(crate) async fn finish_batch(store: &Store, id: Uuid, f: &Finished<'_>) -> R
         .execute(&store.pool).await?;
     reload(store, id).await
 }
-/// Observed provider progress (native): counts and the stall clock.
+/// Observed provider progress (native): counts and the stall clock. The
+/// gateway counted the lines at admission, so a provider total never replaces
+/// it (OpenAI reports `total: 0` while it is still validating).
 pub(crate) async fn observe_counts(store: &Store, id: Uuid, counts: RequestCounts) -> Result<()> {
-    sqlx::query("UPDATE async_jobs SET last_progress_at=CASE WHEN request_completed IS DISTINCT FROM $3 OR request_failed IS DISTINCT FROM $4 THEN clock_timestamp() ELSE coalesce(last_progress_at,clock_timestamp()) END,request_total=$2,request_completed=$3,request_failed=$4 WHERE id=$1 AND state IN('queued','in_progress')")
+    sqlx::query("UPDATE async_jobs SET last_progress_at=CASE WHEN request_completed IS DISTINCT FROM $3 OR request_failed IS DISTINCT FROM $4 THEN clock_timestamp() ELSE coalesce(last_progress_at,clock_timestamp()) END,request_total=coalesce(request_total,$2),request_completed=$3,request_failed=$4 WHERE id=$1 AND state IN('queued','in_progress')")
         .bind(id).bind(counts.total as i32).bind(counts.completed as i32).bind(counts.failed as i32)
         .execute(&store.pool).await?;
     Ok(())

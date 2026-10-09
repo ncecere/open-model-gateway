@@ -106,8 +106,40 @@ impl ApprovedEndpoints {
             .ok_or(InferenceError::Configuration)?;
         Ok((&entry.client, &entry.base))
     }
+    /// A server load signal (Prometheus text, batch scheduling): only
+    /// `{approved base without the final /v1}/metrics` of an approved local
+    /// endpoint, fetched with that approval's pinned client (no redirects,
+    /// proxy or retries; no credentials are ever sent). Returns the client and
+    /// the exact URL.
+    pub fn metrics_endpoint(
+        &self,
+        url: &str,
+    ) -> Result<(&reqwest::Client, String), InferenceError> {
+        let invalid = InferenceError::Configuration;
+        if url.len() > 2048 {
+            return Err(invalid);
+        }
+        let parsed = reqwest::Url::parse(url).map_err(|_| invalid)?;
+        let prefix = parsed.path().strip_suffix("/metrics").ok_or(invalid)?;
+        if !matches!(parsed.scheme(), "http" | "https")
+            || parsed.host_str().is_none()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+            || parsed.path().contains('%')
+            || url != parsed.as_str()
+        {
+            return Err(invalid);
+        }
+        let mut base = parsed.clone();
+        base.set_path(&format!("{prefix}/v1"));
+        let (base, _) = canonical(base.as_str())?;
+        let entry = self.endpoints.get(&base).ok_or(invalid)?;
+        Ok((&entry.client, parsed.as_str().to_owned()))
+    }
     #[cfg(test)]
-    pub(super) fn for_test(endpoint: &str) -> Self {
+    pub(crate) fn for_test(endpoint: &str) -> Self {
         Self::parse(
             &serde_json::json!([{"endpoint":endpoint,"addresses":["127.0.0.1"]}]).to_string(),
             "development",
@@ -226,5 +258,37 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[test]
+    fn metrics_urls_must_be_an_approved_origin() {
+        let p = ApprovedEndpoints::parse(
+            r#"[{"endpoint":"http://gpu.example:8000/v1","addresses":["10.10.1.20"]},{"endpoint":"https://proxy.example/vllm/v1","addresses":["10.10.1.21"]}]"#,
+            "production",
+        )
+        .unwrap();
+        assert_eq!(
+            p.metrics_endpoint("http://gpu.example:8000/metrics")
+                .unwrap()
+                .1,
+            "http://gpu.example:8000/metrics"
+        );
+        assert!(
+            p.metrics_endpoint("https://proxy.example/vllm/metrics")
+                .is_ok()
+        );
+        for url in [
+            "http://gpu.example:9000/metrics",
+            "http://other.example:8000/metrics",
+            "http://gpu.example:8000/v1/metrics",
+            "http://gpu.example:8000/metrics?x=1",
+            "http://gpu.example:8000/metrics#x",
+            "http://u:p@gpu.example:8000/metrics",
+            "http://gpu.example:8000/stats",
+            "https://gpu.example:8000/metrics",
+            "https://proxy.example/metrics",
+            "http://GPU.example:8000/metrics",
+        ] {
+            assert!(p.metrics_endpoint(url).is_err(), "{url}");
+        }
     }
 }
