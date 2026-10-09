@@ -538,6 +538,59 @@ async fn file_store_runs_as_runtime(pool: &PgPool) {
     .await
     .unwrap();
     assert_eq!(deleted, 2);
+    // Installation logo (0023): the upload, replace and remove statements and
+    // the public endpoint need nothing beyond the reviewed grants.
+    let image: &'static [u8] = b"\x89PNG\r\n\x1a\nlogo-probe";
+    let logo = files
+        .create(
+            NewFile {
+                created_by_user_id: Some(user),
+                filename: Some("logo.png".into()),
+                content_type: Some("image/png".into()),
+                ..NewFile::new(Purpose::Branding, None)
+            },
+            futures::stream::iter([Ok(bytes::Bytes::from_static(image))]).boxed(),
+        )
+        .await
+        .unwrap();
+    let previous: Option<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT branding_logo_file_id FROM installation_settings WHERE singleton",
+    )
+    .fetch_one(&runtime)
+    .await
+    .unwrap();
+    assert_eq!(previous, None);
+    sqlx::query("UPDATE installation_settings SET branding_logo_file_id=$1,branding_logo_updated_at=now(),branding_logo_width=$2,branding_logo_height=$3,logo_url=NULL,updated_at=now(),updated_by=$4 WHERE singleton")
+        .bind(logo.id)
+        .bind(64)
+        .bind(64)
+        .bind(user)
+        .execute(&runtime)
+        .await
+        .unwrap();
+    let app = open_model_gateway::http::router(store.clone())
+        .layer(axum::Extension(files.runtime().clone()));
+    let response = tower::ServiceExt::oneshot(
+        app,
+        axum::http::Request::builder()
+            .uri("/api/v1/branding/logo")
+            .body(axum::body::Body::empty())
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.headers()["content-type"], "image/png");
+    let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    assert_eq!(body.as_ref(), image);
+    sqlx::query("UPDATE installation_settings SET branding_logo_file_id=NULL,branding_logo_updated_at=NULL,branding_logo_width=NULL,branding_logo_height=NULL,updated_at=now(),updated_by=$1 WHERE singleton")
+        .bind(user)
+        .execute(&runtime)
+        .await
+        .unwrap();
+    assert!(files.delete(logo.id, None).await.unwrap());
     runtime.close().await;
 }
 

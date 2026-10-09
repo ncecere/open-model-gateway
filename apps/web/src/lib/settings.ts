@@ -2,11 +2,40 @@
  * Admin › Settings: API shapes and client-side checks that mirror the server's
  * strict validation (the server stays authoritative). See docs/settings.md.
  */
-import { API } from "./api";
+import { API, ApiError, csrfCookie, type InstallationLogo } from "./api";
 
 export const settingsPath = `${API}/platform/settings`;
 
-export type GeneralSettings = { display_name: string; support_url: string | null; logo_url: string | null; human_key_max_lifetime_days: number; timezone: "UTC"; updated_at: string; updated_by: string | null };
+/** `logo_url` is deprecated (accepted for API compatibility, never shown); `logo` is the uploaded logo. */
+export type GeneralSettings = {
+  display_name: string; support_url: string | null; logo_url: string | null; human_key_max_lifetime_days: number; timezone: "UTC"; updated_at: string; updated_by: string | null;
+  logo?: (InstallationLogo & { width: number; height: number }) | null;
+  logo_upload?: { available: boolean; max_bytes: number; content_types: string[]; min_side: number; max_side: number; recommended_side: number };
+};
+export const logoPath = `${settingsPath}/general/logo`;
+export const LOGO_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;
+export const LOGO_MAX_BYTES = 512 * 1024;
+/** Client-side pre-check (the server also checks the magic bytes, structure and dimensions). */
+export function logoFileError(file: { type: string; size: number }, maxBytes = LOGO_MAX_BYTES): string | undefined {
+  if (!(LOGO_TYPES as readonly string[]).includes(file.type)) return "Use a PNG, JPEG or WebP image.";
+  if (file.size > maxBytes) return `Use an image of ${Math.round(maxBytes / 1024)} KiB or less.`;
+  return;
+}
+/** Uploads the raw image (its type as Content-Type); the response is the general settings. */
+export async function uploadLogo(file: Blob, signal?: AbortSignal): Promise<GeneralSettings> {
+  const csrf = csrfCookie(document.cookie);
+  if (!csrf) throw new ApiError(403, "csrf_missing", "Your security token is missing. Reload this page and sign in again.");
+  let response: Response;
+  try { response = await fetch(logoPath, { method: "PUT", headers: { Accept: "application/json", "Content-Type": file.type, "X-CSRF-Token": csrf }, body: file, credentials: "same-origin", cache: "no-store", redirect: "error", signal }); }
+  catch (error) { if (signal?.aborted) throw error; throw new ApiError(0, "network_error", "Cannot reach the gateway. Check your connection and try again."); }
+  let body: unknown; try { body = await response.json(); } catch { body = undefined; }
+  if (response.status === 401) window.dispatchEvent(new Event("omg:unauthorized"));
+  if (!response.ok) {
+    const error = body && typeof body === "object" && "error" in body && body.error && typeof body.error === "object" ? body.error as Record<string, unknown> : {};
+    throw new ApiError(response.status, typeof error.code === "string" ? error.code : "request_failed", typeof error.message === "string" ? error.message : `Upload failed (${response.status}).`, typeof error.reason === "string" ? error.reason : undefined);
+  }
+  return body as GeneralSettings;
+}
 export type LockedValue<T> = { value: T; stored: T; locked: boolean; source: "installation" | "environment"; variable: string };
 export type PrivacySettings = {
   openrouter_data_collection: LockedValue<"deny" | "allow">;

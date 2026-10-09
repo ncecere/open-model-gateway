@@ -1,10 +1,10 @@
 # Installation settings
 
-Admin › Settings holds installation-wide settings. Platform Admins change them; Auditors read them; Users don't see them. Values live in one database row (`installation_settings`, migration 0010) plus `installation.name`. Every change is written to the audit log (`settings.general_updated`, `settings.privacy_updated`, `settings.email_updated`, `settings.email_test`, `settings.storage_updated`, `settings.storage_test`) with typed metadata only, never addresses, URLs or credentials. The API is in [management API](management-api.md#installation-settings).
+Admin › Settings holds installation-wide settings. Platform Admins change them; Auditors read them; Users don't see them. Values live in one database row (`installation_settings`, migration 0010) plus `installation.name`. Every change is written to the audit log (`settings.general_updated`, `settings.privacy_updated`, `settings.email_updated`, `settings.email_test`, `settings.storage_updated`, `settings.storage_test`, `settings.logo_uploaded`, `settings.logo_removed`) with typed metadata only, never addresses, URLs or credentials. The API is in [management API](management-api.md#installation-settings).
 
 | Page | Holds |
 | --- | --- |
-| General | Display name, support URL, logo URL, maximum lifetime of new human keys. |
+| General | Display name, support URL, logo, maximum lifetime of new human keys. |
 | Defaults & limits | The installation ceiling and Personal/Team/Project defaults (formerly Admin › Limits; `/admin/limits` still opens it). See [governance](governance.md). |
 | Data & privacy | OpenRouter data collection, request log retention, prompt/response storage, and the encrypted file store (Storage). |
 | Email | SMTP relay for invitations, status, test send. |
@@ -13,9 +13,21 @@ Admin › Settings holds installation-wide settings. Platform Admins change them
 ## General
 
 - **Display name**: 1–120 characters, no control characters. Shown as the installation name (`GET /me` → `installation.name`).
-- **Support URL** and **logo URL**: optional absolute `https://` URLs without credentials or fragment, at most 2048 characters. Returned to every signed-in user in `GET /me` (`installation.support_url`, `installation.logo_url`); the gateway never fetches them.
+- **Support URL**: optional absolute `https://` URL without credentials or fragment, at most 2048 characters. Returned to every signed-in user in `GET /me` (`installation.support_url`); the gateway never fetches it.
+- **Logo**: see [Logo](#logo).
+- **Logo URL (deprecated)**: the old external `logo_url` (same URL rules) is still accepted and returned by the API for compatibility, but nothing shows it: drawing it would make every browser call a third-party host. Uploading a logo clears it. If one is set without an uploaded logo, the Logo row says "Logo URL is no longer shown; upload a logo."
 - **Maximum key lifetime**: 1–365 days (default 365). Applies when a person creates or rotates their own key (`expires_in_days` above it is rejected with `reason:"key_lifetime_exceeds_maximum"`). Existing keys keep their expiry; service-account keys keep the general 1–365 day bound. `GET /me` exposes it as `installation.key_max_lifetime_days`.
 - **Time zone**: UTC, fixed. Budget windows, reports and dates use UTC.
+
+### Logo
+
+Without a logo, the app shows the Open Model Gateway mark ("Portal") in the sidebar and on the sign-in page. An uploaded logo replaces it in both places: in the sidebar's 20 px box and at 40 px on the sign-in page, scaled to fit (any aspect ratio). Its alt text is the installation's display name; in the sidebar, where the name is the link text beside it, it is decorative.
+
+- **Upload** (Admin): PNG, JPEG or WebP, at most 512 KiB, 16 to 4096 px per side; square and 64 px or larger is recommended. SVG is never accepted. The server checks that the file's magic bytes match its declared type, that the image structure parses to its end (no trailing data, no animation) and that it contains no markup, then reads the dimensions from the image header.
+- **Storage**: the image is kept in the encrypted [file store](file-storage.md) (purpose `branding`, installation scope, never expires), so the store must be configured. Without it the row says so in one line and links to Data & privacy › Storage (`409 reason:"file_storage_not_configured"`). `installation_settings.branding_logo_file_id` (migration 0023) references the current file, with its dimensions; a trigger accepts only a live, committed installation branding file.
+- **Replace / Remove**: replacing the logo or removing it deletes the previous object after the change is saved (a failed delete is retried by the sweeper). Removing works with the store off.
+- **Serving**: `GET /api/v1/branding/logo` serves it same-origin and without a session (the sign-in page needs it before login), with `nosniff`, `Content-Security-Policy: default-src 'none'`, an ETag and a 5-minute public cache. `GET /me` and the public `GET /api/v1/auth/config` return `logo` (`{url, updated_at}` or null; null when the store is off). See the [management API](management-api.md#public-installation-logo).
+- **Audit**: `settings.logo_uploaded` (image kind and byte count) and `settings.logo_removed`.
 
 ## Data & privacy
 

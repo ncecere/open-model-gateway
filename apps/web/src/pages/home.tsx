@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "@tanstack/react-router";
-import { abortRequests, api, ApiError, API, type Session, type Workspace } from "../lib/api";
+import { abortRequests, api, ApiError, API, type AuthConfig, type Session, type Workspace } from "../lib/api";
 import { canView, type DashboardSearch } from "../lib/permissions";
 import { dashboardHref, parseDashboardLocation } from "../lib/locations";
 import { clearRememberedPortals, landingSearch, rememberPortal, rememberWorkspace, resolveDashboardSearch, isAdminPage } from "../lib/navigation";
@@ -21,6 +21,7 @@ import { parseCompareIds } from "../lib/model-compare";
 import { ActionProvider, ApiScopeProvider, Button, ErrorNotice, Heading, Panel, Alert, Stack } from "../components/ui";
 import { DashboardNavigationProvider } from "../components/navigation-link";
 import { DashboardShell } from "../components/layout/shell";
+import { InstallationLogo } from "../components/layout/installation-logo";
 import { AlertDialog } from "../components/ui/dialog/dialog";
 import { CrumbProvider } from "../components/layout/breadcrumbs";
 import { PlatformTeams, PlatformUsers, UserDetail, OidcMappings, CostCenters } from "./hierarchy";
@@ -57,10 +58,11 @@ const SIGNED_OUT = "omg.enterprise.signedOut";
 export function takeSignedOutNotice(storage: Pick<Storage, "getItem" | "removeItem"> = window.sessionStorage): boolean {
   try { const set = storage.getItem(SIGNED_OUT) === "1"; if (set) storage.removeItem(SIGNED_OUT); return set; } catch { return false; }
 }
-export function AuthRequired({ error, refresh, denied = false }: { error?: unknown; refresh: () => void; denied?: boolean }) {
+/** `branding`: the public sign-in configuration; its uploaded logo replaces the Portal mark (alt: the installation name). */
+export function AuthRequired({ error, refresh, denied = false, branding }: { error?: unknown; refresh: () => void; denied?: boolean; branding?: AuthConfig }) {
   useEffect(() => { if (takeSignedOutNotice()) toast.success("You're signed out"); }, []);
   return <main className={signIn.page}><div className={signIn.column}>
-    <div className={signIn.brand}><span aria-hidden className={signIn.mark}><span className={signIn.accent} /></span><h1 className={signIn.title}>Open Model Gateway</h1><p className={signIn.subtitle}>Models for your personal, team and project workspaces</p></div>
+    <div className={signIn.brand}><InstallationLogo logo={branding?.logo} alt={branding?.installation_name ?? ""} className={signIn.mark} /><h1 className={signIn.title}>Open Model Gateway</h1><p className={signIn.subtitle}>Models for your personal, team and project workspaces</p></div>
     <Card className={signIn.card}><CardBody className={signIn.body}><Stack gap={5}>
       <div><h2 className={signIn.heading}>Sign in</h2><p className={signIn.lead}>Use your organization account to continue.</p></div>
       {denied && <Alert tone="warning" title="No access yet">Ask a platform admin to add you.</Alert>}
@@ -137,6 +139,9 @@ export function DashboardContent({ session, search, workspace, navigate }: { ses
 export function Home() {
   const location = useLocation(), routerNavigate = useNavigate(), client = useQueryClient(), [ended, setEnded] = useState(false), [rechecking, setRechecking] = useState(false), [logoutError, setLogoutError] = useState<unknown>(), [loggingOut, setLoggingOut] = useState(false), [confirmLogout, setConfirmLogout] = useState(false), mounted = useRef(true);
   const session = useQuery({ queryKey: ["session"], queryFn: ({ signal }) => api<Session>(`${API}/me`, { signal }), retry: false, refetchOnWindowFocus: true, staleTime: 0, enabled: !ended });
+  // Public sign-in configuration (the installation logo), only needed while signed out.
+  const signedOut = ended || session.isError;
+  const branding = useQuery({ queryKey: ["auth-config"], queryFn: ({ signal }) => api<AuthConfig>(`${API}/auth/config`, { signal }), retry: false, staleTime: 300_000, enabled: signedOut });
   const authorization = session.data ? JSON.stringify(session.data) : undefined, identity = useRef<string | undefined>(undefined);
   const navigate = (next: DashboardSearch, replace = false) => { const target = new URL(dashboardHref(next), window.location.origin); void routerNavigate({ to: target.pathname as "/", search: Object.fromEntries(target.searchParams), replace }); };
   const query = new URLSearchParams(); for (const [key, value] of Object.entries(location.search)) if (value !== undefined) query.set(key, String(value));
@@ -171,9 +176,9 @@ export function Home() {
     try { await api(`${API}/auth/logout`, { method: "POST" }); try { window.sessionStorage.setItem(SIGNED_OUT, "1"); } catch { /* Storage is optional. */ } if (mounted.current) window.location.assign("/"); } catch (error) { if (mounted.current) { setLogoutError(error); setLoggingOut(false); } }
   };
   const callbackDenied = query.get("auth_error") === "access_denied" || new URLSearchParams(window.location.search).get("auth_error") === "access_denied";
-  if (ended) return <AuthRequired denied={callbackDenied} error={logoutError} refresh={() => { setEnded(false); void session.refetch(); }} />;
+  if (ended) return <AuthRequired branding={branding.data} denied={callbackDenied} error={logoutError} refresh={() => { setEnded(false); void session.refetch(); }} />;
   if (session.isPending || rechecking) return <main className={s.page}><p role="status">Checking current access…</p></main>;
-  if (session.isError || !session.data) return <AuthRequired denied={callbackDenied} error={session.error} refresh={() => void session.refetch()} />;
+  if (session.isError || !session.data) return <AuthRequired branding={branding.data} denied={callbackDenied} error={session.error} refresh={() => void session.refetch()} />;
   const current = session.data;
   // The complete live authorization snapshot keys all content and dialogs. Revocation remounts the
   // scope, aborts transport, and drops query entries before another identity can inspect them.

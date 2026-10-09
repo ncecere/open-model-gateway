@@ -111,6 +111,12 @@ npm run test:browser
 
 Mock-provider and SDK tests require no paid calls or real enterprise IdP modifications. See [staging](docs/staging.md) for restricted runtime roles, the image, TLS rehearsal and backup/restore tooling. **Use a new enterprise staging database; do not run initialization against an existing legacy deployment.** Production load/availability, real-provider certification, live IdP/SCIM acceptance, observability and off-host recovery acceptance remain unfinished.
 
+## Releases and security
+
+- **Releases:** [changelog](CHANGELOG.md) and per-release notes in [`docs/releases/`](docs/releases/) (migrations, new settings, upgrade steps, known limitations). Upgrades are explicit: back up, `migrate`, reapply runtime grants, `budget verify`.
+- **Images:** from v0.3.0, `ghcr.io/ncecere/open-model-gateway` is published for linux/amd64 and linux/arm64 with SBOM and provenance attestations and a cosign keyless signature. Each architecture's exact digest passes the isolated staging rehearsal and a Trivy scan before it is tagged. Deploy by digest and [verify the signature](docs/releases/v0.3.0.md#verifying-the-images) first. v0.1.0 and v0.2.0 have no published images.
+- **Security:** report vulnerabilities privately as [SECURITY.md](SECURITY.md) describes. Only the latest minor release (0.3.x) gets fixes.
+
 ## License
 
 [MIT](LICENSE). Copyright (c) 2026 Nicholas Cecere.

@@ -13,15 +13,24 @@ This is a **single-host staging baseline, not approval for public production lau
 
 For reproducible releases, build/tag the image with the Git commit and promote the tested image by digest. Do not substitute a newly rebuilt mutable tag during rollback. The base-image version tags should also be pinned to reviewed digests by your release process; this baseline does not claim immutable upstream image tags.
 
-## Image CI and optional registry publication
+## Image CI and registry publication
 
-The CI workflow builds a Linux image and runs the isolated migration/runtime-permission/HTTPS/restore smoke without real credentials. A separate **manual**, main-branch-only `Publish staging image` workflow tests the exact loaded image before pushing it to GHCR under its full commit SHA:
+For pull requests and branches, CI's `staging-image` job builds a Linux image and runs the isolated migration/runtime-permission/HTTPS/restore smoke without real credentials.
+
+On pushes to `main` and `v*` tags, once the tests pass, `.github/workflows/image.yml` publishes `ghcr.io/ncecere/open-model-gateway`:
+
+1. Each architecture (linux/amd64, linux/arm64) is built on a native runner, with SBOM and provenance attestations, and pushed **by digest only**, without a tag.
+2. That exact digest is pulled and must report the `Cargo.toml` version (and, for a tag, the tag's version). It then runs this rehearsal (`init`, `db`, `migrate`, `up`, `verify`, HTTPS readiness through `local-ca`, `restore-check`) with `GATEWAY_IMAGE` set to the digest, and the job checks that the gateway container ran it. A Trivy scan fails on fixable HIGH or CRITICAL findings.
+3. Only then are the tested digests joined into one multi-arch index, tagged (`sha-<short>` for `main`; `vX.Y.Z`, `vX.Y` and `latest-release` for final tags; never `latest`) and signed with cosign keyless signing.
+4. For a `v*` tag, a GitHub Release is created from `docs/releases/vX.Y.Z.md` with the per-platform SBOMs, the digest and checksums.
+
+The workflow can also be run by hand on `main` or a `v*` tag; other refs are refused:
 
 ```sh
-gh workflow run publish-image.yml --ref main
+gh workflow run image.yml --ref main
 ```
 
-Inspect the workflow result and image digest before promotion. It does not deploy to a host or change provider settings. Check package access/visibility and configure a registry credential helper on the target host; do not place registry tokens in Compose or Git. This workflow currently publishes the Ubuntu runner's Linux/amd64 architecture; local Docker builds also work on the tested Linux/arm64 host. Multi-architecture release promotion needs acceptance on each target architecture.
+The job summary prints the digest and the `cosign verify` command. Verify the signature and promote by digest ([verifying the images](releases/v0.3.0.md#verifying-the-images)). The workflow does not deploy to a host or change provider settings. Configure a registry credential helper on the target host if the package is private; do not place registry tokens in Compose or Git. Each architecture is rehearsed on GitHub's runners only; acceptance on your own target hosts is still needed.
 
 ## First local HTTPS rehearsal
 

@@ -1,5 +1,6 @@
 {
   "name": "open-model-gateway",
+  "version": "0.3.0",
   "private": true,
   "workspaces": ["apps/web"],
   "engines": { "node": ">=22.12.0" },

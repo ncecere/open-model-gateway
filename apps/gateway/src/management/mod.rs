@@ -2,6 +2,7 @@ mod access;
 mod alerts;
 mod batch_scheduling;
 mod batches;
+pub(crate) mod branding;
 mod catalogs;
 mod compare;
 mod directory;
@@ -72,6 +73,10 @@ const REASONS: &[(&str, &str)] = &[
         settings::storage::STORAGE_TEST_LIMIT,
         "storage_test_rate_limited",
     ),
+    (branding::LOGO_TYPE, "logo_unsupported_type"),
+    (branding::LOGO_TOO_LARGE, "logo_too_large"),
+    (branding::LOGO_INVALID, "logo_invalid_image"),
+    (branding::LOGO_DIMENSIONS, "logo_dimensions"),
     (alerts::PERSONAL_BUILTIN_ONLY, "personal_alerts_built_in"),
     (alerts::RULE_LIMIT, "alert_rule_limit"),
     (alerts::KIND_FIXED, "alert_rule_kind_fixed"),
@@ -328,6 +333,11 @@ pub fn router(identity: IdentityState) -> Router<Store> {
         .layer(Extension(sign_in))
         .route_layer(middleware::from_fn_with_state(identity, require_session))
 }
+/// Public, sessionless routes: the installation logo (the sign-in page shows
+/// it before login).
+pub fn public_router() -> Router<Store> {
+    branding::public_routes()
+}
 /// Session routes with their own (larger) body cap; mount outside the shared
 /// 2 MiB request limit.
 pub fn upload_router(identity: IdentityState) -> Router<Store> {
@@ -456,15 +466,22 @@ pub(crate) type WorkspaceContextRow = (
     Option<String>,
 );
 
-async fn me(State(s): State<Store>, Extension(u): Extension<BrowserPrincipal>) -> ApiResult {
+async fn me(
+    State(s): State<Store>,
+    Extension(u): Extension<BrowserPrincipal>,
+    files: Option<Extension<crate::filestore::FileStoreRuntime>>,
+) -> ApiResult {
     let mut tx = resources::installation_tx(&s).await?;
     let role = resources::platform_role(&mut tx, u.user_id).await?;
     // Presentation settings (Admin > Settings > General) everyone may see.
-    let installation: Value = sqlx::query_scalar(
+    // `logo_url` is deprecated (never shown); `logo` is the uploaded logo.
+    let mut installation: Value = sqlx::query_scalar(
         "SELECT jsonb_build_object('id',i.id,'name',i.name,'support_url',s.support_url,'logo_url',s.logo_url,'key_max_lifetime_days',s.human_key_max_lifetime_days) FROM installation i JOIN installation_settings s ON s.singleton WHERE i.singleton",
     )
     .fetch_one(&mut *tx)
     .await?;
+    let files = files.map(|Extension(r)| r).unwrap_or_default();
+    installation["logo"] = branding::public_logo(&mut *tx, &files).await?;
     // Presentation of the signed-in identity uses the signature-verified session
     // claim, not an editable directory/profile email.
     let email = &u.email;

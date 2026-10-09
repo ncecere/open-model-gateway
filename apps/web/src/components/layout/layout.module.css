@@ -150,3 +150,9 @@
     flex: none;
   }
 }
+
+/* An installation's uploaded logo: any aspect ratio fits the mark's square box (sidebar 20 px, sign-in 40 px). */
+.customLogo {
+  display: block;
+  object-fit: contain;
+}

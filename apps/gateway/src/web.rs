@@ -245,6 +245,46 @@ mod tests {
         assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 
+    /// The built SPA's root icons (`apps/web/public`: favicon.svg, favicon.ico,
+    /// apple-touch-icon.png) are served as files with their image types, never
+    /// the HTML fallback.
+    #[tokio::test]
+    async fn serves_root_icons_from_the_built_spa() {
+        let (directory, app) = fixture();
+        let ico = [0u8, 0, 1, 0, 1, 0];
+        let png = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        std::fs::write(directory.path().join("favicon.ico"), ico).unwrap();
+        std::fs::write(directory.path().join("apple-touch-icon.png"), png).unwrap();
+        std::fs::write(directory.path().join("favicon.svg"), "<svg/>").unwrap();
+        for (path, kind, body) in [
+            ("/favicon.ico", "image/x-icon", &ico[..]),
+            ("/apple-touch-icon.png", "image/png", &png[..]),
+            ("/favicon.svg", "image/svg+xml", &b"<svg/>"[..]),
+        ] {
+            for accept in ["text/html", "image/*"] {
+                let response = app
+                    .clone()
+                    .oneshot(request(path, Method::GET, accept))
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK, "{path}");
+                assert_eq!(response.headers()[header::CONTENT_TYPE], kind, "{path}");
+                assert_eq!(
+                    to_bytes(response.into_body(), 4096).await.unwrap().as_ref(),
+                    body,
+                    "{path}"
+                );
+            }
+        }
+        // The public logo endpoint is an API route, never the SPA (no store here: 404 JSON).
+        let response = app
+            .oneshot(request("/api/v1/branding/logo", Method::GET, "text/html"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
+    }
+
     #[tokio::test]
     async fn static_frontend_does_not_bypass_auth_or_health_handlers() {
         let (_directory, app) = fixture();

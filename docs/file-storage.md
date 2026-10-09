@@ -10,8 +10,9 @@ What's implemented today:
 - Encryption, metadata and retention (`stored_files`, migration 0019).
 - The retention sweeper, the `files verify` and `files sweep` commands, metrics, and Admin › Settings › Data & privacy › Storage.
 - The gateway-owned **[Files API](files-api.md)** (`/v1/files`, migration 0020), with a stacked per-workspace storage quota and storage usage tracking (GB-days, not charged).
+- The **installation logo** (Admin › Settings › General, migration 0023), purpose `branding`.
 
-The batch engine, CSV exports, the Settings logo and video outputs use or will use the store as they're built (see [Consumers](#consumers)).
+The batch engine, CSV exports and video outputs use or will use the store as they're built (see [Consumers](#consumers)).
 
 ## Configuration
 
@@ -245,5 +246,5 @@ Uses:
 - **Batch engine:** reads `batch_input` files by gateway id and writes `batch_output` for results and errors, scoped to the workspace with the creating key recorded. Both require "Batch files" to be allowed. Contract: `.local/enterprise-rebuild/files-batch-contract.md`.
 - **Files API (`/v1/files`), implemented:** `user_file` (OpenAI `user_data`, `vision`, `assistants`, `evals`) and `batch_input` (`batch`), mapped by `Purpose::from_openai`. It keeps the sanitized original filename and content type, honors a client `expires_after` (relative to `created_at`), enforces the storage quota while streaming, and lists `batch_output` files too. See [Files API](files-api.md).
 - **CSV exports:** `export` in the requesting workspace (or installation scope for platform reports), with an explicit short `expires_at` for download links. Retention defaults to 1 day.
-- **Settings logo:** `branding/installation/<uuid>`, which never expires. The general settings will reference the file ID instead of an external URL. Re-encrypting non-expiring objects for key retirement is a planned command (see operations).
+- **Settings logo, implemented:** `branding/installation/<uuid>`, which never expires. `installation_settings.branding_logo_file_id` (migration 0023) references the current logo instead of an external URL; replacing or removing it deletes the previous object. PNG, JPEG or WebP up to 512 KiB, validated before it is stored; served publicly at `GET /api/v1/branding/logo`. See [settings](settings.md#logo). Because the logo never expires, retiring an encryption key means re-uploading it (or the planned re-encrypt command, see operations).
 - **Video outputs:** `video_output` copies of provider results, scoped to the workspace. Requires "Video outputs" to be allowed.

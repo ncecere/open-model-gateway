@@ -1,8 +1,10 @@
 //! Admin › Settings: installation-wide settings in one DB row (0010
 //! `installation_settings`) plus the installation display name.
 //!
-//! - General: display name, support/logo URLs (HTTPS), the maximum lifetime of
-//!   new human keys (enforced at create and rotate). Times are UTC.
+//! - General: display name, support URL (HTTPS), the uploaded logo
+//!   (`branding.rs`; the external `logo_url` is deprecated and only kept for
+//!   API compatibility), the maximum lifetime of new human keys (enforced at
+//!   create and rotate). Times are UTC.
 //! - Data & privacy: the OpenRouter data-collection default and request log
 //!   retention. A set environment variable overrides and locks each one.
 //!   Prompt and response bodies are never stored (a fact, not a setting).
@@ -58,9 +60,10 @@ pub(super) fn routes() -> Router<Store> {
         .route("/api/v1/platform/settings/email/test", post(test_email))
         .route("/api/v1/platform/settings/sign-in", get(sign_in))
         .merge(storage::routes())
+        .merge(branding::routes())
 }
 
-async fn write_tx<'a>(
+pub(super) async fn write_tx<'a>(
     s: &'a Store,
     u: &BrowserPrincipal,
 ) -> Result<Transaction<'a, Postgres>, ApiError> {
@@ -107,9 +110,31 @@ fn https_url(value: Option<String>) -> Result<Option<String>, ApiError> {
 
 const GENERAL_SQL: &str = "SELECT jsonb_build_object('display_name',i.name,'support_url',s.support_url,'logo_url',s.logo_url,'human_key_max_lifetime_days',s.human_key_max_lifetime_days,'timezone','UTC','updated_at',s.updated_at,'updated_by',(SELECT u.email FROM users u WHERE u.id=s.updated_by)) FROM installation i JOIN installation_settings s ON s.singleton WHERE i.singleton";
 
-async fn general(State(s): State<Store>, Extension(u): Extension<BrowserPrincipal>) -> ApiResult {
+/// General settings plus the uploaded logo (`logo`) and what an upload accepts
+/// (`logo_upload`). `logo_url` is deprecated: accepted and returned, never shown.
+pub(super) async fn general_json(
+    tx: &mut Transaction<'_, Postgres>,
+    rt: &crate::filestore::FileStoreRuntime,
+) -> Result<Value, ApiError> {
+    let mut v: Value = sqlx::query_scalar(GENERAL_SQL).fetch_one(&mut **tx).await?;
+    let (logo, upload) = branding::settings_json(tx, rt).await?;
+    v["logo"] = logo;
+    v["logo_upload"] = upload;
+    Ok(v)
+}
+fn file_runtime(
+    ext: Option<Extension<crate::filestore::FileStoreRuntime>>,
+) -> crate::filestore::FileStoreRuntime {
+    ext.map(|Extension(r)| r).unwrap_or_default()
+}
+
+async fn general(
+    State(s): State<Store>,
+    Extension(u): Extension<BrowserPrincipal>,
+    ext: Option<Extension<crate::filestore::FileStoreRuntime>>,
+) -> ApiResult {
     let mut tx = read_tx(&s, &u).await?;
-    let v: Value = sqlx::query_scalar(GENERAL_SQL).fetch_one(&mut *tx).await?;
+    let v = general_json(&mut tx, &file_runtime(ext)).await?;
     tx.commit().await?;
     Ok(Json(v))
 }
@@ -124,6 +149,7 @@ struct GeneralInput {
 async fn update_general(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
+    ext: Option<Extension<crate::filestore::FileStoreRuntime>>,
     Json(b): Json<GeneralInput>,
 ) -> ApiResult {
     let mut tx = write_tx(&s, &u).await?;
@@ -154,7 +180,7 @@ async fn update_general(
         json!({"count": b.human_key_max_lifetime_days}),
     )
     .await?;
-    let v: Value = sqlx::query_scalar(GENERAL_SQL).fetch_one(&mut *tx).await?;
+    let v = general_json(&mut tx, &file_runtime(ext)).await?;
     tx.commit().await?;
     Ok(Json(v))
 }

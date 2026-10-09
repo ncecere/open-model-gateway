@@ -46,6 +46,9 @@ DO $$ DECLARE r record; t text; BEGIN
  IF has_column_privilege('gateway_runtime','public.governance_reservations','request_count','UPDATE') OR has_column_privilege('gateway_runtime','public.governance_reservations','admitted_at','UPDATE') THEN RAISE EXCEPTION 'mutable reservation admission snapshot'; END IF;
  IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'async_job%' AND tgenabled='O' AND NOT tgisinternal)<>4 THEN RAISE EXCEPTION 'async job guards missing or disabled'; END IF;
  IF has_table_privilege('gateway_runtime','public.installation_settings','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.installation_settings','singleton','UPDATE') THEN RAISE EXCEPTION 'installation settings row replaceable'; END IF;
+ -- Installation logo (0023): a reviewed column set, guarded by a trigger.
+ IF NOT has_column_privilege('gateway_runtime','public.installation_settings','branding_logo_file_id','UPDATE') THEN RAISE EXCEPTION 'installation logo not maintainable by runtime'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname='installation_settings_logo_guard' AND tgenabled='O' AND NOT tgisinternal)<>1 THEN RAISE EXCEPTION 'installation logo guard missing or disabled'; END IF;
  -- SCIM (0014): user links are never removed or re-keyed; group identity fixed; one state row.
  IF has_table_privilege('gateway_runtime','public.scim_users','DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.scim_users','user_id','UPDATE') OR has_column_privilege('gateway_runtime','public.scim_users','created_at','UPDATE') THEN RAISE EXCEPTION 'scim user link removable or re-keyable'; END IF;
  IF has_column_privilege('gateway_runtime','public.scim_groups','id','UPDATE') OR has_any_column_privilege('gateway_runtime','public.scim_group_members','UPDATE') OR has_table_privilege('gateway_runtime','public.scim_groups','TRUNCATE') OR has_table_privilege('gateway_runtime','public.scim_group_members','TRUNCATE') THEN RAISE EXCEPTION 'scim group identity rewritable'; END IF;
@@ -366,6 +369,23 @@ BEGIN
   BEGIN INSERT INTO stored_files(id,object_key,purpose,backend,encryption_key_id) VALUES(x1,'batch_output/installation/'||x1,'batch_output','s3','k'); RAISE EXCEPTION 'installation-scoped customer content allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN INSERT INTO stored_files(id,object_key,purpose,workspace_id,filename,backend,encryption_key_id) VALUES(x2,'user_file/'||ws||'/'||x2,'user_file',ws,'../etc/passwd','s3','k'); RAISE EXCEPTION 'path-like filename allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN INSERT INTO stored_files(id,object_key,purpose,workspace_id,created_by_api_key_id,backend,encryption_key_id) VALUES(x3,'export/'||personal||'/'||x3,'export',personal,k,'s3','k'); RAISE EXCEPTION 'cross-workspace key attribution allowed'; EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+  -- Installation logo (0023): upload (committed branding file referenced), replace, remove.
+  DECLARE l1 uuid:=gen_random_uuid(); l2 uuid:=gen_random_uuid(); BEGIN
+   INSERT INTO stored_files(id,object_key,purpose,created_by_user_id,filename,content_type,backend,encryption_key_id) VALUES(l1,'branding/installation/'||l1,'branding',u,'logo.png','image/png','local','k2026'),(l2,'branding/installation/'||l2,'branding',u,'logo.webp','image/webp','local','k2026');
+   BEGIN UPDATE installation_settings SET branding_logo_file_id=l1,branding_logo_updated_at=now(),branding_logo_width=64,branding_logo_height=64 WHERE singleton; RAISE EXCEPTION 'uncommitted logo referenced'; EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'installation logo must be a live branding file' THEN RAISE; END IF; END;
+   UPDATE stored_files SET size_bytes=100,sha256=decode(repeat('ab',32),'hex'),committed_at=clock_timestamp() WHERE id IN (l1,l2) AND committed_at IS NULL AND deleted_at IS NULL;
+   PERFORM branding_logo_file_id FROM installation_settings WHERE singleton;
+   UPDATE installation_settings SET branding_logo_file_id=l1,branding_logo_updated_at=now(),branding_logo_width=64,branding_logo_height=64,logo_url=NULL,updated_at=now(),updated_by=u WHERE singleton;
+   UPDATE installation_settings SET branding_logo_file_id=l2,branding_logo_updated_at=now(),branding_logo_width=128,branding_logo_height=96,updated_at=now(),updated_by=u WHERE singleton;
+   UPDATE stored_files SET deleted_at=clock_timestamp(),filename=NULL,content_type=NULL WHERE id=l1 AND deleted_at IS NULL;
+   BEGIN UPDATE installation_settings SET branding_logo_file_id=l1 WHERE singleton; RAISE EXCEPTION 'deleted logo referenced'; EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'installation logo must be a live branding file' THEN RAISE; END IF; END;
+   BEGIN UPDATE installation_settings SET branding_logo_file_id=fid WHERE singleton; RAISE EXCEPTION 'non-branding logo referenced'; EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'installation logo must be a live branding file' THEN RAISE; END IF; END;
+   BEGIN UPDATE installation_settings SET branding_logo_width=NULL WHERE singleton; RAISE EXCEPTION 'partial logo allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+   BEGIN UPDATE installation_settings SET branding_logo_width=8 WHERE singleton; RAISE EXCEPTION 'logo dimension bound absent'; EXCEPTION WHEN check_violation THEN NULL; END;
+   UPDATE installation_settings SET branding_logo_file_id=NULL,branding_logo_updated_at=NULL,branding_logo_width=NULL,branding_logo_height=NULL,updated_at=now(),updated_by=u WHERE singleton;
+   UPDATE stored_files SET deleted_at=clock_timestamp(),filename=NULL,content_type=NULL WHERE id=l2 AND deleted_at IS NULL;
+   INSERT INTO audit_events(id,actor_user_id,action,resource_type,resource_id,metadata) VALUES(gen_random_uuid(),u,'settings.logo_uploaded','installation_settings',l2,'{"kind":"webp","count":100}'),(gen_random_uuid(),u,'settings.logo_removed','installation_settings',l2,'{}');
+  END;
  END;
  -- Files API (0020): storage quota layers, a reserved upload, listing, usage rows (append-only).
  DECLARE f2 uuid:=gen_random_uuid(); x4 uuid:=gen_random_uuid(); BEGIN

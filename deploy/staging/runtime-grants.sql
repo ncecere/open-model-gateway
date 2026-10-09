@@ -216,6 +216,11 @@ GRANT UPDATE(paused_reason,checked_at,live_in_flight,metrics_checked_at,metrics_
 GRANT SELECT,INSERT,DELETE ON public.batch_route_waits TO gateway_runtime;
 GRANT UPDATE(waiting_lines,reason,ready,last_claim_at,updated_at) ON public.batch_route_waits TO gateway_runtime;
 GRANT UPDATE(last_waited_at) ON public.async_jobs TO gateway_runtime;
+-- Installation logo (0023). The settings row references the current branding
+-- file (a live, committed installation branding object; trigger) with its
+-- dimensions; uploads/removals go through the reviewed stored_files grants.
+GRANT UPDATE(branding_logo_file_id,branding_logo_updated_at,branding_logo_width,
+ branding_logo_height) ON public.installation_settings TO gateway_runtime;
 -- No UPDATE/DELETE/TRUNCATE of immutable prices, ledger or audit; no removal of
 -- users/workspaces/keys/history and no rewrite of immutable admission snapshots.
 COMMIT;

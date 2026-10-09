@@ -116,7 +116,11 @@ jobs:
             target/browser-tests/gateway.log
           retention-days: 7
 
+  # The isolated staging rehearsal on a locally built image, for pull requests
+  # and branches. On main and v* tags the image job runs the same rehearsal on
+  # the exact digests it publishes, so this job is skipped there.
   staging-image:
+    if: github.event_name != 'push' || (github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     timeout-minutes: 35
     needs: [gateway, web]
@@ -143,3 +147,16 @@ jobs:
       - name: Stop isolated staging (retain volumes; runner is disposable)
         if: always()
         run: python3 scripts/staging.py down
+
+  # Multi-arch image (linux/amd64, linux/arm64): staging rehearsal of each
+  # pushed digest, Trivy scan, SBOM and provenance, cosign signature, and the
+  # GitHub Release for v* tags. On pushes to main and v* tags once the tests
+  # pass (.github/workflows/image.yml).
+  image:
+    needs: [gateway, web, browser]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    permissions:
+      contents: write # the release job (v* tags only) creates the GitHub Release
+      packages: write
+      id-token: write
+    uses: ./.github/workflows/image.yml

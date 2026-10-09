@@ -181,6 +181,8 @@ fn build_router(
         get(move |State(store): State<Store>| readiness(store, ready_web.clone())),
     )
     .merge(inference)
+    // Public installation logo (no session; same-origin for the sign-in page).
+    .merge(crate::management::public_router())
     // WebSocket upgrade: authenticates itself (Bearer header or the key
     // subprotocol) before admission; no request body.
     .route("/v1/realtime", get(realtime::handle))
@@ -201,6 +203,11 @@ fn build_router(
     .layer(middleware::from_fn(request_context))
     .with_state(store)
 }
+
+/// Response extension: keep the handler's own `Cache-Control` (public,
+/// non-personal content only, such as the installation logo).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PublicCache;
 
 async fn request_context(mut request: Request, next: Next) -> Response {
     // Generate our own ID; do not reflect arbitrary client-supplied values into logs.
@@ -228,9 +235,12 @@ async fn request_context(mut request: Request, next: Next) -> Response {
             "x-request-id",
             HeaderValue::from_str(&request_id).expect("UUID is a valid header value"),
         );
-        response
-            .headers_mut()
-            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        // Everything is uncacheable unless a handler marked it public (the logo).
+        if response.extensions().get::<PublicCache>().is_none() {
+            response
+                .headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        }
         tracing::info!(
             status = response.status().as_u16(),
             header_latency_ms = started.elapsed().as_millis(),

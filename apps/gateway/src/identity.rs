@@ -604,8 +604,26 @@ fn set_cookie(
     );
 }
 
-async fn auth_config(State(state): State<IdentityState>) -> Response {
-    private(Json(serde_json::json!({ "enabled": state.provider.is_some() })).into_response())
+/// Public sign-in configuration: whether SSO is configured and the uploaded
+/// installation logo (`{url, updated_at}` or null) with the installation name
+/// as its alt text (only when a logo is set). Both are null on a storage
+/// error, so the sign-in page never depends on them.
+async fn auth_config(
+    State(state): State<IdentityState>,
+    files: Option<axum::Extension<crate::filestore::FileStoreRuntime>>,
+) -> Response {
+    let files = files.map(|axum::Extension(r)| r).unwrap_or_default();
+    let (logo, name) = crate::management::branding::sign_in_branding(&state.store.pool, &files)
+        .await
+        .unwrap_or_default();
+    private(
+        Json(serde_json::json!({
+            "enabled": state.provider.is_some(),
+            "logo": logo,
+            "installation_name": name,
+        }))
+        .into_response(),
+    )
 }
 
 #[derive(Deserialize, Default)]

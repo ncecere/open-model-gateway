@@ -484,7 +484,9 @@ async fn server_metrics_busy_or_unreadable_pause_the_route(pool: PgPool) {
         "vllm:num_requests_waiting 0\nvllm:kv_cache_usage_perc 0.95\n",
     ));
     eventually!(w.status().await["metrics"]["kv_cache_permille"] == 950);
-    assert_eq!(w.reason(&job).await.as_deref(), Some("server_busy"));
+    // The route status reads the new metrics before the runner's next pass
+    // records the job's reason, so wait for the reason as well.
+    eventually!(w.reason(&job).await.as_deref() == Some("server_busy"));
     assert_eq!(w.server.requests(), 0);
     // An idle server: the lines run.
     w.server.set_metrics(Some(

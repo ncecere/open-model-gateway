@@ -54,7 +54,7 @@ The serving process runs bounded inactive-account cleanup every minute (up to 10
 
 ## HTTP sessions
 
-- `GET /api/v1/auth/config` returns `{ "enabled": true|false }`.
+- `GET /api/v1/auth/config` returns `{ "enabled": true|false, "logo": {url, updated_at}|null, "installation_name": string|null }`: the uploaded installation logo for the sign-in page and its alt text (the name only when a logo is set). See [management API](management-api.md#public-installation-logo).
 - `GET /api/v1/auth/login` starts login; unconfigured login returns 503. An optional `return_to` is the dashboard path to land on after sign-in. It must be a same-origin relative path (no scheme, host, `//`, backslash or control characters, and never `/api`, `/v1` or `/health`). The server drops anything else, stores the accepted path with the login attempt (migration `0006_login_return_path`, checked again by a database constraint) and validates it again before the callback redirects there; otherwise the callback redirects to `/`.
 - `GET /api/v1/auth/callback` redirects to `/`; no return-to parameter.
 - `POST /api/v1/auth/logout` revokes the current session and clears cookies.
