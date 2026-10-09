@@ -166,7 +166,7 @@ describe("workload grouping", () => {
     expect(toggleProtocol(["images"], "embeddings", true)).toEqual(["embeddings"]);
     expect(toggleProtocol(["rerank"], "rerank", false)).toEqual([]);
     for (const group of workloadGroups) expect(protocolSetError(JSON.stringify(group.protocols.map(p => p.value)))).toBeUndefined();
-    expect(workloadGroups.map(g => g.label)).toEqual(["Text", "Embeddings", "Images", "Speech to text", "Text to speech", "Rerank", "System One"]);
+    expect(workloadGroups.map(g => g.label)).toEqual(["Text", "Embeddings", "Images", "Speech to text", "Text to speech", "Rerank", "System One", "Realtime audio", "Video", "Batch"]);
   });
   it("shows only the workload's meters and publishes the rest as not applicable", () => {
     const body = draftBody(limits(emptyDraft("embeddings"), "8192", "0"));

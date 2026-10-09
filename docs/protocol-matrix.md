@@ -20,7 +20,26 @@ Current inference routes share key authentication, global public model aliases, 
 | `openrouter` | JSON base64 `input_audio`; no `prompt` | Native, `mp3`/`pcm` only |
 | Others | No | No |
 
-A model's protocols belong to one workload: Chat/Responses/Messages combine, while embeddings and each other kind stand alone. Images, audio, Rerank and System One routes return **400 `unsupported_capability`** when the model exists but has no deployment that declares the protocol on an adapter supporting it. Chat/Responses/Messages/Embeddings keep 501 for unsupported capabilities.
+### Realtime
+
+| Adapter | Realtime `GET /v1/realtime` (WebSocket) |
+| --- | --- |
+| `openai` | GA interface over `wss://api.openai.com/v1/realtime`, bounded event allowlist |
+| Others | No |
+
+See [realtime](#realtime-audio) below and [realtime](realtime.md).
+
+### Async jobs
+
+| Adapter | Videos `/v1/videos` | Files + Batches `/v1/files`, `/v1/batches` |
+| --- | --- | --- |
+| `openai` | `sora-*`: create (explicit `seconds`/`size`), retrieve, list, content, delete | `purpose=batch` JSONL for `/v1/chat/completions` only; create, retrieve, list, cancel, file content |
+| `openrouter` | No (OpenRouter's video API has a different shape; not implemented) | No (no Batch API) |
+| Others | No | No |
+
+See [async jobs](#async-jobs-video-and-batch) below and [async jobs](async-jobs.md).
+
+A model's protocols belong to one workload: Chat/Responses/Messages combine, while embeddings and each other kind stand alone. Images, audio, realtime, video, batch, Rerank and System One routes return **400 `unsupported_capability`** when the model exists but has no deployment that declares the protocol on an adapter supporting it. Chat/Responses/Messages/Embeddings keep 501 for unsupported capabilities.
 
 Unsupported combinations fail explicitly. Local labels do not mean every installed server/model supports all fields. Ollama native embedding follow-up has source and mocked tests, but this documentation refresh does not claim a fresh pass or live-server certification; consult [local profile notes](../apps/gateway/src/providers/local/README.md). [Bedrock](bedrock.md) documents its separate transport.
 
@@ -157,6 +176,27 @@ curl https://gateway/v1/audio/transcriptions -H "Authorization: Bearer $KEY" \
 - **Cancellation:** dropping the client connection drops the upstream request synchronously. The attempt is recorded as cancelled with its character usage, and the hold is retained (state unknown), because the provider may still charge.
 - **Metering:** `input_characters` (exact), `requests` 1, semantic zeros for images/input audio/search. Output audio duration is never reported, so it is unknown: price `output_audio_seconds_ms` as `not_applicable`, or give it `max_units`, or the hold is unbounded. Upstreams return no usage on this route: OpenAI `tts-1`/`gpt-4o-mini-tts` token usage (only on SSE) and OpenRouter cost (only via the delayed generation lookup) are not observed, so token meters stay unknown unless priced `not_applicable`. Value per-character models such as `tts-1` ($15/M) or `microsoft/mai-voice-2-flash` ($15/M) with an `input_characters` line.
 - Speech input and generated audio are never logged or stored.
+
+## Realtime audio
+
+`GET /v1/realtime?model=…` upgrades to a WebSocket that proxies OpenAI Realtime (GA) events. Authenticate with one inference key, either `Authorization: Bearer` or the subprotocol `openai-insecure-api-key.<key>` (never both). The key is never forwarded; the upstream uses the connection's server credential. The beta interface, ephemeral client secrets (`/v1/realtime/client_secrets`) and WebRTC/SIP (`/v1/realtime/calls`) return 400 `unsupported_capability`.
+
+- **Client events:** an allowlist of `session.update`, `input_audio_buffer.*`, `output_audio_buffer.clear`, `conversation.item.*`, `response.create` and `response.cancel`, with field-level rules. Anything else gets an `error` event and close 1008, never a silent drop. Input transcription, automatic VAD responses, idle-timeout responses, out-of-band responses, MCP tools and image input are refused.
+- **Responses:** one at a time. `response.create` always carries `max_output_tokens` (at most the window). It is forwarded only after a budget window is reserved.
+- **Accounting:** one attempt and reservation per session. Usage is settled per `response.done` with the realtime audio-token meters (`input_audio_tokens`, `cache_read_audio_tokens`, `output_audio_tokens`) beside the text token meters. Unknown usage keeps its window on hold.
+- **Limits:** `GATEWAY_REALTIME_*` (session length, idle time, output window, message size and event rate).
+- **Termination:** a client disconnect closes upstream immediately. Upstream failures close with 1011, never a clean end.
+
+Details, limits and pricing: [realtime](realtime.md).
+
+## Async jobs (video and batch)
+
+Model protocols `videos` and `batches`, each its own workload. Jobs belong to the creating workspace: ids are gateway ids (`video_…`, `batch_…`, `file-…`), never upstream ids, and another workspace's key gets 404. Lists come from gateway records, not the provider account.
+
+- **`POST /v1/videos`** (multipart like the SDKs, or JSON): `model, prompt` (≤ 32 KiB), `seconds` `4|8|12` (default 4) and `size` `720x1280|1280x720|1024x1792|1792x1024` (default `720x1280`), always sent upstream. `input_reference`, remix, edits, extensions and characters are `unsupported_capability`. `GET /v1/videos[/{id}]`, `GET /v1/videos/{id}/content?variant=video|thumbnail|spritesheet` (completed only; streamed, allowlisted media types), `DELETE /v1/videos/{id}` (finished jobs only).
+- **`POST /v1/files`** multipart, `purpose=batch` then `file`: streamed to the provider while each line is validated (never stored or logged; ≤ `GATEWAY_MAX_BATCH_FILE_BYTES`, ≤ 50,000 lines, ≤ 4 MiB per line). Every line is `{custom_id, method:"POST", url:"/v1/chat/completions", body}` naming the same batch model with exactly one positive `max_completion_tokens`/`max_tokens` within the price's output ceiling. `stream`, `n>1`, audio output, web search and predicted outputs are rejected. An unpriced or unbounded file is refused before the upload completes. `GET /v1/files/{id}[/content]` for workspace-owned input/output/error files.
+- **`POST /v1/batches`** `{input_file_id, endpoint:"/v1/chat/completions", completion_window:"24h", metadata?}` (`output_expires_after` unsupported; one batch per file), `GET /v1/batches[/{id}]`, `POST /v1/batches/{id}/cancel`.
+- **Accounting:** one attempt and reservation per job, through the ordinary admission (budget totals included). Video holds `seconds × highest resolution rate`; batches hold `lines × input ceiling` plus the sum of line maxima. Settlement on a terminal state, by the poller or a read: actual video seconds; provider batch usage, else per-line usage stream-parsed from the output file. Unknown usage, cancellation and expiry keep the hold.
 
 ## Streaming and evidence boundaries
 

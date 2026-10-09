@@ -96,6 +96,7 @@ impl ProviderAdapter for FixtureAdapter {
                     output_audio_seconds_ms: Some(0),
                     search_units: Some(1),
                     requests: Some(1),
+                    output_video_seconds_ms: None,
                 }),
                 provider_cost_microusd: Some(7),
                 ..Default::default()
@@ -350,6 +351,8 @@ async fn database_budget_admission_and_versioned_costs_reach_real_http(pool: PgP
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn independent_engines_share_database_request_limits(pool: PgPool) {
     let (app, keys, adapter, store) = fixture(&pool, false).await;
+    // Both engines share this store's clock: one UTC minute for both racers.
+    store.freeze_admission_clock().await.unwrap();
     sqlx::query("INSERT INTO installation_policy(singleton,requests_per_minute) VALUES(true,1)")
         .execute(&pool)
         .await
@@ -652,7 +655,9 @@ async fn deployment_resolution_cannot_cross_workspaces(pool: PgPool) {
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn platform_ceiling_is_shared_by_team_project_and_personal_requests(pool: PgPool) {
-    let (app, keys, adapter, _) = fixture(&pool, false).await;
+    let (app, keys, adapter, store) = fixture(&pool, false).await;
+    // Per-minute ceilings: every request must be admitted in one UTC minute.
+    store.freeze_admission_clock().await.unwrap();
     let project = Uuid::new_v4();
     let project_key = open_model_gateway::auth::NewApiKey::generate();
     let user: Uuid = sqlx::query_scalar("SELECT issued_to_user_id FROM api_keys WHERE id=$1")

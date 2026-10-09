@@ -17,6 +17,11 @@ pub struct Store {
     /// `governance::LockGate`): waiters queue here instead of holding pooled
     /// connections, so authentication and settlement are not starved.
     pub(crate) lock_gates: std::sync::Arc<crate::governance::LockGates>,
+    /// Test-only pinned admission instant shared by every clone of this store.
+    /// Production builds have no override: admission always reads the
+    /// database clock (see [`Store::admission_now`]).
+    #[cfg(any(test, feature = "integration-tests"))]
+    admission_clock: std::sync::Arc<std::sync::OnceLock<chrono::DateTime<chrono::Utc>>>,
 }
 
 // Keep this inventory in step with future enterprise migrations. Preflight rejects
@@ -75,6 +80,13 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "scim_groups",
     "scim_group_members",
     "scim_state",
+    // 0015 budget totals
+    "budget_totals",
+    // 0016 async jobs
+    "async_jobs",
+    "async_job_files",
+    // 0017 realtime
+    "realtime_responses",
 ];
 
 fn lineage_matches(
@@ -150,7 +162,40 @@ impl Store {
         Self {
             pool,
             lock_gates: std::sync::Arc::new(gates),
+            #[cfg(any(test, feature = "integration-tests"))]
+            admission_clock: Default::default(),
         }
+    }
+
+    /// The instant admission evaluates per-minute rate windows, budget
+    /// periods and leases at: the database clock, so every replica agrees.
+    pub(crate) async fn admission_now(
+        &self,
+        conn: &mut PgConnection,
+    ) -> sqlx::Result<chrono::DateTime<chrono::Utc>> {
+        #[cfg(any(test, feature = "integration-tests"))]
+        if let Some(at) = self.admission_clock.get() {
+            return Ok(*at);
+        }
+        sqlx::query_scalar("SELECT clock_timestamp()")
+            .fetch_one(conn)
+            .await
+    }
+
+    /// Tests only: freeze admission time (for this store and all its clones)
+    /// at the current database time and return it. Every later admission
+    /// then evaluates the same UTC minute however slowly the test runs, so
+    /// per-minute rate assertions cannot straddle a minute boundary. Leases
+    /// and budget periods use the same instant. Freezing twice is an error.
+    #[cfg(any(test, feature = "integration-tests"))]
+    pub async fn freeze_admission_clock(&self) -> anyhow::Result<chrono::DateTime<chrono::Utc>> {
+        let now = sqlx::query_scalar("SELECT clock_timestamp()")
+            .fetch_one(&self.pool)
+            .await?;
+        self.admission_clock
+            .set(now)
+            .map_err(|_| anyhow::anyhow!("admission clock is already frozen"))?;
+        Ok(now)
     }
 
     /// Require a fully initialized current installation, including on serve/bootstrap.

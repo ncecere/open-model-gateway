@@ -125,7 +125,7 @@ Never recover over the live cluster. Never run down migrations. Never delete pen
 2. Restore with `--create` into `gateway_restore_<date>` on a non-production cluster, using `--gateway-binary` from the release you intend to run.
 3. Apply `deploy/staging/runtime-grants.sql` as the migrator, then run `verify-privileges.sql`.
 4. Start the matching release against the restored database. `/health/ready` must report `schema: ok`.
-5. Compare the restored ledger and execution counts (printed by `restore`) with the source. Spot-check costs, and confirm that pending and unknown reservations survived.
+5. Compare the restored ledger and execution counts (printed by `restore`) with the source. Spot-check costs, and confirm that pending and unknown reservations survived. Run `open-model-gateway budget verify` against it.
 6. Record the elapsed time (your measured RTO) and the backup age (RPO), then drop the drill database.
 
 Local evidence (2026-10-09) on a freshly migrated v14 database on the disposable 54339 cluster, with tools in the container:
@@ -172,6 +172,7 @@ DATABASE_URL=postgres://gateway:gateway@127.0.0.1:54339/gateway \
   --test load_test -- --ignored --nocapture
 # LOAD_TEST_REQUESTS (1000), LOAD_TEST_CONCURRENCY (50,200), LOAD_TEST_UPSTREAM_MS (20),
 # LOAD_TEST_POOL (10), LOAD_TEST_MAX_CONCURRENT (256), LOAD_TEST_PRESEED (0)
+# Example used below: LOAD_TEST_PRESEED=200000 LOAD_TEST_REQUESTS=500 LOAD_TEST_CONCURRENCY=50
 ```
 
 After each scenario the harness asserts these ledger invariants:
@@ -182,18 +183,35 @@ After each scenario the harness asserts these ledger invariants:
 - Denied requests never executed, and upstream calls equal admitted attempts.
 - In the budget scenario, settled spend never exceeds the budget.
 - `gateway_settlements_total{outcome="settled"}` matches the count, with no `held` settlements.
+- `budget verify` reports every maintained budget-totals bucket equal to a full scan.
 
-Results (2026-10-09; Apple Silicon laptop, Docker PostgreSQL 17 on 54339, release build, 10-connection pool; half of the requests stream). Latency is client-observed full response time, in milliseconds:
+Results (2026-10-09; Apple Silicon laptop, Docker PostgreSQL 17 on 54339, release build, 10-connection pool; half of the requests stream). Latency is client-observed full response time, in milliseconds. "Before" is the previous release (budget windows scanned), and "after" uses maintained budget totals (`0015_budget_totals.sql`). Both were measured on the same machine in the same session:
 
-| Scenario | Requests | req/s | p50 | p95 | p99 | Errors |
-|---|---|---|---|---|---|---|
-| mixed, 50 concurrent | 1000 | 117 | 428 | 553 | 566 | 0 |
-| mixed, 200 concurrent | 1000 | 95 | 1920 | 2697 | 2748 | 0 |
-| budget contention, 200 concurrent | 1000 | 74 | 2538 | 3051 | 3056 | 490 ok / 510 clean 429 `budget_exceeded`; 5390 of 5500 µUSD settled |
-| mixed, 50 concurrent, 200k history rows this month | 500 | 19 | 2666 | 2721 | 2742 | 0 |
+| Scenario | Requests | Before req/s (p50 / p99) | After req/s (p50 / p99) | Errors |
+|---|---|---|---|---|
+| mixed, 50 concurrent | 1000 | 113 (434 / 576) | 125 (395 / 461) | 0 |
+| budget contention, 50 concurrent | 1000 | 97 (483 / 702) | 123 (363 / 534) | 490 ok / 510 clean 429 `budget_exceeded`; 5390 of 5500 µUSD settled |
+| mixed, 50 concurrent, 200k history rows this month | 500 | **19** (2574 / 2724) | **124** (392 / 526) | 0 |
+| budget contention, 50 concurrent, 200k history rows | 500 | **20** (2436 / 2655) | **150** (280 / 467) | 240 ok / 260 clean 429 |
+| mixed, 200 concurrent, 200k history rows | 1000 | n/a | 116 (1697 / 1802) | 0 |
+| budget contention, 200 concurrent, 200k history rows | 1000 | n/a | 124 (1409 / 2041) | 490 ok / 510 clean 429 |
+
+After each run, the harness also runs `budget verify`. It found 55 buckets consistent with the full scan, which took 1.04 s over 200k rows.
 
 Findings:
 
 1. **Fixed: pool starvation under concurrency.** Before the fix, at 200 concurrent requests on a 10-connection pool, transactions waiting for the installation lock held every pooled connection. Authentication timed out (105 × 503 out of 1000), and 40 streams could not be finalized (settlement `held`, stream ended with an error rather than `[DONE]`). Admission and settlement now queue in process (`governance::LockGates`). At most a quarter of the pool waits on the lock per queue, and settlements never queue behind admissions. Repeated runs now show zero errors. The pool size is configurable through `GATEWAY_DATABASE_MAX_CONNECTIONS`.
-2. **Throughput ceiling: about 100 to 130 req/s per installation in this environment.** Admission and settlement serialize on the installation row by design, so this ceiling is shared by all replicas. In a statement-level trace, about 83% of database time was spent waiting for that lock. Adding replicas or connections does not raise it. Latency at higher concurrency is queueing (Little's law), not failure.
-3. **Open: budget checks scale with history.** Each budget check aggregates every reservation in the budget period, plus the legacy execution anti-join, while holding the lock. With 200k reservations this month, the installation-scope check took about 59 ms, and throughput fell from about 117 to 19 req/s. Fixing this needs maintained period aggregates, which is a schema change and is not done here. Until then, keep budget periods and volumes in mind, monitor `gateway_http_request_duration_seconds` for `/v1/*`, and treat this as a launch blocker for high-volume budgeted installations.
+2. **Throughput ceiling: about 115 to 150 req/s per installation in this environment.** Admission and settlement serialize on the installation row by design, so this ceiling is shared by all replicas. Adding replicas or connections does not raise it. Latency at higher concurrency is queueing (Little's law), not failure.
+3. **Fixed: budget checks no longer scale with history.** Before, each budget check aggregated every reservation in its window (plus the legacy execution anti-join) while holding the lock. With 200k reservations this month the installation check took about 59 ms, and throughput fell to 19 req/s. Admission now reads `budget_totals`: one indexed lookup for all budget layers, O(layers). Statement-level triggers maintain the table in the same transaction as every reservation and execution write. Rate and concurrency limits read only the current minute and live leases. With 200k history rows, throughput matches the no-history case. Monitoring, policy and alert *reports* outside admission (`alerts`, usage pages) still aggregate their own windows and are not on the admission path.
+
+## Budget totals verification
+
+`budget_totals` (migration 0015) holds settled spend, active holds and unresolved counters per scope (installation, workspace, key lineage), period (day, ISO week, month, lifetime) and UTC period start, in exact integer micro-USD. Admission reads it instead of scanning history. Check it against a full scan of reservations and executions:
+
+```sh
+open-model-gateway budget verify
+```
+
+- **What it does:** it runs read-only in one `REPEATABLE READ` snapshot and takes no installation lock. Traffic can continue, but the scan reads every reservation, so run it off-peak on large installations. It prints JSON (`buckets`, `mismatch_count`, up to 20 example `mismatches`) and exits nonzero on any difference. It works with the runtime role's grants.
+- **When to run it:** after `migrate` (the migration backfills from existing history), after restores (restore drill step 5), and periodically.
+- **If it reports a mismatch:** do not edit, delete or "fix" reservations or the ledger. Drift is only possible through manual owner-level edits, such as deleting history, re-keying lineages, or disabling triggers. The runtime role cannot update keys, delete rows or truncate the table. Preserve the report and escalate. The table can be rebuilt by the migrator from the same scan the migration uses.

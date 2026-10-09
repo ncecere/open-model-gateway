@@ -5,9 +5,11 @@ use sqlx::PgPool;
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn missing_reservation_history_blocks_new_monetary_and_token_caps(pool: PgPool) {
     let f = fixture(pool).await;
+    // The unreserved execution must fall in the admission minute.
+    let now = f.store.freeze_admission_clock().await.unwrap();
     f.price(1_000_000).await;
     let old = f.start();
-    sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id) VALUES($1,$2,$3,$4,'company/smart','openai',false,'cancelled',$1)").bind(old.id).bind(f.principal.workspace_id).bind(f.principal.key_id).bind(f.deployment).execute(&f.store.pool).await.unwrap();
+    sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,started_at) VALUES($1,$2,$3,$4,'company/smart','openai',false,'cancelled',$1,$5)").bind(old.id).bind(f.principal.workspace_id).bind(f.principal.key_id).bind(f.deployment).bind(now).execute(&f.store.pool).await.unwrap();
     for (tokens, budget) in [(None, Some(10000_i64)), (Some(10000_i64), None)] {
         sqlx::query("INSERT INTO workspace_local_policies(workspace_id,tokens_per_minute) VALUES($1,$2) ON CONFLICT(workspace_id) DO UPDATE SET tokens_per_minute=$2").bind(f.principal.workspace_id).bind(tokens).execute(&f.store.pool).await.unwrap();
         crate::governance::set_test_budget(

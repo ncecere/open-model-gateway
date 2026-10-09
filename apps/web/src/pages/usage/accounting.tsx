@@ -75,10 +75,13 @@ export function CacheAccounting({ billing, components, attempts, legacy }: { bil
  * (`undefined`); a fully observed meter is a known value, possibly zero; any unobserved relevant attempt makes it
  * "Unknown · partial" with the observed lower bound. Without counts, an absent total is unknown.
  */
-export function meterUsageText(key: UnitMeter, usage: MeterUsage | null, relevant?: Record<UnitMeter, string>, unknown?: Record<UnitMeter, string>): string | undefined {
-  const value = usage?.[key] ?? null, audio = key.endsWith("_audio_seconds_ms"), show = (v: string) => audio ? formatAudio(v) : formatCount(v);
+export function meterUsageText(key: UnitMeter, usage: MeterUsage | null, relevant?: Partial<Record<UnitMeter, string>>, unknown?: Partial<Record<UnitMeter, string>>): string | undefined {
+  // Video seconds (0016) are absent from older evidence and reports: absent is "not counted", not unknown.
+  if (key === "output_video_seconds_ms" && usage?.[key] === undefined && relevant?.[key] === undefined) return undefined;
+  const value = usage?.[key] ?? null, audio = key.endsWith("_audio_seconds_ms") || key === "output_video_seconds_ms", show = (v: string) => audio ? formatAudio(v) : formatCount(v);
   if (!relevant || !unknown) return value == null ? "Unknown" : show(value);
-  if (relevant[key] === "0") return undefined;
+  // A meter the report does not count (an older gateway: video jobs, 0016) is omitted, never "Unknown".
+  if (relevant[key] === undefined || relevant[key] === "0") return undefined;
   if (unknown[key] !== "0") return value == null || /^0+$/.test(value) && unknown[key] === relevant[key] ? "Unknown" : `Unknown · partial (at least ${show(value)})`;
   return show(value ?? "0");
 }
@@ -90,7 +93,7 @@ export type MeterRow = { key: UnitMeter; label: string; usage: string; spent: st
  * "At least" its known charge. A used meter with a known zero charge is "—" (charged elsewhere, see NO_METER_CHARGE),
  * never "$0.00". Rows with a known zero usage and a known zero charge are hidden. Amounts are exact micro-USD.
  */
-export function meterRows(usage: MeterUsage | null, components: Partial<MeterCostComponents> | null, relevant?: Record<UnitMeter, string>, unknown?: Record<UnitMeter, string>): MeterRow[] {
+export function meterRows(usage: MeterUsage | null, components: Partial<MeterCostComponents> | null, relevant?: Partial<Record<UnitMeter, string>>, unknown?: Partial<Record<UnitMeter, string>>): MeterRow[] {
   return meterUsageLabels.flatMap((r, i): MeterRow[] => {
     const text = meterUsageText(r.key, usage, relevant, unknown);
     if (text === undefined) return [];
@@ -109,7 +112,7 @@ export function meterRows(usage: MeterUsage | null, components: Partial<MeterCos
  * Non-token meters (one table: usage and spend side by side), plus provider-reported cost as evidence only (never the
  * charge). Nothing at all when no meter was used (or is unknown) and the provider reported nothing.
  */
-export function MeterAccounting({ usage, components, providerCost, relevant, unknown }: { usage: MeterUsage | null; components: Partial<MeterCostComponents> | null; providerCost: string | null; relevant?: Record<UnitMeter, string>; unknown?: Record<UnitMeter, string> }) {
+export function MeterAccounting({ usage, components, providerCost, relevant, unknown }: { usage: MeterUsage | null; components: Partial<MeterCostComponents> | null; providerCost: string | null; relevant?: Partial<Record<UnitMeter, string>>; unknown?: Partial<Record<UnitMeter, string>> }) {
   const rows = meterRows(usage, components, relevant, unknown);
   if (!rows.length && providerCost == null) return null;
   return <Stack gap={3}>

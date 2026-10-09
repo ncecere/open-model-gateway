@@ -12,7 +12,7 @@ use crate::{
     },
     store::Store,
 };
-use chrono::{DateTime, DurationRound, Utc};
+use chrono::{DateTime, Utc};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 type Tx<'a> = Transaction<'a, Postgres>;
@@ -95,8 +95,24 @@ impl Price {
     /// `ceilings` are request-derived hard unit bounds; they only tighten v3
     /// `max_units` (v1/v2 have no unit meters).
     fn bound(&self, output: u64, ceilings: &MeterUsage) -> Result<Option<i64>, InferenceError> {
-        let input =
-            u64::try_from(self.input_token_limit).map_err(|_| InferenceError::Configuration)?;
+        self.bound_scaled(1, output, ceilings, false)
+    }
+    /// [`Price::bound`] for `requests` requests sharing one attempt (an async
+    /// batch: input ceiling `requests * input_token_limit`) and, for the
+    /// video workload, the `output_video_seconds_ms` meter. Every other
+    /// workload cannot produce video, so prices without a video line still
+    /// bound them.
+    fn bound_scaled(
+        &self,
+        requests: u64,
+        output: u64,
+        ceilings: &MeterUsage,
+        video: bool,
+    ) -> Result<Option<i64>, InferenceError> {
+        let input = u64::try_from(self.input_token_limit)
+            .ok()
+            .and_then(|n| n.checked_mul(requests))
+            .ok_or(InferenceError::Configuration)?;
         match self.pricing_version {
             1 => {
                 let (i, o) = self.token_rates()?;
@@ -109,9 +125,11 @@ impl Price {
             }
             3 => {
                 let (lines, mut max) = self.lines()?;
+                // `MeterUsage::counts` order: non-token `Meter::ALL`, then video.
                 for (meter, ceiling) in billing::v3::Meter::ALL
                     .into_iter()
                     .filter(|m| !m.is_token())
+                    .chain(billing::v3::Meter::VIDEO)
                     .zip(ceilings.counts())
                 {
                     // A request ceiling tightens the price's `max_units`. A
@@ -128,8 +146,12 @@ impl Price {
                         (None, _) => {}
                     }
                 }
-                billing::v3::bound(&lines, &max, input, output)
-                    .map_err(|_| InferenceError::Configuration)
+                if video {
+                    billing::v3::bound_video(&lines, &max, input, output)
+                } else {
+                    billing::v3::bound(&lines, &max, input, output)
+                }
+                .map_err(|_| InferenceError::Configuration)
             }
             _ => Err(InferenceError::Configuration),
         }
@@ -227,15 +249,6 @@ struct Policy {
     tokens_per_minute: Option<i64>,
     concurrent_requests: Option<i64>,
 }
-/// One admission check: scope (workspace, key lineage), rate caps, budget and its window.
-type Check = (
-    Option<Uuid>,
-    Option<Uuid>,
-    [Option<i64>; 3],
-    Option<i64>,
-    DateTime<Utc>,
-    DateTime<Utc>,
-);
 #[derive(sqlx::FromRow)]
 struct Budget {
     workspace_id: Option<Uuid>,
@@ -260,22 +273,15 @@ pub(crate) const BUDGETS: &str = "SELECT NULL::uuid workspace_id,NULL::uuid api_
  UNION ALL SELECT $1::uuid,NULL::uuid,period,amount_microusd FROM policy_budgets WHERE layer='local' AND workspace_id=$1
  UNION ALL SELECT $1::uuid,$2::uuid,period,amount_microusd FROM policy_budgets WHERE layer='key' AND workspace_id=$1 AND governance_key_id=$2";
 /// Budget consumption of one scope (a workspace, or one key lineage inside it)
-/// in `[start, end)`: settled actual plus active pending/unknown holds by
-/// admission time, and whether unresolved unbounded/unpriced usage makes the
-/// sum a lower bound. Used by policy reports; admission uses the same rules.
-pub(crate) async fn budget_consumption(
-    tx: &mut Transaction<'_, Postgres>,
-    workspace: Uuid,
-    lineage: Option<Uuid>,
-    start: DateTime<Utc>,
-    end: DateTime<Utc>,
-) -> Result<(String, bool), sqlx::Error> {
-    sqlx::query_as(r#"SELECT coalesce(sum(CASE WHEN r.state='settled' THEN r.actual_microusd ELSE r.held_microusd END),0)::text,
-      count(*) FILTER(WHERE r.state<>'settled' AND (r.unbounded_cost OR r.held_microusd IS NULL))>0
-      OR EXISTS(SELECT 1 FROM inference_executions e WHERE e.workspace_id=$1 AND e.started_at>=$3 AND e.started_at<$4 AND ($2::uuid IS NULL OR e.api_key_id IN(SELECT id FROM api_keys WHERE workspace_id=$1 AND governance_key_id=$2)) AND NOT EXISTS(SELECT 1 FROM governance_reservations x WHERE x.execution_id=e.id))
-      FROM governance_reservations r WHERE r.workspace_id=$1 AND ($2::uuid IS NULL OR r.api_key_id IN(SELECT id FROM api_keys WHERE workspace_id=$1 AND governance_key_id=$2)) AND r.admitted_at>=$3 AND r.admitted_at<$4"#)
-        .bind(workspace).bind(lineage).bind(start).bind(end).fetch_one(&mut **tx).await
-}
+/// in the current window of a period: settled actual plus active
+/// pending/unknown holds by admission time, and whether unresolved
+/// unbounded/unpriced usage makes the sum a lower bound. Read from the
+/// maintained totals (migration 0015) that admission also uses.
+pub(crate) use totals::budget_consumption;
+/// Lease extension and bound preview for async jobs (`crate::jobs`).
+pub mod jobs;
+/// Maintained per-scope, per-period budget totals and their consistency check.
+pub mod totals;
 fn generation(max_output_tokens: Option<u32>) -> WorkloadAdmission {
     WorkloadAdmission {
         kind: WorkloadKind::Generation,
@@ -401,10 +407,7 @@ async fn admit_unobserved(
     {
         return Err(InferenceError::Configuration);
     }
-    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(storage)?;
+    let now: DateTime<Utc> = store.admission_now(&mut tx).await.map_err(storage)?;
     let lease = now
         .checked_add_signed(chrono::TimeDelta::seconds(lease_seconds))
         .ok_or(InferenceError::Configuration)?;
@@ -429,22 +432,57 @@ async fn admit_unobserved(
                     .ok_or(InferenceError::Configuration)?,
             ),
             OutputReservation::PriceCeiling => p.output_token_limit,
+            // Every line maximum is checked below; the sum is the ceiling.
+            OutputReservation::Batch {
+                requests,
+                output_tokens,
+                max_line_output,
+            } => {
+                if requests == 0
+                    || max_line_output == 0
+                    || i64::from(max_line_output) > p.output_token_limit
+                    || output_tokens < u64::from(max_line_output)
+                    || output_tokens > u64::from(requests) * u64::from(max_line_output)
+                {
+                    return Err(InferenceError::Configuration);
+                }
+                i64::try_from(output_tokens).map_err(|_| InferenceError::Configuration)?
+            }
+        };
+        let requests = match workload.output {
+            OutputReservation::Batch { requests, .. } => i64::from(requests),
+            _ => 1,
         };
         // A zero input ceiling is valid only for v3 prices whose input-family
         // token meters are all not applicable (validated again here).
         let zero_input_ok = p.input_token_limit == 0
             && p.pricing_version == 3
             && p.lines()?.0.input_tokens_inapplicable();
-        if (p.input_token_limit < 1 && !zero_input_ok) || output > p.output_token_limit {
+        if (p.input_token_limit < 1 && !zero_input_ok)
+            || (output > p.output_token_limit && requests == 1)
+        {
             return Err(InferenceError::Configuration);
         }
         (
             Some(
                 p.input_token_limit
-                    .checked_add(output)
+                    .checked_mul(requests)
+                    .and_then(|n| n.checked_add(output))
                     .ok_or(InferenceError::Configuration)?,
             ),
-            p.bound(output as u64, &workload.unit_ceilings)?,
+            // A realtime session holds one response window (`realtime`).
+            if workload.kind == WorkloadKind::Realtime {
+                p.realtime_window(output as u64)?
+            } else if matches!(workload.kind, WorkloadKind::Videos | WorkloadKind::Batches) {
+                p.bound_scaled(
+                    requests as u64,
+                    output as u64,
+                    &workload.unit_ceilings,
+                    workload.kind == WorkloadKind::Videos,
+                )?
+            } else {
+                p.bound(output as u64, &workload.unit_ceilings)?
+            },
         )
     } else {
         (None, None)
@@ -460,107 +498,86 @@ async fn admit_unobserved(
     {
         return Err(InferenceError::Configuration);
     }
-    // Rate layers and every (scope, period) budget are separate checks; a rate
-    // check uses an empty budget window.
-    let minute = now
-        .duration_trunc(chrono::TimeDelta::minutes(1))
-        .map_err(|_| InferenceError::Configuration)?;
-    let mut checks: Vec<Check> = policies
-        .into_iter()
-        .map(|p| {
-            (
-                p.workspace_id,
-                p.api_key_id,
-                [
-                    p.requests_per_minute,
-                    p.tokens_per_minute,
-                    p.concurrent_requests,
-                ],
-                None,
-                minute,
-                minute,
-            )
-        })
-        .collect();
-    for b in budgets {
-        let period = BudgetPeriod::parse(&b.period).ok_or(InferenceError::Storage)?;
-        // This budget's own UTC window: [start, end) by admission time.
-        let (start, end) = period.window(now);
-        checks.push((
-            b.workspace_id,
-            b.api_key_id,
-            [None; 3],
-            Some(b.amount_microusd),
-            start,
-            end,
-        ));
-    }
     // Evaluate every applicable layer, then report the most actionable denial:
     // budget/accounting (narrowest scope first) before retryable rate limits.
-    let mut denial: Option<(u8, InferenceError)> = None;
-    for (
-        workspace_id,
-        api_key_id,
-        [requests_per_minute, tokens_per_minute, concurrent_requests],
-        budget,
-        window_start,
-        window_end,
-    ) in checks
-    {
-        let (rate_ok, unresolved_ok, budget_ok):(bool,bool,bool)=sqlx::query_as(r#"WITH accounting AS (
-          SELECT workspace_id,api_key_id,minute_start,admitted_at budget_at,state,lease_expires_at,reserved_tokens,input_tokens,output_tokens,billing_usage,held_microusd,actual_microusd,unbounded_cost FROM governance_reservations
-          UNION ALL SELECT e.workspace_id,e.api_key_id,date_trunc('minute',e.started_at,'UTC'),e.started_at,'unknown',NULL::timestamptz,NULL::bigint,e.input_tokens,e.output_tokens,e.billing_usage,NULL::bigint,NULL::bigint,true FROM inference_executions e WHERE e.started_at>=least($10::timestamptz,date_trunc('minute',$3::timestamptz,'UTC')) AND NOT EXISTS(SELECT 1 FROM governance_reservations r WHERE r.execution_id=e.id)
-          ) SELECT
-          ($4::bigint IS NULL OR count(*) FILTER(WHERE minute_start=date_trunc('minute',$3::timestamptz,'UTC'))::numeric+1<=$4)
-          AND ($5::bigint IS NULL OR (count(*) FILTER(WHERE minute_start=date_trunc('minute',$3::timestamptz,'UTC') AND reserved_tokens IS NULL)=0 AND coalesce(sum(greatest(coalesce(reserved_tokens,0)::numeric,coalesce(input_tokens,0)::numeric+coalesce(output_tokens,0)::numeric,coalesce((billing_usage->>'total_input_tokens')::numeric,0)+coalesce(output_tokens,0)::numeric,coalesce((billing_usage->>'uncached_input_tokens')::numeric,0)+coalesce((billing_usage->>'cache_read_input_tokens')::numeric,0)+greatest(coalesce((billing_usage->>'cache_write_input_tokens')::numeric,0),coalesce((billing_usage->>'cache_write_default_input_tokens')::numeric,0)+coalesce((billing_usage->>'cache_write_5m_input_tokens')::numeric,0)+coalesce((billing_usage->>'cache_write_1h_input_tokens')::numeric,0))+coalesce(output_tokens,0)::numeric)) FILTER(WHERE minute_start=date_trunc('minute',$3::timestamptz,'UTC')),0)+$8::bigint<=$5))
-          AND ($6::bigint IS NULL OR count(*) FILTER(WHERE state='pending' AND lease_expires_at>$3)::numeric+1<=$6),
-          ($7::bigint IS NULL OR count(*) FILTER(WHERE budget_at>=$10 AND budget_at<$11 AND state<>'settled' AND (unbounded_cost OR held_microusd IS NULL))=0),
-          ($7::bigint IS NULL OR coalesce(sum(CASE WHEN state='settled' THEN actual_microusd ELSE held_microusd END) FILTER(WHERE budget_at>=$10 AND budget_at<$11),0)+$9::bigint<=$7)
-          FROM accounting WHERE ($1::uuid IS NULL OR workspace_id=$1) AND ($2::uuid IS NULL OR api_key_id IN(SELECT id FROM api_keys WHERE workspace_id=$1 AND governance_key_id=$2)) AND (minute_start=date_trunc('minute',$3::timestamptz,'UTC') OR (budget_at>=$10 AND budget_at<$11) OR (state='pending' AND lease_expires_at>$3))"#)
-            .bind(workspace_id).bind(api_key_id).bind(now).bind(requests_per_minute).bind(tokens_per_minute).bind(concurrent_requests).bind(budget).bind(tokens).bind(if v3_unbounded { Some(0) } else { held }).bind(window_start).bind(window_end).fetch_one(&mut *tx).await.map_err(storage)?;
-        let budget_ok = budget_ok && !(v3_unbounded && budget.is_some());
-        let scope = match (workspace_id, api_key_id) {
+    let limit_scope =
+        |workspace_id: Option<Uuid>, api_key_id: Option<Uuid>| match (workspace_id, api_key_id) {
             (None, _) => LimitScope::Installation,
             (Some(_), None) => LimitScope::Workspace,
             (Some(_), Some(_)) => LimitScope::ApiKey,
         };
-        let rank = |scope| match scope {
-            LimitScope::ApiKey => 3,
-            LimitScope::Workspace => 2,
-            LimitScope::Installation => 1,
-        };
+    let rank = |scope| match scope {
+        LimitScope::ApiKey => 3,
+        LimitScope::Workspace => 2,
+        LimitScope::Installation => 1,
+    };
+    let mut denial: Option<(u8, InferenceError)> = None;
+    let mut deny = |found: (u8, InferenceError)| {
+        if denial.is_none_or(|d| found.0 > d.0) {
+            denial = Some(found);
+        }
+    };
+    // Rate layers: only the current UTC minute and live leases are read, so the
+    // cost does not grow with history.
+    for p in policies {
+        let scope = limit_scope(p.workspace_id, p.api_key_id);
         // A reservation that alone exceeds a tokens-per-minute limit can never
         // be admitted, however idle the minute is: report it honestly (scope
         // kind only, never amounts) instead of a transient rate limit.
-        let reservation_too_large = tokens_per_minute
+        if p.tokens_per_minute
             .zip(tokens)
-            .is_some_and(|(limit, reserved)| reserved > limit);
-        let found = if !unresolved_ok {
+            .is_some_and(|(limit, reserved)| reserved > limit)
+        {
+            deny((
+                rank(scope),
+                InferenceError::TokenReservationExceedsLimit(scope),
+            ));
+            continue;
+        }
+        if p.requests_per_minute.is_none()
+            && p.tokens_per_minute.is_none()
+            && p.concurrent_requests.is_none()
+        {
+            continue;
+        }
+        let rate_ok:bool=sqlx::query_scalar(r#"WITH accounting AS (
+          SELECT workspace_id,api_key_id,minute_start,state,lease_expires_at,reserved_tokens,input_tokens,output_tokens,billing_usage FROM governance_reservations WHERE minute_start=date_trunc('minute',$3::timestamptz,'UTC') OR (state='pending' AND lease_expires_at>$3)
+          UNION ALL SELECT e.workspace_id,e.api_key_id,date_trunc('minute',e.started_at,'UTC'),'unknown',NULL::timestamptz,NULL::bigint,e.input_tokens,e.output_tokens,e.billing_usage FROM inference_executions e WHERE e.started_at>=date_trunc('minute',$3::timestamptz,'UTC') AND e.started_at<date_trunc('minute',$3::timestamptz,'UTC')+interval '1 minute' AND NOT EXISTS(SELECT 1 FROM governance_reservations r WHERE r.execution_id=e.id)
+          ) SELECT
+          ($4::bigint IS NULL OR count(*) FILTER(WHERE minute_start=date_trunc('minute',$3::timestamptz,'UTC'))::numeric+1<=$4)
+          AND ($5::bigint IS NULL OR (count(*) FILTER(WHERE minute_start=date_trunc('minute',$3::timestamptz,'UTC') AND reserved_tokens IS NULL)=0 AND coalesce(sum(greatest(coalesce(reserved_tokens,0)::numeric,coalesce(input_tokens,0)::numeric+coalesce(output_tokens,0)::numeric,coalesce((billing_usage->>'total_input_tokens')::numeric,0)+coalesce(output_tokens,0)::numeric,coalesce((billing_usage->>'uncached_input_tokens')::numeric,0)+coalesce((billing_usage->>'cache_read_input_tokens')::numeric,0)+greatest(coalesce((billing_usage->>'cache_write_input_tokens')::numeric,0),coalesce((billing_usage->>'cache_write_default_input_tokens')::numeric,0)+coalesce((billing_usage->>'cache_write_5m_input_tokens')::numeric,0)+coalesce((billing_usage->>'cache_write_1h_input_tokens')::numeric,0))+coalesce(output_tokens,0)::numeric)) FILTER(WHERE minute_start=date_trunc('minute',$3::timestamptz,'UTC')),0)+$7::bigint<=$5))
+          AND ($6::bigint IS NULL OR count(*) FILTER(WHERE state='pending' AND lease_expires_at>$3)::numeric+1<=$6)
+          FROM accounting WHERE ($1::uuid IS NULL OR workspace_id=$1) AND ($2::uuid IS NULL OR api_key_id IN(SELECT id FROM api_keys WHERE workspace_id=$1 AND governance_key_id=$2))"#)
+            .bind(p.workspace_id).bind(p.api_key_id).bind(now).bind(p.requests_per_minute).bind(p.tokens_per_minute).bind(p.concurrent_requests).bind(tokens).fetch_one(&mut *tx).await.map_err(storage)?;
+        if !rate_ok {
+            deny((0, InferenceError::Busy));
+        }
+    }
+    // Budgets: every (scope, period) budget reads its maintained totals row
+    // (one query for all layers), exactly the former window scan.
+    let mut windows = Vec::with_capacity(budgets.len());
+    for b in &budgets {
+        let period = BudgetPeriod::parse(&b.period).ok_or(InferenceError::Storage)?;
+        windows.push((totals::Scope::of(b.workspace_id, b.api_key_id), period));
+    }
+    let consumption = totals::read(&mut tx, &windows, now)
+        .await
+        .map_err(storage)?;
+    let new_hold = i128::from(if v3_unbounded { 0 } else { held.unwrap_or(0) });
+    for (b, c) in budgets.iter().zip(consumption) {
+        let scope = limit_scope(b.workspace_id, b.api_key_id);
+        if c.unresolved {
             // Installation-wide holds can belong to other workspaces; never
             // reveal whether another scope has unresolved usage.
-            Some((
+            deny((
                 rank(scope),
                 match scope {
                     LimitScope::Installation => InferenceError::BudgetExceeded(scope),
                     _ => InferenceError::UnresolvedUsage(scope),
                 },
-            ))
-        } else if !budget_ok {
-            Some((rank(scope), InferenceError::BudgetExceeded(scope)))
-        } else if reservation_too_large {
-            Some((
-                rank(scope),
-                InferenceError::TokenReservationExceedsLimit(scope),
-            ))
-        } else if !rate_ok {
-            Some((0, InferenceError::Busy))
-        } else {
-            None
-        };
-        if let Some(found) = found
-            && denial.is_none_or(|d| found.0 > d.0)
-        {
-            denial = Some(found);
+            ));
+        } else if v3_unbounded || c.used_microusd + new_hold > i128::from(b.amount_microusd) {
+            deny((rank(scope), InferenceError::BudgetExceeded(scope)));
         }
     }
     if let Some((_, error)) = denial {
@@ -568,8 +585,15 @@ async fn admit_unobserved(
     }
     sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,started_at,root_request_id,attempt_number,workload_kind,cost_center_id,cost_center_name,cost_center_code,upstream_model,client_session_id,client_app) SELECT $1,w.id,$3,$4,$5,$6,$7,'started',$8,$9,$10,$11,w.cost_center_id,c.name,c.code,$12,$13,$14 FROM workspaces w LEFT JOIN cost_centers c ON c.id=w.cost_center_id WHERE w.id=$2")
         .bind(record.id).bind(workspace).bind(key).bind(record.deployment_id).bind(&record.model).bind(&record.provider).bind(record.streamed).bind(now).bind(record.root_request_id).bind(record.attempt_number).bind(workload.kind.as_str()).bind(&record.upstream_model).bind(&record.client.session_id).bind(&record.client.app).execute(&mut *tx).await.map_err(storage)?;
-    sqlx::query("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,price_id,admitted_at,minute_start,month_start,lease_expires_at,state,reserved_tokens,held_microusd,unbounded_cost) VALUES($1,$2,$3,$4,$5,$6,date_trunc('minute',$6::timestamptz,'UTC'),date_trunc('month',$6::timestamptz,'UTC'),$7,'pending',$8,$9,$10)")
-        .bind(record.id).bind(workspace).bind(key).bind(record.deployment_id).bind(price.as_ref().map(|p|p.id)).bind(now).bind(lease).bind(tokens).bind(held).bind(held.is_none()).execute(&mut *tx).await.map_err(storage)?;
+    // An async batch records its request count (0016) for settlement checks.
+    let request_count = match workload.output {
+        OutputReservation::Batch { requests, .. } => {
+            Some(i32::try_from(requests).map_err(|_| InferenceError::Configuration)?)
+        }
+        _ => None,
+    };
+    sqlx::query("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,price_id,admitted_at,minute_start,month_start,lease_expires_at,state,reserved_tokens,held_microusd,unbounded_cost,request_count) VALUES($1,$2,$3,$4,$5,$6,date_trunc('minute',$6::timestamptz,'UTC'),date_trunc('month',$6::timestamptz,'UTC'),$7,'pending',$8,$9,$10,$11)")
+        .bind(record.id).bind(workspace).bind(key).bind(record.deployment_id).bind(price.as_ref().map(|p|p.id)).bind(now).bind(lease).bind(tokens).bind(held).bind(held.is_none()).bind(request_count).execute(&mut *tx).await.map_err(storage)?;
     ledger(
         &mut tx,
         record.id,
@@ -599,9 +623,11 @@ struct Reservation {
     /// Metrics labels only (provider kind, configured public model).
     provider: String,
     public_model: String,
+    /// Requests covered by one async batch attempt (0016); `None` = one.
+    request_count: Option<i32>,
 }
 async fn reservation(tx: &mut Tx<'_>, id: Uuid) -> Result<Reservation, InferenceError> {
-    sqlx::query_as("SELECT r.workspace_id,r.deployment_id,r.price_id,r.state,r.input_tokens,r.output_tokens,r.billing_usage,e.workload_kind,r.reserved_tokens,r.meter_usage,r.output_image_variant,r.provider_cost_microusd,e.provider,e.public_model FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id WHERE r.execution_id=$1").bind(id).fetch_one(&mut **tx).await.map_err(storage)
+    sqlx::query_as("SELECT r.workspace_id,r.deployment_id,r.price_id,r.state,r.input_tokens,r.output_tokens,r.billing_usage,e.workload_kind,r.reserved_tokens,r.meter_usage,r.output_image_variant,r.provider_cost_microusd,e.provider,e.public_model,r.request_count FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id WHERE r.execution_id=$1").bind(id).fetch_one(&mut **tx).await.map_err(storage)
 }
 /// Meter, variant and provider-cost evidence as stored columns.
 struct MeterEvidence {
@@ -838,6 +864,11 @@ async fn pinned_value(
                     output_tokens: usage.output_tokens,
                     meters: usage.meters.as_ref(),
                     variant: usage.output_image_variant,
+                    // Realtime audio tokens are valued per response in
+                    // `governance::realtime`, never here.
+                    audio: None,
+                    // Only async video jobs can produce video seconds.
+                    video: r.workload_kind == WorkloadKind::Videos.as_str(),
                 },
             )?;
             value.components = v.components.map(|(c, m)| CostBreakdown::Metered(c, m));
@@ -893,10 +924,13 @@ async fn pinned_value(
         Err(billing::BillingError::Overflow) => return Ok(unresolved(true)),
         Err(_) => return Err(InferenceError::Storage),
     };
-    let output_bound = r
-        .reserved_tokens
-        .and_then(|n| n.checked_sub(p.input_token_limit));
-    value.violated |= observed_input > p.input_token_limit as u64
+    // An async batch attempt covers `request_count` requests (aggregated usage).
+    let input_bound = p
+        .input_token_limit
+        .checked_mul(i64::from(r.request_count.unwrap_or(1)))
+        .ok_or(InferenceError::Storage)?;
+    let output_bound = r.reserved_tokens.and_then(|n| n.checked_sub(input_bound));
+    value.violated |= observed_input > input_bound as u64
         || output_bound.is_some_and(|limit| usage.output_tokens.is_some_and(|n| n > limit as u64));
     Ok(value)
 }
@@ -1152,6 +1186,8 @@ pub async fn reconcile_expired(store: &Store, limit: i64) -> Result<u64, Inferen
                 return Err(InferenceError::Storage);
             }
             ledger(&mut tx, id, "unknown", None, Usage::default(), None, None).await?;
+            // A crashed realtime session's open responses never reported usage.
+            realtime::expire_open_responses(&mut tx, id).await?;
             count += 1;
         }
         tx.commit().await.map_err(storage)?;
@@ -1176,7 +1212,9 @@ pub async fn resolve_usage(
     let mut tx = store.pool.begin().await.map_err(storage)?;
     lock(&mut tx).await?;
     let r = reservation(&mut tx, execution).await?;
-    if r.workspace_id != workspace {
+    // Realtime sessions are valued per response (`realtime`); an aggregate
+    // reconciliation could not reproduce that valuation, so it is refused.
+    if r.workspace_id != workspace || r.workload_kind == WorkloadKind::Realtime.as_str() {
         return Err(InferenceError::InvalidRequest);
     }
     let authorized:Option<Uuid>=sqlx::query_scalar("SELECT u.id FROM users u JOIN effective_platform_roles p ON p.user_id=u.id AND p.role='admin' JOIN workspaces w ON w.id=$2 AND w.disabled_at IS NULL WHERE u.id=$1 AND u.disabled_at IS NULL AND u.cleaned_at IS NULL AND (w.kind IN('team','project') OR w.owner_user_id=u.id) FOR SHARE OF u,w")
@@ -1276,10 +1314,16 @@ pub(crate) async fn set_test_budget(
 mod image_tests;
 #[cfg(test)]
 mod period_tests;
+/// Realtime session accounting: per-response windows on one reservation.
+pub mod realtime;
+#[cfg(all(test, feature = "integration-tests"))]
+mod realtime_tests;
 #[cfg(all(test, feature = "integration-tests"))]
 mod safety_tests;
 #[cfg(test)]
 pub(crate) mod tests;
+#[cfg(all(test, feature = "integration-tests"))]
+mod totals_tests;
 #[cfg(all(test, feature = "integration-tests"))]
 mod v3_tests;
 #[cfg(all(test, feature = "integration-tests"))]

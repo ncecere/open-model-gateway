@@ -86,7 +86,23 @@ export type RequestRow = {
   root_request_id: string; started_at: string; completed_at: string | null; model: string; key: { id: string; name: string }; status: string; attempts: number;
   input_tokens: string | null; output_tokens: string | null; cost_microusd: string | null; held_microusd: string | null; latency_ms: number | null;
   cost_center: { id: string; name: string; code: string } | null; workload_kind: string; streamed: boolean; provider?: string | null;
+  /** Async video/batch job of this request (gateway id, gateway state, provider status). */
+  job?: JobSummary | null;
 } & LogTelemetry;
+export type JobSummary = { id: string; kind: "video" | "batch"; state: JobState; upstream_status: string | null };
+export type JobState = "queued" | "in_progress" | "completed" | "failed" | "cancelled" | "expired";
+/** Job details on the request page. Metadata only: never prompts, lines or outputs. */
+export type JobDetail = JobSummary & Partial<{
+  progress: number | null; error_code: string | null; created_at: string; completed_at: string | null; expires_at: string | null; cancel_requested_at: string | null; deleted_at: string | null;
+  poll_deadline_at: string; settled_at: string | null; video_seconds: number | null; video_size: string | null; batch_endpoint: string | null; request_counts: { total: number; completed: number; failed: number } | null;
+}>;
+export const jobStateLabels: Record<JobState, string> = { queued: "Queued", in_progress: "In progress", completed: "Completed", failed: "Failed", cancelled: "Cancelled", expired: "Expired" };
+export const jobStateTone = (s: JobState) => s === "completed" ? "success" : s === "failed" ? "danger" : s === "queued" || s === "in_progress" ? "info" : "neutral";
+/** "Video · Completed" / "Batch · In progress (finalizing)". */
+export function jobText(j: JobSummary): string {
+  const status = j.upstream_status && j.upstream_status !== j.state ? ` (${j.upstream_status.replace(/_/g, " ")})` : "";
+  return `${j.kind === "video" ? "Video" : "Batch"} · ${jobStateLabels[j.state] ?? j.state}${status}`;
+}
 /** One upstream attempt (Logs › Generations). */
 export type GenerationRow = {
   execution_id: string; root_request_id: string; attempt_number: number; started_at: string; completed_at: string | null; model: string;
@@ -115,15 +131,37 @@ export type RequestAttempt = {
   failover_reason: string | null; data_policy?: { data_collection: "allow" | "deny" | "unknown"; basis: string }; details_redacted_at?: string | null;
   finish_reason?: string | null; time_to_first_token_ms?: number | null; generation_ms?: number | null; cached_input_tokens?: string | null; reasoning_tokens?: string | null;
   reported_upstream_model?: string | null;
+  /** Realtime sessions only: per-response usage (metadata; never audio or text). */
+  realtime_responses?: RealtimeResponse[] | null;
 };
-export type RequestDetail = Omit<RequestRow, "attempts"> & { workspace_id: string; attempt_count: number; attempts: RequestAttempt[]; prev_id: string | null; next_id: string | null };
+/** One response of a realtime session. Token counts are decimal strings; null is unknown, never zero. */
+export type RealtimeResponse = {
+  sequence: number; state: "pending" | "settled" | "unknown"; status: "completed" | "cancelled" | "incomplete" | "failed" | null;
+  input_text_tokens: string | null; cached_text_tokens: string | null; input_audio_tokens: string | null; cached_audio_tokens: string | null;
+  output_text_tokens: string | null; output_audio_tokens: string | null; cost_microusd: string | null; held_microusd: string | null;
+  unbounded_cost: boolean; started_at: string; completed_at: string | null; duration_ms: number | null;
+};
+/** Timeline state of a realtime response: its upstream status, else its accounting state. */
+export function realtimeResponseState(r: Pick<RealtimeResponse, "state" | "status">): string {
+  if (r.status === "completed") return "succeeded";
+  if (r.status === "cancelled") return "cancelled";
+  if (r.status === "failed" || r.status === "incomplete") return "failed";
+  return r.state === "pending" ? "in_progress" : "unknown";
+}
+/** "12 text · 340 audio (40 cached)" for one direction of a realtime response. */
+export function modalityText(text: string | null, audio: string | null, cached?: string | null): string {
+  if (text == null || audio == null) return "Unknown";
+  const total = /^\d+$/.test(cached ?? "") ? BigInt(cached!) : 0n;
+  return `${countText(text)} text · ${countText(audio)} audio${total > 0n ? ` (${countText(cached!)} cached)` : ""}`;
+}
+export type RequestDetail = Omit<RequestRow, "attempts" | "job"> & { workspace_id: string; attempt_count: number; attempts: RequestAttempt[]; prev_id: string | null; next_id: string | null; job?: JobDetail | null };
 export type RequestPage = { data: RequestRow[]; next_cursor: string | null };
 
 /** The URL filters shared by the Logs tabs and the request page (not the cursor, tab or table view). */
-export type RequestFilters = Pick<DashboardSearch, "model" | "key_id" | "status" | "q" | "range" | "start_date" | "end_date" | "finish_reason" | "streamed" | "session_id" | "workspace_id">;
+export type RequestFilters = Pick<DashboardSearch, "model" | "key_id" | "status" | "q" | "range" | "start_date" | "end_date" | "finish_reason" | "streamed" | "session_id" | "workspace_id" | "workload">;
 export function requestFilters(search: DashboardSearch): RequestFilters {
   const picked = new Set((search.finish_reason ?? "").split(",")), reasons = finishReasons.filter(f => picked.has(f.value)).map(f => f.value);
-  const extra = { finish_reason: reasons.length ? reasons.join(",") : undefined, streamed: search.streamed, session_id: search.session_id, workspace_id: search.workspace_id };
+  const extra = { finish_reason: reasons.length ? reasons.join(",") : undefined, streamed: search.streamed, session_id: search.session_id, workspace_id: search.workspace_id, workload: search.workload };
   return Object.fromEntries(Object.entries({ ...baseFilters(search), ...extra }).filter(([, v]) => v !== undefined)) as RequestFilters;
 }
 function baseFilters(search: DashboardSearch): RequestFilters {
@@ -134,7 +172,7 @@ function baseFilters(search: DashboardSearch): RequestFilters {
   const custom = (search.range === "custom" || !search.range) && !!search.start_date && !!search.end_date;
   return { model: search.model, key_id: search.key_id, status, q: search.q, range: custom ? "custom" : search.range === "custom" ? undefined : search.range, start_date: custom ? search.start_date : undefined, end_date: custom ? search.end_date : undefined };
 }
-export const activeFilterCount = (f: RequestFilters) => [f.model, f.key_id, f.status, f.q, f.finish_reason, f.streamed, f.session_id, f.workspace_id, f.range && f.range !== "30d" ? f.range : undefined].filter(Boolean).length;
+export const activeFilterCount = (f: RequestFilters) => [f.model, f.key_id, f.status, f.q, f.finish_reason, f.streamed, f.session_id, f.workspace_id, f.workload, f.range && f.range !== "30d" ? f.range : undefined].filter(Boolean).length;
 /** Client session ids: 1–128 characters, no control characters or surrounding spaces (the server's rule). */
 export const validSessionId = (id: string) => id.length >= 1 && [...id].length <= 128 && id.trim() === id && !/[\u0000-\u001f\u007f-\u009f]/.test(id);
 /** A request ID search: 4 to 36 hex digits or hyphens (the server's rule). */
@@ -177,6 +215,7 @@ export function requestQuery(filters: RequestFilters, now = Date.now()): { query
   if (filters.status) query.set("status", filters.status);
   if (filters.finish_reason) query.set("finish_reason", filters.finish_reason);
   if (filters.streamed) query.set("streamed", filters.streamed);
+  if (filters.workload) query.set("workload", filters.workload);
   if (filters.session_id) { if (!validSessionId(filters.session_id)) return { query, error: "A session ID has 1 to 128 characters without leading or trailing spaces." }; query.set("session_id", filters.session_id); }
   if (filters.workspace_id) query.set("workspace_id", filters.workspace_id);
   if (filters.q?.trim()) { if (!requestIdQuery(filters.q)) return { query, error: "Search by at least 4 characters of a request ID (0–9, a–f)." }; query.set("q", filters.q.trim().toLowerCase()); }
@@ -236,5 +275,5 @@ const reasons: Record<string, string> = {
   in_progress: "Still running", incomplete_usage: "The provider didn't report complete usage",
 };
 export const unresolvedText = (reason: string | null) => reason ? reasons[reason] ?? reason.replaceAll("_", " ") : null;
-const workloads: Record<string, string> = { generation: "Text generation", embeddings: "Embeddings", images: "Images", audio_transcriptions: "Speech to text", audio_speech: "Text to speech", rerank: "Rerank", systemone: "System One" };
+const workloads: Record<string, string> = { generation: "Text generation", embeddings: "Embeddings", images: "Images", audio_transcriptions: "Speech to text", audio_speech: "Text to speech", rerank: "Rerank", systemone: "System One", realtime: "Realtime audio", videos: "Video job", batches: "Batch job" };
 export const workloadText = (kind: string) => workloads[kind] ?? kind;

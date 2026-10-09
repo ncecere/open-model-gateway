@@ -27,7 +27,7 @@ The gateway is a modular monolith with logically separate control and data plane
 
 Use a separately approved fresh target for enterprise staging. Do not point the rebuild at an old database, automatically migrate it, reset it, or delete history. A development/test database owner is not an appropriate production runtime identity; review the release's runtime grants and privilege probes separately.
 
-Catalog advisory locks precede the singleton installation row lock. Admission, settlement, entitlement and policy changes serialize around this installation boundary rather than obsolete organization locks. Reports also use installation serialization; bounded output does not imply bounded scans or measured contention.
+Catalog advisory locks precede the singleton installation row lock. Admission, settlement, entitlement and policy changes serialize around this installation boundary rather than obsolete organization locks. Inside that lock, budget checks read trigger-maintained per-scope, per-period totals (`budget_totals`), so their cost does not grow with history. Reports also use installation serialization; bounded output does not imply bounded scans or measured contention.
 
 ## Identity and authorization
 
@@ -45,7 +45,7 @@ A model has one global public alias and an explicit `supported_protocols` list. 
 
 Catalogs have live defaults per workspace kind and replacement overrides. Personal owners/shared administrators select available catalog models; Platform Admins can assign models directly. Catalog presence alone is not permission. Catalog/direct provenance, current enabled state and key restrictions are checked during discovery and admission. Losing authorization retires affected selections without turning a restricted key into an unrestricted one.
 
-The engine separates protocol codecs, typed generation/embedding requests, registry selection and provider transports. Registered profiles cover bounded Chat, Responses, Messages and embeddings combinations, not arbitrary SDK options. See [protocol matrix](protocol-matrix.md) and [provider adapters](provider-adapters.md).
+The engine separates protocol codecs, typed generation/embedding requests, registry selection and provider transports. Registered profiles cover bounded Chat, Responses, Messages and embeddings combinations, not arbitrary SDK options. See [protocol matrix](protocol-matrix.md) and [provider adapters](provider-adapters.md). Realtime WebSocket sessions are one upstream attempt and reservation each, with budget windows reserved per response and settled per `response.done` ([realtime](realtime.md)). Async video and batch jobs are also one attempt and reservation each: admitted at create, held until the provider reports a final state (background poller), with metadata-only job rows and gateway ids scoped to the creating workspace ([async jobs](async-jobs.md)).
 
 Admission records one execution and reservation per actual upstream attempt. Prices are immutable configured estimates, not invoices. Cache-aware settlement uses disjoint categories and exact integers; incomplete evidence retains conservative holds. Embeddings are input-only workloads, not chat requests with synthetic messages. Cost-center attribution is snapshotted at admission. See [governance](governance.md) and [cost reporting](cost-reporting.md).
 

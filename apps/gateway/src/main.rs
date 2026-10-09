@@ -62,6 +62,11 @@ enum Command {
         #[command(subcommand)]
         action: AlertsCommand,
     },
+    /// Budget accounting maintenance (docs/operations.md).
+    Budget {
+        #[command(subcommand)]
+        action: BudgetCommand,
+    },
     /// Explicitly provision an email for first OIDC linking; requires trusted database access.
     ProvisionUser {
         #[arg(long)]
@@ -79,6 +84,13 @@ enum AlertsCommand {
         #[arg(long)]
         once: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum BudgetCommand {
+    /// Read-only: compare maintained budget totals with a full scan of
+    /// reservations and executions in one snapshot; exits nonzero on any mismatch.
+    Verify,
 }
 
 #[tokio::main]
@@ -201,6 +213,20 @@ async fn main() -> Result<()> {
                 None => println!("Another replica is evaluating alerts right now; nothing done."),
             }
         }
+        Command::Budget {
+            action: BudgetCommand::Verify,
+        } => {
+            store.preflight_enterprise().await?;
+            let report = open_model_gateway::governance::totals::verify(&store)
+                .await
+                .context("budget totals verification failed")?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            anyhow::ensure!(
+                report.consistent(),
+                "{} budget total bucket(s) differ from the full scan",
+                report.mismatch_count
+            );
+        }
         Command::SchemaVersion => unreachable!("handled before configuration"),
         Command::ProvisionUser {
             email,
@@ -238,12 +264,21 @@ async fn main() -> Result<()> {
             for adapter in open_model_gateway::providers::local::adapters(secrets, approvals) {
                 registry.register(adapter)?;
             }
-            let engine = Engine::new(Arc::new(store.clone()), registry, config.inference_limits)?;
+            let engine = Engine::new(Arc::new(store.clone()), registry, config.inference_limits)?
+                .with_realtime_limits(
+                open_model_gateway::inference::realtime::RealtimeLimits::from_lookup(|name| {
+                    std::env::var(name).ok()
+                })?,
+            )?;
             let identity = IdentityState::new(store.clone(), IdentityConfig::from_env()?)
                 .await?
                 .with_scim(open_model_gateway::scim::ScimConfig::from_env()?)?;
             let retention = open_model_gateway::maintenance::retention_from_env()?;
             let alert_interval = open_model_gateway::alerts::interval_from_env()?;
+            // Async jobs (video, batch): limits and the background poller.
+            open_model_gateway::jobs::configure(open_model_gateway::jobs::JobLimits::from_lookup(
+                |name| std::env::var(name).ok(),
+            )?)?;
             let listener = tokio::net::TcpListener::bind(config.listen).await?;
             tracing::info!(address = %listener.local_addr()?, serving_web = web.is_some(), "gateway listening");
             // Separate, optional metrics listener: never the public port or SPA.
@@ -261,6 +296,9 @@ async fn main() -> Result<()> {
                 None => None,
             };
             let maintenance = open_model_gateway::maintenance::start(store.clone(), retention);
+            let job_poller = open_model_gateway::jobs::poller::start(
+                open_model_gateway::jobs::Jobs::new(store.clone(), &engine),
+            );
             let alerts =
                 alert_interval.map(|every| open_model_gateway::alerts::start(store.clone(), every));
             let lifecycle_store = store.clone();
@@ -296,6 +334,10 @@ async fn main() -> Result<()> {
             if let Some(metrics) = metrics {
                 metrics.abort();
                 let _ = metrics.await;
+            }
+            if let Some(poller) = job_poller {
+                poller.abort();
+                let _ = poller.await;
             }
             maintenance.abort();
             lifecycle.abort();
@@ -409,6 +451,19 @@ mod demo {
             })
         ));
         assert!(Cli::try_parse_from(["gateway", "alerts"]).is_err());
+    }
+
+    #[test]
+    fn budget_verify_is_an_explicit_subcommand() {
+        assert!(matches!(
+            Cli::try_parse_from(["gateway", "budget", "verify"])
+                .unwrap()
+                .command,
+            Some(Command::Budget {
+                action: BudgetCommand::Verify
+            })
+        ));
+        assert!(Cli::try_parse_from(["gateway", "budget"]).is_err());
     }
 
     #[test]

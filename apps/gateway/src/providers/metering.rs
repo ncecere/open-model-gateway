@@ -247,6 +247,7 @@ pub(crate) fn text_workload_meters(search_units: Option<u64>) -> MeterUsage {
         output_audio_seconds_ms: Some(0),
         search_units,
         requests: Some(1),
+        output_video_seconds_ms: None,
     }
 }
 /// Exact provider-reported USD amount (the JSON number's source text, never an

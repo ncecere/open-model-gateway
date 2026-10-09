@@ -19,6 +19,31 @@ DO $$ DECLARE r record; t text; BEGIN
  IF has_column_privilege('gateway_runtime','public.api_keys','governance_key_id','UPDATE') THEN RAISE EXCEPTION 'mutable credential budget lineage'; END IF;
  IF has_any_column_privilege('gateway_runtime','public.policy_budgets','UPDATE') OR has_table_privilege('gateway_runtime','public.policy_budgets','TRUNCATE') THEN RAISE EXCEPTION 'budget rows rewritable in place'; END IF;
  IF has_table_privilege('gateway_runtime','public.key_model_restrictions','UPDATE,DELETE,TRUNCATE') OR has_any_column_privilege('gateway_runtime','public.key_model_restrictions','UPDATE') OR has_any_column_privilege('gateway_runtime','public.key_model_selections','UPDATE') THEN RAISE EXCEPTION 'mutable key restriction provenance'; END IF;
+ -- Budget totals (0015): trigger-maintained counters; no removal, no re-keying, triggers present.
+ IF has_table_privilege('gateway_runtime','public.budget_totals','DELETE,TRUNCATE') THEN RAISE EXCEPTION 'budget totals removable'; END IF;
+ FOREACH t IN ARRAY ARRAY['scope_kind','scope_id','period','period_start'] LOOP
+  IF has_column_privilege('gateway_runtime','public.budget_totals',t,'UPDATE') THEN RAISE EXCEPTION 'budget totals re-keyable: %',t; END IF;
+ END LOOP;
+ IF NOT has_table_privilege('gateway_runtime','public.budget_totals','SELECT,INSERT') OR NOT has_column_privilege('gateway_runtime','public.budget_totals','held_microusd','UPDATE') THEN RAISE EXCEPTION 'budget totals not maintainable by runtime'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'budget_totals_%' AND tgenabled='O' AND NOT tgisinternal)<>6 THEN RAISE EXCEPTION 'budget totals triggers missing or disabled'; END IF;
+ -- Realtime (0017): response rows are append-then-settle-once; identity and holds fixed.
+ IF has_table_privilege('gateway_runtime','public.realtime_responses','DELETE,TRUNCATE') THEN RAISE EXCEPTION 'realtime responses removable'; END IF;
+ FOREACH t IN ARRAY ARRAY['execution_id','sequence','window_hold_microusd','created_at'] LOOP
+  IF has_column_privilege('gateway_runtime','public.realtime_responses',t,'UPDATE') THEN RAISE EXCEPTION 'mutable realtime response identity: %',t; END IF;
+ END LOOP;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'realtime_responses_%' AND tgenabled='O' AND NOT tgisinternal)<>3 THEN RAISE EXCEPTION 'realtime response guards missing or disabled'; END IF;
+ -- Async jobs (0016): no removal; identity, ownership and reservation link fixed.
+ FOREACH t IN ARRAY ARRAY['async_jobs','async_job_files'] LOOP
+  IF has_table_privilege('gateway_runtime','public.'||t,'DELETE,TRUNCATE') THEN RAISE EXCEPTION 'async job history removable: %',t; END IF;
+ END LOOP;
+ FOREACH t IN ARRAY ARRAY['id','kind','workspace_id','api_key_id','deployment_id','execution_id','public_model','provider','upstream_id','created_at','poll_deadline_at','video_seconds','video_size','batch_endpoint'] LOOP
+  IF has_column_privilege('gateway_runtime','public.async_jobs',t,'UPDATE') THEN RAISE EXCEPTION 'mutable async job identity: %',t; END IF;
+ END LOOP;
+ FOREACH t IN ARRAY ARRAY['id','workspace_id','api_key_id','deployment_id','public_model','upstream_id','purpose','bytes','request_count','output_token_sum','max_line_output','created_at'] LOOP
+  IF has_column_privilege('gateway_runtime','public.async_job_files',t,'UPDATE') THEN RAISE EXCEPTION 'mutable async job file: %',t; END IF;
+ END LOOP;
+ IF has_column_privilege('gateway_runtime','public.governance_reservations','request_count','UPDATE') OR has_column_privilege('gateway_runtime','public.governance_reservations','admitted_at','UPDATE') THEN RAISE EXCEPTION 'mutable reservation admission snapshot'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'async_job%' AND tgenabled='O' AND NOT tgisinternal)<>4 THEN RAISE EXCEPTION 'async job guards missing or disabled'; END IF;
  IF has_table_privilege('gateway_runtime','public.installation_settings','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.installation_settings','singleton','UPDATE') THEN RAISE EXCEPTION 'installation settings row replaceable'; END IF;
  -- SCIM (0014): user links are never removed or re-keyed; group identity fixed; one state row.
  IF has_table_privilege('gateway_runtime','public.scim_users','DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.scim_users','user_id','UPDATE') OR has_column_privilege('gateway_runtime','public.scim_users','created_at','UPDATE') THEN RAISE EXCEPTION 'scim user link removable or re-keyable'; END IF;
@@ -42,7 +67,7 @@ DO $$ DECLARE r record; t text; BEGIN
  FOR t IN SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename<>'_sqlx_migrations' LOOP
   IF NOT has_table_privilege('gateway_runtime','public.'||t,'SELECT') THEN RAISE EXCEPTION 'unreviewed table: %',t; END IF;
  END LOOP;
- IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
+ IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units','valid_model_protocols_base','valid_cost_components_base','valid_price_lines_base','valid_upstream_job_id')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
 END $$;
 BEGIN;
 SET LOCAL ROLE gateway_runtime;
@@ -126,6 +151,48 @@ BEGIN
  UPDATE inference_executions SET state='succeeded',meter_usage='{"output_images":"1","input_characters":null,"input_audio_seconds_ms":null,"output_audio_seconds_ms":null,"search_units":null,"requests":"1"}',output_image_variant='768',provider_cost_microusd=20500 WHERE id=e;
  UPDATE governance_reservations SET state='unknown',meter_usage=(SELECT meter_usage FROM inference_executions WHERE id=e),output_image_variant='768',provider_cost_microusd=20500 WHERE execution_id=e;
  INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd,meter_usage,output_image_variant,provider_cost_microusd) SELECT gen_random_uuid(),e,'unknown',1,meter_usage,output_image_variant,provider_cost_microusd FROM inference_executions WHERE id=e;
+ -- Budget totals (0015): the runtime's reservation writes maintained them; unknown keeps its hold.
+ IF (SELECT (held_microusd,settled_microusd,reservations,pending,unknown)::text FROM budget_totals WHERE scope_kind='key' AND scope_id=k AND period='lifetime')<>'(1,0,1,0,1)' THEN RAISE EXCEPTION 'budget totals not maintained'; END IF;
+ PERFORM coalesce(sum(t.settled_microusd+t.held_microusd),0),bool_or(t.unresolved+t.unreserved_executions>0) FROM unnest(ARRAY['workspace'],ARRAY[ws],ARRAY['month'],ARRAY[date_trunc('month',now(),'UTC')]) q(kind,id,period,start) LEFT JOIN budget_totals t ON t.scope_kind=q.kind AND t.scope_id=q.id AND t.period=q.period AND t.period_start=q.start;
+ BEGIN DELETE FROM budget_totals WHERE scope_id=k; RAISE EXCEPTION 'budget totals removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN UPDATE budget_totals SET period_start='epoch' WHERE scope_id=k; RAISE EXCEPTION 'budget totals re-key allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN TRUNCATE TABLE budget_totals; RAISE EXCEPTION 'budget totals truncate allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ -- Async jobs (0016): a job is recorded, its lease extended, polled forward,
+ -- settled once; batch files are claimed, consumed and linked to outputs.
+ DECLARE j uuid:=gen_random_uuid(); fi uuid:=gen_random_uuid(); fo uuid:=gen_random_uuid(); BEGIN
+  UPDATE governance_reservations SET lease_expires_at=greatest(lease_expires_at,now()+interval '6 hours') WHERE execution_id=e AND state='pending';
+  INSERT INTO async_job_files(id,workspace_id,api_key_id,deployment_id,public_model,upstream_id,purpose,bytes,endpoint,request_count,output_token_sum,max_line_output) VALUES(fi,ws,k,d,'rollback','file-in-'||fi,'batch',10,'/v1/chat/completions',2,20,10);
+  UPDATE async_job_files SET claimed_by_execution_id=e WHERE id=fi AND claimed_by_execution_id IS NULL;
+  INSERT INTO async_jobs(id,kind,workspace_id,api_key_id,deployment_id,execution_id,public_model,provider,upstream_id,poll_deadline_at,batch_endpoint) VALUES(j,'batch',ws,k,d,e,'rollback','openai_compatible','batch_up_'||replace(j::text,'-',''),now()+interval '26 hours','/v1/chat/completions');
+  UPDATE async_job_files SET job_id=j WHERE id=fi AND job_id IS NULL;
+  INSERT INTO async_job_files(id,workspace_id,api_key_id,deployment_id,public_model,upstream_id,purpose,job_id) VALUES(fo,ws,k,d,'rollback','file-out-'||fo,'batch_output',j) ON CONFLICT DO NOTHING;
+  PERFORM id FROM async_jobs WHERE id IN(SELECT id FROM async_jobs WHERE settled_at IS NULL AND next_poll_at<=clock_timestamp() ORDER BY next_poll_at LIMIT 1 FOR UPDATE SKIP LOCKED);
+  UPDATE async_jobs SET next_poll_at=clock_timestamp()+make_interval(secs=>30) WHERE id=j;
+  UPDATE async_jobs SET state='in_progress',upstream_status='finalizing',progress=50,request_total=2,request_completed=1,request_failed=0,last_polled_at=clock_timestamp(),poll_failures=0 WHERE id=j AND state='queued';
+  UPDATE async_jobs SET poll_failures=poll_failures+1 WHERE id=j;
+  UPDATE async_jobs SET cancel_requested_at=now() WHERE id=j;
+  UPDATE async_jobs SET state='completed',completed_at=now(),expires_at=now()+interval '1 day',error_code=NULL WHERE id=j;
+  UPDATE async_jobs SET settled_at=clock_timestamp() WHERE id=j AND settled_at IS NULL;
+  PERFORM coalesce((SELECT state='pending' FROM governance_reservations WHERE execution_id=e),false);
+  BEGIN UPDATE async_jobs SET state='in_progress' WHERE id=j; RAISE EXCEPTION 'async job regression allowed'; EXCEPTION WHEN raise_exception THEN IF SQLERRM NOT LIKE 'invalid async job transition%' THEN RAISE; END IF; END;
+  BEGIN UPDATE async_jobs SET workspace_id=personal WHERE id=j; RAISE EXCEPTION 'async job re-own allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN DELETE FROM async_jobs WHERE id=j; RAISE EXCEPTION 'async job removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE async_job_files SET upstream_id='x' WHERE id=fi; RAISE EXCEPTION 'async job file rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE async_job_files SET job_id=NULL WHERE id=fi; RAISE EXCEPTION 'consumed batch file released'; EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'async job files are immutable' THEN RAISE; END IF; END;
+  BEGIN INSERT INTO async_jobs(id,kind,workspace_id,api_key_id,deployment_id,execution_id,public_model,provider,upstream_id,poll_deadline_at,video_seconds,video_size) VALUES(gen_random_uuid(),'video',personal,k,d,e,'rollback','openai','video_x',now(),4,'720x1280'); RAISE EXCEPTION 'cross-workspace job allowed'; EXCEPTION WHEN foreign_key_violation OR unique_violation THEN NULL; END;
+  IF NOT valid_model_protocols(ARRAY['videos']) OR NOT valid_model_protocols(ARRAY['batches']) OR valid_model_protocols(ARRAY['videos','batches'])
+   OR NOT valid_price_lines('[{"meter":"output_video_seconds_ms","microusd_per_batch":"100000","batch":1000,"unit_label":"/second","sku_label":"Video","variant":"720x1280"}]'::jsonb)
+   OR NOT valid_meter_usage('{"output_images":"0","input_characters":"0","input_audio_seconds_ms":"0","output_audio_seconds_ms":"0","search_units":"0","requests":"1","output_video_seconds_ms":"8000"}'::jsonb) THEN RAISE EXCEPTION 'async job validators'; END IF;
+ END;
+ -- Realtime (0017): a session extends its hold, records a response, settles it once.
+ UPDATE governance_reservations SET reserved_tokens=reserved_tokens+1,held_microusd=held_microusd+1 WHERE execution_id=e;
+ INSERT INTO realtime_responses(execution_id,sequence,window_hold_microusd) VALUES(e,1,1);
+ UPDATE realtime_responses SET state='settled',status='completed',actual_microusd=0,input_text_tokens=0,cached_text_tokens=0,input_audio_tokens=0,cached_audio_tokens=0,output_text_tokens=0,output_audio_tokens=0,completed_at=clock_timestamp() WHERE execution_id=e AND sequence=1;
+ BEGIN UPDATE realtime_responses SET status='failed' WHERE execution_id=e; RAISE EXCEPTION 'settled realtime response rewritten'; EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'realtime responses settle once' THEN RAISE; END IF; END;
+ BEGIN DELETE FROM realtime_responses WHERE execution_id=e; RAISE EXCEPTION 'realtime response removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ IF NOT valid_model_protocols(ARRAY['realtime']) OR valid_model_protocols(ARRAY['realtime','chat_completions'])
+  OR NOT valid_price_lines('[{"meter":"input_tokens","not_applicable":true},{"meter":"output_audio_tokens","microusd_per_batch":"64000000","batch":1000000,"unit_label":"/M tokens","sku_label":"Audio output"}]'::jsonb)
+  OR valid_price_lines('[{"meter":"output_audio_tokens","not_applicable":true}]'::jsonb) THEN RAISE EXCEPTION 'realtime validators'; END IF;
  -- Request telemetry (0009): admission snapshot + labels, finish telemetry, retention clearing.
  INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,attempt_number,upstream_model,client_session_id,client_app) VALUES(gen_random_uuid(),ws,k,d,'rollback','openai_compatible',true,'started',e,2,'disabled-probe','probe session','Probe app');
  UPDATE inference_executions SET finish_reason='stop',time_to_first_token_ms=1,generation_ms=2,reasoning_tokens=0 WHERE root_request_id=e;

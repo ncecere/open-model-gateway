@@ -98,7 +98,7 @@ async fn wire_payload_auth_usage_meters_and_variant() {
     );
     assert_eq!(
         u.meters.unwrap().counts(),
-        [Some(1), Some(0), Some(0), Some(0), Some(0), Some(1)]
+        [Some(1), Some(0), Some(0), Some(0), Some(0), Some(1), None]
     );
     assert_eq!(u.output_image_variant.unwrap().as_str(), "1024x1024");
     assert_eq!(u.provider_cost_microusd, None);

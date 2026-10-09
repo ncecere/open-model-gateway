@@ -143,6 +143,8 @@ async fn metrics_follow_real_admission_and_settlement(pool: PgPool) {
     registry.register(Arc::new(OpsMock)).unwrap();
     let engine = Engine::new(Arc::new(store.clone()), registry, EngineLimits::default()).unwrap();
     let app = http::router_with_engine(store.clone(), None, engine);
+    // requests_per_minute=2 over three requests: keep them in one UTC minute.
+    store.freeze_admission_clock().await.unwrap();
     let before = METRICS.render(None).await;
     let settled = r#"gateway_settlements_total{outcome="settled"} "#;
     let denied = r#"gateway_admission_denials_total{code="rate_limit_error",scope="policy"} "#;

@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { AudioLines, Binary, BrainCircuit, Image, ListOrdered, MessageSquareText, Mic } from "lucide-react";
+import { AudioLines, Binary, BrainCircuit, Clapperboard, Headphones, Image, Layers, ListOrdered, MessageSquareText, Mic } from "lucide-react";
 import { ApiError, api, platformPath, type Catalog, type ModelProtocol, type ModelSetupResult, type Provider, type Session } from "../lib/api";
 import { validateFields, type Values } from "../lib/forms";
 import { apiNameFrom, chosenConnection, defaultProtocols, initialSetupValues, protocolSupported, selectedIds, setupBody, setupFields, setupIdentityFields, setupSourceFields, workloadGroups, workloadSupported, type SetupChoices } from "../lib/model-setup";
@@ -24,7 +24,7 @@ import m from "./model-setup.module.css";
 export const conflictErrors = { public_name: "This name may already be taken. Choose another.", provider_connection_id: "Or this connection was removed. Choose it again." };
 
 /** Type icons (decorative; the label is the name). */
-const workloadIcons: Record<WorkloadKind, ReactNode> = { generation: <MessageSquareText />, embeddings: <Binary />, images: <Image />, audio_transcriptions: <Mic />, audio_speech: <AudioLines />, rerank: <ListOrdered />, systemone: <BrainCircuit /> };
+const workloadIcons: Record<WorkloadKind, ReactNode> = { generation: <MessageSquareText />, embeddings: <Binary />, images: <Image />, audio_transcriptions: <Mic />, audio_speech: <AudioLines />, rerank: <ListOrdered />, systemone: <BrainCircuit />, realtime: <Headphones />, videos: <Clapperboard />, batches: <Layers /> };
 
 /** Admin › Models › Add model (/admin/models/new?connection=): connection → model in one request. */
 export function AddModel({ session, connection }: { session: Session; connection?: string }) {

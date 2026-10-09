@@ -558,7 +558,7 @@ pub(crate) async fn budget_windows(
         for (period, amount) in budgets.iter() {
             let (start, end) = period.window(now);
             let (used, unresolved) = if *visible {
-                let (used, unresolved) = budget_consumption(tx, ws, *lineage, start, end).await?;
+                let (used, unresolved) = budget_consumption(tx, ws, *lineage, *period, now).await?;
                 (Some(used), Some(unresolved))
             } else {
                 (None, None)
@@ -601,7 +601,7 @@ pub(crate) async fn key_usage(
         .fetch_one(&mut **tx)
         .await?;
     let (start, end) = period.window(now);
-    let (used, unresolved) = budget_consumption(tx, ws, Some(lineage), start, end).await?;
+    let (used, unresolved) = budget_consumption(tx, ws, Some(lineage), period, now).await?;
     let lifetime = period == BudgetPeriod::Lifetime;
     let start = if lifetime {
         lineage_created(tx, ws, lineage).await?

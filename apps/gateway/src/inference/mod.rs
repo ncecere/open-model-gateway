@@ -5,6 +5,7 @@ mod embeddings;
 pub mod error;
 pub(crate) mod evidence;
 pub mod images;
+pub mod realtime;
 pub mod repository;
 pub mod types;
 pub mod workload;
@@ -52,6 +53,8 @@ pub struct Engine {
     registry: ProviderRegistry,
     capacity: Arc<Semaphore>,
     limits: EngineLimits,
+    /// Realtime session limits (`Engine::with_realtime_limits`).
+    realtime: realtime::RealtimeLimits,
 }
 
 impl Engine {
@@ -73,6 +76,7 @@ impl Engine {
             registry,
             capacity: Arc::new(Semaphore::new(limits.max_concurrent)),
             limits,
+            realtime: realtime::RealtimeLimits::default(),
         })
     }
 

@@ -1,11 +1,14 @@
 pub mod audio;
+pub mod batches;
 pub mod chat_completions;
 pub mod embeddings;
 pub mod images;
 pub mod messages;
+pub mod realtime;
 pub mod rerank;
 pub mod responses;
 pub mod systemone;
+pub mod videos;
 
 use crate::inference::error::InferenceError;
 use axum::{

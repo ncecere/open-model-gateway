@@ -131,6 +131,36 @@ GRANT UPDATE(user_name,external_id,given_name,family_name,active,updated_at)
 GRANT UPDATE(display_name,external_id,updated_at) ON public.scim_groups TO gateway_runtime;
 GRANT DELETE ON public.scim_groups,public.scim_group_members TO gateway_runtime;
 GRANT SELECT,UPDATE(last_write_at) ON public.scim_state TO gateway_runtime;
+-- Budget totals (0015): written only by the budget_totals_maintain() triggers,
+-- which run as the invoking runtime role inside reservation/execution writes
+-- (upsert: INSERT + UPDATE of the counters). Bucket keys are never re-keyed and
+-- rows are never deleted or truncated. Admission/report reads need SELECT.
+GRANT SELECT,INSERT ON public.budget_totals TO gateway_runtime;
+GRANT UPDATE(settled_microusd,held_microusd,reservations,pending,unknown,unresolved,
+ unreserved_executions) ON public.budget_totals TO gateway_runtime;
+-- Async jobs (0016): metadata rows only. Jobs and files are inserted once and
+-- never deleted (triggers also refuse it); identity/ownership columns are not
+-- updatable; state moves forward only (trigger). An admitted job keeps its
+-- pending reservation until its poll deadline (lease_expires_at, extended
+-- under the installation lock). The upstream-id CHECK needs EXECUTE.
+GRANT SELECT,INSERT ON public.async_jobs,public.async_job_files TO gateway_runtime;
+GRANT UPDATE(state,upstream_status,progress,error_code,completed_at,expires_at,cancel_requested_at,
+ deleted_at,next_poll_at,last_polled_at,poll_failures,settled_at,request_total,request_completed,
+ request_failed) ON public.async_jobs TO gateway_runtime;
+GRANT UPDATE(job_id,claimed_by_execution_id) ON public.async_job_files TO gateway_runtime;
+GRANT UPDATE(lease_expires_at) ON public.governance_reservations TO gateway_runtime;
+GRANT EXECUTE ON FUNCTION public.valid_upstream_job_id(text) TO gateway_runtime;
+-- Realtime (0017). A session extends its own pending hold and token reservation
+-- per response window (reserved_tokens); response rows are inserted once and
+-- settled once (a trigger refuses any later change), never deleted. The
+-- composed validators call their 0016 bases, which need EXECUTE too.
+GRANT UPDATE(reserved_tokens) ON public.governance_reservations TO gateway_runtime;
+GRANT SELECT,INSERT ON public.realtime_responses TO gateway_runtime;
+GRANT UPDATE(state,status,actual_microusd,floor_microusd,unbounded_cost,input_text_tokens,
+ cached_text_tokens,input_audio_tokens,cached_audio_tokens,output_text_tokens,output_audio_tokens,
+ cost_components,completed_at) ON public.realtime_responses TO gateway_runtime;
+GRANT EXECUTE ON FUNCTION public.valid_model_protocols_base(text[]),
+ public.valid_cost_components_base(jsonb),public.valid_price_lines_base(jsonb) TO gateway_runtime;
 -- No UPDATE/DELETE/TRUNCATE of immutable prices, ledger or audit; no removal of
 -- users/workspaces/keys/history and no rewrite of immutable admission snapshots.
 COMMIT;

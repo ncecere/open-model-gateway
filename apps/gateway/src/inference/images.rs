@@ -179,6 +179,7 @@ impl ImageRequest {
             output_audio_seconds_ms: Some(0),
             search_units: Some(0),
             requests: Some(1),
+            output_video_seconds_ms: None,
         }
     }
 }
@@ -434,7 +435,7 @@ mod tests {
         assert_eq!(a.output, OutputReservation::PriceCeiling);
         assert_eq!(
             a.unit_ceilings.counts(),
-            [Some(1), Some(0), Some(0), Some(0), Some(0), Some(1)]
+            [Some(1), Some(0), Some(0), Some(0), Some(0), Some(1), None]
         );
     }
     #[test]

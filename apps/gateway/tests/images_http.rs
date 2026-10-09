@@ -92,6 +92,7 @@ impl ProviderAdapter for Fixture {
                     output_audio_seconds_ms: Some(0),
                     search_units: Some(0),
                     requests: Some(1),
+                    output_video_seconds_ms: None,
                 }),
                 output_image_variant: MeterVariant::new("1024x1024"),
                 provider_cost_microusd: None,

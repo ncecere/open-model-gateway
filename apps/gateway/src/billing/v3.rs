@@ -4,8 +4,8 @@
 //! `not_applicable` asserts the meter cannot apply. Charges are exact integer
 //! micro-USD: `ceil(count × microusd_per_batch / batch)` per meter.
 use super::{
-    BillingError, BillingUsage, CachePricing, CacheRate, CostComponents, MeterCostComponents,
-    MeterUsage, MeterVariant, charge_batch,
+    AudioTokenCostComponents, BillingError, BillingUsage, CachePricing, CacheRate, CostComponents,
+    MeterCostComponents, MeterUsage, MeterVariant, charge_batch,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -36,6 +36,17 @@ pub enum Meter {
     SearchUnits,
     #[serde(rename = "requests")]
     Requests,
+    /// Realtime-only audio-token meters (see [`Meter::AUDIO_TOKENS`]).
+    #[serde(rename = "input_audio_tokens")]
+    InputAudioTokens,
+    #[serde(rename = "cache_read_audio_tokens")]
+    CacheReadAudioTokens,
+    #[serde(rename = "output_audio_tokens")]
+    OutputAudioTokens,
+    /// Generated video duration of async video jobs (migration 0016); see
+    /// [`Meter::VIDEO`].
+    #[serde(rename = "output_video_seconds_ms")]
+    OutputVideoSecondsMs,
 }
 pub const MAX_LINES: usize = 64;
 const AUDIO_BATCHES: &[u64] = &[1_000, 60_000, 3_600_000];
@@ -54,6 +65,27 @@ impl Meter {
         Meter::SearchUnits,
         Meter::Requests,
     ];
+    /// Realtime audio tokens (uncached input, cached input, output), priced
+    /// per million like text tokens. They apply only to the realtime workload;
+    /// every other workload ignores them, so they are not in [`Meter::ALL`].
+    /// No `min_prompt_tokens` tiers and no `max_units`: their ceilings are the
+    /// price's token ceilings.
+    pub const AUDIO_TOKENS: [Meter; 3] = [
+        Meter::InputAudioTokens,
+        Meter::CacheReadAudioTokens,
+        Meter::OutputAudioTokens,
+    ];
+    pub fn is_audio_token(self) -> bool {
+        Self::AUDIO_TOKENS.contains(&self)
+    }
+    /// Video seconds apply only to the video workload (variant = resolution);
+    /// every other workload cannot produce video, so the meter is not in
+    /// [`Meter::ALL`] and prices without a video line keep working.
+    pub const VIDEO: [Meter; 1] = [Meter::OutputVideoSecondsMs];
+    /// Meters that may carry a `variant` (closed tier set per price).
+    pub fn has_variants(self) -> bool {
+        matches!(self, Self::OutputImages | Self::OutputVideoSecondsMs)
+    }
     pub fn as_str(self) -> &'static str {
         match self {
             Self::InputTokens => "input_tokens",
@@ -68,6 +100,10 @@ impl Meter {
             Self::OutputAudioSecondsMs => "output_audio_seconds_ms",
             Self::SearchUnits => "search_units",
             Self::Requests => "requests",
+            Self::InputAudioTokens => "input_audio_tokens",
+            Self::CacheReadAudioTokens => "cache_read_audio_tokens",
+            Self::OutputAudioTokens => "output_audio_tokens",
+            Self::OutputVideoSecondsMs => "output_video_seconds_ms",
         }
     }
     pub fn is_token(self) -> bool {
@@ -84,9 +120,11 @@ impl Meter {
     /// Allowed batch sizes; the canonical unit label follows from the batch.
     pub fn batches(self) -> &'static [u64] {
         match self {
-            m if m.is_token() => &[1_000_000],
+            m if m.is_token() || m.is_audio_token() => &[1_000_000],
             Self::InputCharacters => &[1_000_000],
-            Self::InputAudioSecondsMs | Self::OutputAudioSecondsMs => AUDIO_BATCHES,
+            Self::InputAudioSecondsMs | Self::OutputAudioSecondsMs | Self::OutputVideoSecondsMs => {
+                AUDIO_BATCHES
+            }
             _ => &[1],
         }
     }
@@ -95,14 +133,16 @@ impl Meter {
             return None;
         }
         Some(match self {
-            m if m.is_token() => "/M tokens",
+            m if m.is_token() || m.is_audio_token() => "/M tokens",
             Self::OutputImages => "/image",
             Self::InputCharacters => "/M characters",
-            Self::InputAudioSecondsMs | Self::OutputAudioSecondsMs => match batch {
-                1_000 => "/second",
-                60_000 => "/minute",
-                _ => "/hour",
-            },
+            Self::InputAudioSecondsMs | Self::OutputAudioSecondsMs | Self::OutputVideoSecondsMs => {
+                match batch {
+                    1_000 => "/second",
+                    60_000 => "/minute",
+                    _ => "/hour",
+                }
+            }
             Self::SearchUnits => "/search",
             _ => "/request",
         })
@@ -121,10 +161,14 @@ impl Meter {
             Self::OutputAudioSecondsMs => "output audio",
             Self::SearchUnits => "search units",
             Self::Requests => "requests",
+            Self::InputAudioTokens => "input audio tokens",
+            Self::CacheReadAudioTokens => "cached input audio tokens",
+            Self::OutputAudioTokens => "output audio tokens",
+            Self::OutputVideoSecondsMs => "output video",
         }
     }
     fn display_unit(self, batch: u64) -> String {
-        if self.is_token() {
+        if self.is_token() || self.is_audio_token() {
             format!("/M {}", self.noun())
         } else {
             self.unit_label(batch).unwrap_or("/unit").to_owned()
@@ -206,7 +250,8 @@ impl TryFrom<RawLine> for PriceLine {
         };
         if r.meter.unit_label(batch) != Some(unit.as_str())
             || !label_valid(&sku)
-            || (r.variant.is_some() && r.meter != Meter::OutputImages)
+            || (r.variant.is_some() && !r.meter.has_variants())
+            || (r.min_prompt_tokens.is_some() && r.meter.is_audio_token())
             || r.min_prompt_tokens
                 .is_some_and(|n| !(1..=i32::MAX as u64).contains(&n))
         {
@@ -257,7 +302,15 @@ impl PriceLines {
                 return Err(BillingError::InvalidRate);
             }
         }
-        for m in Meter::ALL {
+        // Audio-token lines extend a price; they never stand alone.
+        if self.0.iter().all(|l| l.meter.is_audio_token()) {
+            return Err(BillingError::InvalidRate);
+        }
+        for m in Meter::ALL
+            .into_iter()
+            .chain(Meter::AUDIO_TOKENS)
+            .chain(Meter::VIDEO)
+        {
             let n = self.0.iter().filter(|l| l.meter == m).count();
             if n > 1 && self.0.iter().any(|l| l.meter == m && l.rate.is_none()) {
                 return Err(BillingError::InvalidRate);
@@ -290,7 +343,10 @@ impl PriceLines {
                 .of(m)
                 .iter()
                 .all(|l| l.rate.is_some_and(|r| r.microusd_per_batch == 0)),
-        })
+        }) && self
+            .of(Meter::OutputVideoSecondsMs)
+            .iter()
+            .all(|l| l.rate.is_none_or(|r| r.microusd_per_batch == 0))
     }
 }
 impl Serialize for PriceLines {
@@ -333,7 +389,7 @@ impl<'de> Deserialize<'de> for MaxUnits {
         BTreeMap::<Meter, String>::deserialize(d)?
             .into_iter()
             .map(|(k, v)| match money(&v) {
-                Some(n) if !k.is_token() => Ok((k, n as u64)),
+                Some(n) if !k.is_token() && !k.is_audio_token() => Ok((k, n as u64)),
                 _ => Err(serde::de::Error::custom("invalid max_units")),
             })
             .collect::<Result<_, _>>()
@@ -353,7 +409,7 @@ fn group(lines: &PriceLines, meter: Meter, variant: Option<MeterVariant>) -> Gro
     if all.iter().any(|l| l.rate.is_none()) {
         return Group::NotApplicable;
     }
-    if meter != Meter::OutputImages {
+    if !meter.has_variants() {
         return Group::Lines(all);
     }
     let specific: Vec<_> = all
@@ -392,12 +448,28 @@ fn free(g: &[&PriceLine]) -> bool {
         && g.iter()
             .all(|l| l.rate.is_some_and(|r| r.microusd_per_batch == 0))
 }
+/// Realtime audio-token observations (`None` = unknown, never zero).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AudioTokens {
+    /// Uncached input audio tokens.
+    pub input: Option<u64>,
+    /// Cached input audio tokens (a disjoint partition, not a subset).
+    pub cache_read: Option<u64>,
+    pub output: Option<u64>,
+}
 #[derive(Clone, Copy, Default)]
 pub struct Observed<'a> {
     pub billing: Option<&'a BillingUsage>,
     pub output_tokens: Option<u64>,
     pub meters: Option<&'a MeterUsage>,
     pub variant: Option<MeterVariant>,
+    /// `Some` only for the realtime workload: the audio-token meters apply
+    /// and are valued like other meters. `None` (every other workload) means
+    /// they cannot apply, whatever the price lists.
+    pub audio: Option<AudioTokens>,
+    /// `true` only for the video workload: `output_video_seconds_ms` applies
+    /// (read from `meters`). Every other workload cannot produce video.
+    pub video: bool,
 }
 impl Observed<'_> {
     fn count(&self, meter: Meter) -> Option<u64> {
@@ -416,6 +488,10 @@ impl Observed<'_> {
             Meter::OutputAudioSecondsMs => m.and_then(|m| m.output_audio_seconds_ms),
             Meter::SearchUnits => m.and_then(|m| m.search_units),
             Meter::Requests => m.and_then(|m| m.requests),
+            Meter::InputAudioTokens => self.audio.and_then(|a| a.input),
+            Meter::CacheReadAudioTokens => self.audio.and_then(|a| a.cache_read),
+            Meter::OutputAudioTokens => self.audio.and_then(|a| a.output),
+            Meter::OutputVideoSecondsMs => m.and_then(|m| m.output_video_seconds_ms),
         }
     }
 }
@@ -427,6 +503,9 @@ pub struct Valuation {
     pub floor: i64,
     /// The admission hold can no longer be proven to cover this observation.
     pub violated: bool,
+    /// Audio-token charges (realtime only; zero otherwise). Part of `floor`
+    /// and of a complete settlement.
+    pub audio: AudioTokenCostComponents,
 }
 pub fn value(
     lines: &PriceLines,
@@ -440,14 +519,33 @@ pub fn value(
     if let Some(m) = obs.meters {
         m.validate()?;
     }
-    if obs.output_tokens.is_some_and(|n| n > i64::MAX as u64) {
+    if obs.output_tokens.is_some_and(|n| n > i64::MAX as u64)
+        || obs.audio.is_some_and(|a| {
+            [a.input, a.cache_read, a.output]
+                .into_iter()
+                .flatten()
+                .any(|n| n > i64::MAX as u64)
+        })
+    {
         return Err(BillingError::Overflow);
     }
     let prompt = obs.billing.and_then(|b| b.total_input_tokens);
-    let mut amounts = [0i64; 12];
+    // Indices: Meter::ALL 0..12, audio tokens 12..15, video 15.
+    let mut amounts = [0i64; 16];
     let mut complete = true;
     let mut violated = false;
-    for (i, meter) in Meter::ALL.into_iter().enumerate() {
+    let audio_meters: &[Meter] = if obs.audio.is_some() {
+        &Meter::AUDIO_TOKENS
+    } else {
+        &[]
+    };
+    let video_meters: &[Meter] = if obs.video { &Meter::VIDEO } else { &[] };
+    for (i, meter) in Meter::ALL
+        .into_iter()
+        .chain(audio_meters.iter().copied())
+        .enumerate()
+        .chain(video_meters.iter().map(|m| (15, *m)))
+    {
         let count = obs.count(meter);
         match group(lines, meter, obs.variant) {
             Group::NotApplicable => {
@@ -480,6 +578,7 @@ pub fn value(
             },
         }
         if !meter.is_token()
+            && !meter.is_audio_token()
             && let (Some(n), Some(limit)) = (count, max.0.get(&meter))
             && n > *limit
         {
@@ -529,12 +628,18 @@ pub fn value(
             output_audio_microusd: amounts[9],
             search_units_microusd: amounts[10],
             requests_microusd: amounts[11],
+            output_video_microusd: amounts[15],
         },
     ));
     Ok(Valuation {
         components,
         floor,
         violated,
+        audio: AudioTokenCostComponents {
+            input_audio_tokens_microusd: amounts[12],
+            cache_read_audio_tokens_microusd: amounts[13],
+            output_audio_tokens_microusd: amounts[14],
+        },
     })
 }
 /// Conservative admission ceiling: every possible input-family token meter is
@@ -548,13 +653,47 @@ pub fn bound(
     input_limit: u64,
     output_limit: u64,
 ) -> Result<Option<i64>, BillingError> {
+    bound_meters(lines, max, input_limit, output_limit, &Meter::ALL)
+}
+/// [`bound`] for one realtime response window: additionally the audio-token
+/// meters, input and cached input at the input ceiling and output at the
+/// output ceiling (the context and output limits bound every modality).
+pub fn bound_realtime(
+    lines: &PriceLines,
+    max: &MaxUnits,
+    input_limit: u64,
+    output_limit: u64,
+) -> Result<Option<i64>, BillingError> {
+    let mut meters = Meter::ALL.to_vec();
+    meters.extend(Meter::AUDIO_TOKENS);
+    bound_meters(lines, max, input_limit, output_limit, &meters)
+}
+/// [`bound`] for one async video job: additionally `output_video_seconds_ms`
+/// on its `max_units` ceiling at the highest (resolution variant) rate.
+pub fn bound_video(
+    lines: &PriceLines,
+    max: &MaxUnits,
+    input_limit: u64,
+    output_limit: u64,
+) -> Result<Option<i64>, BillingError> {
+    let mut meters = Meter::ALL.to_vec();
+    meters.extend(Meter::VIDEO);
+    bound_meters(lines, max, input_limit, output_limit, &meters)
+}
+fn bound_meters(
+    lines: &PriceLines,
+    max: &MaxUnits,
+    input_limit: u64,
+    output_limit: u64,
+    meters: &[Meter],
+) -> Result<Option<i64>, BillingError> {
     lines.validate()?;
     let mut total: i128 = 0;
     let mut unknown = false;
-    for meter in Meter::ALL {
-        let ceiling = if meter == Meter::OutputTokens {
+    for meter in meters.iter().copied() {
+        let ceiling = if matches!(meter, Meter::OutputTokens | Meter::OutputAudioTokens) {
             Some(output_limit)
-        } else if meter.is_token() {
+        } else if meter.is_token() || meter.is_audio_token() {
             Some(input_limit)
         } else {
             max.0.get(&meter).copied()

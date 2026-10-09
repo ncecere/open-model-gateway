@@ -452,6 +452,17 @@ async fn run(options: PgConnectOptions) {
     assert!(exposition.contains(&settled), "{settled}");
     assert!(exposition.contains(r#"gateway_reservations_held{state="pending"} 0"#));
     assert!(!exposition.contains(r#"gateway_settlements_total{outcome="held"}"#));
+    // Maintained budget totals (0015) still equal a full scan after the run.
+    let verified = std::time::Instant::now();
+    let report = open_model_gateway::governance::totals::verify(&Store::new(pool.clone()))
+        .await
+        .unwrap();
+    assert!(report.consistent(), "{report:?}");
+    println!(
+        "Budget totals verified: {} buckets consistent with a full scan in {:?}.",
+        report.buckets,
+        verified.elapsed()
+    );
     server.abort();
     pool.close().await;
 }

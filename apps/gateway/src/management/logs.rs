@@ -27,6 +27,9 @@ pub(super) struct LogQuery {
     pub(super) session_id: Option<String>,
     /// Platform scope only (a Team/Project id).
     pub(super) workspace_id: Option<Uuid>,
+    /// Workload of the request: a workload kind, or `jobs` (async video and
+    /// batch jobs).
+    pub(super) workload: Option<String>,
     pub(super) cursor: Option<String>,
     pub(super) limit: Option<i64>,
 }
@@ -40,6 +43,39 @@ pub(super) struct Filters {
     finish: Option<Vec<String>>,
     streamed: Option<bool>,
     session: Option<String>,
+    /// Validated workload kinds (a closed set, never client text).
+    workloads: Option<Vec<&'static str>>,
+}
+impl Filters {
+    /// ` AND {column} IN(...)` for the workload filter (constants only).
+    pub(super) fn workload_sql(&self, column: &str) -> String {
+        match &self.workloads {
+            None => String::new(),
+            Some(kinds) => format!(
+                " AND {column} IN({})",
+                kinds
+                    .iter()
+                    .map(|k| format!("'{k}'"))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+        }
+    }
+}
+fn workloads(s: &str) -> Result<Vec<&'static str>, ApiError> {
+    use crate::inference::types::{ApiProtocol, WorkloadKind};
+    if s == "jobs" {
+        return Ok(vec![
+            WorkloadKind::Videos.as_str(),
+            WorkloadKind::Batches.as_str(),
+        ]);
+    }
+    ApiProtocol::ALL
+        .into_iter()
+        .map(|p| p.workload().as_str())
+        .find(|k| *k == s)
+        .map(|k| vec![k])
+        .ok_or_else(invalid)
 }
 fn finish_reasons(s: &str) -> Result<Vec<String>, ApiError> {
     let mut out: Vec<String> = Vec::new();
@@ -121,6 +157,7 @@ impl LogQuery {
             finish,
             streamed: self.streamed,
             session: self.session_id.clone(),
+            workloads: self.workload.as_deref().map(workloads).transpose()?,
         })
     }
     pub(super) fn limit(&self) -> Result<i64, ApiError> {
@@ -224,7 +261,7 @@ const TPS: &str = "CASE WHEN e.workload_kind='generation' AND e.state='succeeded
 const ROOTS: &str = "WITH att AS (SELECT e.*,k.name key_name,w.name workspace_name,w.kind workspace_kind,r.state accounting_state,r.actual_microusd,r.held_microusd,(e.billing_usage->>'cache_read_input_tokens')::bigint cached_tokens,{TPS} decode_ms FROM inference_executions e JOIN api_keys k ON k.id=e.api_key_id AND k.workspace_id=e.workspace_id JOIN workspaces w ON w.id=e.workspace_id LEFT JOIN governance_reservations r ON r.execution_id=e.id WHERE {VISIBLE} AND {FILTER}),
 roots AS (SELECT root_request_id,(array_agg(workspace_id ORDER BY attempt_number))[1] workspace_id,(array_agg(workspace_name ORDER BY attempt_number))[1] workspace_name,(array_agg(workspace_kind ORDER BY attempt_number))[1] workspace_kind,min(started_at) started_at,CASE WHEN bool_and(completed_at IS NOT NULL) THEN max(completed_at) END completed_at,CASE WHEN bool_and(completed_at IS NOT NULL) THEN floor(extract(epoch FROM max(completed_at)-min(started_at))*1000)::bigint END latency_ms,(array_agg(public_model ORDER BY attempt_number))[1] model,(array_agg(api_key_id ORDER BY attempt_number))[1] key_id,(array_agg(key_name ORDER BY attempt_number))[1] key_name,CASE (array_agg(state ORDER BY attempt_number DESC))[1] WHEN 'started' THEN 'in_progress' ELSE (array_agg(state ORDER BY attempt_number DESC))[1] END status,count(*) attempts,CASE WHEN count(*) FILTER(WHERE input_tokens IS NULL)=0 THEN sum(input_tokens) END input_tokens,CASE WHEN count(*) FILTER(WHERE output_tokens IS NULL)=0 THEN sum(output_tokens) END output_tokens,CASE WHEN count(*) FILTER(WHERE cached_tokens IS NULL)=0 THEN sum(cached_tokens) END cached_tokens,CASE WHEN count(*) FILTER(WHERE reasoning_tokens IS NULL)=0 THEN sum(reasoning_tokens) END reasoning_tokens,CASE WHEN count(*) FILTER(WHERE actual_microusd IS NULL)=0 THEN sum(actual_microusd) END cost_microusd,coalesce(sum(actual_microusd),0) known_cost_microusd,coalesce(sum(held_microusd) FILTER(WHERE actual_microusd IS NULL AND accounting_state IN('pending','unknown')),0) held_microusd,(array_agg(cost_center_id ORDER BY attempt_number))[1] cost_center_id,(array_agg(cost_center_name ORDER BY attempt_number))[1] cost_center_name,(array_agg(cost_center_code ORDER BY attempt_number))[1] cost_center_code,(array_agg(workload_kind ORDER BY attempt_number))[1] workload_kind,bool_or(streamed) streamed,(array_agg(finish_reason ORDER BY attempt_number DESC))[1] finish_reason,(array_agg(time_to_first_token_ms ORDER BY attempt_number DESC))[1] ttft_ms,(array_agg(generation_ms ORDER BY attempt_number DESC))[1] generation_ms,(array_agg(decode_ms ORDER BY attempt_number DESC))[1] decode_ms,(array_agg(output_tokens ORDER BY attempt_number DESC))[1] final_output_tokens,(array_agg(upstream_model ORDER BY attempt_number DESC))[1] upstream_model,(array_agg(reported_upstream_model ORDER BY attempt_number DESC))[1] reported_upstream_model,(array_agg(provider ORDER BY attempt_number DESC))[1] provider,(array_agg(client_session_id ORDER BY attempt_number))[1] session_id,(array_agg(client_app ORDER BY attempt_number))[1] app,array_agg(id) execution_ids FROM att GROUP BY root_request_id)";
 /// One root row (requests list, detail summary).
-pub(super) const ROW: &str = "jsonb_build_object('root_request_id',root_request_id,'workspace',jsonb_build_object('id',workspace_id,'name',workspace_name,'kind',workspace_kind),'started_at',started_at,'completed_at',completed_at,'model',model,'upstream_model',upstream_model,'reported_upstream_model',reported_upstream_model,'provider',provider,'key',jsonb_build_object('id',key_id,'name',key_name),'status',status,'finish_reason',finish_reason,'attempts',attempts,'input_tokens',input_tokens::text,'output_tokens',output_tokens::text,'cached_input_tokens',cached_tokens::text,'reasoning_tokens',reasoning_tokens::text,'cost_microusd',cost_microusd::text,'held_microusd',held_microusd::text,'latency_ms',latency_ms,'time_to_first_token_ms',ttft_ms,'generation_ms',generation_ms,'tokens_per_second',CASE WHEN decode_ms>0 THEN round(final_output_tokens*1000.0/decode_ms,2)::text END,'cost_center',CASE WHEN cost_center_id IS NULL THEN NULL ELSE jsonb_build_object('id',cost_center_id,'name',cost_center_name,'code',cost_center_code) END,'workload_kind',workload_kind,'streamed',streamed,'session_id',session_id,'app',app)";
+pub(super) const ROW: &str = "jsonb_build_object('root_request_id',root_request_id,'workspace',jsonb_build_object('id',workspace_id,'name',workspace_name,'kind',workspace_kind),'started_at',started_at,'completed_at',completed_at,'model',model,'upstream_model',upstream_model,'reported_upstream_model',reported_upstream_model,'provider',provider,'key',jsonb_build_object('id',key_id,'name',key_name),'status',status,'finish_reason',finish_reason,'attempts',attempts,'input_tokens',input_tokens::text,'output_tokens',output_tokens::text,'cached_input_tokens',cached_tokens::text,'reasoning_tokens',reasoning_tokens::text,'cost_microusd',cost_microusd::text,'held_microusd',held_microusd::text,'latency_ms',latency_ms,'time_to_first_token_ms',ttft_ms,'generation_ms',generation_ms,'tokens_per_second',CASE WHEN decode_ms>0 THEN round(final_output_tokens*1000.0/decode_ms,2)::text END,'cost_center',CASE WHEN cost_center_id IS NULL THEN NULL ELSE jsonb_build_object('id',cost_center_id,'name',cost_center_name,'code',cost_center_code) END,'workload_kind',workload_kind,'streamed',streamed,'session_id',session_id,'app',app,'job',(SELECT jsonb_build_object('id',j.kind||'_'||replace(j.id::text,'-',''),'kind',j.kind,'state',j.state,'upstream_status',j.upstream_status) FROM async_jobs j WHERE j.execution_id=roots.root_request_id))";
 /// Filters on roots: $4 start, $5 end, $6 model, $7 key, $8 statuses,
 /// $9 id prefix, $10 finish reasons (final attempt), $11 streamed, $12 session.
 pub(super) const FILTERED: &str = "started_at>=$4 AND started_at<$5 AND ($6::text IS NULL OR model=$6) AND ($7::uuid IS NULL OR key_id=$7) AND ($8::text[] IS NULL OR status=ANY($8)) AND ($9::text IS NULL OR root_request_id::text LIKE $9||'%' OR EXISTS(SELECT 1 FROM unnest(execution_ids) x WHERE x::text LIKE $9||'%')) AND ($10::text[] IS NULL OR finish_reason=ANY($10)) AND ($11::boolean IS NULL OR streamed=$11) AND ($12::text IS NULL OR session_id=$12)";
@@ -302,8 +339,9 @@ pub(super) async fn list_requests(
     let cursor = p.cursor.as_deref().map(cursor_parts).transpose()?;
     // Roots are selected by their first attempt's start inside the range.
     let sql = format!(
-        "{} SELECT {ROW},started_at,root_request_id FROM roots WHERE {FILTERED} AND ($13::timestamptz IS NULL OR (started_at,root_request_id)<($13,$14)) ORDER BY started_at DESC,root_request_id DESC LIMIT $15",
-        listed_roots(&scope, false)
+        "{} SELECT {ROW},started_at,root_request_id FROM roots WHERE {FILTERED}{} AND ($13::timestamptz IS NULL OR (started_at,root_request_id)<($13,$14)) ORDER BY started_at DESC,root_request_id DESC LIMIT $15",
+        listed_roots(&scope, false),
+        f.workload_sql("workload_kind")
     );
     let rows: Vec<(Value, DateTime<Utc>, Uuid)> = bind_filters(sqlx::query_as(&sql), &scope, &f)
         .bind(cursor.map(|c| c.0))
@@ -328,9 +366,10 @@ pub(super) async fn list_generations(
     let limit = p.limit()?;
     let cursor = p.cursor.as_deref().map(cursor_parts).transpose()?;
     let sql = format!(
-        "SELECT {},e.started_at,e.id FROM inference_executions e JOIN api_keys k ON k.id=e.api_key_id AND k.workspace_id=e.workspace_id JOIN workspaces w ON w.id=e.workspace_id JOIN deployments d ON d.id=e.deployment_id JOIN provider_connections p ON p.id=d.provider_connection_id LEFT JOIN governance_reservations r ON r.execution_id=e.id WHERE {} AND e.started_at>=$4 AND e.started_at<$5 AND ($6::text IS NULL OR e.public_model=$6) AND ($7::uuid IS NULL OR e.api_key_id=$7) AND ($8::text[] IS NULL OR (CASE e.state WHEN 'started' THEN 'in_progress' ELSE e.state END)=ANY($8)) AND ($9::text IS NULL OR e.id::text LIKE $9||'%' OR e.root_request_id::text LIKE $9||'%') AND ($10::text[] IS NULL OR e.finish_reason=ANY($10)) AND ($11::boolean IS NULL OR e.streamed=$11) AND ($12::text IS NULL OR e.client_session_id=$12) AND ($13::timestamptz IS NULL OR (e.started_at,e.id)<($13,$14)) ORDER BY e.started_at DESC,e.id DESC LIMIT $15",
+        "SELECT {},e.started_at,e.id FROM inference_executions e JOIN api_keys k ON k.id=e.api_key_id AND k.workspace_id=e.workspace_id JOIN workspaces w ON w.id=e.workspace_id JOIN deployments d ON d.id=e.deployment_id JOIN provider_connections p ON p.id=d.provider_connection_id LEFT JOIN governance_reservations r ON r.execution_id=e.id WHERE {} AND e.started_at>=$4 AND e.started_at<$5 AND ($6::text IS NULL OR e.public_model=$6) AND ($7::uuid IS NULL OR e.api_key_id=$7) AND ($8::text[] IS NULL OR (CASE e.state WHEN 'started' THEN 'in_progress' ELSE e.state END)=ANY($8)) AND ($9::text IS NULL OR e.id::text LIKE $9||'%' OR e.root_request_id::text LIKE $9||'%') AND ($10::text[] IS NULL OR e.finish_reason=ANY($10)) AND ($11::boolean IS NULL OR e.streamed=$11) AND ($12::text IS NULL OR e.client_session_id=$12){} AND ($13::timestamptz IS NULL OR (e.started_at,e.id)<($13,$14)) ORDER BY e.started_at DESC,e.id DESC LIMIT $15",
         GENERATION.replace("{TPS}", TPS),
-        scope.visible()
+        scope.visible(),
+        f.workload_sql("e.workload_kind")
     );
     let rows: Vec<(Value, DateTime<Utc>, Uuid)> = bind_filters(sqlx::query_as(&sql), &scope, &f)
         .bind(cursor.map(|c| c.0))
@@ -346,10 +385,13 @@ pub(super) async fn list_generations(
 
 const SESSIONS: &str = "{ROOTS}, s AS (SELECT workspace_id,(array_agg(workspace_name))[1] workspace_name,(array_agg(workspace_kind))[1] workspace_kind,session_id,count(*) requests,sum(attempts) attempts,count(*) FILTER(WHERE status='failed') failed,count(*) FILTER(WHERE status='in_progress') in_progress,CASE WHEN count(*) FILTER(WHERE input_tokens IS NULL)=0 THEN sum(input_tokens) END input_tokens,CASE WHEN count(*) FILTER(WHERE output_tokens IS NULL)=0 THEN sum(output_tokens) END output_tokens,CASE WHEN count(*) FILTER(WHERE cost_microusd IS NULL)=0 THEN sum(cost_microusd) END cost_microusd,sum(known_cost_microusd) known_cost_microusd,sum(held_microusd) held_microusd,count(*) FILTER(WHERE cost_microusd IS NULL) unresolved_requests,min(started_at) first_at,max(started_at) last_at,(array_agg(DISTINCT model ORDER BY model))[1:10] models,count(DISTINCT model) model_count,(array_agg(model ORDER BY started_at DESC))[1] last_model,max(app) app,count(DISTINCT key_id) keys FROM roots WHERE {FILTERED} AND session_id IS NOT NULL GROUP BY workspace_id,session_id)";
 const SESSION_ROW: &str = "jsonb_build_object('session_id',session_id,'workspace',jsonb_build_object('id',workspace_id,'name',workspace_name,'kind',workspace_kind),'requests',requests::text,'attempts',attempts::text,'failed_requests',failed::text,'in_progress_requests',in_progress::text,'input_tokens',input_tokens::text,'output_tokens',output_tokens::text,'cost_microusd',cost_microusd::text,'known_cost_microusd',known_cost_microusd::text,'held_microusd',held_microusd::text,'unresolved_requests',unresolved_requests::text,'first_at',first_at,'last_at',last_at,'models',to_jsonb(models),'model_count',model_count,'last_model',last_model,'app',app,'keys',keys)";
-fn sessions_sql(scope: &LogScope) -> String {
+fn sessions_sql(scope: &LogScope, f: &Filters) -> String {
     SESSIONS
         .replace("{ROOTS}", &listed_roots(scope, true))
-        .replace("{FILTERED}", FILTERED)
+        .replace(
+            "{FILTERED}",
+            &format!("{FILTERED}{}", f.workload_sql("workload_kind")),
+        )
 }
 fn session_cursor(c: &str) -> Result<(DateTime<Utc>, Uuid, String), ApiError> {
     let mut parts = c.splitn(3, '_');
@@ -387,7 +429,7 @@ pub(super) async fn list_sessions(
     let cursor = p.cursor.as_deref().map(session_cursor).transpose()?;
     let sql = format!(
         "{} SELECT {SESSION_ROW},last_at,workspace_id,session_id FROM s WHERE ($13::timestamptz IS NULL OR (last_at,workspace_id,session_id COLLATE \"C\")<($13,$14,$15::text COLLATE \"C\")) ORDER BY last_at DESC,workspace_id DESC,session_id COLLATE \"C\" DESC LIMIT $16",
-        sessions_sql(&scope)
+        sessions_sql(&scope, &f)
     );
     let rows: Vec<(Value, DateTime<Utc>, Uuid, String)> =
         bind_filters(sqlx::query_as(&sql), &scope, &f)
@@ -425,7 +467,7 @@ pub(super) async fn session_detail(
     let mut f = p.filters()?;
     f.session = Some(session.to_owned());
     scope.workspace = Some(ws);
-    let sql = format!("{} SELECT {SESSION_ROW} FROM s", sessions_sql(&scope));
+    let sql = format!("{} SELECT {SESSION_ROW} FROM s", sessions_sql(&scope, &f));
     let row: Option<(Value,)> = bind_filters(sqlx::query_as(&sql), &scope, &f)
         .fetch_optional(&mut *tx)
         .await?;
@@ -443,8 +485,9 @@ pub(super) async fn metrics(
     p.no_paging()?;
     let f = p.filters()?;
     let sql = format!(
-        "{}, f AS (SELECT * FROM roots WHERE {FILTERED}) SELECT jsonb_build_object('requests',count(*)::text,'completed',count(*) FILTER(WHERE status<>'in_progress')::text,'failed',count(*) FILTER(WHERE status='failed')::text,'error_rate',CASE WHEN count(*) FILTER(WHERE status<>'in_progress')>0 THEN round(count(*) FILTER(WHERE status='failed')::numeric/count(*) FILTER(WHERE status<>'in_progress'),4)::text END,'latency_p50_ms',percentile_disc(0.5) WITHIN GROUP (ORDER BY latency_ms),'latency_p95_ms',percentile_disc(0.95) WITHIN GROUP (ORDER BY latency_ms),'avg_time_to_first_token_ms',round(avg(ttft_ms))::bigint,'ttft_requests',count(ttft_ms)::text,'tokens_per_second',CASE WHEN coalesce(sum(decode_ms) FILTER(WHERE decode_ms>0),0)>0 THEN round(sum(final_output_tokens) FILTER(WHERE decode_ms>0)*1000.0/sum(decode_ms) FILTER(WHERE decode_ms>0),2)::text END,'input_tokens',coalesce(sum(input_tokens),0)::text,'output_tokens',coalesce(sum(output_tokens),0)::text,'unknown_token_requests',count(*) FILTER(WHERE input_tokens IS NULL OR output_tokens IS NULL)::text,'known_cost_microusd',coalesce(sum(known_cost_microusd),0)::text,'held_microusd',coalesce(sum(held_microusd),0)::text,'unresolved_requests',count(*) FILTER(WHERE cost_microusd IS NULL)::text) FROM f",
-        listed_roots(&scope, false)
+        "{}, f AS (SELECT * FROM roots WHERE {FILTERED}{}) SELECT jsonb_build_object('requests',count(*)::text,'completed',count(*) FILTER(WHERE status<>'in_progress')::text,'failed',count(*) FILTER(WHERE status='failed')::text,'error_rate',CASE WHEN count(*) FILTER(WHERE status<>'in_progress')>0 THEN round(count(*) FILTER(WHERE status='failed')::numeric/count(*) FILTER(WHERE status<>'in_progress'),4)::text END,'latency_p50_ms',percentile_disc(0.5) WITHIN GROUP (ORDER BY latency_ms),'latency_p95_ms',percentile_disc(0.95) WITHIN GROUP (ORDER BY latency_ms),'avg_time_to_first_token_ms',round(avg(ttft_ms))::bigint,'ttft_requests',count(ttft_ms)::text,'tokens_per_second',CASE WHEN coalesce(sum(decode_ms) FILTER(WHERE decode_ms>0),0)>0 THEN round(sum(final_output_tokens) FILTER(WHERE decode_ms>0)*1000.0/sum(decode_ms) FILTER(WHERE decode_ms>0),2)::text END,'input_tokens',coalesce(sum(input_tokens),0)::text,'output_tokens',coalesce(sum(output_tokens),0)::text,'unknown_token_requests',count(*) FILTER(WHERE input_tokens IS NULL OR output_tokens IS NULL)::text,'known_cost_microusd',coalesce(sum(known_cost_microusd),0)::text,'held_microusd',coalesce(sum(held_microusd),0)::text,'unresolved_requests',count(*) FILTER(WHERE cost_microusd IS NULL)::text) FROM f",
+        listed_roots(&scope, false),
+        f.workload_sql("workload_kind")
     );
     let (v,): (Value,) = bind_filters(sqlx::query_as(&sql), &scope, &f)
         .fetch_one(&mut *tx)

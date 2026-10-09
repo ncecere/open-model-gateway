@@ -34,6 +34,10 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         "inference_executions",
         "monetary_ledger",
         "audit_events",
+        "budget_totals",
+        "realtime_responses",
+        "async_jobs",
+        "async_job_files",
     ] {
         assert_eq!(
             sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
@@ -45,7 +49,11 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         );
     }
     alert_evaluation_runs_as_runtime(&pool).await;
+    realtime_accounting_runs_as_runtime(&pool).await;
     scim_provisioning_runs_as_runtime(&pool).await;
+    budget_totals_maintained_as_runtime(&pool).await;
+    // Last: its unknown batch hold would change the installation totals above.
+    async_jobs_run_as_runtime(&pool).await;
     sqlx::query("SELECT pg_advisory_unlock(72419505)")
         .execute(&mut *connection)
         .await
@@ -288,4 +296,395 @@ async fn alert_evaluation_runs_as_runtime(pool: &PgPool) {
     assert!(exposition.contains(r#"gateway_reservations_held{state="pending"} 0"#));
     assert!(!exposition.contains(r#"gateway_metrics_collection_errors_total{"#));
     runtime.close().await;
+}
+
+/// Expiry reconciliation (a trigger-maintained reservation write) and the
+/// `budget verify` consistency check need nothing beyond the reviewed grants.
+async fn budget_totals_maintained_as_runtime(pool: &PgPool) {
+    // Seed an expired pending attempt as owner, like an admission whose lease ran out.
+    sqlx::raw_sql(r#"DO $$ DECLARE e uuid:=gen_random_uuid(); r record; BEGIN
+      SELECT workspace_id,api_key_id,deployment_id INTO r FROM governance_reservations ORDER BY execution_id LIMIT 1;
+      INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id) VALUES(e,r.workspace_id,r.api_key_id,r.deployment_id,'alerts','openai_compatible',false,'started',e);
+      INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,held_microusd) VALUES(e,r.workspace_id,r.api_key_id,r.deployment_id,now(),date_trunc('minute',now()),date_trunc('month',now()),now()-interval '1 second','pending',500);
+    END $$"#)
+        .execute(pool)
+        .await
+        .unwrap();
+    let runtime = runtime_pool(pool).await;
+    let store = open_model_gateway::store::Store::new(runtime.clone());
+    assert_eq!(
+        open_model_gateway::governance::reconcile_expired(&store, 10)
+            .await
+            .unwrap(),
+        1
+    );
+    let report = open_model_gateway::governance::totals::verify(&store)
+        .await
+        .unwrap();
+    assert!(report.consistent(), "{report:?}");
+    assert!(report.buckets > 0);
+    // The unknown attempt keeps its 500 micro-USD hold in every period.
+    let held: Vec<String> = sqlx::query_scalar(
+        "SELECT held_microusd::text FROM budget_totals WHERE scope_kind='installation' ORDER BY period",
+    )
+    .fetch_all(&runtime)
+    .await
+    .unwrap();
+    assert_eq!(held, ["500", "500", "500", "500"]);
+    runtime.close().await;
+}
+
+mod jobs_fake {
+    use open_model_gateway::{
+        inference::{
+            error::InferenceError,
+            types::{ApiProtocol, Capabilities, ChatRequest, Deployment, ProviderOutput},
+        },
+        jobs::types::*,
+        providers::ProviderAdapter,
+    };
+    use std::sync::Mutex;
+    /// Scripted provider: a queued then completed video, a batch that is
+    /// cancelled; uploads are drained.
+    #[derive(Default)]
+    pub struct Fake(pub Mutex<Vec<&'static str>>);
+    fn video(state: JobState) -> UpstreamVideo {
+        UpstreamVideo {
+            id: UpstreamId::parse("video_runtime").unwrap(),
+            state,
+            progress: None,
+            seconds: Some(4),
+            size: None,
+            completed_at: None,
+            expires_at: None,
+            error: None,
+        }
+    }
+    fn batch(status: BatchStatus) -> UpstreamBatch {
+        UpstreamBatch {
+            id: UpstreamId::parse("batch_runtime").unwrap(),
+            status,
+            output_file: None,
+            error_file: Some(UpstreamId::parse("file-err-runtime").unwrap()),
+            counts: None,
+            usage: None,
+            created_at: None,
+            in_progress_at: None,
+            finalizing_at: None,
+            completed_at: None,
+            failed_at: None,
+            expired_at: None,
+            cancelling_at: None,
+            cancelled_at: None,
+            expires_at: None,
+            metadata: None,
+        }
+    }
+    #[async_trait::async_trait]
+    impl ProviderAdapter for Fake {
+        fn id(&self) -> &'static str {
+            "openai"
+        }
+        fn capabilities(&self) -> Capabilities {
+            Capabilities {
+                text_chat: false,
+                streaming: false,
+                tools: false,
+            }
+        }
+        fn supports_protocol(&self, p: ApiProtocol) -> bool {
+            matches!(p, ApiProtocol::Videos | ApiProtocol::Batches)
+        }
+        fn supports_video_request(&self, _: &Deployment, _: &VideoRequest) -> bool {
+            true
+        }
+        async fn execute(
+            &self,
+            _: &Deployment,
+            _: ChatRequest,
+        ) -> Result<ProviderOutput, InferenceError> {
+            Err(InferenceError::Unsupported)
+        }
+        async fn create_video(
+            &self,
+            _: &Deployment,
+            _: VideoRequest,
+        ) -> Result<UpstreamVideo, InferenceError> {
+            Ok(video(JobState::Queued))
+        }
+        async fn retrieve_video(
+            &self,
+            _: &Deployment,
+            _: &UpstreamId,
+        ) -> Result<UpstreamVideo, InferenceError> {
+            Ok(video(JobState::Completed))
+        }
+        async fn upload_batch_file(
+            &self,
+            _: &Deployment,
+            mut content: ByteStream,
+        ) -> Result<UpstreamFile, InferenceError> {
+            use futures_util::StreamExt;
+            while let Some(chunk) = content.next().await {
+                chunk?;
+            }
+            Ok(UpstreamFile {
+                id: UpstreamId::parse("file-in-runtime").unwrap(),
+                bytes: None,
+            })
+        }
+        async fn create_batch(
+            &self,
+            _: &Deployment,
+            _: &UpstreamId,
+            _: Option<serde_json::Map<String, serde_json::Value>>,
+        ) -> Result<UpstreamBatch, InferenceError> {
+            Ok(batch(BatchStatus::InProgress))
+        }
+        async fn cancel_batch(
+            &self,
+            _: &Deployment,
+            _: &UpstreamId,
+        ) -> Result<UpstreamBatch, InferenceError> {
+            self.0.lock().unwrap().push("cancel");
+            Ok(batch(BatchStatus::Cancelled))
+        }
+    }
+}
+
+/// Video and batch jobs (admission, lease extension, job/file rows, polling,
+/// settlement, cancel) need nothing beyond the reviewed grants.
+async fn async_jobs_run_as_runtime(pool: &PgPool) {
+    use open_model_gateway::{
+        auth::Principal,
+        jobs::{JobLimits, Jobs, types::*},
+        providers::ProviderRegistry,
+    };
+    let (user, ws, key, video_model, batch_model) = (
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+    );
+    sqlx::raw_sql(&format!(r#"DO $$ DECLARE pc uuid:=gen_random_uuid(); dv uuid:=gen_random_uuid(); db uuid:=gen_random_uuid(); BEGIN
+ INSERT INTO users(id,email) VALUES('{user}','jobs-{user}@example.invalid');
+ INSERT INTO platform_role_grants(user_id,role,source) VALUES('{user}','user','manual');
+ INSERT INTO workspaces(id,name,kind) VALUES('{ws}','Jobs project','project');
+ INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source) VALUES('{ws}','{user}','owner','manual');
+ INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash) VALUES('{key}','{ws}','{user}','Jobs',decode(repeat('06',32),'hex'));
+ INSERT INTO models(id,public_name,supported_protocols) VALUES('{video_model}','video-{video_model}',ARRAY['videos']),('{batch_model}','batch-{batch_model}',ARRAY['batches']);
+ INSERT INTO provider_connections(id,name,provider,credential_ref,enabled) VALUES(pc,'Jobs','openai','env:UNUSED',true);
+ INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model,enabled) VALUES(dv,'{video_model}',pc,'sora-2',true),(db,'{batch_model}',pc,'gpt-x',true);
+ INSERT INTO workspace_model_grants(workspace_id,model_id,source) VALUES('{ws}','{video_model}','direct'),('{ws}','{batch_model}','direct');
+ INSERT INTO deployment_prices(id,deployment_id,input_token_limit,output_token_limit,pricing_version,price_lines,max_units) VALUES(gen_random_uuid(),dv,0,1,3,
+  '[{{"meter":"input_tokens","not_applicable":true}},{{"meter":"output_tokens","not_applicable":true}},{{"meter":"cache_read_tokens","not_applicable":true}},{{"meter":"cache_write_tokens","not_applicable":true}},{{"meter":"cache_write_5m_tokens","not_applicable":true}},{{"meter":"cache_write_1h_tokens","not_applicable":true}},{{"meter":"output_images","not_applicable":true}},{{"meter":"input_characters","not_applicable":true}},{{"meter":"input_audio_seconds_ms","not_applicable":true}},{{"meter":"output_audio_seconds_ms","not_applicable":true}},{{"meter":"search_units","not_applicable":true}},{{"meter":"requests","microusd_per_batch":"0","batch":1,"unit_label":"/request","sku_label":"Request"}},{{"meter":"output_video_seconds_ms","microusd_per_batch":"100000","batch":1000,"unit_label":"/second","sku_label":"Video"}}]','{{}}');
+ INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version) VALUES(gen_random_uuid(),db,1000000,1000000,100,50,1);
+ END $$"#))
+    .execute(pool)
+    .await
+    .unwrap();
+    let store = open_model_gateway::store::Store::new(runtime_pool(pool).await);
+    let fake = std::sync::Arc::new(jobs_fake::Fake::default());
+    let mut registry = ProviderRegistry::default();
+    registry.register(fake.clone()).unwrap();
+    let jobs = Jobs::with(store, registry, JobLimits::default());
+    let principal = Principal {
+        key_id: key,
+        workspace_id: ws,
+        user_id: Some(user),
+    };
+    let video = uuid::Uuid::new_v4();
+    jobs.create_video(
+        principal,
+        VideoRequest {
+            model: format!("video-{video_model}"),
+            prompt: "probe".into(),
+            seconds: 4,
+            size: VideoSize::DEFAULT,
+        },
+        video,
+    )
+    .await
+    .unwrap();
+    sqlx::query("UPDATE async_jobs SET next_poll_at=now()")
+        .execute(pool)
+        .await
+        .unwrap();
+    assert_eq!(jobs.poll_once().await.unwrap(), 1);
+    let (state, actual): (String, Option<i64>) = sqlx::query_as(
+        "SELECT state,actual_microusd FROM governance_reservations WHERE execution_id=$1",
+    )
+    .bind(video)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!((state.as_str(), actual), ("settled", Some(400_000)));
+    // Batch: streamed upload, file claim, admission, cancel, settlement.
+    let line = format!(
+        "{{\"custom_id\":\"a\",\"method\":\"POST\",\"url\":\"/v1/chat/completions\",\"body\":{{\"model\":\"batch-{batch_model}\",\"messages\":[],\"max_tokens\":10}}}}\n"
+    );
+    let form = format!(
+        "--B\r\nContent-Disposition: form-data; name=\"purpose\"\r\n\r\nbatch\r\n--B\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.jsonl\"\r\n\r\n{line}\r\n--B--\r\n"
+    );
+    let body =
+        futures_util::stream::iter(vec![Ok::<_, std::io::Error>(axum::body::Bytes::from(form))]);
+    let file = jobs
+        .upload_batch_file(
+            principal,
+            uuid::Uuid::new_v4(),
+            "multipart/form-data; boundary=B",
+            body,
+        )
+        .await
+        .unwrap();
+    let batch = uuid::Uuid::new_v4();
+    let (job, _) = jobs
+        .create_batch(principal, batch, &client_id(FILE_PREFIX, file.id), None)
+        .await
+        .unwrap();
+    let (job, _) = jobs
+        .cancel_batch(&principal, &client_id("batch_", job.id))
+        .await
+        .unwrap();
+    assert_eq!(job.state, "cancelled");
+    assert!(job.settled_at.is_some());
+    assert_eq!(*fake.0.lock().unwrap(), ["cancel"]);
+    let state: String =
+        sqlx::query_scalar("SELECT state FROM governance_reservations WHERE execution_id=$1")
+            .bind(batch)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(state, "unknown");
+    let report = open_model_gateway::governance::totals::verify(&jobs_store(pool).await)
+        .await
+        .unwrap();
+    assert!(report.consistent(), "{report:?}");
+}
+async fn jobs_store(pool: &PgPool) -> open_model_gateway::store::Store {
+    open_model_gateway::store::Store::new(runtime_pool(pool).await)
+}
+
+/// A realtime session's admission, window extension, per-response settlement
+/// and finish need nothing beyond the reviewed grants (including the composed
+/// 0017 validators and their bases).
+async fn realtime_accounting_runs_as_runtime(pool: &PgPool) {
+    use open_model_gateway::{
+        auth::Principal,
+        billing::MeterUsage,
+        inference::{
+            realtime::{RealtimeFinish, RealtimeUsage, ResponseStatus},
+            repository::{AttemptTelemetry, ExecutionStart, InferenceRepository, Outcome},
+            types::WorkloadKind,
+            workload::{OutputReservation, WorkloadAdmission},
+        },
+    };
+    let (user, ws, key, model) = (
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+    );
+    sqlx::raw_sql(&format!(r#"DO $$ DECLARE pc uuid:=gen_random_uuid(); d uuid:=gen_random_uuid(); BEGIN
+ INSERT INTO users(id,email) VALUES('{user}','realtime-{user}@example.invalid');
+ INSERT INTO platform_role_grants(user_id,role,source) VALUES('{user}','user','manual');
+ INSERT INTO workspaces(id,name,kind) VALUES('{ws}','Realtime project','project');
+ INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source) VALUES('{ws}','{user}','owner','manual');
+ INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash) VALUES('{key}','{ws}','{user}','Realtime',decode(repeat('05',32),'hex'));
+ INSERT INTO models(id,public_name,supported_protocols) VALUES('{model}','realtime-{model}',ARRAY['realtime']);
+ INSERT INTO provider_connections(id,name,provider,credential_ref,enabled) VALUES(pc,'Realtime','openai','env:UNUSED',true);
+ INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model,enabled) VALUES(d,'{model}',pc,'gpt-realtime',true);
+ INSERT INTO workspace_model_grants(workspace_id,model_id,source) VALUES('{ws}','{model}','direct');
+ INSERT INTO deployment_prices(id,deployment_id,input_token_limit,output_token_limit,pricing_version,price_lines,max_units) VALUES(gen_random_uuid(),d,1000,100,3,
+  '[{{"meter":"input_tokens","microusd_per_batch":"4000000","batch":1000000,"unit_label":"/M tokens","sku_label":"Text"}},{{"meter":"cache_read_tokens","not_applicable":true}},{{"meter":"output_tokens","microusd_per_batch":"16000000","batch":1000000,"unit_label":"/M tokens","sku_label":"Text out"}},{{"meter":"input_audio_tokens","microusd_per_batch":"32000000","batch":1000000,"unit_label":"/M tokens","sku_label":"Audio"}},{{"meter":"cache_read_audio_tokens","not_applicable":true}},{{"meter":"output_audio_tokens","microusd_per_batch":"64000000","batch":1000000,"unit_label":"/M tokens","sku_label":"Audio out"}},{{"meter":"cache_write_tokens","not_applicable":true}},{{"meter":"cache_write_5m_tokens","not_applicable":true}},{{"meter":"cache_write_1h_tokens","not_applicable":true}},{{"meter":"output_images","not_applicable":true}},{{"meter":"input_characters","not_applicable":true}},{{"meter":"input_audio_seconds_ms","not_applicable":true}},{{"meter":"output_audio_seconds_ms","not_applicable":true}},{{"meter":"search_units","not_applicable":true}},{{"meter":"requests","microusd_per_batch":"0","batch":1,"unit_label":"/request","sku_label":"Request"}}]','{{}}');
+ END $$"#))
+    .execute(pool)
+    .await
+    .unwrap();
+    let store = open_model_gateway::store::Store::new(runtime_pool(pool).await);
+    let principal = Principal {
+        key_id: key,
+        workspace_id: ws,
+        user_id: Some(user),
+    };
+    let name = format!("realtime-{model}");
+    let deployment = store
+        .deployments(&principal, &name)
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(
+        store
+            .realtime_window_output(deployment.id, 4096)
+            .await
+            .unwrap(),
+        100
+    );
+    let id = uuid::Uuid::new_v4();
+    store
+        .admit_workload(
+            &ExecutionStart {
+                id,
+                root_request_id: id,
+                attempt_number: 1,
+                principal,
+                deployment_id: deployment.id,
+                provider: "openai".into(),
+                model: name.clone(),
+                streamed: true,
+                upstream_model: Some("gpt-realtime".into()),
+                client: Default::default(),
+            },
+            &WorkloadAdmission {
+                kind: WorkloadKind::Realtime,
+                output: OutputReservation::Requested(Some(100)),
+                unit_ceilings: MeterUsage {
+                    requests: Some(1),
+                    ..MeterUsage::default()
+                },
+            },
+            960,
+            &deployment,
+        )
+        .await
+        .unwrap();
+    let usage = RealtimeUsage {
+        input_text_tokens: 10,
+        cached_text_tokens: 0,
+        input_audio_tokens: 20,
+        cached_audio_tokens: 0,
+        output_text_tokens: 10,
+        output_audio_tokens: 40,
+    };
+    store.realtime_open_response(id, 1, 100).await.unwrap();
+    store
+        .realtime_settle_response(id, 1, Some(ResponseStatus::Completed), Some(usage), 100)
+        .await
+        .unwrap();
+    store
+        .realtime_reserve_window(&principal, id, &name, 100)
+        .await
+        .unwrap();
+    store
+        .realtime_finish(&RealtimeFinish {
+            id,
+            outcome: Outcome::Succeeded,
+            error: None,
+            elapsed_ms: 1,
+            telemetry: AttemptTelemetry::default(),
+            unopened_request: false,
+            window_output_tokens: 100,
+        })
+        .await
+        .unwrap();
+    // 10×4 + 10×16 + 20×32 + 40×64 = 3,400 µUSD; the unused window is released.
+    let (state, actual): (String, Option<i64>) = sqlx::query_as(
+        "SELECT state,actual_microusd FROM governance_reservations WHERE execution_id=$1",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!((state.as_str(), actual), ("settled", Some(3_400)));
 }

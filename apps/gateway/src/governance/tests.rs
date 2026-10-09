@@ -674,6 +674,8 @@ pub(crate) mod db {
     #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn installation_caps_pool_workspaces_type_caps_do_not(pool: PgPool) {
         let f = fixture(pool).await;
+        // Per-minute caps: every admission must see the same UTC minute.
+        f.store.freeze_admission_clock().await.unwrap();
         f.price(1_000_000).await;
         let mut team = f.start();
         team.principal = f.team;
@@ -754,6 +756,8 @@ pub(crate) mod db {
     #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn each_limiter_independently_serializes_races(pool: PgPool) {
         let f = fixture(pool).await;
+        // Shared by every isolated clone: both racers see one UTC minute.
+        f.store.freeze_admission_clock().await.unwrap();
         f.price(1_000_000).await;
         for (r, t, c, b) in [
             (Some(1), None, None, None),
@@ -1306,6 +1310,7 @@ pub(crate) mod db {
     #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn budget_denials_are_scoped_and_precede_rate_limits(pool: PgPool) {
         let f = fixture(pool).await;
+        f.store.freeze_admission_clock().await.unwrap();
         f.price(1_000_000).await;
         f.policy("workspace_local_policies", Some(1), None, None, Some(10000))
             .await;
@@ -1924,6 +1929,8 @@ pub(crate) mod db {
     #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn key_rotation_consumption_and_restriction_lineage_do_not_reset(pool: PgPool) {
         let f = fixture(pool).await;
+        // The rotated key must be denied by the same minute's consumption.
+        f.store.freeze_admission_clock().await.unwrap();
         sqlx::query("INSERT INTO key_policies(workspace_id,governance_key_id,requests_per_minute) VALUES($1,$2,1)").bind(f.principal.workspace_id).bind(f.principal.key_id).execute(&f.store.pool).await.unwrap();
         admit(&f.store, &f.start(), &request(), 30).await.unwrap();
         let key = NewApiKey::generate();
@@ -1943,6 +1950,7 @@ pub(crate) mod db {
     #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn override_header_replaces_live_type_default_and_local_tightens(pool: PgPool) {
         let f = fixture(pool).await;
+        f.store.freeze_admission_clock().await.unwrap();
         sqlx::query(
             "INSERT INTO workspace_type_policies(kind,requests_per_minute) VALUES('personal',1)",
         )

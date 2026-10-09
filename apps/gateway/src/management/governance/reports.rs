@@ -212,7 +212,8 @@ fn meter_workloads(key: &str) -> &'static str {
         "input_characters" | "output_audio_seconds_ms" => "'audio_speech'",
         "input_audio_seconds_ms" => "'audio_transcriptions'",
         "search_units" => "'rerank'",
-        _ => "'images','audio_transcriptions','audio_speech','rerank','systemone'",
+        "output_video_seconds_ms" => "'videos'",
+        _ => "'images','audio_transcriptions','audio_speech','rerank','systemone','videos'",
     }
 }
 fn breakdown(id: &str, name: &str) -> String {
@@ -239,7 +240,7 @@ async fn report(
         .keys()
         .cloned()
         .collect::<Vec<_>>();
-    let meter_component_fields =
+    let mut meter_component_fields =
         serde_json::to_value(crate::billing::MeterCostComponents::default())
             .map_err(|_| invalid())?
             .as_object()
@@ -247,6 +248,8 @@ async fn report(
             .keys()
             .cloned()
             .collect::<Vec<_>>();
+    // Serialized only when nonzero (async video jobs, 0016); always reported.
+    meter_component_fields.push("output_video_microusd".to_owned());
     // Token components come from v2 and v3 settlements; meter components only from v3.
     let mut component_sql=component_fields.iter().map(|key|format!("'{key}',coalesce(sum((cost_components->>'{key}')::numeric) FILTER(WHERE accounting_state='settled' AND pricing_version IN(2,3)),0)::text")).chain(meter_component_fields.iter().map(|key|format!("'{key}',coalesce(sum((cost_components->>'{key}')::numeric) FILTER(WHERE accounting_state='settled' AND pricing_version=3),0)::text"))).collect::<Vec<_>>().join(",");
     component_sql.push_str(

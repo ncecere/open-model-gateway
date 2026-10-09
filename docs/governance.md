@@ -16,6 +16,12 @@ Each scope may stack up to one budget per period, all enforced over their own ha
 
 Changing budgets only changes which windows later admissions sum. Consumption history (reservations, holds, ledger, admission time) is never reset, moved or rewritten, and a request stays in the window of its admission even when it settles or is reconciled later.
 
+### Maintained budget totals
+
+Admission does not scan history. `0015_budget_totals.sql` adds `budget_totals`, one row per consumption scope (`installation`, `workspace`, or `key` lineage), period (`day`, `week`, `month`, `lifetime`) and UTC period start. Each row holds the settled actual cost and the active pending/unknown holds in exact integer micro-USD (`numeric(38,0)`), plus counters for reservations, pending, unknown, unresolved (unsettled and unbounded or unpriced) and unreserved executions. Installation budgets read the installation row. Type-default, override and local budgets read the workspace row. Key budgets read the lineage row. Every period is maintained whether or not a budget uses it, so adding, changing or switching a budget period reads existing consumption and never resets it. Admission reads all applicable layers in one indexed lookup, so its cost is O(layers), not O(history). Rate and concurrency limits still read only the current minute and live leases.
+
+Statement-level triggers on `governance_reservations` and `inference_executions` update the rows in the same transaction as every write: admission, settlement, failure to unknown, lease expiry and reconciliation. Code paths therefore cannot forget them. Unknown cost keeps its hold. The migration backfills from existing reservations and executions with the former scan's rules and modifies no history rows. `open-model-gateway budget verify` compares the table with a full scan (see [operations](operations.md#budget-totals-verification)).
+
 Tighten-only local/key rules are per period: a child budget for period P may not exceed a parent's budget for the same P; budgets of different periods are independent because each parent budget is still enforced over its own window, so a child can never loosen a parent. A stored local/key budget for P may only keep or lower its amount and cannot be removed. Ordinary-user denials do not reveal personal installation headroom.
 
 ## Bounds and prices

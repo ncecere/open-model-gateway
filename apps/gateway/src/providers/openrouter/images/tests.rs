@@ -88,7 +88,7 @@ async fn wire_tier_variant_usage_and_exact_cost() {
     );
     assert_eq!(
         u.meters.unwrap().counts(),
-        [Some(1), Some(0), Some(0), Some(0), Some(0), Some(1)]
+        [Some(1), Some(0), Some(0), Some(0), Some(0), Some(1), None]
     );
     assert_eq!(u.output_image_variant.unwrap().as_str(), "768");
     assert_eq!(u.provider_cost_microusd, Some(20_500));

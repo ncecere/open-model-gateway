@@ -19,7 +19,7 @@ import { useEffect } from "react";
 import { FileQuestion } from "lucide-react";
 import { ApiError, platformPath, wsPath, type Session } from "../lib/api";
 import { formatMicroUsd } from "../lib/governance";
-import { costText, countText, dataPolicyOf, finishReasonLabel, latencyText, logPaths, logsSearch, requestFilters, requestQuery, requestStatusLabel, requestStatusTone, requestTarget, servedModel, sessionTarget, timelineStatus, tokensText, tpsText, unresolvedText, workloadText, type LogsScope, type RequestAttempt, type RequestDetail, type RequestPage } from "../lib/requests";
+import { costText, countText, dataPolicyOf, finishReasonLabel, jobStateTone, jobText, type JobDetail, latencyText, logPaths, logsSearch, requestFilters, requestQuery, requestStatusLabel, requestStatusTone, requestTarget, servedModel, sessionTarget, timelineStatus, tokensText, tpsText, unresolvedText, workloadText, modalityText, realtimeResponseState, type LogsScope, type RealtimeResponse, type RequestAttempt, type RequestDetail, type RequestPage } from "../lib/requests";
 import type { DashboardSearch } from "../lib/permissions";
 import { Button, ErrorNotice, Stack, useApi } from "../components/ui";
 import { EmptyState } from "../components/ui/empty-state/empty-state";
@@ -59,6 +59,21 @@ export function attemptItem(a: RequestAttempt, attempts: RequestAttempt[], workl
     </Stack>,
   };
 }
+
+/** One realtime response: status, per-modality usage, its value (or retained hold) and duration. */
+export function realtimeResponseItem(r: RealtimeResponse, cached: (a: string | null, b: string | null) => string | null): TimelineItem {
+  return {
+    id: String(r.sequence), status: timelineStatus(realtimeResponseState(r)), durationMs: r.duration_ms,
+    title: <>Response {r.sequence}</>,
+    meta: <>{r.status ? requestStatusLabel(r.status === "completed" ? "succeeded" : r.status) : r.state === "pending" ? "In progress" : "No usage reported"} · {costText(r.cost_microusd, r.held_microusd)}</>,
+    detail: <Stack gap={1}>
+      <span>Input: {modalityText(r.input_text_tokens, r.input_audio_tokens, cached(r.cached_text_tokens, r.cached_audio_tokens))}</span>
+      <span>Output: {modalityText(r.output_text_tokens, r.output_audio_tokens)}</span>
+      {r.cost_microusd === null && <span className={s.muted}>Cost unknown: {r.unbounded_cost ? "the usage could not be priced or exceeded the window" : "no usage was reported"}; the response's budget window stays on hold.</span>}
+    </Stack>,
+  };
+}
+const cachedSum = (a: string | null, b: string | null) => a != null && b != null && /^\d+$/.test(a) && /^\d+$/.test(b) ? (BigInt(a) + BigInt(b)).toString() : null;
 
 /** Output tokens per second after the first token (as the server computes it for successful generation). */
 function attemptSpeed(a: RequestAttempt): string | undefined {
@@ -108,6 +123,22 @@ function RequestRoute({ scope, id }: { scope: LogsScope; id: string }) {
   return <RequestNotFound scope={scope} back={back} />;
 }
 
+/** An async video or batch job: one attempt whose hold stays until the provider reports a terminal state. */
+export function JobCard({ job }: { job: JobDetail }) {
+  const when = (v: string | null | undefined, missing: string) => v ? <DetailTime value={v} fallback={v} /> : <span className={s.secondary}>{missing}</span>;
+  const counts = job.request_counts;
+  return <Card title={job.kind === "video" ? "Video job" : "Batch job"} titleAs="h2" description="Created by this request. The hold stays until the provider reports a final state; unknown usage keeps it. Prompts, batch lines and outputs are never stored."><DescriptionList dividers items={[
+    { label: "Job ID", value: <CopyId value={job.id} label="job ID" head={14} tail={6} /> },
+    { label: "State", value: <StatusBadge tone={jobStateTone(job.state)} size="sm">{jobText(job)}</StatusBadge> },
+    ...(job.kind === "video" && job.video_seconds != null ? [{ label: "Requested", value: `${job.video_seconds} s · ${job.video_size ?? "default size"}` }] : []),
+    ...(job.kind === "batch" ? [{ label: "Requests", value: counts ? `${countText(counts.completed)} completed · ${countText(counts.failed)} failed · ${countText(counts.total)} total` : "Not reported yet" }] : []),
+    ...(job.error_code ? [{ label: "Provider error code", value: job.error_code }] : []),
+    { label: "Finished", value: when(job.completed_at, "Not yet") },
+    ...(job.cancel_requested_at ? [{ label: "Cancel requested", value: when(job.cancel_requested_at, "") }] : []),
+    { label: "Accounting", value: job.settled_at ? <>Recorded <DetailTime value={job.settled_at} fallback={job.settled_at} /></> : <span className={s.secondary}>Waiting for the provider{job.poll_deadline_at ? <> (polled until <DetailTime value={job.poll_deadline_at} fallback={job.poll_deadline_at} />)</> : null}</span> },
+    ...(job.deleted_at ? [{ label: "Assets deleted", value: when(job.deleted_at, "") }] : []),
+  ]} /></Card>;
+}
 function RequestDetail({ scope, id }: { scope: LogsScope; id: string }) {
   const nav = useDashboardNavigation(), search: DashboardSearch = nav?.search ?? requestTarget(scope, id, {});
   const filters = scopeFilters(scope, search), view = { cols: search.cols, density: search.density };
@@ -156,6 +187,10 @@ function RequestDetail({ scope, id }: { scope: LogsScope; id: string }) {
       <Card title="Attempts" titleAs="h2" description="In order. A fallback runs only if an earlier attempt failed before any output.">
         <Timeline label="Upstream attempts" items={r!.attempts.map(a => attemptItem(a, r!.attempts, r!.workload_kind))} showDurationBars showTotal empty="No attempts are visible for this request." />
       </Card>
+      {r!.job && <JobCard job={r!.job} />}
+      {served?.realtime_responses && <Card title="Realtime responses" titleAs="h2" description="One realtime session is one attempt. Each response reserved a bounded budget window and was valued from its own usage; responses without usage keep their window on hold.">
+        <Timeline label="Realtime responses" items={served.realtime_responses.map(x => realtimeResponseItem(x, cachedSum))} showDurationBars empty="No responses were created in this session." />
+      </Card>}
       <p className={s.note}>Prompts and responses are never stored or shown here.</p>
     </>}
   </Stack>;

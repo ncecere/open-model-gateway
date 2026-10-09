@@ -367,7 +367,7 @@ export function recordCostText(c: Pick<Cost, "cost_microusd" | "active_held_micr
   if (c.active_held_microusd != null && /^\d+$/.test(c.active_held_microusd) && BigInt(c.active_held_microusd) > 0n) return `Unknown · ${formatMicroUsd(c.active_held_microusd)} on hold`;
   return "Unknown";
 }
-export const workloadLabels: Record<WorkloadKind, string> = { generation: "Text", embeddings: "Embeddings", images: "Images", audio_transcriptions: "Speech to text", audio_speech: "Text to speech", rerank: "Rerank", systemone: "System One" };
+export const workloadLabels: Record<WorkloadKind, string> = { generation: "Text", embeddings: "Embeddings", images: "Images", audio_transcriptions: "Speech to text", audio_speech: "Text to speech", rerank: "Rerank", systemone: "System One", realtime: "Realtime audio", videos: "Video", batches: "Batch" };
 
 /* ---------------- Charts and per-group statistics ---------------- */
 

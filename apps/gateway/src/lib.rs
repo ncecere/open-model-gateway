@@ -10,6 +10,7 @@ pub mod governance;
 pub mod http;
 pub mod identity;
 pub mod inference;
+pub mod jobs;
 pub mod lifecycle;
 pub mod maintenance;
 pub mod management;

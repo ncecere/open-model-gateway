@@ -45,6 +45,15 @@ pub enum OutputReservation {
     /// The pinned price's trusted `output_token_limit` (e.g. System One,
     /// whose providers may report output tokens the request cannot bound).
     PriceCeiling,
+    /// One async batch attempt covering `requests` requests: the input
+    /// ceiling is `requests × input_token_limit`, the output ceiling the sum
+    /// of the per-line maxima, and every line maximum must be within the
+    /// price's `output_token_limit` (see `jobs::batch`).
+    Batch {
+        requests: u32,
+        output_tokens: u64,
+        max_line_output: u32,
+    },
 }
 /// Per-attempt admission inputs. `unit_ceilings` are request-derived hard
 /// upper bounds per non-token meter (e.g. `requests: Some(1)`). They tighten,
@@ -89,7 +98,10 @@ impl WorkloadLimits {
     pub const MAX_BODY_BYTES: usize = 64 * MIB;
     pub fn body_bytes(self, kind: WorkloadKind) -> Option<usize> {
         match kind {
-            WorkloadKind::Generation | WorkloadKind::Embeddings => None,
+            // Realtime is a WebSocket upgrade without a request body.
+            WorkloadKind::Generation | WorkloadKind::Embeddings | WorkloadKind::Realtime => None,
+            // Async jobs carry their own caps (`jobs::JobLimits`).
+            WorkloadKind::Videos | WorkloadKind::Batches => None,
             WorkloadKind::Images => Some(self.images_body_bytes),
             WorkloadKind::AudioTranscriptions => Some(self.audio_transcriptions_body_bytes),
             WorkloadKind::AudioSpeech => Some(self.audio_speech_body_bytes),
@@ -328,6 +340,10 @@ impl Workload for SystemoneRequest {
 impl Engine {
     pub fn limits(&self) -> EngineLimits {
         self.limits
+    }
+    /// Registered adapters (async jobs dispatch outside the request engine).
+    pub fn registry(&self) -> &ProviderRegistry {
+        &self.registry
     }
 
     /// Execute one non-generation workload with per-attempt admission and

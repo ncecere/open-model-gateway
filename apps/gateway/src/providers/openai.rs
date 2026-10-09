@@ -8,6 +8,10 @@ use serde_json::{Map, Value, json};
 
 use super::{ProviderAdapter, secrets::SecretResolver};
 use crate::inference::{error::InferenceError, types::*};
+use crate::jobs::types::{
+    ByteStream, ContentStream, OutputUsage, UpstreamBatch, UpstreamFile, UpstreamId, UpstreamVideo,
+    VideoAsset, VideoRequest,
+};
 
 const BASE: &str = "https://api.openai.com/v1";
 const BODY_LIMIT: usize = 4 * 1024 * 1024;
@@ -73,7 +77,93 @@ impl ProviderAdapter for OpenAiAdapter {
                 | ApiProtocol::Images
                 | ApiProtocol::AudioTranscriptions
                 | ApiProtocol::AudioSpeech
+                | ApiProtocol::Videos
+                | ApiProtocol::Batches
+                | ApiProtocol::Realtime
         )
+    }
+
+    async fn connect_realtime(
+        &self,
+        target: &Deployment,
+        setup: &crate::inference::realtime::RealtimeSetup,
+    ) -> Result<crate::inference::realtime::RealtimeUpstream> {
+        realtime::connect(self, target, setup).await
+    }
+
+    fn supports_video_request(&self, target: &Deployment, request: &VideoRequest) -> bool {
+        jobs::supports_video(target, request)
+    }
+
+    async fn create_video(
+        &self,
+        target: &Deployment,
+        request: VideoRequest,
+    ) -> Result<UpstreamVideo> {
+        jobs::create_video(self, target, request).await
+    }
+
+    async fn retrieve_video(
+        &self,
+        target: &Deployment,
+        video: &UpstreamId,
+    ) -> Result<UpstreamVideo> {
+        jobs::retrieve_video(self, target, video).await
+    }
+
+    async fn delete_video(&self, target: &Deployment, video: &UpstreamId) -> Result<()> {
+        jobs::delete_video(self, target, video).await
+    }
+
+    async fn video_content(
+        &self,
+        target: &Deployment,
+        video: &UpstreamId,
+        asset: VideoAsset,
+    ) -> Result<ContentStream> {
+        jobs::video_content(self, target, video, asset).await
+    }
+
+    async fn upload_batch_file(
+        &self,
+        target: &Deployment,
+        content: ByteStream,
+    ) -> Result<UpstreamFile> {
+        jobs::upload_batch_file(self, target, content).await
+    }
+
+    async fn create_batch(
+        &self,
+        target: &Deployment,
+        input: &UpstreamId,
+        metadata: Option<Map<String, Value>>,
+    ) -> Result<UpstreamBatch> {
+        jobs::create_batch(self, target, input, metadata).await
+    }
+
+    async fn retrieve_batch(
+        &self,
+        target: &Deployment,
+        batch: &UpstreamId,
+    ) -> Result<UpstreamBatch> {
+        jobs::batch_action(self, target, batch, false).await
+    }
+
+    async fn cancel_batch(&self, target: &Deployment, batch: &UpstreamId) -> Result<UpstreamBatch> {
+        jobs::batch_action(self, target, batch, true).await
+    }
+
+    async fn file_content(&self, target: &Deployment, file: &UpstreamId) -> Result<ContentStream> {
+        jobs::file_content(self, target, file).await
+    }
+
+    async fn batch_output_usage(
+        &self,
+        target: &Deployment,
+        file: &UpstreamId,
+        max_bytes: u64,
+    ) -> Result<OutputUsage> {
+        jobs::output_usage(self, target, file, max_bytes).await
     }
 
     fn supports_transcription_request(&self, _: &Deployment, _: &TranscriptionRequest) -> bool {
@@ -664,5 +754,7 @@ pub(super) fn decode_stream_profile(
 
 mod audio;
 mod images;
+mod jobs;
+pub(crate) mod realtime;
 #[cfg(test)]
 mod tests;

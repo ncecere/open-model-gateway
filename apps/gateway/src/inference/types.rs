@@ -20,10 +20,15 @@ pub enum ApiProtocol {
     AudioSpeech,
     Rerank,
     Systemone,
+    /// `GET /v1/realtime` WebSocket sessions (`inference::realtime`).
+    Realtime,
+    /// Async jobs (`jobs`): `POST /v1/videos` and `/v1/files` + `/v1/batches`.
+    Videos,
+    Batches,
 }
 
 impl ApiProtocol {
-    pub const ALL: [ApiProtocol; 9] = [
+    pub const ALL: [ApiProtocol; 12] = [
         Self::ChatCompletions,
         Self::Responses,
         Self::Messages,
@@ -33,6 +38,9 @@ impl ApiProtocol {
         Self::AudioSpeech,
         Self::Rerank,
         Self::Systemone,
+        Self::Realtime,
+        Self::Videos,
+        Self::Batches,
     ];
     pub fn as_str(self) -> &'static str {
         match self {
@@ -45,6 +53,9 @@ impl ApiProtocol {
             Self::AudioSpeech => "audio_speech",
             Self::Rerank => "rerank",
             Self::Systemone => "systemone",
+            Self::Realtime => "realtime",
+            Self::Videos => "videos",
+            Self::Batches => "batches",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -60,6 +71,9 @@ impl ApiProtocol {
             Self::AudioSpeech => WorkloadKind::AudioSpeech,
             Self::Rerank => WorkloadKind::Rerank,
             Self::Systemone => WorkloadKind::Systemone,
+            Self::Realtime => WorkloadKind::Realtime,
+            Self::Videos => WorkloadKind::Videos,
+            Self::Batches => WorkloadKind::Batches,
         }
     }
     /// A valid model protocol set is nonempty, distinct and within one workload.
@@ -92,6 +106,9 @@ pub enum WorkloadKind {
     AudioSpeech,
     Rerank,
     Systemone,
+    Realtime,
+    Videos,
+    Batches,
 }
 impl WorkloadKind {
     pub fn as_str(self) -> &'static str {
@@ -103,6 +120,9 @@ impl WorkloadKind {
             Self::AudioSpeech => "audio_speech",
             Self::Rerank => "rerank",
             Self::Systemone => "systemone",
+            Self::Realtime => "realtime",
+            Self::Videos => "videos",
+            Self::Batches => "batches",
         }
     }
 }

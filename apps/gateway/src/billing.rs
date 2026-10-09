@@ -274,17 +274,24 @@ pub struct MeterUsage {
     pub search_units: Option<u64>,
     #[serde(with = "counter")]
     pub requests: Option<u64>,
+    /// Generated video duration (async video jobs, migration 0016). Optional
+    /// in storage: absent is unknown, so pre-0016 six-key evidence stays
+    /// valid. Workloads that cannot produce video treat it as a semantic zero.
+    #[serde(with = "counter", default, skip_serializing_if = "Option::is_none")]
+    pub output_video_seconds_ms: Option<u64>,
 }
 impl MeterUsage {
-    pub const KEYS: [&'static str; 6] = [
+    pub const KEYS: [&'static str; 7] = [
         "output_images",
         "input_characters",
         "input_audio_seconds_ms",
         "output_audio_seconds_ms",
         "search_units",
         "requests",
+        "output_video_seconds_ms",
     ];
-    pub fn counts(&self) -> [Option<u64>; 6] {
+    /// Counts in [`MeterUsage::KEYS`] order (the non-token order of `v3::Meter::ALL`).
+    pub fn counts(&self) -> [Option<u64>; 7] {
         [
             self.output_images,
             self.input_characters,
@@ -292,6 +299,7 @@ impl MeterUsage {
             self.output_audio_seconds_ms,
             self.search_units,
             self.requests,
+            self.output_video_seconds_ms,
         ]
     }
     pub fn validate(&self) -> Result<(), BillingError> {
@@ -371,9 +379,16 @@ pub struct MeterCostComponents {
     pub search_units_microusd: i64,
     #[serde(with = "money")]
     pub requests_microusd: i64,
+    /// Video seconds (0016). Serialized only when nonzero, so non-video v3
+    /// settlements keep their twelve-key components.
+    #[serde(with = "money", default, skip_serializing_if = "is_zero")]
+    pub output_video_microusd: i64,
+}
+fn is_zero(n: &i64) -> bool {
+    *n == 0
 }
 impl MeterCostComponents {
-    pub fn values(&self) -> [i64; 6] {
+    pub fn values(&self) -> [i64; 7] {
         [
             self.output_images_microusd,
             self.input_characters_microusd,
@@ -381,15 +396,42 @@ impl MeterCostComponents {
             self.output_audio_microusd,
             self.search_units_microusd,
             self.requests_microusd,
+            self.output_video_microusd,
+        ]
+    }
+}
+/// Per-meter charges for the realtime-only audio-token meters (pricing v3).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AudioTokenCostComponents {
+    #[serde(with = "money")]
+    pub input_audio_tokens_microusd: i64,
+    #[serde(with = "money")]
+    pub cache_read_audio_tokens_microusd: i64,
+    #[serde(with = "money")]
+    pub output_audio_tokens_microusd: i64,
+}
+impl AudioTokenCostComponents {
+    pub fn values(&self) -> [i64; 3] {
+        [
+            self.input_audio_tokens_microusd,
+            self.cache_read_audio_tokens_microusd,
+            self.output_audio_tokens_microusd,
         ]
     }
 }
 /// Settled disjoint charges. V2 stores six token components; v3 adds six meter
-/// components to the same JSON object (twelve keys).
+/// components to the same JSON object (twelve keys); realtime sessions add the
+/// three audio-token components (fifteen keys).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CostBreakdown {
     Tokens(CostComponents),
     Metered(CostComponents, MeterCostComponents),
+    Realtime(
+        CostComponents,
+        MeterCostComponents,
+        AudioTokenCostComponents,
+    ),
 }
 impl CostBreakdown {
     pub fn total(&self) -> Result<i64, BillingError> {
@@ -398,15 +440,26 @@ impl CostBreakdown {
             Self::Metered(c, m) => checked_total(c.values())?
                 .checked_add(checked_total(m.values())?)
                 .ok_or(BillingError::Overflow),
+            Self::Realtime(c, m, a) => checked_total([
+                checked_total(c.values())?,
+                checked_total(m.values())?,
+                checked_total(a.values())?,
+            ]),
         }
     }
     pub fn to_value(&self) -> serde_json::Value {
         let mut v = serde_json::to_value(match self {
-            Self::Tokens(c) | Self::Metered(c, _) => c,
+            Self::Tokens(c) | Self::Metered(c, _) | Self::Realtime(c, _, _) => c,
         })
         .unwrap_or_default();
-        if let (Self::Metered(_, m), Some(obj)) = (self, v.as_object_mut())
+        if let (Self::Metered(_, m) | Self::Realtime(_, m, _), Some(obj)) =
+            (self, v.as_object_mut())
             && let Ok(serde_json::Value::Object(extra)) = serde_json::to_value(m)
+        {
+            obj.extend(extra);
+        }
+        if let (Self::Realtime(_, _, a), Some(obj)) = (self, v.as_object_mut())
+            && let Ok(serde_json::Value::Object(extra)) = serde_json::to_value(a)
         {
             obj.extend(extra);
         }
@@ -426,7 +479,7 @@ pub fn charge_batch(units: u64, rate: i64, batch: u64) -> Result<i64, BillingErr
         .try_into()
         .map_err(|_| BillingError::Overflow)
 }
-fn checked_total(v: [i64; 6]) -> Result<i64, BillingError> {
+fn checked_total<const N: usize>(v: [i64; N]) -> Result<i64, BillingError> {
     if v.iter().any(|n| *n < 0) {
         return Err(BillingError::InvalidRate);
     }

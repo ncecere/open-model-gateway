@@ -66,6 +66,9 @@ export const protocolOptions: { value: ModelProtocol; label: string; group: stri
   { value: "audio_speech", label: "Text to speech", group: "Text to speech" },
   { value: "rerank", label: "Rerank", group: "Rerank" },
   { value: "systemone", label: "System One decisions", group: "System One decisions" },
+  { value: "realtime", label: "Realtime (WebSocket)", group: "Realtime audio" },
+  { value: "videos", label: "Video generation (async job)", group: "Video" },
+  { value: "batches", label: "Batch chat completions (async job)", group: "Batch" },
 ];
 /**
  * The Add model Type choices, short labels only (API paths and units live in docs/protocol-matrix.md and on the
@@ -73,9 +76,10 @@ export const protocolOptions: { value: ModelProtocol; label: string; group: stri
  */
 export const workloadGroups: { workload: WorkloadKind; label: string; protocols: typeof protocolOptions }[] = ([
   ["generation", "Text"], ["embeddings", "Embeddings"], ["images", "Images"], ["audio_transcriptions", "Speech to text"],
-  ["audio_speech", "Text to speech"], ["rerank", "Rerank"], ["systemone", "System One"],
+  ["audio_speech", "Text to speech"], ["rerank", "Rerank"], ["systemone", "System One"], ["realtime", "Realtime audio"],
+  ["videos", "Video"], ["batches", "Batch"],
 ] as const).map(([workload, label]) => ({ workload, label, protocols: protocolOptions.filter(o => workloadOf([o.value]) === workload) }));
-const protocolNames: Record<string, string> = { images: "Image generation", audio_transcriptions: "Speech to text", audio_speech: "Text to speech", rerank: "Rerank", systemone: "System One decisions" };
+const protocolNames: Record<string, string> = { images: "Image generation", audio_transcriptions: "Speech to text", audio_speech: "Text to speech", rerank: "Rerank", systemone: "System One decisions", realtime: "Realtime audio", videos: "Video generation", batches: "Batch chat completions" };
 export const protocolLabel = (p: string) => protocolNames[p] ?? protocolOptions.find(o => o.value === p)?.label ?? p;
 const generationProtocols = new Set(["chat_completions", "responses", "messages"]);
 /** Mirrors the server: one workload per model; only text-generation protocols combine. */
@@ -114,6 +118,9 @@ export function upstreamPlaceholder(profile?: string, workload: WorkloadKind = "
     audio_speech: { openai: "gpt-4o-mini-tts", default: "openai/gpt-4o-mini-tts" },
     rerank: { default: "cohere/rerank-v3.5" },
     systemone: { default: "typesafe/jev" },
+    realtime: { default: "gpt-realtime" },
+    videos: { default: "sora-2" },
+    batches: { default: "gpt-4.1-mini" },
   };
   const text: Record<string, string> = { openai: "gpt-4.1-mini", anthropic: "claude-sonnet-4-5", bedrock: "anthropic.claude-3-5-sonnet-20240620-v1:0", openrouter: "openai/gpt-4.1-mini", ollama: "llama3.1:8b", vllm: "meta-llama/Llama-3.1-8B-Instruct", sglang: "meta-llama/Llama-3.1-8B-Instruct", openai_compatible: "meta-llama/Llama-3.1-8B-Instruct", default: "gpt-4.1-mini" };
   const table = workload === "generation" ? text : byWorkload[workload] ?? text;
@@ -128,6 +135,9 @@ export function displayPlaceholder(profile?: string, workload: WorkloadKind = "g
     audio_speech: { default: "GPT-4o mini TTS" },
     rerank: { default: "Rerank 3.5" },
     systemone: { default: "Jev" },
+    realtime: { default: "GPT Realtime" },
+    videos: { default: "Sora 2" },
+    batches: { default: "GPT-4.1 mini (batch)" },
   };
   const text: Record<string, string> = { openai: "GPT-4.1 mini", openrouter: "GPT-4.1 mini", anthropic: "Claude Sonnet 4.5", bedrock: "Claude 3.5 Sonnet", ollama: "Llama 3.1 8B", default: "Llama 3.1 8B Instruct" };
   const table = workload === "generation" ? text : byWorkload[workload] ?? text;
@@ -187,9 +197,9 @@ export type CatalogModel = Model & { workload?: WorkloadKind; created_at?: strin
 export type Eligibility = "selected" | "direct" | "available_from_catalog";
 /** Workspace catalog row (contract §10). */
 export type WorkspaceCatalogModel = { model_id: string; public_name: string; display_name: string; description: string | null; protocols: ModelProtocol[]; workload: WorkloadKind; eligibility: Eligibility; reason: string; min_input_microusd_per_million: string | null; min_output_microusd_per_million: string | null; routes: number | string; /** When the model was added (wave 2; absent from older gateways). */ created_at?: string };
-export const catalogTypeTabs: { value: CatalogType | "all"; label: string }[] = [{ value: "all", label: "All" }, { value: "generation", label: "Text" }, { value: "embeddings", label: "Embeddings" }, { value: "images", label: "Images" }, { value: "audio_transcriptions", label: "Speech to text" }, { value: "audio_speech", label: "Text to speech" }, { value: "rerank", label: "Rerank" }, { value: "systemone", label: "System One" }];
+export const catalogTypeTabs: { value: CatalogType | "all"; label: string }[] = [{ value: "all", label: "All" }, { value: "generation", label: "Text" }, { value: "embeddings", label: "Embeddings" }, { value: "images", label: "Images" }, { value: "audio_transcriptions", label: "Speech to text" }, { value: "audio_speech", label: "Text to speech" }, { value: "rerank", label: "Rerank" }, { value: "systemone", label: "System One" }, { value: "realtime", label: "Realtime" }, { value: "videos", label: "Video" }, { value: "batches", label: "Batch" }];
 /** Input → output modalities of a workload, for cards and header tiles. */
-export const workloadModalities: Record<WorkloadKind, string> = { generation: "Text → Text", embeddings: "Text → Vectors", images: "Text → Image", audio_transcriptions: "Audio → Text", audio_speech: "Text → Audio", rerank: "Text → Scores", systemone: "Text → Decisions" };
+export const workloadModalities: Record<WorkloadKind, string> = { generation: "Text → Text", embeddings: "Text → Vectors", images: "Text → Image", audio_transcriptions: "Audio → Text", audio_speech: "Text → Audio", rerank: "Text → Scores", systemone: "Text → Decisions", realtime: "Audio ⇄ Audio", videos: "Text → Video (async)", batches: "JSONL → JSONL (async)" };
 export const catalogSorts = [{ value: "name", label: "Name (A–Z)" }, { value: "price", label: "Input price: low to high" }, { value: "newest", label: "Newest" }] as const;
 export type CatalogSort = typeof catalogSorts[number]["value"];
 export const modelWorkload = (m: Pick<CatalogModel, "workload" | "supported_protocols">): WorkloadKind => m.workload ?? workloadOf(m.supported_protocols);
@@ -266,7 +276,7 @@ export function routeSectionFor(tab?: string): string | undefined {
 // the gateway's inference surface; serving also needs a route whose adapter
 // supports the protocol.
 // ---------------------------------------------------------------------------
-export type ProtocolEndpoint = { method: "POST"; path: string; contentType: string; headers: { name: string; value: string }[]; params: { name: string; note: string; required?: boolean }[]; unsupported: string; adapters: string };
+export type ProtocolEndpoint = { method: "POST" | "GET"; path: string; contentType: string; headers: { name: string; value: string }[]; params: { name: string; note: string; required?: boolean }[]; unsupported: string; adapters: string };
 const bearer = { name: "Authorization", value: "Bearer <inference key>" }, json = { name: "Content-Type", value: "application/json" };
 export const protocolEndpoints: Record<ModelProtocol, ProtocolEndpoint> = {
   chat_completions: { method: "POST", path: "/v1/chat/completions", contentType: "application/json", headers: [bearer, json], params: [{ name: "model", note: "API model name", required: true }, { name: "messages", note: "Text-string messages: system, developer, user, assistant, tool", required: true }, { name: "max_completion_tokens", note: "Generation bound (needed when the price requires one)" }, { name: "temperature", note: "Sampling temperature" }, { name: "tools / tool_choice", note: "Function tools and tool results" }, { name: "stream", note: "With optional stream_options.include_usage" }], unsupported: "n > 1, legacy max_tokens, multimodal content arrays, structured output, reasoning, log probabilities and other extensions are rejected.", adapters: "OpenAI (native), Anthropic and Bedrock (representable subset), OpenRouter and local profiles (compatible subset)." },
@@ -278,6 +288,9 @@ export const protocolEndpoints: Record<ModelProtocol, ProtocolEndpoint> = {
   audio_speech: { method: "POST", path: "/v1/audio/speech", contentType: "application/json", headers: [bearer, json], params: [{ name: "model", note: "API model name", required: true }, { name: "input", note: "Text to speak", required: true }, { name: "voice", note: "Voice name", required: true }, { name: "response_format", note: "mp3, wav, opus or pcm (adapter-dependent)" }, { name: "speed", note: "0.25–4" }], unsupported: "aac and flac output, instructions and SSE streaming are rejected.", adapters: "OpenAI and OpenRouter (mp3 and pcm only)." },
   rerank: { method: "POST", path: "/v1/rerank", contentType: "application/json", headers: [bearer, json], params: [{ name: "model", note: "API model name", required: true }, { name: "query", note: "Up to 32 KiB", required: true }, { name: "documents", note: "Up to 1000 strings", required: true }, { name: "top_n", note: "At least 1" }], unsupported: "return_documents, object documents and provider options are rejected; documents are never echoed.", adapters: "OpenRouter." },
   systemone: { method: "POST", path: "/v1/systemone", contentType: "application/json", headers: [bearer, json], params: [{ name: "model", note: "API model name", required: true }, { name: "state", note: "String, object or array", required: true }, { name: "questions", note: "1–64 noul, choice or score questions", required: true }], unsupported: "Image parts, provider and user fields are rejected (422 for validation failures).", adapters: "OpenRouter." },
+  realtime: { method: "GET", path: "/v1/realtime?model=<API model name>", contentType: "WebSocket upgrade; JSON text events", headers: [{ name: "Authorization or subprotocol", value: "Bearer <inference key>, or openai-insecure-api-key.<inference key> (one, never both)" }], params: [{ name: "model", note: "API model name (query parameter)", required: true }, { name: "session.update", note: "Realtime sessions; VAD only with create_response false" }, { name: "response.create", note: "One response at a time; max_output_tokens within the gateway ceiling" }, { name: "input_audio_buffer.*, conversation.item.*", note: "Audio and text input; no image input" }], unsupported: "Beta interface, client secrets, WebRTC/SIP, input transcription, automatic VAD responses, out-of-band responses, MCP tools and image input are rejected with an error event.", adapters: "OpenAI (GA interface)." },
+  videos: { method: "POST", path: "/v1/videos", contentType: "multipart/form-data or application/json", headers: [bearer], params: [{ name: "model", note: "API model name", required: true }, { name: "prompt", note: "Up to 32 KiB", required: true }, { name: "seconds", note: "4, 8 or 12 (default 4, always sent)" }, { name: "size", note: "720x1280 (default), 1280x720, 1024x1792 or 1792x1024" }, { name: "GET /v1/videos/{id}[/content], DELETE", note: "Same workspace's keys only" }], unsupported: "input_reference, remix, edits, extensions and characters are not supported.", adapters: "OpenAI (sora-*)." },
+  batches: { method: "POST", path: "/v1/files (purpose=batch), then /v1/batches", contentType: "multipart/form-data (JSONL file); application/json", headers: [bearer], params: [{ name: "file", note: "JSONL, one /v1/chat/completions request per line, ≤ 50,000 lines", required: true }, { name: "body.model", note: "This model's API name on every line", required: true }, { name: "body.max_completion_tokens", note: "Required per line (bounds the hold)", required: true }, { name: "input_file_id, endpoint, completion_window", note: "/v1/chat/completions and 24h only", required: true }], unsupported: "Other batch endpoints, n > 1, streaming, audio output, web search, predicted outputs and expires_after are rejected.", adapters: "OpenAI." },
 };
 /** Connection profiles whose adapter implements each client protocol (docs/protocol-matrix.md). */
 export const protocolProfiles: Record<ModelProtocol, string[]> = {
@@ -290,6 +303,10 @@ export const protocolProfiles: Record<ModelProtocol, string[]> = {
   audio_speech: ["openai", "openrouter"],
   rerank: ["openrouter"],
   systemone: ["openrouter"],
+  realtime: ["openai"],
+  // Async jobs (docs/async-jobs.md): OpenAI only; OpenRouter's video API has another shape.
+  videos: ["openai"],
+  batches: ["openai"],
 };
 
 // ---------------------------------------------------------------------------

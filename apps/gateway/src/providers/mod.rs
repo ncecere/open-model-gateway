@@ -11,6 +11,10 @@ use crate::inference::{
         TranscriptionResponse,
     },
 };
+use crate::jobs::types::{
+    ByteStream, ContentStream, OutputUsage, UpstreamBatch, UpstreamFile, UpstreamId, UpstreamVideo,
+    VideoAsset, VideoRequest,
+};
 
 pub mod anthropic;
 pub(crate) mod audio;
@@ -117,6 +121,105 @@ pub trait ProviderAdapter: Send + Sync {
         _target: &Deployment,
         _request: SystemoneRequest,
     ) -> Result<SystemoneResponse, InferenceError> {
+        Err(InferenceError::Unsupported)
+    }
+    // Async jobs (see `crate::jobs`), gated by `supports_protocol(Videos |
+    // Batches)`. Each call is one bounded upstream request: no polling loops,
+    // no retries; dropping the future cancels it. Upstream ids never leave
+    // the gateway, and error/job messages are never read or returned.
+    /// Request-specific video support (model family), before admission.
+    fn supports_video_request(&self, _target: &Deployment, _request: &VideoRequest) -> bool {
+        false
+    }
+    async fn create_video(
+        &self,
+        _target: &Deployment,
+        _request: VideoRequest,
+    ) -> Result<UpstreamVideo, InferenceError> {
+        Err(InferenceError::Unsupported)
+    }
+    async fn retrieve_video(
+        &self,
+        _target: &Deployment,
+        _video: &UpstreamId,
+    ) -> Result<UpstreamVideo, InferenceError> {
+        Err(InferenceError::Unsupported)
+    }
+    async fn delete_video(
+        &self,
+        _target: &Deployment,
+        _video: &UpstreamId,
+    ) -> Result<(), InferenceError> {
+        Err(InferenceError::Unsupported)
+    }
+    /// Asset body passed through unbuffered.
+    async fn video_content(
+        &self,
+        _target: &Deployment,
+        _video: &UpstreamId,
+        _asset: VideoAsset,
+    ) -> Result<ContentStream, InferenceError> {
+        Err(InferenceError::Unsupported)
+    }
+    /// Stream already-validated JSONL to a provider batch input file. An
+    /// error item in `content` must abort the upload.
+    async fn upload_batch_file(
+        &self,
+        _target: &Deployment,
+        _content: ByteStream,
+    ) -> Result<UpstreamFile, InferenceError> {
+        Err(InferenceError::Unsupported)
+    }
+    async fn create_batch(
+        &self,
+        _target: &Deployment,
+        _input: &UpstreamId,
+        _metadata: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> Result<UpstreamBatch, InferenceError> {
+        Err(InferenceError::Unsupported)
+    }
+    async fn retrieve_batch(
+        &self,
+        _target: &Deployment,
+        _batch: &UpstreamId,
+    ) -> Result<UpstreamBatch, InferenceError> {
+        Err(InferenceError::Unsupported)
+    }
+    async fn cancel_batch(
+        &self,
+        _target: &Deployment,
+        _batch: &UpstreamId,
+    ) -> Result<UpstreamBatch, InferenceError> {
+        Err(InferenceError::Unsupported)
+    }
+    /// Batch input/output/error file body passed through unbuffered.
+    async fn file_content(
+        &self,
+        _target: &Deployment,
+        _file: &UpstreamId,
+    ) -> Result<ContentStream, InferenceError> {
+        Err(InferenceError::Unsupported)
+    }
+    /// Usage summed from a batch output file (stream-parsed, bodies dropped),
+    /// for batches whose provider object reports no aggregate usage.
+    async fn batch_output_usage(
+        &self,
+        _target: &Deployment,
+        _file: &UpstreamId,
+        _max_bytes: u64,
+    ) -> Result<OutputUsage, InferenceError> {
+        Err(InferenceError::Unsupported)
+    }
+    /// Realtime (`inference::realtime`): connect one upstream session with the
+    /// server credential and enforce `setup` (no automatic or out-of-band
+    /// billable work; per-response output ceiling) before returning. Dropping
+    /// the returned halves MUST close the upstream socket. Adapters opt in via
+    /// `supports_protocol(ApiProtocol::Realtime)`.
+    async fn connect_realtime(
+        &self,
+        _target: &Deployment,
+        _setup: &crate::inference::realtime::RealtimeSetup,
+    ) -> Result<crate::inference::realtime::RealtimeUpstream, InferenceError> {
         Err(InferenceError::Unsupported)
     }
     /// Dropping this future or the returned stream MUST cancel upstream work.

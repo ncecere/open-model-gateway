@@ -180,6 +180,63 @@ pub trait InferenceRepository: Send + Sync {
     ) -> Result<(), InferenceError> {
         Ok(())
     }
+    // Realtime sessions (`inference::realtime`, `governance::realtime`).
+    /// Per-response output window: `cap`, lowered to the latest price's
+    /// output ceiling.
+    async fn realtime_window_output(
+        &self,
+        _deployment: Uuid,
+        cap: u32,
+    ) -> Result<u32, InferenceError> {
+        Ok(cap)
+    }
+    /// Extend the session hold by one response window (budget-checked).
+    async fn realtime_reserve_window(
+        &self,
+        _principal: &Principal,
+        _session: Uuid,
+        _model: &str,
+        _window_output_tokens: u32,
+    ) -> Result<(), InferenceError> {
+        Ok(())
+    }
+    /// Record that a reserved window now belongs to response `sequence`.
+    async fn realtime_open_response(
+        &self,
+        _session: Uuid,
+        _sequence: i32,
+        _window_output_tokens: u32,
+    ) -> Result<(), InferenceError> {
+        Ok(())
+    }
+    /// Settle one response (`None` usage keeps its window as unknown).
+    async fn realtime_settle_response(
+        &self,
+        _session: Uuid,
+        _sequence: i32,
+        _status: Option<super::realtime::ResponseStatus>,
+        _usage: Option<super::realtime::RealtimeUsage>,
+        _window_output_tokens: u32,
+    ) -> Result<(), InferenceError> {
+        Ok(())
+    }
+    /// Finish the session's single attempt from its response rows.
+    async fn realtime_finish(
+        &self,
+        record: &super::realtime::RealtimeFinish,
+    ) -> Result<(), InferenceError> {
+        self.finish_attempt(
+            &ExecutionFinish {
+                id: record.id,
+                outcome: record.outcome,
+                error: record.error,
+                usage: Usage::default(),
+                elapsed_ms: record.elapsed_ms,
+            },
+            &record.telemetry,
+        )
+        .await
+    }
 }
 
 #[async_trait]
@@ -296,5 +353,61 @@ impl InferenceRepository for Store {
         error: Option<InferenceError>,
     ) -> Result<(), InferenceError> {
         crate::routing::record_result(self, deployment, error).await
+    }
+    async fn realtime_window_output(
+        &self,
+        deployment: Uuid,
+        cap: u32,
+    ) -> Result<u32, InferenceError> {
+        crate::governance::realtime::window_output(self, deployment, cap).await
+    }
+    async fn realtime_reserve_window(
+        &self,
+        principal: &Principal,
+        session: Uuid,
+        model: &str,
+        window_output_tokens: u32,
+    ) -> Result<(), InferenceError> {
+        crate::governance::realtime::reserve_window(
+            self,
+            principal,
+            session,
+            model,
+            window_output_tokens,
+        )
+        .await
+    }
+    async fn realtime_open_response(
+        &self,
+        session: Uuid,
+        sequence: i32,
+        window_output_tokens: u32,
+    ) -> Result<(), InferenceError> {
+        crate::governance::realtime::open_response(self, session, sequence, window_output_tokens)
+            .await
+    }
+    async fn realtime_settle_response(
+        &self,
+        session: Uuid,
+        sequence: i32,
+        status: Option<super::realtime::ResponseStatus>,
+        usage: Option<super::realtime::RealtimeUsage>,
+        window_output_tokens: u32,
+    ) -> Result<(), InferenceError> {
+        crate::governance::realtime::settle_response(
+            self,
+            session,
+            sequence,
+            status,
+            usage,
+            window_output_tokens,
+        )
+        .await
+    }
+    async fn realtime_finish(
+        &self,
+        record: &super::realtime::RealtimeFinish,
+    ) -> Result<(), InferenceError> {
+        crate::governance::realtime::finish(self, record).await
     }
 }

@@ -16,6 +16,13 @@ export const METERS: Meter[] = ["input_tokens", "output_tokens", "cache_read_tok
 export const TOKEN_METERS = new Set<Meter>(METERS.slice(0, 6));
 /** Input-family token meters: the input token ceiling bounds all of them. */
 export const INPUT_TOKEN_METERS: Meter[] = METERS.slice(0, 6).filter(m => m !== "output_tokens");
+/** Realtime-only audio-token meters (per M tokens, no tiers, no max units). Other workloads never publish them. */
+export const AUDIO_TOKEN_METERS: Meter[] = ["input_audio_tokens", "cache_read_audio_tokens", "output_audio_tokens"];
+/** Video-job-only meter (per second of generated video, resolution variants). Other workloads never publish it. */
+export const VIDEO_METERS: Meter[] = ["output_video_seconds_ms"];
+const ALL_METERS: Meter[] = [...METERS, ...AUDIO_TOKEN_METERS, ...VIDEO_METERS];
+/** The meters a workload's price publishes lines for (realtime adds the audio-token meters, video jobs the video meter). */
+export const metersFor = (workload: WorkloadKind): Meter[] => workload === "realtime" ? [...METERS, ...AUDIO_TOKEN_METERS] : workload === "videos" ? [...METERS, ...VIDEO_METERS] : METERS;
 export const MAX_PRICE_LINES = 64;
 export const MAX_TOKEN_LIMIT = 2147483647;
 const MAX_USD_INPUT_LENGTH = 40;
@@ -83,12 +90,18 @@ export const METER_SPECS: Record<Meter, MeterSpec> = {
   input_audio_seconds_ms: { meter: "input_audio_seconds_ms", title: "Audio input", sku: "Audio input", noun: "input audio", units: audioUnits("audio input"), tiers: false, variants: false, maxUnits: { label: "Max input audio per request (seconds)", scale: 1000n, help: "Trusted ceiling for uploaded audio length, in whole seconds." }, help: "Speech-to-text audio length. Choose the unit the provider quotes; a rate that isn't a whole micro-dollar per second may be exact per hour." },
   output_audio_seconds_ms: { meter: "output_audio_seconds_ms", title: "Audio output", sku: "Audio output", noun: "output audio", units: audioUnits("audio output"), tiers: false, variants: false, maxUnits: { label: "Max output audio per request (seconds)", scale: 1000n, help: "Trusted ceiling for generated audio length, in whole seconds." }, help: "Generated speech length, for models priced per second/minute of audio." },
   search_units: { meter: "search_units", title: "Search units", sku: "Search units", noun: "search units", units: [{ batch: 1, unitLabel: "/search", display: "/search", input: "$ per search", name: "per search" }], tiers: false, variants: false, maxUnits: { label: "Max search units per request", scale: 1n, help: "Trusted ceiling for rerank search units per request." }, help: "Rerank search units (Cohere-style). OpenRouter's catalog does not publish these; enter them by hand." },
+  input_audio_tokens: { ...token("input_audio_tokens", "Audio input tokens", "Audio input", "input audio tokens", "Realtime: uncached input audio tokens. Text tokens use the input/cache/output token lines."), tiers: false },
+  cache_read_audio_tokens: { ...token("cache_read_audio_tokens", "Cached audio input", "Cached audio input", "cached input audio tokens", "Realtime: input audio tokens read from the provider's cache."), tiers: false },
+  output_audio_tokens: { ...token("output_audio_tokens", "Audio output tokens", "Audio output", "output audio tokens", "Realtime: generated audio tokens."), tiers: false },
+  output_video_seconds_ms: { meter: "output_video_seconds_ms", title: "Video output", sku: "Video output", noun: "output video", units: audioUnits("generated video"), tiers: false, variants: true, maxUnits: { label: "Max video per request (seconds)", scale: 1000n, help: "Optional trusted ceiling; each request's own seconds already bound its hold." }, help: "Per second of generated video (async video jobs). Add resolution tiers (720x1280, 1792x1024…); a line without a variant is the default." },
   requests: { meter: "requests", title: "Requests", sku: "Request", noun: "requests", units: [{ batch: 1, unitLabel: "/request", display: "/request", input: "$ per request", name: "per request" }], tiers: false, variants: false, maxUnits: { label: "Max requests per attempt", scale: 1n, help: "Normally 1: each upstream attempt is one request." }, help: "A fixed fee per upstream request. Free unless the provider lists one." },
 };
 export const unitFor = (meter: Meter, batch: number) => METER_SPECS[meter].units.find(u => u.batch === batch);
 export const defaultBatch = (meter: Meter) => meter.endsWith("_audio_seconds_ms") ? 60000 : METER_SPECS[meter].units[0].batch;
+/** Price lines of a video price: per-second video lines are present. */
+const isVideoPrice = (lines: PriceLine[]) => lines.some(l => VIDEO_METERS.includes(l.meter));
 
-export const workloadLabels: Record<WorkloadKind, string> = { generation: "Text generation", embeddings: "Embeddings", images: "Images", audio_transcriptions: "Speech to text", audio_speech: "Text to speech", rerank: "Rerank", systemone: "System One decisions" };
+export const workloadLabels: Record<WorkloadKind, string> = { generation: "Text generation", embeddings: "Embeddings", images: "Images", audio_transcriptions: "Speech to text", audio_speech: "Text to speech", rerank: "Rerank", systemone: "System One decisions", realtime: "Realtime audio", videos: "Video generation", batches: "Batch chat completions" };
 /** Meters shown for a workload. All others are published as not applicable (as the OpenRouter suggestion does). */
 export const WORKLOAD_METERS: Record<WorkloadKind, Meter[]> = {
   generation: ["input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "cache_write_5m_tokens", "cache_write_1h_tokens", "requests"],
@@ -98,6 +111,10 @@ export const WORKLOAD_METERS: Record<WorkloadKind, Meter[]> = {
   audio_speech: ["input_characters", "output_audio_seconds_ms", "requests"],
   rerank: ["search_units", "input_tokens", "output_tokens", "requests"],
   systemone: ["input_tokens", "output_tokens", "requests"],
+  realtime: ["input_tokens", "cache_read_tokens", "output_tokens", "input_audio_tokens", "cache_read_audio_tokens", "output_audio_tokens", "requests"],
+  videos: ["output_video_seconds_ms", "requests"],
+  // One hold covers the whole file: the input ceiling × lines plus every line's maximum.
+  batches: ["input_tokens", "output_tokens", "cache_read_tokens", "requests"],
 };
 const generation = new Set<string>(["chat_completions", "responses", "messages"]);
 /** One workload per model (Phase 1): chat/responses/messages are text generation; every other protocol is its own workload. */
@@ -124,9 +141,9 @@ export const newRow = (meter: Meter, extra: Partial<RateRow> = {}): RateRow => (
 const meterDraft = (meter: Meter, mode: MeterMode = "unknown"): MeterDraft => ({ mode, batch: defaultBatch(meter), rows: [newRow(meter)], maxUnits: "" });
 /** A fresh v3 draft: every applicable meter starts Unknown, so nothing is silently free. */
 export function emptyDraft(workload: WorkloadKind): PriceDraft {
-  return { workload, shown: WORKLOAD_METERS[workload], meters: Object.fromEntries(METERS.map(m => [m, meterDraft(m, WORKLOAD_METERS[workload].includes(m) ? "unknown" : "not_applicable")])) as Record<Meter, MeterDraft>, inputTokenLimit: "", outputTokenLimit: workload === "embeddings" ? "0" : "" };
+  return { workload, shown: WORKLOAD_METERS[workload], meters: Object.fromEntries(ALL_METERS.map(m => [m, meterDraft(m, WORKLOAD_METERS[workload].includes(m) ? "unknown" : "not_applicable")])) as Record<Meter, MeterDraft>, inputTokenLimit: "", outputTokenLimit: workload === "embeddings" ? "0" : "" };
 }
-const shownFor = (workload: WorkloadKind, extra: Meter[]) => METERS.filter(m => WORKLOAD_METERS[workload].includes(m) || extra.includes(m));
+const shownFor = (workload: WorkloadKind, extra: Meter[]) => metersFor(workload).filter(m => WORKLOAD_METERS[workload].includes(m) || extra.includes(m));
 const maxUnitsText = (meter: Meter, value: string | undefined) => {
   const scale = METER_SPECS[meter].maxUnits?.scale ?? 1n;
   if (!value || !/^\d+$/.test(value)) return "";
@@ -136,7 +153,7 @@ type AnyLine = { meter: Meter; microusd_per_batch?: string | null; batch?: numbe
 /** Group lines per meter into editor rows, re-expressing every row in the meter's largest batch (always exact). */
 function metersFromLines(workload: WorkloadKind, lines: AnyLine[], maxUnits: Record<string, string> | null | undefined): Pick<PriceDraft, "shown" | "meters"> {
   const meters = emptyDraft(workload).meters, extra: Meter[] = [];
-  for (const meter of METERS) {
+  for (const meter of metersFor(workload)) {
     const own = lines.filter(l => l.meter === meter);
     if (!own.length) { meters[meter] = meterDraft(meter, "unknown"); continue; }
     const review = own.some(l => l.needs_review), note = own.map(l => l.note).filter(Boolean).join(" ") || undefined;
@@ -162,7 +179,7 @@ export function draftFromPrice(price: Price, workload: WorkloadKind): PriceDraft
   const cache = (meter: Meter, key: "read" | "write" | "write_5m" | "write_1h"): AnyLine[] => { const r = price.cache_pricing?.[key]; return !r ? [] : r.status === "priced" ? line(meter, r.microusd_per_million) : r.status === "not_applicable" ? [{ meter, not_applicable: true }] : []; };
   const lines = [...line("input_tokens", price.input_microusd_per_million), ...line("output_tokens", price.output_microusd_per_million), ...cache("cache_read_tokens", "read"), ...cache("cache_write_tokens", "write"), ...cache("cache_write_5m_tokens", "write_5m"), ...cache("cache_write_1h_tokens", "write_1h"), { meter: "requests" as Meter, microusd_per_batch: "0", batch: 1 }];
   const draft = { ...base, ...metersFromLines(workload, lines, null) };
-  for (const meter of METERS) if (!WORKLOAD_METERS[workload].includes(meter) && !lines.some(l => l.meter === meter)) draft.meters[meter] = meterDraft(meter, "not_applicable");
+  for (const meter of metersFor(workload)) if (!WORKLOAD_METERS[workload].includes(meter) && !lines.some(l => l.meter === meter)) draft.meters[meter] = meterDraft(meter, "not_applicable");
   return draft;
 }
 export type SuggestionLine = AnyLine & { needs_review: boolean; source?: string; unit_label?: string };
@@ -261,7 +278,7 @@ export function validateDraft(draft: PriceDraft): Record<string, string> {
       if (max <= 0n || max > MAX_MICROUSD) errors[`${meter}.max`] = "Enter a positive whole number, or leave blank (budgeted requests are then refused).";
     }
   }
-  if (draft.shown.reduce((n, meter) => n + (draft.meters[meter].mode === "priced" ? draft.meters[meter].rows.length : draft.meters[meter].mode === "unknown" ? 0 : 1), 0) + METERS.filter(m => !draft.shown.includes(m)).length > MAX_PRICE_LINES) errors["limits.input"] ??= `Use at most ${MAX_PRICE_LINES} price lines.`;
+  if (draft.shown.reduce((n, meter) => n + (draft.meters[meter].mode === "priced" ? draft.meters[meter].rows.length : draft.meters[meter].mode === "unknown" ? 0 : 1), 0) + metersFor(draft.workload).filter(m => !draft.shown.includes(m)).length > MAX_PRICE_LINES) errors["limits.input"] ??= `Use at most ${MAX_PRICE_LINES} price lines.`;
   if (!Object.keys(errors).length) {
     const bound = priceBound(draftBody(draft));
     if (bound.overflow) errors["limits.input"] = "Maximum reservation exceeds $9,223,372,036,854.775807 USD. Reduce rates or ceilings.";
@@ -271,7 +288,7 @@ export function validateDraft(draft: PriceDraft): Record<string, string> {
 /** The v3 POST body. Throws on invalid money: validate first. */
 export function draftBody(draft: PriceDraft): PriceBody {
   const price_lines: PriceLine[] = [], max_units: Partial<Record<UnitMeter, string>> = {};
-  for (const meter of METERS) {
+  for (const meter of metersFor(draft.workload)) {
     const m = draft.meters[meter], unit = unitFor(meter, m.batch) ?? unitFor(meter, defaultBatch(meter))!;
     if (!draft.shown.includes(meter) || m.mode === "not_applicable") { price_lines.push({ meter, not_applicable: true }); continue; }
     if (m.mode === "unknown") continue;
@@ -292,9 +309,14 @@ export type Bound = { microusd: bigint | null; unbounded: { meter: Meter; reason
 /** Mirrors the gateway's conservative admission hold (billing::v3::bound) for a preview; the server stays authoritative. */
 export function priceBound(body: Pick<PriceBody, "price_lines" | "max_units" | "input_token_limit" | "output_token_limit">): Bound {
   let total = 0n; const unbounded: Bound["unbounded"] = [];
-  for (const meter of METERS) {
+  // A price with audio-token lines is a realtime price: one response window, where audio tokens share the token
+  // ceilings, a response is one request, and no other unit meter can occur (as the gateway bounds it).
+  const realtime = body.price_lines.some(l => AUDIO_TOKEN_METERS.includes(l.meter));
+  // A video price bounds its video meter on max_units (each request's seconds tighten it at admission).
+  for (const meter of realtime ? [...METERS, ...AUDIO_TOKEN_METERS] : isVideoPrice(body.price_lines) ? [...METERS, ...VIDEO_METERS] : METERS) {
     const lines = body.price_lines.filter(l => l.meter === meter);
-    const ceiling = meter === "output_tokens" ? BigInt(body.output_token_limit) : TOKEN_METERS.has(meter) ? BigInt(body.input_token_limit) : body.max_units[meter as UnitMeter] != null ? BigInt(body.max_units[meter as UnitMeter]!) : null;
+    const unitCeiling = body.max_units[meter as UnitMeter] != null ? BigInt(body.max_units[meter as UnitMeter]!) : null;
+    const ceiling = meter === "output_tokens" || meter === "output_audio_tokens" ? BigInt(body.output_token_limit) : TOKEN_METERS.has(meter) || AUDIO_TOKEN_METERS.includes(meter) ? BigInt(body.input_token_limit) : !realtime ? unitCeiling : meter === "requests" ? (unitCeiling !== null && unitCeiling < 1n ? null : 1n) : 0n;
     if (lines.some(l => "not_applicable" in l) || ceiling === 0n) continue;
     if (!lines.length) { unbounded.push({ meter, reason: "unknown" }); continue; }
     const priced = lines as Extract<PriceLine, { batch: number }>[];
@@ -377,7 +399,7 @@ export function priceItems(price: Price, workload: WorkloadKind): PriceItem[] {
   const items: PriceItem[] = [];
   if (price.pricing_version === 3 && price.price_lines) {
     const lines = price.price_lines, priced = lines.filter((l): l is PricedLine => !("not_applicable" in l));
-    for (const meter of METERS) {
+    for (const meter of metersFor(workload)) {
       const own = priced.filter(l => l.meter === meter);
       if (!own.length) { if (WORKLOAD_METERS[workload].includes(meter) && !lines.some(l => l.meter === meter)) items.push({ key: meter, label: METER_SPECS[meter].sku, meter, amount: null, unit: unitText(meter, defaultBatch(meter)) }); continue; }
       for (const variant of [...new Set(own.map(l => l.variant))]) {
@@ -406,7 +428,7 @@ export function priceItems(price: Price, workload: WorkloadKind): PriceItem[] {
   return items;
 }
 /** The meters a workload's headline prices use: tokens for text, the native unit for images, audio and rerank. */
-export const HEADLINE_METERS: Record<WorkloadKind, Meter[]> = { generation: ["input_tokens", "output_tokens"], embeddings: ["input_tokens"], images: ["output_images"], audio_transcriptions: ["input_audio_seconds_ms"], audio_speech: ["input_characters", "output_audio_seconds_ms"], rerank: ["search_units", "input_tokens"], systemone: ["input_tokens", "output_tokens"] };
+export const HEADLINE_METERS: Record<WorkloadKind, Meter[]> = { generation: ["input_tokens", "output_tokens"], embeddings: ["input_tokens"], images: ["output_images"], audio_transcriptions: ["input_audio_seconds_ms"], audio_speech: ["input_characters", "output_audio_seconds_ms"], rerank: ["search_units", "input_tokens"], systemone: ["input_tokens", "output_tokens"], realtime: ["input_audio_tokens", "output_audio_tokens"], videos: ["output_video_seconds_ms"], batches: ["input_tokens", "output_tokens"] };
 export type BasePrice = { amount: string; batch: number; unit: string } | { amount: null; notApplicable: boolean; unit: string };
 /** The untiered price of one meter (the cheapest variant when variants differ); unknown when the price leaves it out. */
 export function basePrice(price: Price | null | undefined, meter: Meter): BasePrice {
@@ -478,5 +500,5 @@ export function countNoun(meter: Meter, count: string | number | bigint): string
   const text = String(count), noun = text === "1" ? singular[meter] ?? METER_SPECS[meter].noun : METER_SPECS[meter].noun;
   return `${/^\d+$/.test(text) ? grouped(text) : text} ${noun}`;
 }
-export const meterUsageLabels: { key: UnitMeter; label: string; audio?: boolean }[] = [{ key: "output_images", label: "Images generated" }, { key: "input_characters", label: "Input characters" }, { key: "input_audio_seconds_ms", label: "Audio input", audio: true }, { key: "output_audio_seconds_ms", label: "Audio output", audio: true }, { key: "search_units", label: "Search units" }, { key: "requests", label: "Metered requests" }];
-export const meterComponentLabels: { key: "output_images_microusd" | "input_characters_microusd" | "input_audio_microusd" | "output_audio_microusd" | "search_units_microusd" | "requests_microusd"; label: string }[] = [{ key: "output_images_microusd", label: "Images" }, { key: "input_characters_microusd", label: "Characters" }, { key: "input_audio_microusd", label: "Audio input" }, { key: "output_audio_microusd", label: "Audio output" }, { key: "search_units_microusd", label: "Search units" }, { key: "requests_microusd", label: "Requests" }];
+export const meterUsageLabels: { key: UnitMeter; label: string; audio?: boolean }[] = [{ key: "output_images", label: "Images generated" }, { key: "input_characters", label: "Input characters" }, { key: "input_audio_seconds_ms", label: "Audio input", audio: true }, { key: "output_audio_seconds_ms", label: "Audio output", audio: true }, { key: "search_units", label: "Search units" }, { key: "requests", label: "Metered requests" }, { key: "output_video_seconds_ms", label: "Video output", audio: true }];
+export const meterComponentLabels: { key: "output_images_microusd" | "input_characters_microusd" | "input_audio_microusd" | "output_audio_microusd" | "search_units_microusd" | "requests_microusd" | "output_video_microusd"; label: string }[] = [{ key: "output_images_microusd", label: "Images" }, { key: "input_characters_microusd", label: "Characters" }, { key: "input_audio_microusd", label: "Audio input" }, { key: "output_audio_microusd", label: "Audio output" }, { key: "search_units_microusd", label: "Search units" }, { key: "requests_microusd", label: "Requests" }, { key: "output_video_microusd", label: "Video" }];

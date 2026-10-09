@@ -17,7 +17,7 @@ Providers are startup registry entries, not engine branches or database enums. M
 
 | Registry ID | Transport/profile |
 | --- | --- |
-| `openai` | Fixed `https://api.openai.com/v1`; native Chat, Responses, string embeddings, `gpt-image-*` image generation, audio transcription and speech. No arbitrary cloud endpoint override. |
+| `openai` | Fixed `https://api.openai.com/v1`; native Chat, Responses, string embeddings, `gpt-image-*` image generation, audio transcription and speech, realtime sessions over `wss://api.openai.com/v1/realtime` (GA interface), and async jobs: `sora-*` videos and Chat Completions batches ([async jobs](async-jobs.md)). No arbitrary cloud endpoint override. |
 | `anthropic` | Fixed `https://api.anthropic.com/v1`; native Messages, representable Chat subset. |
 | `bedrock` | Server AWS identity, an allowlisted named profile or an assumed IAM role; explicit region; optional allowlisted VPC endpoint; SigV4 Converse/ConverseStream, not an OpenAI URL. |
 | `openai_compatible` | Explicit approved local Chat/embedding subset, not universal compatibility. |
@@ -75,6 +75,28 @@ OpenRouter `:free` variants may train on prompts. Under the default `deny` they 
 - **Transcriptions:** `POST /v1/audio/transcriptions` with a multipart body the gateway builds itself. It has fixed fields (`model`, `response_format=json`, optional `language`/`prompt`/`temperature`) and `file` named `audio.<ext>` with the canonical media type. Client headers, filenames and credentials are never forwarded. The response must be JSON `{text, usage}`; content-bearing extras (segments, words, logprobs) fail rather than being dropped. `usage.type:"duration"` gives whole `seconds` → `input_audio_seconds_ms`. `usage.type:"tokens"` gives `input_tokens`/`output_tokens` (with `total_tokens` checked) plus the gateway-measured duration. Transcript bodies are capped at 4 MiB of text.
 - **Speech:** `POST /v1/audio/speech` JSON `model, input, voice, response_format, speed?`. The upstream media type must match the format: `audio/mpeg`, `audio/wav` (or `x-wav`/`wave`), `audio/opus` (or `ogg`), or `audio/pcm` (or `l16`/octet-stream). The body is passed through unbuffered. Non-SSE speech reports no usage, so `gpt-4o-mini-tts` token usage is not observed.
 - Statuses map like Chat. Error bodies are never read.
+
+### OpenAI realtime
+
+`ProviderAdapter::connect_realtime` (default `Unsupported`; opt in with `supports_protocol(ApiProtocol::Realtime)`) returns a connected `RealtimeUpstream`: a text sink and a classified event stream. Dropping it closes the socket. The OpenAI adapter:
+
+- **Connection:** validates the connection before resolving the credential. It connects to `wss://api.openai.com/v1/realtime?model=<upstream model>` with `Authorization: Bearer <server secret>`, tokio-tungstenite (`=0.29.0`) and an explicit ring-backed rustls config with webpki roots. There are no proxies, redirects (handshake errors) or retries, and the connect + configuration deadline is 10 s. Handshake statuses map like Chat (401/403/3xx → `provider_configuration_error`, 429 → `rate_limit_error`, 5xx → `upstream_unavailable`); bodies are never read.
+- **Configuration:** before returning, it sends its own `session.update` (server VAD with `create_response:false`, transcription off, per-response `max_output_tokens`) and waits for the acknowledging `session.updated`. A rejection returns `upstream_rejected`. An unsafe acknowledgement (automatic or idle responses, transcription) returns `invalid_upstream_response`.
+- **Event classification:** `session.*` (with a safety flag), `response.created`/`response.done` (response id, status, normalized usage), `error` (bounded tokens only), `rate_limits.updated` (filtered) and input-transcription events (unaccounted, so the session fails closed). Every other event is forwarded verbatim. Upstream close or binary frames are errors.
+- **Usage:** see [realtime](realtime.md#usage-normalization-openai). Missing or inconsistent counts are unknown, never zero.
+
+Contract tests run against a scripted loopback WebSocket mock (`providers/openai/realtime/mock.rs`): the frontend and engine over a real listener and PostgreSQL. No live or paid realtime call was made.
+
+### Async jobs (video, batch)
+
+Job methods on `ProviderAdapter` (`supports_video_request`, `create_video`, `retrieve_video`, `delete_video`, `video_content`, `upload_batch_file`, `create_batch`, `retrieve_batch`, `cancel_batch`, `file_content`, `batch_output_usage`) default to `Unsupported`; an adapter opts in with `supports_protocol(Videos | Batches)`. Each call is one bounded request: no polling loops, no retries, and dropping the future cancels it. The job service (`crate::jobs`) owns admission, ids, ownership, polling and settlement; see [async jobs](async-jobs.md).
+
+OpenAI (shapes from the official OpenAPI spec via openai-python, 2026-10-08; mock-tested only, no paid calls):
+
+- **Videos:** `sora-*` upstream models only. `POST /videos` is a gateway-built multipart form with exactly `model, prompt, seconds, size`. `GET`/`DELETE /videos/{id}` and `GET /videos/{id}/content?variant=` are also used. Video `status` must be `queued|in_progress|completed|failed`. `seconds` is decimal text (an unparseable value is unknown). Only the error `code` is kept (sanitized to `[a-z_]`); messages are dropped. Content media types are allowlisted (`video/mp4`, images for thumbnails/spritesheets, generic binary) and streamed through.
+- **Files/Batches:** `POST /files` is a chunked multipart stream (`purpose=batch` + `file`). A content error aborts the body, so the provider never receives a complete form. `POST /batches` carries `{input_file_id, endpoint:"/v1/chat/completions", completion_window:"24h", metadata?}`; `GET /batches/{id}` and `POST /batches/{id}/cancel` are also used. The batch `usage` maps to billing usage like Chat (`cached_tokens` is cache read; this schema has no cache writes, so they are zero). Malformed or partial usage is unknown. `GET /files/{id}/content` is streamed through to clients. For settlement it is stream-parsed line by line with bounded lines and a total cap; only each line's `response.body.usage` is read and bodies are dropped.
+- Upstream ids are validated (`[A-Za-z0-9._:-]{1,128}`) before use in a path. Statuses map like Chat, and error bodies are never read.
+- OpenRouter: not supported. Its `POST /api/v1/videos` uses another request shape (`duration`, `resolution`, `aspect_ratio`, `polling_url`), and it has no Batch API.
 
 ## Approve local endpoints out of band
 

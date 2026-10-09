@@ -63,7 +63,7 @@ describe("Add model form", () => {
     expect(protocolSupported("responses", undefined)).toBe(true); expect(protocolSupported("responses", "future-profile")).toBe(true);
     expect(workloadGroups.filter(g => workloadSupported(g.workload, "anthropic")).map(g => g.label)).toEqual(["Text"]);
     expect(workloadGroups.filter(g => !workloadSupported(g.workload, "openai")).map(g => g.label)).toEqual(["Rerank", "System One"]);
-    expect(workloadGroups.every(g => workloadSupported(g.workload, "openrouter"))).toBe(true);
+    expect(workloadGroups.filter(g => !workloadSupported(g.workload, "openrouter")).map(g => g.label)).toEqual(["Realtime audio", "Video", "Batch"]);
   });
   it("keeps help to the API-name hint and uses examples in the provider's format", () => {
     const fields = [...setupSourceFields(choices, "anthropic"), ...setupIdentityFields("anthropic")];
@@ -86,8 +86,8 @@ describe("setup checklist from server counts (contract §4)", () => {
 
 describe("workload-grouped protocols", () => {
   it("offers every server protocol grouped by workload, none labelled as planned (all are served)", () => {
-    expect(protocolOptions.map(o => o.value)).toEqual(["chat_completions", "responses", "messages", "embeddings", "images", "audio_transcriptions", "audio_speech", "rerank", "systemone"]);
-    expect(new Set(protocolOptions.map(o => o.group)).size).toBe(7);
+    expect(protocolOptions.map(o => o.value)).toEqual(["chat_completions", "responses", "messages", "embeddings", "images", "audio_transcriptions", "audio_speech", "rerank", "systemone", "realtime", "videos", "batches"]);
+    expect(new Set(protocolOptions.map(o => o.group)).size).toBe(10);
     expect(protocolOptions.find(o => o.value === "rerank")?.label).toBe("Rerank");
     expect(JSON.stringify([protocolOptions, workloadGroups])).not.toMatch(/planned|not served/i);
     expect(protocolLabel("audio_transcriptions")).toBe("Speech to text");

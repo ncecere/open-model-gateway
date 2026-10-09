@@ -17,7 +17,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ListTree, MessagesSquare } from "lucide-react";
 import { platformPath, wsPath, type Grant, type Model, type Workspace } from "../lib/api";
 import type { DashboardSearch, RangePreset } from "../lib/permissions";
-import { activeFilterCount, compactDateTime, costText, countText, finishReasonLabel, finishReasonTone, finishReasons, latencyText, logPaths, logTab, logsSearch, rangeLabels, rateText, requestFilters, requestQuery, requestStatuses, requestStatusLabel, requestStatusTone, requestTarget, servedModel, servedModelText, sessionTarget, tokensText, tpsText, ttftText, utcDate, validSessionId, workloadText, type GenerationPage, type GenerationRow, type LogMetrics, type LogTab, type LogsScope, type RequestFilters, type RequestPage, type RequestRow, type SessionPage, type SessionRow } from "../lib/requests";
+import { activeFilterCount, compactDateTime, costText, countText, finishReasonLabel, finishReasonTone, finishReasons, jobStateTone, jobText, latencyText, logPaths, logTab, logsSearch, rangeLabels, rateText, requestFilters, requestQuery, requestStatuses, requestStatusLabel, requestStatusTone, requestTarget, servedModel, servedModelText, sessionTarget, tokensText, tpsText, ttftText, utcDate, validSessionId, workloadText, type GenerationPage, type GenerationRow, type LogMetrics, type LogTab, type LogsScope, type RequestFilters, type RequestPage, type RequestRow, type SessionPage, type SessionRow } from "../lib/requests";
 import { formatMicroUsd } from "../lib/governance";
 import { NARROW_QUERY, useMediaQuery } from "../lib/bitop-utils";
 import type { KeyRow } from "../lib/keys";
@@ -90,12 +90,13 @@ const requestColumns = (scope: LogsScope, filters: RequestFilters, view: View): 
   { id: "request", header: "Request ID", defaultHidden: true, cell: r => <CopyId value={r.root_request_id} label="request ID" /> },
   { id: "session", header: "Session", defaultHidden: true, cell: r => r.session_id ? <span className={rq.truncateKey} title={r.session_id}>{r.session_id}</span> : <span className={s.secondary}>None</span> },
   { id: "workload", header: "Type", defaultHidden: true, cell: r => workloadText(r.workload_kind) },
+  { id: "job", header: "Job", label: "Async job state", defaultHidden: true, cell: r => r.job ? <StatusBadge tone={jobStateTone(r.job.state)} size="sm">{jobText(r.job)}</StatusBadge> : <span className={s.secondary}>—</span> },
   { id: "streamed", header: "Streamed", defaultHidden: true, cell: r => r.streamed ? "Yes" : "No" },
   { id: "cost_center", header: "Cost center", defaultHidden: true, cell: r => r.cost_center ? `${r.cost_center.name} · ${r.cost_center.code}` : "Unallocated" },
 ];
-export const requestColumnIds = ["started", "model", "workspace", "key", "tokens", "cost", "latency", "ttft", "speed", "finish", "status", "attempts", "cached", "reasoning", "request", "session", "workload", "streamed", "cost_center"];
+export const requestColumnIds = ["started", "model", "workspace", "key", "tokens", "cost", "latency", "ttft", "speed", "finish", "status", "attempts", "cached", "reasoning", "request", "session", "workload", "job", "streamed", "cost_center"];
 /** Rows stay short (ui-principles 4): streaming telemetry and fallbacks are one click away under Columns. */
-export const requestDefaultHidden = ["ttft", "speed", "cached", "reasoning", "request", "session", "workload", "streamed", "cost_center"];
+export const requestDefaultHidden = ["ttft", "speed", "cached", "reasoning", "request", "session", "workload", "job", "streamed", "cost_center"];
 /** Low-priority columns also hidden by default on a phone (≤600px), where rows stack. */
 export const requestNarrowHidden = ["tokens", "attempts", "key", "request", "ttft", "speed", "finish"];
 
@@ -290,12 +291,13 @@ export function LogsPage({ scope }: { scope: LogsScope }) {
     { id: "status", label: "Status", type: "select", multiple: true, placeholder: "Any status", options: requestStatuses },
     { id: "finish_reason", label: "Finish reason", type: "select", multiple: true, placeholder: "Any", options: finishReasons },
     { id: "streamed", label: "Streamed", type: "toggle", allLabel: "Any", options: [{ value: "true", label: "Streamed" }, { value: "false", label: "Not streamed" }] },
+    { id: "workload", label: "Jobs", type: "toggle", allLabel: "All requests", options: [{ value: "jobs", label: "Video and batch jobs" }] },
   ];
   const list = (v?: string) => v ? v.split(",") : [];
-  const facetValues: FilterValues = { model: list(filters.model), key_id: list(filters.key_id), workspace_id: list(filters.workspace_id), status: list(filters.status), finish_reason: list(filters.finish_reason), streamed: list(filters.streamed) };
+  const facetValues: FilterValues = { model: list(filters.model), key_id: list(filters.key_id), workspace_id: list(filters.workspace_id), status: list(filters.status), finish_reason: list(filters.finish_reason), streamed: list(filters.streamed), workload: list(filters.workload) };
   const onFacets = (next: FilterValues) => {
     const one = (v: unknown) => Array.isArray(v) && typeof v[0] === "string" ? v[0] : undefined, several = (v: unknown) => Array.isArray(v) && v.length ? (v as string[]).join(",") : undefined;
-    go({ model: one(next.model), key_id: platform ? undefined : one(next.key_id), workspace_id: platform ? one(next.workspace_id) : undefined, status: several(next.status), finish_reason: several(next.finish_reason), streamed: one(next.streamed) as DashboardSearch["streamed"], cursor: undefined });
+    go({ model: one(next.model), key_id: platform ? undefined : one(next.key_id), workspace_id: platform ? one(next.workspace_id) : undefined, status: several(next.status), finish_reason: several(next.finish_reason), streamed: one(next.streamed) as DashboardSearch["streamed"], workload: one(next.workload) === "jobs" ? "jobs" : undefined, cursor: undefined });
   };
   const chips: ToolbarChip[] = filters.session_id ? [{ key: "session", label: "Session", text: filters.session_id, onRemove: () => go({ session_id: undefined, cursor: undefined }) }] : [];
   const periodActive = filters.range && filters.range !== "30d" ? 1 : 0;

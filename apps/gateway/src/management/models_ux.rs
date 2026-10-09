@@ -33,6 +33,9 @@ fn workload_valid(t: &str) -> bool {
             | "audio_speech"
             | "rerank"
             | "systemone"
+            | "realtime"
+            | "videos"
+            | "batches"
     )
 }
 #[derive(Deserialize)]
@@ -120,6 +123,9 @@ pub(super) async fn platform_models(
         "audio_speech",
         "rerank",
         "systemone",
+        "realtime",
+        "videos",
+        "batches",
     ] {
         all.insert(w.into(), json!(counts[w].as_i64().unwrap_or(0)));
     }

@@ -305,6 +305,7 @@ pub fn transcription_meters(input_audio_ms: Option<u64>) -> MeterUsage {
         output_audio_seconds_ms: Some(0),
         search_units: Some(0),
         requests: Some(1),
+        output_video_seconds_ms: None,
     }
 }
 
@@ -448,6 +449,7 @@ impl SpeechRequest {
                 output_audio_seconds_ms: None,
                 search_units: Some(0),
                 requests: Some(1),
+                output_video_seconds_ms: None,
             }),
             ..Usage::default()
         }

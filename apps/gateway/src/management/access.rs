@@ -119,8 +119,7 @@ async fn access(
     }
     for (layer, limits, lin) in &scopes {
         for (period, amount) in &limits.budgets {
-            let (start, end) = period.window(now);
-            let (used, unresolved) = budget_consumption(&mut tx, ws, *lin, start, end).await?;
+            let (used, unresolved) = budget_consumption(&mut tx, ws, *lin, *period, now).await?;
             if unresolved {
                 global.push(Reason {
                     code: "unresolved_usage_blocking",

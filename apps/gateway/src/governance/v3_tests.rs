@@ -497,6 +497,8 @@ async fn other_failures_partial_usage_or_paid_meters_stay_unknown(pool: PgPool) 
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn token_reservation_above_tokens_per_minute_is_a_distinct_denial(pool: PgPool) {
     let f = fixture(pool).await;
+    // The "minute's tokens are used" step needs both admissions in one minute.
+    f.store.freeze_admission_clock().await.unwrap();
     // Reservation = input ceiling 100 + requested output 10 = 110 tokens.
     v3(&f, token_lines(), json!({})).await;
     f.policy("workspace_local_policies", None, Some(109), None, None)

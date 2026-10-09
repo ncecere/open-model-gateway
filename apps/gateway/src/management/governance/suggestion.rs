@@ -754,6 +754,16 @@ pub(crate) fn map(model: &Value, workload: WorkloadKind, images: Option<&[u8]>) 
             d.na(Meter::InputTokens, false, "");
             d.na(Meter::OutputTokens, false, "");
         }
+        // OpenRouter serves no realtime sessions; there is nothing to import.
+        WorkloadKind::Realtime => d.warnings.push(
+            "OpenRouter does not serve realtime sessions; set the text and audio token rates by hand."
+                .into(),
+        ),
+        // Async jobs are served on OpenAI connections only (docs/async-jobs.md).
+        WorkloadKind::Videos | WorkloadKind::Batches => d.warnings.push(
+            "OpenRouter video and batch jobs are not supported by the gateway; set the rates by hand."
+                .into(),
+        ),
     }
     for (key, what) in [
         ("web_search", "Web search"),

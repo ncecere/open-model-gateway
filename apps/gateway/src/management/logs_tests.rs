@@ -454,3 +454,104 @@ async fn platform_logs_show_shared_workspaces_only_never_personal(pool: PgPool) 
         }
     }
 }
+
+/// Async jobs in Logs: the `workload=jobs` filter, the job summary on rows
+/// and the job detail on the request page, under the usual visibility.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn logs_filter_and_show_async_jobs(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let r = route(&pool, "job-model", "openai").await;
+    let (_, owner_key) = key(&f, &f.owner, f.team, Value::Null).await;
+    let base = simple(
+        f.team,
+        id(&owner_key),
+        "job-model",
+        "now()-interval '1 hour'",
+        4,
+    );
+    let text_root = base.root;
+    attempt(&pool, &r, base).await;
+    let job_root = Uuid::new_v4();
+    let video = attempt(
+        &pool,
+        &r,
+        Attempt {
+            root: job_root,
+            ..simple(
+                f.team,
+                id(&owner_key),
+                "job-model",
+                "now()-interval '2 hours'",
+                7,
+            )
+        },
+    )
+    .await;
+    // A job is one attempt: its request id is the execution id.
+    sqlx::query(
+        "UPDATE inference_executions SET root_request_id=id,workload_kind='videos' WHERE id=$1",
+    )
+    .bind(video)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let job = Uuid::new_v4();
+    sqlx::query("INSERT INTO async_jobs(id,kind,workspace_id,api_key_id,deployment_id,execution_id,public_model,provider,upstream_id,state,upstream_status,poll_deadline_at,video_seconds,video_size,completed_at,settled_at) VALUES($1,'video',$2,$3,$4,$5,'job-model','openai','video_up_logs','completed','completed',now()+interval '1 hour',8,'720x1280',now(),now())")
+        .bind(job).bind(f.team).bind(id(&owner_key)).bind(r.deployment).bind(video).execute(&pool).await.unwrap();
+    let ws = format!("/api/v1/workspaces/{}", f.team);
+    let (status, all) = get(&f, &f.owner, &format!("{ws}/requests")).await;
+    assert_eq!(status, StatusCode::OK, "{all}");
+    assert_eq!(rows(&all).len(), 2);
+    let (status, jobs) = get(&f, &f.owner, &format!("{ws}/requests?workload=jobs")).await;
+    assert_eq!(status, StatusCode::OK, "{jobs}");
+    assert_eq!(ids(&jobs, "root_request_id"), [video.to_string()]);
+    let row = &rows(&jobs)[0];
+    assert_eq!(row["job"]["id"], format!("video_{}", job.simple()));
+    assert_eq!(
+        (row["job"]["kind"].as_str(), row["job"]["state"].as_str()),
+        (Some("video"), Some("completed"))
+    );
+    assert!(
+        !row.to_string().contains("video_up_logs"),
+        "upstream id leaked"
+    );
+    let (_, text_only) = get(&f, &f.owner, &format!("{ws}/requests?workload=generation")).await;
+    assert_eq!(ids(&text_only, "root_request_id"), [text_root.to_string()]);
+    assert!(rows(&text_only).iter().all(|r| r["job"].is_null()));
+    for path in ["requests?workload=everything", "requests?workload=jobs%27"] {
+        assert_eq!(
+            get(&f, &f.owner, &format!("{ws}/{path}")).await.0,
+            StatusCode::BAD_REQUEST,
+            "{path}"
+        );
+    }
+    let (status, generations) = get(&f, &f.owner, &format!("{ws}/generations?workload=jobs")).await;
+    assert_eq!(status, StatusCode::OK, "{generations}");
+    assert_eq!(ids(&generations, "execution_id"), [video.to_string()]);
+    assert_eq!(
+        get(&f, &f.owner, &format!("{ws}/sessions?workload=jobs"))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let (status, metrics) = get(&f, &f.owner, &format!("{ws}/logs/metrics?workload=jobs")).await;
+    assert_eq!(status, StatusCode::OK, "{metrics}");
+    assert_eq!(metrics["requests"], "1");
+    let (status, detail) = get(
+        &f,
+        &f.owner,
+        &format!("{ws}/requests/{video}?workload=jobs"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["job"]["video_seconds"], 8);
+    assert_eq!(detail["job"]["state"], "completed");
+    assert!(detail["job"]["settled_at"].is_string());
+    assert!(
+        !detail.to_string().contains("video_up_logs"),
+        "upstream id leaked"
+    );
+    // An ordinary member sees only their own human-key requests: not this job.
+    let (_, mine) = get(&f, &f.member, &format!("{ws}/requests?workload=jobs")).await;
+    assert!(rows(&mine).is_empty());
+}

@@ -250,7 +250,7 @@ describe("Add model type and protocols", () => {
     return within(await screen.findByRole("listbox")).getAllByRole("option").map(o => [o.textContent, o.getAttribute("aria-disabled") === "true"] as const);
   };
   const protocols = () => within(screen.getByRole("group", { name: "Protocols" })).getAllByRole("button").map(b => [b.textContent, b.getAttribute("aria-pressed") === "true"]);
-  const types = ["Text", "Embeddings", "Images", "Speech to text", "Text to speech", "Rerank", "System One"];
+  const types = ["Text", "Embeddings", "Images", "Speech to text", "Text to speech", "Rerank", "System One", "Realtime audio", "Video", "Batch"];
 
   it("is one compact Type select with short labels; types the connection can't serve are disabled with a reason, not red sentences", async () => {
     const user = mount([conn("a", "anthropic", "Claude")]);
@@ -272,7 +272,7 @@ describe("Add model type and protocols", () => {
     expect(protocols()).toEqual([["Chat Completions", true]]);
     cleanup(); const user = mount([conn("v", "vllm", "Local")]);
     expect(protocols()).toEqual([["Chat Completions", true]]);
-    expect((await typeOptions(user)).filter(([, disabled]) => disabled).map(([label]) => label?.replace(/\(.*\)/, ""))).toEqual(["Images", "Speech to text", "Text to speech", "Rerank", "System One"]);
+    expect((await typeOptions(user)).filter(([, disabled]) => disabled).map(([label]) => label?.replace(/\(.*\)/, ""))).toEqual(["Images", "Speech to text", "Text to speech", "Rerank", "System One", "Realtime audio", "Video", "Batch"]);
   });
   it("sends the chosen protocols; switching connection follows the new profile and drops a type it can't serve", async () => {
     const fetch = vi.fn().mockResolvedValue(Response.json({ model_id: "m", deployment_id: "d", price_id: null }, { status: 201 }));

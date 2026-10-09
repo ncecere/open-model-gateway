@@ -21,7 +21,8 @@ use crate::{
     identity::IdentityState,
     inference::{Engine, EngineLimits, types::WorkloadKind},
     protocols::{
-        audio, chat_completions, embeddings, images, messages, rerank, responses, systemone,
+        audio, batches, chat_completions, embeddings, images, messages, realtime, rerank,
+        responses, systemone, videos,
     },
     providers::ProviderRegistry,
     store::Store,
@@ -76,6 +77,12 @@ fn build_router(
         .route("/v1/responses", post(responses::handle))
         .route("/v1/messages", post(messages::handle))
         .route("/v1/embeddings", post(embeddings::handle))
+        // Explicitly unsupported realtime companions (never minted upstream).
+        .route(
+            "/v1/realtime/client_secrets",
+            post(realtime::unsupported_route),
+        )
+        .route("/v1/realtime/calls", post(realtime::unsupported_route))
         .route_layer(middleware::from_fn(client_labels))
         .route_layer(middleware::from_fn_with_state(store.clone(), authenticate));
     // Non-generation workloads carry their own configured body caps instead
@@ -113,6 +120,44 @@ fn build_router(
         )
         .route_layer(middleware::from_fn(client_labels))
         .route_layer(middleware::from_fn_with_state(store.clone(), authenticate));
+    // Async jobs (`crate::jobs`): video create and the streamed batch-file
+    // upload have their own caps; everything else keeps 2 MiB.
+    let job_limits = crate::jobs::limits();
+    let cap = |bytes: usize, route: MethodRouter<Store>| -> MethodRouter<Store> {
+        route
+            .layer::<_, std::convert::Infallible>(DefaultBodyLimit::max(bytes))
+            .layer(RequestBodyLimitLayer::new(bytes))
+    };
+    let upload_bytes =
+        usize::try_from(job_limits.batch_file_bytes + 64 * 1024).unwrap_or(usize::MAX);
+    let small = 2 * 1024 * 1024;
+    let jobs = Router::new()
+        .route(
+            "/v1/videos",
+            cap(
+                job_limits.video_body_bytes,
+                post(videos::create).get(videos::list),
+            ),
+        )
+        .route(
+            "/v1/videos/{id}",
+            cap(small, get(videos::retrieve).delete(videos::delete)),
+        )
+        .route("/v1/videos/{id}/content", cap(small, get(videos::content)))
+        .route("/v1/files", cap(upload_bytes, post(batches::upload)))
+        .route("/v1/files/{id}", cap(small, get(batches::file)))
+        .route(
+            "/v1/files/{id}/content",
+            cap(small, get(batches::file_content)),
+        )
+        .route(
+            "/v1/batches",
+            cap(small, post(batches::create).get(batches::list)),
+        )
+        .route("/v1/batches/{id}", cap(small, get(batches::retrieve)))
+        .route("/v1/batches/{id}/cancel", cap(small, post(batches::cancel)))
+        .route_layer(middleware::from_fn(client_labels))
+        .route_layer(middleware::from_fn_with_state(store.clone(), authenticate));
 
     let ready_web = web.clone();
     let mut root = Router::new();
@@ -130,6 +175,9 @@ fn build_router(
         get(move |State(store): State<Store>| readiness(store, ready_web.clone())),
     )
     .merge(inference)
+    // WebSocket upgrade: authenticates itself (Bearer header or the key
+    // subprotocol) before admission; no request body.
+    .route("/v1/realtime", get(realtime::handle))
     .fallback(move |request: Request| {
         let web = web.clone();
         async move {
@@ -141,6 +189,7 @@ fn build_router(
     })
     .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024))
     .merge(workloads)
+    .merge(jobs)
     .layer(Extension(engine))
     .layer(middleware::from_fn(request_context))
     .with_state(store)
@@ -368,6 +417,31 @@ mod tests {
             ("/v1/images/generations", "POST"),
             ("/v1/audio/transcriptions", "POST"),
             ("/v1/audio/speech", "POST"),
+            // Async jobs: every route, including reads, is key-authenticated.
+            ("/v1/videos", "POST"),
+            ("/v1/videos", "GET"),
+            ("/v1/videos/video_00000000000000000000000000000000", "GET"),
+            (
+                "/v1/videos/video_00000000000000000000000000000000",
+                "DELETE",
+            ),
+            (
+                "/v1/videos/video_00000000000000000000000000000000/content",
+                "GET",
+            ),
+            ("/v1/files", "POST"),
+            ("/v1/files/file-00000000000000000000000000000000", "GET"),
+            (
+                "/v1/files/file-00000000000000000000000000000000/content",
+                "GET",
+            ),
+            ("/v1/batches", "POST"),
+            ("/v1/batches", "GET"),
+            ("/v1/batches/batch_00000000000000000000000000000000", "GET"),
+            (
+                "/v1/batches/batch_00000000000000000000000000000000/cancel",
+                "POST",
+            ),
         ] {
             let response = app()
                 .oneshot(
