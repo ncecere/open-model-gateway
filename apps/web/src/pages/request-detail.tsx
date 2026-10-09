@@ -19,7 +19,7 @@ import { useEffect } from "react";
 import { FileQuestion } from "lucide-react";
 import { ApiError, platformPath, wsPath, type Session } from "../lib/api";
 import { formatMicroUsd } from "../lib/governance";
-import { costText, countText, dataPolicyOf, finishReasonLabel, latencyText, logPaths, logsSearch, requestFilters, requestQuery, requestStatusLabel, requestStatusTone, requestTarget, sessionTarget, timelineStatus, tokensText, tpsText, unresolvedText, workloadText, type LogsScope, type RequestAttempt, type RequestDetail, type RequestPage } from "../lib/requests";
+import { costText, countText, dataPolicyOf, finishReasonLabel, latencyText, logPaths, logsSearch, requestFilters, requestQuery, requestStatusLabel, requestStatusTone, requestTarget, servedModel, sessionTarget, timelineStatus, tokensText, tpsText, unresolvedText, workloadText, type LogsScope, type RequestAttempt, type RequestDetail, type RequestPage } from "../lib/requests";
 import type { DashboardSearch } from "../lib/permissions";
 import { Button, ErrorNotice, Stack, useApi } from "../components/ui";
 import { EmptyState } from "../components/ui/empty-state/empty-state";
@@ -28,6 +28,7 @@ import { useResourceName } from "../components/layout/breadcrumbs";
 import { LabIcon, ProviderIcon, WithIcon } from "../components/provider-icon";
 import { BackLink } from "../components/templates/form-page";
 import { CopyId, shortId } from "../components/templates/copy-id";
+import { UpstreamModel } from "../components/templates/upstream-model";
 import { DataPolicyBadge } from "../components/templates/data-policy-badge";
 import { PrevNext } from "../components/templates/prev-next";
 import { StatTile, StatTileGrid } from "../components/templates/stat-tile";
@@ -46,7 +47,7 @@ export function attemptItem(a: RequestAttempt, attempts: RequestAttempt[], workl
   const reason = unresolvedText(a.cost_microusd === null ? a.unresolved_reason : null);
   return {
     id: a.execution_id, status: timelineStatus(a.state), durationMs: a.latency_ms,
-    title: <WithIcon icon={<ProviderIcon profile={a.connection.provider} size="sm" />}>{a.connection.name} · {a.deployment.upstream_model}</WithIcon>,
+    title: <WithIcon icon={<ProviderIcon profile={a.connection.provider} size="sm" />}>{a.connection.name} · <UpstreamModel row={{ upstream_model: a.deployment.upstream_model, reported_upstream_model: a.reported_upstream_model }} showRoute /></WithIcon>,
     marker: a.attempt_number > 1 ? "Fallback" : undefined, markerTone: "warning",
     meta: <>{stateLabel(a.state)}{a.finish_reason && a.finish_reason !== "error" ? <> · {finishReasonLabel(a.finish_reason)}</> : null}{a.error_code ? <> · <code className={s.mono}>{a.error_code}</code></> : null} · {tokensText(a.input_tokens, a.output_tokens, a.workload_kind ?? workload)} · {costText(a.cost_microusd, a.held_microusd)}</>,
     detail: <Stack gap={1}>
@@ -137,7 +138,9 @@ function RequestDetail({ scope, id }: { scope: LogsScope; id: string }) {
       </StatTileGrid>
       <Card title="Details" titleAs="h2"><DescriptionList dividers items={[
         { label: "Request ID", value: <CopyId value={r!.root_request_id} label="request ID" head={13} tail={12} /> },
-        { label: "Model", value: r!.upstream_model && r!.upstream_model !== r!.model ? <>{r!.model} <span className={s.secondary}>→ {r!.upstream_model}</span></> : r!.model },
+        { label: "Model", value: r!.model },
+        // What the provider reported serving (final attempt), else the route's configured id, marked "configured".
+        ...(servedModel(r!) ? [{ label: "Upstream model", value: <UpstreamModel row={r!} showRoute /> }] : []),
         ...(scope.kind === "platform" && r!.workspace ? [{ label: "Workspace", value: `${r!.workspace.name} · ${r!.workspace.kind === "project" ? "Project" : "Team"}` }] : []),
         { label: "Key", value: scope.kind === "workspace" ? <ResourceLink search={{ page: "key-detail", ws: scope.workspace.id, record: r!.key.id }}>{r!.key.name}</ResourceLink> : r!.key.name },
         { label: "Finish reason", value: r!.finish_reason ? finishReasonLabel(r!.finish_reason) : r!.status === "in_progress" ? "Not finished yet" : "None reported" },

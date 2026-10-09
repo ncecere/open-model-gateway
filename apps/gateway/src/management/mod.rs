@@ -283,7 +283,7 @@ struct Name {
     name: String,
 }
 pub fn router(identity: IdentityState) -> Router<Store> {
-    let sign_in = settings::SignIn(identity.sign_in_summary());
+    let sign_in = settings::SignIn(identity.clone());
     routes()
         .layer(Extension(sign_in))
         .route_layer(middleware::from_fn_with_state(identity, require_session))

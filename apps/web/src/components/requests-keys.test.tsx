@@ -53,8 +53,10 @@ describe("Request page", () => {
     expect(page).toContain("Copy request ID");
     expect(page).toContain("Doesn&#x27;t keep data");
     expect(page).toContain("Current setting of the route that served it, not a record of this request.");
-    expect(page).toContain("Primary OpenAI · upstream-1");
-    expect(page).toContain("Backup OpenRouter · upstream-2");
+    // No model was reported, so each attempt shows its configured route id, marked as such.
+    const text = page.replace(/<[^>]+>/g, "");
+    expect(text).toContain("Primary OpenAI · upstream-1 (configured)");
+    expect(text).toContain("Backup OpenRouter · upstream-2 (configured)");
     expect(page).toContain("upstream_timeout");
     expect(page).toContain("Fallback");
     expect(page).toContain("Tried after attempt 1 (Primary OpenAI) ended with");

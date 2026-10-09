@@ -21,7 +21,7 @@ Provide issuer URL, client ID, staging origin, public/confidential client type, 
 - Verify new ordinary identity behavior and explicit linking for a pre-provisioned email. An email-only match must not bypass linking approval.
 - Create a separate test organization/team/project. Verify platform admin, org admin, shared-workspace admin and member access, including negative API requests—not just hidden navigation.
 - Verify personal workspace metadata/keys/activity remain owner-private, even from another operator.
-- Exercise the issuer's signing-key rotation process in coordination with a gateway restart; automatic JWKS refresh is pending. Record that limitation in the pilot runbook.
+- Exercise the issuer's signing-key rotation: publish a new key, sign in with it without restarting the gateway (one rate-limited JWKS refetch), and confirm Admin › Settings › Sign-in shows the refreshed keys. If SCIM is enabled, also run [SCIM](scim.md) provisioning and deactivation against the real provider.
 
 ## 3. One model/provider first
 

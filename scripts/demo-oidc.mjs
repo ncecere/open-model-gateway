@@ -15,8 +15,10 @@ export const DEMO_ACCOUNTS = {
 const accounts = DEMO_ACCOUNTS;
 const encode = value => Buffer.from(JSON.stringify(value)).toString("base64url");
 const escapeHtml = value => value.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-const validAuthorization = p => p.get("client_id") === CLIENT && p.get("redirect_uri") === CALLBACK && p.get("response_type") === "code" && p.get("code_challenge_method") === "S256" && /^[A-Za-z0-9_-]{43}$/.test(p.get("code_challenge") ?? "") && ["state", "nonce"].every(k => /^[A-Za-z0-9_-]{1,200}$/.test(p.get(k) ?? ""));
-export function createDemoIssuer() {
+const validAuthorization = (p, callback = CALLBACK) => p.get("client_id") === CLIENT && p.get("redirect_uri") === callback && p.get("response_type") === "code" && p.get("code_challenge_method") === "S256" && /^[A-Za-z0-9_-]{43}$/.test(p.get("code_challenge") ?? "") && ["state", "nonce"].every(k => /^[A-Za-z0-9_-]{1,200}$/.test(p.get(k) ?? ""));
+// Options exist only so the isolated browser suite can bind other loopback ports; defaults are the demo.
+export function createDemoIssuer({ issuer: ISSUER_URL = ISSUER, callback: CALLBACK_URL = CALLBACK } = {}) {
+  const issuerHost = new URL(ISSUER_URL).host, callbackOrigin = new URL(CALLBACK_URL).origin;
   const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
   const jwk = { ...publicKey.export({ format: "jwk" }), kid: "local-demo", use: "sig", alg: "RS256" };
   const codes = new Map();
@@ -26,16 +28,16 @@ export function createDemoIssuer() {
     // Retain the form Origin header without leaking authorization query parameters.
     res.setHeader("referrer-policy", "origin");
     const json = (value, status = 200) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(value)); };
-    if (req.headers.host !== "127.0.0.1:18084") return json({ error: "invalid_host" }, 400);
+    if (req.headers.host !== issuerHost) return json({ error: "invalid_host" }, 400);
     for (const [code, item] of codes) if (item.expires < Date.now()) codes.delete(code);
-    const url = new URL(req.url, ISSUER);
-    if (req.method === "GET" && url.pathname === "/.well-known/openid-configuration") return json({ issuer: ISSUER, authorization_endpoint: `${ISSUER}/authorize`, token_endpoint: `${ISSUER}/token`, jwks_uri: `${ISSUER}/jwks`, response_types_supported: ["code"], subject_types_supported: ["public"], id_token_signing_alg_values_supported: ["RS256"], token_endpoint_auth_methods_supported: ["none"], code_challenge_methods_supported: ["S256"] });
+    const url = new URL(req.url, ISSUER_URL);
+    if (req.method === "GET" && url.pathname === "/.well-known/openid-configuration") return json({ issuer: ISSUER_URL, authorization_endpoint: `${ISSUER_URL}/authorize`, token_endpoint: `${ISSUER_URL}/token`, jwks_uri: `${ISSUER_URL}/jwks`, response_types_supported: ["code"], subject_types_supported: ["public"], id_token_signing_alg_values_supported: ["RS256"], token_endpoint_auth_methods_supported: ["none"], code_challenge_methods_supported: ["S256"] });
     if (req.method === "GET" && url.pathname === "/jwks") return json({ keys: [jwk] });
     if (req.method === "GET" && url.pathname === "/authorize") {
       const p = url.searchParams;
-      if (!validAuthorization(p)) return json({ error: "invalid_request" }, 400);
+      if (!validAuthorization(p, CALLBACK_URL)) return json({ error: "invalid_request" }, 400);
       const hidden = ["client_id", "redirect_uri", "response_type", "code_challenge_method", "code_challenge", "state", "nonce"].map(k => `<input type="hidden" name="${k}" value="${escapeHtml(p.get(k))}">`).join("");
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' http://127.0.0.1:3000; base-uri 'none'; frame-ancestors 'none'" });
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-security-policy": `default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${callbackOrigin}; base-uri 'none'; frame-ancestors 'none'` });
       // Look follows Grounded's development-accounts sign-in (dark card, initials, role badge, arrow).
       const initials = (email) => email.slice(0, 2).toUpperCase();
       const roles = { operator: ["Platform admin", "info"], auditor: ["Platform auditor", "neutral"], alex: ["Team admin", "neutral"], blair: ["Platform user", "neutral"], unentitled: ["No entitlement", "warn"] };
@@ -44,7 +46,7 @@ export function createDemoIssuer() {
     }
     if (req.method !== "POST" || !["/choose", "/token"].includes(url.pathname)) return json({ error: "not_found" }, 404);
     if (!req.headers["content-type"]?.startsWith("application/x-www-form-urlencoded")) return json({ error: "invalid_request" }, 400);
-    if (url.pathname === "/choose" && req.headers.origin !== ISSUER) return json({ error: "invalid_origin" }, 403);
+    if (url.pathname === "/choose" && req.headers.origin !== ISSUER_URL) return json({ error: "invalid_origin" }, 403);
     let body = "";
     try {
       for await (const chunk of req) { body += chunk; if (Buffer.byteLength(body) > 8192) return json({ error: "invalid_request" }, 413); }
@@ -52,17 +54,17 @@ export function createDemoIssuer() {
     const p = new URLSearchParams(body);
     if (url.pathname === "/choose") {
       const account = p.get("account");
-      if (!validAuthorization(p) || !Object.hasOwn(accounts, account)) return json({ error: "invalid_request" }, 400);
+      if (!validAuthorization(p, CALLBACK_URL) || !Object.hasOwn(accounts, account)) return json({ error: "invalid_request" }, 400);
       if (codes.size >= 1000) return json({ error: "temporarily_unavailable" }, 503);
       const code = randomBytes(32).toString("hex");
       codes.set(code, { account, nonce: p.get("nonce"), challenge: p.get("code_challenge"), expires: Date.now() + 60_000 });
-      const redirect = new URL(CALLBACK); redirect.searchParams.set("code", code); redirect.searchParams.set("state", p.get("state"));
+      const redirect = new URL(CALLBACK_URL); redirect.searchParams.set("code", code); redirect.searchParams.set("state", p.get("state"));
       res.writeHead(302, { location: redirect.href }); return res.end();
     }
     const attempt = codes.get(p.get("code")); codes.delete(p.get("code"));
-    if (!attempt || attempt.expires < Date.now() || p.get("grant_type") !== "authorization_code" || p.get("client_id") !== CLIENT || p.get("redirect_uri") !== CALLBACK || !/^[A-Za-z0-9._~-]{43,128}$/.test(p.get("code_verifier") ?? "") || createHash("sha256").update(p.get("code_verifier")).digest("base64url") !== attempt.challenge) return json({ error: "invalid_grant" }, 400);
+    if (!attempt || attempt.expires < Date.now() || p.get("grant_type") !== "authorization_code" || p.get("client_id") !== CLIENT || p.get("redirect_uri") !== CALLBACK_URL || !/^[A-Za-z0-9._~-]{43,128}$/.test(p.get("code_verifier") ?? "") || createHash("sha256").update(p.get("code_verifier")).digest("base64url") !== attempt.challenge) return json({ error: "invalid_grant" }, 400);
     const now = Math.floor(Date.now() / 1000);
-    const payload = `${encode({ alg: "RS256", kid: jwk.kid })}.${encode({ iss: ISSUER, sub: attempt.account, aud: CLIENT, iat: now, exp: now + 300, nonce: attempt.nonce, email: accounts[attempt.account].email, email_verified: true, name: accounts[attempt.account].name, groups: accounts[attempt.account].groups })}`;
+    const payload = `${encode({ alg: "RS256", kid: jwk.kid })}.${encode({ iss: ISSUER_URL, sub: attempt.account, aud: CLIENT, iat: now, exp: now + 300, nonce: attempt.nonce, email: accounts[attempt.account].email, email_verified: true, name: accounts[attempt.account].name, groups: accounts[attempt.account].groups })}`;
     json({ access_token: "local-demo-unused-token", token_type: "Bearer", expires_in: 300, id_token: `${payload}.${sign("RSA-SHA256", Buffer.from(payload), privateKey).toString("base64url")}` });
   });
 }

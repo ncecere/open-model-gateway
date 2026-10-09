@@ -1,7 +1,7 @@
 use super::*;
 use axum::{body::Body, extract::Form};
 use openidconnect::{
-    IdToken, IdTokenClaims, PrivateSigningKey,
+    IdToken, IdTokenClaims, JsonWebKeyId, PrivateSigningKey,
     core::{CoreEdDsaPrivateSigningKey, CoreJwsSigningAlgorithm},
 };
 use serde_json::{Value, json};
@@ -27,6 +27,11 @@ struct MockProvider {
     claims: Arc<Mutex<Value>>,
     exchanges: Arc<AtomicUsize>,
     verifier: Arc<Mutex<Option<String>>>,
+    /// Published key set, request count, Cache-Control header and outage switch.
+    jwks: Arc<Mutex<Value>>,
+    jwks_hits: Arc<AtomicUsize>,
+    jwks_cache_control: Arc<Mutex<Option<String>>>,
+    jwks_fail: Arc<std::sync::atomic::AtomicBool>,
     task: tokio::task::JoinHandle<()>,
 }
 impl Drop for MockProvider {
@@ -51,7 +56,18 @@ impl MockProvider {
         if let Some((key, value)) = change {
             metadata[key] = value;
         }
-        let jwks = json!({"keys": [signing_key().as_verification_key()]});
+        let jwks = Arc::new(Mutex::new(
+            json!({"keys": [signing_key().as_verification_key()]}),
+        ));
+        let jwks_hits = Arc::new(AtomicUsize::new(0));
+        let jwks_cache_control = Arc::new(Mutex::new(None::<String>));
+        let jwks_fail = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let jwks_state = (
+            jwks.clone(),
+            jwks_hits.clone(),
+            jwks_cache_control.clone(),
+            jwks_fail.clone(),
+        );
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -66,7 +82,21 @@ impl MockProvider {
         let state = (claims.clone(), exchanges.clone(), verifier.clone());
         let app = Router::new()
             .route("/.well-known/openid-configuration", get(move || { let metadata = metadata.clone(); async move { Json(metadata) } }))
-            .route("/jwks", get(move || { let jwks = jwks.clone(); async move { Json(jwks) } }))
+            .route("/jwks", get(move || {
+                let (jwks, hits, cache_control, fail) = jwks_state.clone();
+                async move {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    if fail.load(Ordering::SeqCst) {
+                        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                    }
+                    let mut headers = HeaderMap::new();
+                    if let Some(value) = cache_control.lock().unwrap().clone() {
+                        headers.insert(header::CACHE_CONTROL, value.parse().unwrap());
+                    }
+                    let body = jwks.lock().unwrap().clone();
+                    (headers, Json(body)).into_response()
+                }
+            }))
             .route("/token", post(move |Form(form): Form<HashMap<String,String>>| {
                 let (claims, exchanges, verifier) = state.clone();
                 async move {
@@ -96,6 +126,10 @@ impl MockProvider {
             claims,
             exchanges,
             verifier,
+            jwks,
+            jwks_hits,
+            jwks_cache_control,
+            jwks_fail,
             task,
         }
     }
@@ -326,6 +360,226 @@ async fn disabled_login_and_bearer_rejection_do_not_need_database() {
         verify_session(&state, &headers).await,
         Err(AuthError(StatusCode::UNAUTHORIZED))
     ));
+}
+
+/// Ed25519 PKCS#8 keys built from fixed test seeds (public test material only).
+fn rotation_key(der_base64: &str, kid: &str) -> CoreEdDsaPrivateSigningKey {
+    let pem = format!("-----BEGIN PRIVATE KEY-----\n{der_base64}\n-----END PRIVATE KEY-----");
+    CoreEdDsaPrivateSigningKey::from_ed25519_pem(&pem, Some(JsonWebKeyId::new(kid.into()))).unwrap()
+}
+const KEY_B: &str = "MC4CAQAwBQYDK2VwBCIEIIUFxA5MJvcFlRFzvVZvw0RpOP86u8UZywrRtvXcdAD7";
+const KEY_C: &str = "MC4CAQAwBQYDK2VwBCIEIK1PB7sZp+K3ReVinF8TAbYnSpyirzgr6lzAzk/Jy295";
+
+fn token_claims(issuer: &str) -> IdTokenClaims<SignedClaims, CoreGenderClaim> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    serde_json::from_value(json!({
+        "iss": issuer, "sub": "rotation", "aud": "test-client", "exp": now + 300, "iat": now,
+        "nonce": "jwks-nonce", "email": "rotation@example.test", "email_verified": true, "groups": []
+    }))
+    .unwrap()
+}
+
+fn mint(key: &CoreEdDsaPrivateSigningKey, issuer: &str) -> EnterpriseIdToken {
+    IdToken::new(
+        token_claims(issuer),
+        key,
+        CoreJwsSigningAlgorithm::EdDsa,
+        None,
+        None,
+    )
+    .unwrap()
+}
+
+#[derive(Clone)]
+struct TestClock {
+    base: std::time::Instant,
+    offset: Arc<std::sync::atomic::AtomicU64>,
+}
+impl TestClock {
+    fn new() -> Self {
+        Self {
+            base: std::time::Instant::now(),
+            offset: Arc::default(),
+        }
+    }
+    fn advance(&self, seconds: u64) {
+        self.offset.fetch_add(seconds, Ordering::SeqCst);
+    }
+    fn clock(&self) -> jwks::Clock {
+        let this = self.clone();
+        Arc::new(move || this.base + Duration::from_secs(this.offset.load(Ordering::SeqCst)))
+    }
+}
+
+#[tokio::test]
+async fn jwks_rotation_refetch_is_rate_limited_single_flight_and_survives_outages() {
+    let mock = MockProvider::start(None).await;
+    let (a, b, c) = (
+        rotation_key(
+            "MC4CAQAwBQYDK2VwBCIEICWeYPLxoZKHZlQ6rkBi11E9JwchynXtljATLqym/XS9",
+            "kid-a",
+        ),
+        rotation_key(KEY_B, "kid-b"),
+        rotation_key(KEY_C, "kid-c"),
+    );
+    *mock.jwks.lock().unwrap() = json!({"keys": [a.as_verification_key()]});
+    *mock.jwks_cache_control.lock().unwrap() = Some("public, max-age=600".into());
+    let clock = TestClock::new();
+    let state = IdentityState::build(
+        Store::new(lazy_pool()),
+        Some(mock.config()),
+        JwksPolicy::default(),
+        clock.clock(),
+    )
+    .await
+    .unwrap();
+    let provider = state.provider.clone().unwrap();
+    let nonce = Nonce::new("jwks-nonce".into());
+    let hits = || mock.jwks_hits.load(Ordering::SeqCst);
+    let start = hits();
+    let (token_a, token_b, token_c) = (
+        mint(&a, &mock.issuer),
+        mint(&b, &mock.issuer),
+        mint(&c, &mock.issuer),
+    );
+    assert!(verify_id_token(&provider, &token_a, &nonce).await.is_ok());
+    assert_eq!(hits(), start, "cached keys are reused");
+    let summary = state.sign_in_summary();
+    assert_eq!(summary["jwks"]["keys"], 1);
+    assert_eq!(summary["jwks"]["state"], "fresh");
+    assert!(summary["jwks"]["refreshed_at"].is_string());
+
+    // Rotation: kid-b is published; an unknown kid refetches at most once a minute.
+    *mock.jwks.lock().unwrap() =
+        json!({"keys": [a.as_verification_key(), b.as_verification_key()]});
+    assert_eq!(
+        verify_id_token(&provider, &token_b, &nonce)
+            .await
+            .unwrap_err()
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(hits(), start, "rate limited right after startup");
+    clock.advance(60);
+    assert!(verify_id_token(&provider, &token_b, &nonce).await.is_ok());
+    assert!(verify_id_token(&provider, &token_a, &nonce).await.is_ok());
+    assert_eq!(hits(), start + 1);
+
+    // A burst of unknown key ids triggers one fetch, then nothing until the interval passes.
+    clock.advance(60);
+    let burst = futures_util::future::join_all(
+        (0..16).map(|_| verify_id_token(&provider, &token_c, &nonce)),
+    )
+    .await;
+    assert!(burst.iter().all(Result::is_err));
+    assert_eq!(hits(), start + 2, "single flight");
+    for _ in 0..5 {
+        assert!(verify_id_token(&provider, &token_c, &nonce).await.is_err());
+    }
+    assert_eq!(hits(), start + 2);
+
+    // max-age=600 is honoured: keys refresh once after expiry.
+    clock.advance(600);
+    assert!(verify_id_token(&provider, &token_a, &nonce).await.is_ok());
+    assert_eq!(hits(), start + 3);
+
+    // Outage: last good keys stay usable within the grace period, then sign-in fails closed.
+    mock.jwks_fail.store(true, Ordering::SeqCst);
+    clock.advance(600);
+    assert!(verify_id_token(&provider, &token_b, &nonce).await.is_ok());
+    assert_eq!(hits(), start + 4);
+    let summary = state.sign_in_summary();
+    assert_eq!(summary["jwks"]["state"], "stale");
+    assert!(summary["jwks"]["last_failure_at"].is_string());
+    assert!(verify_id_token(&provider, &token_a, &nonce).await.is_ok());
+    assert_eq!(hits(), start + 4, "failure backoff");
+    clock.advance(6 * 60 * 60);
+    assert_eq!(
+        verify_id_token(&provider, &token_a, &nonce)
+            .await
+            .unwrap_err()
+            .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(state.sign_in_summary()["jwks"]["state"], "unavailable");
+    mock.jwks_fail.store(false, Ordering::SeqCst);
+    clock.advance(30);
+    assert!(verify_id_token(&provider, &token_a, &nonce).await.is_ok());
+    assert_eq!(state.sign_in_summary()["jwks"]["state"], "fresh");
+    assert_eq!(state.sign_in_summary()["jwks"]["keys"], 2);
+}
+
+#[tokio::test]
+async fn id_tokens_never_accept_none_or_shared_secret_algorithms() {
+    for algs in [json!(["none"]), json!(["HS256"]), json!(["HS256", "none"])] {
+        let mock = MockProvider::start(Some(("id_token_signing_alg_values_supported", algs))).await;
+        assert!(
+            IdentityState::new(Store::new(lazy_pool()), Some(mock.config()))
+                .await
+                .is_err()
+        );
+    }
+    // Advertised HS256/none are ignored; a confidential client secret is never an ID-token key.
+    let mock = MockProvider::start(Some((
+        "id_token_signing_alg_values_supported",
+        json!(["HS256", "none", "EdDSA"]),
+    )))
+    .await;
+    let config = IdentityConfig::parse(
+        "http://127.0.0.1:3000".into(),
+        mock.issuer.clone(),
+        "test-client".into(),
+        Some("test-client-secret".into()),
+        true,
+    )
+    .unwrap();
+    let state = IdentityState::new(Store::new(lazy_pool()), Some(config))
+        .await
+        .unwrap();
+    let provider = state.provider.clone().unwrap();
+    assert_eq!(provider.algs, [CoreJwsSigningAlgorithm::EdDsa]);
+    let nonce = Nonce::new("jwks-nonce".into());
+    let hmac: EnterpriseIdToken = IdToken::new(
+        token_claims(&mock.issuer),
+        &openidconnect::core::CoreHmacKey::new("test-client-secret"),
+        CoreJwsSigningAlgorithm::HmacSha256,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        verify_id_token(&provider, &hmac, &nonce)
+            .await
+            .unwrap_err()
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    // Same claims, `alg: none` and an empty signature.
+    let payload = hmac.to_string().split('.').nth(1).unwrap().to_owned();
+    let unsigned = format!("eyJhbGciOiJub25lIn0.{payload}.");
+    if let Ok(token) = unsigned.parse::<EnterpriseIdToken>() {
+        assert!(verify_id_token(&provider, &token, &nonce).await.is_err());
+    }
+    // The legitimate key still works.
+    assert!(
+        verify_id_token(
+            &provider,
+            &IdToken::new(
+                token_claims(&mock.issuer),
+                &signing_key(),
+                CoreJwsSigningAlgorithm::EdDsa,
+                None,
+                None,
+            )
+            .unwrap(),
+            &nonce
+        )
+        .await
+        .is_ok()
+    );
 }
 
 #[test]
@@ -1636,5 +1890,87 @@ mod database {
                 .await
                 .is_err()
         );
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn scim_managed_groups_replace_token_membership_at_sign_in(pool: sqlx::PgPool) {
+        let store = Store::new(pool.clone());
+        let issuer = "https://issuer.test";
+        for group in ["Engineering", "Legacy"] {
+            sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES($1,$2,$3,'platform','user')")
+                .bind(Uuid::new_v4()).bind(issuer).bind(group).execute(&pool).await.unwrap();
+        }
+        let (scim_member, group) = (Uuid::new_v4(), Uuid::new_v4());
+        sqlx::query(
+            "INSERT INTO users(id,email,oidc_link_allowed) VALUES($1,'member@example.test',true)",
+        )
+        .bind(scim_member)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO scim_groups(id,display_name,external_id) VALUES($1,'Engineering','grp-eng')")
+            .bind(group).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO scim_group_members(group_id,user_id) VALUES($1,$2)")
+            .bind(group)
+            .bind(scim_member)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let grants = |user: Uuid| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, String>("SELECT m.group_value FROM platform_role_grants g JOIN oidc_group_mappings m ON m.id=g.mapping_id WHERE g.user_id=$1 AND g.source='group' AND g.revoked_at IS NULL ORDER BY 1")
+                    .bind(user).fetch_all(&pool).await.unwrap()
+            }
+        };
+        // SCIM membership entitles even though the token claim is empty.
+        assert_eq!(
+            resolve_identity_with(&store, issuer, "member", "member@example.test", &[], true)
+                .await
+                .unwrap(),
+            scim_member
+        );
+        assert_eq!(grants(scim_member).await, ["Engineering"]);
+        // With SCIM disabled the signed empty claim is authoritative again.
+        assert_eq!(
+            resolve_identity_with(&store, issuer, "member", "member@example.test", &[], false)
+                .await
+                .unwrap_err()
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            resolve_identity_with(&store, issuer, "member", "member@example.test", &[], true)
+                .await
+                .unwrap(),
+            scim_member
+        );
+        // A token claiming a SCIM-managed group (by name or external id) does not grant it;
+        // groups SCIM does not manage still come from the token.
+        assert_eq!(
+            resolve_identity_with(
+                &store,
+                issuer,
+                "outsider",
+                "outsider@example.test",
+                &["Engineering".into(), "grp-eng".into()],
+                true
+            )
+            .await
+            .unwrap_err()
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        let outsider = resolve_identity_with(
+            &store,
+            issuer,
+            "outsider",
+            "outsider@example.test",
+            &["Engineering".into(), "Legacy".into()],
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(grants(outsider).await, ["Legacy"]);
     }
 }

@@ -63,10 +63,23 @@ export const finishReasons: { value: FinishReason; label: string }[] = [
 /** A finish reason for display; null = still running or not applicable (e.g. embeddings). */
 export const finishReasonLabel = (reason: string | null | undefined) => reason == null ? "None" : finishReasons.find(f => f.value === reason)?.label ?? reason;
 export const finishReasonTone = (reason: string | null | undefined) => reason === "stop" || reason === "tool_calls" ? "success" : reason === "error" ? "danger" : reason === "length" || reason === "content_filter" ? "warning" : "neutral";
+/**
+ * The Logs "Upstream model": the model the provider reported serving when it
+ * reported one, else the route's configured upstream id (`configured`), else
+ * null. Providers that never report it (Bedrock outside prompt routers) show
+ * the configured id.
+ */
+export type ServedModel = { id: string; configured: boolean; route?: string };
+export function servedModel(row: { upstream_model?: string | null; reported_upstream_model?: string | null }): ServedModel | null {
+  if (row.reported_upstream_model) return { id: row.reported_upstream_model, configured: false, ...(row.upstream_model && row.upstream_model !== row.reported_upstream_model ? { route: row.upstream_model } : {}) };
+  return row.upstream_model ? { id: row.upstream_model, configured: true } : null;
+}
+/** Plain text for titles and tooltips: "gpt-x (configured)". */
+export const servedModelText = (m: ServedModel | null) => m ? `${m.id}${m.configured ? " (configured)" : ""}` : "Unknown";
 export type LogWorkspace = { id: string; name: string; kind: "personal" | "team" | "project" };
 /** Telemetry shared by request and generation rows (optional: older servers omit them). */
 export type LogTelemetry = {
-  workspace?: LogWorkspace; upstream_model?: string | null; finish_reason?: string | null; cached_input_tokens?: string | null; reasoning_tokens?: string | null;
+  workspace?: LogWorkspace; upstream_model?: string | null; reported_upstream_model?: string | null; finish_reason?: string | null; cached_input_tokens?: string | null; reasoning_tokens?: string | null;
   time_to_first_token_ms?: number | null; generation_ms?: number | null; tokens_per_second?: string | null; session_id?: string | null; app?: string | null;
 };
 export type RequestRow = {
@@ -101,6 +114,7 @@ export type RequestAttempt = {
   cost_microusd: string | null; held_microusd: string | null; accounting_state: string; unresolved_reason: string | null; price_id: string | null; pricing_version: number | null;
   failover_reason: string | null; data_policy?: { data_collection: "allow" | "deny" | "unknown"; basis: string }; details_redacted_at?: string | null;
   finish_reason?: string | null; time_to_first_token_ms?: number | null; generation_ms?: number | null; cached_input_tokens?: string | null; reasoning_tokens?: string | null;
+  reported_upstream_model?: string | null;
 };
 export type RequestDetail = Omit<RequestRow, "attempts"> & { workspace_id: string; attempt_count: number; attempts: RequestAttempt[]; prev_id: string | null; next_id: string | null };
 export type RequestPage = { data: RequestRow[]; next_cursor: string | null };

@@ -174,7 +174,9 @@ fn finish(value: &Value) -> Result<FinishReason> {
 /// Structural failure still fails, but a valid usage object is kept as evidence.
 fn decode(value: &Value) -> Result<ChatResponse> {
     crate::inference::evidence::preserve(decode_shape(value), || {
-        value["usage"].is_object().then(|| usage(&value["usage"]))
+        value["usage"].is_object().then(|| {
+            usage(&value["usage"]).map(|u| super::metering::with_model(u, &value["model"]))
+        })
     })
 }
 fn decode_shape(value: &Value) -> Result<ChatResponse> {
@@ -230,7 +232,7 @@ fn decode_shape(value: &Value) -> Result<ChatResponse> {
         content: if text.is_empty() { None } else { Some(text) },
         tool_calls: calls,
         finish_reason: finish(&value["stop_reason"])?,
-        usage: usage(&value["usage"])?,
+        usage: super::metering::with_model(usage(&value["usage"])?, &value["model"]),
     })
 }
 #[derive(Default)]
@@ -275,11 +277,13 @@ impl State {
                     return Err(InferenceError::InvalidUpstream);
                 }
                 self.started = true;
-                self.usage = usage(&message["usage"])?;
+                self.usage =
+                    super::metering::with_model(usage(&message["usage"])?, &message["model"]);
                 // Start counts are preliminary; only cumulative message_delta usage
                 // is evidence of generated output. Do not settle a missing final
-                // output count using the usual start-event zero.
+                // output count (or its thinking breakdown) using a start-event zero.
                 self.usage.output_tokens = None;
+                self.usage.reasoning_tokens = None;
             }
             Some("content_block_start")
                 if self.started && !self.finished && self.active.is_none() =>

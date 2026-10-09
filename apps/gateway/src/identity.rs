@@ -10,10 +10,11 @@ use axum::{
     routing::{get, post},
 };
 use openidconnect::{
-    AdditionalClaims, AuthorizationCode, Client, ClientId, ClientSecret, CsrfToken,
-    EmptyExtraTokenFields, EndpointMaybeSet, EndpointNotSet, EndpointSet, HttpRequest,
-    HttpResponse, IdTokenFields, IssuerUrl, Nonce, PkceCodeChallenge, PkceCodeVerifier,
-    RedirectUrl, Scope, StandardErrorResponse, StandardTokenResponse, TokenResponse,
+    AdditionalClaims, AuthorizationCode, ClaimsVerificationError, Client, ClientId, ClientSecret,
+    CsrfToken, EmptyExtraTokenFields, EndpointMaybeSet, EndpointNotSet, EndpointSet, HttpRequest,
+    HttpResponse, IdToken, IdTokenClaims, IdTokenFields, IdTokenVerifier, IssuerUrl, Nonce,
+    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, SignatureVerificationError,
+    StandardErrorResponse, StandardTokenResponse, TokenResponse,
     core::{
         CoreAuthDisplay, CoreAuthPrompt, CoreAuthenticationFlow, CoreErrorResponseType,
         CoreGenderClaim, CoreJsonWebKey, CoreJweContentEncryptionAlgorithm,
@@ -30,6 +31,10 @@ use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
 use crate::{lifecycle, store::Store};
+
+#[path = "identity/jwks.rs"]
+pub(crate) mod jwks;
+use jwks::{JwksCache, JwksPolicy};
 
 const SESSION: &str = "omg_session";
 const CSRF: &str = "omg_csrf";
@@ -71,6 +76,27 @@ type EnterpriseClient<A = EndpointNotSet, T = EndpointNotSet, U = EndpointNotSet
     U,
 >;
 type DiscoveredClient = EnterpriseClient<EndpointSet, EndpointMaybeSet, EndpointMaybeSet>;
+type EnterpriseIdToken = IdToken<
+    SignedClaims,
+    CoreGenderClaim,
+    CoreJweContentEncryptionAlgorithm,
+    CoreJwsSigningAlgorithm,
+>;
+type EnterpriseClaims = IdTokenClaims<SignedClaims, CoreGenderClaim>;
+
+/// ID tokens must use an asymmetric signature advertised by the issuer. `none`
+/// and shared-secret MACs (HS*) are never accepted, even if advertised.
+const ASYMMETRIC_ALGS: [CoreJwsSigningAlgorithm; 9] = [
+    CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
+    CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha384,
+    CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha512,
+    CoreJwsSigningAlgorithm::RsaSsaPssSha256,
+    CoreJwsSigningAlgorithm::RsaSsaPssSha384,
+    CoreJwsSigningAlgorithm::RsaSsaPssSha512,
+    CoreJwsSigningAlgorithm::EcdsaP256Sha256,
+    CoreJwsSigningAlgorithm::EcdsaP384Sha384,
+    CoreJwsSigningAlgorithm::EdDsa,
+];
 
 impl SignedClaims {
     fn groups(&self, path: &str) -> Option<Vec<String>> {
@@ -244,23 +270,109 @@ impl OidcHttp {
         }
         builder.body(body).map_err(|_| fail())
     }
+
+    /// One bounded JWKS fetch under the same transport policy, with its Cache-Control max-age.
+    async fn fetch_jwks(self, uri: String) -> Result<jwks::Fetched, ()> {
+        let request = axum::http::Request::builder()
+            .method(Method::GET)
+            .uri(uri)
+            .header(header::ACCEPT, "application/json")
+            .body(Vec::new())
+            .map_err(|_| ())?;
+        let response = self.send(request).await.map_err(|_| ())?;
+        if response.status() != StatusCode::OK {
+            return Err(());
+        }
+        let max_age = jwks::max_age(
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+        );
+        let keys: jwks::Keys = serde_json::from_slice(response.body()).map_err(|_| ())?;
+        Ok(jwks::Fetched { keys, max_age })
+    }
 }
 
 struct Provider {
     config: IdentityConfig,
     client: DiscoveredClient,
     http: OidcHttp,
+    jwks: JwksCache,
+    algs: Vec<CoreJwsSigningAlgorithm>,
+}
+
+impl Provider {
+    fn verifier(&self, keys: jwks::Keys) -> IdTokenVerifier<'static, CoreJsonWebKey> {
+        // Always a public-client verifier: the client secret is never an ID-token key.
+        IdTokenVerifier::new_public_client(
+            ClientId::new(self.config.client_id.clone()),
+            self.config.issuer.clone(),
+            keys,
+        )
+        .set_allowed_algs(self.algs.iter().cloned())
+    }
+}
+
+/// Signature, issuer, audience, expiry, nonce and algorithm policy. A token naming an
+/// unknown key triggers one rate-limited, single-flight JWKS refetch and one retry.
+async fn verify_id_token<'t>(
+    provider: &Provider,
+    token: &'t EnterpriseIdToken,
+    nonce: &Nonce,
+) -> Result<&'t EnterpriseClaims, AuthError> {
+    let unavailable = || AuthError(StatusCode::SERVICE_UNAVAILABLE);
+    let keys = provider.jwks.current().await.ok_or_else(unavailable)?;
+    match token.claims(&provider.verifier(keys), nonce) {
+        Ok(claims) => Ok(claims),
+        Err(ClaimsVerificationError::SignatureVerification(
+            SignatureVerificationError::NoMatchingKey,
+        )) => {
+            let keys = provider
+                .jwks
+                .refresh_for_unknown_kid()
+                .await
+                .ok_or_else(unavailable)?;
+            token
+                .claims(&provider.verifier(keys), nonce)
+                .map_err(|_| invalid())
+        }
+        Err(_) => Err(invalid()),
+    }
+}
+
+/// SCIM provisioning bound to the configured OIDC issuer (see `crate::scim`).
+pub(crate) struct ScimRuntime {
+    pub(crate) token_hash: [u8; 32],
+    pub(crate) issuer: String,
+    pub(crate) base_url: String,
 }
 
 #[derive(Clone)]
 pub struct IdentityState {
     store: Store,
     provider: Option<Arc<Provider>>,
+    scim: Option<Arc<ScimRuntime>>,
 }
 
 impl IdentityState {
     /// Discovery/issuer/JWKS validation is fail-closed: configured OIDC failure prevents startup.
     pub async fn new(store: Store, config: Option<IdentityConfig>) -> anyhow::Result<Self> {
+        Self::build(
+            store,
+            config,
+            JwksPolicy::default(),
+            Arc::new(std::time::Instant::now),
+        )
+        .await
+    }
+
+    async fn build(
+        store: Store,
+        config: Option<IdentityConfig>,
+        policy: JwksPolicy,
+        clock: jwks::Clock,
+    ) -> anyhow::Result<Self> {
         let provider = if let Some(config) = config {
             let http = OidcHttp {
                 client: reqwest::Client::builder()
@@ -283,6 +395,26 @@ impl IdentityState {
                 .token_endpoint()
                 .ok_or_else(|| anyhow::anyhow!("OIDC provider has no token endpoint"))?;
             validate_url(token_endpoint.as_str(), config.allow_loopback_http)?;
+            let algs: Vec<CoreJwsSigningAlgorithm> = metadata
+                .id_token_signing_alg_values_supported()
+                .iter()
+                .filter(|alg| ASYMMETRIC_ALGS.contains(alg))
+                .cloned()
+                .collect();
+            anyhow::ensure!(
+                !algs.is_empty(),
+                "OIDC provider advertises no supported asymmetric ID-token signing algorithm"
+            );
+            let jwks_uri = metadata.jwks_uri().url().to_string();
+            validate_url(&jwks_uri, config.allow_loopback_http)?;
+            let fetch_http = http.clone();
+            let fetcher: jwks::Fetcher = Arc::new(move || {
+                let (http, uri) = (fetch_http.clone(), jwks_uri.clone());
+                Box::pin(http.fetch_jwks(uri))
+            });
+            let jwks = JwksCache::load(fetcher, policy, clock)
+                .await
+                .map_err(|_| anyhow::anyhow!("OIDC JWKS validation failed"))?;
             let redirect =
                 RedirectUrl::new(format!("{}/api/v1/auth/callback", config.public_origin))
                     .map_err(|_| anyhow::anyhow!("Invalid OIDC callback URL"))?;
@@ -296,18 +428,45 @@ impl IdentityState {
                 config,
                 client,
                 http,
+                jwks,
+                algs,
             }))
         } else {
             None
         };
-        Ok(Self { store, provider })
+        Ok(Self {
+            store,
+            provider,
+            scim: None,
+        })
+    }
+
+    /// Enable SCIM provisioning. SCIM groups feed the configured issuer's group
+    /// mappings, so SCIM requires OIDC.
+    pub fn with_scim(mut self, scim: Option<crate::scim::ScimConfig>) -> anyhow::Result<Self> {
+        self.scim = match (scim, &self.provider) {
+            (None, _) => None,
+            (Some(_), None) => anyhow::bail!("GATEWAY_SCIM_TOKEN_ENV requires OIDC sign-in"),
+            (Some(scim), Some(provider)) => Some(Arc::new(ScimRuntime {
+                token_hash: scim.token_hash(),
+                issuer: provider.config.issuer.as_str().to_owned(),
+                base_url: format!("{}/scim/v2", provider.config.public_origin),
+            })),
+        };
+        Ok(self)
+    }
+
+    pub(crate) fn scim(&self) -> Option<Arc<ScimRuntime>> {
+        self.scim.clone()
     }
 
     /// Read-only sign-in configuration for Admin > Settings > Sign-in:
     /// public values only (never the client secret).
     pub fn sign_in_summary(&self) -> serde_json::Value {
         match &self.provider {
-            Some(provider) => serde_json::json!({
+            Some(provider) => {
+                let status = provider.jwks.status();
+                serde_json::json!({
                 "enabled": true,
                 "issuer": provider.config.issuer.as_str(),
                 "client_id": provider.config.client_id,
@@ -316,7 +475,19 @@ impl IdentityState {
                 "public_url": provider.config.public_origin,
                 "callback_url": format!("{}/api/v1/auth/callback", provider.config.public_origin),
                 "secure_cookies": provider.config.secure_cookies,
-            }),
+                "jwks": {
+                    "keys": status.keys,
+                    "refreshed_at": status.refreshed_at,
+                    "fresh_until": status.fresh_until,
+                    "last_failure_at": status.last_failure_at,
+                    "state": match status.state {
+                        jwks::Freshness::Fresh => "fresh",
+                        jwks::Freshness::Stale => "stale",
+                        jwks::Freshness::Unavailable => "unavailable",
+                    },
+                },
+                })
+            }
             None => serde_json::json!({ "enabled": false }),
         }
     }
@@ -332,12 +503,17 @@ pub struct BrowserPrincipal {
 }
 
 pub fn router(state: IdentityState) -> Router<Store> {
+    let scim = crate::scim::router(crate::scim::ScimState::new(
+        state.store.clone(),
+        state.scim.clone(),
+    ));
     Router::new()
         .route("/api/v1/auth/config", get(auth_config))
         .route("/api/v1/auth/login", get(login))
         .route("/api/v1/auth/callback", get(callback))
         .route("/api/v1/auth/logout", post(logout))
         .with_state(state)
+        .merge(scim)
 }
 
 #[derive(Debug)]
@@ -576,10 +752,9 @@ async fn callback(
         .await
         .map_err(|_| invalid())?;
     let id_token = tokens.id_token().ok_or_else(invalid)?;
-    // Library verifies signature, issuer, audience, expiration and the original nonce.
-    let claims = id_token
-        .claims(&provider.client.id_token_verifier(), &Nonce::new(nonce))
-        .map_err(|_| invalid())?;
+    // Signature (cached, rotating JWKS; asymmetric algorithms only), issuer, audience,
+    // expiration and the original nonce.
+    let claims = verify_id_token(provider, id_token, &Nonce::new(nonce)).await?;
     // The library deliberately leaves `azp` policy to relying parties.
     if claims
         .authorized_party()
@@ -607,12 +782,13 @@ async fn callback(
         .additional_claims()
         .groups(&provider.config.groups_claim)
         .ok_or(AuthError(StatusCode::FORBIDDEN))?;
-    let user_id = match resolve_identity(
+    let user_id = match resolve_identity_with(
         &state.store,
         provider.config.issuer.as_str(),
         subject,
         &email,
         &groups,
+        state.scim.is_some(),
     )
     .await
     {
@@ -687,12 +863,26 @@ async fn advisory_lock(tx: &mut Transaction<'_, Postgres>, key: &str) -> Result<
     Ok(())
 }
 
+#[cfg(all(test, feature = "integration-tests"))]
 async fn resolve_identity(
     store: &Store,
     issuer: &str,
     subject: &str,
     email: &str,
     groups: &[String],
+) -> Result<Uuid, AuthError> {
+    resolve_identity_with(store, issuer, subject, email, groups, false).await
+}
+
+/// With SCIM enabled, SCIM-managed groups take their membership from SCIM, not the
+/// token: the claim is merged as (token groups not managed by SCIM) ∪ (SCIM groups).
+async fn resolve_identity_with(
+    store: &Store,
+    issuer: &str,
+    subject: &str,
+    email: &str,
+    groups: &[String],
+    scim: bool,
 ) -> Result<Uuid, AuthError> {
     let email = email.to_lowercase();
     let mut tx = store.pool.begin().await.map_err(internal)?;
@@ -784,7 +974,14 @@ async fn resolve_identity(
         }
         id
     };
-    let active = lifecycle::synchronize_groups(&mut tx, id, issuer, groups)
+    let groups = if scim {
+        crate::scim::effective_groups(&mut tx, id, groups)
+            .await
+            .map_err(internal)?
+    } else {
+        groups.to_vec()
+    };
+    let active = lifecycle::synchronize_groups(&mut tx, id, issuer, &groups)
         .await
         .map_err(internal)?;
     // Entitlement loss MUST commit session/key revocation before returning the 403.

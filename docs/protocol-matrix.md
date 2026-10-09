@@ -164,6 +164,8 @@ Native upstream SSE parsers tolerate fragmented network/UTF-8 boundaries and req
 
 Chat frontend streams incrementally. Responses/Messages start streaming but buffer at most 4 MiB of normalized content before ordered item/block delivery; they are **not token-by-token frontend streams**. Text is consolidated before tools because the shared generation result does not preserve mixed text/tool positions. Parallel tools are serialized into valid lifecycles. Engine Done alone authorizes success; malformed arguments, errors, EOF and overflow close with sanitized errors rather than success. When an upstream body or terminal snapshot fails structural validation but carries a valid usage object, the attempt still fails and keeps its hold. The validated counts are recorded on the failed execution instead of being lost. This applies to non-stream OpenAI Chat/compatible, Responses and Anthropic Messages bodies, and to the Responses stream terminal snapshot.
 
-Dropping streams/futures requests cancellation without promising zero charges. No failover occurs after stream return. See [routing](routing.md) and [provider adapters](provider-adapters.md).
+Dropping streams/futures requests cancellation without promising zero charges. No failover occurs after stream return.
+
+Logs telemetry is never returned to clients: the provider-reported served model and reasoning/thinking token breakdowns are recorded per attempt only (see [provider adapters](provider-adapters.md#logs-telemetry-served-model-and-reasoning-tokens)). Client responses keep the public model alias, and invalid or absent telemetry never fails a request. See [routing](routing.md) and [provider adapters](provider-adapters.md).
 
 The earlier “native protocol milestone 3” is historical. Isolated provider tests (including the earlier 77-test result) are not whole-stack, new-native-follow-up, real-server or production-readiness evidence. [Verification](verification.md) records dated checks separately.

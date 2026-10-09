@@ -88,6 +88,14 @@ async fn logs_telemetry_filters_generations_sessions_and_metrics(pool: PgPool) {
         Some("Agent"),
     )
     .await;
+    // Only the successful fallback reported its served model (0013).
+    sqlx::query(
+        "UPDATE inference_executions SET reported_upstream_model='served-upstream-v2' WHERE id=$1",
+    )
+    .bind(a2)
+    .execute(&pool)
+    .await
+    .unwrap();
     // B: member, length, not streamed, same session.
     let b = simple(
         f.team,
@@ -126,6 +134,9 @@ async fn logs_telemetry_filters_generations_sessions_and_metrics(pool: PgPool) {
     assert_eq!(row["cached_input_tokens"], "6");
     assert_eq!(row["reasoning_tokens"], "2");
     assert_eq!(row["upstream_model"], "snap-upstream");
+    assert_eq!(row["reported_upstream_model"], "served-upstream-v2");
+    assert!(rows(&list)[1]["reported_upstream_model"].is_null());
+    assert_eq!(rows(&list)[1]["upstream_model"], "snap-upstream");
     assert_eq!(row["workspace"]["kind"], "team");
     assert_eq!(rows(&list)[1]["tokens_per_second"], "20.00");
     // Filters.
@@ -175,6 +186,12 @@ async fn logs_telemetry_filters_generations_sessions_and_metrics(pool: PgPool) {
         "snap-upstream"
     );
     assert_eq!(d["attempts"][1]["cached_input_tokens"], "3");
+    assert_eq!(
+        d["attempts"][1]["reported_upstream_model"],
+        "served-upstream-v2"
+    );
+    assert!(d["attempts"][0]["reported_upstream_model"].is_null());
+    assert_eq!(d["reported_upstream_model"], "served-upstream-v2");
     assert!(d["prev_id"].is_null());
     assert_eq!(d["next_id"], b.root.to_string());
 
@@ -187,6 +204,10 @@ async fn logs_telemetry_filters_generations_sessions_and_metrics(pool: PgPool) {
     );
     assert_eq!(rows(&g)[0]["attempt_number"], 2);
     assert_eq!(rows(&g)[0]["tokens_per_second"], "10.00");
+    assert_eq!(rows(&g)[0]["reported_upstream_model"], "served-upstream-v2");
+    assert_eq!(rows(&g)[0]["upstream_model"], "snap-upstream");
+    assert!(rows(&g)[1]["reported_upstream_model"].is_null());
+    assert_eq!(rows(&g)[1]["upstream_model"], "snap-upstream");
     assert_eq!(rows(&g)[1]["status"], "failed");
     assert!(rows(&g)[1]["tokens_per_second"].is_null());
     let (_, errors) = get(

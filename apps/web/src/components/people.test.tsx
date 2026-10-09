@@ -23,6 +23,7 @@ describe("Grounded-style people pages", () => {
     expect(displayRole({ ...suspended, role_grants: [] } as never)).toEqual({ role: null, inactive: true });
     expect(auditActionLabel("workspace.manual_membership_set")).toBe("Set manual membership");
     expect(auditActionLabel("future.unknown_code")).toBe("future.unknown_code");
+    expect(auditActionLabel("scim.user.deactivated")).toBe("Deactivated user (SCIM)"); expect(resourceTypeLabel("scim_group")).toBe("SCIM group");
     expect(auditEventLabel({ action: "model.granted", metadata: { source: "catalog" } })).toBe("Added model"); expect(auditActionLabel("key.enabled")).toBe("Enabled API key"); expect(auditActionLabel("key.disabled")).toBe("Disabled API key");
     expect(auditEventLabel({ action: "model.grant_revoked", metadata: { source: "catalog" } })).toBe("Removed model");
     expect(auditEventLabel({ action: "model.granted", metadata: { source: "direct" } })).toBe("Assigned model");

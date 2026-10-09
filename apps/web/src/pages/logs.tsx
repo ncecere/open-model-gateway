@@ -17,7 +17,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ListTree, MessagesSquare } from "lucide-react";
 import { platformPath, wsPath, type Grant, type Model, type Workspace } from "../lib/api";
 import type { DashboardSearch, RangePreset } from "../lib/permissions";
-import { activeFilterCount, compactDateTime, costText, countText, finishReasonLabel, finishReasonTone, finishReasons, latencyText, logPaths, logTab, logsSearch, rangeLabels, rateText, requestFilters, requestQuery, requestStatuses, requestStatusLabel, requestStatusTone, requestTarget, sessionTarget, tokensText, tpsText, ttftText, utcDate, validSessionId, workloadText, type GenerationPage, type GenerationRow, type LogMetrics, type LogTab, type LogsScope, type RequestFilters, type RequestPage, type RequestRow, type SessionPage, type SessionRow } from "../lib/requests";
+import { activeFilterCount, compactDateTime, costText, countText, finishReasonLabel, finishReasonTone, finishReasons, latencyText, logPaths, logTab, logsSearch, rangeLabels, rateText, requestFilters, requestQuery, requestStatuses, requestStatusLabel, requestStatusTone, requestTarget, servedModel, servedModelText, sessionTarget, tokensText, tpsText, ttftText, utcDate, validSessionId, workloadText, type GenerationPage, type GenerationRow, type LogMetrics, type LogTab, type LogsScope, type RequestFilters, type RequestPage, type RequestRow, type SessionPage, type SessionRow } from "../lib/requests";
 import { formatMicroUsd } from "../lib/governance";
 import { NARROW_QUERY, useMediaQuery } from "../lib/bitop-utils";
 import type { KeyRow } from "../lib/keys";
@@ -27,6 +27,7 @@ import { ResourceLink, useDashboardNavigation } from "../components/navigation-l
 import { DateControl } from "../components/date-control";
 import { IconCell, LabIcon, ProviderIcon } from "../components/provider-icon";
 import { CopyId } from "../components/templates/copy-id";
+import { UpstreamModel } from "../components/templates/upstream-model";
 import { InfoBanner } from "../components/templates/notices";
 import { FilterToolbar, ToolbarField, type ToolbarChip } from "../components/templates/filter-toolbar";
 import { StatTile, StatTileGrid } from "../components/templates/stat-tile";
@@ -73,7 +74,7 @@ const WorkspaceCell = ({ w }: { w?: { name: string; kind: string } }) => w ? <sp
 const requestColumns = (scope: LogsScope, filters: RequestFilters, view: View): DataTableColumn<RequestRow>[] => [
   // The started time is the row's link; the whole row is clickable (a stretched link), and it's the row's one tab stop.
   { id: "started", header: "Started", rowHeader: true, hideable: false, width: "8.5rem", cell: r => <RowLink at={r.started_at} search={requestTarget(scope, r.root_request_id, filters, view)} label={`Open request ${r.root_request_id.slice(0, 8)}, ${r.model}`} /> },
-  { id: "model", header: "Model", cell: r => <IconCell icon={<LabIcon model={r.model} />}><span className={rq.truncate} title={r.upstream_model ? `${r.model} → ${r.upstream_model}` : r.model}>{r.model}</span></IconCell> },
+  { id: "model", header: "Model", cell: r => <IconCell icon={<LabIcon model={r.model} />}><span className={rq.truncate} title={servedModel(r) ? `${r.model} → ${servedModelText(servedModel(r))}` : r.model}>{r.model}</span></IconCell> },
   ...(scope.kind === "platform" ? [{ id: "workspace", header: "Workspace", cell: (r: RequestRow) => <WorkspaceCell w={r.workspace} /> }] : []),
   { id: "key", header: "Key / app", cell: r => <KeyApp name={r.key.name} app={r.app} /> },
   { id: "tokens", header: "Tokens", numeric: true, cell: r => tokensText(r.input_tokens, r.output_tokens, r.workload_kind) },
@@ -102,7 +103,7 @@ export const requestNarrowHidden = ["tokens", "attempts", "key", "request", "ttf
 const generationColumns = (scope: LogsScope, filters: RequestFilters, view: View): DataTableColumn<GenerationRow>[] => [
   { id: "started", header: "Started", rowHeader: true, hideable: false, width: "8.5rem", cell: g => <RowLink at={g.started_at} search={requestTarget(scope, g.root_request_id, filters, view)} label={`Open request ${g.root_request_id.slice(0, 8)} (attempt ${g.attempt_number}), ${g.model}`} /> },
   { id: "model", header: "Model", cell: g => <IconCell icon={<LabIcon model={g.model} />}><span className={rq.truncate} title={g.model}>{g.model}</span></IconCell> },
-  { id: "provider", header: "Provider", cell: g => <IconCell icon={<ProviderIcon profile={g.connection.provider} size="sm" />}><span className={rq.truncateKey} title={`${g.connection.name} · ${g.upstream_model ?? ""}`}>{g.connection.name}</span></IconCell> },
+  { id: "provider", header: "Provider", cell: g => <IconCell icon={<ProviderIcon profile={g.connection.provider} size="sm" />}><span className={rq.truncateKey} title={`${g.connection.name} · ${servedModelText(servedModel(g))}`}>{g.connection.name}</span></IconCell> },
   ...(scope.kind === "platform" ? [{ id: "workspace", header: "Workspace", cell: (g: GenerationRow) => <WorkspaceCell w={g.workspace} /> }] : []),
   { id: "key", header: "Key / app", cell: g => <KeyApp name={g.key.name} app={g.app} /> },
   { id: "tokens", header: "Tokens", numeric: true, cell: g => tokensText(g.input_tokens, g.output_tokens, g.workload_kind) },
@@ -114,7 +115,8 @@ const generationColumns = (scope: LogsScope, filters: RequestFilters, view: View
   { id: "status", header: "Status", cell: g => <StatusBadge tone={requestStatusTone(g.status)} size="sm">{requestStatusLabel(g.status)}</StatusBadge> },
   { id: "attempt", header: "Attempt", numeric: true, cell: g => g.attempt_number > 1 ? `${g.attempt_number} (fallback)` : "1" },
   { id: "error", header: "Error", defaultHidden: true, cell: g => g.error_code ? <code className={s.mono}>{g.error_code}</code> : <span className={s.secondary}>None</span> },
-  { id: "upstream", header: "Upstream model", defaultHidden: true, cell: g => g.upstream_model ? <span className={rq.truncate} title={g.upstream_model}>{g.upstream_model}</span> : "Unknown" },
+  // The model the provider reported serving, else the route's configured id (marked "configured").
+  { id: "upstream", header: "Upstream model", defaultHidden: true, cell: g => <UpstreamModel row={g} compact /> },
   { id: "cached", header: "Cached", label: "Cached input tokens", numeric: true, defaultHidden: true, cell: g => optionalCount(g.cached_input_tokens) },
   { id: "reasoning", header: "Reasoning", label: "Reasoning tokens", numeric: true, defaultHidden: true, cell: g => optionalCount(g.reasoning_tokens) },
   { id: "generation_time", header: "Generation", label: "Generation time", numeric: true, defaultHidden: true, cell: g => latencyText(g.generation_ms) },

@@ -5,7 +5,7 @@ use std::{
 
 use axum::{
     Extension, Json, Router,
-    extract::{DefaultBodyLimit, Request, State},
+    extract::{DefaultBodyLimit, MatchedPath, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -114,6 +114,7 @@ fn build_router(
         .route_layer(middleware::from_fn(client_labels))
         .route_layer(middleware::from_fn_with_state(store.clone(), authenticate));
 
+    let ready_web = web.clone();
     let mut root = Router::new();
     if let Some(identity) = identity {
         root = root
@@ -124,7 +125,10 @@ fn build_router(
         "/health/live",
         get(|| async { Json(json!({"status": "ok"})) }),
     )
-    .route("/health/ready", get(readiness))
+    .route(
+        "/health/ready",
+        get(move |State(store): State<Store>| readiness(store, ready_web.clone())),
+    )
     .merge(inference)
     .fallback(move |request: Request| {
         let web = web.clone();
@@ -148,9 +152,22 @@ async fn request_context(mut request: Request, next: Next) -> Response {
     request.extensions_mut().insert(RequestId(id));
     let request_id = id.to_string();
     let span = tracing::info_span!("http.request", request_id, method = %request.method());
+    // Route templates only (never raw paths); unrouted/SPA requests share one label.
+    let route = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map_or("unmatched", |path| path.as_str())
+        .to_owned();
+    let method = request.method().clone();
     async {
         let started = Instant::now();
         let mut response = next.run(request).await;
+        crate::metrics::METRICS.observe_http(
+            &method,
+            &route,
+            response.status().as_u16(),
+            started.elapsed(),
+        );
         response.headers_mut().insert(
             "x-request-id",
             HeaderValue::from_str(&request_id).expect("UUID is a valid header value"),
@@ -260,19 +277,30 @@ async fn models(
     }
 }
 
-async fn readiness(State(store): State<Store>) -> Response {
-    if tokio::time::timeout(Duration::from_secs(2), store.is_ready())
+/// Ready only when the database answers, the schema lineage exactly matches
+/// this binary, and (if configured) the served web build is still intact.
+/// Check names and ok/fail only; never error details.
+async fn readiness(store: Store, web: Option<WebAssets>) -> Response {
+    let checks = tokio::time::timeout(Duration::from_secs(2), store.readiness())
         .await
-        .unwrap_or(false)
-    {
-        (StatusCode::OK, Json(json!({"status": "ready"}))).into_response()
+        .unwrap_or_default();
+    let web_ok = web.as_ref().is_none_or(WebAssets::is_intact);
+    let ready = checks.database && checks.schema && web_ok;
+    let word = |ok: bool| if ok { "ok" } else { "fail" };
+    let body = json!({
+        "status": if ready { "ready" } else { "not_ready" },
+        "checks": {
+            "database": word(checks.database),
+            "schema": if checks.database { word(checks.schema) } else { "unknown" },
+            "web": if web.is_some() { word(web_ok) } else { "disabled" },
+        },
+    });
+    let status = if ready {
+        StatusCode::OK
     } else {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"status": "not_ready"})),
-        )
-            .into_response()
-    }
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (status, Json(body)).into_response()
 }
 
 pub(crate) fn not_found() -> Response {
@@ -360,6 +388,58 @@ mod tests {
                 assert_eq!(body["type"], "error");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn readiness_is_structured_and_fails_closed_without_database() {
+        let pool = PgPoolOptions::new()
+            .acquire_timeout(Duration::from_millis(200))
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .unwrap();
+        let response = router(Store::new(pool))
+            .oneshot(
+                Request::builder()
+                    .uri("/health/ready")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+        assert_eq!(
+            body,
+            json!({"status":"not_ready","checks":{"database":"fail","schema":"unknown","web":"disabled"}})
+        );
+    }
+
+    #[tokio::test]
+    async fn requests_are_counted_by_route_template_not_raw_path() {
+        let before = crate::metrics::METRICS.render(None).await;
+        assert!(!before.contains("/not-a-route-for-metrics"));
+        app()
+            .oneshot(
+                Request::builder()
+                    .uri("/not-a-route-for-metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        app()
+            .oneshot(
+                Request::builder()
+                    .uri("/health/live")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let after = crate::metrics::METRICS.render(None).await;
+        assert!(!after.contains("/not-a-route-for-metrics"));
+        assert!(after.contains(r#"route="unmatched",status="404""#));
+        assert!(after.contains(r#"route="/health/live",status="200""#));
     }
 
     #[tokio::test]

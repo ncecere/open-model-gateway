@@ -81,7 +81,7 @@ function CatalogList({ session }: { session: Session }) {
   return <Stack gap={4}>
     <FilterToolbar search={{ label: "Search catalogs", placeholder: "Name or description", value: filter, onChange: setFilter }} facets={[]} values={{}} onChange={() => undefined} />
     {q.isError ? <ErrorNotice error={q.error} retry={() => void q.refetch()} /> : !q.data ? <p role="status">Loading catalogs…</p> :
-      <Card flush><BitopTable caption="Catalogs" stack columns={["Catalog", "Models", "Who gets it"]} empty={!q.data.length ? <Empty title="No catalogs yet">Create a catalog, add approved models, then check who gets it under Defaults.</Empty> : !shown.length ? <Empty title="No catalogs match">Try another name.</Empty> : undefined}>
+      <Card flush><BitopTable caption="Catalogs" stack columns={["Catalog", "Models", "Who gets it"]} empty={!q.data.length ? <Empty titleAs="h2" title="No catalogs yet">Create a catalog, add approved models, then check who gets it under Defaults.</Empty> : !shown.length ? <Empty title="No catalogs match">Try another name.</Empty> : undefined}>
         {shown.map(c => <Tr key={c.id}>
           <Td><ResourceLink search={{ page: "catalog-detail", record: c.id }}>{c.name}</ResourceLink><span className={s.secondary}>{c.description || "No description"}</span></Td>
           <Td><CatalogModelIcons catalog={c} /></Td>

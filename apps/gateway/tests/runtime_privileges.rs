@@ -45,10 +45,171 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         );
     }
     alert_evaluation_runs_as_runtime(&pool).await;
+    scim_provisioning_runs_as_runtime(&pool).await;
     sqlx::query("SELECT pg_advisory_unlock(72419505)")
         .execute(&mut *connection)
         .await
         .unwrap();
+}
+
+async fn runtime_pool(pool: &PgPool) -> PgPool {
+    let options = (*pool.connect_options()).clone();
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .after_connect(|c, _| {
+            Box::pin(async move {
+                sqlx::Executor::execute(c, "SET ROLE gateway_runtime").await?;
+                Ok(())
+            })
+        })
+        .connect_with(options)
+        .await
+        .unwrap()
+}
+
+/// SCIM provisioning, deactivation, group-provenance sync and account cleanup need
+/// nothing beyond the reviewed grants.
+async fn scim_provisioning_runs_as_runtime(pool: &PgPool) {
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+    const TOKEN: &str = "runtime-scim-token-0123456789abcdefghij";
+    const ISSUER: &str = "https://issuer.example.invalid";
+    sqlx::raw_sql(&format!("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES(gen_random_uuid(),'{ISSUER}','Runtime engineers','platform','user')"))
+        .execute(pool)
+        .await
+        .unwrap();
+    let runtime = runtime_pool(pool).await;
+    let store = open_model_gateway::store::Store::new(runtime.clone());
+    let config = open_model_gateway::scim::ScimConfig::from_lookup(|name| match name {
+        "GATEWAY_SCIM_TOKEN_ENV" => Some("RUNTIME_SCIM_TOKEN".into()),
+        "RUNTIME_SCIM_TOKEN" => Some(TOKEN.into()),
+        _ => None,
+    })
+    .unwrap()
+    .unwrap();
+    let app = open_model_gateway::scim::standalone_router(
+        store.clone(),
+        config,
+        ISSUER,
+        "https://gateway.example.invalid/scim/v2",
+    );
+    let call = |method: &str, uri: String, body: Option<serde_json::Value>| {
+        let app = app.clone();
+        let request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .header("content-type", "application/scim+json")
+            .body(body.map_or_else(Body::empty, |b| Body::from(b.to_string())))
+            .unwrap();
+        async move {
+            let response = app.oneshot(request).await.unwrap();
+            let status = response.status().as_u16();
+            let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+                .await
+                .unwrap();
+            (
+                status,
+                serde_json::from_slice::<serde_json::Value>(&bytes)
+                    .unwrap_or(serde_json::Value::Null),
+            )
+        }
+    };
+    let (status, user) = call(
+        "POST",
+        "/scim/v2/Users".into(),
+        Some(serde_json::json!({"userName":"runtime-scim@example.invalid","externalId":"00u-runtime","name":{"givenName":"Run"}})),
+    )
+    .await;
+    assert_eq!(status, 201, "{user}");
+    let id = user["id"].as_str().unwrap().to_owned();
+    let (status, group) = call(
+        "POST",
+        "/scim/v2/Groups".into(),
+        Some(serde_json::json!({"displayName":"Runtime engineers","members":[{"value":id}]})),
+    )
+    .await;
+    assert_eq!(status, 201, "{group}");
+    let group = group["id"].as_str().unwrap().to_owned();
+    for (method, uri, body, expected) in [
+        (
+            "GET",
+            "/scim/v2/Users?filter=userName%20eq%20%22RUNTIME-SCIM%40example.invalid%22".to_owned(),
+            None,
+            200,
+        ),
+        (
+            "GET",
+            "/scim/v2/Groups?excludedAttributes=members".to_owned(),
+            None,
+            200,
+        ),
+        (
+            "PATCH",
+            format!("/scim/v2/Users/{id}"),
+            Some(
+                serde_json::json!({"Operations":[{"op":"replace","value":{"active":false,"displayName":"Runtime"}}]}),
+            ),
+            200,
+        ),
+        (
+            "PATCH",
+            format!("/scim/v2/Users/{id}"),
+            Some(
+                serde_json::json!({"Operations":[{"op":"Replace","path":"active","value":"True"}]}),
+            ),
+            200,
+        ),
+        (
+            "PUT",
+            format!("/scim/v2/Users/{id}"),
+            Some(
+                serde_json::json!({"userName":"runtime-scim@example.invalid","emails":[{"value":"runtime-scim2@example.invalid"}]}),
+            ),
+            200,
+        ),
+        (
+            "PATCH",
+            format!("/scim/v2/Groups/{group}"),
+            Some(
+                serde_json::json!({"Operations":[{"op":"remove","path":format!("members[value eq \"{id}\"]")}]}),
+            ),
+            204,
+        ),
+        (
+            "PATCH",
+            format!("/scim/v2/Groups/{group}"),
+            Some(
+                serde_json::json!({"Operations":[{"op":"add","path":"members","value":[{"value":id}]},{"op":"replace","path":"externalId","value":"grp-runtime"}]}),
+            ),
+            204,
+        ),
+        (
+            "PUT",
+            format!("/scim/v2/Groups/{group}"),
+            Some(serde_json::json!({"displayName":"Runtime engineers 2","members":[{"value":id}]})),
+            200,
+        ),
+        ("DELETE", format!("/scim/v2/Groups/{group}"), None, 204),
+        ("DELETE", format!("/scim/v2/Users/{id}"), None, 204),
+    ] {
+        let (status, body) = call(method, uri.clone(), body).await;
+        assert_eq!(status, expected, "{method} {uri}: {body}");
+    }
+    // Grace expiry is simulated as owner; cleanup itself runs as runtime.
+    sqlx::query("UPDATE users SET cleanup_due_at=now()-interval '1 second' WHERE email='runtime-scim2@example.invalid'")
+        .execute(pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        open_model_gateway::lifecycle::cleanup_inactive_accounts(&store)
+            .await
+            .unwrap(),
+        1
+    );
+    let (status, _) = call("GET", format!("/scim/v2/Users/{id}"), None).await;
+    assert_eq!(status, 404);
+    runtime.close().await;
 }
 
 /// The alert evaluator and email delivery need nothing beyond the reviewed
@@ -113,5 +274,18 @@ async fn alert_evaluation_runs_as_runtime(pool: &PgPool) {
         open_model_gateway::alerts::deliver_pending(&store, 100).await,
         7
     );
+    // Readiness and scrape-time metrics collectors need no extra grants.
+    assert_eq!(
+        store.readiness().await,
+        open_model_gateway::store::Readiness {
+            database: true,
+            schema: true
+        }
+    );
+    let exposition = open_model_gateway::metrics::METRICS
+        .render(Some(&store))
+        .await;
+    assert!(exposition.contains(r#"gateway_reservations_held{state="pending"} 0"#));
+    assert!(!exposition.contains(r#"gateway_metrics_collection_errors_total{"#));
     runtime.close().await;
 }

@@ -92,6 +92,19 @@ Local `credential_ref:"none"` explicitly sends no authentication and resolves no
 
 Ollama embedding requests derive the same approved origin/prefix's `/api/embed` and send `truncate:false`. The proxy/server must serve that path and honor non-truncation; the adapter cannot detect an old server silently ignoring fields. There is no retry on `/v1/embeddings`, legacy `/api/embeddings`, truncation or a different host. Its `prompt_eval_count` is batch input usage when present; missing/null stays unknown. Operators must verify deployment model/server behavior and hard aggregate input bounds.
 
+## Logs telemetry: served model and reasoning tokens
+
+Each attempt records, for Logs only, the model the provider reports having served (`reported_upstream_model`, migration 0013) next to the configured route id snapshot (`upstream_model`). Logs show the reported model and fall back to the configured id marked "configured". Reasoning tokens are a telemetry breakdown of the inclusive output count: never charged separately, never sent to clients.
+
+| Adapter | Served model | Reasoning tokens |
+| --- | --- | --- |
+| `openai` Chat, `openrouter` Chat, local profiles | `model` of the body, or of the first stream chunk that carries it (attached to the usage snapshot) | `usage.completion_tokens_details.reasoning_tokens` |
+| `openai` Responses | `response.model` (body or terminal snapshot) | `usage.output_tokens_details.reasoning_tokens` |
+| `anthropic` | `model` of the body, or `message_start.message.model` | `usage.output_tokens_details.thinking_tokens` (final cumulative `message_delta`; the start event's preliminary value is ignored) |
+| `bedrock` | `trace.promptRouter.invokedModelId` (Converse and the ConverseStream metadata event); otherwise not reported | Not reported: `TokenUsage` has no reasoning field |
+
+A served model is 1–256 bytes of printable, non-space ASCII. Anything else (absent, empty, longer, whitespace, non-string) is unknown, never truncated and never an error. A reasoning count that is absent, malformed or above the output count is unknown, not zero. Streams carry both on the usage event: a stream that reports no usage records neither. Non-generation workloads do not record a served model.
+
 ## Streams, limits and accounting
 
 Generation uses text/tool typed contracts, not arbitrary provider JSON. Unknown request fields/options fail rather than disappear. Upstream refusal/reasoning/audio content outside the subset is rejected. Adapter support never guarantees every upstream model accepts the request.
@@ -110,6 +123,6 @@ Raw usage and normalized cache partitions remain separate. Missing counters/rate
 2. Declare protocols and pure request-specific support checks. Embeddings and other non-generation workloads use their `execute_*` methods (default `Unsupported`), not synthetic chat messages.
 3. Validate fields/options before credentials/network. Reject unrepresentable features; never add unchecked passthrough.
 4. Return typed complete output or a lazy stream that owns transport/cancellation. Never retry internally.
-5. Register at the composition root and add shared contracts plus profile-specific wire, usage, framing, cancellation and endpoint tests.
+5. Register at the composition root and add shared contracts plus profile-specific wire, usage, framing, cancellation and endpoint tests. `providers::contract::assert_text_chat_contract` takes the mock's expected Logs telemetry (served model, reasoning tokens) and checks it on both the complete and streamed reply; pass `Telemetry::UNKNOWN` when the provider reports neither.
 
 Historical isolated provider work reported **77 provider tests**, not a whole gateway/database/browser integration pass. The current integrated run in [verification](verification.md) included the native Ollama mocked tests; that is still not live-server certification. This refresh ran no paid requests, live certification or fresh acceptance suite; see [verification](verification.md) for explicitly dated checks.

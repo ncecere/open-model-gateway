@@ -95,9 +95,11 @@ GRANT UPDATE(requests_per_minute,tokens_per_minute,concurrent_requests)
  TO gateway_runtime;
 -- 0009 telemetry is written at finish; client labels are cleared by detail
 -- retention. upstream_model is an admission snapshot (INSERT only).
+-- reported_upstream_model (0013) is the provider-reported served model, written at finish.
 GRANT UPDATE(state,error_code,input_tokens,output_tokens,billing_usage,elapsed_ms,completed_at,
  public_model,provider,details_redacted_at,meter_usage,output_image_variant,provider_cost_microusd,
- finish_reason,time_to_first_token_ms,generation_ms,reasoning_tokens,client_session_id,client_app)
+ finish_reason,time_to_first_token_ms,generation_ms,reasoning_tokens,client_session_id,client_app,
+ reported_upstream_model)
  ON public.inference_executions TO gateway_runtime;
 GRANT UPDATE(state,actual_microusd,input_tokens,output_tokens,billing_usage,cost_components,
  held_microusd,unbounded_cost,meter_usage,output_image_variant,provider_cost_microusd)
@@ -118,6 +120,17 @@ GRANT UPDATE(name,enabled,budget_layers,thresholds,spike_factor_percent,min_spen
  ON public.alert_rules TO gateway_runtime;
 GRANT UPDATE(resolved_at,resolution) ON public.alert_events TO gateway_runtime;
 GRANT UPDATE(status,recipients,sent,failed,error,completed_at) ON public.alert_deliveries TO gateway_runtime;
+-- SCIM (0014). Directory attributes are upserted per user and cleared at cleanup;
+-- the user link is never re-keyed or removed. Groups and memberships are directory
+-- state (DELETE allowed); group-derived grants keep their own revocation history.
+-- One seeded scim_state row: last write time only.
+GRANT SELECT,INSERT ON public.scim_users,public.scim_groups,public.scim_group_members
+ TO gateway_runtime;
+GRANT UPDATE(user_name,external_id,given_name,family_name,active,updated_at)
+ ON public.scim_users TO gateway_runtime;
+GRANT UPDATE(display_name,external_id,updated_at) ON public.scim_groups TO gateway_runtime;
+GRANT DELETE ON public.scim_groups,public.scim_group_members TO gateway_runtime;
+GRANT SELECT,UPDATE(last_write_at) ON public.scim_state TO gateway_runtime;
 -- No UPDATE/DELETE/TRUNCATE of immutable prices, ledger or audit; no removal of
 -- users/workspaces/keys/history and no rewrite of immutable admission snapshots.
 COMMIT;

@@ -400,9 +400,12 @@ pub(super) fn decode_complete_profile(
     profile: Option<&str>,
 ) -> Result<ChatResponse> {
     crate::inference::evidence::preserve(decode_shape(value, profile), || {
-        value["usage"].is_object().then(|| match profile {
-            Some(profile) => local_usage(&value["usage"], profile),
-            None => usage(&value["usage"]),
+        value["usage"].is_object().then(|| {
+            match profile {
+                Some(profile) => local_usage(&value["usage"], profile),
+                None => usage(&value["usage"]),
+            }
+            .map(|u| super::metering::with_model(u, &value["model"]))
         })
     })
 }
@@ -454,10 +457,13 @@ fn decode_shape(value: &Value, profile: Option<&str>) -> Result<ChatResponse> {
         content,
         tool_calls,
         finish_reason: finish(&choice["finish_reason"])?,
-        usage: match profile {
-            Some(profile) => local_usage(&value["usage"], profile)?,
-            None => usage(&value["usage"])?,
-        },
+        usage: super::metering::with_model(
+            match profile {
+                Some(profile) => local_usage(&value["usage"], profile)?,
+                None => usage(&value["usage"])?,
+            },
+            &value["model"],
+        ),
     })
 }
 
@@ -466,6 +472,8 @@ pub(super) struct StreamState {
     profile: Option<&'static str>,
     finished: bool,
     used: bool,
+    /// First valid `model` any chunk reported; carried on the usage event.
+    model: Option<ReportedModel>,
 }
 
 impl StreamState {
@@ -481,6 +489,9 @@ impl StreamState {
         object(&value)?;
         if !empty(&value["error"]) {
             return Err(InferenceError::InvalidUpstream);
+        }
+        if self.model.is_none() {
+            self.model = ReportedModel::from_json(&value["model"]);
         }
         let choices = array(&value["choices"])?;
         if choices.len() > 1 {
@@ -540,10 +551,12 @@ impl StreamState {
             if self.used || !self.finished {
                 return Err(InferenceError::InvalidUpstream);
             }
-            events.push(ChatEvent::Usage(match self.profile {
+            let mut usage = match self.profile {
                 Some(profile) => local_usage(&value["usage"], profile)?,
                 None => usage(&value["usage"])?,
-            }));
+            };
+            usage.reported_model = self.model;
+            events.push(ChatEvent::Usage(usage));
             self.used = true;
         }
         Ok(events)

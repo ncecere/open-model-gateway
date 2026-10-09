@@ -54,6 +54,9 @@ enum Command {
         #[arg(long, default_value_t = 1000)]
         limit: i64,
     },
+    /// Print the migrations embedded in this binary as JSON (no database access);
+    /// backup/restore tooling compares it with a backup's recorded lineage.
+    SchemaVersion,
     /// Alert rules (docs/alerts.md).
     Alerts {
         #[command(subcommand)]
@@ -87,6 +90,10 @@ async fn main() -> Result<()> {
         dotenvy::dotenv().ok();
     }
     let cli = Cli::parse();
+    if matches!(cli.command, Some(Command::SchemaVersion)) {
+        println!("{}", schema_version()?);
+        return Ok(());
+    }
     tracing_subscriber::fmt()
         .json()
         .with_writer(std::io::stderr)
@@ -194,6 +201,7 @@ async fn main() -> Result<()> {
                 None => println!("Another replica is evaluating alerts right now; nothing done."),
             }
         }
+        Command::SchemaVersion => unreachable!("handled before configuration"),
         Command::ProvisionUser {
             email,
             platform_admin,
@@ -231,11 +239,27 @@ async fn main() -> Result<()> {
                 registry.register(adapter)?;
             }
             let engine = Engine::new(Arc::new(store.clone()), registry, config.inference_limits)?;
-            let identity = IdentityState::new(store.clone(), IdentityConfig::from_env()?).await?;
+            let identity = IdentityState::new(store.clone(), IdentityConfig::from_env()?)
+                .await?
+                .with_scim(open_model_gateway::scim::ScimConfig::from_env()?)?;
             let retention = open_model_gateway::maintenance::retention_from_env()?;
             let alert_interval = open_model_gateway::alerts::interval_from_env()?;
             let listener = tokio::net::TcpListener::bind(config.listen).await?;
             tracing::info!(address = %listener.local_addr()?, serving_web = web.is_some(), "gateway listening");
+            // Separate, optional metrics listener: never the public port or SPA.
+            let metrics = match config.metrics_listen {
+                Some(address) => {
+                    let metrics_listener = tokio::net::TcpListener::bind(address).await?;
+                    tracing::info!(address = %metrics_listener.local_addr()?, "metrics listening");
+                    let app = open_model_gateway::metrics::router(store.clone());
+                    Some(tokio::spawn(async move {
+                        if axum::serve(metrics_listener, app).await.is_err() {
+                            tracing::error!("metrics listener stopped");
+                        }
+                    }))
+                }
+                None => None,
+            };
             let maintenance = open_model_gateway::maintenance::start(store.clone(), retention);
             let alerts =
                 alert_interval.map(|every| open_model_gateway::alerts::start(store.clone(), every));
@@ -269,6 +293,10 @@ async fn main() -> Result<()> {
                 alerts.abort();
                 let _ = alerts.await;
             }
+            if let Some(metrics) = metrics {
+                metrics.abort();
+                let _ = metrics.await;
+            }
             maintenance.abort();
             lifecycle.abort();
             let _ = maintenance.await;
@@ -278,6 +306,22 @@ async fn main() -> Result<()> {
     }
     pool.close().await;
     Ok(())
+}
+
+fn schema_version() -> Result<String> {
+    let migrations: Vec<_> = open_model_gateway::store::MIGRATOR
+        .iter()
+        .map(|m| serde_json::json!({"version": m.version, "checksum": hex::encode(&m.checksum)}))
+        .collect();
+    let latest = open_model_gateway::store::MIGRATOR
+        .iter()
+        .map(|m| m.version)
+        .max();
+    Ok(serde_json::to_string(&serde_json::json!({
+        "schema_family": "enterprise_v1",
+        "latest_version": latest,
+        "migrations": migrations,
+    }))?)
 }
 
 fn ensure_demo_config(config: &Config) -> Result<()> {
@@ -339,6 +383,22 @@ mod demo {
     }
 
     #[test]
+    fn schema_version_lists_embedded_lineage_without_a_database() {
+        let value: serde_json::Value = serde_json::from_str(&schema_version().unwrap()).unwrap();
+        let migrations = value["migrations"].as_array().unwrap();
+        assert_eq!(
+            value["latest_version"],
+            migrations.last().unwrap()["version"]
+        );
+        assert_eq!(migrations[0]["version"], 1);
+        assert!(
+            migrations
+                .iter()
+                .all(|m| m["checksum"].as_str().unwrap().len() == 96)
+        );
+    }
+
+    #[test]
     fn alert_evaluation_is_an_explicit_one_shot_command() {
         assert!(matches!(
             Cli::try_parse_from(["gateway", "alerts", "evaluate", "--once"])
@@ -361,6 +421,8 @@ mod demo {
             web_directory: None,
             secret_env_allowlist: vec![],
             inference_limits: Default::default(),
+            metrics_listen: None,
+            database_max_connections: 10,
         };
         assert!(ensure_demo_config(&config).is_ok());
         for url in [

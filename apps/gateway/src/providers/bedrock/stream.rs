@@ -163,7 +163,14 @@ impl State {
                 }
                 self.metadata = true;
                 if let Some(value) = metadata.usage {
-                    result.push(ChatEvent::Usage(usage(&value)?));
+                    let mut usage = usage(&value)?;
+                    usage.reported_model = invoked_model(
+                        metadata
+                            .trace
+                            .as_ref()
+                            .and_then(|t| t.prompt_router.as_ref()),
+                    );
+                    result.push(ChatEvent::Usage(usage));
                 }
             }
             _ => return Err(invalid()),

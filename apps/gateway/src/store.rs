@@ -2,9 +2,21 @@ use sqlx::{PgConnection, PgPool, migrate::Migrator};
 
 pub static MIGRATOR: Migrator = sqlx::migrate!("./enterprise_migrations");
 
+/// `/health/ready` inputs; `Default` is "database unreachable".
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Readiness {
+    pub database: bool,
+    /// Migration family/lineage/checksums exactly match this binary.
+    pub schema: bool,
+}
+
 #[derive(Clone)]
 pub struct Store {
     pub(crate) pool: PgPool,
+    /// In-process queues in front of the installation lock (see
+    /// `governance::LockGate`): waiters queue here instead of holding pooled
+    /// connections, so authentication and settlement are not starved.
+    pub(crate) lock_gates: std::sync::Arc<crate::governance::LockGates>,
 }
 
 // Keep this inventory in step with future enterprise migrations. Preflight rejects
@@ -58,6 +70,11 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "alert_events",
     "alert_deliveries",
     "alert_reads",
+    // 0014 SCIM
+    "scim_users",
+    "scim_groups",
+    "scim_group_members",
+    "scim_state",
 ];
 
 fn lineage_matches(
@@ -129,7 +146,11 @@ async fn preflight(connection: &mut PgConnection, initializing: bool) -> anyhow:
 
 impl Store {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        let gates = crate::governance::LockGates::for_pool(pool.options().get_max_connections());
+        Self {
+            pool,
+            lock_gates: std::sync::Arc::new(gates),
+        }
     }
 
     /// Require a fully initialized current installation, including on serve/bootstrap.
@@ -162,15 +183,26 @@ impl Store {
 
     /// Readiness checks the family AND exact checksums; it cannot initialize anything.
     pub async fn is_ready(&self) -> bool {
+        let checks = self.readiness().await;
+        checks.database && checks.schema
+    }
+
+    /// Database reachability and exact schema lineage, reported separately.
+    pub async fn readiness(&self) -> Readiness {
         let Ok(mut connection) = self.pool.acquire().await else {
-            return false;
+            return Readiness::default();
         };
-        let installed: bool =
-            sqlx::query_scalar("SELECT to_regclass('public.installation') IS NOT NULL")
+        let Ok(installed) =
+            sqlx::query_scalar::<_, bool>("SELECT to_regclass('public.installation') IS NOT NULL")
                 .fetch_one(&mut *connection)
                 .await
-                .unwrap_or(false);
-        installed && preflight(&mut connection, false).await.is_ok()
+        else {
+            return Readiness::default();
+        };
+        Readiness {
+            database: true,
+            schema: installed && preflight(&mut connection, false).await.is_ok(),
+        }
     }
 }
 

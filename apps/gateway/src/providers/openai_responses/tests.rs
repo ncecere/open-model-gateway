@@ -85,7 +85,7 @@ fn request(stream: bool) -> ChatRequest {
     }
 }
 fn complete() -> Value {
-    json!({"id":"private","object":"response","status":"completed","output":[{"id":"m","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"世界","annotations":[]}]}],"usage":{"input_tokens":3,"output_tokens":2}})
+    json!({"id":"private","object":"response","model":"gpt-served-2026-01-01","status":"completed","output":[{"id":"m","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"世界","annotations":[]}]}],"usage":{"input_tokens":3,"output_tokens":2,"output_tokens_details":{"reasoning_tokens":1}}})
 }
 fn stream() -> Vec<Value> {
     vec![
@@ -178,6 +178,14 @@ async fn native_json_and_byte_fragmented_sse() {
         panic!()
     };
     assert_eq!(r.content.as_deref(), Some("世界"));
+    let telemetry = |u: &Usage| {
+        (
+            u.reported_model.map(|m| m.as_str().to_owned()),
+            u.reasoning_tokens,
+        )
+    };
+    let expected = (Some("gpt-served-2026-01-01".to_owned()), Some(1));
+    assert_eq!(telemetry(&r.usage), expected);
     let ProviderOutput::Stream(s) = mock
         .adapter
         .execute_protocol(&target(), request(true), ApiProtocol::Responses)
@@ -189,6 +197,15 @@ async fn native_json_and_byte_fragmented_sse() {
     let events: Vec<_> = s.collect().await;
     assert!(events.iter().all(|v| v.is_ok()));
     assert!(matches!(events.last(), Some(Ok(ChatEvent::Done))));
+    // The terminal snapshot carries the served model and reasoning breakdown.
+    let usage: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            Ok(ChatEvent::Usage(u)) => Some(telemetry(u)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(usage, vec![expected]);
     for (h, uri, v) in mock.capture.lock().unwrap().iter() {
         assert_eq!(uri.path(), "/v1/responses");
         assert_eq!(h["authorization"], "Bearer mock-key");

@@ -1,0 +1,14 @@
+# Example scrape configuration. The metrics listener is unauthenticated:
+# reach it only over a private network (same host, VPN or internal Docker
+# network). Ingress never routes to it.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 30s
+rule_files:
+  - prometheus-rules.yml
+scrape_configs:
+  - job_name: open-model-gateway
+    # The gateway serves OpenMetrics text at /metrics on GATEWAY_METRICS_ADDR.
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["gateway:9464"]

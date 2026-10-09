@@ -4,12 +4,12 @@ import type { ReactNode } from "react";
 import { DashboardNavigationProvider } from "./navigation-link";
 import { LogsPage } from "../pages/logs";
 import { PlatformSessionDetailPage, SessionDetailPage } from "../pages/logs-session";
-import { PlatformRequestDetailPage } from "../pages/request-detail";
+import { PlatformRequestDetailPage, attemptItem } from "../pages/request-detail";
 import type { DashboardSearch } from "../lib/permissions";
 import { dashboardHref, parseDashboardLocation } from "../lib/locations";
 import { dashboardSearch } from "../lib/permissions";
 import { navigation } from "../lib/navigation";
-import { rateText, requestFilters, requestQuery, tpsText, ttftText, validSessionId, type GenerationRow, type LogMetrics, type RequestDetail, type RequestRow, type SessionRow } from "../lib/requests";
+import { rateText, requestFilters, requestQuery, servedModel, servedModelText, tpsText, ttftText, validSessionId, type GenerationRow, type LogMetrics, type RequestDetail, type RequestRow, type SessionRow } from "../lib/requests";
 import { admin, markup, member, session, team } from "../lib/test-fixtures";
 
 const ws = "/api/v1/workspaces/team";
@@ -95,5 +95,36 @@ describe("Logs URLs and formatting", () => {
     expect(rateText("0.0250")).toBe("2.5%"); expect(rateText("1.0000")).toBe("100%"); expect(rateText(null)).toBe("Unknown");
     expect(tpsText("41.25")).toBe("41.2 tok/s"); expect(tpsText("1200.00")).toBe("1,200 tok/s"); expect(tpsText(null)).toBe("Unknown");
     expect(ttftText(null, false)).toBe("Not streamed"); expect(ttftText(null, true)).toBe("Unknown");
+  });
+});
+
+describe("Upstream model (reported by the provider, else configured)", () => {
+  it("prefers the reported model and marks a configured fallback", () => {
+    expect(servedModel({ upstream_model: "gpt-x", reported_upstream_model: "gpt-x-2026-01-01" })).toEqual({ id: "gpt-x-2026-01-01", configured: false, route: "gpt-x" });
+    expect(servedModel({ upstream_model: "gpt-x", reported_upstream_model: "gpt-x" })).toEqual({ id: "gpt-x", configured: false });
+    expect(servedModel({ upstream_model: "gpt-x", reported_upstream_model: null })).toEqual({ id: "gpt-x", configured: true });
+    expect(servedModel({})).toBeNull();
+    expect(servedModelText(servedModel({ upstream_model: "gpt-x" }))).toBe("gpt-x (configured)");
+    expect(servedModelText(null)).toBe("Unknown");
+  });
+  it("shows it in the generations list", () => {
+    const rows = [{ ...generation, reported_upstream_model: "openai/gpt-x-2026-01-01" }, { ...generation, execution_id: "e2e2e2e2-0000-0000-0000-000000000000", reported_upstream_model: null }];
+    const html = markup(nav({ page: "requests", ws: "team", tab: "generations", cols: "none" }, <LogsPage scope={{ kind: "workspace", workspace: team }} />), [[`${ws}/generations?limit=50`, { data: rows, next_cursor: null }]]);
+    const table = new DOMParser().parseFromString(html, "text/html").querySelector("table")!;
+    const column = [...table.tHead!.rows[0]!.cells].findIndex(c => c.textContent === "Upstream model");
+    expect(column).toBeGreaterThan(0);
+    expect([...table.tBodies[0]!.rows].map(r => r.cells[column]!.textContent)).toEqual(["openai/gpt-x-2026-01-01", "gpt-x (configured)"]);
+  });
+  it("shows it on the request page and in each attempt", () => {
+    const configured: RequestDetail = { ...row, workspace_id: "team", attempt_count: 1, attempts: [], prev_id: null, next_id: null };
+    const html = markup(nav({ page: "platform-log-detail", record: row.root_request_id }, <PlatformRequestDetailPage session={admin} id={row.root_request_id} />), [[`/api/v1/platform/logs/requests/${row.root_request_id}`, configured]]);
+    expect(html).toContain("Upstream model"); expect(html).toContain("(configured)");
+    const reported = { ...configured, reported_upstream_model: "openai/gpt-x-2026-01-01" };
+    const page = markup(nav({ page: "platform-log-detail", record: row.root_request_id }, <PlatformRequestDetailPage session={admin} id={row.root_request_id} />), [[`/api/v1/platform/logs/requests/${row.root_request_id}`, reported]]);
+    expect(page).toContain("openai/gpt-x-2026-01-01"); expect(page).toContain("route gpt-x"); expect(page).not.toContain("(configured)");
+    const base = { attempt_number: 1, execution_id: "x1", state: "succeeded", error_code: null, started_at: row.started_at, completed_at: row.completed_at, latency_ms: 10, deployment: { id: "d", upstream_model: "claude-route" }, connection: { id: "c", name: "Anthropic", provider: "anthropic" }, input_tokens: "1", output_tokens: "1", billing_usage: null, meter_usage: null, cost_microusd: "0", held_microusd: "0", accounting_state: "settled", unresolved_reason: null, price_id: null, pricing_version: null, failover_reason: null };
+    const title = (a: typeof base & { reported_upstream_model?: string | null }) => new DOMParser().parseFromString(markup(<>{attemptItem(a, [a]).title}</>), "text/html").body.textContent;
+    expect(title(base)).toBe("Anthropic · claude-route (configured)");
+    expect(title({ ...base, reported_upstream_model: "claude-served-1" })).toBe("Anthropic · claude-served-1 · route claude-route");
   });
 });

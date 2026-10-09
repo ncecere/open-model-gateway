@@ -19,6 +19,36 @@ type Tx<'a> = Transaction<'a, Postgres>;
 fn storage(_: sqlx::Error) -> InferenceError {
     InferenceError::Storage
 }
+/// Bounded in-process queues in front of the installation lock, one for
+/// admissions and one for settlements/reconciliation. Work under that lock is
+/// serialized anyway, so letting every concurrent request hold a pooled
+/// connection while it waits adds no throughput: it starves authentication,
+/// routing and settlement of connections (the load test saw 503s and
+/// unsettled streams at 200 concurrent requests on a 10-connection pool).
+/// Each queue lets at most a quarter of the pool wait on the database lock;
+/// other callers wait here without a connection. Settlements never queue
+/// behind admissions in-process, so holds are released promptly.
+pub struct LockGates {
+    admission: tokio::sync::Semaphore,
+    settlement: tokio::sync::Semaphore,
+}
+impl LockGates {
+    pub(crate) fn for_pool(max_connections: u32) -> Self {
+        let permits = (max_connections as usize / 4).max(1);
+        Self {
+            admission: tokio::sync::Semaphore::new(permits),
+            settlement: tokio::sync::Semaphore::new(permits),
+        }
+    }
+}
+async fn gate(semaphore: &tokio::sync::Semaphore) -> tokio::sync::SemaphorePermit<'_> {
+    // Never closed; an error would mean a bug, and failing open is safe here
+    // because the database lock still serializes the work.
+    semaphore
+        .acquire()
+        .await
+        .expect("installation lock gate is never closed")
+}
 async fn lock(tx: &mut Tx<'_>) -> Result<(), InferenceError> {
     sqlx::query("SELECT pg_advisory_xact_lock_shared(72419502)")
         .execute(&mut **tx)
@@ -325,11 +355,23 @@ async fn admit_checked(
     lease_seconds: i64,
     expected: Option<&Deployment>,
 ) -> Result<(), InferenceError> {
+    let result = admit_unobserved(store, record, workload, lease_seconds, expected).await;
+    crate::metrics::observe_admission(&result);
+    result
+}
+async fn admit_unobserved(
+    store: &Store,
+    record: &ExecutionStart,
+    workload: WorkloadAdmission,
+    lease_seconds: i64,
+    expected: Option<&Deployment>,
+) -> Result<(), InferenceError> {
     if !(1..=86_400).contains(&lease_seconds) {
         return Err(InferenceError::Configuration);
     }
     let workspace = record.principal.workspace_id;
     let key = record.principal.key_id;
+    let _queued = gate(&store.lock_gates.admission).await;
     let mut tx = store.pool.begin().await.map_err(storage)?;
     lock(&mut tx).await?;
     let lineage = crate::auth::revalidate(&mut tx, &record.principal)
@@ -554,9 +596,12 @@ struct Reservation {
     meter_usage: Option<serde_json::Value>,
     output_image_variant: Option<String>,
     provider_cost_microusd: Option<i64>,
+    /// Metrics labels only (provider kind, configured public model).
+    provider: String,
+    public_model: String,
 }
 async fn reservation(tx: &mut Tx<'_>, id: Uuid) -> Result<Reservation, InferenceError> {
-    sqlx::query_as("SELECT r.workspace_id,r.deployment_id,r.price_id,r.state,r.input_tokens,r.output_tokens,r.billing_usage,e.workload_kind,r.reserved_tokens,r.meter_usage,r.output_image_variant,r.provider_cost_microusd FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id WHERE r.execution_id=$1").bind(id).fetch_one(&mut **tx).await.map_err(storage)
+    sqlx::query_as("SELECT r.workspace_id,r.deployment_id,r.price_id,r.state,r.input_tokens,r.output_tokens,r.billing_usage,e.workload_kind,r.reserved_tokens,r.meter_usage,r.output_image_variant,r.provider_cost_microusd,e.provider,e.public_model FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id WHERE r.execution_id=$1").bind(id).fetch_one(&mut **tx).await.map_err(storage)
 }
 /// Meter, variant and provider-cost evidence as stored columns.
 struct MeterEvidence {
@@ -952,6 +997,61 @@ pub async fn finish_with_telemetry(
     record: &ExecutionFinish,
     telemetry: &crate::inference::repository::AttemptTelemetry,
 ) -> Result<(), InferenceError> {
+    use crate::metrics::{AttemptObservation, METRICS, Settlement};
+    match finish_unobserved(store, record, telemetry).await {
+        Ok(Finished::Replay) => Ok(()),
+        Ok(Finished::Conflict) => Err(InferenceError::Storage),
+        Ok(Finished::Committed {
+            provider,
+            model,
+            settled,
+            input,
+            output,
+        }) => {
+            let telemetry = telemetry.for_outcome(record.outcome);
+            let labels = METRICS.labels(&provider, &model);
+            METRICS.observe_attempt(AttemptObservation {
+                labels: &labels,
+                outcome: record.outcome.as_str(),
+                error: record.error,
+                input_tokens: input,
+                output_tokens: output,
+                generation_ms: telemetry.generation_ms,
+                time_to_first_token_ms: telemetry.time_to_first_token_ms,
+            });
+            METRICS.observe_settlement(if settled {
+                Settlement::Settled
+            } else {
+                Settlement::Unknown
+            });
+            Ok(())
+        }
+        Err(error) => {
+            // The reservation stays pending (held) until reconciliation.
+            METRICS.observe_settlement(Settlement::Held);
+            Err(error)
+        }
+    }
+}
+/// Metrics view of a terminal finish (labels come from the durable row).
+enum Finished {
+    /// An identical terminal finish was already recorded.
+    Replay,
+    /// A different terminal finish was already recorded.
+    Conflict,
+    Committed {
+        provider: String,
+        model: String,
+        settled: bool,
+        input: Option<i64>,
+        output: Option<i64>,
+    },
+}
+async fn finish_unobserved(
+    store: &Store,
+    record: &ExecutionFinish,
+    telemetry: &crate::inference::repository::AttemptTelemetry,
+) -> Result<Finished, InferenceError> {
     let telemetry = telemetry.for_outcome(record.outcome);
     let ms = |v: Option<u64>| v.map(|n| n.min(i64::MAX as u64) as i64);
     let reasoning = record
@@ -959,6 +1059,9 @@ pub async fn finish_with_telemetry(
         .reasoning_tokens
         .filter(|n| *n <= i64::MAX as u64)
         .map(|n| n as i64);
+    // Provider-reported served model (0013), validated and bounded by type.
+    let reported_model = record.usage.reported_model.map(|m| m.as_str().to_owned());
+    let _queued = gate(&store.lock_gates.settlement).await;
     let mut tx = store.pool.begin().await.map_err(storage)?;
     lock(&mut tx).await?;
     let r = reservation(&mut tx, record.id).await?;
@@ -983,11 +1086,11 @@ pub async fn finish_with_telemetry(
     if r.state != "pending" {
         let same:bool=sqlx::query_scalar("SELECT state=$2 AND error_code IS NOT DISTINCT FROM $3::text AND input_tokens IS NOT DISTINCT FROM $4::bigint AND output_tokens IS NOT DISTINCT FROM $5::bigint AND billing_usage IS NOT DISTINCT FROM $6::jsonb AND meter_usage IS NOT DISTINCT FROM $7::jsonb AND output_image_variant IS NOT DISTINCT FROM $8::text AND provider_cost_microusd IS NOT DISTINCT FROM $9::bigint FROM inference_executions WHERE id=$1")
             .bind(record.id).bind(record.outcome.as_str()).bind(record.error.map(|e|e.code())).bind(input).bind(output).bind(billing).bind(m.meters).bind(m.variant).bind(m.provider_cost).fetch_one(&mut *tx).await.map_err(storage)?;
-        return if same {
-            Ok(())
+        return Ok(if same {
+            Finished::Replay
         } else {
-            Err(InferenceError::Storage)
-        };
+            Finished::Conflict
+        });
     }
     let value = pinned_value(&mut tx, &r, usage).await?;
     // A settled row records observed token counts; unreported tokens (other
@@ -1001,9 +1104,9 @@ pub async fn finish_with_telemetry(
         None
     };
     let components = value.components.filter(|_| actual.is_some());
-    let changed=sqlx::query("UPDATE inference_executions SET state=$2,error_code=$3,input_tokens=$4,output_tokens=$5,billing_usage=$6,elapsed_ms=$7,completed_at=clock_timestamp(),meter_usage=$8,output_image_variant=$9,provider_cost_microusd=$10,finish_reason=$11,time_to_first_token_ms=$12,generation_ms=$13,reasoning_tokens=$14 WHERE id=$1 AND state='started'")
+    let changed=sqlx::query("UPDATE inference_executions SET state=$2,error_code=$3,input_tokens=$4,output_tokens=$5,billing_usage=$6,elapsed_ms=$7,completed_at=clock_timestamp(),meter_usage=$8,output_image_variant=$9,provider_cost_microusd=$10,finish_reason=$11,time_to_first_token_ms=$12,generation_ms=$13,reasoning_tokens=$14,reported_upstream_model=$15 WHERE id=$1 AND state='started'")
         .bind(record.id).bind(record.outcome.as_str()).bind(record.error.map(|e|e.code())).bind(input).bind(output).bind(&billing).bind(record.elapsed_ms.min(i64::MAX as u64)as i64).bind(&m.meters).bind(&m.variant).bind(m.provider_cost)
-        .bind(telemetry.finish_reason.map(|f|f.as_str())).bind(ms(telemetry.time_to_first_token_ms)).bind(ms(telemetry.generation_ms)).bind(reasoning).execute(&mut *tx).await.map_err(storage)?.rows_affected();
+        .bind(telemetry.finish_reason.map(|f|f.as_str())).bind(ms(telemetry.time_to_first_token_ms)).bind(ms(telemetry.generation_ms)).bind(reasoning).bind(&reported_model).execute(&mut *tx).await.map_err(storage)?.rows_affected();
     if changed != 1 {
         return Err(InferenceError::Storage);
     }
@@ -1023,7 +1126,14 @@ pub async fn finish_with_telemetry(
         None,
     )
     .await?;
-    tx.commit().await.map_err(storage)
+    tx.commit().await.map_err(storage)?;
+    Ok(Finished::Committed {
+        provider: r.provider,
+        model: r.public_model,
+        settled: actual.is_some(),
+        input,
+        output,
+    })
 }
 pub async fn reconcile_expired(store: &Store, limit: i64) -> Result<u64, InferenceError> {
     if !(1..=10_000).contains(&limit) {
@@ -1032,6 +1142,7 @@ pub async fn reconcile_expired(store: &Store, limit: i64) -> Result<u64, Inferen
     let ids:Vec<Uuid>=sqlx::query_scalar("SELECT execution_id FROM governance_reservations WHERE state='pending' AND lease_expires_at<=clock_timestamp() ORDER BY lease_expires_at,execution_id LIMIT $1").bind(limit).fetch_all(&store.pool).await.map_err(storage)?;
     let mut count = 0;
     for id in ids {
+        let _queued = gate(&store.lock_gates.settlement).await;
         let mut tx = store.pool.begin().await.map_err(storage)?;
         lock(&mut tx).await?;
         let changed=sqlx::query("UPDATE governance_reservations SET state='unknown' WHERE execution_id=$1 AND state='pending' AND lease_expires_at<=clock_timestamp()").bind(id).execute(&mut *tx).await.map_err(storage)?.rows_affected();

@@ -40,7 +40,7 @@ fn request(stream: bool) -> ChatRequest {
     }
 }
 fn complete() -> Value {
-    json!({"id":"upstream","type":"message","role":"assistant","model":"private","content":[{"type":"text","text":"世界"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":4,"output_tokens":2}})
+    json!({"id":"upstream","type":"message","role":"assistant","model":"private","content":[{"type":"text","text":"世界"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":4,"output_tokens":2,"output_tokens_details":{"thinking_tokens":1}}})
 }
 fn stream() -> Vec<Value> {
     vec![
@@ -48,7 +48,7 @@ fn stream() -> Vec<Value> {
         json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
         json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"世界"}}),
         json!({"type":"content_block_stop","index":0}),
-        json!({"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}),
+        json!({"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2,"output_tokens_details":{"thinking_tokens":1}}}),
         json!({"type":"message_stop"}),
     ]
 }
@@ -122,8 +122,18 @@ impl Mock {
 #[tokio::test]
 async fn local_contract_and_native_headers() {
     let mock = Mock::new(200, None).await;
-    super::super::contract::assert_text_chat_contract(&mock.adapter, &target(), request(false))
-        .await;
+    // `message.model` is reported; thinking tokens come from
+    // `usage.output_tokens_details.thinking_tokens` (final cumulative usage).
+    super::super::contract::assert_text_chat_contract(
+        &mock.adapter,
+        &target(),
+        request(false),
+        super::super::contract::Telemetry {
+            reported_model: Some("private"),
+            reasoning_tokens: Some(1),
+        },
+    )
+    .await;
     let capture = mock.capture.lock().unwrap();
     assert_eq!(capture.len(), 2);
     for (h, uri, v) in capture.iter() {
@@ -180,7 +190,14 @@ fn strict_subset_and_unknown_usage() {
     assert!(decode(&v).is_err());
     let mut v = complete();
     v.as_object_mut().unwrap().remove("usage");
-    assert_eq!(decode(&v).unwrap().usage, Usage::default());
+    // Missing usage stays unknown; only the reported model is observed.
+    assert_eq!(
+        decode(&v).unwrap().usage,
+        Usage {
+            reported_model: ReportedModel::parse("private"),
+            ..Usage::default()
+        }
+    );
     assert!(
         AnthropicAdapter::new(Arc::new(Resolver))
             .unwrap()
@@ -268,4 +285,47 @@ async fn invalid_messages_body_preserves_validated_usage_as_evidence() {
         (observed.input_tokens, observed.output_tokens),
         (Some(13), Some(14))
     );
+}
+#[test]
+fn thinking_tokens_and_reported_model_are_telemetry_only() {
+    // A preliminary start-event breakdown is not final evidence.
+    let mut state = State::default();
+    state.push(json!({"type":"message_start","message":{"type":"message","role":"assistant","model":"claude-served-1","content":[],"stop_reason":null,"usage":{"input_tokens":4,"output_tokens":1,"output_tokens_details":{"thinking_tokens":0}}}})).unwrap();
+    state.push(json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":9}})).unwrap();
+    let ChatEvent::Usage(u) = state.push(json!({"type":"message_stop"})).unwrap()[0] else {
+        panic!()
+    };
+    assert_eq!(
+        u.reasoning_tokens, None,
+        "unknown stays unknown, never zero"
+    );
+    assert_eq!(u.reported_model.unwrap().as_str(), "claude-served-1");
+    // Cumulative deltas: the last reported breakdown wins.
+    let mut state = State::default();
+    state.push(stream()[0].clone()).unwrap();
+    state.push(json!({"type":"message_delta","delta":{"stop_reason":null},"usage":{"output_tokens":5,"output_tokens_details":{"thinking_tokens":3}}})).unwrap();
+    state.push(json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":8,"output_tokens_details":{"thinking_tokens":6}}})).unwrap();
+    let ChatEvent::Usage(u) = state.push(json!({"type":"message_stop"})).unwrap()[0] else {
+        panic!()
+    };
+    assert_eq!((u.output_tokens, u.reasoning_tokens), (Some(8), Some(6)));
+    // Implausible or malformed breakdowns and invalid model ids are unknown,
+    // never a failed response.
+    for (details, model) in [
+        (json!({"thinking_tokens":3}), json!("has space")),
+        (json!({"thinking_tokens":"1"}), json!(7)),
+        (json!(null), json!("")),
+    ] {
+        let mut v = complete();
+        v["usage"]["output_tokens_details"] = details;
+        v["model"] = model;
+        let u = decode(&v).unwrap().usage;
+        assert_eq!(
+            (u.output_tokens, u.reasoning_tokens, u.reported_model),
+            (Some(2), None, None)
+        );
+    }
+    let mut v = complete();
+    v["model"] = json!("m".repeat(ReportedModel::MAX + 1));
+    assert_eq!(decode(&v).unwrap().usage.reported_model, None);
 }

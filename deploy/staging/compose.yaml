@@ -85,6 +85,10 @@ services:
       GATEWAY_MAX_CONCURRENT_REQUESTS: ${GATEWAY_MAX_CONCURRENT_REQUESTS:-32}
       GATEWAY_REQUEST_TIMEOUT_SECONDS: ${GATEWAY_REQUEST_TIMEOUT_SECONDS:-120}
       GATEWAY_SECRET_ENV_ALLOWLIST: ${GATEWAY_SECRET_ENV_ALLOWLIST:-}
+      GATEWAY_DATABASE_MAX_CONNECTIONS: ${GATEWAY_DATABASE_MAX_CONNECTIONS:-10}
+      # Optional Prometheus listener; empty disables it. Never published by
+      # ingress: scrape it from a monitoring container on a private network.
+      GATEWAY_METRICS_ADDR: ${GATEWAY_METRICS_ADDR:-}
       AWS_EC2_METADATA_DISABLED: 'true'
       RUST_LOG: open_model_gateway=info
     secrets: [runtime_database_url]

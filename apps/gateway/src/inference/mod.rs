@@ -97,7 +97,7 @@ impl Engine {
             self.capacity
                 .clone()
                 .try_acquire_owned()
-                .map_err(|_| InferenceError::Busy)?,
+                .map_err(|_| crate::metrics::capacity_denied())?,
         )));
         let started = Instant::now();
         let deadline = started + self.limits.request_timeout;

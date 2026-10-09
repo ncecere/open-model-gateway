@@ -8,7 +8,7 @@ Admin › Settings holds installation-wide settings. Platform Admins change them
 | Defaults & limits | The installation ceiling and Personal/Team/Project defaults (formerly Admin › Limits; `/admin/limits` still opens it). See [governance](governance.md). |
 | Data & privacy | OpenRouter data collection, request log retention, prompt/response storage. |
 | Email | SMTP relay for invitations, status, test send. |
-| Sign-in | Read-only OIDC configuration; SSO group mappings stay on Admin › SSO groups. |
+| Sign-in | Read-only OIDC configuration, signing-key (JWKS) status and SCIM provisioning status; SSO group mappings stay on Admin › SSO groups. |
 
 ## General
 
@@ -46,6 +46,13 @@ When a relay is configured, creating an invitation also emails the invite code t
 ## Sign-in
 
 Read-only: whether OIDC is configured, the issuer, client ID, client type (confidential or public), groups claim, public URL and the callback URL to register, plus the number of enabled SSO group mappings. Values come from the server environment ([identity](identity.md)) and change only with a restart. The client secret is never shown.
+
+Live status is also shown:
+
+- **Signing keys:** cached key count, last refresh, and whether keys are current, a cached copy (refresh failing) or unavailable ([identity](identity.md#signing-keys-jwks)).
+- **Provisioning (SCIM):** on or off, the base URL to copy, active and total users, groups and memberships, and the last SCIM write ([SCIM](scim.md)). The token is never shown.
+
+`GET /api/v1/platform/settings/sign-in` adds `jwks` (`keys`, `refreshed_at`, `fresh_until`, `last_failure_at`, `state`: `fresh` | `stale` | `unavailable`) and `scim` (`enabled`, plus `base_url`, `users`, `active_users`, `groups`, `memberships` and `last_sync_at` when enabled).
 
 ## Operations
 

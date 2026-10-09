@@ -185,6 +185,9 @@ impl ProviderAdapter for FixtureAdapter {
             input_tokens: Some(7),
             output_tokens: Some(2),
             billing: None,
+            // Provider-reported telemetry (Logs only, never sent to clients).
+            reasoning_tokens: Some(1),
+            reported_model: ReportedModel::parse("private-upstream-id-2026-01-01"),
             ..Default::default()
         };
         if request.stream {
@@ -405,6 +408,19 @@ async fn telemetry(pool: &PgPool, id: Uuid) -> TelemetryRow {
     sqlx::query_as("SELECT finish_reason,time_to_first_token_ms,generation_ms,upstream_model,client_session_id,client_app FROM inference_executions WHERE id=$1")
         .bind(id).fetch_one(pool).await.unwrap()
 }
+/// Provider-reported served model (0013) and reasoning tokens of an attempt;
+/// the configured `upstream_model` snapshot is kept alongside.
+async fn reported(pool: &PgPool, id: Uuid) -> (Option<String>, Option<i64>, Option<String>) {
+    sqlx::query_as("SELECT reported_upstream_model,reasoning_tokens,upstream_model FROM inference_executions WHERE id=$1")
+        .bind(id).fetch_one(pool).await.unwrap()
+}
+fn served() -> (Option<String>, Option<i64>, Option<String>) {
+    (
+        Some("private-upstream-id-2026-01-01".into()),
+        Some(1),
+        Some("private-upstream-id".into()),
+    )
+}
 async fn send(app: &axum::Router, request: Request<Body>) -> (StatusCode, Option<Uuid>) {
     let response = app.clone().oneshot(request).await.unwrap();
     let status = response.status();
@@ -435,6 +451,7 @@ async fn request_telemetry_and_client_labels_are_recorded(pool: PgPool) {
     assert_eq!(ttft, None, "time to first token is for streams only");
     assert!(generation.is_some());
     assert_eq!(upstream.as_deref(), Some("private-upstream-id"));
+    assert_eq!(reported(&pool, id.unwrap()).await, served());
     assert_eq!(session.as_deref(), Some("sess-A"));
     assert_eq!(app_name.as_deref(), Some("Logs test"));
     // Streams: metadata.session_id before user; first delta sets TTFT.
@@ -446,6 +463,7 @@ async fn request_telemetry_and_client_labels_are_recorded(pool: PgPool) {
     let (finish, ttft, generation, _, session, app_name) = telemetry(&pool, id.unwrap()).await;
     assert_eq!(finish.as_deref(), Some("stop"));
     assert!(ttft.is_some() && generation.is_some() && ttft <= generation);
+    assert_eq!(reported(&pool, id.unwrap()).await, served());
     assert_eq!(session.as_deref(), Some("conv 42"));
     assert_eq!(app_name, None);
     let mut body = chat(false);

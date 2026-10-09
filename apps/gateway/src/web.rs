@@ -29,6 +29,11 @@ impl WebAssets {
         Ok(Self { directory })
     }
 
+    /// Readiness: the loaded build has not been removed or unmounted.
+    pub fn is_intact(&self) -> bool {
+        self.directory.join("index.html").is_file()
+    }
+
     pub async fn serve(&self, request: Request) -> Response {
         let Ok(path) = percent_decode_str(request.uri().path()).decode_utf8() else {
             return super::http::not_found();
@@ -38,7 +43,7 @@ impl WebAssets {
             .filter(|segment| !segment.is_empty())
             .collect();
         // Never let HTML fallback hide an API typo, including encoded prefixes.
-        if matches!(segments.first(), Some(&"api" | &"v1" | &"health"))
+        if matches!(segments.first(), Some(&"api" | &"v1" | &"health" | &"scim"))
             || segments
                 .iter()
                 .any(|segment| segment.starts_with('.') || segment.contains('\\'))
@@ -184,6 +189,8 @@ mod tests {
             "/v1/unknown",
             "/health",
             "/health/missing",
+            "/scim",
+            "/scim/v2/Users",
             "/%76%31/unknown",
             "//api/v1/unknown",
         ] {

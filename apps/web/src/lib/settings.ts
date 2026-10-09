@@ -23,7 +23,11 @@ export type EmailSettings = {
   last_test: { at: string; ok: boolean; error: DeliveryError | null } | null; updated_at: string;
 };
 export type EmailTestResult = { ok: boolean; error: DeliveryError | null; recipient: string };
-export type SignInSettings = { enabled: boolean; issuer?: string; client_id?: string; client_type?: "confidential" | "public"; groups_claim?: string; public_url?: string; callback_url?: string; secure_cookies?: boolean; enabled_group_mappings: number };
+/** Issuer signing keys (JWKS) cached by the server: refreshed on expiry or unknown key id. */
+export type JwksStatus = { keys: number; refreshed_at: string; fresh_until: string; last_failure_at: string | null; state: "fresh" | "stale" | "unavailable" };
+/** SCIM provisioning status; never the token. */
+export type ScimStatus = { enabled: false } | { enabled: true; base_url: string; users: number; active_users: number; groups: number; memberships: number; last_sync_at: string | null };
+export type SignInSettings = { enabled: boolean; issuer?: string; client_id?: string; client_type?: "confidential" | "public"; groups_claim?: string; public_url?: string; callback_url?: string; secure_cookies?: boolean; jwks?: JwksStatus; enabled_group_mappings: number; scim?: ScimStatus };
 
 export const KEY_DAYS = { min: 1, max: 365 } as const;
 export const tlsLabels: Record<TlsMode, string> = { starttls: "STARTTLS", implicit: "Implicit TLS", none: "None (this machine only)" };

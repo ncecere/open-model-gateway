@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Boxes, LayoutDashboard, Shield, LogOut, UserRound, RefreshCw, House } from "lucide-react";
+import { Boxes, LayoutDashboard, Shield, LogOut, UserRound, RefreshCw, House, PanelLeft } from "lucide-react";
 import type { Session, Workspace } from "../../lib/api";
 import { authorityLabel } from "../../lib/access";
 import { canAdminister, type DashboardSearch, type Page } from "../../lib/permissions";
@@ -7,6 +7,7 @@ import { navigation, navParents, hiddenPages, activeAdminGroup, adminGroups, con
 import { ResourceLink } from "../navigation-link";
 import { AppShell, Sidebar, SidebarHeader, SidebarContent, SidebarFooter, SidebarNav, SidebarSection, SidebarItem, SidebarModeSwitch, SidebarUser, Brand, WorkspaceSwitcher, TopBar, Main, useAppShell } from "../ui/app-shell/app-shell";
 import { Avatar } from "../ui/avatar/avatar";
+import { IconButton } from "../ui/button/button";
 import { Badge } from "../ui/badge/badge";
 import { MenuGroup, MenuHeader, MenuItem, MenuLinkItem, MenuSeparator } from "../ui/menu/menu";
 import { Breadcrumbs, type BreadcrumbItem } from "../ui/breadcrumbs/breadcrumbs";
@@ -69,6 +70,13 @@ export function DashboardShell({ session, search, workspace, navigate, refresh, 
   const sidebar = <Sidebar label={admin ? "Admin sidebar" : "Workspace sidebar"}><SidebarHeader><Brand name={session.installation.name} render={<ResourceLink search={{ page: "home" }} />} />{canAdminister(session) && <SidebarModeSwitch label="Portal" items={[{ label: "Workspace", icon: <LayoutDashboard aria-hidden />, current: !admin, render: <ResourceLink search={{ page: "home" }} /> }, { label: "Admin", icon: <Shield aria-hidden />, current: admin, render: <ResourceLink search={portal(session, "admin") ?? { page: "platform-overview" }} /> }]} />}{admin ? <AdminHeader readonly={readonly} /> : switcher}</SidebarHeader>
     <SidebarContent><SidebarNav aria-label="Main">{nav}</SidebarNav></SidebarContent>
     <SidebarFooter><SidebarUser name={display || session.user.email} email={display ? session.user.email : roleLabel}><MenuHeader><strong>{display || session.user.email}</strong>{display ? `${session.user.email} · ${roleLabel}` : roleLabel}</MenuHeader><MenuSeparator /><MenuLinkItem icon={<UserRound aria-hidden />} render={<ResourceLink search={{ page: "profile" }} />}>Your profile</MenuLinkItem><MenuItem icon={<RefreshCw aria-hidden />} onClick={refresh}>Reload my access</MenuItem><MenuSeparator /><ThemeMenuGroup /><MenuSeparator /><MenuItem icon={<LogOut aria-hidden />} onClick={logout}>Sign out</MenuItem></SidebarUser></SidebarFooter></Sidebar>;
-  return <TooltipProvider><AppShell collapsed={choice ?? compact} onCollapsedChange={collapsed => { setChoice(collapsed); try { localStorage.setItem("omg.enterprise.sidebarCollapsed", collapsed ? "1" : "0"); } catch { /* Unavailable storage. */ } }} sidebar={sidebar} topbar={<TopBar start={<Breadcrumbs items={fitCrumbs(crumbs, narrow)} className={s.crumbs} />} end={<>{admin && readonly && <Badge tone="warning" dot className={s.adminBadge} title="Read-only"><span className={s.adminBadgeText}>Read-only</span></Badge>}<JumpSearch session={session} workspace={admin ? undefined : active} navigate={navigate} refresh={refresh} /><NotificationBell /></>} />}><Main>{children}</Main></AppShell></TooltipProvider>;
+  return <TooltipProvider><AppShell collapsed={choice ?? compact} onCollapsedChange={collapsed => { setChoice(collapsed); try { localStorage.setItem("omg.enterprise.sidebarCollapsed", collapsed ? "1" : "0"); } catch { /* Unavailable storage. */ } }} sidebar={sidebar} topbar={<TopBar sidebarToggle={false} start={<><ShellSidebarToggle /><Breadcrumbs items={fitCrumbs(crumbs, narrow)} className={s.crumbs} /></>} end={<>{admin && readonly && <Badge tone="warning" dot className={s.adminBadge} title="Read-only"><span className={s.adminBadgeText}>Read-only</span></Badge>}<JumpSearch session={session} workspace={admin ? undefined : active} navigate={navigate} refresh={refresh} /><NotificationBell /></>} />}><Main>{children}</Main></AppShell></TooltipProvider>;
+}
+/** Bitop's SidebarToggle, wrapped: aria-controls only names the sidebar while it is rendered (the narrow-window drawer unmounts when closed). */
+function ShellSidebarToggle() {
+  const shell = useAppShell();
+  if (!shell) return null;
+  const label = shell.narrow ? (shell.drawerOpen ? "Close navigation" : "Open navigation") : shell.collapsed ? "Expand sidebar" : "Collapse sidebar";
+  return <IconButton size="sm" icon={<PanelLeft aria-hidden />} label={label} aria-expanded={shell.narrow ? shell.drawerOpen : !shell.collapsed} aria-controls={!shell.narrow || shell.drawerOpen ? shell.sidebarId : undefined} onClick={shell.toggle} />;
 }
 function AdminHeader({ readonly }: { readonly: boolean }) { const shell = useAppShell(); return <div className={shell?.collapsed ? s.visuallyHidden : s.adminHeader}><span aria-hidden className={s.adminHeaderIcon}><Shield /></span><span className={s.adminHeaderText}><span className={s.adminHeaderName}>{readonly ? "Platform auditor" : "Platform admin"}</span><span className={s.adminHeaderDescription}>{readonly ? "Configuration and totals, read-only" : "Installation administration"}</span></span></div>; }

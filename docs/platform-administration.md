@@ -47,7 +47,7 @@ Cost centers are optional Admin-controlled allocation labels, not authorization 
 
 ## People and credentials
 
-Manual and mapped-group access are independent sources. Signed generic group claims synchronize at sign-in; group removal outside a new sign-in is not immediately observable. Suspend manually for immediate denial. Entitlement loss revokes sessions/human keys; shared service credentials remain independent. Thirty-day cleanup keeps accounting/audit attribution through tombstones rather than cascading history deletion. See [identity](identity.md).
+Manual and mapped-group access are independent sources. Signed generic group claims synchronize at sign-in; without SCIM, group removal outside a new sign-in is not immediately observable, so suspend manually for immediate denial. With [SCIM](scim.md), the identity provider pushes deactivation and pushed-group membership as they change. Entitlement loss revokes sessions/human keys; shared service credentials remain independent. Thirty-day cleanup keeps accounting/audit attribution through tombstones rather than cascading history deletion. See [identity](identity.md).
 
 Workspace administrators manage shared members, invitations and service accounts. Human keys require actual membership and live entitlement. Service-account disablement revokes its keys. Reactivation never restores revoked credentials. Rotation retains restrictions, policy and consumed allowance; separately created keys have separate key scopes, bounded by their workspace/installation limits.
 

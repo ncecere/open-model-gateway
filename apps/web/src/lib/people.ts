@@ -98,6 +98,8 @@ export const auditActionLabels: Record<string, string> = {
   "provider.created": "Added connection", "provider.updated": "Changed connection",
   "role.granted": "Granted platform role", "role.revoked": "Revoked platform role",
   "routing.deployment_updated": "Changed route settings", "routing.model_updated": "Changed model routing",
+  "scim.user.created": "Provisioned user (SCIM)", "scim.user.updated": "Changed user (SCIM)", "scim.user.deactivated": "Deactivated user (SCIM)", "scim.user.reactivated": "Reactivated user (SCIM)",
+  "scim.group.created": "Added group (SCIM)", "scim.group.updated": "Changed group (SCIM)", "scim.group.deleted": "Deleted group (SCIM)",
   "service_account.created": "Created service account", "service_account.updated": "Changed service account",
   "usage.reconciled": "Reconciled usage",
   "user.provisioned": "Provisioned user", "user.updated": "Changed user", "user.bootstrap_role": "Granted first admin role", "user.cleaned": "Cleaned up departed user",
@@ -118,7 +120,7 @@ export function auditEventLabel(event: { action: string; metadata?: Record<strin
 export const resourceTypeLabels: Record<string, string> = {
   user: "User", workspace: "Workspace", key: "API key", model: "Model", catalog: "Catalog", cost_center: "Cost center", group_mapping: "SSO group mapping",
   installation: "Installation", workspace_type: "Workspace type", provider: "Connection", deployment: "Route", price: "Price", service_account: "Service account",
-  invitation: "Invitation", execution: "Request",
+  invitation: "Invitation", execution: "Request", scim_group: "SCIM group",
 };
 export const resourceTypeLabel = (type?: string) => type ? resourceTypeLabels[type] ?? cap(type.replaceAll("_", " ")) : "Unknown";
 

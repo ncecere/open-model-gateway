@@ -14,6 +14,14 @@ A single-enterprise inference gateway: Rust/Axum/Tokio/SQLx + PostgreSQL 17, wit
 
 The dashboard follows Grounded's Bitop UI and Workspace/Admin composition, with gateway-specific permissions and resources. See [dashboard](docs/dashboard.md), [management API](docs/management-api.md) and [Bitop provenance](docs/bitop-ui.md).
 
+## What works today
+
+- **Workspace:** Home, Models (catalog, model compare), API keys (one-time disclosure, rotate/disable/revoke, per-key models and limits, key safety findings), Logs (requests, generations, sessions), Usage & costs, Settings and Alerts for Team/Project admins.
+- **Admin:** Users, Teams, Projects, SSO group mappings, Connections (OpenAI, Anthropic, OpenRouter, AWS Bedrock with default/profile/role access modes, approved local endpoints), Models with routes and immutable prices, Catalogs and defaults, limits and budgets, cost centers, Logs and Usage (Team/Project rows only), key safety, audit, Settings (general, limits, data & privacy, email, sign-in) and Alerts (budget thresholds, spend spikes, error rates, failing connections; in-app and email). Auditors get the same views read-only.
+- **Checks:** Rust unit/integration tests on real PostgreSQL, mock-provider and SDK contracts, Vitest, and a Playwright journey with axe accessibility scans for every persona ([verification](docs/verification.md), [accessibility](docs/accessibility.md)).
+
+**Planned, not implemented:** video, realtime audio, asynchronous/batch jobs, image edits and vision input, token-by-token Responses/Messages streaming, active health probes, webhooks and key-expiry notifications, provider-invoice reconciliation. See [roadmap](docs/roadmap.md).
+
 ## Local account picker
 
 See [local demo](docs/local-demo.md) for the fresh, loopback-only `gateway_enterprise_demo` database and five personas: Platform Admin, Auditor, Alex (workspace administrator), Blair (member), and an authenticated but unentitled SSO user.
@@ -80,7 +88,7 @@ Inference keys never authorize management. Model-declared protocols must interse
 - Routing supports priority/weight, residency labels, passive cooldown and at most three explicitly permitted attempts. No failover follows a returned stream.
 - Reports use strict UTC date intervals, known actual versus active held amounts, explicit accounting coverage and optional admission-time cost-center snapshots. Costs are configured estimates, not provider invoices.
 
-See [protocol matrix](docs/protocol-matrix.md), [providers](docs/provider-adapters.md), [cache pricing](docs/cache-pricing.md), [governance](docs/governance.md) and [reports](docs/cost-reporting.md). Base64 image generation (`/v1/images/generations`, OpenAI `gpt-image-*` and OpenRouter) is a bounded first increment, as are audio transcription (`/v1/audio/transcriptions`) and speech (`/v1/audio/speech`) for OpenAI and OpenRouter. Image edits, vision, realtime audio, video and asynchronous jobs are later milestones. Native Responses/Messages SSE currently buffers bounded content rather than delivering token-by-token frontend events.
+See [protocol matrix](docs/protocol-matrix.md), [providers](docs/provider-adapters.md), [cache pricing](docs/cache-pricing.md), [governance](docs/governance.md) and [reports](docs/cost-reporting.md). Base64 image generation (`/v1/images/generations`, OpenAI `gpt-image-*` and OpenRouter) is a bounded first increment, as are audio transcription (`/v1/audio/transcriptions`) and speech (`/v1/audio/speech`) for OpenAI and OpenRouter. Image edits, vision, realtime audio, video and asynchronous/batch jobs are not implemented yet. Native Responses/Messages SSE currently buffers bounded content rather than delivering token-by-token frontend events.
 
 ## Verification and deployment
 
@@ -96,6 +104,8 @@ npm run test:demo
 npm run test:container
 npm run test:staging
 npm run build:web
+# Playwright + axe against a disposable database on 54339 (never the demo):
+npm run test:browser
 ```
 
-Mock-provider and SDK tests require no paid calls or real enterprise IdP modifications. See [staging](docs/staging.md) for restricted runtime roles, the image, TLS rehearsal and backup/restore tooling. **Use a new enterprise staging database; do not run initialization against an existing legacy deployment.** Production load/availability, real-provider certification, live JWKS refresh, observability and off-host recovery acceptance remain unfinished.
+Mock-provider and SDK tests require no paid calls or real enterprise IdP modifications. See [staging](docs/staging.md) for restricted runtime roles, the image, TLS rehearsal and backup/restore tooling. **Use a new enterprise staging database; do not run initialization against an existing legacy deployment.** Production load/availability, real-provider certification, live IdP/SCIM acceptance, observability and off-host recovery acceptance remain unfinished.

@@ -1,0 +1,31 @@
+/* UpstreamModel: the id (ellipsized when compact), then a muted "(configured)" or route note that stays visible. Semantic tokens only. */
+.model {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 0.25em;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.compact {
+  flex-wrap: nowrap;
+  max-width: 16rem;
+}
+
+.id {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.compact .id {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note {
+  flex: none;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}

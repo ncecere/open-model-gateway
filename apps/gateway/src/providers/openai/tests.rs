@@ -179,26 +179,34 @@ fn assert_error<T>(result: Result<T>, expected: InferenceError) {
 
 #[tokio::test]
 async fn satisfies_shared_adapter_contract_against_local_http() {
-    let app = Router::new().fallback(|axum::Json(body): axum::Json<Value>| async move {
+    let usage = json!({"prompt_tokens":1,"completion_tokens":2,"completion_tokens_details":{"reasoning_tokens":1}});
+    let app = Router::new().fallback(move |axum::Json(body): axum::Json<Value>| {
+        let usage = usage.clone();
+        async move { contract_reply(body, usage) }
+    });
+    fn contract_reply(body: Value, usage: Value) -> Response<Body> {
         if body["stream"] == true {
             assert_eq!(body["stream_options"]["include_usage"], true);
             let stream = format!(
                 "{}{}{}data: [DONE]\n\n",
                 event(chunk(json!({"content":"hello"}), Value::Null)),
                 finished(),
-                event(json!({"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":2}}))
+                // The usage frame need not repeat the model reported earlier.
+                event(json!({"choices":[],"usage":usage}))
             );
             Response::builder()
                 .header(header::CONTENT_TYPE, "text/event-stream")
                 .body(Body::from(stream))
                 .unwrap()
         } else {
+            let mut body = complete();
+            body["usage"] = usage;
             Response::builder()
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(complete().to_string()))
+                .body(Body::from(body.to_string()))
                 .unwrap()
         }
-    });
+    }
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let mock = Mock {
         base: format!("http://{}/v1", listener.local_addr().unwrap()),
@@ -211,6 +219,11 @@ async fn satisfies_shared_adapter_contract_against_local_http() {
         &mock.adapter(),
         &target(),
         request(false),
+        crate::providers::contract::Telemetry {
+            // Reported by the provider, distinct from the configured id.
+            reported_model: Some("private-model"),
+            reasoning_tokens: Some(1),
+        },
     )
     .await;
 }
@@ -331,7 +344,9 @@ async fn nonstream_tools_usage_and_unknown_usage() {
         Usage {
             input_tokens: Some(12),
             output_tokens: Some(7),
-            billing: usage(&json!({"prompt_tokens":12,"completion_tokens":7,"prompt_tokens_details":{"cached_tokens":3}})).unwrap().billing, ..Default::default() }
+            billing: usage(&json!({"prompt_tokens":12,"completion_tokens":7,"prompt_tokens_details":{"cached_tokens":3}})).unwrap().billing,
+            reported_model: ReportedModel::parse("private-model"),
+            ..Default::default() }
     );
     assert_eq!(response.tool_calls.len(), 1);
     assert_eq!(response.tool_calls[0].id, "call-2");
@@ -346,7 +361,35 @@ async fn nonstream_tools_usage_and_unknown_usage() {
     else {
         panic!("expected complete")
     };
-    assert_eq!(response.usage, Usage::default());
+    // Missing usage stays unknown; only the served model is observed.
+    assert_eq!(
+        response.usage,
+        Usage {
+            reported_model: ReportedModel::parse("private-model"),
+            ..Usage::default()
+        }
+    );
+    // An invalid or absent reported model is unknown and never fails the request.
+    for model in [
+        json!(null),
+        json!(""),
+        json!("two words"),
+        json!(42),
+        json!("x".repeat(257)),
+    ] {
+        let mut body = complete();
+        body["model"] = model;
+        let mock = Mock::json(body).await;
+        let ProviderOutput::Complete(response) = mock
+            .adapter()
+            .execute(&target(), request(false))
+            .await
+            .unwrap()
+        else {
+            panic!("expected complete")
+        };
+        assert_eq!(response.usage, Usage::default());
+    }
     assert_eq!(
         usage(&json!({"completion_tokens":0})).unwrap(),
         Usage {

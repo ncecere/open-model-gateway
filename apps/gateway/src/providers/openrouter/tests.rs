@@ -152,7 +152,7 @@ fn glm_usage() -> Value {
         "completion_tokens_details":{"reasoning_tokens":16,"image_tokens":0,"audio_tokens":0}})
 }
 fn glm_complete() -> Value {
-    json!({"id":"gen-1-abc","object":"chat.completion","created":0,"model":"z-ai/glm-5.3-flash","provider":"Parasail",
+    json!({"id":"gen-1-abc","object":"chat.completion","created":0,"model":"z-ai/glm-5.3-flash-20260301","provider":"Parasail",
         "system_fingerprint":null,"service_tier":null,
         "choices":[{"index":0,"logprobs":null,"finish_reason":"length","native_finish_reason":"length",
             "message":{"role":"assistant","content":null,"refusal":null,"reasoning":"thinking",
@@ -160,7 +160,7 @@ fn glm_complete() -> Value {
         "usage": glm_usage()})
 }
 fn chunk(delta: Value, finish: Option<&str>, usage: Option<Value>) -> String {
-    let mut v = json!({"id":"gen-1","object":"chat.completion.chunk","created":0,"model":"z-ai/glm-5.3-flash","provider":"Parasail",
+    let mut v = json!({"id":"gen-1","object":"chat.completion.chunk","created":0,"model":"z-ai/glm-5.3-flash-20260301","provider":"Parasail",
         "choices":[{"index":0,"delta":delta,"finish_reason":finish,"native_finish_reason":finish}]});
     if let Some(u) = usage {
         v["usage"] = u;
@@ -300,10 +300,16 @@ async fn shared_text_chat_contract_and_fragmented_stream() {
         }
     })
     .await;
+    // OpenRouter reports the served (versioned) slug, distinct from the
+    // configured route id, and `completion_tokens_details.reasoning_tokens`.
     super::super::contract::assert_text_chat_contract(
         &mock.adapter(),
         &target("z-ai/glm-5.3-flash"),
         chat(false),
+        super::super::contract::Telemetry {
+            reported_model: Some("z-ai/glm-5.3-flash-20260301"),
+            reasoning_tokens: Some(16),
+        },
     )
     .await;
     assert_eq!(

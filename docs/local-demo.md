@@ -69,7 +69,7 @@ The tracked demo Compose file binds PostgreSQL to **127.0.0.1:54349**, separate 
 
 Example connections/deployments start **disabled**. Local HTTP approval is explicit in `.env.demo.example`; approval does not mean a server exists or a model is certified. Example prices are not vendor prices. Configure an actual local endpoint/model and enforced input bounds before enabling inference. Paid-provider tests require separate explicit approval and server-held credentials.
 
-`bootstrap-demo` is transactional and idempotent after its own successful seed marker. It preserves edits, inactive users and history; it refuses unrelated existing users or email collisions. The old organization-persona upgrade flag is unsupported. Restart issuer and gateway together: the demo signing key is ephemeral, while live JWKS refresh remains future work.
+`bootstrap-demo` is transactional and idempotent after its own successful seed marker. It preserves edits, inactive users and history; it refuses unrelated existing users or email collisions. The old organization-persona upgrade flag is unsupported. Restart issuer and gateway together: the demo signing key is ephemeral, and a new issuer key is picked up only after a JWKS refresh (rate-limited to once a minute for unknown key IDs).
 
 To stop without deleting data:
 

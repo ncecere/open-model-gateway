@@ -43,8 +43,8 @@ impl Mock {
                 c.lock().unwrap().push((headers,uri,v));
                 let data=if native {json!({"model":"private","embeddings":vec![vec![0.1,0.2];count],"prompt_eval_count":4}).to_string()}
                 else if embeddings {json!({"object":"list","model":"private","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"usage":{"prompt_tokens":4,"total_tokens":4}}).to_string()}
-                else if stream {format!("data: {}\n\ndata: {}\n\ndata: {}\n\n{}",json!({"choices":[{"index":0,"delta":{"role":"assistant","content":"世界"},"finish_reason":null}]}),json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}),json!({"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"prompt_tokens_details":{"cached_tokens":3,"created_cache_tokens":4}}}),if unfinished{""}else{"data: [DONE]\n\n"})}
-                else {json!({"choices":[{"index":0,"message":{"role":"assistant","content":"世界"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"prompt_tokens_details":{"cached_tokens":3,"created_cache_tokens":4}}}).to_string()};
+                else if stream {format!("data: {}\n\ndata: {}\n\ndata: {}\n\n{}",json!({"model":"served/local-1","choices":[{"index":0,"delta":{"role":"assistant","content":"世界"},"finish_reason":null}]}),json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}),json!({"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"prompt_tokens_details":{"cached_tokens":3,"created_cache_tokens":4}}}),if unfinished{""}else{"data: [DONE]\n\n"})}
+                else {json!({"model":"served/local-1","choices":[{"index":0,"message":{"role":"assistant","content":"世界"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"prompt_tokens_details":{"cached_tokens":3,"created_cache_tokens":4}}}).to_string()};
                 let chunks=data.into_bytes().into_iter().map(|b|Ok::<_,Infallible>(Bytes::from(vec![b]))).collect::<Vec<_>>();
                 Response::builder().status(status).header("content-type",if stream{"text/event-stream"}else{"application/json"}).header("location","http://169.254.169.254/latest/meta-data/").body(Body::from_stream(futures_util::stream::iter(chunks))).unwrap()
             }
@@ -111,7 +111,18 @@ async fn all_profiles_mock_chat_and_embedding_contracts_with_pinned_host() {
         let resolver = Arc::new(Resolver(AtomicUsize::new(0)));
         let adapter = mock.adapter(profile, resolver.clone());
         let target = mock.target(profile);
-        super::super::contract::assert_text_chat_contract(&adapter, &target, request(false)).await;
+        // The served model comes from `model` (here only on the first stream
+        // chunk); these servers report no reasoning breakdown, so it is unknown.
+        super::super::contract::assert_text_chat_contract(
+            &adapter,
+            &target,
+            request(false),
+            super::super::contract::Telemetry {
+                reported_model: Some("served/local-1"),
+                reasoning_tokens: None,
+            },
+        )
+        .await;
         let ProviderOutput::Complete(response) =
             adapter.execute(&target, request(false)).await.unwrap()
         else {

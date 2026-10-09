@@ -31,7 +31,8 @@ import s from "../pages/shared.module.css";
 export { Button, Input, NativeSelect, Textarea, FormField, Alert, Stack, Inline };
 export { StatCard } from "./ui/stat-card/stat-card";
 export function ErrorNotice({ error, retry }: { error: unknown; retry?: () => void }) { return <ErrorAlert error={error} title={error instanceof ApiError && error.status === 403 ? "Access denied" : error instanceof ApiError && error.status === 404 ? "Not found" : "Unable to complete request"} onRetry={retry} />; }
-export function Empty({ title = "Nothing here yet", children }: { title?: string; children?: ReactNode }) { return <EmptyState title={title} description={children} titleAs="h3" />; }
+/** `titleAs` keeps heading order valid where the empty state follows the page h1 directly. */
+export function Empty({ title = "Nothing here yet", children, titleAs = "h3" }: { title?: string; children?: ReactNode; titleAs?: "h2" | "h3" | "p" }) { return <EmptyState title={title} description={children} titleAs={titleAs} />; }
 export function Badge({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "good" | "bad" }) { return <BitopBadge tone={tone === "good" ? "success" : tone === "bad" ? "danger" : "neutral"}>{children}</BitopBadge>; }
 export function Status({ enabled }: { enabled: boolean }) { return <Badge tone={enabled ? "good" : "neutral"}>{enabled ? "Enabled" : "Disabled"}</Badge>; }
 /** Relative time for tables ("3 hours ago") with the detail format in its tooltip ("Oct 8, 2026, 2:30 AM EDT", lib/format). */

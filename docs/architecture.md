@@ -31,7 +31,7 @@ Catalog advisory locks precede the singleton installation row lock. Admission, s
 
 ## Identity and authorization
 
-OIDC authentication is distinct from entitlement. Active `user`, `auditor` or `admin` platform grants are required. Manual/bootstrap and signed-group grants remain independently represented. Group mappings synchronize at sign-in; background identity provisioning is not implemented by generic OIDC. See [identity](identity.md).
+OIDC authentication is distinct from entitlement. Active `user`, `auditor` or `admin` platform grants are required. Manual/bootstrap and signed-group grants remain independently represented. Group mappings synchronize at sign-in and, when enabled, from SCIM pushes (`/scim/v2`, bearer token by hash, group provenance). The issuer JWKS is cached with bounded TTL, rate-limited single-flight refresh and a bounded outage grace. See [identity](identity.md) and [SCIM](scim.md).
 
 A personal workspace is created on an entitled user's successful sign-in. It is owner-private for keys and request details, including against Platform Admins/Auditors. Their financial reporting may include personal totals without granting private-detail access. Ordinary shared members see their own human-key activity; shared administrators see workspace-wide activity.
 

@@ -11,10 +11,22 @@ Browser sessions and inference keys are separate credentials. A bearer key canno
 | `GATEWAY_OIDC_CLIENT_ID` | Registered authorization-code client. |
 | `GATEWAY_OIDC_CLIENT_SECRET` | Optional confidential-client secret. |
 | `GATEWAY_OIDC_GROUPS_CLAIM` | Signed ID-token claim name/path; default `groups`. Literal names take precedence over dotted nested paths. |
+| `GATEWAY_SCIM_TOKEN_ENV` | Optional. Name of the variable holding the SCIM bearer token; enables [SCIM provisioning](scim.md). Requires OIDC. |
 
 Register `${GATEWAY_PUBLIC_URL}/api/v1/auth/callback` with the origin's trailing slash removed. Admin › Settings › Sign-in shows the active issuer, client ID, client type, groups claim and this callback URL read-only (never the secret); see [settings](settings.md#sign-in). Use authorization code and S256 PKCE. ID tokens must contain `email`, boolean `email_verified:true`, and a valid string-array group claim, including `[]` when no groups match. The gateway requests the `openid email profile` scopes; an optional `name` claim is stored as the user's display name (trimmed, at most 200 characters, replaced at every sign-in and cleared at account cleanup). It is presentation only and never used for matching or authorization. The gateway does not fetch userinfo or retain upstream access/refresh tokens.
 
-HTTPS is required for identity URLs. Only `GATEWAY_ENV=development` allows HTTP on localhost/literal loopback. Forwarded headers do not alter this policy. Cookies are Secure except on explicitly configured development-loopback HTTP. Missing all OIDC client settings disables login; partial/empty settings and configured discovery failures fail startup. Discovery/JWKS responses are bounded to 1 MiB, with redirects disabled, a 15-second timeout and five-second connection timeout. JWKS is a startup snapshot; restart after key rotation. This is not live JWKS refresh or provider certification.
+HTTPS is required for identity URLs. Only `GATEWAY_ENV=development` allows HTTP on localhost/literal loopback. Forwarded headers do not alter this policy. Cookies are Secure except on explicitly configured development-loopback HTTP. Missing all OIDC client settings disables login; partial/empty settings and configured discovery failures fail startup. Discovery/JWKS responses are bounded to 1 MiB, with redirects disabled, a 15-second timeout and five-second connection timeout. This is not provider certification.
+
+### Signing keys (JWKS)
+
+The issuer's JWKS is fetched at startup (failure stops startup) and cached:
+
+- **TTL:** `Cache-Control: max-age`, clamped to 5 minutes–24 hours; one hour when the issuer sends none. Expired keys are refreshed at the next sign-in.
+- **Rotation:** a token naming an unknown `kid` triggers one refetch and one retry. Refetches for unknown keys happen at most once a minute per installation, and concurrent callers share one fetch, so random key IDs cannot cause a stampede.
+- **Outage:** a failed or empty fetch keeps the last good keys for up to 6 hours past their expiry, retrying at most every 30 seconds. After that, sign-in fails closed with 503 until a fetch succeeds.
+- **Algorithms:** only asymmetric algorithms that the issuer advertises (RS/PS 256–512, ES256/ES384, EdDSA). `none` and HMAC (`HS*`) are never accepted, even if advertised, and the client secret is never used as an ID-token key. Startup fails if the issuer advertises no supported algorithm.
+
+Admin › Settings › Sign-in shows the number of cached keys, the last refresh and whether keys are current, a cached copy (refresh failing) or unavailable.
 
 ## Authentication is not entitlement
 
@@ -22,7 +34,7 @@ Platform grants are `user`, `auditor`, and `admin`; Auditor/Admin include User a
 
 Platform Admins provision manual grants and generic issuer/group mappings through [management](management-api.md). Group targets are a platform role or a Team/Project `admin`/`member` membership; group ownership is not supported. Manual/bootstrap platform grants and manual workspace membership survive removal of an independent group grant. Multiple sources are not overwritten by a single effective role.
 
-Synchronization runs at sign-in using the signature-verified claim. Valid empty groups remove no-longer-matching group grants. Missing/malformed groups deny sign-in **without treating the claim as an empty list or revoking existing grants**. Sign-in-only synchronization cannot discover group removal for someone who never signs in again. That accepted delay requires explicit manual suspension when immediate loss of access matters. There is no background SCIM/provisioning guarantee. Separately, changing/deleting a mapping definition through management immediately revokes that mapping's existing group grants, subject to last-admin safeguards; newly matching grants still require sign-in.
+Synchronization runs at sign-in using the signature-verified claim. Valid empty groups remove no-longer-matching group grants. Missing/malformed groups deny sign-in **without treating the claim as an empty list or revoking existing grants**. Without SCIM, sign-in-only synchronization cannot discover group removal for someone who never signs in again; suspend manually when immediate loss of access matters. With [SCIM provisioning](scim.md), the identity provider pushes deactivation and group membership as they change. Membership of a group that SCIM has pushed then comes only from SCIM, not the token; other groups still sync at sign-in. Separately, changing/deleting a mapping definition through management immediately revokes that mapping's existing group grants, subject to last-admin safeguards; newly matching grants still require sign-in.
 
 ## Linking, suspension and cleanup
 
@@ -36,7 +48,7 @@ cargo run -p open-model-gateway -- provision-user --email operator@example.org -
 
 This requires trusted database access and the enterprise lineage. It is not a public role-assignment endpoint and does not create a personal workspace before sign-in. Omit `--platform-admin` for a User grant. Existing identity bindings are not silently replaced.
 
-When synchronization or explicit role removal detects loss of all entitlement, access is disabled and sessions/user-owned keys are revoked. Account/access attribution remains during a **30-day grace period**. Group re-entitlement within that period can reactivate entitlement-loss suspension, not administrative suspension. Revoked keys stay revoked; issue new credentials. Shared service-account keys are independent of the departed person.
+When synchronization or explicit role removal detects loss of all entitlement, access is disabled and sessions/user-owned keys are revoked. Account/access attribution remains during a **30-day grace period**. Group re-entitlement within that period can reactivate entitlement-loss suspension, not administrative or SCIM suspension (`scim_deactivated`, lifted only by SCIM `active: true`; see [SCIM](scim.md#users)). Revoked keys stay revoked; issue new credentials. Shared service-account keys are independent of the departed person.
 
 The serving process runs bounded inactive-account cleanup every minute (up to 100 accounts per transaction). Cleanup revokes retained human grants, disables the old personal workspace, clears email/linking permission and keeps a user/identity tombstone. It does not delete immutable financial/audit records or shared service accounts. After cleaned entitlement-loss accounts regain a valid mapped platform role, authenticated callback can bind a new user UUID; old grants, personal workspace and keys are not resurrected. Administrative-suspension tombstones do not automatically rebind. Management has last-admin/last-shared-owner protections; external entitlement loss must not preserve unauthorized access merely to keep an owner active.
 
@@ -60,4 +72,4 @@ X-CSRF-Token: <current omg_csrf value>
 
 Origin must exactly match configuration; repeated, missing or mismatched headers fail. Cookie-only, Referer and inference bearer authentication are not substitutes. Management handlers independently recheck live authority under locks.
 
-Auth responses are no-store/no-referrer. Edge logs must not retain callback queries, cookies or auth headers. Rate-limit login and manage expired attempts/sessions operationally. Upstream single logout, cross-device logout and real-provider certification remain separate work. Tests in `identity/tests.rs`, `lifecycle/tests.rs` and `auth/enterprise_tests.rs` are source coverage, not a fresh execution claim; historical browser checks are in [verification](verification.md).
+Auth responses are no-store/no-referrer. Edge logs must not retain callback queries, cookies or auth headers. Rate-limit login and manage expired attempts/sessions operationally. Upstream single logout, cross-device logout and real-provider certification remain separate work. Tests in `identity/tests.rs` (including a local mock issuer rotating keys), `identity/jwks.rs`, `scim/tests.rs`, `lifecycle/tests.rs` and `auth/enterprise_tests.rs` are source coverage, not a fresh execution claim; historical browser checks are in [verification](verification.md).

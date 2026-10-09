@@ -196,6 +196,49 @@ pub struct Usage {
     /// Provider-reported reasoning tokens (a subset of output tokens).
     /// Telemetry only: never charged separately; `None` = not reported.
     pub reasoning_tokens: Option<u64>,
+    /// Model id the provider reports having served (telemetry only; `None` =
+    /// not reported or not a valid bounded id). Never fails a request.
+    pub reported_model: Option<ReportedModel>,
+}
+
+/// A provider-reported upstream model id: 1..=[`ReportedModel::MAX`] bytes of
+/// printable, non-space ASCII. Stored inline so [`Usage`] stays `Copy`.
+/// Anything else (absent, empty, too long, whitespace/control/non-ASCII,
+/// non-string) is unknown, never an error and never truncated.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct ReportedModel {
+    len: u16,
+    bytes: [u8; ReportedModel::MAX],
+}
+impl ReportedModel {
+    pub const MAX: usize = 256;
+    pub fn parse(value: &str) -> Option<Self> {
+        let raw = value.as_bytes();
+        if raw.is_empty() || raw.len() > Self::MAX || !raw.iter().all(u8::is_ascii_graphic) {
+            return None;
+        }
+        let mut bytes = [0; Self::MAX];
+        bytes[..raw.len()].copy_from_slice(raw);
+        Some(Self {
+            len: raw.len() as u16,
+            bytes,
+        })
+    }
+    /// A JSON string value, else unknown.
+    pub fn from_json(value: &serde_json::Value) -> Option<Self> {
+        value.as_str().and_then(Self::parse)
+    }
+    pub fn as_str(&self) -> &str {
+        // Only validated ASCII is ever stored.
+        std::str::from_utf8(&self.bytes[..self.len as usize]).unwrap_or_default()
+    }
+}
+impl std::fmt::Debug for ReportedModel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("ReportedModel")
+            .field(&self.as_str())
+            .finish()
+    }
 }
 
 pub struct ChatResponse {

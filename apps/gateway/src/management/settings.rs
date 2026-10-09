@@ -32,9 +32,9 @@ const KEY_DAYS: std::ops::RangeInclusive<i32> = 1..=365;
 const TESTS_PER_MINUTE: i64 = 2;
 const TESTS_PER_HOUR: i64 = 20;
 
-/// Public sign-in configuration captured at startup (`IdentityState::sign_in_summary`).
+/// Live sign-in status: startup OIDC configuration, JWKS cache and SCIM provisioning.
 #[derive(Clone)]
-pub(crate) struct SignIn(pub(crate) Value);
+pub(crate) struct SignIn(pub(crate) crate::identity::IdentityState);
 
 pub(super) fn routes() -> Router<Store> {
     Router::new()
@@ -585,8 +585,14 @@ async fn sign_in(
         sqlx::query_scalar("SELECT count(*) FROM oidc_group_mappings WHERE enabled")
             .fetch_one(&mut *tx)
             .await?;
+    let scim = config.as_ref().and_then(|Extension(c)| c.0.scim());
+    let scim = crate::scim::summary(&mut tx, scim.as_deref()).await?;
     tx.commit().await?;
-    let mut v = config.map_or_else(|| json!({"enabled": false}), |Extension(c)| c.0);
+    let mut v = config.map_or_else(
+        || json!({"enabled": false}),
+        |Extension(c)| c.0.sign_in_summary(),
+    );
     v["enabled_group_mappings"] = json!(mappings);
+    v["scim"] = scim;
     Ok(Json(v))
 }

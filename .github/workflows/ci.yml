@@ -42,6 +42,14 @@ jobs:
       - run: cargo test --workspace --all-features
       - name: Verify enterprise runtime ACLs on disposable PostgreSQL
         run: cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored
+      - name: Backup/restore drill on the disposable service database
+        # PostgreSQL 17 client tools run inside the service container; the
+        # lineage check uses the gateway binary built by the tests above.
+        env:
+          BACKUP_TEST_DATABASE_URL: postgres://gateway:gateway@127.0.0.1:5432/gateway
+          BACKUP_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
+          BACKUP_TEST_GATEWAY_BINARY: target/debug/open-model-gateway
+        run: python3 tests/backup.test.py
 
   web:
     runs-on: ubuntu-latest
@@ -58,6 +66,48 @@ jobs:
       - run: npm run test:container
       - run: npm run test:staging
       - run: npm run build:web
+
+  browser:
+    # Playwright (Chromium) against the real gateway binary + built SPA, a disposable
+    # database, the local signed-OIDC issuer and a mock upstream. No paid providers.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: gateway
+          POSTGRES_PASSWORD: gateway
+          POSTGRES_DB: gateway
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gateway -d gateway"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      OMG_BROWSER_ADMIN_DATABASE_URL: postgres://gateway:gateway@localhost:5432/gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps --only-shell chromium
+      - run: npm run test:browser
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-test-results
+          path: |
+            target/browser-tests/results
+            target/browser-tests/report
+            target/browser-tests/gateway.log
+          retention-days: 7
 
   staging-image:
     runs-on: ubuntu-latest

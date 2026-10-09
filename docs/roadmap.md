@@ -4,7 +4,11 @@
 
 The approved next direction is a **single-enterprise installation with sibling Teams, Projects and private personal workspaces**, multiple scoped catalogs, OIDC platform entitlement/group mappings, and optional cost-center allocation. The first rebuild also recreates richer cost reporting and cache-aware accounting and adds embeddings and local provider profiles. See [the confirmed decisions and eight-milestone plan](enterprise-rebuild.md).
 
-This direction supersedes the multi-organization product assumptions for new development, but is **not yet implemented**. The restored code at `6598602` and the implemented-state inventory below remain the current baseline. Images, speech, video and further proxy capabilities are staged follow-ups, not claims of existing support. Production/security gates remain necessary.
+**Status (2026-10-09):** the rebuild is implemented and released as v0.1.0, with later rounds adding logs, Admin settings, Bedrock access modes, alerts, key safety, model compare, JWKS refresh and SCIM. The implemented inventory is in [Implemented baseline](#implemented-baseline-and-existing-limitations) below; legacy organization wording in the R-items describes the pre-rebuild review.
+
+- **Implemented workloads:** Chat Completions, Responses, Messages, embeddings, image generation (base64), audio transcription and speech, rerank and System One, across OpenAI, Anthropic, AWS Bedrock, OpenRouter and approved local profiles (OpenAI-compatible, vLLM, SGLang, Ollama).
+- **Planned, not implemented:** video, realtime audio, asynchronous/batch jobs, image edits and vision input, token-by-token Responses/Messages streaming, active health probes, key-expiry/hold-age notifications and webhooks, provider-invoice reconciliation.
+- **Quality gates:** CI runs Rust/PostgreSQL integration tests, Vitest and a Playwright + axe browser suite ([verification](verification.md#browser-suite), [accessibility](accessibility.md)). Production/security acceptance (live IdP and providers, load, off-host recovery, independent review) remains open.
 
 ## Historical proposal and restored baseline
 
@@ -54,6 +58,7 @@ Effort is relative: **S** = narrow change; **M** = several components plus tests
 
 - [ ] Select R02
 - **Value:** avoid signing-key rotation outages and make lost sessions and authentication abuse manageable.
+- **Progress (2026-10-09):** bounded JWKS refresh is implemented (Cache-Control TTL clamped 5 min to 24 h, rate-limited single-flight refetch on unknown key IDs, 6-hour outage grace, asymmetric algorithms only); see [identity](identity.md#signing-keys-jwks). The rest of R02 remains open.
 - **Scope / done:** bounded JWKS refresh on rotation/unknown key IDs; login/callback abuse controls; expired session/attempt cleanup; view and revoke the caller's sessions. Test key rollover without weakening issuer/audience/nonce checks, concurrent revocation, stale cookies and cleanup boundaries.
 - **Decision:** choose session lifetime/idle policy and whether IdP logout integration is necessary. Ordinary org administration must not become global identity administration.
 
@@ -78,6 +83,7 @@ Effort is relative: **S** = narrow change; **M** = several components plus tests
 - **Value:** protect the role-sensitive UI and one-time-secret flows as features expand.
 - **Scope / done:** automate real browser journeys for all four personas against an isolated fixture: login/logout, scope changes, deep links, key lifecycle, delegated ceilings, search focus, keyboard interaction and mobile layouts. Exercise authorization with direct negative API tests as well as hidden controls.
 - **Guardrails:** synthetic identities only; redact screenshots; no paid upstreams. Preserve pill tabs, USD decimal inputs and context-change secret teardown. Sampled accessibility checks are not certification.
+- **Progress (2026-10-09):** `npm run test:browser` (CI job `browser`) runs a Playwright journey for all five personas against the real gateway, a disposable database, the local signed-OIDC issuer and a mock upstream: team/project creation, SSO mappings, priced mock model, key issue/inference/Logs/Usage/revoke, auditor read-only and API denials, 390px key pages. axe scans (WCAG 2.2 AA + best practice; serious/critical fail) cover the main pages per persona at 1440/390 plus dialogs, skip link, focus trap and reduced motion ([accessibility](accessibility.md)). Deep links, delegated ceilings and rotation are not yet in the suite.
 
 ## B. Scale and inference capabilities
 
@@ -180,6 +186,7 @@ Effort is relative: **S** = narrow change; **M** = several components plus tests
 
 - [ ] Select R18
 - **Value:** reduce manual membership maintenance and identify stale access as organizations grow.
+- **Progress (2026-10-09):** SCIM 2.0 provisioning (Okta/Entra subset) is implemented: deactivation suspends and revokes credentials, pushed groups feed the existing group mappings with group provenance, and Admin › Settings › Sign-in shows read-only status ([SCIM](scim.md), migration 0014). Dry-run diffs and access reviews remain open; real Okta/Entra acceptance is pending.
 - **Scope / done:** choose explicit IdP-group mapping or SCIM, with a dry-run membership diff, deprovisioning rules and periodic review of shared memberships/service credentials. Surface key expiry/last-use metadata only to authorized viewers.
 - **Guardrails:** external claims must not automatically grant platform administration; removing one organization's membership must not disable an unrelated organization's user. Preserve service-account independence, last-owner protections and personal privacy.
 
@@ -239,25 +246,27 @@ Implemented here means code plus local automated coverage—not proof of product
 
 - [x] OIDC authorization-code login with PKCE/state/nonce, explicit account linking, verified email.
 - [x] Hashed twelve-hour browser sessions, logout, exact-Origin and CSRF enforcement.
-- [x] Separate platform operator, organization owner/admin/member, and workspace roles.
+- [x] Platform Admin/Auditor/User entitlements, separate from SSO, and Team/Project owner/admin/member grants with manual and group provenance.
 - [x] Private personal spaces, sibling shared team/project workspaces, workspace switching.
 - [x] Email-bound, expiring, single-use invitations; membership/owner protections.
 - [x] Team/project service accounts, independent of an employee's key lifecycle.
 - [x] Trusted `provision-user` CLI for initial operator/linking approval; no public dev login.
+- [x] Issuer JWKS cache with bounded TTL, rate-limited single-flight refresh on unknown key IDs and bounded outage grace; `none`/HMAC ID tokens rejected (2026-10-09).
+- [x] SCIM 2.0 provisioning (`/scim/v2`, `GATEWAY_SCIM_TOKEN_ENV`): users, groups, deactivation/reactivation without key resurrection, group-provenance grants; read-only status in Admin › Settings › Sign-in ([SCIM](scim.md), 2026-10-09).
 
-Operational follow-up: live IdP acceptance, automatic JWKS refresh, session/attempt cleanup, login abuse limits, upstream single logout and revoke-all-device UX. See [identity](identity.md).
+Operational follow-up: live IdP and SCIM acceptance (Okta, Entra), session/attempt cleanup, login abuse limits, upstream single logout and revoke-all-device UX. See [identity](identity.md).
 
 ## 2. Management API and dashboard — implemented
 
 - [x] Session-only Rust API under `/api/v1`; inference keys cannot administer resources.
 - [x] Functional React/Vite dashboard using real management endpoints.
 - [x] Reference-only provider credentials; operator-only connection configuration.
-- [x] Platform-owned catalog/providers/deployments/routing/pricing, explicit organization entitlements, and delegated workspace/individual-personal model grants.
-- [x] Platform global configuration without an organization context; org admins consume assigned models rather than managing infrastructure.
+- [x] Platform-owned connections/models/routes/pricing, multiple catalogs with live workspace-type defaults and per-workspace replacements, workspace selections and direct assignments.
+- [x] Workspace admins consume available models rather than managing infrastructure.
 - [x] Key creation, one-time disclosure, bounded expiry, atomic rotation, revocation.
 - [x] Service-account lifecycle; disabling a member/account permanently revokes affected keys.
 - [x] Execution history, thirty-day known-token totals and explicit unknown-usage counts.
-- [x] Logs (2026-10-08): per-attempt telemetry (finish reason, time to first token, generation time, reasoning tokens, upstream model snapshot) and optional client session/app labels; request, generation and session views with summary metrics in each workspace and on Admin (Team/Project only, never personal rows). Provider-reported response model ids are not captured yet; reasoning tokens are reported only by OpenAI-compatible usage details.
+- [x] Logs (2026-10-08): per-attempt telemetry (finish reason, time to first token, generation time, reasoning tokens, upstream model snapshot) and optional client session/app labels; request, generation and session views with summary metrics in each workspace and on Admin (Team/Project only, never personal rows). Provider-reported served model (migration 0013, alongside the configured snapshot) and reasoning tokens from OpenAI/OpenRouter/compatible usage details and Anthropic `output_tokens_details.thinking_tokens` (2026-10-09); Bedrock reports the served model only through prompt-router traces and no reasoning breakdown, so those stay unknown. See [provider adapters](provider-adapters.md#logs-telemetry-served-model-and-reasoning-tokens).
 - [x] Backend APIs for the UX program (2026-10-08): own-scope Home summary and keys, request logs with attempt timelines, key statistics and reversible key disablement, usage overview/explore analytics, effective-access layers with per-model reasons, member picker and catalog filters. Browser UI for them is in progress.
 - [x] Key safety audit and model compare (2026-10-08): read-only findings per active key (no or overlong expiry, no effective budget or cap, holder left, unused or never used, all-models access, old secret) for workspaces and for Admin (Team/Project only, personal keys as counts), with fixes that reuse the existing key actions ([key safety](key-safety.md)). Side-by-side comparison of 2–4 models: exact price lines, ceilings, serving state and 30-day observed metrics scoped like Logs ([management API](management-api.md#model-compare)). The audit raises no notifications; alerts are separate.
 - [x] Alerts (2026-10-08): installation and Team/Project rules for stacked-budget thresholds, spend spikes, error rates and failing connections, plus owner-only built-in personal budget alerts; a bounded, idempotent background evaluator (`GATEWAY_ALERT_INTERVAL_SECONDS`, `alerts evaluate --once`); in-app notifications with a top-bar bell and per-user read state; email via the SMTP relay with recorded outcomes ([alerts](alerts.md)).
@@ -277,12 +286,12 @@ Usage and configured-rate cost accounting are implemented, but neither is provid
 - [x] Real OpenAI/Anthropic client SDK JSON and streaming-helper contract tests.
 - [x] Published supported/unsupported matrix and Bedrock setup.
 
-Deliberate limits: native Responses/Messages frontend content is currently buffered (at most 4 MiB), not delivered token-by-token; upstreams are parsed incrementally. No multimodal content, hosted tools, reasoning, persisted Responses state, or full vendor-option passthrough. Live provider/model/IAM validation remains an operator acceptance step. The next requested provider targets are OpenAI-compatible Chat/Responses endpoints, vLLM, and SGLang, with platform-controlled origin allowlists and explicit adapter capability tests. Finer model capabilities, expanded canonical content, and native extensions remain future increments. See [protocol matrix](protocol-matrix.md).
+Deliberate limits: native Responses/Messages frontend content is currently buffered (at most 4 MiB), not delivered token-by-token; upstreams are parsed incrementally. No multimodal chat content (vision), hosted tools, persisted Responses state, or full vendor-option passthrough; images, audio, rerank and System One use their own bounded endpoints. Live provider/model/IAM validation remains an operator acceptance step. Local OpenAI-compatible, vLLM, SGLang and Ollama profiles cover Chat and embeddings only (no local Responses/Messages). Finer model capabilities, expanded canonical content, and native extensions remain future increments. See [protocol matrix](protocol-matrix.md).
 
 ## 4. Governance, accounting, and routing — implemented bounded scope
 
-- [x] PostgreSQL-backed org/workspace/key attempt, token and leased concurrency limits across replicas.
-- [x] Separately-owned platform organization ceilings; optional child restrictions share parent allowance and cannot remove or exceed effective parent limits.
+- [x] PostgreSQL-backed installation/workspace/key attempt, token and leased concurrency limits across replicas.
+- [x] Live workspace-type defaults and platform overrides; tighten-only workspace/key restrictions share parent allowance and cannot remove or exceed effective parent limits.
 - [x] Stacked UTC daily/weekly (ISO)/monthly/lifetime USD budgets (one per period at every policy layer, all enforced) with serialized reservations; unknown usage retains holds; budget changes never reset consumption.
 - [x] Immutable deployment price versions and append-only integer-micro cost ledger.
 - [x] Pinned-rate settlement, crash/expiry reconciliation worker, evidence-backed manual usage resolution.

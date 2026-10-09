@@ -11,6 +11,10 @@ pub struct Config {
     pub web_directory: Option<PathBuf>,
     pub secret_env_allowlist: Vec<String>,
     pub inference_limits: crate::inference::EngineLimits,
+    /// Optional separate Prometheus listener (`GATEWAY_METRICS_ADDR`); `None` disables it.
+    pub metrics_listen: Option<SocketAddr>,
+    /// `GATEWAY_DATABASE_MAX_CONNECTIONS` (default 10) per replica.
+    pub database_max_connections: u32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -76,6 +80,16 @@ impl Config {
                 std::env::var(name).ok()
             })?,
         };
+        let metrics_listen = crate::metrics::listen_from(
+            std::env::var("GATEWAY_METRICS_ADDR").ok().as_deref(),
+            listen,
+        )?;
+        let database_max_connections = std::env::var("GATEWAY_DATABASE_MAX_CONNECTIONS")
+            .unwrap_or_else(|_| "10".into())
+            .parse::<u32>()
+            .ok()
+            .filter(|n| (2..=500).contains(n))
+            .context("GATEWAY_DATABASE_MAX_CONNECTIONS must be an integer from 2 to 500")?;
         Ok(Self {
             database_url,
             listen,
@@ -83,12 +97,14 @@ impl Config {
             web_directory,
             secret_env_allowlist,
             inference_limits,
+            metrics_listen,
+            database_max_connections,
         })
     }
 
     pub async fn connect(&self) -> Result<sqlx::PgPool> {
         PgPoolOptions::new()
-            .max_connections(10)
+            .max_connections(self.database_max_connections)
             .acquire_timeout(Duration::from_secs(3))
             .connect(&self.database_url)
             .await

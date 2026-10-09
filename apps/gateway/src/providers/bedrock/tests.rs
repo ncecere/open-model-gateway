@@ -218,7 +218,15 @@ fn wire(events: Vec<(&str, Value)>) -> Vec<u8> {
 async fn shared_text_contract_and_actual_sdk_signed_request() {
     let mock = Mock::serve(complete(false), wire(events(false)), 200).await;
     let adapter = mock.adapter();
-    super::super::contract::assert_text_chat_contract(&adapter, &target(), request()).await;
+    // Converse reports neither the served model (outside prompt routers) nor
+    // reasoning tokens: both stay unknown and Logs fall back to the configured id.
+    super::super::contract::assert_text_chat_contract(
+        &adapter,
+        &target(),
+        request(),
+        super::super::contract::Telemetry::UNKNOWN,
+    )
+    .await;
     let requests = mock.requests.lock().unwrap();
     assert_eq!(requests.len(), 2);
     for (i, req) in requests.iter().enumerate() {
@@ -244,6 +252,45 @@ async fn shared_text_contract_and_actual_sdk_signed_request() {
         );
         assert!(!req.body.to_string().contains("local-session-token"));
     }
+}
+
+fn routed(mut events: Vec<(&'static str, Value)>, invoked: &str) -> Vec<(&'static str, Value)> {
+    for (kind, value) in &mut events {
+        if *kind == "metadata" {
+            value["trace"] = json!({"promptRouter":{"invokedModelId":invoked}});
+        }
+    }
+    events
+}
+
+#[tokio::test]
+async fn prompt_router_trace_reports_the_invoked_model() {
+    const INVOKED: &str =
+        "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-haiku-20240307-v1:0";
+    let mut body = complete(false);
+    body["trace"] = json!({"promptRouter":{"invokedModelId":INVOKED}});
+    let mock = Mock::serve(body, wire(routed(events(false), INVOKED)), 200).await;
+    super::super::contract::assert_text_chat_contract(
+        &mock.adapter(),
+        &target(),
+        request(),
+        super::super::contract::Telemetry {
+            reported_model: Some(INVOKED),
+            reasoning_tokens: None,
+        },
+    )
+    .await;
+    // An invalid reported id is unknown and never fails the request.
+    let mut body = complete(false);
+    body["trace"] = json!({"promptRouter":{"invokedModelId":"not a model id"}});
+    let mock = Mock::serve(body, wire(routed(events(false), "")), 200).await;
+    super::super::contract::assert_text_chat_contract(
+        &mock.adapter(),
+        &target(),
+        request(),
+        super::super::contract::Telemetry::UNKNOWN,
+    )
+    .await;
 }
 
 #[tokio::test]

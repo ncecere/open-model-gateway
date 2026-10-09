@@ -122,7 +122,7 @@ python3 scripts/staging.py up
 
 The client must support authorization code + PKCE. IdP groups do not automatically grant gateway roles. First identity linking is explicit; do not weaken verified-email checks to accommodate a claim mismatch.
 
-Known staging limitations: issuer signing keys are loaded at startup (automatic JWKS refresh is still pending); coordinate key rotation/restart. Session/attempt cleanup, login abuse controls, independent security review and production-load acceptance also remain. Keep this pilot private.
+Known staging limitations: issuer key rotation relies on the bounded JWKS refresh ([identity](identity.md#signing-keys-jwks)), not yet exercised against the real issuer; SCIM is not yet accepted against a real provider. Session/attempt cleanup, login abuse controls, independent security review and production-load acceptance also remain. Keep this pilot private.
 
 ## First real provider: explicit opt-in only
 
@@ -146,6 +146,8 @@ Planned additional connections are OpenAI-compatible Chat/Responses servers, vLL
 Use [live acceptance](live-acceptance.md) before enabling a paid deployment. Cost limits use configured estimates, not provider invoices. Start with one model, one test organization/workspace, one short-lived key, a low organization ceiling and a small explicit output-token limit. Never claim a tiny budget is an absolute vendor-billing guarantee.
 
 ## Backup, restore and recovery
+
+For checksummed manifests, lineage-checked restores into empty databases, PITR guidance, metrics/alerting and the load-test baseline, see the [operations runbook](operations.md) and `scripts/backup.py`.
 
 ```sh
 python3 scripts/staging.py backup

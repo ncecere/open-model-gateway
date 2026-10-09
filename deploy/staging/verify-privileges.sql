@@ -20,6 +20,10 @@ DO $$ DECLARE r record; t text; BEGIN
  IF has_any_column_privilege('gateway_runtime','public.policy_budgets','UPDATE') OR has_table_privilege('gateway_runtime','public.policy_budgets','TRUNCATE') THEN RAISE EXCEPTION 'budget rows rewritable in place'; END IF;
  IF has_table_privilege('gateway_runtime','public.key_model_restrictions','UPDATE,DELETE,TRUNCATE') OR has_any_column_privilege('gateway_runtime','public.key_model_restrictions','UPDATE') OR has_any_column_privilege('gateway_runtime','public.key_model_selections','UPDATE') THEN RAISE EXCEPTION 'mutable key restriction provenance'; END IF;
  IF has_table_privilege('gateway_runtime','public.installation_settings','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.installation_settings','singleton','UPDATE') THEN RAISE EXCEPTION 'installation settings row replaceable'; END IF;
+ -- SCIM (0014): user links are never removed or re-keyed; group identity fixed; one state row.
+ IF has_table_privilege('gateway_runtime','public.scim_users','DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.scim_users','user_id','UPDATE') OR has_column_privilege('gateway_runtime','public.scim_users','created_at','UPDATE') THEN RAISE EXCEPTION 'scim user link removable or re-keyable'; END IF;
+ IF has_column_privilege('gateway_runtime','public.scim_groups','id','UPDATE') OR has_any_column_privilege('gateway_runtime','public.scim_group_members','UPDATE') OR has_table_privilege('gateway_runtime','public.scim_groups','TRUNCATE') OR has_table_privilege('gateway_runtime','public.scim_group_members','TRUNCATE') THEN RAISE EXCEPTION 'scim group identity rewritable'; END IF;
+ IF has_table_privilege('gateway_runtime','public.scim_state','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.scim_state','singleton','UPDATE') THEN RAISE EXCEPTION 'scim state row replaceable'; END IF;
  -- Alerts (0011): no removal; incidents resolve once; rule identity/scope fixed.
  FOREACH t IN ARRAY ARRAY['alert_rules','alert_events','alert_deliveries','alert_reads'] LOOP
   IF has_table_privilege('gateway_runtime','public.'||t,'DELETE,TRUNCATE') THEN RAISE EXCEPTION 'alert history removable: %',t; END IF;
@@ -130,6 +134,12 @@ BEGIN
  BEGIN UPDATE inference_executions SET upstream_model='rewrite' WHERE id=e; RAISE EXCEPTION 'upstream snapshot rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  BEGIN UPDATE inference_executions SET finish_reason='bogus' WHERE id=e; RAISE EXCEPTION 'finish reason constraint absent'; EXCEPTION WHEN check_violation THEN NULL; END;
  BEGIN UPDATE inference_executions SET client_session_id=' padded' WHERE id=e; RAISE EXCEPTION 'session label constraint absent'; EXCEPTION WHEN check_violation THEN NULL; END;
+ -- Reported upstream model (0013): written at finish (and on insert), bounded and validated.
+ INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,attempt_number,upstream_model,reported_upstream_model) VALUES(gen_random_uuid(),ws,k,d,'rollback','openai_compatible',false,'started',e,3,'disabled-probe','probe-served-model');
+ UPDATE inference_executions SET reported_upstream_model='openai/gpt-probe-2026-01-01' WHERE root_request_id=e;
+ PERFORM count(*) FROM inference_executions WHERE root_request_id=e AND coalesce(reported_upstream_model,upstream_model) IS NOT NULL;
+ BEGIN UPDATE inference_executions SET reported_upstream_model='has space' WHERE id=e; RAISE EXCEPTION 'reported model constraint absent'; EXCEPTION WHEN check_violation THEN NULL; END;
+ BEGIN UPDATE inference_executions SET reported_upstream_model=repeat('m',257) WHERE id=e; RAISE EXCEPTION 'reported model bound absent'; EXCEPTION WHEN check_violation THEN NULL; END;
  -- Platform overview aggregates are read-only over already-granted relations.
  PERFORM (SELECT count(*) FROM effective_platform_roles),(SELECT count(*) FROM oidc_group_mappings WHERE enabled),(SELECT count(*) FILTER(WHERE kind='team') FROM workspace_type_catalogs),(SELECT count(e2.id)::text||coalesce(sum(r.actual_microusd),0)::text FROM inference_executions e2 LEFT JOIN governance_reservations r ON r.execution_id=e2.id WHERE e2.started_at>=statement_timestamp()-interval '7 days');
  INSERT INTO audit_events(id,actor_user_id,workspace_id,action,resource_type) VALUES(gen_random_uuid(),u,ws,'staging.rollback_probe','workspace');
@@ -187,6 +197,36 @@ BEGIN
   BEGIN INSERT INTO alert_rules(id,scope,workspace_id,kind,name,spike_factor_percent,min_spend_microusd) VALUES(gen_random_uuid(),'workspace',personal,'spend_spike','Personal rule',300,1); RAISE EXCEPTION 'personal alert rule allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN INSERT INTO alert_rules(id,scope,workspace_id,kind,name,window_minutes,consecutive_failures) VALUES(gen_random_uuid(),'workspace',ws,'provider_failing','Workspace upstream',15,3); RAISE EXCEPTION 'workspace connection rule allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN INSERT INTO alert_events(id,rule_id,builtin,kind,subject_key,level,severity,summary) VALUES(gen_random_uuid(),ar,'personal_budget','budget_threshold','x',1,'warning','x'); RAISE EXCEPTION 'ambiguous alert source allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+ END;
+ -- SCIM (0014): provisioning upserts, group-provenance sync, deactivation, cleanup.
+ DECLARE g uuid:=gen_random_uuid(); mp uuid:=gen_random_uuid(); BEGIN
+  INSERT INTO scim_users(user_id,user_name,external_id,given_name,family_name,active) VALUES(u,'rollback-'||u,'ext-'||u,'Roll','Back',true) ON CONFLICT(user_id) DO UPDATE SET user_name=EXCLUDED.user_name,external_id=EXCLUDED.external_id,given_name=EXCLUDED.given_name,family_name=EXCLUDED.family_name,active=EXCLUDED.active,updated_at=now();
+  INSERT INTO scim_users(user_id,user_name,active) VALUES(u,'rollback2-'||u,false) ON CONFLICT(user_id) DO UPDATE SET user_name=EXCLUDED.user_name,active=EXCLUDED.active,updated_at=now();
+  PERFORM u2.id FROM users u2 LEFT JOIN scim_users s ON s.user_id=u2.id WHERE u2.cleaned_at IS NULL AND lower(coalesce(s.user_name,u2.email))=lower('rollback2-'||u) FOR UPDATE OF u2;
+  INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES(mp,'https://issuer.example.invalid','Rollback group','platform','user');
+  INSERT INTO scim_groups(id,display_name,external_id) VALUES(g,'Rollback group','grp-'||g);
+  PERFORM id FROM scim_groups WHERE id=g FOR UPDATE;
+  INSERT INTO scim_group_members(group_id,user_id) SELECT g,unnest(ARRAY[u]) ON CONFLICT DO NOTHING;
+  PERFORM v FROM scim_group_members m JOIN scim_groups sg ON sg.id=m.group_id CROSS JOIN LATERAL (VALUES (sg.display_name),(sg.external_id)) x(v) WHERE m.user_id=u AND v IS NOT NULL;
+  INSERT INTO platform_role_grants(id,user_id,role,source,mapping_id) VALUES(gen_random_uuid(),u,'user','group',mp);
+  PERFORM g2.user_id FROM platform_role_grants g2 JOIN oidc_group_mappings m2 ON m2.id=g2.mapping_id WHERE g2.source='group' AND g2.revoked_at IS NULL AND m2.group_value=ANY(ARRAY['Rollback group']);
+  UPDATE scim_groups SET display_name='Rollback group 2',external_id=NULL,updated_at=now() WHERE id=g;
+  UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=u AND mapping_id=mp AND revoked_at IS NULL;
+  UPDATE users SET disabled_at=coalesce(disabled_at,now()),cleanup_due_at=coalesce(cleanup_due_at,now()+interval '30 days'),disable_reason='scim_deactivated' WHERE id=u AND cleaned_at IS NULL;
+  UPDATE users SET disabled_at=NULL,cleanup_due_at=NULL,disable_reason=NULL WHERE id=u AND disable_reason='scim_deactivated' AND cleanup_due_at>now();
+  UPDATE scim_state SET last_write_at=now() WHERE singleton;
+  PERFORM (SELECT count(*) FROM scim_users),(SELECT count(*) FROM scim_group_members),(SELECT last_write_at FROM scim_state WHERE singleton);
+  DELETE FROM scim_group_members WHERE group_id=g AND user_id=ANY(ARRAY[u]);
+  INSERT INTO scim_group_members(group_id,user_id) VALUES(g,u);
+  DELETE FROM scim_groups WHERE id=g;
+  IF EXISTS(SELECT FROM scim_group_members WHERE group_id=g) THEN RAISE EXCEPTION 'scim membership cascade failed'; END IF;
+  UPDATE scim_users SET user_name=NULL,external_id=NULL,given_name=NULL,family_name=NULL,active=false,updated_at=now() WHERE user_id=u;
+  DELETE FROM scim_group_members WHERE user_id=u;
+  BEGIN DELETE FROM scim_users WHERE user_id=u; RAISE EXCEPTION 'scim user link removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE scim_users SET user_id=gen_random_uuid() WHERE user_id=u; RAISE EXCEPTION 'scim user link re-key allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN INSERT INTO scim_state(singleton) VALUES(true); RAISE EXCEPTION 'scim state insert allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN INSERT INTO scim_groups(id,display_name) VALUES(gen_random_uuid(),'bad'||chr(7)); RAISE EXCEPTION 'scim group name constraint absent'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN INSERT INTO scim_users(user_id,user_name) VALUES(gen_random_uuid(),'orphan'); RAISE EXCEPTION 'scim user without account allowed'; EXCEPTION WHEN foreign_key_violation THEN NULL; END;
  END;
 END $$;
 ROLLBACK;

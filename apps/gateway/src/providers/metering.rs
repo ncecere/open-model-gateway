@@ -1,7 +1,10 @@
 //! Wire-presence-aware metering. Unknown counters never become zero.
 use crate::{
     billing::{BillingUsage, MeterUsage},
-    inference::{error::InferenceError, types::Usage},
+    inference::{
+        error::InferenceError,
+        types::{ReportedModel, Usage},
+    },
 };
 use serde_json::Value;
 type Result<T> = std::result::Result<T, InferenceError>;
@@ -119,7 +122,19 @@ fn reasoning_tokens(value: &Value, output: Option<u64>) -> Option<u64> {
     ["completion_tokens_details", "output_tokens_details"]
         .into_iter()
         .find_map(|key| value[key]["reasoning_tokens"].as_u64())
-        .filter(|n| *n <= i64::MAX as u64 && output.is_none_or(|o| *n <= o))
+        .filter(|n| plausible_reasoning(*n, output))
+}
+fn plausible_reasoning(n: u64, output: Option<u64>) -> bool {
+    n <= i64::MAX as u64 && output.is_none_or(|o| n <= o)
+}
+/// Telemetry only (Logs): the model id the provider reports having served
+/// (`model` of a body or stream frame). Invalid or absent values leave the
+/// usage unchanged (unknown); they never fail the request.
+pub(crate) fn with_model(mut usage: Usage, model: &Value) -> Usage {
+    if let Some(model) = ReportedModel::from_json(model) {
+        usage.reported_model = Some(model);
+    }
+    usage
 }
 pub(crate) fn anthropic(value: &Value) -> Result<Usage> {
     if value.is_null() {
@@ -128,7 +143,8 @@ pub(crate) fn anthropic(value: &Value) -> Result<Usage> {
     object(value)?;
     object(&value["cache_creation"])?;
     let allocation = &value["cache_creation"];
-    checked(
+    let output = count(&value["output_tokens"])?;
+    let mut usage = checked(
         BillingUsage {
             cache_read_input_tokens: count(&value["cache_read_input_tokens"])?,
             cache_write_input_tokens: count(&value["cache_creation_input_tokens"])?,
@@ -143,8 +159,15 @@ pub(crate) fn anthropic(value: &Value) -> Result<Usage> {
         },
         false,
         count(&value["input_tokens"])?,
-        count(&value["output_tokens"])?,
-    )
+        output,
+    )?;
+    // Telemetry only: `output_tokens_details.thinking_tokens` is the provider's
+    // observability breakdown of the inclusive, billed `output_tokens`. Absent
+    // or implausible values stay unknown, never zero and never an error.
+    usage.reasoning_tokens = value["output_tokens_details"]["thinking_tokens"]
+        .as_u64()
+        .filter(|n| plausible_reasoning(*n, output));
+    Ok(usage)
 }
 /// Bedrock SDK values may be used only after transport validates raw presence.
 pub(crate) fn bedrock(value: &Value) -> Result<Usage> {
@@ -338,10 +361,17 @@ pub(crate) fn merge(old: Usage, new: Usage) -> Result<Usage> {
         }
         (a, b) => b.or(a),
     };
+    let output_tokens = counter(old.output_tokens, new.output_tokens)?;
     Ok(Usage {
         input_tokens: counter(old.input_tokens, new.input_tokens)?,
-        output_tokens: counter(old.output_tokens, new.output_tokens)?,
+        output_tokens,
         billing,
+        // Telemetry: the latest snapshot wins, earlier evidence is retained.
+        reasoning_tokens: new
+            .reasoning_tokens
+            .or(old.reasoning_tokens)
+            .filter(|n| plausible_reasoning(*n, output_tokens)),
+        reported_model: new.reported_model.or(old.reported_model),
         ..Default::default()
     })
 }
@@ -391,6 +421,58 @@ mod tests {
         assert_eq!(chat(json!({"prompt_tokens":5,"completion_tokens":9,"completion_tokens_details":{"reasoning_tokens":"4"}})).reasoning_tokens, None);
         let u = inclusive(&json!({"input_tokens":5,"output_tokens":9,"output_tokens_details":{"reasoning_tokens":2}}),"input_tokens","output_tokens","input_tokens_details","cache_write_tokens").unwrap();
         assert_eq!(u.reasoning_tokens, Some(2));
+    }
+    #[test]
+    fn reported_model_and_merge_keep_telemetry_without_guessing() {
+        let u = with_model(Usage::default(), &json!("vendor/model-1:beta"));
+        assert_eq!(u.reported_model.unwrap().as_str(), "vendor/model-1:beta");
+        for bad in [
+            json!(null),
+            json!(""),
+            json!(" padded"),
+            json!("tab\t"),
+            json!("é"),
+            json!(1),
+            json!("x".repeat(257)),
+        ] {
+            assert_eq!(
+                with_model(Usage::default(), &bad),
+                Usage::default(),
+                "{bad}"
+            );
+        }
+        assert!(ReportedModel::parse(&"x".repeat(256)).is_some());
+        // Anthropic thinking tokens: reported breakdown of inclusive output.
+        let start = with_model(
+            anthropic(&json!({"input_tokens":4,"output_tokens":1})).unwrap(),
+            &json!("claude-x"),
+        );
+        let delta =
+            anthropic(&json!({"output_tokens":9,"output_tokens_details":{"thinking_tokens":5}}))
+                .unwrap();
+        assert_eq!(delta.reasoning_tokens, Some(5));
+        let merged = merge(start, delta).unwrap();
+        assert_eq!(
+            (merged.output_tokens, merged.reasoning_tokens),
+            (Some(9), Some(5))
+        );
+        assert_eq!(merged.reported_model.unwrap().as_str(), "claude-x");
+        // A later snapshot without the breakdown keeps earlier evidence.
+        let later = merge(merged, anthropic(&json!({"output_tokens":9})).unwrap()).unwrap();
+        assert_eq!(later.reasoning_tokens, Some(5));
+        assert_eq!(
+            anthropic(&json!({"input_tokens":1,"output_tokens":2}))
+                .unwrap()
+                .reasoning_tokens,
+            None
+        );
+        // Bedrock's TokenUsage has no reasoning field: always unknown.
+        assert_eq!(
+            bedrock(&json!({"inputTokens":1,"outputTokens":2}))
+                .unwrap()
+                .reasoning_tokens,
+            None
+        );
     }
     #[test]
     fn exclusive_ttl_is_not_double_counted_or_guessed() {

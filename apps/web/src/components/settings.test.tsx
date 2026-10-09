@@ -7,7 +7,7 @@ import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/rea
 import { dashboardRouteTree } from "../router";
 import { abortRequests } from "../lib/api";
 import { admin, auditor, testClient } from "../lib/test-fixtures";
-import { emailErrors, httpsUrlError, isLoopback, type EmailDraft, type EmailSettings, type PrivacySettings } from "../lib/settings";
+import { emailErrors, httpsUrlError, isLoopback, type EmailDraft, type EmailSettings, type PrivacySettings, type SignInSettings } from "../lib/settings";
 
 beforeEach(() => { document.cookie = "omg_csrf=test-csrf; Path=/"; localStorage.clear(); sessionStorage.clear(); Object.defineProperty(Element.prototype, "getAnimations", { configurable: true, value: () => [] }); vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} }); Object.defineProperty(window, "matchMedia", { configurable: true, value: () => ({ matches: false, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent() { return false; } }) }); });
 afterEach(() => { cleanup(); abortRequests(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
@@ -124,6 +124,45 @@ describe("Admin › Settings", () => {
     expect(document.querySelector("main")!.textContent).not.toMatch(/secret value/i);
     expect(screen.getByRole("link", { name: /SSO groups/ }).getAttribute("href")).toBe("/admin/sso-groups");
     expect(screen.getByText("3")).toBeTruthy();
+    // Older servers without SCIM/JWKS fields: provisioning shows as off.
+    expect(screen.getByRole("heading", { name: "Provisioning (SCIM)" })).toBeTruthy();
+    expect(screen.getByText("Off")).toBeTruthy();
+    expect(screen.getByText("GATEWAY_SCIM_TOKEN_ENV")).toBeTruthy();
+    client.clear();
+  });
+  it("shows SCIM status and the cached signing keys read-only, never a token", async () => {
+    const signIn: SignInSettings = {
+      enabled: true, issuer: "https://login.example.com", client_id: "gateway", client_type: "public", groups_claim: "groups", public_url: "https://gateway.example.com", callback_url: "https://gateway.example.com/api/v1/auth/callback", enabled_group_mappings: 2,
+      jwks: { keys: 2, refreshed_at: new Date(Date.now() - 5 * 60_000).toISOString(), fresh_until: new Date(Date.now() + 55 * 60_000).toISOString(), last_failure_at: null, state: "fresh" },
+      scim: { enabled: true, base_url: "https://gateway.example.com/scim/v2", users: 12, active_users: 10, groups: 3, memberships: 1, last_sync_at: new Date(Date.now() - 60 * 60_000).toISOString() },
+    };
+    serve(auditor, path => path.endsWith("/settings/sign-in") ? signIn : undefined);
+    const { client } = await mount("/admin/settings/sign-in");
+    expect(await screen.findByText("Provisioning (SCIM)")).toBeTruthy();
+    const main = document.querySelector("main")!;
+    expect(main.innerHTML).toContain("https://gateway.example.com/scim/v2");
+    expect(screen.getByRole("button", { name: /Copy SCIM base URL/i })).toBeTruthy();
+    expect(main.textContent).toContain("10 active of 12");
+    expect(main.textContent).toContain("3 groups · 1 membership");
+    expect(main.textContent).toMatch(/2 keys · refreshed/);
+    expect(screen.getByText("Current")).toBeTruthy();
+    expect(main.querySelectorAll("time").length).toBeGreaterThanOrEqual(2);
+    // Read-only: no inputs other than copy fields, no edits.
+    expect(main.querySelectorAll("input:not([readonly])").length).toBe(0);
+    expect(main.textContent).not.toMatch(/token value|secret value/i);
+    client.clear();
+  });
+  it("flags stale or unavailable signing keys and a never-synced SCIM endpoint", async () => {
+    const signIn: SignInSettings = {
+      enabled: true, issuer: "https://login.example.com", client_id: "gateway", client_type: "public", groups_claim: "groups", public_url: "https://gateway.example.com", callback_url: "https://gateway.example.com/api/v1/auth/callback", enabled_group_mappings: 0,
+      jwks: { keys: 1, refreshed_at: "2026-10-08T00:00:00Z", fresh_until: "2026-10-08T01:00:00Z", last_failure_at: "2026-10-08T02:00:00Z", state: "unavailable" },
+      scim: { enabled: true, base_url: "https://gateway.example.com/scim/v2", users: 0, active_users: 0, groups: 0, memberships: 0, last_sync_at: null },
+    };
+    serve(admin, path => path.endsWith("/settings/sign-in") ? signIn : undefined);
+    const { client } = await mount("/admin/settings/sign-in");
+    expect(await screen.findByText("Unavailable")).toBeTruthy();
+    expect(screen.getByText("Never")).toBeTruthy();
+    expect(document.querySelector("main")!.textContent).toContain("1 key · refreshed");
     client.clear();
   });
 });

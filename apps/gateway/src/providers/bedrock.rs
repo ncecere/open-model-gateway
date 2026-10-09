@@ -506,17 +506,28 @@ fn decode_complete(
     if (reason == FinishReason::ToolCalls) != !calls.is_empty() {
         return Err(InferenceError::InvalidUpstream);
     }
+    let mut usage = output
+        .usage
+        .as_ref()
+        .map(usage)
+        .transpose()?
+        .unwrap_or_default();
+    usage.reported_model =
+        invoked_model(output.trace.as_ref().and_then(|t| t.prompt_router.as_ref()));
     Ok(ChatResponse {
         content: (!text.is_empty()).then_some(text),
         tool_calls: calls,
         finish_reason: reason,
-        usage: output
-            .usage
-            .as_ref()
-            .map(usage)
-            .transpose()?
-            .unwrap_or_default(),
+        usage,
     })
+}
+/// Telemetry only: Converse reports the served model only for prompt routers
+/// (`trace.promptRouter.invokedModelId`). Otherwise it is unknown and Logs
+/// show the configured model id. Invalid values are unknown, never an error.
+fn invoked_model(trace: Option<&aws::PromptRouterTrace>) -> Option<ReportedModel> {
+    trace
+        .and_then(|t| t.invoked_model_id.as_deref())
+        .and_then(ReportedModel::parse)
 }
 
 fn sdk_error<E: ProvideErrorMetadata>(error: SdkError<E>) -> InferenceError {

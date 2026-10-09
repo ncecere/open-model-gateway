@@ -107,7 +107,9 @@ fn usage(value: &Value) -> Result<Usage> {
 /// Structural failure still fails, but a valid usage object is kept as evidence.
 fn decode(value: &Value) -> Result<ChatResponse> {
     crate::inference::evidence::preserve(decode_shape(value), || {
-        value["usage"].is_object().then(|| usage(&value["usage"]))
+        value["usage"].is_object().then(|| {
+            usage(&value["usage"]).map(|u| super::metering::with_model(u, &value["model"]))
+        })
     })
 }
 /// Responses message `phase` labels assistant text: `commentary` (preamble) or
@@ -219,7 +221,7 @@ fn decode_shape(value: &Value) -> Result<ChatResponse> {
             reason
         },
         tool_calls: calls,
-        usage: usage(&value["usage"])?,
+        usage: super::metering::with_model(usage(&value["usage"])?, &value["model"]),
     })
 }
 // Native output is validated incrementally; the final native snapshot is checked

@@ -1,5 +1,34 @@
 # Verification
 
+## Test commands
+
+Run from the repository root. None of them make paid provider calls or touch the local demo (PostgreSQL 54349, port 3000).
+
+| Command | Covers | Needs |
+| --- | --- | --- |
+| `cargo fmt --all -- --check` | Formatting | Rust |
+| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | Lints | Rust |
+| `cargo test --workspace --all-features` | Unit, mock-provider contract, SDK and real-PostgreSQL integration tests (SQLx creates disposable databases) | `DATABASE_URL` to the disposable cluster, e.g. `postgres://gateway:gateway@127.0.0.1:54339/gateway`; `npm ci` for the SDK tests |
+| `cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored` | Runtime-role ACL rollback probe | Disposable cluster only |
+| `npm run typecheck:web` / `npm run test:web` / `npm run build:web` | SPA types, Vitest unit/component tests, production build | Node 22 |
+| `npm run test:browser` | Playwright end-to-end journey and axe accessibility scans (below) | Disposable PostgreSQL, Rust, Chromium (`npx playwright install chromium`) |
+| `npm run test:demo` | Local demo issuer and runtime helper | Node, Python 3 |
+| `npm run test:container` / `npm run test:staging` | Container entrypoint, staging/provider-acceptance helpers | Node, Python 3 |
+
+CI (`.github/workflows/ci.yml`) runs all of these; the `browser` job uses a PostgreSQL service container.
+
+### Browser suite
+
+`npm run test:browser` (Chromium only, about 2 minutes after builds) starts an isolated stack from `tests/browser/stack.mjs`:
+
+- creates a new database `omg_browser_<id>` on `OMG_BROWSER_ADMIN_DATABASE_URL` (default the disposable cluster `postgres://gateway:gateway@127.0.0.1:54339/gateway`; port 54349 is refused), runs `migrate` and `provision-user --platform-admin`, and drops the database afterwards (`OMG_BROWSER_KEEP_DB=1` keeps it);
+- builds the SPA into `target/browser-tests/web-dist` and the debug gateway binary, then serves them with `GATEWAY_WEB_DIR` on 127.0.0.1:18291 (`OMG_BROWSER_PORT_BASE` moves the ports);
+- runs the passwordless local demo issuer (`createDemoIssuer` from `scripts/demo-oidc.mjs`, test ports only) and a deterministic OpenAI-compatible mock upstream approved through `GATEWAY_LOCAL_UPSTREAMS`.
+
+The journey signs in each persona through real signed OIDC: the unentitled user is denied; the Platform Admin creates a Team and Project, maps SSO groups, adds a mock connection and a priced model and assigns it; the Auditor sees Admin without mutation controls and gets 403 from mutations; the team admin and member get their workspace roles; the member creates a key, calls `/v1/chat/completions` through the mock, sees the request in Logs (with a known cost) and Usage, checks key pages at 390px, revokes the key and gets 401. The accessibility pass is described in [accessibility](accessibility.md).
+
+`OMG_BROWSER_SKIP_BUILD=1` reuses existing builds; `OMG_BROWSER_GATEWAY_BIN` / `OMG_BROWSER_WEB_DIR` select other builds. Failures leave traces and screenshots of the disposable stack in `target/browser-tests/` and the gateway log in `target/browser-tests/gateway.log`.
+
 ## Single-enterprise rebuild — current evidence
 
 The organization-free rebuild uses fresh enterprise migrations. Existing installations and the legacy demo were not reset, migrated or reseeded. The current local demo is `gateway_enterprise_demo` on loopback PostgreSQL 54349, served by an explicitly verified restricted runtime role; 54339 is the separate disposable regression cluster.

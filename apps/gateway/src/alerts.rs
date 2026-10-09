@@ -998,6 +998,7 @@ pub fn start(store: Store, every: Duration) -> tokio::task::JoinHandle<()> {
             tick.tick().await;
             match tokio::time::timeout(Duration::from_secs(60), evaluate_once(&store)).await {
                 Ok(Ok(Some(report))) => {
+                    crate::metrics::METRICS.observe_alert_run("ok", report.failed_rules);
                     if report.fired + report.resolved + report.failed_rules > 0 {
                         tracing::info!(
                             fired = report.fired,
@@ -1007,8 +1008,11 @@ pub fn start(store: Store, every: Duration) -> tokio::task::JoinHandle<()> {
                         );
                     }
                 }
-                Ok(Ok(None)) => {}
-                _ => tracing::warn!("alert evaluation incomplete; retrying next interval"),
+                Ok(Ok(None)) => crate::metrics::METRICS.observe_alert_run("skipped", 0),
+                _ => {
+                    crate::metrics::METRICS.observe_alert_run("failed", 0);
+                    tracing::warn!("alert evaluation incomplete; retrying next interval")
+                }
             }
             if tokio::time::timeout(
                 Duration::from_secs(300),
