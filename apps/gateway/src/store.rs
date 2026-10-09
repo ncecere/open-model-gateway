@@ -87,6 +87,8 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "async_job_files",
     // 0017 realtime
     "realtime_responses",
+    // 0019 file store
+    "stored_files",
 ];
 
 fn lineage_matches(

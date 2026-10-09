@@ -29,6 +29,48 @@ export type JwksStatus = { keys: number; refreshed_at: string; fresh_until: stri
 export type ScimStatus = { enabled: false } | { enabled: true; base_url: string; users: number; active_users: number; groups: number; memberships: number; last_sync_at: string | null };
 export type SignInSettings = { enabled: boolean; issuer?: string; client_id?: string; client_type?: "confidential" | "public"; groups_claim?: string; public_url?: string; callback_url?: string; secure_cookies?: boolean; jwks?: JwksStatus; enabled_group_mappings: number; scim?: ScimStatus };
 
+/** Data & privacy › Storage (docs/file-storage.md). Location is host-only; never paths or credentials. */
+export type StorageGroupId = "batch" | "video" | "user_files" | "export" | "branding";
+export type StorageGroup = {
+  group: StorageGroupId; label: string; purposes: string[]; holds_customer_content: boolean; toggle: boolean;
+  enabled: boolean; active: boolean; retention_days: number | null; retention_editable: boolean; default_retention_days: number | null;
+  minimum: number; maximum: number; objects: number; bytes: number;
+};
+export type StorageLocation =
+  | { kind: "local" | "memory" }
+  | { kind: "s3"; bucket: string; region: string; endpoint_host: string | null; endpoint_tls: boolean; path_style: boolean; prefix_set: boolean; auth: "aws_default" | "aws_profile" | "aws_role" | "static" };
+export type StorageError = "not_found" | "too_large" | "integrity" | "key_unavailable" | "invalid_key" | "source" | "unavailable" | "timeout" | "denied" | "unsafe_path" | "disabled";
+export type StorageSettings = {
+  backend: "off" | "local" | "s3" | "memory"; location: StorageLocation | null;
+  encryption: { key_id: string; decrypt_only_keys: number } | null;
+  health: { checked_at: string; ok: boolean; error: StorageError | null; current: boolean } | null;
+  groups: StorageGroup[]; updated_at: string;
+};
+export type StorageTestResult = { ok: boolean; error: StorageError | null; backend: string; round_trip_ms: number | null };
+export const storageErrors: Record<StorageError, string> = {
+  not_found: "The test object disappeared.", too_large: "The test object was too large.", integrity: "The stored test object didn't match.",
+  key_unavailable: "The encryption key isn't configured.", invalid_key: "Invalid object key.", source: "The upload failed.",
+  unavailable: "Couldn't reach the store. Check the bucket, endpoint and network.", timeout: "The store didn't answer in time.",
+  denied: "The store refused the credentials or permissions.", unsafe_path: "The storage directory contains a symlink or unsafe path.", disabled: "No file store is configured.",
+};
+export function storageBackendLabel(s: StorageSettings): string {
+  if (s.backend === "off") return "Off";
+  if (s.backend === "local") return "Local disk";
+  if (s.backend === "memory") return "Memory (tests)";
+  return s.location?.kind === "s3" && s.location.endpoint_host ? "S3-compatible" : "Amazon S3";
+}
+export type StorageDraft = Record<StorageGroupId, { enabled: boolean; days: string }>;
+export const storageDraft = (s: StorageSettings): StorageDraft => Object.fromEntries(s.groups.map(g => [g.group, { enabled: g.enabled, days: g.retention_days === null ? "" : String(g.retention_days) }])) as StorageDraft;
+export function storageErrorsOf(s: StorageSettings, d: StorageDraft): Partial<Record<StorageGroupId, string>> {
+  const out: Partial<Record<StorageGroupId, string>> = {};
+  for (const g of s.groups) if (g.retention_editable) { const e = daysError(d[g.group].days, g.minimum, g.maximum, "the retention"); if (e) out[g.group] = e; }
+  return out;
+}
+export const storageBody = (d: StorageDraft) => ({
+  batch: { enabled: d.batch.enabled, retention_days: Number(d.batch.days) }, video: { enabled: d.video.enabled, retention_days: Number(d.video.days) },
+  user_files: { enabled: d.user_files.enabled, retention_days: Number(d.user_files.days) }, export: { retention_days: Number(d.export.days) },
+});
+
 export const KEY_DAYS = { min: 1, max: 365 } as const;
 export const tlsLabels: Record<TlsMode, string> = { starttls: "STARTTLS", implicit: "Implicit TLS", none: "None (this machine only)" };
 export const tlsPorts: Record<TlsMode, number> = { starttls: 587, implicit: 465, none: 25 };

@@ -10,6 +10,9 @@
 //!   group mappings with group provenance (manual grants are never touched), and sign-in
 //!   no longer takes that group's membership from the token.
 //! - Attributes outside the published schema subset are accepted but not stored.
+//! - SCIM never removes platform access from the last active Platform Admin: a write
+//!   that would leave none is rolled back whole, answered with 409, audited, and raises
+//!   the built-in installation alert (see [`finish`]).
 use std::{
     collections::{BTreeSet, HashMap},
     sync::Arc,
@@ -228,6 +231,13 @@ fn conflict() -> ScimError {
 }
 fn mutability(detail: &'static str) -> ScimError {
     ScimError::new(StatusCode::BAD_REQUEST, Some("mutability"), detail)
+}
+pub(crate) const LAST_ADMIN: &str =
+    "Can't deactivate the last active Platform Admin. Grant Admin to someone else first.";
+/// The write conflicts with the installation's state (RFC 7644 409; the
+/// attribute change itself is not permitted for this resource now).
+fn last_admin() -> ScimError {
+    ScimError::new(StatusCode::CONFLICT, Some("mutability"), LAST_ADMIN)
 }
 
 impl IntoResponse for ScimError {
@@ -711,18 +721,77 @@ fn apply_user_patch(draft: &mut UserDraft, body: &Value) -> Result<(), ScimError
     Ok(())
 }
 
-async fn write_tx(store: &Store) -> Result<Transaction<'_, Postgres>, ScimError> {
-    let mut tx = store.pool.begin().await?;
-    lifecycle::lock(&mut tx).await?;
-    Ok(tx)
+/// Whether the installation had an active Platform Admin when a SCIM write
+/// started (read under the installation lock).
+#[derive(Clone, Copy)]
+struct AdminGuard {
+    had_admin: bool,
 }
 
-async fn finish(mut tx: Transaction<'_, Postgres>) -> Result<(), ScimError> {
+/// Active Platform Admins: a live admin grant (any provenance) on an account that is
+/// neither suspended nor cleaned up (`effective_platform_roles`).
+async fn active_admins(tx: &mut Transaction<'_, Postgres>) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT count(*) FROM effective_platform_roles WHERE role='admin'")
+        .fetch_one(&mut **tx)
+        .await
+}
+
+/// Every SCIM write runs in one transaction under the installation lock, the
+/// same lock manual grant/suspend changes and sign-in take, so concurrent
+/// writes cannot both pass the last-admin check.
+async fn write_tx(store: &Store) -> Result<(Transaction<'_, Postgres>, AdminGuard), ScimError> {
+    let mut tx = store.pool.begin().await?;
+    lifecycle::lock(&mut tx).await?;
+    let had_admin = active_admins(&mut tx).await? > 0;
+    Ok((tx, AdminGuard { had_admin }))
+}
+
+/// Commit a SCIM write, unless it would leave the installation without an active
+/// Platform Admin (deactivation, DELETE, or group changes that drop the last
+/// effective Admin grant). Then nothing is applied: the transaction rolls back,
+/// the refusal is audited and the built-in installation alert is raised, and the
+/// provider gets 409.
+async fn finish(
+    store: &Store,
+    mut tx: Transaction<'_, Postgres>,
+    guard: AdminGuard,
+    resource: &'static str,
+    id: Uuid,
+) -> Result<(), ScimError> {
+    if guard.had_admin && active_admins(&mut tx).await? == 0 {
+        tx.rollback().await?;
+        if let Err(error) = record_last_admin_refusal(store, resource, id).await {
+            let code = error
+                .as_database_error()
+                .and_then(|e| e.code().map(|c| c.into_owned()));
+            tracing::error!(code = ?code, "SCIM last-admin refusal could not be recorded");
+        }
+        return Err(last_admin());
+    }
     sqlx::query("UPDATE scim_state SET last_write_at=now() WHERE singleton")
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
     Ok(())
+}
+
+/// Audit (no names or emails) and raise the installation alert in a separate
+/// transaction: the refused change itself was rolled back.
+async fn record_last_admin_refusal(
+    store: &Store,
+    resource: &'static str,
+    id: Uuid,
+) -> Result<(), sqlx::Error> {
+    let mut tx = store.pool.begin().await?;
+    lifecycle::lock(&mut tx).await?;
+    sqlx::query("INSERT INTO audit_events(id,actor_user_id,action,resource_type,resource_id,metadata) VALUES($1,NULL,'scim.last_admin_protected',$2,$3,'{}')")
+        .bind(Uuid::new_v4())
+        .bind(if resource == "group" { "scim_group" } else { "user" })
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    crate::alerts::fire_scim_last_admin(&mut tx, resource).await?;
+    tx.commit().await
 }
 
 async fn audit(
@@ -887,13 +956,13 @@ async fn reactivate(tx: &mut Transaction<'_, Postgres>, user: Uuid) -> Result<()
 }
 
 async fn respond_user(
-    tx: Transaction<'_, Postgres>,
+    (tx, guard): (Transaction<'_, Postgres>, AdminGuard),
     store: &Store,
     rt: &ScimRuntime,
     id: Uuid,
     status: StatusCode,
 ) -> Result<Response, ScimError> {
-    finish(tx).await?;
+    finish(store, tx, guard, "user", id).await?;
     let row: UserRow = sqlx::query_as(&format!("{USER_SELECT} AND u.id=$1"))
         .bind(id)
         .fetch_optional(&store.pool)
@@ -910,7 +979,7 @@ async fn respond_user(
 async fn create_user(State(state): State<ScimState>, body: Bytes) -> Result<Response, ScimError> {
     let rt = state.rt()?;
     let draft = user_from_body(&body_json(&body)?, None)?;
-    let mut tx = write_tx(&state.store).await?;
+    let (mut tx, guard) = write_tx(&state.store).await?;
     let id = Uuid::new_v4();
     let taken: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users u LEFT JOIN scim_users s ON s.user_id=u.id WHERE u.cleaned_at IS NULL AND (lower(u.email)=lower($1) OR lower(coalesce(s.user_name,u.email))=lower($2)))")
         .bind(&draft.email).bind(&draft.user_name).fetch_one(&mut *tx).await?;
@@ -932,7 +1001,7 @@ async fn create_user(State(state): State<ScimState>, body: Bytes) -> Result<Resp
         json!({"active": draft.active}),
     )
     .await?;
-    respond_user(tx, &state.store, rt, id, StatusCode::CREATED).await
+    respond_user((tx, guard), &state.store, rt, id, StatusCode::CREATED).await
 }
 
 async fn replace_user(
@@ -943,13 +1012,13 @@ async fn replace_user(
     let rt = state.rt()?;
     let id = resource_id(&id)?;
     let body = body_json(&body)?;
-    let mut tx = write_tx(&state.store).await?;
+    let (mut tx, guard) = write_tx(&state.store).await?;
     let row = load_user(&mut tx, id, true).await?.ok_or_else(not_found)?;
     let before = row.draft();
     let draft = user_from_body(&body, Some(&before))?;
     persist_user(&mut tx, id, Some(&before), row.enabled, &draft).await?;
     audit(&mut tx, "scim.user.updated", "user", id, json!({})).await?;
-    respond_user(tx, &state.store, rt, id, StatusCode::OK).await
+    respond_user((tx, guard), &state.store, rt, id, StatusCode::OK).await
 }
 
 async fn patch_user(
@@ -960,14 +1029,14 @@ async fn patch_user(
     let rt = state.rt()?;
     let id = resource_id(&id)?;
     let body = body_json(&body)?;
-    let mut tx = write_tx(&state.store).await?;
+    let (mut tx, guard) = write_tx(&state.store).await?;
     let row = load_user(&mut tx, id, true).await?.ok_or_else(not_found)?;
     let before = row.draft();
     let mut draft = before.clone();
     apply_user_patch(&mut draft, &body)?;
     persist_user(&mut tx, id, Some(&before), row.enabled, &draft).await?;
     audit(&mut tx, "scim.user.updated", "user", id, json!({})).await?;
-    respond_user(tx, &state.store, rt, id, StatusCode::OK).await
+    respond_user((tx, guard), &state.store, rt, id, StatusCode::OK).await
 }
 
 /// DELETE deactivates; users are never deleted (history and attribution stay).
@@ -977,7 +1046,7 @@ async fn delete_user(
 ) -> Result<Response, ScimError> {
     state.rt()?;
     let id = resource_id(&id)?;
-    let mut tx = write_tx(&state.store).await?;
+    let (mut tx, guard) = write_tx(&state.store).await?;
     let row = load_user(&mut tx, id, true).await?.ok_or_else(not_found)?;
     let before = row.draft();
     let draft = UserDraft {
@@ -985,7 +1054,7 @@ async fn delete_user(
         ..before.clone()
     };
     persist_user(&mut tx, id, Some(&before), row.enabled, &draft).await?;
-    finish(tx).await?;
+    finish(&state.store, tx, guard, "user", id).await?;
     Ok(no_content())
 }
 
@@ -1486,7 +1555,7 @@ async fn respond_group(
 async fn create_group(State(state): State<ScimState>, body: Bytes) -> Result<Response, ScimError> {
     let rt = state.rt()?;
     let draft = group_from_body(&body_json(&body)?)?;
-    let mut tx = write_tx(&state.store).await?;
+    let (mut tx, guard) = write_tx(&state.store).await?;
     let taken: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM scim_groups WHERE display_name=$1)")
             .bind(&draft.display_name)
@@ -1497,7 +1566,7 @@ async fn create_group(State(state): State<ScimState>, body: Bytes) -> Result<Res
     }
     let id = Uuid::new_v4();
     persist_group(&mut tx, rt, id, None, &draft).await?;
-    finish(tx).await?;
+    finish(&state.store, tx, guard, "group", id).await?;
     respond_group(&state.store, rt, id, StatusCode::CREATED).await
 }
 
@@ -1509,10 +1578,10 @@ async fn replace_group(
     let rt = state.rt()?;
     let id = resource_id(&id)?;
     let draft = group_from_body(&body_json(&body)?)?;
-    let mut tx = write_tx(&state.store).await?;
+    let (mut tx, guard) = write_tx(&state.store).await?;
     let (row, members) = load_group(&mut tx, id).await?.ok_or_else(not_found)?;
     persist_group(&mut tx, rt, id, Some((&row, &members)), &draft).await?;
-    finish(tx).await?;
+    finish(&state.store, tx, guard, "group", id).await?;
     respond_group(&state.store, rt, id, StatusCode::OK).await
 }
 
@@ -1525,7 +1594,7 @@ async fn patch_group(
     let rt = state.rt()?;
     let id = resource_id(&id)?;
     let body = body_json(&body)?;
-    let mut tx = write_tx(&state.store).await?;
+    let (mut tx, guard) = write_tx(&state.store).await?;
     let (row, members) = load_group(&mut tx, id).await?.ok_or_else(not_found)?;
     let mut draft = GroupDraft {
         display_name: row.display_name.clone(),
@@ -1534,7 +1603,7 @@ async fn patch_group(
     };
     apply_group_patch(&mut draft, &body)?;
     persist_group(&mut tx, rt, id, Some((&row, &members)), &draft).await?;
-    finish(tx).await?;
+    finish(&state.store, tx, guard, "group", id).await?;
     Ok(no_content())
 }
 
@@ -1545,7 +1614,7 @@ async fn delete_group(
 ) -> Result<Response, ScimError> {
     let rt = state.rt()?;
     let id = resource_id(&id)?;
-    let mut tx = write_tx(&state.store).await?;
+    let (mut tx, guard) = write_tx(&state.store).await?;
     let (row, members) = load_group(&mut tx, id).await?.ok_or_else(not_found)?;
     let values = row.values();
     let mut affected = members;
@@ -1556,7 +1625,7 @@ async fn delete_group(
         .await?;
     sync_users(&mut tx, rt, affected, &values).await?;
     audit(&mut tx, "scim.group.deleted", "scim_group", id, json!({})).await?;
-    finish(tx).await?;
+    finish(&state.store, tx, guard, "group", id).await?;
     Ok(no_content())
 }
 

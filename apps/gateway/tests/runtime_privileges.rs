@@ -38,6 +38,7 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         "realtime_responses",
         "async_jobs",
         "async_job_files",
+        "stored_files",
     ] {
         assert_eq!(
             sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
@@ -52,6 +53,7 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
     realtime_accounting_runs_as_runtime(&pool).await;
     scim_provisioning_runs_as_runtime(&pool).await;
     budget_totals_maintained_as_runtime(&pool).await;
+    file_store_runs_as_runtime(&pool).await;
     // Last: its unknown batch hold would change the installation totals above.
     async_jobs_run_as_runtime(&pool).await;
     sqlx::query("SELECT pg_advisory_unlock(72419505)")
@@ -217,6 +219,21 @@ async fn scim_provisioning_runs_as_runtime(pool: &PgPool) {
     );
     let (status, _) = call("GET", format!("/scim/v2/Users/{id}"), None).await;
     assert_eq!(status, 404);
+    // Last-admin refusal (0018): rollback, audit and the installation alert as runtime.
+    let admins: Vec<uuid::Uuid> =
+        sqlx::query_scalar("SELECT user_id FROM effective_platform_roles WHERE role='admin'")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+    assert_eq!(admins.len(), 1, "the alert probe seeds exactly one admin");
+    let (status, body) = call("DELETE", format!("/scim/v2/Users/{}", admins[0]), None).await;
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["scimType"], "mutability");
+    let (audits, alerts): (i64, i64) = sqlx::query_as("SELECT (SELECT count(*) FROM audit_events WHERE action='scim.last_admin_protected'),(SELECT count(*) FROM alert_events WHERE builtin='scim_last_admin' AND resolved_at IS NULL)")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!((audits, alerts), (1, 1));
     runtime.close().await;
 }
 
@@ -295,6 +312,88 @@ async fn alert_evaluation_runs_as_runtime(pool: &PgPool) {
         .await;
     assert!(exposition.contains(r#"gateway_reservations_held{state="pending"} 0"#));
     assert!(!exposition.contains(r#"gateway_metrics_collection_errors_total{"#));
+    runtime.close().await;
+}
+
+/// File store (0019): metadata writes, scoped reads, deletion, retention sweeps,
+/// verification and the Admin › Settings › Storage statements need nothing
+/// beyond the reviewed grants; rows are never deleted.
+async fn file_store_runs_as_runtime(pool: &PgPool) {
+    use futures::StreamExt;
+    use open_model_gateway::filestore::{
+        FileStoreRuntime, NewFile, Purpose,
+        files::FileStorage,
+        sweep::{sweep_once, verify},
+    };
+    let (ws, user, key) = (
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+    );
+    sqlx::query("INSERT INTO users(id,email) VALUES($1,$2)")
+        .bind(user)
+        .bind(format!("files-{user}@example.test"))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO workspaces(id,name,kind) VALUES($1,'Files probe','project')")
+        .bind(ws)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash) VALUES($1,$2,$3,'files',decode(repeat('00',32),'hex'))").bind(key).bind(ws).bind(user).execute(pool).await.unwrap();
+    let runtime = runtime_pool(pool).await;
+    let store = open_model_gateway::store::Store::new(runtime.clone());
+    // Settings › Storage writes (toggles, retention, health result) and reads.
+    sqlx::query("UPDATE installation_settings SET file_batch_enabled=true,file_batch_retention_days=7,file_video_enabled=false,file_video_retention_days=7,file_user_files_enabled=false,file_user_files_retention_days=30,file_export_retention_days=1,updated_at=now(),updated_by=$1 WHERE singleton").bind(user).execute(&runtime).await.unwrap();
+    sqlx::query("UPDATE installation_settings SET file_store_last_check_at=now(),file_store_last_check_ok=true,file_store_last_check_error=NULL,file_store_last_check_target=$1 WHERE singleton").bind("0".repeat(64)).execute(&runtime).await.unwrap();
+    sqlx::query("SELECT purpose,count(*),coalesce(sum(size_bytes),0)::bigint FROM stored_files WHERE deleted_at IS NULL AND committed_at IS NOT NULL GROUP BY purpose").fetch_all(&runtime).await.unwrap();
+    let files = FileStorage::new(store.clone(), FileStoreRuntime::memory());
+    assert!(files.accepts(Purpose::BatchInput).await.unwrap());
+    let mut new = NewFile::new(Purpose::BatchInput, Some(ws));
+    new.created_by_user_id = Some(user);
+    new.created_by_api_key_id = Some(key);
+    new.filename = Some("input.jsonl".into());
+    let body = futures::stream::iter([Ok(bytes::Bytes::from_static(b"{}\n"))]).boxed();
+    let file = files.create(new, body).await.unwrap();
+    let (_, mut stream) = files.open(file.id, Some(ws)).await.unwrap();
+    assert_eq!(stream.next().await.unwrap().unwrap().as_ref(), b"{}\n");
+    assert_eq!(files.workspace_stored_bytes(ws).await.unwrap(), 3);
+    assert!(
+        verify(&store, files.runtime(), 100)
+            .await
+            .unwrap()
+            .consistent()
+    );
+    let export = files
+        .create(
+            NewFile::new(Purpose::Export, None),
+            futures::stream::iter([Ok(bytes::Bytes::from_static(b"a,b"))]).boxed(),
+        )
+        .await
+        .unwrap();
+    assert!(files.delete(file.id, Some(ws)).await.unwrap());
+    // Expire the export (as owner: created_at is not runtime-writable) and sweep it.
+    sqlx::query("UPDATE stored_files SET created_at=now()-interval '2 days' WHERE id=$1")
+        .bind(export.id)
+        .execute(pool)
+        .await
+        .unwrap();
+    let report = sweep_once(&store, files.runtime(), 10).await.unwrap();
+    assert_eq!((report.deleted, report.failed), (1, 0));
+    assert!(
+        sqlx::query("DELETE FROM stored_files")
+            .execute(&runtime)
+            .await
+            .is_err()
+    );
+    let deleted: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM stored_files WHERE deleted_at IS NOT NULL AND filename IS NULL",
+    )
+    .fetch_one(&runtime)
+    .await
+    .unwrap();
+    assert_eq!(deleted, 2);
     runtime.close().await;
 }
 
@@ -507,6 +606,35 @@ async fn async_jobs_run_as_runtime(pool: &PgPool) {
     )
     .await
     .unwrap();
+    // Jobs at once (0018): the accepted video holds the key's only job slot.
+    sqlx::query(
+        "INSERT INTO key_policies(workspace_id,governance_key_id,concurrent_jobs) VALUES($1,$2,1)",
+    )
+    .bind(ws)
+    .bind(key)
+    .execute(pool)
+    .await
+    .unwrap();
+    let denied = jobs
+        .create_video(
+            principal,
+            VideoRequest {
+                model: format!("video-{video_model}"),
+                prompt: "probe".into(),
+                seconds: 4,
+                size: VideoSize::DEFAULT,
+            },
+            uuid::Uuid::new_v4(),
+        )
+        .await;
+    assert!(matches!(
+        denied,
+        Err(open_model_gateway::jobs::JobError::Inference(
+            open_model_gateway::inference::error::InferenceError::JobLimitExceeded(
+                open_model_gateway::inference::error::LimitScope::ApiKey
+            )
+        ))
+    ));
     sqlx::query("UPDATE async_jobs SET next_poll_at=now()")
         .execute(pool)
         .await
@@ -574,7 +702,7 @@ async fn realtime_accounting_runs_as_runtime(pool: &PgPool) {
         auth::Principal,
         billing::MeterUsage,
         inference::{
-            realtime::{RealtimeFinish, RealtimeUsage, ResponseStatus},
+            realtime::{RealtimeFinish, RealtimeUsage, ResponseBound, ResponseStatus},
             repository::{AttemptTelemetry, ExecutionStart, InferenceRepository, Outcome},
             types::WorkloadKind,
             workload::{OutputReservation, WorkloadAdmission},
@@ -657,13 +785,29 @@ async fn realtime_accounting_runs_as_runtime(pool: &PgPool) {
         output_text_tokens: 10,
         output_audio_tokens: 40,
     };
-    store.realtime_open_response(id, 1, 100).await.unwrap();
+    // Resize the admission window to the context, then add one more window.
+    let window = ResponseBound {
+        text_input: Some(400),
+        audio_input: Some(100),
+        output: 100,
+    };
     store
-        .realtime_settle_response(id, 1, Some(ResponseStatus::Completed), Some(usage), 100)
+        .realtime_reserve_window(
+            &principal,
+            id,
+            &name,
+            window,
+            Some(ResponseBound::admission(100)),
+        )
+        .await
+        .unwrap();
+    store.realtime_open_response(id, 1, window).await.unwrap();
+    store
+        .realtime_settle_response(id, 1, Some(ResponseStatus::Completed), Some(usage), window)
         .await
         .unwrap();
     store
-        .realtime_reserve_window(&principal, id, &name, 100)
+        .realtime_reserve_window(&principal, id, &name, ResponseBound::unknown(100), None)
         .await
         .unwrap();
     store
@@ -674,7 +818,7 @@ async fn realtime_accounting_runs_as_runtime(pool: &PgPool) {
             elapsed_ms: 1,
             telemetry: AttemptTelemetry::default(),
             unopened_request: false,
-            window_output_tokens: 100,
+            window: ResponseBound::unknown(100),
         })
         .await
         .unwrap();

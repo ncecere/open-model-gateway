@@ -164,7 +164,7 @@ export function CreateKeyDialog({ session, workspace, options, accounts, onClose
   const [name, setName] = useState(""), [owner, setOwner] = useState<Owner>(p.createUserKey ? "me" : "service"), [account, setAccount] = useState(accounts[0]?.id ?? "");
   const [expiry, setExpiry] = useState<PresetValue>({ kind: "preset", preset: "30" }), [limit, setLimit] = useState<PresetValue>({ kind: "preset", preset: "" }), [period, setPeriod] = useState<BudgetPeriod>("month");
   const [extra, setExtra] = useState<BudgetDraft[]>([]), [modelMode, setModelMode] = useState<"inherit" | "selected">("inherit"), [models, setModels] = useState<string[]>([]);
-  const [rates, setRates] = useState<Record<RateKey, string>>({ requests_per_minute: "", tokens_per_minute: "", concurrent_requests: "" }), [rejected, setRejected] = useState<DraftErrors>();
+  const [rates, setRates] = useState<Record<RateKey, string>>({ requests_per_minute: "", tokens_per_minute: "", concurrent_requests: "", concurrent_jobs: "" }), [rejected, setRejected] = useState<DraftErrors>();
   const [submitted, setSubmitted] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState<unknown>(), [result, setResult] = useState<{ id: string; token: string; policy: Policy | null }>(), [copied, setCopied] = useState(false);
   const limitText = presetChoiceText(limit).trim(), maxDays = owner === "service" ? 365 : session.installation.key_max_lifetime_days ?? 365;
   const budgets: BudgetDraft[] = [...(limitText ? [{ key: "primary", period, amount: limitText }] : []), ...extra];
@@ -233,7 +233,7 @@ export function CreateKeyDialog({ session, workspace, options, accounts, onClose
           <IconButton icon={<X aria-hidden />} label={`Remove ${periodName[b.period].toLowerCase()} budget`} disabled={busy} onClick={() => setExtraBudgets(extra.filter(x => x.key !== b.key))} />
         </div>)}
         {limitText && used.size < stackPeriods.length && <span><Button size="sm" variant="ghost" disabled={busy} onClick={() => { const next = (["day", "week", "month", "lifetime"] as BudgetPeriod[]).find(x => !used.has(x)); if (next) setExtraBudgets([...extra, { key: newBudgetKey(), period: next, amount: "" }]); }}><Plus aria-hidden /> Add a budget for another period</Button></span>}
-        <Disclosure title="Rate limits" summary={rateRows.some(r => rates[r.key].trim()) ? rateRows.filter(r => rates[r.key].trim()).map(r => `${rates[r.key].trim()} ${r.unit === "at once" ? "at once" : r.key === "requests_per_minute" ? "RPM" : "TPM"}`).join(" · ") : "Optional · inherited when blank"} defaultOpen={false}>
+        <Disclosure title="Rate limits" summary={rateRows.some(r => rates[r.key].trim()) ? rateRows.filter(r => rates[r.key].trim()).map(r => `${rates[r.key].trim()} ${r.key === "concurrent_jobs" ? "jobs at once" : r.unit === "at once" ? "at once" : r.key === "requests_per_minute" ? "RPM" : "TPM"}`).join(" · ") : "Optional · inherited when blank"} defaultOpen={false}>
           <div className={k.rates}>{rateRows.map(r => { const cap = parents.map(x => x.limits[r.key]).filter((v): v is number => v !== null).sort((a, b) => a - b)[0]; return <FormField key={r.key} label={r.label} description={cap !== undefined ? `At most ${cap.toLocaleString("en-US")} (inherited)` : r.description} error={shown(budgetErrors.rates[r.key])}>
             <Input value={rates[r.key]} inputMode="numeric" maxLength={32} autoComplete="off" disabled={busy} placeholder="No key limit" onChange={event => setRate(r.key, event.target.value)} />
           </FormField>; })}</div>

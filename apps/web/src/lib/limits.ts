@@ -1,6 +1,6 @@
 /*
- * Stacked limits (ux-api-contract "Stacked budgets"): every scope holds three
- * rate limits and at most one budget per period (day, week, month, lifetime).
+ * Stacked limits (ux-api-contract "Stacked budgets"): every scope holds four
+ * rate limits (including "Jobs at once" for video and batch jobs) and at most one budget per period (day, week, month, lifetime).
  * All applicable limits compose: rates take the minimum, budgets take the
  * minimum per period, and budgets of different periods are all enforced, each
  * over its own UTC window.
@@ -15,13 +15,14 @@
 import { ApiError } from "./api";
 import { dollarsToMicroUsd, formatMicroUsd, microUsdToDollars, type BudgetPeriod, type Policy, type PolicyBudget } from "./governance";
 
-export type RateKey = "requests_per_minute" | "tokens_per_minute" | "concurrent_requests";
+export type RateKey = "requests_per_minute" | "tokens_per_minute" | "concurrent_requests" | "concurrent_jobs";
 export type Limits = Record<RateKey, number | null> & { budgets: PolicyBudget[] };
 export const stackPeriods: BudgetPeriod[] = ["day", "week", "month", "lifetime"];
 export const rateRows: { key: RateKey; label: string; description: string; unit: string }[] = [
   { key: "requests_per_minute", label: "Requests per minute", description: "How many requests can start each minute. Fallback attempts count too.", unit: "per min" },
   { key: "tokens_per_minute", label: "Tokens per minute", description: "Input and output tokens a minute's requests can use, counted when each request starts.", unit: "per min" },
   { key: "concurrent_requests", label: "Requests running at once", description: "How many requests can be in progress at the same time.", unit: "at once" },
+  { key: "concurrent_jobs", label: "Jobs at once", description: "How many video and batch jobs can run at the same time. Jobs don't use the per-minute or requests-at-once limits.", unit: "at once" },
 ];
 export const periodName: Record<BudgetPeriod, string> = { day: "Daily", week: "Weekly", month: "Monthly", lifetime: "Lifetime" };
 /** Plain-language reset rule of a budget period. */
@@ -36,9 +37,9 @@ export function policyBudgets(policy: Pick<Policy, "budgets" | "monthly_budget_m
   return policy.monthly_budget_microusd === null ? [] : [{ period: policy.budget_period ?? "month", amount_microusd: policy.monthly_budget_microusd }];
 }
 export function limitsOf(policy: Policy): Limits {
-  return { requests_per_minute: policy.requests_per_minute, tokens_per_minute: policy.tokens_per_minute, concurrent_requests: policy.concurrent_requests, budgets: policyBudgets(policy) };
+  return { requests_per_minute: policy.requests_per_minute, tokens_per_minute: policy.tokens_per_minute, concurrent_requests: policy.concurrent_requests, concurrent_jobs: policy.concurrent_jobs ?? null, budgets: policyBudgets(policy) };
 }
-export const noLimits: Limits = { requests_per_minute: null, tokens_per_minute: null, concurrent_requests: null, budgets: [] };
+export const noLimits: Limits = { requests_per_minute: null, tokens_per_minute: null, concurrent_requests: null, concurrent_jobs: null, budgets: [] };
 export const budgetFor = (limits: Pick<Limits, "budgets"> | undefined, period: BudgetPeriod) => limits?.budgets.find(b => b.period === period)?.amount_microusd ?? null;
 const minAmount = (a: string | null, b: string | null) => a === null ? b : b === null ? a : BigInt(a) <= BigInt(b) ? a : b;
 /** All layers apply: minimum rates, and the minimum budget per period. */
@@ -46,11 +47,11 @@ export function composeLimits(...layers: (Limits | undefined)[]): Limits {
   const known = layers.filter((l): l is Limits => !!l);
   const minimum = (key: RateKey) => known.reduce<number | null>((acc, l) => l[key] === null ? acc : acc === null ? l[key] : Math.min(acc, l[key]!), null);
   const budgets = stackPeriods.flatMap(period => { const amount = known.reduce<string | null>((acc, l) => minAmount(acc, budgetFor(l, period)), null); return amount === null ? [] : [{ period, amount_microusd: amount }]; });
-  return { requests_per_minute: minimum("requests_per_minute"), tokens_per_minute: minimum("tokens_per_minute"), concurrent_requests: minimum("concurrent_requests"), budgets };
+  return { requests_per_minute: minimum("requests_per_minute"), tokens_per_minute: minimum("tokens_per_minute"), concurrent_requests: minimum("concurrent_requests"), concurrent_jobs: minimum("concurrent_jobs"), budgets };
 }
-/** The full PUT body: three explicit rate fields plus the complete stacked budget set (never the legacy fields). */
+/** The full PUT body: four explicit rate fields plus the complete stacked budget set (never the legacy fields). */
 export function limitsBody(limits: Limits) {
-  return { requests_per_minute: limits.requests_per_minute, tokens_per_minute: limits.tokens_per_minute, concurrent_requests: limits.concurrent_requests, budgets: sortBudgets(limits.budgets).map(b => ({ period: b.period, amount_microusd: b.amount_microusd })) };
+  return { requests_per_minute: limits.requests_per_minute, tokens_per_minute: limits.tokens_per_minute, concurrent_requests: limits.concurrent_requests, concurrent_jobs: limits.concurrent_jobs, budgets: sortBudgets(limits.budgets).map(b => ({ period: b.period, amount_microusd: b.amount_microusd })) };
 }
 export const rateText = (value: number | null, unit = "") => value === null ? "No limit" : `${value.toLocaleString("en-US")}${unit ? ` ${unit}` : ""}`;
 /** "$5.00 daily · $100.00 monthly", or the empty text. */
@@ -60,7 +61,7 @@ export function budgetsText(budgets: PolicyBudget[], empty = "No budget"): strin
 /** One-line summary of a layer: "60 RPM · $5.00 daily", or "No limits". */
 export function limitsSummary(limits: Partial<Limits> | null | undefined, empty = "No limits"): string {
   if (!limits) return empty;
-  const parts = [limits.requests_per_minute != null ? `${limits.requests_per_minute.toLocaleString("en-US")} RPM` : "", limits.tokens_per_minute != null ? `${limits.tokens_per_minute.toLocaleString("en-US")} TPM` : "", limits.concurrent_requests != null ? `${limits.concurrent_requests.toLocaleString("en-US")} at once` : "", limits.budgets?.length ? budgetsText(limits.budgets) : ""].filter(Boolean);
+  const parts = [limits.requests_per_minute != null ? `${limits.requests_per_minute.toLocaleString("en-US")} RPM` : "", limits.tokens_per_minute != null ? `${limits.tokens_per_minute.toLocaleString("en-US")} TPM` : "", limits.concurrent_requests != null ? `${limits.concurrent_requests.toLocaleString("en-US")} at once` : "", limits.concurrent_jobs != null ? `${limits.concurrent_jobs.toLocaleString("en-US")} ${limits.concurrent_jobs === 1 ? "job" : "jobs"} at once` : "", limits.budgets?.length ? budgetsText(limits.budgets) : ""].filter(Boolean);
   return parts.length ? parts.join(" · ") : empty;
 }
 
@@ -70,7 +71,7 @@ export type LimitsDraft = Record<RateKey, string> & { budgets: BudgetDraft[] };
 let draftKeys = 0;
 export const newBudgetKey = () => `b${++draftKeys}`;
 export function draftOf(limits: Limits): LimitsDraft {
-  return { requests_per_minute: limits.requests_per_minute?.toString() ?? "", tokens_per_minute: limits.tokens_per_minute?.toString() ?? "", concurrent_requests: limits.concurrent_requests?.toString() ?? "", budgets: limits.budgets.map(b => ({ key: `saved-${b.period}`, period: b.period, amount: microUsdToDollars(b.amount_microusd) })) };
+  return { requests_per_minute: limits.requests_per_minute?.toString() ?? "", tokens_per_minute: limits.tokens_per_minute?.toString() ?? "", concurrent_requests: limits.concurrent_requests?.toString() ?? "", concurrent_jobs: limits.concurrent_jobs?.toString() ?? "", budgets: limits.budgets.map(b => ({ key: `saved-${b.period}`, period: b.period, amount: microUsdToDollars(b.amount_microusd) })) };
 }
 export function sameDraft(a: LimitsDraft, b: LimitsDraft) {
   const budgets = (d: LimitsDraft) => JSON.stringify(sortBudgets(d.budgets.map(x => ({ period: x.period, amount_microusd: x.amount.trim() }))));
@@ -98,7 +99,7 @@ export function budgetAmountError(raw: string): string | undefined {
 /** Draft to limits; call only on a draft without errors. */
 export function draftLimits(draft: LimitsDraft): Limits {
   const int = (v: string) => v.trim() ? Number(v.trim()) : null;
-  return { requests_per_minute: int(draft.requests_per_minute), tokens_per_minute: int(draft.tokens_per_minute), concurrent_requests: int(draft.concurrent_requests), budgets: sortBudgets(draft.budgets.map(b => ({ period: b.period, amount_microusd: dollarsToMicroUsd(b.amount) }))) };
+  return { requests_per_minute: int(draft.requests_per_minute), tokens_per_minute: int(draft.tokens_per_minute), concurrent_requests: int(draft.concurrent_requests), concurrent_jobs: int(draft.concurrent_jobs), budgets: sortBudgets(draft.budgets.map(b => ({ period: b.period, amount_microusd: dollarsToMicroUsd(b.amount) }))) };
 }
 /** Rows whose typed value can't be used yet: their Effective cell shows "—" while the other rows keep theirs. */
 export type InvalidRows = { rates: RateKey[]; periods: BudgetPeriod[] };
@@ -117,7 +118,7 @@ export function draftLimitsValid(draft: LimitsDraft, errors: DraftErrors, stored
   }
   for (const b of draft.budgets) if (invalid.periods.includes(b.period)) { const i = budgets.findIndex(x => x.period === b.period); if (i >= 0) budgets.splice(i, 1); }
   if (errors.form.length) for (const s of stored.budgets) if (!draft.budgets.some(b => b.period === s.period) && !invalid.periods.includes(s.period)) invalid.periods.push(s.period);
-  return { limits: { requests_per_minute: rate("requests_per_minute"), tokens_per_minute: rate("tokens_per_minute"), concurrent_requests: rate("concurrent_requests"), budgets: sortBudgets(budgets) }, invalid };
+  return { limits: { requests_per_minute: rate("requests_per_minute"), tokens_per_minute: rate("tokens_per_minute"), concurrent_requests: rate("concurrent_requests"), concurrent_jobs: rate("concurrent_jobs"), budgets: sortBudgets(budgets) }, invalid };
 }
 export type Parent = { label: string; limits: Limits };
 export type DraftErrors = { rates: Partial<Record<RateKey, string>>; budgets: Record<string, string>; form: string[] };

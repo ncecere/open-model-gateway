@@ -58,7 +58,7 @@ async fn key_safety_findings_follow_effective_limits_and_list_visibility(pool: P
     assert_eq!(v["summary"]["high"], 2);
     assert_eq!(v["thresholds"]["unused_days"], 30);
     // A rate cap on the type default: budget still missing (medium).
-    sqlx::query("INSERT INTO workspace_type_policies(kind,requests_per_minute) VALUES('team',10)")
+    sqlx::query("INSERT INTO workspace_type_policies(kind,requests_per_minute) VALUES('team',10) ON CONFLICT(kind) DO UPDATE SET requests_per_minute=EXCLUDED.requests_per_minute")
         .execute(&pool)
         .await
         .unwrap();

@@ -50,7 +50,7 @@ describe("Create key sends its limits in the create request", () => {
     await user.type(screen.getByRole("textbox", { name: /^Requests per minute/ }), "30");
     await user.click(screen.getByRole("button", { name: "Create key" }));
     await screen.findByText("Save your API key");
-    expect(api.writes()).toEqual([{ method: "POST", url: "/api/v1/workspaces/team/keys", body: { name: "CI", expires_in_days: 30, model_ids: null, requests_per_minute: 30, tokens_per_minute: null, concurrent_requests: null, budgets: [{ period: "month", amount_microusd: "10000000" }] } }]);
+    expect(api.writes()).toEqual([{ method: "POST", url: "/api/v1/workspaces/team/keys", body: { name: "CI", expires_in_days: 30, model_ids: null, requests_per_minute: 30, tokens_per_minute: null, concurrent_requests: null, concurrent_jobs: null, budgets: [{ period: "month", amount_microusd: "10000000" }] } }]);
     expect(screen.getByText(/Key limits: 30 RPM · \$10\.00 monthly/)).toBeTruthy();
     expect(screen.queryByText(/weren't saved/)).toBeNull();
     api.client.clear();
@@ -126,7 +126,7 @@ describe("Admin › Costs › Set custom limits", () => {
     await user.type(screen.getByRole("textbox", { name: /^Daily budget \(USD\)/ }), "2.5");
     await user.click(screen.getByRole("button", { name: "Save custom limits" }));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
-    expect(api.writes()).toEqual([{ method: "PUT", url: path, body: { requests_per_minute: 60, tokens_per_minute: null, concurrent_requests: null, budgets: [{ period: "day", amount_microusd: "2500000" }, { period: "month", amount_microusd: "100000000" }] } }]);
+    expect(api.writes()).toEqual([{ method: "PUT", url: path, body: { requests_per_minute: 60, tokens_per_minute: null, concurrent_requests: null, concurrent_jobs: null, budgets: [{ period: "day", amount_microusd: "2500000" }, { period: "month", amount_microusd: "100000000" }] } }]);
     api.client.clear();
   });
 });

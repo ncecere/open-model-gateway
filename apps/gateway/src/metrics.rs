@@ -71,6 +71,8 @@ pub struct Metrics {
     pool_connections: Family<L1, Gauge>,
     pool_max: Gauge,
     collection_errors: Family<L1, Counter>,
+    file_store_ops: Family<L3, Counter>,
+    file_store_bytes: Family<L2, Counter>,
     providers: Mutex<HashSet<String>>,
     models: Mutex<HashSet<String>>,
     reservations_refreshed: Mutex<Option<Instant>>,
@@ -164,6 +166,8 @@ impl Metrics {
             pool_connections: Family::default(),
             pool_max: Gauge::default(),
             collection_errors: Family::default(),
+            file_store_ops: Family::default(),
+            file_store_bytes: Family::default(),
             providers: Mutex::default(),
             models: Mutex::default(),
             reservations_refreshed: Mutex::default(),
@@ -250,6 +254,16 @@ impl Metrics {
             "metrics_collection_errors",
             "Scrape-time collectors that failed (values keep their last reading)",
             metrics.collection_errors.clone(),
+        );
+        registry.register(
+            "file_store_operations",
+            "File store operations by backend (local, s3), operation and outcome (ok or a safe error code)",
+            metrics.file_store_ops.clone(),
+        );
+        registry.register(
+            "file_store_bytes",
+            "Plaintext bytes written (put) and read to the end (get) by backend",
+            metrics.file_store_bytes.clone(),
         );
         Self {
             registry,
@@ -344,7 +358,8 @@ impl Metrics {
             InferenceError::Busy => "policy",
             InferenceError::BudgetExceeded(s)
             | InferenceError::UnresolvedUsage(s)
-            | InferenceError::TokenReservationExceedsLimit(s) => scope(s),
+            | InferenceError::TokenReservationExceedsLimit(s)
+            | InferenceError::JobLimitExceeded(s) => scope(s),
             _ => return,
         };
         self.denials
@@ -370,6 +385,29 @@ impl Metrics {
             .get_or_create(&[("result", result.to_owned())])
             .inc();
         self.alert_rule_failures.inc_by(failed_rules as u64);
+    }
+
+    /// File store operation outcome. All labels come from fixed sets: backend
+    /// kind, operation name and `FileStoreError::code()`.
+    pub fn observe_file_store(
+        &self,
+        backend: &'static str,
+        op: &'static str,
+        error: Option<&'static str>,
+    ) {
+        self.file_store_ops
+            .get_or_create(&[
+                ("backend", backend.to_owned()),
+                ("op", op.to_owned()),
+                ("outcome", error.unwrap_or("ok").to_owned()),
+            ])
+            .inc();
+    }
+
+    pub fn observe_file_store_bytes(&self, backend: &'static str, op: &'static str, bytes: u64) {
+        self.file_store_bytes
+            .get_or_create(&[("backend", backend.to_owned()), ("op", op.to_owned())])
+            .inc_by(bytes);
     }
 
     fn collection_error(&self, collector: &'static str) {
@@ -586,6 +624,9 @@ mod tests {
         m.observe_settlement(Settlement::Settled);
         m.observe_settlement(Settlement::Unknown);
         m.observe_alert_run("ok", 2);
+        m.observe_file_store("s3", "put", None);
+        m.observe_file_store("local", "get", Some("integrity"));
+        m.observe_file_store_bytes("s3", "put", 42);
         let out = m.render(None).await;
         for expected in [
             r#"gateway_build_info{version=""#,
@@ -601,6 +642,9 @@ mod tests {
             r#"gateway_settlements_total{outcome="unknown"} 1"#,
             r#"gateway_alert_evaluations_total{result="ok"} 1"#,
             "gateway_alert_rule_failures_total 2",
+            r#"gateway_file_store_operations_total{backend="s3",op="put",outcome="ok"} 1"#,
+            r#"gateway_file_store_operations_total{backend="local",op="get",outcome="integrity"} 1"#,
+            r#"gateway_file_store_bytes_total{backend="s3",op="put"} 42"#,
             "# EOF",
         ] {
             assert!(out.contains(expected), "missing {expected} in\n{out}");

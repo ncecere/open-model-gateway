@@ -1141,3 +1141,290 @@ async fn http_video_routes_render_gateway_ids_and_scope_by_key(pool: PgPool) {
     assert_eq!(status, 400);
     assert_eq!(fake.calls(), ["create_video"]);
 }
+
+/// Active job slots of a workspace as admission counts them (0018).
+async fn job_count(f: &Fixture) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id LEFT JOIN async_jobs j ON j.execution_id=r.execution_id WHERE r.workspace_id=$1 AND e.workload_kind IN('videos','batches') AND r.state='pending' AND r.lease_expires_at>now() AND NOT coalesce(j.state IN('completed','failed','cancelled','expired') OR j.cancel_requested_at IS NOT NULL,false)")
+        .bind(f.principal.workspace_id)
+        .fetch_one(&f.store.pool)
+        .await
+        .unwrap()
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn jobs_hold_job_slots_not_interactive_limits(pool: PgPool) {
+    let f = fixture(pool).await;
+    batch_setup(&f).await;
+    let fake = Fake::default();
+    let j = jobs(&f, &fake, false);
+    let m = "company/smart";
+    // Type defaults start at 2 jobs at once (migration 0018).
+    let default: Option<i64> = sqlx::query_scalar(
+        "SELECT concurrent_jobs FROM workspace_type_policies WHERE kind='personal'",
+    )
+    .fetch_one(&f.store.pool)
+    .await
+    .unwrap();
+    assert_eq!(default, Some(2));
+    // Interactive limits a 3-line batch (360 reserved tokens) would exceed on its own.
+    f.policy(
+        "workspace_local_policies",
+        Some(1),
+        Some(200),
+        Some(1),
+        None,
+    )
+    .await;
+    let three = [(10, m), (20, m), (30, m)];
+    let mut batches = Vec::new();
+    for _ in 0..2 {
+        let file = upload(&j, &f, &three).await.unwrap();
+        fake.push_batch(upstream_batch(BatchStatus::InProgress, None));
+        let request = Uuid::new_v4();
+        let (row, _) = j
+            .create_batch(f.principal, request, &client_id(FILE_PREFIX, file.id), None)
+            .await
+            .expect("batches are exempt from requests/tokens per minute");
+        batches.push((request, client_id("batch_", row.id)));
+    }
+    assert_eq!(job_count(&f).await, 2);
+    // Accepted jobs hold no request slot and no per-minute allowance.
+    let chat = f.start();
+    crate::governance::admit(
+        &f.store,
+        &chat,
+        &crate::governance::tests::db::request(),
+        60,
+    )
+    .await
+    .expect("jobs do not consume interactive limits");
+    crate::governance::finish(
+        &f.store,
+        &crate::governance::tests::db::done(chat.id, Some(10), Some(5)),
+    )
+    .await
+    .unwrap();
+    // A third job is refused by the job limit; nothing is sent upstream and
+    // the input file is released.
+    let file = upload(&j, &f, &three).await.unwrap();
+    let third = client_id(FILE_PREFIX, file.id);
+    let denied = j
+        .create_batch(f.principal, Uuid::new_v4(), &third, None)
+        .await;
+    assert_eq!(
+        denied.err(),
+        Some(JobError::Inference(InferenceError::JobLimitExceeded(
+            crate::inference::error::LimitScope::Workspace
+        )))
+    );
+    assert_eq!(
+        InferenceError::JobLimitExceeded(crate::inference::error::LimitScope::Workspace).code(),
+        "job_limit_exceeded"
+    );
+    let claimed: Option<Uuid> =
+        sqlx::query_scalar("SELECT claimed_by_execution_id FROM async_job_files WHERE id=$1")
+            .bind(file.id)
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+    assert_eq!(claimed, None);
+    assert_eq!(
+        fake.calls()
+            .iter()
+            .filter(|c| **c == "create_batch")
+            .count(),
+        2
+    );
+    // Cancel releases the slot at once (the provider is still cancelling).
+    fake.push_batch(upstream_batch(BatchStatus::Cancelling, None));
+    j.cancel_batch(&f.principal, &batches[0].1).await.unwrap();
+    assert_eq!(job_count(&f).await, 1);
+    fake.push_batch(upstream_batch(BatchStatus::InProgress, None));
+    let replacement = Uuid::new_v4();
+    j.create_batch(f.principal, replacement, &third, None)
+        .await
+        .unwrap();
+    // A terminal state releases it: complete the second batch.
+    let file = upload(&j, &f, &three).await.unwrap();
+    let fourth = client_id(FILE_PREFIX, file.id);
+    assert!(matches!(
+        j.create_batch(f.principal, Uuid::new_v4(), &fourth, None)
+            .await,
+        Err(JobError::Inference(InferenceError::JobLimitExceeded(_)))
+    ));
+    fake.push_batch(upstream_batch(
+        BatchStatus::Completed,
+        Some(tokens(250, 40)),
+    ));
+    j.get_batch(&f.principal, &batches[1].1).await.unwrap();
+    assert_eq!(job_count(&f).await, 1);
+    fake.push_batch(upstream_batch(BatchStatus::InProgress, None));
+    let last = Uuid::new_v4();
+    j.create_batch(f.principal, last, &fourth, None)
+        .await
+        .unwrap();
+    // Lease expiry releases a slot too (the hold stays for reconciliation).
+    assert_eq!(job_count(&f).await, 2);
+    sqlx::query("UPDATE governance_reservations SET lease_expires_at=now()-interval '1 second' WHERE execution_id=$1").bind(last).execute(&f.store.pool).await.unwrap();
+    assert_eq!(job_count(&f).await, 1);
+    // A key may tighten the limit (key scope is reported).
+    sqlx::query(
+        "INSERT INTO key_policies(workspace_id,governance_key_id,concurrent_jobs) VALUES($1,$2,1)",
+    )
+    .bind(f.principal.workspace_id)
+    .bind(f.principal.key_id)
+    .execute(&f.store.pool)
+    .await
+    .unwrap();
+    let file = upload(&j, &f, &three).await.unwrap();
+    assert_eq!(
+        j.create_batch(
+            f.principal,
+            Uuid::new_v4(),
+            &client_id(FILE_PREFIX, file.id),
+            None
+        )
+        .await
+        .err(),
+        Some(JobError::Inference(InferenceError::JobLimitExceeded(
+            crate::inference::error::LimitScope::ApiKey
+        )))
+    );
+    // Budgets still apply in full (ceiling reservation as before).
+    sqlx::query("DELETE FROM key_policies")
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    crate::governance::set_test_budget(
+        &f.store.pool,
+        "local",
+        None,
+        Some(f.principal.workspace_id),
+        None,
+        "month",
+        Some(1),
+    )
+    .await;
+    assert!(matches!(
+        j.create_batch(
+            f.principal,
+            Uuid::new_v4(),
+            &client_id(FILE_PREFIX, file.id),
+            None
+        )
+        .await,
+        Err(JobError::Inference(InferenceError::BudgetExceeded(_)))
+    ));
+    let report = crate::governance::totals::verify(&f.store).await.unwrap();
+    assert!(report.consistent(), "{report:?}");
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn video_jobs_are_exempt_from_per_minute_limits(pool: PgPool) {
+    let f = fixture(pool).await;
+    video_setup(&f).await;
+    let fake = Fake::default();
+    let j = jobs(&f, &fake, false);
+    // One request per minute and at once: both videos still start (job slots).
+    f.policy("workspace_local_policies", Some(1), Some(1), Some(1), None)
+        .await;
+    for _ in 0..2 {
+        fake.push_video(upstream_video(JobState::Queued, Some(8)));
+        j.create_video(f.principal, video_request(), Uuid::new_v4())
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        j.create_video(f.principal, video_request(), Uuid::new_v4())
+            .await
+            .err(),
+        Some(JobError::Inference(InferenceError::JobLimitExceeded(
+            crate::inference::error::LimitScope::Workspace
+        )))
+    );
+    // Raising the workspace's job limit (platform override) admits a third.
+    sqlx::query("INSERT INTO workspace_platform_policy_overrides(workspace_id,concurrent_jobs) VALUES($1,3)")
+        .bind(f.principal.workspace_id)
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    fake.push_video(upstream_video(JobState::Queued, Some(8)));
+    j.create_video(f.principal, video_request(), Uuid::new_v4())
+        .await
+        .unwrap();
+    // The installation-wide limit still applies on top.
+    sqlx::query("INSERT INTO installation_policy(singleton,concurrent_jobs) VALUES(true,3) ON CONFLICT(singleton) DO UPDATE SET concurrent_jobs=3")
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE workspace_platform_policy_overrides SET concurrent_jobs=10")
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        j.create_video(f.principal, video_request(), Uuid::new_v4())
+            .await
+            .err(),
+        Some(JobError::Inference(InferenceError::JobLimitExceeded(
+            crate::inference::error::LimitScope::Installation
+        )))
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn concurrent_job_admissions_never_exceed_the_limit(pool: PgPool) {
+    let f = fixture(pool).await;
+    video_setup(&f).await;
+    let fake = Fake::default();
+    let j = jobs(&f, &fake, false);
+    for _ in 0..6 {
+        fake.push_video(upstream_video(JobState::Queued, Some(8)));
+    }
+    // Admission checks and inserts under the installation lock, so parallel
+    // submissions cannot both take the last slot.
+    let results = futures_util::future::join_all(
+        (0..6).map(|_| j.create_video(f.principal, video_request(), Uuid::new_v4())),
+    )
+    .await;
+    let admitted = results.iter().filter(|r| r.is_ok()).count();
+    assert_eq!(admitted, 2, "{results:?}");
+    assert!(results.iter().filter_map(|r| r.as_ref().err()).all(|e| *e
+        == JobError::Inference(InferenceError::JobLimitExceeded(
+            crate::inference::error::LimitScope::Workspace
+        ))));
+    assert_eq!(job_count(&f).await, 2);
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn video_without_a_supported_provider_is_refused_before_admission(pool: PgPool) {
+    let f = fixture(pool).await;
+    video_setup(&f).await;
+    // The production OpenAI adapter: its Videos API was retired on 2026-09-24.
+    let mut registry = ProviderRegistry::default();
+    registry
+        .register(Arc::new(
+            crate::providers::openai::OpenAiAdapter::new(Arc::new(
+                crate::providers::secrets::EnvSecrets::new([]),
+            ))
+            .unwrap(),
+        ))
+        .unwrap();
+    let j = Jobs::with(f.store.clone(), registry, JobLimits::default());
+    let request_id = Uuid::new_v4();
+    match j
+        .create_video(f.principal, video_request(), request_id)
+        .await
+    {
+        Err(JobError::Conflict(code, message)) => {
+            assert_eq!(code, "unsupported_capability");
+            assert!(message.contains("2026-09-24") && message.contains("OpenRouter"));
+        }
+        other => panic!("expected an explicit refusal, got {:?}", other.map(|_| ())),
+    }
+    // Nothing was admitted or fabricated.
+    let rows: (i64, i64, i64) = sqlx::query_as("SELECT (SELECT count(*) FROM inference_executions),(SELECT count(*) FROM governance_reservations),(SELECT count(*) FROM async_jobs)")
+        .fetch_one(&f.store.pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, (0, 0, 0));
+}

@@ -4,7 +4,7 @@
 use super::tests::db::{Fixture, amounts, fixture};
 use super::*;
 use crate::inference::{
-    realtime::{RealtimeFinish, RealtimeUsage, ResponseStatus},
+    realtime::{RealtimeFinish, RealtimeUsage, ResponseBound, ResponseStatus},
     repository::AttemptTelemetry,
 };
 use serde_json::{Value, json};
@@ -66,10 +66,31 @@ fn finished(id: Uuid, unopened: bool) -> RealtimeFinish {
         elapsed_ms: 5,
         telemetry: AttemptTelemetry::default(),
         unopened_request: unopened,
-        window_output_tokens: 100,
+        window: FULL,
     }
 }
+/// Unknown context: input 1000 (the ceiling) per modality, output 100 →
+/// 1000×($4 + $0.40 + $32 + $0.40)/M + 100×($16 + $64)/M = 44,800 µUSD.
+const FULL: ResponseBound = ResponseBound {
+    text_input: None,
+    audio_input: None,
+    output: 100,
+};
 const WINDOW: i64 = 44_800;
+/// Admission: 256 text tokens of framing, no audio, output 100 →
+/// 1024 + ceil(102.4) + 1600 + 6400 = 9,127 µUSD (356 tokens).
+const ADMISSION: i64 = 9_127;
+fn admitted() -> ResponseBound {
+    ResponseBound::admission(100)
+}
+/// A context-sized window (text, audio input; output 100).
+fn sized(text: u64, audio: u64) -> ResponseBound {
+    ResponseBound {
+        text_input: Some(text),
+        audio_input: Some(audio),
+        output: 100,
+    }
+}
 const U: RealtimeUsage = RealtimeUsage {
     input_text_tokens: 10,
     cached_text_tokens: 4,
@@ -185,10 +206,22 @@ async fn windows_extend_settle_and_finish_on_one_reservation(pool: PgPool) {
         .unwrap();
     assert_eq!(
         amounts(&f, start.id).await,
-        ("pending".into(), Some(WINDOW), None, false)
+        ("pending".into(), Some(ADMISSION), None, false)
     );
-    // Response 1 uses the admission window.
-    realtime::open_response(&f.store, start.id, 1, 100)
+    // Response 1 resizes the admission window to its context:
+    // 300×4.4 + 100×32.4 + 8000 = 12,560 µUSD.
+    realtime::reserve_window(
+        &f.store,
+        &f.principal,
+        start.id,
+        "company/smart",
+        sized(300, 100),
+        Some(admitted()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(amounts(&f, start.id).await.1, Some(12_560));
+    realtime::open_response(&f.store, start.id, 1, sized(300, 100))
         .await
         .unwrap();
     realtime::settle_response(
@@ -197,7 +230,7 @@ async fn windows_extend_settle_and_finish_on_one_reservation(pool: PgPool) {
         1,
         Some(ResponseStatus::Completed),
         Some(U),
-        100,
+        sized(300, 100),
     )
     .await
     .unwrap();
@@ -205,12 +238,19 @@ async fn windows_extend_settle_and_finish_on_one_reservation(pool: PgPool) {
         amounts(&f, start.id).await,
         ("pending".into(), Some(RESPONSE), None, false)
     );
-    // Response 2 extends by one window; its usage is unknown and keeps it.
-    realtime::reserve_window(&f.store, &f.principal, start.id, "company/smart", 100)
-        .await
-        .unwrap();
+    // Response 2 adds a window at the context cap; its usage is unknown and keeps it.
+    realtime::reserve_window(
+        &f.store,
+        &f.principal,
+        start.id,
+        "company/smart",
+        FULL,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(amounts(&f, start.id).await.1, Some(RESPONSE + WINDOW));
-    realtime::open_response(&f.store, start.id, 2, 100)
+    realtime::open_response(&f.store, start.id, 2, FULL)
         .await
         .unwrap();
     realtime::settle_response(
@@ -219,20 +259,27 @@ async fn windows_extend_settle_and_finish_on_one_reservation(pool: PgPool) {
         2,
         Some(ResponseStatus::Completed),
         None,
-        100,
+        FULL,
     )
     .await
     .unwrap();
     // A response cannot settle twice.
     assert!(
-        realtime::settle_response(&f.store, start.id, 2, None, Some(U), 100)
+        realtime::settle_response(&f.store, start.id, 2, None, Some(U), FULL)
             .await
             .is_err()
     );
     // An extension the client never used is released at the end.
-    realtime::reserve_window(&f.store, &f.principal, start.id, "company/smart", 100)
-        .await
-        .unwrap();
+    realtime::reserve_window(
+        &f.store,
+        &f.principal,
+        start.id,
+        "company/smart",
+        FULL,
+        None,
+    )
+    .await
+    .unwrap();
     realtime::finish(&f.store, &finished(start.id, false))
         .await
         .unwrap();
@@ -295,13 +342,61 @@ async fn extensions_respect_budgets_tokens_per_minute_and_live_authorization(poo
     admit_workload_for_deployment(&f.store, &start, &admission(100), 960, &d)
         .await
         .unwrap();
-    realtime::reserve_window(&f.store, &f.principal, start.id, "company/smart", 100)
-        .await
-        .unwrap();
+    realtime::reserve_window(
+        &f.store,
+        &f.principal,
+        start.id,
+        "company/smart",
+        FULL,
+        Some(admitted()),
+    )
+    .await
+    .unwrap();
+    realtime::reserve_window(
+        &f.store,
+        &f.principal,
+        start.id,
+        "company/smart",
+        FULL,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(amounts(&f, start.id).await.1, Some(2 * WINDOW));
     assert_eq!(
-        realtime::reserve_window(&f.store, &f.principal, start.id, "company/smart", 100).await,
+        realtime::reserve_window(
+            &f.store,
+            &f.principal,
+            start.id,
+            "company/smart",
+            FULL,
+            None
+        )
+        .await,
         Err(InferenceError::BudgetExceeded(LimitScope::Workspace))
     );
+    // Shrinking a reserved window only releases, even with no budget left.
+    realtime::reserve_window(
+        &f.store,
+        &f.principal,
+        start.id,
+        "company/smart",
+        admitted(),
+        Some(FULL),
+    )
+    .await
+    .unwrap();
+    assert_eq!(amounts(&f, start.id).await.1, Some(WINDOW + ADMISSION));
+    realtime::reserve_window(
+        &f.store,
+        &f.principal,
+        start.id,
+        "company/smart",
+        FULL,
+        Some(admitted()),
+    )
+    .await
+    .unwrap();
     set_test_budget(
         &f.store.pool,
         "local",
@@ -315,11 +410,26 @@ async fn extensions_respect_budgets_tokens_per_minute_and_live_authorization(poo
     // Tokens per minute: every window counts in the session's admission minute.
     f.policy("workspace_local_policies", None, Some(3 * 1100), None, None)
         .await;
-    realtime::reserve_window(&f.store, &f.principal, start.id, "company/smart", 100)
-        .await
-        .unwrap();
+    realtime::reserve_window(
+        &f.store,
+        &f.principal,
+        start.id,
+        "company/smart",
+        FULL,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(
-        realtime::reserve_window(&f.store, &f.principal, start.id, "company/smart", 100).await,
+        realtime::reserve_window(
+            &f.store,
+            &f.principal,
+            start.id,
+            "company/smart",
+            FULL,
+            None
+        )
+        .await,
         Err(InferenceError::Busy)
     );
     f.policy("workspace_local_policies", None, None, None, None)
@@ -331,7 +441,15 @@ async fn extensions_respect_budgets_tokens_per_minute_and_live_authorization(poo
         .await
         .unwrap();
     assert_eq!(
-        realtime::reserve_window(&f.store, &f.principal, start.id, "company/smart", 100).await,
+        realtime::reserve_window(
+            &f.store,
+            &f.principal,
+            start.id,
+            "company/smart",
+            FULL,
+            None
+        )
+        .await,
         Err(InferenceError::ModelUnavailable)
     );
     // An unopened forwarded request keeps its window as unknown.
@@ -354,7 +472,7 @@ async fn pricing_must_be_v3_and_unpriced_sessions_stay_unknown(pool: PgPool) {
     admit_workload_for_deployment(&f.store, &start, &admission(100), 960, &d)
         .await
         .unwrap();
-    realtime::open_response(&f.store, start.id, 1, 100)
+    realtime::open_response(&f.store, start.id, 1, admitted())
         .await
         .unwrap();
     realtime::settle_response(
@@ -363,7 +481,7 @@ async fn pricing_must_be_v3_and_unpriced_sessions_stay_unknown(pool: PgPool) {
         1,
         Some(ResponseStatus::Completed),
         Some(U),
-        100,
+        admitted(),
     )
     .await
     .unwrap();
@@ -409,7 +527,7 @@ async fn lease_expiry_closes_open_responses_and_keeps_their_windows(pool: PgPool
     admit_workload_for_deployment(&f.store, &start, &admission(100), 960, &d)
         .await
         .unwrap();
-    realtime::open_response(&f.store, start.id, 1, 100)
+    realtime::open_response(&f.store, start.id, 1, admitted())
         .await
         .unwrap();
     sqlx::query("UPDATE governance_reservations SET lease_expires_at=now()-interval '1 second' WHERE execution_id=$1")
@@ -417,7 +535,7 @@ async fn lease_expiry_closes_open_responses_and_keeps_their_windows(pool: PgPool
     assert_eq!(reconcile_expired(&f.store, 10).await.unwrap(), 1);
     assert_eq!(
         amounts(&f, start.id).await,
-        ("unknown".into(), Some(WINDOW), None, false)
+        ("unknown".into(), Some(ADMISSION), None, false)
     );
     let state: String =
         sqlx::query_scalar("SELECT state FROM realtime_responses WHERE execution_id=$1")
@@ -431,5 +549,98 @@ async fn lease_expiry_closes_open_responses_and_keeps_their_windows(pool: PgPool
         realtime::finish(&f.store, &finished(start.id, false))
             .await
             .is_err()
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn context_sized_windows_settle_known_and_flag_usage_above_them(pool: PgPool) {
+    let f = fixture(pool).await;
+    let d = realtime_model(&f, Some(lines())).await;
+    let start = ExecutionStart {
+        streamed: true,
+        ..f.start()
+    };
+    admit_workload_for_deployment(&f.store, &start, &admission(100), 960, &d)
+        .await
+        .unwrap();
+    let reserved = |id| {
+        let pool = f.store.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, Option<i64>>(
+                "SELECT reserved_tokens FROM governance_reservations WHERE execution_id=$1",
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(reserved(start.id).await, Some(256 + 100));
+    // Within its context-sized window: known, bounded.
+    let w = sized(20, 25);
+    realtime::reserve_window(
+        &f.store,
+        &f.principal,
+        start.id,
+        "company/smart",
+        w,
+        Some(admitted()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(reserved(start.id).await, Some(45 + 100));
+    realtime::open_response(&f.store, start.id, 1, w)
+        .await
+        .unwrap();
+    realtime::settle_response(
+        &f.store,
+        start.id,
+        1,
+        Some(ResponseStatus::Completed),
+        Some(U),
+        w,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        amounts(&f, start.id).await,
+        ("pending".into(), Some(RESPONSE), None, false)
+    );
+    // Audio input above the window's audio bound: valued, but unbounded.
+    let small = sized(20, 19);
+    realtime::reserve_window(
+        &f.store,
+        &f.principal,
+        start.id,
+        "company/smart",
+        small,
+        None,
+    )
+    .await
+    .unwrap();
+    realtime::open_response(&f.store, start.id, 2, small)
+        .await
+        .unwrap();
+    realtime::settle_response(
+        &f.store,
+        start.id,
+        2,
+        Some(ResponseStatus::Completed),
+        Some(U),
+        small,
+    )
+    .await
+    .unwrap();
+    realtime::finish(&f.store, &finished(start.id, false))
+        .await
+        .unwrap();
+    assert_eq!(
+        amounts(&f, start.id).await,
+        (
+            "settled".into(),
+            Some(2 * RESPONSE),
+            Some(2 * RESPONSE),
+            true
+        )
     );
 }

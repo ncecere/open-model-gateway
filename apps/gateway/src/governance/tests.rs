@@ -699,7 +699,7 @@ pub(crate) mod db {
         }
         f.policy("installation_policy", None, None, None, None)
             .await;
-        sqlx::query("INSERT INTO workspace_type_policies(kind,concurrent_requests) VALUES('personal',1),('team',1)").execute(&f.store.pool).await.unwrap();
+        sqlx::query("INSERT INTO workspace_type_policies(kind,concurrent_requests) VALUES('personal',1),('team',1) ON CONFLICT(kind) DO UPDATE SET concurrent_requests=EXCLUDED.concurrent_requests").execute(&f.store.pool).await.unwrap();
         admit(&f.store, &f.start(), &request(), 30).await.unwrap();
         let mut team = f.start();
         team.principal = f.team;
@@ -1952,7 +1952,7 @@ pub(crate) mod db {
         let f = fixture(pool).await;
         f.store.freeze_admission_clock().await.unwrap();
         sqlx::query(
-            "INSERT INTO workspace_type_policies(kind,requests_per_minute) VALUES('personal',1)",
+            "INSERT INTO workspace_type_policies(kind,requests_per_minute) VALUES('personal',1) ON CONFLICT(kind) DO UPDATE SET requests_per_minute=EXCLUDED.requests_per_minute",
         )
         .execute(&f.store.pool)
         .await

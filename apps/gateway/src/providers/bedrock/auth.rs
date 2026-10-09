@@ -166,7 +166,8 @@ impl Policy {
         Self::new(profiles.split(','), endpoints.split(','))
     }
 
-    fn allows(&self, auth: &AwsAuth) -> bool {
+    /// Also used by the S3 file store (`GATEWAY_S3_AUTH`).
+    pub(crate) fn allows(&self, auth: &AwsAuth) -> bool {
         match auth {
             AwsAuth::Profile(name) => self.profiles.contains(name),
             AwsAuth::Default | AwsAuth::Role { .. } => true,
@@ -285,7 +286,8 @@ pub(super) async fn assume_role_provider(
 }
 
 /// Credentials for a plan. No network I/O until the SDK first needs an identity.
-pub(super) async fn credentials(auth: &AwsAuth, region: &str) -> SharedCredentialsProvider {
+/// Shared with the S3 file store.
+pub(crate) async fn credentials(auth: &AwsAuth, region: &str) -> SharedCredentialsProvider {
     let server = || {
         DefaultCredentialsChain::builder()
             .region(Region::new(region.to_owned()))

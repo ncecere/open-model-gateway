@@ -158,6 +158,7 @@ pub(super) struct NewKey {
     requests_per_minute: Option<i64>,
     tokens_per_minute: Option<i64>,
     concurrent_requests: Option<i64>,
+    concurrent_jobs: Option<i64>,
     budgets: Option<Vec<governance::BudgetInput>>,
 }
 #[derive(Deserialize)]
@@ -230,6 +231,7 @@ pub(super) async fn create_key(
             b.requests_per_minute,
             b.tokens_per_minute,
             b.concurrent_requests,
+            b.concurrent_jobs,
         ],
         b.budgets.as_deref(),
     )?;

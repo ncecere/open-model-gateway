@@ -141,12 +141,19 @@ export type RealtimeResponse = {
   output_text_tokens: string | null; output_audio_tokens: string | null; cost_microusd: string | null; held_microusd: string | null;
   unbounded_cost: boolean; started_at: string; completed_at: string | null; duration_ms: number | null;
 };
-/** Timeline state of a realtime response: its upstream status, else its accounting state. */
+/**
+ * Timeline state of a realtime response: its upstream status, else its accounting state. `incomplete` (stopped by
+ * `max_output_tokens` or a content filter) produced billed output, like a Chat "length" finish, so it is not a failure.
+ */
 export function realtimeResponseState(r: Pick<RealtimeResponse, "state" | "status">): string {
-  if (r.status === "completed") return "succeeded";
+  if (r.status === "completed" || r.status === "incomplete") return "succeeded";
   if (r.status === "cancelled") return "cancelled";
-  if (r.status === "failed" || r.status === "incomplete") return "failed";
+  if (r.status === "failed") return "failed";
   return r.state === "pending" ? "in_progress" : "unknown";
+}
+/** Display label of a realtime response's upstream status. */
+export function realtimeStatusLabel(status: string): string {
+  return status === "completed" ? requestStatusLabel("succeeded") : status === "incomplete" ? "Incomplete" : requestStatusLabel(status);
 }
 /** "12 text · 340 audio (40 cached)" for one direction of a realtime response. */
 export function modalityText(text: string | null, audio: string | null, cached?: string | null): string {

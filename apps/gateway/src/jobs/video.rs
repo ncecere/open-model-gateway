@@ -7,6 +7,9 @@ use uuid::Uuid;
 use super::{store::Observation, *};
 use crate::inference::{types::WorkloadKind, workload::OutputReservation};
 
+/// `POST /v1/videos` when no adapter offers video generation.
+pub const NO_VIDEO_PROVIDER: &str = "Video generation has no supported provider: OpenAI shut down the Sora 2 models and the Videos API on 2026-09-24. An OpenRouter video adapter is planned.";
+
 fn observation(v: &UpstreamVideo) -> Observation<'_> {
     Observation {
         state: v.state,
@@ -88,6 +91,14 @@ impl Jobs {
         request_id: Uuid,
     ) -> JobResult<JobRow> {
         request.validate()?;
+        // No registered adapter offers video generation (OpenAI retired its
+        // Videos API): refuse explicitly before admission, never a job.
+        if !self.registry.supports(ApiProtocol::Videos) {
+            return Err(JobError::Conflict(
+                "unsupported_capability",
+                NO_VIDEO_PROVIDER,
+            ));
+        }
         let model = request.model.clone();
         let (target, adapter) = self
             .select(

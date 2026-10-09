@@ -19,6 +19,16 @@ aws-smithy-types = { version = "1", features = ["http-body-1-x"] }
 aws-smithy-runtime-api = { version = "1", features = ["client"] }
 aws-smithy-eventstream = "=0.60.18"
 aws-smithy-async = "1"
+# File store (docs/file-storage.md): S3-compatible backend. Same SDK generation as
+# Bedrock (shared smithy/runtime crates); request checksums "when_required" for MinIO/RustFS.
+aws-sdk-s3 = { version = "=1.122.0", default-features = false, features = ["rt-tokio"] }
+# Mandatory streaming AES-256-GCM encryption of every stored object.
+aes-gcm = { version = "=0.10.3", features = ["zeroize"] }
+base64 = "0.22"
+bytes = "1"
+futures = "0.3"
+libc = "0.2"
+zeroize = "1"
 http-body = "1"
 http-body-util = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -40,7 +50,7 @@ serde_json = { version = "1", features = ["raw_value"] }
 sha2 = "0.10"
 subtle = "2"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "uuid", "migrate", "macros", "json", "chrono"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "time", "sync", "process"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "time", "sync", "process", "fs", "io-util"] }
 # Realtime upstream WebSocket (same tungstenite as axum's `ws`); TLS uses an explicit
 # ring-backed rustls config with webpki roots; no proxies, redirects or retries.
 tokio-tungstenite = { version = "=0.29.0", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
@@ -54,3 +64,4 @@ uuid = { version = "1", features = ["v4", "serde"] }
 
 [dev-dependencies]
 tempfile = "3"
+proptest = { version = "=1.11.0", default-features = false, features = ["std"] }

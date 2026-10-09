@@ -166,7 +166,7 @@ describe("D-6 sticky save bar", () => {
 });
 
 describe("D-7 limits editor while some rows are invalid", () => {
-  const parent: Limits = { requests_per_minute: 60, tokens_per_minute: 1000, concurrent_requests: null, budgets: [{ period: "month", amount_microusd: "100000000" }] };
+  const parent: Limits = { requests_per_minute: 60, tokens_per_minute: 1000, concurrent_requests: null, concurrent_jobs: null, budgets: [{ period: "month", amount_microusd: "100000000" }] };
   it("says a negative number must be positive", () => {
     expect(rateError("-3")).toBe("Must be a positive whole number.");
     expect(rateError("0")).toBe("Must be a positive whole number.");
@@ -180,8 +180,8 @@ describe("D-7 limits editor while some rows are invalid", () => {
     expect(valid.limits.budgets).toEqual([{ period: "month", amount_microusd: "5000000" }]);
     const html = markup(<LimitsTable caption="Limits" scopeLabel="This workspace" draft={draft} editing errors={errors} mode="tighten" inherited={{ label: "Inherited", limits: parent }} effective={{ limits: { ...parent, requests_per_minute: null, budgets: [{ period: "month", amount_microusd: "5000000" }] }, invalid: valid.invalid }} />);
     const doc = new DOMParser().parseFromString(html, "text/html"), cells = [...doc.querySelectorAll("tbody tr")].map(r => [...r.querySelectorAll("td")].at(-1)!.textContent);
-    // Requests per minute (invalid), Tokens per minute (unchanged), Running at once, Daily (invalid), Monthly (unchanged).
-    expect(cells).toEqual(["—", "1,000", "No limit", "—", "$5.00"]);
+    // Requests per minute (invalid), Tokens per minute (unchanged), Running at once, Jobs at once, Daily (invalid), Monthly (unchanged).
+    expect(cells).toEqual(["—", "1,000", "No limit", "No limit", "—", "$5.00"]);
     expect(html).toContain("Must be a positive whole number.");
   });
 });
@@ -279,7 +279,7 @@ describe("Polish", () => {
     expect(reasonText({ code: "not_selected", layer: "workspace" }, "team")).toContain("A workspace admin can add it from Models.");
   });
   it("keeps limit help in plain words", () => {
-    const html = markup(<LimitsTable caption="Limits" scopeLabel="Here" draft={draftOf({ requests_per_minute: null, tokens_per_minute: null, concurrent_requests: null, budgets: [] })} editing={false} />);
+    const html = markup(<LimitsTable caption="Limits" scopeLabel="Here" draft={draftOf({ requests_per_minute: null, tokens_per_minute: null, concurrent_requests: null, concurrent_jobs: null, budgets: [] })} editing={false} />);
     expect(html).not.toContain("Upstream attempts admitted"); expect(html).toContain("How many requests can start each minute");
   });
 });

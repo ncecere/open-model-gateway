@@ -336,7 +336,8 @@ fn error_body(e: InferenceError) -> Value {
         InferenceError::Busy
         | InferenceError::BudgetExceeded(_)
         | InferenceError::UnresolvedUsage(_)
-        | InferenceError::TokenReservationExceedsLimit(_) => "rate_limit_error",
+        | InferenceError::TokenReservationExceedsLimit(_)
+        | InferenceError::JobLimitExceeded(_) => "rate_limit_error",
         InferenceError::UpstreamUnavailable => "overloaded_error",
         _ => "api_error",
     };

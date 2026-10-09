@@ -1,9 +1,12 @@
 //! Realtime session accounting. A session is one upstream attempt with one
-//! reservation; its hold is a sum of bounded *response windows*:
+//! reservation; its hold is a sum of bounded *response windows*, each sized
+//! from the session's actual context ([`ResponseBound`], capped at the
+//! price's input ceiling as the context window):
 //!
-//! - admission (shared `admit_workload_for_deployment`) holds one window;
-//! - [`reserve_window`] extends the hold by one window before a further
-//!   `response.create`, under live key/model authorization and every
+//! - admission (shared `admit_workload_for_deployment`) holds one minimal
+//!   window ([`ResponseBound::admission`]);
+//! - [`reserve_window`] resizes the reserved unused window, or adds one,
+//!   before a `response.create`, under live key/model authorization and every
 //!   applicable budget (read from the maintained totals at the session's
 //!   admission time) and tokens-per-minute limit (in the session's admission
 //!   minute);
@@ -23,22 +26,36 @@ use crate::{
         CostBreakdown,
         v3::{AudioTokens, Meter, Observed},
     },
-    inference::realtime::{RealtimeFinish, RealtimeUsage, ResponseStatus},
+    inference::realtime::{RealtimeFinish, RealtimeUsage, ResponseBound, ResponseStatus},
 };
 use chrono::{DateTime, Utc};
 
 impl Price {
+    /// `(text input, audio input, output)` ceilings of a window: each input
+    /// modality capped at the input ceiling (the model's context window).
+    fn realtime_ceilings(&self, b: ResponseBound) -> Result<(u64, u64, u64), InferenceError> {
+        let context =
+            u64::try_from(self.input_token_limit).map_err(|_| InferenceError::Configuration)?;
+        Ok(b.ceilings(context))
+    }
+    /// Tokens a window reserves against tokens-per-minute limits: its input
+    /// (at most the context window) plus its output.
+    pub(super) fn realtime_tokens(&self, b: ResponseBound) -> Result<i64, InferenceError> {
+        let (text, audio, output) = self.realtime_ceilings(b)?;
+        let context = u64::try_from(self.input_token_limit).unwrap_or(0);
+        i64::try_from(text.saturating_add(audio).min(context) + output)
+            .map_err(|_| InferenceError::Configuration)
+    }
     /// Hold of one realtime response window: pricing v3 only (audio tokens
     /// have no v1/v2 rate). Text and audio input meters are bounded by the
-    /// input ceiling, output by the window's output tokens, `requests` by one;
-    /// meters a realtime response never reports (cache writes, images,
-    /// characters, audio seconds, search units) are impossible.
-    pub(super) fn realtime_window(&self, output: u64) -> Result<Option<i64>, InferenceError> {
+    /// window's per-modality input ceilings, output by its output tokens,
+    /// `requests` by one; meters a realtime response never reports (cache
+    /// writes, images, characters, audio seconds, search units) are impossible.
+    pub(super) fn realtime_window(&self, b: ResponseBound) -> Result<Option<i64>, InferenceError> {
         if self.pricing_version != 3 {
             return Err(InferenceError::Configuration);
         }
-        let input =
-            u64::try_from(self.input_token_limit).map_err(|_| InferenceError::Configuration)?;
+        let (text_input, audio_input, output) = self.realtime_ceilings(b)?;
         let (lines, mut max) = self.lines()?;
         for meter in Meter::ALL.into_iter().filter(|m| !m.is_token()) {
             if meter == Meter::Requests {
@@ -52,8 +69,16 @@ impl Price {
                 max.0.insert(meter, 0);
             }
         }
-        billing::v3::bound_realtime(&lines, &max, input, output)
-            .map_err(|_| InferenceError::Configuration)
+        billing::v3::bound_realtime(
+            &lines,
+            &max,
+            billing::v3::RealtimeCeilings {
+                text_input,
+                audio_input,
+                output,
+            },
+        )
+        .map_err(|_| InferenceError::Configuration)
     }
 }
 
@@ -131,14 +156,17 @@ fn limit_scope(workspace: Option<Uuid>, key: Option<Uuid>) -> LimitScope {
     }
 }
 
-/// Extend the session hold by one response window before a further
-/// `response.create`. Denials are the admission errors of the same scope.
+/// Reserve window `window` before a `response.create`: resize the reserved
+/// unused window `armed`, or add one when there is none. Only growth is
+/// budget- and rate-checked (shrinking releases). Denials are the admission
+/// errors of the same scope.
 pub async fn reserve_window(
     store: &Store,
     principal: &Principal,
     id: Uuid,
     model: &str,
-    window_output_tokens: u32,
+    window: ResponseBound,
+    armed: Option<ResponseBound>,
 ) -> Result<(), InferenceError> {
     let _queued = gate(&store.lock_gates.admission).await;
     let mut tx = store.pool.begin().await.map_err(storage)?;
@@ -162,18 +190,25 @@ pub async fn reserve_window(
     if allowed.is_none() {
         return Err(InferenceError::ModelUnavailable);
     }
-    let output = u64::from(window_output_tokens);
+    // `hold`: the change of the session hold (`None`: unbounded); `tokens`:
+    // the new window's tokens and the change of reserved tokens.
     let (hold, tokens) = match pinned(&mut tx, &s).await? {
-        Some(p) => (
-            p.realtime_window(output)?,
-            Some(
-                p.input_token_limit
-                    .checked_add(output as i64)
-                    .ok_or(InferenceError::Configuration)?,
-            ),
-        ),
+        Some(p) => {
+            let (old_hold, old_tokens) = match armed {
+                Some(a) => (p.realtime_window(a)?, p.realtime_tokens(a)?),
+                None => (Some(0), 0),
+            };
+            let new_tokens = p.realtime_tokens(window)?;
+            (
+                p.realtime_window(window)?
+                    .zip(old_hold)
+                    .map(|(new, old)| new - old),
+                Some((new_tokens, new_tokens - old_tokens)),
+            )
+        }
         None => (None, None),
     };
+    let grows = hold.is_none_or(|h| h > 0) || tokens.is_some_and(|(_, d)| d > 0);
     let policies = sqlx::query_as::<_, Policy>(POLICIES)
         .bind(s.workspace_id)
         .bind(lineage)
@@ -194,22 +229,23 @@ pub async fn reserve_window(
     };
     // Tokens-per-minute: the session's whole reservation counts in its
     // admission minute, so a session can never reserve more than the limit.
-    for p in &policies {
+    for p in policies.iter().filter(|_| grows) {
         let Some(limit) = p.tokens_per_minute else {
             continue;
         };
         let scope = limit_scope(p.workspace_id, p.api_key_id);
-        let Some(tokens) = tokens else {
+        let Some((window_tokens, tokens)) = tokens else {
             return Err(InferenceError::Configuration);
         };
-        if tokens > limit {
+        if window_tokens > limit {
             deny((
                 rank(scope),
                 InferenceError::TokenReservationExceedsLimit(scope),
             ));
             continue;
         }
-        let fits: bool = sqlx::query_scalar("SELECT count(*) FILTER(WHERE reserved_tokens IS NULL)=0 AND coalesce(sum(reserved_tokens),0)+$4::bigint<=$5 FROM governance_reservations WHERE minute_start=$3 AND ($1::uuid IS NULL OR workspace_id=$1) AND ($2::uuid IS NULL OR api_key_id IN(SELECT id FROM api_keys WHERE workspace_id=$1 AND governance_key_id=$2))")
+        // Async jobs are exempt from per-minute limits (0018) and never count here.
+        let fits: bool = sqlx::query_scalar("SELECT count(*) FILTER(WHERE reserved_tokens IS NULL)=0 AND coalesce(sum(reserved_tokens),0)+$4::bigint<=$5 FROM governance_reservations r WHERE minute_start=$3 AND NOT EXISTS(SELECT 1 FROM inference_executions e WHERE e.id=r.execution_id AND e.workload_kind IN('videos','batches')) AND ($1::uuid IS NULL OR workspace_id=$1) AND ($2::uuid IS NULL OR api_key_id IN(SELECT id FROM api_keys WHERE workspace_id=$1 AND governance_key_id=$2))")
             .bind(p.workspace_id).bind(p.api_key_id).bind(s.minute_start).bind(tokens).bind(limit)
             .fetch_one(&mut *tx).await.map_err(storage)?;
         if !fits {
@@ -226,7 +262,7 @@ pub async fn reserve_window(
     let consumption = totals::read(&mut tx, &windows, s.admitted_at)
         .await
         .map_err(storage)?;
-    for (b, c) in budgets.iter().zip(consumption) {
+    for (b, c) in budgets.iter().zip(consumption).filter(|_| grows) {
         let scope = limit_scope(b.workspace_id, b.api_key_id);
         if c.unresolved {
             deny((
@@ -247,7 +283,7 @@ pub async fn reserve_window(
         return Err(error);
     }
     let changed = sqlx::query("UPDATE governance_reservations SET held_microusd=held_microusd+$2,reserved_tokens=reserved_tokens+$3,unbounded_cost=unbounded_cost OR $4 WHERE execution_id=$1 AND state='pending'")
-        .bind(id).bind(hold.unwrap_or(0)).bind(tokens.unwrap_or(0)).bind(hold.is_none())
+        .bind(id).bind(hold.unwrap_or(0)).bind(tokens.map_or(0, |(_, d)| d)).bind(hold.is_none())
         .execute(&mut *tx).await.map_err(storage)?.rows_affected();
     if changed != 1 {
         return Err(InferenceError::Storage);
@@ -260,7 +296,7 @@ pub async fn open_response(
     store: &Store,
     id: Uuid,
     sequence: i32,
-    window_output_tokens: u32,
+    window: ResponseBound,
 ) -> Result<(), InferenceError> {
     let mut tx = store.pool.begin().await.map_err(storage)?;
     let s = session(&mut tx, id).await?;
@@ -268,7 +304,7 @@ pub async fn open_response(
         return Err(InferenceError::Storage);
     }
     let hold = match pinned(&mut tx, &s).await? {
-        Some(p) => p.realtime_window(u64::from(window_output_tokens))?,
+        Some(p) => p.realtime_window(window)?,
         None => None,
     };
     sqlx::query("INSERT INTO realtime_responses(execution_id,sequence,window_hold_microusd,unbounded_cost) VALUES($1,$2,$3,$4)")
@@ -282,13 +318,15 @@ pub async fn open_response(
 fn value_response(
     p: &Price,
     u: RealtimeUsage,
-    window_output_tokens: u32,
+    window: ResponseBound,
 ) -> Result<(Option<i64>, i64, bool, Option<CostBreakdown>), InferenceError> {
     if p.pricing_version != 3 || !u.valid() {
         return Ok((None, 0, true, None));
     }
     let (lines, max) = p.lines()?;
-    let input_limit = u64::try_from(p.input_token_limit).map_err(|_| InferenceError::Storage)?;
+    let (text_limit, audio_limit, output_limit) = p
+        .realtime_ceilings(window)
+        .map_err(|_| InferenceError::Storage)?;
     let billing = BillingUsage {
         total_input_tokens: Some(u.input_text_tokens),
         uncached_input_tokens: Some(u.input_text_tokens - u.cached_text_tokens),
@@ -327,7 +365,7 @@ fn value_response(
             || cache_bound_violated(
                 Some(&billing),
                 &billing::v3::cache_rates(&lines),
-                input_limit,
+                text_limit,
             )?;
         let components = v
             .components
@@ -341,9 +379,12 @@ fn value_response(
         Err(billing::BillingError::Overflow) => return Ok((None, 0, true, None)),
         Err(_) => return Err(InferenceError::Storage),
     };
+    // Above its window's per-modality ceilings, the hold no longer proves an
+    // upper bound for this response.
     let violated = violated
-        || u.input_tokens() > input_limit
-        || u.output_tokens() > u64::from(window_output_tokens);
+        || u.input_text_tokens > text_limit
+        || u.input_audio_tokens > audio_limit
+        || u.output_tokens() > output_limit;
     Ok((actual, floor, violated, components))
 }
 
@@ -355,7 +396,7 @@ pub async fn settle_response(
     sequence: i32,
     status: Option<ResponseStatus>,
     usage: Option<RealtimeUsage>,
-    window_output_tokens: u32,
+    window: ResponseBound,
 ) -> Result<(), InferenceError> {
     let _queued = gate(&store.lock_gates.settlement).await;
     let mut tx = store.pool.begin().await.map_err(storage)?;
@@ -366,18 +407,18 @@ pub async fn settle_response(
     }
     let row: Option<(String, Option<i64>)> = sqlx::query_as("SELECT state,window_hold_microusd FROM realtime_responses WHERE execution_id=$1 AND sequence=$2 FOR UPDATE")
         .bind(id).bind(sequence).fetch_optional(&mut *tx).await.map_err(storage)?;
-    let Some((state, window)) = row else {
+    let Some((state, held)) = row else {
         return Err(InferenceError::Storage);
     };
     if state != "pending" {
         return Err(InferenceError::Storage);
     }
     let (actual, floor, violated, components) = match (pinned(&mut tx, &s).await?, usage) {
-        (Some(p), Some(u)) => value_response(&p, u, window_output_tokens)?,
+        (Some(p), Some(u)) => value_response(&p, u, window)?,
         (Some(_), None) => (None, 0, false, None),
         (None, _) => (None, 0, true, None),
     };
-    let delta = window.map(|h| match actual {
+    let delta = held.map(|h| match actual {
         Some(a) => a - h,
         None => floor.max(h) - h,
     });
@@ -394,7 +435,7 @@ pub async fn settle_response(
         .bind(components.map(|c| c.to_value()))
         .execute(&mut *tx).await.map_err(storage)?;
     let changed = sqlx::query("UPDATE governance_reservations SET held_microusd=held_microusd+$2,unbounded_cost=unbounded_cost OR $3 WHERE execution_id=$1 AND state='pending'")
-        .bind(id).bind(delta.unwrap_or(0)).bind(violated || window.is_none())
+        .bind(id).bind(delta.unwrap_or(0)).bind(violated || held.is_none())
         .execute(&mut *tx).await.map_err(storage)?.rows_affected();
     if changed != 1 {
         return Err(InferenceError::Storage);
@@ -465,7 +506,7 @@ async fn finish_unobserved(
     // window is retained as an unknown response.
     if record.unopened_request {
         let hold = match pinned(&mut tx, &s).await? {
-            Some(p) => p.realtime_window(u64::from(record.window_output_tokens))?,
+            Some(p) => p.realtime_window(record.window)?,
             None => None,
         };
         sqlx::query("INSERT INTO realtime_responses(execution_id,sequence,state,window_hold_microusd,unbounded_cost,completed_at) SELECT $1,coalesce(max(sequence),0)+1,'unknown',$2,$3,clock_timestamp() FROM realtime_responses WHERE execution_id=$1")

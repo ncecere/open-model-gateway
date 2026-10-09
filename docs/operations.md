@@ -1,6 +1,6 @@
 # Operations runbook
 
-This covers health checks, metrics and alerting, backups and restore, secret rotation, upgrades, and the load-test baseline. It assumes the [staging](staging.md) role split: `gateway_bootstrap` for cluster administration, `gateway_migrator` for schema ownership, and `gateway_runtime` for the service. None of this approves a public production launch.
+This covers health checks, metrics and alerting, backups and restore, secret rotation, Platform Admin lockout protection, upgrades, and the load-test baseline. It assumes the [staging](staging.md) role split: `gateway_bootstrap` for cluster administration, `gateway_migrator` for schema ownership, and `gateway_runtime` for the service. None of this approves a public production launch.
 
 ## Configuration reference
 
@@ -10,6 +10,7 @@ This covers health checks, metrics and alerting, backups and restore, secret rot
 | `GATEWAY_DATABASE_MAX_CONNECTIONS` | `10` | Database pool size per replica (2 to 500). Size PostgreSQL `max_connections` for every replica plus migrator and backup sessions. |
 | `GATEWAY_MAX_CONCURRENT_REQUESTS` | `128` (staging: 32) | Per-replica inference concurrency. Requests beyond it get 429 and are counted under `scope="gateway_capacity"`. |
 | `GATEWAY_REQUEST_TIMEOUT_SECONDS` | `120` | Inference deadline. Time spent waiting for admission counts toward it. |
+| `GATEWAY_FILE_STORE` | `off` | Encrypted file store: `off`, `local` or `s3`. See [file storage](file-storage.md) for the backend and encryption-key variables. |
 
 ## Health endpoints
 
@@ -52,13 +53,15 @@ There are no workspace, key, user, request IDs, or prompt and response data in a
 | `gateway_upstream_time_to_first_token_seconds` | histogram | `provider`, `model` (streams) |
 | `gateway_inference_tokens_total` | counter | `provider`, `model`, `direction` (provider-reported only; unknown usage is not counted as zero) |
 | `gateway_settlements_total` | counter | `outcome`: `settled` (exact cost), `unknown` (hold retained), `held` (finalization failed; the reservation stays pending until reconciliation) |
-| `gateway_admission_denials_total` | counter | `code`, `scope` (`installation`, `workspace`, `api_key`, `policy` for rate/concurrency limits, `gateway_capacity`) |
+| `gateway_admission_denials_total` | counter | `code`, `scope` (`installation`, `workspace`, `api_key`, `policy` for rate/concurrency limits, `gateway_capacity`). `code="job_limit_exceeded"` counts video/batch jobs refused by a "Jobs at once" limit, with the scope that refused them. |
 | `gateway_reservations_held` | gauge | `state` (`pending`, `unknown`). Refreshed at scrape time, at most every 15 seconds, with a 2-second query timeout. |
 | `gateway_alert_evaluations_total` | counter | `result` (`ok`, `skipped` when another replica holds the lock, `failed`) |
 | `gateway_alert_rule_failures_total` | counter | none |
 | `gateway_db_pool_connections` | gauge | `state` (`idle`, `in_use`) |
 | `gateway_db_pool_max_connections` | gauge | none |
 | `gateway_metrics_collection_errors_total` | counter | `collector` |
+| `gateway_file_store_operations_total` | counter | `backend` (`local`, `s3`), `op` (`put`, `get`, `read`, `head`, `delete`, `health`), `outcome` (`ok` or a safe error code such as `integrity`, `denied`, `unavailable`). `op="read"` counts failures while streaming an object. |
+| `gateway_file_store_bytes_total` | counter | `backend`, `op` (`put`; `get` counts objects read to the end). Plaintext bytes. |
 
 Gauges and counters are per replica. Aggregate them with `sum`. The reservation gauge counts the whole installation, so take `max` across replicas instead of summing it.
 
@@ -151,7 +154,35 @@ General rule: add the new credential, deploy, verify, then revoke the old one. N
 - **Provider API keys:** keys are referenced as `env:NAME` and must be listed in `GATEWAY_SECRET_ENV_ALLOWLIST`. Write the new key to the secret file, then restart. To rotate with no gap, create the new key at the provider first and revoke the old one after `gateway_inference_attempt_errors_total{code="upstream_rejected"}` stays flat. Prefer workload identity for Bedrock.
 - **OIDC client secret:** register the new secret at the IdP, replace `secrets/oidc_client_secret`, restart, test a sign-in, then revoke the old secret. See [identity](identity.md) for IdP signing-key handling.
 - **SMTP password:** update the referenced secret, restart, then send a test from Settings.
+- **S3 static keys for the file store:** create the new key pair, update the variables named by `GATEWAY_S3_ACCESS_KEY_ID_ENV`/`GATEWAY_S3_SECRET_ACCESS_KEY_ENV`, restart, use **Test storage**, then revoke the old pair. Prefer `aws:role:` or workload identity on AWS.
+- **File store encryption keys:** see [below](#file-store-encryption-keys).
 - **Inference API keys** belong to users and workspaces. Rotate them through the dashboard; rotation keeps policy and spend lineage. Revoked keys never reactivate.
+
+## File store encryption keys
+
+The [file store](file-storage.md) encrypts every object under the first key in the variable named by `GATEWAY_FILE_ENCRYPTION_KEYS_ENV` (`kid:base64key[,kid:base64key…]`).
+
+**Backup.** Keep the key list in your secret manager and in the same encrypted recovery plan as the database secrets, **separately from object and database backups**. A database backup holds `stored_files` metadata (owners, sizes, hashes, key IDs) but no contents. An object backup (bucket replication or versioning, or a copy of `GATEWAY_FILE_STORE_DIR`) holds ciphertext only. Without the keys, objects are unrecoverable. After a restore, run `open-model-gateway files verify`. It reports missing objects, size mismatches and key IDs that are no longer configured.
+
+**Rotation.**
+
+1. Generate a key (`openssl rand -base64 32`) with a new ID and put it **first**: `k2027a:<new>,k2026a:<old>`. Restart every replica. New objects use `k2027a`, and old ones still decrypt.
+2. Watch `files verify`: its `by_key_id` counts show how many live files still use `k2026a`. Files with a retention window drain as they expire (at most 365 days; exports after 1 day, batch files after 7 days by default).
+3. Remove the old key only when its count reaches 0. Removing it earlier makes those files fail with `key_unavailable` (and `verify` lists the ID under `unknown_key_ids`).
+
+Branding objects never expire. Re-encrypting them (a header-only re-wrap is possible because the format keeps the key ID and wrapped data key out of the chunk authentication) is planned but not implemented; until then keep their key as decrypt-only.
+
+**Compromise.** If a master key leaks, add a new active key at once. Then treat the files under the old key as exposed only to someone who also has the ciphertext, and expire or delete them (shorten the group's retention and run `files sweep --once`) before removing the key.
+
+## Platform Admin lockout protection
+
+Neither SCIM nor the management API can remove platform access from the last active Platform Admin (a live Admin grant of any provenance on an account that is not suspended or cleaned up).
+
+- **SCIM:** deactivation, `DELETE`, and Group changes that would drop the last effective Admin grant are refused whole with `409` (`scimType: "mutability"`). See [SCIM](scim.md#the-last-platform-admin-is-protected).
+- **Manual:** Admin › Users refuses to revoke the last Admin grant or suspend the last Admin, and group mappings that hold it cannot be changed or deleted (`409 Cannot remove the last platform administrator`).
+- Both checks run under the installation lock, so concurrent changes cannot both pass.
+
+When SCIM is refused, the gateway writes the audit event `scim.last_admin_protected` and opens the built-in installation alert "SCIM tried to remove the last Platform Admin" (Notifications, Admin › Settings › Alerts › History, and email to Platform Admins when a relay is set up). It means the identity provider wants to remove the only Admin. Grant Admin to a second person (a manual grant, or a mapped Admin group), then let the provider retry or repeat the change. The alert clears at the next evaluation once a second active Platform Admin exists. Keeping two Admins avoids the situation entirely. A sign-in claim that drops the last group-provenance Admin grant is not covered by this check.
 
 ## Upgrade and migration procedure
 
@@ -161,6 +192,8 @@ General rule: add the new credential, deploy, verify, then revoke the old one. N
 4. Run `open-model-gateway migrate` as the migrator, then reapply `runtime-grants.sql`. `staging.py migrate` does both.
 5. Start the new release. Wait for `/health/ready` to report `schema: ok`, then check metrics, sign-in, and one bounded inference request.
 6. To roll back, redeploy the previous image digest only if no migration ran. Otherwise restore the pre-upgrade backup into a new database and cut over. There are no down migrations.
+
+`0018_job_limits.sql` adds the "Jobs at once" limit to every policy layer and sets the workspace-type defaults to 2 active video/batch jobs per workspace. After upgrading, review Admin › Settings › Defaults & limits if workspaces routinely run more jobs at once. It also adds the SCIM last-admin alert kind. Reapply `runtime-grants.sql` (step 4).
 
 ## Load test baseline
 

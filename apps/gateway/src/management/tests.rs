@@ -30,6 +30,8 @@ mod session_tests;
 mod settings_tests;
 #[path = "setup/tests.rs"]
 mod setup_tests;
+#[path = "settings/storage_tests.rs"]
+mod storage_tests;
 #[path = "ux_tests.rs"]
 mod ux_tests;
 

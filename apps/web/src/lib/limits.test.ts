@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "./api";
-import { composeLimits, draftErrors, draftLimits, draftOf, hasErrors, limitsBody, limitsOf, limitsSaveError, limitsSummary, lockedBudget, mergeErrors, noLimits, policyBudgets, policyRejection, rejectionErrors, resetText, type Limits, type LimitsDraft } from "./limits";
+import { composeLimits, draftErrors, draftLimits, draftOf, hasErrors, limitsBody, limitsOf, limitsSaveError, limitsSummary, lockedBudget, mergeErrors, noLimits, policyBudgets, policyRejection, rateRows, rejectionErrors, resetText, type Limits, type LimitsDraft } from "./limits";
 
 const base = { requests_per_minute: null, tokens_per_minute: null, concurrent_requests: null, monthly_budget_microusd: null };
 const limits = (patch: Partial<Limits>): Limits => ({ ...noLimits, ...patch });
-const draft = (budgets: [string, "day" | "week" | "month" | "lifetime", string][], rates: Partial<Record<"requests_per_minute" | "tokens_per_minute" | "concurrent_requests", string>> = {}): LimitsDraft => ({ requests_per_minute: "", tokens_per_minute: "", concurrent_requests: "", ...rates, budgets: budgets.map(([key, period, amount]) => ({ key, period, amount })) });
+const draft = (budgets: [string, "day" | "week" | "month" | "lifetime", string][], rates: Partial<Record<"requests_per_minute" | "tokens_per_minute" | "concurrent_requests", string>> = {}): LimitsDraft => ({ requests_per_minute: "", tokens_per_minute: "", concurrent_requests: "", concurrent_jobs: "", ...rates, budgets: budgets.map(([key, period, amount]) => ({ key, period, amount })) });
 
 describe("stacked budgets", () => {
   it("reads stacked budgets in period order, and the legacy single budget of older gateways", () => {
@@ -15,12 +15,12 @@ describe("stacked budgets", () => {
   it("composes rates by minimum and budgets by minimum per period; other periods all apply", () => {
     const platform = limits({ requests_per_minute: 60, budgets: [{ period: "month", amount_microusd: "100000000" }] });
     const local = limits({ requests_per_minute: 80, budgets: [{ period: "month", amount_microusd: "9007199254740993" }, { period: "day", amount_microusd: "5000000" }] });
-    expect(composeLimits(platform, local)).toEqual({ requests_per_minute: 60, tokens_per_minute: null, concurrent_requests: null, budgets: [{ period: "day", amount_microusd: "5000000" }, { period: "month", amount_microusd: "100000000" }] });
+    expect(composeLimits(platform, local)).toEqual({ requests_per_minute: 60, tokens_per_minute: null, concurrent_requests: null, concurrent_jobs: null, budgets: [{ period: "day", amount_microusd: "5000000" }, { period: "month", amount_microusd: "100000000" }] });
     expect(composeLimits(limits({ budgets: [{ period: "month", amount_microusd: "9007199254740993" }] }), limits({ budgets: [{ period: "month", amount_microusd: "9007199254740992" }] })).budgets[0]!.amount_microusd).toBe("9007199254740992");
   });
   it("sends the full set with exact BigInt money, never the legacy fields", () => {
     const body = limitsBody(draftLimits(draft([["a", "lifetime", "0.000001"], ["b", "week", "9007199254.740993"]], { requests_per_minute: "5" })));
-    expect(body).toEqual({ requests_per_minute: 5, tokens_per_minute: null, concurrent_requests: null, budgets: [{ period: "week", amount_microusd: "9007199254740993" }, { period: "lifetime", amount_microusd: "1" }] });
+    expect(body).toEqual({ requests_per_minute: 5, tokens_per_minute: null, concurrent_requests: null, concurrent_jobs: null, budgets: [{ period: "week", amount_microusd: "9007199254740993" }, { period: "lifetime", amount_microusd: "1" }] });
     expect(body).not.toHaveProperty("monthly_budget_microusd");
     expect(draftOf(limitsOf({ ...base, budgets: [{ period: "day", amount_microusd: "1500000" }] })).budgets).toEqual([{ key: "saved-day", period: "day", amount: "1.50" }]);
   });
@@ -67,7 +67,7 @@ describe("stacked budget validation (mirrors the server's tighten-only rules)", 
   });
   it("maps each named policy rejection (with its period or limit) to a specific message on the right field", () => {
     const reject = (status: number, reason: string, detail?: { period?: string; limit?: string }) => new ApiError(status, String(status), "server text", reason, detail);
-    const d: LimitsDraft = { requests_per_minute: "100", tokens_per_minute: "", concurrent_requests: "", budgets: [{ key: "b1", period: "day", amount: "9" }, { key: "b2", period: "month", amount: "90" }] };
+    const d: LimitsDraft = { requests_per_minute: "100", tokens_per_minute: "", concurrent_requests: "", concurrent_jobs: "", budgets: [{ key: "b1", period: "day", amount: "9" }, { key: "b2", period: "month", amount: "90" }] };
     const parent = rejectionErrors(reject(400, "exceeds_parent_budget", { period: "day" }), d)!;
     expect(parent.budgets.b1).toBe("The daily budget is higher than an inherited daily budget for the same period. Lower it to at most the inherited amount.");
     expect(parent.budgets.b2).toBeUndefined(); expect(parent.form).toEqual([]);
@@ -84,5 +84,22 @@ describe("stacked budget validation (mirrors the server's tighten-only rules)", 
     expect((limitsSaveError(reject(403, "stored_rate_loosen_not_allowed", { limit: "tokens_per_minute" })) as Error).message).toBe("The saved tokens per minute limit can only be lowered, never raised or removed.");
     // Client errors win over a server rejection on the same field.
     expect(mergeErrors({ rates: { requests_per_minute: "client" }, budgets: {}, form: [] }, parent)).toEqual({ rates: { requests_per_minute: "client" }, budgets: { b1: parent.budgets.b1 }, form: [] });
+  });
+});
+
+describe("jobs at once", () => {
+  it("is one more stacked limit: shown, composed by minimum, tighten-only, and read from older gateways as no limit", () => {
+    expect(rateRows.map(r => r.label)).toContain("Jobs at once");
+    expect(limitsOf(base).concurrent_jobs).toBeNull();
+    expect(limitsOf({ ...base, concurrent_jobs: 2 }).concurrent_jobs).toBe(2);
+    expect(composeLimits(limits({ concurrent_jobs: 2 }), limits({ concurrent_jobs: 5 }), limits({})).concurrent_jobs).toBe(2);
+    expect(limitsSummary(limits({ concurrent_requests: 8, concurrent_jobs: 2 }))).toBe("8 at once · 2 jobs at once");
+    expect(limitsSummary(limits({ concurrent_jobs: 1 }))).toBe("1 job at once");
+    const d = { ...draftOf(limits({ concurrent_jobs: 2 })), concurrent_jobs: "3" };
+    expect(draftErrors(d, "tighten", [{ label: "platform", limits: limits({ concurrent_jobs: 2 }) }]).rates.concurrent_jobs).toMatch(/only be lowered|higher than the platform/);
+    expect(draftErrors({ ...d, concurrent_jobs: "" }, "tighten", [], limits({ concurrent_jobs: 2 })).rates.concurrent_jobs).toMatch(/can't be removed/);
+    expect(limitsBody(draftLimits({ ...d, concurrent_jobs: "1" })).concurrent_jobs).toBe(1);
+    const reject = new ApiError(400, "400", "server text", "exceeds_parent_rate", { limit: "concurrent_jobs" });
+    expect(policyRejection(reject)).toEqual({ rate: "concurrent_jobs", message: "Jobs at once is higher than an inherited limit. Lower it to at most the inherited value." });
   });
 });

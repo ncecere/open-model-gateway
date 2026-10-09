@@ -39,7 +39,14 @@ jobs:
       - run: npm ci
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --workspace --all-features
+      # The MinIO/RustFS file store tests run in their own step below.
+      - run: cargo test --workspace --all-features -- --skip minio_compatibility --skip rustfs_compatibility
+      - name: S3-compatible file store against MinIO and RustFS containers
+        # Images are pinned by digest in tests/filestore_s3.rs; random loopback ports;
+        # containers are removed by the test. Missing Docker fails instead of skipping.
+        env:
+          FILESTORE_REQUIRE_DOCKER: "1"
+        run: cargo test -p open-model-gateway --all-features --test filestore_s3
       - name: Verify enterprise runtime ACLs on disposable PostgreSQL
         run: cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored
       - name: Backup/restore drill on the disposable service database

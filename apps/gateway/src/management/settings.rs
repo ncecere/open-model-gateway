@@ -10,6 +10,8 @@
 //!   `env:NAME` reference, never a value. Test sends are rate-limited from the
 //!   audit trail and go only to the signed-in admin's verified address.
 //! - Sign-in: read-only OIDC configuration from the server environment.
+//! - Storage (Data & privacy): the file store, its health and per-purpose
+//!   toggles/retention (`settings/storage.rs`).
 //!
 //! Admin writes, Auditor reads. Writes are audited inside their transaction.
 use super::*;
@@ -17,6 +19,9 @@ use crate::{
     email::{self, DeliveryError, OutgoingEmail, SmtpSettings, TlsMode},
     providers::openrouter::DataCollection,
 };
+
+#[path = "settings/storage.rs"]
+pub(super) mod storage;
 
 pub(super) const KEY_LIFETIME: &str = "Key lifetime exceeds the installation maximum";
 pub(super) const SETTING_LOCKED: &str = "This setting is set by the server environment";
@@ -52,6 +57,7 @@ pub(super) fn routes() -> Router<Store> {
         )
         .route("/api/v1/platform/settings/email/test", post(test_email))
         .route("/api/v1/platform/settings/sign-in", get(sign_in))
+        .merge(storage::routes())
 }
 
 async fn write_tx<'a>(

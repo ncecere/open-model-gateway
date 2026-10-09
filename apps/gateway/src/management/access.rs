@@ -48,7 +48,7 @@ fn status(reasons: &[Reason], upto: usize) -> &'static str {
     if partial { "partial" } else { "available" }
 }
 fn rates(l: &governance::Limits) -> Value {
-    json!({"requests_per_minute":l.requests_per_minute,"tokens_per_minute":l.tokens_per_minute,"concurrent_requests":l.concurrent_requests})
+    json!({"requests_per_minute":l.requests_per_minute,"tokens_per_minute":l.tokens_per_minute,"concurrent_requests":l.concurrent_requests,"concurrent_jobs":l.concurrent_jobs})
 }
 type ModelRow = (
     Uuid,

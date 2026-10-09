@@ -10,6 +10,19 @@ Fresh storage is `apps/gateway/enterprise_migrations/0001_enterprise.sql`, with 
 
 Requests/tokens use fixed UTC minutes, sampled from database wall-clock **after acquiring locks**. Concurrency counts pending unexpired leases. A child cap does not reserve capacity. Increasing policy does not reset consumption.
 
+### Jobs at once
+
+`0018_job_limits.sql` adds `concurrent_jobs` ("Jobs at once") to every policy layer: installation, workspace-type default, platform override, workspace local and key lineage. It is how many async jobs (video and batch, see [async jobs](async-jobs.md)) a scope may have active at the same time. It composes like the other rate limits: every applicable layer applies, an absent child limit inherits, local/key layers are tighten-only, and an override replaces the type default. Type defaults start at **2** per workspace. The installation layer is a shared ceiling across all workspaces.
+
+- **Active job:** its reservation is pending with a live lease, and the job is not terminal and has no cancel request. A slot is released when the job reaches a terminal state, when cancel is requested, or when its lease expires (lease reconciliation keeps the hold as unknown).
+- **Requests at once:** a job holds a "requests at once" slot only while its create call runs. Once the provider accepts it, it holds a job slot instead.
+- **Per-minute limits:** video and batch admissions skip requests-per-minute and tokens-per-minute checks, and their reservations never count toward them, so a large batch no longer fails with `token_reservation_exceeds_limit`.
+- **Budgets:** unchanged. The job's full ceiling is reserved, counted in the maintained totals (0015) and checked against every applicable budget.
+- **Realtime:** a session still counts as one request against requests per minute and requests at once.
+- **Denial:** `job_limit_exceeded` (HTTP 429, retryable). It ranks below budget/accounting denials and above other rate limits.
+
+The count is taken in the same admission transaction, after the catalog and installation locks, from the current minute and live leases only, so concurrent submissions cannot both take the last slot and the cost does not grow with history.
+
 ### Budget periods
 
 Each scope may stack up to one budget per period, all enforced over their own half-open UTC window by **admission time**: `day` is the UTC calendar day, `week` the ISO week from Monday 00:00 UTC, `month` the UTC calendar month and `lifetime` all time since the scope was created. Each budget sums settled actual cost plus active pending/unknown holds of its scope (workspace, key lineage or installation) admitted in its window; the unknown/unbounded and `budget_exceeded`/`unresolved_usage` rules are unchanged. Every budget at every layer applies, so a $10/day local budget under a $200/month override binds on whichever is exhausted first. Override budgets apply only while the replacement header exists; type-default budgets only without one.

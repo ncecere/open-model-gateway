@@ -19,7 +19,7 @@ import { useEffect } from "react";
 import { FileQuestion } from "lucide-react";
 import { ApiError, platformPath, wsPath, type Session } from "../lib/api";
 import { formatMicroUsd } from "../lib/governance";
-import { costText, countText, dataPolicyOf, finishReasonLabel, jobStateTone, jobText, type JobDetail, latencyText, logPaths, logsSearch, requestFilters, requestQuery, requestStatusLabel, requestStatusTone, requestTarget, servedModel, sessionTarget, timelineStatus, tokensText, tpsText, unresolvedText, workloadText, modalityText, realtimeResponseState, type LogsScope, type RealtimeResponse, type RequestAttempt, type RequestDetail, type RequestPage } from "../lib/requests";
+import { costText, countText, dataPolicyOf, finishReasonLabel, jobStateTone, jobText, type JobDetail, latencyText, logPaths, logsSearch, requestFilters, requestQuery, requestStatusLabel, requestStatusTone, requestTarget, servedModel, sessionTarget, timelineStatus, tokensText, tpsText, unresolvedText, workloadText, modalityText, realtimeResponseState, realtimeStatusLabel, type LogsScope, type RealtimeResponse, type RequestAttempt, type RequestDetail, type RequestPage } from "../lib/requests";
 import type { DashboardSearch } from "../lib/permissions";
 import { Button, ErrorNotice, Stack, useApi } from "../components/ui";
 import { EmptyState } from "../components/ui/empty-state/empty-state";
@@ -65,7 +65,7 @@ export function realtimeResponseItem(r: RealtimeResponse, cached: (a: string | n
   return {
     id: String(r.sequence), status: timelineStatus(realtimeResponseState(r)), durationMs: r.duration_ms,
     title: <>Response {r.sequence}</>,
-    meta: <>{r.status ? requestStatusLabel(r.status === "completed" ? "succeeded" : r.status) : r.state === "pending" ? "In progress" : "No usage reported"} · {costText(r.cost_microusd, r.held_microusd)}</>,
+    meta: <>{r.status ? realtimeStatusLabel(r.status) : r.state === "pending" ? "In progress" : "No usage reported"} · {costText(r.cost_microusd, r.held_microusd)}</>,
     detail: <Stack gap={1}>
       <span>Input: {modalityText(r.input_text_tokens, r.input_audio_tokens, cached(r.cached_text_tokens, r.cached_audio_tokens))}</span>
       <span>Output: {modalityText(r.output_text_tokens, r.output_audio_tokens)}</span>

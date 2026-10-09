@@ -81,6 +81,43 @@ fn only_one_model_query_parameter() {
 }
 
 #[test]
+fn forwarded_events_are_measured_for_hold_sizing() {
+    use crate::inference::realtime::context::EventSize;
+    let size = |v: Value| validate_measured(&v.to_string(), 100).unwrap().1;
+    // Audio payloads count as decoded audio bytes, the rest as text bytes.
+    let append = json!({"type":"input_audio_buffer.append","audio":"A".repeat(400)});
+    assert_eq!(
+        size(append.clone()),
+        EventSize {
+            text_bytes: append.to_string().len() as u64 - 400,
+            audio_bytes: 300,
+            audio_bytes_per_second: None,
+        }
+    );
+    let item = json!({"type":"conversation.item.create","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"},{"type":"input_audio","audio":"AAAA"}]}});
+    let s = size(item.clone());
+    assert_eq!(
+        (s.text_bytes, s.audio_bytes),
+        (item.to_string().len() as u64 - 4, 3)
+    );
+    // A format switch is reported so slower audio is never under-counted.
+    let update = json!({"type":"session.update","session":{"type":"realtime","instructions":"long","audio":{"input":{"format":{"type":"audio/pcmu"}}}}});
+    let s = size(update.clone());
+    assert_eq!(s.text_bytes, update.to_string().len() as u64);
+    assert_eq!(s.audio_bytes_per_second, Some(8_000));
+    // response.create counts its forwarded (rewritten) text.
+    let (action, s) = validate_measured(
+        &json!({"type":"response.create","response":{"instructions":"be brief"}}).to_string(),
+        100,
+    )
+    .unwrap();
+    let ClientAction::ResponseCreate { text, .. } = action else {
+        panic!()
+    };
+    assert_eq!(s.text_bytes, text.len() as u64);
+}
+
+#[test]
 fn client_events_follow_the_allowlist() {
     let ok = |v: Value| validate(&v.to_string(), 100).unwrap();
     let err = |v: Value| validate(&v.to_string(), 100).unwrap_err();
@@ -106,9 +143,14 @@ fn client_events_follow_the_allowlist() {
     }
     // response.create gets an explicit per-response ceiling and an event id.
     match ok(json!({"type":"response.create"})) {
-        ClientAction::ResponseCreate { text, event_id } => {
+        ClientAction::ResponseCreate {
+            text,
+            event_id,
+            max_output_tokens,
+        } => {
             let v: Value = serde_json::from_str(&text).unwrap();
             assert_eq!(v["response"]["max_output_tokens"], 100);
+            assert_eq!(max_output_tokens, 100);
             assert_eq!(v["event_id"], event_id.as_str());
             assert!(event_id.starts_with("event_gw_"));
         }
@@ -117,8 +159,13 @@ fn client_events_follow_the_allowlist() {
     match ok(
         json!({"type":"response.create","event_id":"mine","response":{"max_output_tokens":7,"conversation":"auto","metadata":{"k":"v"},"audio":{"output":{"voice":"marin"}}}}),
     ) {
-        ClientAction::ResponseCreate { text, event_id } => {
+        ClientAction::ResponseCreate {
+            text,
+            event_id,
+            max_output_tokens,
+        } => {
             assert_eq!(event_id, "mine");
+            assert_eq!(max_output_tokens, 7);
             assert_eq!(
                 serde_json::from_str::<Value>(&text).unwrap()["response"]["max_output_tokens"],
                 7

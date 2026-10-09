@@ -190,13 +190,15 @@ pub trait InferenceRepository: Send + Sync {
     ) -> Result<u32, InferenceError> {
         Ok(cap)
     }
-    /// Extend the session hold by one response window (budget-checked).
+    /// Reserve response window `window`: resize the reserved unused window
+    /// `armed`, or add one when there is none (growth is budget-checked).
     async fn realtime_reserve_window(
         &self,
         _principal: &Principal,
         _session: Uuid,
         _model: &str,
-        _window_output_tokens: u32,
+        _window: super::realtime::ResponseBound,
+        _armed: Option<super::realtime::ResponseBound>,
     ) -> Result<(), InferenceError> {
         Ok(())
     }
@@ -205,7 +207,7 @@ pub trait InferenceRepository: Send + Sync {
         &self,
         _session: Uuid,
         _sequence: i32,
-        _window_output_tokens: u32,
+        _window: super::realtime::ResponseBound,
     ) -> Result<(), InferenceError> {
         Ok(())
     }
@@ -216,7 +218,7 @@ pub trait InferenceRepository: Send + Sync {
         _sequence: i32,
         _status: Option<super::realtime::ResponseStatus>,
         _usage: Option<super::realtime::RealtimeUsage>,
-        _window_output_tokens: u32,
+        _window: super::realtime::ResponseBound,
     ) -> Result<(), InferenceError> {
         Ok(())
     }
@@ -366,25 +368,19 @@ impl InferenceRepository for Store {
         principal: &Principal,
         session: Uuid,
         model: &str,
-        window_output_tokens: u32,
+        window: super::realtime::ResponseBound,
+        armed: Option<super::realtime::ResponseBound>,
     ) -> Result<(), InferenceError> {
-        crate::governance::realtime::reserve_window(
-            self,
-            principal,
-            session,
-            model,
-            window_output_tokens,
-        )
-        .await
+        crate::governance::realtime::reserve_window(self, principal, session, model, window, armed)
+            .await
     }
     async fn realtime_open_response(
         &self,
         session: Uuid,
         sequence: i32,
-        window_output_tokens: u32,
+        window: super::realtime::ResponseBound,
     ) -> Result<(), InferenceError> {
-        crate::governance::realtime::open_response(self, session, sequence, window_output_tokens)
-            .await
+        crate::governance::realtime::open_response(self, session, sequence, window).await
     }
     async fn realtime_settle_response(
         &self,
@@ -392,17 +388,10 @@ impl InferenceRepository for Store {
         sequence: i32,
         status: Option<super::realtime::ResponseStatus>,
         usage: Option<super::realtime::RealtimeUsage>,
-        window_output_tokens: u32,
+        window: super::realtime::ResponseBound,
     ) -> Result<(), InferenceError> {
-        crate::governance::realtime::settle_response(
-            self,
-            session,
-            sequence,
-            status,
-            usage,
-            window_output_tokens,
-        )
-        .await
+        crate::governance::realtime::settle_response(self, session, sequence, status, usage, window)
+            .await
     }
     async fn realtime_finish(
         &self,

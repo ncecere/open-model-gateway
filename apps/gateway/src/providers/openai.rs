@@ -77,7 +77,10 @@ impl ProviderAdapter for OpenAiAdapter {
                 | ApiProtocol::Images
                 | ApiProtocol::AudioTranscriptions
                 | ApiProtocol::AudioSpeech
-                | ApiProtocol::Videos
+                // OpenAI shut down the Sora 2 models and the Videos API on
+                // 2026-09-24 (no replacement): new video jobs are refused
+                // before admission. The video wire code below stays for
+                // jobs created before the shutdown and is mock-tested.
                 | ApiProtocol::Batches
                 | ApiProtocol::Realtime
         )

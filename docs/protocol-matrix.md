@@ -33,8 +33,8 @@ See [realtime](#realtime-audio) below and [realtime](realtime.md).
 
 | Adapter | Videos `/v1/videos` | Files + Batches `/v1/files`, `/v1/batches` |
 | --- | --- | --- |
-| `openai` | `sora-*`: create (explicit `seconds`/`size`), retrieve, list, content, delete | `purpose=batch` JSONL for `/v1/chat/completions` only; create, retrieve, list, cancel, file content |
-| `openrouter` | No (OpenRouter's video API has a different shape; not implemented) | No (no Batch API) |
+| `openai` | **No longer offered.** OpenAI shut down the Sora 2 models and the Videos API on 2026-09-24. The `sora-*` wire code remains only for jobs created before then | `purpose=batch` JSONL for `/v1/chat/completions` only; create, retrieve, list, cancel, file content |
+| `openrouter` | Planned: an OpenRouter video adapter (another API shape) | No (no Batch API) |
 | Others | No | No |
 
 See [async jobs](#async-jobs-video-and-batch) below and [async jobs](async-jobs.md).
@@ -193,6 +193,7 @@ Details, limits and pricing: [realtime](realtime.md).
 
 Model protocols `videos` and `batches`, each its own workload. Jobs belong to the creating workspace: ids are gateway ids (`video_…`, `batch_…`, `file-…`), never upstream ids, and another workspace's key gets 404. Lists come from gateway records, not the provider account.
 
+- **Video has no supported provider.** OpenAI shut down the Sora 2 models and the Videos API on 2026-09-24, with no replacement ([OpenAI video generation guide](https://developers.openai.com/api/docs/guides/video-generation)). `POST /v1/videos` validates the request and then returns **400 `unsupported_capability`** before admission: no job, execution or hold is created. Reads of jobs created before the shutdown still work from gateway records. An OpenRouter video adapter is planned. The contract below is what that adapter will serve.
 - **`POST /v1/videos`** (multipart like the SDKs, or JSON): `model, prompt` (≤ 32 KiB), `seconds` `4|8|12` (default 4) and `size` `720x1280|1280x720|1024x1792|1792x1024` (default `720x1280`), always sent upstream. `input_reference`, remix, edits, extensions and characters are `unsupported_capability`. `GET /v1/videos[/{id}]`, `GET /v1/videos/{id}/content?variant=video|thumbnail|spritesheet` (completed only; streamed, allowlisted media types), `DELETE /v1/videos/{id}` (finished jobs only).
 - **`POST /v1/files`** multipart, `purpose=batch` then `file`: streamed to the provider while each line is validated (never stored or logged; ≤ `GATEWAY_MAX_BATCH_FILE_BYTES`, ≤ 50,000 lines, ≤ 4 MiB per line). Every line is `{custom_id, method:"POST", url:"/v1/chat/completions", body}` naming the same batch model with exactly one positive `max_completion_tokens`/`max_tokens` within the price's output ceiling. `stream`, `n>1`, audio output, web search and predicted outputs are rejected. An unpriced or unbounded file is refused before the upload completes. `GET /v1/files/{id}[/content]` for workspace-owned input/output/error files.
 - **`POST /v1/batches`** `{input_file_id, endpoint:"/v1/chat/completions", completion_window:"24h", metadata?}` (`output_expires_after` unsupported; one batch per file), `GET /v1/batches[/{id}]`, `POST /v1/batches/{id}/cancel`.

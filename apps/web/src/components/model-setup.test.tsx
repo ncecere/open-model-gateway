@@ -50,6 +50,17 @@ describe("Add model page", () => {
     expect((screen.getByRole("switch", { name: "Enabled" }) as HTMLElement).getAttribute("aria-checked")).toBe("false");
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("combobox", { name: /Connection/ })));
   });
+  it("marks Video as having no supported provider on every connection (OpenAI Videos API shut down 2026-09-24)", async () => {
+    for (const connection of ["c1", "c2"]) {
+      const { user } = mountAddModel(vi.fn(), connection);
+      await user.click(screen.getByRole("combobox", { name: "Type" }));
+      const video = await screen.findByRole("option", { name: /^Video/ });
+      expect(video.getAttribute("aria-disabled")).toBe("true");
+      expect(video.textContent).toContain("No supported provider yet");
+      expect(screen.getByRole("option", { name: "Text" }).getAttribute("aria-disabled")).not.toBe("true");
+      cleanup();
+    }
+  });
   it("keeps help to one hint: placeholders instead of sentences, no API paths or pricing prose, no provider label above Connection", () => {
     mountAddModel(vi.fn());
     const text = form().textContent ?? "";

@@ -7,6 +7,7 @@ Alerts tell people when budgets fill up, spend jumps, requests fail or a connect
 - **Admin › Settings › Alerts** (`/admin/settings/alerts`): installation-wide rules (Rules tab) and their incidents (History tab). Platform Admins edit; Auditors read. Rules open on their own page (`/admin/alerts/{id}`, `/admin/alerts/new`) with Cancel and Save in the header.
 - **Workspace › Settings › Alerts**: Team/Project rules, for that workspace's admins (actual membership). Platform readers may read them through the API; members don't see the tab.
 - **Personal workspaces** have built-in budget alerts for their owner only (80% and 100%). Nothing is configurable and nobody else sees them, Platform Admins included.
+- **SCIM safeguard:** a built-in installation alert, "SCIM tried to remove the last Platform Admin", fires when SCIM is refused for that reason ([SCIM](scim.md#the-last-platform-admin-is-protected)). It appears in Admin › Settings › Alerts › History and in Notifications for Platform Admins and Auditors, is emailed to Platform Admins, and clears once a second active Platform Admin exists. At most one is open at a time.
 - **Notifications** (`/notifications`, the bell in the top bar with the unread count): each person's alerts, with per-user read state.
 
 ## Rule kinds
@@ -36,7 +37,7 @@ A budget alert fires at the highest threshold reached. When spend later reaches 
 ## Delivery
 
 - **In-app.** Visibility follows live authority, not a stored recipient list: installation incidents for Platform Admins and Auditors; workspace incidents for that workspace's current owners and admins (and for platform readers when the rule notifies Platform Admins); built-in incidents for the personal owner. Losing a role removes the incidents from that person's feed. The feed covers the last 90 days.
-- **Email** through the [Admin › Settings › Email](settings.md#email) relay when one is set up, when an incident fires and when it clears: to the rule's recipients (workspace admins, Platform Admins and up to 10 validated addresses) or, for built-in alerts, the owner. Disabled users get nothing. Messages contain the summary, a scope label (Installation, the Team/Project or connection name, "Your personal workspace"), the rule name and time, and a link to Notifications when `GATEWAY_PUBLIC_URL` is set.
+- **Email** through the [Admin › Settings › Email](settings.md#email) relay when one is set up, when an incident fires and when it clears: to the rule's recipients (workspace admins, Platform Admins and up to 10 validated addresses) or, for built-in budget alerts, the owner (the SCIM safeguard goes to Platform Admins). Disabled users get nothing. Messages contain the summary, a scope label (Installation, the Team/Project or connection name, "Your personal workspace"), the rule name and time, and a link to Notifications when `GATEWAY_PUBLIC_URL` is set.
 - Outcomes are recorded per incident transition: `sent`, `partial`, `failed` (with a category: `credential`, `address`, `connection`, `tls`, `authentication`, `rejected`, `timeout`), `not_configured` or `no_recipients`. Sending holds the delivery row's lock, so replicas never send the same email twice; up to 25 deliveries per tick, sequentially, with the relay's own timeouts. A delivery left pending for a day is marked `failed`/`interrupted`. Email failures never stop evaluation.
 
 ## Privacy

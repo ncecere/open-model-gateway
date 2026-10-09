@@ -9,7 +9,7 @@ import { useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { BellRing, CheckCheck, History, Plus } from "lucide-react";
 import { api, platformPath, type Provider, type Session, type Workspace } from "../lib/api";
-import { conditionText, draftOf, emailLabels, eventsPath, kindHints, kindLabels, kindsFor, layerLabels, layersFor, newDraft, notificationsPath, recipientsText, resolutionLabels, ruleBody, ruleErrors, rulePath, rulesPath, unknownCostNote, whereText, type AlertEvent, type AlertKind, type AlertRule, type AlertScope, type BudgetLayer, type Notification, type RuleDraft, type RuleList } from "../lib/alerts";
+import { conditionText, draftOf, emailLabels, eventsPath, kindHints, kindLabels, kindsFor, layerLabels, layersFor, newDraft, notificationsPath, recipientsText, resolutionLabels, ruleBody, sourceText, ruleErrors, rulePath, rulesPath, unknownCostNote, whereText, type AlertEvent, type AlertKind, type AlertRule, type AlertScope, type BudgetLayer, type Notification, type RuleDraft, type RuleList } from "../lib/alerts";
 import { permissions, type DashboardSearch } from "../lib/permissions";
 import { Button, ErrorNotice, FormField, Heading, Input, NativeSelect, Stack, Textarea, useAction, useApi, useChoices } from "../components/ui";
 import { ResourcePage } from "../components/resource-page";
@@ -38,7 +38,7 @@ function EventState({ event }: { event: AlertEvent }) {
   if (event.state === "firing") return <StatusBadge tone={event.severity === "critical" ? "danger" : "warning"}>Firing</StatusBadge>;
   return <StatusBadge tone="neutral" title={event.resolution ? resolutionLabels[event.resolution] : undefined}>Resolved</StatusBadge>;
 }
-const eventSecondary = (e: AlertEvent) => [e.rule?.name ?? "Built-in budget alert", unknownCostNote(e) ? "Some cost unknown" : ""].filter(Boolean).join(" · ");
+const eventSecondary = (e: AlertEvent) => [sourceText(e), unknownCostNote(e) ? "Some cost unknown" : ""].filter(Boolean).join(" · ");
 
 export function NewRuleButton({ scope }: { scope: AlertScope }) {
   return <Button render={<ResourceLink search={recordSearch(scope, "new")} />}><Plus aria-hidden /> New rule</Button>;

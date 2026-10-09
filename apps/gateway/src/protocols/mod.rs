@@ -40,7 +40,8 @@ fn http_status(error: InferenceError) -> StatusCode {
         InferenceError::Busy
         | InferenceError::BudgetExceeded(_)
         | InferenceError::UnresolvedUsage(_)
-        | InferenceError::TokenReservationExceedsLimit(_) => StatusCode::TOO_MANY_REQUESTS,
+        | InferenceError::TokenReservationExceedsLimit(_)
+        | InferenceError::JobLimitExceeded(_) => StatusCode::TOO_MANY_REQUESTS,
         InferenceError::Timeout => StatusCode::GATEWAY_TIMEOUT,
         InferenceError::InvalidUpstream | InferenceError::UpstreamUnavailable => {
             StatusCode::BAD_GATEWAY
@@ -76,7 +77,10 @@ fn payload_too_large() -> Response {
 fn openai_error_body(error: InferenceError) -> serde_json::Value {
     let kind = if error.is_budget_denial() {
         "insufficient_quota"
-    } else if matches!(error, InferenceError::TokenReservationExceedsLimit(_)) {
+    } else if matches!(
+        error,
+        InferenceError::TokenReservationExceedsLimit(_) | InferenceError::JobLimitExceeded(_)
+    ) {
         "rate_limit_error"
     } else {
         error.code()

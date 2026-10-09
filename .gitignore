@@ -18,4 +18,4 @@ __pycache__/
 ai.env
 
 # Local screenshots of third-party accounts (may contain account details)
-_images/openrouter/
+_images/

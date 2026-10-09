@@ -6,6 +6,7 @@ pub mod catalog;
 pub mod config;
 pub mod demo;
 pub mod email;
+pub mod filestore;
 pub mod governance;
 pub mod http;
 pub mod identity;

@@ -14,6 +14,7 @@ import { DescriptionList } from "../../components/ui/description-list/descriptio
 import { RadioGroup } from "../../components/ui/radio-group/radio-group";
 import { toast } from "../../components/ui/toast/toast";
 import { EnvironmentLock, readOnlyNote, SaveControls, SettingsPage } from "./shared";
+import { StorageSection } from "./storage";
 import st from "./settings.module.css";
 
 type Policy = "deny" | "allow";
@@ -63,8 +64,9 @@ export function PrivacySettingsPage({ session }: { session: Session }) {
         : <FormField label="Compact details after" labelHint="Optional" description={`${r.minimum}–${r.maximum} days. Leave empty to keep details.`} error={submitted ? retention : undefined}><span className={st.days}><Input inputMode="numeric" value={form.retention} maxLength={4} placeholder="Keep" disabled={busy} onChange={e => setEdits({ ...form, retention: e.target.value })} /><span className={st.unit}>days</span></span></FormField>}
     </Card>
     <Card title="Prompts and responses" description="Request logs hold metadata only: model, key, tokens, cost, timing and status.">
-      <DescriptionList dividers items={[{ label: "Prompt and response bodies", value: <Badge tone="good">Never stored</Badge> }]} />
+      <DescriptionList dividers items={[{ label: "Prompt and response bodies in request logs", value: <Badge tone="good">Never stored</Badge> }]} />
     </Card>
+    <StorageSection session={session} />
     <SaveControls writable={edit && !(dc.locked && r.locked)} dirty={dirty} invalid={submitted && invalid} busy={busy} saveLabel="Save settings" onSave={() => void save()} onDiscard={() => { setEdits(undefined); setSubmitted(false); setError(undefined); }} />
   </div>);
 }

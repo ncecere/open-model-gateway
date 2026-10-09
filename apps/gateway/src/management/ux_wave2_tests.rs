@@ -779,3 +779,138 @@ async fn model_reads_include_created_at_and_catalog_sorts(pool: PgPool) {
         StatusCode::BAD_REQUEST
     );
 }
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn jobs_at_once_stacks_like_other_limits(pool: PgPool) {
+    let f = fixture(&pool).await;
+    // Type defaults start at 2; the effective workspace limit inherits it.
+    let (status, t) = call(
+        &f.s,
+        &f.admin,
+        "GET",
+        "/api/v1/platform/workspace-types/team/policy",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{t}");
+    assert_eq!(t["policy"]["concurrent_jobs"], 2);
+    let ws_policy = format!("/api/v1/workspaces/{}/policy", f.team);
+    let (_, w) = call(&f.s, &f.owner, "GET", &ws_policy, json!({})).await;
+    assert_eq!(
+        (
+            w["effective"]["concurrent_jobs"].clone(),
+            w["policy"]["concurrent_jobs"].clone()
+        ),
+        (json!(2), Value::Null)
+    );
+    // Workspace layer: tighten-only, with a structured reason.
+    let mut body = rates(json!([]), Value::Null);
+    body["concurrent_jobs"] = json!(3);
+    let (status, v) = call(&f.s, &f.owner, "PUT", &ws_policy, body.clone()).await;
+    rejected(
+        status,
+        &v,
+        StatusCode::BAD_REQUEST,
+        "exceeds_parent_rate",
+        ("limit", "concurrent_jobs"),
+    );
+    body["concurrent_jobs"] = json!(1);
+    let (status, v) = call(&f.s, &f.owner, "PUT", &ws_policy, body.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    // A body without the field keeps the stored cap; null cannot remove it.
+    let (status, v) = call(
+        &f.s,
+        &f.owner,
+        "PUT",
+        &ws_policy,
+        rates(json!([]), json!(5)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let mut body = rates(json!([]), json!(5));
+    body["concurrent_jobs"] = Value::Null;
+    let (status, v) = call(&f.s, &f.owner, "PUT", &ws_policy, body).await;
+    rejected(
+        status,
+        &v,
+        StatusCode::FORBIDDEN,
+        "stored_rate_loosen_not_allowed",
+        ("limit", "concurrent_jobs"),
+    );
+    let (_, w) = call(&f.s, &f.owner, "GET", &ws_policy, json!({})).await;
+    assert_eq!(w["policy"]["concurrent_jobs"], 1);
+    assert_eq!(w["effective"]["concurrent_jobs"], 1);
+    assert_eq!(w["provenance"]["platform"]["concurrent_jobs"], 2);
+    // A key created with a jobs cap above the workspace's is refused.
+    let keys = format!("/api/v1/workspaces/{}/keys", f.team);
+    let (status, v) = call(
+        &f.s,
+        &f.member,
+        "POST",
+        &keys,
+        new_key(json!({"concurrent_jobs":2})),
+    )
+    .await;
+    rejected(
+        status,
+        &v,
+        StatusCode::BAD_REQUEST,
+        "exceeds_parent_rate",
+        ("limit", "concurrent_jobs"),
+    );
+    let (status, k) = call(
+        &f.s,
+        &f.member,
+        "POST",
+        &keys,
+        new_key(json!({"concurrent_jobs":1})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{k}");
+    assert_eq!(k["policy"]["concurrent_jobs"], 1);
+    // Platform layers are free (replacement override, installation).
+    let mut over = rates(json!([]), Value::Null);
+    over["concurrent_jobs"] = json!(8);
+    let (status, v) = call(
+        &f.s,
+        &f.admin,
+        "PUT",
+        &format!("/api/v1/platform/workspaces/{}/policy", f.team),
+        over,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let (_, p) = call(
+        &f.s,
+        &f.admin,
+        "GET",
+        &format!("/api/v1/platform/workspaces/{}/policy", f.team),
+        json!({}),
+    )
+    .await;
+    assert_eq!(
+        (
+            p["provenance"]["platform"]["concurrent_jobs"].clone(),
+            p["provenance"]["type_default"]["concurrent_jobs"].clone(),
+            p["effective"]["concurrent_jobs"].clone()
+        ),
+        (json!(8), json!(2), json!(1))
+    );
+    // Effective access shows the limit per layer.
+    let (status, a) = call(
+        &f.s,
+        &f.owner,
+        "GET",
+        &format!("/api/v1/workspaces/{}/access", f.team),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{a}");
+    let workspace = a["layers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["layer"] == "workspace")
+        .unwrap();
+    assert_eq!(workspace["limits"]["concurrent_jobs"], 1);
+}

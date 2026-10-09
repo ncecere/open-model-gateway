@@ -413,3 +413,75 @@ async fn notifications_follow_live_authority_and_never_leak_private_details(pool
     assert_eq!(closed["data"][0]["state"], "resolved");
     assert_eq!(closed["data"][0]["resolution"], "rule_disabled");
 }
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn scim_last_admin_incident_is_for_platform_readers(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let mut tx = pool.begin().await.unwrap();
+    assert!(
+        crate::alerts::fire_scim_last_admin(&mut tx, "user")
+            .await
+            .unwrap()
+    );
+    // At most one open incident: a repeat is absorbed.
+    assert!(
+        !crate::alerts::fire_scim_last_admin(&mut tx, "group")
+            .await
+            .unwrap()
+    );
+    tx.commit().await.unwrap();
+    // Email goes to Platform Admins (the relay is not configured here).
+    assert_eq!(crate::alerts::deliver_pending(&f.s, 10).await, 1);
+    let status: String = sqlx::query_scalar("SELECT d.status FROM alert_deliveries d JOIN alert_events e ON e.id=d.event_id WHERE e.builtin='scim_last_admin'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "not_configured");
+    for user in [&f.admin, &f.auditor] {
+        let (status, v) = call(
+            &f.s,
+            user,
+            "GET",
+            "/api/v1/platform/alerts/events?kind=scim_last_admin",
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{v}");
+        let event = &v["data"][0];
+        assert_eq!(
+            (
+                event["summary"].clone(),
+                event["builtin"].clone(),
+                event["rule"].clone(),
+                event["workspace"].clone()
+            ),
+            (
+                json!(crate::alerts::SCIM_LAST_ADMIN_SUMMARY),
+                json!(true),
+                Value::Null,
+                Value::Null
+            )
+        );
+        assert_eq!(event["details"], json!({"resource":"user"}));
+        let (_, n) = call(&f.s, user, "GET", "/api/v1/me/notifications", json!({})).await;
+        assert!(
+            n["data"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e["kind"] == "scim_last_admin"),
+            "{n}"
+        );
+    }
+    for user in [&f.owner, &f.member] {
+        let (_, n) = call(&f.s, user, "GET", "/api/v1/me/notifications", json!({})).await;
+        assert!(
+            !n["data"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e["kind"] == "scim_last_admin"),
+            "{n}"
+        );
+    }
+}

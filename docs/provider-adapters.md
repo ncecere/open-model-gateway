@@ -17,7 +17,7 @@ Providers are startup registry entries, not engine branches or database enums. M
 
 | Registry ID | Transport/profile |
 | --- | --- |
-| `openai` | Fixed `https://api.openai.com/v1`; native Chat, Responses, string embeddings, `gpt-image-*` image generation, audio transcription and speech, realtime sessions over `wss://api.openai.com/v1/realtime` (GA interface), and async jobs: `sora-*` videos and Chat Completions batches ([async jobs](async-jobs.md)). No arbitrary cloud endpoint override. |
+| `openai` | Fixed `https://api.openai.com/v1`; native Chat, Responses, string embeddings, `gpt-image-*` image generation, audio transcription and speech, realtime sessions over `wss://api.openai.com/v1/realtime` (GA interface), and async Chat Completions batches ([async jobs](async-jobs.md)). It no longer offers `videos`: OpenAI shut down the Sora 2 models and the Videos API on 2026-09-24. No arbitrary cloud endpoint override. |
 | `anthropic` | Fixed `https://api.anthropic.com/v1`; native Messages, representable Chat subset. |
 | `bedrock` | Server AWS identity, an allowlisted named profile or an assumed IAM role; explicit region; optional allowlisted VPC endpoint; SigV4 Converse/ConverseStream, not an OpenAI URL. |
 | `openai_compatible` | Explicit approved local Chat/embedding subset, not universal compatibility. |
@@ -93,10 +93,10 @@ Job methods on `ProviderAdapter` (`supports_video_request`, `create_video`, `ret
 
 OpenAI (shapes from the official OpenAPI spec via openai-python, 2026-10-08; mock-tested only, no paid calls):
 
-- **Videos:** `sora-*` upstream models only. `POST /videos` is a gateway-built multipart form with exactly `model, prompt, seconds, size`. `GET`/`DELETE /videos/{id}` and `GET /videos/{id}/content?variant=` are also used. Video `status` must be `queued|in_progress|completed|failed`. `seconds` is decimal text (an unparseable value is unknown). Only the error `code` is kept (sanitized to `[a-z_]`); messages are dropped. Content media types are allowlisted (`video/mp4`, images for thumbnails/spritesheets, generic binary) and streamed through.
+- **Videos (retired):** OpenAI shut down this API on 2026-09-24, so the adapter no longer declares `videos` and new jobs are refused before admission. The calls below remain for jobs created earlier and stay mock-tested. `sora-*` upstream models only. `POST /videos` is a gateway-built multipart form with exactly `model, prompt, seconds, size`. `GET`/`DELETE /videos/{id}` and `GET /videos/{id}/content?variant=` are also used. Video `status` must be `queued|in_progress|completed|failed`. `seconds` is decimal text (an unparseable value is unknown). Only the error `code` is kept (sanitized to `[a-z_]`); messages are dropped. Content media types are allowlisted (`video/mp4`, images for thumbnails/spritesheets, generic binary) and streamed through.
 - **Files/Batches:** `POST /files` is a chunked multipart stream (`purpose=batch` + `file`). A content error aborts the body, so the provider never receives a complete form. `POST /batches` carries `{input_file_id, endpoint:"/v1/chat/completions", completion_window:"24h", metadata?}`; `GET /batches/{id}` and `POST /batches/{id}/cancel` are also used. The batch `usage` maps to billing usage like Chat (`cached_tokens` is cache read; this schema has no cache writes, so they are zero). Malformed or partial usage is unknown. `GET /files/{id}/content` is streamed through to clients. For settlement it is stream-parsed line by line with bounded lines and a total cap; only each line's `response.body.usage` is read and bodies are dropped.
 - Upstream ids are validated (`[A-Za-z0-9._:-]{1,128}`) before use in a path. Statuses map like Chat, and error bodies are never read.
-- OpenRouter: not supported. Its `POST /api/v1/videos` uses another request shape (`duration`, `resolution`, `aspect_ratio`, `polling_url`), and it has no Batch API.
+- OpenRouter: video is planned (the next video adapter). Its `POST /api/v1/videos` uses another request shape (`duration`, `resolution`, `aspect_ratio`, `polling_url`). It has no Batch API.
 
 ## Approve local endpoints out of band
 

@@ -7,7 +7,7 @@ import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/rea
 import { dashboardRouteTree } from "../router";
 import { abortRequests } from "../lib/api";
 import { admin, auditor, testClient } from "../lib/test-fixtures";
-import { emailErrors, httpsUrlError, isLoopback, type EmailDraft, type EmailSettings, type PrivacySettings, type SignInSettings } from "../lib/settings";
+import { emailErrors, httpsUrlError, isLoopback, storageBody, storageDraft, storageErrorsOf, type EmailDraft, type EmailSettings, type PrivacySettings, type SignInSettings, type StorageGroup, type StorageSettings } from "../lib/settings";
 
 beforeEach(() => { document.cookie = "omg_csrf=test-csrf; Path=/"; localStorage.clear(); sessionStorage.clear(); Object.defineProperty(Element.prototype, "getAnimations", { configurable: true, value: () => [] }); vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} }); Object.defineProperty(window, "matchMedia", { configurable: true, value: () => ({ matches: false, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent() { return false; } }) }); });
 afterEach(() => { cleanup(); abortRequests(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
@@ -19,6 +19,9 @@ const privacy: PrivacySettings = {
   prompt_response_storage: "never_stored", updated_at: "2026-10-08T00:00:00Z",
 };
 const email: EmailSettings = { configured: false, status: "not_configured", host: null, port: null, tls: null, username: null, password_ref: null, password_ref_allowed: null, from_address: null, from_name: null, public_url_configured: true, last_test: null, updated_at: "2026-10-08T00:00:00Z" };
+const group = (g: StorageGroup["group"], label: string, days: number | null, toggle: boolean): StorageGroup => ({ group: g, label, purposes: [], holds_customer_content: toggle, toggle, enabled: !toggle, active: false, retention_days: days, retention_editable: days !== null, default_retention_days: days, minimum: 1, maximum: 365, objects: 0, bytes: 0 });
+const storageOff: StorageSettings = { backend: "off", location: null, encryption: null, health: null, updated_at: "2026-10-08T00:00:00Z", groups: [group("batch", "Batch files", 7, true), group("video", "Video outputs", 7, true), group("user_files", "User files", 30, true), group("export", "Exports", 1, false), group("branding", "Branding", null, false)] };
+const storageOn: StorageSettings = { ...storageOff, backend: "s3", location: { kind: "s3", bucket: "omg-files", region: "us-east-1", endpoint_host: "minio.internal", endpoint_tls: false, path_style: true, prefix_set: true, auth: "static" }, encryption: { key_id: "k2026", decrypt_only_keys: 1 }, health: { checked_at: "2026-10-08T00:00:00Z", ok: true, error: null, current: true }, groups: storageOff.groups.map(g => g.group === "export" ? { ...g, active: true, objects: 2, bytes: 1500 } : g) };
 const ready: EmailSettings = { ...email, configured: true, status: "ready", host: "smtp.example.com", port: 587, tls: "starttls", from_address: "gateway@example.com" };
 
 type Handler = (path: string, init?: RequestInit) => unknown;
@@ -31,6 +34,7 @@ function serve(session = admin, handler: Handler = () => undefined) {
     if (path.endsWith("/settings/general")) return Promise.resolve(Response.json(general));
     if (path.endsWith("/settings/privacy")) return Promise.resolve(Response.json(privacy));
     if (path.endsWith("/settings/email")) return Promise.resolve(Response.json(email));
+    if (path.endsWith("/settings/storage")) return Promise.resolve(Response.json(storageOff));
     return Promise.resolve(Response.json({ data: [], has_more: false }));
   });
   vi.stubGlobal("fetch", fetch); return fetch;
@@ -164,6 +168,56 @@ describe("Admin › Settings", () => {
     expect(screen.getByText("Never")).toBeTruthy();
     expect(document.querySelector("main")!.textContent).toContain("1 key · refreshed");
     client.clear();
+  });
+});
+
+describe("Admin › Settings › Data & privacy › Storage", () => {
+  it("shows the store as off and keeps customer-content toggles unavailable", async () => {
+    serve();
+    const { client } = await mount("/admin/settings/privacy");
+    expect(await screen.findByRole("heading", { name: "Storage" })).toBeTruthy();
+    expect(await screen.findByText("GATEWAY_FILE_STORE")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Test storage/ })).toBeNull();
+    const batch = screen.getByRole("switch", { name: /Allow batch files/ });
+    expect(batch.getAttribute("aria-disabled") === "true" || batch.hasAttribute("disabled") || batch.getAttribute("data-disabled") !== null).toBe(true);
+    expect(screen.getByText("No expiry")).toBeTruthy();
+    client.clear();
+  });
+  it("lets admins allow batch storage, edit retention and test the store", async () => {
+    const user = userEvent.setup(), fetch = serve(admin, (path, init) => path.endsWith("/storage/test") && init?.method === "POST" ? { ok: false, error: "denied", backend: "s3", round_trip_ms: null } : path.endsWith("/settings/storage") && (init?.method ?? "GET") === "GET" ? storageOn : undefined);
+    const { client } = await mount("/admin/settings/privacy");
+    expect(await screen.findByText("omg-files · minio.internal (HTTP)")).toBeTruthy();
+    expect(screen.getByText("k2026")).toBeTruthy();
+    expect(screen.getByText("+1 decrypt-only")).toBeTruthy();
+    expect(screen.getByText("Healthy")).toBeTruthy();
+    expect(screen.getByText("1.5 kB")).toBeTruthy();
+    await user.click(screen.getByRole("switch", { name: /Allow batch files/ }));
+    const days = screen.getByRole("textbox", { name: "Exports retention in days" });
+    await user.clear(days); await user.type(days, "400");
+    await user.click(screen.getByRole("button", { name: "Save storage" }));
+    expect(await screen.findByText("Enter 1–365 days.")).toBeTruthy();
+    expect(puts(fetch).filter(([p]) => p.endsWith("/storage"))).toEqual([]);
+    await user.clear(days); await user.type(days, "3");
+    await user.click(screen.getByRole("button", { name: "Save storage" }));
+    await waitFor(() => expect(puts(fetch).filter(([p]) => p.endsWith("/storage"))).toEqual([["/api/v1/platform/settings/storage", { batch: { enabled: true, retention_days: 7 }, video: { enabled: false, retention_days: 7 }, user_files: { enabled: false, retention_days: 30 }, export: { retention_days: 3 } }]]));
+    await user.click(screen.getByRole("button", { name: /Test storage/ }));
+    expect(await screen.findByText("The store refused the credentials or permissions.")).toBeTruthy();
+    client.clear();
+  });
+  it("shows Auditors storage values read-only", async () => {
+    serve(auditor, path => path.endsWith("/settings/storage") ? storageOn : undefined);
+    const { client } = await mount("/admin/settings/privacy");
+    expect(await screen.findByText("omg-files · minio.internal (HTTP)")).toBeTruthy();
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Test storage/ })).toBeNull();
+    expect(screen.getByText("30 days")).toBeTruthy();
+    client.clear();
+  });
+  it("validates storage drafts like the server", () => {
+    const draft = storageDraft(storageOn);
+    expect(storageErrorsOf(storageOn, draft)).toEqual({});
+    expect(Object.keys(storageErrorsOf(storageOn, { ...draft, batch: { enabled: true, days: "0" } }))).toEqual(["batch"]);
+    expect(storageBody(draft).export).toEqual({ retention_days: 1 });
   });
 });
 

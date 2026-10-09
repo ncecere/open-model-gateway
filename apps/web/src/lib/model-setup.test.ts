@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { validateFields } from "./forms";
-import { readinessText, apiNameFrom, chosenConnection, defaultProtocols, protocolSupported, setupIdentityFields, setupSourceFields, workloadSupported, initialSetupValues, modelReadiness, protocolLabel, protocolOptions, protocolSetError, setupBody, setupFields, setupSteps, workloadGroups, type SetupChoices } from "./model-setup";
+import { readinessText, apiNameFrom, chosenConnection, defaultProtocols, protocolSupported, setupIdentityFields, setupSourceFields, workloadSupported, initialSetupValues, modelReadiness, protocolLabel, protocolOptions, protocolSetError, setupBody, setupFields, setupSteps, workloadDisabledReason, workloadGroups, type SetupChoices } from "./model-setup";
 import type { ModelReadiness, PlatformOverviewData } from "./api";
 import { draftBody, emptyDraft, validateDraft } from "./pricing";
 
@@ -22,7 +22,13 @@ describe("model readiness derivation (contract §2)", () => {
     // Setup gaps still win over configuration checks.
     expect(modelReadiness({ enabled: false, readiness: { ...counts, routes_over_token_limit: 1 } }).state).toBe("needs_setup");
   });
-  it("calls an enabled model with no enabled route Not serving (one vocabulary everywhere)", () => { expect(modelReadiness({ enabled: true, readiness: { ...counts, enabled_routes: 0, priced_enabled_routes: 0 } }).state).toBe("not_serving"); expect(readinessText.not_serving).toBe("Not serving"); expect(Object.values(readinessText)).toEqual(["Ready", "Needs setup", "Needs attention", "Not serving", "Readiness unknown"]); });
+  it("calls an enabled model with no enabled route Not serving (one vocabulary everywhere)", () => { expect(modelReadiness({ enabled: true, readiness: { ...counts, enabled_routes: 0, priced_enabled_routes: 0 } }).state).toBe("not_serving"); expect(readinessText.not_serving).toBe("Not serving"); expect(Object.values(readinessText)).toEqual(["Ready", "Needs setup", "Needs attention", "Not serving", "Provider API retired", "Readiness unknown"]); });
+  it("shows video models as Provider API retired, whatever their routes (OpenAI Videos API shut down 2026-09-24)", () => {
+    expect(modelReadiness({ enabled: true, supported_protocols: ["videos"], readiness: counts })).toEqual({ state: "retired", warnings: ["provider_retired"] });
+    expect(modelReadiness({ enabled: true, supported_protocols: ["videos"] }).state).toBe("retired");
+    expect(readinessText.retired).toBe("Provider API retired");
+    expect(modelReadiness({ enabled: true, supported_protocols: ["batches"], readiness: counts }).state).toBe("ready");
+  });
   it("never infers readiness from a missing server value", () => { expect(modelReadiness({ enabled: true })).toEqual({ state: "unknown", warnings: [] }); expect(modelReadiness({ enabled: true, readiness: null })).toEqual({ state: "unknown", warnings: [] }); });
 });
 
@@ -62,7 +68,11 @@ describe("Add model form", () => {
     expect(protocolSupported("responses", "anthropic")).toBe(false); expect(protocolSupported("messages", "anthropic")).toBe(true);
     expect(protocolSupported("responses", undefined)).toBe(true); expect(protocolSupported("responses", "future-profile")).toBe(true);
     expect(workloadGroups.filter(g => workloadSupported(g.workload, "anthropic")).map(g => g.label)).toEqual(["Text"]);
-    expect(workloadGroups.filter(g => !workloadSupported(g.workload, "openai")).map(g => g.label)).toEqual(["Rerank", "System One"]);
+    expect(workloadGroups.filter(g => !workloadSupported(g.workload, "openai")).map(g => g.label)).toEqual(["Rerank", "System One", "Video"]);
+    // Video has no supported provider on any connection, even an unknown profile.
+    expect(protocolSupported("videos", "future-profile")).toBe(false); expect(protocolSupported("videos", undefined)).toBe(false);
+    for (const profile of ["openai", "openrouter", "anthropic", undefined]) expect(workloadDisabledReason("videos", profile, "OpenAI")).toMatch(/^No supported provider yet\./);
+    expect(workloadDisabledReason("rerank", "openai", "OpenAI")).toBe("Not available on OpenAI"); expect(workloadDisabledReason("batches", "openai", "OpenAI")).toBeUndefined();
     expect(workloadGroups.filter(g => !workloadSupported(g.workload, "openrouter")).map(g => g.label)).toEqual(["Realtime audio", "Video", "Batch"]);
   });
   it("keeps help to the API-name hint and uses examples in the provider's format", () => {

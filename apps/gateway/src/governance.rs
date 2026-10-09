@@ -248,6 +248,8 @@ struct Policy {
     requests_per_minute: Option<i64>,
     tokens_per_minute: Option<i64>,
     concurrent_requests: Option<i64>,
+    /// "Jobs at once" (0018): active async jobs (video + batch).
+    concurrent_jobs: Option<i64>,
 }
 #[derive(sqlx::FromRow)]
 struct Budget {
@@ -258,11 +260,30 @@ struct Budget {
 }
 // A replacement HEADER, including all-null, replaces the type default. Local/key
 // policies compose, never coalesce away a stricter parent. Type limits are per workspace.
-const POLICIES: &str = "SELECT NULL::uuid workspace_id,NULL::uuid api_key_id,requests_per_minute,tokens_per_minute,concurrent_requests FROM installation_policy
- UNION ALL SELECT $1::uuid,NULL::uuid,p.requests_per_minute,p.tokens_per_minute,p.concurrent_requests FROM workspace_platform_policy_overrides p WHERE workspace_id=$1
- UNION ALL SELECT $1::uuid,NULL::uuid,p.requests_per_minute,p.tokens_per_minute,p.concurrent_requests FROM workspace_type_policies p JOIN workspaces w ON w.kind=p.kind WHERE w.id=$1 AND NOT EXISTS(SELECT 1 FROM workspace_platform_policy_overrides WHERE workspace_id=$1)
- UNION ALL SELECT $1::uuid,NULL::uuid,requests_per_minute,tokens_per_minute,concurrent_requests FROM workspace_local_policies WHERE workspace_id=$1
- UNION ALL SELECT $1::uuid,$2::uuid,requests_per_minute,tokens_per_minute,concurrent_requests FROM key_policies WHERE workspace_id=$1 AND governance_key_id=$2";
+const POLICIES: &str = "SELECT NULL::uuid workspace_id,NULL::uuid api_key_id,requests_per_minute,tokens_per_minute,concurrent_requests,concurrent_jobs FROM installation_policy
+ UNION ALL SELECT $1::uuid,NULL::uuid,p.requests_per_minute,p.tokens_per_minute,p.concurrent_requests,p.concurrent_jobs FROM workspace_platform_policy_overrides p WHERE workspace_id=$1
+ UNION ALL SELECT $1::uuid,NULL::uuid,p.requests_per_minute,p.tokens_per_minute,p.concurrent_requests,p.concurrent_jobs FROM workspace_type_policies p JOIN workspaces w ON w.kind=p.kind WHERE w.id=$1 AND NOT EXISTS(SELECT 1 FROM workspace_platform_policy_overrides WHERE workspace_id=$1)
+ UNION ALL SELECT $1::uuid,NULL::uuid,requests_per_minute,tokens_per_minute,concurrent_requests,concurrent_jobs FROM workspace_local_policies WHERE workspace_id=$1
+ UNION ALL SELECT $1::uuid,$2::uuid,requests_per_minute,tokens_per_minute,concurrent_requests,concurrent_jobs FROM key_policies WHERE workspace_id=$1 AND governance_key_id=$2";
+/// Live rate/concurrency/job accounting over the current UTC minute and live
+/// leases only (cost independent of history). `$1` workspace, `$2` key
+/// lineage, `$3` admission time, `$4` requests/min, `$5` tokens/min, `$6`
+/// requests at once, `$7` reserved tokens, `$8` jobs at once. Returns
+/// (rate limits ok, job limit ok).
+///
+/// - Job reservations never count toward requests/tokens per minute.
+/// - A job holds a "requests at once" slot only while its submission runs
+///   (no `async_jobs` row yet); afterwards it holds a job slot until the job
+///   is terminal, cancel was requested, or the lease expired.
+const RATE_ACCOUNTING: &str = r#"WITH accounting AS (
+  SELECT r.workspace_id,r.api_key_id,r.minute_start,r.state,r.lease_expires_at,r.reserved_tokens,r.input_tokens,r.output_tokens,r.billing_usage,e.workload_kind IN('videos','batches') AS job,j.id IS NOT NULL AS accepted,coalesce(j.state IN('completed','failed','cancelled','expired') OR j.cancel_requested_at IS NOT NULL,false) AS job_done FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id LEFT JOIN async_jobs j ON j.execution_id=r.execution_id WHERE r.minute_start=date_trunc('minute',$3::timestamptz,'UTC') OR (r.state='pending' AND r.lease_expires_at>$3)
+  UNION ALL SELECT e.workspace_id,e.api_key_id,date_trunc('minute',e.started_at,'UTC'),'unknown',NULL::timestamptz,NULL::bigint,e.input_tokens,e.output_tokens,e.billing_usage,false,false,false FROM inference_executions e WHERE e.started_at>=date_trunc('minute',$3::timestamptz,'UTC') AND e.started_at<date_trunc('minute',$3::timestamptz,'UTC')+interval '1 minute' AND NOT EXISTS(SELECT 1 FROM governance_reservations r WHERE r.execution_id=e.id)
+  ) SELECT
+  ($4::bigint IS NULL OR count(*) FILTER(WHERE NOT job AND minute_start=date_trunc('minute',$3::timestamptz,'UTC'))::numeric+1<=$4)
+  AND ($5::bigint IS NULL OR (count(*) FILTER(WHERE NOT job AND minute_start=date_trunc('minute',$3::timestamptz,'UTC') AND reserved_tokens IS NULL)=0 AND coalesce(sum(greatest(coalesce(reserved_tokens,0)::numeric,coalesce(input_tokens,0)::numeric+coalesce(output_tokens,0)::numeric,coalesce((billing_usage->>'total_input_tokens')::numeric,0)+coalesce(output_tokens,0)::numeric,coalesce((billing_usage->>'uncached_input_tokens')::numeric,0)+coalesce((billing_usage->>'cache_read_input_tokens')::numeric,0)+greatest(coalesce((billing_usage->>'cache_write_input_tokens')::numeric,0),coalesce((billing_usage->>'cache_write_default_input_tokens')::numeric,0)+coalesce((billing_usage->>'cache_write_5m_input_tokens')::numeric,0)+coalesce((billing_usage->>'cache_write_1h_input_tokens')::numeric,0))+coalesce(output_tokens,0)::numeric)) FILTER(WHERE NOT job AND minute_start=date_trunc('minute',$3::timestamptz,'UTC')),0)+$7::bigint<=$5))
+  AND ($6::bigint IS NULL OR count(*) FILTER(WHERE state='pending' AND lease_expires_at>$3 AND NOT accepted)::numeric+1<=$6),
+  ($8::bigint IS NULL OR count(*) FILTER(WHERE job AND state='pending' AND lease_expires_at>$3 AND NOT job_done)::numeric+1<=$8)
+  FROM accounting WHERE ($1::uuid IS NULL OR workspace_id=$1) AND ($2::uuid IS NULL OR api_key_id IN(SELECT id FROM api_keys WHERE workspace_id=$1 AND governance_key_id=$2))"#;
 /// Every applicable budget (one per scope and period). Override budgets apply
 /// only while the replacement header exists; type budgets only without one.
 /// Each budget is checked over its own window; a child can never loosen a
@@ -463,16 +484,24 @@ async fn admit_unobserved(
         {
             return Err(InferenceError::Configuration);
         }
+        // A realtime session holds one minimal response window, resized from
+        // the session's context by its first `response.create` (`realtime`).
+        let realtime = (workload.kind == WorkloadKind::Realtime).then(|| {
+            crate::inference::realtime::ResponseBound::admission(
+                u32::try_from(output).unwrap_or(u32::MAX),
+            )
+        });
         (
-            Some(
-                p.input_token_limit
+            Some(match realtime {
+                Some(window) => p.realtime_tokens(window)?,
+                None => p
+                    .input_token_limit
                     .checked_mul(requests)
                     .and_then(|n| n.checked_add(output))
                     .ok_or(InferenceError::Configuration)?,
-            ),
-            // A realtime session holds one response window (`realtime`).
-            if workload.kind == WorkloadKind::Realtime {
-                p.realtime_window(output as u64)?
+            }),
+            if let Some(window) = realtime {
+                p.realtime_window(window)?
             } else if matches!(workload.kind, WorkloadKind::Videos | WorkloadKind::Batches) {
                 p.bound_scaled(
                     requests as u64,
@@ -491,9 +520,12 @@ async fn admit_unobserved(
     // budget as a budget denial at that scope. v1/v2 keep their legacy
     // configuration error.
     let v3_unbounded = price.as_ref().is_some_and(|p| p.pricing_version == 3) && held.is_none();
+    // Async jobs (video, batch) are exempt from requests/tokens-per-minute
+    // limits and are counted by "jobs at once"; budgets apply in full.
+    let job = matches!(workload.kind, WorkloadKind::Videos | WorkloadKind::Batches);
     if policies
         .iter()
-        .any(|p| p.tokens_per_minute.is_some() && tokens.is_none())
+        .any(|p| p.tokens_per_minute.is_some() && tokens.is_none() && !job)
         || (!budgets.is_empty() && held.is_none() && !v3_unbounded)
     {
         return Err(InferenceError::Configuration);
@@ -506,10 +538,12 @@ async fn admit_unobserved(
             (Some(_), None) => LimitScope::Workspace,
             (Some(_), Some(_)) => LimitScope::ApiKey,
         };
+    // Budget/accounting denials rank above the job limit, which ranks above
+    // other retryable rate limits.
     let rank = |scope| match scope {
-        LimitScope::ApiKey => 3,
-        LimitScope::Workspace => 2,
-        LimitScope::Installation => 1,
+        LimitScope::ApiKey => 4,
+        LimitScope::Workspace => 3,
+        LimitScope::Installation => 2,
     };
     let mut denial: Option<(u8, InferenceError)> = None;
     let mut deny = |found: (u8, InferenceError)| {
@@ -521,10 +555,17 @@ async fn admit_unobserved(
     // cost does not grow with history.
     for p in policies {
         let scope = limit_scope(p.workspace_id, p.api_key_id);
+        // Jobs are exempt from per-minute limits; interactive work never
+        // checks the job limit.
+        let (requests_per_minute, tokens_per_minute, concurrent_jobs) = if job {
+            (None, None, p.concurrent_jobs)
+        } else {
+            (p.requests_per_minute, p.tokens_per_minute, None)
+        };
         // A reservation that alone exceeds a tokens-per-minute limit can never
         // be admitted, however idle the minute is: report it honestly (scope
         // kind only, never amounts) instead of a transient rate limit.
-        if p.tokens_per_minute
+        if tokens_per_minute
             .zip(tokens)
             .is_some_and(|(limit, reserved)| reserved > limit)
         {
@@ -534,21 +575,28 @@ async fn admit_unobserved(
             ));
             continue;
         }
-        if p.requests_per_minute.is_none()
-            && p.tokens_per_minute.is_none()
+        if requests_per_minute.is_none()
+            && tokens_per_minute.is_none()
             && p.concurrent_requests.is_none()
+            && concurrent_jobs.is_none()
         {
             continue;
         }
-        let rate_ok:bool=sqlx::query_scalar(r#"WITH accounting AS (
-          SELECT workspace_id,api_key_id,minute_start,state,lease_expires_at,reserved_tokens,input_tokens,output_tokens,billing_usage FROM governance_reservations WHERE minute_start=date_trunc('minute',$3::timestamptz,'UTC') OR (state='pending' AND lease_expires_at>$3)
-          UNION ALL SELECT e.workspace_id,e.api_key_id,date_trunc('minute',e.started_at,'UTC'),'unknown',NULL::timestamptz,NULL::bigint,e.input_tokens,e.output_tokens,e.billing_usage FROM inference_executions e WHERE e.started_at>=date_trunc('minute',$3::timestamptz,'UTC') AND e.started_at<date_trunc('minute',$3::timestamptz,'UTC')+interval '1 minute' AND NOT EXISTS(SELECT 1 FROM governance_reservations r WHERE r.execution_id=e.id)
-          ) SELECT
-          ($4::bigint IS NULL OR count(*) FILTER(WHERE minute_start=date_trunc('minute',$3::timestamptz,'UTC'))::numeric+1<=$4)
-          AND ($5::bigint IS NULL OR (count(*) FILTER(WHERE minute_start=date_trunc('minute',$3::timestamptz,'UTC') AND reserved_tokens IS NULL)=0 AND coalesce(sum(greatest(coalesce(reserved_tokens,0)::numeric,coalesce(input_tokens,0)::numeric+coalesce(output_tokens,0)::numeric,coalesce((billing_usage->>'total_input_tokens')::numeric,0)+coalesce(output_tokens,0)::numeric,coalesce((billing_usage->>'uncached_input_tokens')::numeric,0)+coalesce((billing_usage->>'cache_read_input_tokens')::numeric,0)+greatest(coalesce((billing_usage->>'cache_write_input_tokens')::numeric,0),coalesce((billing_usage->>'cache_write_default_input_tokens')::numeric,0)+coalesce((billing_usage->>'cache_write_5m_input_tokens')::numeric,0)+coalesce((billing_usage->>'cache_write_1h_input_tokens')::numeric,0))+coalesce(output_tokens,0)::numeric)) FILTER(WHERE minute_start=date_trunc('minute',$3::timestamptz,'UTC')),0)+$7::bigint<=$5))
-          AND ($6::bigint IS NULL OR count(*) FILTER(WHERE state='pending' AND lease_expires_at>$3)::numeric+1<=$6)
-          FROM accounting WHERE ($1::uuid IS NULL OR workspace_id=$1) AND ($2::uuid IS NULL OR api_key_id IN(SELECT id FROM api_keys WHERE workspace_id=$1 AND governance_key_id=$2))"#)
-            .bind(p.workspace_id).bind(p.api_key_id).bind(now).bind(p.requests_per_minute).bind(p.tokens_per_minute).bind(p.concurrent_requests).bind(tokens).fetch_one(&mut *tx).await.map_err(storage)?;
+        let (rate_ok, jobs_ok): (bool, bool) = sqlx::query_as(RATE_ACCOUNTING)
+            .bind(p.workspace_id)
+            .bind(p.api_key_id)
+            .bind(now)
+            .bind(requests_per_minute)
+            .bind(tokens_per_minute)
+            .bind(p.concurrent_requests)
+            .bind(tokens)
+            .bind(concurrent_jobs)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(storage)?;
+        if !jobs_ok {
+            deny((1, InferenceError::JobLimitExceeded(scope)));
+        }
         if !rate_ok {
             deny((0, InferenceError::Busy));
         }

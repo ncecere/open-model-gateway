@@ -20,7 +20,7 @@ export function modelEditBody(values: Record<string, string>) { const { enabled:
 /** Ready / Needs setup / Needs attention / Not serving (readinessText), from server readiness counts only (contract §2). */
 export function ReadinessBadge({ model, policy }: { model: Model; policy?: ServerPolicy }) {
   const r = modelReadiness(model, policy);
-  return <BitopBadge tone={r.state === "ready" ? "success" : r.state === "needs_setup" || r.state === "needs_attention" || r.state === "not_serving" ? "warning" : "neutral"} dot>{readinessText[r.state]}</BitopBadge>;
+  return <BitopBadge tone={r.state === "ready" ? "success" : r.state === "needs_setup" || r.state === "needs_attention" || r.state === "not_serving" || r.state === "retired" ? "warning" : "neutral"} dot>{readinessText[r.state]}</BitopBadge>;
 }
 export const readinessNote = (model: Model, policy?: ServerPolicy) => modelReadiness(model, policy).warnings.map(w => readinessLabels[w]).join(" · ");
 /** The server's provider policy for readiness checks; unknown (undefined) until loaded. */

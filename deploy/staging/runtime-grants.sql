@@ -89,7 +89,8 @@ GRANT UPDATE(name,description) ON public.catalogs TO gateway_runtime;
 GRANT UPDATE(model_id) ON public.workspace_model_grants TO gateway_runtime;
 -- Budgets (0005) live in policy_budgets and are replaced by DELETE+INSERT per
 -- scope; there is no UPDATE privilege on budget rows (amounts never rewrite in place).
-GRANT UPDATE(requests_per_minute,tokens_per_minute,concurrent_requests)
+-- concurrent_jobs ("Jobs at once", 0018) is edited like the other limits.
+GRANT UPDATE(requests_per_minute,tokens_per_minute,concurrent_requests,concurrent_jobs)
  ON public.installation_policy,public.workspace_type_policies,
  public.workspace_platform_policy_overrides,public.workspace_local_policies,public.key_policies
  TO gateway_runtime;
@@ -161,6 +162,18 @@ GRANT UPDATE(state,status,actual_microusd,floor_microusd,unbounded_cost,input_te
  cost_components,completed_at) ON public.realtime_responses TO gateway_runtime;
 GRANT EXECUTE ON FUNCTION public.valid_model_protocols_base(text[]),
  public.valid_cost_components_base(jsonb),public.valid_price_lines_base(jsonb) TO gateway_runtime;
+-- File store (0019): metadata only (objects are encrypted in the configured store).
+-- Rows are inserted once and never deleted: removal sets deleted_at and clears the
+-- filename/content type. Identity, ownership, purpose, backend and key id are fixed;
+-- size/sha256/committed_at are written once and deleted rows are final (trigger).
+-- Settings: per-group toggles, retention and the last storage health check.
+GRANT SELECT,INSERT ON public.stored_files TO gateway_runtime;
+GRANT UPDATE(size_bytes,sha256,committed_at,expires_at,deleted_at,filename,content_type,
+ delete_attempts,last_delete_attempt_at,last_delete_error) ON public.stored_files TO gateway_runtime;
+GRANT UPDATE(file_batch_enabled,file_batch_retention_days,file_video_enabled,
+ file_video_retention_days,file_user_files_enabled,file_user_files_retention_days,
+ file_export_retention_days,file_store_last_check_at,file_store_last_check_ok,
+ file_store_last_check_error,file_store_last_check_target) ON public.installation_settings TO gateway_runtime;
 -- No UPDATE/DELETE/TRUNCATE of immutable prices, ledger or audit; no removal of
 -- users/workspaces/keys/history and no rewrite of immutable admission snapshots.
 COMMIT;

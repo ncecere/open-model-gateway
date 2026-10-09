@@ -39,6 +39,11 @@ const EVALUATION_LOCK: i64 = 72419507;
 /// Built-in personal budget alert thresholds (owner only).
 pub const PERSONAL_THRESHOLDS: [i32; 2] = [80, 100];
 pub const PERSONAL_BUILTIN: &str = "personal_budget";
+/// Built-in installation incident (0018): SCIM tried to remove platform
+/// access from the last active Platform Admin and was refused. Also its kind
+/// and subject: at most one is open at a time.
+pub const SCIM_LAST_ADMIN: &str = "scim_last_admin";
+pub const SCIM_LAST_ADMIN_SUMMARY: &str = "SCIM tried to remove the last Platform Admin";
 /// Attempt failures that indicate the upstream (not the request) is failing.
 pub const UPSTREAM_FAILURES: [&str; 4] = [
     "upstream_unavailable",
@@ -684,7 +689,8 @@ pub async fn evaluate_once(store: &Store) -> anyhow::Result<Option<Report>> {
         .execute(&mut *tx)
         .await?;
     let mut report = Report {
-        resolved: retire_inactive(&mut tx, None).await? as usize,
+        resolved: retire_inactive(&mut tx, None).await? as usize
+            + resolve_scim_last_admin(&mut tx).await?,
         ..Report::default()
     };
     let rules: Vec<Rule> = sqlx::query_as("SELECT r.id,r.workspace_id,r.kind,r.budget_layers,r.thresholds,r.spike_factor_percent,r.min_spend_microusd,r.window_minutes,r.error_rate_percent,r.min_requests,r.consecutive_failures,r.provider_connection_id FROM alert_rules r LEFT JOIN workspaces w ON w.id=r.workspace_id WHERE r.enabled AND r.deleted_at IS NULL AND (r.workspace_id IS NULL OR w.disabled_at IS NULL) ORDER BY r.created_at,r.id LIMIT $1")
@@ -731,6 +737,44 @@ pub async fn evaluate_once(store: &Store) -> anyhow::Result<Option<Report>> {
     }
     tx.commit().await?;
     Ok(Some(report))
+}
+
+/// Raise (or keep) the SCIM last-admin incident. `resource` is `user` or
+/// `group` only: no names, emails or ids. Idempotent while one is open.
+pub(crate) async fn fire_scim_last_admin(
+    tx: &mut Transaction<'_, Postgres>,
+    resource: &str,
+) -> Result<bool, sqlx::Error> {
+    let id = Uuid::new_v4();
+    let inserted = sqlx::query("INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,summary,details) VALUES($1,$2,$2,$2,1,'critical',$3,jsonb_build_object('resource',$4::text)) ON CONFLICT DO NOTHING")
+        .bind(id)
+        .bind(SCIM_LAST_ADMIN)
+        .bind(SCIM_LAST_ADMIN_SUMMARY)
+        .bind(resource)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected();
+    if inserted == 1 {
+        sqlx::query("INSERT INTO alert_deliveries(id,event_id,transition) VALUES($1,$2,'fired')")
+            .bind(Uuid::new_v4())
+            .bind(id)
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(inserted == 1)
+}
+
+/// The SCIM last-admin incident clears once a second active Platform Admin
+/// exists (the installation is no longer one SCIM change away from lockout).
+async fn resolve_scim_last_admin(tx: &mut Transaction<'_, Postgres>) -> Result<usize, sqlx::Error> {
+    let open: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM alert_events WHERE builtin=$1 AND resolved_at IS NULL AND (SELECT count(*) FROM effective_platform_roles WHERE role='admin')>=2 FOR UPDATE")
+        .bind(SCIM_LAST_ADMIN)
+        .fetch_all(&mut **tx)
+        .await?;
+    for id in &open {
+        resolve(tx, *id, "cleared").await?;
+    }
+    Ok(open.len())
 }
 
 // ---------- Delivery ----------
@@ -842,13 +886,15 @@ struct Pending {
     workspace_kind: Option<String>,
     connection_name: Option<String>,
     personal_workspace: Option<Uuid>,
+    event_id: Uuid,
+    builtin: Option<String>,
 }
 
 /// Send one pending delivery while holding its row lock (no double sends
 /// across replicas). Returns false when nothing was pending.
 async fn deliver_one(store: &Store, id: Uuid) -> anyhow::Result<bool> {
     let mut tx = store.pool.begin().await?;
-    let row: Option<Pending> = sqlx::query_as("SELECT d.transition,e.summary,e.severity,e.fired_at,e.resolved_at,e.rule_id,r.name rule_name,w.name workspace_name,w.kind workspace_kind,p.name connection_name,CASE WHEN e.builtin IS NOT NULL THEN e.workspace_id END personal_workspace FROM alert_deliveries d JOIN alert_events e ON e.id=d.event_id LEFT JOIN alert_rules r ON r.id=e.rule_id LEFT JOIN workspaces w ON w.id=e.workspace_id LEFT JOIN provider_connections p ON p.id=e.provider_connection_id WHERE d.id=$1 AND d.status='pending' FOR UPDATE OF d SKIP LOCKED")
+    let row: Option<Pending> = sqlx::query_as("SELECT d.transition,e.summary,e.severity,e.fired_at,e.resolved_at,e.rule_id,r.name rule_name,w.name workspace_name,w.kind workspace_kind,p.name connection_name,CASE WHEN e.builtin IS NOT NULL THEN e.workspace_id END personal_workspace,e.id event_id,e.builtin FROM alert_deliveries d JOIN alert_events e ON e.id=d.event_id LEFT JOIN alert_rules r ON r.id=e.rule_id LEFT JOIN workspaces w ON w.id=e.workspace_id LEFT JOIN provider_connections p ON p.id=e.provider_connection_id WHERE d.id=$1 AND d.status='pending' FOR UPDATE OF d SKIP LOCKED")
         .bind(id)
         .fetch_optional(&mut *tx)
         .await?;
@@ -864,6 +910,8 @@ async fn deliver_one(store: &Store, id: Uuid) -> anyhow::Result<bool> {
         workspace_kind: ws_kind,
         connection_name: connection,
         personal_workspace: personal,
+        event_id,
+        builtin,
     }) = row
     else {
         return Ok(false);
@@ -873,10 +921,13 @@ async fn deliver_one(store: &Store, id: Uuid) -> anyhow::Result<bool> {
  UNION ALL SELECT u.email FROM alert_rules r JOIN effective_workspace_memberships m ON m.workspace_id=r.workspace_id AND m.role IN ('owner','admin') JOIN users u ON u.id=m.user_id WHERE r.id=$1 AND r.notify_workspace_admins
  UNION ALL SELECT u.email FROM alert_rules r JOIN effective_platform_roles p ON p.role='admin' JOIN users u ON u.id=p.user_id WHERE r.id=$1 AND r.notify_platform_admins
  UNION ALL SELECT u.email FROM workspaces w JOIN users u ON u.id=w.owner_user_id JOIN effective_platform_roles p ON p.user_id=u.id WHERE w.id=$2 AND w.kind='personal' AND w.disabled_at IS NULL
+ UNION ALL SELECT u.email FROM alert_events e JOIN effective_platform_roles p ON p.role='admin' JOIN users u ON u.id=p.user_id WHERE e.id=$4 AND e.builtin=$5
 ) x WHERE x.email IS NOT NULL ORDER BY 1 LIMIT $3")
         .bind(rule)
         .bind(personal)
         .bind(MAX_RECIPIENTS)
+        .bind(event_id)
+        .bind(SCIM_LAST_ADMIN)
         .fetch_all(&mut *tx)
         .await?;
     let (settings, installation) = relay(&mut tx).await?;
@@ -927,7 +978,10 @@ async fn deliver_one(store: &Store, id: Uuid) -> anyhow::Result<bool> {
             resolved,
             critical: severity == "critical",
             scope,
-            rule: rule_name,
+            rule: rule_name.or_else(|| {
+                (builtin.as_deref() == Some(SCIM_LAST_ADMIN))
+                    .then(|| "Built-in SCIM safeguard".to_owned())
+            }),
             at: if resolved {
                 resolved_at.unwrap_or(fired_at)
             } else {

@@ -1210,4 +1210,210 @@ mod database {
             json!({"enabled": false})
         );
     }
+
+    async fn refused(app: &Router, method: Method, uri: &str, body: Option<Value>) {
+        let (status, _, error) = send(app, method, uri, Some(&bearer()), body).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{error}");
+        assert_eq!(
+            (
+                error["status"].clone(),
+                error["scimType"].clone(),
+                error["detail"].clone()
+            ),
+            (json!("409"), json!("mutability"), json!(LAST_ADMIN))
+        );
+        assert_eq!(error["schemas"], json!([ERROR_SCHEMA]));
+    }
+
+    async fn scalar(pool: &PgPool, sql: &str) -> i64 {
+        sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn scim_never_removes_the_last_active_platform_admin(pool: PgPool) {
+        let app = app(pool.clone(), true);
+        let auth = bearer();
+        let root = person(&pool, "root@example.com", Some("admin")).await;
+        let personal = workspace(&pool, "personal", Some(root)).await;
+        let root_key = key(&pool, personal, root).await;
+        session(&pool, root).await;
+        let uri = format!("/scim/v2/Users/{root}");
+        // Deactivation in every form is refused whole: no suspension, no revoked
+        // credentials, no partial attribute change.
+        refused(
+            &app,
+            Method::PATCH,
+            &uri,
+            Some(patch(json!([
+                {"op":"replace","path":"displayName","value":"Changed"},
+                {"op":"replace","value":{"active":false}}
+            ]))),
+        )
+        .await;
+        refused(
+            &app,
+            Method::PUT,
+            &uri,
+            Some(json!({"userName":"root@example.com","displayName":"Changed","active":false})),
+        )
+        .await;
+        refused(&app, Method::DELETE, &uri, None).await;
+        assert_eq!(state(&pool, root).await, (false, None));
+        assert!(!revoked(&pool, root_key).await);
+        assert_eq!(sessions_open(&pool, root).await, 1);
+        assert_eq!(
+            platform_grants(&pool, root).await,
+            [("manual".into(), "admin".into())]
+        );
+        let (_, _, body) = send(&app, Method::GET, &uri, Some(&auth), None).await;
+        assert_eq!(body["active"], true);
+        assert!(body.get("displayName").is_none(), "{body}");
+        let scim_rows = scalar(&pool, "SELECT count(*) FROM scim_users").await;
+        assert_eq!(scim_rows, 0, "nothing of the refused writes was stored");
+        // Every refusal is audited (no names or emails); one alert stays open.
+        assert_eq!(
+            scalar(&pool, "SELECT count(*) FROM audit_events WHERE action='scim.last_admin_protected' AND actor_user_id IS NULL AND metadata='{}'").await,
+            3
+        );
+        assert_eq!(
+            scalar(&pool, "SELECT count(*) FROM audit_events WHERE action IN ('scim.user.updated','scim.user.deactivated')").await,
+            0
+        );
+        let (summary, severity, workspace_id): (String, String, Option<Uuid>) = sqlx::query_as("SELECT summary,severity,workspace_id FROM alert_events WHERE builtin='scim_last_admin' AND kind='scim_last_admin' AND resolved_at IS NULL")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(
+            (summary.as_str(), severity.as_str(), workspace_id),
+            (
+                "SCIM tried to remove the last Platform Admin",
+                "critical",
+                None
+            )
+        );
+        assert_eq!(
+            scalar(&pool, "SELECT count(*) FROM alert_deliveries d JOIN alert_events e ON e.id=d.event_id WHERE e.builtin='scim_last_admin'").await,
+            1
+        );
+
+        // Group provenance: Ann is an Admin only through a SCIM-pushed group.
+        mapping_platform(&pool, ISSUER, "Admins", "admin").await;
+        let ann = person(&pool, "ann@example.com", None).await;
+        let (status, _, group) = send(
+            &app,
+            Method::POST,
+            "/scim/v2/Groups",
+            Some(&auth),
+            Some(json!({
+                "displayName":"Admins","members":[{"value":ann.to_string()}]
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{group}");
+        let group_uri = format!("/scim/v2/Groups/{}", group["id"].as_str().unwrap());
+        assert_eq!(
+            platform_grants(&pool, ann).await,
+            [("group".into(), "admin".into())]
+        );
+        // With a second Admin, Root can be deactivated.
+        let (status, _, _) = send(
+            &app,
+            Method::PATCH,
+            &uri,
+            Some(&auth),
+            Some(patch(
+                json!([{"op":"replace","path":"active","value":false}]),
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(state(&pool, root).await.0);
+        // Now Ann is the last Admin: no group change may drop her grant.
+        for (method, body) in [
+            (
+                Method::PATCH,
+                Some(patch(
+                    json!([{"op":"remove","path":format!("members[value eq \"{ann}\"]")}]),
+                )),
+            ),
+            (
+                Method::PATCH,
+                Some(patch(
+                    json!([{"op":"replace","path":"displayName","value":"Former admins"}]),
+                )),
+            ),
+            (
+                Method::PUT,
+                Some(json!({"displayName":"Admins","members":[]})),
+            ),
+            (Method::DELETE, None),
+        ] {
+            refused(&app, method, &group_uri, body).await;
+        }
+        refused(&app, Method::DELETE, &format!("/scim/v2/Users/{ann}"), None).await;
+        assert_eq!(
+            platform_grants(&pool, ann).await,
+            [("group".into(), "admin".into())]
+        );
+        assert_eq!(state(&pool, ann).await, (false, None));
+        assert_eq!(
+            scalar(&pool, "SELECT count(*) FROM scim_group_members").await,
+            1
+        );
+        assert_eq!(
+            scalar(
+                &pool,
+                "SELECT count(*) FROM alert_events WHERE builtin='scim_last_admin'"
+            )
+            .await,
+            1,
+            "repeated refusals keep one open incident"
+        );
+        // A second active Admin clears the incident and allows the change.
+        person(&pool, "bob@example.com", Some("admin")).await;
+        crate::alerts::evaluate_once(&Store::new(pool.clone()))
+            .await
+            .unwrap();
+        assert_eq!(
+            scalar(&pool, "SELECT count(*) FROM alert_events WHERE builtin='scim_last_admin' AND resolution='cleared'").await,
+            1
+        );
+        let (status, _, _) = send(
+            &app,
+            Method::PATCH,
+            &group_uri,
+            Some(&auth),
+            Some(patch(json!([{"op":"remove","path":"members"}]))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert!(platform_grants(&pool, ann).await.is_empty());
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn concurrent_deactivations_keep_one_admin(pool: PgPool) {
+        let app = app(pool.clone(), true);
+        let a = person(&pool, "a@example.com", Some("admin")).await;
+        let b = person(&pool, "b@example.com", Some("admin")).await;
+        let body = || {
+            Some(patch(
+                json!([{"op":"replace","path":"active","value":false}]),
+            ))
+        };
+        let auth = bearer();
+        let (ua, ub) = (format!("/scim/v2/Users/{a}"), format!("/scim/v2/Users/{b}"));
+        let ((sa, _, _), (sb, _, _)) = tokio::join!(
+            send(&app, Method::PATCH, &ua, Some(&auth), body()),
+            send(&app, Method::PATCH, &ub, Some(&auth), body()),
+        );
+        let mut statuses = [sa, sb];
+        statuses.sort();
+        assert_eq!(statuses, [StatusCode::OK, StatusCode::CONFLICT]);
+        assert_eq!(
+            scalar(
+                &pool,
+                "SELECT count(*) FROM effective_platform_roles WHERE role='admin'"
+            )
+            .await,
+            1
+        );
+    }
 }

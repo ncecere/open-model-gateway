@@ -612,7 +612,7 @@ impl EventQuery {
             || self
                 .kind
                 .as_deref()
-                .is_some_and(|k| Kind::parse(k).is_none())
+                .is_some_and(|k| Kind::parse(k).is_none() && k != crate::alerts::SCIM_LAST_ADMIN)
         {
             return Err(invalid());
         }
@@ -653,7 +653,8 @@ async fn platform_events(
     let out = events(
         &mut tx,
         &q,
-        "r.scope='installation' AND $6::uuid IS NULL",
+        // Installation rules plus the built-in SCIM last-admin incident.
+        "(r.scope='installation' OR e.builtin='scim_last_admin') AND $6::uuid IS NULL",
         None,
     )
     .await?;
@@ -682,7 +683,7 @@ async fn workspace_events(
 // ---------- Notifications ----------
 
 /// Incidents the caller may see, by live authority (`$1` caller, `$2` platform reader).
-const VISIBLE: &str = "e.fired_at>now()-interval '90 days' AND ((e.builtin IS NOT NULL AND w.kind='personal' AND w.owner_user_id=$1 AND w.disabled_at IS NULL) OR (r.scope='installation' AND $2) OR (r.scope='workspace' AND w.kind IN ('team','project') AND w.disabled_at IS NULL AND (EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=e.workspace_id AND m.user_id=$1 AND m.role IN ('owner','admin')) OR (r.notify_platform_admins AND $2))))";
+const VISIBLE: &str = "e.fired_at>now()-interval '90 days' AND ((e.builtin IS NOT NULL AND w.kind='personal' AND w.owner_user_id=$1 AND w.disabled_at IS NULL) OR (r.scope='installation' AND $2) OR (e.builtin='scim_last_admin' AND $2) OR (r.scope='workspace' AND w.kind IN ('team','project') AND w.disabled_at IS NULL AND (EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=e.workspace_id AND m.user_id=$1 AND m.role IN ('owner','admin')) OR (r.notify_platform_admins AND $2))))";
 
 /// Notifications never take the installation lock (the bell polls).
 async fn viewer<'a>(

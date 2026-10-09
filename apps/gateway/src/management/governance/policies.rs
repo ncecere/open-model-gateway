@@ -21,6 +21,10 @@ pub(super) struct Policy {
     tokens_per_minute: Option<i64>,
     #[serde(deserialize_with = "nullable")]
     concurrent_requests: Option<i64>,
+    /// "Jobs at once" (0018). Optional for older clients: absent keeps the
+    /// stored value; explicit null clears it (tighten-only rules still apply).
+    #[serde(default, deserialize_with = "supplied")]
+    concurrent_jobs: Option<Option<i64>>,
     /// Deprecated single budget (amount per `budget_period`). Required unless
     /// `budgets` is supplied; then it must be absent.
     #[serde(default, deserialize_with = "supplied")]
@@ -51,16 +55,19 @@ pub(crate) struct Limits {
     pub(crate) requests_per_minute: Option<i64>,
     pub(crate) tokens_per_minute: Option<i64>,
     pub(crate) concurrent_requests: Option<i64>,
+    /// Concurrent active async jobs (video + batch).
+    pub(crate) concurrent_jobs: Option<i64>,
     pub(crate) budgets: Budgets,
 }
-type Row = (Option<i64>, Option<i64>, Option<i64>);
-const COLS: &str = "requests_per_minute,tokens_per_minute,concurrent_requests";
+type Row = (Option<i64>, Option<i64>, Option<i64>, Option<i64>);
+const COLS: &str = "requests_per_minute,tokens_per_minute,concurrent_requests,concurrent_jobs";
 impl Limits {
-    fn rates(&self) -> [Option<i64>; 3] {
+    fn rates(&self) -> [Option<i64>; 4] {
         [
             self.requests_per_minute,
             self.tokens_per_minute,
             self.concurrent_requests,
+            self.concurrent_jobs,
         ]
     }
     /// Deprecated single-budget mirror: the smallest amount (ties prefer the shorter period).
@@ -77,11 +84,12 @@ impl Limits {
     }
 }
 fn rates(row: Option<Row>) -> Limits {
-    let (r, t, c) = row.unwrap_or_default();
+    let (r, t, c, j) = row.unwrap_or_default();
     Limits {
         requests_per_minute: r,
         tokens_per_minute: t,
         concurrent_requests: c,
+        concurrent_jobs: j,
         budgets: Budgets::new(),
     }
 }
@@ -155,6 +163,7 @@ impl Policy {
             self.requests_per_minute,
             self.tokens_per_minute,
             self.concurrent_requests,
+            self.concurrent_jobs.flatten(),
         ]
         .into_iter()
         .flatten()
@@ -185,6 +194,7 @@ impl Policy {
             requests_per_minute: self.requests_per_minute,
             tokens_per_minute: self.tokens_per_minute,
             concurrent_requests: self.concurrent_requests,
+            concurrent_jobs: self.concurrent_jobs.unwrap_or(stored.concurrent_jobs),
             budgets,
         })
     }
@@ -198,7 +208,7 @@ pub(crate) fn json_budgets(b: &Budgets) -> Value {
 }
 pub(crate) fn json_limits(l: &Limits) -> Value {
     let legacy = l.legacy();
-    json!({"requests_per_minute":l.requests_per_minute,"tokens_per_minute":l.tokens_per_minute,"concurrent_requests":l.concurrent_requests,"monthly_budget_microusd":legacy.map(|(_,a)|a.to_string()),"budget_period":legacy.map_or("month",|(p,_)|p.as_str()),"budgets":json_budgets(&l.budgets)})
+    json!({"requests_per_minute":l.requests_per_minute,"tokens_per_minute":l.tokens_per_minute,"concurrent_requests":l.concurrent_requests,"concurrent_jobs":l.concurrent_jobs,"monthly_budget_microusd":legacy.map(|(_,a)|a.to_string()),"budget_period":legacy.map_or("month",|(p,_)|p.as_str()),"budgets":json_budgets(&l.budgets)})
 }
 /// Rate limits and same-period budgets take the minimum. Budgets of different
 /// periods are all enforced independently.
@@ -220,6 +230,7 @@ pub(crate) fn compose(a: &Limits, b: &Limits) -> Limits {
         requests_per_minute: min(a.requests_per_minute, b.requests_per_minute),
         tokens_per_minute: min(a.tokens_per_minute, b.tokens_per_minute),
         concurrent_requests: min(a.concurrent_requests, b.concurrent_requests),
+        concurrent_jobs: min(a.concurrent_jobs, b.concurrent_jobs),
         budgets,
     }
 }
@@ -236,10 +247,11 @@ pub(crate) fn compose(a: &Limits, b: &Limits) -> Limits {
 /// Rejections carry a stable `error.reason` and the period/limit name, never
 /// an amount (see `POLICY_REASONS`).
 fn validate_tighten(new: &Limits, parents: &[&Limits], old: &Limits) -> Result<(), ApiError> {
-    const RATE_NAMES: [&str; 3] = [
+    const RATE_NAMES: [&str; 4] = [
         "requests_per_minute",
         "tokens_per_minute",
         "concurrent_requests",
+        "concurrent_jobs",
     ];
     let bad = StatusCode::BAD_REQUEST;
     let forbidden = StatusCode::FORBIDDEN;
@@ -290,18 +302,24 @@ fn validate_tighten(new: &Limits, parents: &[&Limits], old: &Limits) -> Result<(
 /// Optional key policy supplied at key creation (absent fields inherit).
 /// Validated exactly like the key policy PUT against an empty stored layer.
 pub(crate) fn initial_key_limits(
-    rates: [Option<i64>; 3],
+    rates: [Option<i64>; 4],
     budgets: Option<&[BudgetInput]>,
 ) -> Result<Option<Limits>, ApiError> {
     if rates.into_iter().flatten().any(|n| !positive_limit(n)) {
         return Err(invalid());
     }
     let budgets = budgets.map(parse_budgets).transpose()?.unwrap_or_default();
-    let [requests_per_minute, tokens_per_minute, concurrent_requests] = rates;
+    let [
+        requests_per_minute,
+        tokens_per_minute,
+        concurrent_requests,
+        concurrent_jobs,
+    ] = rates;
     let l = Limits {
         requests_per_minute,
         tokens_per_minute,
         concurrent_requests,
+        concurrent_jobs,
         budgets,
     };
     Ok((l != Limits::default()).then_some(l))
@@ -399,10 +417,10 @@ async fn put_layer(
     scope: &Scope,
     l: &Limits,
 ) -> Result<(), ApiError> {
-    let sets = "requests_per_minute=excluded.requests_per_minute,tokens_per_minute=excluded.tokens_per_minute,concurrent_requests=excluded.concurrent_requests";
+    let sets = "requests_per_minute=excluded.requests_per_minute,tokens_per_minute=excluded.tokens_per_minute,concurrent_requests=excluded.concurrent_requests,concurrent_jobs=excluded.concurrent_jobs";
     let q = |table: &str, col: &str| {
         format!(
-            "INSERT INTO {table}({col},{COLS}) VALUES($1,$2,$3,$4) ON CONFLICT({col}) DO UPDATE SET {sets}"
+            "INSERT INTO {table}({col},{COLS}) VALUES($1,$2,$3,$4,$5) ON CONFLICT({col}) DO UPDATE SET {sets}"
         )
     };
     fn rates<'q>(
@@ -412,6 +430,7 @@ async fn put_layer(
         q.bind(l.requests_per_minute)
             .bind(l.tokens_per_minute)
             .bind(l.concurrent_requests)
+            .bind(l.concurrent_jobs)
     }
     match scope {
         Scope::Installation => {
@@ -447,7 +466,7 @@ async fn put_layer(
             .await?;
         }
         Scope::Key(w, k) => {
-            rates(sqlx::query(&format!("INSERT INTO key_policies(workspace_id,governance_key_id,{COLS}) VALUES($1,$2,$3,$4,$5) ON CONFLICT(workspace_id,governance_key_id) DO UPDATE SET {sets}")).bind(w).bind(k), l)
+            rates(sqlx::query(&format!("INSERT INTO key_policies(workspace_id,governance_key_id,{COLS}) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(workspace_id,governance_key_id) DO UPDATE SET {sets}")).bind(w).bind(k), l)
                 .execute(&mut **tx)
                 .await?;
         }
@@ -959,6 +978,62 @@ mod tests {
         assert!(validate_tighten(&empty(), &[&rpm(5)], &rpm(10)).is_err());
         assert!(validate_tighten(&rpm(4), &[&rpm(5)], &rpm(10)).is_ok());
         assert_eq!(compose(&rpm(5), &empty()), rpm(5));
+    }
+    fn jobs(n: i64) -> Limits {
+        Limits {
+            concurrent_jobs: Some(n),
+            ..Limits::default()
+        }
+    }
+    #[test]
+    fn jobs_at_once_is_a_tighten_only_composed_limit() {
+        // A child may not exceed a parent, nor raise or remove a stored cap.
+        let e = validate_tighten(&jobs(3), &[&jobs(2)], &empty()).unwrap_err();
+        assert_eq!(
+            (e.0, e.1),
+            (
+                StatusCode::BAD_REQUEST,
+                "concurrent_jobs exceeds a parent limit"
+            )
+        );
+        for new in [jobs(3), empty()] {
+            let e = validate_tighten(&new, &[], &jobs(2)).unwrap_err();
+            assert_eq!(
+                (e.0, e.1),
+                (
+                    StatusCode::FORBIDDEN,
+                    "A stored concurrent_jobs cap cannot be raised or removed"
+                )
+            );
+        }
+        assert!(validate_tighten(&jobs(1), &[&jobs(2)], &jobs(2)).is_ok());
+        // Absent child limits inherit; composition takes the minimum.
+        assert_eq!(compose(&jobs(2), &empty()), jobs(2));
+        assert_eq!(compose(&jobs(2), &jobs(1)), jobs(1));
+        assert_eq!(json_limits(&jobs(2))["concurrent_jobs"], 2);
+        assert_eq!(json_limits(&empty())["concurrent_jobs"], Value::Null);
+        // Older clients omit the field: the stored value is kept. Null clears;
+        // zero and negatives are invalid.
+        let stored = jobs(4);
+        let keep = body(json!({"budgets":[]})).unwrap();
+        assert_eq!(
+            keep.limits(&stored, Month).unwrap().concurrent_jobs,
+            Some(4)
+        );
+        let clear = body(json!({"budgets":[],"concurrent_jobs":null})).unwrap();
+        assert_eq!(clear.limits(&stored, Month).unwrap().concurrent_jobs, None);
+        let set = body(json!({"budgets":[],"concurrent_jobs":3})).unwrap();
+        assert_eq!(set.limits(&stored, Month).unwrap().concurrent_jobs, Some(3));
+        for bad in [0, -1] {
+            let p = body(json!({"budgets":[],"concurrent_jobs":bad})).unwrap();
+            assert!(p.limits(&stored, Month).is_err());
+        }
+        assert!(
+            initial_key_limits([None, None, None, Some(0)], None).is_err()
+                && initial_key_limits([None, None, None, Some(1)], None)
+                    .unwrap()
+                    .is_some_and(|l| l == jobs(1))
+        );
     }
     #[test]
     fn budget_tightening_is_per_period() {

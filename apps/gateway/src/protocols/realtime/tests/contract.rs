@@ -18,7 +18,16 @@ use crate::{
     bootstrap::{self, DevelopmentKeys},
     config::Environment,
     http,
-    inference::{Engine, EngineLimits, realtime::RealtimeLimits},
+    inference::{
+        Engine, EngineLimits,
+        realtime::{
+            RealtimeLimits, ResponseBound,
+            context::{
+                Growth, PCM_AUDIO_BYTES_PER_SECOND, Prior, audio_tokens, base64_decoded_bytes,
+                response_bound,
+            },
+        },
+    },
     providers::{
         ProviderRegistry,
         openai::realtime::{
@@ -33,9 +42,64 @@ use crate::{
 type Client = WebSocketStream<MaybeTlsStream<TcpStream>>;
 const AUDIO: &str = "U0VDUkVUQVVESU9QQVlMT0FE";
 const INSTRUCTIONS: &str = "never store this private instruction";
-/// One window: input ceiling 1000, output 100 →
+/// A window at the context cap: input ceiling 1000, output 100 →
 /// 1000×($4 + $0.40 + $32 + $0.40)/M + 100×($16 + $64)/M = 44,800 µUSD.
+/// Context-sized windows stay below it.
 const WINDOW: i64 = 44_800;
+/// The admission window: 256 framing tokens, output 100 →
+/// 1024 + ceil(102.4) + 1600 + 6400 = 9,127 µUSD.
+const ADMISSION: i64 = 9_127;
+/// 0.4125 s of PCM16 (19,800 bytes): at most 21 audio tokens at the
+/// gateway's conservative rate, enough for the 20 reported by `usage(…, 20, …)`.
+fn speech() -> String {
+    AUDIO.repeat(1100)
+}
+/// Hold of a window under the test prices with input ceiling `context`
+/// (each meter rounded up, as the gateway values it).
+fn hold(b: ResponseBound, context: u64) -> i64 {
+    let (text, audio, output) = b.ceilings(context);
+    let up = |n: u64, tenths: u64| (n * tenths).div_ceil(10) as i64;
+    up(text, 40) + up(text, 4) + up(audio, 320) + up(audio, 4) + up(output, 160) + up(output, 640)
+}
+/// The bound each forwarded `response.create` should have reserved, from the
+/// frames upstream received (the gateway's own `session.update` excluded) and
+/// the previous responses' conversation sizes (`None`: unknown usage).
+fn expected_bounds(g: &Gateway, priors: &[Option<Prior>]) -> Vec<ResponseBound> {
+    let frames = g.mock.shared.received.lock().unwrap().clone();
+    let mut growth = Growth::default();
+    let mut bounds = Vec::new();
+    for frame in frames {
+        let v: Value = serde_json::from_str(&frame).unwrap();
+        if v["event_id"] == "gw_session_init" {
+            continue;
+        }
+        let audio = v["audio"].as_str().map_or(0, str::len)
+            + v["item"]["content"].as_array().map_or(0, |parts| {
+                parts
+                    .iter()
+                    .filter_map(|p| p["audio"].as_str())
+                    .map(str::len)
+                    .sum()
+            });
+        growth.text_tokens += (frame.len() - audio) as u64;
+        growth.audio_tokens +=
+            audio_tokens(base64_decoded_bytes(audio), PCM_AUDIO_BYTES_PER_SECOND);
+        if v["type"] == "response.create" {
+            let prior = priors
+                .get(bounds.len())
+                .copied()
+                .unwrap_or(Some(Prior::default()));
+            let output = v["response"]["max_output_tokens"].as_u64().unwrap() as u32;
+            bounds.push(response_bound(
+                prior,
+                std::mem::take(&mut growth),
+                0,
+                output,
+            ));
+        }
+    }
+    bounds
+}
 /// usage(10 text incl. 4 cached, 20 audio incl. 5 cached, 10 text out, 40 audio out):
 /// 6×4 + ceil(4×0.4) + 10×16 + 15×32 + ceil(5×0.4) + 40×64 = 3,228 µUSD.
 const RESPONSE: i64 = 3_228;
@@ -170,7 +234,7 @@ impl Gateway {
         }
     }
     async fn responses(&self, id: &str) -> Vec<Value> {
-        sqlx::query_scalar("SELECT jsonb_build_object('sequence',sequence,'state',state,'status',status,'window',window_hold_microusd,'actual',actual_microusd,'input_audio_tokens',input_audio_tokens) FROM realtime_responses WHERE execution_id=$1::uuid ORDER BY sequence")
+        sqlx::query_scalar("SELECT jsonb_build_object('sequence',sequence,'state',state,'status',status,'window',window_hold_microusd,'actual',actual_microusd,'input_audio_tokens',input_audio_tokens,'input_text_tokens',input_text_tokens,'unbounded',unbounded_cost) FROM realtime_responses WHERE execution_id=$1::uuid ORDER BY sequence")
             .bind(id).fetch_all(&self.pool).await.unwrap()
     }
     async fn ledger(&self, id: &str) -> Vec<(String, Option<i64>)> {
@@ -226,6 +290,15 @@ async fn opened(client: &mut Client) {
         false
     );
 }
+/// Send audio the scripted usage can account for, and commit it.
+async fn speak(client: &mut Client) {
+    send(
+        client,
+        json!({"type":"input_audio_buffer.append","audio":speech()}),
+    )
+    .await;
+    send(client, json!({"type":"input_audio_buffer.commit"})).await;
+}
 async fn respond(client: &mut Client) -> Value {
     send(
         client,
@@ -251,12 +324,7 @@ async fn responses_settle_individually_and_the_session_sums_them(pool: PgPool) {
     .await;
     let mut client = g.connect().await;
     opened(&mut client).await;
-    send(
-        &mut client,
-        json!({"type":"input_audio_buffer.append","audio":AUDIO}),
-    )
-    .await;
-    send(&mut client, json!({"type":"input_audio_buffer.commit"})).await;
+    speak(&mut client).await;
     let done = respond(&mut client).await;
     assert_eq!(done["response"]["usage"]["output_tokens"], 50);
     respond(&mut client).await;
@@ -274,26 +342,51 @@ async fn responses_settle_individually_and_the_session_sums_them(pool: PgPool) {
     assert_eq!(row["actual"], 2 * RESPONSE);
     assert_eq!(row["components"].as_object().unwrap().len(), 15);
     assert_eq!(row["components"]["output_audio_tokens_microusd"], "5120");
-    // The second response extended the session by one window.
-    assert_eq!(row["reserved_tokens"], 2 * 1100);
+    assert_eq!(row["unbounded"], false);
+    // Windows are sized from the context: response 1 from the client's
+    // input (21 audio tokens), response 2 from response 1's usage
+    // (20 text, 60 audio tokens) plus its own request.
+    let bounds = expected_bounds(
+        &g,
+        &[
+            Some(Prior::default()),
+            Some(Prior {
+                text_tokens: 20,
+                audio_tokens: 60,
+            }),
+        ],
+    );
+    assert_eq!(bounds[0].audio_input, Some(21));
+    assert_eq!(bounds[1].audio_input, Some(60));
+    let tokens = |b: &ResponseBound| {
+        let (t, a, o) = b.ceilings(1000);
+        ((t + a).min(1000) + o) as i64
+    };
+    // Admission's window was resized for response 1; response 2 added one.
+    assert_eq!(
+        row["reserved_tokens"],
+        tokens(&bounds[0]) + tokens(&bounds[1])
+    );
     let id = row["id"].as_str().unwrap();
     let responses = g.responses(id).await;
     assert_eq!(responses.len(), 2);
-    for r in &responses {
+    for (r, b) in responses.iter().zip(&bounds) {
         assert_eq!(
             (r["state"].as_str(), r["status"].as_str()),
             (Some("settled"), Some("completed"))
         );
         assert_eq!(
             (r["window"].as_i64(), r["actual"].as_i64()),
-            (Some(WINDOW), Some(RESPONSE))
+            (Some(hold(*b, 1000)), Some(RESPONSE))
         );
+        assert!(RESPONSE <= hold(*b, 1000) && hold(*b, 1000) < WINDOW);
         assert_eq!(r["input_audio_tokens"], 20);
+        assert_eq!(r["unbounded"], false);
     }
     assert_eq!(
         g.ledger(id).await,
         [
-            ("hold".into(), Some(WINDOW)),
+            ("hold".into(), Some(ADMISSION)),
             ("settlement".into(), Some(2 * RESPONSE))
         ]
     );
@@ -328,6 +421,113 @@ async fn responses_settle_individually_and_the_session_sums_them(pool: PgPool) {
     }
 }
 
+/// A long conversation: each turn adds ~1,500 text tokens and some audio, so
+/// response 3 reads 4,760 input tokens. With the price's input ceiling set to
+/// the model's real context (32k), every window is sized from the session's
+/// actual context: holds stay above each response's cost and far below a
+/// 32k window (which this budget could not admit even once), and the session
+/// settles as known, not unbounded.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn a_growing_session_settles_known_with_context_sized_holds(pool: PgPool) {
+    const CONTEXT: u64 = 32_000;
+    const TURN: &str = "x";
+    // (text in, cached text, audio in, cached audio, text out, audio out)
+    let turns = [
+        (1_500, 0, 20, 0, 40, 60),
+        (3_040, 1_500, 100, 20, 40, 60),
+        (4_580, 3_040, 180, 100, 40, 60),
+    ];
+    let g = gateway(
+        pool,
+        Init::Safe,
+        turns
+            .iter()
+            .map(|t| Reply::Done(usage(t.0, t.1, t.2, t.3, t.4, t.5)))
+            .collect(),
+        limits(),
+    )
+    .await;
+    // Re-price at the model's real context window (prices are append-only).
+    let lines: Value = sqlx::query_scalar("SELECT price_lines FROM deployment_prices LIMIT 1")
+        .fetch_one(&g.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_token_limit,output_token_limit,pricing_version,price_lines,max_units) SELECT $1,deployment_id,$2,100,3,$3,'{}' FROM deployment_prices LIMIT 1")
+        .bind(Uuid::new_v4()).bind(CONTEXT as i64).bind(lines).execute(&g.pool).await.unwrap();
+    let full = hold(ResponseBound::unknown(100), CONTEXT);
+    const BUDGET: i64 = 200_000;
+    assert!(full > BUDGET, "a fixed 32k window would not fit at all");
+    crate::governance::set_test_budget(
+        &g.pool,
+        "local",
+        None,
+        Some(g.keys.team_workspace_id),
+        None,
+        "month",
+        Some(BUDGET),
+    )
+    .await;
+    let mut client = g.connect().await;
+    opened(&mut client).await;
+    for _ in &turns {
+        send(
+            &mut client,
+            json!({"type":"conversation.item.create","item":{"type":"message","role":"user","content":[{"type":"input_text","text":TURN.repeat(1_500)}]}}),
+        )
+        .await;
+        // 0.5 s of PCM16: at most 25 audio tokens.
+        send(
+            &mut client,
+            json!({"type":"input_audio_buffer.append","audio":"A".repeat(32_000)}),
+        )
+        .await;
+        send(&mut client, json!({"type":"input_audio_buffer.commit"})).await;
+        let done = respond(&mut client).await;
+        assert_eq!(done["response"]["status"], "completed");
+    }
+    client.close(None).await.unwrap();
+    let row = g.finished().await;
+    assert_eq!(row["state"], "succeeded");
+    assert_eq!(
+        (row["reservation"].as_str(), row["unbounded"].as_bool()),
+        (Some("settled"), Some(false)),
+        "{row}"
+    );
+    let responses = g.responses(row["id"].as_str().unwrap()).await;
+    assert_eq!(responses.len(), 3);
+    let priors: Vec<_> = std::iter::once(Some(Prior::default()))
+        .chain(turns.iter().map(|t| {
+            Some(Prior {
+                text_tokens: t.0 + t.4,
+                audio_tokens: t.2 + t.5,
+            })
+        }))
+        .collect();
+    let bounds = expected_bounds(&g, &priors);
+    let mut total = 0;
+    for ((r, b), t) in responses.iter().zip(&bounds).zip(&turns) {
+        let (window, actual) = (r["window"].as_i64().unwrap(), r["actual"].as_i64().unwrap());
+        assert_eq!(r["state"], "settled");
+        assert_eq!(r["unbounded"], false, "{r}");
+        assert_eq!(r["input_text_tokens"], t.0);
+        assert_eq!(window, hold(*b, CONTEXT));
+        assert!(actual <= window && window < full / 10, "{r}");
+        total += actual;
+    }
+    // The context really grew past the old 4,000-token demo ceiling.
+    let last = turns[2];
+    assert!(last.0 + last.2 > 4_000);
+    assert!(bounds[2].text_input.unwrap() + bounds[2].audio_input.unwrap() > 4_000);
+    assert_eq!(row["actual"], total);
+    assert_eq!(
+        (row["input_tokens"].as_u64(), row["output_tokens"].as_u64()),
+        (
+            Some(turns.iter().map(|t| t.0 + t.2).sum()),
+            Some(turns.iter().map(|t| t.4 + t.5).sum())
+        )
+    );
+}
+
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn unknown_usage_retains_the_window_hold(pool: PgPool) {
     let g = gateway(pool, Init::Safe, vec![Reply::NoUsage], limits()).await;
@@ -339,7 +539,8 @@ async fn unknown_usage_retains_the_window_hold(pool: PgPool) {
     assert_eq!(row["state"], "succeeded");
     assert_eq!(row["reservation"], "unknown");
     assert_eq!(row["actual"], Value::Null);
-    assert_eq!(row["held"], WINDOW);
+    let window = hold(expected_bounds(&g, &[])[0], 1000);
+    assert_eq!(row["held"], window, "the response's window is retained");
     assert_eq!(
         row["input_tokens"],
         Value::Null,
@@ -347,6 +548,7 @@ async fn unknown_usage_retains_the_window_hold(pool: PgPool) {
     );
     let id = row["id"].as_str().unwrap();
     assert_eq!(g.responses(id).await[0]["state"], "unknown");
+    assert_eq!(g.responses(id).await[0]["window"], window);
     assert_eq!(g.ledger(id).await[1], ("unknown".into(), Some(0)));
 }
 
@@ -366,7 +568,7 @@ async fn client_disconnect_closes_upstream_and_keeps_the_hold(pool: PgPool) {
     assert_eq!(row["state"], "cancelled");
     assert_eq!(row["finish_reason"], "cancelled");
     assert_eq!(row["reservation"], "unknown");
-    assert_eq!(row["held"], WINDOW);
+    assert_eq!(row["held"], hold(expected_bounds(&g, &[])[0], 1000));
     let responses = g.responses(row["id"].as_str().unwrap()).await;
     assert_eq!(
         (responses.len(), responses[0]["state"].as_str()),
@@ -384,7 +586,9 @@ async fn budget_exhaustion_sends_an_error_event_and_closes(pool: PgPool) {
         limits(),
     )
     .await;
-    // Admits one window; after one settled response a second window no longer fits.
+    // Admits the admission window and response 1's context-sized window;
+    // after response 1 settles, response 2's window no longer fits.
+    const BUDGET: i64 = 12_500;
     crate::governance::set_test_budget(
         &g.pool,
         "local",
@@ -392,11 +596,12 @@ async fn budget_exhaustion_sends_an_error_event_and_closes(pool: PgPool) {
         Some(g.keys.team_workspace_id),
         None,
         "month",
-        Some(WINDOW + 1000),
+        Some(BUDGET),
     )
     .await;
     let mut client = g.connect().await;
     opened(&mut client).await;
+    speak(&mut client).await;
     respond(&mut client).await;
     send(
         &mut client,
@@ -423,6 +628,17 @@ async fn budget_exhaustion_sends_an_error_event_and_closes(pool: PgPool) {
     );
     assert_eq!(row["reservation"], "settled");
     assert_eq!(row["actual"], RESPONSE);
+    // The premise: response 1's window fit, response 2's would not have.
+    let first = g.responses(row["id"].as_str().unwrap()).await[0]["window"]
+        .as_i64()
+        .unwrap();
+    let second = ResponseBound {
+        text_input: Some(20 + 256 + 83),
+        audio_input: Some(60),
+        output: 100,
+    };
+    assert!(ADMISSION <= BUDGET && first <= BUDGET);
+    assert!(RESPONSE + hold(second, 1000) > BUDGET);
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
@@ -606,6 +822,7 @@ async fn a_rejected_request_keeps_its_window_for_the_next_one(pool: PgPool) {
     .await;
     let mut client = g.connect().await;
     opened(&mut client).await;
+    speak(&mut client).await;
     send(
         &mut client,
         json!({"type":"response.create","event_id":"first"}),
@@ -626,11 +843,17 @@ async fn a_rejected_request_keeps_its_window_for_the_next_one(pool: PgPool) {
     let row = g.finished().await;
     assert_eq!(row["reservation"], "settled");
     assert_eq!(row["actual"], RESPONSE);
+    // The rejected request's window was resized, not extended, and its input
+    // still counts toward the next request's window.
+    let bounds = expected_bounds(&g, &[]);
+    let input = |b: &ResponseBound| b.text_input.unwrap() - 256 + b.audio_input.unwrap();
     assert_eq!(
-        row["reserved_tokens"], 1100,
-        "the rejected request's window was reused, not extended"
+        row["reserved_tokens"].as_u64(),
+        Some(input(&bounds[0]) + input(&bounds[1]) + 256 + 100)
     );
-    assert_eq!(g.responses(row["id"].as_str().unwrap()).await.len(), 1);
+    let responses = g.responses(row["id"].as_str().unwrap()).await;
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0]["unbounded"], false);
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]

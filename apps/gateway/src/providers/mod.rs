@@ -258,4 +258,11 @@ impl ProviderRegistry {
     pub fn get(&self, id: &str) -> Option<Arc<dyn ProviderAdapter>> {
         self.adapters.get(id).cloned()
     }
+
+    /// Whether any registered adapter supports `protocol` at all.
+    pub fn supports(&self, protocol: crate::inference::types::ApiProtocol) -> bool {
+        self.adapters
+            .values()
+            .any(|a| a.supports_protocol(protocol))
+    }
 }

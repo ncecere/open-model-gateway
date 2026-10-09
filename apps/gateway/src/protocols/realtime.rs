@@ -35,7 +35,10 @@ use crate::{
         Engine,
         client::ClientMetadata,
         error::InferenceError,
-        realtime::{RealtimeSession, RealtimeUpstream, UpstreamEvent},
+        realtime::{
+            RealtimeSession, RealtimeUpstream, UpstreamEvent,
+            context::{EventSize, base64_decoded_bytes, input_format_rate, session_config},
+        },
         repository::{FinishLabel, Outcome},
     },
     store::Store,
@@ -269,7 +272,43 @@ pub(crate) enum ClientAction {
     ResponseCreate {
         text: String,
         event_id: String,
+        /// The explicit per-response output bound (within the window).
+        max_output_tokens: u32,
     },
+}
+
+/// Base64 characters of the audio payloads one validated event carries.
+fn audio_chars(e: &Map<String, Value>) -> usize {
+    match e.get("type").and_then(Value::as_str) {
+        Some("input_audio_buffer.append") => {
+            e.get("audio").and_then(Value::as_str).map_or(0, str::len)
+        }
+        Some("conversation.item.create") => e
+            .get("item")
+            .and_then(|i| i.get("content"))
+            .and_then(Value::as_array)
+            .map_or(0, |parts| {
+                parts
+                    .iter()
+                    .filter_map(|p| p.get("audio").and_then(Value::as_str))
+                    .map(str::len)
+                    .sum()
+            }),
+        _ => 0,
+    }
+}
+/// What a validated event can add to the conversation, for hold sizing
+/// (`inference::realtime::context`): audio payloads as decoded audio bytes,
+/// everything else of the forwarded text as text bytes.
+fn event_size(e: &Map<String, Value>, forwarded: &str) -> EventSize {
+    let audio = audio_chars(e).min(forwarded.len());
+    EventSize {
+        text_bytes: (forwarded.len() - audio) as u64,
+        audio_bytes: base64_decoded_bytes(audio),
+        audio_bytes_per_second: (e.get("type").and_then(Value::as_str) == Some("session.update"))
+            .then(|| input_format_rate(&e["session"]["audio"]["input"]["format"]))
+            .flatten(),
+    }
 }
 
 fn object<'a>(value: &'a Value, param: &str) -> Result<&'a Map<String, Value>, Rejection> {
@@ -560,7 +599,16 @@ fn event_id(e: &Map<String, Value>) -> Result<Option<String>, Rejection> {
 }
 
 /// Validate one client text frame against the allowlist.
+#[cfg(test)]
 pub(crate) fn validate(text: &str, window: u32) -> Result<ClientAction, Rejection> {
+    validate_measured(text, window).map(|(action, _)| action)
+}
+/// [`validate`], plus the size of what the forwarded event can add to the
+/// conversation.
+pub(crate) fn validate_measured(
+    text: &str,
+    window: u32,
+) -> Result<(ClientAction, EventSize), Rejection> {
     let value: Value =
         serde_json::from_str(text).map_err(|_| invalid("event", "Events must be JSON objects"))?;
     let e = object(&value, "event")?;
@@ -616,10 +664,19 @@ pub(crate) fn validate(text: &str, window: u32) -> Result<ClientAction, Rejectio
                 let event_id = id
                     .clone()
                     .unwrap_or_else(|| format!("event_gw_{}", Uuid::new_v4().simple()));
+                // Validated within 1..=window above (or set to the window).
+                let max_output_tokens = response["max_output_tokens"]
+                    .as_u64()
+                    .and_then(|n| u32::try_from(n).ok())
+                    .unwrap_or(window);
                 let text =
                     json!({"type":"response.create","event_id":event_id,"response":response})
                         .to_string();
-                ClientAction::ResponseCreate { text, event_id }
+                ClientAction::ResponseCreate {
+                    text,
+                    event_id,
+                    max_output_tokens,
+                }
             }),
         _ => Err(Rejection {
             kind: "invalid_request_error",
@@ -630,7 +687,14 @@ pub(crate) fn validate(text: &str, window: u32) -> Result<ClientAction, Rejectio
             fatal: true,
         }),
     };
-    checked.map_err(with_id)
+    checked.map_err(with_id).map(|action| {
+        let size = match &action {
+            ClientAction::Forward(t) | ClientAction::ResponseCreate { text: t, .. } => {
+                event_size(e, t)
+            }
+        };
+        (action, size)
+    })
 }
 
 // --------------------------------------------------------------- Proxy ----
@@ -787,14 +851,15 @@ async fn proxy(socket: WebSocket, mut session: RealtimeSession) {
                 if !bucket.take() {
                     break End::RateLimited;
                 }
-                match validate(text.as_str(), window) {
+                match validate_measured(text.as_str(), window) {
                     Err(rejection) => break End::Rejected(rejection),
-                    Ok(ClientAction::Forward(text)) => {
+                    Ok((ClientAction::Forward(text), size)) => {
+                        session.client_event(size);
                         if let Err(error) = send_upstream(&mut upstream, text).await {
                             break End::Upstream(error);
                         }
                     }
-                    Ok(ClientAction::ResponseCreate { text, event_id }) => {
+                    Ok((ClientAction::ResponseCreate { text, event_id, max_output_tokens }, size)) => {
                         if session.response_open() || requested.is_some() {
                             // Upstream allows one active response; refuse
                             // explicitly without forwarding.
@@ -810,7 +875,8 @@ async fn proxy(socket: WebSocket, mut session: RealtimeSession) {
                             }
                             continue;
                         }
-                        if let Err(error) = session.reserve_window().await {
+                        session.client_event(size);
+                        if let Err(error) = session.reserve_window(max_output_tokens).await {
                             break End::Denied(error);
                         }
                         requested = Some(event_id);
@@ -838,6 +904,7 @@ async fn proxy(socket: WebSocket, mut session: RealtimeSession) {
                         if !safe && event["type"] == "session.updated" {
                             break End::Upstream(InferenceError::InvalidUpstream);
                         }
+                        session.session_config(session_config(&event["session"]));
                         session_text(event, &alias)
                     }
                     Some(Ok(UpstreamEvent::ResponseCreated { text, response_id })) => {

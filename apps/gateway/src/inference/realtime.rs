@@ -3,11 +3,15 @@
 //! durable reservation (see `.local/enterprise-rebuild/realtime-contract.md`
 //! and `docs/realtime.md`).
 //!
-//! Budget model: admission reserves one bounded *response window* (input up to
-//! the price's input ceiling, output up to [`RealtimeSession::window_output_tokens`]).
-//! Every later `response.create` first extends the session hold by another
-//! window under a fresh budget check; every `response.done` settles that
-//! response with the pinned price (unknown usage keeps its window). Dropping a
+//! Budget model: every response holds one bounded *response window*. Its
+//! input bound is the session's actual context ([`context`]: the previous
+//! response's usage plus the client input since, capped at the context
+//! window); its output bound is the response's `max_output_tokens`, at most
+//! [`RealtimeSession::window_output_tokens`]. Admission reserves a minimal
+//! window; every `response.create` resizes the reserved window (or adds one)
+//! under a fresh budget check before it is forwarded; every `response.done`
+//! settles that response with the pinned price (unknown usage keeps its
+//! window). Dropping a
 //! [`RealtimeSession`] drops the upstream socket synchronously and records the
 //! session as cancelled (holds retained).
 //!
@@ -18,6 +22,10 @@ use std::{pin::Pin, time::Duration};
 
 use futures_util::{Sink, Stream};
 use serde_json::Value;
+
+pub mod context;
+pub use context::ResponseBound;
+use context::{ContextTracker, EventSize, SessionConfig};
 
 use super::*;
 use crate::{
@@ -215,6 +223,9 @@ pub type UpstreamEvents = Pin<Box<dyn Stream<Item = Result<UpstreamEvent, Infere
 pub struct RealtimeUpstream {
     pub sink: UpstreamSink,
     pub events: UpstreamEvents,
+    /// The acknowledged effective configuration (instructions/tools size,
+    /// input audio format) that sizes the first response's hold.
+    pub config: SessionConfig,
 }
 
 /// Session setup the adapter must enforce before returning.
@@ -235,7 +246,8 @@ pub struct RealtimeFinish {
     /// A `response.create` was forwarded but neither created nor rejected:
     /// upstream may have started it, so its window is retained as unknown.
     pub unopened_request: bool,
-    pub window_output_tokens: u32,
+    /// The reserved window of that request.
+    pub window: ResponseBound,
 }
 
 /// An admitted, connected realtime session (one upstream attempt).
@@ -250,12 +262,13 @@ pub struct RealtimeSession {
     started: Instant,
     dispatched: Instant,
     upstream: Option<RealtimeUpstream>,
-    /// One reserved window not yet used by a response.
-    armed: bool,
+    /// One reserved window not yet used by a response, with its bound.
+    armed: Option<ResponseBound>,
     /// A `response.create` was forwarded and is neither created nor rejected.
     requested: bool,
     sequence: i32,
-    open: Option<(i32, String)>,
+    open: Option<(i32, String, ResponseBound)>,
+    context: ContextTracker,
     finished: bool,
     first_output_ms: Option<u64>,
     _permit: SharedPermit,
@@ -285,25 +298,38 @@ impl RealtimeSession {
             self.first_output_ms = Some(millis(self.dispatched.elapsed()));
         }
     }
-    /// Before forwarding `response.create`: make sure one window is reserved
-    /// (the admission window, or a fresh extension under budget checks).
-    pub async fn reserve_window(&mut self) -> Result<(), InferenceError> {
-        if self.armed {
-            self.requested = true;
-            return Ok(());
+    /// A validated client event about to be forwarded (it may add input).
+    pub fn client_event(&mut self, size: EventSize) {
+        self.context.client_event(size);
+    }
+    /// An effective session configuration reported by upstream.
+    pub fn session_config(&mut self, config: SessionConfig) {
+        self.context.session_config(config);
+    }
+    /// Before forwarding `response.create` with `max_output_tokens`: reserve
+    /// one window sized from the session's context. A reserved but unused
+    /// window (admission's, or a rejected request's) is resized; otherwise a
+    /// new window is added. Growth is budget-checked; shrinking releases.
+    pub async fn reserve_window(&mut self, max_output_tokens: u32) -> Result<(), InferenceError> {
+        if !(1..=self.window_output_tokens).contains(&max_output_tokens) {
+            return Err(InferenceError::InvalidRequest);
         }
-        timeout(
-            Duration::from_secs(5),
-            self.repository.realtime_reserve_window(
-                &self.principal,
-                self.id,
-                &self.model,
-                self.window_output_tokens,
-            ),
-        )
-        .await
-        .map_err(|_| InferenceError::Storage)??;
-        self.armed = true;
+        let bound = self.context.request(max_output_tokens);
+        if self.armed != Some(bound) {
+            timeout(
+                Duration::from_secs(5),
+                self.repository.realtime_reserve_window(
+                    &self.principal,
+                    self.id,
+                    &self.model,
+                    bound,
+                    self.armed,
+                ),
+            )
+            .await
+            .map_err(|_| InferenceError::Storage)??;
+        }
+        self.armed = Some(bound);
         self.requested = true;
         Ok(())
     }
@@ -312,26 +338,28 @@ impl RealtimeSession {
     /// next request.
     pub fn request_rejected(&mut self) {
         self.requested = false;
+        self.context.rejected();
     }
     /// `response.created`: the reserved window now belongs to this response.
     /// Without a reserved window (an unsolicited response) the session must
     /// fail closed.
     pub async fn open_response(&mut self, response_id: String) -> Result<(), InferenceError> {
-        if !self.armed || self.open.is_some() {
+        let (Some(bound), None) = (self.armed, &self.open) else {
             return Err(InferenceError::InvalidUpstream);
-        }
+        };
         let sequence = self.sequence.checked_add(1).ok_or(InferenceError::Busy)?;
         timeout(
             Duration::from_secs(3),
             self.repository
-                .realtime_open_response(self.id, sequence, self.window_output_tokens),
+                .realtime_open_response(self.id, sequence, bound),
         )
         .await
         .map_err(|_| InferenceError::Storage)??;
-        self.armed = false;
+        self.armed = None;
         self.requested = false;
         self.sequence = sequence;
-        self.open = Some((sequence, response_id));
+        self.open = Some((sequence, response_id, bound));
+        self.context.opened();
         Ok(())
     }
     /// `response.done`: settle the open response with its (possibly unknown) usage.
@@ -341,26 +369,23 @@ impl RealtimeSession {
         status: Option<ResponseStatus>,
         usage: Option<RealtimeUsage>,
     ) -> Result<(), InferenceError> {
-        let Some((sequence, open_id)) = &self.open else {
+        let Some((sequence, open_id, bound)) = &self.open else {
             return Err(InferenceError::InvalidUpstream);
         };
         if open_id != response_id {
             return Err(InferenceError::InvalidUpstream);
         }
-        let sequence = *sequence;
+        let (sequence, bound) = (*sequence, *bound);
+        let usage = usage.filter(RealtimeUsage::valid);
         timeout(
             Duration::from_secs(3),
-            self.repository.realtime_settle_response(
-                self.id,
-                sequence,
-                status,
-                usage.filter(RealtimeUsage::valid),
-                self.window_output_tokens,
-            ),
+            self.repository
+                .realtime_settle_response(self.id, sequence, status, usage, bound),
         )
         .await
         .map_err(|_| InferenceError::Storage)??;
         self.open = None;
+        self.context.done(usage);
         Ok(())
     }
     fn record(
@@ -380,7 +405,9 @@ impl RealtimeSession {
                 generation_ms: Some(millis(self.dispatched.elapsed())),
             },
             unopened_request: self.requested,
-            window_output_tokens: self.window_output_tokens,
+            window: self
+                .armed
+                .unwrap_or(ResponseBound::unknown(self.window_output_tokens)),
         }
     }
     /// Durably finish the session. An open response or unopened request keeps
@@ -581,10 +608,11 @@ impl Engine {
                 started,
                 dispatched: Instant::now(),
                 upstream: None,
-                armed: true,
+                armed: Some(ResponseBound::admission(window)),
                 requested: false,
                 sequence: 0,
                 open: None,
+                context: ContextTracker::new(SessionConfig::default()),
                 finished: false,
                 first_output_ms: None,
                 _permit: permit.clone(),
@@ -602,6 +630,7 @@ impl Engine {
             .unwrap_or(Err(InferenceError::Timeout));
             match connected {
                 Ok(upstream) => {
+                    session.context = ContextTracker::new(upstream.config);
                     session.upstream = Some(upstream);
                     session.dispatched = Instant::now();
                     return Ok(session);

@@ -138,7 +138,7 @@ async fn seed_data(store: &Store) -> Result<bool> {
         ("team", 100_000_000),
         ("project", 100_000_000),
     ] {
-        sqlx::query("INSERT INTO workspace_type_policies(kind,requests_per_minute,tokens_per_minute,concurrent_requests) VALUES($1,60,100000,8)").bind(kind).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO workspace_type_policies(kind,requests_per_minute,tokens_per_minute,concurrent_requests) VALUES($1,60,100000,8) ON CONFLICT(kind) DO UPDATE SET requests_per_minute=EXCLUDED.requests_per_minute,tokens_per_minute=EXCLUDED.tokens_per_minute,concurrent_requests=EXCLUDED.concurrent_requests").bind(kind).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO policy_budgets(layer,kind,period,amount_microusd) VALUES('type',$1,'month',$2)").bind(kind).bind(budget).execute(&mut *tx).await?;
     }
     // No installation-wide budget is enabled implicitly.

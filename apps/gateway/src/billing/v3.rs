@@ -653,20 +653,46 @@ pub fn bound(
     input_limit: u64,
     output_limit: u64,
 ) -> Result<Option<i64>, BillingError> {
-    bound_meters(lines, max, input_limit, output_limit, &Meter::ALL)
+    bound_meters(
+        lines,
+        max,
+        TokenCeilings::uniform(input_limit, output_limit),
+        &Meter::ALL,
+    )
 }
-/// [`bound`] for one realtime response window: additionally the audio-token
-/// meters, input and cached input at the input ceiling and output at the
-/// output ceiling (the context and output limits bound every modality).
+/// Token ceilings of one realtime response window, per modality. Each input
+/// modality is a total that includes its cached part: both the uncached and
+/// the cached meter of a modality are charged on the full total, so the bound
+/// holds for any cache split.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RealtimeCeilings {
+    pub text_input: u64,
+    pub audio_input: u64,
+    /// Text and audio output (each charged on the full output ceiling).
+    pub output: u64,
+}
+/// [`bound`] for one realtime response window: text-input meters (uncached,
+/// cached and the impossible cache writes) on the text ceiling, audio-input
+/// meters on the audio ceiling and both output meters on the output ceiling.
+/// Prompt tiers apply at the combined input.
 pub fn bound_realtime(
     lines: &PriceLines,
     max: &MaxUnits,
-    input_limit: u64,
-    output_limit: u64,
+    c: RealtimeCeilings,
 ) -> Result<Option<i64>, BillingError> {
     let mut meters = Meter::ALL.to_vec();
     meters.extend(Meter::AUDIO_TOKENS);
-    bound_meters(lines, max, input_limit, output_limit, &meters)
+    bound_meters(
+        lines,
+        max,
+        TokenCeilings {
+            input: c.text_input,
+            audio_input: c.audio_input,
+            output: c.output,
+            prompt: c.text_input.saturating_add(c.audio_input),
+        },
+        &meters,
+    )
 }
 /// [`bound`] for one async video job: additionally `output_video_seconds_ms`
 /// on its `max_units` ceiling at the highest (resolution variant) rate.
@@ -678,23 +704,48 @@ pub fn bound_video(
 ) -> Result<Option<i64>, BillingError> {
     let mut meters = Meter::ALL.to_vec();
     meters.extend(Meter::VIDEO);
-    bound_meters(lines, max, input_limit, output_limit, &meters)
+    bound_meters(
+        lines,
+        max,
+        TokenCeilings::uniform(input_limit, output_limit),
+        &meters,
+    )
+}
+/// Token-meter ceilings of [`bound_meters`]; `prompt` selects prompt tiers.
+#[derive(Clone, Copy)]
+struct TokenCeilings {
+    input: u64,
+    audio_input: u64,
+    output: u64,
+    prompt: u64,
+}
+impl TokenCeilings {
+    fn uniform(input: u64, output: u64) -> Self {
+        Self {
+            input,
+            audio_input: input,
+            output,
+            prompt: input,
+        }
+    }
 }
 fn bound_meters(
     lines: &PriceLines,
     max: &MaxUnits,
-    input_limit: u64,
-    output_limit: u64,
+    c: TokenCeilings,
     meters: &[Meter],
 ) -> Result<Option<i64>, BillingError> {
     lines.validate()?;
+    let input_limit = c.prompt;
     let mut total: i128 = 0;
     let mut unknown = false;
     for meter in meters.iter().copied() {
         let ceiling = if matches!(meter, Meter::OutputTokens | Meter::OutputAudioTokens) {
-            Some(output_limit)
-        } else if meter.is_token() || meter.is_audio_token() {
-            Some(input_limit)
+            Some(c.output)
+        } else if meter.is_audio_token() {
+            Some(c.audio_input)
+        } else if meter.is_token() {
+            Some(c.input)
         } else {
             max.0.get(&meter).copied()
         };
@@ -1141,6 +1192,52 @@ mod tests {
                 "Requests: Free",
                 "Output images: Free (1K)"
             ]
+        );
+    }
+
+    #[test]
+    fn realtime_bound_uses_per_modality_ceilings() {
+        let line = |m: &str, n: &str| json!({"meter":m,"microusd_per_batch":n,"batch":1000000,"unit_label":"/M tokens","sku_label":"L"});
+        let l = lines(json!([
+            line("input_tokens", "4000000"),
+            line("cache_read_tokens", "400000"),
+            line("output_tokens", "16000000"),
+            line("input_audio_tokens", "32000000"),
+            line("cache_read_audio_tokens", "400000"),
+            line("output_audio_tokens", "64000000"),
+            {"meter":"cache_write_tokens","not_applicable":true},
+            {"meter":"cache_write_5m_tokens","not_applicable":true},
+            {"meter":"cache_write_1h_tokens","not_applicable":true},
+        ]));
+        let mut max = MaxUnits::default();
+        for meter in Meter::ALL.into_iter().filter(|m| !m.is_token()) {
+            max.0.insert(meter, 0);
+        }
+        let c = |text_input, audio_input, output| RealtimeCeilings {
+            text_input,
+            audio_input,
+            output,
+        };
+        // Text (uncached and cached) on the text ceiling, audio on the audio
+        // ceiling, both outputs on the output ceiling; each meter rounded up.
+        assert_eq!(
+            bound_realtime(&l, &max, c(1_001, 7, 3)),
+            Ok(Some(4_004 + 401 + 224 + 3 + 48 + 192))
+        );
+        // A zero audio ceiling holds nothing for audio input.
+        assert_eq!(
+            bound_realtime(&l, &max, c(10, 0, 1)),
+            Ok(Some(40 + 4 + 16 + 64))
+        );
+        // The uniform bound is the same as equal per-modality ceilings.
+        assert_eq!(
+            bound_realtime(&l, &max, c(1_000, 1_000, 100)),
+            Ok(Some(44_800))
+        );
+        // Monotonic: a larger context never holds less.
+        assert!(
+            bound_realtime(&l, &max, c(5_000, 200, 100)).unwrap()
+                > bound_realtime(&l, &max, c(4_000, 200, 100)).unwrap()
         );
     }
 }

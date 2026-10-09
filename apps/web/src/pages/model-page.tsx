@@ -21,7 +21,7 @@ import { api, platformPath, type Catalog, type Deployment, type Model, type Mode
 import { deploymentRoutingBody, formatMicroUsd, modelRoutingBody, passiveHealth, type DeploymentRouting, type ModelRouting, type Price, type WorkloadKind } from "../lib/governance";
 import { HEADLINE_METERS, METER_SPECS, basePrice, cheapestPrice, countNoun, formatAudio, priceItems, priceTokenCeilings, unitFor, workloadLabels, workloadOf, type BasePrice } from "../lib/pricing";
 import { formatCount } from "../lib/reports";
-import { modelReadiness, modelSectionFor, protocolEndpoints, protocolLabel, protocolOptions, protocolProfiles, routeDataPolicy, routeSectionFor, routeTiers, workloadModalities, type RouteTiers } from "../lib/model-setup";
+import { modelReadiness, modelSectionFor, protocolEndpoints, protocolLabel, protocolOptions, protocolProfiles, readinessText, retiredWorkloads, routeDataPolicy, routeSectionFor, routeTiers, workloadModalities, type RouteTiers } from "../lib/model-setup";
 import { parseCheckboxValues, type Field } from "../lib/forms";
 import { ResourceLink } from "../components/navigation-link";
 import { LabBadge, LabIcon, ProviderIcon, TitleWithIcon, WithIcon } from "../components/provider-icon";
@@ -170,6 +170,8 @@ function ModelOverview({ model, policy, writable, profiles }: { model: Model; po
 /** Server counts only; fix actions jump to the section that resolves the step and are omitted for read-only viewers. */
 export function ModelReadinessChecklist({ model, writable, onJump, policy }: { model: Model; writable: boolean; onJump?: (section: string) => void; policy?: ServerPolicy }) {
   const ask = useAction(), r = model.readiness;
+  const retired = retiredWorkloads[workloadOf(model.supported_protocols)];
+  if (retired) return <Alert tone="warning" title={readinessText.retired}>{retired} Requests are refused with unsupported_capability; no job is created.</Alert>;
   if (!r) return <Alert tone="info">This gateway did not report readiness for the model, so it is shown as unknown rather than ready.</Alert>;
   const readiness = modelReadiness(model, policy), jump = (id: string, label: string) => !writable ? undefined : onJump ? { label, onClick: () => onJump(id) } : { label, render: <a href={`#${id}`} /> };
   const steps: ChecklistStep[] = [

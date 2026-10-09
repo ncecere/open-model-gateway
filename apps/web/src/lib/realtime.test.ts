@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Meter } from "./governance";
 import { AUDIO_TOKEN_METERS, draftBody, emptyDraft, metersFor, newRow, priceBound, priceItems, type PriceDraft } from "./pricing";
 import { protocolEndpoints, protocolOptions, protocolSetError, toggleProtocol, workloadGroups } from "./model-setup";
-import { modalityText, realtimeResponseState } from "./requests";
+import { modalityText, realtimeResponseState, realtimeStatusLabel } from "./requests";
 
 const priced = (draft: PriceDraft, meter: Meter, usd: string): PriceDraft => ({ ...draft, meters: { ...draft.meters, [meter]: { ...draft.meters[meter], mode: "priced", rows: [newRow(meter, { usd })] } } });
 
@@ -44,5 +44,15 @@ describe("realtime responses in Logs", () => {
     expect(realtimeResponseState({ state: "settled", status: "completed" })).toBe("succeeded");
     expect(realtimeResponseState({ state: "unknown", status: null })).toBe("unknown");
     expect(realtimeResponseState({ state: "pending", status: null })).toBe("in_progress");
+  });
+
+  it("shows a response stopped by max_output_tokens as incomplete, not failed", () => {
+    // Live acceptance: a 64-token audio response ended `incomplete` and was billed from its usage.
+    expect(realtimeResponseState({ state: "settled", status: "incomplete" })).toBe("succeeded");
+    expect(realtimeStatusLabel("incomplete")).toBe("Incomplete");
+    expect(realtimeResponseState({ state: "settled", status: "failed" })).toBe("failed");
+    expect(realtimeStatusLabel("failed")).toBe("Failed");
+    expect(realtimeStatusLabel("completed")).toBe("Succeeded");
+    expect(realtimeStatusLabel("cancelled")).toBe("Cancelled");
   });
 });

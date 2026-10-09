@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { AudioLines, Binary, BrainCircuit, Clapperboard, Headphones, Image, Layers, ListOrdered, MessageSquareText, Mic } from "lucide-react";
 import { ApiError, api, platformPath, type Catalog, type ModelProtocol, type ModelSetupResult, type Provider, type Session } from "../lib/api";
 import { validateFields, type Values } from "../lib/forms";
-import { apiNameFrom, chosenConnection, defaultProtocols, initialSetupValues, protocolSupported, selectedIds, setupBody, setupFields, setupIdentityFields, setupSourceFields, workloadGroups, workloadSupported, type SetupChoices } from "../lib/model-setup";
+import { apiNameFrom, chosenConnection, defaultProtocols, initialSetupValues, protocolSupported, selectedIds, setupBody, setupFields, setupIdentityFields, setupSourceFields, workloadDisabledReason, workloadGroups, workloadSupported, type SetupChoices } from "../lib/model-setup";
 import type { WorkloadKind } from "../lib/governance";
 import { draftBody, emptyDraft, validateDraft, type PriceDraft } from "../lib/pricing";
 import { PriceLinesEditor, focusFirstPriceError } from "../components/price-editor";
@@ -119,7 +119,7 @@ function AddModelForm({ connection }: { connection?: string }) {
         <Input id={`${id}-upstream_model`} name="upstream_model" aria-required disabled={busy} value={current.upstream_model} maxLength={upstreamField.maxLength} placeholder={upstreamField.placeholder} autoComplete="off" spellCheck={false} onChange={event => change("upstream_model", event.target.value)} />
       </FormField>
       <IconSelect<WorkloadKind> label="Type" id={`${id}-workload`} value={workload} disabled={busy} onChange={changeWorkload}
-        items={workloadGroups.map(g => ({ value: g.workload, label: g.label, icon: workloadIcons[g.workload], disabledReason: workloadSupported(g.workload, profile) ? undefined : `Not available on ${providerName}` }))} />
+        items={workloadGroups.map(g => ({ value: g.workload, label: g.label, icon: workloadIcons[g.workload], disabledReason: workloadDisabledReason(g.workload, profile, providerName) }))} />
       {workload === "generation"
         ? <ProtocolChips id={`${id}-supported_protocols`} value={current.supported_protocols} profile={profile} error={errors.supported_protocols} disabled={busy} onChange={value => change("supported_protocols", value)} />
         : errors.supported_protocols ? <p id={`${id}-supported_protocols`} tabIndex={-1} className={s.dangerText}>{errors.supported_protocols}</p> : <span />}

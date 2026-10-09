@@ -53,7 +53,7 @@ A SCIM user is a gateway user, and its `id` is the user's UUID. `GET` and filter
 
 - **Create** (`POST`): adds a user with the primary email (or `userName`, if that is an email). There are no grants. As with manual provisioning, the first OIDC sign-in with that verified email links the account once. A `userName` or email that is already in use returns `409 uniqueness`.
 - **Email change:** updates the directory email and ends the user's browser sessions, because a directory change is not fresh sign-in proof.
-- **Deactivate** (`active: false`, or `DELETE`): suspends the user. Their sessions and their personal and issued API keys are revoked. Grants are kept, and the normal 30-day cleanup applies.
+- **Deactivate** (`active: false`, or `DELETE`): suspends the user. Their sessions and their personal and issued API keys are revoked. Grants are kept, and the normal 30-day cleanup applies. Deactivating the last active Platform Admin is refused (see [below](#the-last-platform-admin-is-protected)).
 - **Reactivate** (`active: true`): lifts only SCIM's own suspension, within the 30-day grace period. Access again depends on the user's grants. **Revoked keys and sessions stay revoked**; the user signs in again and issues new keys. SCIM never lifts an administrative suspension.
 - After cleanup, the user's SCIM attributes and memberships are cleared and the user returns 404. A new `POST` creates a new user; old grants, workspaces and keys never come back.
 - SCIM's `active` is the provider's view. A user an administrator suspended can show `active: true` and still have no access.
@@ -72,11 +72,21 @@ A pushed group's `displayName` and `externalId` are both matched against the `gr
 - Unknown member ids return `400 invalidValue`; they are never dropped silently.
 - A new or changed mapping applies to existing SCIM members at their next sign-in or the next SCIM change to that group.
 
-There are no last-admin or last-owner safeguards for SCIM changes: like other external entitlement loss, the identity provider's decision wins. Keep a manual Admin grant for at least one break-glass account.
+### The last Platform Admin is protected
+
+SCIM never removes platform access from the last active Platform Admin. An active Platform Admin has a live Admin grant (manual, bootstrap or group provenance) on an account that is neither suspended nor cleaned up. If a SCIM write would leave the installation with none, it is refused whole:
+
+- **What is covered:** `PATCH`/`PUT` with `active: false`, `DELETE` of a user, and any Group change (`POST`, `PUT`, `PATCH`, `DELETE`, rename, `externalId` change, member removal) that would drop the last effective Admin grant.
+- **Response:** `409` with `scimType: "mutability"` and the detail "Can't deactivate the last active Platform Admin. Grant Admin to someone else first."
+- **No partial change:** the whole request rolls back. Other attributes in the same request are not stored, and no session or key is revoked.
+- **Record:** an audit event `scim.last_admin_protected` (no names or emails) and the built-in installation alert "SCIM tried to remove the last Platform Admin". Platform Admins and Auditors see it in Notifications and Admin › Settings › Alerts › History, and Platform Admins get it by email when a relay is set up. At most one is open at a time. It clears once a second active Platform Admin exists.
+- **Concurrency:** the check runs under the installation lock that manual grant and suspend changes also take, so two concurrent requests cannot both pass it.
+
+To retire the last Admin, grant Admin to someone else first, then repeat the change in the identity provider. The same rule applies to manual changes: Admin › Users and the management API refuse to revoke the last Admin grant, suspend the last Admin, or change or delete the group mapping that holds it. There is no last-owner safeguard for SCIM: losing a Team or Project owner through SCIM follows the identity provider.
 
 ## Operations and limits
 
-- Each write runs in one transaction under the installation lock, the same lock that sign-in and management use. A change to a very large group's name or `externalId` re-checks every member in that transaction.
-- Runtime database access is limited to the reviewed columns in `deploy/staging/runtime-grants.sql` (migration `0014_scim.sql`). SCIM user links cannot be deleted or re-keyed. Groups and memberships are directory state that can be removed, and grant history stays in the grant tables and audit log. `verify-privileges.sql` checks this and runs rollback-only probes.
+- Each write runs in one transaction under the installation lock, the same lock that sign-in and management use. The last-admin check runs at the end of that transaction (see [above](#the-last-platform-admin-is-protected)). A change to a very large group's name or `externalId` re-checks every member in that transaction.
+- Runtime database access is limited to the reviewed columns in `deploy/staging/runtime-grants.sql` (migration `0014_scim.sql`; the last-admin alert kind is in `0018_job_limits.sql`). SCIM user links cannot be deleted or re-keyed. Groups and memberships are directory state that can be removed, and grant history stays in the grant tables and audit log. `verify-privileges.sql` checks this and runs rollback-only probes.
 - Rate-limit `/scim` at the edge, and keep `Authorization` headers out of edge logs.
 - Tests in `apps/gateway/src/scim/tests.rs` use local requests only. Real Okta and Entra acceptance has not been run yet.

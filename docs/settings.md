@@ -1,12 +1,12 @@
 # Installation settings
 
-Admin › Settings holds installation-wide settings. Platform Admins change them; Auditors read them; Users don't see them. Values live in one database row (`installation_settings`, migration 0010) plus `installation.name`. Every change is written to the audit log (`settings.general_updated`, `settings.privacy_updated`, `settings.email_updated`, `settings.email_test`) with typed metadata only, never addresses, URLs or credentials. The API is in [management API](management-api.md#installation-settings).
+Admin › Settings holds installation-wide settings. Platform Admins change them; Auditors read them; Users don't see them. Values live in one database row (`installation_settings`, migration 0010) plus `installation.name`. Every change is written to the audit log (`settings.general_updated`, `settings.privacy_updated`, `settings.email_updated`, `settings.email_test`, `settings.storage_updated`, `settings.storage_test`) with typed metadata only, never addresses, URLs or credentials. The API is in [management API](management-api.md#installation-settings).
 
 | Page | Holds |
 | --- | --- |
 | General | Display name, support URL, logo URL, maximum lifetime of new human keys. |
 | Defaults & limits | The installation ceiling and Personal/Team/Project defaults (formerly Admin › Limits; `/admin/limits` still opens it). See [governance](governance.md). |
-| Data & privacy | OpenRouter data collection, request log retention, prompt/response storage. |
+| Data & privacy | OpenRouter data collection, request log retention, prompt/response storage, and the encrypted file store (Storage). |
 | Email | SMTP relay for invitations, status, test send. |
 | Sign-in | Read-only OIDC configuration, signing-key (JWKS) status and SCIM provisioning status; SSO group mappings stay on Admin › SSO groups. |
 
@@ -28,6 +28,22 @@ Admin › Settings holds installation-wide settings. Platform Admins change them
 When the variable is set, the page shows the effective value as locked and the API rejects changes with `409 reason:"setting_locked_by_environment"` (resending the stored value is allowed). Without it, the stored value applies: the replica that saves it switches at once and the others within one maintenance tick (5 seconds). Until a replica has read the setting it sends `deny`.
 
 Retention compacts settled request metadata older than the window (error code and latency are cleared and `details_redacted_at` is set), hourly in batches of up to 1000. It never deletes or changes usage, prices, reservations, the monetary ledger or the audit log; pending and unknown-cost records are kept. Without a value nothing is compacted.
+
+## Storage
+
+The Storage card on Data & privacy covers the encrypted [file store](file-storage.md). The backend, bucket or endpoint and encryption keys come from the server environment and are shown read-only: the backend kind, the bucket and endpoint **host** (marked HTTP when plaintext), the active encryption key ID with the number of decrypt-only keys, and the last health check (shown only when it was run against the current configuration).
+
+| Group | Purposes | Allow toggle | Retention (stored) |
+| --- | --- | --- | --- |
+| Batch files | `batch_input`, `batch_output` | `file_batch_enabled` (default off) | `file_batch_retention_days`, 1–365 (default 7) |
+| Video outputs | `video_output` | `file_video_enabled` (default off) | `file_video_retention_days`, 1–365 (default 7) |
+| User files | `user_file` | `file_user_files_enabled` (default off) | `file_user_files_retention_days`, 1–365 (default 30) |
+| Exports | `export` | follows the backend being on | `file_export_retention_days`, 1–365 (default 1) |
+| Branding | `branding` | follows the backend being on | never expires |
+
+The toggles cover groups that hold customer content. Turning one on requires a configured backend (otherwise `409 reason:"file_storage_not_configured"`) and a passing health check, which the server runs before saving (otherwise `409 reason:"file_storage_unhealthy"`). Turning a group off stops new files; existing files remain until their retention ends. Retention applies to existing files: a file expires at `created_at` plus the current retention, or at its own explicit expiry if that comes first.
+
+**Test storage** writes, reads and deletes a small random object and records the result (`file_store_last_check_*`, with a fingerprint of the configuration). At most 5 per admin per minute and 60 per hour (`429 reason:"storage_test_rate_limited"`). The audit log records `settings.storage_updated` and `settings.storage_test` with counts and the backend kind only.
 
 ## Email
 

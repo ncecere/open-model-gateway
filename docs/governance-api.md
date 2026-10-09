@@ -14,10 +14,10 @@ Money and financial aggregate/token counts are decimal **strings**; unknown meas
 | `/workspaces/{ws}/policy` | GET/PUT local tightening by owner/shared administrator. |
 | `/workspaces/{ws}/keys/{key}/policy` | GET/PUT visible key-lineage tightening; rotations retain consumption. |
 
-PUT accepts the **inner** object, with the three rate fields explicit plus one budget form, and returns `{ok:true}`:
+PUT accepts the **inner** object, with the three rate fields explicit plus one budget form, and returns `{ok:true}`. `concurrent_jobs` ("Jobs at once", 0018) is optional: absent keeps the stored value, null clears it (subject to tighten-only rules). GET always returns it.
 
 ```json
-{"requests_per_minute":120,"tokens_per_minute":null,"concurrent_requests":8,
+{"requests_per_minute":120,"tokens_per_minute":null,"concurrent_requests":8,"concurrent_jobs":2,
  "budgets":[{"period":"day","amount_microusd":"5000000"},{"period":"month","amount_microusd":"100000000"}]}
 ```
 
@@ -42,7 +42,7 @@ Tighten-only rejections keep their HTTP status and add a stable `error.reason` p
 | Status | `reason` | Detail | Cause |
 | --- | --- | --- | --- |
 | 400 | `exceeds_parent_budget` | `period` | Budget for P is above a parent budget for the same P. |
-| 400 | `exceeds_parent_rate` | `limit` | `requests_per_minute`, `tokens_per_minute` or `concurrent_requests` is above a parent cap. |
+| 400 | `exceeds_parent_rate` | `limit` | `requests_per_minute`, `tokens_per_minute`, `concurrent_requests` or `concurrent_jobs` is above a parent cap. |
 | 403 | `stored_budget_raise_not_allowed` | `period` | Raises the stored budget for that period. |
 | 403 | `period_change_not_allowed` | `period` | Removes the stored budget for that period, including moving it to another period. |
 | 403 | `stored_rate_loosen_not_allowed` | `limit` | Raises or clears a stored rate cap. |
@@ -57,12 +57,13 @@ Admission denials happen before dispatch and consume no quota. All use HTTP **42
 | --- | --- | --- |
 | Request/token minute or concurrency limit (gateway or provider) | `rate_limit_error` / `rate_limit_error` | Gateway or provider concurrency/rate limit reached |
 | The attempt's token reservation (price `input_token_limit` plus output reservation) alone exceeds a tokens-per-minute limit | `rate_limit_error` / `token_reservation_exceeds_limit` | The model's input+output token ceiling exceeds this API key's/workspace's (or the installation-wide) tokens-per-minute limit; lower the price ceilings or raise the limit |
+| A video or batch job would exceed a "Jobs at once" limit ([async jobs](async-jobs.md#job-limits)) | `rate_limit_error` / `job_limit_exceeded` | Too many jobs are running for this API key/workspace (jobs at once limit); wait for one to finish or cancel one, or the installation-wide jobs at once limit is reached |
 | Budget for the layer's current period would be exceeded | `insufficient_quota` / `budget_exceeded` | Budget for this API key/workspace would be exceeded in its current period, or Installation-wide budget cannot admit this request in its current period |
 | Unresolved unbounded-cost usage in the layer's current budget window | `insufficient_quota` / `unresolved_usage` | Unresolved usage with unbounded cost blocks budgeted admission for this workspace/API key until reconciled |
 
 Under pricing v3, a pinned price whose hold cannot be bounded (a possibly-used meter without a line or `max_units`) is denied with `budget_exceeded` at the budget's scope; v1/v2 unbounded prices keep the legacy `provider_configuration_error` denial.
 
-Budget, unresolved-usage and `token_reservation_exceeds_limit` denials also send `x-should-retry: false` because retrying does not help (the last can never succeed until the price's ceilings or the limit change; it ranks with budget denials by scope, after them at the same scope). The official OpenAI and Anthropic SDKs honor this header. `/v1/messages` keeps Anthropic's `rate_limit_error` type for every 429 and uses the message to show which case applies. When layers deny at the same time, the narrowest scope wins (key, then workspace, then installation), and budget/accounting denials take precedence over rate limits. Messages name only the scope kind, never amounts, identities or headroom. The installation-wide ceiling always reports `budget_exceeded`, even when another workspace's unresolved usage is the cause, so the denial never reveals another scope's activity. Reconcile unresolved attempts with [evidence-backed reconciliation](#evidence-backed-reconciliation).
+Budget, unresolved-usage and `token_reservation_exceeds_limit` denials also send `x-should-retry: false` because retrying does not help (the last can never succeed until the price's ceilings or the limit change; it ranks with budget denials by scope, after them at the same scope). The official OpenAI and Anthropic SDKs honor this header. `/v1/messages` keeps Anthropic's `rate_limit_error` type for every 429 and uses the message to show which case applies. When layers deny at the same time, the narrowest scope wins (key, then workspace, then installation), and budget/accounting denials take precedence over rate limits (`job_limit_exceeded` ranks between them; it is retryable). Messages name only the scope kind, never amounts, identities or headroom. The installation-wide ceiling always reports `budget_exceeded`, even when another workspace's unresolved usage is the cause, so the denial never reveals another scope's activity. Reconcile unresolved attempts with [evidence-backed reconciliation](#evidence-backed-reconciliation).
 
 An all-null platform override still replaces defaults. Local/key null cannot remove a previously stored cap. Child limits never reserve capacity or remove parents. Requests/tokens use fixed UTC minutes; each budget uses its own UTC day, ISO week, calendar month or lifetime window by admission time. Budget changes and key rotation never reset or rewrite consumption.
 

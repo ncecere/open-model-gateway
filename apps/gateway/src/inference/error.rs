@@ -24,6 +24,9 @@ pub enum InferenceError {
     /// output reservation) alone exceeds a tokens-per-minute limit at this
     /// scope, so the request can never be admitted until configuration changes.
     TokenReservationExceedsLimit(LimitScope),
+    /// The "jobs at once" limit (concurrent active video/batch jobs) at this
+    /// scope is reached. Retryable once a job finishes or is cancelled.
+    JobLimitExceeded(LimitScope),
     Timeout,
     UpstreamRejected,
     UpstreamUnavailable,
@@ -42,6 +45,7 @@ impl InferenceError {
             Self::BudgetExceeded(_) => "budget_exceeded",
             Self::UnresolvedUsage(_) => "unresolved_usage",
             Self::TokenReservationExceedsLimit(_) => "token_reservation_exceeds_limit",
+            Self::JobLimitExceeded(_) => "job_limit_exceeded",
             Self::Timeout => "timeout_error",
             Self::UpstreamRejected => "upstream_rejected",
             Self::UpstreamUnavailable => "upstream_unavailable",
@@ -87,6 +91,15 @@ impl InferenceError {
             }
             Self::TokenReservationExceedsLimit(LimitScope::Installation) => {
                 "The model's input+output token ceiling exceeds the installation-wide tokens-per-minute limit; lower the price ceilings or raise the limit"
+            }
+            Self::JobLimitExceeded(LimitScope::ApiKey) => {
+                "Too many jobs are running for this API key (jobs at once limit); wait for one to finish or cancel one"
+            }
+            Self::JobLimitExceeded(LimitScope::Workspace) => {
+                "Too many jobs are running for this workspace (jobs at once limit); wait for one to finish or cancel one"
+            }
+            Self::JobLimitExceeded(LimitScope::Installation) => {
+                "The installation-wide jobs at once limit is reached; try again when a job finishes"
             }
             Self::Timeout => "Inference deadline exceeded",
             Self::UpstreamRejected => "The provider rejected the request",

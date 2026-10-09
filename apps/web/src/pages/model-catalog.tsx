@@ -23,7 +23,7 @@ import { Plus } from "lucide-react";
 import { api, platformPath, wsPath, type Collection, type Grant, type Provider, type ServerPolicy, type Session, type Workspace } from "../lib/api";
 import type { DashboardSearch } from "../lib/permissions";
 import { permissions } from "../lib/permissions";
-import { catalogSorts, catalogTypeTabs, eligibilityLabels, readinessLabels, readinessText, filterCatalog, modelReadiness, modelWorkload, protocolLabel, sortCatalog, typeCounts, type CatalogFilters, type CatalogModel, type CatalogSort, type Eligibility, type Readiness, type WorkspaceCatalogModel } from "../lib/model-setup";
+import { catalogSorts, catalogTypeTabs, eligibilityLabels, readinessLabels, readinessText, filterCatalog, modelReadiness, modelWorkload, protocolLabel, retiredWorkloads, sortCatalog, typeCounts, type CatalogFilters, type CatalogModel, type CatalogSort, type Eligibility, type Readiness, type WorkspaceCatalogModel } from "../lib/model-setup";
 import { HEADLINE_METERS, compareDecimal, formatDecimalMicroUsd, unitText, usdPerMillionFilter, usdToMicroUsd, workloadLabels } from "../lib/pricing";
 import type { WorkloadKind } from "../lib/governance";
 import { ResourceLink, useDashboardNavigation } from "../components/navigation-link";
@@ -155,7 +155,7 @@ function useCompareSelection() {
   const select: Select = (id, name, children) => <CompareSelect name={name} checked={picked.includes(id)} full={picked.length >= MAX_COMPARE} onChange={on => setPicked(current => toggleCompare(current, id, on))}>{children}</CompareSelect>;
   return { picked, select, clear: () => setPicked([]) };
 }
-const readinessOptions: { value: Readiness["state"]; label: string }[] = (["ready", "needs_setup", "needs_attention", "not_serving", "unknown"] as const).map(value => ({ value, label: readinessText[value] }));
+const readinessOptions: { value: Readiness["state"]; label: string }[] = (["ready", "needs_setup", "needs_attention", "not_serving", "retired", "unknown"] as const).map(value => ({ value, label: readinessText[value] }));
 /** The model's icon, display name and (when different) its mono API name: the first cell of every row. */
 function ModelName({ display, api, search }: { display: string; api: string; search: DashboardSearch }) {
   return <IconCell icon={<LabIcon model={[api, display]} />}><ResourceLink className={m.rowLink} search={search}>{display || api}</ResourceLink>{display && display !== api && <code className={m.rowId}>{api}</code>}</IconCell>;
@@ -177,6 +177,7 @@ export function adminStatus(model: CatalogModel, policy?: ServerPolicy): { label
   if (!model.enabled) return { label: "Disabled", tone: "neutral", hint: "Turned off. Requests are refused." };
   const r = modelReadiness(model, policy), reasons = r.warnings.map(w => readinessLabels[w]);
   if (r.state === "not_serving") return { label: readinessText.not_serving, tone: "warning", hint: "No enabled route to a provider, so requests fail." };
+  if (r.state === "retired") return { label: readinessText.retired, tone: "warning", hint: retiredWorkloads[modelWorkload(model)] };
   return { label: readinessText[r.state], tone: r.state === "ready" ? "success" : r.state === "unknown" ? "neutral" : "warning", hint: reasons.join(" · ") || undefined };
 }
 export function Models({ session }: { session: Session }) {

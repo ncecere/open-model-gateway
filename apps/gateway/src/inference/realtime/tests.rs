@@ -98,6 +98,7 @@ impl ProviderAdapter for Fake {
                 let _held = &signal;
                 std::task::Poll::Pending
             })),
+            config: Default::default(),
         })
     }
 }

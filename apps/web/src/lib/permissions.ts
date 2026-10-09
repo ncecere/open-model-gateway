@@ -89,7 +89,7 @@ export function dashboardSearch(search: Record<string, unknown>): DashboardSearc
   if (search.risk === "attention") result.risk = "attention";
   if (typeof search.connections === "string") { const ids = search.connections.split(",").slice(0, 20).map(identifier).filter(Boolean); if (ids.length) result.connections = ids.join(","); }
   for (const key of ["min_price", "max_price"] as const) if (typeof search[key] === "string" && /^\d{0,13}(?:\.\d{0,6})?$/.test(search[key]) && search[key] !== "") result[key] = search[key];
-  const policy = subset(search.policy, ["allow", "deny", "unknown"]), readiness = subset(search.readiness, ["ready", "needs_attention", "needs_setup", "not_serving", "unknown"]), eligibility = subset(search.eligibility, ["selected", "direct", "available_from_catalog"]);
+  const policy = subset(search.policy, ["allow", "deny", "unknown"]), readiness = subset(search.readiness, ["ready", "needs_attention", "needs_setup", "not_serving", "retired", "unknown"]), eligibility = subset(search.eligibility, ["selected", "direct", "available_from_catalog"]);
   if (policy) result.policy = policy; if (readiness) result.readiness = readiness; if (eligibility) result.eligibility = eligibility;
   for (const key of ["model", "provider", "q"] as const) if (typeof search[key] === "string" && search[key].length <= 200 && !/[\u0000-\u001f\u007f]/.test(search[key])) result[key] = search[key];
   if (typeof search.tab === "string" && dashboardTabs.includes(search.tab as typeof dashboardTabs[number])) result.tab = search.tab;

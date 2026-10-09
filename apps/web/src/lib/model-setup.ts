@@ -8,20 +8,34 @@ import type { CatalogType } from "./permissions";
 // Readiness (contract §2). The server returns counts; this derivation is UI-only.
 // Missing readiness is unknown, never "not ready" or "ready".
 // ---------------------------------------------------------------------------
-export type ReadinessWarning = "disabled" | "no_route" | "unpriced" | "not_offered" | "token_ceiling" | "free_blocked";
-export const readinessLabels: Record<ReadinessWarning, string> = { disabled: "Disabled", no_route: "No enabled route", unpriced: "Unpriced route", not_offered: "Not offered", token_ceiling: "Token ceilings exceed a tokens-per-minute default", free_blocked: "Free OpenRouter route blocked by the data-collection policy" };
-export type Readiness = { state: "ready" | "needs_attention" | "needs_setup" | "not_serving" | "unknown"; warnings: ReadinessWarning[] };
+export type ReadinessWarning = "disabled" | "no_route" | "unpriced" | "not_offered" | "token_ceiling" | "free_blocked" | "provider_retired";
+export const readinessLabels: Record<ReadinessWarning, string> = { disabled: "Disabled", no_route: "No enabled route", unpriced: "Unpriced route", not_offered: "Not offered", token_ceiling: "Token ceilings exceed a tokens-per-minute default", free_blocked: "Free OpenRouter route blocked by the data-collection policy", provider_retired: "Provider API retired" };
+export type Readiness = { state: "ready" | "needs_attention" | "needs_setup" | "not_serving" | "retired" | "unknown"; warnings: ReadinessWarning[] };
+/**
+ * Workloads whose provider API no longer exists, with the reason. OpenAI shut down the Sora 2 models and the Videos
+ * API on 2026-09-24 with no replacement; the gateway refuses new video jobs (unsupported_capability). An OpenRouter
+ * video adapter is planned.
+ */
+export const retiredWorkloads: Partial<Record<WorkloadKind, string>> = {
+  videos: "No supported provider yet. OpenAI shut down the Sora 2 models and the Videos API on 2026-09-24; an OpenRouter video adapter is planned.",
+};
+/** Why a workload type can't be chosen on a connection, or undefined when it can. */
+export function workloadDisabledReason(workload: WorkloadKind, profile?: string, providerName = "this connection"): string | undefined {
+  return retiredWorkloads[workload] ?? (workloadSupported(workload, profile) ? undefined : `Not available on ${providerName}`);
+}
 /**
  * The one readiness vocabulary (review rule 3): Ready / Needs setup / Needs attention / Not serving.
  * "Not serving" = an enabled model with no enabled route (requests fail); workspaces show only Ready / Not serving + a reason.
  */
-export const readinessText: Record<Readiness["state"], string> = { ready: "Ready", needs_setup: "Needs setup", needs_attention: "Needs attention", not_serving: "Not serving", unknown: "Readiness unknown" };
+export const readinessText: Record<Readiness["state"], string> = { ready: "Ready", needs_setup: "Needs setup", needs_attention: "Needs attention", not_serving: "Not serving", retired: "Provider API retired", unknown: "Readiness unknown" };
 /**
  * `policy` is the server's provider policy when known. Configuration checks are best effort: a route whose token
  * ceilings exceed the smallest applicable type-default tokens-per-minute limit is refused for those workspaces, and
  * OpenRouter `:free` endpoints may train on prompts, so they are unavailable when data collection is denied.
  */
-export function modelReadiness(model: Pick<Model, "enabled"> & { readiness?: ModelReadiness | null }, policy?: ServerPolicy): Readiness {
+export function modelReadiness(model: Pick<Model, "enabled"> & { supported_protocols?: readonly string[]; readiness?: ModelReadiness | null }, policy?: ServerPolicy): Readiness {
+  // A retired provider API can never serve, whatever the routes say (video: OpenAI Videos API, shut down 2026-09-24).
+  if (model.supported_protocols?.length && retiredWorkloads[workloadOf(model.supported_protocols as ModelProtocol[])]) return { state: "retired", warnings: ["provider_retired"] };
   const r = model.readiness;
   if (!r) return { state: "unknown", warnings: [] };
   const warnings: ReadinessWarning[] = [];
@@ -143,8 +157,9 @@ export function displayPlaceholder(profile?: string, workload: WorkloadKind = "g
   const table = workload === "generation" ? text : byWorkload[workload] ?? text;
   return table[profile ?? "default"] ?? table.default;
 }
-/** Whether a connection profile's adapter implements a client protocol (no or unrecognised profile: assume yes). */
+/** Whether a connection profile's adapter implements a client protocol (no or unrecognised profile: assume yes, unless no adapter does). */
 export function protocolSupported(protocol: ModelProtocol, profile?: string): boolean {
+  if (!protocolProfiles[protocol].length) return false;
   if (!profile || !Object.values(protocolProfiles).some(list => list.includes(profile))) return true;
   return protocolProfiles[protocol].includes(profile);
 }
@@ -289,7 +304,7 @@ export const protocolEndpoints: Record<ModelProtocol, ProtocolEndpoint> = {
   rerank: { method: "POST", path: "/v1/rerank", contentType: "application/json", headers: [bearer, json], params: [{ name: "model", note: "API model name", required: true }, { name: "query", note: "Up to 32 KiB", required: true }, { name: "documents", note: "Up to 1000 strings", required: true }, { name: "top_n", note: "At least 1" }], unsupported: "return_documents, object documents and provider options are rejected; documents are never echoed.", adapters: "OpenRouter." },
   systemone: { method: "POST", path: "/v1/systemone", contentType: "application/json", headers: [bearer, json], params: [{ name: "model", note: "API model name", required: true }, { name: "state", note: "String, object or array", required: true }, { name: "questions", note: "1–64 noul, choice or score questions", required: true }], unsupported: "Image parts, provider and user fields are rejected (422 for validation failures).", adapters: "OpenRouter." },
   realtime: { method: "GET", path: "/v1/realtime?model=<API model name>", contentType: "WebSocket upgrade; JSON text events", headers: [{ name: "Authorization or subprotocol", value: "Bearer <inference key>, or openai-insecure-api-key.<inference key> (one, never both)" }], params: [{ name: "model", note: "API model name (query parameter)", required: true }, { name: "session.update", note: "Realtime sessions; VAD only with create_response false" }, { name: "response.create", note: "One response at a time; max_output_tokens within the gateway ceiling" }, { name: "input_audio_buffer.*, conversation.item.*", note: "Audio and text input; no image input" }], unsupported: "Beta interface, client secrets, WebRTC/SIP, input transcription, automatic VAD responses, out-of-band responses, MCP tools and image input are rejected with an error event.", adapters: "OpenAI (GA interface)." },
-  videos: { method: "POST", path: "/v1/videos", contentType: "multipart/form-data or application/json", headers: [bearer], params: [{ name: "model", note: "API model name", required: true }, { name: "prompt", note: "Up to 32 KiB", required: true }, { name: "seconds", note: "4, 8 or 12 (default 4, always sent)" }, { name: "size", note: "720x1280 (default), 1280x720, 1024x1792 or 1792x1024" }, { name: "GET /v1/videos/{id}[/content], DELETE", note: "Same workspace's keys only" }], unsupported: "input_reference, remix, edits, extensions and characters are not supported.", adapters: "OpenAI (sora-*)." },
+  videos: { method: "POST", path: "/v1/videos", contentType: "multipart/form-data or application/json", headers: [bearer], params: [{ name: "model", note: "API model name", required: true }, { name: "prompt", note: "Up to 32 KiB", required: true }, { name: "seconds", note: "4, 8 or 12 (default 4, always sent)" }, { name: "size", note: "720x1280 (default), 1280x720, 1024x1792 or 1792x1024" }, { name: "GET /v1/videos/{id}[/content], DELETE", note: "Same workspace's keys only" }], unsupported: "Every request is refused (unsupported_capability): OpenAI shut down the Sora 2 models and the Videos API on 2026-09-24. input_reference, remix, edits, extensions and characters were never supported.", adapters: "None yet. An OpenRouter video adapter is planned." },
   batches: { method: "POST", path: "/v1/files (purpose=batch), then /v1/batches", contentType: "multipart/form-data (JSONL file); application/json", headers: [bearer], params: [{ name: "file", note: "JSONL, one /v1/chat/completions request per line, ≤ 50,000 lines", required: true }, { name: "body.model", note: "This model's API name on every line", required: true }, { name: "body.max_completion_tokens", note: "Required per line (bounds the hold)", required: true }, { name: "input_file_id, endpoint, completion_window", note: "/v1/chat/completions and 24h only", required: true }], unsupported: "Other batch endpoints, n > 1, streaming, audio output, web search, predicted outputs and expires_after are rejected.", adapters: "OpenAI." },
 };
 /** Connection profiles whose adapter implements each client protocol (docs/protocol-matrix.md). */
@@ -304,8 +319,9 @@ export const protocolProfiles: Record<ModelProtocol, string[]> = {
   rerank: ["openrouter"],
   systemone: ["openrouter"],
   realtime: ["openai"],
-  // Async jobs (docs/async-jobs.md): OpenAI only; OpenRouter's video API has another shape.
-  videos: ["openai"],
+  // Async jobs (docs/async-jobs.md). Video: no adapter since OpenAI shut down its Videos API (2026-09-24);
+  // an OpenRouter video adapter (another API shape) is planned.
+  videos: [],
   batches: ["openai"],
 };
 

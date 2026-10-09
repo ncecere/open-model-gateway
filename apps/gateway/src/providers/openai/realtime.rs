@@ -156,6 +156,7 @@ pub(super) async fn connect(
     .map_err(|_| InferenceError::UpstreamUnavailable)?;
     // Wait for the acknowledgement; earlier events are replayed in order.
     let mut buffered = Vec::new();
+    let config;
     loop {
         let message = timeout_at(deadline, upstream.next())
             .await
@@ -175,6 +176,9 @@ pub(super) async fn connect(
                 if !safe {
                     return Err(InferenceError::InvalidUpstream);
                 }
+                // The acknowledged configuration sizes the first response's
+                // hold (instructions, tools, input audio format).
+                config = crate::inference::realtime::context::session_config(&event["session"]);
                 buffered.push(Ok(UpstreamEvent::Session { event, safe }));
                 break;
             }
@@ -193,6 +197,7 @@ pub(super) async fn connect(
     Ok(RealtimeUpstream {
         sink: Box::pin(sink),
         events: Box::pin(stream::iter(buffered).chain(live)),
+        config,
     })
 }
 

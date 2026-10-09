@@ -8,7 +8,7 @@ export type PolicyBudget = { period: BudgetPeriod; amount_microusd: string };
  * `budgets` is the stacked set (sorted day, week, month, lifetime). `monthly_budget_microusd`/`budget_period` are the
  * deprecated mirror of the smallest budget; older gateways only send those.
  */
-export type Policy = { requests_per_minute: number | null; tokens_per_minute: number | null; concurrent_requests: number | null; monthly_budget_microusd: string | null; budget_period?: BudgetPeriod; budgets?: PolicyBudget[] };
+export type Policy = { requests_per_minute: number | null; tokens_per_minute: number | null; concurrent_requests: number | null; /** "Jobs at once" (video and batch jobs); absent from older gateways. */ concurrent_jobs?: number | null; monthly_budget_microusd: string | null; budget_period?: BudgetPeriod; budgets?: PolicyBudget[] };
 /** One applicable budget (layer and period) and its current UTC window; usage only where the caller may see that scope's activity. */
 export type BudgetWindow = { layer: "platform" | "local" | "key"; period?: BudgetPeriod; amount_microusd?: string; monthly_budget_microusd: string; budget_period: BudgetPeriod; window_start: string; window_end: string | null; usage_visible: boolean; used_microusd: string | null; unresolved_usage: boolean | null; exhausted?: boolean | null };
 export const budgetPeriods: { value: BudgetPeriod; label: string; unit: string; window: string }[] = [

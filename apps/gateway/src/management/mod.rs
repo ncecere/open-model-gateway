@@ -56,6 +56,18 @@ const REASONS: &[(&str, &str)] = &[
     (settings::PLAINTEXT_REMOTE, "plaintext_requires_loopback"),
     (settings::EMAIL_NOT_CONFIGURED, "email_not_configured"),
     (settings::EMAIL_TEST_LIMIT, "email_test_rate_limited"),
+    (
+        settings::storage::STORAGE_OFF,
+        "file_storage_not_configured",
+    ),
+    (
+        settings::storage::STORAGE_UNHEALTHY,
+        "file_storage_unhealthy",
+    ),
+    (
+        settings::storage::STORAGE_TEST_LIMIT,
+        "storage_test_rate_limited",
+    ),
     (alerts::PERSONAL_BUILTIN_ONLY, "personal_alerts_built_in"),
     (alerts::RULE_LIMIT, "alert_rule_limit"),
     (alerts::KIND_FIXED, "alert_rule_kind_fixed"),
@@ -131,6 +143,12 @@ const POLICY_REASONS: &[(&str, &str, &str, &str)] = &[
         "concurrent_requests",
     ),
     (
+        "concurrent_jobs exceeds a parent limit",
+        "exceeds_parent_rate",
+        "limit",
+        "concurrent_jobs",
+    ),
+    (
         "A stored day budget cannot be raised",
         "stored_budget_raise_not_allowed",
         "period",
@@ -195,6 +213,12 @@ const POLICY_REASONS: &[(&str, &str, &str, &str)] = &[
         "stored_rate_loosen_not_allowed",
         "limit",
         "concurrent_requests",
+    ),
+    (
+        "A stored concurrent_jobs cap cannot be raised or removed",
+        "stored_rate_loosen_not_allowed",
+        "limit",
+        "concurrent_jobs",
     ),
 ];
 /// Policy rejection with `reason` and detail value (a period or limit name).

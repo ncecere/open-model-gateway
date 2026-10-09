@@ -67,6 +67,11 @@ enum Command {
         #[command(subcommand)]
         action: BudgetCommand,
     },
+    /// Encrypted file store maintenance (docs/file-storage.md).
+    Files {
+        #[command(subcommand)]
+        action: FilesCommand,
+    },
     /// Explicitly provision an email for first OIDC linking; requires trusted database access.
     ProvisionUser {
         #[arg(long)]
@@ -83,6 +88,24 @@ enum AlertsCommand {
         /// Required: run one evaluation and exit.
         #[arg(long)]
         once: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum FilesCommand {
+    /// Read-only: compare `stored_files` metadata with the configured store;
+    /// exits nonzero on missing objects, size or backend mismatches, or unknown key ids.
+    Verify {
+        #[arg(long, default_value_t = 100_000)]
+        limit: i64,
+    },
+    /// Delete expired, pending-deletion and abandoned objects once (`serve` sweeps every minute).
+    Sweep {
+        /// Required: run one sweep and exit.
+        #[arg(long)]
+        once: bool,
+        #[arg(long, default_value_t = 1000)]
+        limit: i64,
     },
 }
 
@@ -227,6 +250,35 @@ async fn main() -> Result<()> {
                 report.mismatch_count
             );
         }
+        Command::Files { action } => {
+            store.preflight_enterprise().await?;
+            let files = open_model_gateway::filestore::FileStoreRuntime::build(
+                open_model_gateway::filestore::FileStoreConfig::from_env()?,
+            )
+            .await?;
+            match action {
+                FilesCommand::Verify { limit } => {
+                    let report =
+                        open_model_gateway::filestore::sweep::verify(&store, &files, limit).await?;
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                    anyhow::ensure!(
+                        report.consistent(),
+                        "stored file metadata and the file store differ"
+                    );
+                }
+                FilesCommand::Sweep { once, limit } => {
+                    anyhow::ensure!(once, "pass --once; `serve` sweeps every minute");
+                    anyhow::ensure!(
+                        files.store().is_some(),
+                        "no file store is configured (GATEWAY_FILE_STORE=off)"
+                    );
+                    let report =
+                        open_model_gateway::filestore::sweep::sweep_once(&store, &files, limit)
+                            .await?;
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                }
+            }
+        }
         Command::SchemaVersion => unreachable!("handled before configuration"),
         Command::ProvisionUser {
             email,
@@ -274,6 +326,12 @@ async fn main() -> Result<()> {
                 .await?
                 .with_scim(open_model_gateway::scim::ScimConfig::from_env()?)?;
             let retention = open_model_gateway::maintenance::retention_from_env()?;
+            // Encrypted file store: invalid configuration fails startup.
+            let files = open_model_gateway::filestore::FileStoreRuntime::build(
+                open_model_gateway::filestore::FileStoreConfig::from_env()?,
+            )
+            .await?;
+            tracing::info!(backend = files.backend_name(), "file store configured");
             let alert_interval = open_model_gateway::alerts::interval_from_env()?;
             // Async jobs (video, batch): limits and the background poller.
             open_model_gateway::jobs::configure(open_model_gateway::jobs::JobLimits::from_lookup(
@@ -296,6 +354,8 @@ async fn main() -> Result<()> {
                 None => None,
             };
             let maintenance = open_model_gateway::maintenance::start(store.clone(), retention);
+            let file_sweeper =
+                open_model_gateway::filestore::sweep::start(store.clone(), files.clone());
             let job_poller = open_model_gateway::jobs::poller::start(
                 open_model_gateway::jobs::Jobs::new(store.clone(), &engine),
             );
@@ -323,7 +383,8 @@ async fn main() -> Result<()> {
             });
             let served = axum::serve(
                 listener,
-                http::router_with_identity(store, web, engine, identity),
+                http::router_with_identity(store, web, engine, identity)
+                    .layer(axum::Extension(files)),
             )
             .with_graceful_shutdown(shutdown_signal())
             .await;
@@ -338,6 +399,10 @@ async fn main() -> Result<()> {
             if let Some(poller) = job_poller {
                 poller.abort();
                 let _ = poller.await;
+            }
+            if let Some(sweeper) = file_sweeper {
+                sweeper.abort();
+                let _ = sweeper.await;
             }
             maintenance.abort();
             lifecycle.abort();
@@ -451,6 +516,30 @@ mod demo {
             })
         ));
         assert!(Cli::try_parse_from(["gateway", "alerts"]).is_err());
+    }
+
+    #[test]
+    fn file_store_commands_are_explicit() {
+        assert!(matches!(
+            Cli::try_parse_from(["gateway", "files", "verify"])
+                .unwrap()
+                .command,
+            Some(Command::Files {
+                action: FilesCommand::Verify { limit: 100_000 }
+            })
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["gateway", "files", "sweep", "--once"])
+                .unwrap()
+                .command,
+            Some(Command::Files {
+                action: FilesCommand::Sweep {
+                    once: true,
+                    limit: 1000
+                }
+            })
+        ));
+        assert!(Cli::try_parse_from(["gateway", "files"]).is_err());
     }
 
     #[test]

@@ -3,6 +3,9 @@
 //! - Videos: `POST /videos` (multipart `model, prompt, seconds, size`; the
 //!   gateway builds the form itself and always sends explicit seconds/size),
 //!   `GET /videos/{id}`, `DELETE /videos/{id}`, `GET /videos/{id}/content`.
+//!   OpenAI shut down the Sora 2 models and this API on 2026-09-24, so the
+//!   adapter no longer offers the `videos` protocol: new jobs are refused
+//!   before admission. These calls remain for jobs created earlier.
 //! - Files + Batch: `POST /files` (multipart `purpose=batch` + a streamed
 //!   JSONL `file`, chunked), `POST /batches`, `GET /batches/{id}`,
 //!   `POST /batches/{id}/cancel`, `GET /files/{id}/content`.

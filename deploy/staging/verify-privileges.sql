@@ -67,6 +67,13 @@ DO $$ DECLARE r record; t text; BEGIN
  FOR t IN SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename<>'_sqlx_migrations' LOOP
   IF NOT has_table_privilege('gateway_runtime','public.'||t,'SELECT') THEN RAISE EXCEPTION 'unreviewed table: %',t; END IF;
  END LOOP;
+ -- File store (0019): metadata rows are never removed; identity/ownership fixed; guard present.
+ IF has_table_privilege('gateway_runtime','public.stored_files','DELETE,TRUNCATE') THEN RAISE EXCEPTION 'stored file metadata removable'; END IF;
+ FOREACH t IN ARRAY ARRAY['id','object_key','purpose','workspace_id','created_by_user_id','created_by_api_key_id','backend','encryption_key_id','created_at'] LOOP
+  IF has_column_privilege('gateway_runtime','public.stored_files',t,'UPDATE') THEN RAISE EXCEPTION 'mutable stored file identity: %',t; END IF;
+ END LOOP;
+ IF NOT has_table_privilege('gateway_runtime','public.stored_files','SELECT,INSERT') OR NOT has_column_privilege('gateway_runtime','public.stored_files','deleted_at','UPDATE') THEN RAISE EXCEPTION 'stored files not maintainable by runtime'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname='stored_files_guard' AND tgenabled='O' AND NOT tgisinternal)<>1 THEN RAISE EXCEPTION 'stored file guard missing or disabled'; END IF;
  IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units','valid_model_protocols_base','valid_cost_components_base','valid_price_lines_base','valid_upstream_job_id')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
 END $$;
 BEGIN;
@@ -108,6 +115,15 @@ BEGIN
  INSERT INTO workspace_platform_policy_overrides(workspace_id) VALUES(ws) ON CONFLICT(workspace_id) DO UPDATE SET concurrent_requests=EXCLUDED.concurrent_requests;
  INSERT INTO workspace_local_policies(workspace_id) VALUES(ws) ON CONFLICT(workspace_id) DO NOTHING;
  INSERT INTO key_policies(workspace_id,governance_key_id) VALUES(ws,k) ON CONFLICT(workspace_id,governance_key_id) DO NOTHING;
+ -- Jobs at once (0018): every policy layer stores and upserts concurrent_jobs; type defaults start at 2.
+ INSERT INTO installation_policy(singleton,concurrent_jobs) VALUES(true,9) ON CONFLICT(singleton) DO UPDATE SET concurrent_jobs=EXCLUDED.concurrent_jobs;
+ INSERT INTO workspace_type_policies(kind,concurrent_jobs) VALUES('team',3) ON CONFLICT(kind) DO UPDATE SET concurrent_jobs=EXCLUDED.concurrent_jobs;
+ INSERT INTO workspace_platform_policy_overrides(workspace_id,concurrent_jobs) VALUES(ws,4) ON CONFLICT(workspace_id) DO UPDATE SET concurrent_jobs=EXCLUDED.concurrent_jobs;
+ INSERT INTO workspace_local_policies(workspace_id,concurrent_jobs) VALUES(ws,2) ON CONFLICT(workspace_id) DO UPDATE SET concurrent_jobs=EXCLUDED.concurrent_jobs;
+ INSERT INTO key_policies(workspace_id,governance_key_id,concurrent_jobs) VALUES(ws,k,1) ON CONFLICT(workspace_id,governance_key_id) DO UPDATE SET concurrent_jobs=EXCLUDED.concurrent_jobs;
+ IF (SELECT concurrent_jobs FROM workspace_type_policies WHERE kind='personal') IS DISTINCT FROM 2 THEN RAISE EXCEPTION 'jobs at once type default missing'; END IF;
+ BEGIN INSERT INTO key_policies(workspace_id,governance_key_id,concurrent_jobs) VALUES(ws,k,0) ON CONFLICT(workspace_id,governance_key_id) DO UPDATE SET concurrent_jobs=EXCLUDED.concurrent_jobs; RAISE EXCEPTION 'non-positive jobs at once allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+ PERFORM count(*) FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id LEFT JOIN async_jobs j ON j.execution_id=r.execution_id WHERE r.state='pending' AND e.workload_kind IN('videos','batches') AND j.state NOT IN('completed','failed','cancelled','expired') AND j.cancel_requested_at IS NULL;
  INSERT INTO policy_budgets(layer,period,amount_microusd) VALUES('installation','day',1),('installation','lifetime',9);
  INSERT INTO policy_budgets(layer,kind,period,amount_microusd) VALUES('type','project','week',1);
  INSERT INTO policy_budgets(layer,workspace_id,period,amount_microusd) VALUES('override',ws,'month',1),('local',ws,'day',1),('local',ws,'month',2);
@@ -247,6 +263,10 @@ BEGIN
   INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary) VALUES(gen_random_uuid(),ar,'budget_threshold','local:'||ws||':-:month',100,'critical',ws,'Duplicate') ON CONFLICT DO NOTHING;
   IF (SELECT count(*) FROM alert_events WHERE rule_id=ar AND resolved_at IS NULL)<>1 THEN RAISE EXCEPTION 'duplicate open alert allowed'; END IF;
   INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,workspace_id,summary) VALUES(gen_random_uuid(),'personal_budget','budget_threshold','key:'||personal||':-:day',100,'critical',personal,'API key daily budget reached 100%');
+  -- SCIM last-admin incident (0018): installation-wide built-in, no workspace.
+  INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,summary) VALUES(gen_random_uuid(),'scim_last_admin','scim_last_admin','scim_last_admin',1,'critical','SCIM tried to remove the last Platform Admin');
+  BEGIN INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,workspace_id,summary) VALUES(gen_random_uuid(),'scim_last_admin','scim_last_admin','x',1,'critical',ws,'x'); RAISE EXCEPTION 'scoped scim alert allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,summary) VALUES(gen_random_uuid(),ar,'scim_last_admin','y',1,'critical','x'); RAISE EXCEPTION 'rule scim alert allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
   PERFORM id FROM alert_events WHERE id=ev FOR UPDATE;
   INSERT INTO alert_deliveries(id,event_id,transition) VALUES(gen_random_uuid(),ev,'fired');
   UPDATE alert_deliveries SET status='partial',recipients=2,sent=1,failed=1,error='rejected',completed_at=now() WHERE event_id=ev;
@@ -294,6 +314,28 @@ BEGIN
   BEGIN INSERT INTO scim_state(singleton) VALUES(true); RAISE EXCEPTION 'scim state insert allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   BEGIN INSERT INTO scim_groups(id,display_name) VALUES(gen_random_uuid(),'bad'||chr(7)); RAISE EXCEPTION 'scim group name constraint absent'; EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN INSERT INTO scim_users(user_id,user_name) VALUES(gen_random_uuid(),'orphan'); RAISE EXCEPTION 'scim user without account allowed'; EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+ END;
+ -- File store (0019): pending → committed once → swept (deleted_at, names cleared); settings.
+ DECLARE fid uuid:=gen_random_uuid(); lid uuid:=gen_random_uuid(); x1 uuid:=gen_random_uuid(); x2 uuid:=gen_random_uuid(); x3 uuid:=gen_random_uuid(); BEGIN
+  UPDATE installation_settings SET file_batch_enabled=true,file_batch_retention_days=3,file_video_enabled=true,file_video_retention_days=7,file_user_files_enabled=false,file_user_files_retention_days=30,file_export_retention_days=1,file_store_last_check_at=now(),file_store_last_check_ok=false,file_store_last_check_error='timeout',file_store_last_check_target=repeat('a',64) WHERE singleton;
+  BEGIN UPDATE installation_settings SET file_batch_retention_days=0 WHERE singleton; RAISE EXCEPTION 'file retention bound absent'; EXCEPTION WHEN check_violation THEN NULL; END;
+  INSERT INTO stored_files(id,object_key,purpose,workspace_id,created_by_user_id,created_by_api_key_id,filename,content_type,backend,encryption_key_id,expires_at) VALUES(fid,'batch_input/'||ws||'/'||fid,'batch_input',ws,u,k,'input.jsonl','application/jsonl','s3','k2026',now()+interval '1 day');
+  INSERT INTO stored_files(id,object_key,purpose,backend,encryption_key_id) VALUES(lid,'branding/installation/'||lid,'branding','local','k2026');
+  UPDATE stored_files SET size_bytes=10,sha256=decode(repeat('ab',32),'hex'),committed_at=clock_timestamp() WHERE id=fid AND committed_at IS NULL AND deleted_at IS NULL;
+  PERFORM coalesce(sum(size_bytes),0) FROM stored_files WHERE workspace_id=ws AND deleted_at IS NULL;
+  PERFORM purpose,count(*) FROM stored_files f CROSS JOIN installation_settings s WHERE s.singleton AND f.deleted_at IS NULL AND f.created_at+make_interval(days=>s.file_batch_retention_days)<=now() GROUP BY purpose;
+  UPDATE stored_files f SET last_delete_attempt_at=clock_timestamp() FROM (SELECT id FROM stored_files WHERE deleted_at IS NULL ORDER BY created_at LIMIT 10 FOR UPDATE SKIP LOCKED) due WHERE f.id=due.id;
+  UPDATE stored_files SET delete_attempts=delete_attempts+1,last_delete_error='unavailable',expires_at=least(expires_at,clock_timestamp()) WHERE id=fid;
+  UPDATE stored_files SET deleted_at=clock_timestamp(),filename=NULL,content_type=NULL WHERE id=fid AND deleted_at IS NULL;
+  BEGIN UPDATE stored_files SET deleted_at=NULL WHERE id=fid; RAISE EXCEPTION 'stored file undeleted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'deleted stored files are final' THEN RAISE; END IF; END;
+  BEGIN UPDATE stored_files SET size_bytes=1,sha256=decode(repeat('cd',32),'hex'),committed_at=now() WHERE id=lid; UPDATE stored_files SET size_bytes=2 WHERE id=lid; RAISE EXCEPTION 'stored file contents rewritten'; EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'stored file contents are written once' THEN RAISE; END IF; END;
+  BEGIN DELETE FROM stored_files WHERE id=lid; RAISE EXCEPTION 'stored file row removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE stored_files SET workspace_id=personal WHERE id=lid; RAISE EXCEPTION 'stored file re-own allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE stored_files SET encryption_key_id='other' WHERE id=lid; RAISE EXCEPTION 'stored file key id rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN INSERT INTO stored_files(id,object_key,purpose,workspace_id,backend,encryption_key_id) VALUES(gen_random_uuid(),'batch_input/'||ws||'/../x','batch_input',ws,'s3','k'); RAISE EXCEPTION 'non-canonical object key allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN INSERT INTO stored_files(id,object_key,purpose,backend,encryption_key_id) VALUES(x1,'batch_output/installation/'||x1,'batch_output','s3','k'); RAISE EXCEPTION 'installation-scoped customer content allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN INSERT INTO stored_files(id,object_key,purpose,workspace_id,filename,backend,encryption_key_id) VALUES(x2,'user_file/'||ws||'/'||x2,'user_file',ws,'../etc/passwd','s3','k'); RAISE EXCEPTION 'path-like filename allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN INSERT INTO stored_files(id,object_key,purpose,workspace_id,created_by_api_key_id,backend,encryption_key_id) VALUES(x3,'export/'||personal||'/'||x3,'export',personal,k,'s3','k'); RAISE EXCEPTION 'cross-workspace key attribution allowed'; EXCEPTION WHEN foreign_key_violation THEN NULL; END;
  END;
 END $$;
 ROLLBACK;
