@@ -129,7 +129,7 @@ describe("Key page", () => {
     for (const name of ["Overview", "Limits", "Access"]) expect(html).toMatch(new RegExp(`role="tab"[^>]*>(<[^>]*>)*[^<]*${name}`));
     expect(html).not.toContain("Key limits"); expect(html).not.toContain("Effective access");
     expect(html).toContain("This week");
-    expect(html).toContain("$0.0001 on hold");
+    expect(html).toContain("$0.00010 on hold");
     expect(html).toContain("1 cost unknown");
     expect(html).toContain("Spending, last 30 days");
     const limits = render("key2", team, "limits");

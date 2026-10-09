@@ -218,7 +218,7 @@ describe("Admin overview", () => {
   });
   it("shows installation budgets with amount, used, spent and on hold per period", () => {
     const html = markup(<PlatformOverview session={admin} />, [[path, { ...overview, installation_budgets: [{ period: "month", amount_microusd: "9007199254740993", used_microusd: "8100", settled_microusd: "8000", held_microusd: "100", unresolved_usage: false, exhausted: false, window_start: "2026-10-01T00:00:00Z", window_end: "2026-11-01T00:00:00Z" }, { period: "day", amount_microusd: "5000000", used_microusd: "5000000", settled_microusd: "5000000", held_microusd: "0", unresolved_usage: false, exhausted: true, window_start: "2026-10-08T00:00:00Z", window_end: "2026-10-09T00:00:00Z" }] }]]);
-    for (const text of ["Installation budgets", "Installation daily budget (used up)", "$0.0081 / $9,007,199,254.740993 · Monthly", "Spent $0.008 · on hold $0.0001 · resets Nov 1, 2026"]) expect(html).toContain(text);
+    for (const text of ["Installation budgets", "Installation daily budget (used up)", "$0.0081 / $9,007,199,254.740993 · Monthly", "Spent $0.0080 · on hold $0.00010 · resets Nov 1, 2026"]) expect(html).toContain(text);
     expect(html.indexOf("Installation daily budget")).toBeLessThan(html.indexOf("Installation monthly budget"));
     expect(markup(<PlatformOverview session={admin} />, [[path, overview]])).not.toContain("Installation budgets");
   });

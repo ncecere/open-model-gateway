@@ -10,7 +10,7 @@ import { wsPath, platformPath, type Workspace } from "../../lib/api";
 import { formatUsd } from "../../lib/governance";
 import { Money } from "../../components/templates/money";
 import { formatCount, knownSpendText } from "../../lib/reports";
-import { chartLabeler, chartNumber, decimalChange, dimensionOptions, formatRateMicroUsd, rateTexts, usageQuery, type TopRow, type UsageOverview, filterCount, seriesValue, usageFilters, downloadText, exploreCsv, exploreMetrics, exploreQuery, exploreTopN, comparisonLabel, formatMetric, groupName, longDate, metricInfo, periodLabel, pivotFromUsageSearch, pivotToUsageSearch, shortDate, type Dimension, type ExploreMetric, type ExploreResponse, type ExploreRow, type UsageContext, type UsagePeriod } from "../../lib/usage";
+import { chartLabeler, chartNumber, decimalChange, dimensionOptions, dimensionPhrase, formatRateMicroUsd, rateTexts, usageQuery, type TopRow, type UsageOverview, filterCount, seriesValue, usageFilters, downloadText, exploreCsv, exploreMetrics, exploreQuery, exploreTopN, comparisonLabel, formatMetric, groupName, longDate, metricInfo, periodLabel, pivotFromUsageSearch, pivotToUsageSearch, shortDate, type Dimension, type ExploreMetric, type ExploreResponse, type ExploreRow, type UsageContext, type UsagePeriod } from "../../lib/usage";
 import { Button, ErrorNotice, Stack, useAction, useApi } from "../../components/ui";
 import { PivotControls, PIVOT_NONE } from "../../components/templates/pivot-controls";
 import { PercentBarCell } from "../../components/templates/percent-bar-cell";
@@ -39,7 +39,7 @@ export function UsageExploreTab({ workspace, ctx, period, nav, workspaceFilter }
     metrics={exploreMetrics.map(m => ({ value: m, label: metricInfo[m].label }))} dimensions={dims}
     onChange={v => nav.navigate(pivotToUsageSearch({ metric: v.metric as ExploreMetric, groupBy: v.groupBy as Dimension, thenBy: v.thenBy === PIVOT_NONE ? "none" : v.thenBy as Dimension, top: Number(v.topN) }))} />;
   const exportTable = (res: ExploreResponse, rows: number) => ask({ title: "Export this table as CSV?", submitLabel: "Download CSV", successNotice: "CSV downloaded.",
-    description: `Downloads the ${rows} row${rows === 1 ? "" : "s"} shown: ${metricInfo[res.metric].label.toLowerCase()} by ${dimLabel(res.group_by).toLowerCase()}${res.then_by ? ` then ${dimLabel(res.then_by).toLowerCase()}` : ""}, ${periodLabel(period)}${res.other ? ", plus one \"Other\" row" : ""}. Totals only: no request records, prompts or responses. Amounts are exact estimates from configured prices.`,
+    description: `Downloads the ${rows} row${rows === 1 ? "" : "s"} shown: ${metricInfo[res.metric].label.toLowerCase()} by ${dimensionPhrase(dimLabel(res.group_by))}${res.then_by ? ` then ${dimensionPhrase(dimLabel(res.then_by))}` : ""}, ${periodLabel(period)}${res.other ? ", plus one \"Other\" row" : ""}. Totals only: no request records, prompts or responses. Amounts are exact estimates from configured prices.`,
     run: async () => { downloadText(exploreCsv(res, period), `usage-${res.metric}-by-${res.group_by}${res.then_by ? `-${res.then_by}` : ""}-${period.start_date}-${period.last_date}.csv`); } });
   return <Stack gap={6}>
     {overview.data && <PeriodRateTiles overview={overview.data} nav={nav} days={period.days} />}
@@ -73,19 +73,19 @@ function ExploreResult({ res, period, dimLabel, onExport, filtered, models }: { 
   if (!res.rows.length) return <Card><EmptyState title="Nothing to break down" titleAs="h2" description={`No ${info.label.toLowerCase()} in ${periodLabel(period)}${filtered ? " with these filters" : ""}.`} /></Card>;
   const rows: TableRow[] = [...res.rows.map((r, i) => ({ ...r, key: String(i) })), ...(res.other ? [{ key: "other", other: true, group: { id: null, name: "Other" }, then: null, value: res.other.value, share: res.other.share, held_microusd: null, unresolved_attempts: null }] : [])];
   const columns: DataTableColumn<TableRow>[] = [
-    { id: "group", header: dimLabel(res.group_by), rowHeader: true, cell: r => r.other ? `Other ${dimLabel(res.group_by).toLowerCase()}s` : groupName(r.group, res.group_by) },
+    { id: "group", header: dimLabel(res.group_by), rowHeader: true, cell: r => r.other ? `Other ${dimensionPhrase(dimLabel(res.group_by))}s` : groupName(r.group, res.group_by) },
     ...(res.then_by ? [{ id: "then", header: dimLabel(res.then_by), cell: (r: TableRow) => r.other ? "—" : groupName(r.then, res.then_by) }] : []),
     { id: "value", header: `${info.label} (${info.unit})`, numeric: true, cell: r => money ? (knownSpendText(r.value, r.unresolved_attempts) === "Unknown" ? "Unknown" : <Money value={r.value} />) : formatMetric(res.metric, r.value) },
     ...(info.additive ? [{ id: "share", header: "Share of total", cell: (r: TableRow) => <PercentBarCell part={r.value} total={res.total.value} /> }] : []),
     ...(res.group_by === "model" && !res.then_by && models ? [{ id: "rate", header: "Cost per 1M tokens", numeric: true, cell: (r: TableRow) => r.other ? "—" : modelRate(models, r.group.id) ?? "—" }] : []),
     ...(money ? [{ id: "held", header: "On hold (USD)", numeric: true, defaultHiddenNarrow: true, cell: (r: TableRow) => r.other ? "—" : <Money value={r.held_microusd} /> }, { id: "unknown", header: "Cost unknown (attempts)", numeric: true, defaultHiddenNarrow: true, cell: (r: TableRow) => r.other ? "—" : formatCount(r.unresolved_attempts) }] : []),
   ];
-  return <Card title={`${info.label} by ${dimLabel(res.group_by).toLowerCase()}${res.then_by ? ` and ${dimLabel(res.then_by).toLowerCase()}` : ""}`} description={<>Total {money ? knownSpendText(res.total.value, res.total.unresolved_attempts) : formatMetric(res.metric, res.total.value)}{money && res.total.held_microusd && res.total.held_microusd !== "0" ? ` · ${formatUsd(res.total.held_microusd)} on hold` : ""} · {periodLabel(period)}</>}
+  return <Card title={`${info.label} by ${dimensionPhrase(dimLabel(res.group_by))}${res.then_by ? ` and ${dimensionPhrase(dimLabel(res.then_by))}` : ""}`} description={<>Total {money ? knownSpendText(res.total.value, res.total.unresolved_attempts) : formatMetric(res.metric, res.total.value)}{money && res.total.held_microusd && res.total.held_microusd !== "0" ? ` · ${formatUsd(res.total.held_microusd)} on hold` : ""} · {periodLabel(period)}</>}
     actions={<Button size="sm" variant="secondary" onClick={() => onExport(res, rows.length)}>Export table (CSV)</Button>}>
     <Stack gap={5}>
       <ExploreChart res={res} />
       <ViewDataTable<TableRow> caption={`${info.label} breakdown`} columns={columns} data={rows} getRowId={r => r.key} hideDensity />
-      {(res.truncated || !!res.then_by) && <p className={u.note}>{res.truncated ? `Showing the top ${new Set(res.rows.map(r => `${r.group.id}|${r.group.name}`)).size} groups; the rest are combined in "Other". ` : ""}{res.then_by ? `Each group lists its top 5 ${dimLabel(res.then_by).toLowerCase()}s.` : ""}</p>}
+      {(res.truncated || !!res.then_by) && <p className={u.note}>{res.truncated ? `Showing the top ${new Set(res.rows.map(r => `${r.group.id}|${r.group.name}`)).size} groups; the rest are combined in "Other". ` : ""}{res.then_by ? `Each group lists its top 5 ${dimensionPhrase(dimLabel(res.then_by))}s.` : ""}</p>}
       {res.group_by === "model" && !res.then_by && models && <p className={u.note}>Cost per 1M tokens is final cost over the tokens of the same requests, shown for the top {models.length} models by spend ("—" for the rest).</p>}
     </Stack>
   </Card>;

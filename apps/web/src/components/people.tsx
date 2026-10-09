@@ -37,11 +37,14 @@ export function PersonCell({ name, shape, children }: { name: string; shape?: "c
 /**
  * A person as Grounded shows them (review #33, rule 15): display name over email, "(you)" for the viewer. Without a
  * display name from the identity provider, the email is the primary line. `link` makes the name open their page.
+ * A long email is cut to one line with an ellipsis (full address in its title), never broken mid-word.
  */
 export function PersonIdentity({ person, self, link }: { person: { display_name?: string | null; email: string | null }; self?: boolean; link?: DashboardSearch }) {
   const name = person.display_name?.trim() || person.email || "Retained identity", secondary = person.display_name?.trim() && person.email ? person.email : undefined;
-  const primary = <>{link ? <ResourceLink search={link}>{name}</ResourceLink> : name}{self && <span className={s.muted}> (you)</span>}</>;
-  return <PersonCell name={name}><CellText primary={primary} secondary={secondary} wrap="anywhere" /></PersonCell>;
+  const email = (value: string) => <span className={p.email} title={value}>{value}</span>;
+  const label = link ? <ResourceLink search={link}>{name}</ResourceLink> : name;
+  const primary = <>{name === person.email ? <span className={p.email} title={name}>{label}</span> : label}{self && <span className={s.muted}> (you)</span>}</>;
+  return <PersonCell name={name}><CellText primary={primary} secondary={secondary && email(secondary)} /></PersonCell>;
 }
 export function UserStatusBadge({ user }: { user: Pick<PlatformUser, "disabled_at" | "cleaned_at"> & Partial<Pick<PlatformUser, "disable_reason" | "role_grants">> }) {
   const state = userState(user);

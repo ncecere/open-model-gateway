@@ -55,6 +55,11 @@ describe("exact micro-USD and governance forms", () => {
     expect(formatUsd("8150")).toBe("$0.0082");
     expect(formatUsd("9999")).toBe("$0.01");
     expect(formatUsd("120")).toBe("$0.00012");
+    // Two significant digits keep a trailing zero (seen live: "$0.007", "$0.009").
+    expect(formatUsd("7000")).toBe("$0.0070");
+    expect(formatUsd("8960")).toBe("$0.0090");
+    expect(formatUsd("500")).toBe("$0.00050");
+    expect(formatUsd("10")).toBe("$0.000010");
     expect(formatUsd("5")).toBe("$0.000005");
     expect(formatUsd("1")).toBe("$0.000001");
     for (const v of ["1", "49", "4999", "9949"]) expect(formatUsd(v)).not.toBe("$0.00");

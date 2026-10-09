@@ -68,8 +68,9 @@ export function progress(b: Pick<BatchRow, "total" | "completed" | "failed">) {
   return { done, total, text: `${done.toLocaleString("en-US")} / ${total.toLocaleString("en-US")}` };
 }
 /**
- * Cost so far: settled cost plus what's on hold, rounded for reading (`formatUsd`); `detail` carries the exact
- * amounts. Unknown is never shown as zero.
+ * Cost so far: settled cost plus what's on hold, rounded for reading (`formatUsd`). `hint` is a short rounded
+ * footnote (settled/on hold split or the unknown-cost caveat); `title` carries the exact amounts for a tooltip.
+ * Unknown is never shown as zero.
  */
 export function costSoFar(b: Pick<BatchRow, "settled_microusd" | "held_microusd" | "cost_unknown"> & Partial<Pick<BatchRow, "cost_unknown_attempts">>) {
   const holding = /^\d+$/.test(b.held_microusd) && BigInt(b.held_microusd) > 0n;
@@ -80,11 +81,21 @@ export function costSoFar(b: Pick<BatchRow, "settled_microusd" | "held_microusd"
   if (b.cost_unknown) {
     const n = b.cost_unknown_attempts && /^\d+$/.test(b.cost_unknown_attempts) && b.cost_unknown_attempts !== "0" ? b.cost_unknown_attempts : null;
     const why = n ? `${n} attempt${n === "1" ? "" : "s"} with unknown cost` : "Some attempts' cost is unknown";
-    return { text: `At least ${settled}${held ? ` + ${held} on hold` : ""}`, detail: `${why} · at least ${settledExact} settled${heldExact ? ` · ${heldExact} on hold` : ""}` };
+    return { text: `At least ${settled}${held ? ` + ${held} on hold` : ""}`, hint: `${why} · at least ${settled} settled${held ? ` · ${held} on hold` : ""}`, title: `${why} · at least ${settledExact} settled${heldExact ? ` · ${heldExact} on hold` : ""}` };
   }
   // A running batch's hold is part of its cost so far: never show it as a bare "$0.00".
-  if (held) return { text: `${settled} + ${held} on hold`, detail: `${settledExact} settled · ${heldExact} on hold` };
-  return { text: settled, detail: settled === settledExact ? null : `Exactly ${settledExact}` };
+  if (held) return { text: `${settled} + ${held} on hold`, hint: `${settled} settled · ${held} on hold`, title: settled === settledExact && held === heldExact ? null : `Exactly ${settledExact} settled · ${heldExact} on hold` };
+  return { text: settled, hint: null, title: settled === settledExact ? null : `Exactly ${settledExact}` };
+}
+const lineStates: Record<string, string> = { running: "Running", succeeded: "Succeeded", failed: "Failed", interrupted: "Interrupted" };
+/**
+ * A batch-line outcome row: the state once, the error code only when it adds something (an interrupted line's code
+ * is "interrupted" too), then the count: "Interrupted · 2 lines", "Failed · rate limited · 1 line".
+ */
+export function lineOutcomeLabel(o: { state: string; code: string | null; lines: number }): string {
+  const state = lineStates[o.state] ?? batchStatusLabel(o.state);
+  const code = o.code && o.code !== o.state ? o.code.replace(/_/g, " ") : null;
+  return `${state}${code ? ` · ${code}` : ""} · ${o.lines.toLocaleString("en-US")} line${o.lines === 1 ? "" : "s"}`;
 }
 const reasons: Record<string, string> = { budget_exceeded: "A budget was exhausted", submission_failed: "The provider refused the batch", submission_interrupted: "The submission was interrupted", batch_failed: "The provider failed the batch" };
 export const stopReason = (code: string | null) => code ? reasons[code] ?? code.replace(/_/g, " ") : null;

@@ -48,3 +48,13 @@
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: var(--space-4);
 }
+
+/* A long email in a person cell: one line cut with an ellipsis (full address in its title), never broken mid-word. */
+.email {
+  display: inline-block;
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}

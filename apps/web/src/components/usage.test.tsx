@@ -12,7 +12,7 @@ import { UsageOverviewTab, showsAccounting } from "../pages/usage/overview";
 import { UsageExploreTab } from "../pages/usage/explore";
 import { WorkspaceRecords } from "../pages/usage/records";
 import { AccountingReport } from "../pages/usage/accounting";
-import { previousHasData, tileDelta, usageContext, usagePeriod, type ExploreResponse, type UsageOverview } from "../lib/usage";
+import { dimensionPhrase, previousHasData, tileDelta, usageContext, usagePeriod, type ExploreResponse, type UsageOverview } from "../lib/usage";
 import type { DashboardSearch } from "../lib/permissions";
 
 const now = new Date("2026-10-08T12:00:00Z"), period = usagePeriod({}, now), q = "start_date=2026-10-01&end_date=2026-10-09";
@@ -141,6 +141,15 @@ describe("Usage & costs overview", () => {
     client.setQueryData(["api", undefined, path], { ...explore, rows: names.map(n => ({ group: { id: n, name: n }, then: null, value: "1", share: "0.1", held_microusd: "0", unresolved_attempts: "0" })), series: explore.series.map(d => ({ date: d.date, values: names.map(n => ({ id: n, value: "1" })) })) });
     const html = view();
     expect(html).toContain("Build a breakdown"); expect(html).toContain("The chart shows the top 7 groups; the table shows all 9.");
+    client.clear();
+  });
+  it("keeps acronyms in grouping labels inside sentences (\"model and API key\", not \"api key\")", () => {
+    const client = testClient(), view = () => markup(<UsageExploreTab workspace={team} ctx={usageContext(team)} period={period} nav={nav({ page: "costs", ws: "team", tab: "explore", group: "model", then: "key" })} />, [], client);
+    view(); const path = paths(client).find(p => p.includes("/usage/explore?"))!;
+    client.setQueryData(["api", undefined, path], { ...explore, then_by: "key", rows: explore.rows.map(r => ({ ...r, then: { id: "k", name: "Laptop key" } })) });
+    const html = view();
+    expect(html).toContain("Spend by model and API key"); expect(html).toContain("top 5 API keys"); expect(html).not.toMatch(/api key/);
+    expect(dimensionPhrase("Cost center")).toBe("cost center"); expect(dimensionPhrase("API key")).toBe("API key");
     client.clear();
   });
   it("renders an empty state instead of a flat chart of zeros, and never fabricates $0 while loading", () => {

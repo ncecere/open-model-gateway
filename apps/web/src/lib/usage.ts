@@ -252,6 +252,8 @@ export function usageContext(workspace?: { kind: string; capabilities: { view_al
 export function dimensionOptions(ctx: UsageContext): { value: Dimension; label: string }[] {
   return [{ value: "model", label: "Model" }, { value: "key", label: "API key" }, ...(ctx.members ? [{ value: "member" as const, label: "Member" }] : []), { value: "provider", label: "Provider" }, ...(ctx.platform ? [{ value: "workspace" as const, label: "Workspace" }, { value: "cost_center" as const, label: "Cost center" }] : []), { value: "day", label: "Day" }];
 }
+/** A dimension label inside a sentence: lower-case, but acronyms keep their case ("model", "API key", "cost center"). */
+export const dimensionPhrase = (label: string) => label.split(" ").map(w => /^[A-Z]{2,}$/.test(w) ? w : w.toLowerCase()).join(" ");
 export const exploreTopN = [5, 10, 25];
 
 /** One measure for reading: money rounded with `formatUsd` (sub-cent keeps two significant digits), counts grouped, rates as percentages; unknown stays "Unknown". */

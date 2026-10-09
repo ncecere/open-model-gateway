@@ -109,7 +109,7 @@ export function formatMicroUsd(value: string | null | undefined): string {
 /**
  * Money for reading (tiles, cards, table cells): whole cents from $0.01 up
  * ("$8.27" for 8271628 micro-USD, half-up), and two significant digits below a
- * cent ("$0.0081"), so a non-zero amount is never "$0.00". Unknown stays
+ * cent ("$0.0081"; "$0.0070" keeps its trailing zero, down to the micro-USD), so a non-zero amount is never "$0.00". Unknown stays
  * "Unknown". Pair with the exact `formatMicroUsd` value in a tooltip (the
  * `Money` component); prices, configured limits, inputs and exports stay exact.
  */
@@ -127,7 +127,10 @@ export function formatUsd(value: string | null | undefined): string {
   const step = 10n ** BigInt(Math.max(0, digits - 2));
   const rounded = ((amount + step / 2n) / step) * step;
   if (rounded >= 10000n) return "$0.01";
-  return `$0.${rounded.toString().padStart(6, "0").replace(/0+$/, "")}`;
+  // Keep both significant digits ("$0.0070", not "$0.007"), but never go past
+  // the micro-USD the amount is stored in (1 micro-USD stays "$0.000001").
+  const micro = rounded.toString().padStart(6, "0");
+  return `$0.${micro.slice(0, Math.min(6, micro.search(/[1-9]/) + 2))}`;
 }
 export const integerField = (name: string, label: string, min = 1, max = 2147483647): Field => ({ name, label, type: "number", required: true, min, max, validate: value => /^-?\d+$/.test(value) && Number.isSafeInteger(Number(value)) ? undefined : "Enter an exact safe integer, without exponent notation." });
 /**

@@ -237,7 +237,7 @@ describe("BudgetRing", () => {
 
   it("states unlimited, unknown, at and over limit", () => {
     const { rerender, container } = render(<BudgetRing label="Key limit" used="100" limit={null} />);
-    expect(screen.getByRole("img", { name: "Key limit: $0.0001, no limit" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "Key limit: $0.00010, no limit" })).toBeTruthy();
     expect(screen.getByText("∞")).toBeTruthy();
     rerender(<BudgetRing label="Key limit" used={null} limit="50000000" />);
     expect(screen.getByText("?")).toBeTruthy();

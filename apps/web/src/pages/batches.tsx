@@ -12,7 +12,7 @@
 import { useState } from "react";
 import { Layers } from "lucide-react";
 import { api, type Session, type Workspace } from "../lib/api";
-import { batchCancelPath, batchPath, batchStatus, batchStatusLabel, batchStatusTone, batchStatuses, batchesPath, costSoFar, endpointLabel, isActive, isBatchStatus, modeHint, modeLabel, priceListLabel, progress, stopReason, type BatchDetail, type BatchPage, type BatchRow } from "../lib/batches";
+import { batchCancelPath, batchPath, batchStatus, batchStatusLabel, batchStatusTone, batchStatuses, batchesPath, costSoFar, endpointLabel, isActive, isBatchStatus, lineOutcomeLabel, modeHint, modeLabel, priceListLabel, progress, stopReason, type BatchDetail, type BatchPage, type BatchRow } from "../lib/batches";
 import { fileContentPath } from "../lib/files";
 import { pauseLabel, type BatchRouteWait } from "../lib/batch-scheduling";
 import type { DashboardSearch } from "../lib/permissions";
@@ -43,7 +43,7 @@ function ModeCell({ b }: { b: BatchRow }) {
 }
 function CostCell({ b }: { b: BatchRow }) {
   const cost = costSoFar(b);
-  return <span title={cost.detail ?? undefined}>{cost.text}</span>;
+  return <span title={cost.title ?? cost.hint ?? undefined}>{cost.text}</span>;
 }
 
 /** The Batches tab of Logs. */
@@ -118,12 +118,12 @@ export function BatchDetailPage({ workspace, id }: { session: Session; workspace
       { label: "Output", value: file(b.output_file_id, "Output file") },
       { label: "Errors", value: file(b.error_file_id, "Error file") },
     ]}
-    sections={[{ id: "scheduling", title: "Scheduling", hidden: !waits.length, content: <WaitList waits={waits} /> }, { id: "outcomes", title: "Line outcomes", hidden: !detail.data?.outcomes.length, content: <ul className={s.plainList}>{detail.data?.outcomes.map(o => <li key={`${o.state}:${o.code}`}>{batchStatusLabel(o.state)}{o.code ? ` · ${o.code.replace(/_/g, " ")}` : ""}: {o.lines.toLocaleString("en-US")}</li>)}</ul> }]}>
+    sections={[{ id: "scheduling", title: "Scheduling", hidden: !waits.length, content: <WaitList waits={waits} /> }, { id: "outcomes", title: "Line outcomes", hidden: !detail.data?.outcomes.length, content: <ul className={s.plainList}>{detail.data?.outcomes.map(o => <li key={`${o.state}:${o.code}`}>{lineOutcomeLabel(o)}</li>)}</ul> }]}>
     <StatTileGrid columns={4} label="Batch summary">
       <StatTile label="Progress" value={p.text} hint={p.total ? `${Math.floor((p.done * 100) / p.total)}% of lines finished` : undefined} />
       <StatTile label="Completed" value={b.completed.toLocaleString("en-US")} />
       <StatTile label="Failed" value={b.failed.toLocaleString("en-US")} />
-      <StatTile label="Cost so far" value={cost.text} hint={cost.detail ?? (b.mode === "gateway" ? "Standard prices per line" : undefined)} />
+      <StatTile label="Cost so far" value={<span title={cost.title ?? undefined}>{cost.text}</span>} hint={cost.hint ?? (b.mode === "gateway" ? "Standard prices per line" : undefined)} />
     </StatTileGrid>
   </RecordPage>;
 }
