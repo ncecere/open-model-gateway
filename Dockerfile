@@ -20,7 +20,10 @@ ARG CARGO_BUILD_JOBS=2
 RUN cargo build --locked --release --jobs "$CARGO_BUILD_JOBS" -p open-model-gateway
 
 FROM debian:bookworm-slim AS runtime
+# Apply Debian security updates at build time so the published image carries
+# fixed versions of base packages (e.g. perl-base) the scan would flag.
 RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 gateway \
