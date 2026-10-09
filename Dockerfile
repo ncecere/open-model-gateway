@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM node:22.22.0-bookworm-slim AS web
+FROM node:22.23.3-bookworm-slim AS web
 WORKDIR /build
 COPY package.json package-lock.json ./
 COPY apps/web/package.json apps/web/package.json
@@ -11,7 +11,7 @@ RUN npm run build:web
 # All locked dependency manifests currently require Rust <= 1.88. This pinned
 # compiler also supports edition 2024; do not use the manifest MSRV blindly when
 # updating Cargo.lock. Build and runtime share Debian's glibc baseline.
-FROM rust:1.90.0-bookworm AS build
+FROM rust:1.99.0-bookworm AS build
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY apps/gateway/ apps/gateway/
