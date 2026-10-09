@@ -152,7 +152,7 @@ Response: `{deployment_id,upstream_model,source:"openrouter_public_catalog",cata
 
 ## Reports, detail and CSV
 
-- `GET /platform/cost-report`: authorized platform aggregates including personal totals, no request-detail endpoint; platform `service_accounts` breakdown is empty.
+- `GET /platform/cost-report`: authorized platform aggregates including personal totals, no request-detail endpoint; platform `service_accounts` breakdown is empty. Each personal workspace's `workspaces` breakdown row is named `Personal · <owner>` (display name, else email, `former user` after cleanup) instead of the bare workspace name.
 - `GET /workspaces/{ws}/cost-report`: workspace-wide for administrators, own human-key activity for ordinary members.
 - `GET /workspaces/{ws}/costs`: `{data,has_more}` with authorized detail rows, `limit=1..200`, `offset=0..100000`.
 - `GET /workspaces/{ws}/usage-export`: one CSV page, `limit=1..1000`, `offset=0..100000`, no-store and formula-safe quoted cells. Headers include `x-export-limit`, `x-export-offset`, `x-export-rows`.

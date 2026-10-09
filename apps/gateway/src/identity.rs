@@ -800,6 +800,11 @@ async fn callback(
         .additional_claims()
         .groups(&provider.config.groups_claim)
         .ok_or(AuthError(StatusCode::FORBIDDEN))?;
+    // Presentation only: the verified token's display name (or none) replaces the stored one.
+    let display_name = claims
+        .name()
+        .and_then(|name| name.get(None))
+        .and_then(|name| display_name(name.as_str()));
     let user_id = match resolve_identity_with(
         &state.store,
         provider.config.issuer.as_str(),
@@ -811,16 +816,24 @@ async fn callback(
     .await
     {
         Ok(id) => id,
-        Err(AuthError(status)) if status == StatusCode::FORBIDDEN && wants_html(&headers) => {
-            return denied_browser_callback(&state, &headers, provider.config.secure_cookies).await;
+        Err(AuthError(status)) if status == StatusCode::FORBIDDEN => {
+            // A denied sign-in (no platform role) still records who tried under the
+            // linked identity, so Admin › Users shows a name rather than a bare row.
+            sqlx::query("UPDATE users u SET display_name=$3 FROM oidc_identities i WHERE i.issuer=$1 AND i.subject=$2 AND u.id=i.user_id AND u.cleaned_at IS NULL AND u.display_name IS DISTINCT FROM $3")
+                .bind(provider.config.issuer.as_str())
+                .bind(subject)
+                .bind(&display_name)
+                .execute(&state.store.pool)
+                .await
+                .map_err(internal)?;
+            if wants_html(&headers) {
+                return denied_browser_callback(&state, &headers, provider.config.secure_cookies)
+                    .await;
+            }
+            return Err(AuthError(status));
         }
         Err(error) => return Err(error),
     };
-    // Presentation only: the verified token's display name (or none) replaces the stored one.
-    let display_name = claims
-        .name()
-        .and_then(|name| name.get(None))
-        .and_then(|name| display_name(name.as_str()));
     sqlx::query("UPDATE users SET display_name=$2 WHERE id=$1 AND cleaned_at IS NULL AND display_name IS DISTINCT FROM $2")
         .bind(user_id)
         .bind(display_name)

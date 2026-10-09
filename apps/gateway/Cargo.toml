@@ -1,6 +1,6 @@
 [package]
 name = "open-model-gateway"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -15,7 +15,10 @@ anyhow = "1"
 async-trait = "0.1"
 openidconnect = { version = "4", default-features = false, features = ["reqwest", "rustls-tls"] }
 aws-config = "1"
-aws-sdk-bedrockruntime = "1"
+# Without the default "rustls" feature: it pulls the legacy hyper 0.14 /
+# rustls 0.21 connector (unpatched h2 0.3 and rustls-webpki 0.101 advisories,
+# deny.toml). Requests use the gateway's own reqwest transport (providers/bedrock/transport.rs).
+aws-sdk-bedrockruntime = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
 aws-smithy-types = { version = "1", features = ["http-body-1-x"] }
 aws-smithy-runtime-api = { version = "1", features = ["client"] }
 aws-smithy-eventstream = "=0.60.18"

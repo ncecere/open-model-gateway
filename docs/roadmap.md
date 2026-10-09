@@ -46,7 +46,7 @@ After v0.3.0 the remaining R-items were selected as one enterprise program, deli
 | 6. Feature gaps | Token-by-token Responses/Messages streaming, active health checks, vision input and image edits, `file_id` in requests, OpenRouter video, native Bedrock/Vertex batches, realtime extras | R08, R10, R20 | Planned |
 | 6b. Providers and cache-aware routing | **Azure** adapter (Claude through Microsoft Foundry, and Azure OpenAI; API-key or Entra workload identity; deployment names) and **Google Vertex AI** adapter (Claude on Vertex with the Anthropic request shape; service-account or workload identity; project and region), so one model such as `claude-haiku-5.5` can have Anthropic, Bedrock, Azure and Vertex routes. **Cache-aware sticky routing** (proposed): keep a conversation or a shared prompt prefix on the route whose prompt cache is warm, keyed by `X-Session-Id`, `prompt_cache_key` or a keyed in-memory hash of the cacheable prefix (no prompt text stored), for the cache's lifetime; break affinity only for cooldown, failure, limits or residency, and log it | R09, R10 | After phases 1–6; live tests later |
 
-Next release (unreleased): a distroless runtime image (binary entrypoint, `open-model-gateway healthcheck`, 104 MB, no shell/curl/perl) and fixes found while capturing the documentation screenshots.
+v0.3.1 (2026-10-09): distroless runtime image (binary entrypoint, `open-model-gateway healthcheck`, 104 MB, no shell/curl/perl), supply-chain scanning (cargo-deny, npm audit gate, CodeQL, Dependabot), rerank and System One on self-hosted profiles, and fixes from live DGX Spark acceptance and the screenshot pass ([notes](releases/v0.3.1.md)). Generic OIDC sign-in passed end to end against a self-hosted Authentik.
 
 ## Historical proposal and restored baseline
 
@@ -329,7 +329,7 @@ Usage and configured-rate cost accounting are implemented, but neither is provid
 - [x] Real OpenAI/Anthropic client SDK JSON and streaming-helper contract tests.
 - [x] Published supported/unsupported matrix and Bedrock setup.
 
-Deliberate limits: native Responses/Messages frontend content is currently buffered (at most 4 MiB), not delivered token-by-token; upstreams are parsed incrementally. No multimodal chat content (vision), hosted tools, persisted Responses state, or full vendor-option passthrough; images, audio, rerank and System One use their own bounded endpoints. Live provider/model/IAM validation remains an operator acceptance step. Local OpenAI-compatible, vLLM, SGLang and Ollama profiles cover Chat and embeddings only (no local Responses/Messages). Finer model capabilities, expanded canonical content, and native extensions remain future increments. See [protocol matrix](protocol-matrix.md).
+Deliberate limits: native Responses/Messages frontend content is currently buffered (at most 4 MiB), not delivered token-by-token; upstreams are parsed incrementally. No multimodal chat content (vision), hosted tools, persisted Responses state, or full vendor-option passthrough; images, audio, rerank and System One use their own bounded endpoints. Live provider/model/IAM validation remains an operator acceptance step. Local OpenAI-compatible, vLLM, SGLang and Ollama profiles cover Chat and embeddings, plus rerank (compatible, vLLM, SGLang) and System One (compatible, Ollama); no local Responses/Messages. Finer model capabilities, expanded canonical content, and native extensions remain future increments. See [protocol matrix](protocol-matrix.md).
 
 ## 4. Governance, accounting, and routing — implemented bounded scope
 

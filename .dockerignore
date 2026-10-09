@@ -1,4 +1,5 @@
-# Deny by default: only build inputs and the production entrypoint enter context.
+# Deny by default: only build inputs enter context. The runtime image is
+# distroless; the binary is its own entrypoint (no shell scripts).
 **
 !Dockerfile
 !.dockerignore
@@ -22,8 +23,6 @@
 !apps/web/src/**
 !apps/web/public/
 !apps/web/public/**
-!deploy/
-!deploy/container-entrypoint.sh
 
 # Defense in depth inside allowed source trees. No environment files (including
 # examples) are needed to build or run this image.

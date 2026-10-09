@@ -272,7 +272,7 @@ describe("Add model type and protocols", () => {
     expect(protocols()).toEqual([["Chat Completions", true]]);
     cleanup(); const user = mount([conn("v", "vllm", "Local")]);
     expect(protocols()).toEqual([["Chat Completions", true]]);
-    expect((await typeOptions(user)).filter(([, disabled]) => disabled).map(([label]) => label?.replace(/\(.*\)/, ""))).toEqual(["Images", "Speech to text", "Text to speech", "Rerank", "System One", "Realtime audio", "Video", "Batch"]);
+    expect((await typeOptions(user)).filter(([, disabled]) => disabled).map(([label]) => label?.replace(/\(.*\)/, ""))).toEqual(["Images", "Speech to text", "Text to speech", "System One", "Realtime audio", "Video", "Batch"]);
   });
   it("sends the chosen protocols; switching connection follows the new profile and drops a type it can't serve", async () => {
     const fetch = vi.fn().mockResolvedValue(Response.json({ model_id: "m", deployment_id: "d", price_id: null }, { status: 201 }));

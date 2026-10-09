@@ -13,7 +13,7 @@
  * the optional client session id / app name. Unknown stays null, never zero.
  */
 import type { DashboardSearch, RangePreset } from "./permissions";
-import { formatMicroUsd } from "./governance";
+import { formatUsd } from "./governance";
 import type { DataPolicy } from "../components/templates/data-policy-badge";
 import type { TimelineStatus } from "../components/templates/timeline";
 import { detailTime, tableTime } from "./format";
@@ -252,10 +252,10 @@ export function tokensText(input: string | number | null | undefined, output: st
 export function compactDateTime(iso: string, now = new Date(), timeZone?: string): { text: string; full: string } {
   return { text: tableTime(iso, now, timeZone), full: detailTime(iso, timeZone) };
 }
-/** Known cost, or "Unknown" with what's on hold (a hold is a floor, not the price). */
+/** Known cost, or "Unknown" with what's on hold (a hold is a floor, not the price). Rounded for reading; see `Money` for the exact title. */
 export function costText(cost: string | null, held: string | null): string {
-  if (cost !== null) return formatMicroUsd(cost);
-  return held && /^\d+$/.test(held) && BigInt(held) > 0n ? `Unknown · ${formatMicroUsd(held)} on hold` : "Unknown";
+  if (cost !== null) return formatUsd(cost);
+  return held && /^\d+$/.test(held) && BigInt(held) > 0n ? `Unknown · ${formatUsd(held)} on hold` : "Unknown";
 }
 /** Tokens per second (a decimal string from the server); unknown is "Unknown". */
 export function tpsText(value: string | null | undefined): string {

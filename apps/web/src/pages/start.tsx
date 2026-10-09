@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Activity, Coins, Cpu, FolderKanban, UserRound, UsersRound } from "lucide-react";
 import { platformPath, type PlatformOverviewData, type Session } from "../lib/api";
 import type { DashboardSearch } from "../lib/permissions";
-import { formatMicroUsd } from "../lib/governance";
+import { Money } from "../components/templates/money";
 import { formatCount } from "../lib/reports";
 import { setupSteps, type SetupStepId } from "../lib/model-setup";
 import { ResourceLink } from "../components/navigation-link";
@@ -71,6 +71,6 @@ function Glance({ data }: { data: PlatformOverviewData }) {
     <StatCard label="Projects" value={count(g.projects)} icon={<FolderKanban />} render={<ResourceLink search={{ page: "platform-projects" }} />} />
     <StatCard label="Ready models" value={count(g.ready_models)} icon={<Cpu />} hint={`of ${count(data.setup.models)} model${data.setup.models === 1 ? "" : "s"}`} render={<ResourceLink search={{ page: "models" }} />} />
     <StatCard label="Requests this month" value={monthly(tiles?.requests.attempts, formatCount)} icon={<Activity />} hint={usage.isError ? "Couldn't load usage" : "Includes retries"} render={<ResourceLink search={{ page: "platform-costs" }} />} />
-    <StatCard label="Spend this month" value={monthly(tiles?.spend.value, formatMicroUsd)} icon={<Coins />} hint={usage.isError ? "Couldn't load usage" : "Estimated, excludes holds"} render={<ResourceLink search={{ page: "platform-costs" }} />} />
+    <StatCard label="Spend this month" value={usage.isPending || usage.isError || tiles?.spend.value == null ? monthly(tiles?.spend.value, String) : <Money value={tiles.spend.value} />} icon={<Coins />} hint={usage.isError ? "Couldn't load usage" : "Estimated, excludes holds"} render={<ResourceLink search={{ page: "platform-costs" }} />} />
   </div></Stack></section>;
 }

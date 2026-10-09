@@ -16,7 +16,7 @@ import { Activity as ActivityIcon, FileClock } from "lucide-react";
 import { platformPath, type Audit, type Catalog, type CostCenter, type GroupMapping, type Model, type PlatformUser, type Provider, type Workspace } from "../lib/api";
 import type { DashboardSearch } from "../lib/permissions";
 import type { CostReport, Totals } from "../lib/governance";
-import { formatMicroUsd } from "../lib/governance";
+import { Money } from "./templates/money";
 import { formatCount } from "../lib/reports";
 import { auditEventLabel, kindLabels, last30Days, resourceTypeLabel, splitUsage, type DirectoryWorkspace } from "../lib/people";
 import { DateTime, ErrorNotice, Stack, StatCard, useApi, useChoices } from "./ui";
@@ -68,7 +68,7 @@ export function UserActions({ user, name }: { user: Pick<PlatformUser, "id">; na
   </Card>;
 }
 
-const money = (v: string) => formatMicroUsd(v);
+const money = (v: string) => <Money value={v} />;
 function UsageRow({ name, kind, totals }: { name: ReactNode; kind?: ReactNode; totals: Totals }) {
   return <Tr><Td>{name}</Td><Td>{kind ?? <span className={s.muted}>—</span>}</Td><Td numeric>{formatCount(totals.attempts)}</Td><Td numeric>{money(totals.known_cost_microusd)}</Td><Td numeric>{money(totals.held_microusd)}</Td></Tr>;
 }

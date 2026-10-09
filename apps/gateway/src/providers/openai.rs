@@ -465,6 +465,35 @@ fn known_fields(value: &Value, allowed: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// Local servers (SGLang, vLLM, Ollama) add stop metadata to a choice
+/// (`matched_stop`, `stop_reason`: the matched stop token id or string) and,
+/// with a reasoning parser, a separate reasoning trace to the message or delta
+/// (`reasoning_content`, `reasoning`). As on OpenRouter, the trace is not
+/// returned to clients; its tokens stay in `completion_tokens`. The extras are
+/// accepted only for local profiles and only with those scalar shapes.
+type LocalExtras = (&'static [&'static str], fn(&Value) -> bool);
+const LOCAL_STOP_FIELDS: LocalExtras = (&["matched_stop", "stop_reason"], |v| {
+    v.is_null() || v.is_string() || v.is_u64() || v.is_i64()
+});
+const LOCAL_REASONING_FIELDS: LocalExtras = (&["reasoning_content", "reasoning"], |v| {
+    v.is_null() || v.is_string()
+});
+fn known_profile_fields(
+    value: &Value,
+    allowed: &[&str],
+    profile: Option<&str>,
+    (extras, valid): LocalExtras,
+) -> Result<()> {
+    if profile.is_none() {
+        return known_fields(value, allowed);
+    }
+    if extras.iter().any(|key| !valid(&value[*key])) {
+        return Err(InferenceError::InvalidUpstream);
+    }
+    let all: Vec<&str> = allowed.iter().chain(extras).copied().collect();
+    known_fields(value, &all)
+}
+
 fn finish(value: &Value) -> Result<FinishReason> {
     match string(value)? {
         "stop" => Ok(FinishReason::Stop),
@@ -485,7 +514,7 @@ fn usage(value: &Value) -> Result<Usage> {
     )
 }
 pub(super) fn local_usage(value: &Value, profile: &str) -> Result<Usage> {
-    super::metering::inclusive(
+    let mut usage = super::metering::inclusive(
         value,
         "prompt_tokens",
         "completion_tokens",
@@ -495,7 +524,13 @@ pub(super) fn local_usage(value: &Value, profile: &str) -> Result<Usage> {
         } else {
             "cache_write_tokens"
         },
-    )
+    )?;
+    // SGLang reports the breakdown as top-level `usage.reasoning_tokens`.
+    if usage.reasoning_tokens.is_none() {
+        usage.reasoning_tokens =
+            super::metering::top_level_reasoning_tokens(value, usage.output_tokens);
+    }
+    Ok(usage)
 }
 
 pub(super) fn decode_complete(value: &Value) -> Result<ChatResponse> {
@@ -529,9 +564,19 @@ fn decode_shape(value: &Value, profile: Option<&str>) -> Result<ChatResponse> {
     if choice["index"].as_u64() != Some(0) {
         return Err(InferenceError::InvalidUpstream);
     }
-    known_fields(choice, &["index", "message", "finish_reason", "logprobs"])?;
+    known_profile_fields(
+        choice,
+        &["index", "message", "finish_reason", "logprobs"],
+        profile,
+        LOCAL_STOP_FIELDS,
+    )?;
     let message = &choice["message"];
-    known_fields(message, &["role", "content", "tool_calls"])?;
+    known_profile_fields(
+        message,
+        &["role", "content", "tool_calls"],
+        profile,
+        LOCAL_REASONING_FIELDS,
+    )?;
     if message["role"].as_str() != Some("assistant") {
         return Err(InferenceError::InvalidUpstream);
     }
@@ -609,9 +654,19 @@ impl StreamState {
             if self.finished || choice["index"].as_u64() != Some(0) {
                 return Err(InferenceError::InvalidUpstream);
             }
-            known_fields(choice, &["index", "delta", "finish_reason", "logprobs"])?;
+            known_profile_fields(
+                choice,
+                &["index", "delta", "finish_reason", "logprobs"],
+                self.profile,
+                LOCAL_STOP_FIELDS,
+            )?;
             let delta = &choice["delta"];
-            known_fields(delta, &["role", "content", "tool_calls"])?;
+            known_profile_fields(
+                delta,
+                &["role", "content", "tool_calls"],
+                self.profile,
+                LOCAL_REASONING_FIELDS,
+            )?;
             if !delta["role"].is_null() && delta["role"].as_str() != Some("assistant") {
                 return Err(InferenceError::InvalidUpstream);
             }

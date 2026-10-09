@@ -13,7 +13,8 @@ import type { Session } from "../lib/api";
 import { ApiError } from "../lib/api";
 import type { DashboardSearch } from "../lib/permissions";
 import { countText, logPaths, logsSearch, requestFilters, requestQuery, tokensText, validSessionId, type LogsScope, type RequestFilters, type SessionRow } from "../lib/requests";
-import { formatMicroUsd } from "../lib/governance";
+import { formatUsd } from "../lib/governance";
+import { Money } from "../components/templates/money";
 import { NARROW_QUERY, useMediaQuery } from "../lib/bitop-utils";
 import { Button, ErrorNotice, Stack, useApi } from "../components/ui";
 import { ResourceLink, useDashboardNavigation } from "../components/navigation-link";
@@ -72,7 +73,7 @@ function SessionView({ scope }: { scope: LogsScope }) {
     {summary.isPending ? <p role="status">Loading session…</p> : summary.isError ? <ErrorNotice error={summary.error} retry={() => void summary.refetch()} /> : <>
       <StatTileGrid columns={4} label="Session summary">
         <StatTile label="Requests" value={countText(r!.requests)} hint={`${countText(r!.failed_requests)} failed · ${countText(r!.attempts)} attempts`} />
-        <StatTile label={r!.cost_microusd === null ? "Cost (not final)" : "Cost"} value={r!.cost_microusd === null ? `At least ${formatMicroUsd(r!.known_cost_microusd)}` : formatMicroUsd(r!.cost_microusd)} hint={r!.held_microusd !== "0" ? `${formatMicroUsd(r!.held_microusd)} on hold` : "Estimated from configured prices"} />
+        <StatTile label={r!.cost_microusd === null ? "Cost (not final)" : "Cost"} value={r!.cost_microusd === null ? <Money value={r!.known_cost_microusd} prefix="At least " /> : <Money value={r!.cost_microusd} />} hint={r!.held_microusd !== "0" ? `${formatUsd(r!.held_microusd)} on hold` : "Estimated from configured prices"} />
         <StatTile label="Tokens" value={tokensText(r!.input_tokens, r!.output_tokens) === "Unknown" ? null : tokensText(r!.input_tokens, r!.output_tokens)} hint="Input · output" />
         <StatTile label="Duration" value={durationText(r!.first_at, r!.last_at)} hint="First to last request start" />
       </StatTileGrid>

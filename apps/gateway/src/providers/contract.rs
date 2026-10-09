@@ -24,6 +24,75 @@ fn observed(usage: &Usage) -> Telemetry<'_> {
     }
 }
 
+/// Input-only token metering the mock reports (`None`: not reported).
+fn assert_input_only(usage: &Usage, input_tokens: Option<u64>) {
+    assert_eq!(usage.input_tokens, input_tokens, "input tokens");
+    let billing = usage.billing.expect("billing categories");
+    assert_eq!(billing.total_input_tokens, input_tokens, "total input");
+    let meters = usage.meters.expect("non-token meters");
+    assert_eq!(meters.requests, Some(1), "one upstream request");
+    assert_eq!(
+        (meters.output_images, meters.input_characters),
+        (Some(0), Some(0)),
+        "meters a text workload cannot produce are semantic zeros"
+    );
+}
+
+/// Rerank: results valid for the request (and accepted by the workload),
+/// input-only tokens with semantic output zero, one request, and search units
+/// exactly as reported (unknown stays `None`, never zero).
+pub async fn assert_rerank_contract(
+    adapter: &dyn ProviderAdapter,
+    target: &Deployment,
+    request: RerankRequest,
+    input_tokens: Option<u64>,
+    search_units: Option<u64>,
+) -> RerankResponse {
+    use crate::inference::workload::Workload;
+    assert!(adapter.supports_protocol(ApiProtocol::Rerank));
+    let response = adapter
+        .execute_rerank(target, request.clone())
+        .await
+        .unwrap_or_else(|e| panic!("rerank failed: {e:?}"));
+    assert!(
+        response.valid_for(&request),
+        "results valid for the request"
+    );
+    assert!(
+        request.valid_response(&response),
+        "workload accepts response"
+    );
+    assert_eq!(response.usage.output_tokens, Some(0), "input-only workload");
+    assert_input_only(&response.usage, input_tokens);
+    assert_eq!(response.usage.meters.unwrap().search_units, search_units);
+    response
+}
+
+/// System One: one answer per question, both TypeSafe counters as reported,
+/// one request and no search units.
+pub async fn assert_systemone_contract(
+    adapter: &dyn ProviderAdapter,
+    target: &Deployment,
+    request: SystemoneRequest,
+    input_tokens: u64,
+    output_tokens: u64,
+) -> SystemoneResponse {
+    use crate::inference::workload::Workload;
+    assert!(adapter.supports_protocol(ApiProtocol::Systemone));
+    let response = adapter
+        .execute_systemone(target, request.clone())
+        .await
+        .unwrap_or_else(|e| panic!("System One failed: {e:?}"));
+    assert!(
+        request.valid_response(&response),
+        "workload accepts response"
+    );
+    assert_eq!(response.usage.output_tokens, Some(output_tokens));
+    assert_input_only(&response.usage, Some(input_tokens));
+    assert_eq!(response.usage.meters.unwrap().search_units, Some(0));
+    response
+}
+
 pub async fn assert_text_chat_contract(
     adapter: &dyn ProviderAdapter,
     target: &Deployment,

@@ -1,0 +1,61 @@
+# Weekly dependency updates, grouped so each ecosystem opens at most one
+# version-update pull request a week (security updates still arrive
+# individually). Every PR is checked by ci.yml, including cargo-deny and
+# npm audit (docs/verification.md, "Supply chain").
+version: 2
+updates:
+  # Rust workspace (Cargo.toml, Cargo.lock).
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies, rust]
+    groups:
+      # The AWS SDK and smithy crates are pinned to one generation
+      # (apps/gateway/Cargo.toml) and must move together.
+      aws-sdk:
+        patterns: ["aws-*"]
+      cargo:
+        patterns: ["*"]
+
+  # Root npm workspace (package-lock.json covers apps/web and the test
+  # tooling in package.json).
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies, javascript]
+    groups:
+      npm:
+        patterns: ["*"]
+
+  # Workflow actions stay pinned by commit SHA; Dependabot updates the SHA
+  # and the version comment together.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    labels: [dependencies, github_actions]
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Dockerfile base images (node build stage, rust build stage, distroless
+  # runtime digest).
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    labels: [dependencies, docker]
+    groups:
+      images:
+        patterns: ["*"]
+    ignore:
+      # The SPA build stage tracks the Node 22 LTS line used by CI
+      # (package.json engines); a major Node move is a deliberate change.
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]

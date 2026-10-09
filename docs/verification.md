@@ -13,9 +13,18 @@ Run from the repository root. None of them make paid provider calls or touch the
 | `npm run typecheck:web` / `npm run test:web` / `npm run build:web` | SPA types, Vitest unit/component tests, production build | Node 22 |
 | `npm run test:browser` | Playwright end-to-end journey and axe accessibility scans (below) | Disposable PostgreSQL, Rust, Chromium (`npx playwright install chromium`) |
 | `npm run test:demo` | Local demo issuer and runtime helper | Node, Python 3 |
-| `npm run test:container` / `npm run test:staging` | Container entrypoint, staging/provider-acceptance helpers | Node, Python 3 |
+| `npm run test:container` | Runtime image contract (`tests/container-image.test.mjs`): distroless (no shell, package manager, curl, perl, Node or Cargo), UID 10001, read-only root filesystem, `_FILE` secret import and refusal, `serve` never migrates, explicit `migrate`, exec-form `healthcheck`, graceful `SIGTERM` as PID 1 | Docker, Node; builds the image unless `OMG_CONTAINER_IMAGE` names one; uses a throwaway `postgres:17-alpine` on an internal network |
+| `npm run test:staging` | Staging (including the runtime-image checks of `verify`), provider-acceptance and backup helpers | Python 3 |
+| `cargo deny check` | Supply chain: RustSec advisories (vulnerable, unmaintained, unsound, yanked), licence allow-list, duplicate-version warnings, crates.io-only sources; policy in `deny.toml` | [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny) 0.20 (`cargo install cargo-deny --locked` or the release binary); fetches the advisory database |
+| `npm audit --omit=dev --audit-level=high` | Supply chain: high and critical advisories in production npm dependencies (the SPA bundle) | Node 22; reads `package-lock.json` |
 
-CI (`.github/workflows/ci.yml`) runs all of these; the `browser` job uses a PostgreSQL service container.
+CI (`.github/workflows/ci.yml`) runs all of these; the `browser` job uses a PostgreSQL service container, and `test:container` runs in the `staging-image` job (and on each pushed digest in `image.yml`). The binary's startup secret handling and `healthcheck` are also covered by `cargo test` (`apps/gateway/src/startup.rs`, `apps/gateway/src/healthcheck.rs`, `apps/gateway/tests/startup.rs`).
+
+### Supply chain
+
+CI's `cargo-deny` job runs `cargo deny --all-features check` (SHA-pinned `EmbarkStudios/cargo-deny-action`), and the `npm-audit` job gates on `npm audit --omit=dev --audit-level=high` and writes the full, non-blocking `npm audit` (dev tooling included) to the job summary. `.github/workflows/codeql.yml` runs CodeQL for `javascript-typescript` and `rust` (build mode `none`) on pushes to `main`, pull requests and weekly; results appear on the Security tab. `.github/dependabot.yml` opens weekly grouped updates for Cargo, npm (root workspace), GitHub Actions (SHA pins) and the `Dockerfile` base images. The release image is additionally scanned by Trivy in `image.yml`.
+
+`deny.toml` ignores two advisories, each with its reason: RUSTSEC-2023-0071 (`rsa` via `openidconnect`; no fixed release, and the gateway only verifies ID-token signatures with public keys) and RUSTSEC-2026-0253 (`lru` via the pinned `aws-sdk-s3`; unsound only when a key's `Drop` panics, fixed with the next AWS SDK generation). No licence exceptions are needed; the allow-list is MIT, MIT-0, Apache-2.0 (with or without LLVM-exception), BSD-2/3-Clause, ISC, 0BSD, Zlib, Unicode-3.0 and CDLA-Permissive-2.0 (`webpki-roots`).
 
 ### Browser suite
 

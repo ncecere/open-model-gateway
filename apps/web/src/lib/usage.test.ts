@@ -71,20 +71,24 @@ describe("exact money and measures", () => {
   });
   it("computes per-model Min/Max/Avg/Total exactly from decimal-string series, beyond 2^53", () => {
     const [a, b] = groupStats(explore(), "spend", 3);
-    expect(a).toMatchObject({ name: "model-a", min: "$0.00", max: "$9,007,199,254.740993", total: "$9,007,199,254.740993", avg: "$3,002,399,751.580331" });
+    // Display rule: cents from $0.01 up (exact values are in CSV/tooltips), sub-cent keeps its digits.
+    expect(a).toMatchObject({ name: "model-a", min: "$0.00", max: "$9,007,199,254.74", total: "$9,007,199,254.74", avg: "≈ $3,002,399,751.58" });
     expect(b).toMatchObject({ name: "model-b", min: "$0.00", max: "$0.000002", avg: "$0.000001", total: "$0.000003" });
     const [r] = groupStats(explore({ metric: "requests", total: { value: "10", held_microusd: null, unresolved_attempts: null }, rows: [{ group: { id: "a", name: "a" }, then: null, value: "10", share: "1", held_microusd: null, unresolved_attempts: null }], series: [{ date: "d1", values: [{ id: "a", value: "3" }] }, { date: "d2", values: [{ id: "a", value: "7" }] }, { date: "d3", values: [] }] }), "requests", 3);
     expect(r).toMatchObject({ min: "0", max: "7", avg: "≈ 3.3", total: "10" });
     const [rate] = groupStats(explore({ metric: "cache_hit_rate", rows: [{ group: { id: "a", name: "a" }, then: null, value: "0.25", share: null, held_microusd: null, unresolved_attempts: null }], series: [{ date: "d1", values: [{ id: "a", value: "0.5" }] }, { date: "d2", values: [{ id: "a", value: null }] }, { date: "d3", values: [{ id: "a", value: "0.2" }] }] }), "cache_hit_rate", 3);
     expect(rate).toMatchObject({ min: "20%", max: "50%", avg: "35%", total: "25%" });
   });
-  it("draws with Numbers but labels drawn values with the exact strings", () => {
-    const format = chartLabeler("spend", ["9007199254740993", "3", null]);
-    expect(format(chartNumber("spend", "9007199254740993"))).toBe("$9,007,199,254.740993");
+  it("draws with Numbers but labels drawn values from the exact strings, money rounded for reading", () => {
+    const format = chartLabeler("spend", ["9007199254740993", "3", "4035947", null]);
+    expect(format(chartNumber("spend", "9007199254740993"))).toBe("$9,007,199,254.74");
+    // Axis/peak labels follow the money display rule (review #3/#12): "$4.04", never "$4.035947"; sub-cent stays non-zero.
+    expect(format(4035947)).toBe("$4.04");
     expect(format(3)).toBe("$0.000003");
     expect(format(Number.NaN)).toBe("No data");
-    // Two exact values that draw at the same coordinate can't be told apart: no false precision.
-    expect(chartLabeler("spend", ["9007199254740993", "9007199254740992"])(9007199254740992)).toBe("Too large to chart exactly");
+    // Two exact values that draw at the same coordinate keep a label only when it is true of both.
+    expect(chartLabeler("spend", ["9007199254740993", "9007199254740992"])(9007199254740992)).toBe("$9,007,199,254.74");
+    expect(chartLabeler("tokens", ["9007199254740993", "9007199254740992"])(9007199254740992)).toBe("Too large to chart exactly");
     expect(chartLabeler("cache_hit_rate", ["0.2513"])(chartNumber("cache_hit_rate", "0.2513"))).toBe("25.13%");
     expect(chartNumber("tokens", null)).toBeNaN();
   });

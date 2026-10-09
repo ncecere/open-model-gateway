@@ -6,6 +6,10 @@ The project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). 
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-09
+
+Distroless runtime image (`gcr.io/distroless/cc-debian12`, pinned by digest; no shell, curl or package manager), the binary as entrypoint with the former shell entrypoint's `_FILE` secret import ported to Rust, and `open-model-gateway healthcheck` for the image `HEALTHCHECK`. Supply-chain scanning: cargo-deny (`deny.toml`), an npm production audit gate, CodeQL for JavaScript/TypeScript and Rust, and weekly grouped Dependabot updates; the Bedrock SDK drops its legacy hyper 0.14/rustls 0.21 connector. Rerank on the `openai_compatible`, `vllm` and `sglang` local profiles and System One on `openai_compatible` and `ollama`, with Add model offering those types only where the profile serves them. Fixes from the v0.3.0 screenshot pass: cooling-down routes answer a retryable 503 with `Retry-After` instead of 404, rounded money display with exact tooltips, aligned stat-tile charts, "Unpriced" unit-priced models, audit labels for every event, "No access" users, per-owner personal workspace rows, Logs that fit at 1440, consistent storage units, and clearer batch waits and lower-bound batch costs. No migrations. Notes: [`docs/releases/v0.3.1.md`](docs/releases/v0.3.1.md).
+
 ## [0.3.0] - 2026-10-09
 
 Encrypted file store, gateway-owned Files API, batches for any model with capacity-aware scheduling for self-hosted servers, a "Jobs at once" limit, the video provider retired, and the first signed multi-arch release images. Migrations `0018` to `0022`. Notes: [`docs/releases/v0.3.0.md`](docs/releases/v0.3.0.md).

@@ -11,7 +11,8 @@
 # runner and pushed by digest only (untagged). That exact digest is pulled and
 # must report the version in Cargo.toml (and, for tags, the tag's version),
 # pass the isolated staging rehearsal (init, db, migrate, up, verify, HTTPS
-# readiness, restore-check) and the vulnerability scan. Then the publish job
+# readiness, restore-check), the distroless runtime contract test and the
+# vulnerability scan. Then the publish job
 # joins the tested digests into one multi-arch index, tags it and signs it
 # (cosign keyless). The SBOM and provenance attestations are built with each
 # image and carried into the index.
@@ -93,7 +94,8 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: docker pull "${IMAGE}@${DIGEST}"
 
-      # The binary's version comes from apps/gateway/Cargo.toml. A tag must
+      # The binary's version comes from apps/gateway/Cargo.toml. The image's
+      # entrypoint is the binary itself (distroless, exec form; no shell). A tag must
       # match it (v0.2.0 was tagged while the binary still said 0.1.0); -rc
       # tags match their base version.
       - name: Check the built version
@@ -142,6 +144,14 @@ jobs:
         if: always()
         run: |
           if [ -f .local/staging/staging.env ]; then python3 scripts/staging.py down; fi
+
+      # Distroless runtime contract of the pushed digest: no shell/package
+      # manager, UID 10001, read-only rootfs, _FILE secrets, serve never
+      # migrates, exec-form healthcheck (tests/container-image.test.mjs).
+      - name: Runtime image contract of the pushed digest
+        env:
+          OMG_CONTAINER_IMAGE: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+        run: node --test tests/container-image.test.mjs
 
       # Fixable HIGH and CRITICAL findings fail the build (Grounded's policy).
       - name: Scan image (${{ matrix.platform }})

@@ -121,6 +121,8 @@ Every object is encrypted with streaming, chunked AES-256-GCM (RustCrypto `aes-g
 
 Overhead is 106 bytes plus 16 bytes per 64 KiB chunk.
 
+**Sizes shown to people.** Quotas, the Files list, the Storage cards and Settings › Storage all count and show the **plaintext** size (what was uploaded), never the encrypted object size. The dashboard writes sizes in binary units labelled in plain words: 1 KB = 1,024 bytes, 1 MB = 1,048,576 bytes, 1 GB = 1,024 MB (the units storage quotas are entered in); hovering a size shows the exact byte count. A 123,732,091-byte file therefore reads "118 MB" everywhere (in decimal megabytes it would be 124 MB).
+
 ### Encryption keys
 
 `GATEWAY_FILE_ENCRYPTION_KEYS_ENV` names a variable whose value is `kid:base64key[,kid:base64key…]`:

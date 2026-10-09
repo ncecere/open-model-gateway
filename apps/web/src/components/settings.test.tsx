@@ -190,7 +190,8 @@ describe("Admin › Settings › Data & privacy › Storage", () => {
     expect(screen.getByText("k2026")).toBeTruthy();
     expect(screen.getByText("+1 decrypt-only")).toBeTruthy();
     expect(screen.getByText("Healthy")).toBeTruthy();
-    expect(screen.getByText("1.5 kB")).toBeTruthy();
+    expect(screen.getByText("1.5 KB")).toBeTruthy(); // same binary units as Files and quotas (1 KB = 1024 bytes)
+    expect(screen.getByText("1.5 KB").getAttribute("title")).toBe("2 files · 1,500 bytes");
     await user.click(screen.getByRole("switch", { name: /Allow batch files/ }));
     const days = screen.getByRole("textbox", { name: "Exports retention in days" });
     await user.clear(days); await user.type(days, "400");

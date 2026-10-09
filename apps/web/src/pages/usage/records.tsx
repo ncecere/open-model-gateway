@@ -7,7 +7,8 @@
  */
 import { useState } from "react";
 import { api, platformPath, platformWorkspacePath, wsPath, type Catalog, type Collection, type CostCenter, type Model, type Session, type Workspace } from "../../lib/api";
-import { canReconcile, formatMicroUsd, type Breakdown, type Cost, type CostReport } from "../../lib/governance";
+import { Money } from "../../components/templates/money";
+import { canReconcile, type Breakdown, type Cost, type CostReport } from "../../lib/governance";
 import { parseCheckboxValues } from "../../lib/forms";
 import { formatCount, knownSpendText, reconciliationBody, reconciliationFields } from "../../lib/reports";
 import { permissions } from "../../lib/permissions";
@@ -64,11 +65,11 @@ export function WorkspaceRecords({ session, workspace, ctx, period, nav }: { ses
     { id: "model", header: "Model", cell: c => <>{c.public_model}<span className={s.secondary}>{c.provider}</span></> },
     { id: "cost_status", header: "Cost status", cell: c => <>{recordStatusText(c)}{c.cost_microusd == null && c.unbounded_cost && c.unresolved_reason !== "unbounded_cost_or_unknown_rate" ? <span className={s.secondary}>No upper limit known</span> : null}</> },
     { id: "tokens", header: "Tokens", numeric: true, defaultHiddenNarrow: true, cell: c => tokensText(c.input_tokens, c.output_tokens, c.workload_kind) },
-    { id: "cost", header: "Cost", numeric: true, cell: c => recordCostText(c) },
+    { id: "cost", header: "Cost", numeric: true, cell: c => c.cost_microusd != null ? <Money value={c.cost_microusd} /> : recordCostText(c) },
     { id: "request", header: "Request ID", defaultHidden: true, cell: c => <CopyId value={c.root_request_id} label="request ID" /> },
     { id: "cost_center", header: "Cost center", defaultHidden: true, cell: c => <>{c.cost_center_name ?? "Unallocated"}{c.cost_center_code && <span className={s.secondary}>{c.cost_center_code}</span>}</> },
     { id: "meters", header: "Meters", defaultHidden: true, cell: c => meterSummary(c) },
-    { id: "provider_cost", header: "Provider-reported (for checking only)", defaultHidden: true, cell: c => c.provider_cost_microusd == null ? <span className={s.muted}>Not reported</span> : formatMicroUsd(c.provider_cost_microusd) },
+    { id: "provider_cost", header: "Provider-reported (for checking only)", defaultHidden: true, cell: c => c.provider_cost_microusd == null ? <span className={s.muted}>Not reported</span> : <Money value={c.provider_cost_microusd} /> },
   ];
   const canFix = permissions(session, workspace).reconcileCosts;
   return <Stack gap={4}>
@@ -85,8 +86,8 @@ export function WorkspaceRecords({ session, workspace, ctx, period, nav }: { ses
 /** By workspace's columns (module-level, so the page can lift the Columns menu onto its FilterToolbar row). */
 const platformColumns: DataTableColumn<Breakdown>[] = [
   { id: "workspace", header: "Workspace", rowHeader: true, cell: r => r.name },
-  { id: "spent", header: "Spent", numeric: true, cell: r => knownSpendText(r.totals.known_cost_microusd, r.totals.unresolved_attempts) },
-  { id: "held", header: "On hold", numeric: true, cell: r => formatMicroUsd(r.totals.held_microusd) },
+  { id: "spent", header: "Spent", numeric: true, cell: r => knownSpendText(r.totals.known_cost_microusd, r.totals.unresolved_attempts) === "Unknown" ? "Unknown" : <Money value={r.totals.known_cost_microusd} /> },
+  { id: "held", header: "On hold", numeric: true, cell: r => <Money value={r.totals.held_microusd} /> },
   { id: "requests", header: "Requests", numeric: true, defaultHiddenNarrow: true, cell: r => formatCount(r.totals.root_requests) },
   { id: "unknown", header: "Cost unknown (attempts)", numeric: true, defaultHiddenNarrow: true, cell: r => formatCount(r.totals.unresolved_attempts) },
 ];

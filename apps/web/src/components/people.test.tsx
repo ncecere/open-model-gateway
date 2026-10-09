@@ -3,7 +3,7 @@ import { PlatformTeams, PlatformUsers, UserDetail, OidcMappings, CostCenters } f
 import { WorkspaceDetail } from "../pages/resource-details";
 import { MembersTable, WorkspaceMembers } from "../pages/workspace";
 import { AuditHistory } from "../pages/organization";
-import { auditActionLabel, auditEventLabel, displayRole, grantLabel, grantRemoval, healthLabel, last30Days, resourceTypeLabel, splitUsage } from "../lib/people";
+import { auditActionLabel, auditEventLabel, displayRole, grantLabel, grantRemoval, healthLabel, last30Days, resourceTypeLabel, splitUsage, userState } from "../lib/people";
 import { admin, auditor, team, markup, report, testClient } from "../lib/test-fixtures";
 import { DashboardNavigationProvider } from "./navigation-link";
 
@@ -40,6 +40,17 @@ describe("Grounded-style people pages", () => {
     expect(visible).not.toContain(uid);
     expect(html).toContain(`href="/admin/users/${uid}"`);
     expect(markup(<PlatformUsers session={auditor} />)).not.toContain("Add user</button>");
+  });
+  it("shows a denied, never-entitled sign-in as No access with their name, not Suspended", () => {
+    const jordan = { id: "8e210000-0000-4000-8000-0000000000bb", email: "jordan.kim@example.edu", display_name: "Jordan Kim", platform_role: null, disabled_at: "2026-10-09T10:00:00Z", disable_reason: "entitlement_loss", cleanup_due_at: "2026-11-08T10:00:00Z", last_sign_in_at: null, shared_workspace_count: 0, role_grants: [] };
+    expect(userState(jordan as never)).toBe("no_access");
+    // Grant history (even revoked) or an admin suspension is a real suspension; unknown history stays "suspended".
+    expect(userState({ ...jordan, role_grants: [{ role: "user", source: "group", revoked_at: "2026-10-01T00:00:00Z" }] } as never)).toBe("suspended");
+    expect(userState({ ...jordan, disable_reason: "admin_suspension" } as never)).toBe("suspended");
+    expect(userState({ ...jordan, role_grants: undefined } as never)).toBe("suspended");
+    const html = markup(<PlatformUsers session={admin} />, [["/api/v1/platform/users?limit=50&offset=0", { data: [jordan], has_more: false }]]), visible = text(html);
+    expect(visible).toContain("Jordan Kim"); expect(visible).toContain("jordan.kim@example.edu"); expect(visible).toContain("No access");
+    expect(visible.split("Last sign-in")[1]).not.toContain("Suspended"); // only the filter option says it
   });
   it("puts search, role and status in one filter row above the table, read from the URL and sent to the server", () => {
     const search = { page: "users" as const, role: "admin" as const, status: "suspended", q: "al" };

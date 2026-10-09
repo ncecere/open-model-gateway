@@ -10,7 +10,7 @@ import { DetailTime } from "../components/templates/when";
 import { History, LayoutDashboard, Landmark, Network, Plus, UserCheck, UserPlus, Users, UsersRound, UserX } from "lucide-react";
 import { api, platformPath, type Session, type Workspace, type PlatformRole, type CostCenter, type GroupMapping } from "../lib/api";
 import { nameField, enabledField, uuidError, type Field } from "../lib/forms";
-import { activeGrants, grantLabel, grantRemoval, kindLabels, platformRoleLabels, type DirectoryUser, type DirectoryWorkspace, type UserRecord } from "../lib/people";
+import { activeGrants, grantLabel, grantRemoval, kindLabels, platformRoleLabels, userState, type DirectoryUser, type DirectoryWorkspace, type UserRecord } from "../lib/people";
 import { Button, DateTime, ErrorNotice, Heading, Stack, Alert, useAction, useApi, useChoices } from "../components/ui";
 import { useDismissed } from "../lib/dismissed";
 import { ResourceLink } from "../components/navigation-link";
@@ -108,7 +108,8 @@ export function UserDetail({ session, id, tab, onTabChange }: { session: Session
   ];
   const signIn = (value: string | null | undefined) => value ? <DetailTime value={value} /> : value === null ? "Never" : "Unavailable";
   const overview = <Stack gap={6}>
-    {u.disabled_at && !u.cleaned_at && <Alert tone="warning" title="Suspended">{grants.some(g => !g.revoked_at) ? "Role grants are retained but give no access while suspended. " : ""}Reactivation does not restore revoked sessions or keys.{u.cleanup_due_at ? <> Grace-period cleanup <Time value={u.cleanup_due_at} format="date" />.</> : null}</Alert>}
+    {userState(u) === "no_access" && <Alert tone="info" title="No access">Signed in without a platform role and never had access. Grant a role or map one of their SSO groups to give access.{u.cleanup_due_at ? <> Their record is cleaned up <Time value={u.cleanup_due_at} format="date" /> unless they get access.</> : null}</Alert>}
+    {u.disabled_at && !u.cleaned_at && userState(u) !== "no_access" && <Alert tone="warning" title="Suspended">{grants.some(g => !g.revoked_at) ? "Role grants are retained but give no access while suspended. " : ""}Reactivation does not restore revoked sessions or keys.{u.cleanup_due_at ? <> Grace-period cleanup <Time value={u.cleanup_due_at} format="date" />.</> : null}</Alert>}
     {u.cleaned_at && <Alert tone="info" title="Cleaned">Personal data was removed after the grace period. Attribution in history is retained.</Alert>}
     <Card title="Profile and access" actions={writable && <Button size="sm" variant="secondary" onClick={grantRole}><UserPlus aria-hidden /> Grant role</Button>}>
       <DescriptionList items={[

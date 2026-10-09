@@ -29,6 +29,36 @@ Both endpoints are on the public listener. They are not authenticated and never 
 
   Use readiness for load-balancer membership and the container `HEALTHCHECK`. The service never migrates by itself, so a release whose schema does not match stays unready until you run `migrate`.
 
+### `open-model-gateway healthcheck`
+
+The runtime image has no shell or curl, so the binary probes itself:
+
+```sh
+open-model-gateway healthcheck [--url http://127.0.0.1:8080/health/ready] [--timeout 3s] [--allow-non-loopback]
+```
+
+It exits 0 for a `2xx` response and 1 otherwise (non-2xx, redirect, refused connection, timeout). Without `--url` it probes `/health/ready` on the port of `GATEWAY_LISTEN` over loopback (`127.0.0.1`, or `::1` for `[::]`). It accepts plain `http://` only, never reads proxy variables, never follows redirects or retries, refuses non-loopback destinations unless `--allow-non-loopback` is given, and reads no configuration, `.env` file or secret. The image's `HEALTHCHECK` is `["/usr/local/bin/open-model-gateway", "healthcheck", "--timeout", "3s"]`. Compose can override it in exec form:
+
+```yaml
+healthcheck:
+  test: ["CMD", "/usr/local/bin/open-model-gateway", "healthcheck"]
+```
+
+In Kubernetes, prefer native HTTP probes (`httpGet` on `/health/live` for liveness and `/health/ready` for readiness, port 8080). If a probe must be an exec probe, use the same command: `command: ["/usr/local/bin/open-model-gateway", "healthcheck"]`. Never use `sh -c` or `curl`; neither exists in the image.
+
+## Container image
+
+The runtime stage is `gcr.io/distroless/cc-debian12` pinned by digest: glibc, libgcc_s, CA certificates and the gateway binary, with the built SPA in `/app/web`. There is no shell, package manager, curl, perl, Node or Cargo. It runs as UID/GID `10001:10001` with `ENTRYPOINT ["/usr/local/bin/open-model-gateway"]` and `CMD ["serve"]`, works with a read-only root filesystem and needs no writable path (staging still mounts a small `/tmp` tmpfs). The binary is PID 1 and handles `SIGTERM` itself; Compose's `init: true` is optional.
+
+What the former `container-entrypoint.sh` did is now done by the binary at startup, for every subcommand except `healthcheck`, before it reads `.env` files or configuration:
+
+- Sets the process umask to `077`.
+- Imports `DATABASE_URL`, `GATEWAY_OIDC_CLIENT_SECRET`, `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` from a file named by `<NAME>_FILE` (Compose or Kubernetes secret mounts; symlinks are followed). Only these four names; other `*_FILE` variables and custom provider references (`GATEWAY_SECRET_ENV_ALLOWLIST`) are never interpreted, so inject those directly. The file must be a readable regular file; one terminal LF is removed. The `_FILE` variable is removed after import.
+- Refuses to start (exit 1) if both a variable and its `_FILE` companion are set, even to an empty value, or if any of the four values is empty, longer than 4096 bytes, or contains CR, LF or NUL. Messages name the variable and the reason, never the value or file path.
+- Runs exactly the given subcommand: `serve` never migrates or bootstraps. Run one-off commands with the same image, for example `docker run --rm … IMAGE migrate`.
+
+To debug a running container without a shell, use `docker exec CONTAINER /usr/local/bin/open-model-gateway healthcheck`, `docker logs`, `docker inspect` (user, health log), or attach a debug container that shares its namespaces (`docker debug`, or `kubectl debug --target`).
+
 ## Metrics
 
 Metrics are served only when `GATEWAY_METRICS_ADDR` is set. They use a dedicated listener that answers `GET /metrics` with OpenMetrics text (`application/openmetrics-text; version=1.0.0`) and returns 404 for every other path. Metrics are never on the public port and never behind the SPA fallback. The endpoint has no authentication, so bind it to loopback or a private scrape network. In the staging Compose file the variable is passed through but empty by default, and Caddy never routes to it. Prometheus 2.x and 3.x negotiate OpenMetrics automatically. The exposition also parses as classic text: `promtool check metrics` reports only the expected HELP lint for OpenMetrics `_total` naming.

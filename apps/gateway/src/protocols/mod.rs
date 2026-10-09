@@ -21,12 +21,18 @@ use axum::{
 /// (OpenAI `insufficient_quota` convention) but are not transient, so they carry
 /// `x-should-retry: false`, which the official OpenAI/Anthropic SDKs honor. A
 /// token reservation that exceeds a tokens-per-minute limit is equally permanent.
+/// A model whose every route is cooling down is a retryable 503 with `Retry-After`.
 fn error_with_body(error: InferenceError, body: serde_json::Value) -> Response {
     let mut response = (responses::status(error), axum::Json(body)).into_response();
     if error.is_non_retryable_denial() {
         response
             .headers_mut()
             .insert("x-should-retry", HeaderValue::from_static("false"));
+    }
+    if let Some(seconds) = error.retry_after_seconds() {
+        response
+            .headers_mut()
+            .insert(axum::http::header::RETRY_AFTER, HeaderValue::from(seconds));
     }
     response
 }
@@ -47,7 +53,9 @@ fn http_status(error: InferenceError) -> StatusCode {
         InferenceError::InvalidUpstream | InferenceError::UpstreamUnavailable => {
             StatusCode::BAD_GATEWAY
         }
-        InferenceError::Configuration | InferenceError::Storage => StatusCode::SERVICE_UNAVAILABLE,
+        InferenceError::Configuration
+        | InferenceError::Storage
+        | InferenceError::RouteCoolingDown(_) => StatusCode::SERVICE_UNAVAILABLE,
     }
 }
 
@@ -94,6 +102,9 @@ fn openai_error_body(error: InferenceError) -> serde_json::Value {
         InferenceError::TokenReservationExceedsLimit(_) | InferenceError::JobLimitExceeded(_)
     ) {
         "rate_limit_error"
+    } else if matches!(error, InferenceError::RouteCoolingDown(_)) {
+        // OpenAI's type for transient server-side unavailability (HTTP 5xx).
+        "server_error"
     } else {
         error.code()
     };
@@ -149,5 +160,35 @@ mod tests {
             assert!(!message.contains("concurrency"));
             assert!(!message.chars().any(|c| c.is_ascii_digit()));
         }
+    }
+
+    #[test]
+    fn cooling_down_is_a_retryable_503_not_model_not_found() {
+        let error = InferenceError::RouteCoolingDown(17);
+        let response = error_with_body(error, openai_error_body(error));
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers()["retry-after"], "17");
+        assert!(response.headers().get("x-should-retry").is_none());
+        let body = openai_error_body(error);
+        assert_eq!(body["error"]["type"], "server_error");
+        assert_eq!(body["error"]["code"], "model_temporarily_unavailable");
+        // Anthropic shape: same status/header, transient error type.
+        let anthropic = messages::batch_error_body(error);
+        assert_eq!(anthropic["error"]["type"], "overloaded_error");
+        // Batch lines report the interactive status.
+        assert_eq!(batch_line_error(false, error).0, 503);
+        // Zero is never sent as Retry-After.
+        let zero = error_with_body(
+            InferenceError::RouteCoolingDown(0),
+            openai_error_body(InferenceError::RouteCoolingDown(0)),
+        );
+        assert_eq!(zero.headers()["retry-after"], "1");
+        // Other errors carry no Retry-After.
+        let missing = error_with_body(
+            InferenceError::ModelUnavailable,
+            openai_error_body(InferenceError::ModelUnavailable),
+        );
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        assert!(missing.headers().get("retry-after").is_none());
     }
 }

@@ -25,6 +25,15 @@ Open Model Gateway is pre-1.0 development software. Security fixes are made on `
 
 Release images are signed from v0.3.0. Verify an image before you deploy it, as the [release notes](docs/releases/v0.3.0.md#verifying-the-images) describe.
 
+## Dependency and code scanning
+
+Every push and pull request runs, in CI:
+- **cargo-deny** (`deny.toml`): RustSec advisories (vulnerable, unmaintained, unsound and yanked crates fail), a licence allow-list compatible with MIT distribution, and crates.io as the only source. Ignored advisories are listed in `deny.toml` with the reason and the condition for removing them.
+- **npm audit**: high and critical advisories in production npm dependencies fail the build; the full audit, dev tooling included, is reported without failing.
+- **CodeQL** (`.github/workflows/codeql.yml`): JavaScript/TypeScript and Rust, also weekly.
+
+Dependabot opens weekly grouped updates for Cargo, npm, GitHub Actions and the `Dockerfile` base images; security updates arrive individually. Release images are scanned by Trivy (fixable HIGH and CRITICAL findings block publishing), carry an SBOM and provenance, and are signed with cosign. Workflow actions are pinned by commit SHA. See [verification](docs/verification.md#supply-chain).
+
 ## Scope
 
 In scope: the code in this repository, including

@@ -18,7 +18,7 @@ import { useDashboardNavigation } from "../components/navigation-link";
 import { FilterToolbar } from "../components/templates/filter-toolbar";
 import { ActionMenu } from "../components/templates/action-menu";
 import { CopyId } from "../components/templates/copy-id";
-import { StorageBar, bytesText } from "../components/templates/storage-bar";
+import { StorageBar, bytesText, bytesTitle } from "../components/templates/storage-bar";
 import { DataTable, type DataTableColumn } from "../components/ui/data-table/data-table";
 import { EmptyState } from "../components/ui/empty-state/empty-state";
 import { Dialog } from "../components/ui/dialog/dialog";
@@ -41,7 +41,7 @@ export function FilesPage({ workspace }: Scope) {
   const columns: DataTableColumn<GatewayFile>[] = [
     { id: "name", header: "Name", rowHeader: true, hideable: false, cell: x => <span className={fc.name}><span className={s.primary}>{x.filename}</span><CopyId value={x.id} label="file ID" /></span> },
     { id: "purpose", header: "Purpose", cell: f => <Badge>{purposeLabel(f.purpose)}</Badge> },
-    { id: "size", header: "Size", numeric: true, cell: f => bytesText(f.bytes) },
+    { id: "size", header: "Size", numeric: true, cell: f => <span title={bytesTitle(f.bytes)}>{bytesText(f.bytes)}</span> },
     { id: "created", header: "Created", cell: f => <Time value={f.created_at} format="relative" /> },
     { id: "expires", header: "Expires", defaultHiddenNarrow: true, cell: f => f.expires_at ? <Time value={f.expires_at} format="date" /> : <span className={s.muted}>Never</span> },
     { id: "status", header: "Status", defaultHiddenNarrow: true, cell: () => <Badge tone="good">Ready</Badge> },

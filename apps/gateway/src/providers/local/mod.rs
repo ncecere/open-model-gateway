@@ -1,11 +1,15 @@
-//! Explicitly approved local profiles; Chat + embeddings only.
-//! Ollama uses compatible Chat and native /api/embed with truncation disabled.
+//! Explicitly approved local profiles: Chat and embeddings on every profile,
+//! rerank on the compatible/vLLM/SGLang profiles, System One on the compatible
+//! and Ollama profiles (see `workloads`). Ollama uses compatible Chat and
+//! native /api/embed with truncation disabled.
 use super::{ProviderAdapter, embeddings, framing, openai, secrets::SecretResolver};
 use crate::inference::{error::InferenceError, types::*};
 use async_trait::async_trait;
 use std::sync::Arc;
 pub mod endpoints;
+mod workloads;
 use endpoints::ApprovedEndpoints;
+use workloads::RerankWire;
 type Result<T> = std::result::Result<T, InferenceError>;
 #[derive(Clone, Copy)]
 pub enum Profile {
@@ -55,6 +59,41 @@ impl LocalAdapter {
             target.region.as_deref(),
         )?;
         self.approvals.approved(endpoint)
+    }
+    /// The approved base with its fixed `/v1` suffix removed, keeping any
+    /// reverse-proxy prefix (native, non-`/v1` server routes).
+    fn prefix(base: &str) -> Result<&str> {
+        base.strip_suffix("/v1")
+            .ok_or(InferenceError::Configuration)
+    }
+    /// Rerank wire of this profile; Ollama serves no rerank API.
+    fn rerank_wire(&self) -> Option<RerankWire> {
+        match self.profile {
+            Profile::OpenAiCompatible | Profile::Vllm => Some(RerankWire::Jina),
+            Profile::Sglang => Some(RerankWire::Sglang),
+            Profile::Ollama => None,
+        }
+    }
+    /// TypeSafe System One: generic compatible servers (OpenJev and the like)
+    /// and Ollama v0.35.0+. vLLM and SGLang serve no such route.
+    fn serves_systemone(&self) -> bool {
+        matches!(self.profile, Profile::OpenAiCompatible | Profile::Ollama)
+    }
+    async fn post_json(
+        &self,
+        target: &Deployment,
+        url: String,
+        payload: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let (client, _) = self.connection(target)?;
+        let response = self
+            .authenticate(client.post(url), target)?
+            .json(payload)
+            .send()
+            .await
+            .map_err(framing::transport)?;
+        framing::status(response.status())?;
+        framing::body(response).await
     }
     fn authenticate(
         &self,
@@ -151,10 +190,12 @@ impl ProviderAdapter for LocalAdapter {
                 && request.dimensions.is_some())
     }
     fn supports_protocol(&self, protocol: ApiProtocol) -> bool {
-        matches!(
-            protocol,
-            ApiProtocol::ChatCompletions | ApiProtocol::Embeddings
-        )
+        match protocol {
+            ApiProtocol::ChatCompletions | ApiProtocol::Embeddings => true,
+            ApiProtocol::Rerank => self.rerank_wire().is_some(),
+            ApiProtocol::Systemone => self.serves_systemone(),
+            _ => false,
+        }
     }
     async fn execute(&self, target: &Deployment, request: ChatRequest) -> Result<ProviderOutput> {
         let payload = self.encode_chat(target, &request)?;
@@ -192,9 +233,7 @@ impl ProviderAdapter for LocalAdapter {
         let (url, payload) = if native {
             // The base was canonically approved, including its origin and /v1 suffix.
             // Strip only that fixed suffix, retaining a reverse-proxy path prefix.
-            let prefix = base
-                .strip_suffix("/v1")
-                .ok_or(InferenceError::Configuration)?;
+            let prefix = Self::prefix(base)?;
             (
                 format!("{prefix}/api/embed"),
                 embeddings::encode_ollama(&target.upstream_model, &request)?,
@@ -220,10 +259,46 @@ impl ProviderAdapter for LocalAdapter {
             embeddings::decode(&value, &request)
         }
     }
+    async fn execute_rerank(
+        &self,
+        target: &Deployment,
+        request: RerankRequest,
+    ) -> Result<RerankResponse> {
+        request.validate()?;
+        let wire = self.rerank_wire().ok_or(InferenceError::Unsupported)?;
+        let (_, base) = self.connection(target)?;
+        // vLLM's canonical route is `/rerank` (its `/v1/rerank` is a deprecated alias).
+        let url = match self.profile {
+            Profile::Vllm => format!("{}/rerank", Self::prefix(base)?),
+            _ => format!("{base}/rerank"),
+        };
+        let payload = workloads::rerank_body(&target.upstream_model, &request, wire);
+        let value = self.post_json(target, url, &payload).await?;
+        workloads::decode_rerank(&value, &request, wire)
+    }
+    async fn execute_systemone(
+        &self,
+        target: &Deployment,
+        request: SystemoneRequest,
+    ) -> Result<SystemoneResponse> {
+        request.validate()?;
+        if !self.serves_systemone() {
+            return Err(InferenceError::Unsupported);
+        }
+        let (_, base) = self.connection(target)?;
+        let url = format!("{base}/systemone");
+        let payload = request.wire(&target.upstream_model);
+        let value = self.post_json(target, url, &payload).await?;
+        workloads::decode_systemone(&value, &request)
+    }
 }
 #[cfg(test)]
 mod cancellation_tests;
 #[cfg(test)]
 mod native_tests;
 #[cfg(test)]
+mod reasoning_tests;
+#[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod workload_tests;

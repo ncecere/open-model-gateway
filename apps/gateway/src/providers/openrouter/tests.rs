@@ -702,6 +702,30 @@ fn rerank_body() -> Value {
 }
 
 #[tokio::test]
+async fn shared_rerank_and_systemone_contracts() {
+    let mock = Mock::json(rerank_body()).await;
+    crate::providers::contract::assert_rerank_contract(
+        &mock.adapter(),
+        &target("m"),
+        rerank_request(Some(2)),
+        Some(25),
+        None,
+    )
+    .await;
+    let mock = Mock::json(json!({"answers":{"is_q":{"type":"noul","noul":0.5}},
+        "usage":{"input_tokens":145,"output_tokens":0}}))
+    .await;
+    crate::providers::contract::assert_systemone_contract(
+        &mock.adapter(),
+        &target("m"),
+        systemone_request(),
+        145,
+        0,
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn rerank_wire_results_and_meters() {
     let mock = Mock::json(rerank_body()).await;
     let response = mock

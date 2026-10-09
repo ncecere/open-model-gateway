@@ -17,8 +17,9 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ListTree, MessagesSquare } from "lucide-react";
 import { platformPath, wsPath, type Grant, type Model, type Workspace } from "../lib/api";
 import type { DashboardSearch, RangePreset } from "../lib/permissions";
-import { activeFilterCount, compactDateTime, costText, countText, finishReasonLabel, finishReasonTone, finishReasons, jobStateTone, jobText, latencyText, logPaths, logTab, logsSearch, rangeLabels, rateText, requestFilters, requestQuery, requestStatuses, requestStatusLabel, requestStatusTone, requestTarget, servedModel, servedModelText, sessionTarget, tokensText, tpsText, ttftText, utcDate, validSessionId, workloadText, type GenerationPage, type GenerationRow, type LogMetrics, type LogTab, type LogsScope, type RequestFilters, type RequestPage, type RequestRow, type SessionPage, type SessionRow } from "../lib/requests";
-import { formatMicroUsd } from "../lib/governance";
+import { activeFilterCount, compactDateTime, countText, finishReasonLabel, finishReasonTone, finishReasons, jobStateTone, jobText, latencyText, logPaths, logTab, logsSearch, rangeLabels, rateText, requestFilters, requestQuery, requestStatuses, requestStatusLabel, requestStatusTone, requestTarget, servedModel, servedModelText, sessionTarget, tokensText, tpsText, ttftText, utcDate, validSessionId, workloadText, type GenerationPage, type GenerationRow, type LogMetrics, type LogTab, type LogsScope, type RequestFilters, type RequestPage, type RequestRow, type SessionPage, type SessionRow } from "../lib/requests";
+import { formatMicroUsd, formatUsd } from "../lib/governance";
+import { Money } from "../components/templates/money";
 import { NARROW_QUERY, useMediaQuery } from "../lib/bitop-utils";
 import type { KeyRow } from "../lib/keys";
 import type { DirectoryWorkspace } from "../lib/people";
@@ -58,9 +59,9 @@ function RowLink({ at, search, label }: { at: string; search: DashboardSearch; l
 }
 /** Known cost; an unknown cost shows what's on hold under it (a floor, not the price). */
 function CostCell({ cost, held }: { cost: string | null; held: string | null }) {
-  if (cost !== null) return <>{costText(cost, held)}</>;
+  if (cost !== null) return <Money value={cost} />;
   const onHold = held && /^\d+$/.test(held) && BigInt(held) > 0n ? held : null;
-  return <span className={rq.costCell} title={costText(null, held)}><span>Unknown</span>{onHold && <span className={s.secondary}>{formatMicroUsd(onHold)} on hold</span>}</span>;
+  return <span className={rq.costCell} title={onHold ? `Unknown · ${formatMicroUsd(onHold)} on hold` : "Unknown"}><span>Unknown</span>{onHold && <span className={s.secondary}>{formatUsd(onHold)} on hold</span>}</span>;
 }
 const FinishBadge = ({ reason }: { reason: string | null | undefined }) => reason == null ? <span className={s.secondary}>None</span> : <StatusBadge tone={finishReasonTone(reason)} size="sm">{finishReasonLabel(reason)}</StatusBadge>;
 /** Time to first token; a request that wasn't streamed has none ("—", the reason in the tooltip), not a repeated phrase in every row. */
@@ -69,23 +70,30 @@ const optionalCount = (v: string | null | undefined) => v == null ? "Unknown" : 
 function KeyApp({ name, app }: { name: string; app?: string | null }) {
   return <span className={rq.costCell} style={{ alignItems: "flex-start" }}><span className={rq.truncateKey} title={name}>{name}</span>{app && <span className={`${s.secondary} ${rq.truncateKey}`} title={`App: ${app}`}>{app}</span>}</span>;
 }
+/** "1,234 in" over "567 out" (two short lines keep the default row inside 1440); other texts as one line. */
+function TokensCell({ text }: { text: string }) {
+  const parts = text.split(" · ");
+  if (parts.length !== 2 || !parts[0]!.endsWith(" in")) return <>{text}</>;
+  return <span className={rq.costCell} title={text}><span>{parts[0]}<span className="sr-only"> · </span></span><span className={s.secondary}>{parts[1]}</span></span>;
+}
 const WorkspaceCell = ({ w }: { w?: { name: string; kind: string } }) => w ? <span className={rq.truncateKey} title={`${w.name} · ${w.kind}`}>{w.name}</span> : <>Unknown</>;
 
 // ----- Requests -----
 const requestColumns = (scope: LogsScope, filters: RequestFilters, view: View): DataTableColumn<RequestRow>[] => [
   // The started time is the row's link; the whole row is clickable (a stretched link), and it's the row's one tab stop.
-  { id: "started", header: "Started", rowHeader: true, hideable: false, width: "8.5rem", cell: r => <RowLink at={r.started_at} search={requestTarget(scope, r.root_request_id, filters, view)} label={`Open request ${r.root_request_id.slice(0, 8)}, ${r.model}`} /> },
+  { id: "started", header: "Started", rowHeader: true, hideable: false, width: "8rem", cell: r => <RowLink at={r.started_at} search={requestTarget(scope, r.root_request_id, filters, view)} label={`Open request ${r.root_request_id.slice(0, 8)}, ${r.model}`} /> },
   { id: "model", header: "Model", cell: r => <IconCell icon={<LabIcon model={r.model} />}><span className={rq.truncate} title={servedModel(r) ? `${r.model} → ${servedModelText(servedModel(r))}` : r.model}>{r.model}</span></IconCell> },
   ...(scope.kind === "platform" ? [{ id: "workspace", header: "Workspace", cell: (r: RequestRow) => <WorkspaceCell w={r.workspace} /> }] : []),
   { id: "key", header: "Key / app", cell: r => <KeyApp name={r.key.name} app={r.app} /> },
-  { id: "tokens", header: "Tokens", numeric: true, cell: r => tokensText(r.input_tokens, r.output_tokens, r.workload_kind) },
+  { id: "tokens", header: "Tokens", numeric: true, cell: r => <TokensCell text={tokensText(r.input_tokens, r.output_tokens, r.workload_kind)} /> },
   { id: "cost", header: "Cost", numeric: true, cell: r => <CostCell cost={r.cost_microusd} held={r.held_microusd} /> },
   { id: "latency", header: "Latency", numeric: true, cell: r => latencyText(r.latency_ms) },
   { id: "ttft", header: "TTFT", label: "Time to first token", numeric: true, cell: r => <TtftCell ms={r.time_to_first_token_ms} streamed={r.streamed} /> },
   { id: "speed", header: "Speed", label: "Speed (tokens per second)", numeric: true, cell: r => r.tokens_per_second ? tpsText(r.tokens_per_second) : <span className={s.secondary}>—</span> },
   { id: "finish", header: "Finish", label: "Finish reason", cell: r => <FinishBadge reason={r.finish_reason} /> },
-  { id: "status", header: "Status", cell: r => <StatusBadge tone={requestStatusTone(r.status)} size="sm">{requestStatusLabel(r.status)}</StatusBadge> },
-  { id: "attempts", header: "Attempts", numeric: true, cell: r => r.attempts > 1 ? `${r.attempts} (${r.attempts - 1} fallback${r.attempts > 2 ? "s" : ""})` : countText(r.attempts) },
+  // Fallbacks show under the status (the Attempts column is optional), so the default row fits at 1440.
+  { id: "status", header: "Status", cell: r => <span className={rq.costCell} style={{ alignItems: "flex-start" }}><StatusBadge tone={requestStatusTone(r.status)} size="sm">{requestStatusLabel(r.status)}</StatusBadge>{r.attempts > 1 && <span className={s.secondary} title={`${r.attempts} attempts`}>{r.attempts - 1} fallback{r.attempts > 2 ? "s" : ""}</span>}</span> },
+  { id: "attempts", header: "Attempts", numeric: true, defaultHidden: true, cell: r => r.attempts > 1 ? `${r.attempts} (${r.attempts - 1} fallback${r.attempts > 2 ? "s" : ""})` : countText(r.attempts) },
   { id: "cached", header: "Cached", label: "Cached input tokens", numeric: true, defaultHidden: true, cell: r => optionalCount(r.cached_input_tokens) },
   { id: "reasoning", header: "Reasoning", label: "Reasoning tokens", numeric: true, defaultHidden: true, cell: r => optionalCount(r.reasoning_tokens) },
   { id: "request", header: "Request ID", defaultHidden: true, cell: r => <CopyId value={r.root_request_id} label="request ID" /> },
@@ -97,7 +105,7 @@ const requestColumns = (scope: LogsScope, filters: RequestFilters, view: View): 
 ];
 export const requestColumnIds = ["started", "model", "workspace", "key", "tokens", "cost", "latency", "ttft", "speed", "finish", "status", "attempts", "cached", "reasoning", "request", "session", "workload", "job", "streamed", "cost_center"];
 /** Rows stay short (ui-principles 4): streaming telemetry and fallbacks are one click away under Columns. */
-export const requestDefaultHidden = ["ttft", "speed", "cached", "reasoning", "request", "session", "workload", "job", "streamed", "cost_center"];
+export const requestDefaultHidden = ["ttft", "speed", "attempts", "cached", "reasoning", "request", "session", "workload", "job", "streamed", "cost_center"];
 /** Low-priority columns also hidden by default on a phone (≤600px), where rows stack. */
 export const requestNarrowHidden = ["tokens", "attempts", "key", "request", "ttft", "speed", "finish"];
 
@@ -139,7 +147,7 @@ const sessionColumns = (scope: LogsScope, filters: RequestFilters): DataTableCol
   { id: "requests", header: "Requests", numeric: true, cell: r => countText(r.requests) },
   { id: "failed", header: "Failed", numeric: true, cell: r => countText(r.failed_requests) },
   { id: "tokens", header: "Tokens", numeric: true, cell: r => tokensText(r.input_tokens, r.output_tokens) },
-  { id: "cost", header: "Cost", numeric: true, cell: r => r.cost_microusd !== null ? formatMicroUsd(r.cost_microusd) : <span className={rq.costCell} title="Some requests' costs aren't known yet"><span>At least {formatMicroUsd(r.known_cost_microusd)}</span>{r.held_microusd !== "0" && <span className={s.secondary}>{formatMicroUsd(r.held_microusd)} on hold</span>}</span> },
+  { id: "cost", header: "Cost", numeric: true, cell: r => r.cost_microusd !== null ? <Money value={r.cost_microusd} /> : <span className={rq.costCell} title={`Some requests' costs aren't known yet · at least ${formatMicroUsd(r.known_cost_microusd)}`}><span>At least {formatUsd(r.known_cost_microusd)}</span>{r.held_microusd !== "0" && <span className={s.secondary}>{formatUsd(r.held_microusd)} on hold</span>}</span> },
   { id: "first", header: "First seen", defaultHidden: true, cell: r => { const w = compactDateTime(r.first_at); return <time dateTime={r.first_at} title={w.full}>{w.text}</time>; } },
   { id: "keys", header: "Keys", numeric: true, defaultHidden: true, cell: r => countText(r.keys) },
 ];
@@ -154,13 +162,18 @@ const tables = {
   // Batches keep their own compact table (pages/batches.tsx).
   batches: { ids: [], hidden: [], narrow: [] },
 } satisfies Record<LogTab, { ids: string[]; hidden: string[]; narrow: string[] }>;
-const defaultHiddenFor = (tab: LogTab, narrow: boolean) => narrow ? [...tables[tab].hidden, ...tables[tab].narrow] : tables[tab].hidden;
+/** Admin › Logs adds a Workspace column; it hides Finish by default (still under Columns) so the default row fits at 1440. */
+export const platformRequestHidden = ["finish"];
+const defaultHiddenFor = (tab: LogTab, narrow: boolean, platform = false) => {
+  const base = platform && tab === "requests" ? [...tables[tab].hidden, ...platformRequestHidden] : tables[tab].hidden;
+  return narrow ? [...new Set([...base, ...tables[tab].narrow])] : base;
+};
 /** The table view in the URL. Hidden-by-default columns shown again are written as `cols=none` (nothing hidden). */
-export function logView(search: DashboardSearch, tab: LogTab, narrow = false): TableView {
-  return search.cols === "none" ? { hidden: [], density: search.density ?? "comfortable" } : tableViewFromSearch(search, tables[tab].ids, { hidden: defaultHiddenFor(tab, narrow), density: "comfortable" });
+export function logView(search: DashboardSearch, tab: LogTab, narrow = false, platform = false): TableView {
+  return search.cols === "none" ? { hidden: [], density: search.density ?? "comfortable" } : tableViewFromSearch(search, tables[tab].ids, { hidden: defaultHiddenFor(tab, narrow, platform), density: "comfortable" });
 }
-export function logViewSearch(view: TableView, tab: LogTab, narrow = false): View {
-  const v = tableViewToSearch(view), same = [...view.hidden].sort().join(",") === [...defaultHiddenFor(tab, narrow)].sort().join(",");
+export function logViewSearch(view: TableView, tab: LogTab, narrow = false, platform = false): View {
+  const v = tableViewToSearch(view), same = [...view.hidden].sort().join(",") === [...defaultHiddenFor(tab, narrow, platform)].sort().join(",");
   return { cols: same ? undefined : v.cols ?? "none", density: v.density === "compact" ? "compact" : undefined };
 }
 export const requestView = (search: DashboardSearch, narrow = false) => logView(search, "requests", narrow);
@@ -190,7 +203,7 @@ function emptyText(scope: LogsScope, what: string, filtered: boolean) {
 
 /** The Requests table (also used on a session's page, fixed to that session). */
 export function RequestsTable({ scope, search, filters, query, enabled, narrow, go, filtered, tools, caption = "Requests" }: TableProps & { caption?: string }) {
-  const view = logView(search, "requests", narrow), viewSearch = { cols: search.cols, density: search.density }, filterKey = JSON.stringify(filters);
+  const view = logView(search, "requests", narrow, scope.kind === "platform"), viewSearch = { cols: search.cols, density: search.density }, filterKey = JSON.stringify(filters);
   const q = new URLSearchParams(query); q.set("limit", "50"); if (search.cursor) q.set("cursor", search.cursor);
   const page = useApi<RequestPage>(`${logPaths(scope).requests}?${q}`, enabled);
   const columns = useMemo(() => requestColumns(scope, filters, viewSearch), [scope.kind, filterKey, search.cols, search.density]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -198,7 +211,7 @@ export function RequestsTable({ scope, search, filters, query, enabled, narrow, 
   useEffect(() => tools(chooserColumns(columns), view), [columns, JSON.stringify(view)]); // eslint-disable-line react-hooks/exhaustive-deps
   const empty = emptyText(scope, "requests", filtered);
   return <ViewDataTable<RequestRow> caption={caption} className={rq.requests} stack columns={columns} data={rows} getRowId={r => r.root_request_id} manual
-    view={view} onViewChange={next => go(logViewSearch(next, "requests", narrow))} hideViewControls
+    view={view} onViewChange={next => go(logViewSearch(next, "requests", narrow, scope.kind === "platform"))} hideViewControls
     loading={page.isFetching} error={page.error} onRetry={() => void page.refetch()}
     empty={<EmptyState size="compact" icon={<ListTree />} title={empty.title} description={empty.description} />} cursor={cursor} />;
 }
@@ -305,7 +318,7 @@ export function LogsPage({ scope }: { scope: LogsScope }) {
   const chips: ToolbarChip[] = filters.session_id ? [{ key: "session", label: "Session", text: filters.session_id, onRemove: () => go({ session_id: undefined, cursor: undefined }) }] : [];
   const periodActive = filters.range && filters.range !== "30d" ? 1 : 0;
   const props: TableProps = { scope, search, filters, query, enabled: !filterError, narrow, go, filtered: filtered || !!filterError, tools: (columns, view) => setTools({ columns, view }) };
-  const defaults = defaultHiddenFor(tab, narrow);
+  const defaults = defaultHiddenFor(tab, narrow, platform);
   return <Stack gap={6} className={s.page}>
     <Heading title="Logs" description={scope.kind === "platform" ? platformDescription : requestsDescription(scope.workspace)} />
     {tab !== "batches" && <LogMetricsTiles scope={scope} query={query} enabled={!filterError} />}
@@ -317,7 +330,7 @@ export function LogsPage({ scope }: { scope: LogsScope }) {
           start={<PeriodControl filters={filters} onChange={patch => go({ ...patch, cursor: undefined })} />} extraActive={periodActive} extraChips={chips}
           moreStart={<SessionField value={filters.session_id} onChange={session_id => go({ session_id, cursor: undefined })} />} moreStartActive={filters.session_id ? 1 : 0}
           facets={facets} values={facetValues} onChange={onFacets} more={["key_id", "workspace_id", "finish_reason", "streamed"]}
-          end={tools && <><ColumnChooser columns={tools.columns} hidden={tools.view.hidden} onHiddenChange={hidden => go(logViewSearch({ ...tools.view, hidden }, tab, narrow))} defaultHidden={defaults} /><DensityToggle value={tools.view.density} onChange={density => go(logViewSearch({ ...tools.view, density }, tab, narrow))} /></>} />
+          end={tools && <><ColumnChooser columns={tools.columns} hidden={tools.view.hidden} onHiddenChange={hidden => go(logViewSearch({ ...tools.view, hidden }, tab, narrow, platform))} defaultHidden={defaults} /><DensityToggle value={tools.view.density} onChange={density => go(logViewSearch({ ...tools.view, density }, tab, narrow))} /></>} />
         {filterError && <InfoBanner tone="warning" title="Filters not applied">{filterError}</InfoBanner>}
         {tab === "requests" ? <RequestsTable {...props} /> : tab === "generations" ? <GenerationsTable {...props} /> : <SessionsTable {...props} />}
       </div>}

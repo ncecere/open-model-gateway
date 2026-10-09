@@ -24,14 +24,19 @@ describe("batches", () => {
   });
   it("counts finished lines and never shows unknown cost as zero", () => {
     expect(progress(row())).toEqual({ done: 12, total: 40, text: "12 / 40" });
-    expect(costSoFar(row()).text).toBe("$0.00125");
+    expect(costSoFar(row()).text).toBe("$0.0013"); // rounded for reading; the exact amount is the detail
+    expect(costSoFar(row()).detail).toBe("Exactly $0.00125");
     // A running native batch with nothing settled yet shows its hold, never a bare $0.00 (seen live).
     const running = costSoFar(row({ mode: "native", settled_microusd: "0", held_microusd: "1888" }));
-    expect(running.text).toBe("$0.00 + $0.001888 on hold");
+    expect(running.text).toBe("$0.00 + $0.0019 on hold");
     expect(running.detail).toBe("$0.00 settled · $0.001888 on hold");
-    const unknown = costSoFar(row({ cost_unknown: true, held_microusd: "500" }));
-    expect(unknown.text).toBe("Unknown");
-    expect(unknown.detail).toContain("on hold");
+    // One failed line (unknown cost) makes the total a lower bound, not "Unknown" and never a bare amount.
+    const unknown = costSoFar(row({ cost_unknown: true, cost_unknown_attempts: "1", settled_microusd: "8271628", held_microusd: "500" }));
+    expect(unknown.text).toBe("At least $8.27 + $0.0005 on hold");
+    expect(unknown.detail).toBe("1 attempt with unknown cost · at least $8.271628 settled · $0.0005 on hold");
+    const older = costSoFar(row({ cost_unknown: true, settled_microusd: "0", held_microusd: "0" }));
+    expect(older.text).toBe("At least $0.00"); expect(older.detail).toMatch(/^Some attempts' cost is unknown/);
+    expect(costSoFar(row({ cost_unknown: false, settled_microusd: "8271628", held_microusd: "0" })).text).toBe("$8.27");
   });
   it("flags native batches without a published batch price", () => {
     expect(priceListLabel(row())).toBeNull();

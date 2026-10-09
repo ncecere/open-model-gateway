@@ -685,6 +685,26 @@ mod db {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(v["totals"]["known_cost_microusd"], "13");
         assert_eq!(v["breakdowns"]["service_accounts"], json!([]));
+        // Personal workspaces are told apart by owner (platform totals only), never all "Personal".
+        let owner_email: String = sqlx::query_scalar("SELECT email FROM users WHERE id=$1")
+            .bind(f.owner)
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            v["breakdowns"]["workspaces"][0]["name"],
+            format!("Personal · {owner_email}")
+        );
+        sqlx::query("UPDATE users SET display_name='Pat Owner' WHERE id=$1")
+            .bind(f.owner)
+            .execute(&f.store.pool)
+            .await
+            .unwrap();
+        let (_, named) = call(&f, &u, "GET", &p, Value::Null).await;
+        assert_eq!(
+            named["breakdowns"]["workspaces"][0]["name"],
+            "Personal · Pat Owner"
+        );
         assert!(!v.to_string().contains(&f.principal.key_id.to_string()));
         assert_eq!(
             call(&f, &user(f.other, false), "GET", &p, Value::Null)

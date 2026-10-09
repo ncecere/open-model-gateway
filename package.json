@@ -1,6 +1,6 @@
 {
   "name": "open-model-gateway",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "workspaces": ["apps/web"],
   "engines": { "node": ">=22.12.0" },
@@ -17,7 +17,7 @@
     "typecheck:web": "npm run typecheck --workspace @omg/web",
     "test:web": "npm run test --workspace @omg/web",
     "test:demo": "node --test tests/demo-oidc.test.mjs && python3 tests/demo-runtime.test.py",
-    "test:container": "node --test tests/container-entrypoint.test.mjs",
+    "test:container": "node --test tests/container-image.test.mjs",
     "test:staging": "python3 tests/staging.test.py && python3 tests/provider-acceptance.test.py && python3 tests/backup.test.py",
     "test:browser": "playwright test -c tests/browser/playwright.config.ts"
   }

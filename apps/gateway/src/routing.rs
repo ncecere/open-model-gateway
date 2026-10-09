@@ -94,6 +94,8 @@ struct Candidate {
     residency: String,
     operator_disabled: bool,
     circuit_open: bool,
+    /// Whole seconds until an open circuit closes (0 when closed).
+    cooldown_remaining_seconds: i32,
 }
 
 /// The caller owns current authorization and capability checks. The database query
@@ -128,7 +130,10 @@ pub async fn plan(
         r#"SELECT d.id AS deployment_id, COALESCE(r.priority,0) AS priority,
                   COALESCE(r.weight,1) AS weight, COALESCE(r.residency,'unspecified') AS residency,
                   false AS operator_disabled,
-                  COALESCE(h.open_until > statement_timestamp(),false) AS circuit_open
+                  COALESCE(h.open_until > statement_timestamp(),false) AS circuit_open,
+                  CASE WHEN h.open_until > statement_timestamp()
+                       THEN LEAST(86400, GREATEST(1, CEIL(EXTRACT(EPOCH FROM h.open_until - statement_timestamp()))))::int
+                       ELSE 0 END AS cooldown_remaining_seconds
            FROM unnest($3::uuid[]) WITH ORDINALITY AS input(id, position)
            JOIN deployments d ON d.id=input.id
            JOIN models m ON m.id=d.model_id
@@ -182,12 +187,25 @@ fn order_candidates(
     }
     candidates.retain(|c| {
         !c.operator_disabled
-            && !c.circuit_open
             && policy
                 .required_residency
                 .as_deref()
                 .is_none_or(|label| label == c.residency)
     });
+    // Routes in cooldown are skipped. If cooldown is the only reason nothing can
+    // serve the model, say so (retryable, with the soonest reopening) instead of
+    // reporting the model as missing.
+    let cooling = candidates
+        .iter()
+        .filter(|c| c.circuit_open)
+        .map(|c| c.cooldown_remaining_seconds.max(1) as u32)
+        .min();
+    candidates.retain(|c| !c.circuit_open);
+    if candidates.is_empty()
+        && let Some(seconds) = cooling
+    {
+        return Err(InferenceError::RouteCoolingDown(seconds));
+    }
     // Stable sorting retains repository order when priority values tie.
     candidates.sort_by_key(|c| c.priority);
     let mut ordered = Vec::with_capacity(candidates.len());

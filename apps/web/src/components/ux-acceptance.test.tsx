@@ -80,7 +80,7 @@ describe("D-3 Requests list", () => {
   const html = () => markup(nav({ page: "requests", ws: "team" }, <Requests session={session} workspace={team} />), [[`${ws}/requests?limit=50`, { data: [row, { ...row, root_request_id: "2b2b3c4d-0000-0000-0000-000000000002", workload_kind: "audio_speech", input_tokens: "0", output_tokens: "0" }], next_cursor: null }]]);
   it("puts Started (compact, one line), Model, Status, Cost and Latency first, and makes the whole row one link", () => {
     const doc = new DOMParser().parseFromString(html(), "text/html"), table = doc.querySelector("table")!;
-    expect([...table.tHead!.rows[0]!.cells].map(c => c.textContent)).toEqual(["Started", "Model", "Key / app", "Tokens", "Cost", "Latency", "Finish", "Status", "Attempts"]);
+    expect([...table.tHead!.rows[0]!.cells].map(c => c.textContent)).toEqual(["Started", "Model", "Key / app", "Tokens", "Cost", "Latency", "Finish", "Status"]);
     const first = table.tBodies[0]!.rows[0]!, link = first.cells[0]!.querySelector("a")!;
     expect(link.className).toMatch(/rowLink/);
     expect(link.getAttribute("href")).toBe("/workspaces/team/requests/1a2b3c4d-0000-0000-0000-000000000001");

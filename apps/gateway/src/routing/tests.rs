@@ -7,6 +7,7 @@ fn candidate(id: u128, priority: i32, weight: i32, residency: &str) -> Candidate
         residency: residency.into(),
         operator_disabled: false,
         circuit_open: false,
+        cooldown_remaining_seconds: 0,
     }
 }
 #[test]
@@ -103,8 +104,35 @@ fn disabled_and_open_routes_are_skipped_without_probes() {
         .deployment_ids,
         vec![Uuid::from_u128(3)]
     );
+    // Only cooling-down routes are left: retryable, never "model not found".
+    open.cooldown_remaining_seconds = 12;
+    let mut later = candidate(4, 0, 1, "us");
+    later.circuit_open = true;
+    later.cooldown_remaining_seconds = 25;
     assert_eq!(
-        order_candidates(&RoutingPolicy::default(), vec![disabled, open], [0; 32]),
+        order_candidates(
+            &RoutingPolicy::default(),
+            vec![disabled.clone(), later, open],
+            [0; 32]
+        ),
+        Err(InferenceError::RouteCoolingDown(12))
+    );
+    assert_eq!(
+        order_candidates(&RoutingPolicy::default(), vec![disabled], [0; 32]),
+        Err(InferenceError::ModelUnavailable)
+    );
+}
+#[test]
+fn cooling_route_outside_required_residency_is_not_a_retry_hint() {
+    let p = RoutingPolicy {
+        required_residency: Some("us".into()),
+        ..Default::default()
+    };
+    let mut eu = candidate(1, 0, 1, "eu");
+    eu.circuit_open = true;
+    eu.cooldown_remaining_seconds = 5;
+    assert_eq!(
+        order_candidates(&p, vec![eu], [0; 32]),
         Err(InferenceError::ModelUnavailable)
     );
 }
@@ -256,17 +284,19 @@ mod database {
         let h = health(&f.store, deployment.id).await.unwrap();
         assert!(h.circuit_open);
         assert_eq!(h.consecutive_failures, 2);
-        assert_eq!(
-            plan(
-                &f.store,
-                &f.principal,
-                "company/smart",
-                std::slice::from_ref(&deployment),
-                Uuid::new_v4()
-            )
-            .await,
-            Err(InferenceError::ModelUnavailable)
-        );
+        // The model exists; its only route is cooling down (60 s policy).
+        match plan(
+            &f.store,
+            &f.principal,
+            "company/smart",
+            std::slice::from_ref(&deployment),
+            Uuid::new_v4(),
+        )
+        .await
+        {
+            Err(InferenceError::RouteCoolingDown(seconds)) => assert!((1..=60).contains(&seconds)),
+            other => panic!("expected cooldown, got {other:?}"),
+        }
         record_result(&f.store, deployment.id, Some(InferenceError::Storage))
             .await
             .unwrap();

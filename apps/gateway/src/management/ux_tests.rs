@@ -978,6 +978,9 @@ async fn model_catalog_filters_route_detail_and_workspace_catalog(pool: PgPool) 
     assert_eq!(rows[0]["min_output_microusd_per_million"], "9000000");
     assert_eq!(rows[1]["eligibility"], "direct");
     assert_eq!(rows[1]["min_output_microusd_per_million"], "1500000");
+    // Priced enabled routes are reported so unit-priced workloads can say "Unpriced".
+    assert_eq!(rows[0]["priced_routes"], rows[0]["routes"]);
+    assert!(rows[0]["priced_routes"].as_i64().unwrap() >= 1);
     assert_eq!(
         get(
             &f,

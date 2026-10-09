@@ -6,7 +6,7 @@
  * Money is exact integer micro-USD strings; an unknown cost is never zero.
  */
 import { platformPath, wsPath } from "./api";
-import { formatMicroUsd } from "./governance";
+import { formatMicroUsd, formatUsd } from "./governance";
 import type { BatchRouteWait } from "./batch-scheduling";
 
 export type BatchState = "queued" | "in_progress" | "completed" | "failed" | "cancelled" | "expired";
@@ -17,7 +17,7 @@ export type BatchRow = {
   total: number | null; completed: number; failed: number; error_code: string | null;
   created_at: string; in_progress_at: string | null; finalizing_at: string | null; completed_at: string | null; cancel_requested_at: string | null; last_progress_at: string | null;
   input_file_id: string | null; output_file_id: string | null; error_file_id: string | null;
-  settled_microusd: string; held_microusd: string; cost_unknown: boolean;
+  settled_microusd: string; held_microusd: string; cost_unknown: boolean; /** Attempts whose cost is unknown (decimal string; absent from older gateways). */ cost_unknown_attempts?: string;
   workspace_id: string; workspace_name: string; workspace_kind: string; key_name?: string | null; mine?: boolean;
   /** Gateway-run scheduling (0022): lines running now, and why lines wait (null: not waiting). */
   running_lines?: number; waiting_reason?: string | null;
@@ -67,12 +67,24 @@ export function progress(b: Pick<BatchRow, "total" | "completed" | "failed">) {
   const total = b.total ?? 0, done = Math.min(total, b.completed + b.failed);
   return { done, total, text: `${done.toLocaleString("en-US")} / ${total.toLocaleString("en-US")}` };
 }
-/** Cost so far: exact settled cost plus what's on hold; unknown is never shown as zero. */
-export function costSoFar(b: Pick<BatchRow, "settled_microusd" | "held_microusd" | "cost_unknown">) {
-  const held = /^\d+$/.test(b.held_microusd) && BigInt(b.held_microusd) > 0n ? formatMicroUsd(b.held_microusd) : null;
-  if (b.cost_unknown) return { text: "Unknown", detail: held ? `At least ${formatMicroUsd(b.settled_microusd)} · ${held} on hold` : `At least ${formatMicroUsd(b.settled_microusd)}` };
+/**
+ * Cost so far: settled cost plus what's on hold, rounded for reading (`formatUsd`); `detail` carries the exact
+ * amounts. Unknown is never shown as zero.
+ */
+export function costSoFar(b: Pick<BatchRow, "settled_microusd" | "held_microusd" | "cost_unknown"> & Partial<Pick<BatchRow, "cost_unknown_attempts">>) {
+  const holding = /^\d+$/.test(b.held_microusd) && BigInt(b.held_microusd) > 0n;
+  const held = holding ? formatUsd(b.held_microusd) : null, heldExact = holding ? formatMicroUsd(b.held_microusd) : null;
+  const settled = formatUsd(b.settled_microusd), settledExact = formatMicroUsd(b.settled_microusd);
+  // Some attempts' cost is unknown (e.g. a failed line on a priced route): the settled amount is a lower bound, so the
+  // headline says so instead of collapsing the whole total to "Unknown"; the caveat and exact amounts are the detail.
+  if (b.cost_unknown) {
+    const n = b.cost_unknown_attempts && /^\d+$/.test(b.cost_unknown_attempts) && b.cost_unknown_attempts !== "0" ? b.cost_unknown_attempts : null;
+    const why = n ? `${n} attempt${n === "1" ? "" : "s"} with unknown cost` : "Some attempts' cost is unknown";
+    return { text: `At least ${settled}${held ? ` + ${held} on hold` : ""}`, detail: `${why} · at least ${settledExact} settled${heldExact ? ` · ${heldExact} on hold` : ""}` };
+  }
   // A running batch's hold is part of its cost so far: never show it as a bare "$0.00".
-  return { text: held ? `${formatMicroUsd(b.settled_microusd)} + ${held} on hold` : formatMicroUsd(b.settled_microusd), detail: held ? `${formatMicroUsd(b.settled_microusd)} settled · ${held} on hold` : null };
+  if (held) return { text: `${settled} + ${held} on hold`, detail: `${settledExact} settled · ${heldExact} on hold` };
+  return { text: settled, detail: settled === settledExact ? null : `Exactly ${settledExact}` };
 }
 const reasons: Record<string, string> = { budget_exceeded: "A budget was exhausted", submission_failed: "The provider refused the batch", submission_interrupted: "The submission was interrupted", batch_failed: "The provider failed the batch" };
 export const stopReason = (code: string | null) => code ? reasons[code] ?? code.replace(/_/g, " ") : null;

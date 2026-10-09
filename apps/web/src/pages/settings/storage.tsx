@@ -9,7 +9,7 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { HardDrive } from "lucide-react";
 import { api, type Session } from "../../lib/api";
-import { formatBytes } from "../../lib/bitop-format";
+import { bytesText, bytesTitle } from "../../components/templates/storage-bar";
 import { settingsPath, storageBackendLabel, storageBody, storageDraft, storageErrors, storageErrorsOf, type StorageDraft, type StorageSettings, type StorageTestResult } from "../../lib/settings";
 import { Badge, Button, DateTime, ErrorNotice, Input, useApi } from "../../components/ui";
 import { Card } from "../../components/ui/card/card";
@@ -79,7 +79,7 @@ export function StorageSection({ session }: { session: Session }) {
             <Td>{!g.toggle ? <span className={st.note}>{off ? "Store off" : "Always"}</span> : writable
               ? <Switch label={<span className="sr-only">Allow {g.label.toLowerCase()}</span>} checked={row.enabled} disabled={busy || (off && !row.enabled)} onCheckedChange={checked => set(g.group, { enabled: checked })} />
               : g.enabled ? <Badge tone="good">Allowed</Badge> : <Badge>Off</Badge>}</Td>
-            <Td numeric><span title={`${g.objects.toLocaleString("en-US")} file${g.objects === 1 ? "" : "s"}`}>{off && !g.objects ? "—" : formatBytes(g.bytes)}</span></Td>
+            <Td numeric><span title={`${g.objects.toLocaleString("en-US")} file${g.objects === 1 ? "" : "s"} · ${bytesTitle(g.bytes)}`}>{off && !g.objects ? "—" : bytesText(g.bytes)}</span></Td>
           </Tr>;
         })}
       </Table>

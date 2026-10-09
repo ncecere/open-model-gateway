@@ -8,9 +8,9 @@
  * sub-cent value is "$0.0081", never "$0". `null`/invalid inputs are
  * "unknown", never zero.
  */
-import { formatMicroUsd } from "../../lib/governance";
+import { formatMicroUsd, formatUsd } from "../../lib/governance";
 
-export { formatMicroUsd };
+export { formatMicroUsd, formatUsd };
 
 /** A non-negative integer decimal string (micro-USD, token counts) as BigInt; null when unknown or invalid. */
 export function parseInteger(value: string | number | bigint | null | undefined): bigint | null {

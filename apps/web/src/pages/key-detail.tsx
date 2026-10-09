@@ -20,7 +20,8 @@ import type { ReactNode } from "react";
 import { FileQuestion, Gauge, LayoutDashboard, ShieldCheck } from "lucide-react";
 import { EmptyState } from "../components/ui/empty-state/empty-state";
 import { ApiError, wsPath, type Grant, type Member, type ServiceAccount } from "../lib/api";
-import { formatMicroUsd } from "../lib/governance";
+import { formatMicroUsd, formatUsd } from "../lib/governance";
+import { Money } from "../components/templates/money";
 import { canDisable, canEditKeyLimits, canEnable, canRevoke, canRotate, filterKeys, issuedTo, keyListStatus, keyPill, keyStatus, type KeyRow, type KeyStats, type KeyTotals } from "../lib/keys";
 import { keyModelOptions, keyModelSummary } from "../lib/key-models";
 import { periodName } from "../lib/limits";
@@ -53,7 +54,7 @@ import k from "./keys.module.css";
 
 const layerNames = { platform: "Platform", local: "Workspace", key: "Key" } as const;
 function totalsHint(t: KeyTotals) {
-  const held = t.held_microusd !== "0" ? `${formatMicroUsd(t.held_microusd)} on hold · ` : "";
+  const held = t.held_microusd !== "0" ? `${formatUsd(t.held_microusd)} on hold · ` : "";
   return `${held}${countText(t.requests)} request${t.requests === "1" ? "" : "s"}${t.unresolved_attempts !== "0" ? ` · ${countText(t.unresolved_attempts)} cost unknown` : ""}`;
 }
 /** Micro-USD as a Number only to size bars; labels format the exact integer string. */
@@ -67,13 +68,13 @@ export function KeyUsage({ workspace, keyId, part = "spending" }: { workspace: S
   if (part === "budgets") return <KeyBudgets stats={stats} />;
   return <Stack gap={6}>
     <StatTileGrid columns={3} label="Spending totals (UTC)">
-      <StatTile label="Today" value={formatMicroUsd(stats.totals.today.spend_microusd)} hint={totalsHint(stats.totals.today)} />
-      <StatTile label="This week" value={formatMicroUsd(stats.totals.week.spend_microusd)} hint={totalsHint(stats.totals.week)} />
-      <StatTile label="This month" value={formatMicroUsd(stats.totals.month.spend_microusd)} hint={totalsHint(stats.totals.month)} />
+      <StatTile label="Today" value={<Money value={stats.totals.today.spend_microusd} />} hint={totalsHint(stats.totals.today)} />
+      <StatTile label="This week" value={<Money value={stats.totals.week.spend_microusd} />} hint={totalsHint(stats.totals.week)} />
+      <StatTile label="This month" value={<Money value={stats.totals.month.spend_microusd} />} hint={totalsHint(stats.totals.month)} />
     </StatTileGrid>
     <Card title="Spending, last 30 days" titleAs="h2" description="Per UTC day, including earlier versions of this key.">
       <BarChart layout="stack" size="sm" data={stats.daily.map(d => ({ label: shortDate(d.date), values: { spend: microNumber(d.spend_microusd), held: microNumber(d.held_microusd) } }))} series={[{ key: "spend", label: "Spent" }, { key: "held", label: "On hold", tone: "warning" }]}
-        summary={`Spent ${formatMicroUsd(total.toString())} over the last 30 days${stats.daily.length ? `, ${longDate(stats.daily[0]!.date)} to ${longDate(stats.daily.at(-1)!.date)} (UTC days)` : ""}.`} formatValue={v => Number.isFinite(v) ? formatMicroUsd(String(Math.round(v))) : "Unknown"} dataTable={{ caption: "Spending per day", labelHeader: "UTC day" }} />
+        summary={`Spent ${formatUsd(total.toString())} over the last 30 days${stats.daily.length ? `, ${longDate(stats.daily[0]!.date)} to ${longDate(stats.daily.at(-1)!.date)} (UTC days)` : ""}.`} formatValue={v => Number.isFinite(v) ? formatUsd(String(Math.round(v))) : "Unknown"} dataTable={{ caption: "Spending per day", labelHeader: "UTC day" }} />
     </Card>
   </Stack>;
 }

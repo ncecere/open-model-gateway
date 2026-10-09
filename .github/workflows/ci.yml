@@ -70,9 +70,45 @@ jobs:
       - run: npm run typecheck:web
       - run: npm run test:web
       - run: npm run test:demo
-      - run: npm run test:container
       - run: npm run test:staging
       - run: npm run build:web
+
+  # Supply chain (docs/verification.md): cargo-deny over the Rust graph
+  # (RustSec advisories, licences, bans, sources; policy in deny.toml) and
+  # npm audit of the production dependencies. Actions pinned by commit SHA.
+  cargo-deny:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1 (cargo-deny 0.20.2)
+        with:
+          command: check
+          arguments: --all-features
+
+  npm-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      # Gate: high/critical advisories in production dependencies (the SPA
+      # bundle) fail the job. Reads package-lock.json; no install needed.
+      - name: npm audit (production, high and critical)
+        run: npm audit --omit=dev --audit-level=high
+      # Non-blocking: every advisory, dev tooling included, in the summary.
+      - name: npm audit summary (all dependencies, non-blocking)
+        if: always()
+        run: |
+          {
+            echo "## npm audit (all dependencies)"
+            echo
+            echo '```'
+            npm audit || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   browser:
     # Playwright (Chromium) against the real gateway binary + built SPA, a disposable
@@ -147,6 +183,16 @@ jobs:
       - name: Stop isolated staging (retain volumes; runner is disposable)
         if: always()
         run: python3 scripts/staging.py down
+      # Distroless runtime contract on the same image: no shell/package manager,
+      # UID 10001, read-only rootfs, _FILE secrets, serve never migrates,
+      # exec-form healthcheck.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Runtime image contract
+        env:
+          OMG_CONTAINER_IMAGE: open-model-gateway:staging
+        run: npm run test:container
 
   # Multi-arch image (linux/amd64, linux/arm64): staging rehearsal of each
   # pushed digest, Trivy scan, SBOM and provenance, cosign signature, and the

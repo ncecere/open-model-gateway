@@ -30,6 +30,7 @@ pub mod openai;
 pub mod openai_responses;
 pub mod openrouter;
 pub mod secrets;
+pub(crate) mod text_workloads;
 
 #[async_trait]
 pub trait ProviderAdapter: Send + Sync {

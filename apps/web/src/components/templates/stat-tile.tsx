@@ -71,9 +71,13 @@ export function StatTile({ label, value, hint, details, icon, series, seriesLabe
   const points = series?.map(v => (v === null || !Number.isFinite(v) ? Number.NaN : v)) ?? [];
   const finite = points.filter(Number.isFinite);
   // A single known point is a dot, not a trend (review #37): a sparkline needs two.
-  const chart = points.length > 1 && finite.length > 1
-    ? <Sparkline values={points} variant="area" size="sm" label={seriesLabel ?? `${label} trend over ${points.length} points, from ${formatSeriesValue(finite[0]!)} to ${formatSeriesValue(finite[finite.length - 1]!)}`} />
-    : undefined;
+  const drawn = points.length > 1 && finite.length > 1;
+  // The chart slot is a fixed-size block pinned to the bottom of the tile (stat-tile.module.css), so every tile in a
+  // row draws its sparkline at the same height and width however many text lines sit above it. A tile given a series
+  // it can't draw (fewer than two known points) keeps the empty slot, so it lines up with its neighbours too.
+  const chart = series === undefined ? undefined : <span className={styles.chart} data-empty={drawn ? undefined : ""} aria-hidden={drawn ? undefined : true}>
+    {drawn && <Sparkline values={points} variant="area" size="sm" label={seriesLabel ?? `${label} trend over ${points.length} points, from ${formatSeriesValue(finite[0]!)} to ${formatSeriesValue(finite[finite.length - 1]!)}`} />}
+  </span>;
   const linkRender = href === undefined && render === undefined && onClick ? <button type="button" className={styles.button} onClick={onClick} /> : render;
   const unknown = value === null || value === undefined;
   return (
@@ -87,8 +91,7 @@ export function StatTile({ label, value, hint, details, icon, series, seriesLabe
       render={linkRender}
       details={details}
       delta={change ? { value: change.text, trend: change.direction, sentiment: change.text === "New" ? "neutral" : sentimentOf(change.direction, delta?.increaseIs ?? "good"), label: delta?.label } : undefined}
-      // With a sparkline, always keep the one-line hint row so charts in a row of tiles line up.
-      hint={delta && !change ? <>{noComparisonLabel}{hint ? <> · {hint}</> : null}</> : hint ?? (chart ? <span aria-hidden>{"\u00a0"}</span> : undefined)}
+      hint={delta && !change ? <>{noComparisonLabel}{hint ? <> · {hint}</> : null}</> : hint}
     />
   );
 }

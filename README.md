@@ -102,7 +102,7 @@ DATABASE_URL=postgres://gateway:gateway@127.0.0.1:54339/gateway \
 npm run typecheck:web
 npm run test:web
 npm run test:demo
-npm run test:container
+npm run test:container   # builds the image; needs Docker
 npm run test:staging
 npm run build:web
 # Playwright + axe against a disposable database on 54339 (never the demo):
@@ -114,7 +114,7 @@ Mock-provider and SDK tests require no paid calls or real enterprise IdP modific
 ## Releases and security
 
 - **Releases:** [changelog](CHANGELOG.md) and per-release notes in [`docs/releases/`](docs/releases/) (migrations, new settings, upgrade steps, known limitations). Upgrades are explicit: back up, `migrate`, reapply runtime grants, `budget verify`.
-- **Images:** from v0.3.0, `ghcr.io/ncecere/open-model-gateway` is published for linux/amd64 and linux/arm64 with SBOM and provenance attestations and a cosign keyless signature. Each architecture's exact digest passes the isolated staging rehearsal and a Trivy scan before it is tagged. Deploy by digest and [verify the signature](docs/releases/v0.3.0.md#verifying-the-images) first. v0.1.0 and v0.2.0 have no published images.
+- **Images:** from v0.3.0, `ghcr.io/ncecere/open-model-gateway` is published for linux/amd64 and linux/arm64 with SBOM and provenance attestations and a cosign keyless signature. Each architecture's exact digest passes the isolated staging rehearsal and a Trivy scan before it is tagged. Deploy by digest and [verify the signature](docs/releases/v0.3.0.md#verifying-the-images) first. v0.1.0 and v0.2.0 have no published images. After v0.3.0 the runtime image is distroless (no shell or curl): the binary is the entrypoint, reads `*_FILE` secrets itself and provides `open-model-gateway healthcheck` ([container image](docs/operations.md#container-image)).
 - **Security:** report vulnerabilities privately as [SECURITY.md](SECURITY.md) describes. Only the latest minor release (0.3.x) gets fixes.
 
 ## License

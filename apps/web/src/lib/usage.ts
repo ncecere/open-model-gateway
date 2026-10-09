@@ -12,7 +12,7 @@
  */
 import type { CostStatusFilter, DashboardSearch } from "./permissions";
 import type { InstallationBudget } from "./api";
-import { formatMicroUsd, type Cost, type WorkloadKind } from "./governance";
+import { formatUsd, type Cost, type WorkloadKind } from "./governance";
 import { dateError, formatCount } from "./reports";
 import { requestStatuses, type RequestStatus } from "./requests";
 
@@ -254,11 +254,11 @@ export function dimensionOptions(ctx: UsageContext): { value: Dimension; label: 
 }
 export const exploreTopN = [5, 10, 25];
 
-/** One measure, exactly: money with `formatMicroUsd`, counts grouped, rates as percentages; unknown stays "Unknown". */
+/** One measure for reading: money rounded with `formatUsd` (sub-cent keeps two significant digits), counts grouped, rates as percentages; unknown stays "Unknown". */
 export function formatMetric(metric: ChartMetric, value: string | null | undefined): string {
   if (value == null) return "Unknown";
   const v = value;
-  if (metric === "spend") return formatMicroUsd(v);
+  if (metric === "spend") return formatUsd(v);
   if (metric === "blended") return formatDecimalMicroUsd(v);
   if (metric === "cache_hit_rate") return formatRatioPercent(v) ?? "Unknown";
   return formatCount(v);
@@ -363,8 +363,8 @@ export function recordStatusText(c: Pick<Cost, "cost_status" | "cost_microusd" |
 }
 /** Final cost, else the amount on hold (a floor, not a cap), else Unknown. */
 export function recordCostText(c: Pick<Cost, "cost_microusd" | "active_held_microusd">): string {
-  if (c.cost_microusd != null) return formatMicroUsd(c.cost_microusd);
-  if (c.active_held_microusd != null && /^\d+$/.test(c.active_held_microusd) && BigInt(c.active_held_microusd) > 0n) return `Unknown · ${formatMicroUsd(c.active_held_microusd)} on hold`;
+  if (c.cost_microusd != null) return formatUsd(c.cost_microusd);
+  if (c.active_held_microusd != null && /^\d+$/.test(c.active_held_microusd) && BigInt(c.active_held_microusd) > 0n) return `Unknown · ${formatUsd(c.active_held_microusd)} on hold`;
   return "Unknown";
 }
 export const workloadLabels: Record<WorkloadKind, string> = { generation: "Text", embeddings: "Embeddings", images: "Images", audio_transcriptions: "Speech to text", audio_speech: "Text to speech", rerank: "Rerank", systemone: "System One", realtime: "Realtime audio", videos: "Video", batches: "Batch" };
@@ -431,10 +431,12 @@ export function groupStats(res: ExploreResponse, metric: ExploreMetric, days: nu
   });
 }
 function avgText(metric: ExploreMetric, total: bigint, days: number): string {
-  // Money keeps two digits below the micro-dollar, so a sub-cent average never reads $0.00.
+  // Money from a cent up reads in cents (the display rule); below a cent it keeps two digits below the micro-dollar,
+  // so a sub-cent average never reads $0.00.
   const r = divideExact(total, BigInt(days), metric === "spend" ? 2 : 1);
-  const text = metric === "spend" ? formatDecimalMicroUsd(r.value) : `${group(r.value.split(".")[0]!)}${r.value.includes(".") ? `.${r.value.split(".")[1]}` : ""}`;
-  return r.exact ? text : `≈ ${text}`;
+  const cents = metric === "spend" && total / BigInt(days) >= 10000n;
+  const text = metric !== "spend" ? `${group(r.value.split(".")[0]!)}${r.value.includes(".") ? `.${r.value.split(".")[1]}` : ""}` : cents ? formatUsd(r.value.split(".")[0]!) : formatDecimalMicroUsd(r.value);
+  return r.exact && (!cents || formatUsd(r.value.split(".")[0]!) === formatDecimalMicroUsd(r.value)) ? text : `≈ ${text}`;
 }
 
 /* ---------------- CSV ---------------- */

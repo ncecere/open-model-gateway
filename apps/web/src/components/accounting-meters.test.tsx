@@ -58,7 +58,8 @@ describe("knownSpendText (Explore, By workspace)", () => {
   it("is Unknown for a zero known spend with unresolved attempts, exact otherwise", () => {
     expect(knownSpendText("0", "1")).toBe("Unknown");
     expect(knownSpendText("0", "0")).toBe("$0.00");
-    expect(knownSpendText("2753", "5")).toBe("$0.002753");
+    expect(knownSpendText("2753", "5")).toBe("$0.0028"); // rounded for reading, never $0.00
+    expect(knownSpendText("8271628", "0")).toBe("$8.27");
     expect(knownSpendText(null, "0")).toBe("Unknown");
     expect(knownSpendText("14", null)).toBe("$0.000014");
   });

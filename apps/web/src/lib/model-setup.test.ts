@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { validateFields } from "./forms";
-import { readinessText, apiNameFrom, chosenConnection, defaultProtocols, protocolSupported, setupIdentityFields, setupSourceFields, workloadSupported, initialSetupValues, modelReadiness, protocolLabel, protocolOptions, protocolSetError, setupBody, setupFields, setupSteps, workloadDisabledReason, workloadGroups, type SetupChoices } from "./model-setup";
+import { readinessText, apiNameFrom, chosenConnection, defaultProtocols, protocolSupported, setupIdentityFields, setupSourceFields, workloadSupported, initialSetupValues, modelReadiness, protocolLabel, protocolOptions, protocolSetError, setupBody, setupFields, setupSteps, upstreamPlaceholder, workloadDisabledReason, workloadGroups, type SetupChoices } from "./model-setup";
 import type { ModelReadiness, PlatformOverviewData } from "./api";
 import { draftBody, emptyDraft, validateDraft } from "./pricing";
 
@@ -74,6 +74,14 @@ describe("Add model form", () => {
     for (const profile of ["openai", "openrouter", "anthropic", undefined]) expect(workloadDisabledReason("videos", profile, "OpenAI")).toMatch(/^No supported provider yet\./);
     expect(workloadDisabledReason("rerank", "openai", "OpenAI")).toBe("Not available on OpenAI"); expect(workloadDisabledReason("batches", "openai", "OpenAI")).toBeUndefined();
     expect(workloadGroups.filter(g => !workloadSupported(g.workload, "openrouter")).map(g => g.label)).toEqual(["Realtime audio", "Video", "Batch"]);
+    // Local profiles: rerank where the server has a rerank API, System One where it serves TypeSafe's route.
+    const local = (profile: string) => workloadGroups.filter(g => workloadSupported(g.workload, profile)).map(g => g.label);
+    expect(local("openai_compatible")).toEqual(["Text", "Embeddings", "Rerank", "System One"]);
+    expect(local("vllm")).toEqual(["Text", "Embeddings", "Rerank"]); expect(local("sglang")).toEqual(["Text", "Embeddings", "Rerank"]);
+    expect(local("ollama")).toEqual(["Text", "Embeddings", "System One"]);
+    expect(workloadDisabledReason("rerank", "ollama", "Ollama")).toBe("Not available on Ollama"); expect(workloadDisabledReason("systemone", "vllm", "vLLM")).toBe("Not available on vLLM");
+    expect(workloadDisabledReason("rerank", "vllm", "vLLM")).toBeUndefined(); expect(workloadDisabledReason("systemone", "ollama", "Ollama")).toBeUndefined();
+    expect(defaultProtocols("rerank", "sglang")).toEqual(["rerank"]); expect(upstreamPlaceholder("ollama", "systemone")).toBe("nimble");
   });
   it("keeps help to the API-name hint and uses examples in the provider's format", () => {
     const fields = [...setupSourceFields(choices, "anthropic"), ...setupIdentityFields("anthropic")];

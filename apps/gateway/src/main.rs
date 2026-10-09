@@ -79,6 +79,20 @@ enum Command {
         #[arg(long)]
         platform_admin: bool,
     },
+    /// Probe the readiness endpoint and exit 0 when healthy, 1 otherwise (the
+    /// container HEALTHCHECK; no shell or curl). Reads no configuration or secrets.
+    Healthcheck {
+        /// Plain http:// URL to probe [default: http://127.0.0.1:<port of
+        /// GATEWAY_LISTEN>/health/ready]. Proxies and redirects are never used.
+        #[arg(long)]
+        url: Option<String>,
+        /// Overall timeout, such as 3s or 500ms (at most 60s).
+        #[arg(long, default_value = open_model_gateway::healthcheck::DEFAULT_TIMEOUT)]
+        timeout: String,
+        /// Permit a destination that is not a loopback address.
+        #[arg(long)]
+        allow_non_loopback: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -116,19 +130,52 @@ enum BudgetCommand {
     Verify,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    // Arguments only: no clap argument reads the environment.
+    let cli = Cli::parse();
+    if let Some(Command::Healthcheck {
+        url,
+        timeout,
+        allow_non_loopback,
+    }) = &cli.command
+    {
+        return healthcheck(url.as_deref(), timeout, *allow_non_loopback);
+    }
+    // Former container entrypoint (docs/operations.md): private umask and
+    // `*_FILE` secret import for the four well-known secrets, before any
+    // `.env` file, configuration, logging or thread. Never migrates/bootstraps.
+    open_model_gateway::startup::restrict_umask();
+    // SAFETY: still single-threaded; no runtime or thread has been started.
+    unsafe { open_model_gateway::startup::import_secret_files() }?;
     if let Some(path) = std::env::var_os("GATEWAY_ENV_FILE") {
         dotenvy::from_path(path)
             .map_err(|_| anyhow::anyhow!("Could not load selected environment file"))?;
     } else {
         dotenvy::dotenv().ok();
     }
-    let cli = Cli::parse();
     if matches!(cli.command, Some(Command::SchemaVersion)) {
         println!("{}", schema_version()?);
         return Ok(());
     }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run(cli))
+}
+
+fn healthcheck(url: Option<&str>, timeout: &str, allow_non_loopback: bool) -> Result<()> {
+    use open_model_gateway::healthcheck::{Target, parse_timeout, probe};
+    let timeout = parse_timeout(timeout)?;
+    let target = match url {
+        Some(url) => Target::parse(url)?,
+        None => Target::from_listen(std::env::var("GATEWAY_LISTEN").ok().as_deref())?,
+    };
+    let status = probe(&target, timeout, allow_non_loopback).context("health check failed")?;
+    println!("healthy (HTTP {status})");
+    Ok(())
+}
+
+async fn run(cli: Cli) -> Result<()> {
     tracing_subscriber::fmt()
         .json()
         .with_writer(std::io::stderr)
@@ -279,7 +326,9 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Command::SchemaVersion => unreachable!("handled before configuration"),
+        Command::SchemaVersion | Command::Healthcheck { .. } => {
+            unreachable!("handled before configuration")
+        }
         Command::ProvisionUser {
             email,
             platform_admin,
@@ -560,6 +609,37 @@ mod demo {
             })
         ));
         assert!(Cli::try_parse_from(["gateway", "files"]).is_err());
+    }
+
+    #[test]
+    fn healthcheck_defaults_and_options() {
+        let Some(Command::Healthcheck {
+            url,
+            timeout,
+            allow_non_loopback,
+        }) = Cli::try_parse_from(["gateway", "healthcheck"])
+            .unwrap()
+            .command
+        else {
+            panic!("healthcheck must parse");
+        };
+        assert_eq!(
+            (url, timeout.as_str(), allow_non_loopback),
+            (None, "3s", false)
+        );
+        assert!(
+            Cli::try_parse_from([
+                "gateway",
+                "healthcheck",
+                "--url",
+                "http://127.0.0.1:8080/health/ready",
+                "--timeout",
+                "1s",
+                "--allow-non-loopback",
+            ])
+            .is_ok()
+        );
+        assert!(Cli::try_parse_from(["gateway", "healthcheck", "extra"]).is_err());
     }
 
     #[test]

@@ -27,6 +27,11 @@ pub enum InferenceError {
     /// The "jobs at once" limit (concurrent active video/batch jobs) at this
     /// scope is reached. Retryable once a job finishes or is cancelled.
     JobLimitExceeded(LimitScope),
+    /// Every route that could serve the model is in its circuit-breaker
+    /// cooldown after consecutive provider failures. Transient: retry after
+    /// the carried number of seconds (at least 1). The model exists; this is
+    /// never reported as `model_not_found`.
+    RouteCoolingDown(u32),
     Timeout,
     UpstreamRejected,
     UpstreamUnavailable,
@@ -46,6 +51,7 @@ impl InferenceError {
             Self::UnresolvedUsage(_) => "unresolved_usage",
             Self::TokenReservationExceedsLimit(_) => "token_reservation_exceeds_limit",
             Self::JobLimitExceeded(_) => "job_limit_exceeded",
+            Self::RouteCoolingDown(_) => "model_temporarily_unavailable",
             Self::Timeout => "timeout_error",
             Self::UpstreamRejected => "upstream_rejected",
             Self::UpstreamUnavailable => "upstream_unavailable",
@@ -60,6 +66,13 @@ impl InferenceError {
     /// Admission denials that retrying cannot fix (`x-should-retry: false`).
     pub fn is_non_retryable_denial(self) -> bool {
         self.is_budget_denial() || matches!(self, Self::TokenReservationExceedsLimit(_))
+    }
+    /// Seconds a client should wait before retrying (`Retry-After`), if known.
+    pub fn retry_after_seconds(self) -> Option<u32> {
+        match self {
+            Self::RouteCoolingDown(seconds) => Some(seconds.max(1)),
+            _ => None,
+        }
     }
     pub fn message(self) -> &'static str {
         match self {
@@ -100,6 +113,9 @@ impl InferenceError {
             }
             Self::JobLimitExceeded(LimitScope::Installation) => {
                 "The installation-wide jobs at once limit is reached; try again when a job finishes"
+            }
+            Self::RouteCoolingDown(_) => {
+                "The model is temporarily unavailable after repeated provider failures; retry after the indicated delay"
             }
             Self::Timeout => "Inference deadline exceeded",
             Self::UpstreamRejected => "The provider rejected the request",

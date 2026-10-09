@@ -18,7 +18,7 @@ Only active keys are checked. Revoked, expired and disabled keys, and keys of di
 | `expiry_beyond_max` | Expiry too long | Medium | Human key that expires later than today plus the installation's maximum key lifetime (Admin › Settings › General). Service-account keys are exempt because the maximum applies to human keys only. |
 | `no_limits` | No limits | High | No budget **and** no rate cap at any applicable layer. |
 | `no_budget` | No budget | Medium | A rate cap applies, but no budget does at any layer. |
-| `owner_lost_access` | Holder left | High | Team/Project human key whose holder no longer has an effective membership, for example a suspended account or a revoked grant. Personal keys and service-account keys are exempt. |
+| `owner_lost_access` | Holder left | High | Team/Project human key whose holder no longer has an effective membership, for example a suspended account or a revoked grant. Personal keys and service-account keys are exempt. Defensive: every gateway path that ends a membership (manual removal, SSO/SCIM group loss, SCIM deactivation, suspension, role loss, disabling the workspace, cleanup) revokes the holder's keys at the same time, so this should not appear in normal operation; it flags keys left active by changes made outside those paths, such as a database restore or direct SQL. Such a key is already refused at request time (access is checked live). |
 | `unused` | Unused | Low | The last use was at least *unused days* ago (default 30). |
 | `never_used` | Never used | Low | The key was never used and was created at least `min(unused days, 7)` days ago, so new keys aren't flagged right away. |
 | `broad_model_access` | All models | Low | The key has no model restriction, and its workspace has at least 5 usable models. |

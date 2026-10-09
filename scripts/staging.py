@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Isolated single-host staging operations. Never targets the local demo stack."""
 import argparse
+import json
 import os
 from pathlib import Path
 import re
@@ -11,6 +12,31 @@ from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parents[1]
 DEPLOY = ROOT / "deploy" / "staging"
+GATEWAY_BINARY = "/usr/local/bin/open-model-gateway"
+# The runtime image is distroless: each of these must fail to start inside it
+# (exit 126/127). Each command would succeed if the tool existed.
+ABSENT_TOOLS = (
+    ("/bin/sh", "-c", "exit 0"), ("/bin/bash", "-c", "exit 0"), ("/busybox/sh", "-c", "exit 0"),
+    ("/usr/bin/curl", "--version"), ("/usr/bin/perl", "-e", "0"), ("/usr/bin/apt-get", "--version"),
+    ("/usr/bin/dpkg", "--version"), ("node", "-e", "0"), ("cargo", "--version"),
+)
+
+
+def runtime_problems(inspect):
+    """Check `docker inspect` of the running gateway container; return problems."""
+    config, host, state = inspect.get("Config", {}), inspect.get("HostConfig", {}), inspect.get("State", {})
+    problems = []
+    if config.get("User") != "10001:10001":
+        problems.append("gateway must run as 10001:10001")
+    if config.get("Entrypoint") != [GATEWAY_BINARY]:
+        problems.append("entrypoint must be the gateway binary itself")
+    if (config.get("Healthcheck") or {}).get("Test", [None, None])[:3] != ["CMD", GATEWAY_BINARY, "healthcheck"]:
+        problems.append("healthcheck must be the binary's exec-form healthcheck")
+    if host.get("ReadonlyRootfs") is not True:
+        problems.append("root filesystem must be read-only")
+    if (state.get("Health") or {}).get("Status") != "healthy":
+        problems.append("container health must be healthy")
+    return problems
 
 
 def create_state(state):
@@ -147,10 +173,23 @@ def main():
         subprocess.run(["docker", "cp", container + ":/data/caddy/pki/authorities/local/root.crt", str(state / "local-ca.crt")], check=True)
         print("Copied only the public local CA certificate. Use curl --cacert; no system trust settings changed.")
     elif args.command == "verify":
-        run(["exec", "-T", "gateway", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8080/health/ready"])
-        run(["exec", "-T", "gateway", "sh", "-c", "test \"$(id -u)\" = 10001 && ! test -w /app && ! command -v node && ! command -v cargo"])
+        # Exec form only: the distroless image has no shell, curl or coreutils.
+        run(["exec", "-T", "gateway", GATEWAY_BINARY, "healthcheck"])
+        container = run(["ps", "-q", "gateway"], capture_output=True, text=True).stdout.strip()
+        if not container:
+            raise ValueError("Staging gateway is not running")
+        inspect = json.loads(subprocess.run(["docker", "inspect", container], check=True, capture_output=True, text=True).stdout)[0]
+        problems = runtime_problems(inspect)
+        for tool in ABSENT_TOOLS:
+            result = subprocess.run(["docker", "exec", container, *tool], stdin=subprocess.DEVNULL, capture_output=True)
+            if result.returncode not in (126, 127):
+                problems.append(f"{tool[0]} must not exist in the runtime image")
+        if problems:
+            for problem in problems:
+                print(f"Runtime image check failed: {problem}", file=sys.stderr)
+            raise ValueError("Runtime image restrictions failed")
         run(["exec", "-T", "postgres", "psql", "--no-psqlrc", "-v", "ON_ERROR_STOP=1", "-U", "gateway_bootstrap", "-d", "gateway"], input=(DEPLOY / "verify-privileges.sql").read_text(), text=True)
-        print("Readiness, runtime image restrictions, and database privilege assertions passed.")
+        print("Readiness, runtime image restrictions (distroless, UID 10001, read-only, no shell), and database privilege assertions passed.")
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@
 import type { ReactNode } from "react";
 import { Meter } from "../ui/meter/meter";
 import { cx } from "../../lib/bitop-utils";
-import { formatMicroUsd, type LimitPeriod, limitPeriodLabel, parseInteger, shareBasisPoints } from "./kit-format";
+import { formatMicroUsd, formatUsd, type LimitPeriod, limitPeriodLabel, parseInteger, shareBasisPoints } from "./kit-format";
 import styles from "./usage-bar.module.css";
 
 export type UsageBarProps = {
@@ -33,9 +33,9 @@ export type UsageBarProps = {
   className?: string;
 };
 
-/** "$12.40 / $50.00 · Monthly", "$12.40 / ∞", "Unknown / $50.00". */
+/** "$12.40 / $50.00 · Monthly", "$12.40 / ∞", "Unknown / $50.00". Spend is rounded for reading (`formatUsd`); the limit is exact. */
 export function usageText(used: string | null | undefined, limit: string | null | undefined, period?: LimitPeriod): string {
-  const amount = parseInteger(used) === null ? "Unknown" : formatMicroUsd(used);
+  const amount = parseInteger(used) === null ? "Unknown" : formatUsd(used);
   const cap = limit === null || limit === undefined ? "∞" : formatMicroUsd(limit);
   return `${amount} / ${cap}${period ? ` · ${limitPeriodLabel(period)}` : ""}`;
 }

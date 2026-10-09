@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { BASE_URL, ISSUER_URL, UPSTREAM_URL } from "./stack.mjs";
 import { MOCK_REPLY } from "./mock-upstream.mjs";
-import { api, chat, expectNoHorizontalScroll, readFixture, saveFixture, signIn } from "./helpers";
+import { api, chat, expectNoHorizontalScroll, expectTableFits, expectTileChartsAligned, readFixture, saveFixture, signIn } from "./helpers";
 
 // One ordered journey on a fresh database: each step builds on the previous one.
 test.describe.configure({ mode: "serial" });
@@ -212,4 +212,45 @@ test("team admin sees the member's request workspace-wide; the member cannot see
   const blair = await signIn(browser, "blair");
   expect((await api(blair.page, "GET", "/platform/logs/requests")).status()).toBe(403);
   await blair.context.close();
+});
+
+test("Logs deep links filter and fit at 1440; usage tiles line up their charts at 1440 and 390", async ({ browser }) => {
+  const { product } = readFixture();
+  const alex = await signIn(browser, "alex");
+  const page = alex.page;
+  // ?model= applies the Model filter (URL → filter state): the request carries it and the control shows it.
+  const filtered = page.waitForRequest(r => r.url().includes(`/workspaces/${product}/requests?`) && r.url().includes("model=mock%2Fchat"));
+  await page.goto(`/workspaces/${product}/logs?model=mock%2Fchat`);
+  await filtered;
+  await expect(page.getByRole("combobox", { name: "Model" })).toHaveValue(/mock\/chat/);
+  await expect(page.getByRole("row", { name: /mock\/chat ci-key/ })).toBeVisible();
+  await expectTableFits(page, "Requests");
+  await page.goto(`/workspaces/${product}/logs?model=nothing%2Fhere`);
+  await expect(page.getByRole("row", { name: /mock\/chat ci-key/ })).toHaveCount(0);
+  // Usage overview tiles: sparklines at one height whatever the hint lines (review #12).
+  await page.goto(`/workspaces/${product}/costs`);
+  await expectTileChartsAligned(page, "Usage summary");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectTileChartsAligned(page, "Usage summary");
+  await expectNoHorizontalScroll(page);
+  await alex.context.close();
+
+  const operator = await signIn(browser, "operator");
+  // Admin › Logs has the extra Workspace column and must still fit at 1440.
+  const platform = operator.page.waitForRequest(r => r.url().includes("/platform/logs/requests?") && r.url().includes("model=mock%2Fchat"));
+  await operator.page.goto("/admin/logs?model=mock%2Fchat");
+  await platform;
+  await expect(operator.page.getByRole("combobox", { name: "Model" })).toHaveValue(/mock\/chat/);
+  await expectTableFits(operator.page, "Requests");
+  // Capture-like content (long names, large counts, an unknown cost with a hold, a failed request with a fallback)
+  // must still fit with the default columns at 1440: Status is never clipped (review #7).
+  const wide = { root_request_id: "1a2b3c4d-0000-4000-8000-000000000001", workspace: { id: readFixture().product, name: "Chemistry Teaching and Learning", kind: "team" }, started_at: new Date().toISOString(), completed_at: new Date().toISOString(), model: "example/chat-fast-extended", upstream_model: "chat-small", key: { id: "k", name: "Priya's laptop (course tools)" }, app: "Course assistant", status: "failed", finish_reason: "length", attempts: 2, input_tokens: "1234567", output_tokens: "765432", cached_input_tokens: null, reasoning_tokens: null, cost_microusd: null, held_microusd: "1234567", latency_ms: 123456, time_to_first_token_ms: 1200, generation_ms: 4000, tokens_per_second: "123.45", cost_center: null, workload_kind: "generation", streamed: true, session_id: null };
+  await operator.page.route("**/api/v1/platform/logs/requests?*", route => route.fulfill({ json: { data: [wide, { ...wide, root_request_id: "1a2b3c4d-0000-4000-8000-000000000002", status: "succeeded", finish_reason: "tool_calls", attempts: 1, cost_microusd: "8271628", held_microusd: "0" }], next_cursor: null } }));
+  await operator.page.goto("/admin/logs");
+  await expect(operator.page.getByRole("row", { name: /example\/chat-fast-extended/ }).first()).toBeVisible();
+  await expectTableFits(operator.page, "Requests");
+  await operator.page.unroute("**/api/v1/platform/logs/requests?*");
+  await operator.page.goto("/admin/costs");
+  await expectTileChartsAligned(operator.page, "Usage summary");
+  await operator.context.close();
 });

@@ -43,8 +43,9 @@ export function PersonIdentity({ person, self, link }: { person: { display_name?
   const primary = <>{link ? <ResourceLink search={link}>{name}</ResourceLink> : name}{self && <span className={s.muted}> (you)</span>}</>;
   return <PersonCell name={name}><CellText primary={primary} secondary={secondary} wrap="anywhere" /></PersonCell>;
 }
-export function UserStatusBadge({ user }: { user: Pick<PlatformUser, "disabled_at" | "cleaned_at"> }) {
+export function UserStatusBadge({ user }: { user: Pick<PlatformUser, "disabled_at" | "cleaned_at"> & Partial<Pick<PlatformUser, "disable_reason" | "role_grants">> }) {
   const state = userState(user);
+  if (state === "no_access") return <StatusBadge tone="neutral" title="Signed in without a platform role; never had access. Grant a role or map an SSO group to give access.">No access</StatusBadge>;
   return state === "active" ? <StatusBadge tone="success">Active</StatusBadge> : state === "suspended" ? <StatusBadge tone="danger">Suspended</StatusBadge> : <StatusBadge tone="neutral">Cleaned</StatusBadge>;
 }
 export function WorkspaceStatusBadge({ disabled }: { disabled: boolean }) { return disabled ? <StatusBadge tone="warning">Disabled</StatusBadge> : <StatusBadge tone="success">Active</StatusBadge>; }

@@ -26,7 +26,7 @@ describe("Requests list", () => {
     expect(html).toContain("Requests made with your keys in Product. Workspace admins see everyone&#x27;s.");
     expect(html).toContain('href="/workspaces/team/requests/1a2b3c4d-0000-0000-0000-000000000001?model=company%2Fsmart&amp;status=failed"');
     expect(html).toContain("Unknown · $0.0019 on hold");
-    expect(html).toContain("2 (1 fallback)");
+    expect(html).toContain("1 fallback"); // under the status; Attempts is an optional column
     expect(html).not.toContain("Unknown in · 4 out");
     expect(html).not.toContain("$0.00<");
     expect(markup(<Requests session={session} workspace={personal} />)).toContain("Only you can see them.");

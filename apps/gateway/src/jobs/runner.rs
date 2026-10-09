@@ -312,14 +312,26 @@ impl Runner {
                         continue;
                     };
                     if head.planned.is_none_or(|t| t.elapsed() >= REPLAN) {
-                        head.route = match &head.request {
+                        (head.route, head.cooling) = match &head.request {
                             Some(request) => {
-                                self.plan_route(&principal, endpoint, request, head.execution)
+                                match self
+                                    .plan_route(&principal, endpoint, request, head.execution)
                                     .await
+                                {
+                                    Planned::Route(d) => (Some(d), false),
+                                    Planned::CoolingDown => (None, true),
+                                    Planned::Nothing => (None, false),
+                                }
                             }
-                            None => None,
+                            None => (None, false),
                         };
                         head.planned = Some(Instant::now());
+                    }
+                    if head.cooling {
+                        // Every route is in its circuit-breaker cooldown: the
+                        // line waits (nothing is sent) and is planned again,
+                        // instead of failing like an interactive request.
+                        continue;
                     }
                     let (n, execution) = (head.n, head.execution);
                     let route = head.route.as_ref().map(|d| d.id);
@@ -359,11 +371,22 @@ impl Runner {
                         note(&mut report, route, waiting, Some(pause), false);
                         continue;
                     }
+                    let settings = &gate.settings.settings;
                     let Some(permits) = permits(&per_batch, &self.pool) else {
-                        note(&mut report, route, waiting, Some(Pause::Workers), false);
+                        // Report the binding limit: with the defaults the
+                        // route's batch limit equals the per-batch cap, so a
+                        // full route must not read as "workers busy".
+                        let running = self.scheduler.running_lines(route).await.ok();
+                        let reason = wait_reason_without_permits(running, settings.max_concurrency);
+                        note(
+                            &mut report,
+                            route,
+                            waiting,
+                            Some(reason),
+                            reason == Pause::Concurrency,
+                        );
                         continue;
                     };
-                    let settings = &gate.settings.settings;
                     match self
                         .scheduler
                         .claim(job, n, execution, route, settings.max_concurrency)
@@ -592,21 +615,37 @@ impl Runner {
 
     /// The route a line would use right now: the engine's own candidate
     /// filter (live catalog and key access, protocol, adapter support) and
-    /// route plan, first candidate. `None`: nothing serves it.
+    /// route plan, first candidate.
     async fn plan_route(
         &self,
         principal: &Principal,
         endpoint: BatchEndpoint,
         request: &BatchRequest,
         execution: Uuid,
-    ) -> Option<Deployment> {
+    ) -> Planned {
+        match self
+            .plan_route_inner(principal, endpoint, request, execution)
+            .await
+        {
+            Ok(Some(d)) => Planned::Route(d),
+            Err(InferenceError::RouteCoolingDown(_)) => Planned::CoolingDown,
+            _ => Planned::Nothing,
+        }
+    }
+
+    async fn plan_route_inner(
+        &self,
+        principal: &Principal,
+        endpoint: BatchEndpoint,
+        request: &BatchRequest,
+        execution: Uuid,
+    ) -> Result<Option<Deployment>, InferenceError> {
         let protocol = endpoint.protocol();
         let model = request.model();
         let store = &self.jobs.store;
         let candidates: Vec<Deployment> = store
             .deployments(principal, model)
-            .await
-            .ok()?
+            .await?
             .into_iter()
             .filter(|d| {
                 d.supported_protocols.iter().any(|p| p == protocol.as_str())
@@ -620,14 +659,15 @@ impl Runner {
             })
             .collect();
         if candidates.is_empty() {
-            return None;
+            return Ok(None);
         }
         let plan = store
             .route_plan(principal, model, &candidates, execution)
-            .await
-            .ok()?;
-        let first = *plan.deployment_ids.first()?;
-        candidates.into_iter().find(|d| d.id == first)
+            .await?;
+        let Some(first) = plan.deployment_ids.first() else {
+            return Ok(None);
+        };
+        Ok(candidates.into_iter().find(|d| d.id == *first))
     }
 }
 
@@ -640,6 +680,15 @@ struct Pin {
     max_concurrency: i32,
 }
 
+/// Outcome of planning a waiting line's route.
+enum Planned {
+    Route(Deployment),
+    /// Every route serving the line is cooling down: wait, do not fail.
+    CoolingDown,
+    /// Nothing serves the line (it fails like an interactive request).
+    Nothing,
+}
+
 /// The next line of a lane, read and planned.
 struct Head {
     n: i32,
@@ -647,6 +696,8 @@ struct Head {
     execution: Uuid,
     request: Option<BatchRequest>,
     route: Option<Deployment>,
+    /// Planned while every route was cooling down.
+    cooling: bool,
     planned: Option<Instant>,
 }
 
@@ -731,6 +782,7 @@ impl Lane {
                     execution: Uuid::new_v4(),
                     request,
                     route: None,
+                    cooling: false,
                     planned: None,
                 });
                 return Ok(());
@@ -756,6 +808,15 @@ fn permits(
     let local = per_batch.clone().try_acquire_owned().ok()?;
     let global = pool.clone().try_acquire_owned().ok()?;
     Some((local, global))
+}
+
+/// Why a line waits when no worker permit is free: the route's own batch
+/// limit when it is reached (all batches), otherwise the gateway's workers.
+fn wait_reason_without_permits(route_running: Option<i64>, max_concurrency: i32) -> Pause {
+    match route_running {
+        Some(n) if n >= i64::from(max_concurrency) => Pause::Concurrency,
+        _ => Pause::Workers,
+    }
 }
 
 /// Merge one lane's state into the batch's demand on a route.
@@ -1286,5 +1347,20 @@ impl InferenceRepository for LineRepository {
         error: Option<InferenceError>,
     ) -> Result<(), InferenceError> {
         self.store.route_result(deployment, error).await
+    }
+}
+
+#[cfg(test)]
+mod wait_reason_tests {
+    use super::*;
+
+    #[test]
+    fn a_full_route_is_reported_as_its_batch_limit_not_workers() {
+        // Defaults: route limit 2 == per-batch cap 2.
+        assert_eq!(wait_reason_without_permits(Some(2), 2), Pause::Concurrency);
+        assert_eq!(wait_reason_without_permits(Some(3), 2), Pause::Concurrency);
+        assert_eq!(wait_reason_without_permits(Some(1), 4), Pause::Workers);
+        // Unknown route load: fall back to the gateway's own limit.
+        assert_eq!(wait_reason_without_permits(None, 2), Pause::Workers);
     }
 }

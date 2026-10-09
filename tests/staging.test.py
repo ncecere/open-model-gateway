@@ -53,6 +53,35 @@ class StagingTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(path.exists())
 
+    def test_runtime_checks_require_distroless_hardening(self):
+        good = {
+            "Config": {"User": "10001:10001", "Entrypoint": [staging.GATEWAY_BINARY],
+                       "Healthcheck": {"Test": ["CMD", staging.GATEWAY_BINARY, "healthcheck", "--timeout", "3s"]}},
+            "HostConfig": {"ReadonlyRootfs": True},
+            "State": {"Health": {"Status": "healthy"}},
+        }
+        self.assertEqual(staging.runtime_problems(good), [])
+        for path, value in [
+            (("Config", "User"), "0:0"), (("Config", "User"), ""),
+            (("Config", "Entrypoint"), ["/usr/local/bin/container-entrypoint"]),
+            (("Config", "Healthcheck"), {"Test": ["CMD", "curl", "--fail", "http://127.0.0.1:8080/health/ready"]}),
+            (("Config", "Healthcheck"), None),
+            (("HostConfig", "ReadonlyRootfs"), False),
+            (("State", "Health"), {"Status": "starting"}),
+        ]:
+            bad = {key: dict(value) for key, value in good.items()}
+            bad[path[0]][path[1]] = value
+            self.assertEqual(len(staging.runtime_problems(bad)), 1, path)
+        self.assertEqual(len(staging.runtime_problems({})), 5)
+        # Every probed tool is invoked so that it would succeed if present.
+        self.assertIn(("/bin/sh", "-c", "exit 0"), staging.ABSENT_TOOLS)
+        self.assertTrue(all(len(tool) >= 2 for tool in staging.ABSENT_TOOLS))
+
+    def test_verify_never_needs_a_shell_in_the_gateway_image(self):
+        source = (ROOT / "scripts" / "staging.py").read_text()
+        self.assertNotIn('"gateway", "sh"', source)
+        self.assertNotIn('"gateway", "curl"', source)
+
     def test_init_refuses_existing_symlink(self):
         with tempfile.TemporaryDirectory() as folder:
             target = Path(folder) / "target"

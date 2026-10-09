@@ -7,6 +7,7 @@ import { dashboardSearch } from "../lib/permissions";
 import { markup, member, policy, session, team } from "../lib/test-fixtures";
 import { usagePeriod } from "../lib/usage";
 import { FilesPage } from "../pages/files";
+import { bytesText, bytesTitle } from "./templates/storage-bar";
 import { StorageUsageCard } from "../pages/usage/storage";
 import { ScopeLimits } from "./scope-limits";
 
@@ -50,6 +51,15 @@ describe("Files API store in the workspace", () => {
     expect(html).toContain("File storage is off"); expect(html).toContain("Files you uploaded");
     expect(html).toMatch(/<button[^>]*disabled[^>]*>(?:<[^>]+>)*[^<]*Upload/);
     expect(html).toContain("No files yet");
+  });
+});
+
+describe("one size unit everywhere (review #9)", () => {
+  it("writes a file's plaintext size the same on Files, Storage cards and Settings (binary MB, exact bytes in the title)", () => {
+    const file = 118 * 1048576 + 123; // the 118 MB user file that read "124 MB" on the decimal Storage card
+    expect(bytesText(file)).toBe("118 MB");
+    expect(bytesTitle(file)).toBe("123,732,091 bytes");
+    expect(bytesText(1024 * 1048576)).toBe("1 GB"); // quotas use the same units: 1 GB = 1024 MB
   });
 });
 

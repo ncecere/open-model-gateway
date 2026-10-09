@@ -106,6 +106,13 @@ pub(crate) fn findings(f: &Facts, now: DateTime<Utc>, t: &Thresholds) -> Vec<Fin
     } else if !f.has_budget {
         push("no_budget", Severity::Medium, None);
     }
+    // Defensive: every API path that ends a shared membership revokes the holder's
+    // keys in the same transaction (manual removal, group/mapping loss at sign-in
+    // or via SCIM, SCIM deactivation, suspension, role loss, workspace disable,
+    // cleanup), so this finding should not appear in normal operation. It stays
+    // because access is re-checked live and a key can still outlive its holder's
+    // membership through changes made outside these paths (database restores,
+    // direct SQL, a future reinstatement flow); a High finding is the safe signal.
     if human && f.workspace_kind != "personal" && !f.holder_has_access {
         push("owner_lost_access", Severity::High, None);
     }

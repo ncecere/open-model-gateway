@@ -28,7 +28,11 @@ use reqwest::{
 use serde::Deserialize;
 use serde_json::{Value, json, value::RawValue};
 
-use super::{ProviderAdapter, embeddings, metering, openai, secrets::SecretResolver};
+use super::{
+    ProviderAdapter, embeddings, metering, openai,
+    secrets::SecretResolver,
+    text_workloads::{rerank_results, rerank_usage, systemone_usage},
+};
 use crate::inference::{error::InferenceError, evidence, types::*};
 
 pub const BASE: &str = "https://openrouter.ai/api/v1";
@@ -472,68 +476,6 @@ fn fixed_dimensions(model: &str) -> Option<u32> {
     (base == "nvidia/nemotron-3-embed-1b").then_some(2048)
 }
 
-fn rerank_usage(value: &Value, cost: Option<i64>) -> Result<Usage> {
-    if !(value.is_null() || value.is_object()) {
-        return Err(InferenceError::InvalidUpstream);
-    }
-    let mut usage = metering::input_only(metering::count(&value["total_tokens"])?);
-    usage.meters = Some(metering::text_workload_meters(metering::count(
-        &value["search_units"],
-    )?));
-    usage.provider_cost_microusd = cost;
-    Ok(usage)
-}
-
-fn decode_rerank(value: &Value, request: &RerankRequest) -> Result<Vec<RerankResult>> {
-    let results = value["results"]
-        .as_array()
-        .ok_or(InferenceError::InvalidUpstream)?;
-    let results = results
-        .iter()
-        .map(|r| {
-            let object = r.as_object().ok_or(InferenceError::InvalidUpstream)?;
-            if object
-                .keys()
-                .any(|k| !matches!(k.as_str(), "index" | "relevance_score" | "document"))
-            {
-                return Err(InferenceError::InvalidUpstream);
-            }
-            Ok(RerankResult {
-                index: r["index"]
-                    .as_u64()
-                    .and_then(|n| usize::try_from(n).ok())
-                    .ok_or(InferenceError::InvalidUpstream)?,
-                relevance_score: r["relevance_score"]
-                    .as_f64()
-                    .filter(|n| n.is_finite())
-                    .ok_or(InferenceError::InvalidUpstream)?,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let response = RerankResponse {
-        results,
-        usage: Usage::default(),
-    };
-    if !response.valid_for(request) {
-        return Err(InferenceError::InvalidUpstream);
-    }
-    Ok(response.results)
-}
-
-fn systemone_usage(value: &Value, cost: Option<i64>) -> Result<Usage> {
-    if !value.is_object() {
-        return Err(InferenceError::InvalidUpstream);
-    }
-    let mut usage = metering::input_only(metering::count(&value["input_tokens"])?);
-    usage.output_tokens = metering::count(&value["output_tokens"])?;
-    if usage.input_tokens.is_none() || usage.output_tokens.is_none() {
-        return Err(InferenceError::InvalidUpstream);
-    }
-    usage.meters = Some(metering::text_workload_meters(Some(0)));
-    usage.provider_cost_microusd = cost;
-    Ok(usage)
-}
-
 #[async_trait]
 impl ProviderAdapter for OpenRouterAdapter {
     fn id(&self) -> &'static str {
@@ -673,7 +615,7 @@ impl ProviderAdapter for OpenRouterAdapter {
         let (value, cost) = parse(&read(response).await?)?;
         let usage = rerank_usage(&value["usage"], cost)?;
         evidence::preserve(
-            decode_rerank(&value, &request).map(|results| RerankResponse { results, usage }),
+            rerank_results(&value, &request).map(|results| RerankResponse { results, usage }),
             || Some(Ok(usage)),
         )
     }

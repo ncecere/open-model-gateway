@@ -184,7 +184,9 @@ describe("Limits · tighten-only workspace restrictions", () => {
     const user = userEvent.setup(), stored = { ...policy, monthly_budget_microusd: "5000000", budget_period: "week" as const, budgets: [{ period: "week" as const, amount_microusd: "5000000" }] }, api = serve("/api/v1/workspaces/team/policy", local(stored));
     mount(<ScopeLimits mode="local" path="/api/v1/workspaces/team/policy" writable />, api.client);
     expect((screen.getByRole("combobox", { name: /^Budget period/ }) as HTMLSelectElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: /^Saved weekly budget can only be lowered/ }) as HTMLButtonElement).disabled).toBe(true);
+    // Removal is never allowed for a saved local budget, so no remove (×) control is offered, only the explanation.
+    expect(screen.queryByRole("button", { name: /Remove weekly budget|Saved weekly budget/ })).toBeNull();
+    expect(screen.getByText("Saved budgets can only be lowered.").getAttribute("title")).toMatch(/not raised or removed/);
     const weekly = screen.getByRole("textbox", { name: /^Weekly budget \(USD\)/ });
     await user.clear(weekly); await user.type(weekly, "6");
     expect(screen.getByText("A saved budget can only be lowered (now $5.00).")).toBeDefined();

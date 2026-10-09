@@ -5,22 +5,23 @@ This is a **single-host staging baseline, not approval for public production lau
 ## Architecture and prerequisites
 
 - Docker Engine with Compose v2 or later, Python 3, and curl on the operator machine.
-- Multi-stage `Dockerfile`: Node builds the SPA, Rust builds the locked binary, and a non-root Debian runtime contains neither Node nor Cargo. `GATEWAY_WEB_DIR=/app/web`.
+- Multi-stage `Dockerfile`: Node builds the SPA, Rust builds the locked binary, and the runtime is distroless (`gcr.io/distroless/cc-debian12`, pinned by digest): no shell, package manager, curl, Node or Cargo. The binary is the entrypoint and does its own `_FILE` secret import and health check ([container image](operations.md#container-image)). `GATEWAY_WEB_DIR=/app/web`.
 - Caddy terminates HTTPS and forwards unbuffered SSE to Rust. It has no exposed admin API or access log. Only ingress publishes ports; Postgres and Rust do not.
 - Dedicated PostgreSQL 17 volume/network; the database network is internal. Rust also has outbound connectivity for OIDC/provider calls. This is not an egress firewall.
 - Rust runs as UID/GID 10001, with a read-only root filesystem, dropped Linux capabilities, no-new-privileges, a small `/tmp` tmpfs, and a 150-second shutdown grace period.
 - Runtime readiness verifies migration versions/checksums. Startup never runs migrations or provisions identities. The default pool is 10 connections per replica: size database capacity accordingly.
+- The image `HEALTHCHECK` runs `open-model-gateway healthcheck` in exec form; ingress waits for it. Use `docker compose exec gateway /usr/local/bin/open-model-gateway healthcheck` for a manual probe; `sh`/`curl` inside the gateway container do not exist.
 
-For reproducible releases, build/tag the image with the Git commit and promote the tested image by digest. Do not substitute a newly rebuilt mutable tag during rollback. The base-image version tags should also be pinned to reviewed digests by your release process; this baseline does not claim immutable upstream image tags.
+For reproducible releases, build/tag the image with the Git commit and promote the tested image by digest. Do not substitute a newly rebuilt mutable tag during rollback. The runtime base image is pinned by digest in the `Dockerfile`; the build-stage images (`node`, `rust`) and the Compose images (`postgres`, `caddy`) are pinned by version tag only, so pin those to reviewed digests in your release process.
 
 ## Image CI and registry publication
 
-For pull requests and branches, CI's `staging-image` job builds a Linux image and runs the isolated migration/runtime-permission/HTTPS/restore smoke without real credentials.
+For pull requests and branches, CI's `staging-image` job builds a Linux image, runs the isolated migration/runtime-permission/HTTPS/restore smoke without real credentials, then `npm run test:container` on the same image.
 
 On pushes to `main` and `v*` tags, once the tests pass, `.github/workflows/image.yml` publishes `ghcr.io/ncecere/open-model-gateway`:
 
 1. Each architecture (linux/amd64, linux/arm64) is built on a native runner, with SBOM and provenance attestations, and pushed **by digest only**, without a tag.
-2. That exact digest is pulled and must report the `Cargo.toml` version (and, for a tag, the tag's version). It then runs this rehearsal (`init`, `db`, `migrate`, `up`, `verify`, HTTPS readiness through `local-ca`, `restore-check`) with `GATEWAY_IMAGE` set to the digest, and the job checks that the gateway container ran it. A Trivy scan fails on fixable HIGH or CRITICAL findings.
+2. That exact digest is pulled and must report the `Cargo.toml` version (`docker run --rm IMAGE --version`, exec form). It then runs this rehearsal (`init`, `db`, `migrate`, `up`, `verify`, HTTPS readiness through `local-ca`, `restore-check`) with `GATEWAY_IMAGE` set to the digest, and the job checks that the gateway container ran it. The runtime contract test (`tests/container-image.test.mjs`) then runs on the digest, and a Trivy scan fails on fixable HIGH or CRITICAL findings.
 3. Only then are the tested digests joined into one multi-arch index, tagged (`sha-<short>` for `main`; `vX.Y.Z`, `vX.Y` and `latest-release` for final tags; never `latest`) and signed with cosign keyless signing.
 4. For a `v*` tag, a GitHub Release is created from `docs/releases/vX.Y.Z.md` with the per-platform SBOMs, the digest and checksums.
 
@@ -47,6 +48,8 @@ python3 scripts/staging.py local-ca
 curl --cacert .local/staging/local-ca.crt https://localhost:18443/health/ready
 curl --cacert .local/staging/local-ca.crt https://localhost:18443/api/v1/auth/config
 ```
+
+`verify` probes readiness inside the gateway container with the binary's own `healthcheck`, checks with `docker inspect` that it runs as `10001:10001` from a read-only root filesystem with the binary as entrypoint and a healthy exec-form health check, confirms that `/bin/sh`, bash, busybox, curl, perl, apt-get, dpkg, Node and Cargo cannot be started in it, and runs the database privilege assertions.
 
 Open **https://localhost:18443**. Caddy uses its own local CA for localhost. The `local-ca` command copies only its public certificate; it does not modify system/browser trust. Trust that certificate explicitly in a disposable browser profile if needed; do not normalize bypassing certificate validation for real staging. The plain HTTP redirect is intended for normal public ports; use the HTTPS URL directly for this nonstandard-port rehearsal.
 
@@ -120,7 +123,7 @@ GATEWAY_OIDC_ISSUER=https://YOUR-ISSUER
 GATEWAY_OIDC_CLIENT_ID=YOUR-CLIENT-ID
 ```
 
-For a confidential client only, place its secret in `.local/staging/secrets/oidc_client_secret`, with the same protected parent directories and readable file permissions, and set `STAGING_OIDC_CONFIDENTIAL=1`. The application entrypoint reads it via `_FILE`, never a Docker build argument or command-line argument. Do not create an empty placeholder secret or set unused OIDC variables to empty strings.
+For a confidential client only, place its secret in `.local/staging/secrets/oidc_client_secret`, with the same protected parent directories and readable file permissions, and set `STAGING_OIDC_CONFIDENTIAL=1`. The gateway binary reads it via `_FILE` at startup, never a Docker build argument or command-line argument. Do not create an empty placeholder secret or set unused OIDC variables to empty strings.
 
 Provision the explicitly approved initial identity, then restart with discovery enabled:
 

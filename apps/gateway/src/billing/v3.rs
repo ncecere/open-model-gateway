@@ -540,13 +540,17 @@ pub fn value(
         &[]
     };
     let video_meters: &[Meter] = if obs.video { &Meter::VIDEO } else { &[] };
+    let residual_input = residual_uncached_input(lines, obs);
     for (i, meter) in Meter::ALL
         .into_iter()
         .chain(audio_meters.iter().copied())
         .enumerate()
         .chain(video_meters.iter().map(|m| (15, *m)))
     {
-        let count = obs.count(meter);
+        let count = match meter {
+            Meter::InputTokens => obs.count(meter).or(residual_input),
+            _ => obs.count(meter),
+        };
         match group(lines, meter, obs.variant) {
             Group::NotApplicable => {
                 if count.is_some_and(|n| n > 0) {
@@ -641,6 +645,38 @@ pub fn value(
             output_audio_tokens_microusd: amounts[14],
         },
     })
+}
+/// Uncached input that the price itself proves: a provider that reports only
+/// the inclusive input total (no cache split, as local SGLang/vLLM servers do)
+/// leaves uncached input unknown. When every cache category with an unknown
+/// count is `not_applicable`, those categories are absent, so uncached input is
+/// the total minus the known cache parts. An aggregate write that its known
+/// allocations do not explain would force a residual into an NA category, so
+/// nothing is derived then (it stays unknown, never zero).
+fn residual_uncached_input(lines: &PriceLines, obs: &Observed) -> Option<u64> {
+    let b = obs.billing?;
+    let total = b.total_input_tokens?;
+    let read = match b.cache_read_input_tokens {
+        Some(n) => n,
+        None if lines.not_applicable(Meter::CacheReadTokens) => 0,
+        None => return None,
+    };
+    let mut writes = 0u64;
+    for (meter, count) in [
+        (Meter::CacheWriteTokens, b.cache_write_default_input_tokens),
+        (Meter::CacheWrite5mTokens, b.cache_write_5m_input_tokens),
+        (Meter::CacheWrite1hTokens, b.cache_write_1h_input_tokens),
+    ] {
+        match count {
+            Some(n) => writes = writes.checked_add(n)?,
+            None if lines.not_applicable(meter) => {}
+            None => return None,
+        }
+    }
+    if b.cache_write_input_tokens.is_some_and(|w| w > writes) {
+        return None;
+    }
+    total.checked_sub(read.checked_add(writes)?)
 }
 /// Conservative admission ceiling: every possible input-family token meter is
 /// charged on the full input ceiling at its highest applicable tier rate, output
@@ -1049,6 +1085,68 @@ mod tests {
         )
         .unwrap();
         assert!(v.components.is_none() && v.violated);
+    }
+    #[test]
+    fn total_only_input_settles_when_every_unknown_cache_category_is_na() {
+        // A local server reported 59 inclusive input tokens and no cache split
+        // (SGLang's `prompt_tokens_details: null`, as normalized live).
+        let local = BillingUsage {
+            total_input_tokens: Some(59),
+            uncached_input_tokens: None,
+            cache_read_input_tokens: None,
+            cache_write_input_tokens: None,
+            cache_write_default_input_tokens: None,
+            cache_write_5m_input_tokens: Some(0),
+            cache_write_1h_input_tokens: Some(0),
+        };
+        let observe = |l: &PriceLines, b: &BillingUsage| {
+            value(
+                l,
+                &MaxUnits::default(),
+                &Observed {
+                    billing: Some(b),
+                    output_tokens: Some(21),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        let mut all_na = tokens();
+        all_na[3] = json!({"meter":"cache_read_tokens","not_applicable":true});
+        let all_na = lines(all_na);
+        // ceil(59×0.1)=6, ceil(21×0.5)=11
+        let v = observe(&all_na, &local);
+        let (c, _) = v.components.expect("settles");
+        assert_eq!((c.uncached_input_microusd, c.output_microusd), (6, 11));
+        assert_eq!((v.floor, v.violated), (17, false));
+        // Known cache parts are subtracted from the total.
+        let read = BillingUsage {
+            cache_read_input_tokens: Some(9),
+            ..local
+        };
+        let (c, _) = observe(&lines(tokens()), &read).components.unwrap();
+        assert_eq!((c.uncached_input_microusd, c.cache_read_microusd), (5, 1));
+        // A priced cache read with an unknown count stays unresolved.
+        let v = observe(&lines(tokens()), &local);
+        assert_eq!((v.components, v.floor), (None, 11));
+        // An unexplained aggregate write is a residual forced into an NA
+        // category: nothing is derived, never valued as zero.
+        let write = BillingUsage {
+            cache_write_input_tokens: Some(4),
+            ..local
+        };
+        assert!(observe(&all_na, &write).components.is_none());
+        // Cache parts above the total are invalid usage, never a residual.
+        let over = BillingUsage {
+            cache_read_input_tokens: Some(60),
+            ..local
+        };
+        let observed = Observed {
+            billing: Some(&over),
+            output_tokens: Some(21),
+            ..Default::default()
+        };
+        assert!(value(&all_na, &MaxUnits::default(), &observed).is_err());
     }
     #[test]
     fn image_variants_and_unit_bounds() {

@@ -12,7 +12,8 @@
 import { ArrowRight, KeyRound, Settings, Activity } from "lucide-react";
 import type { ReactNode } from "react";
 import { wsPath, type Session, type Workspace } from "../lib/api";
-import { formatMicroUsd, type CostReport } from "../lib/governance";
+import { type CostReport } from "../lib/governance";
+import { Money } from "../components/templates/money";
 import { formatCount, reportQuery } from "../lib/reports";
 import { latencyText, requestStatusLabel, requestStatusTone, tokensText, type RequestPage } from "../lib/requests";
 import { canView, inWorkspacePortal, type Page } from "../lib/permissions";
@@ -58,8 +59,8 @@ export function Overview({ session, workspace }: Scope) {
     <PageHeader title={workspace.name} description={overviewDescription(workspace)} meta={workspace.kind === "personal" ? <Badge variant="outline">Private</Badge> : <RoleBadge role={workspace.role} />} actions={(settings || create) && <>{settings}{create}</>} />
     <section aria-label="This month (UTC)">
       {q.isPending ? <p role="status">Loading this month's totals…</p> : q.isError ? <ErrorNotice error={q.error} retry={() => void q.refetch()} /> : <StatTileGrid columns={3} label="This month (UTC)">
-        <StatTile label="Spent this month" value={formatMicroUsd(q.data.totals.known_cost_microusd)} hint="Estimated from configured prices" render={<ResourceLink search={{ page: "costs", ws: workspace.id }} />} />
-        <StatTile label="On hold" value={formatMicroUsd(q.data.totals.held_microusd)} hint={q.data.totals.unresolved_attempts !== "0" ? `${formatCount(q.data.totals.unresolved_attempts)} cost unknown` : undefined} />
+        <StatTile label="Spent this month" value={<Money value={q.data.totals.known_cost_microusd} />} hint="Estimated from configured prices" render={<ResourceLink search={{ page: "costs", ws: workspace.id }} />} />
+        <StatTile label="On hold" value={<Money value={q.data.totals.held_microusd} />} hint={q.data.totals.unresolved_attempts !== "0" ? `${formatCount(q.data.totals.unresolved_attempts)} cost unknown` : undefined} />
         <StatTile label="Requests" value={formatCount(q.data.totals.root_requests)} hint={q.data.totals.attempts !== q.data.totals.root_requests ? `${formatCount(q.data.totals.attempts)} attempts including retries` : undefined} />
       </StatTileGrid>}
     </section>

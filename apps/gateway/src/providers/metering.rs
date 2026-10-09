@@ -124,6 +124,13 @@ fn reasoning_tokens(value: &Value, output: Option<u64>) -> Option<u64> {
         .find_map(|key| value[key]["reasoning_tokens"].as_u64())
         .filter(|n| plausible_reasoning(*n, output))
 }
+/// Telemetry only (Logs): SGLang's top-level `usage.reasoning_tokens`, with
+/// the same plausibility rule as the nested forms.
+pub(crate) fn top_level_reasoning_tokens(value: &Value, output: Option<u64>) -> Option<u64> {
+    value["reasoning_tokens"]
+        .as_u64()
+        .filter(|n| plausible_reasoning(*n, output))
+}
 fn plausible_reasoning(n: u64, output: Option<u64>) -> bool {
     n <= i64::MAX as u64 && output.is_none_or(|o| n <= o)
 }

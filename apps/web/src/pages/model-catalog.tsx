@@ -96,21 +96,28 @@ function useCatalogSearch(page: DashboardSearch["page"]) {
 const tokenInput = new Set<WorkloadKind>(["generation", "embeddings", "systemone"]);
 const perUnit = (workload: WorkloadKind) => { const meter = HEADLINE_METERS[workload][0]; return `Priced per ${unitText(meter, meter === "input_audio_seconds_ms" ? 60000 : meter === "input_characters" ? 1000000 : 1)}`; };
 /** Unknown stays unknown (amber, never $0): a short "Unpriced" with the full meaning as its tooltip. */
-function UnknownPrice() { return <TooltipText content="Input price unknown · not free" className={m.unknown}>Unpriced</TooltipText>; }
-/** "From $0.10 / M input tokens"; unknown stays unknown (amber) for token-priced workloads. Table cells. */
-export function InputPriceSummary({ value, workload, from = false }: { value: string | null | undefined; workload: WorkloadKind; from?: boolean }) {
+function UnknownPrice({ workload }: { workload?: WorkloadKind }) { return <TooltipText content={workload && !tokenInput.has(workload) ? "No price published · cost is recorded as unknown, not free" : "Input price unknown · not free"} className={m.unknown}>Unpriced</TooltipText>; }
+/** Enabled routes with a price; undefined when not reported (older gateways). */
+const pricedCount = (v: number | string | undefined) => v === undefined || v === null || !/^\d+$/.test(String(v)) ? undefined : Number(v);
+/**
+ * "From $0.10 / M input tokens"; unknown stays unknown (amber) for token-priced workloads. A unit-priced workload
+ * (images, audio…) reads "Priced per image" only when a route has a price (`pricedRoutes` > 0); with none it is
+ * "Unpriced", never a price summary. Table cells.
+ */
+export function InputPriceSummary({ value, workload, from = false, pricedRoutes }: { value: string | null | undefined; workload: WorkloadKind; from?: boolean; pricedRoutes?: number }) {
   const text = formatDecimalMicroUsd(value);
   if (text) return <span>{from ? "From " : ""}{text}<span className={s.muted}> / M input tokens</span></span>;
   if (tokenInput.has(workload)) return <span className={m.unknown}>Input price unknown · not free</span>;
+  if (pricedRoutes === 0) return <UnknownPrice workload={workload} />;
   return <span className={s.muted}>{perUnit(workload)}</span>;
 }
 /** One line for list rows: "$0.10 in · $0.40 out / 1M tokens", "From $0.02 / 1M tokens" or "Unpriced". */
-function PriceSummary({ input, output, workload, from = false, noRoutes = false }: { input: string | null | undefined; output?: string | null; workload: WorkloadKind; from?: boolean; /** No enabled route: nothing can be priced yet, so not "Unpriced" (which the Pricing filter means as an enabled route without a price). */ noRoutes?: boolean }) {
+function PriceSummary({ input, output, workload, from = false, noRoutes = false, pricedRoutes }: { input: string | null | undefined; output?: string | null; workload: WorkloadKind; from?: boolean; /** No enabled route: nothing can be priced yet, so not "Unpriced" (which the Pricing filter means as an enabled route without a price). */ noRoutes?: boolean; /** Enabled routes with a price (undefined: not reported). 0 makes a unit-priced workload "Unpriced". */ pricedRoutes?: number }) {
   const i = formatDecimalMicroUsd(input), o = workload === "embeddings" ? null : formatDecimalMicroUsd(output);
   if (!i && noRoutes) return <TooltipText content="No enabled route, so no price yet" className={s.muted}>—</TooltipText>;
   // "/M" keeps the row's price on one line at 1440 (the full unit is the tooltip).
   if (i) return <span className={m.price} title={`${from ? "From " : ""}${i}${o ? ` in · ${o} out` : workload === "embeddings" ? "" : " in"} per 1M tokens`}>{from ? "From " : ""}{i}{o ? <> in · {o} out</> : workload === "embeddings" ? null : " in"}<span className={s.muted}> /M</span></span>;
-  if (tokenInput.has(workload)) return <UnknownPrice />;
+  if (tokenInput.has(workload) || pricedRoutes === 0) return <UnknownPrice workload={workload} />;
   return <span className={s.muted}>{perUnit(workload)}</span>;
 }
 /** "14 models" / "3 of 14 models" after the type tabs; never shown while loading or after a load error (no fabricated zero). */
@@ -244,7 +251,7 @@ function AdminListRow({ model, policy, profiles, select }: { model: AdminRow; po
     <span className={m.rowName}>{select ? select(model.id, model.display_name || model.public_name, <ModelName display={model.display_name} api={model.public_name} search={detail} />) : <ModelName display={model.display_name} api={model.public_name} search={detail} />}</span>
     <span className={m.rowType}><BitopBadge size="sm" variant="outline">{workloadLabels[model.workload]}</BitopBadge></span>
     <span className={m.rowStatus}><HintBadge tone={status.tone} hint={status.hint}>{status.label}</HintBadge></span>
-    <span className={m.rowPrice}><PriceSummary input={model.min_input_microusd_per_million} workload={model.workload} from={(r?.enabled_routes ?? 0) > 1} noRoutes={r?.enabled_routes === 0} />{!!unpriced && formatDecimalMicroUsd(model.min_input_microusd_per_million) && <> <TooltipText content={`${unpriced} enabled route${unpriced === 1 ? " has" : "s have"} no price; its cost is recorded as unknown`} className={m.unknown}>· Unpriced</TooltipText></>}</span>
+    <span className={m.rowPrice}><PriceSummary input={model.min_input_microusd_per_million} workload={model.workload} from={(r?.enabled_routes ?? 0) > 1} noRoutes={r?.enabled_routes === 0} pricedRoutes={r?.priced_enabled_routes} />{!!unpriced && (r?.priced_enabled_routes ?? 0) > 0 && <> <TooltipText content={`${unpriced} enabled route${unpriced === 1 ? " has" : "s have"} no price; its cost is recorded as unknown`} className={m.unknown}>· Unpriced</TooltipText></>}</span>
     <span className={m.rowSource}>{!r ? <span className={m.unknown}>Unknown</span> : !lead ? <span className={s.muted}>No routes</span> : <IconCell icon={profile ? <ProviderIcon profile={profile} size="sm" /> : null}><span className={m.sourceWrap} title={conns.map(c => c.name).join(", ")}><ResourceLink search={{ page: "provider-detail", record: lead.id }}>{lead.name}</ResourceLink>{conns.length > 1 && <span className={s.muted}> +{conns.length - 1}</span>}</span></IconCell>}</span>
     <span className={m.rowActions}><ActionMenu label={`Actions for ${model.display_name}`} actions={[{ label: "View details", render: <ResourceLink search={detail} /> }, copyIdAction(model.public_name, "Copy API name")]} /></span>
   </li>;
@@ -256,7 +263,7 @@ function adminColumns({ policy, profiles, prices, pricesLoading, select }: { pol
   return [
     { id: "model", header: "Model", rowHeader: true, hideable: false, sortable: true, accessor: r => r.display_name, cell: r => select ? select(r.id, r.display_name || r.public_name, name(r)) : name(r) },
     { id: "type", header: "Type", sortable: true, accessor: r => workloadLabels[r.workload] },
-    { id: "price", header: "Price", label: "Price", sortable: true, accessor: r => r.min_input_microusd_per_million ?? "", sortFn: (a, b) => compareDecimal(a.min_input_microusd_per_million, b.min_input_microusd_per_million), cell: r => pricesLoading ? <span className={s.muted}>Loading…</span> : prices ? <ModelHeadlinePrice routes={prices.get(r.id)} workload={r.workload} /> : <InputPriceSummary value={r.min_input_microusd_per_million} workload={r.workload} /> },
+    { id: "price", header: "Price", label: "Price", sortable: true, accessor: r => r.min_input_microusd_per_million ?? "", sortFn: (a, b) => compareDecimal(a.min_input_microusd_per_million, b.min_input_microusd_per_million), cell: r => pricesLoading ? <span className={s.muted}>Loading…</span> : prices ? <ModelHeadlinePrice routes={prices.get(r.id)} workload={r.workload} /> : <InputPriceSummary value={r.min_input_microusd_per_million} workload={r.workload} pricedRoutes={r.readiness?.enabled_routes ? r.readiness.priced_enabled_routes : undefined} /> },
     { id: "pricing", header: "Priced routes", label: "Priced routes", accessor: r => unpricedRoutes(r) ?? -1, sortable: true, cell: r => r.readiness ? <><span>{r.readiness.priced_enabled_routes} of {r.readiness.enabled_routes} enabled</span>{isUnpricedModel(r) && <span className={s.badges}><UnpricedBadge model={r} /></span>}</> : <span className={m.unknown}>Unknown</span> },
     { id: "connections", header: "Connections", cell: r => <ConnectionNames model={r} profiles={profiles} /> },
     { id: "routes", header: "Routes", numeric: true, accessor: r => r.readiness?.enabled_routes ?? -1, sortable: true, cell: r => r.readiness ? `${r.readiness.enabled_routes} / ${r.readiness.routes}` : <span className={m.unknown}>Unknown</span> },
@@ -325,7 +332,7 @@ function WorkspaceListRow({ model, ws, actions, select }: { model: WorkspaceRow;
     <span className={m.rowName}>{select ? select(model.model_id, model.display_name || model.public_name, name) : name}</span>
     <span className={m.rowType}><BitopBadge size="sm" variant="outline">{workloadLabels[model.workload] ?? model.workload}</BitopBadge></span>
     <span className={m.rowStatus}>{off ? <NotServingBadge hint={notServingNote} /> : <HintBadge tone="success">{readinessText.ready}</HintBadge>}</span>
-    <span className={m.rowPrice}><PriceSummary input={model.min_input_microusd_per_million} output={model.min_output_microusd_per_million} workload={model.workload} from={Number(model.routes) > 1} noRoutes={off} /></span>
+    <span className={m.rowPrice}><PriceSummary input={model.min_input_microusd_per_million} output={model.min_output_microusd_per_million} workload={model.workload} from={Number(model.routes) > 1} noRoutes={off} pricedRoutes={pricedCount(model.priced_routes)} /></span>
     <span className={m.rowSource}><EligibilityBadge eligibility={model.eligibility} hint={model.reason} /></span>
     <span className={m.rowActions}>{actions}</span>
   </li>;
@@ -334,7 +341,7 @@ function WorkspacePrices({ model }: { model: WorkspaceRow }) {
   const output = formatDecimalMicroUsd(model.min_output_microusd_per_million);
   // Not serving and no price: nothing can be priced yet, so "—" (as Admin's list), not "unknown · not free".
   if (notServing(model) && !formatDecimalMicroUsd(model.min_input_microusd_per_million)) return <TooltipText content="No enabled route, so no price yet" className={s.muted}>—</TooltipText>;
-  return <><InputPriceSummary value={model.min_input_microusd_per_million} workload={model.workload} from={Number(model.routes) > 1} />{output && model.workload !== "embeddings" && <span> · {output}<span className={s.muted}> / M output tokens</span></span>}</>;
+  return <><InputPriceSummary value={model.min_input_microusd_per_million} workload={model.workload} from={Number(model.routes) > 1} pricedRoutes={pricedCount(model.priced_routes)} />{output && model.workload !== "embeddings" && <span> · {output}<span className={s.muted}> / M output tokens</span></span>}</>;
 }
 const workspaceColumnIds = ["type", "price", "protocols", "eligibility", "created"];
 function workspaceColumns(ws: string, select?: Select): DataTableColumn<WorkspaceRow>[] {

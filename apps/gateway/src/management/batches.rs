@@ -51,7 +51,9 @@ impl ListQuery {
 }
 
 /// One batch row with its cost so far (settled actual + active holds of its
-/// attempts; `unknown` when any attempt's cost is unresolved).
+/// attempts; `unknown` when any attempt's cost is unresolved, with how many).
+/// A failed attempt on a priced route keeps an unknown cost (settlement never
+/// assumes the provider charged nothing), so the total is then a lower bound.
 const ROW: &str = "jsonb_build_object(
  'job_id',j.id,'workspace_id',j.workspace_id,'workspace_name',w.name,'workspace_kind',w.kind,
  'state',j.state,'upstream_status',j.upstream_status,'mode',coalesce(j.batch_mode,'native'),
@@ -61,12 +63,12 @@ const ROW: &str = "jsonb_build_object(
  'finalizing_at',j.finalizing_at,'completed_at',j.completed_at,'cancel_requested_at',j.cancel_requested_at,
  'last_progress_at',j.last_progress_at,'input_file',j.input_file_id,'output_file',j.output_file_id,
  'error_file',j.error_file_id,'user_id',j.user_id,
- 'settled_microusd',(c.settled)::text,'held_microusd',(c.held)::text,'cost_unknown',c.unknown,'key_name',k.name,
+ 'settled_microusd',(c.settled)::text,'held_microusd',(c.held)::text,'cost_unknown',c.unknown,'cost_unknown_attempts',c.unknown_count::text,'key_name',k.name,
  'running_lines',(SELECT count(*) FROM batch_lines l WHERE l.job_id=j.id AND l.state='running'),
  'waiting_reason',(SELECT b.reason FROM batch_route_waits b WHERE b.job_id=j.id AND b.reason IS NOT NULL AND j.settled_at IS NULL AND b.updated_at>clock_timestamp()-interval '10 seconds' ORDER BY b.waiting_lines DESC,b.deployment_id LIMIT 1))
  FROM async_jobs j JOIN workspaces w ON w.id=j.workspace_id LEFT JOIN api_keys k ON k.id=j.api_key_id
  CROSS JOIN LATERAL (SELECT coalesce(sum(r.actual_microusd) FILTER(WHERE r.state='settled'),0) settled,
-  coalesce(sum(r.held_microusd) FILTER(WHERE r.state<>'settled'),0) held, coalesce(bool_or(r.state='unknown'),false) unknown
+  coalesce(sum(r.held_microusd) FILTER(WHERE r.state<>'settled'),0) held, coalesce(bool_or(r.state='unknown'),false) unknown, count(*) FILTER(WHERE r.state='unknown') unknown_count
   FROM governance_reservations r WHERE r.execution_id IN (SELECT e.id FROM inference_executions e WHERE e.batch_job_id=j.id)
    OR (r.execution_id=j.execution_id AND j.batch_mode IS DISTINCT FROM 'gateway')) c";
 
@@ -283,4 +285,21 @@ async fn platform_list(
     Ok(Json(
         json!({"data": data, "has_more": more, "personal": personal}),
     ))
+}
+
+#[cfg(all(test, feature = "integration-tests"))]
+mod tests {
+    use super::ROW;
+
+    /// The row query is valid SQL against the real schema and reports how many
+    /// attempts have unknown cost (a lower-bound total, never zero).
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn row_reports_unknown_attempt_count(pool: sqlx::PgPool) {
+        let rows: Vec<serde_json::Value> = sqlx::query_scalar(&format!("SELECT {ROW} WHERE false"))
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert!(rows.is_empty());
+        assert!(ROW.contains("'cost_unknown_attempts'"));
+    }
 }

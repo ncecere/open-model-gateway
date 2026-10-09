@@ -7,9 +7,10 @@ Current inference routes share key authentication, global public model aliases, 
 | `openai` | Native Chat | Native Responses | No | Native float/string subset | No | No |
 | `anthropic` | Representable subset via Messages | No | Native Messages | No | No | No |
 | `bedrock` | Text/tools via Converse | No | Text/tools via Converse | No | No | No |
-| `openai_compatible` | Narrow compatible profile | No | No | OpenAI-wire subset; no dimensions | No | No |
-| `vllm`, `sglang` | Profile-specific compatible subset | No | No | OpenAI-wire subset, bounded dimensions | No | No |
-| `ollama` | Compatible Chat subset | No | No | Native `/api/embed`, no dimensions | No | No |
+| `openai_compatible` | Narrow compatible profile | No | No | OpenAI-wire subset; no dimensions | Jina/Cohere `/v1/rerank` | TypeSafe `/v1/systemone` |
+| `vllm` | Profile-specific compatible subset | No | No | OpenAI-wire subset, bounded dimensions | Jina/Cohere `/rerank` | No |
+| `sglang` | Profile-specific compatible subset | No | No | OpenAI-wire subset, bounded dimensions | Native `/v1/rerank`, mapped | No |
+| `ollama` | Compatible Chat subset | No | No | Native `/api/embed`, no dimensions | No | `/v1/systemone` (v0.35.0+) |
 | `openrouter` | Compatible Chat subset (stream/non-stream) | No | No | Float/string subset; fixed native widths only | Native `/rerank` | Native `/systemone` |
 
 ### Speech routes
@@ -103,6 +104,8 @@ The response is `{"object":"list","id","model","results":[{"index","relevance_sc
 
 Limits: at most 1000 non-blank documents, 64 KiB per document, 32 KiB per query, and 1 MiB of aggregate content. `top_n` is at least 1. The body cap is `GATEWAY_MAX_BODY_BYTES_RERANK` (default 2 MiB, over the cap returns 413). Rerank is input-only: tokens are uncached input with semantic output 0. Meters are `search_units` when the provider reports them (otherwise unknown, never zero) and `requests: 1`.
 
+Local profiles ([details](provider-adapters.md#local-rerank-and-system-one)): `openai_compatible` and `vllm` speak the same Jina/Cohere wire (vLLM on its canonical `/rerank`). SGLang returns a bare scored array; the gateway sends it no `top_n`, then sorts and truncates itself so every pair's input tokens are observed. Ollama has no rerank API.
+
 ## System One
 
 `POST /v1/systemone` implements the TypeSafe System One contract, so the TypeSafe SDK works unchanged with `base_url = https://<gateway>`. Use an inference key.
@@ -118,6 +121,7 @@ Limits: at most 1000 non-blank documents, 64 KiB per document, 32 KiB per query,
 - **Answer validation:** answers are checked against the questions: one per key with a matching type, a choice within the options, probability keys equal to the options or levels, values finite and within [0, 1], and sums within rounding tolerance.
 - **Billing:** gateway billing stays in the financial APIs and is never added to this body.
 - **Admission:** input tokens are metered; output tokens are reserved up to the pinned price's `output_token_limit` (some models report free output tokens), and `requests` is 1. The body cap is `GATEWAY_MAX_BODY_BYTES_SYSTEMONE` (default 2 MiB).
+- **Adapters:** OpenRouter, `openai_compatible` (TypeSafe-compatible servers such as OpenJev) and `ollama` (v0.35.0+, whose `prompt_eval_cached_count` is recorded as cache reads). vLLM and SGLang serve no System One route.
 
 ## Images
 

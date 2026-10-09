@@ -31,7 +31,7 @@ afterEach(() => { cleanup(); abortRequests(); vi.useRealTimers(); vi.unstubAllGl
 describe("Usage & costs overview", () => {
   it("shows three exact sub-cent tiles with deltas, the on-hold amount on Spend (no banner) and a link to unresolved records", () => {
     const html = markup(<UsageOverviewTab workspace={team} ctx={usageContext(team)} period={period} nav={nav()} />, [[`/api/v1/workspaces/team/usage/overview?${q}`, overview([{ id: "u1", name: "alex@example.invalid", spend_microusd: "2723", requests: "21", tokens: "5000", share: "1" }])], ["/api/v1/workspaces/team/policy", { budgets: [{ layer: "local", period: "month", amount_microusd: "100000000", usage_visible: true, used_microusd: "10323", unresolved_usage: true, window_start: "2026-10-01T00:00:00Z", window_end: "2026-11-01T00:00:00Z" }] }]]);
-    for (const text of ["$0.002723", "+$0.0076 on hold", "including 2 retries", "At least 5,000", "+172.3%", "+110%", "+25%", "vs previous 8 days", "Top members", "alex@example.invalid", "Laptop key", "$0.000081", "Budgets", "Workspace monthly budget", "$0.010323 / $100.00 · Monthly", "Resets Nov 1, 2026", ">Accounting</h2>", "View all in Explore", "Estimates from configured prices, not invoices"]) expect(html).toContain(text);
+    for (const text of ["$0.0027", 'title="Exactly $0.002723"', "+$0.0076 on hold", "including 2 retries", "At least 5,000", "+172.3%", "+110%", "+25%", "vs previous 8 days", "Top members", "alex@example.invalid", "Laptop key", "$0.000081", "Budgets", "Workspace monthly budget", "$0.01 / $100.00 · Monthly", "Resets Nov 1, 2026", ">Accounting</h2>", "View all in Explore", "Estimates from configured prices, not invoices"]) expect(html).toContain(text);
     // The on-hold explanation is the Spend tile's tooltip (and screen-reader sentence); no "Some costs aren't final yet" banner.
     expect(html).toContain("$0.0076 is on hold for 5 requests whose final cost isn&#x27;t known yet");
     expect(html).not.toContain("Some costs aren"); expect(html).not.toContain('role="alert"');
@@ -215,7 +215,7 @@ describe("Usage & costs routing", () => {
     const table = await screen.findByRole("table", { name: "Spend by model" });
     for (const header of ["Min (USD per day)", "Max (USD per day)", "Avg (USD per day)", "Total (USD)"]) expect(within(table).getByText(header)).toBeTruthy();
     const big = within(table).getByRole("rowheader", { name: "big-model" }).closest("tr")!;
-    expect(within(big).getAllByText("$9,007,199,254.740993")).toHaveLength(2); // exact max and total from decimal strings
+    expect(within(big).getAllByText("$9,007,199,254.74")).toHaveLength(2); // max and total from decimal strings, in cents
     const small = within(table).getByRole("rowheader", { name: "small-model" }).closest("tr")!;
     expect(within(small).getAllByText("$0.000003")).toHaveLength(2); expect(within(small).getByText("≈ $0.00000042")).toBeTruthy();
     const call = fetch.mock.calls.map(c => String(c[0])).find(p => p.includes("/usage/explore?"))!;

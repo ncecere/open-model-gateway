@@ -25,8 +25,16 @@ export const kindLabels: Record<WorkspaceKind, string> = { personal: "Personal",
 export const grantLabel = (grant: { role: string; source: string }) => `${cap(grant.role)} · ${grant.source}`;
 export const activeGrants = <T extends { revoked_at?: string | null }>(grants?: T[] | null) => grants?.filter(g => !g.revoked_at) ?? [];
 
-export type UserState = "active" | "suspended" | "cleaned";
-export function userState(user: Pick<PlatformUser, "disabled_at" | "cleaned_at">): UserState { return user.cleaned_at ? "cleaned" : user.disabled_at ? "suspended" : "active"; }
+export type UserState = "active" | "suspended" | "no_access" | "cleaned";
+/**
+ * "no_access": signed in without a platform role and never held one (the account is disabled for entitlement
+ * loss with no grant history), so it was never suspended. Unknown grant history keeps "suspended".
+ */
+export function userState(user: Pick<PlatformUser, "disabled_at" | "cleaned_at"> & Partial<Pick<PlatformUser, "disable_reason" | "role_grants">>): UserState {
+  if (user.cleaned_at) return "cleaned";
+  if (!user.disabled_at) return "active";
+  return user.disable_reason === "entitlement_loss" && Array.isArray(user.role_grants) && user.role_grants.length === 0 ? "no_access" : "suspended";
+}
 const roleRank: PlatformRole[] = ["admin", "auditor", "user"];
 /**
  * The one role shown for a person: the effective role, or for a suspended/cleaned
@@ -79,13 +87,20 @@ export function splitUsage(rows: Breakdown[], shared: Map<string, { name: string
   return { shared: named, personal: personal.length ? sumTotals(personal) : null };
 }
 
-/** Audit actions emitted by the gateway; unknown codes fall back to the code itself. */
+/**
+ * Audit actions emitted by the gateway, as short labels (the code stays in the row's tooltip/detail).
+ * `audit-labels.test.ts` scans the Rust sources so every emitted code has a label; an unknown code
+ * (from a newer gateway) falls back to the code itself.
+ */
 export const auditActionLabels: Record<string, string> = {
+  "alert_rule.created": "Created alert rule", "alert_rule.updated": "Changed alert rule", "alert_rule.deleted": "Deleted alert rule",
+  "batch.cancelled": "Cancelled batch", "batch_scheduling.updated": "Changed batch scheduling",
   "catalog.created": "Created catalog", "catalog.updated": "Changed catalog", "catalog.deleted": "Deleted catalog", "catalog.models_replaced": "Changed catalog models",
   "catalog.override_replaced": "Replaced workspace catalogs", "catalog.override_reset": "Reset workspace catalogs", "catalog.type_defaults_replaced": "Changed default catalogs",
   "configuration.updated": "Changed configuration",
   "cost_center.created": "Created cost center", "cost_center.updated": "Changed cost center", "cost_center.archived": "Archived cost center",
   "deployment.created": "Added route",
+  "file.uploaded": "Uploaded file", "file.deleted": "Deleted file",
   "identity.groups_synchronized": "Synchronized SSO groups", "identity.rebound": "Re-linked sign-in identity",
   "installation.bootstrap_demo": "Seeded the demo", "installation.bootstrap_dev": "Set up the development install",
   "invitation.created": "Created invitation", "invitation.accepted": "Accepted invitation", "invitation.revoked": "Revoked invitation",
@@ -100,6 +115,11 @@ export const auditActionLabels: Record<string, string> = {
   "routing.deployment_updated": "Changed route settings", "routing.model_updated": "Changed model routing",
   "scim.user.created": "Provisioned user (SCIM)", "scim.user.updated": "Changed user (SCIM)", "scim.user.deactivated": "Deactivated user (SCIM)", "scim.user.reactivated": "Reactivated user (SCIM)",
   "scim.group.created": "Added group (SCIM)", "scim.group.updated": "Changed group (SCIM)", "scim.group.deleted": "Deleted group (SCIM)",
+  "scim.last_admin_protected": "Kept last admin (SCIM change refused)",
+  "settings.general_updated": "Changed general settings", "settings.privacy_updated": "Changed privacy settings",
+  "settings.email_updated": "Changed email settings", "settings.email_test": "Sent test email",
+  "settings.storage_updated": "Changed file storage", "settings.storage_test": "Tested file storage",
+  "settings.logo_uploaded": "Uploaded logo", "settings.logo_removed": "Removed logo",
   "service_account.created": "Created service account", "service_account.updated": "Changed service account",
   "usage.reconciled": "Reconciled usage",
   "user.provisioned": "Provisioned user", "user.updated": "Changed user", "user.bootstrap_role": "Granted first admin role", "user.cleaned": "Cleaned up departed user",

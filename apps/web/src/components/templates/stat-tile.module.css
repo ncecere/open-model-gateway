@@ -1,8 +1,31 @@
 /* StatTile: Bitop StatCard plus a button reset for onClick tiles. Semantic tokens only. */
 .tile {
+  /* Equal-height column (grid rows stretch their items): the text sits at the top, the chart at the bottom. */
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   /* A long value wraps inside its tile rather than widening the grid (or the page). */
   overflow-wrap: anywhere;
+}
+
+.tile > dl {
+  flex: 1 1 auto;
+}
+
+/*
+ * The sparkline slot: pinned to the bottom of the tile with a fixed size, so tiles in a row draw their charts at
+ * the same vertical position and width whatever the number of hint/comparison lines above (review #12).
+ */
+.tile dd:has(> .chart) {
+  margin-top: auto;
+  padding-top: var(--space-1);
+}
+
+.chart {
+  display: block;
+  width: 100%;
+  height: 1.5rem;
+  flex: none;
 }
 
 .unknown {

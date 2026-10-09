@@ -15,7 +15,8 @@ import { useQueries } from "@tanstack/react-query";
 import { ArrowRight, Boxes, KeyRound, Plus } from "lucide-react";
 import type { ReactElement, ReactNode } from "react";
 import { api, wsPath, type Collection, type Session, type Workspace } from "../lib/api";
-import { formatMicroUsd } from "../lib/governance";
+import { formatUsd } from "../lib/governance";
+import { Money } from "../components/templates/money";
 import { formatCount } from "../lib/reports";
 import { ME_KEYS, ME_SUMMARY, addedModelCount, keyWorkspaces, modelsAcrossWorkspaces, notAvailable, sharedMemberships, topKeys, welcomeTitle, type HomeCatalogRow, type MeKey, type MeSummary } from "../lib/home";
 import { personalWorkspace, portalWorkspaces, rememberedWorkspace } from "../lib/navigation";
@@ -120,7 +121,7 @@ function YourUsage({ session }: { session: Session }) {
       const now = q.data.totals.current;
       const held = now.held_microusd && now.held_microusd !== "0", unknown = now.unresolved_attempts && now.unresolved_attempts !== "0", partialTokens = now.unknown_token_attempts && now.unknown_token_attempts !== "0";
       return <StatTileGrid columns={3} label="Your usage this month">
-        <StatTile label="Spent" value={now.known_cost_microusd == null ? null : formatMicroUsd(now.known_cost_microusd)} hint={held ? `+${formatMicroUsd(now.held_microusd)} on hold` : unknown ? `${formatCount(now.unresolved_attempts)} cost unknown` : "Estimated"} />
+        <StatTile label="Spent" value={now.known_cost_microusd == null ? null : <Money value={now.known_cost_microusd} />} hint={held ? `+${formatUsd(now.held_microusd)} on hold` : unknown ? `${formatCount(now.unresolved_attempts)} cost unknown` : "Estimated"} />
         <StatTile label="Requests" value={now.requests == null ? null : formatCount(now.requests)} hint="Your keys" />
         <StatTile label="Tokens" value={now.tokens == null ? null : `${partialTokens ? "≥ " : ""}${formatCount(now.tokens)}`} hint={partialTokens ? `${formatCount(now.unknown_token_attempts)} not reported` : "Input and output"} />
       </StatTileGrid>;

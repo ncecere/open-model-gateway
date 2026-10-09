@@ -18,7 +18,7 @@ Threshold/cooldown are deployment settings, not model API fields, even though an
 
 - **Priority:** lower signed integer first; ties retain deterministic repository order (`created_at,id`). Defaults preserve first-eligible selection without retries.
 - **Weighted:** strict priority tiers, weighted order without replacement within a tier. Weights 1–1000 are relative, not percentages. Workspace UUID, gateway-generated request UUID and public alias seed ordering; caller IDs are not trusted random sources.
-- Open circuits and disabled model/deployment/provider rows are excluded. More than 256 candidates, duplicate IDs and invalid settings fail rather than silently truncate. Repository fetches 257 to detect overflow before adapter filtering.
+- Open circuits and disabled model/deployment/provider rows are excluded. When cooldown is the only reason no route can serve an available model, the request fails with HTTP 503 `model_temporarily_unavailable` (OpenAI type `server_error`, Anthropic `overloaded_error`) and `Retry-After` set to the soonest reopening, never 404 `model_not_found`. Gateway-run batch lines wait for the cooldown instead of failing. More than 256 candidates, duplicate IDs and invalid settings fail rather than silently truncate. Repository fetches 257 to detect overflow before adapter filtering.
 - A route plan is not permission to execute every candidate. Engine enforces attempt count (1–3), available IDs, one shared hard deadline and separate admission/accounting.
 
 ## Failover and residency

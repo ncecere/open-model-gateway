@@ -57,7 +57,7 @@ export function WorkspaceModelPage({ workspace, id }: Scope & { id: string }) {
       actions={<PrevNext noun="model" position={{ index, total: rows.length }} prev={target(rows[index - 1])} next={target(rows[index + 1])} />} />
     <StatTileGrid columns={3} label="Model summary">
       <StatTile label="Type" value={workloadModalities[model.workload] ?? workloadLabels[model.workload] ?? model.workload} hint={model.protocols.map(protocolLabel).join(" · ")} />
-      <StatTile label="Input price" value={tokens ? input ?? null : "Not token-priced"} hint={tokens ? input ? <span title="Configured estimate, not a provider invoice">per M input tokens · {estimate}</span> : unpriced : "Priced per unit"} />
+      <StatTile label="Input price" value={tokens ? input ?? null : "Not token-priced"} hint={tokens ? input ? <span title="Configured estimate, not a provider invoice">per M input tokens · {estimate}</span> : unpriced : model.priced_routes !== undefined && Number(model.priced_routes) === 0 && !off ? unpriced : "Priced per unit"} />
       <StatTile label="Output price" value={model.workload === "generation" ? output ?? null : "Not applicable"} hint={model.workload === "generation" ? output ? <span title="Configured estimate, not a provider invoice">per M output tokens · {estimate}</span> : unpriced : undefined} />
     </StatTileGrid>
     <Card title="Overview" titleAs="h2"><DescriptionList dividers items={[

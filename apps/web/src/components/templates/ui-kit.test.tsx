@@ -72,6 +72,38 @@ describe("StatTile", () => {
     expect(screen.getByRole("link", { name: LONG }).getAttribute("href")).toBe("/usage/tokens");
   });
 
+  it("pins every tile's sparkline slot to the bottom at a fixed size, whatever the text above (review #12)", () => {
+    const { container } = render(<StatTileGrid columns={3} label="Usage">
+      <StatTile label="Spend" value="$10.61" series={[1, 2, 3]} delta={{ current: "3", previous: "2", label: "vs previous 9 days" }} hint="+$5.45 on hold · View unresolved" />
+      <StatTile label="Requests" value="1,945" series={[4, 5, 6]} delta={{ current: "6", previous: "4", label: "vs previous 9 days" }} hint="including 1 retry" />
+      <StatTile label="Tokens" value="4,989,243" series={[7, null]} delta={{ current: "7", previous: "5" }} />
+    </StatTileGrid>);
+    const tiles = [...container.querySelectorAll("dl")].map(dl => dl.parentElement!);
+    expect(tiles).toHaveLength(3);
+    for (const tile of tiles) {
+      // Every tile in the row has exactly one chart slot, the last block of its list (or just before details).
+      const slots = tile.querySelectorAll("dd > span[class*='chart']");
+      expect(slots).toHaveLength(1);
+      expect(slots[0]!.parentElement!.tagName).toBe("DD");
+      expect(slots[0]!.parentElement!.nextElementSibling).toBeNull();
+    }
+    // A series that can't be drawn keeps an empty, hidden slot of the same size (no fabricated chart).
+    const empty = tiles[2]!.querySelector("[data-empty]")!;
+    expect(empty.getAttribute("aria-hidden")).toBe("true");
+    expect(empty.querySelector("svg")).toBeNull();
+    // No placeholder hint line any more: alignment is structural.
+    expect(tiles[2]!.textContent).not.toContain("\u00a0");
+    // A tile without a series has no chart slot at all.
+    const { container: plain } = render(<StatTile label="Teams" value="4" />);
+    expect(plain.querySelector("span[class*='chart']")).toBeNull();
+    // The layout contract lives in CSS (jsdom has no layout): flex column, list fills it, chart pinned with a fixed height.
+    const css = readFileSync(resolve(__dirname, "stat-tile.module.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(css).toMatch(/\.tile\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;/);
+    expect(css).toMatch(/\.tile > dl\s*\{[^}]*flex:\s*1 1 auto;/);
+    expect(css).toMatch(/\.tile dd:has\(> \.chart\)\s*\{[^}]*margin-top:\s*auto;/);
+    expect(css).toMatch(/\.chart\s*\{[^}]*width:\s*100%;[^}]*height:\s*1\.5rem;/);
+  });
+
   it("groups tiles", () => {
     render(<StatTileGrid label="Usage summary"><StatTile label="A" value="1" /><StatTile label="B" value="2" /></StatTileGrid>);
     expect(screen.getByRole("group", { name: "Usage summary" })).toBeTruthy();

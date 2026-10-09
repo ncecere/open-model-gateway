@@ -1,6 +1,6 @@
 import type { DashboardSearch } from "./permissions";
 import type { CostReport, Period, Totals, BillingUsage, Cost } from "./governance";
-import { formatMicroUsd } from "./governance";
+import { formatUsd } from "./governance";
 import { uuidError, type Field, type Values } from "./forms";
 export const reportFilterKeys = ["model", "provider", "workspace_id", "cost_center_id", "actor_user_id", "service_account_id", "accounting_status"] as const;
 type DateRange = Pick<Period, "start_date" | "end_date">;
@@ -39,20 +39,20 @@ export function countLabel(value: string | number | null | undefined, singular: 
 }
 /**
  * Known spend beside its unresolved attempts: a known zero with attempts whose cost isn't known yet is "Unknown",
- * never "$0.00" (unknown is not zero); otherwise the exact amount (a lower bound the row's unknown count qualifies).
+ * never "$0.00" (unknown is not zero); otherwise the amount rounded for reading (a lower bound the row's unknown count qualifies).
  */
 export function knownSpendText(known: string | null | undefined, unresolved: string | null | undefined): string {
-  return known != null && /^0+$/.test(known) && unresolved != null && /^\d+$/.test(unresolved) && BigInt(unresolved) > 0n ? "Unknown" : formatMicroUsd(known);
+  return known != null && /^0+$/.test(known) && unresolved != null && /^\d+$/.test(unresolved) && BigInt(unresolved) > 0n ? "Unknown" : formatUsd(known);
 }
 export function exactDifference(a: string, b: string, money = false): string {
   if (!/^\d+$/.test(a) || !/^\d+$/.test(b)) return "Unknown";
   const value = BigInt(a) - BigInt(b), abs = value < 0n ? -value : value;
-  return `${value > 0n ? "+" : value < 0n ? "−" : ""}${money ? formatMicroUsd(abs.toString()) : formatCount(abs.toString())}`;
+  return `${value > 0n ? "+" : value < 0n ? "−" : ""}${money ? formatUsd(abs.toString()) : formatCount(abs.toString())}`;
 }
 // Only the small normalized graph coordinates become Number. Money/count labels stay exact.
 export function trendPoints(report: CostReport) {
   const max = report.daily.reduce((peak, d) => { const n = BigInt(d.totals.known_cost_microusd); return peak > n ? peak : n; }, 0n);
-  return report.daily.map(d => ({ label: `${d.date} · ${formatMicroUsd(d.totals.known_cost_microusd)}`, values: { known: max === 0n ? 0 : Number(BigInt(d.totals.known_cost_microusd) * 10000n / max) / 100 } }));
+  return report.daily.map(d => ({ label: `${d.date} · ${formatUsd(d.totals.known_cost_microusd)}`, values: { known: max === 0n ? 0 : Number(BigInt(d.totals.known_cost_microusd) * 10000n / max) / 100 } }));
 }
 export const totalLabels: { key: keyof Totals; label: string; money?: boolean }[] = [{ key: "known_cost_microusd", label: "Known estimated cost", money: true }, { key: "held_microusd", label: "Held reservations", money: true }, { key: "attempts", label: "Upstream attempts" }, { key: "root_requests", label: "Root requests" }, { key: "unresolved_attempts", label: "Unresolved attempts" }];
 export const billingLabels: { key: keyof BillingUsage; label: string }[] = [{ key: "total_input_tokens", label: "Total input · inclusive" }, { key: "uncached_input_tokens", label: "Uncached input" }, { key: "cache_read_input_tokens", label: "Cache read" }, { key: "cache_write_input_tokens", label: "Cache write · overlapping aggregate" }, { key: "cache_write_default_input_tokens", label: "Cache write · default" }, { key: "cache_write_5m_input_tokens", label: "Cache write · 5-minute" }, { key: "cache_write_1h_input_tokens", label: "Cache write · 1-hour" }];

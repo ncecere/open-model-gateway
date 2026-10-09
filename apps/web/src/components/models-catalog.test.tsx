@@ -44,6 +44,15 @@ describe("Admin Models catalog", () => {
     expect(html).toContain("No enabled route, so no price yet"); expect(html).not.toContain(">Unpriced<");
     c.clear();
   });
+  it("says Unpriced (never 'Priced per image') for a unit-priced model whose enabled routes have no price", () => {
+    const search: DashboardSearch = { page: "models" }, c = client(search);
+    const image = { ...model, id: "img2", public_name: "example/image", display_name: "Image model", supported_protocols: ["images"], enabled: true, readiness: { ...readiness, priced_enabled_routes: 0 }, workload: "images", min_input_microusd_per_million: null };
+    for (const path of catalogQueryPaths(search)) c.setQueryData(["api", undefined, path, "choices"], [image]);
+    const html = markup(<DashboardNavigationProvider search={search} navigate={vi.fn()}><Models session={admin} /></DashboardNavigationProvider>, [], c);
+    expect(html).toContain(">Unpriced<"); expect(html).not.toContain("Priced per image");
+    expect(html).toContain("Unpriced route"); // the readiness hint says why
+    c.clear();
+  });
   it("shows type tabs with counts, sort, list cards with exact prices and the Add model action", () => {
     const html = page({ page: "models" });
     for (const tab of ["All", "Text", "Embeddings", "Images"]) expect(html).toContain(`>${tab}<`);

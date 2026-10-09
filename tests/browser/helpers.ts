@@ -64,3 +64,35 @@ export async function expectAccessible(page: Page, label: string) {
   expect(summary, `${label}: axe serious/critical violations`).toEqual([]);
   return results.violations.filter(v => !blocking.includes(v));
 }
+
+/** The named table's default columns fit its frame: nothing scrolls sideways or is clipped (e.g. Status at 1440). */
+export async function expectTableFits(page: Page, caption: string) {
+  const table = page.getByRole("table", { name: caption });
+  await expect(table).toBeVisible();
+  const fit = await table.evaluate(t => {
+    const frame = t.parentElement!;
+    const last = t.querySelector("thead tr")!.lastElementChild!.getBoundingClientRect();
+    return { overflow: frame.scrollWidth - frame.clientWidth, lastRight: last.right, frameRight: frame.getBoundingClientRect().right };
+  });
+  expect(fit.overflow, `${caption}: columns must fit without sideways scrolling`).toBeLessThanOrEqual(0);
+  expect(fit.lastRight, `${caption}: the last column must not be clipped`).toBeLessThanOrEqual(fit.frameRight + 0.5);
+}
+
+/** Every stat tile in the named group draws its chart slot at the same height, size and distance from the tile bottom. */
+export async function expectTileChartsAligned(page: Page, group: string) {
+  const tiles = page.getByRole("group", { name: group });
+  await expect(tiles).toBeVisible();
+  const boxes = await tiles.evaluate(g => [...g.querySelectorAll("dl")].map(dl => {
+    const tile = dl.parentElement!.getBoundingClientRect(), slot = dl.querySelector("dd > span[class*='_chart_']")?.getBoundingClientRect();
+    return slot ? { top: Math.round(slot.top), bottomGap: Math.round(tile.bottom - slot.bottom), height: Math.round(slot.height), width: Math.round(slot.width), tileTop: Math.round(tile.top) } : null;
+  }));
+  const slots = boxes.filter((b): b is NonNullable<typeof b> => b !== null);
+  expect(slots.length, `${group}: tiles with a chart slot`).toBeGreaterThan(1);
+  for (const b of slots) {
+    expect(b.bottomGap, `${group}: chart pinned to the tile bottom`).toBe(slots[0]!.bottomGap);
+    expect(b.height, `${group}: chart height`).toBe(slots[0]!.height);
+    expect(Math.abs(b.width - slots[0]!.width), `${group}: chart width`).toBeLessThanOrEqual(1);
+    // Tiles on the same row (same top) draw their charts at the same height.
+    for (const other of slots.filter(o => o.tileTop === b.tileTop)) expect(other.top, `${group}: chart position in a row`).toBe(b.top);
+  }
+}

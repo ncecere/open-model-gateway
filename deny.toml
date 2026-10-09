@@ -1,0 +1,83 @@
+# cargo-deny policy for the Rust workspace (docs/verification.md,
+# "Supply chain"). Run locally with `cargo deny check`; CI runs the same
+# check in the `supply-chain` job of .github/workflows/ci.yml.
+#
+# Every exception below names the crate and the reason. Add new ones only
+# with a comment, and remove them as soon as the dependency moves on.
+
+[graph]
+# Check the whole graph for every target, including the Windows/WASM-only
+# crates the lockfile carries, so a platform switch never brings in an
+# unreviewed licence or advisory. Dev-dependencies are checked too.
+all-features = true
+
+[output]
+feature-depth = 1
+
+# RustSec advisories (https://rustsec.org). Vulnerabilities always fail;
+# unmaintained and unsound crates fail when they are anywhere in the graph,
+# yanked versions fail.
+[advisories]
+db-path = "$CARGO_HOME/advisory-dbs"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+unmaintained = "all"
+unsound = "all"
+yanked = "deny"
+ignore = [
+    # rsa 0.9 (via openidconnect 4): Marvin timing side channel on RSA
+    # private-key operations; no patched release exists. The gateway never
+    # holds an RSA private key: openidconnect only verifies ID-token
+    # signatures with the issuer's public JWKS keys, and client
+    # authentication is a client secret or none (PKCE), never private_key_jwt.
+    { id = "RUSTSEC-2023-0071", reason = "rsa is used for public-key ID-token verification only; no fixed rsa release" },
+    # lru 0.16 (via aws-sdk-s3, pinned =1.122.0 with the Bedrock SDK
+    # generation): LruCache::pop is not panic-safe when a key's Drop panics
+    # under catch_unwind. The SDK's keys are plain strings/identities with
+    # non-panicking Drop. Fixed in lru 0.18.2, which needs aws-sdk-s3
+    # >=1.150 and the aws-smithy 0.61 generation; remove this when the
+    # AWS SDK crates are bumped together.
+    { id = "RUSTSEC-2026-0253", reason = "unsound only with panicking key Drop; fix needs the next AWS SDK generation" },
+]
+
+[licenses]
+# Licences compatible with distributing the gateway under MIT (the
+# workspace licence) and its container image. For crates offered under an
+# OR expression, cargo-deny only needs one allowed alternative.
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "0BSD",
+    "Zlib",
+    "Unicode-3.0",
+    # webpki-roots: the Mozilla CA bundle's data licence (permissive,
+    # attribution only).
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.93
+exceptions = []
+
+[licenses.private]
+# The workspace crate itself is `publish = false` (MIT, see LICENSE).
+ignore = true
+
+[bans]
+# Duplicate versions (rand 0.8/0.9, thiserror 1/2, webpki-roots 0.26/1,
+# windows-sys, ...) are reported as warnings, not failures: they come from
+# upstream crates and are tracked through Dependabot updates.
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+highlight = "all"
+
+[sources]
+# crates.io only. There are no git or alternate-registry dependencies; add
+# any future one here explicitly, pinned to a commit.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

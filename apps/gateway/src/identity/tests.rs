@@ -1039,6 +1039,34 @@ mod database {
     }
 
     #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn denied_sign_in_records_the_display_name_without_access(pool: sqlx::PgPool) {
+        let mock = MockProvider::start(None).await;
+        let state = mock.state(pool.clone()).await;
+        mock.claims.lock().unwrap()["name"] = json!("Jordan Kim");
+        let (oauth_state, browser, _) = begin_login(&state, &mock).await;
+        assert!(
+            finish_login(&state, &oauth_state, &browser, "good")
+                .await
+                .is_err()
+        );
+        let (name, disabled, grants): (Option<String>, bool, i64) = sqlx::query_as(
+            "SELECT u.display_name,u.disabled_at IS NOT NULL,(SELECT count(*) FROM platform_role_grants g WHERE g.user_id=u.id) FROM users u",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(name.as_deref(), Some("Jordan Kim"));
+        // Never entitled: no grant ever existed (the UI shows "No access", not "Suspended").
+        assert!(disabled);
+        assert_eq!(grants, 0);
+        let sessions: i64 = sqlx::query_scalar("SELECT count(*) FROM browser_sessions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(sessions, 0);
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn complete_oidc_flow_uses_pkce_and_fresh_hashed_sessions(pool: sqlx::PgPool) {
         let mock = MockProvider::start(None).await;
         let state = mock.state(pool.clone()).await;

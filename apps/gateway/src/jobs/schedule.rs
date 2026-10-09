@@ -764,6 +764,16 @@ impl Scheduler {
         }
     }
 
+    /// Batch lines running on `deployment` (all batches, all processes).
+    pub async fn running_lines(&self, deployment: Uuid) -> Result<i64, sqlx::Error> {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM batch_lines WHERE deployment_id=$1 AND state='running'",
+        )
+        .bind(deployment)
+        .fetch_one(&self.store.pool)
+        .await
+    }
+
     /// Claim line `line` of `job` on `deployment` when the route has room and
     /// it is this batch's turn. Serialized per route by a transaction lock;
     /// inserting the line row is the (exactly-once) claim.

@@ -13,7 +13,8 @@ import { cssPercent, formatShare, shareBasisPoints } from "../../components/temp
 import { useId, type ReactElement, type ReactNode } from "react";
 import { DetailTime } from "../../components/templates/when";
 import { wsPath, platformPath, type InstallationBudget, type Workspace } from "../../lib/api";
-import { formatMicroUsd } from "../../lib/governance";
+import { formatMicroUsd, formatUsd } from "../../lib/governance";
+import { Money } from "../../components/templates/money";
 import type { DashboardSearch } from "../../lib/permissions";
 import { countLabel, formatCount } from "../../lib/reports";
 import { activeDays, chartLabeler, chartNumber, filterCount, formatMetric, longDate, metricInfo, resetsAt, shortDate, tileDelta, usageFilters, usageQuery, visibleBudgets, type BudgetSpan, type Tile, type TopRow, type UsageBudgetWindow, type UsageContext, type UsageOverview, type UsagePeriod } from "../../lib/usage";
@@ -91,12 +92,12 @@ function SpendTile({ overview: o, workspace, nav, period, render }: { overview: 
   const t = o.tiles.spend, held = positive(t.held_microusd), unknown = positive(t.unresolved_attempts);
   const requests = countLabel(t.unresolved_attempts, "request");
   const why = `${formatMicroUsd(t.held_microusd)} is on hold for ${requests} whose final cost isn't known yet; it counts toward budgets until resolved, and the final cost may be higher.`;
-  const hint = held ? <span title={why}>+{formatMicroUsd(t.held_microusd)} on hold<span className="sr-only">. {why}</span></span>
+  const hint = held ? <span title={why}>+{formatUsd(t.held_microusd)} on hold<span className="sr-only">. {why}</span></span>
     : unknown ? <span title="Their final cost isn't known yet, so Spend is a lower bound.">{requests} with unknown cost</span> : undefined;
   // The unresolved link shares the hint line, so all three tiles keep the same layout and their charts line up.
   const target: DashboardSearch = { ...nav.search, tab: "records", metric: undefined, offset: undefined, cost_status: workspace ? held ? "on_hold" : "cost_unknown" : undefined };
   const line = hint ? <>{hint} · <ResourceLink search={target}>View unresolved</ResourceLink></> : undefined;
-  return <StatTile label="Spend" value={t.value == null ? null : formatMicroUsd(t.value)} hint={line}
+  return <StatTile label="Spend" value={t.value == null ? null : <Money value={t.value} />} hint={line}
     series={series("spend", t)} formatSeriesValue={labels("spend", t)} delta={tileDelta(t.value, t.previous, "bad", period.days)} render={render} />;
 }
 
@@ -119,7 +120,7 @@ function TopList({ title, nameHeader, rows, total, more, empty, open }: { title:
     {shown.length === 0 ? <p className={u.cardNote}>{empty}</p> : <Table caption={title} stack className={u.topTable} columns={[nameHeader, { label: "Spend", numeric: true, width: "7.5rem" }]}>
       {shown.map((r, i) => { const name = r.name ?? (r.id === null ? "Service accounts" : "Unknown"), page = open?.(r); return <Tr key={`${r.id ?? "none"}-${i}`}>
         <Th scope="row"><span className={u.topName} title={r.name ?? undefined}>{page ? <ResourceLink search={page}>{name}</ResourceLink> : name}</span><span className={u.topMeta}>{formatCount(r.requests)} {r.requests === "1" ? "request" : "requests"} · {formatShare(r.spend_microusd, total)} of spend</span><span className={u.topTrack} aria-hidden><span className={u.topBar} style={{ "--percent": cssPercent(shareBasisPoints(r.spend_microusd, total)) } as CSSProperties} /></span></Th>
-        <Td numeric>{formatMicroUsd(r.spend_microusd)}</Td>
+        <Td numeric><Money value={r.spend_microusd} /></Td>
       </Tr>; })}
     </Table>}
   </Card>;
@@ -152,7 +153,7 @@ function InstallationBudgetRow({ budgets }: { budgets: InstallationBudget[] | nu
   const order: BudgetSpan[] = ["day", "week", "month", "lifetime"], sorted = [...budgets].sort((a, b) => order.indexOf(a.period) - order.indexOf(b.period));
   return <BudgetRow description="Installation budgets are shared by every workspace and not narrowed by filters. Used is spent plus on hold in each budget's current UTC window; every budget is enforced.">
     {sorted.map(b => <UsageBar key={b.period} size="sm" label={`Installation ${spanNames[b.period]} budget${b.exhausted ? " (used up)" : ""}`} showLabel used={b.used_microusd} limit={b.amount_microusd} period={b.period}
-      description={`${b.unresolved_usage ? "At least this much: some costs aren't known yet. " : ""}Spent ${formatMicroUsd(b.settled_microusd)} · on hold ${formatMicroUsd(b.held_microusd)} · ${resetsAt(b.window_end, true)}`} />)}
+      description={`${b.unresolved_usage ? "At least this much: some costs aren't known yet. " : ""}Spent ${formatUsd(b.settled_microusd)} · on hold ${formatUsd(b.held_microusd)} · ${resetsAt(b.window_end, true)}`} />)}
   </BudgetRow>;
 }
 
@@ -167,6 +168,6 @@ export function InstallationBudgets({ budgets }: { budgets: InstallationBudget[]
   const order: BudgetSpan[] = ["day", "week", "month", "lifetime"], sorted = [...budgets].sort((a, b) => order.indexOf(a.period) - order.indexOf(b.period));
   return <Card title="Installation budgets" description="Shared by every workspace. Used is spent plus on hold in each budget's current UTC window; every budget is enforced. Not narrowed by filters.">
     <div className={u.budgets}>{sorted.map(b => <UsageBar key={b.period} label={`Installation ${spanNames[b.period]} budget${b.exhausted ? " (used up)" : ""}`} showLabel used={b.used_microusd} limit={b.amount_microusd} period={b.period}
-      description={`${b.unresolved_usage ? "At least this much: some costs aren't known yet. " : ""}Spent ${formatMicroUsd(b.settled_microusd)} · on hold ${formatMicroUsd(b.held_microusd)} · ${resetsAt(b.window_end, true)}`} />)}</div>
+      description={`${b.unresolved_usage ? "At least this much: some costs aren't known yet. " : ""}Spent ${formatUsd(b.settled_microusd)} · on hold ${formatUsd(b.held_microusd)} · ${resetsAt(b.window_end, true)}`} />)}</div>
   </Card>;
 }

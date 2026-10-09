@@ -7,7 +7,8 @@
  * cost per 1M tokens.
  */
 import { wsPath, platformPath, type Workspace } from "../../lib/api";
-import { formatMicroUsd } from "../../lib/governance";
+import { formatUsd } from "../../lib/governance";
+import { Money } from "../../components/templates/money";
 import { formatCount, knownSpendText } from "../../lib/reports";
 import { chartLabeler, chartNumber, decimalChange, dimensionOptions, formatRateMicroUsd, rateTexts, usageQuery, type TopRow, type UsageOverview, filterCount, seriesValue, usageFilters, downloadText, exploreCsv, exploreMetrics, exploreQuery, exploreTopN, comparisonLabel, formatMetric, groupName, longDate, metricInfo, periodLabel, pivotFromUsageSearch, pivotToUsageSearch, shortDate, type Dimension, type ExploreMetric, type ExploreResponse, type ExploreRow, type UsageContext, type UsagePeriod } from "../../lib/usage";
 import { Button, ErrorNotice, Stack, useAction, useApi } from "../../components/ui";
@@ -74,12 +75,12 @@ function ExploreResult({ res, period, dimLabel, onExport, filtered, models }: { 
   const columns: DataTableColumn<TableRow>[] = [
     { id: "group", header: dimLabel(res.group_by), rowHeader: true, cell: r => r.other ? `Other ${dimLabel(res.group_by).toLowerCase()}s` : groupName(r.group, res.group_by) },
     ...(res.then_by ? [{ id: "then", header: dimLabel(res.then_by), cell: (r: TableRow) => r.other ? "—" : groupName(r.then, res.then_by) }] : []),
-    { id: "value", header: `${info.label} (${info.unit})`, numeric: true, cell: r => money ? knownSpendText(r.value, r.unresolved_attempts) : formatMetric(res.metric, r.value) },
+    { id: "value", header: `${info.label} (${info.unit})`, numeric: true, cell: r => money ? (knownSpendText(r.value, r.unresolved_attempts) === "Unknown" ? "Unknown" : <Money value={r.value} />) : formatMetric(res.metric, r.value) },
     ...(info.additive ? [{ id: "share", header: "Share of total", cell: (r: TableRow) => <PercentBarCell part={r.value} total={res.total.value} /> }] : []),
     ...(res.group_by === "model" && !res.then_by && models ? [{ id: "rate", header: "Cost per 1M tokens", numeric: true, cell: (r: TableRow) => r.other ? "—" : modelRate(models, r.group.id) ?? "—" }] : []),
-    ...(money ? [{ id: "held", header: "On hold (USD)", numeric: true, defaultHiddenNarrow: true, cell: (r: TableRow) => r.other ? "—" : formatMicroUsd(r.held_microusd) }, { id: "unknown", header: "Cost unknown (attempts)", numeric: true, defaultHiddenNarrow: true, cell: (r: TableRow) => r.other ? "—" : formatCount(r.unresolved_attempts) }] : []),
+    ...(money ? [{ id: "held", header: "On hold (USD)", numeric: true, defaultHiddenNarrow: true, cell: (r: TableRow) => r.other ? "—" : <Money value={r.held_microusd} /> }, { id: "unknown", header: "Cost unknown (attempts)", numeric: true, defaultHiddenNarrow: true, cell: (r: TableRow) => r.other ? "—" : formatCount(r.unresolved_attempts) }] : []),
   ];
-  return <Card title={`${info.label} by ${dimLabel(res.group_by).toLowerCase()}${res.then_by ? ` and ${dimLabel(res.then_by).toLowerCase()}` : ""}`} description={<>Total {money ? knownSpendText(res.total.value, res.total.unresolved_attempts) : formatMetric(res.metric, res.total.value)}{money && res.total.held_microusd && res.total.held_microusd !== "0" ? ` · ${formatMicroUsd(res.total.held_microusd)} on hold` : ""} · {periodLabel(period)}</>}
+  return <Card title={`${info.label} by ${dimLabel(res.group_by).toLowerCase()}${res.then_by ? ` and ${dimLabel(res.then_by).toLowerCase()}` : ""}`} description={<>Total {money ? knownSpendText(res.total.value, res.total.unresolved_attempts) : formatMetric(res.metric, res.total.value)}{money && res.total.held_microusd && res.total.held_microusd !== "0" ? ` · ${formatUsd(res.total.held_microusd)} on hold` : ""} · {periodLabel(period)}</>}
     actions={<Button size="sm" variant="secondary" onClick={() => onExport(res, rows.length)}>Export table (CSV)</Button>}>
     <Stack gap={5}>
       <ExploreChart res={res} />

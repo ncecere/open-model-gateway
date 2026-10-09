@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { budgetTightenError, effectivePolicy, periodNests, canReconcile, deploymentRoutingBody, dollarsToMicroUsd, formatMicroUsd, integerField, microUsdError, microUsdToDollars, modelRoutingBody, passiveHealth, policyBody, policyFields, priceBody, priceFields, residencyError, priceLinesText, scalarRate, type Cost, type Policy, type Price } from "./governance";
+import { budgetTightenError, effectivePolicy, periodNests, canReconcile, deploymentRoutingBody, dollarsToMicroUsd, formatMicroUsd, formatUsd, integerField, microUsdError, microUsdToDollars, modelRoutingBody, passiveHealth, policyBody, policyFields, priceBody, priceFields, residencyError, priceLinesText, scalarRate, type Cost, type Policy, type Price } from "./governance";
 import { validateFields } from "./forms";
 
 const cacheDefaults = { cache_read_status: "unknown", cache_write_status: "unknown", cache_write_5m_status: "unknown", cache_write_1h_status: "unknown" };
@@ -41,6 +41,27 @@ describe("exact micro-USD and governance forms", () => {
     expect(formatMicroUsd("1000010")).toBe("$1.00001");
     expect(formatMicroUsd(null)).toBe("Unknown");
     expect(formatMicroUsd("bogus")).toBe("Unknown");
+  });
+  it("rounds display money to cents, keeps sub-cent amounts non-zero, and leaves unknown unknown", () => {
+    expect(formatUsd("8271628")).toBe("$8.27");
+    expect(formatUsd("8275000")).toBe("$8.28"); // half-up
+    expect(formatUsd("999995")).toBe("$1.00");
+    expect(formatUsd("10000")).toBe("$0.01");
+    expect(formatUsd("1234567891234")).toBe("$1,234,567.89");
+    expect(formatUsd("9223372036854775807")).toBe("$9,223,372,036,854.78");
+    expect(formatUsd("0")).toBe("$0.00");
+    expect(formatUsd("8100")).toBe("$0.0081");
+    expect(formatUsd("8149")).toBe("$0.0081");
+    expect(formatUsd("8150")).toBe("$0.0082");
+    expect(formatUsd("9999")).toBe("$0.01");
+    expect(formatUsd("120")).toBe("$0.00012");
+    expect(formatUsd("5")).toBe("$0.000005");
+    expect(formatUsd("1")).toBe("$0.000001");
+    for (const v of ["1", "49", "4999", "9949"]) expect(formatUsd(v)).not.toBe("$0.00");
+    expect(formatUsd(null)).toBe("Unknown");
+    expect(formatUsd(undefined)).toBe("Unknown");
+    expect(formatUsd("-1")).toBe("Unknown");
+    expect(formatUsd("1.5")).toBe("Unknown");
   });
   it("converts exact decimal dollars using BigInt, rejecting silent precision loss", () => {
     expect(dollarsToMicroUsd("9007199254.740993")).toBe("9007199254740993");

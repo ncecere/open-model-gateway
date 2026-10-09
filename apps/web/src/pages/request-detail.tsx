@@ -18,7 +18,8 @@ import { DetailTime } from "../components/templates/when";
 import { useEffect } from "react";
 import { FileQuestion } from "lucide-react";
 import { ApiError, platformPath, wsPath, type Session } from "../lib/api";
-import { formatMicroUsd } from "../lib/governance";
+import { formatUsd } from "../lib/governance";
+import { Money } from "../components/templates/money";
 import { costText, countText, dataPolicyOf, finishReasonLabel, jobStateTone, jobText, type JobDetail, latencyText, logPaths, logsSearch, requestFilters, requestQuery, requestStatusLabel, requestStatusTone, requestTarget, servedModel, sessionTarget, timelineStatus, tokensText, tpsText, unresolvedText, workloadText, modalityText, realtimeResponseState, realtimeStatusLabel, type LogsScope, type RealtimeResponse, type RequestAttempt, type RequestDetail, type RequestPage } from "../lib/requests";
 import type { DashboardSearch } from "../lib/permissions";
 import { Button, ErrorNotice, Stack, useApi } from "../components/ui";
@@ -160,7 +161,7 @@ function RequestDetail({ scope, id }: { scope: LogsScope; id: string }) {
     <PageHeader title={title} meta={r && <StatusBadge tone={requestStatusTone(r.status)}>{requestStatusLabel(r.status)}</StatusBadge>} breadcrumbs={<BackLink {...back} />} description={r ? <><WithIcon icon={<LabIcon model={r.model} size="sm" />}>{r.model}</WithIcon> · {r.key.name}</> : undefined} actions={<PrevNext noun="request" shortcuts prev={target(r?.prev_id ?? null)} next={target(r?.next_id ?? null)} />} />
     {q.isPending ? <p role="status">Loading request…</p> : q.isError ? <ErrorNotice error={q.error} retry={() => void q.refetch()} /> : <>
       <StatTileGrid columns={5} label="Request summary">
-        <StatTile label={r!.cost_microusd === null ? "Cost (not final)" : "Cost"} value={r!.cost_microusd === null ? null : formatMicroUsd(r!.cost_microusd)} hint={held ? `${formatMicroUsd(held)} on hold until the cost is known` : r!.cost_microusd === null ? "Not known yet" : "Estimated from configured prices"} />
+        <StatTile label={r!.cost_microusd === null ? "Cost (not final)" : "Cost"} value={r!.cost_microusd === null ? null : <Money value={r!.cost_microusd} />} hint={held ? `${formatUsd(held)} on hold until the cost is known` : r!.cost_microusd === null ? "Not known yet" : "Estimated from configured prices"} />
         <StatTile label="Tokens" value={tokensText(r!.input_tokens, r!.output_tokens, r!.workload_kind) === "Unknown" ? null : tokensText(r!.input_tokens, r!.output_tokens, r!.workload_kind)} hint={tokensText(r!.input_tokens, r!.output_tokens, r!.workload_kind) === "Not applicable" ? "Speech is metered by audio or characters, not tokens" : "Input · output"} />
         <StatTile label="Latency" value={r!.latency_ms === null ? null : latencyText(r!.latency_ms)} hint={r!.streamed ? "Streamed · until the stream ended" : "Until the response completed"} />
         {r!.streamed ? <StatTile label="Time to first token" value={ttft === null ? null : latencyText(ttft)} hint={[generation !== null ? `Generation ${latencyText(generation)}` : null, speed].filter(Boolean).join(" · ") || "Not reported"} />

@@ -29,7 +29,7 @@ describe("Logs page", () => {
     for (const text of ["12", "10%", "850 ms", "Median · p95 3.2 s", "140 ms", "41.2 tok/s"]) expect(html).toContain(text);
     const table = doc.querySelector("table")!;
     // Streaming telemetry (TTFT, speed) is under Columns by default so rows stay short; the tiles summarize it.
-    expect([...table.tHead!.rows[0]!.cells].map(c => c.textContent)).toEqual(["Started", "Model", "Key / app", "Tokens", "Cost", "Latency", "Finish", "Status", "Attempts"]);
+    expect([...table.tHead!.rows[0]!.cells].map(c => c.textContent)).toEqual(["Started", "Model", "Key / app", "Tokens", "Cost", "Latency", "Finish", "Status"]);
     const cells = [...table.tBodies[0]!.rows[0]!.cells].map(c => c.textContent);
     expect(cells).toContain("Length limit"); expect(cells).toContain("CI runnerAgent");
     const all = new DOMParser().parseFromString(markup(nav({ ...search, cols: "none" }, <LogsPage scope={{ kind: "workspace", workspace: team }} />), [[`${ws}/logs/metrics?finish_reason=length&streamed=true`, metrics], [`${ws}/requests?finish_reason=length&streamed=true&limit=50`, { data: [row], next_cursor: null }]]), "text/html");

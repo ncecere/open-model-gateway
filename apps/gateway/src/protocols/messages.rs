@@ -361,7 +361,9 @@ fn error_body(e: InferenceError) -> Value {
         | InferenceError::UnresolvedUsage(_)
         | InferenceError::TokenReservationExceedsLimit(_)
         | InferenceError::JobLimitExceeded(_) => "rate_limit_error",
-        InferenceError::UpstreamUnavailable => "overloaded_error",
+        InferenceError::UpstreamUnavailable | InferenceError::RouteCoolingDown(_) => {
+            "overloaded_error"
+        }
         _ => "api_error",
     };
     json!({"type":"error","error":{"type":kind,"message":e.message()}})

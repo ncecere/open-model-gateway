@@ -1,6 +1,6 @@
 # Local provider profiles
 
-Local adapters expose Chat and string-batch embeddings only, not Responses or Messages. Every request uses the exact server-approved base URL, the approval's pinned destination addresses, and a dedicated client with no redirects, proxy or automatic retries. `credential_ref: none` does not resolve a secret or send authentication. Optional `env:` authentication is explicit; inference-key and cloud credentials are never reused.
+Local adapters expose Chat and string-batch embeddings on every profile, rerank on `openai_compatible`, `vllm` and `sglang`, and System One on `openai_compatible` and `ollama` (wire mapping in `workloads.rs`, details in [provider adapters](../../../../../docs/provider-adapters.md#local-rerank-and-system-one)); never Responses or Messages. Every request uses the exact server-approved base URL, the approval's pinned destination addresses, and a dedicated client with no redirects, proxy or automatic retries. `credential_ref: none` does not resolve a secret or send authentication. Optional `env:` authentication is explicit; inference-key and cloud credentials are never reused.
 
 ## Ollama: compatible Chat plus native embeddings
 
@@ -11,6 +11,8 @@ Native embedding requests send a string array, the deployment's upstream model, 
 Authoritative source reviewed read-only: `ollama/ollama` commit `e3cddc3e897d8414a60a46e23f5ef3a99be2eb81`, `api/types.go` (`EmbedRequest`, `EmbedResponse`) and `server/routes.go` (`EmbedHandler`). `truncate:false` rejects input beyond context rather than truncating and disables the handler's truncation retry. Native vectors preserve batch order. `prompt_eval_count` sums runner embedding token counts across inputs; its wire field is `omitempty`. Missing or null counts therefore remain unknown, not zero. Output token count is the embedding workload's semantic non-applicable zero. This native embedding API has no prompt-cache charging categories, so its cache billing categories are non-applicable zeros; duration fields are not token observations.
 
 Current native source supports output `dimensions`, but permitted dimensions depend on the runner/model (length and trained Matryoshka set). This slice has no certified per-model dimensions metadata: **Ollama rejects all dimension overrides before admission and defensively before execution**, rather than silently dropping them or pretending every installed version/model supports them. Generic `openai_compatible` also rejects dimensions; only the tested vLLM/SGLang profiles currently accept them. Dimension support for Ollama requires a separately certified deployment/model contract.
+
+Reasoning models: a `reasoning_content`/`reasoning` string on the message or delta is dropped (not returned to clients; its tokens remain in `completion_tokens`), and a scalar `matched_stop`/`stop_reason` on the choice is accepted. Other shapes for those fields still fail. Fixtures in `reasoning_tests.rs` are the field shapes a live SGLang server returned on 2026-10-09.
 
 All local profiles reject strict tool guarantees. Ollama rejects explicit tool choice; generic compatible servers reject required/named choices. Request-specific support checks are pure, do not resolve credentials, and do not contact a server; execution repeats them as a defense.
 

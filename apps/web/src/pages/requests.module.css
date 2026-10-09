@@ -58,11 +58,12 @@
 }
 
 .truncate {
-  max-width: 14rem;
+  max-width: 10rem;
 }
 
+/* Key, app, workspace and session names: short enough that the default Logs row fits at 1440 (review #7). */
 .truncateKey {
-  max-width: 10rem;
+  max-width: 8rem;
 }
 
 .costCell {
