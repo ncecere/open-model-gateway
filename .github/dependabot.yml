@@ -1,7 +1,14 @@
-# Weekly dependency updates, grouped so each ecosystem opens at most one
-# version-update pull request a week (security updates still arrive
-# individually). Every PR is checked by ci.yml, including cargo-deny and
-# npm audit (docs/verification.md, "Supply chain").
+# Weekly dependency updates. Minor and patch updates are grouped so each
+# ecosystem opens at most one grouped pull request a week; major updates
+# arrive as individual pull requests so one breaking change (and its
+# migration) never holds the routine updates hostage. Security updates still
+# arrive individually. Every PR is checked by ci.yml, including cargo-deny
+# and npm audit (docs/verification.md, "Supply chain").
+#
+# Cargo applies pre-1.0 rules: 0.10 -> 0.11 is a major update and gets its own
+# PR. npm and GitHub Actions use plain semver, so a 0.x minor bump is grouped
+# as "minor" (today only @anthropic-ai/sdk, a dev-only SDK compatibility test
+# dependency whose tests run in CI).
 version: 2
 updates:
   # Rust workspace (Cargo.toml, Cargo.lock).
@@ -13,11 +20,13 @@ updates:
     labels: [dependencies, rust]
     groups:
       # The AWS SDK and smithy crates are pinned to one generation
-      # (apps/gateway/Cargo.toml) and must move together.
+      # (apps/gateway/Cargo.toml) and must move together, including across
+      # a generation (major) change, so this group takes every update type.
       aws-sdk:
         patterns: ["aws-*"]
       cargo:
         patterns: ["*"]
+        update-types: [minor, patch]
 
   # Root npm workspace (package-lock.json covers apps/web and the test
   # tooling in package.json).
@@ -30,6 +39,17 @@ updates:
     groups:
       npm:
         patterns: ["*"]
+        update-types: [minor, patch]
+    ignore:
+      # Node.js types must match the Node 22 runtime (CI, the Dockerfile
+      # build stage and package.json engines); newer majors describe APIs
+      # the runtime does not have. Move this with the runtime.
+      - dependency-name: "@types/node"
+        versions: [">= 23"]
+      # TypeScript 7 (native compiler) removes options this workspace still
+      # uses (baseUrl); the migration is tracked separately.
+      - dependency-name: typescript
+        versions: ["7.x"]
 
   # Workflow actions stay pinned by commit SHA; Dependabot updates the SHA
   # and the version comment together.
@@ -37,14 +57,17 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 5
     labels: [dependencies, github_actions]
     groups:
       actions:
         patterns: ["*"]
+        update-types: [minor, patch]
 
   # Dockerfile base images (node build stage, rust build stage, distroless
-  # runtime digest).
+  # runtime digest). No update-types filter: the only image with possible
+  # majors (node) ignores them below, and a filter would split digest-only
+  # refreshes (no version change) out of the group.
   - package-ecosystem: docker
     directory: /
     schedule:
