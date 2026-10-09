@@ -87,7 +87,7 @@ notes="${work}/notes.md"
   echo "$ref"
   echo '```'
   echo
-  echo "Deploy by digest. Verify the signature (keyless, GitHub Actions OIDC):"
+  echo "Deploy by digest. Verify the signature with cosign v3 or newer (keyless, GitHub Actions OIDC):"
   echo
   echo '```sh'
   echo "cosign verify ${ref} \\"
