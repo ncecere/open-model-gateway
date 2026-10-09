@@ -38,7 +38,7 @@ async fn model_setup(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
     Json(b): Json<ModelSetup>,
-) -> Result<(StatusCode, Json<Value>), ApiError> {
+) -> Result<(StatusCode, Json<Value>), ManagementError> {
     let mut tx = resources::catalog_tx(&s, &u, true).await?;
     let model_id = insert_model(&mut tx, &u, b.model).await?;
     let deployment_id = insert_deployment(

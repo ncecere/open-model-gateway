@@ -51,10 +51,7 @@ impl ProviderAdapter for AnthropicAdapter {
         }
     }
     fn supports_protocol(&self, protocol: ApiProtocol) -> bool {
-        matches!(
-            protocol,
-            ApiProtocol::ChatCompletions | ApiProtocol::Messages
-        )
+        super::capabilities::serves(self.id(), protocol)
     }
     fn native_batch(&self, target: &Deployment, endpoint: BatchEndpoint) -> bool {
         batches::native_batch(target, endpoint)

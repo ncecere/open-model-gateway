@@ -11,7 +11,7 @@ Provider: validate connection/options → resolve its credentials → wire trans
 Client codec: bounded JSON / SSE
 ```
 
-Providers are startup registry entries, not engine branches or database enums. Model protocol declarations and adapter request-specific checks both apply. A profile is a **narrow tested subset**, not a promise that every server/version/model or SDK option works.
+Providers are startup registry entries, not engine branches or database enums. Model protocol declarations and adapter request-specific checks both apply. Which client protocols each profile can carry at all is one table, `providers::capabilities::PROFILES`: adapters' `supports_protocol` reads it, and so do route/model-setup validation (`route_unsupported_capability`), readiness counts and, through a drift test, the dashboard's `protocolProfiles`. A profile is a **narrow tested subset**, not a promise that every server/version/model or SDK option works.
 
 ## Registered transports
 
@@ -27,7 +27,7 @@ Providers are startup registry entries, not engine branches or database enums. M
 
 See [protocol matrix](protocol-matrix.md), [Bedrock](bedrock.md) and the provider-owned [local profile notes](../apps/gateway/src/providers/local/README.md). Ollama native embedding follow-up is present in source; it has not been freshly validated by this documentation refresh or certified against a live Ollama server. Do not extend earlier isolated-provider counts to that follow-up or whole-stack integration.
 
-Local Chat maps the gateway's maximum to upstream `max_tokens`. Reasoning parsers (SGLang, vLLM, Ollama) add a `reasoning_content`/`reasoning` string to the message or delta, and servers add `matched_stop`/`stop_reason` (token id or string) to the choice: local profiles accept exactly those scalar shapes, never return the trace to clients (its tokens stay in `completion_tokens`), and read SGLang's top-level `usage.reasoning_tokens` as Logs telemetry. Rerank and System One on local profiles are described [below](#local-rerank-and-system-one); a profile without them fails such routes before admission with `unsupported_capability`. All local profiles reject strict tool guarantees; Ollama rejects every explicit tool-choice option; generic compatible rejects required/named choices. Generic compatible/Ollama reject dimension overrides; vLLM/SGLang accept the bounded tested dimension field, subject to actual model support. Local Responses/Messages are not implied.
+Local Chat maps the gateway's maximum (client `max_completion_tokens` or its legacy alias `max_tokens`) to upstream `max_tokens`. Reasoning parsers (SGLang, vLLM, Ollama) add a `reasoning_content`/`reasoning` string to the message or delta, and servers add `matched_stop`/`stop_reason` (token id or string) to the choice: local profiles accept exactly those scalar shapes, never return the trace to clients (its tokens stay in `completion_tokens`), and read SGLang's top-level `usage.reasoning_tokens` as Logs telemetry. Rerank and System One on local profiles are described [below](#local-rerank-and-system-one); a profile without them fails such routes before admission with `unsupported_capability`. All local profiles reject strict tool guarantees; Ollama rejects every explicit tool-choice option; generic compatible rejects required/named choices. Generic compatible/Ollama reject dimension overrides; vLLM/SGLang accept the bounded tested dimension field, subject to actual model support. Local Responses/Messages are not implied.
 
 ## Local rerank and System One
 
@@ -163,7 +163,7 @@ Raw usage and normalized cache partitions remain separate. Missing counters/rate
 ## Add an adapter
 
 1. Implement `ProviderAdapter` under `apps/gateway/src/providers/` with a stable registry ID.
-2. Declare protocols and pure request-specific support checks. Embeddings and other non-generation workloads use their `execute_*` methods (default `Unsupported`), not synthetic chat messages.
+2. Declare the profile's protocols in `providers::capabilities::PROFILES` (and the dashboard's `protocolProfiles`; a test compares them), and add pure request-specific support checks. Embeddings and other non-generation workloads use their `execute_*` methods (default `Unsupported`), not synthetic chat messages.
 3. Validate fields/options before credentials/network. Reject unrepresentable features; never add unchecked passthrough.
 4. Return typed complete output or a lazy stream that owns transport/cancellation. Never retry internally.
 5. Register at the composition root and add shared contracts plus profile-specific wire, usage, framing, cancellation and endpoint tests. `providers::contract::assert_text_chat_contract` takes the mock's expected Logs telemetry (served model, reasoning tokens) and checks it on both the complete and streamed reply; pass `Telemetry::UNKNOWN` when the provider reports neither. `assert_rerank_contract` and `assert_systemone_contract` check valid results/answers, input-only metering, one request, and token and search-unit counts exactly as the mock reports them (`None` stays unknown).

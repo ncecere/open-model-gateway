@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Price } from "./governance";
+import type { Price, PriceLine } from "./governance";
 import { METERS as METER_LIST, acceptImportedCeilings, convertUsd, countNoun, draftBody, draftFromPrice, draftFromSuggestion, draftSummary, emptyDraft, exactAlternatives, formatAudio, lineDisplay, markAllFree, mergeImport, newRow, priceBound, priceDisplayLines, priceSummary, priceTokenCeilings, rowKey, tokenCeilings, unpricedMeters, usdError, usdToMicroUsd, validateDraft, workloadOf, type MeterMode, type PriceDraft, type PriceSuggestion } from "./pricing";
 import { toggleProtocol, protocolSetError, workloadGroups } from "./model-setup";
 import type { Meter } from "./governance";
@@ -48,7 +48,7 @@ describe("price draft → v3 body", () => {
     expect(body.max_units).toEqual({ output_images: "4" });
     expect(body.price_lines).toContainEqual({ meter: "requests", microusd_per_batch: "0", batch: 1, unit_label: "/request", sku_label: "Request" });
     expect(body.price_lines).toContainEqual({ meter: "search_units", not_applicable: true }); // hidden for images
-    expect(body.price_lines.some(l => l.meter === "input_tokens")).toBe(false); // left Unknown: omitted, never free
+    expect(body.price_lines.filter(l => l.meter === "input_tokens")).toEqual([{ meter: "input_tokens", unknown: true }]); // left Unknown: stated explicitly, never free
     expect(priceBound(body)).toMatchObject({ microusd: null, unbounded: [{ meter: "input_tokens", reason: "unknown" }] }); // a zero output ceiling cannot be used
   });
   it("publishes $15/M characters and audio per minute with second ceilings in milliseconds", () => {
@@ -62,14 +62,14 @@ describe("price draft → v3 body", () => {
     expect(body.max_units).toEqual({ input_characters: "4096", output_audio_seconds_ms: "600000" });
     // ceil(4096 × 15,000,000 / 1,000,000) + ceil(600,000 × 150,000 / 60,000) = 61,440 + 1,500,000
     expect(priceBound(body)).toEqual({ microusd: 1561440n, unbounded: [], overflow: false });
-    expect(lineDisplay(body.price_lines.find(l => l.meter === "output_audio_seconds_ms")!)).toBe("$0.15/minute");
+    expect(lineDisplay(body.price_lines.find(l => l.meter === "output_audio_seconds_ms")! as PriceLine)).toBe("$0.15/minute");
   });
   it("publishes prompt-size tiers and requires a base line, distinct thresholds and valid tiers", () => {
     let draft = limits(emptyDraft("generation"), "400000", "4000");
     draft = priced(draft, "input_tokens", [["0.10"], ["0.20", { minPromptTokens: "272000" }]]);
     const body = draftBody(priced(draft, "output_tokens", [["0.50"]]));
     expect(body.price_lines.filter(l => l.meter === "input_tokens")).toEqual([{ meter: "input_tokens", microusd_per_batch: "100000", batch: 1000000, unit_label: "/M tokens", sku_label: "Input" }, { meter: "input_tokens", microusd_per_batch: "200000", batch: 1000000, unit_label: "/M tokens", sku_label: "Input", min_prompt_tokens: 272000 }]);
-    expect(lineDisplay(body.price_lines[1])).toBe("$0.20/M input tokens (prompt > 272,000 tokens)");
+    expect(lineDisplay(body.price_lines[1] as PriceLine)).toBe("$0.20/M input tokens (prompt > 272,000 tokens)");
     const noBase = priced(draft, "input_tokens", [["0.20", { minPromptTokens: "272000" }]]);
     expect(validateDraft(noBase)).toHaveProperty(["input_tokens.rows"]);
     const duplicate = priced(draft, "input_tokens", [["0.10"], ["0.20", { minPromptTokens: "272000" }], ["0.30", { minPromptTokens: "272000" }]]);
@@ -170,8 +170,11 @@ describe("workload grouping", () => {
   });
   it("shows only the workload's meters and publishes the rest as not applicable", () => {
     const body = draftBody(limits(emptyDraft("embeddings"), "8192", "0"));
-    expect(body.price_lines).toHaveLength(10); // input_tokens and requests stay Unknown
-    expect(body.price_lines.every(l => "not_applicable" in l)).toBe(true);
+    // Every meter is stated: input_tokens and requests explicitly Unknown, the rest not applicable.
+    expect(body.price_lines).toHaveLength(12);
+    expect(body.price_lines.filter(l => "unknown" in l)).toEqual([{ meter: "input_tokens", unknown: true }, { meter: "requests", unknown: true }]);
+    expect(body.price_lines.filter(l => !("unknown" in l)).every(l => "not_applicable" in l)).toBe(true);
+    expect(priceBound(body).unbounded).toEqual([{ meter: "input_tokens", reason: "unknown" }, { meter: "requests", reason: "unknown" }]);
     expect(emptyDraft("rerank").shown).toEqual(["search_units", "input_tokens", "output_tokens", "requests"]);
   });
 });

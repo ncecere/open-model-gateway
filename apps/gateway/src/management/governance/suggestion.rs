@@ -807,8 +807,10 @@ pub(crate) fn map(model: &Value, workload: WorkloadKind, images: Option<&[u8]>) 
     for meter in Meter::ALL {
         d.na(meter, false, "");
     }
-    // Draft: only fully priced lines, without review annotations.
-    let price_lines: Vec<Value> = d
+    // Draft: fully priced and not-applicable lines without review
+    // annotations, plus an explicit `unknown` line for each meter whose price
+    // the catalog does not give (publication requires every meter stated).
+    let mut price_lines: Vec<Value> = d
         .lines
         .iter()
         .filter(|l| l["not_applicable"] == true || l["microusd_per_batch"].is_string())
@@ -822,6 +824,15 @@ pub(crate) fn map(model: &Value, workload: WorkloadKind, images: Option<&[u8]>) 
             l
         })
         .collect();
+    for line in &d.lines {
+        let meter = &line["meter"];
+        if line["microusd_per_batch"].is_null()
+            && line["not_applicable"] != true
+            && !price_lines.iter().any(|l| &l["meter"] == meter)
+        {
+            price_lines.push(json!({"meter":meter,"unknown":true}));
+        }
+    }
     let parsed = serde_json::from_value::<PriceLines>(json!(price_lines)).ok();
     if parsed.is_none() {
         d.warnings

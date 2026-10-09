@@ -616,3 +616,39 @@ async fn dropping_rerank_or_systemone_cancels_the_upstream_body() {
         server.abort();
     }
 }
+/// The rerank wire and System One routing agree with the shared capability
+/// table that `supports_protocol`, route validation and readiness use.
+#[test]
+fn local_workload_wires_match_the_capability_table() {
+    for profile in [
+        Profile::OpenAiCompatible,
+        Profile::Vllm,
+        Profile::Sglang,
+        Profile::Ollama,
+    ] {
+        let adapter = LocalAdapter::new(
+            profile,
+            Arc::new(Resolver(AtomicUsize::new(0))),
+            Arc::new(ApprovedEndpoints::for_test("http://127.0.0.1:9/v1")),
+        );
+        let id = profile.id();
+        assert_eq!(
+            adapter.rerank_wire().is_some(),
+            crate::providers::capabilities::serves(id, ApiProtocol::Rerank),
+            "{id}"
+        );
+        assert_eq!(
+            adapter.serves_systemone(),
+            crate::providers::capabilities::serves(id, ApiProtocol::Systemone),
+            "{id}"
+        );
+        for protocol in ApiProtocol::ALL {
+            assert_eq!(
+                adapter.supports_protocol(protocol),
+                crate::providers::capabilities::serves(id, protocol),
+                "{id} {}",
+                protocol.as_str()
+            );
+        }
+    }
+}

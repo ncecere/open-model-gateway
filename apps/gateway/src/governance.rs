@@ -325,6 +325,46 @@ pub mod batch;
 pub mod jobs;
 /// Maintained per-scope, per-period budget totals and their consistency check.
 pub mod totals;
+/// Meters a pricing-v3 price of a `kind` route must state explicitly (priced,
+/// `not_applicable` or `unknown`) at publication: every meter that kind's
+/// admission bound treats as possibly used. Admission bounds every meter of
+/// [`billing::v3::Meter::ALL`] except those a workload's request ceilings fix
+/// at zero (images, speech to text, text to speech and video jobs fix the unit
+/// meters they cannot produce; a realtime window fixes every non-token meter
+/// but `requests`), plus the realtime audio-token and video meters. A meter left
+/// out would make every budgeted admission unbounded (`price_unbounded`).
+pub fn price_meters(kind: WorkloadKind) -> Vec<billing::v3::Meter> {
+    use billing::v3::Meter;
+    let tokens = Meter::ALL.into_iter().filter(|m| m.is_token());
+    match kind {
+        WorkloadKind::Images => tokens
+            .chain([Meter::OutputImages, Meter::Requests])
+            .collect(),
+        WorkloadKind::AudioTranscriptions => tokens
+            .chain([Meter::InputAudioSecondsMs, Meter::Requests])
+            .collect(),
+        WorkloadKind::AudioSpeech => tokens
+            .chain([
+                Meter::InputCharacters,
+                Meter::OutputAudioSecondsMs,
+                Meter::Requests,
+            ])
+            .collect(),
+        WorkloadKind::Realtime => tokens
+            .chain(Meter::AUDIO_TOKENS)
+            .chain([Meter::Requests])
+            .collect(),
+        WorkloadKind::Videos => tokens
+            .chain([Meter::Requests])
+            .chain(Meter::VIDEO)
+            .collect(),
+        WorkloadKind::Generation
+        | WorkloadKind::Embeddings
+        | WorkloadKind::Rerank
+        | WorkloadKind::Systemone
+        | WorkloadKind::Batches => Meter::ALL.to_vec(),
+    }
+}
 fn generation(max_output_tokens: Option<u32>) -> WorkloadAdmission {
     WorkloadAdmission {
         kind: WorkloadKind::Generation,
@@ -526,8 +566,9 @@ async fn admit_unobserved(
     } else {
         (None, None)
     };
-    // Pricing v3 reports an unbounded (unknown-rate or uncapped) meter under a
-    // budget as a budget denial at that scope. v1/v2 keep their legacy
+    // A pricing-v3 price that cannot bound this attempt (a possibly-used meter
+    // without a line, an explicit unknown, or no `max_units`) is refused under
+    // any budget with `price_unbounded`. v1/v2 keep their legacy
     // configuration error.
     let v3_unbounded = price.as_ref().is_some_and(|p| p.pricing_version == 3) && held.is_none();
     // Async jobs (video, batch) are exempt from requests/tokens-per-minute
@@ -621,6 +662,11 @@ async fn enforce_limits(
     {
         return Err(InferenceError::Configuration);
     }
+    // No budget can be enforced against an unbounded hold. This is the
+    // price's configuration, not any scope's spending: never `budget_exceeded`.
+    if !budgets.is_empty() && v3_unbounded {
+        return Err(InferenceError::PriceUnbounded);
+    }
     // Evaluate every applicable layer, then report the most actionable denial:
     // budget/accounting (narrowest scope first) before retryable rate limits.
     let limit_scope =
@@ -700,7 +746,7 @@ async fn enforce_limits(
         windows.push((totals::Scope::of(b.workspace_id, b.api_key_id), period));
     }
     let consumption = totals::read(tx, &windows, now).await.map_err(storage)?;
-    let new_hold = i128::from(if v3_unbounded { 0 } else { held.unwrap_or(0) });
+    let new_hold = i128::from(held.unwrap_or(0));
     for (b, c) in budgets.iter().zip(consumption) {
         let scope = limit_scope(b.workspace_id, b.api_key_id);
         if c.unresolved {
@@ -713,7 +759,7 @@ async fn enforce_limits(
                     _ => InferenceError::UnresolvedUsage(scope),
                 },
             ));
-        } else if v3_unbounded || c.used_microusd + new_hold > i128::from(b.amount_microusd) {
+        } else if c.used_microusd + new_hold > i128::from(b.amount_microusd) {
             deny((rank(scope), InferenceError::BudgetExceeded(scope)));
         }
     }

@@ -189,13 +189,10 @@ impl ProviderAdapter for LocalAdapter {
             && !(matches!(self.profile, Profile::OpenAiCompatible | Profile::Ollama)
                 && request.dimensions.is_some())
     }
+    /// The shared capability table (`providers::capabilities`); the rerank
+    /// wire and System One support below must agree with it (tested).
     fn supports_protocol(&self, protocol: ApiProtocol) -> bool {
-        match protocol {
-            ApiProtocol::ChatCompletions | ApiProtocol::Embeddings => true,
-            ApiProtocol::Rerank => self.rerank_wire().is_some(),
-            ApiProtocol::Systemone => self.serves_systemone(),
-            _ => false,
-        }
+        super::capabilities::serves(self.id(), protocol)
     }
     async fn execute(&self, target: &Deployment, request: ChatRequest) -> Result<ProviderOutput> {
         let payload = self.encode_chat(target, &request)?;

@@ -393,7 +393,7 @@ mod tests {
             bad(&|v| v["body"]["n"] = json!(2)),
             Some(LineError::InvalidBody)
         );
-        // The legacy `max_tokens` name is accepted, never both.
+        // The legacy `max_tokens` name is accepted; both only when equal.
         let mut legacy = chat();
         let body = legacy["body"].as_object_mut().unwrap();
         body.remove("max_completion_tokens");

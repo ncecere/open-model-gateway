@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { validateFields } from "./forms";
-import { readinessText, apiNameFrom, chosenConnection, defaultProtocols, protocolSupported, setupIdentityFields, setupSourceFields, workloadSupported, initialSetupValues, modelReadiness, protocolLabel, protocolOptions, protocolSetError, setupBody, setupFields, setupSteps, upstreamPlaceholder, workloadDisabledReason, workloadGroups, type SetupChoices } from "./model-setup";
+import { notServingReason, readinessText, apiNameFrom, chosenConnection, defaultProtocols, protocolSupported, setupIdentityFields, setupSourceFields, workloadSupported, initialSetupValues, modelReadiness, protocolLabel, protocolOptions, protocolSetError, setupBody, setupFields, setupSteps, upstreamPlaceholder, workloadDisabledReason, workloadGroups, type SetupChoices } from "./model-setup";
 import type { ModelReadiness, PlatformOverviewData } from "./api";
 import { draftBody, emptyDraft, validateDraft } from "./pricing";
 
@@ -23,6 +23,18 @@ describe("model readiness derivation (contract §2)", () => {
     expect(modelReadiness({ enabled: false, readiness: { ...counts, routes_over_token_limit: 1 } }).state).toBe("needs_setup");
   });
   it("calls an enabled model with no enabled route Not serving (one vocabulary everywhere)", () => { expect(modelReadiness({ enabled: true, readiness: { ...counts, enabled_routes: 0, priced_enabled_routes: 0 } }).state).toBe("not_serving"); expect(readinessText.not_serving).toBe("Not serving"); expect(Object.values(readinessText)).toEqual(["Ready", "Needs setup", "Needs attention", "Not serving", "Provider API retired", "Readiness unknown"]); });
+  it("calls enabled routes whose connection can't serve the model Not serving, with the reason", () => {
+    const bad = { ...counts, serving_routes: 0, unsupported_routes: 1, unsupported_profiles: ["vllm"] };
+    const model = { enabled: true, supported_protocols: ["systemone"], readiness: bad };
+    expect(modelReadiness(model)).toEqual({ state: "not_serving", warnings: ["unsupported_route"] });
+    expect(notServingReason(model)).toBe("Not serving: vllm connection can't serve System One decisions, so requests fail. Add a route on a connection that serves it, then disable the unsupported route.");
+    // Another route still serves: needs attention, not ready.
+    expect(modelReadiness({ ...model, readiness: { ...bad, enabled_routes: 2, priced_enabled_routes: 2, serving_routes: 1 } })).toEqual({ state: "needs_attention", warnings: ["unsupported_route"] });
+    expect(notServingReason({ ...model, readiness: { ...bad, enabled_routes: 2, serving_routes: 1 } })).toBeUndefined();
+    expect(notServingReason({ enabled: true, readiness: { ...counts, enabled_routes: 0 } })).toBe("Not serving: no enabled route to a provider, so requests fail.");
+    // Older gateways without serving counts keep the enabled-route rule.
+    expect(modelReadiness({ enabled: true, readiness: counts }).state).toBe("ready");
+  });
   it("shows video models as Provider API retired, whatever their routes (OpenAI Videos API shut down 2026-09-24)", () => {
     expect(modelReadiness({ enabled: true, supported_protocols: ["videos"], readiness: counts })).toEqual({ state: "retired", warnings: ["provider_retired"] });
     expect(modelReadiness({ enabled: true, supported_protocols: ["videos"] }).state).toBe("retired");
@@ -51,7 +63,7 @@ describe("Add model form", () => {
     expect(price.price_lines).toContainEqual({ meter: "input_tokens", microusd_per_batch: "9007199254740993", batch: 1000000, unit_label: "/M tokens", sku_label: "Input" });
     expect(price.price_lines).toContainEqual({ meter: "output_tokens", microusd_per_batch: "1", batch: 1000000, unit_label: "/M tokens", sku_label: "Output" });
     expect(price.price_lines).toContainEqual({ meter: "cache_read_tokens", microusd_per_batch: "100000", batch: 1000000, unit_label: "/M tokens", sku_label: "Cache read" });
-    expect(price.price_lines.some(l => l.meter === "cache_write_tokens")).toBe(false); // unknown, never free
+    expect(price.price_lines.filter(l => l.meter === "cache_write_tokens")).toEqual([{ meter: "cache_write_tokens", unknown: true }]); // unknown, stated, never free
     expect(price.price_lines).toContainEqual({ meter: "output_images", not_applicable: true });
   });
   it("sends a price only when setting one, and validates the draft separately", () => { expect(Object.keys(validateFields(setupFields(choices, filled), filled))).toEqual([]); expect(setupBody(filled, choices, draftBody({ ...emptyDraft("generation"), inputTokenLimit: "1", outputTokenLimit: "1" })).price).toBeNull(); expect(validateDraft(emptyDraft("generation"))).toHaveProperty(["limits.input"]); });

@@ -19,6 +19,7 @@ use crate::jobs::types::{
 pub mod anthropic;
 pub(crate) mod audio;
 pub mod bedrock;
+pub mod capabilities;
 #[cfg(test)]
 pub(crate) mod contract;
 pub(crate) mod embeddings;

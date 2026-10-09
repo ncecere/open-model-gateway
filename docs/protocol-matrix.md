@@ -43,6 +43,8 @@ Any model can be batched: batches without a native path run line by line through
 
 See [async jobs](#async-jobs-video-and-batch) below and [async jobs](async-jobs.md).
 
+This table is one source of truth in the gateway (`providers::capabilities`): every adapter's `supports_protocol`, the pre-admission `unsupported_capability` check, route validation (`400 route_unsupported_capability` when a route's connection serves none of its model's protocols, see [management API](management-api.md#infrastructure-and-catalogs)), readiness and the Add model form all read it.
+
 A model's protocols belong to one workload: Chat/Responses/Messages combine, while embeddings and each other kind stand alone. Images, audio, realtime, video, batch, Rerank and System One routes return **400 `unsupported_capability`** when the model exists but has no deployment that declares the protocol on an adapter supporting it. Chat/Responses/Messages/Embeddings keep 501 for unsupported capabilities.
 
 Unsupported combinations fail explicitly. Local labels do not mean every installed server/model supports all fields. Ollama native embedding follow-up has source and mocked tests, but this documentation refresh does not claim a fresh pass or live-server certification; consult [local profile notes](../apps/gateway/src/providers/local/README.md). [Bedrock](bedrock.md) documents its separate transport.
@@ -58,7 +60,9 @@ A label is recorded only when it is 1–128 (session) or 1–200 (app) character
 
 ## Chat Completions
 
-One choice (`n` absent or 1); text-string messages with system/developer/user/assistant/tool roles; function tools and tool-call/results; `temperature`, `max_completion_tokens`, streaming and optional `stream_options.include_usage`; `user` and `metadata` as [client labels](#client-labels-logs-sessions-and-apps) only. Legacy client `max_tokens`, multimodal arrays, structured output, reasoning, log probabilities and arbitrary extensions are rejected.
+One choice (`n` absent or 1); text-string messages with system/developer/user/assistant/tool roles; function tools and tool-call/results; `temperature`, `max_completion_tokens` (or its legacy alias `max_tokens`), streaming and optional `stream_options.include_usage`; `user` and `metadata` as [client labels](#client-labels-logs-sessions-and-apps) only. Multimodal arrays, structured output, reasoning, log probabilities and arbitrary extensions are rejected.
+
+**Output maximum.** `max_tokens` (still sent by many OpenAI-compatible clients and older SDK code) is accepted as an alias of `max_completion_tokens`. Sending both is accepted only when they are equal; different values (or 0) are 400 `invalid_request_error`. The one value is the admission reservation's output bound and the upstream maximum: OpenAI and OpenRouter receive `max_completion_tokens`; local profiles (`openai_compatible`, `vllm`, `sglang`, `ollama`) receive `max_tokens`; Anthropic receives Messages `max_tokens` and Bedrock Converse `maxTokens`. Batch lines follow the same rule. Responses keeps `max_output_tokens` and rejects both Chat names.
 
 Local transports translate the accepted maximum to upstream `max_tokens`. All local profiles reject strict function guarantees. Ollama rejects explicit tool choice; generic compatible rejects required/named choice. Anthropic Chat accepts leading system/developer text but rejects strict schemas, temperature above 1 and non-object tool arguments. Adapter defaults do not substitute for explicit generation bounds when a priced admission requires them.
 

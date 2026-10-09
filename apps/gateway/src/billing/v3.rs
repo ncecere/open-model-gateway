@@ -1,7 +1,10 @@
 //! Pricing v3: immutable OpenRouter-style price lines with explicit units.
 //!
 //! A missing meter line is **unknown**, not free; `"0"` is explicitly free and
-//! `not_applicable` asserts the meter cannot apply. Charges are exact integer
+//! `not_applicable` asserts the meter cannot apply. `{meter, unknown:true}`
+//! states the unknown explicitly (publication requires every meter a route's
+//! workload can use to be stated); it values exactly like a missing line, and
+//! the stored canonical form is that missing line. Charges are exact integer
 //! micro-USD: `ceil(count × microusd_per_batch / batch)` per meter.
 use super::{
     AudioTokenCostComponents, BillingError, BillingUsage, CachePricing, CacheRate, CostComponents,
@@ -207,6 +210,9 @@ struct RawLine {
     min_prompt_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     not_applicable: bool,
+    /// Explicitly unknown: the meter can apply but its rate is not known.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    unknown: bool,
 }
 fn label_valid(s: &str) -> bool {
     !s.trim().is_empty() && s.chars().count() <= 80 && !s.chars().any(char::is_control)
@@ -221,6 +227,10 @@ impl TryFrom<RawLine> for PriceLine {
     type Error = BillingError;
     fn try_from(r: RawLine) -> Result<Self, BillingError> {
         let bad = Err(BillingError::InvalidRate);
+        if r.unknown {
+            // Explicit unknowns are kept outside the valued lines.
+            return bad;
+        }
         if r.not_applicable {
             // Exactly `{meter, not_applicable:true}`: NA is the meter's only line.
             if r.microusd_per_batch.is_some()
@@ -283,14 +293,37 @@ impl From<&PriceLine> for RawLine {
             variant: l.variant,
             min_prompt_tokens: l.min_prompt_tokens,
             not_applicable: l.rate.is_none(),
+            unknown: false,
         }
     }
 }
+impl RawLine {
+    /// Exactly `{meter, unknown:true}`.
+    fn explicit_unknown(&self) -> Option<Meter> {
+        (self.unknown
+            && !self.not_applicable
+            && self.microusd_per_batch.is_none()
+            && self.batch.is_none()
+            && self.unit_label.is_none()
+            && self.sku_label.is_none()
+            && self.variant.is_none()
+            && self.min_prompt_tokens.is_none())
+        .then_some(self.meter)
+    }
+}
+/// Valued lines plus the meters stated explicitly unknown (`{meter,
+/// unknown:true}`, each the meter's only line). An explicit unknown values
+/// exactly like a missing line: it only records, for publication checks, that
+/// the publisher stated it. It is serialized (and stored) as that missing
+/// line, so stored price lines keep their validated shape.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct PriceLines(pub Vec<PriceLine>);
+pub struct PriceLines(pub Vec<PriceLine>, pub BTreeSet<Meter>);
 impl PriceLines {
     pub fn validate(&self) -> Result<(), BillingError> {
         if self.0.is_empty() || self.0.len() > MAX_LINES {
+            return Err(BillingError::InvalidRate);
+        }
+        if self.0.iter().any(|l| self.1.contains(&l.meter)) {
             return Err(BillingError::InvalidRate);
         }
         let mut keys = BTreeSet::new();
@@ -320,6 +353,14 @@ impl PriceLines {
     }
     fn of(&self, meter: Meter) -> Vec<&PriceLine> {
         self.0.iter().filter(|l| l.meter == meter).collect()
+    }
+    /// Every meter the price states: priced, not applicable or explicitly unknown.
+    pub fn meters(&self) -> BTreeSet<Meter> {
+        self.0
+            .iter()
+            .map(|l| l.meter)
+            .chain(self.1.iter().copied())
+            .collect()
     }
     /// The price asserts this meter cannot apply.
     pub fn not_applicable(&self, meter: Meter) -> bool {
@@ -351,6 +392,7 @@ impl PriceLines {
 }
 impl Serialize for PriceLines {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        // Explicit unknowns are stored as their canonical form: no line.
         self.0
             .iter()
             .map(RawLine::from)
@@ -360,12 +402,24 @@ impl Serialize for PriceLines {
 }
 impl<'de> Deserialize<'de> for PriceLines {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let lines = Vec::<RawLine>::deserialize(d)?
-            .into_iter()
-            .map(PriceLine::try_from)
-            .collect::<Result<Vec<_>, _>>()
-            .map(Self)
-            .map_err(|_| serde::de::Error::custom("invalid price line"))?;
+        let mut unknown = BTreeSet::new();
+        let mut valued = Vec::new();
+        for raw in Vec::<RawLine>::deserialize(d)? {
+            if raw.unknown {
+                let meter = raw
+                    .explicit_unknown()
+                    .ok_or_else(|| serde::de::Error::custom("invalid price line"))?;
+                if !unknown.insert(meter) {
+                    return Err(serde::de::Error::custom("invalid price lines"));
+                }
+            } else {
+                valued.push(
+                    PriceLine::try_from(raw)
+                        .map_err(|_| serde::de::Error::custom("invalid price line"))?,
+                );
+            }
+        }
+        let lines = Self(valued, unknown);
         lines
             .validate()
             .map_err(|_| serde::de::Error::custom("invalid price lines"))?;
@@ -901,13 +955,12 @@ pub fn display_line(l: &PriceLine) -> String {
     }
     s
 }
+/// One display string per serialized (stored) line, in order.
+pub fn display_lines(lines: &PriceLines) -> Vec<String> {
+    lines.0.iter().map(display_line).collect()
+}
 pub fn display_summary(lines: &PriceLines) -> String {
-    lines
-        .0
-        .iter()
-        .map(display_line)
-        .collect::<Vec<_>>()
-        .join(" · ")
+    display_lines(lines).join(" · ")
 }
 
 #[cfg(test)]
@@ -1336,6 +1389,61 @@ mod tests {
         assert!(
             bound_realtime(&l, &max, c(5_000, 200, 100)).unwrap()
                 > bound_realtime(&l, &max, c(4_000, 200, 100)).unwrap()
+        );
+    }
+    #[test]
+    fn explicit_unknown_values_like_a_missing_line_and_is_stored_as_one() {
+        let mut v = tokens();
+        let arr = v.as_array_mut().unwrap();
+        arr.retain(|l| l["meter"] != "search_units");
+        let missing = lines(v.clone());
+        v.as_array_mut()
+            .unwrap()
+            .push(json!({"meter":"search_units","unknown":true}));
+        let explicit = lines(v);
+        assert_eq!(explicit.1, BTreeSet::from([Meter::SearchUnits]));
+        assert!(explicit.meters().contains(&Meter::SearchUnits));
+        assert!(!missing.meters().contains(&Meter::SearchUnits));
+        // Same valuation and bound as the missing line, and the same stored form.
+        assert_eq!(explicit.0, missing.0);
+        assert_eq!(
+            bound(&explicit, &MaxUnits::default(), 100, 10).unwrap(),
+            None
+        );
+        assert_eq!(
+            bound(&missing, &MaxUnits::default(), 100, 10).unwrap(),
+            None
+        );
+        assert_eq!(
+            serde_json::to_value(&explicit).unwrap(),
+            serde_json::to_value(&missing).unwrap()
+        );
+        assert_eq!(display_lines(&explicit).len(), explicit.0.len());
+        // Exactly `{meter, unknown:true}`, once, and the meter's only line.
+        let base = || {
+            let mut v = tokens();
+            v.as_array_mut()
+                .unwrap()
+                .retain(|l| l["meter"] != "search_units");
+            v
+        };
+        for extra in [
+            json!([{"meter":"search_units","unknown":true},{"meter":"search_units","unknown":true}]),
+            json!([{"meter":"search_units","unknown":true,"sku_label":"x"}]),
+            json!([{"meter":"search_units","unknown":true,"not_applicable":true}]),
+            json!([{"meter":"search_units","unknown":false}]),
+            json!([{"meter":"requests","unknown":true}]),
+        ] {
+            let mut v = base();
+            v.as_array_mut()
+                .unwrap()
+                .extend(extra.as_array().unwrap().clone());
+            assert!(serde_json::from_value::<PriceLines>(v).is_err(), "{extra}");
+        }
+        // Explicit unknowns never stand in for every valued line.
+        assert!(
+            serde_json::from_value::<PriceLines>(json!([{"meter":"requests","unknown":true}]))
+                .is_err()
         );
     }
 }

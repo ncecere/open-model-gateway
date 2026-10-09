@@ -234,7 +234,7 @@ async fn unpriced_images_are_unbounded_and_unpriced_variants_stay_unknown(pool: 
             &deployment
         )
         .await,
-        Err(InferenceError::BudgetExceeded(LimitScope::Workspace))
+        Err(InferenceError::PriceUnbounded)
     );
     // Variant tiers without a matching line for the billed tier: the hold
     // is finite (closed set) but the settlement is unresolved.

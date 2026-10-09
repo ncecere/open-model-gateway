@@ -169,7 +169,7 @@ async fn v3_unknown_meter_keeps_floor_and_unbounded_budget_is_denied(pool: PgPoo
     budget(&f, Some(1_000_000)).await;
     assert_eq!(
         admit(&f.store, &f.start(), &request(), 30).await,
-        Err(InferenceError::BudgetExceeded(LimitScope::Workspace))
+        Err(InferenceError::PriceUnbounded)
     );
     budget(&f, None).await;
     let start = f.start();
@@ -198,7 +198,7 @@ async fn v3_unit_meter_needs_trusted_ceiling_for_budget(pool: PgPool) {
     budget(&f, Some(1_000_000_000)).await;
     assert_eq!(
         admit(&f.store, &f.start(), &request(), 30).await,
-        Err(InferenceError::BudgetExceeded(LimitScope::Workspace))
+        Err(InferenceError::PriceUnbounded)
     );
     // With a trusted ceiling the hold is finite: 690 + ceil(4096 × 15).
     v3(&f, lines, json!({"input_characters":"4096"})).await;
@@ -614,4 +614,100 @@ async fn zero_input_ceiling_only_for_v3_without_input_token_meters(pool: PgPool)
         admit_workload_for_deployment(&f.store, &f.start(), &admission, 30, &deployment).await,
         Err(InferenceError::Configuration)
     );
+}
+
+/// `price_meters` (the publication completeness rule) is exactly the set of
+/// meters each workload's admission bound needs: stating only those bounds
+/// the hold, and leaving any one of them out makes it unbounded.
+#[test]
+fn price_meters_are_exactly_what_each_workload_admission_bounds() {
+    use crate::inference::{
+        audio::transcription_meters, realtime::ResponseBound, types::WorkloadKind as K,
+    };
+    let price = |meters: &[Meter]| {
+        let lines: Vec<Value> = meters
+            .iter()
+            .map(|m| line(*m, "1000", m.batches()[0]))
+            .collect();
+        let max: serde_json::Map<String, Value> = meters
+            .iter()
+            .filter(|m| !m.is_token() && !m.is_audio_token())
+            .map(|m| (m.as_str().to_owned(), json!("1000000")))
+            .collect();
+        Price {
+            id: Uuid::nil(),
+            input_microusd_per_million: None,
+            output_microusd_per_million: None,
+            input_token_limit: 100,
+            output_token_limit: 50,
+            pricing_version: 3,
+            cache_pricing: None,
+            price_lines: Some(json!(lines)),
+            max_units: Some(Value::Object(max)),
+            batch_price_lines: None,
+        }
+    };
+    let images = MeterUsage {
+        output_images: Some(1),
+        input_characters: Some(0),
+        input_audio_seconds_ms: Some(0),
+        output_audio_seconds_ms: Some(0),
+        search_units: Some(0),
+        requests: Some(1),
+        output_video_seconds_ms: None,
+    };
+    let speech = MeterUsage {
+        output_images: Some(0),
+        input_characters: Some(12),
+        input_audio_seconds_ms: Some(0),
+        output_audio_seconds_ms: None,
+        search_units: Some(0),
+        requests: Some(1),
+        output_video_seconds_ms: None,
+    };
+    let once = MeterUsage {
+        requests: Some(1),
+        ..MeterUsage::default()
+    };
+    for kind in [
+        K::Generation,
+        K::Embeddings,
+        K::Images,
+        K::AudioTranscriptions,
+        K::AudioSpeech,
+        K::Rerank,
+        K::Systemone,
+        K::Realtime,
+        K::Videos,
+        K::Batches,
+    ] {
+        let hold = |p: &Price| -> Option<i64> {
+            match kind {
+                // Any later window (unknown context) can hold audio input.
+                K::Realtime => p.realtime_window(ResponseBound::unknown(10)).unwrap(),
+                K::Videos => p
+                    .bound_scaled(1, 10, &crate::jobs::unit_ceilings(1, 4000), true)
+                    .unwrap(),
+                K::Images => p.bound(10, &images).unwrap(),
+                K::AudioTranscriptions => p.bound(10, &transcription_meters(Some(2000))).unwrap(),
+                K::AudioSpeech => p.bound(10, &speech).unwrap(),
+                K::Rerank | K::Systemone => p.bound(10, &once).unwrap(),
+                K::Generation | K::Embeddings | K::Batches => {
+                    p.bound(10, &MeterUsage::default()).unwrap()
+                }
+            }
+        };
+        let meters = price_meters(kind);
+        assert!(hold(&price(&meters)).is_some(), "{kind:?}");
+        for left_out in &meters {
+            let rest: Vec<Meter> = meters.iter().copied().filter(|m| m != left_out).collect();
+            if rest.iter().all(|m| m.is_audio_token()) {
+                continue;
+            }
+            assert!(
+                hold(&price(&rest)).is_none(),
+                "{kind:?} without {left_out:?}"
+            );
+        }
+    }
 }

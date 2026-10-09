@@ -354,6 +354,16 @@ async fn providers(
 }
 /// A route is usable only while both the deployment and its connection are enabled.
 pub(super) const ENABLED_ROUTE: &str = "d.enabled AND EXISTS(SELECT 1 FROM provider_connections p WHERE p.id=d.provider_connection_id AND p.enabled)";
+/// An enabled route whose connection profile serves at least one of its
+/// model's protocols (`providers::capabilities`, the table the inference path
+/// and route validation use). Routes accepted before that validation existed
+/// may be enabled yet unable to serve; they count as not serving.
+pub(super) static SERVING_ROUTE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "({ENABLED_ROUTE} AND {})",
+        crate::providers::capabilities::route_serves_sql()
+    )
+});
 /// Any immutable price version makes a route priced; the latest version is pinned at admission.
 pub(super) const PRICED_ROUTE: &str =
     "EXISTS(SELECT 1 FROM deployment_prices dp WHERE dp.deployment_id=d.id)";
@@ -362,8 +372,9 @@ pub(super) const DIRECT_WORKSPACES: &str = "(SELECT count(*) FROM workspace_mode
 /// Server-side mirror of the documented UI readiness derivation, used only for aggregate counts.
 /// Video models are never ready: OpenAI shut down its Videos API on 2026-09-24 and no adapter offers video.
 pub(super) fn ready_model() -> String {
+    let serving = &*SERVING_ROUTE;
     format!(
-        "(m.enabled AND NOT ('videos'=ANY(m.supported_protocols)) AND EXISTS(SELECT 1 FROM deployments d WHERE d.model_id=m.id AND {ENABLED_ROUTE}) AND (EXISTS(SELECT 1 FROM catalog_models cm WHERE cm.model_id=m.id) OR {DIRECT_WORKSPACES}>0))"
+        "(m.enabled AND NOT ('videos'=ANY(m.supported_protocols)) AND EXISTS(SELECT 1 FROM deployments d WHERE d.model_id=m.id AND {serving}) AND (EXISTS(SELECT 1 FROM catalog_models cm WHERE cm.model_id=m.id) OR {DIRECT_WORKSPACES}>0))"
     )
 }
 /// Configuration check (best effort): the smallest tokens-per-minute limit
@@ -374,9 +385,12 @@ pub(super) const APPLICABLE_TYPE_TOKENS_PER_MINUTE: &str = "(SELECT min(t) FROM 
 /// The latest price version's worst-case per-attempt token reservation.
 const ROUTE_TOKEN_CEILING: &str = "(SELECT dp.input_token_limit+dp.output_token_limit FROM deployment_prices dp WHERE dp.deployment_id=d.id ORDER BY dp.created_at DESC,dp.id DESC LIMIT 1)";
 /// Model metadata plus aggregate readiness counts. Connection labels never include credential references.
+/// `serving_routes` are enabled routes whose connection profile can serve the model;
+/// `unsupported_routes`/`unsupported_profiles` are the enabled ones that cannot.
 pub(super) fn model_json() -> String {
+    let serving = &*SERVING_ROUTE;
     format!(
-        "jsonb_build_object('id',m.id,'public_name',m.public_name,'display_name',m.display_name,'description',m.description,'supported_protocols',m.supported_protocols,'enabled',m.enabled,'created_at',m.created_at,'readiness',jsonb_build_object('routes',(SELECT count(*) FROM deployments d WHERE d.model_id=m.id),'enabled_routes',(SELECT count(*) FROM deployments d WHERE d.model_id=m.id AND {ENABLED_ROUTE}),'priced_enabled_routes',(SELECT count(*) FROM deployments d WHERE d.model_id=m.id AND {ENABLED_ROUTE} AND {PRICED_ROUTE}),'type_tokens_per_minute',{APPLICABLE_TYPE_TOKENS_PER_MINUTE},'routes_over_token_limit',(SELECT count(*) FROM deployments d WHERE d.model_id=m.id AND {ENABLED_ROUTE} AND {ROUTE_TOKEN_CEILING}>{APPLICABLE_TYPE_TOKENS_PER_MINUTE}),'openrouter_free_routes',(SELECT count(*) FROM deployments d JOIN provider_connections p ON p.id=d.provider_connection_id WHERE d.model_id=m.id AND {ENABLED_ROUTE} AND p.provider='openrouter' AND d.upstream_model LIKE '%:free'),'catalogs',(SELECT count(*) FROM catalog_models cm WHERE cm.model_id=m.id),'direct_workspaces',{DIRECT_WORKSPACES},'connections',(SELECT coalesce(jsonb_agg(jsonb_build_object('id',c.id,'name',c.name) ORDER BY c.name,c.id),'[]'::jsonb) FROM (SELECT p.id,p.name FROM provider_connections p WHERE EXISTS(SELECT 1 FROM deployments d WHERE d.model_id=m.id AND d.provider_connection_id=p.id) ORDER BY p.name,p.id LIMIT 20) c)))"
+        "jsonb_build_object('id',m.id,'public_name',m.public_name,'display_name',m.display_name,'description',m.description,'supported_protocols',m.supported_protocols,'enabled',m.enabled,'created_at',m.created_at,'readiness',jsonb_build_object('routes',(SELECT count(*) FROM deployments d WHERE d.model_id=m.id),'enabled_routes',(SELECT count(*) FROM deployments d WHERE d.model_id=m.id AND {ENABLED_ROUTE}),'priced_enabled_routes',(SELECT count(*) FROM deployments d WHERE d.model_id=m.id AND {ENABLED_ROUTE} AND {PRICED_ROUTE}),'serving_routes',(SELECT count(*) FROM deployments d WHERE d.model_id=m.id AND {serving}),'unsupported_routes',(SELECT count(*) FROM deployments d WHERE d.model_id=m.id AND {ENABLED_ROUTE} AND NOT {serving}),'unsupported_profiles',(SELECT coalesce(jsonb_agg(DISTINCT p.provider ORDER BY p.provider),'[]'::jsonb) FROM deployments d JOIN provider_connections p ON p.id=d.provider_connection_id WHERE d.model_id=m.id AND {ENABLED_ROUTE} AND NOT {serving}),'type_tokens_per_minute',{APPLICABLE_TYPE_TOKENS_PER_MINUTE},'routes_over_token_limit',(SELECT count(*) FROM deployments d WHERE d.model_id=m.id AND {ENABLED_ROUTE} AND {ROUTE_TOKEN_CEILING}>{APPLICABLE_TYPE_TOKENS_PER_MINUTE}),'openrouter_free_routes',(SELECT count(*) FROM deployments d JOIN provider_connections p ON p.id=d.provider_connection_id WHERE d.model_id=m.id AND {ENABLED_ROUTE} AND p.provider='openrouter' AND d.upstream_model LIKE '%:free'),'catalogs',(SELECT count(*) FROM catalog_models cm WHERE cm.model_id=m.id),'direct_workspaces',{DIRECT_WORKSPACES},'connections',(SELECT coalesce(jsonb_agg(jsonb_build_object('id',c.id,'name',c.name) ORDER BY c.name,c.id),'[]'::jsonb) FROM (SELECT p.id,p.name FROM provider_connections p WHERE EXISTS(SELECT 1 FROM deployments d WHERE d.model_id=m.id AND d.provider_connection_id=p.id) ORDER BY p.name,p.id LIMIT 20) c)))"
     )
 }
 async fn deployments(
@@ -679,8 +693,19 @@ pub(super) async fn insert_model(
 pub(super) struct Enabled {
     enabled: bool,
 }
-async fn toggle(s: Store, u: BrowserPrincipal, id: Uuid, b: Enabled, table: &str) -> ApiResult {
+async fn toggle(
+    s: Store,
+    u: BrowserPrincipal,
+    id: Uuid,
+    b: Enabled,
+    table: &str,
+) -> DetailedResult {
     let mut tx = catalog_tx(&s, &u, true).await?;
+    // Enabling a route its connection cannot serve would make the model look
+    // ready while every request fails; disabling is always allowed.
+    if table == "deployments" && b.enabled {
+        route_capability(&mut tx, id).await?;
+    }
     if sqlx::query(&format!("UPDATE {table} SET enabled=$2 WHERE id=$1"))
         .bind(id)
         .bind(b.enabled)
@@ -689,7 +714,7 @@ async fn toggle(s: Store, u: BrowserPrincipal, id: Uuid, b: Enabled, table: &str
         .rows_affected()
         != 1
     {
-        return Err(missing());
+        return Err(missing().into());
     }
     if table == "models" && !b.enabled {
         catalogs::retire(&mut tx).await?;
@@ -736,7 +761,7 @@ async fn update_model(
     Extension(u): Extension<BrowserPrincipal>,
     Path(id): Path<Uuid>,
     Json(b): Json<ModelUpdate>,
-) -> ApiResult {
+) -> DetailedResult {
     let mut tx = catalog_tx(&s, &u, true).await?;
     if b.public_name.as_ref().is_some_and(|s| !alias_valid(s))
         || b.display_name.as_ref().is_some_and(|s| !valid_name(s))
@@ -748,9 +773,22 @@ async fn update_model(
             .as_ref()
             .is_some_and(|p| !protocols_valid(p))
     {
-        return Err(invalid());
+        return Err(invalid().into());
     }
-    if sqlx::query("UPDATE models SET public_name=coalesce($2,public_name),display_name=coalesce($3,display_name),description=CASE WHEN $7 THEN $4 ELSE description END,enabled=coalesce($5,enabled),supported_protocols=coalesce($6,supported_protocols) WHERE id=$1").bind(id).bind(b.public_name).bind(b.display_name).bind(b.description.clone().flatten()).bind(b.enabled).bind(b.supported_protocols).bind(b.description.is_some()).execute(&mut *tx).await?.rows_affected()!=1{return Err(missing())}
+    // New protocols must stay servable by every enabled route of the model.
+    if let Some(protocols) = &b.supported_protocols {
+        let providers: Vec<String> = sqlx::query_scalar("SELECT DISTINCT p.provider FROM deployments d JOIN provider_connections p ON p.id=d.provider_connection_id WHERE d.model_id=$1 AND d.enabled ORDER BY p.provider").bind(id).fetch_all(&mut *tx).await?;
+        for provider in providers {
+            if let Some(reason) =
+                crate::providers::capabilities::unsupported_reason(&provider, protocols)
+            {
+                return Err(ManagementError::route_unsupported(format!(
+                    "An enabled route can't serve these protocols. {reason}. Disable or replace that route first."
+                )));
+            }
+        }
+    }
+    if sqlx::query("UPDATE models SET public_name=coalesce($2,public_name),display_name=coalesce($3,display_name),description=CASE WHEN $7 THEN $4 ELSE description END,enabled=coalesce($5,enabled),supported_protocols=coalesce($6,supported_protocols) WHERE id=$1").bind(id).bind(b.public_name).bind(b.display_name).bind(b.description.clone().flatten()).bind(b.enabled).bind(b.supported_protocols).bind(b.description.is_some()).execute(&mut *tx).await?.rows_affected()!=1{return Err(missing().into())}
     if b.enabled == Some(false) {
         catalogs::retire(&mut tx).await?;
     }
@@ -772,21 +810,21 @@ async fn delete_provider(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
     Path(id): Path<Uuid>,
-) -> ApiResult {
+) -> DetailedResult {
     toggle(s, u, id, Enabled { enabled: false }, "provider_connections").await
 }
 async fn delete_model(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
     Path(id): Path<Uuid>,
-) -> ApiResult {
+) -> DetailedResult {
     toggle(s, u, id, Enabled { enabled: false }, "models").await
 }
 async fn delete_deployment(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
     Path(id): Path<Uuid>,
-) -> ApiResult {
+) -> DetailedResult {
     toggle(s, u, id, Enabled { enabled: false }, "deployments").await
 }
 async fn update_deployment(
@@ -794,7 +832,7 @@ async fn update_deployment(
     Extension(u): Extension<BrowserPrincipal>,
     Path(id): Path<Uuid>,
     Json(b): Json<Enabled>,
-) -> ApiResult {
+) -> DetailedResult {
     toggle(s, u, id, b, "deployments").await
 }
 #[derive(Deserialize)]
@@ -809,7 +847,7 @@ async fn create_deployment(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
     Json(b): Json<DeploymentInput>,
-) -> ApiResult {
+) -> DetailedResult {
     let mut tx = catalog_tx(&s, &u, true).await?;
     let id = insert_deployment(&mut tx, &u, b).await?;
     tx.commit().await?;
@@ -821,12 +859,12 @@ pub(super) async fn insert_deployment(
     tx: &mut Transaction<'_, Postgres>,
     u: &BrowserPrincipal,
     b: DeploymentInput,
-) -> Result<Uuid, ApiError> {
+) -> Result<Uuid, ManagementError> {
     if b.upstream_model.trim().is_empty()
         || b.upstream_model.len() > 512
         || b.upstream_model.chars().any(char::is_control)
     {
-        return Err(invalid());
+        return Err(invalid().into());
     }
     // Bedrock routes take a model ID, an inference profile ID (`us.…`, `global.…`) or a
     // Bedrock ARN in the connection's own region. Unknown connections stay FK conflicts.
@@ -835,13 +873,26 @@ pub(super) async fn insert_deployment(
             .bind(b.provider_connection_id)
             .fetch_optional(&mut **tx)
             .await?;
-    if let Some((provider, region)) = connection
+    if let Some((provider, region)) = &connection
         && provider == "bedrock"
         && !region.as_deref().is_some_and(|r| {
             crate::providers::bedrock::auth::valid_upstream_model(&b.upstream_model, r)
         })
     {
-        return Err(invalid());
+        return Err(invalid().into());
+    }
+    // The connection profile must serve one of the model's protocols (the
+    // same table the inference path uses for `unsupported_capability`).
+    let protocols: Option<Vec<String>> =
+        sqlx::query_scalar("SELECT supported_protocols FROM models WHERE id=$1")
+            .bind(b.model_id)
+            .fetch_optional(&mut **tx)
+            .await?;
+    if let (Some((provider, _)), Some(protocols)) = (&connection, &protocols)
+        && let Some(reason) =
+            crate::providers::capabilities::unsupported_reason(provider, protocols)
+    {
+        return Err(ManagementError::route_unsupported(format!("{reason}.")));
     }
     let id = Uuid::new_v4();
     sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model,enabled) VALUES($1,$2,$3,$4,$5)").bind(id).bind(b.model_id).bind(b.provider_connection_id).bind(b.upstream_model).bind(b.enabled).execute(&mut **tx).await?;
@@ -856,6 +907,21 @@ pub(super) async fn insert_deployment(
     )
     .await?;
     Ok(id)
+}
+/// Rejects enabling a route whose connection profile serves none of its
+/// model's protocols (400 `route_unsupported_capability`).
+async fn route_capability(
+    tx: &mut Transaction<'_, Postgres>,
+    deployment: Uuid,
+) -> Result<(), ManagementError> {
+    let row: Option<(String, Vec<String>)> = sqlx::query_as("SELECT p.provider,m.supported_protocols FROM deployments d JOIN provider_connections p ON p.id=d.provider_connection_id JOIN models m ON m.id=d.model_id WHERE d.id=$1").bind(deployment).fetch_optional(&mut **tx).await?;
+    if let Some((provider, protocols)) = row
+        && let Some(reason) =
+            crate::providers::capabilities::unsupported_reason(&provider, &protocols)
+    {
+        return Err(ManagementError::route_unsupported(format!("{reason}.")));
+    }
+    Ok(())
 }
 /// Audit actions recorded as a side effect of a person signing in (not changes they made).
 pub(crate) const SIGN_IN_AUDIT_ACTIONS: &[&str] =

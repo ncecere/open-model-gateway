@@ -1,5 +1,5 @@
 use super::*;
-use crate::billing::v3::{MaxUnits, PriceLines, display_line, display_summary};
+use crate::billing::v3::{MaxUnits, PriceLines, display_lines, display_summary};
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Price {
@@ -63,10 +63,7 @@ pub(crate) fn add_display(row: &mut Value) {
             .cloned()
             .and_then(|v| serde_json::from_value::<PriceLines>(v).ok());
         match lines {
-            Some(l) => (
-                json!(l.0.iter().map(display_line).collect::<Vec<_>>()),
-                json!(display_summary(&l)),
-            ),
+            Some(l) => (json!(display_lines(&l)), json!(display_summary(&l))),
             None => (Value::Null, Value::Null),
         }
     };
@@ -83,6 +80,9 @@ pub(crate) fn add_display(row: &mut Value) {
 /// variant and tier keys, same not-applicable meters), so switching lists
 /// never turns a priced meter into a missing one.
 fn same_meters(standard: &PriceLines, batch: &PriceLines) -> bool {
+    standard.1 == batch.1 && same_valued_meters(standard, batch)
+}
+fn same_valued_meters(standard: &PriceLines, batch: &PriceLines) -> bool {
     let keys = |l: &PriceLines| {
         let mut k: Vec<String> = serde_json::to_value(l)
             .ok()
@@ -115,7 +115,7 @@ pub(super) async fn create_price(
     Extension(u): Extension<BrowserPrincipal>,
     Path(deployment): Path<Uuid>,
     Json(p): Json<Price>,
-) -> ApiResult {
+) -> DetailedResult {
     let p = validate_price(p)?;
     let mut tx = resources::catalog_tx(&s, &u, true).await?;
     let id = insert_price(&mut tx, &u, deployment, p).await?;
@@ -226,13 +226,16 @@ pub(crate) async fn insert_price(
     u: &BrowserPrincipal,
     deployment: Uuid,
     v: ValidPrice,
-) -> Result<Uuid, ApiError> {
+) -> Result<Uuid, ManagementError> {
     let ValidPrice {
         price: p,
         input,
         output,
     } = v;
     exists(tx, "deployments", deployment).await?;
+    if let Some(lines) = &p.price_lines {
+        meters_complete(tx, deployment, lines).await?;
+    }
     let id = Uuid::new_v4();
     sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version,cache_pricing,price_lines,max_units,batch_price_lines) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)").bind(id).bind(deployment).bind(input).bind(output).bind(p.input_token_limit).bind(p.output_token_limit).bind(p.pricing_version).bind(p.cache_pricing.map(serde_json::to_value).transpose().map_err(|_|invalid())?).bind(p.price_lines.map(serde_json::to_value).transpose().map_err(|_|invalid())?).bind(p.max_units.map(serde_json::to_value).transpose().map_err(|_|invalid())?).bind(p.batch_price_lines.map(serde_json::to_value).transpose().map_err(|_|invalid())?).execute(&mut **tx).await?;
     resources::audit(
@@ -246,6 +249,42 @@ pub(crate) async fn insert_price(
     )
     .await?;
     Ok(id)
+}
+/// A v3 price must state every meter its route's workload can use (priced,
+/// `not_applicable` or `unknown`): an omitted meter would silently leave every
+/// budgeted request unbounded. 400 `price_meters_incomplete` with
+/// `missing_meters`.
+async fn meters_complete(
+    tx: &mut Transaction<'_, Postgres>,
+    deployment: Uuid,
+    lines: &PriceLines,
+) -> Result<(), ManagementError> {
+    let protocols: Vec<String> = sqlx::query_scalar("SELECT m.supported_protocols FROM deployments d JOIN models m ON m.id=d.model_id WHERE d.id=$1").bind(deployment).fetch_one(&mut **tx).await?;
+    let kind = protocols
+        .first()
+        .and_then(|p| crate::inference::types::ApiProtocol::parse(p))
+        .map_or(crate::inference::types::WorkloadKind::Generation, |p| {
+            p.workload()
+        });
+    let stated = lines.meters();
+    let missing: Vec<&str> = crate::governance::price_meters(kind)
+        .into_iter()
+        .filter(|m| !stated.contains(m))
+        .map(|m| m.as_str())
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(ManagementError::detailed(
+        StatusCode::BAD_REQUEST,
+        "price_meters_incomplete",
+        format!(
+            "A {} price must state every meter the route can use as priced, not_applicable or unknown; missing: {}",
+            crate::providers::capabilities::workload_label(kind),
+            missing.join(", ")
+        ),
+        json!({"missing_meters":missing}),
+    ))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -66,7 +66,7 @@ const noData = (m: CompareModel) => m.metrics.requests === "0";
 export const compareRows: Row[] = [
   { label: "Type", cell: m => workloadLabels[m.workload] ?? m.workload },
   { label: "Protocols", cell: m => m.protocols.map(protocolLabel).join(" · ") },
-  { label: "Serving", cell: m => !m.enabled ? <HintBadge tone="neutral" hint="Turned off">Disabled</HintBadge> : m.enabled_routes > 0 ? <HintBadge tone="success" hint={`${m.enabled_routes} enabled route${m.enabled_routes === 1 ? "" : "s"}`}>Ready</HintBadge> : <HintBadge tone="warning" hint="No enabled route">Not serving</HintBadge> },
+  { label: "Serving", cell: m => !m.enabled ? <HintBadge tone="neutral" hint="Turned off">Disabled</HintBadge> : (m.serving_routes ?? m.enabled_routes) > 0 ? <HintBadge tone="success" hint={`${m.enabled_routes} enabled route${m.enabled_routes === 1 ? "" : "s"}`}>Ready</HintBadge> : <HintBadge tone="warning" hint={m.enabled_routes > 0 ? "No enabled route's connection can serve this model" : "No enabled route"}>Not serving</HintBadge> },
   { label: "Input price", hint: "Per million input tokens, first enabled route", cell: price("input_tokens"), value: m => lineAmount(m.price, "input_tokens"), better: "min" },
   { label: "Output price", hint: "Per million output tokens, first enabled route", cell: price("output_tokens"), value: m => lineAmount(m.price, "output_tokens"), better: "min" },
   { label: "Other prices", cell: m => { const lines = otherLines(m.price); return lines.length ? <span className={c.lines}>{lines.map(l => <span key={l}>{l}</span>)}</span> : <span className={s.muted}>—</span>; } },

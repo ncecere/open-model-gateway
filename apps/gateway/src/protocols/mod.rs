@@ -54,6 +54,7 @@ fn http_status(error: InferenceError) -> StatusCode {
             StatusCode::BAD_GATEWAY
         }
         InferenceError::Configuration
+        | InferenceError::PriceUnbounded
         | InferenceError::Storage
         | InferenceError::RouteCoolingDown(_) => StatusCode::SERVICE_UNAVAILABLE,
     }

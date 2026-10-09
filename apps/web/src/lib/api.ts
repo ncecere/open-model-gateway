@@ -1,6 +1,7 @@
 export const API = "/api/v1";
 export class ApiError extends Error {
   /**
+   * `code`: `error.code`, the HTTP status as a string for management errors.
    * `reason`: the server's stable machine code for selected errors (`error.reason`), when present. `detail`: the one
    * non-sensitive field that accompanies a policy rejection (`error.period` or `error.limit`), never an amount.
    */
@@ -72,7 +73,7 @@ export type GroupMapping = { id: string; issuer: string; group_value: string; ta
 export type Provider = { id: string; name: string; provider: string; endpoint: string | null; region: string | null; enabled: boolean; auth_mode: "none" | "credential"; /** Bedrock identity mode; the reference itself is never returned. */ aws_auth?: "default" | "profile" | "role" | null; model_count?: number };
 export type ModelProtocol = "chat_completions" | "responses" | "messages" | "embeddings" | "images" | "audio_transcriptions" | "audio_speech" | "rerank" | "systemone" | "realtime" | "videos" | "batches";
 /** Server-computed aggregate counts (contract §2). Absent from older gateways: never assume zero. */
-export type ModelReadiness = { routes: number; enabled_routes: number; priced_enabled_routes: number; catalogs: number; direct_workspaces: number; connections: { id: string; name: string }[]; /** Configuration check: smallest applicable tokens-per-minute default (null when none). */ type_tokens_per_minute?: number | null; /** Enabled routes whose latest input+output token ceilings exceed it. */ routes_over_token_limit?: number; /** Enabled routes on OpenRouter `:free` endpoints. */ openrouter_free_routes?: number };
+export type ModelReadiness = { routes: number; enabled_routes: number; priced_enabled_routes: number; catalogs: number; direct_workspaces: number; connections: { id: string; name: string }[]; /** Configuration check: smallest applicable tokens-per-minute default (null when none). */ type_tokens_per_minute?: number | null; /** Enabled routes whose latest input+output token ceilings exceed it. */ routes_over_token_limit?: number; /** Enabled routes on OpenRouter `:free` endpoints. */ openrouter_free_routes?: number; /** Enabled routes whose connection profile can serve the model (absent from older gateways). */ serving_routes?: number; /** Enabled routes whose connection profile serves none of the model's protocols. */ unsupported_routes?: number; /** Their connection profiles, e.g. ["vllm"]. */ unsupported_profiles?: string[] };
 /** Server-controlled provider policy (Admin/Auditor readable; no secrets). */
 export type ServerPolicy = { openrouter: { data_collection: "deny" | "allow"; free_models_available: boolean } };
 export type Model = { id: string; public_name: string; display_name: string; description?: string | null; enabled: boolean; supported_protocols: ModelProtocol[]; readiness?: ModelReadiness; /** When the model was added (wave 2; absent from older gateways). */ created_at?: string };

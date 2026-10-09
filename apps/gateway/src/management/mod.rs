@@ -282,6 +282,79 @@ impl From<sqlx::Error> for ApiError {
         }
     }
 }
+/// A management error that may carry a dynamic message, a stable machine code
+/// and detail fields (for example `missing_meters`). It uses the same envelope
+/// as every management error: `error.code` is the HTTP status and
+/// `error.reason` is the machine code. Plain [`ApiError`]s convert into it
+/// unchanged, so `?` keeps working.
+#[derive(Debug)]
+pub(crate) enum ManagementError {
+    Api(ApiError),
+    Detailed {
+        status: StatusCode,
+        code: &'static str,
+        message: String,
+        details: serde_json::Map<String, Value>,
+    },
+}
+type DetailedResult = Result<Json<Value>, ManagementError>;
+impl ManagementError {
+    pub(crate) fn detailed(
+        status: StatusCode,
+        code: &'static str,
+        message: String,
+        details: Value,
+    ) -> Self {
+        Self::Detailed {
+            status,
+            code,
+            message,
+            details: details.as_object().cloned().unwrap_or_default(),
+        }
+    }
+    /// 400 `route_unsupported_capability`: the route's connection profile
+    /// serves none of its model's protocols (`providers::capabilities`).
+    pub(crate) fn route_unsupported(message: String) -> Self {
+        Self::detailed(
+            StatusCode::BAD_REQUEST,
+            "route_unsupported_capability",
+            message,
+            json!({}),
+        )
+    }
+}
+impl From<ApiError> for ManagementError {
+    fn from(e: ApiError) -> Self {
+        Self::Api(e)
+    }
+}
+impl From<sqlx::Error> for ManagementError {
+    fn from(e: sqlx::Error) -> Self {
+        Self::Api(e.into())
+    }
+}
+impl IntoResponse for ManagementError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Api(e) => e.into_response(),
+            Self::Detailed {
+                status,
+                code,
+                message,
+                details,
+            } => {
+                // Same envelope as `ApiError`: `code` is the HTTP status,
+                // `reason` the machine code.
+                let mut error =
+                    json!({"code":status.as_u16().to_string(),"message":message,"reason":code});
+                if let Some(object) = error.as_object_mut() {
+                    object.extend(details);
+                }
+                (status, Json(json!({ "error": error }))).into_response()
+            }
+        }
+    }
+}
 fn denied() -> ApiError {
     ApiError(StatusCode::FORBIDDEN, "Access denied")
 }

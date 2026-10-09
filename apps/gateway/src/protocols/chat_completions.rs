@@ -32,6 +32,9 @@ pub struct Request {
     stream_options: Option<StreamOptions>,
     temperature: Option<f64>,
     max_completion_tokens: Option<u32>,
+    /// Legacy alias of `max_completion_tokens` (still sent by many
+    /// OpenAI-compatible clients). Both may be sent only with equal values.
+    max_tokens: Option<u32>,
     n: Option<u32>,
     #[serde(default)]
     tools: Vec<WireTool>,
@@ -104,10 +107,17 @@ impl Request {
             || self.n.is_some_and(|n| n != 1)
             || self.temperature.is_some_and(|n| !(0.0..=2.0).contains(&n))
             || self.max_completion_tokens == Some(0)
+            || self.max_tokens == Some(0)
+            || self
+                .max_completion_tokens
+                .zip(self.max_tokens)
+                .is_some_and(|(a, b)| a != b)
             || (!self.stream && self.stream_options.is_some())
         {
             return Err(invalid);
         }
+        // One maximum for the upstream request and the admission reservation.
+        let max_output_tokens = self.max_completion_tokens.or(self.max_tokens);
         let mut messages = Vec::with_capacity(self.messages.len());
         for message in self.messages {
             if message.role == Role::Tool {
@@ -206,7 +216,7 @@ impl Request {
             tools,
             tool_choice,
             temperature: self.temperature,
-            max_output_tokens: self.max_completion_tokens,
+            max_output_tokens,
             stream: self.stream,
         })
     }
@@ -322,15 +332,8 @@ fn complete_body(id: &str, created: u64, model: &str, response: ChatResponse) ->
 }
 
 /// `/v1/batches` line body (`crate::jobs::lines`): the same contract as an
-/// interactive request, never streamed. `max_tokens` is accepted as the
-/// Batch API's legacy name of `max_completion_tokens` (not both).
-pub(crate) fn batch_request(mut body: Value) -> Result<ChatRequest, InferenceError> {
-    if let Some(fields) = body.as_object_mut()
-        && !fields.contains_key("max_completion_tokens")
-        && let Some(max) = fields.remove("max_tokens")
-    {
-        fields.insert("max_completion_tokens".into(), max);
-    }
+/// interactive request (including the `max_tokens` alias), never streamed.
+pub(crate) fn batch_request(body: Value) -> Result<ChatRequest, InferenceError> {
     let wire: Request = serde_json::from_value(body).map_err(|_| InferenceError::InvalidRequest)?;
     if wire.stream || !client::valid_openai_metadata(wire.metadata.as_ref()) {
         return Err(InferenceError::InvalidRequest);
@@ -387,6 +390,50 @@ mod tests {
             "tool_choice":{"type":"function","function":{"name":"weather"}},"max_completion_tokens":32})).unwrap();
         assert_eq!(request.tools.len(), 1);
         assert_eq!(request.max_output_tokens, Some(32));
+    }
+    #[test]
+    fn legacy_max_tokens_is_an_alias_of_max_completion_tokens() {
+        let base = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
+        let with = |extra: Value| {
+            let mut v = base.clone();
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            parse(v)
+        };
+        assert_eq!(
+            with(json!({"max_tokens":7})).unwrap().max_output_tokens,
+            Some(7)
+        );
+        assert_eq!(
+            with(json!({"max_completion_tokens":7}))
+                .unwrap()
+                .max_output_tokens,
+            Some(7)
+        );
+        assert_eq!(
+            with(json!({"max_tokens":7,"max_completion_tokens":7}))
+                .unwrap()
+                .max_output_tokens,
+            Some(7)
+        );
+        assert_eq!(with(json!({})).unwrap().max_output_tokens, None);
+        for bad in [
+            json!({"max_tokens":7,"max_completion_tokens":8}),
+            json!({"max_tokens":0}),
+            json!({"max_tokens":-1}),
+            json!({"max_tokens":"7"}),
+        ] {
+            assert!(with(bad.clone()).is_err(), "{bad}");
+        }
+        // Batch lines share the same contract.
+        let mut line = base.clone();
+        line["max_tokens"] = json!(9);
+        assert_eq!(batch_request(line).unwrap().max_output_tokens, Some(9));
+        let mut line = base;
+        line["max_tokens"] = json!(9);
+        line["max_completion_tokens"] = json!(8);
+        assert!(batch_request(line).is_err());
     }
     #[test]
     fn rejects_unsupported_fields_choices_and_multimodal_inputs() {

@@ -12,7 +12,7 @@ import { identifier } from "./permissions";
 export type CompareLine = { meter: string; microusd_per_batch?: string; batch?: number; unit_label?: string; sku_label?: string; variant?: string; min_prompt_tokens?: number; not_applicable?: true };
 export type ComparePrice = { pricing_version: number; lines: CompareLine[]; display_lines: string[] | null; input_token_limit: number | null; output_token_limit: number | null; created_at: string };
 export type CompareMetrics = { requests: string; completed: string; failed: string; error_rate: string | null; latency_p50_ms: number | null; ttft_p50_ms: number | null; ttft_requests: string; tokens_per_second: string | null };
-export type CompareModel = { id: string; public_name: string; display_name: string; enabled: boolean; protocols: ModelProtocol[]; workload: WorkloadKind; routes: number; enabled_routes: number; priced_enabled_routes: number; price: ComparePrice | null; metrics: CompareMetrics };
+export type CompareModel = { id: string; public_name: string; display_name: string; enabled: boolean; protocols: ModelProtocol[]; workload: WorkloadKind; routes: number; enabled_routes: number; /** Enabled routes whose connection can serve the model (absent from older gateways). */ serving_routes?: number; priced_enabled_routes: number; price: ComparePrice | null; metrics: CompareMetrics };
 export type CompareResponse = { scope: "workspace" | "platform"; activity: "own" | "workspace" | "shared_workspaces"; period: { start: string; end: string }; data: CompareModel[] };
 export type CompareScope = { kind: "workspace"; workspace: { id: string; name: string; kind: WorkspaceKind } } | { kind: "platform" };
 

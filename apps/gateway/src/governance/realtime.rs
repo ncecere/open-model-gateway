@@ -192,7 +192,9 @@ pub async fn reserve_window(
     }
     // `hold`: the change of the session hold (`None`: unbounded); `tokens`:
     // the new window's tokens and the change of reserved tokens.
-    let (hold, tokens) = match pinned(&mut tx, &s).await? {
+    let pinned_price = pinned(&mut tx, &s).await?;
+    let priced = pinned_price.is_some();
+    let (hold, tokens) = match pinned_price {
         Some(p) => {
             let (old_hold, old_tokens) = match armed {
                 Some(a) => (p.realtime_window(a)?, p.realtime_tokens(a)?),
@@ -251,6 +253,11 @@ pub async fn reserve_window(
         if !fits {
             deny((0, InferenceError::Busy));
         }
+    }
+    // A pinned price that cannot bound the new window can never be checked
+    // against a budget: the price's configuration, not a budget denial.
+    if grows && priced && hold.is_none() && !budgets.is_empty() {
+        return Err(InferenceError::PriceUnbounded);
     }
     // Budgets: the session's charges belong to the windows containing its
     // admission time (the same buckets the totals triggers use).

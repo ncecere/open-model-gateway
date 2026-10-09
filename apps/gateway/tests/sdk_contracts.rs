@@ -31,6 +31,12 @@ impl ProviderAdapter for Fixture {
         _: &Deployment,
         request: ChatRequest,
     ) -> Result<ProviderOutput, InferenceError> {
+        // Echo an observed output maximum of 7 so the SDK contracts can prove
+        // which client field reached the adapter.
+        let text = match request.max_output_tokens {
+            Some(7) => "Hello from fixture (max 7)",
+            _ => "Hello from fixture",
+        };
         let usage = Usage {
             input_tokens: Some(3),
             output_tokens: Some(4),
@@ -41,7 +47,7 @@ impl ProviderAdapter for Fixture {
             Ok(ProviderOutput::Stream(Box::pin(
                 futures_util::stream::iter(vec![
                     Ok(ChatEvent::Delta {
-                        text: Some("Hello from fixture".into()),
+                        text: Some(text.into()),
                         tool_calls: vec![],
                     }),
                     Ok(ChatEvent::Finish(FinishReason::Stop)),
@@ -51,7 +57,7 @@ impl ProviderAdapter for Fixture {
             )))
         } else {
             Ok(ProviderOutput::Complete(ChatResponse {
-                content: Some("Hello from fixture".into()),
+                content: Some(text.into()),
                 tool_calls: vec![],
                 finish_reason: FinishReason::Stop,
                 usage,

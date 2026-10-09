@@ -6,8 +6,10 @@
  * no Number, parseFloat or toFixed ever touches money.
  *
  * A meter without a line is UNKNOWN (never free); "Free" publishes an explicit
- * "0" line; "Not applicable" publishes {meter, not_applicable:true}. Meters that
- * cannot apply to the model's workload are published as not applicable.
+ * "0" line; "Not applicable" publishes {meter, not_applicable:true}; "Unknown"
+ * publishes {meter, unknown:true} (the gateway requires every meter a route can
+ * use to be stated, and stores an unknown as no line). Meters that cannot apply
+ * to the model's workload are published as not applicable.
  */
 import type { ModelProtocol } from "./api";
 import { MAX_MICROUSD, type Meter, type Price, type PriceLine, type UnitMeter, type WorkloadKind } from "./governance";
@@ -99,7 +101,7 @@ export const METER_SPECS: Record<Meter, MeterSpec> = {
 export const unitFor = (meter: Meter, batch: number) => METER_SPECS[meter].units.find(u => u.batch === batch);
 export const defaultBatch = (meter: Meter) => meter.endsWith("_audio_seconds_ms") ? 60000 : METER_SPECS[meter].units[0].batch;
 /** Price lines of a video price: per-second video lines are present. */
-const isVideoPrice = (lines: PriceLine[]) => lines.some(l => VIDEO_METERS.includes(l.meter));
+const isVideoPrice = (lines: { meter: Meter }[]) => lines.some(l => VIDEO_METERS.includes(l.meter));
 
 export const workloadLabels: Record<WorkloadKind, string> = { generation: "Text generation", embeddings: "Embeddings", images: "Images", audio_transcriptions: "Speech to text", audio_speech: "Text to speech", rerank: "Rerank", systemone: "System One decisions", realtime: "Realtime audio", videos: "Video generation", batches: "Batch chat completions" };
 /** Meters shown for a workload. All others are published as not applicable (as the OpenRouter suggestion does). */
@@ -134,7 +136,9 @@ export type RateRow = { id: string; usd: string; sku: string; variant?: string; 
 export type MeterDraft = { mode: MeterMode; batch: number; rows: RateRow[]; maxUnits: string; review?: boolean; note?: string };
 export type ImportInfo = { model: string; needsReview: boolean; warnings: string[]; endpoint?: SuggestionEndpoint; ceilings?: SuggestionCeilings; /** Ceilings the admin had entered, kept instead of the imported ones until confirmed. */ keptCeilings?: { input: string; output: string; importedInput: string; importedOutput: string } };
 export type PriceDraft = { workload: WorkloadKind; shown: Meter[]; meters: Record<Meter, MeterDraft>; inputTokenLimit: string; outputTokenLimit: string; import?: ImportInfo; /** Also publish a batch price list (native batch APIs; the provider's published batch rates, never derived). */ batchPrices?: boolean };
-export type PriceBody = { pricing_version: 3; input_token_limit: number; output_token_limit: number; price_lines: PriceLine[]; max_units: Partial<Record<UnitMeter, string>>; batch_price_lines?: PriceLine[] };
+/** A published line: a stored line, or an explicit unknown (publication only; stored as no line). */
+export type PublishLine = PriceLine | { meter: Meter; unknown: true };
+export type PriceBody = { pricing_version: 3; input_token_limit: number; output_token_limit: number; price_lines: PublishLine[]; max_units: Partial<Record<UnitMeter, string>>; batch_price_lines?: PublishLine[] };
 
 let rowCounter = 0;
 export const newRow = (meter: Meter, extra: Partial<RateRow> = {}): RateRow => ({ id: `r${++rowCounter}`, usd: "", sku: METER_SPECS[meter].sku, ...extra });
@@ -302,11 +306,12 @@ export function validateDraft(draft: PriceDraft): Record<string, string> {
 }
 /** The v3 POST body. Throws on invalid money: validate first. */
 export function draftBody(draft: PriceDraft): PriceBody {
-  const price_lines: PriceLine[] = [], batch_lines: PriceLine[] = [], max_units: Partial<Record<UnitMeter, string>> = {};
+  const price_lines: PublishLine[] = [], batch_lines: PublishLine[] = [], max_units: Partial<Record<UnitMeter, string>> = {};
   for (const meter of metersFor(draft.workload)) {
     const m = draft.meters[meter], unit = unitFor(meter, m.batch) ?? unitFor(meter, defaultBatch(meter))!;
     if (!draft.shown.includes(meter) || m.mode === "not_applicable") { price_lines.push({ meter, not_applicable: true }); batch_lines.push({ meter, not_applicable: true }); continue; }
-    if (m.mode === "unknown") continue;
+    // Stated explicitly: the gateway refuses a price that leaves out a meter the route can use.
+    if (m.mode === "unknown") { price_lines.push({ meter, unknown: true }); batch_lines.push({ meter, unknown: true }); continue; }
     const rows = m.mode === "free" ? [{ ...m.rows[0], usd: "0", variant: undefined, minPromptTokens: undefined, sku: m.rows[0]?.sku || METER_SPECS[meter].sku }] : m.rows;
     for (const row of rows) {
       const money = usdToMicroUsd(row.usd);
@@ -336,7 +341,8 @@ export function priceBound(body: Pick<PriceBody, "price_lines" | "max_units" | "
   const realtime = body.price_lines.some(l => AUDIO_TOKEN_METERS.includes(l.meter));
   // A video price bounds its video meter on max_units (each request's seconds tighten it at admission).
   for (const meter of realtime ? [...METERS, ...AUDIO_TOKEN_METERS] : isVideoPrice(body.price_lines) ? [...METERS, ...VIDEO_METERS] : METERS) {
-    const lines = body.price_lines.filter(l => l.meter === meter);
+    // An explicit unknown values like a missing line.
+    const lines = body.price_lines.filter((l): l is PriceLine => l.meter === meter && !("unknown" in l));
     const unitCeiling = body.max_units[meter as UnitMeter] != null ? BigInt(body.max_units[meter as UnitMeter]!) : null;
     const ceiling = meter === "output_tokens" || meter === "output_audio_tokens" ? BigInt(body.output_token_limit) : TOKEN_METERS.has(meter) || AUDIO_TOKEN_METERS.includes(meter) ? BigInt(body.input_token_limit) : !realtime ? unitCeiling : meter === "requests" ? (unitCeiling !== null && unitCeiling < 1n ? null : 1n) : 0n;
     if (lines.some(l => "not_applicable" in l) || ceiling === 0n) continue;

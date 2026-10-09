@@ -15,6 +15,24 @@ for await (const event of await openai.chat.completions.create({ model: "company
   text += event.choices[0]?.delta?.content ?? "";
 }
 assert.equal(text, "Hello from fixture");
+// Legacy `max_tokens` (still sent by many OpenAI-compatible clients) is an alias of max_completion_tokens.
+const legacy = await openai.chat.completions.create({ model: "company/smart", messages, max_tokens: 7 });
+assert.equal(legacy.choices[0].message.content, "Hello from fixture (max 7)");
+const both = await openai.chat.completions.create({ model: "company/smart", messages, max_tokens: 7, max_completion_tokens: 7 });
+assert.equal(both.choices[0].message.content, "Hello from fixture (max 7)");
+assert.equal((await openai.chat.completions.create({ model: "company/smart", messages, max_completion_tokens: 7 })).choices[0].message.content, "Hello from fixture (max 7)");
+await assert.rejects(
+  openai.chat.completions.create({ model: "company/smart", messages, max_tokens: 7, max_completion_tokens: 8 }),
+  (e) => e.status === 400 && e.code === "invalid_request_error",
+);
+let legacyText = "";
+for await (const event of await openai.chat.completions.create({ model: "company/smart", messages, max_tokens: 7, stream: true })) {
+  legacyText += event.choices[0]?.delta?.content ?? "";
+}
+assert.equal(legacyText, "Hello from fixture (max 7)");
+// Responses keeps its own max_output_tokens.
+const capped = await openai.responses.create({ model: "company/smart", input: "hello", store: false, max_output_tokens: 7 });
+assert.equal(capped.output_text, "Hello from fixture (max 7)");
 const response = await openai.responses.create({ model: "company/smart", input: "hello", store: false });
 assert.equal(response.status, "completed");
 assert.equal(response.output_text, "Hello from fixture");
@@ -38,7 +56,7 @@ assert.equal(finalMessage.usage.input_tokens, 3);
 assert.equal(finalMessage.usage.output_tokens, 4);
 assert.equal(finalMessage.content[0].text, "Hello from fixture");
 assert.equal(finalMessage.stop_reason, "end_turn");
-console.log("OpenAI Chat, Responses, and Anthropic Messages SDK contracts passed (JSON + streaming helpers)");
+console.log("OpenAI Chat (including legacy max_tokens), Responses, and Anthropic Messages SDK contracts passed (JSON + streaming helpers)");
 // Files API (gateway-owned store): the official SDK's multipart order works.
 const jsonl = '{"custom_id":"a","method":"POST","url":"/v1/chat/completions","body":{}}\n';
 const uploaded = await openai.files.create({ file: await toFile(Buffer.from(jsonl), "input.jsonl"), purpose: "batch" });

@@ -68,22 +68,12 @@ impl ProviderAdapter for OpenAiAdapter {
         }
     }
 
+    /// The shared capability table (`providers::capabilities`). Videos are
+    /// not served: OpenAI shut down the Sora 2 models and the Videos API on
+    /// 2026-09-24, so new video jobs are refused before admission. The video
+    /// wire code below stays for jobs created before the shutdown.
     fn supports_protocol(&self, protocol: ApiProtocol) -> bool {
-        matches!(
-            protocol,
-            ApiProtocol::ChatCompletions
-                | ApiProtocol::Responses
-                | ApiProtocol::Embeddings
-                | ApiProtocol::Images
-                | ApiProtocol::AudioTranscriptions
-                | ApiProtocol::AudioSpeech
-                // OpenAI shut down the Sora 2 models and the Videos API on
-                // 2026-09-24 (no replacement): new video jobs are refused
-                // before admission. The video wire code below stays for
-                // jobs created before the shutdown and is mock-tested.
-                | ApiProtocol::Batches
-                | ApiProtocol::Realtime
-        )
+        super::capabilities::serves(self.id(), protocol)
     }
 
     async fn connect_realtime(

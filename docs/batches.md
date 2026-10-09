@@ -18,7 +18,7 @@ This page describes the current source (migrations `0021_batch_engine.sql` and `
 | `GET /v1/batches/{id}` | One batch, from gateway records. |
 | `POST /v1/batches/{id}/cancel` | Stops the batch (see [Cancel](#cancel)). |
 
-- **Endpoints:** `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings` and `/v1/messages` (Anthropic shape). Every line uses the batch's endpoint and is validated exactly like an interactive request to it. Lines are never streamed. Chat Completions lines may name their maximum `max_tokens` (legacy) or `max_completion_tokens`, not both.
+- **Endpoints:** `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings` and `/v1/messages` (Anthropic shape). Every line uses the batch's endpoint and is validated exactly like an interactive request to it. Lines are never streamed. Chat Completions lines may name their maximum `max_tokens` (legacy alias) or `max_completion_tokens`, as interactive requests do: both only with equal values.
 - **Lines:** `{custom_id, method:"POST", url, body}`, at most 50,000 per file and 4 MiB each. Blank lines are skipped.
 - **Ids:** `batch_<32 hex>` and `file-<32 hex>` gateway ids. Upstream ids and client `custom_id`s are never sent to or exposed from the other side: native lines are sent upstream as `l0`, `l1`, … and mapped back.
 - **`metadata`:** at most 16 string values. It is validated but **not stored**, so the batch object returns `metadata: null`. Two keys are gateway options:

@@ -6,6 +6,8 @@ The project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). 
 
 ## [Unreleased]
 
+Fixes three gaps found in live DGX Spark acceptance. Routes whose connection profile can't serve the model (System One on `vllm`, rerank on `ollama`) are refused with 400 `route_unsupported_capability` at route creation, enabling, model setup and model protocol changes, using the one capability table the inference path uses; existing ones read "Not serving: <reason>". Pricing-v3 publications must state every meter the route's workload can use (priced, `not_applicable` or the new explicit `unknown`), else 400 `price_meters_incomplete`; budgeted admission on a price that cannot bound the hold now returns 503 `price_unbounded` (non-retryable) instead of a misleading `budget_exceeded`, and older prices stay unchanged. Both new management errors carry their machine code in `error.reason`, like every management error. Chat Completions accepts legacy `max_tokens` as an alias of `max_completion_tokens`. No migrations. Notes: [`docs/releases/unreleased.md`](docs/releases/unreleased.md).
+
 ## [0.3.1] - 2026-10-09
 
 Distroless runtime image (`gcr.io/distroless/cc-debian12`, pinned by digest; no shell, curl or package manager), the binary as entrypoint with the former shell entrypoint's `_FILE` secret import ported to Rust, and `open-model-gateway healthcheck` for the image `HEALTHCHECK`. Supply-chain scanning: cargo-deny (`deny.toml`), an npm production audit gate, CodeQL for JavaScript/TypeScript and Rust, and weekly grouped Dependabot updates; the Bedrock SDK drops its legacy hyper 0.14/rustls 0.21 connector. Rerank on the `openai_compatible`, `vllm` and `sglang` local profiles and System One on `openai_compatible` and `ollama`, with Add model offering those types only where the profile serves them. Fixes from the v0.3.0 screenshot pass: cooling-down routes answer a retryable 503 with `Retry-After` instead of 404, rounded money display with exact tooltips, aligned stat-tile charts, "Unpriced" unit-priced models, audit labels for every event, "No access" users, per-owner personal workspace rows, Logs that fit at 1440, consistent storage units, and clearer batch waits and lower-bound batch costs. No migrations. Notes: [`docs/releases/v0.3.1.md`](docs/releases/v0.3.1.md).
@@ -22,7 +24,8 @@ Alerts, key safety, model compare, SCIM, JWKS refresh, metrics and backup toolin
 
 The single-enterprise rebuild: Team, Project and personal workspaces, OIDC platform roles, catalogs, multimodal workloads across five provider families, immutable micro-USD accounting, logs and Admin settings. Migrations `0001` to `0010`. Notes: [`docs/releases/v0.1.0.md`](docs/releases/v0.1.0.md).
 
-[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/ncecere/open-model-gateway/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/ncecere/open-model-gateway/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ncecere/open-model-gateway/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ncecere/open-model-gateway/releases/tag/v0.1.0

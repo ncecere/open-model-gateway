@@ -49,6 +49,11 @@ describe("management API", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ error: { code: "forbidden", message: "Access denied" } }, { status: 403 })));
     await expect(api(`${API}/me`)).rejects.toMatchObject({ status: 403, code: "forbidden", message: "Access denied" });
   });
+  it("exposes the machine code of detailed management errors in reason", async () => {
+    cookie();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ error: { code: "400", reason: "price_meters_incomplete", message: "missing: requests", missing_meters: ["requests"] } }, { status: 400 })));
+    await expect(api(`${API}/platform/deployments/d/prices`, { method: "POST", body: {} })).rejects.toMatchObject({ status: 400, code: "400", reason: "price_meters_incomplete", message: "missing: requests" });
+  });
   it("renders Axum plain-text validation errors without requiring JSON", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("Failed to deserialize query string", { status: 400 })));
     await expect(api(`${API}/me`)).rejects.toThrow("Failed to deserialize query string");

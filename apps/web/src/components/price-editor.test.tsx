@@ -61,7 +61,7 @@ describe("v3 price editor dialog", () => {
     const body = JSON.parse(first[1].body);
     expect(body).toMatchObject({ pricing_version: 3, input_token_limit: 1000, output_token_limit: 100, max_units: {} });
     expect(body.price_lines).toContainEqual({ meter: "input_tokens", microusd_per_batch: "100000", batch: 1000000, unit_label: "/M tokens", sku_label: "Input" });
-    expect(body.price_lines.some((l: { meter: string }) => l.meter === "output_tokens")).toBe(false); // Unknown, never free
+    expect(body.price_lines.filter((l: { meter: string }) => l.meter === "output_tokens")).toEqual([{ meter: "output_tokens", unknown: true }]); // Unknown, stated, never free
     expect(body.price_lines).toContainEqual({ meter: "output_images", not_applicable: true });
   });
 

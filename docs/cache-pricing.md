@@ -75,17 +75,33 @@ Complete normalized usage/output and applicable rates settle the six components.
 | `requests` | 1 · `/request` | `meter_usage.requests` |
 
 - `unit_label` must equal the canonical label for the meter/batch; `sku_label` is 1–80 non-control characters. `variant` is allowed only on `output_images` (`[A-Za-z0-9._:-]{1,32}`).
-- `(meter, variant, min_prompt_tokens)` is unique. `{"meter":...,"not_applicable":true}` is the meter's only line.
+- `(meter, variant, min_prompt_tokens)` is unique. `{"meter":...,"not_applicable":true}` is the meter's only line, and so is an explicit `{"meter":...,"unknown":true}`.
+- **Every meter a route can use must be stated at publication** (priced, `not_applicable` or `unknown`); see [meter completeness](#meter-completeness).
 - `min_prompt_tokens` (1–2,147,483,647) is a prompt-size tier: it applies when inclusive input tokens are **strictly greater**; the highest exceeded threshold wins per meter. Unknown inclusive input with tiers leaves the charge unresolved.
 - A variant-specific line applies to that variant; variant-less lines are the default for other or unreported variants. An image variant with no line is unpriced.
 - **Total-only input.** When a provider reports only the inclusive input total (no cache split, for example SGLang or vLLM without `prompt_tokens_details`) and every cache meter with an unknown count is `not_applicable`, those categories are absent, so uncached input is the total minus the known cache parts. An aggregate cache write that its known allocations do not explain derives nothing (it stays unknown); a priced cache meter with an unknown count also leaves input unknown.
-- **A missing meter line is unknown, never free.** `"0"` is explicitly free; free meters need no ceiling and settle as zero even when unobserved. `not_applicable` treats an unobserved meter as absent; positive usage contradicts it.
+- **A missing meter line is unknown, never free.** An explicit `unknown` line values exactly the same way and is stored as that missing line (stored price lines keep their validated shape; GET shows no line for it). `"0"` is explicitly free; free meters need no ceiling and settle as zero even when unobserved. `not_applicable` treats an unobserved meter as absent; positive usage contradicts it.
 - `input_token_limit` may be `0` only when every input-family token meter (`input_tokens` and the four cache meters) is `not_applicable`, for example text to speech or per-second transcription (migration `0003`); otherwise it is at least 1. `output_token_limit` may be `0`.
 - A **failed** attempt settles at a known `0` only when the provider rejected it before processing (`upstream_rejected`: 4xx validation, moderation or a filtered/missing model), it reported no usage at all (no token or meter counts, no nonzero provider cost), and every meter of the pinned v3 price is explicitly free or not applicable. Its token counts are recorded as semantic zeros. Every other failure, partial usage, priced or missing meter, and v1/v2 price stays unknown.
 
 Each used meter charges `ceil(count × microusd_per_batch / batch)`; the total is the sum. Any possibly-used meter that is unpriced or unobserved leaves the actual unknown with the known charges kept as a floor. Settled v3 `cost_components` add six meter keys (`output_images_microusd`, `input_characters_microusd`, `input_audio_microusd`, `output_audio_microusd`, `search_units_microusd`, `requests_microusd`) to the six token keys.
 
-The admission hold charges every applicable input-family token meter on the full `input_token_limit` (output on the requested maximum) at its highest applicable tier rate, plus each unit meter's `max_units` at its highest (variant) rate. Tiers above the input ceiling cannot apply. Any non-NA meter without a line, without base (non-tier) coverage, or—unless free—without `max_units` makes the price unbounded: budgeted admission is denied with `budget_exceeded` at the budget's scope. Usage above a ceiling, positive NA usage or an unpriced variant settles when exact but marks `unbounded_cost`. V1/v2 behavior is unchanged.
+The admission hold charges every applicable input-family token meter on the full `input_token_limit` (output on the requested maximum) at its highest applicable tier rate, plus each unit meter's `max_units` at its highest (variant) rate. Tiers above the input ceiling cannot apply. Any non-NA meter without a line (or stated `unknown`), without base (non-tier) coverage, or—unless free—without `max_units` makes the price unbounded: whenever any budget applies, admission is refused before dispatch with **`price_unbounded`** (HTTP 503 like an unpriced route's configuration error, `x-should-retry: false`; it is the price's configuration, never another scope's spending, so it is not `budget_exceeded`). Without budgets the attempt is admitted with an unbounded hold, as before. Usage above a ceiling, positive NA usage or an unpriced variant settles when exact but marks `unbounded_cost`. V1/v2 behavior is unchanged.
+
+### Meter completeness
+
+A v3 publication (`POST .../prices`, the `price` of `POST /platform/model-setup`, and a `batch_price_lines` list, which must state the same meters) must state every meter the route's workload can use. An omitted meter is refused with 400 `error.reason:"price_meters_incomplete"` and `error.missing_meters` (meter names), and nothing is stored. The meters are those the workload's admission bound treats as possibly used:
+
+| Route workload | Meters to state |
+| --- | --- |
+| Text generation, embeddings, rerank, System One, batch models | the six token meters, `output_images`, `input_characters`, `input_audio_seconds_ms`, `output_audio_seconds_ms`, `search_units`, `requests` |
+| Images | the six token meters, `output_images`, `requests` |
+| Speech to text | the six token meters, `input_audio_seconds_ms`, `requests` |
+| Text to speech | the six token meters, `input_characters`, `output_audio_seconds_ms`, `requests` |
+| Realtime | the six token meters, `input_audio_tokens`, `cache_read_audio_tokens`, `output_audio_tokens`, `requests` |
+| Video | the six token meters, `requests`, `output_video_seconds_ms` |
+
+The rule only applies to new publications. Earlier prices that omit a meter are immutable and unchanged; budgeted keys on them now get `price_unbounded` instead of a misleading `budget_exceeded`. Publish a new complete version to fix them. The dashboard always states every meter (its "Unknown" choice publishes `unknown`).
 
 `GET .../prices` adds `price_lines`, `max_units`, `display_lines` and `display_summary`, computed from integers (for example `$0.10/M input tokens`, `$0.0205/image (768)`, `$15/M characters`, `$0.20/minute`). A zero rate always reads `Requests: Free` (`Output images: Free (1K)`), never `$0/request`. Whole dollars omit decimals; otherwise at least two decimals without trailing zeros.
 

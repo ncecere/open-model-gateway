@@ -964,6 +964,96 @@ mod db {
             l("requests","1000",1,"/request")
         ]})
     }
+    /// Every meter the route's workload can use must be stated (priced,
+    /// `not_applicable` or `unknown`); omitted meters are refused with
+    /// `price_meters_incomplete` instead of silently making budgeted keys fail.
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn v3_prices_must_state_every_meter_the_route_can_use(pool: PgPool) {
+        let f = fixture(pool).await;
+        let admin = user(f.owner, true);
+        let p = format!("/api/v1/platform/deployments/{}/prices", f.deployment);
+        let rows = |f: &Fixture| {
+            let pool = f.store.pool.clone();
+            async move {
+                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM deployment_prices")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+            }
+        };
+        let before = rows(&f).await;
+        let mut omitted = v3_body();
+        omitted["price_lines"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|l| l["meter"] != "search_units" && l["meter"] != "requests");
+        omitted.as_object_mut().unwrap().remove("max_units");
+        let (status, v) = call(&f, &admin, "POST", &p, omitted.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{v}");
+        assert_eq!(v["error"]["code"], "400", "{v}");
+        // Deprecated duplicate, kept for one release.
+        assert_eq!(v["error"]["reason"], "price_meters_incomplete", "{v}");
+        assert_eq!(
+            v["error"]["missing_meters"],
+            json!(["search_units", "requests"])
+        );
+        let message = v["error"]["message"].as_str().unwrap();
+        assert!(message.contains("search_units, requests"), "{message}");
+        assert!(message.contains("Text generation"), "{message}");
+        assert_eq!(rows(&f).await, before);
+        // Stating them explicitly unknown publishes; the stored form of an
+        // unknown is no line (exactly what an omitted meter values as).
+        let mut explicit = omitted.clone();
+        for meter in ["search_units", "requests"] {
+            explicit["price_lines"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"meter":meter,"unknown":true}));
+        }
+        let (status, v) = call(&f, &admin, "POST", &p, explicit).await;
+        assert_eq!(status, StatusCode::OK, "{v}");
+        let (_, prices) = call(&f, &admin, "GET", &p, Value::Null).await;
+        let stored = prices["data"][0]["price_lines"].as_array().unwrap();
+        assert!(stored.iter().all(|l| l.get("unknown").is_none()));
+        assert!(!stored.iter().any(|l| l["meter"] == "search_units"));
+        assert_eq!(
+            prices["data"][0]["display_lines"].as_array().unwrap().len(),
+            stored.len()
+        );
+        // An unknown must be exactly `{meter, unknown:true}` and the meter's only line.
+        for bad in [
+            json!({"meter":"requests","unknown":true,"sku_label":"Request"}),
+            json!({"meter":"input_tokens","unknown":true}),
+        ] {
+            let mut body = omitted.clone();
+            body["price_lines"]
+                .as_array_mut()
+                .unwrap()
+                .push(bad.clone());
+            body["price_lines"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"meter":"search_units","unknown":true}));
+            let status = call(&f, &admin, "POST", &p, body).await.0;
+            assert!(
+                matches!(
+                    status,
+                    StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY
+                ),
+                "{bad}: {status}"
+            );
+        }
+        // A batch list states the same meters, unknowns included.
+        let mut batch = v3_body();
+        batch["batch_price_lines"] = omitted["price_lines"].clone();
+        let (status, v) = call(&f, &admin, "POST", &p, batch).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{v}");
+        // v1/v2 are unchanged.
+        assert_eq!(
+            call(&f, &admin, "POST", &p, price()).await.0,
+            StatusCode::OK
+        );
+    }
     #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn v3_prices_publish_display_and_report_meter_totals(pool: PgPool) {
         let f = fixture(pool).await;

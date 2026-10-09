@@ -117,10 +117,7 @@ impl ProviderAdapter for BedrockAdapter {
         }
     }
     fn supports_protocol(&self, protocol: ApiProtocol) -> bool {
-        matches!(
-            protocol,
-            ApiProtocol::ChatCompletions | ApiProtocol::Messages
-        )
+        super::capabilities::serves(self.id(), protocol)
     }
     async fn execute(&self, target: &Deployment, request: ChatRequest) -> Result<ProviderOutput> {
         let plan = auth::Plan::new(target, &self.policy).ok_or(InferenceError::Configuration)?;

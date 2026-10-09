@@ -23,7 +23,7 @@ import { Plus } from "lucide-react";
 import { api, platformPath, wsPath, type Collection, type Grant, type Provider, type ServerPolicy, type Session, type Workspace } from "../lib/api";
 import type { DashboardSearch } from "../lib/permissions";
 import { permissions } from "../lib/permissions";
-import { catalogSorts, catalogTypeTabs, eligibilityLabels, readinessLabels, readinessText, filterCatalog, modelReadiness, modelWorkload, protocolLabel, retiredWorkloads, sortCatalog, typeCounts, type CatalogFilters, type CatalogModel, type CatalogSort, type Eligibility, type Readiness, type WorkspaceCatalogModel } from "../lib/model-setup";
+import { catalogSorts, catalogTypeTabs, eligibilityLabels, readinessLabels, readinessText, filterCatalog, modelReadiness, notServingReason, modelWorkload, protocolLabel, retiredWorkloads, sortCatalog, typeCounts, type CatalogFilters, type CatalogModel, type CatalogSort, type Eligibility, type Readiness, type WorkspaceCatalogModel } from "../lib/model-setup";
 import { HEADLINE_METERS, compareDecimal, formatDecimalMicroUsd, unitText, usdPerMillionFilter, usdToMicroUsd, workloadLabels } from "../lib/pricing";
 import type { WorkloadKind } from "../lib/governance";
 import { ResourceLink, useDashboardNavigation } from "../components/navigation-link";
@@ -183,7 +183,7 @@ export const adminMoreFacets = ["pricing", "policy", "readiness", "enabled", "de
 export function adminStatus(model: CatalogModel, policy?: ServerPolicy): { label: string; tone: "success" | "warning" | "neutral"; hint?: string } {
   if (!model.enabled) return { label: "Disabled", tone: "neutral", hint: "Turned off. Requests are refused." };
   const r = modelReadiness(model, policy), reasons = r.warnings.map(w => readinessLabels[w]);
-  if (r.state === "not_serving") return { label: readinessText.not_serving, tone: "warning", hint: "No enabled route to a provider, so requests fail." };
+  if (r.state === "not_serving") return { label: readinessText.not_serving, tone: "warning", hint: notServingReason(model) ?? "No enabled route to a provider, so requests fail." };
   if (r.state === "retired") return { label: readinessText.retired, tone: "warning", hint: retiredWorkloads[modelWorkload(model)] };
   return { label: readinessText[r.state], tone: r.state === "ready" ? "success" : r.state === "unknown" ? "neutral" : "warning", hint: reasons.join(" · ") || undefined };
 }

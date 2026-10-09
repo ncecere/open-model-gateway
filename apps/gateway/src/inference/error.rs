@@ -24,6 +24,11 @@ pub enum InferenceError {
     /// output reservation) alone exceeds a tokens-per-minute limit at this
     /// scope, so the request can never be admitted until configuration changes.
     TokenReservationExceedsLimit(LimitScope),
+    /// The pinned pricing-v3 price cannot bound this attempt's cost (a meter
+    /// it may use has no line, is explicitly unknown, or has no `max_units`),
+    /// so no budget can be enforced. A configuration problem, never a budget
+    /// denial; refused before dispatch whenever a budget applies.
+    PriceUnbounded,
     /// The "jobs at once" limit (concurrent active video/batch jobs) at this
     /// scope is reached. Retryable once a job finishes or is cancelled.
     JobLimitExceeded(LimitScope),
@@ -46,6 +51,7 @@ impl InferenceError {
             Self::ModelUnavailable => "model_not_found",
             Self::Unsupported => "unsupported_capability",
             Self::Configuration => "provider_configuration_error",
+            Self::PriceUnbounded => "price_unbounded",
             Self::Busy => "rate_limit_error",
             Self::BudgetExceeded(_) => "budget_exceeded",
             Self::UnresolvedUsage(_) => "unresolved_usage",
@@ -65,7 +71,11 @@ impl InferenceError {
     }
     /// Admission denials that retrying cannot fix (`x-should-retry: false`).
     pub fn is_non_retryable_denial(self) -> bool {
-        self.is_budget_denial() || matches!(self, Self::TokenReservationExceedsLimit(_))
+        self.is_budget_denial()
+            || matches!(
+                self,
+                Self::TokenReservationExceedsLimit(_) | Self::PriceUnbounded
+            )
     }
     /// Seconds a client should wait before retrying (`Retry-After`), if known.
     pub fn retry_after_seconds(self) -> Option<u32> {
@@ -80,6 +90,9 @@ impl InferenceError {
             Self::ModelUnavailable => "Model not found or not available to this workspace",
             Self::Unsupported => "No registered deployment supports the requested capabilities",
             Self::Configuration => "Provider configuration is unavailable",
+            Self::PriceUnbounded => {
+                "The model's price cannot bound this request's cost (a meter it may use is unknown or has no per-request maximum), so budgeted keys cannot use it until a Platform Admin publishes a complete price"
+            }
             Self::Busy => "Gateway or provider concurrency/rate limit reached",
             Self::BudgetExceeded(LimitScope::ApiKey) => {
                 "Budget for this API key would be exceeded in its current period"

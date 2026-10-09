@@ -146,3 +146,16 @@ fn unknown_usage_and_tool_argument_fragments() {
     assert_eq!(r.tool_calls[0].arguments, "{}");
     assert!(snapshot("r", "m", 1, &r)["usage"].is_null());
 }
+#[test]
+fn responses_keep_max_output_tokens_and_reject_chat_maxima() {
+    let base = json!({"model":"m","input":"hi","store":false});
+    let mut v = base.clone();
+    v["max_output_tokens"] = json!(7);
+    assert_eq!(parse(v).unwrap().max_output_tokens, Some(7));
+    // The Chat Completions names (including the legacy alias) are not Responses fields.
+    for field in ["max_tokens", "max_completion_tokens"] {
+        let mut v = base.clone();
+        v[field] = json!(7);
+        assert!(parse(v).is_err(), "{field}");
+    }
+}

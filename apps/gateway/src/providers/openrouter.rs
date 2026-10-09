@@ -491,16 +491,7 @@ impl ProviderAdapter for OpenRouterAdapter {
     }
 
     fn supports_protocol(&self, protocol: ApiProtocol) -> bool {
-        matches!(
-            protocol,
-            ApiProtocol::ChatCompletions
-                | ApiProtocol::Embeddings
-                | ApiProtocol::Rerank
-                | ApiProtocol::Systemone
-                | ApiProtocol::Images
-                | ApiProtocol::AudioTranscriptions
-                | ApiProtocol::AudioSpeech
-        )
+        super::capabilities::serves(self.id(), protocol)
     }
 
     fn supports_transcription_request(

@@ -1,15 +1,15 @@
 import type { Model, ModelProtocol, ModelReadiness, ModelSetupBody, PlatformOverviewData, ServerPolicy } from "./api";
 import { checkboxValues, parseCheckboxValues, type Field, type Values } from "./forms";
 import type { WorkloadKind } from "./governance";
-import { compareDecimal, workloadOf, type PriceBody } from "./pricing";
+import { compareDecimal, workloadLabels, workloadOf, type PriceBody } from "./pricing";
 import type { CatalogType } from "./permissions";
 
 // ---------------------------------------------------------------------------
 // Readiness (contract §2). The server returns counts; this derivation is UI-only.
 // Missing readiness is unknown, never "not ready" or "ready".
 // ---------------------------------------------------------------------------
-export type ReadinessWarning = "disabled" | "no_route" | "unpriced" | "not_offered" | "token_ceiling" | "free_blocked" | "provider_retired";
-export const readinessLabels: Record<ReadinessWarning, string> = { disabled: "Disabled", no_route: "No enabled route", unpriced: "Unpriced route", not_offered: "Not offered", token_ceiling: "Token ceilings exceed a tokens-per-minute default", free_blocked: "Free OpenRouter route blocked by the data-collection policy", provider_retired: "Provider API retired" };
+export type ReadinessWarning = "disabled" | "no_route" | "unsupported_route" | "unpriced" | "not_offered" | "token_ceiling" | "free_blocked" | "provider_retired";
+export const readinessLabels: Record<ReadinessWarning, string> = { disabled: "Disabled", no_route: "No enabled route", unsupported_route: "A route's connection can't serve this model", unpriced: "Unpriced route", not_offered: "Not offered", token_ceiling: "Token ceilings exceed a tokens-per-minute default", free_blocked: "Free OpenRouter route blocked by the data-collection policy", provider_retired: "Provider API retired" };
 export type Readiness = { state: "ready" | "needs_attention" | "needs_setup" | "not_serving" | "retired" | "unknown"; warnings: ReadinessWarning[] };
 /**
  * Workloads whose provider API no longer exists, with the reason. OpenAI shut down the Sora 2 models and the Videos
@@ -40,15 +40,31 @@ export function modelReadiness(model: Pick<Model, "enabled"> & { supported_proto
   if (!r) return { state: "unknown", warnings: [] };
   const warnings: ReadinessWarning[] = [];
   if (!model.enabled) warnings.push("disabled");
+  // Enabled routes whose connection profile serves none of the model's protocols (accepted before the gateway
+  // validated routes) fail every request: they don't count as serving. Older gateways omit serving_routes.
+  const serving = r.serving_routes ?? r.enabled_routes;
   if (r.enabled_routes <= 0) warnings.push("no_route");
   else if (r.priced_enabled_routes < r.enabled_routes) warnings.push("unpriced");
+  if ((r.unsupported_routes ?? 0) > 0) warnings.push("unsupported_route");
   const offered = r.catalogs > 0 || r.direct_workspaces > 0;
   if (!offered) warnings.push("not_offered");
   if ((r.routes_over_token_limit ?? 0) > 0) warnings.push("token_ceiling");
   if (policy?.openrouter.data_collection === "deny" && (r.openrouter_free_routes ?? 0) > 0) warnings.push("free_blocked");
   // Pricing is a warning, not a readiness requirement: unpriced usage is recorded as unknown cost.
-  const ready = model.enabled && r.enabled_routes > 0 && offered;
-  return { state: model.enabled && r.enabled_routes <= 0 ? "not_serving" : !ready ? "needs_setup" : warnings.some(w => w === "token_ceiling" || w === "free_blocked") ? "needs_attention" : "ready", warnings };
+  const ready = model.enabled && serving > 0 && offered;
+  return { state: model.enabled && serving <= 0 ? "not_serving" : !ready ? "needs_setup" : warnings.some(w => w === "token_ceiling" || w === "free_blocked" || w === "unsupported_route") ? "needs_attention" : "ready", warnings };
+}
+/**
+ * "Not serving: <reason>" for an enabled model that cannot serve, else undefined. Names the connection profiles whose
+ * routes can't carry the model's workload (the server's capability table, docs/protocol-matrix.md).
+ */
+export function notServingReason(model: Pick<Model, "enabled"> & { supported_protocols?: readonly string[]; readiness?: ModelReadiness | null }): string | undefined {
+  const r = model.readiness;
+  if (!model.enabled || !r || (r.serving_routes ?? r.enabled_routes) > 0) return;
+  if (r.enabled_routes <= 0) return "Not serving: no enabled route to a provider, so requests fail.";
+  const profiles = r.unsupported_profiles ?? [], workload = workloadLabels[workloadOf((model.supported_protocols ?? []) as ModelProtocol[])] ?? "this model";
+  const on = profiles.length ? `${profiles.join(", ")} connection${profiles.length === 1 ? "" : "s"}` : "its connection";
+  return `Not serving: ${on} can't serve ${workload}, so requests fail. Add a route on a connection that serves it, then disable the unsupported route.`;
 }
 
 // ---------------------------------------------------------------------------

@@ -144,7 +144,7 @@ describe("Add model page", () => {
     expect(body.price.price_lines).toContainEqual({ meter: "input_tokens", microusd_per_batch: "123456", batch: 1000000, unit_label: "/M tokens", sku_label: "Input" });
     expect(body.price.price_lines).toContainEqual({ meter: "output_tokens", microusd_per_batch: "9007199254740993", batch: 1000000, unit_label: "/M tokens", sku_label: "Output" });
     expect(body.price.price_lines).toContainEqual({ meter: "requests", microusd_per_batch: "0", batch: 1, unit_label: "/request", sku_label: "Request" });
-    expect(body.price.price_lines.some((l: { meter: string }) => l.meter === "cache_read_tokens")).toBe(false);
+    expect(body.price.price_lines.filter((l: { meter: string }) => l.meter === "cache_read_tokens")).toEqual([{ meter: "cache_read_tokens", unknown: true }]); // stated unknown, never free
     expect(form().getAttribute("data-dirty")).toBeNull();
   });
   it("maps a 409 to API name and connection fields, then retries after a fix", async () => {

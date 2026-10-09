@@ -96,7 +96,7 @@ async fn model_setup_is_one_audited_transaction(pool: PgPool) {
     assert_eq!(m["enabled"], false);
     assert_eq!(
         m["readiness"],
-        json!({"routes":1,"enabled_routes":0,"priced_enabled_routes":0,"type_tokens_per_minute":null,"routes_over_token_limit":0,"openrouter_free_routes":0,"catalogs":2,"direct_workspaces":0,"connections":[{"id":conn,"name":"Cloud"}]})
+        json!({"routes":1,"enabled_routes":0,"priced_enabled_routes":0,"serving_routes":0,"unsupported_routes":0,"unsupported_profiles":[],"type_tokens_per_minute":null,"routes_over_token_limit":0,"openrouter_free_routes":0,"catalogs":2,"direct_workspaces":0,"connections":[{"id":conn,"name":"Cloud"}]})
     );
     let deployment: (Uuid, Uuid, String, bool) = sqlx::query_as(
         "SELECT model_id,provider_connection_id,upstream_model,enabled FROM deployments WHERE id=$1",
@@ -403,15 +403,15 @@ async fn readiness_counts_routes_connections_pricing_and_offer_sources(pool: PgP
     let data = list["data"].as_array().unwrap();
     assert_eq!(
         data[0]["readiness"],
-        json!({"routes":4,"enabled_routes":2,"priced_enabled_routes":1,"type_tokens_per_minute":null,"routes_over_token_limit":0,"openrouter_free_routes":0,"catalogs":1,"direct_workspaces":0,"connections":[{"id":off,"name":"Alpha"},{"id":on,"name":"Zulu"}]})
+        json!({"routes":4,"enabled_routes":2,"priced_enabled_routes":1,"serving_routes":2,"unsupported_routes":0,"unsupported_profiles":[],"type_tokens_per_minute":null,"routes_over_token_limit":0,"openrouter_free_routes":0,"catalogs":1,"direct_workspaces":0,"connections":[{"id":off,"name":"Alpha"},{"id":on,"name":"Zulu"}]})
     );
     assert_eq!(
         data[1]["readiness"],
-        json!({"routes":1,"enabled_routes":0,"priced_enabled_routes":0,"type_tokens_per_minute":null,"routes_over_token_limit":0,"openrouter_free_routes":0,"catalogs":0,"direct_workspaces":2,"connections":[{"id":off,"name":"Alpha"}]})
+        json!({"routes":1,"enabled_routes":0,"priced_enabled_routes":0,"serving_routes":0,"unsupported_routes":0,"unsupported_profiles":[],"type_tokens_per_minute":null,"routes_over_token_limit":0,"openrouter_free_routes":0,"catalogs":0,"direct_workspaces":2,"connections":[{"id":off,"name":"Alpha"}]})
     );
     assert_eq!(
         data[2]["readiness"],
-        json!({"routes":0,"enabled_routes":0,"priced_enabled_routes":0,"type_tokens_per_minute":null,"routes_over_token_limit":0,"openrouter_free_routes":0,"catalogs":0,"direct_workspaces":0,"connections":[]})
+        json!({"routes":0,"enabled_routes":0,"priced_enabled_routes":0,"serving_routes":0,"unsupported_routes":0,"unsupported_profiles":[],"type_tokens_per_minute":null,"routes_over_token_limit":0,"openrouter_free_routes":0,"catalogs":0,"direct_workspaces":0,"connections":[]})
     );
     // Disabled workspaces no longer count as direct offers.
     sqlx::query("UPDATE workspaces SET disabled_at=now() WHERE id=$1")
@@ -810,4 +810,265 @@ async fn readiness_flags_ceilings_over_type_token_limits_and_blocked_free_routes
         ),
         json!({"openrouter":{"data_collection":"deny","free_models_available":false}})
     );
+}
+
+async fn local_connection(pool: &PgPool, name: &str, profile: &str) -> Uuid {
+    let id = Uuid::new_v4();
+    sqlx::query("INSERT INTO provider_connections(id,name,provider,credential_ref,endpoint,enabled) VALUES($1,$2,$3,'none','http://127.0.0.1:8000/v1',true)")
+        .bind(id)
+        .bind(name)
+        .bind(profile)
+        .execute(pool)
+        .await
+        .unwrap();
+    id
+}
+fn workload_setup(name: &str, protocol: &str, connection: Uuid) -> Value {
+    let mut body = setup_body(name, connection, Value::Null, &[]);
+    body["model"]["supported_protocols"] = json!([protocol]);
+    body
+}
+fn assert_unsupported(status: StatusCode, v: &Value, profile: &str, workload: &str) {
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{v}");
+    assert_eq!(v["error"]["code"], "400", "{v}");
+    // Deprecated duplicate, kept for one release.
+    assert_eq!(v["error"]["reason"], "route_unsupported_capability", "{v}");
+    let message = v["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains(profile) && message.contains(workload),
+        "{message}"
+    );
+}
+
+/// Routes are validated against the shared capability table (the one the
+/// inference path uses for `unsupported_capability`) at model setup, route
+/// creation, route enabling and model protocol changes.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn routes_the_adapter_cannot_serve_are_rejected(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let vllm = local_connection(&pool, "Spark embeddings", "vllm").await;
+    let ollama = local_connection(&pool, "Ollama", "ollama").await;
+    let before = counts(&pool).await;
+    for (protocol, conn, profile, workload) in [
+        ("systemone", vllm, "vllm", "System One"),
+        ("rerank", ollama, "ollama", "Rerank"),
+        ("responses", vllm, "vllm", "Text generation"),
+        ("images", ollama, "ollama", "Image generation"),
+    ] {
+        let (status, v) = call(
+            &f.s,
+            &f.admin,
+            "POST",
+            "/api/v1/platform/model-setup",
+            workload_setup(&format!("bad/{protocol}"), protocol, conn),
+        )
+        .await;
+        assert_unsupported(status, &v, profile, workload);
+        assert_eq!(counts(&pool).await, before, "{protocol} persisted state");
+    }
+    // What the profile serves is accepted, including a text model whose other
+    // protocols another route serves.
+    for (name, protocol, conn) in [
+        ("ok/rerank", "rerank", vllm),
+        ("ok/systemone", "systemone", ollama),
+        ("ok/embeddings", "embeddings", vllm),
+    ] {
+        let (status, v) = call(
+            &f.s,
+            &f.admin,
+            "POST",
+            "/api/v1/platform/model-setup",
+            workload_setup(name, protocol, conn),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{name}: {v}");
+    }
+    let mut text = setup_body("ok/text", vllm, Value::Null, &[]);
+    text["model"]["supported_protocols"] = json!(["chat_completions", "responses"]);
+    let (status, v) = call(&f.s, &f.admin, "POST", "/api/v1/platform/model-setup", text).await;
+    assert_eq!(status, StatusCode::CREATED, "{v}");
+
+    // POST /platform/deployments uses the same rule.
+    let (status, v) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        "/api/v1/platform/models",
+        json!({"public_name":"decider","display_name":"Decider","description":null,"enabled":true,"supported_protocols":["systemone"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let decider = id(&v);
+    let before = counts(&pool).await;
+    let (status, v) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        "/api/v1/platform/deployments",
+        json!({"model_id":decider,"provider_connection_id":vllm,"upstream_model":"cygnet","enabled":true}),
+    )
+    .await;
+    assert_unsupported(status, &v, "vllm", "System One");
+    assert_eq!(counts(&pool).await, before);
+    let (status, v) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        "/api/v1/platform/deployments",
+        json!({"model_id":decider,"provider_connection_id":ollama,"upstream_model":"nimble","enabled":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+
+    // A model's protocols cannot move away from what its enabled routes serve.
+    let (status, v) = call(
+        &f.s,
+        &f.admin,
+        "PATCH",
+        &format!("/api/v1/platform/models/{decider}"),
+        json!({"supported_protocols":["rerank"]}),
+    )
+    .await;
+    assert_unsupported(status, &v, "ollama", "Rerank");
+    let stored: Vec<String> =
+        sqlx::query_scalar("SELECT supported_protocols FROM models WHERE id=$1")
+            .bind(decider)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored, ["systemone"]);
+}
+
+/// Routes accepted before validation existed are not migrated: readiness says
+/// they cannot serve, enabling one again is refused, disabling is allowed.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn existing_unservable_routes_read_not_serving(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let vllm = local_connection(&pool, "Spark embeddings", "vllm").await;
+    let cloud = connection(&pool, "Cloud", true).await;
+    let m = model(&pool, "legacy/systemone").await;
+    sqlx::query(
+        "UPDATE models SET supported_protocols=ARRAY['systemone'],enabled=true WHERE id=$1",
+    )
+    .bind(m)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let bad = route(&pool, m, vllm, true, true).await;
+    let parked = route(&pool, m, vllm, false, false).await;
+    let c = new_catalog(&f, "Offer").await;
+    put_model_catalogs(&f, m, &[c]).await;
+    direct(&pool, f.team, m).await;
+    let (status, v) = get(&f, &f.auditor, &format!("/api/v1/platform/models/{m}")).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let r = &v["readiness"];
+    assert_eq!(r["enabled_routes"], 1, "{r}");
+    assert_eq!(r["serving_routes"], 0, "{r}");
+    assert_eq!(r["unsupported_routes"], 1, "{r}");
+    assert_eq!(r["unsupported_profiles"], json!(["vllm"]), "{r}");
+    let (_, o) = get(&f, &f.auditor, "/api/v1/platform/overview").await;
+    assert_eq!(o["setup"]["ready_models"], 0, "{o}");
+    // Workspace members see it as not serving (no route that can serve).
+    let (status, catalog) = get(
+        &f,
+        &f.owner,
+        &format!("/api/v1/workspaces/{}/catalog", f.team),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{catalog}");
+    let row = catalog["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["model_id"] == m.to_string())
+        .unwrap();
+    assert_eq!(row["routes"], 0, "{row}");
+    // Enabling another unservable route is refused; disabling the bad one works.
+    let (status, v) = call(
+        &f.s,
+        &f.admin,
+        "PATCH",
+        &format!("/api/v1/platform/deployments/{parked}"),
+        json!({"enabled":true}),
+    )
+    .await;
+    assert_unsupported(status, &v, "vllm", "System One");
+    let (status, v) = call(
+        &f.s,
+        &f.admin,
+        "PATCH",
+        &format!("/api/v1/platform/deployments/{bad}"),
+        json!({"enabled":false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    // A servable route makes it ready again.
+    let other = model(&pool, "fine/chat").await;
+    let fine = route(&pool, other, cloud, false, true).await;
+    let (status, v) = call(
+        &f.s,
+        &f.admin,
+        "PATCH",
+        &format!("/api/v1/platform/deployments/{fine}"),
+        json!({"enabled":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+}
+
+/// Model setup publishes through the same price rule: an embeddings v3 price
+/// must state every meter an embeddings route can use, or nothing is created.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn model_setup_refuses_v3_prices_with_omitted_meters(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let vllm = local_connection(&pool, "Spark embeddings", "vllm").await;
+    let line = |meter: &str, amount: &str, batch: u64, unit: &str| json!({"meter":meter,"microusd_per_batch":amount,"batch":batch,"unit_label":unit,"sku_label":"Line"});
+    let na = |meter: &str| json!({"meter":meter,"not_applicable":true});
+    let lines = |extra: Vec<Value>| {
+        let mut l = vec![
+            line("input_tokens", "10000", 1_000_000, "/M tokens"),
+            na("output_tokens"),
+            na("cache_read_tokens"),
+            na("cache_write_tokens"),
+            na("cache_write_5m_tokens"),
+            na("cache_write_1h_tokens"),
+            line("requests", "0", 1, "/request"),
+        ];
+        l.extend(extra);
+        json!({"pricing_version":3,"input_token_limit":8192,"output_token_limit":0,"price_lines":l})
+    };
+    let before = counts(&pool).await;
+    let mut body = workload_setup("spark/embed", "embeddings", vllm);
+    body["price"] = lines(vec![]);
+    let (status, v) = call(&f.s, &f.admin, "POST", "/api/v1/platform/model-setup", body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{v}");
+    assert_eq!(v["error"]["code"], "400", "{v}");
+    assert_eq!(v["error"]["reason"], "price_meters_incomplete");
+    assert_eq!(
+        v["error"]["missing_meters"],
+        json!([
+            "output_images",
+            "input_characters",
+            "input_audio_seconds_ms",
+            "output_audio_seconds_ms",
+            "search_units"
+        ])
+    );
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Embeddings")
+    );
+    assert_eq!(counts(&pool).await, before);
+    let mut body = workload_setup("spark/embed", "embeddings", vllm);
+    body["price"] = lines(vec![
+        na("output_images"),
+        na("input_characters"),
+        na("input_audio_seconds_ms"),
+        na("output_audio_seconds_ms"),
+        json!({"meter":"search_units","unknown":true}),
+    ]);
+    let (status, v) = call(&f.s, &f.admin, "POST", "/api/v1/platform/model-setup", body).await;
+    assert_eq!(status, StatusCode::CREATED, "{v}");
 }

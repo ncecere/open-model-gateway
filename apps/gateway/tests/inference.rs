@@ -1195,6 +1195,84 @@ async fn rerank_reaches_http_with_v3_meter_settlement(pool: PgPool) {
     assert_eq!(adapter.calls.load(Ordering::SeqCst), 1);
 }
 
+/// A v3 price published before meter completeness was required (here: no
+/// `search_units` line) stays unchanged, but budgeted keys now get a distinct
+/// `price_unbounded` (503, like an unpriced route's configuration error, and
+/// non-retryable) instead of a misleading `budget_exceeded`.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn unbounded_v3_price_is_a_distinct_non_retryable_error(pool: PgPool) {
+    let (app, keys, adapter, _) = fixture(&pool, false).await;
+    workload_model(&pool, "rerank").await;
+    let deployment: Uuid = sqlx::query_scalar("SELECT id FROM deployments")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let na = |m: &str| json!({"meter":m,"not_applicable":true});
+    let lines = json!([
+        {"meter":"input_tokens","microusd_per_batch":"1000000","batch":1000000,"unit_label":"/M tokens","sku_label":"Input"},
+        na("output_tokens"), na("cache_read_tokens"), na("cache_write_tokens"), na("cache_write_5m_tokens"),
+        na("cache_write_1h_tokens"), na("output_images"), na("input_characters"), na("input_audio_seconds_ms"),
+        na("output_audio_seconds_ms"),
+        {"meter":"requests","microusd_per_batch":"0","batch":1,"unit_label":"/request","sku_label":"Request"}
+    ]);
+    let price = Uuid::new_v4();
+    sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_token_limit,output_token_limit,pricing_version,price_lines,max_units) VALUES($1,$2,1000,0,3,$3,'{}')")
+        .bind(price).bind(deployment).bind(&lines).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO policy_budgets(layer,period,amount_microusd) VALUES('installation','month',1000000000)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let response = app
+        .clone()
+        .oneshot(protocol_request(
+            &keys.personal_key.token,
+            "/v1/rerank",
+            rerank_body(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.headers()["x-should-retry"], "false");
+    let (status, body, _) = json_body(response).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["error"]["code"], "price_unbounded");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot bound")
+    );
+    assert_eq!(adapter.calls.load(Ordering::SeqCst), 0);
+    let reservations: i64 = sqlx::query_scalar("SELECT count(*) FROM governance_reservations")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(reservations, 0);
+    // The immutable row is unchanged.
+    let stored: Value = sqlx::query_scalar("SELECT price_lines FROM deployment_prices WHERE id=$1")
+        .bind(price)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, lines);
+    // Without a budget the attempt is admitted with an unbounded hold, as before.
+    sqlx::query("DELETE FROM policy_budgets")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let response = app
+        .oneshot(protocol_request(
+            &keys.personal_key.token,
+            "/v1/rerank",
+            rerank_body(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(adapter.calls.load(Ordering::SeqCst), 1);
+}
+
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn systemone_speaks_the_typesafe_contract_over_http(pool: PgPool) {
     let (app, keys, adapter, _) = fixture(&pool, false).await;

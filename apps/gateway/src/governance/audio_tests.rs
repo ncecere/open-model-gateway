@@ -159,7 +159,7 @@ async fn unmeasured_audio_needs_price_max_units_and_ceilings_never_loosen_it(poo
     assert_eq!(
         admit_workload_for_deployment(&f.store, &f.start(), &m4a.admission(), 30, &deployment)
             .await,
-        Err(InferenceError::BudgetExceeded(LimitScope::Workspace))
+        Err(InferenceError::PriceUnbounded)
     );
     // A ten-minute max_units bounds it at $0.06.
     price(&f, per_minute(), json!({"input_audio_seconds_ms":"600000"})).await;
@@ -180,7 +180,7 @@ async fn unmeasured_audio_needs_price_max_units_and_ceilings_never_loosen_it(poo
     assert_eq!(
         admit_workload_for_deployment(&f.store, &f.start(), &short.admission(), 30, &deployment)
             .await,
-        Err(InferenceError::BudgetExceeded(LimitScope::Workspace))
+        Err(InferenceError::PriceUnbounded)
     );
     budget(&f, None).await;
     let start = f.start();
@@ -310,7 +310,7 @@ async fn cancelled_speech_keeps_its_hold_and_unbounded_output_is_refused(pool: P
     assert_eq!(
         admit_workload_for_deployment(&f.store, &f.start(), &request.admission(), 30, &deployment)
             .await,
-        Err(InferenceError::BudgetExceeded(LimitScope::Workspace))
+        Err(InferenceError::PriceUnbounded)
     );
     // Priced output audio (per minute) cannot be bounded by the request.
     price(
@@ -325,7 +325,7 @@ async fn cancelled_speech_keeps_its_hold_and_unbounded_output_is_refused(pool: P
     assert_eq!(
         admit_workload_for_deployment(&f.store, &f.start(), &request.admission(), 30, &deployment)
             .await,
-        Err(InferenceError::BudgetExceeded(LimitScope::Workspace))
+        Err(InferenceError::PriceUnbounded)
     );
     price(
         &f,

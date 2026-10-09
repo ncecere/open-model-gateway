@@ -163,7 +163,7 @@ async fn rerank_unbounded_search_units_deny_budget_and_unknown_count_keeps_floor
     assert_eq!(
         admit_workload_for_deployment(&f.store, &f.start(), &rerank_admission(), 30, &deployment)
             .await,
-        Err(InferenceError::BudgetExceeded(LimitScope::Workspace))
+        Err(InferenceError::PriceUnbounded)
     );
     budget(&f, None).await;
     let start = f.start();
