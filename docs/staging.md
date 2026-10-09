@@ -12,7 +12,7 @@ This is a **single-host staging baseline, not approval for public production lau
 - Runtime readiness verifies migration versions/checksums. Startup never runs migrations or provisions identities. The default pool is 10 connections per replica: size database capacity accordingly.
 - The image `HEALTHCHECK` runs `open-model-gateway healthcheck` in exec form; ingress waits for it. Use `docker compose exec gateway /usr/local/bin/open-model-gateway healthcheck` for a manual probe; `sh`/`curl` inside the gateway container do not exist.
 
-For reproducible releases, build/tag the image with the Git commit and promote the tested image by digest. Do not substitute a newly rebuilt mutable tag during rollback. The runtime base image is pinned by digest in the `Dockerfile`; the build-stage images (`node`, `rust`) and the Compose images (`postgres`, `caddy`) are pinned by version tag only, so pin those to reviewed digests in your release process.
+For reproducible releases, build/tag the image with the Git commit and promote the tested image by digest. Do not substitute a newly rebuilt mutable tag during rollback. The runtime base image is pinned by digest in the `Dockerfile`; the build-stage images (`node`, `rust`, pulled through Google's Docker Hub mirror `mirror.gcr.io`) and the Compose images (`postgres`, `caddy`) are pinned by version tag only, so pin those to reviewed digests in your release process. `STAGING_POSTGRES_IMAGE` and `STAGING_CADDY_IMAGE` (in `staging.env` or the environment) replace the Compose images; CI sets them to the `mirror.gcr.io/library/...` copies so it never pulls from Docker Hub ([verification](verification.md#no-docker-hub-pulls-in-ci)).
 
 ## Image CI and registry publication
 

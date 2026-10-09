@@ -75,7 +75,8 @@ before(async () => {
     assert.equal(build.status, 0, "docker build failed");
   }
   ok(["network", "create", "--internal", network]);
-  ok(["run", "-d", "--name", database, "--network", network, "-e", `POSTGRES_PASSWORD=${password}`, "postgres:17-alpine"]);
+  // Docker Hub's official image via Google's mirror (no Docker Hub pull in CI).
+  ok(["run", "-d", "--name", database, "--network", network, "-e", `POSTGRES_PASSWORD=${password}`, "mirror.gcr.io/library/postgres:17-alpine"]);
   await waitFor(() => docker(["exec", database, "pg_isready", "-U", "postgres", "-h", "127.0.0.1"]).status === 0, "PostgreSQL");
   databaseUrlFile = secret("database url", `postgres://postgres:${password}@${database}:5432/postgres\n`);
 });

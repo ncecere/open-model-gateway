@@ -37,3 +37,7 @@ No migrations and no new runtime grants: the readiness and validation queries re
 - the inference error code `price_unbounded`.
 
 After upgrading, open Admin › Models and filter by **Not serving** to find routes that can't serve. For any model whose budgeted requests report `price_unbounded`, publish a complete price.
+
+## Build and CI
+
+CI and the release pipeline no longer pull from Docker Hub, whose anonymous rate limit and an outage failed builds on GitHub's shared runners. The `Dockerfile`'s node and rust build stages now come from `mirror.gcr.io`, Google's Docker Hub mirror (the same image digests), and it uses BuildKit's built-in Dockerfile frontend (no `# syntax=` line). The runtime image is unchanged. The staging Compose file still defaults to Docker Hub's `postgres` and `caddy`; `STAGING_POSTGRES_IMAGE` and `STAGING_CADDY_IMAGE` replace them. Details: [verification](../verification.md#no-docker-hub-pulls-in-ci).

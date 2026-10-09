@@ -19,10 +19,15 @@ use sha2::Digest;
 use uuid::Uuid;
 
 /// Upstream MinIO stopped publishing community images in October 2025; this is
-/// the pgsty community build of the upstream AGPL source.
-const MINIO_IMAGE: &str = "pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372";
-const RUSTFS_IMAGE: &str =
-    "rustfs/rustfs:1.0.1@sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c";
+/// the pgsty community build of the upstream AGPL source. pgsty publishes only
+/// to Docker Hub, so it is pulled through Google's Docker Hub mirror (same
+/// digest; no Docker Hub rate limit). The mirror serves only images it has
+/// cached, so [`pull`] retries with backoff and names the override on failure.
+const MINIO_IMAGE: &str = "mirror.gcr.io/pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372";
+/// RustFS's own registry (the same digest as its Docker Hub image).
+const RUSTFS_IMAGE: &str = "ghcr.io/rustfs/rustfs:1.0.1@sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c";
+/// Bounded pull retries: 4 attempts, waiting 5, 10 and 20 seconds between them.
+const PULL_ATTEMPTS: u32 = 4;
 const CHUNK: usize = 65_536;
 const PART: usize = 8 * 1024 * 1024;
 const KEYS: &str = "it2026:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
@@ -52,6 +57,39 @@ impl Drop for Container {
             .args(["rm", "-f", "-v", &self.0])
             .output();
     }
+}
+
+/// Pulls `image` unless it is already present, retrying transient registry
+/// failures with exponential backoff (bounded by [`PULL_ATTEMPTS`]).
+fn pull(image: &str, override_var: &str) {
+    let present = Command::new("docker")
+        .args(["image", "inspect", "--format", "{{.Id}}", image])
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if present {
+        return;
+    }
+    let mut last = String::new();
+    for attempt in 1..=PULL_ATTEMPTS {
+        let out = Command::new("docker")
+            .args(["pull", "--quiet", image])
+            .output()
+            .expect("docker pull");
+        if out.status.success() {
+            return;
+        }
+        last = String::from_utf8_lossy(&out.stderr).trim().to_owned();
+        if attempt < PULL_ATTEMPTS {
+            let wait = Duration::from_secs(5 << (attempt - 1));
+            eprintln!(
+                "docker pull {image} failed (attempt {attempt}/{PULL_ATTEMPTS}), retrying in {wait:?}: {last}"
+            );
+            std::thread::sleep(wait);
+        }
+    }
+    panic!(
+        "docker pull {image} failed after {PULL_ATTEMPTS} attempts ({last}); set {override_var} to another reference for the same image"
+    );
 }
 
 fn start(image: &str, env: &[(&str, &str)], args: &[&str]) -> (Container, u16) {
@@ -102,6 +140,7 @@ fn secret() -> String {
 fn minio() -> Target {
     let secret = secret();
     let image = std::env::var("FILESTORE_MINIO_IMAGE").unwrap_or_else(|_| MINIO_IMAGE.into());
+    pull(&image, "FILESTORE_MINIO_IMAGE");
     let (container, port) = start(
         &image,
         &[
@@ -121,6 +160,7 @@ fn minio() -> Target {
 fn rustfs() -> Target {
     let secret = secret();
     let image = std::env::var("FILESTORE_RUSTFS_IMAGE").unwrap_or_else(|_| RUSTFS_IMAGE.into());
+    pull(&image, "FILESTORE_RUSTFS_IMAGE");
     let (container, port) = start(
         &image,
         &[

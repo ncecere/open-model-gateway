@@ -18,6 +18,11 @@
 # image and carried into the index.
 #
 # Every action is pinned by commit SHA; the comment gives the version.
+#
+# No Docker Hub pulls (its anonymous pull limit and outages failed builds on
+# shared runners): BuildKit, the SBOM generator and the staging PostgreSQL and
+# Caddy images come from mirror.gcr.io, Google's Docker Hub mirror (same
+# digests); the Dockerfile's build stages do too.
 name: image
 on:
   workflow_call:
@@ -50,6 +55,10 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      # Staging rehearsal images (deploy/staging/compose.yaml defaults to Docker Hub).
+      STAGING_POSTGRES_IMAGE: mirror.gcr.io/library/postgres:17-bookworm
+      STAGING_CADDY_IMAGE: mirror.gcr.io/library/caddy:2-alpine
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -59,6 +68,9 @@ jobs:
         run: echo "PLATFORM_PAIR=${PLATFORM//\//-}" >> "$GITHUB_ENV"
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          # BuildKit from mirror.gcr.io instead of Docker Hub.
+          driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
 
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -84,7 +96,8 @@ jobs:
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,"name=${{ env.IMAGE }}",push-by-digest=true,name-canonical=true,push=true
-          sbom: true
+          # SBOM generator from mirror.gcr.io (`sbom: true` pulls it from Docker Hub).
+          attests: type=sbom,generator=mirror.gcr.io/docker/buildkit-syft-scanner:stable-1@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9
           provenance: mode=max
           cache-from: type=gha,scope=image-${{ env.PLATFORM_PAIR }}
           cache-to: type=gha,mode=max,scope=image-${{ env.PLATFORM_PAIR }}
@@ -196,6 +209,9 @@ jobs:
           merge-multiple: true
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          # BuildKit from mirror.gcr.io instead of Docker Hub.
+          driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
 
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:

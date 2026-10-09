@@ -13,7 +13,7 @@ Run from the repository root. None of them make paid provider calls or touch the
 | `npm run typecheck:web` / `npm run test:web` / `npm run build:web` | SPA types, Vitest unit/component tests, production build | Node 22 |
 | `npm run test:browser` | Playwright end-to-end journey and axe accessibility scans (below) | Disposable PostgreSQL, Rust, Chromium (`npx playwright install chromium`) |
 | `npm run test:demo` | Local demo issuer and runtime helper | Node, Python 3 |
-| `npm run test:container` | Runtime image contract (`tests/container-image.test.mjs`): distroless (no shell, package manager, curl, perl, Node or Cargo), UID 10001, read-only root filesystem, `_FILE` secret import and refusal, `serve` never migrates, explicit `migrate`, exec-form `healthcheck`, graceful `SIGTERM` as PID 1 | Docker, Node; builds the image unless `OMG_CONTAINER_IMAGE` names one; uses a throwaway `postgres:17-alpine` on an internal network |
+| `npm run test:container` | Runtime image contract (`tests/container-image.test.mjs`): distroless (no shell, package manager, curl, perl, Node or Cargo), UID 10001, read-only root filesystem, `_FILE` secret import and refusal, `serve` never migrates, explicit `migrate`, exec-form `healthcheck`, graceful `SIGTERM` as PID 1 | Docker, Node; builds the image unless `OMG_CONTAINER_IMAGE` names one; uses a throwaway `mirror.gcr.io/library/postgres:17-alpine` on an internal network |
 | `npm run test:staging` | Staging (including the runtime-image checks of `verify`), provider-acceptance and backup helpers | Python 3 |
 | `cargo deny check` | Supply chain: RustSec advisories (vulnerable, unmaintained, unsound, yanked), licence allow-list, duplicate-version warnings, crates.io-only sources; policy in `deny.toml` | [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny) 0.20 (`cargo install cargo-deny --locked` or the release binary); fetches the advisory database |
 | `npm audit --omit=dev --audit-level=high` | Supply chain: high and critical advisories in production npm dependencies (the SPA bundle) | Node 22; reads `package-lock.json` |
@@ -22,7 +22,24 @@ CI (`.github/workflows/ci.yml`) runs all of these; the `browser` job uses a Post
 
 ### Supply chain
 
-CI's `cargo-deny` job runs `cargo deny --all-features check` (SHA-pinned `EmbarkStudios/cargo-deny-action`), and the `npm-audit` job gates on `npm audit --omit=dev --audit-level=high` and writes the full, non-blocking `npm audit` (dev tooling included) to the job summary. `.github/workflows/codeql.yml` runs CodeQL for `javascript-typescript` and `rust` (build mode `none`) on pushes to `main`, pull requests and weekly; results appear on the Security tab. `.github/dependabot.yml` opens weekly grouped updates for Cargo, npm (root workspace), GitHub Actions (SHA pins) and the `Dockerfile` base images. The release image is additionally scanned by Trivy in `image.yml`.
+CI's `cargo-deny` job runs `cargo deny --all-features check` (cargo-deny 0.20.2's release binary, installed and checksum-verified by the SHA-pinned `taiki-e/install-action`), and the `npm-audit` job gates on `npm audit --omit=dev --audit-level=high` and writes the full, non-blocking `npm audit` (dev tooling included) to the job summary. `.github/workflows/codeql.yml` runs CodeQL for `javascript-typescript` and `rust` (build mode `none`) on pushes to `main`, pull requests and weekly; results appear on the Security tab. `.github/dependabot.yml` opens weekly grouped updates for Cargo, npm (root workspace), GitHub Actions (SHA pins) and the `Dockerfile` base images. The release image is additionally scanned by Trivy in `image.yml`.
+
+### No Docker Hub pulls in CI
+
+GitHub's shared runners hit Docker Hub's anonymous pull limit, and a Docker Hub outage (`auth.docker.io` 504) failed builds, so CI and the release pipeline pull nothing from Docker Hub:
+
+| Image or tool | Source |
+| --- | --- |
+| `Dockerfile` build stages (`node`, `rust`) | `mirror.gcr.io/library/...`, Google's Docker Hub mirror (the same image digests). No `# syntax=` line: BuildKit's built-in Dockerfile frontend. The runtime base was already `gcr.io/distroless`. |
+| PostgreSQL service containers (`gateway`, `browser` jobs) and `test:container`'s database | `mirror.gcr.io/library/postgres:17-alpine` |
+| Staging rehearsal PostgreSQL and Caddy | `STAGING_POSTGRES_IMAGE` / `STAGING_CADDY_IMAGE` set to `mirror.gcr.io/library/postgres:17-bookworm` and `mirror.gcr.io/library/caddy:2-alpine` by `ci.yml` and `image.yml`. `deploy/staging/compose.yaml` still defaults to Docker Hub for operators. |
+| BuildKit (`docker/setup-buildx-action`) | `driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1@sha256:…` |
+| SBOM generator | `attests: type=sbom,generator=mirror.gcr.io/docker/buildkit-syft-scanner:stable-1@sha256:…` (replaces `sbom: true`) |
+| MinIO / RustFS file-store tests | `mirror.gcr.io/pgsty/minio@sha256:…` (pgsty publishes only to Docker Hub; the pull is retried with backoff) and `ghcr.io/rustfs/rustfs@sha256:…` (RustFS's own registry). Same digests as on Docker Hub. |
+| cargo-deny | Release binary via `taiki-e/install-action` (not the Docker-based `EmbarkStudios/cargo-deny-action`) |
+| Trivy | Its vulnerability database already defaults to `mirror.gcr.io/aquasec`, then `ghcr.io` |
+
+The mirror serves only images it has cached: popular official images are, but an image or tag nobody has pulled through it is "not found". Before changing a mirror reference, check that it resolves and matches Docker Hub, for example `docker buildx imagetools inspect mirror.gcr.io/library/rust:1.99.0-bookworm` and the same for `rust:1.99.0-bookworm`. Dependabot's `docker` updates still track the `Dockerfile`'s mirrored build stages (it queries `mirror.gcr.io`, whose tag list holds only cached tags, so a new version can appear there later than on Docker Hub; bump by hand if it lags). The mirror references in workflows, tests and the staging overrides are not tracked by Dependabot and are updated by hand. Local developer stacks (`compose.yaml`, `deploy/demo/compose.yaml`) are not used by CI and still pull from Docker Hub.
 
 `deny.toml` ignores two advisories, each with its reason: RUSTSEC-2023-0071 (`rsa` via `openidconnect`; no fixed release, and the gateway only verifies ID-token signatures with public keys) and RUSTSEC-2026-0253 (`lru` via the pinned `aws-sdk-s3`; unsound only when a key's `Drop` panics, fixed with the next AWS SDK generation). No licence exceptions are needed; the allow-list is MIT, MIT-0, Apache-2.0 (with or without LLVM-exception), BSD-2/3-Clause, ISC, 0BSD, Zlib, Unicode-3.0 and CDLA-Permissive-2.0 (`webpki-roots`).
 

@@ -68,6 +68,14 @@ updates:
   # runtime digest). No update-types filter: the only image with possible
   # majors (node) ignores them below, and a filter would split digest-only
   # refreshes (no version change) out of the group.
+  #
+  # The node and rust stages come from mirror.gcr.io (Google's Docker Hub
+  # mirror; CI avoids Docker Hub's pull limit), so Dependabot reads their
+  # tags from the mirror and names them library/node and library/rust. The
+  # mirror lists only tags it has cached, so a release can show up there
+  # later than on Docker Hub. Mirror references outside the Dockerfile
+  # (workflows, tests, staging overrides) are updated by hand; see
+  # docs/verification.md, "No Docker Hub pulls in CI".
   - package-ecosystem: docker
     directory: /
     schedule:
@@ -80,5 +88,5 @@ updates:
     ignore:
       # The SPA build stage tracks the Node 22 LTS line used by CI
       # (package.json engines); a major Node move is a deliberate change.
-      - dependency-name: node
+      - dependency-name: library/node
         update-types: ["version-update:semver-major"]

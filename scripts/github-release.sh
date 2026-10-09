@@ -56,7 +56,7 @@ if jq -e 'type == "object" and has("SPDX")' "$sboms" >/dev/null; then
   jq '{"image": .}' "$sboms" >"${sboms}.tmp" && mv "${sboms}.tmp" "$sboms"
 fi
 platforms="$(jq -r 'if type == "object" then keys[] else empty end' "$sboms")"
-[ -n "$platforms" ] || fail "${ref} has no SBOM attestation (was it built with sbom: true?)"
+[ -n "$platforms" ] || fail "${ref} has no SBOM attestation (was it built with an SBOM attestation?)"
 files=()
 while IFS= read -r platform; do
   name="open-model-gateway-${TAG}-${platform//\//-}.sbom.spdx.json" # linux/amd64 -> linux-amd64
