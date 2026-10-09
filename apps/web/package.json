@@ -1,6 +1,6 @@
 {
   "name": "@omg/web",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "type": "module",
   "scripts": { "dev": "vite", "build": "tsc --noEmit && vite build", "typecheck": "tsc --noEmit", "test": "vitest run", "ui:check": "node ../../../../typescript/bitop-ui/packages/cli/bin/bitop.mjs diff --check --registry ../../../../typescript/bitop-ui" },
