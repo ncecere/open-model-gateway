@@ -181,7 +181,7 @@ export function compareDecimal(a: string, b: string): -1 | 0 | 1 {
   const x = BigInt(ai + af.padEnd(len, "0")), y = BigInt(bi + bf.padEnd(len, "0"));
   return x === y ? 0 : x > y ? 1 : -1;
 }
-/** Period rates for Explore and Accounting details (not tiles): exact text; Unknown never $0; "—" when idle. */
+/** Period rates for Explore and the Accounting card (not tiles): exact text; Unknown never $0; "—" when idle. */
 export function rateTexts(o: Pick<UsageOverview, "tiles">): { cacheHit: string; blended: { text: string; exact: string } } {
   const t = o.tiles, zero = (v: string | null) => v != null && /^0+(?:\.0+)?$/.test(v), idle = zero(t.requests.value) && zero(t.spend.value);
   const rate = formatRatioPercent(t.cache_hit_rate.value), blended = t.blended_microusd_per_million.value;

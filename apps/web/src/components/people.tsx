@@ -126,7 +126,8 @@ export function DirectoryTable<T>({ path, label, storageKey, columns, rowKey, ro
   for (const f of facets) { const v = one(values, f.id); if (v) params.set(f.id, v); }
   const query = useCollection<T>(`${path}${path.includes("?") ? "&" : "?"}${params}`);
   const rows = query.data?.data ?? [], hasMore = !!query.data && (query.data.has_more ?? rows.length === pageSize) && offset + pageSize <= 100000;
-  const filtered = !!q || facets.some(f => one(values, f.id));
+  // Caller-held facet values are defaults (e.g. sign-ins hidden), not a user's filter: the empty state says so itself.
+  const filtered = !!q || (!facetState && facets.some(f => one(values, f.id)));
   const storage = `omg.enterprise.columns.${storageKey}`, cols = useStoredColumns(columns, storage), filters = !!search || facets.length > 0;
   return <div className={s.list}>
     {filters && <FilterToolbar<T> search={search ? { label: `Search ${label.toLowerCase()}`, placeholder: search.placeholder, value: q, onChange: next => change({ q: next || undefined, offset: undefined }) } : undefined}

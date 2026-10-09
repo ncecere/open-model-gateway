@@ -43,5 +43,22 @@ export function reasonText(reason: AccessReason, kind: WorkspaceKind, canManageM
     default: return `Unavailable (${reason.code}).`;
   }
 }
+/** One reason as a short inline label for the "Why" column (the full sentence is in the expanded row). Unknown codes are shown, never hidden. */
+export function reasonLabel(reason: AccessReason, kind: WorkspaceKind): string {
+  const kindName = kind === "personal" ? "workspace" : kindLabels[kind].toLowerCase();
+  switch (reason.code) {
+    case "model_disabled": return "Turned off by a Platform Admin";
+    case "workspace_disabled": return `This ${kindName} is disabled`;
+    case "no_enabled_route": return "No provider route turned on";
+    case "some_routes_unavailable": return "Some routes turned off";
+    case "not_in_catalog": return "Not in an available catalog";
+    case "not_selected": return `Not added to this ${kindName}`;
+    case "key_restriction": return "Key limited to other models";
+    case "budget_exhausted": return reason.period ? `${periodName[reason.period]} budget used up` : "Budget used up";
+    case "unresolved_usage_blocking": return "Waiting for unknown costs";
+    case "protocol_unsupported": return "Protocol not supported";
+    default: return `Unavailable (${reason.code})`;
+  }
+}
 /** Blocking reasons make a model unavailable; the rest (some routes off) only make it partly available. */
 export const blockingReason = (reason: AccessReason) => reason.code !== "some_routes_unavailable";

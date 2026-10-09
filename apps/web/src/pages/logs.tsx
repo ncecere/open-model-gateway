@@ -44,7 +44,7 @@ export function requestsDescription(workspace: Workspace) {
   if (workspace.kind === "personal") return "Requests made with your keys. Only you can see them.";
   return workspace.capabilities.view_all_activity ? `Every request made with ${workspace.name}'s keys.` : `Requests made with your keys in ${workspace.name}. Workspace admins see everyone's.`;
 }
-const platformDescription = "Request metadata from every team and project. Personal workspaces never appear here; their totals are in Usage & costs.";
+const platformDescription = "Requests in every team and project. Personal workspaces never appear here.";
 type View = Pick<DashboardSearch, "cols" | "density">;
 /** Search values of the request page for one row, keeping the list's filters for previous/next. */
 export const requestPageSearch = (ws: string, id: string, filters: RequestFilters, view?: View): DashboardSearch => ({ page: "request-detail", ws, record: id, ...filters, workspace_id: undefined, ...view });
@@ -61,6 +61,8 @@ function CostCell({ cost, held }: { cost: string | null; held: string | null }) 
   return <span className={rq.costCell} title={costText(null, held)}><span>Unknown</span>{onHold && <span className={s.secondary}>{formatMicroUsd(onHold)} on hold</span>}</span>;
 }
 const FinishBadge = ({ reason }: { reason: string | null | undefined }) => reason == null ? <span className={s.secondary}>None</span> : <StatusBadge tone={finishReasonTone(reason)} size="sm">{finishReasonLabel(reason)}</StatusBadge>;
+/** Time to first token; a request that wasn't streamed has none ("—", the reason in the tooltip), not a repeated phrase in every row. */
+const TtftCell = ({ ms, streamed }: { ms: number | null | undefined; streamed: boolean }) => ms == null && !streamed ? <span className={s.secondary} title="Not streamed">—</span> : <>{ttftText(ms, streamed)}</>;
 const optionalCount = (v: string | null | undefined) => v == null ? "Unknown" : countText(v);
 function KeyApp({ name, app }: { name: string; app?: string | null }) {
   return <span className={rq.costCell} style={{ alignItems: "flex-start" }}><span className={rq.truncateKey} title={name}>{name}</span>{app && <span className={`${s.secondary} ${rq.truncateKey}`} title={`App: ${app}`}>{app}</span>}</span>;
@@ -77,7 +79,7 @@ const requestColumns = (scope: LogsScope, filters: RequestFilters, view: View): 
   { id: "tokens", header: "Tokens", numeric: true, cell: r => tokensText(r.input_tokens, r.output_tokens, r.workload_kind) },
   { id: "cost", header: "Cost", numeric: true, cell: r => <CostCell cost={r.cost_microusd} held={r.held_microusd} /> },
   { id: "latency", header: "Latency", numeric: true, cell: r => latencyText(r.latency_ms) },
-  { id: "ttft", header: "TTFT", label: "Time to first token", numeric: true, cell: r => ttftText(r.time_to_first_token_ms, r.streamed) },
+  { id: "ttft", header: "TTFT", label: "Time to first token", numeric: true, cell: r => <TtftCell ms={r.time_to_first_token_ms} streamed={r.streamed} /> },
   { id: "speed", header: "Speed", label: "Speed (tokens per second)", numeric: true, cell: r => r.tokens_per_second ? tpsText(r.tokens_per_second) : <span className={s.secondary}>—</span> },
   { id: "finish", header: "Finish", label: "Finish reason", cell: r => <FinishBadge reason={r.finish_reason} /> },
   { id: "status", header: "Status", cell: r => <StatusBadge tone={requestStatusTone(r.status)} size="sm">{requestStatusLabel(r.status)}</StatusBadge> },
@@ -91,7 +93,8 @@ const requestColumns = (scope: LogsScope, filters: RequestFilters, view: View): 
   { id: "cost_center", header: "Cost center", defaultHidden: true, cell: r => r.cost_center ? `${r.cost_center.name} · ${r.cost_center.code}` : "Unallocated" },
 ];
 export const requestColumnIds = ["started", "model", "workspace", "key", "tokens", "cost", "latency", "ttft", "speed", "finish", "status", "attempts", "cached", "reasoning", "request", "session", "workload", "streamed", "cost_center"];
-export const requestDefaultHidden = ["cached", "reasoning", "request", "session", "workload", "streamed", "cost_center"];
+/** Rows stay short (ui-principles 4): streaming telemetry and fallbacks are one click away under Columns. */
+export const requestDefaultHidden = ["ttft", "speed", "cached", "reasoning", "request", "session", "workload", "streamed", "cost_center"];
 /** Low-priority columns also hidden by default on a phone (≤600px), where rows stack. */
 export const requestNarrowHidden = ["tokens", "attempts", "key", "request", "ttft", "speed", "finish"];
 
@@ -105,7 +108,7 @@ const generationColumns = (scope: LogsScope, filters: RequestFilters, view: View
   { id: "tokens", header: "Tokens", numeric: true, cell: g => tokensText(g.input_tokens, g.output_tokens, g.workload_kind) },
   { id: "cost", header: "Cost", numeric: true, cell: g => <CostCell cost={g.cost_microusd} held={g.held_microusd} /> },
   { id: "latency", header: "Latency", numeric: true, cell: g => latencyText(g.latency_ms) },
-  { id: "ttft", header: "TTFT", label: "Time to first token", numeric: true, cell: g => ttftText(g.time_to_first_token_ms, g.streamed) },
+  { id: "ttft", header: "TTFT", label: "Time to first token", numeric: true, cell: g => <TtftCell ms={g.time_to_first_token_ms} streamed={g.streamed} /> },
   { id: "speed", header: "Speed", label: "Speed (tokens per second)", numeric: true, cell: g => g.tokens_per_second ? tpsText(g.tokens_per_second) : <span className={s.secondary}>—</span> },
   { id: "finish", header: "Finish", label: "Finish reason", cell: g => <FinishBadge reason={g.finish_reason} /> },
   { id: "status", header: "Status", cell: g => <StatusBadge tone={requestStatusTone(g.status)} size="sm">{requestStatusLabel(g.status)}</StatusBadge> },
@@ -119,7 +122,7 @@ const generationColumns = (scope: LogsScope, filters: RequestFilters, view: View
   { id: "attempt_id", header: "Attempt ID", defaultHidden: true, cell: g => <CopyId value={g.execution_id} label={`attempt ${g.attempt_number} ID`} /> },
 ];
 const generationColumnIds = ["started", "model", "provider", "workspace", "key", "tokens", "cost", "latency", "ttft", "speed", "finish", "status", "attempt", "error", "upstream", "cached", "reasoning", "generation_time", "session", "attempt_id"];
-const generationDefaultHidden = ["error", "upstream", "cached", "reasoning", "generation_time", "session", "attempt_id"];
+const generationDefaultHidden = ["ttft", "speed", "error", "upstream", "cached", "reasoning", "generation_time", "session", "attempt_id"];
 const generationNarrowHidden = ["provider", "key", "tokens", "ttft", "speed", "finish", "attempt"];
 
 // ----- Sessions -----
@@ -224,12 +227,14 @@ export function LogMetricsTiles({ scope, query, enabled }: { scope: LogsScope; q
   const m = useApi<LogMetrics>(`${logPaths(scope).metrics}${query.size ? `?${query}` : ""}`, enabled), d = m.data;
   // Loading shows an ellipsis; a failed summary is unknown (never zero).
   const value = (v: ReactNode | null | undefined) => m.isError ? null : !enabled || m.isPending ? "…" : v;
+  // Nothing to measure (no requests, or none streamed) is "—", not "Unknown": unknown means a value exists but wasn't reported.
+  const noRequests = d?.requests === "0" ? "—" : null, noStreamed = d && (d.requests === "0" || d.ttft_requests === "0") ? "—" : null;
   return <StatTileGrid columns={5} label="Summary for these filters">
     <StatTile label="Requests" value={value(d ? countText(d.requests) : null)} hint={d ? `${countText(d.failed)} failed · ${countText(d.completed)} finished` : m.isError ? "Couldn't load the summary" : undefined} />
-    <StatTile label="Error rate" value={value(d?.error_rate == null ? null : rateText(d.error_rate))} hint={d?.error_rate == null ? "No finished requests" : "Failed ÷ finished requests"} />
-    <StatTile label="Latency" value={value(d?.latency_p50_ms == null ? null : latencyText(d.latency_p50_ms))} hint={d?.latency_p95_ms == null ? "Median" : `Median · p95 ${latencyText(d.latency_p95_ms)}`} />
-    <StatTile label="Time to first token" value={value(d?.avg_time_to_first_token_ms == null ? null : latencyText(d.avg_time_to_first_token_ms))} hint={d ? `Average over ${countText(d.ttft_requests)} streamed requests` : undefined} />
-    <StatTile label="Speed" value={value(d?.tokens_per_second == null ? null : tpsText(d.tokens_per_second))} hint="Output tokens per second of generation" />
+    <StatTile label="Error rate" value={value(d?.error_rate == null ? d?.completed === "0" ? "—" : null : rateText(d.error_rate))} hint={d?.error_rate == null ? "No finished requests" : "Failed ÷ finished"} />
+    <StatTile label="Latency" value={value(d?.latency_p50_ms == null ? d?.completed === "0" ? "—" : null : latencyText(d.latency_p50_ms))} hint={d?.latency_p95_ms == null ? "Median" : `Median · p95 ${latencyText(d.latency_p95_ms)}`} />
+    <StatTile label="Time to first token" value={value(d?.avg_time_to_first_token_ms == null ? noStreamed : latencyText(d.avg_time_to_first_token_ms))} hint={d ? d.ttft_requests === "0" ? "No streamed requests" : `Average · ${countText(d.ttft_requests)} streamed` : undefined} />
+    <StatTile label="Speed" value={value(d?.tokens_per_second == null ? noRequests : tpsText(d.tokens_per_second))} hint={<span title="Output tokens per second after the first token">Output tokens/s</span>} />
   </StatTileGrid>;
 }
 
@@ -279,7 +284,8 @@ export function LogsPage({ scope }: { scope: LogsScope }) {
   const facets: Facet[] = [
     { id: "model", label: "Model", type: "select", placeholder: "Any model", options: modelOptions },
     ...(platform ? [{ id: "workspace_id", label: "Workspace", type: "select", placeholder: "Any team or project", options: workspaceOptions } satisfies Facet] : [{ id: "key_id", label: "Key", type: "select", placeholder: "Any key", options: keyOptions } satisfies Facet]),
-    { id: "status", label: "Status", type: "toggle", multiple: true, allLabel: "All", options: requestStatuses },
+    // A compact multi-select (five statuses as a segmented control took a row of its own).
+    { id: "status", label: "Status", type: "select", multiple: true, placeholder: "Any status", options: requestStatuses },
     { id: "finish_reason", label: "Finish reason", type: "select", multiple: true, placeholder: "Any", options: finishReasons },
     { id: "streamed", label: "Streamed", type: "toggle", allLabel: "Any", options: [{ value: "true", label: "Streamed" }, { value: "false", label: "Not streamed" }] },
   ];
@@ -299,15 +305,17 @@ export function LogsPage({ scope }: { scope: LogsScope }) {
     <TypeTabs label="Log view" value={tab} onChange={next => nav?.navigate(logsSearch(scope, filters, next as LogTab))}
       items={[{ value: "requests", label: "Requests" }, { value: "generations", label: "Generations" }, { value: "sessions", label: "Sessions" }]}>
       <div className={s.list}>
-        <FilterToolbar search={{ label: "Search by request ID", placeholder: "Request ID (at least 4 characters)", value: search.q ?? "", onChange: next => go({ q: next || undefined, cursor: undefined }) }}
-          start={<><PeriodControl filters={filters} onChange={patch => go({ ...patch, cursor: undefined })} /><SessionField value={filters.session_id} onChange={session_id => go({ session_id, cursor: undefined })} /></>} extraActive={periodActive} extraChips={chips}
-          facets={facets} values={facetValues} onChange={onFacets} more={["finish_reason", "streamed"]}
+        {/* One row at 1440 (ui-principles 3): Search, Period, Model, Status, More filters (key/workspace, finish, streamed, session) … Columns, density. */}
+        <FilterToolbar search={{ label: "Search by request ID (at least 4 characters)", placeholder: "Request ID", value: search.q ?? "", onChange: next => go({ q: next || undefined, cursor: undefined }) }}
+          start={<PeriodControl filters={filters} onChange={patch => go({ ...patch, cursor: undefined })} />} extraActive={periodActive} extraChips={chips}
+          moreStart={<SessionField value={filters.session_id} onChange={session_id => go({ session_id, cursor: undefined })} />} moreStartActive={filters.session_id ? 1 : 0}
+          facets={facets} values={facetValues} onChange={onFacets} more={["key_id", "workspace_id", "finish_reason", "streamed"]}
           end={tools && <><ColumnChooser columns={tools.columns} hidden={tools.view.hidden} onHiddenChange={hidden => go(logViewSearch({ ...tools.view, hidden }, tab, narrow))} defaultHidden={defaults} /><DensityToggle value={tools.view.density} onChange={density => go(logViewSearch({ ...tools.view, density }, tab, narrow))} /></>} />
         {filterError && <InfoBanner tone="warning" title="Filters not applied">{filterError}</InfoBanner>}
         {tab === "requests" ? <RequestsTable {...props} /> : tab === "generations" ? <GenerationsTable {...props} /> : <SessionsTable {...props} />}
       </div>
     </TypeTabs>
-    <p className={s.note}>Request metadata only: prompts and responses are never stored. Costs are estimates from configured prices; a cost that isn't known yet shows what's on hold. Speed is output tokens per second after the first token. Times are in your time zone; periods are UTC days.</p>
+    <p className={s.note}>Metadata only: prompts and responses are never stored. Costs are estimates; periods are UTC days.</p>
   </Stack>;
 }
 export const platformLogsScope: LogsScope = { kind: "platform" };

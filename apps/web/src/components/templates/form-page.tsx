@@ -1,8 +1,9 @@
 /*
  * FormPage: a long create form on a page of its own (Add model), with a
- * "Back to …" link, titled sections in two columns, and Cancel + submit in a
- * footer bar stuck to the bottom of the viewport (StickySaveBar, which keeps
- * focused fields clear of it). Short forms stay in ActionDialog.
+ * "Back to …" link, titled sections in two columns, and Cancel + submit in the
+ * page header (right of the title, like "Create catalog" on Catalogs; they
+ * wrap under the title on a phone). No footer card: sticky save bars are only
+ * for long settings forms (ui-principles 12). Short forms stay in ActionDialog.
  *
  * Provenance: layout and section pattern adapted from Grounded
  * web/src/components/templates/form-page.tsx and takeover.tsx (read-only
@@ -28,7 +29,6 @@ import { DateControl } from "../date-control";
 import { NavigationGuard } from "../navigation-guard";
 import { ResourceLink } from "../navigation-link";
 import { useResourceName } from "../layout/breadcrumbs";
-import { StickySaveBar } from "./sticky-save-bar";
 import s from "../../pages/shared.module.css";
 import styles from "./templates.module.css";
 
@@ -47,11 +47,11 @@ export type FormPageProps = {
   onSubmit: () => void;
   submitLabel: ReactNode;
   busy?: boolean;
-  /** Unsaved edits: leaving any way asks "Leave without saving?" first. */
+  /** Unsaved edits: leaving any way asks "Discard unsaved changes?" first. */
   dirty: boolean;
   /** Allow leaving without asking (e.g. after a successful save, while navigating to the result). */
   allowLeave?: () => boolean;
-  /** Request-level error, shown above the actions. Field errors belong to their fields. */
+  /** Request-level error, shown under the header (next to the actions). Field errors belong to their fields. */
   error?: unknown;
   /** Show a placeholder while the form's options load. */
   loading?: ReactNode;
@@ -69,10 +69,10 @@ export function FormPage({ label, title, description, back, onCancel, onSubmit, 
     return () => clearTimeout(timer);
   }, [!!loading]);
   return <Stack gap={6} className={`${s.page} ${styles.takeover}`}>
-    <PageHeader title={title} description={description} breadcrumbs={<BackLink {...back} />} />
-    <Card><CardBody>{loading ? <div role="status">{loading}</div> : <Form ref={ref} id={id} noValidate aria-label={label} aria-busy={busy} className={styles.formBody} data-dirty={dirty ? "true" : undefined} onSubmit={event => { event.preventDefault(); if (!busy) onSubmit(); }}>{children}</Form>}</CardBody></Card>
+    <PageHeader title={title} description={description} breadcrumbs={<BackLink {...back} />}
+      actions={<div className={styles.headerActions} data-form-actions=""><Button variant="secondary" onClick={onCancel}>Cancel</Button><Button type="submit" form={id} loading={busy} disabled={!!loading}>{submitLabel}</Button></div>} />
     {error !== undefined && <ErrorNotice error={error} />}
-    <StickySaveBar open message={dirty ? "Unsaved changes" : ""} className={styles.formFooter}><Button variant="secondary" onClick={onCancel}>Cancel</Button><Button type="submit" form={id} loading={busy} disabled={!!loading}>{submitLabel}</Button></StickySaveBar>
+    <Card><CardBody>{loading ? <div role="status">{loading}</div> : <Form ref={ref} id={id} noValidate aria-label={label} aria-busy={busy} className={styles.formBody} data-dirty={dirty ? "true" : undefined} onSubmit={event => { event.preventDefault(); if (!busy) onSubmit(); }}>{children}</Form>}</CardBody></Card>
     <NavigationGuard dirty={dirty} allow={allowLeave} />
   </Stack>;
 }

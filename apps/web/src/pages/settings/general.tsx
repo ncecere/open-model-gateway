@@ -43,7 +43,7 @@ export function GeneralSettingsPage({ session }: { session: Session }) {
       setEdits(undefined); setSubmitted(false); toast.success("Settings saved");
     } catch (caught) { setError(caught); } finally { setBusy(false); }
   }
-  const page = (body: ReactNode) => <SettingsPage title="General" description="How this installation presents itself, and how long new personal API keys may last.">{body}</SettingsPage>;
+  const page = (body: ReactNode) => <SettingsPage title="General" description="Name, help link, logo and key lifetime.">{body}</SettingsPage>;
   if (q.isError) return page(<ErrorNotice error={q.error} retry={() => void q.refetch()} />);
   if (!form || !q.data) return page(<p role="status">Loading settings…</p>);
   if (!writable) return page(<>
@@ -53,17 +53,17 @@ export function GeneralSettingsPage({ session }: { session: Session }) {
   </>);
   return page(<div className={st.form} data-dirty={dirty ? "true" : undefined}>
     {error !== undefined && <ErrorNotice error={error instanceof ApiError && error.status === 400 ? new Error("The settings weren't saved: check the highlighted fields and try again.") : error} />}
-    <Card title="Installation" description="The name appears in page titles and emails. The support link and logo are offered to everyone who signs in.">
+    <Card title="Installation" description="Shown in page titles, emails and to everyone who signs in.">
       <div className={st.grid}>
-        <FormField label="Display name" description="At most 120 characters." error={shown.display_name}><Input value={form.display_name} maxLength={120} disabled={busy} onChange={e => set("display_name", e.target.value)} /></FormField>
-        <FormField label="Support link" labelHint="Optional" description="Where people get help, starting with https://." error={shown.support_url}><Input type="url" inputMode="url" placeholder="https://help.example.com" value={form.support_url} maxLength={2048} disabled={busy} onChange={e => set("support_url", e.target.value)} /></FormField>
-        <FormField label="Logo URL" labelHint="Optional" description="An https:// image address. The gateway never downloads it." error={shown.logo_url}><Input type="url" inputMode="url" placeholder="https://cdn.example.com/logo.svg" value={form.logo_url} maxLength={2048} disabled={busy} onChange={e => set("logo_url", e.target.value)} /></FormField>
+        <FormField label="Display name" error={shown.display_name}><Input value={form.display_name} maxLength={120} disabled={busy} onChange={e => set("display_name", e.target.value)} /></FormField>
+        <FormField label="Support link" labelHint="Optional" description="Starts with https://." error={shown.support_url}><Input type="url" inputMode="url" placeholder="https://help.example.com" value={form.support_url} maxLength={2048} disabled={busy} onChange={e => set("support_url", e.target.value)} /></FormField>
+        <FormField label="Logo URL" labelHint="Optional" description="An https:// image address." error={shown.logo_url}><Input type="url" inputMode="url" placeholder="https://cdn.example.com/logo.svg" value={form.logo_url} maxLength={2048} disabled={busy} onChange={e => set("logo_url", e.target.value)} /></FormField>
       </div>
     </Card>
-    <Card title="API keys" description="Applies when someone creates or rotates their own key. Existing keys keep their expiry; service account keys can last up to 365 days.">
+    <Card title="API keys" description="For keys people create or rotate from now on. Existing keys keep their expiry.">
       <FormField label="Longest lifetime for a new personal key" description={`${KEY_DAYS.min}–${KEY_DAYS.max} days.`} error={shown.days}><span className={st.days}><Input inputMode="numeric" value={form.days} maxLength={3} disabled={busy} onChange={e => set("days", e.target.value)} /><span className={st.unit}>days</span></span></FormField>
     </Card>
-    <Card title="Time" description="Budget windows, reports and dates use UTC. Days and months start at 00:00 UTC.">
+    <Card title="Time" description="Budgets, reports and periods use UTC days.">
       <DescriptionList dividers items={[{ label: "Time zone", value: "UTC" }]} />
     </Card>
     <SaveControls writable dirty={dirty} invalid={submitted && invalid} busy={busy} saveLabel="Save settings" onSave={() => void save()} onDiscard={() => { setEdits(undefined); setSubmitted(false); setError(undefined); }} />

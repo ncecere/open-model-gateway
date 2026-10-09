@@ -46,7 +46,7 @@ export function PrivacySettingsPage({ session }: { session: Session }) {
       setEdits(undefined); setSubmitted(false); toast.success("Settings saved");
     } catch (caught) { setError(caught); void client.invalidateQueries({ queryKey: ["api"] }); } finally { setBusy(false); }
   }
-  const page = (body: ReactNode) => <SettingsPage title="Data & privacy" description="What providers may do with prompts, and how long request details are kept. Prompts and responses are never stored.">{body}</SettingsPage>;
+  const page = (body: ReactNode) => <SettingsPage title="Data & privacy" description="What providers may do with prompts, and how long request details are kept.">{body}</SettingsPage>;
   if (q.isError) return page(<ErrorNotice error={q.error} retry={() => void q.refetch()} />);
   if (!form || !q.data || !r) return page(<p role="status">Loading settings…</p>);
   const dc = q.data.openrouter_data_collection, edit = writable;
@@ -57,7 +57,7 @@ export function PrivacySettingsPage({ session }: { session: Session }) {
         ? <Stack gap={3}><DescriptionList dividers items={[{ label: "Data collection", value: policyOptions.find(o => o.value === dc.value)?.label ?? dc.value }]} />{dc.locked ? <p className={st.note}><EnvironmentLock variable={dc.variable} /> Change it in the server environment; it applies after a restart.</p> : <p className={st.note}>{readOnlyNote}</p>}</Stack>
         : <RadioGroup<Policy> legend="Data collection" options={policyOptions} value={form.policy} disabled={busy} onValueChange={v => setEdits({ ...form, policy: v })} />}
     </Card>
-    <Card title="Request log retention" description="After this many days, settled requests lose their error code and latency. Usage, cost, the ledger and the audit log are always kept. Checked hourly.">
+    <Card title="Request log retention" description="After this many days, settled requests drop their error code and latency. Usage, cost and the audit log are kept.">
       {r.locked || !edit
         ? <Stack gap={3}><DescriptionList dividers items={[{ label: "Compact details after", value: retentionText(r.value) }]} />{r.locked ? <p className={st.note}><EnvironmentLock variable={r.variable} /> Change it in the server environment; it applies after a restart.</p> : <p className={st.note}>{readOnlyNote}</p>}</Stack>
         : <FormField label="Compact details after" labelHint="Optional" description={`${r.minimum}–${r.maximum} days. Leave empty to keep details.`} error={submitted ? retention : undefined}><span className={st.days}><Input inputMode="numeric" value={form.retention} maxLength={4} placeholder="Keep" disabled={busy} onChange={e => setEdits({ ...form, retention: e.target.value })} /><span className={st.unit}>days</span></span></FormField>}

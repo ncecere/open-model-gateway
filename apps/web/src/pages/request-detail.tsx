@@ -25,7 +25,7 @@ import { Button, ErrorNotice, Stack, useApi } from "../components/ui";
 import { EmptyState } from "../components/ui/empty-state/empty-state";
 import { ResourceLink, useDashboardNavigation } from "../components/navigation-link";
 import { useResourceName } from "../components/layout/breadcrumbs";
-import { ProviderIcon, WithIcon } from "../components/provider-icon";
+import { LabIcon, ProviderIcon, WithIcon } from "../components/provider-icon";
 import { BackLink } from "../components/templates/form-page";
 import { CopyId, shortId } from "../components/templates/copy-id";
 import { DataPolicyBadge } from "../components/templates/data-policy-badge";
@@ -125,7 +125,7 @@ function RequestDetail({ scope, id }: { scope: LogsScope; id: string }) {
   // Not found and not allowed look the same (the server answers 404 or 403): say so plainly, with no previous/next.
   if (q.error instanceof ApiError && (q.error.status === 404 || q.error.status === 403 || q.error.status === 400)) return <RequestNotFound scope={scope} back={back} />;
   return <Stack gap={6} className={s.page}>
-    <PageHeader title={title} meta={r && <StatusBadge tone={requestStatusTone(r.status)}>{requestStatusLabel(r.status)}</StatusBadge>} breadcrumbs={<BackLink {...back} />} description={r ? `${r.model} · ${r.key.name}` : undefined} actions={<PrevNext noun="request" shortcuts prev={target(r?.prev_id ?? null)} next={target(r?.next_id ?? null)} />} />
+    <PageHeader title={title} meta={r && <StatusBadge tone={requestStatusTone(r.status)}>{requestStatusLabel(r.status)}</StatusBadge>} breadcrumbs={<BackLink {...back} />} description={r ? <><WithIcon icon={<LabIcon model={r.model} size="sm" />}>{r.model}</WithIcon> · {r.key.name}</> : undefined} actions={<PrevNext noun="request" shortcuts prev={target(r?.prev_id ?? null)} next={target(r?.next_id ?? null)} />} />
     {q.isPending ? <p role="status">Loading request…</p> : q.isError ? <ErrorNotice error={q.error} retry={() => void q.refetch()} /> : <>
       <StatTileGrid columns={5} label="Request summary">
         <StatTile label={r!.cost_microusd === null ? "Cost (not final)" : "Cost"} value={r!.cost_microusd === null ? null : formatMicroUsd(r!.cost_microusd)} hint={held ? `${formatMicroUsd(held)} on hold until the cost is known` : r!.cost_microusd === null ? "Not known yet" : "Estimated from configured prices"} />
@@ -150,7 +150,7 @@ function RequestDetail({ scope, id }: { scope: LogsScope; id: string }) {
         { label: "Data policy", value: <><DataPolicyBadge policy={dataPolicyOf(served?.data_policy)} /> <span className={s.secondary}>Current setting of the route that served it, not a record of this request.</span></> },
         ...(r!.cost_center ? [{ label: "Cost center", value: `${r!.cost_center.name} · ${r!.cost_center.code}` }] : []),
       ]} /></Card>
-      <Card title="Attempts" titleAs="h2" description="Each upstream attempt in order. A fallback is tried only when an earlier attempt fails before anything was returned.">
+      <Card title="Attempts" titleAs="h2" description="In order. A fallback runs only if an earlier attempt failed before any output.">
         <Timeline label="Upstream attempts" items={r!.attempts.map(a => attemptItem(a, r!.attempts, r!.workload_kind))} showDurationBars showTotal empty="No attempts are visible for this request." />
       </Card>
       <p className={s.note}>Prompts and responses are never stored or shown here.</p>

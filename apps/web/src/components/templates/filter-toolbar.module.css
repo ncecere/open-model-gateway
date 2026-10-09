@@ -47,9 +47,9 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  flex: 1 1 14rem;
+  flex: 1 1 12rem;
   min-width: 0;
-  max-width: 20rem;
+  max-width: 18rem;
 }
 
 .range {
@@ -59,7 +59,7 @@
 }
 
 .rangeInput {
-  width: 5.5rem;
+  width: 4.75rem;
 }
 
 .prefix {
@@ -95,13 +95,38 @@
   flex: none;
 }
 
-/* Sort / View / Columns at the end of the row, bottom-aligned like the facets. */
+/* Sort / View / Columns at the end of the row, bottom-aligned like the facets, no labels of their own. */
 .end {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
-  gap: var(--space-2) var(--space-3);
+  justify-content: flex-end;
+  gap: var(--space-2);
   margin-inline-start: auto;
+}
+
+/* Unlabelled sort: an arrows icon inside the select, then the current order. */
+.sort {
+  position: relative;
+  display: block;
+  width: 10.5rem;
+  max-width: 100%;
+}
+
+.sortIcon {
+  position: absolute;
+  z-index: 1;
+  inset-inline-start: var(--space-2);
+  top: 50%;
+  width: 0.875rem;
+  height: 0.875rem;
+  transform: translateY(-50%);
+  color: var(--color-text-muted);
+  pointer-events: none;
+}
+
+.sort .sortSelect {
+  padding-inline-start: calc(var(--space-2) + 1.25rem);
 }
 
 /* The popover lists its facets one under another, each control full width. */
@@ -243,6 +268,15 @@
   .field,
   .end {
     flex: 1 1 100%;
+  }
+
+  .end {
+    justify-content: flex-start;
+  }
+
+  .sort {
+    flex: 1 1 auto;
+    width: auto;
   }
 
   /* FilterBar's facets (vendored markup, not edited): full width, multi-selects included. */

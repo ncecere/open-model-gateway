@@ -27,6 +27,23 @@ function client(search: DashboardSearch = { page: "models" }) {
 const page = (search: DashboardSearch, session = admin, navigate = vi.fn()) => markup(<DashboardNavigationProvider search={search} navigate={navigate}><Models session={session} /></DashboardNavigationProvider>, [], client(search));
 
 describe("Admin Models catalog", () => {
+  it("lets a long connection name wrap (two lines, full names as the tooltip) instead of truncating", () => {
+    const search: DashboardSearch = { page: "models" }, c = client(search), long = "Local compatible — disabled demo server in the basement";
+    for (const path of catalogQueryPaths(search)) c.setQueryData(["api", undefined, path, "choices"], [{ ...rows[0], readiness: { ...readiness, connections: [{ id: "c2", name: long }] } }]);
+    document.body.innerHTML = markup(<DashboardNavigationProvider search={search} navigate={vi.fn()}><Models session={admin} /></DashboardNavigationProvider>, [], c);
+    const link = screen.getByRole("link", { name: long }), wrap = link.parentElement!;
+    expect(wrap.getAttribute("title")).toBe(long); expect(wrap.className).toMatch(/sourceWrap/);
+    expect(link.closest("li")!.className).toMatch(/adminRow/);
+    c.clear(); document.body.innerHTML = "";
+  });
+  it("shows no price (not 'Unpriced') for a model without an enabled route", () => {
+    const search: DashboardSearch = { page: "models" }, c = client(search);
+    const idle = { ...model, id: "idle", public_name: "demo/idle", display_name: "demo/idle", readiness: { ...readiness, enabled_routes: 0, priced_enabled_routes: 0, connections: [] }, workload: "generation", min_input_microusd_per_million: null };
+    for (const path of catalogQueryPaths(search)) c.setQueryData(["api", undefined, path, "choices"], [idle]);
+    const html = markup(<DashboardNavigationProvider search={search} navigate={vi.fn()}><Models session={admin} /></DashboardNavigationProvider>, [], c);
+    expect(html).toContain("No enabled route, so no price yet"); expect(html).not.toContain(">Unpriced<");
+    c.clear();
+  });
   it("shows type tabs with counts, sort, list cards with exact prices and the Add model action", () => {
     const html = page({ page: "models" });
     for (const tab of ["All", "Text", "Embeddings", "Images"]) expect(html).toContain(`>${tab}<`);
@@ -34,6 +51,11 @@ describe("Admin Models catalog", () => {
     for (const tab of ["Speech to text", "Text to speech", "Rerank", "System One"]) expect(html).not.toContain(`>${tab}<`);
     expect(page({ page: "models", type: "rerank" })).toContain(">Rerank<");
     expect(html).toContain('aria-label="Model type"'); expect(html).toContain("Input price: low to high");
+    // One toolbar row: Sort and View carry no visible labels of their own; the count sits after the tabs.
+    expect(html).toContain('aria-label="Sort by"'); expect(html).not.toMatch(/>Sort<|>View</); expect(html).toMatch(/aria-label="List"[^>]*title="List"/);
+    expect(html.indexOf('role="status"')).toBeLessThan(html.indexOf('aria-label="Filters"'));
+    // Rows are compact: no descriptions or route/date prose, the why lives in tooltips.
+    expect(html).not.toMatch(/route[s]? enabled|Added <|No enabled route<\/p>/);
     expect(html).toContain("$0.0081"); expect(html).not.toContain("$0.01 "); // sub-cent never rounded
     expect(html).toContain("Input price unknown · not free"); // embeddings with no price
     expect(html).toContain("Priced per image");
@@ -53,9 +75,10 @@ describe("Admin Models catalog", () => {
     expect(disabled).toContain("Imager"); expect(disabled).not.toContain("Embedder");
     expect(page({ page: "models", type: "rerank" })).toContain("No models match");
   });
-  it("renders the table view with a column chooser and density toggle", () => {
+  it("renders the table view with Columns at the end of the toolbar row (density inside its menu)", () => {
     const html = page({ page: "models", layout: "table" });
-    expect(html).toContain("<table"); expect(html).toContain("Columns"); expect(html).toContain("Compact rows");
+    expect(html).toContain("<table"); expect(html).toContain("Columns"); expect(html).not.toContain('aria-label="Row density"');
+    expect(html.indexOf("Columns")).toBeLessThan(html.indexOf("<table"));
     expect(page({ page: "models", layout: "table", cols: "connections" })).not.toContain(">Connections<");
   });
   it("writes tab and filter changes to the URL", async () => {
@@ -91,6 +114,22 @@ describe("Workspace Models (eligible catalog)", () => {
     { model_id: "direct", public_name: "company/direct", display_name: "Assigned one", description: null, protocols: ["embeddings"], workload: "embeddings", eligibility: "direct", reason: "Assigned to this workspace by a Platform Admin", min_input_microusd_per_million: "20000", min_output_microusd_per_million: null, routes: 1 },
   ];
   const ws = (workspace = team, who = session, search: DashboardSearch = { page: "grants", ws: workspace.id }) => { const c = testClient(); c.setQueryData(["api", undefined, `/api/v1/workspaces/${workspace.id}/catalog`, "choices"], catalog); c.setQueryData(["api", undefined, `/api/v1/workspaces/${workspace.id}/models`, "choices"], [grant]); return markup(<DashboardNavigationProvider search={search} navigate={() => {}}><WorkspaceModels session={who} workspace={workspace} /></DashboardNavigationProvider>, [], c); };
+  it("shows \"—\" (not \"Unpriced\") for a model that isn't serving, in the list and the table, as Admin's list does", () => {
+    const idle = { ...catalog[0]!, model_id: "idle", display_name: "Idle one", min_input_microusd_per_million: null, min_output_microusd_per_million: null, routes: 0 };
+    for (const layout of [undefined, "table" as const]) {
+      const c = testClient(); c.setQueryData(["api", undefined, `/api/v1/workspaces/${team.id}/catalog`, "choices"], [idle]); c.setQueryData(["api", undefined, `/api/v1/workspaces/${team.id}/models`, "choices"], []);
+      const html = markup(<DashboardNavigationProvider search={{ page: "grants", ws: team.id, layout }} navigate={() => {}}><WorkspaceModels session={session} workspace={team} /></DashboardNavigationProvider>, [], c);
+      expect(html).toContain("No enabled route, so no price yet"); expect(html).not.toContain(">Unpriced<"); expect(html).not.toContain("Input price unknown · not free</span>");
+      c.clear();
+    }
+  });
+  it("shows the model's lab logo left of the title on the workspace model page", () => {
+    const c = testClient(); c.setQueryData(["api", undefined, `/api/v1/workspaces/${team.id}/catalog`, "choices"], [{ ...catalog[0]!, public_name: "claude-haiku-5.5", display_name: "Claude Haiku 5.5" }]);
+    const html = markup(<DashboardNavigationProvider search={{ page: "workspace-model", ws: team.id, record: model.id }} navigate={() => {}}><WorkspaceModelPage session={session} workspace={member} id={model.id} /></DashboardNavigationProvider>, [], c);
+    expect(html).toMatch(/<h1[^>]*><span[^>]*data-title-icon[^>]*><span aria-hidden="true"[^>]*data-brand="claude"/);
+    expect(html).toMatch(/Claude Haiku 5\.5<\/span><\/span><\/h1>/);
+    c.clear();
+  });
   it("lists only eligible models with eligibility badges, reasons, prices, Add and a row menu with Remove for admins", () => {
     const html = ws();
     for (const text of ["Added", "Available to add", "Assigned by admin", "Assigned to this workspace by a Platform Admin", "$0.10", "$0.40", "Add</button>", "Add models"]) expect(html).toContain(text);
@@ -117,7 +156,7 @@ describe("Workspace Models (eligible catalog)", () => {
     const added = ws(team, session, { page: "grants", ws: team.id, eligibility: "selected" });
     expect(added).toContain("Smart model"); expect(added).not.toContain("Available one");
   });
-  it("describes the personal variant as your own selections", () => { expect(ws(personal)).toContain("Models you can use in your personal workspace"); });
+  it("describes the personal variant in one short line", () => { expect(ws(personal)).toContain("Models you can call from your personal workspace."); });
   it("offers Newest and orders by the catalog's created_at, showing when each model was added", () => {
     const dated = (id: string, created_at: string) => catalog.find(r => r.model_id === id) && { ...catalog.find(r => r.model_id === id)!, created_at };
     const rows = [dated(model.id, "2026-01-01T00:00:00Z"), dated("avail", "2026-09-01T00:00:00Z"), dated("direct", "2026-05-01T00:00:00Z")];
@@ -125,6 +164,8 @@ describe("Workspace Models (eligible catalog)", () => {
     const html = markup(<DashboardNavigationProvider search={{ page: "grants", ws: "team", sort: "newest" }} navigate={() => {}}><WorkspaceModels session={session} workspace={team} /></DashboardNavigationProvider>, [], c);
     expect(html).toMatch(/<option value="newest" selected="">Newest<\/option>/);
     expect(html.indexOf("Available one")).toBeLessThan(html.indexOf("Assigned one")); expect(html.indexOf("Assigned one")).toBeLessThan(html.indexOf("Smart model"));
-    expect(html).toContain("Added <");
+    // The date is in the Table view's Added column, not the list row.
+    const table = markup(<DashboardNavigationProvider search={{ page: "grants", ws: "team", sort: "newest", layout: "table" }} navigate={() => {}}><WorkspaceModels session={session} workspace={team} /></DashboardNavigationProvider>, [], c);
+    expect(table).toContain(">Added<");
   });
 });

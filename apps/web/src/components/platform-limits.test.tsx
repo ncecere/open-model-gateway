@@ -61,15 +61,15 @@ describe("Admin › Settings › Defaults & limits tabs", () => {
     expect(await screen.findByText("Unsaved changes: Team default")).toBeTruthy();
     await user.click(screen.getByRole("tab", { name: "Personal default" }));
     const dialog = await screen.findByRole("alertdialog");
-    expect(within(dialog).getByText("Switch tabs without saving?")).toBeTruthy();
+    expect(within(dialog).getByText("Discard unsaved changes?")).toBeTruthy();
     // Keep editing: still on Team with the edit.
     await user.click(within(dialog).getByRole("button", { name: "Keep editing" }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(router.state.location.search).toMatchObject({ tab: "team" });
     expect((within(screen.getByRole("table", { name: "Team default limits" })).getByRole("textbox", { name: /Requests per minute · Team default/ }) as HTMLInputElement).value).toBe("75");
-    // Discard and switch.
+    // Discard: switches tabs.
     await user.click(screen.getByRole("tab", { name: "Personal default" }));
-    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Discard and switch" }));
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Discard" }));
     await waitFor(() => expect(router.state.location.search).toMatchObject({ tab: "personal" }));
     expect(await screen.findByRole("table", { name: "Personal default limits" })).toBeTruthy();
     expect(screen.queryByRole("alertdialog")).toBeNull();

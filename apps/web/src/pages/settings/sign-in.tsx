@@ -19,7 +19,7 @@ const code = (value?: string) => value ? <code className={st.code}>{value}</code
 
 export function SignInSettingsPage(_: { session: Session }) {
   const q = useApi<SignInSettings>(`${settingsPath}/sign-in`);
-  const page = (body: ReactNode) => <SettingsPage title="Sign-in" description="How people sign in with single sign-on. Set in the server environment; shown here for reference.">{body}</SettingsPage>;
+  const page = (body: ReactNode) => <SettingsPage title="Sign-in" description="Single sign-on, set in the server environment.">{body}</SettingsPage>;
   if (q.isError) return page(<ErrorNotice error={q.error} retry={() => void q.refetch()} />);
   if (!q.data) return page(<p role="status">Loading settings…</p>);
   const c = q.data;
@@ -37,7 +37,7 @@ export function SignInSettingsPage(_: { session: Session }) {
         {c.callback_url && <CopyField label="Callback URL" name="callback URL" value={c.callback_url} description="Register this redirect URI with your identity provider." />}
       </Stack> : <DescriptionList dividers items={[{ label: "Status", value: <Badge>Not configured</Badge> }, { label: "Effect", value: "Nobody can sign in to the dashboard until OIDC is set up." }]} />}
     </Card>
-    <Card title="SSO groups" description="Signing in alone gives no access. Group mappings and manual grants give people their roles." actions={<Button variant="secondary" size="sm" render={<ResourceLink search={{ page: "oidc" }} />}>SSO groups <ArrowRight aria-hidden /></Button>}>
+    <Card title="SSO groups" description="Roles come from group mappings or manual grants." actions={<Button variant="secondary" size="sm" render={<ResourceLink search={{ page: "oidc" }} />}>SSO groups <ArrowRight aria-hidden /></Button>}>
       <DescriptionList dividers items={[{ label: "Enabled group mappings", value: String(c.enabled_group_mappings) }]} />
     </Card>
   </>);

@@ -85,7 +85,7 @@ describe("API keys list", () => {
     expect(html).toContain("Never");
     expect(html).toContain('href="/workspaces/team/keys/key1?status=all"');
     expect(html).toContain("Search keys");
-    expect(html).toContain("Spent + on hold");
+    expect(html).toContain(">Spent<"); expect(html).not.toContain("Spent + on hold");
   });
   it("shows active keys by default so revoked keys don't fill the list; All is explicit", () => {
     const html = markup(nav({ page: "keys", ws: "team" }, <Keys session={session} workspace={team} />), [], seedKeys());
@@ -118,25 +118,32 @@ const access: AccessResponse = { workspace_id: "team", key_id: "key2", truncated
 ], models: [{ model_id: "model", public_name: "company/smart", display_name: "Smart model", status: "available", reasons: [] }, { model_id: "other", public_name: "company/other", display_name: "Other model", status: "unavailable", reasons: [{ code: "key_restriction", layer: "key" }, { code: "budget_exhausted", layer: "workspace", period: "week" }] }] };
 const keyPolicy = { policy: { ...policy, budgets: [{ period: "day", amount_microusd: "5000000" }] }, effective: policy, provenance: { platform_source: "type_default", platform: policy, local: policy, key: policy }, budgets: [] };
 describe("Key page", () => {
-  const render = (id: string, workspace = team) => { const client = seedKeys(); for (const [p, d] of [[`${ws}/keys/${id}`, keys.find(x => x.id === id)], [`${ws}/keys/${id}/stats`, { ...stats, key_id: id }], [`${ws}/keys/${id}/access`, access], [`${ws}/keys/${id}/policy`, keyPolicy]] as const) client.setQueryData(["api", undefined, p], d); return markup(nav({ page: "key-detail", ws: "team", record: id }, <KeyDetail session={session} workspace={workspace} id={id} />), [], client); };
-  it("shows settings, inline limits, totals, budget rings and effective access with reasons", () => {
+  const render = (id: string, workspace = team, tab?: string) => { const client = seedKeys(); for (const [p, d] of [[`${ws}/keys/${id}`, keys.find(x => x.id === id)], [`${ws}/keys/${id}/stats`, { ...stats, key_id: id }], [`${ws}/keys/${id}/access`, access], [`${ws}/keys/${id}/policy`, keyPolicy]] as const) client.setQueryData(["api", undefined, p], d); return markup(nav({ page: "key-detail", ws: "team", record: id, tab }, <KeyDetail session={session} workspace={workspace} id={id} />), [], client); };
+  it("shows settings and totals on Overview, limits and budget rings on Limits, effective access on Access", () => {
     const html = render("key2");
     expect(html).toContain("Back to API keys");
     expect(html).toContain("Rotate the key to set a new expiry");
-    expect(html).toContain("Key limits");
-    expect(html).toContain("Daily budget");
+    // Pill tabs, not one long stacked page (ui-principles 7, 8).
+    for (const name of ["Overview", "Limits", "Access"]) expect(html).toMatch(new RegExp(`role="tab"[^>]*>(<[^>]*>)*[^<]*${name}`));
+    expect(html).not.toContain("Key limits"); expect(html).not.toContain("Effective access");
     expect(html).toContain("This week");
     expect(html).toContain("$0.0001 on hold");
     expect(html).toContain("1 cost unknown");
     expect(html).toContain("Spending, last 30 days");
-    expect(html).toContain('aria-valuetext="$0.0081 of $5.00 · Daily, &lt;1% used"');
-    expect(html).toContain("Only workspace admins see how much of it is used");
-    expect(html).toContain("Effective access");
-    expect(html).toContain("Team defaults");
-    expect(html).toContain("Approved cloud");
-    expect(html).toContain("Only 1 selected model");
-    expect(html).toContain("Why can&#x27;t I use this model?");
-    expect(html).toContain("Details for Other model");
+    const limits = render("key2", team, "limits");
+    expect(limits).toContain("Key limits");
+    expect(limits).toContain("Daily budget");
+    expect(limits).toContain('aria-valuetext="$0.0081 of $5.00 · Daily, &lt;1% used"');
+    expect(limits).toContain("Only workspace admins see how much of it is used");
+    expect(limits).not.toContain("Budget used this period"); // one budgets card, not two
+    expect(limits).not.toContain("Spending, last 30 days");
+    const accessHtml = render("key2", team, "access");
+    expect(accessHtml).toContain("Effective access");
+    expect(accessHtml).toContain("Team defaults");
+    expect(accessHtml).toContain("Approved cloud");
+    expect(accessHtml).toContain("Only 1 selected model");
+    expect(accessHtml).toContain("Why can&#x27;t I use this model?");
+    expect(accessHtml).toContain("Details for Other model");
     expect(html).toContain('href="/workspaces/team/logs?key_id=key2"');
   });
   it("offers Enable only for a disabled key; a revoked key can never be enabled", () => {
@@ -151,8 +158,8 @@ describe("Key page", () => {
     expect(revoked).not.toContain(">Enable key<");
     expect(revoked).not.toContain(">Revoke key<");
     expect(revoked).toContain("This key is revoked and can&#x27;t be used or changed.");
-    expect(revoked).toContain("This key is revoked, so its limits no longer change.");
-    expect(revoked).not.toContain("Leave a field blank");
+    expect(render("key3", team, "limits")).toContain("This key is revoked, so its limits no longer change.");
+    expect(render("key3", team, "limits")).not.toContain("Blank inherits");
     expect(revoked).not.toContain("change its limits below");
     expect(revoked).not.toContain("Rotate the key to set a new expiry");
     expect(revoked).toMatch(/<a[^>]*href="\/workspaces\/team\/logs\?key_id=key3"[^>]*>View requests<\/a>/);
@@ -190,8 +197,9 @@ describe("Effective access", () => {
     expect(html).toContain("Unavailable");
     expect(html).not.toContain(">This key<");
     const card = markup(<AccessCard workspace={team} />, [[`${ws}/access`, access]]);
-    expect(card).toContain("1 available · 0 partly available · 1 unavailable");
-    expect(card).toMatch(/<a[^>]*href="\/workspaces\/team\/settings\?tab=limits"[^>]*>See why/); expect(card).not.toContain("see why"); // one header link (review #41)
-    expect(card).toContain('href="/workspaces/team/settings?tab=limits"');
+    expect(card).toContain("1 available · 1 unavailable"); expect(card).not.toContain("partly");
+    expect(card).toMatch(/<a[^>]*href="\/workspaces\/team\/settings\?tab=access"[^>]*>See why/); expect(card).not.toContain("see why"); // one header link (review #41), to the Access tab
+    // Layers are collapsed under "How limits combine", after the per-model reasons.
+    expect(html.indexOf("Why can&#x27;t I use this model?")).toBeLessThan(html.indexOf("How limits combine"));
   });
 });

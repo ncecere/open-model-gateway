@@ -83,7 +83,8 @@ export function LimitsTable({ caption, scopeLabel, draft, onChange, editing, bus
     {errors && errors.form.length > 0 && <ul className={l.formErrors} role="alert">{errors.form.map(e => <li key={e}>{e}</li>)}</ul>}
     <Table caption={caption} stack columns={columns}>
       {rateRows.map(r => <Tr key={r.key}>
-        <Td><span className={s.primary}>{r.label}</span><span className={s.secondary}>{r.description}</span></Td>
+        {/* The explanation is the label's tooltip: rows stay one line (ui-principles 2, 4). */}
+        <Td><span className={s.primary} title={r.description}>{r.label}</span></Td>
         {inherited && <Td>{parentRate(r.key)}</Td>}
         <Td>{editing ? <Field label={`${r.label} · ${scopeLabel}`} hideLabel error={errors?.rates[r.key]} className={l.amountField}><span className={l.amount}><GroupedIntegerInput className={l.amountInput} placeholder={placeholder?.(r.key) ?? (inherited?.limits?.[r.key] != null ? `Inherited: ${inherited.limits[r.key]!.toLocaleString("en-US")}` : "No limit")} value={draft[r.key]} disabled={busy} onChange={value => set({ [r.key]: value })} /><span aria-hidden className={l.unit}>{r.unit}</span></span></Field> : draft[r.key].trim() ? Number(draft[r.key]).toLocaleString("en-US") : <span className={s.muted}>{emptyText}</span>}</Td>
         {effective && <Td>{effective.limits && !effective.invalid?.rates.includes(r.key) ? rateText(effective.limits[r.key]) : "—"}</Td>}
@@ -105,9 +106,9 @@ export function LimitsTable({ caption, scopeLabel, draft, onChange, editing, bus
           {effective && <Td>{effective.limits && !effective.invalid?.periods.includes(period) ? amountText(budgetFor(effective.limits, period)) : "—"}</Td>}
         </Tr>;
       })}
-      {rows.length === 0 && <Tr><Td><span className={s.primary}>Budget</span><span className={s.secondary}>Add a daily, weekly, monthly or lifetime budget. Each one is enforced on its own.</span></Td>{inherited && <Td>No budget</Td>}<Td><span className={s.muted}>No budget</span></Td>{effective && <Td>No budget</Td>}</Tr>}
+      {rows.length === 0 && <Tr><Td><span className={s.primary}>Budget</span><span className={s.secondary}>Daily, weekly, monthly or lifetime.</span></Td>{inherited && <Td>No budget</Td>}<Td><span className={s.muted}>No budget</span></Td>{effective && <Td>No budget</Td>}</Tr>}
     </Table>
-    {editing && <div className={l.addRow}><Button size="sm" variant="secondary" disabled={!canAdd || busy} onClick={() => add()}><Plus aria-hidden /> Add budget</Button><span className={s.note}>One budget per period. Every budget applies on its own; spending counts toward all of them.</span></div>}
+    {editing && <div className={l.addRow}><Button size="sm" variant="secondary" disabled={!canAdd || busy} onClick={() => add()}><Plus aria-hidden /> Add budget</Button><span className={s.note}>One per period; each applies on its own.</span></div>}
   </>;
 }
 function safeMicro(dollars: string): string | null { try { return dollarsToMicroUsd(dollars); } catch { return null; } }
@@ -117,7 +118,7 @@ const layerName = (kind: string, mode: "inherit" | "replace" | undefined): Recor
 export function BudgetMeters({ windows, kind, mode, title = "Budget used this period" }: { windows: BudgetWindow[]; kind: WorkspaceKind; mode?: "inherit" | "replace"; title?: string }) {
   if (!windows.length) return null;
   const names = layerName(kindLabels[kind], mode);
-  return <Card title={title} description="Spent plus on hold in each budget's current window. Costs that aren't known yet are never counted as zero.">
+  return <Card title={title} description="Spent plus on hold.">
     <div className={l.meters}>{windows.map(w => { const period = w.period ?? w.budget_period, amount = w.amount_microusd ?? w.monthly_budget_microusd, label = `${names[w.layer]} ${periodName[period].toLowerCase()} budget`; return <div key={`${w.layer}-${period}`}>
       {w.usage_visible ? <UsageBar label={label} showLabel used={w.used_microusd} limit={amount} period={period} description={<>{w.unresolved_usage ? "Some costs aren't known yet, so this is at least the amount shown. " : ""}{resetsAt(w.window_end)}</>} />
         : <p className={s.note}>{label}: {formatMicroUsd(amount)}. Only workspace admins see how much of it is used.</p>}
@@ -219,12 +220,12 @@ export function ScopeLimits({ path, mode, writable, kind = "team", scopeLabel, r
     finally { setBusy(false); }
   }
   const description = mode === "replacement"
-    ? picked === "defaults" ? `This ${lower} uses the ${noun} defaults and follows any change to them. Workspace caps and key limits still apply on top.` : `Saved values replace the ${noun} defaults for this ${lower}. A blank field means no limit. Workspace caps and key limits still apply on top.`
-    : writable ? `The lowest limit always applies. Leave a field blank to use the inherited limit. Limits can only be tightened: a saved cap can be lowered, never raised or removed here.` : `${readOnlyReason ? `${readOnlyReason} ` : ""}The lowest limit always applies: platform, then ${mode === "key" ? "workspace, then this key" : "this workspace, then each key"}.`;
+    ? picked === "defaults" ? "Workspace caps and key limits still apply on top." : "Blank means no limit. Workspace caps and key limits still apply on top."
+    : writable ? "Blank inherits. The lowest limit applies; saved caps can only be lowered." : `${readOnlyReason ? `${readOnlyReason} ` : ""}The lowest limit applies.`;
   return <Stack gap={6}>
     {mode === "replacement" && <RadioGroup legend="Limits source" variant="card" orientation="horizontal" value={picked} disabled={!writable || busy} onValueChange={value => { setChoice(value as "defaults" | "override"); if (value === "override" && !replaced && !draft) setDraft(draftOf(typeDefault ?? noLimits)); }} options={[
       { value: "defaults", label: `Use ${noun} defaults`, description: typeDefault ? `Current ${noun} defaults: ${limitsSummary(typeDefault)}.` : `The ${noun} defaults, updated automatically.` },
-      { value: "override", label: `Override for this ${lower}`, description: `Replaces the ${noun} defaults for this ${lower} only. Blank fields mean no limit.` },
+      { value: "override", label: `Override for this ${lower}`, description: `Replaces the ${noun} defaults for this ${lower} only.` },
     ]} />}
     {error !== undefined && <ErrorNotice error={error} />}
     <Card title={mode === "replacement" ? `${noun} limits` : mode === "key" ? "Key limits" : "Workspace limits"} description={description} flush>
@@ -232,8 +233,9 @@ export function ScopeLimits({ path, mode, writable, kind = "team", scopeLabel, r
         inherited={{ label: mode === "replacement" ? `${noun} default` : "Inherited", limits: inherited }} effective={{ limits: effective, invalid: valid?.invalid }} mode={mode === "replacement" ? "free" : "tighten"} stored={mode === "replacement" ? noLimits : stored}
         emptyText={picked === "defaults" ? "Default" : mode === "replacement" ? "No limit" : "Not set"} placeholder={mode === "replacement" ? key => `No limit${typeDefault?.[key] != null ? ` · default ${typeDefault[key]!.toLocaleString("en-US")}` : ""}` : undefined} />
     </Card>
-    <BudgetMeters windows={data.budgets ?? []} kind={kind} mode={data.mode} />
-    {mode !== "key" && <p className={s.note}>Installation-wide limits may also apply. Raising a limit never resets spending, and requests whose cost isn't known yet stay on hold and count toward budgets.</p>}
+    {/* The key page shows every layer's budget as rings from the key's stats (one card, not two). */}
+    {mode !== "key" && <BudgetMeters windows={data.budgets ?? []} kind={kind} mode={data.mode} />}
+    {mode !== "key" && <p className={s.note}>Installation-wide limits may also apply. Raising a limit never resets spending.</p>}
     {writable && <><StickySaveBar open={dirty} message={invalid ? "Not saved: fix the highlighted limits" : rejected ? "Not saved: see the highlighted limit" : mode === "replacement" && picked === "defaults" ? `Unsaved: use the ${noun} defaults` : mode === "replacement" && !replaced ? `Unsaved: create an override for this ${lower}` : "Unsaved changes"}><Button variant="secondary" disabled={busy} onClick={reset}>Discard</Button><Button loading={busy} disabled={invalid} onClick={() => void save()}>Save limits</Button></StickySaveBar><NavigationGuard dirty={dirty && !busy} /></>}
   </Stack>;
 }

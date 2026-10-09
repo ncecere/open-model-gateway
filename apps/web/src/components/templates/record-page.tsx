@@ -23,6 +23,7 @@ import { Stack } from "../ui/layout/layout";
 import { PageHeader } from "../ui/page-header/page-header";
 import { useResourceName } from "../layout/breadcrumbs";
 import { BackLink } from "./form-page";
+import { TitleWithIcon } from "../provider-icon";
 import s from "../../pages/shared.module.css";
 import styles from "./templates.module.css";
 
@@ -35,22 +36,22 @@ export type RecordSection = { id: string; title: string; description?: ReactNode
 
 const sectionCard = (section: RecordSection) => <Card key={section.id} id={section.id} className={styles.recordSection} title={section.title} titleAs="h2" description={section.description} actions={section.actions}><SectionHeadings>{section.content}</SectionHeadings></Card>;
 
-export function RecordPage({ title, meta, description, back, actions, facts, sections, children, tab, onTabChange }: { title: string; meta?: ReactNode; description?: ReactNode; back: { label: string; search: DashboardSearch }; actions?: ReactNode; facts?: DescriptionEntry[]; sections?: RecordSection[]; children?: ReactNode; tab?: string; onTabChange?: (tab: string) => void }) {
+export function RecordPage({ title, icon, meta, description, back, actions, facts, sections, children, tab, onTabChange }: { title: string; /** The provider/model logo left of the title (ui-principles 11). */ icon?: ReactNode; meta?: ReactNode; description?: ReactNode; back: { label: string; search: DashboardSearch }; actions?: ReactNode; facts?: DescriptionEntry[]; sections?: RecordSection[]; children?: ReactNode; tab?: string; onTabChange?: (tab: string) => void }) {
   const shown = facts?.filter(f => f.value !== undefined && f.value !== null);
   if (onTabChange) {
     // Pill tabs (Grounded DetailPage style, same as Team/Project pages); the URL keeps the active tab.
     const visible = sections?.filter(section => !section.hidden) ?? [];
     const overview = <Stack gap={6}>{shown && shown.length > 0 && <Card title="Details" titleAs="h2"><DescriptionList items={shown} dividers /></Card>}{visible.filter(section => section.overview).map(sectionCard)}{children}</Stack>;
     const tabs: ResourceTab[] = [{ value: "overview", label: "Overview", icon: <LayoutDashboard aria-hidden />, content: overview }, ...visible.filter(section => !section.overview).map(section => ({ value: section.id, label: section.tabLabel ?? section.title, icon: section.icon, count: section.count, content: sectionCard(section) }))];
-    return <ResourcePage title={title} meta={meta} description={description} actions={actions ? <div className={styles.headerActions}>{actions}</div> : undefined} tabs={tabs} tab={tab} onTabChange={onTabChange} />;
+    return <ResourcePage title={title} icon={icon} meta={meta} description={description} actions={actions ? <div className={styles.headerActions}>{actions}</div> : undefined} tabs={tabs} tab={tab} onTabChange={onTabChange} />;
   }
-  return <RecordStack title={title} meta={meta} description={description} back={back} actions={actions} shown={shown} sections={sections}>{children}</RecordStack>;
+  return <RecordStack title={title} icon={icon} meta={meta} description={description} back={back} actions={actions} shown={shown} sections={sections}>{children}</RecordStack>;
 }
 
-function RecordStack({ title, meta, description, back, actions, shown, sections, children }: { title: string; meta?: ReactNode; description?: ReactNode; back: { label: string; search: DashboardSearch }; actions?: ReactNode; shown?: DescriptionEntry[]; sections?: RecordSection[]; children?: ReactNode }) {
+function RecordStack({ title, icon, meta, description, back, actions, shown, sections, children }: { title: string; icon?: ReactNode; meta?: ReactNode; description?: ReactNode; back: { label: string; search: DashboardSearch }; actions?: ReactNode; shown?: DescriptionEntry[]; sections?: RecordSection[]; children?: ReactNode }) {
   useResourceName(title);
   return <Stack gap={6} className={`${s.page} ${styles.takeover}`}>
-    <PageHeader title={title} meta={meta} description={description} breadcrumbs={<BackLink {...back} />} actions={actions ? <div className={styles.headerActions}>{actions}</div> : undefined} />
+    <PageHeader title={icon ? <TitleWithIcon icon={icon}>{title}</TitleWithIcon> : title} meta={meta} description={description} breadcrumbs={<BackLink {...back} />} actions={actions ? <div className={styles.headerActions}>{actions}</div> : undefined} />
     {shown && shown.length > 0 && <Card title="Details" titleAs="h2"><DescriptionList items={shown} dividers /></Card>}
     {sections?.filter(section => !section.hidden).map(sectionCard)}
     {children}

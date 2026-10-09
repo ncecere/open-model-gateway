@@ -42,7 +42,7 @@ export type CatalogSummary = Catalog & { model_count?: number; models?: CatalogM
 export type CatalogDefaults = Record<WorkspaceKind, string[]>;
 const workspaceKinds = ["personal", "team", "project"] as const;
 export const catalogDefaultsPath = `${platformPath}/catalog-defaults`;
-export const catalogsExplainer = "A catalog is a set of approved models. Workspaces get the catalogs checked under Defaults for their type, unless they have their own catalog choice.";
+export const catalogsExplainer = "A catalog is a set of approved models; each workspace type gets its defaults.";
 export const defaultsLine = "Workspaces get the checked catalogs unless they choose their own.";
 const retireNote = "Models added only through them are retired from those workspaces and aren't restored if you check them again.";
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -67,7 +67,7 @@ export function Catalogs({ session }: { session: Session }) {
   const raw = nav?.search.tab ?? localTab, tab = raw === "personal" || raw === "team" || raw === "project" ? "defaults" : raw;
   const setTab = (value: string) => nav ? nav.navigate({ ...nav.search, tab: value === "overview" ? undefined : value, q: undefined, offset: undefined }) : setLocalTab(value);
   return <Stack gap={6} className={s.page}>
-    <Heading title="Catalogs" description={catalogsExplainer} actions={session.capabilities.platform_write && <Button onClick={() => ask({ title: "Create catalog", description: "A catalog is a set of approved models. Add models to it, then check who gets it under Defaults.", fields: catalogFields(), submitLabel: "Create catalog", run: (v, signal) => api(`${platformPath}/catalogs`, { method: "POST", body: { name: v.name, description: v.description || null }, signal }) })}>Create catalog</Button>} />
+    <Heading title="Catalogs" description={catalogsExplainer} actions={session.capabilities.platform_write && <Button onClick={() => ask({ title: "Create catalog", description: "Add models to it, then choose who gets it under Defaults.", fields: catalogFields(), submitLabel: "Create catalog", run: (v, signal) => api(`${platformPath}/catalogs`, { method: "POST", body: { name: v.name, description: v.description || null }, signal }) })}><Plus aria-hidden />Create catalog</Button>} />
     <Tabs value={tab} onValueChange={v => setTab(String(v))}>
       <TabsList variant="pills" className={t.list} aria-label="Catalog sections"><Tab value="overview"><Library aria-hidden />Catalogs</Tab><Tab value="defaults"><SlidersHorizontal aria-hidden />Defaults</Tab></TabsList>
       <TabsPanel value="overview"><CatalogList session={session} /></TabsPanel>
@@ -119,7 +119,6 @@ export function DefaultsMatrix({ session }: { session: Session }) {
     <div className={s.pad}><Stack gap={3}>
       {dirty && removed.length > 0 && <Alert tone="warning" title="Unchecked catalogs">{removed.join(" · ")}. Workspaces using these defaults lose {removed.length === 1 ? "it" : "them"} right away. {retireNote}</Alert>}
       {error !== undefined && <ErrorNotice error={error} />}
-      <p className={s.note}>Changes apply right away to every workspace that uses the defaults. Workspaces with their own catalog choice aren't affected.</p>
     </Stack></div>
     {writable && <><StickySaveBar open={dirty} message="Unsaved default changes"><Button variant="secondary" disabled={busy} onClick={reset}>Discard</Button><Button loading={busy} onClick={save}>Save defaults</Button></StickySaveBar><NavigationGuard dirty={dirty && !busy} /></>}
   </Card>;
@@ -129,7 +128,7 @@ export function CatalogDetail({ session, id, tab, onTabChange }: { session: Sess
   if (q.isPending) return <p role="status">Loading catalog…</p>; if (q.isError) return <ErrorNotice error={q.error} retry={() => void q.refetch()} />;
   if (q.data.id !== id) return <ErrorNotice error={new Error("The returned catalog does not match the requested record.")} />;
   const c = q.data;
-  return <ResourcePage title={c.name} description={c.description || "A set of approved models."} facts={<FactsLine items={[{ label: "Models", value: c.model_count === undefined ? "Unknown" : plural(c.model_count, "model") }, { label: "Who gets it", value: <WhoGetsIt catalog={c} /> }]} />}
+  return <ResourcePage title={c.name} description={c.description || "A set of approved models."} facts={<FactsLine items={[{ label: "Who gets it", value: <WhoGetsIt catalog={c} /> }]} />}
     actions={session.capabilities.platform_write && <ActionMenu label="Catalog actions" actions={[{ label: "Delete catalog…", danger: true, onSelect: () => ask({ title: `Delete ${c.name}?`, description: `Removes it from the defaults and from every workspace's own catalog choice. ${retireNote.replace("them", "it")} Direct assignments stay.`, danger: true, submitLabel: "Delete catalog", run: (_, signal) => api(`${platformPath}/catalogs/${enc(id)}`, { method: "DELETE", signal }), after: () => window.history.back() }) }]} />}
     tab={tab === "models" ? "overview" : tab} onTabChange={onTabChange} tabs={[
       { value: "overview", label: "Models", icon: <Boxes aria-hidden />, count: c.model_count, content: <CatalogModels session={session} catalog={c} /> },
@@ -145,7 +144,7 @@ function CatalogModels({ session, catalog }: { session: Session; catalog: Catalo
   const put = (model_ids: string[], signal: AbortSignal) => api(path, { method: "PUT", body: { model_ids }, signal });
   const add = () => ask({ title: `Add models to ${catalog.name}`, description: "Workspaces that get this catalog can add these models right away.", fields: [{ name: "model_ids", label: "Models", type: "checkboxes", value: "[]", required: true, maxSelections: 200, options: addable.map(m => ({ value: m.id, label: `${m.display_name} · ${m.public_name}${m.enabled ? "" : " · disabled"}` })) }], submitLabel: "Add models", successNotice: "Models added.", run: (v, signal) => put([...inCatalog, ...parseCheckboxValues(v.model_ids)], signal) });
   const remove = (m: Model) => ask({ title: `Remove ${m.display_name} from ${catalog.name}?`, description: "Workspaces that had it only through this catalog lose it, and keys that list it stop using it. Adding it back doesn't restore those choices. Other catalogs and direct assignments still count.", danger: true, submitLabel: "Remove model", successNotice: "Model removed.", run: (_, signal) => put(inCatalog.filter(x => x !== m.id), signal) });
-  return <Card title="Models" description="The approved models in this catalog. Workspaces that get it choose which ones to add." actions={writable && <Button disabled={!all.data || !linked.data || addable.length === 0} onClick={add}><Plus aria-hidden />Add models</Button>} flush>
+  return <Card title="Models" description="Workspaces that get this catalog choose which to add." actions={writable && <Button disabled={!all.data || !linked.data || addable.length === 0} onClick={add}><Plus aria-hidden />Add models</Button>} flush>
     {linked.isError ? <ErrorNotice error={linked.error} retry={() => void linked.refetch()} /> : all.isError ? <ErrorNotice error={all.error} retry={() => void all.refetch()} /> : !linked.data ? <p role="status" className={s.pad}>Loading models…</p> :
       <BitopTable caption={`Models in ${catalog.name}`} stack columns={["Model", "Protocols", "Status", ""]} empty={linked.data.length ? undefined : <Empty title="No models yet">{writable ? "Add approved models to offer them to the workspaces that get this catalog." : "No models are in this catalog."}</Empty>}>
         {linked.data.map(m => <Tr key={m.id}>
@@ -184,7 +183,7 @@ function CatalogAudience({ session, catalog }: { session: Session; catalog: Cata
       </Stack>}
       {writable && <><StickySaveBar open={dirty} message="Unsaved default changes"><Button variant="secondary" disabled={busy} onClick={reset}>Discard</Button><Button loading={busy} onClick={save}>Save defaults</Button></StickySaveBar><NavigationGuard dirty={dirty && !busy} /></>}
     </Card>
-    <Card title="Workspaces with their own catalog choice" description="These workspaces don't use the type defaults: a Platform Admin chose their catalogs, and this is one of them. Change it on the workspace's Models tab." flush>
+    <Card title="Workspaces with their own catalog choice" description="They use their own catalogs instead of the type defaults; change it on the workspace's Models tab." flush>
       {!own ? <p className={`${s.pad} ${s.muted}`}>Unknown on this gateway.</p> :
         <BitopTable caption={`Workspaces whose own catalog choice includes ${catalog.name}`} stack columns={["Workspace", "Type"]} empty={own.workspaces.length ? undefined : <Empty title="None">{own.personal_count ? "Only personal workspaces, listed below." : "Every workspace that gets this catalog gets it from the defaults."}</Empty>}>
           {own.workspaces.map(w => <Tr key={w.id}>
@@ -235,11 +234,11 @@ export function WorkspaceCatalogs({ session, workspaceId, kind = "team", readOnl
       .then(async () => { await client.invalidateQueries({ queryKey: ["api"] }); reset(); toast.success("Catalogs saved", selected.length ? list(selected) : "No catalogs"); })
       .catch(caught => setError(caught)).finally(() => setBusy(false));
   }
-  return <Card title="Catalogs" description={`A catalog is a set of approved models; members choose which to add. Available now: ${q.data.effective_catalog_ids.length ? list(q.data.effective_catalog_ids) : "none"}.`}>
+  return <Card title="Catalogs" description="Members add models from these catalogs.">
     <Stack gap={5}>
       <RadioGroup legend="Catalog source" variant="card" orientation="horizontal" value={picked} disabled={!writable || busy} onValueChange={value => setChoice(value as "defaults" | "choose")} options={[
         { value: "defaults", label: `Use ${noun} defaults`, description: defaultIds ? defaultIds.length ? `Defaults: ${list(defaultIds)}` : `The ${noun} defaults currently include no catalogs.` : `Follows the live ${noun} defaults.` },
-        { value: "choose", label: "Choose catalogs", description: `This ${lower}'s own catalog choice: only the catalogs picked here, instead of the defaults.` },
+        { value: "choose", label: "Choose catalogs", description: "Only the catalogs picked here." },
       ]} />
       {picked === "choose" && <CheckboxGroup legend={`Catalogs for this ${lower}`} value={selected} disabled={!writable || busy} onValueChange={next => setSelection(next as string[])}>{catalogs.data.length ? catalogs.data.map(c => <Checkbox key={c.id} value={c.id} label={c.name} />) : <p className={s.muted}>No catalogs exist yet.</p>}</CheckboxGroup>}
       {picked === "choose" && selected.length === 0 && <Alert tone="warning" title="No catalogs">This {lower} will have no catalog models. Members can use only specifically assigned models below.</Alert>}
@@ -257,9 +256,9 @@ export function PlatformAssignment({ session, workspace }: { session: Session; w
   const assignable = models.data?.filter(m => !direct.has(m.id)) ?? [];
   const assign = () => ask({ title: `Assign models to this ${lower}`, description: "Direct assignments are independent of catalogs. Members still choose which assigned models to use.", fields: [{ name: "model_ids", label: "Models", type: "checkboxes", value: "[]", maxSelections: 200, required: true, options: assignable.map(m => ({ value: m.id, label: `${m.display_name} · ${m.public_name}${m.enabled ? "" : " · disabled"}` })) }], submitLabel: "Assign models", run: async (v, signal) => { for (const id of parseCheckboxValues(v.model_ids)) await api(`${platformWorkspacePath(workspace.id)}/models`, { method: "POST", body: { model_id: id }, signal }); } });
   const remove = (g: Grant) => ask({ title: `Remove ${g.display_name || g.public_name}?`, description: g.catalog_granted ? "Removes only the direct assignment. The model stays available through this workspace's catalogs." : `Removes the direct assignment. Keys restricted to this model lose it, and it is not restored if assigned again.`, danger: true, submitLabel: "Remove assignment", run: (_, signal) => api(`${platformWorkspacePath(workspace.id)}/models/${enc(g.model_id)}`, { method: "DELETE", signal }) });
-  return <Card title="Specific models" description="Catalog models come from the catalogs above; direct models are assigned here by a Platform Admin and stay until removed, whatever the catalogs." actions={writable && <Button disabled={!models.data || assignable.length === 0} onClick={assign}>Assign models</Button>} flush>
+  return <Card title="Models" description="Models members added from catalogs, and models assigned directly." actions={writable && <Button disabled={!models.data || assignable.length === 0} onClick={assign}>Assign models</Button>} flush>
     {!visible ? <p className={s.pad}>Model authorizations are visible to Platform Admins and members of this {lower}.</p> : grants.isError ? <ErrorNotice error={grants.error} retry={() => void grants.refetch()} /> : models.isError ? <ErrorNotice error={models.error} /> : !grants.data ? <p role="status" className={s.pad}>Loading models…</p> :
-      <BitopTable caption={`Models authorized for this ${lower}`} stack columns={["Model", "Protocols", "Source", ""]} empty={grants.data.length === 0 ? <Empty title="No models yet">Choose catalogs above or assign specific models.</Empty> : undefined}>
+      <BitopTable caption={`Models authorized for this ${lower}`} stack columns={["Model", "Protocols", "Source", ""]} empty={grants.data.length === 0 ? <Empty title="No models yet">Members add them from the catalogs, or assign them here.</Empty> : undefined}>
         {grants.data.map(g => <Tr key={g.model_id}>
           <Td><span className={s.primary}>{g.display_name || g.public_name}</span><span className={s.secondary}>{g.public_name}</span></Td>
           <Td>{g.supported_protocols?.length ? g.supported_protocols.map(protocolLabel).join(", ") : <span className={s.muted}>—</span>}</Td>

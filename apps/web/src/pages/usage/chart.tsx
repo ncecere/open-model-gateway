@@ -5,23 +5,17 @@
  */
 import { wsPath, platformPath, type Workspace } from "../../lib/api";
 import { activeDays, chartLabeler, chartNumber, exploreQuery, formatMetric, groupStats, longDate, metricInfo, periodLabel, seriesValue, shortDate, usageContext, usageFilters, usageQuery, type ChartMetric, type ExploreMetric, type ExploreResponse, type UsageFilters, type UsageOverview, type UsagePeriod } from "../../lib/usage";
-import { Button, ErrorNotice, Stack, useApi } from "../../components/ui";
-import { ResourceLink } from "../../components/navigation-link";
+import { ErrorNotice, Stack, useApi } from "../../components/ui";
 import { useCrumbTail } from "../../components/layout/breadcrumbs";
 import { Card } from "../../components/ui/card/card";
 import { BarChart } from "../../components/ui/bar-chart/bar-chart";
 import { LineChart } from "../../components/ui/line-chart/line-chart";
 import { EmptyState } from "../../components/ui/empty-state/empty-state";
 import { Table, Td, Th, Tr } from "../../components/ui/table/table";
-import { ArrowLeft } from "lucide-react";
 import type { UsageNav } from "./shared";
 import u from "./usage.module.css";
 
 const MAX_SERIES = 7;
-
-export function BackToUsage({ nav }: { nav: UsageNav }) {
-  return <Button className={u.back} size="sm" variant="ghost" render={<ResourceLink search={{ ...nav.search, tab: undefined, metric: undefined, offset: undefined }} />}><ArrowLeft aria-hidden /> Back to Usage &amp; costs</Button>;
-}
 
 export function UsageChart({ workspace, metric, period, nav, workspaceFilter }: { workspace?: Workspace; metric: ChartMetric; period: UsagePeriod; nav: UsageNav; workspaceFilter?: string }) {
   useCrumbTail(metricInfo[metric].label);
@@ -45,7 +39,7 @@ function ModelChart({ workspace, metric, period, workspaceFilter, filters }: { w
     <Card title={`Daily ${info.label.toLowerCase()} by model`} description={`Total ${formatMetric(metric, res.total.value)} · ${periodLabel(period)}${res.rows.length > MAX_SERIES ? ` · chart shows the top ${MAX_SERIES} models` : ""}`}>
       {data.length < 2 ? <p className={u.note}>The period is a single day, so there is no chart.</p> : <div className={u.chartScroll}>{info.additive ? <BarChart size="lg" layout="stack" data={data} series={series} summary={summary} formatValue={format} dataTable={{ caption: `${info.label} per day and model`, labelHeader: "UTC day" }} /> : <LineChart size="lg" data={data} series={series} summary={summary} formatValue={format} dataTable={{ caption: `${info.label} per day and model`, labelHeader: "UTC day" }} />}</div>}
     </Card>
-    <Card title="By model" description={info.additive ? `Min, Max and Avg are per UTC day over all ${period.days} days (days without use count as zero). "≈" marks a rounded-down average.` : "Min, Max and Avg are over days with data; Overall is the rate for the whole period."} flush>
+    <Card title="By model" description={info.additive ? `Per UTC day over ${period.days} days; idle days count as zero; ≈ is rounded down.` : "Over days with data; Overall is the whole period."} flush>
       <Table caption={`${info.label} by model`} stack columns={["Model", { label: `Min (${unit})`, numeric: true }, { label: `Max (${unit})`, numeric: true }, { label: `Avg (${unit})`, numeric: true }, { label: `${info.additive ? "Total" : "Overall"} (${info.unit})`, numeric: true }]}>
         {stats.map(r => <Tr key={r.key}><Th scope="row">{r.name}</Th><Td numeric>{r.min}</Td><Td numeric>{r.max}</Td><Td numeric>{r.avg}</Td><Td numeric>{r.total}</Td></Tr>)}
         {res.other && <Tr><Th scope="row">Other models</Th><Td numeric>—</Td><Td numeric>—</Td><Td numeric>—</Td><Td numeric>{formatMetric(metric, res.other.value)}</Td></Tr>}

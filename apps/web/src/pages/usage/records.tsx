@@ -19,6 +19,7 @@ import { CopyId } from "../../components/templates/copy-id";
 import { InfoBanner } from "../../components/templates/notices";
 import { ReplacementLimitsDialog } from "../../components/scope-limits";
 import { DataTable, type DataTableColumn } from "../../components/ui/data-table/data-table";
+import { useStoredColumns } from "../../components/templates/table-view";
 import { EmptyState } from "../../components/ui/empty-state/empty-state";
 import { meterSummary } from "./accounting";
 import { tokensText } from "../../lib/requests";
@@ -72,33 +73,38 @@ export function WorkspaceRecords({ session, workspace, ctx, period, nav }: { ses
   const canFix = permissions(session, workspace).reconcileCosts;
   return <Stack gap={4}>
     {unknownModel && <UnknownModel />}
-    <div className={u.toolbar}><Button size="sm" variant="secondary" disabled={!ready} onClick={exportCsv}>Export CSV</Button></div>
-    <DataTable<Cost> caption="Cost records" stack columns={columns} data={ready ? main.data?.data ?? [] : []} getRowId={c => c.id} columnsMenu columnsMenuMin={4} loading={ready && main.isPending} error={main.error ?? undefined} onRetry={() => void main.refetch()}
+    {/* Export sits with Columns on the table's one action row (not a row of its own). */}
+    <DataTable<Cost> caption="Cost records" stack columns={columns} toolbar={<Button size="sm" variant="secondary" disabled={!ready} onClick={exportCsv}>Export CSV</Button>} data={ready ? main.data?.data ?? [] : []} getRowId={c => c.id} columnsMenu columnsMenuMin={4} loading={ready && main.isPending} error={main.error ?? undefined} onRetry={() => void main.refetch()}
       rowActions={canFix ? (c: Cost) => canReconcile(c) ? <Button size="sm" variant="secondary" onClick={() => reconcile(c)}>Reconcile</Button> : null : undefined}
       empty={<EmptyState size="compact" title="No records match" description={`No requests in ${periodLabel(period)}${filtered ? " with these filters" : ""}. Records appear as soon as a key is used.`} />}
       cursor={{ hasPrevious: offset > 0, hasNext: !!main.data?.has_more && offset + PAGE <= 100000, onPrevious: () => nav.navigate({ offset: Math.max(0, offset - PAGE) || undefined }), onNext: () => nav.navigate({ offset: offset + PAGE }), label: main.data?.data.length ? `Rows ${(offset + 1).toLocaleString("en-US")}–${(offset + main.data.data.length).toLocaleString("en-US")}` : undefined }} />
-    <p className={u.note}>One row per upstream attempt; the time opens its request. The Status filter matches the request's result; Cost status is the attempt's accounting state. Costs are estimates from configured prices, not provider invoices. An amount on hold is a floor, not a cap.</p>
+    <p className={u.note}>One row per upstream attempt. Costs are estimates; an amount on hold is a floor, not a cap.</p>
   </Stack>;
 }
 
+/** By workspace's columns (module-level, so the page can lift the Columns menu onto its FilterToolbar row). */
+const platformColumns: DataTableColumn<Breakdown>[] = [
+  { id: "workspace", header: "Workspace", rowHeader: true, cell: r => r.name },
+  { id: "spent", header: "Spent", numeric: true, cell: r => formatMicroUsd(r.totals.known_cost_microusd) },
+  { id: "held", header: "On hold", numeric: true, cell: r => formatMicroUsd(r.totals.held_microusd) },
+  { id: "requests", header: "Requests", numeric: true, defaultHiddenNarrow: true, cell: r => formatCount(r.totals.root_requests) },
+  { id: "unknown", header: "Cost unknown (attempts)", numeric: true, defaultHiddenNarrow: true, cell: r => formatCount(r.totals.unresolved_attempts) },
+];
+
+/** By workspace's column choice: `menu` goes at the end of the page's one FilterToolbar row (never a row of its own). */
+export const usePlatformRecordColumns = () => useStoredColumns(platformColumns, "omg.enterprise.columns.platform-records");
+export type PlatformRecordColumns = ReturnType<typeof usePlatformRecordColumns>;
+
 /** Admin › Usage & costs › By workspace: per-workspace totals (personal workspaces as totals only) with the same inline filters. */
-export function PlatformRecords({ session, ctx, period, nav, workspaceFilter }: { session: Session; ctx: UsageContext; period: UsagePeriod; nav: UsageNav; workspaceFilter?: string }) {
+export function PlatformRecords({ session, ctx, period, nav, workspaceFilter, cols }: { session: Session; ctx: UsageContext; period: UsagePeriod; nav: UsageNav; workspaceFilter?: string; /** From `usePlatformRecordColumns`; its menu sits on the FilterToolbar row. */ cols: PlatformRecordColumns }) {
   const { filters, ready, unknownModel } = useRecordFilters(undefined, ctx, nav, workspaceFilter);
   const report = useApi<CostReport>(`${platformPath}/cost-report?${recordsQuery(period, filters, { platform: true })}`, ready);
-  const columns: DataTableColumn<Breakdown>[] = [
-    { id: "workspace", header: "Workspace", rowHeader: true, cell: r => r.name },
-    { id: "spent", header: "Spent", numeric: true, cell: r => formatMicroUsd(r.totals.known_cost_microusd) },
-    { id: "held", header: "On hold", numeric: true, cell: r => formatMicroUsd(r.totals.held_microusd) },
-    { id: "requests", header: "Requests", numeric: true, defaultHiddenNarrow: true, cell: r => formatCount(r.totals.root_requests) },
-    { id: "unknown", header: "Cost unknown (attempts)", numeric: true, defaultHiddenNarrow: true, cell: r => formatCount(r.totals.unresolved_attempts) },
-  ];
   return <Stack gap={4}>
     {unknownModel && <UnknownModel />}
-    <DataTable<Breakdown> caption="By workspace" stack columns={columns} data={ready ? report.data?.breakdowns.workspaces ?? [] : []} getRowId={r => r.id ?? r.name} columnsMenu loading={ready && report.isPending} error={report.error ?? undefined} onRetry={() => void report.refetch()}
+    <DataTable<Breakdown> caption="By workspace" stack columns={platformColumns} data={ready ? report.data?.breakdowns.workspaces ?? [] : []} getRowId={r => r.id ?? r.name} hiddenColumns={cols.hidden} onHiddenColumnsChange={cols.setHidden} loading={ready && report.isPending} error={report.error ?? undefined} onRetry={() => void report.refetch()}
       rowActions={session.capabilities.platform_write ? (r: Breakdown) => r.id ? <FinancialWorkspaceActions session={session} workspaceId={r.id} name={r.name} /> : null : undefined}
       empty={<EmptyState size="compact" title="No usage matches" description={`No workspace used models in ${periodLabel(period)} with these filters.`} />} />
     {report.data?.breakdowns_truncated && <p className={u.note}>Only the first 100 workspaces are listed. Narrow the filters to see the rest.</p>}
-    <p className={u.note}>Request-level records stay inside each workspace. Personal workspaces appear as totals only, never with their keys or requests.</p>
   </Stack>;
 }
 
@@ -107,12 +113,12 @@ function FinancialWorkspaceActions({ session, workspaceId, name }: { session: Se
   const [limits, setLimits] = useState(false);
   const modelField = { name: "model_id", label: "Platform model", type: "select" as const, required: true, options: models.data?.map(m => ({ value: m.id, label: `${m.display_name} · ${m.public_name}` })) ?? [] };
   return <><ActionMenu label={`Administrative configuration for ${name}`} actions={[
-    { label: "Assign future cost center…", disabled: !centers.isSuccess, disabledReason: "Loading authorized cost centers", onSelect: () => ask({ title: `Future allocation · ${name}`, description: "Applies to new requests only; past usage keeps its label. This does not fetch private workspace keys, activity or owner metadata.", fields: [{ name: "cost_center_id", label: "Cost center", type: "select", options: centers.data?.filter(c => !c.archived_at).map(c => ({ value: c.id, label: `${c.name} · ${c.code}` })) ?? [], help: "Blank intentionally sets Unallocated." }], submitLabel: "Set allocation", run: (v, signal) => api(path, { method: "PATCH", body: { cost_center_id: v.cost_center_id || null }, signal }) }) },
-    { label: "Assign direct model…", disabled: !models.isSuccess, disabledReason: "Loading platform models", onSelect: () => ask({ title: `Direct model assignment · ${name}`, description: "Independent of catalog selection. Financial totals identify the workspace; private grant and credential inventories are not fetched.", fields: [modelField], submitLabel: "Assign direct model", run: (v, signal) => api(`${path}/models`, { method: "POST", body: { model_id: v.model_id }, signal }) }) },
-    { label: "Replace catalog availability…", disabled: !catalogs.isSuccess, disabledReason: "Loading approved catalogs", onSelect: () => ask({ title: `Replace available catalogs · ${name}`, description: "Explicit replacement, never unioned with defaults. Empty selection intentionally disables catalog availability. Ineligible catalog sources retire; independent direct assignments survive.", fields: [{ name: "catalog_ids", label: "Replacement catalogs", type: "checkboxes", value: "[]", maxSelections: 200, options: catalogs.data?.map(c => ({ value: c.id, label: c.name })) ?? [] }], submitLabel: "Set replacement catalogs", run: (v, signal) => api(`${path}/catalogs`, { method: "PUT", body: { mode: "replace", catalog_ids: parseCheckboxValues(v.catalog_ids) }, signal }) }) },
+    { label: "Assign future cost center…", disabled: !centers.isSuccess, disabledReason: "Loading authorized cost centers", onSelect: () => ask({ title: `Future allocation · ${name}`, description: "Applies to new requests only.", fields: [{ name: "cost_center_id", label: "Cost center", type: "select", options: centers.data?.filter(c => !c.archived_at).map(c => ({ value: c.id, label: `${c.name} · ${c.code}` })) ?? [], help: "Blank: Unallocated." }], submitLabel: "Set allocation", run: (v, signal) => api(path, { method: "PATCH", body: { cost_center_id: v.cost_center_id || null }, signal }) }) },
+    { label: "Assign direct model…", disabled: !models.isSuccess, disabledReason: "Loading platform models", onSelect: () => ask({ title: `Direct model assignment · ${name}`, description: "Independent of catalogs.", fields: [modelField], submitLabel: "Assign direct model", run: (v, signal) => api(`${path}/models`, { method: "POST", body: { model_id: v.model_id }, signal }) }) },
+    { label: "Replace catalog availability…", disabled: !catalogs.isSuccess, disabledReason: "Loading approved catalogs", onSelect: () => ask({ title: `Replace available catalogs · ${name}`, description: "Replaces the type defaults for this workspace. None checked means no catalogs; direct assignments stay.", fields: [{ name: "catalog_ids", label: "Replacement catalogs", type: "checkboxes", value: "[]", maxSelections: 200, options: catalogs.data?.map(c => ({ value: c.id, label: c.name })) ?? [] }], submitLabel: "Set replacement catalogs", run: (v, signal) => api(`${path}/catalogs`, { method: "PUT", body: { mode: "replace", catalog_ids: parseCheckboxValues(v.catalog_ids) }, signal }) }) },
     { label: "Set custom limits…", onSelect: () => setLimits(true) },
     { label: "Reset catalog inheritance…", onSelect: () => ask({ title: `Reset catalogs · ${name}?`, description: "Removes this workspace's custom catalog list. It will follow the default catalogs for its type again.", submitLabel: "Reset catalog inheritance", run: (_, signal) => api(`${path}/catalogs`, { method: "DELETE", signal }) }) },
-    { label: "Reset policy inheritance…", onSelect: () => ask({ title: `Reset ceilings · ${name}?`, description: "Deletes the platform override without resetting consumption or local restrictions.", submitLabel: "Reset policy inheritance", run: (_, signal) => api(`${path}/policy`, { method: "DELETE", signal }) }) },
-    { label: "Revoke direct model…", danger: true, disabled: !models.isSuccess, disabledReason: "Loading platform models", onSelect: () => ask({ title: `Revoke direct model · ${name}`, description: "Removes only a matching direct source. A live selected-catalog source is retained. No private grant inventory is fetched.", fields: [modelField], danger: true, submitLabel: "Revoke direct source", run: (v, signal) => api(`${path}/models/${id(v.model_id)}`, { method: "DELETE", signal }) }) },
+    { label: "Reset policy inheritance…", onSelect: () => ask({ title: `Reset ceilings · ${name}?`, description: "Deletes the platform override. Spending isn't reset.", submitLabel: "Reset policy inheritance", run: (_, signal) => api(`${path}/policy`, { method: "DELETE", signal }) }) },
+    { label: "Revoke direct model…", danger: true, disabled: !models.isSuccess, disabledReason: "Loading platform models", onSelect: () => ask({ title: `Revoke direct model · ${name}`, description: "Removes only the direct assignment; catalog access stays.", fields: [modelField], danger: true, submitLabel: "Revoke direct source", run: (v, signal) => api(`${path}/models/${id(v.model_id)}`, { method: "DELETE", signal }) }) },
   ]} />{limits && <ReplacementLimitsDialog workspaceId={workspaceId} name={name} onClose={() => setLimits(false)} />}</>;
 }

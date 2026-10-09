@@ -225,7 +225,8 @@ describe("price display and read-only access", () => {
     expect(meterUsageText("search_units", usage)).toBe("Unknown");
     const none = { ...report, meter_usage: { ...usage, output_audio_seconds_ms: null, input_characters: null, input_audio_seconds_ms: null, requests: null }, meter_relevant_attempts: counts({}), meter_unknown_attempts: counts({}), provider_reported_cost_microusd: null };
     const html = markup(<AccountingReport report={none} />);
-    expect(html).toContain("No image, speech, transcription, rerank or System One requests in this period.");
+    // No workload produced a meter and the provider reported nothing: no meters section at all (zero rows hidden).
+    expect(html).not.toContain("Media and unit meters");
     expect(html).not.toContain("Images generated");
     expect(tokenUsageText({ workload_kind: "audio_speech", input_tokens: "0", output_tokens: "0" })).toBe("Not applicable");
     expect(tokenUsageText({ workload_kind: "generation", input_tokens: "0", output_tokens: "0" })).toBe("0 in · 0 out");

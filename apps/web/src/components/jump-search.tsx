@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { API, api, platformPath, wsPath, type Collection, type Model, type PlatformUser, type Provider, type Session, type Workspace } from "../lib/api";
 import type { MeKey } from "../lib/home";
+/** Usable keys first: a rotated key's revoked predecessor (same name) comes after it. */
+const keyRank = (status: string) => ({ active: 0, disabled: 1, expired: 2, revoked: 3 } as Record<string, number>)[status] ?? 4;
 import type { WorkspaceCatalogModel } from "../lib/model-setup";
 import type { DirectoryWorkspace } from "../lib/people";
 import { inWorkspacePortal, type DashboardSearch } from "../lib/permissions";
@@ -44,10 +46,10 @@ export function useEntityResults(session: Session, workspace: Workspace | undefi
   const groups: EntityGroup[] = [];
   if (on && ws && models.data) groups.push({ label: `Models in ${ws.name}`, hits: models.data.data.map(m => ({ id: `model:${m.model_id}`, label: m.display_name || m.public_name, hint: m.public_name, search: { page: "workspace-model", ws: ws.id, record: m.model_id } })) });
   if (on && platform && adminModels.data) groups.push({ label: "Models (Admin)", hits: adminModels.data.data.map(m => ({ id: `admin-model:${m.id}`, label: m.display_name || m.public_name, hint: m.public_name, search: { page: "model-detail", record: m.id } })) });
-  if (on && keys.data) groups.push({ label: "Your API keys", hits: keys.data.data.filter(k => has(k.name) || k.id.startsWith(lower)).slice(0, 8).map(k => ({ id: `key:${k.id}`, label: k.name, hint: `${k.workspace.name} · ${k.status[0]!.toUpperCase()}${k.status.slice(1)}`, search: { page: "key-detail", ws: k.workspace.id, record: k.id } })) });
+  if (on && keys.data) groups.push({ label: "Your API keys", hits: keys.data.data.filter(k => has(k.name) || k.id.startsWith(lower)).sort((a, b) => keyRank(a.status) - keyRank(b.status)).slice(0, 8).map(k => ({ id: `key:${k.id}`, label: k.name, hint: `${k.workspace.name} · ${k.status[0]!.toUpperCase()}${k.status.slice(1)}`, search: { page: "key-detail", ws: k.workspace.id, record: k.id } })) });
   if (ws && requestIdQuery(q) && requests.data) groups.push({ label: `Requests in ${ws.name}`, hits: requests.data.data.map(r => ({ id: `request:${r.root_request_id}`, label: `Request ${r.root_request_id.slice(0, 8)}`, hint: `${r.model} · ${r.key.name}`, search: { page: "request-detail", ws: ws.id, record: r.root_request_id } })) });
   if (on && platform && users.data) groups.push({ label: "Users", hits: users.data.data.map(u => ({ id: `user:${u.id}`, label: u.email ?? "User", hint: u.disabled_at ? "Suspended" : undefined, search: { page: "user-detail", record: u.id } })) });
-  if (on && platform && shared.data) groups.push({ label: "Teams and projects", hits: shared.data.data.filter(w => w.kind !== "personal").map(w => ({ id: `shared:${w.id}`, label: w.name, hint: w.kind === "project" ? "Project" : "Team", search: { page: "workspace-detail", record: w.id, kind: w.kind } })) });
+  if (on && platform && shared.data) groups.push({ label: "Teams and projects (Admin)", hits: shared.data.data.filter(w => w.kind !== "personal").map(w => ({ id: `shared:${w.id}`, label: w.name, hint: w.kind === "project" ? "Project" : "Team", search: { page: "workspace-detail", record: w.id, kind: w.kind } })) });
   if (on && platform && connections.data) groups.push({ label: "Connections", hits: connections.data.data.filter(c => has(c.name) || has(c.provider)).slice(0, 5).map(c => ({ id: `connection:${c.id}`, label: c.name, hint: c.enabled ? undefined : "Disabled", search: { page: "provider-detail", record: c.id } })) });
   const loading = [models, adminModels, requests, users, shared].some(x => x.fetchStatus === "fetching");
   return { groups: groups.filter(g => g.hits.length), loading };

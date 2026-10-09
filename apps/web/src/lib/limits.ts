@@ -84,7 +84,7 @@ export function rateError(raw: string): string | undefined {
   const value = raw.trim();
   if (!value) return;
   if (/^[-\u2212]\s*\d/.test(value) || /^0+$/.test(value)) return "Must be a positive whole number.";
-  if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) return "Enter a whole number, without separators or exponent notation.";
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) return "Enter a whole number.";
   const n = Number(value);
   return n > MAX_INT ? `Enter 1 to ${MAX_INT.toLocaleString("en-US")}, or leave blank for no limit.` : undefined;
 }

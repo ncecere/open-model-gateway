@@ -78,13 +78,17 @@ describe("Add model page", () => {
     await waitFor(() => expect(fetch).toHaveBeenCalled());
     expect(JSON.parse(fetch.mock.calls[0][1].body).price).toBeNull();
   });
-  it("puts Cancel and Add model in a footer bar that names unsaved changes", async () => {
+  it("puts Cancel and Add model inline in the page header, not in a footer card (ui-principles 12)", async () => {
     const { user } = mountAddModel(vi.fn());
-    const status = screen.getAllByRole("status").find(el => el.closest("[data-open]"))!;
-    expect(status.textContent).toBe("");
-    expect(status.closest("[data-open]")!.querySelectorAll("button")).toHaveLength(2);
+    const actions = document.querySelector("[data-form-actions]")!, heading = screen.getByRole("heading", { level: 1, name: "Add model" });
+    expect([...actions.querySelectorAll("button")].map(b => b.textContent)).toEqual(["Cancel", "Add model"]);
+    // Same header row as the title, before the form card; no save bar.
+    expect(heading.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(actions.compareDocumentPosition(form()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(form().contains(actions)).toBe(false);
+    expect(document.querySelector("[data-open]")).toBeNull();
     await user.type(screen.getByRole("textbox", { name: /Display name/ }), "Draft");
-    expect(status.textContent).toBe("Unsaved changes");
+    expect(form().getAttribute("data-dirty")).toBe("true");
   });
   it("derives the API name from the upstream model ID, not the display name, until it is edited", async () => {
     const { user } = mountAddModel(vi.fn());
@@ -177,12 +181,12 @@ describe("Add model route", () => {
     expect(document.title).toContain("Add model");
     await user.type(await screen.findByRole("textbox", { name: /Display name/ }), "Draft");
     await user.click(screen.getByRole("link", { name: "Back to Models" }));
-    await screen.findByRole("alertdialog", { name: "Leave without saving?" });
+    await screen.findByRole("alertdialog", { name: "Discard unsaved changes?" });
     expect(router.state.location.pathname).toBe("/admin/models/new");
     await user.click(screen.getByRole("button", { name: "Keep editing" }));
     expect((screen.getByRole("textbox", { name: /Display name/ }) as HTMLInputElement).value).toBe("Draft");
     await user.click(screen.getByRole("button", { name: "Cancel" }));
-    await user.click(await screen.findByRole("button", { name: "Leave without saving" }));
+    await user.click(await screen.findByRole("button", { name: "Discard" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/admin/models"));
     client.clear();
   });
@@ -195,7 +199,7 @@ describe("Admin overview", () => {
     // Spend and requests cover this month, like Usage & costs (review #25), from the platform usage overview.
     const month = `${platformPath}/usage/overview?${usageQuery(usagePeriod({}))}`, usage = { tiles: { spend: { value: "9007199254740993" }, requests: { attempts: "12345678901234567890" } } };
     const html = markup(<PlatformOverview session={admin} />, [[path, overview], [month, usage]]);
-    expect(html).toContain("Spend, this month"); expect(html).toContain("Requests (incl. retries), this month");
+    expect(html).toContain("Spend this month"); expect(html).toContain("Requests this month"); expect(html).toContain("Includes retries");
     expect(markup(<PlatformOverview session={admin} />, [[path, overview]])).not.toContain("$0.00");
     expect(html).toContain("Set up this install"); expect(html).toContain("3 of 6 done"); expect(html).toContain('aria-valuenow="3"');
     expect(html).toContain('href="/admin/catalogs"'); expect(html).toContain('href="/admin/sso-groups"');
@@ -207,8 +211,22 @@ describe("Admin overview", () => {
     expect(html.indexOf("Installation daily budget")).toBeLessThan(html.indexOf("Installation monthly budget"));
     expect(markup(<PlatformOverview session={admin} />, [[path, overview]])).not.toContain("Installation budgets");
   });
-  it("is read-only for Auditors: progress without step actions", () => { const html = markup(<PlatformOverview session={auditor} />, [[path, overview]]); expect(html).toContain("3 of 6 done"); expect(html).not.toContain(">Catalog defaults<"); expect(html).not.toContain(">SSO groups<"); expect(html).toContain("read-only"); });
-  it("keeps a visible done state when setup is complete, with no primary next step", () => { const done = { ...overview, setup: { ...overview.setup, ready_models: 1, type_defaults: { personal: 1, team: 1, project: 1 }, oidc_mappings: 1 } }; const html = markup(<PlatformOverview session={admin} />, [[path, done]]); expect(html).not.toContain("Set up this install"); expect(html).toContain("Setup complete"); expect(html).toContain("Platform at a glance"); expect(html).not.toContain('data-variant="primary"'); });
+  it("is read-only for Auditors: progress without step actions", () => { const html = markup(<PlatformOverview session={auditor} />, [[path, overview]]); expect(html).toContain("3 of 6 done"); expect(html).not.toContain(">Catalog defaults<"); expect(html).not.toContain(">SSO groups<"); expect(html).toContain("Read-only"); });
+  it("hides the checklist by default once setup is complete, with a link to show it and no primary next step", () => { const done = { ...overview, setup: { ...overview.setup, ready_models: 1, type_defaults: { personal: 1, team: 1, project: 1 }, oidc_mappings: 1 } }; const html = markup(<PlatformOverview session={admin} />, [[path, done]]); expect(html).not.toContain("Set up this install"); expect(html).not.toContain("<ol"); expect(html).toContain("Setup complete."); expect(html).toContain("Show setup checklist"); expect(html).toContain("Platform at a glance"); expect(html).not.toContain('data-variant="primary"'); });
+  it("lets the checklist be hidden even while incomplete, remembered per user, and shown again", async () => {
+    localStorage.clear();
+    const client = testClient(); client.setQueryData(["api", undefined, path], overview);
+    const user = userEvent.setup();
+    render(<QueryClientProvider client={client}><PlatformOverview session={admin} /></QueryClientProvider>);
+    await user.click(screen.getByRole("button", { name: "Hide setup checklist" }));
+    expect(screen.queryByText("Set up this install")).toBeNull(); expect(screen.getByText(/Setup: 3 of 6 done/)).toBeTruthy();
+    expect(localStorage.getItem(`omg.enterprise.setupDismissed:${admin.user.id}`)).toBe("hidden");
+    cleanup(); render(<QueryClientProvider client={client}><PlatformOverview session={admin} /></QueryClientProvider>);
+    expect(screen.queryByText("Set up this install")).toBeNull(); // remembered
+    await user.click(screen.getByRole("button", { name: "Show setup checklist" }));
+    expect(screen.getByText("Set up this install")).toBeTruthy(); expect(localStorage.getItem(`omg.enterprise.setupDismissed:${admin.user.id}`)).toBe("shown");
+    cleanup(); client.clear(); localStorage.clear();
+  });
   it("makes the next setup step the page's one primary button", () => { const html = markup(<PlatformOverview session={admin} />, [[path, overview]]); expect(html.match(/data-variant="primary"/g)).toHaveLength(1); expect(html).toMatch(/<h1[^>]*>Overview<\/h1>/); });
   it("shows an error instead of zeros when the overview is unavailable", () => { const client = testClient(); client.getQueryCache().build(client, { queryKey: ["api", undefined, path] }).setState({ status: "error", error: new Error("Overview unavailable"), fetchStatus: "idle" }); const html = markup(<PlatformOverview session={admin} />, [], client); expect(html).toContain("Overview unavailable"); expect(html).not.toContain("$0.00"); client.clear(); });
 });

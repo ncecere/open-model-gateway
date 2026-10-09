@@ -23,12 +23,13 @@ export type ChecklistStep = {
 
 /** `embedded`: inside a card that already has a title; no own surface, the title becomes the accessible name only. */
 /** `actionVariant="secondary"` when the page header already holds the next step as its one primary button. */
-export function Checklist({ title, description, steps, onDismiss, headingLevel = 2, complete, embedded = false, actionVariant = "auto" }: { title: string; description?: ReactNode; steps: ChecklistStep[]; onDismiss?: () => void; headingLevel?: 2 | 3; complete?: ReactNode; embedded?: boolean; actionVariant?: "auto" | "secondary" }) {
+/** `onDismiss` adds a × button (named `dismissLabel`, default "Dismiss <title>"). */
+export function Checklist({ title, description, steps, onDismiss, dismissLabel, headingLevel = 2, complete, embedded = false, actionVariant = "auto" }: { title: string; description?: ReactNode; steps: ChecklistStep[]; onDismiss?: () => void; dismissLabel?: string; headingLevel?: 2 | 3; complete?: ReactNode; embedded?: boolean; actionVariant?: "auto" | "secondary" }) {
   const titleId = useId(), Heading = `h${headingLevel}` as const;
   const done = steps.filter(step => step.done).length, total = steps.length, current = steps.find(step => !step.done)?.id;
   const summary = `${done} of ${total} done`, percent = total ? Math.round(done / total * 100) : 0;
   return <section aria-labelledby={titleId} className={embedded ? styles.embedded : styles.root} data-complete={done === total ? "" : undefined}>
-    {embedded ? <span id={titleId} className={styles.srOnly}>{title}</span> : <div className={styles.header}><div className={styles.heading}><Heading id={titleId} className={styles.title}>{title}</Heading>{description && <p className={styles.description}>{description}</p>}</div>{onDismiss && <IconButton size="sm" variant="ghost" icon={<X aria-hidden />} label={`Dismiss ${title}`} onClick={onDismiss} />}</div>}
+    {embedded ? <span id={titleId} className={styles.srOnly}>{title}</span> : <div className={styles.header}><div className={styles.heading}><Heading id={titleId} className={styles.title}>{title}</Heading>{description && <p className={styles.description}>{description}</p>}</div>{onDismiss && <IconButton size="sm" variant="ghost" icon={<X aria-hidden />} label={dismissLabel ?? `Dismiss ${title}`} onClick={onDismiss} />}</div>}
     {done === total && complete ? <p className={styles.summary}>{complete}</p> : <div className={styles.progress}><span className={styles.summary} id={`${titleId}-summary`}>{summary}</span><div role="progressbar" aria-labelledby={`${titleId}-summary`} aria-valuemin={0} aria-valuemax={total} aria-valuenow={done} aria-valuetext={summary} className={styles.track}><span className={styles.bar} style={{ width: `${percent}%` }} /></div></div>}
     <ol className={styles.steps}>{steps.map((step, index) => <li key={step.id} className={styles.step} data-done={step.done ? "" : undefined} data-current={step.id === current ? "" : undefined}>
       <span aria-hidden className={styles.marker}>{step.done ? <Check /> : index + 1}</span>

@@ -93,6 +93,8 @@ describe("Admin › Settings", () => {
   it("sets up email with a password reference and places server reasons on the field", async () => {
     const user = userEvent.setup(), fetch = serve(admin, (path, init) => init?.method === "PUT" && path.endsWith("/settings/email") ? Response.json({ error: { code: "400", message: "The password reference is not on the server allowlist", reason: "credential_reference_not_allowed" } }, { status: 400 }) : undefined);
     const { client } = await mount("/admin/settings/email");
+    // Without a relay the disabled test button says why.
+    expect(await screen.findByText("Turn on Send email below to test delivery.")).toBeTruthy();
     await user.click(await screen.findByRole("switch", { name: /Send email/ }));
     await user.type(screen.getByRole("textbox", { name: "Host" }), "smtp.example.com");
     await user.type(screen.getByRole("textbox", { name: /^Username/ }), "relay");

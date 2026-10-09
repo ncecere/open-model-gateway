@@ -54,8 +54,8 @@ describe("URL state for requests and keys", () => {
     expect(navParents["key-detail"]).toBe("keys");
   });
   it("keeps the column chooser and density in the URL, including showing hidden-by-default columns", () => {
-    expect(requestView({})).toEqual({ hidden: ["cached", "reasoning", "request", "session", "workload", "streamed", "cost_center"], density: "comfortable" });
-    expect(requestViewSearch({ hidden: ["workload", "streamed", "cost_center", "cached", "reasoning", "request", "session"], density: "comfortable" })).toEqual({ cols: undefined, density: undefined });
+    expect(requestView({})).toEqual({ hidden: ["ttft", "speed", "cached", "reasoning", "request", "session", "workload", "streamed", "cost_center"], density: "comfortable" });
+    expect(requestViewSearch({ hidden: ["workload", "streamed", "cost_center", "cached", "reasoning", "request", "session", "speed", "ttft"], density: "comfortable" })).toEqual({ cols: undefined, density: undefined });
     expect(requestViewSearch({ hidden: [], density: "compact" })).toEqual({ cols: "none", density: "compact" });
     expect(requestView({ cols: "none", density: "compact" })).toEqual({ hidden: [], density: "compact" });
     expect(requestView({ cols: "model,unknown" }).hidden).toEqual(["model"]);

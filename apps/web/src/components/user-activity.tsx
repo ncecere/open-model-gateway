@@ -60,7 +60,7 @@ export function UserActions({ user, name }: { user: Pick<PlatformUser, "id">; na
     { id: "workspace", header: "Team or project", cell: e => { const w = e.workspace_id ? spaces.get(e.workspace_id) : undefined; return w ? link(w) : <span className={s.muted}>—</span>; } },
   ];
 
-  return <Card title="Recent actions" description={`Changes ${name} made, newest first. Personal-workspace events are never listed.`}>
+  return <Card title="Recent actions" description={`Changes ${name} made, newest first.`}>
     <DirectoryTable<Audit> path={`${platformPath}/audit?actor_user_id=${enc(user.id)}`} label={`Actions by ${name}`} storageKey="user-activity" rowKey={e => e.id} rowLabel={e => `${auditEventLabel(e)} event`} columns={columns}
       facets={[signInFacet]} facetState={{ values: { hide_sign_ins: hide ? ["true"] : [] }, onChange: next => setHide(Array.isArray(next.hide_sign_ins) && next.hide_sign_ins[0] === "true") }}
       rowActions={e => [copyIdAction(e.resource_id, "Copy target ID"), copyIdAction(e.id, "Copy event ID")]}
@@ -80,7 +80,7 @@ export function UserUsage({ user }: { user: Pick<PlatformUser, "id"> }) {
   const range = useMemo(() => last30Days(), []);
   const report = useApi<CostReport>(`${platformPath}/cost-report?start_date=${range.start_date}&end_date=${range.end_date}&actor_user_id=${enc(user.id)}`);
   const shared = useChoices<DirectoryWorkspace>(`${platformPath}/workspaces`);
-  const description = "Requests with this person's own API keys, in UTC. Estimates from configured rates, not invoices.";
+  const description = "Requests made with this person's own API keys (UTC).";
   if (report.isPending) return <Card title="Usage (last 30 days)" description={description}><p role="status">Loading usage…</p></Card>;
   if (report.isError) return <Card title="Usage (last 30 days)" description={description}><ErrorNotice error={report.error} retry={() => void report.refetch()} /></Card>;
   const r = report.data, t = r.totals, none = t.attempts === "0";
@@ -89,12 +89,12 @@ export function UserUsage({ user }: { user: Pick<PlatformUser, "id"> }) {
   return <Card title="Usage (last 30 days)" description={description}>
     <Stack gap={4}>
       <div className={p.usageTotals}>
-        <StatCard label="Upstream attempts" value={formatCount(t.attempts)} hint={t.unresolved_attempts !== "0" ? `${formatCount(t.unresolved_attempts)} with unresolved cost` : undefined} />
-        <StatCard label="Known estimated cost" value={money(t.known_cost_microusd)} hint={t.unresolved_attempts !== "0" ? "A lower bound while costs are unresolved" : undefined} />
-        <StatCard label="Held reservations" value={money(t.held_microusd)} />
+        <StatCard label="Requests" value={formatCount(t.attempts)} hint={t.unresolved_attempts !== "0" ? `${formatCount(t.unresolved_attempts)} with unresolved cost` : "Includes retries"} />
+        <StatCard label="Spend" value={money(t.known_cost_microusd)} hint={t.unresolved_attempts !== "0" ? "At least; some costs are unresolved" : "Estimated"} />
+        <StatCard label="On hold" value={money(t.held_microusd)} />
       </div>
       {none ? <EmptyState size="compact" icon={<ActivityIcon />} title="No usage in the last 30 days." /> : !split ? <p className={s.muted}>{shared.isPending ? "Loading the per-workspace breakdown…" : "Per-workspace breakdown unavailable; totals only."}</p> :
-        <Table caption="Usage by workspace" columns={["Workspace", "Kind", { label: "Attempts", numeric: true }, { label: "Known cost", numeric: true }, { label: "Held", numeric: true }]}>
+        <Table caption="Usage by workspace" columns={["Workspace", "Kind", { label: "Requests", numeric: true }, { label: "Spend", numeric: true }, { label: "On hold", numeric: true }]}>
           {split.shared.map(w => <UsageRow key={w.id} name={<PersonCell name={w.name} shape="square"><CellText primary={<ResourceLink search={{ page: "workspace-detail", record: w.id, kind: w.kind as "team" | "project" }}>{w.name}</ResourceLink>} /></PersonCell>} kind={<Badge>{kindLabels[w.kind]}</Badge>} totals={w.totals} />)}
           {split.personal && <UsageRow name={<CellText primary="Personal workspace (private)" secondary="Totals only" />} totals={split.personal} />}
         </Table>}

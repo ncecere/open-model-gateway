@@ -157,3 +157,102 @@
   width: 13rem;
   max-width: 100%;
 }
+
+/* ---------------- Overview › Accounting (ui-principles 13) ---------------- */
+
+/* Four small stats in one row (two per row on a phone). */
+.acctStats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+  gap: var(--space-3) var(--space-5);
+  margin: 0;
+
+  @media (max-width: 40rem) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.acctStat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+
+  & dt {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs, 0.75rem);
+  }
+
+  & dd {
+    margin: 0;
+    font-size: var(--font-size-lg);
+    font-weight: var(--font-weight-semibold, 600);
+    font-variant-numeric: tabular-nums;
+    color: var(--color-text);
+  }
+}
+
+.acctStatus {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--font-size-sm, 0.875rem);
+
+  & > svg {
+    flex: none;
+    margin-top: 0.125rem;
+  }
+}
+
+.acctOk {
+  color: var(--color-success-text);
+}
+
+.acctWarn {
+  color: var(--color-warning-text);
+}
+
+.acctWarnText {
+  color: var(--color-warning-text);
+}
+
+.subhead {
+  margin: 0;
+  font-size: var(--font-size-sm, 0.875rem);
+  font-weight: var(--font-weight-medium, 500);
+  color: var(--color-text);
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+}
+
+/* The cache and meter tables: compact, the category column takes what is left. */
+.acctTable {
+  min-width: 0;
+}
+
+/* Coverage counts: label | number pairs, two pairs per row where there is room. */
+.acctCoverage {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr) auto);
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+  font-size: var(--font-size-sm, 0.875rem);
+
+  & dt {
+    color: var(--color-text-muted);
+  }
+
+  & dd {
+    margin: 0;
+    text-align: end;
+    font-variant-numeric: tabular-nums;
+  }
+
+  @media (max-width: 40rem) {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+}

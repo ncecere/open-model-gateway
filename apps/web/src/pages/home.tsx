@@ -57,14 +57,14 @@ export function AuthRequired({ error, refresh, denied = false }: { error?: unkno
     <div className={signIn.brand}><span aria-hidden className={signIn.mark}><span className={signIn.accent} /></span><h1 className={signIn.title}>Open Model Gateway</h1><p className={signIn.subtitle}>Models for your personal, team and project workspaces</p></div>
     <Card className={signIn.card}><CardBody className={signIn.body}><Stack gap={5}>
       <div><h2 className={signIn.heading}>Sign in</h2><p className={signIn.lead}>Use your organization account to continue.</p></div>
-      {denied && <Alert tone="warning" title="No access yet">Your account doesn't have access yet. Ask a platform admin to add you.</Alert>}
+      {denied && <Alert tone="warning" title="No access yet">Ask a platform admin to add you.</Alert>}
       {error !== undefined && !(error instanceof ApiError && error.status === 401) && <ErrorNotice error={error} retry={refresh} />}
       <Button block render={<a href={loginHref()} />}><LogIn aria-hidden /> Sign in with single sign-on</Button>
     </Stack></CardBody></Card>
-    <p className={signIn.note}>Signing in alone doesn't give access; a platform admin gives you a role.</p>
+    {!denied && <p className={signIn.note}>Signing in alone doesn't give access; a platform admin gives you a role.</p>}
   </div></main>;
 }
-function PermissionNotice({ title = "Access not available", description = "Your live session does not authorize this page. Refresh access or switch to a workspace where you have the required capability." }: { title?: string; description?: string }) { return <Stack gap={6} className={s.page}><Heading title={title} description={description} /><Alert tone="info">Access is based on current /me capabilities, not remembered URLs or inferred workspace membership.</Alert></Stack>; }
+function PermissionNotice({ title = "Access not available", description = "You can't open this page here. Try another workspace or reload your access." }: { title?: string; description?: string }) { return <Stack gap={6} className={s.page}><Heading title={title} description={description} /></Stack>; }
 export function DashboardContent({ session, search, workspace, navigate }: { session: Session; search: DashboardSearch; workspace?: Workspace; navigate: (next: DashboardSearch) => void }) {
   const changeTab = (tab: string) => navigate({ ...search, tab: tab === "overview" ? undefined : tab, q: undefined, offset: undefined }), props = { session, id: search.record ?? "", tab: search.tab, onTabChange: changeTab };
   if (!canView(search.page ?? "overview", session, workspace)) return <PermissionNotice />;

@@ -54,7 +54,7 @@ export function EmailSettingsPage({ session }: { session: Session }) {
     try { const result = await api<EmailTestResult>(`${path}/test`, { method: "POST" }); setTest(result); void client.invalidateQueries({ queryKey: ["api"] }); }
     catch (caught) { setTest({ failed: caught }); } finally { setTesting(false); }
   }
-  const page = (body: ReactNode) => <SettingsPage title="Email" description="An SMTP relay for sending invitations. Without one, invitations show a code to copy and send yourself.">{body}</SettingsPage>;
+  const page = (body: ReactNode) => <SettingsPage title="Email" description="An SMTP relay for invitations. Without one, you send the invite code yourself.">{body}</SettingsPage>;
   if (q.isError) return page(<ErrorNotice error={q.error} retry={() => void q.refetch()} />);
   if (!form || !q.data) return page(<p role="status">Loading settings…</p>);
   const e = q.data;
@@ -67,7 +67,7 @@ export function EmailSettingsPage({ session }: { session: Session }) {
       ]} />
       {e.status === "credential_unavailable" && <Alert tone="warning" title="The password can't be read">The referenced variable isn't set on the server or isn't on its allowlist. Email won't send until it is.</Alert>}
       {writable && <div className={st.status}>
-        <p className={st.note}>Sends a short test message to {session.user.email}. At most 2 a minute.</p>
+        <p className={st.note}>{e.configured ? <>Sends a short test message to {session.user.email}. At most 2 a minute.</> : "Turn on Send email below to test delivery."}</p>
         <Button variant="secondary" loading={testing} disabled={!e.configured || dirty} onClick={() => void sendTest()}><Send aria-hidden /> Send test email</Button>
       </div>}
       {test && ("failed" in test ? <ErrorNotice error={test.failed} /> : test.ok ? <Alert tone="success" title="Test email sent">Sent to {test.recipient}. Check that inbox, including spam.</Alert> : <Alert tone="danger" title="Test email failed">{test.error ? deliveryErrors[test.error] : "The message wasn't delivered."}</Alert>)}
@@ -85,7 +85,7 @@ export function EmailSettingsPage({ session }: { session: Session }) {
   return page(<div className={st.form} data-dirty={dirty ? "true" : undefined}>
     {status}
     {error !== undefined && <ErrorNotice error={error} />}
-    <Card title="Relay" description="One connection per message, with STARTTLS or implicit TLS. Unencrypted delivery is only possible to a relay on this machine.">
+    <Card title="Relay" description="STARTTLS or implicit TLS; unencrypted only to a relay on this machine.">
       <Stack gap={5}>
         <Switch label="Send email" description="Turning this off clears the relay settings." checked={form.enabled} disabled={busy} onCheckedChange={checked => set("enabled", checked)} />
         {form.enabled && <>

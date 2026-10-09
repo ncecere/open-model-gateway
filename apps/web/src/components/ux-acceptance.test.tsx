@@ -80,7 +80,7 @@ describe("D-3 Requests list", () => {
   const html = () => markup(nav({ page: "requests", ws: "team" }, <Requests session={session} workspace={team} />), [[`${ws}/requests?limit=50`, { data: [row, { ...row, root_request_id: "2b2b3c4d-0000-0000-0000-000000000002", workload_kind: "audio_speech", input_tokens: "0", output_tokens: "0" }], next_cursor: null }]]);
   it("puts Started (compact, one line), Model, Status, Cost and Latency first, and makes the whole row one link", () => {
     const doc = new DOMParser().parseFromString(html(), "text/html"), table = doc.querySelector("table")!;
-    expect([...table.tHead!.rows[0]!.cells].map(c => c.textContent)).toEqual(["Started", "Model", "Key / app", "Tokens", "Cost", "Latency", "TTFT", "Speed", "Finish", "Status", "Attempts"]);
+    expect([...table.tHead!.rows[0]!.cells].map(c => c.textContent)).toEqual(["Started", "Model", "Key / app", "Tokens", "Cost", "Latency", "Finish", "Status", "Attempts"]);
     const first = table.tBodies[0]!.rows[0]!, link = first.cells[0]!.querySelector("a")!;
     expect(link.className).toMatch(/rowLink/);
     expect(link.getAttribute("href")).toBe("/workspaces/team/requests/1a2b3c4d-0000-0000-0000-000000000001");
@@ -121,7 +121,8 @@ describe("D-4 / D-12 models that can't serve", () => {
     const c = testClient(); c.setQueryData(["api", undefined, `${ws}/catalog`, "choices"], [catalogRow("model", 1), catalogRow("dark", 0), catalogRow("avail", 0, "available_from_catalog")]); c.setQueryData(["api", undefined, `${ws}/models`, "choices"], [grant]);
     const html = markup(nav({ page: "grants", ws: "team" }, <WorkspaceModels session={session} workspace={team} />), [], c);
     expect(html.match(/<span aria-hidden="true" class="[^"]*"><\/span>Not serving<\/span>/g)).toHaveLength(2); expect(html).not.toContain("Not serving — ");
-    expect(html).toContain("No route to a provider is turned on for this model");
+    expect(html).toContain("No route to a provider is turned on, so requests fail"); // the badge's tooltip, not a sentence in the row
+    expect(html).not.toMatch(/<p[^>]*>No route to a provider/);
     const table = markup(nav({ page: "grants", ws: "team", layout: "table" }, <WorkspaceModels session={session} workspace={team} />), [], c);
     expect(table).toContain(">Not serving<"); expect(table).toContain("No route to a provider is turned on");
   });
@@ -236,9 +237,10 @@ describe("D-10 installation budget", () => {
     expect(markup(<InstallationBudgets budgets={null} />)).toBe("");
     const overview = { setup: { connections: 1, enabled_connections: 1, models: 1, ready_models: 1, enabled_routes: 1, priced_enabled_routes: 1, catalogs: 1, type_defaults: { personal: 1, team: 1, project: 1 }, entitled_users: 1, oidc_mappings: 1 }, glance: { entitled_users: 1, teams: 1, projects: 0, ready_models: 1, attempts_7d: "1", known_cost_7d_microusd: "1" }, installation_budgets: [] };
     const html = markup(<PlatformOverview session={{ ...session, capabilities: { platform_read: true, platform_write: false, create_workspace: false } }} />, [["/api/v1/platform/overview", overview]]);
-    expect(html).toContain("No installation-wide budget");
+    // The Admin overview shows the card only when a budget exists ("none" is not worth a card).
+    expect(html).not.toContain("No installation-wide budget"); expect(html).not.toContain("Installation budgets");
     // New vocabulary (polish): no "Attempts" or "unresolved charges".
-    expect(html).not.toContain("Attempts, last 7 days"); expect(html).not.toContain("unresolved charges"); expect(html).toContain("Spend, this month");
+    expect(html).not.toContain("Attempts, last 7 days"); expect(html).not.toContain("unresolved charges"); expect(html).toContain("Spend this month");
   });
 });
 

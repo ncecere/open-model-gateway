@@ -77,7 +77,7 @@ export function microUsdError(value: string): string | undefined {
 export function dollarsToMicroUsd(value: string): string {
   if (value.length > MAX_MONEY_INPUT_LENGTH) throw new Error("Enter a USD amount using at most 32 characters.");
   const dollars = value.trim();
-  if (!/^\d+(?:\.\d{1,6})?$/.test(dollars)) throw new Error("Enter a non-negative USD amount with up to 6 decimal places, without commas, currency symbols, or exponent notation.");
+  if (!/^\d+(?:\.\d{1,6})?$/.test(dollars)) throw new Error("Enter a non-negative USD amount with up to 6 decimal places.");
   const [whole, fraction = ""] = dollars.split(".");
   const amount = BigInt(whole) * 1000000n + BigInt(fraction.padEnd(6, "0"));
   if (amount > MAX_MICROUSD) throw new Error(USD_RANGE_ERROR);

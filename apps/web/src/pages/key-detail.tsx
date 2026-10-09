@@ -1,13 +1,15 @@
 /*
  * One API key on its own page: "Back to API keys" and previous/next within
- * the list's filters; a settings card (name, owner, expiry, model access, all
- * read-only because the server fixes them) with the key's limits edited
- * inline (stacked budgets, tighten-only); spending over the last 30 days with
- * today / this week / this month totals; a budget ring per applicable budget;
- * effective access by layer with "why can't I use this model?"; and a danger
- * zone with Disable or Enable, Rotate and Revoke. Revoked and expired keys are
- * final: no danger zone, read-only copy, "View requests" stays in the header.
- * Key lineage: rotation keeps limits and usage.
+ * the list's filters, then pill tabs (ui-principles 7, 8; `?tab=`):
+ * - Overview: settings (name, owner, expiry, model access, all read-only
+ *   because the server fixes them), today / this week / this month totals,
+ *   spending over the last 30 days, and the danger zone (Disable or Enable,
+ *   Rotate, Revoke).
+ * - Limits: the key's limits edited inline (stacked budgets, tighten-only) and
+ *   a budget ring per applicable budget (every layer, from the key's stats).
+ * - Access: effective access by layer with "why can't I use this model?".
+ * Revoked and expired keys are final: no danger zone, read-only copy, "View
+ * requests" stays in the header. Key lineage: rotation keeps limits and usage.
  *
  * The key itself comes from GET …/keys/{id} (same visibility as the list: a
  * member asking for someone else's key gets 404). The list is read only for
@@ -15,7 +17,7 @@
  */
 import { DetailTime } from "../components/templates/when";
 import type { ReactNode } from "react";
-import { FileQuestion } from "lucide-react";
+import { FileQuestion, Gauge, LayoutDashboard, ShieldCheck } from "lucide-react";
 import { EmptyState } from "../components/ui/empty-state/empty-state";
 import { ApiError, wsPath, type Grant, type Member, type ServiceAccount } from "../lib/api";
 import { formatMicroUsd } from "../lib/governance";
@@ -37,6 +39,7 @@ import { DangerAction, DangerZone } from "../components/templates/notices";
 import { PrevNext } from "../components/templates/prev-next";
 import { StatTile, StatTileGrid } from "../components/templates/stat-tile";
 import { StatusPill } from "../components/templates/status-pill";
+import { TypeTabs } from "../components/templates/type-tabs";
 import { BarChart } from "../components/ui/bar-chart/bar-chart";
 import { Card } from "../components/ui/card/card";
 import { DescriptionList } from "../components/ui/description-list/description-list";
@@ -55,28 +58,33 @@ function totalsHint(t: KeyTotals) {
 /** Micro-USD as a Number only to size bars; labels format the exact integer string. */
 const microNumber = (value: string) => /^\d{1,15}$/.test(value) ? Number(value) : Number.NaN;
 
-export function KeyUsage({ workspace, keyId }: { workspace: Scope["workspace"]; keyId: string }) {
+export function KeyUsage({ workspace, keyId, part = "spending" }: { workspace: Scope["workspace"]; keyId: string; /** Spending totals and chart (Overview) or budget rings (Limits). */ part?: "spending" | "budgets" }) {
   const q = useApi<KeyStats>(`${wsPath(workspace.id)}/keys/${encodeURIComponent(keyId)}/stats`);
   if (q.isPending) return <p role="status">Loading usage…</p>;
   if (q.isError) return <ErrorNotice error={q.error} retry={() => void q.refetch()} />;
   const stats = q.data, total = stats.daily.reduce((sum, d) => sum + BigInt(/^\d+$/.test(d.spend_microusd) ? d.spend_microusd : "0"), 0n);
+  if (part === "budgets") return <KeyBudgets stats={stats} />;
   return <Stack gap={6}>
     <StatTileGrid columns={3} label="Spending totals (UTC)">
       <StatTile label="Today" value={formatMicroUsd(stats.totals.today.spend_microusd)} hint={totalsHint(stats.totals.today)} />
       <StatTile label="This week" value={formatMicroUsd(stats.totals.week.spend_microusd)} hint={totalsHint(stats.totals.week)} />
       <StatTile label="This month" value={formatMicroUsd(stats.totals.month.spend_microusd)} hint={totalsHint(stats.totals.month)} />
     </StatTileGrid>
-    <Card title="Spending, last 30 days" titleAs="h2" description="Known cost per UTC day, with what's on hold for requests whose cost isn't known yet. Includes earlier versions of this key (rotations).">
+    <Card title="Spending, last 30 days" titleAs="h2" description="Per UTC day, including earlier versions of this key.">
       <BarChart layout="stack" size="sm" data={stats.daily.map(d => ({ label: shortDate(d.date), values: { spend: microNumber(d.spend_microusd), held: microNumber(d.held_microusd) } }))} series={[{ key: "spend", label: "Spent" }, { key: "held", label: "On hold", tone: "warning" }]}
         summary={`Spent ${formatMicroUsd(total.toString())} over the last 30 days${stats.daily.length ? `, ${longDate(stats.daily[0]!.date)} to ${longDate(stats.daily.at(-1)!.date)} (UTC days)` : ""}.`} formatValue={v => Number.isFinite(v) ? formatMicroUsd(String(Math.round(v))) : "Unknown"} dataTable={{ caption: "Spending per day", labelHeader: "UTC day" }} />
     </Card>
-    <Card title="Budgets" titleAs="h2" description="Every budget that applies to this key, each in its own current window. Spent plus on hold.">
-      {stats.budgets.length === 0 ? <p className={s.note}>No budget applies to this key. Set one under Limits.</p> : <div className={k.rings}>{stats.budgets.map(w => { const period = w.period ?? w.budget_period, amount = w.amount_microusd ?? w.monthly_budget_microusd, label = `${layerNames[w.layer]} ${periodName[period].toLowerCase()}`; return w.usage_visible
-        ? <div key={`${w.layer}-${period}`}><BudgetRing label={label} used={w.used_microusd} limit={amount} period={period} />{w.unresolved_usage && <span className={s.secondary}>Some costs aren't known yet: at least this much.</span>}</div>
-        : <p key={`${w.layer}-${period}`} className={s.note}>{label}: {formatMicroUsd(amount)}. Only workspace admins see how much of it is used.</p>; })}</div>}
-    </Card>
   </Stack>;
 }
+/** Every budget that applies to this key (key, workspace, platform), each in its current window; spent plus on hold. */
+function KeyBudgets({ stats }: { stats: KeyStats }) {
+  return <Card title="Budgets" titleAs="h2" description="Every budget that applies to this key. Spent plus on hold.">
+      {stats.budgets.length === 0 ? <p className={s.note}>No budget applies to this key.</p> : <div className={k.rings}>{stats.budgets.map(w => { const period = w.period ?? w.budget_period, amount = w.amount_microusd ?? w.monthly_budget_microusd, label = `${layerNames[w.layer]} ${periodName[period].toLowerCase()}`; return w.usage_visible
+        ? <div key={`${w.layer}-${period}`}><BudgetRing label={label} used={w.used_microusd} limit={amount} period={period} />{w.unresolved_usage && <span className={s.secondary}>Some costs aren't known yet: at least this much.</span>}</div>
+        : <p key={`${w.layer}-${period}`} className={s.note}>{label}: {formatMicroUsd(amount)}. Only workspace admins see how much of it is used.</p>; })}</div>}
+    </Card>;
+}
+const keyTabs = [{ value: "overview", label: "Overview", icon: <LayoutDashboard aria-hidden /> }, { value: "limits", label: "Limits", icon: <Gauge aria-hidden /> }, { value: "access", label: "Access", icon: <ShieldCheck aria-hidden /> }];
 
 export function KeyDetail({ session, workspace, id }: Scope & { id: string }) {
   const ask = useAction(), nav = useDashboardNavigation(), search: DashboardSearch = nav?.search ?? { page: "key-detail", ws: workspace.id, record: id }, p = permissions(session, workspace);
@@ -98,9 +106,11 @@ export function KeyDetail({ session, workspace, id }: Scope & { id: string }) {
   const status = keyStatus(key), models = keyModelSummary(key, keyModelOptions(grants.data ?? []));
   // Revoked and expired keys are final: no danger zone, read-only copy throughout.
   const final = status === "revoked" || status === "expired", limitsWritable = !final && canEditKeyLimits(session, workspace, key);
-  const settingsCopy = final ? `This key is ${status} and can't be used or changed. Create a new key instead.` : limitsWritable ? "Set when the key was created. You can change its limits below; create a new key to change its models or owner." : "Set when the key was created. Create a new key to change its models or owner.";
-  return <Stack gap={6} className={s.page}>
-    {header(key.name, <StatusPill {...keyPill(status)} size="md" explain />, <Button variant="secondary" render={<ResourceLink search={{ page: "requests", ws: workspace.id, key_id: key.id }} />}>View requests</Button>)}
+  // Only a final key needs a sentence; otherwise the facts speak for themselves (expiry carries its own short note).
+  const settingsCopy = final ? `This key is ${status} and can't be used or changed. Create a new key instead.` : undefined;
+  const tab = keyTabs.some(x => x.value === search.tab) ? search.tab! : "overview";
+  const setTab = (next: string) => nav?.navigate({ ...search, tab: next === "overview" ? undefined : next });
+  const overview = <Stack gap={6}>
     <Card title="Settings" titleAs="h2" description={settingsCopy}>
       <DescriptionList dividers items={[
         { label: "Name", value: key.name },
@@ -114,14 +124,21 @@ export function KeyDetail({ session, workspace, id }: Scope & { id: string }) {
         ...(key.revoked_at ? [{ label: "Revoked", value: <DetailTime value={key.revoked_at} /> }] : []),
       ]} />
     </Card>
-    <ScopeLimits mode="key" path={`${wsPath(workspace.id)}/keys/${encodeURIComponent(key.id)}/policy`} writable={limitsWritable} kind={workspace.kind} scopeLabel="This key" readOnlyReason={final ? `This key is ${status}, so its limits no longer change.` : "Only the key's holder or a workspace admin can change these limits."} />
     <KeyUsage workspace={workspace} keyId={key.id} />
-    <EffectiveAccess workspace={workspace} keyId={key.id} keyName={key.name} keyStatus={status} canManageModels={p.manageGrants} />
     {!final && (canDisable(session, workspace, key) || canEnable(session, workspace, key) || canRotate(session, workspace, key) || canRevoke(session, workspace, key)) && <DangerZone>
       {status === "disabled" ? <DangerAction title="Enable key" description="Requests using this key work again straight away." action={<Button variant="secondary" disabled={!canEnable(session, workspace, key)} onClick={() => ask(keyActions.enable(workspace.id, key))}>Enable key</Button>} disabledReason={canEnable(session, workspace, key) ? undefined : "Only the key's holder or a workspace admin can enable it."} />
         : <DangerAction title="Disable key" description="Requests using this key fail until it's enabled again. Limits and usage are kept." action={<Button variant="secondary" disabled={!canDisable(session, workspace, key)} onClick={() => ask(keyActions.disable(workspace.id, key))}>Disable key</Button>} />}
       {status === "active" && <DangerAction title="Rotate key" description="A new secret replaces this one, and the old secret stops working immediately. Models, limits and usage carry over." action={<Button variant="secondary" disabled={!canRotate(session, workspace, key)} onClick={() => ask(keyActions.rotate(workspace.id, key))}>Rotate key</Button>} disabledReason={canRotate(session, workspace, key) ? undefined : "Only the key's holder (or a workspace admin, for service-account keys) can rotate it."} />}
       <DangerAction title="Revoke key" description="Requests using this key fail immediately. This can't be undone." action={<Button variant="danger" disabled={!canRevoke(session, workspace, key)} onClick={() => ask(keyActions.revoke(workspace.id, key))}>Revoke key</Button>} />
     </DangerZone>}
+  </Stack>;
+  return <Stack gap={6} className={s.page}>
+    {header(key.name, <StatusPill {...keyPill(status)} size="md" explain />, <Button variant="secondary" render={<ResourceLink search={{ page: "requests", ws: workspace.id, key_id: key.id }} />}>View requests</Button>)}
+    <TypeTabs label="Key sections" items={keyTabs} value={tab} onChange={setTab}>
+      {tab === "limits" ? <Stack gap={6}>
+        <ScopeLimits mode="key" path={`${wsPath(workspace.id)}/keys/${encodeURIComponent(key.id)}/policy`} writable={limitsWritable} kind={workspace.kind} scopeLabel="This key" readOnlyReason={final ? `This key is ${status}, so its limits no longer change.` : "Only the key's holder or a workspace admin can change these limits."} />
+        <KeyUsage workspace={workspace} keyId={key.id} part="budgets" />
+      </Stack> : tab === "access" ? <EffectiveAccess workspace={workspace} keyId={key.id} keyName={key.name} keyStatus={status} canManageModels={p.manageGrants} /> : overview}
+    </TypeTabs>
   </Stack>;
 }

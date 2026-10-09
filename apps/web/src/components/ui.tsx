@@ -20,12 +20,12 @@ import { RadioGroup } from "./ui/radio-group/radio-group";
 import { Switch } from "./ui/switch/switch";
 import { WithIcon } from "./provider-icon";
 import { IconSelect } from "./icon-select";
-import { Dialog, AlertDialog } from "./ui/dialog/dialog";
+import { Dialog } from "./ui/dialog/dialog";
 import { Stack, Inline } from "./ui/layout/layout";
 import { Time } from "./ui/time/time";
 import { toast } from "./ui/toast/toast";
 import { DateControl } from "./date-control";
-import { NavigationGuard } from "./navigation-guard";
+import { DiscardChangesDialog, NavigationGuard } from "./navigation-guard";
 import { useDashboardNavigation } from "./navigation-link";
 import s from "../pages/shared.module.css";
 export { Button, Input, NativeSelect, Textarea, FormField, Alert, Stack, Inline };
@@ -81,7 +81,7 @@ export function CollectionTable<T>({ path, columns, rowKey, label, empty, pageSi
   </div>;
 }
 const statusFacet: Facet = { id: "enabled", label: "Status", type: "toggle", allLabel: "All", options: [{ value: "true", label: "Enabled" }, { value: "false", label: "Disabled" }] };
-export type Action = { title: string; returnFocus?: HTMLElement; description?: string; submitLabel?: string; fields?: Field[]; danger?: boolean; secretLabel?: string; successNotice?: string; navigates?: boolean; run: (values: Values, signal: AbortSignal) => Promise<unknown>; after?: (result: unknown) => void };
+export type Action = { title: string; returnFocus?: HTMLElement; description?: string; submitLabel?: string; fields?: Field[]; danger?: boolean; secretLabel?: string; /** What the one-time secret is called in the dialog ("key", "invite code"; default "token"). */ secretNoun?: string; successNotice?: string; navigates?: boolean; run: (values: Values, signal: AbortSignal) => Promise<unknown>; after?: (result: unknown) => void };
 const ActionContext = createContext<(action: Action) => void>(() => { throw new Error("Missing action provider"); });
 export const useAction = () => useContext(ActionContext);
 export function ActionProvider({ children }: { children: ReactNode }) {
@@ -123,7 +123,7 @@ function ActionDialog({ action, onClose }: { action: Action; onClose: (success: 
     finally { inFlight.current = false; if (mounted.current) setBusy(false); }
   }
   return <><Dialog open title={token ? action.secretLabel! : action.title} description={action.description} hideClose={busy} onOpenChange={open => { if (!open) close(); }} finalFocus={() => action.returnFocus?.isConnected ? action.returnFocus : true} footer={token ? <Button onClick={discard}>I have saved it</Button> : <><Button variant="secondary" disabled={busy} onClick={close}>Cancel</Button><Button type="submit" form={id} variant={action.danger ? "danger" : "primary"} loading={busy}>{action.submitLabel ?? "Save"}</Button></>}>
-    {token ? <Stack gap={4}><Alert tone="warning" title="Shown only once">Store this token securely. Closing or leaving this scope clears it from this page.</Alert><FormField label="One-time token"><Textarea readOnly value={token} rows={4} spellCheck={false} autoComplete="off" autoFocus onFocus={event => event.currentTarget.select()} /></FormField><Button variant="secondary" onClick={async () => { try { await navigator.clipboard.writeText(token); setCopied(true); setCopyError(false); } catch { setCopyError(true); } }}>{copied ? "Copied" : "Copy token"}</Button><p role="status">{copyError ? "Clipboard unavailable. Select and copy the token manually." : copied ? "Copied. Clear your clipboard after storing the token." : ""}</p></Stack> : <Form id={id} noValidate onSubmit={event => void submit(event)} aria-busy={busy} data-dirty={dirty && !token ? "true" : undefined}><Stack gap={4}>{fields.filter(field => !field.visibleWhen || field.visibleWhen(values)).map((field, index) => {
+    {token ? <Stack gap={4}><Alert tone="warning" title="Shown only once">Store it securely. Closing this dialog clears it from the page.</Alert><FormField label={`One-time ${action.secretNoun ?? "token"}`}><Textarea readOnly value={token} rows={4} spellCheck={false} autoComplete="off" autoFocus onFocus={event => event.currentTarget.select()} /></FormField><Button variant="secondary" onClick={async () => { try { await navigator.clipboard.writeText(token); setCopied(true); setCopyError(false); } catch { setCopyError(true); } }}>{copied ? "Copied" : `Copy ${action.secretNoun ?? "token"}`}</Button><p role="status">{copyError ? `Clipboard unavailable. Select and copy the ${action.secretNoun ?? "token"} manually.` : copied ? `Copied. Clear your clipboard after storing the ${action.secretNoun ?? "token"}.` : ""}</p></Stack> : <Form id={id} noValidate onSubmit={event => void submit(event)} aria-busy={busy} data-dirty={dirty && !token ? "true" : undefined}><Stack gap={4}>{fields.filter(field => !field.visibleWhen || field.visibleWhen(values)).map((field, index) => {
       const fieldId = `${id}-${field.name}`;
       const common = { id: fieldId, name: field.name, required: field.required || field.requiredWhen?.(values), disabled: busy, value: values[field.name] ?? "", autoFocus: !action.danger && index === 0, onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => changeValue(field.name, event.target.value) };
       const help = field.helpFor?.(values) ?? field.help;
@@ -133,7 +133,7 @@ function ActionDialog({ action, onClose }: { action: Action; onClose: (success: 
       if (field.type === "select" && field.display === "cards") return <CardChoiceField key={field.name} field={{ ...field, help }} id={fieldId} value={values[field.name] ?? ""} error={errors[field.name]} disabled={busy} onChange={value => changeValue(field.name, value)} />;
       return <FormField key={field.name} name={field.name} label={field.label} labelHint={field.hint ?? (!(field.required || field.requiredWhen?.(values)) ? "Optional" : undefined)} description={help} error={errors[field.name]}>{field.type === "date" ? <DateControl id={fieldId} name={field.name} value={values[field.name] ?? ""} disabled={busy} onChange={value => changeValue(field.name, value)} /> : field.type === "select" ? <NativeSelect {...common}><option value="">Choose…</option>{field.options?.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</NativeSelect> : field.type === "textarea" ? <Textarea {...common} rows={4} autoComplete="off" spellCheck={false} /> : <Input {...common} type={field.type ?? "text"} inputMode={field.inputMode} min={field.min} max={field.max} step={field.type === "number" ? 1 : undefined} maxLength={field.maxLength} placeholder={field.placeholder} autoComplete="off" spellCheck={field.type === "password" ? false : undefined} />}</FormField>;
     })}{error !== undefined && <ErrorNotice error={error} />}</Stack></Form>}
-  </Dialog><NavigationGuard dirty={dirty && !token} allow={() => completed.current || !!action.navigates && inFlight.current} /><AlertDialog open={discarding} onOpenChange={setDiscarding} title="Leave without saving?" description="Your unsaved values will be discarded." confirmLabel="Discard changes" cancelLabel="Keep editing" onConfirm={discard} /></>;
+  </Dialog><NavigationGuard dirty={dirty && !token} allow={() => completed.current || !!action.navigates && inFlight.current} /><DiscardChangesDialog open={discarding} onOpenChange={setDiscarding} onDiscard={discard} /></>;
 }
 /** A select field as Bitop radio cards: native radio semantics (arrow keys, one tab stop) with optional decorative option icons. */
 export function CardChoiceField({ field, id, value, error, disabled, onChange }: { field: Field; id: string; value: string; error?: string; disabled?: boolean; onChange: (value: string) => void }) {

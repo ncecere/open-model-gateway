@@ -1,24 +1,8 @@
 /* Home and workspace Overview: model tiles, key rows, team rows and nav cards. Semantic tokens only. Provenance: Grounded web/src/pages/user.module.css and pages/chat/directory.module.css (read-only reference). */
 
-.adminLine {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-  margin: 0;
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-}
-
-.adminIcon {
-  width: 1rem;
-  height: 1rem;
-  color: var(--color-text-subtle);
-}
-
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(18rem, 100%), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(16rem, 100%), 1fr));
   gap: var(--space-3);
   margin: 0;
   padding: 0;
@@ -32,8 +16,7 @@
   align-items: flex-start;
   gap: var(--space-2);
   height: 100%;
-  padding: var(--space-4);
-  padding-inline-end: var(--space-8);
+  padding: var(--space-3);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-card);
   background-color: var(--color-surface);
@@ -67,51 +50,10 @@
   overflow-wrap: anywhere;
 }
 
-.tileDescription {
-  display: -webkit-box;
-  overflow: hidden;
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-}
-
-.tileIcon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 2rem;
-  height: 2rem;
-  border-radius: var(--radius-3);
-  background-color: var(--color-primary-subtle);
-  color: var(--color-primary-subtle-text);
-
-  & svg {
-    width: 1rem;
-    height: 1rem;
-  }
-}
-
 .tileBadges {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-1);
-}
-
-.arrow {
-  position: absolute;
-  top: var(--space-4);
-  right: var(--space-4);
-  width: 1rem;
-  height: 1rem;
-  color: var(--color-text-subtle);
-}
-
-.byWorkspace {
-  margin: 0;
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
 }
 
 .rows {
@@ -151,32 +93,6 @@
   }
 }
 
-.teams {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.teamRow {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-card);
-}
-
-.teamText {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 10rem;
-}
-
 .teamLink {
   color: var(--color-text);
   font-weight: var(--font-weight-semibold);
@@ -193,11 +109,41 @@
   }
 }
 
-.teamBadges {
+/* Your workspaces: one compact row each (avatar, name + role, quick links). */
+.wsRow {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-1);
-  margin-top: var(--space-1);
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-5);
+}
+
+.wsName {
+  display: flex;
+  flex: 1 1 12rem;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--font-size-sm);
+}
+
+/* "+3 more" and the "2 not serving" badge under the model tiles. */
+.footLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0;
+  font-size: var(--font-size-sm);
+}
+
+/* A section title with its link on the right (usage tiles). */
+.sectionHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
 }
 
 /* Models · API keys · Usage: wrap under the name on a narrow screen. */
@@ -240,11 +186,4 @@
   color: var(--color-text-muted);
   font-size: var(--font-size-xs);
   white-space: nowrap;
-}
-
-/* Added models that can't serve (no enabled route): flagged under the usable ones, never listed as usable. */
-.notServing {
-  margin: 0;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-muted);
 }

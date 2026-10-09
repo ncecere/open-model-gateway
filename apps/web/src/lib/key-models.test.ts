@@ -59,6 +59,8 @@ describe("key model restriction creation", () => {
   it("retains all effective granted choices irrespective of model availability and deduplicates IDs", () => {
     const grant = { model_id: id(1), display_name: "Disabled model", public_name: "test/disabled", enabled: false, selected: true, catalog_granted: false, direct_granted: true, available_from_catalog: false, supported_protocols: ["chat_completions" as const] };
     expect(keyModelOptions([grant, grant])).toEqual([{ value: id(1), label: "Disabled model (test/disabled)" }]);
+    // No "demo/x (demo/x)" when the display name is the API name.
+    expect(keyModelOptions([{ ...grant, display_name: "test/disabled" }])).toEqual([{ value: id(1), label: "test/disabled" }]);
     expect(keyModelBody(values([id(1)]), keyModelOptions([grant]))).toEqual({ model_ids: [id(1)] });
   });
   it("explains immutable restrictions and budget consumption across rotations", () => {
@@ -80,6 +82,6 @@ describe("key model restriction display", () => {
     expect(selectedModelIds("selected", options.map(o => o.value), options)).toHaveProperty("error");
   });
   it("keeps removed grants visible by UUID when their labels are unavailable", () => {
-    expect(keyModelSummary({ model_ids: [id(1), "removed-model"] }, options)).toEqual({ label: "2 selected", models: ["Model 1", "removed-model"] });
+    expect(keyModelSummary({ model_ids: [id(1), "removed-model"] }, options)).toEqual({ label: "2 models", models: ["Model 1", "removed-model"] });
   });
 });

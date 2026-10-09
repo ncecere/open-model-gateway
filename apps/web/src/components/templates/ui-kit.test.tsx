@@ -479,7 +479,9 @@ describe("FilterToolbar", () => {
     const css = readFileSync(resolve(__dirname, "filter-toolbar.module.css"), "utf8");
     expect(css).toContain("@media (max-width: 40rem)");
     expect(css).toMatch(/\.label \{[^}]*font-size: var\(--font-size-xs\)/);
-    expect(css).toMatch(/\.search \{[^}]*flex: 1 1 14rem;[^}]*max-width: 20rem/);
+    expect(css).toMatch(/\.search \{[^}]*flex: 1 1 12rem;[^}]*max-width: 18rem/);
+    // Sort / View / Columns sit at the end of the same row (pushed right), not on a row of their own.
+    expect(css).toMatch(/\.end \{[^}]*margin-inline-start: auto/);
     expect(css).not.toMatch(/position: fixed|translateX/); // no drawer
   });
 

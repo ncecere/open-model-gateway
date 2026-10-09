@@ -12,9 +12,9 @@ import { METER_SPECS, METERS, acceptImportedCeilings, convertUsd, countNoun, dra
 import { formatCount } from "../lib/reports";
 import { Alert, Button, ErrorNotice, FormField, Input, NativeSelect } from "./ui";
 import { Badge } from "./ui/badge/badge";
-import { Dialog, AlertDialog } from "./ui/dialog/dialog";
+import { Dialog } from "./ui/dialog/dialog";
 import { toast } from "./ui/toast/toast";
-import { NavigationGuard } from "./navigation-guard";
+import { DiscardChangesDialog, NavigationGuard } from "./navigation-guard";
 import s from "../pages/shared.module.css";
 import styles from "./price-editor.module.css";
 
@@ -32,10 +32,11 @@ export function PriceLinesEditor({ draft, onChange, errors, disabled, idPrefix }
   return <div className={styles.editor}>
     {draft.import && <ImportNotice info={draft.import} disabled={disabled} onUseImported={() => onChange(acceptImportedCeilings(draft))} />}
     {(ceilings.input || ceilings.output) ? <div className={styles.grid}>
-      {ceilings.input && <FormField name="input_token_limit" label="Hard upstream input token ceiling" description="Includes cache reads and writes. Prompt-size tiers above it never apply. With the output ceiling, it is reserved against tokens-per-minute limits on every request, so keep it within the workspace limits." error={errors["limits.input"]}><Input id={fid("limits.input")} inputMode="numeric" autoComplete="off" disabled={disabled} value={draft.inputTokenLimit} onChange={e => onChange({ ...draft, inputTokenLimit: e.target.value })} /></FormField>}
-      {ceilings.output && <FormField name="output_token_limit" label="Hard upstream output token ceiling" description={draft.workload === "generation" || draft.workload === "systemone" ? "A positive explicit bound on generated tokens." : "Zero is valid when the workload produces no output tokens."} error={errors["limits.output"]}><Input id={fid("limits.output")} inputMode="numeric" autoComplete="off" disabled={disabled} value={draft.outputTokenLimit} onChange={e => onChange({ ...draft, outputTokenLimit: e.target.value })} /></FormField>}
+      {ceilings.input && <FormField name="input_token_limit" label="Hard upstream input token ceiling" description="Includes cache tokens. Reserved with the output ceiling against tokens-per-minute limits, so keep both within them." error={errors["limits.input"]}><Input id={fid("limits.input")} inputMode="numeric" autoComplete="off" disabled={disabled} value={draft.inputTokenLimit} onChange={e => onChange({ ...draft, inputTokenLimit: e.target.value })} /></FormField>}
+      {ceilings.output && <FormField name="output_token_limit" label="Hard upstream output token ceiling" description={draft.workload === "generation" || draft.workload === "systemone" ? "Must be positive." : "Zero is valid when the workload produces no output tokens."} error={errors["limits.output"]}><Input id={fid("limits.output")} inputMode="numeric" autoComplete="off" disabled={disabled} value={draft.outputTokenLimit} onChange={e => onChange({ ...draft, outputTokenLimit: e.target.value })} /></FormField>}
     </div> : <p className={s.note}>No token meters apply, so no token ceilings are needed (published as 0).</p>}
-    {canMarkFree && <div className={styles.rowActions}><Button size="sm" variant="secondary" disabled={disabled} onClick={() => onChange(markAllFree(draft))}>Mark all free</Button><span className={s.note}>Sets every applicable meter to Free (an explicit $0 line). Not-applicable meters stay not applicable.</span></div>}
+    {canMarkFree && <div className={styles.rowActions}><Button size="sm" variant="secondary" disabled={disabled} onClick={() => onChange(markAllFree(draft))}>Mark all free</Button><span className={s.note}>Sets every applicable meter to $0.</span></div>}
+    {draft.shown.some(m => draft.meters[m].mode === "unknown") && <p className={s.note}>Unknown meters publish no line: their usage is recorded with unknown cost, and budgeted requests are refused while they could apply.</p>}
     {draft.shown.map(meter => <MeterEditor key={meter} meter={meter} m={draft.meters[meter]} errors={errors} disabled={disabled} fid={fid} onChange={next => setMeter(meter, next)} />)}
     {hidden.length > 0 && <p className={s.note}>Not applicable to {workloadLabels[draft.workload].toLowerCase()} models and published as not applicable: {hidden.map(m => METER_SPECS[m].title.toLowerCase()).join(", ")}.</p>}
     <PricePreview draft={draft} />
@@ -70,9 +71,8 @@ function MeterEditor({ meter, m, errors, disabled, fid, onChange }: { meter: Met
       <FormField name={`${meter}.mode`} label={`${spec.title} price`}><NativeSelect id={fid(`${meter}.mode`)} disabled={disabled} value={m.mode} onChange={e => onChange({ mode: e.target.value as MeterMode, review: false })}>{meterModes.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}</NativeSelect></FormField>
       {priced && spec.units.length > 1 && <FormField name={`${meter}.unit`} label="Billing unit" description="Prices below are read in this unit."><NativeSelect id={fid(`${meter}.unit`)} disabled={disabled} value={String(m.batch)} onChange={e => onChange({ batch: Number(e.target.value) })}>{spec.units.map(u => <option key={u.batch} value={u.batch}>{u.name[0].toUpperCase() + u.name.slice(1)}</option>)}</NativeSelect></FormField>}
     </div>
-    {m.mode === "unknown" && <p className={s.note}>No line is published: usage is recorded with unknown cost and budgeted requests are refused while this meter could apply.</p>}
     {m.mode === "free" && <p className={s.note}>Free: publishes an explicit {formatUsd(0n)}{unit.display} line.</p>}
-    {m.mode === "not_applicable" && <p className={s.note}>Asserts this model never uses the meter; positive usage is flagged instead of valued at zero.</p>}
+    {m.mode === "not_applicable" && <p className={s.note}>Any usage is flagged, not valued at zero.</p>}
     {priced && <ul className={styles.rows}>{m.rows.map(row => {
       const q = tierLabel(row), tier = row.variant !== undefined || row.minPromptTokens !== undefined, usdKey = rowKey(meter, row, "usd"), money = usdToMicroUsd(row.usd);
       const better = !money.ok && money.reason === "precision" ? exactAlternatives(meter, row.usd, m.batch).filter(a => a.batch > m.batch)[0] : undefined;
@@ -155,7 +155,7 @@ export function PriceEditorDialog({ deployment, workload, profile, current, impo
       <PriceLinesEditor draft={draft} onChange={change} errors={errors} disabled={busy || importing} idPrefix={id} />
       {error !== undefined && <ErrorNotice error={error} />}
     </form>
-  </Dialog><NavigationGuard dirty={dirty} allow={() => completed.current} /><AlertDialog open={discarding} onOpenChange={setDiscarding} title="Leave without saving?" description="Your unpublished price draft will be discarded." confirmLabel="Discard changes" cancelLabel="Keep editing" onConfirm={discard} /></>;
+  </Dialog><NavigationGuard dirty={dirty} allow={() => completed.current} /><DiscardChangesDialog open={discarding} onOpenChange={setDiscarding} onDiscard={discard} description="Your price draft hasn't been published." /></>;
 }
 
 const maxUnitText = (meter: Meter, value: string) => meter.endsWith("_audio_seconds_ms") ? `${formatAudio(value)} ${METER_SPECS[meter].noun}` : countNoun(meter, value);

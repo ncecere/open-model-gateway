@@ -70,7 +70,7 @@ describe("jump search entities (finding #4)", () => {
     const seed: [string, unknown][] = [["/api/v1/platform/users?q=al&limit=5", { data: [{ id: "u1", email: "alex@demo.invalid", disabled_at: null }] }], ["/api/v1/platform/workspaces?q=al&limit=5", { data: [{ id: "w1", name: "Analytics", kind: "project" }] }], ["/api/v1/platform/providers?limit=200", { data: [{ id: "c1", name: "Alibaba", provider: "openai_compatible", enabled: true }] }]];
     expect(results(alex, "al", seed).groups.map(g => g.label)).toEqual([]);
     const admin = results({ ...session, workspaces: [team] }, "al", seed);
-    expect(admin.groups.map(g => g.label)).toEqual(["Users", "Teams and projects", "Connections"]);
+    expect(admin.groups.map(g => g.label)).toEqual(["Users", "Teams and projects (Admin)", "Connections"]); // told apart from the same workspace under Teams/Projects
     expect(admin.groups[1]!.hits[0]!.search).toEqual({ page: "workspace-detail", record: "w1", kind: "project" });
   });
 });

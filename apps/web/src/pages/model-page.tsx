@@ -24,12 +24,13 @@ import { formatCount } from "../lib/reports";
 import { modelReadiness, modelSectionFor, protocolEndpoints, protocolLabel, protocolOptions, protocolProfiles, routeDataPolicy, routeSectionFor, routeTiers, workloadModalities, type RouteTiers } from "../lib/model-setup";
 import { parseCheckboxValues, type Field } from "../lib/forms";
 import { ResourceLink } from "../components/navigation-link";
-import { LabBadge, LabIcon, ProviderBadge, ProviderIcon, WithIcon } from "../components/provider-icon";
+import { LabBadge, LabIcon, ProviderIcon, TitleWithIcon, WithIcon } from "../components/provider-icon";
 import { Alert, Badge, Button, DateTime, ErrorNotice, useAction, useApi, useApiScope, useChoices, useCollection } from "../components/ui";
 import { Badge as BitopBadge } from "../components/ui/badge/badge";
 import { Card } from "../components/ui/card/card";
 import { DescriptionList, type DescriptionEntry } from "../components/ui/description-list/description-list";
 import { Stack } from "../components/ui/layout/layout";
+import { Disclosure } from "../components/ui/disclosure/disclosure";
 import { PageHeader } from "../components/ui/page-header/page-header";
 import { Table, Td, Th, Tr, type TableColumn } from "../components/ui/table/table";
 import { useResourceName, useResourceParent } from "../components/layout/breadcrumbs";
@@ -123,6 +124,8 @@ export function ModelPage({ session, model, path, tab }: ModelPageProps) {
   useSectionFromTab(modelSectionFor(tab));
   const edit = () => ask({ title: `Edit ${model.display_name}`, description: "Changing the API model name changes what clients must send.", fields: modelEditFields(model), submitLabel: "Save model", run: (v, signal) => api(path, { method: "PATCH", body: modelEditBody(v), signal }) });
   const addRoute = () => { if (connections.data) ask(deploymentCreateAction({ model, models: [model], providers: connections.data })); };
+  // The lab logo is left of the title like the list rows (ui-principles 11); the lab badge keeps just its name.
+  const labIds = [model.public_name, model.display_name, ...set.rows.map(row => row.route.upstream_model)];
   const r = model.readiness, serving = [...set.tiers.primary, ...set.tiers.fallback, ...set.tiers.unknown], servingPrices = serving.map(asPrice);
   // Sections are read-only description lists; each editable one has its own Edit (a dialog), so Auditors see plain values (review #22, rule 12).
   const membership = useApi<{ catalog_ids: string[] }>(`${path}/catalogs`), catalogs = useChoices<Catalog>(`${platformPath}/catalogs`);
@@ -131,15 +134,15 @@ export function ModelPage({ session, model, path, tab }: ModelPageProps) {
   const editAvailability = () => { if (membership.data && catalogs.data) ask({ title: "Edit availability", description: catalogRemovalHelp, fields: [catalogField(membership.data.catalog_ids, catalogs.data)], submitLabel: "Save availability", successNotice: "Availability saved.", run: (v, signal) => api(`${path}/catalogs`, { method: "PUT", body: { catalog_ids: parseCheckboxValues(v.catalog_ids) }, signal }) }); };
   const sections: (SectionNavItem & { title: string; description?: ReactNode; actions?: ReactNode; content: ReactNode })[] = [
     { id: "overview", label: "Overview", icon: <LayoutDashboard aria-hidden />, title: "Overview", actions: sectionEdit("Edit model details", edit), content: <ModelOverview model={model} policy={policy} writable={writable} profiles={connections.data} /> },
-    { id: "routes", label: "Routes", icon: <RouteIcon aria-hidden />, title: "Routes", description: "Where requests for this model go, in the order the gateway tries them. Failover follows the routing policy; nothing retries implicitly.", actions: writable && <Button size="sm" variant="secondary" disabled={!connections.data} onClick={addRoute}><Plus aria-hidden />Add route</Button>, content: <RoutesTable set={set} model={model} workload={workload} writable={writable} /> },
-    { id: "pricing", label: "Pricing", icon: <CircleDollarSign aria-hidden />, title: "Pricing", description: "Configured estimates per route, not provider invoices. A missing rate is unknown, never free.", content: <RoutePricing set={set} model={model} workload={workload} writable={writable} /> },
+    { id: "routes", label: "Routes", icon: <RouteIcon aria-hidden />, title: "Routes", description: "Tried in order; fallback follows the routing policy.", actions: writable && <Button size="sm" variant="secondary" disabled={!connections.data} onClick={addRoute}><Plus aria-hidden />Add route</Button>, content: <RoutesTable set={set} model={model} workload={workload} writable={writable} /> },
+    { id: "pricing", label: "Pricing", icon: <CircleDollarSign aria-hidden />, title: "Pricing", description: "Estimates, not invoices. A missing rate is unknown, not free.", content: <RoutePricing set={set} model={model} workload={workload} writable={writable} /> },
     { id: "routing", label: "Routing policy", icon: <Split aria-hidden />, title: "Routing policy", description: modelRoutingHelp, actions: sectionEdit("Edit routing policy", editRouting, !set.policy.data), content: <><RoutingPolicySummary query={set.policy} />{set.tiers.tieNote && <Alert tone="warning">{set.tiers.tieNote}</Alert>}</> },
-    { id: "availability", label: "Availability", icon: <Library aria-hidden />, title: "Availability", description: "Workspaces use this model through catalogs available to them, or by direct assignment.", actions: sectionEdit("Edit availability", editAvailability, !membership.data || !catalogs.data || !catalogs.data.length), content: <ModelAvailability model={model} membership={membership} catalogs={catalogs} /> },
-    { id: "protocols", label: "Protocols", icon: <FileCode2 aria-hidden />, title: "Protocols", description: "Client endpoints this model answers, with what each needs. Anything not listed is refused, never silently dropped.", content: <ProtocolsPanel protocols={model.supported_protocols} routes={set.rows} /> },
+    { id: "availability", label: "Availability", icon: <Library aria-hidden />, title: "Availability", description: "Through catalogs, or by direct assignment.", actions: sectionEdit("Edit availability", editAvailability, !membership.data || !catalogs.data || !catalogs.data.length), content: <ModelAvailability model={model} membership={membership} catalogs={catalogs} /> },
+    { id: "protocols", label: "Protocols", icon: <FileCode2 aria-hidden />, title: "Protocols", description: `${model.supported_protocols.map(protocolLabel).join(" · ")}. Anything else is refused.`, content: <Disclosure title="Endpoint details" keepMounted><ProtocolsPanel protocols={model.supported_protocols} routes={set.rows} /></Disclosure> },
     { id: "usage", label: "Usage", icon: <Activity aria-hidden />, title: "Usage", content: <UsageLink model={model} /> },
   ];
   return <Stack gap={6} className={s.page}>
-    <PageHeader title={model.display_name} meta={<><LabBadge model={[model.public_name, model.display_name, ...set.rows.map(row => row.route.upstream_model)]} /><ReadinessBadge model={model} policy={policy} /></>} description={<>{code(model.public_name)} · {model.description || "A model clients call by its API name, served through routes on connections."}</>} breadcrumbs={<BackLink label="Models" search={{ page: "models" }} />}
+    <PageHeader title={<TitleWithIcon icon={<LabIcon model={labIds} size="xl" />}>{model.display_name}</TitleWithIcon>} meta={<><LabBadge model={labIds} icon={false} /><ReadinessBadge model={model} policy={policy} /></>} description={<>{code(model.public_name)}{model.description ? <> · {model.description}</> : null}</>} breadcrumbs={<BackLink label="Models" search={{ page: "models" }} />}
       actions={writable ? <div className={t.headerActions}><CatalogStatusButton kind="models" record={model} name={model.display_name} /></div> : undefined} />
     <StatTileGrid label="Model summary" columns={4}>
       <StatTile label="Type" value={workloadModalities[workload]} hint={model.supported_protocols.map(protocolLabel).join(" · ")} />
@@ -161,7 +164,8 @@ function ModelPriceTile({ workload, prices, loading }: { workload: WorkloadKind;
   return <StatTile label={label} value={tile.value === null ? null : <span title={title}>{tile.value}</span>} hint={tile.value === null ? basis : <>{tile.units}<br />{basis}</>} />;
 }
 function ModelOverview({ model, policy, writable, profiles }: { model: Model; policy?: ServerPolicy; writable: boolean; profiles?: Provider[] }) {
-  const facts: DescriptionEntry[] = [{ label: "API model name", value: code(model.public_name) }, { label: "Display name", value: model.display_name }, { label: "Client protocols", value: model.supported_protocols.map(protocolLabel).join(" · ") }, { label: "Status", value: <Badge tone={model.enabled ? "good" : "neutral"}>{model.enabled ? "Enabled" : "Disabled"}</Badge> }, { label: "Connections", value: <ConnectionNames model={model} profiles={profiles} /> }, ...(model.description ? [{ label: "Description", value: model.description }] : []), { label: "Identifier", value: <CopyId value={model.id} label="model ID" /> }, ...(model.created_at ? [{ label: "Created", value: <DateTime value={model.created_at} /> }] : [])];
+  // API name and description are the subtitle, status the header badge, protocols the Type tile: listed once each.
+  const facts: DescriptionEntry[] = [{ label: "Connections", value: <ConnectionNames model={model} profiles={profiles} /> }, { label: "ID", value: <CopyId value={model.id} label="model ID" /> }, ...(model.created_at ? [{ label: "Created", value: <DateTime value={model.created_at} /> }] : [])];
   return <Stack gap={5}><DescriptionList items={facts} dividers /><ModelReadinessChecklist model={model} writable={writable} policy={policy} onJump={jumpTo} /></Stack>;
 }
 /** Server counts only; fix actions jump to the section that resolves the step and are omitted for read-only viewers. */
@@ -178,7 +182,9 @@ export function ModelReadinessChecklist({ model, writable, onJump, policy }: { m
   // Configuration checks (best effort): shown only when they find something.
   if (readiness.warnings.includes("token_ceiling")) steps.push({ id: "ceilings", title: "Token ceilings fit tokens-per-minute defaults", description: `${r.routes_over_token_limit} enabled route${r.routes_over_token_limit === 1 ? "'s" : "s'"} input + output token ceilings exceed the ${r.type_tokens_per_minute != null ? `${r.type_tokens_per_minute.toLocaleString("en-US")} ` : ""}tokens-per-minute limit of a workspace type that can use this model. Each request reserves both ceilings, so those workspaces are refused (token_reservation_exceeds_limit). Lower the price's token ceilings or raise the limit. This is a configuration check; overrides and local limits are not included.`, done: false, action: jump("pricing", "Review ceilings") });
   if (readiness.warnings.includes("free_blocked")) steps.push({ id: "free", title: "Free OpenRouter endpoints are usable", description: `${r.openrouter_free_routes} enabled route${r.openrouter_free_routes === 1 ? " uses" : "s use"} an OpenRouter :free model. Free endpoints may train on prompts, and this server denies data collection, so OpenRouter rejects those requests. Use a paid model ID, or have the operator allow data collection.`, done: false, action: jump("routes", "Review routes") });
-  return <Checklist embedded title="Readiness" steps={steps} complete={readiness.state === "ready" ? "Ready: enabled, routed, priced and offered." : undefined} />;
+  const list = <Checklist embedded title="Readiness" steps={steps} complete={readiness.state === "ready" ? "Ready: enabled, routed, priced and offered." : undefined} />;
+  // Nothing to do when ready: the steps stay one click away (progressive disclosure).
+  return readiness.state === "ready" ? <Disclosure title="Readiness" summary="Ready: enabled, routed, priced and offered." keepMounted>{list}</Disclosure> : list;
 }
 
 export type RouteSet = ReturnType<typeof useModelRoutes>;
@@ -301,7 +307,7 @@ export function ProtocolsPanel({ protocols, routes }: { protocols: ModelProtocol
   </div>;
 }
 function UsageLink({ model }: { model: Model }) {
-  return <Stack gap={3}><p className={m.note}>Usage and estimated cost are attributed by API model name ({code(model.public_name)}). Personal workspaces appear only as totals.</p><div className={m.inlineActions}><Button variant="secondary" render={<ResourceLink search={{ page: "platform-costs", tab: "records", model: model.public_name }} />}>Usage records for this model</Button><Button variant="secondary" render={<ResourceLink search={{ page: "platform-costs", tab: "explore", group: "model" }} />}>Compare models in Explore</Button></div></Stack>;
+  return <Stack gap={3}><p className={m.note}>Counted by API model name ({code(model.public_name)}).</p><div className={m.inlineActions}><Button variant="secondary" render={<ResourceLink search={{ page: "platform-costs", tab: "records", model: model.public_name }} />}>Usage records for this model</Button><Button variant="secondary" render={<ResourceLink search={{ page: "platform-costs", tab: "explore", group: "model" }} />}>Compare models in Explore</Button></div></Stack>;
 }
 
 // ---------------------------------------------------------------------------
@@ -321,15 +327,15 @@ export function RoutePage({ session, route: d, path, tab }: { session: Session; 
   useResourceParent({ label: modelName, to: { page: "model-detail", record: d.model_id } });
   useSectionFromTab(routeSectionFor(tab));
   const sections: (SectionNavItem & { title: string; description?: ReactNode; actions?: ReactNode; content: ReactNode })[] = [
-    { id: "pricing", label: "Price lines", icon: <CircleDollarSign aria-hidden />, title: "Price lines", description: "The latest published price, per unit. Estimates, not provider invoices.", content: <><RoutePriceLines price={price} workload={workload} />{writable && <PublishControls route={d} workload={workload} />}</> },
+    { id: "pricing", label: "Price lines", icon: <CircleDollarSign aria-hidden />, title: "Price lines", description: "Latest published price. Estimates, not invoices.", content: <><RoutePriceLines price={price} workload={workload} />{writable && <PublishControls route={d} workload={workload} />}</> },
     { id: "data-policy", label: "Data policy", icon: <ShieldQuestion aria-hidden />, title: "Data policy", content: <RouteDataPolicy route={d} /> },
     { id: "protocols", label: "Protocols & features", icon: <FileCode2 aria-hidden />, title: "Protocols & features", content: <RouteFeatures route={d} workload={workload} /> },
-    { id: "routing", label: "Routing", icon: <Split aria-hidden />, title: "Routing settings", description: "Priority, weight and health-check settings for this route. The model's routing policy decides fallback.", actions: writable ? <Button size="sm" variant="secondary" disabled={!routing.data} aria-label="Edit routing settings" onClick={() => routing.data && ask({ title: `Routing · ${title}`, description: "No implicit retries: fallback attempts follow the model's routing policy only.", fields: deploymentRoutingFields(routing.data.routing), submitLabel: "Save routing", successNotice: "Routing saved.", run: (v, signal) => api(routingPath(d.id), { method: "PUT", body: deploymentRoutingBody(v, routing.data!.routing, true), signal }) })}><Pencil aria-hidden />Edit</Button> : undefined, content: <RouteRouting query={routing} /> },
+    { id: "routing", label: "Routing", icon: <Split aria-hidden />, title: "Routing settings", description: "Fallback follows the model's routing policy.", actions: writable ? <Button size="sm" variant="secondary" disabled={!routing.data} aria-label="Edit routing settings" onClick={() => routing.data && ask({ title: `Routing · ${title}`, description: "No implicit retries: fallback attempts follow the model's routing policy only.", fields: deploymentRoutingFields(routing.data.routing), submitLabel: "Save routing", successNotice: "Routing saved.", run: (v, signal) => api(routingPath(d.id), { method: "PUT", body: deploymentRoutingBody(v, routing.data!.routing, true), signal }) })}><Pencil aria-hidden />Edit</Button> : undefined, content: <RouteRouting query={routing} /> },
     { id: "price-history", label: "Price history", icon: <History aria-hidden />, title: "Price history", content: <PriceVersions path={`${path}/prices`} writable={false} deployment={d} /> },
   ];
   return <Stack gap={6} className={s.page}>
-    <PageHeader title={title} meta={<>{d.provider ? <ProviderBadge profile={d.provider} label={d.provider_name ?? d.provider} /> : null}<Badge tone={d.enabled ? "good" : "neutral"}>{d.enabled ? "Enabled" : "Disabled"}</Badge>{tier && tierBadge[tier]}</>}
-      description={<>{code(d.upstream_model)} · Route of <ResourceLink search={{ page: "model-detail", record: d.model_id }}>{modelName}</ResourceLink> on <ResourceLink search={{ page: "provider-detail", record: d.provider_connection_id }}>{d.provider_name ?? "its connection"}</ResourceLink>. Nothing here calls the provider.</>}
+    <PageHeader title={<TitleWithIcon icon={<ProviderIcon profile={d.provider} size="xl" />}>{title}</TitleWithIcon>} meta={<><Badge tone={d.enabled ? "good" : "neutral"}>{d.enabled ? "Enabled" : "Disabled"}</Badge>{tier && tierBadge[tier]}</>}
+      description={<>{code(d.upstream_model)} · Route of <ResourceLink search={{ page: "model-detail", record: d.model_id }}>{modelName}</ResourceLink> on <ResourceLink search={{ page: "provider-detail", record: d.provider_connection_id }}>{d.provider_name ?? "its connection"}</ResourceLink></>}
       breadcrumbs={<BackLink label={modelName} search={{ page: "model-detail", record: d.model_id }} />}
       actions={<div className={m.headerRight}>{set.list.data && <PrevNext noun="route" position={index >= 0 ? { index, total: set.ordered.length } : undefined} prev={target(prev)} next={target(next)} shortcuts />}{writable && <CatalogStatusButton kind="deployments" record={d} name={d.upstream_model} />}</div>} />
     <StatTileGrid label="Route summary" columns={5}>
@@ -360,7 +366,6 @@ function RouteDataPolicy({ route }: { route: RouteDetail }) {
     <div><DataPolicyBadge policy={p.policy} label={p.label} size="md" detail={p.detail} /></div>
     {p.policy === "unknown" ? <Alert tone="warning" title="Retention and training are unknown">The gateway has no data policy for this provider, so it can't say whether prompts are kept or used for training. Check the provider's terms before routing sensitive work here.</Alert>
       : <p className={m.note}>{route.provider === "openrouter" ? `Every request to OpenRouter sets provider.data_collection to "${route.data_policy?.data_collection}" from the server setting.${route.data_policy?.data_collection === "deny" ? " Free (:free) endpoints may train on prompts and are refused while it is denied." : ""}` : "From the server's configuration for this provider."}</p>}
-    <p className={m.note}>The gateway itself never stores prompt or response bodies by default.</p>
   </Stack>;
 }
 const featureLabels: Record<string, string> = { cache_pricing: "Cache pricing", prompt_size_tiers: "Prompt-size price tiers", openrouter_free_variant: "OpenRouter free variant" };
@@ -370,12 +375,11 @@ function RouteFeatures({ route, workload }: { route: RouteDetail; workload: Work
     { label: "Workload", value: workloadLabels[workload] },
     { label: "Client protocols", value: protocols.length ? <ul className={m.chips}>{protocols.map(p => { const able = route.provider ? protocolProfiles[p].includes(route.provider) : undefined; return <li key={p}><BitopBadge size="sm" tone={able === false ? "warning" : "neutral"}>{protocolLabel(p)}{able === false ? " · not supported by this connection" : ""}</BitopBadge></li>; })}</ul> : <span className={m.unknown}>Unknown</span> },
     { label: "Features", value: route.features ? route.features.length ? <ul className={m.chips}>{route.features.map(f => <li key={f}><BitopBadge size="sm" variant="outline">{featureLabels[f] ?? f}</BitopBadge></li>)}</ul> : "None configured" : <span className={m.unknown}>Unknown</span> },
-    { label: "Region", value: route.region ?? "Not set" },
-    { label: "Region you declare (not verified)", value: route.residency ?? "Not declared" },
-    { label: "Upstream model ID", value: code(route.upstream_model) },
-    { label: "Identifier", value: <CopyId value={route.id} label="route ID" /> },
+    // The declared region is under Routing settings and the upstream ID is the subtitle: each shown once.
+    ...(route.region ? [{ label: "Connection region", value: route.region }] : []),
+    { label: "ID", value: <CopyId value={route.id} label="route ID" /> },
   ];
-  return <Stack gap={3}><DescriptionList items={facts} dividers /><p className={m.note}>Features come from configuration (prices and connection), not upstream probing.</p></Stack>;
+  return <DescriptionList items={facts} dividers />;
 }
 function RouteRouting({ query }: { query: ReturnType<typeof useApi<DeploymentRouting>> }) {
   if (query.isPending) return <p role="status">Loading routing…</p>;

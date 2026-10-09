@@ -19,11 +19,11 @@ import s from "./shared.module.css";
 import t from "../components/resource-page.module.css";
 const id = encodeURIComponent;
 export function Governance({ session, workspace }: Scope) {
-  // Settings › Limits (Team/Project admins): tighten-only workspace caps, then effective access with reasons.
+  // Settings › Limits (Team/Project admins): tighten-only workspace caps. Effective access is the separate Access tab.
   // Key caps live on each key's page (old ?scope=keys links redirect there; lib/locations.ts).
   const writable = permissions(session, workspace).managePolicy;
   // Tabs hold cards, never a second page title (review rule 1): ScopeLimits is the "Workspace limits" card.
-  return <Stack gap={6}><ScopeLimits mode="local" path={`${wsPath(workspace.id)}/policy`} writable={writable} kind={workspace.kind} readOnlyReason={workspace.kind === "personal" ? "Personal limits are set by a Platform Admin." : "Only workspace admins change these limits."} /><p className={s.note}>To cap a single key, open it from <ResourceLink search={{ page: "keys", ws: workspace.id }}>API keys</ResourceLink>.</p><EffectiveAccess workspace={workspace} canManageModels={permissions(session, workspace).manageGrants} /></Stack>;
+  return <Stack gap={6}><ScopeLimits mode="local" path={`${wsPath(workspace.id)}/policy`} writable={writable} kind={workspace.kind} readOnlyReason={workspace.kind === "personal" ? "Personal limits are set by a Platform Admin." : "Only workspace admins change these limits."} /><p className={s.note}>Cap a single key from <ResourceLink search={{ page: "keys", ws: workspace.id }}>API keys</ResourceLink>.</p></Stack>;
 }
 /** Admin › Limits: one pill tab per scope (installation ceiling, type defaults), `?tab=` (pages/settings/limits.tsx; Admin › Settings › Defaults & limits). */
 export function PlatformPolicies({ session, tab, onTabChange }: { session: Session; tab?: string; onTabChange?: (tab: string) => void }) { return <PlatformLimits session={session} tab={tab} onTabChange={onTabChange} />; }

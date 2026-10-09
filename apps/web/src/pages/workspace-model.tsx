@@ -8,7 +8,7 @@
  */
 import { FileQuestion } from "lucide-react";
 import { wsPath } from "../lib/api";
-import { eligibilityLabels, protocolEndpoints, protocolLabel, workloadModalities, type WorkspaceCatalogModel } from "../lib/model-setup";
+import { protocolEndpoints, protocolLabel, workloadModalities, type WorkspaceCatalogModel } from "../lib/model-setup";
 import { formatDecimalMicroUsd, workloadLabels } from "../lib/pricing";
 import { notServing } from "../lib/home";
 import type { DashboardSearch } from "../lib/permissions";
@@ -24,7 +24,8 @@ import { Card } from "../components/ui/card/card";
 import { DescriptionList } from "../components/ui/description-list/description-list";
 import { EmptyState } from "../components/ui/empty-state/empty-state";
 import { PageHeader } from "../components/ui/page-header/page-header";
-import { EligibilityBadge, NotServingBadge, workspaceModelSearch } from "./model-catalog";
+import { LabIcon, TitleWithIcon } from "../components/provider-icon";
+import { EligibilityBadge, NotServingBadge, notServingNote, workspaceModelSearch } from "./model-catalog";
 import type { Scope } from "./workspace";
 import s from "./shared.module.css";
 import m from "./models.module.css";
@@ -46,24 +47,27 @@ export function WorkspaceModelPage({ workspace, id }: Scope & { id: string }) {
   const input = formatDecimalMicroUsd(model.min_input_microusd_per_million), output = formatDecimalMicroUsd(model.min_output_microusd_per_million);
   const tokens = model.workload === "generation" || model.workload === "embeddings" || model.workload === "systemone";
   const several = Number(model.routes) > 1, off = notServing(model);
+  // Each fact once (ui-principles 2): badges in the header, numbers in the tiles, the few remaining facts in Overview.
+  // The API name is the subtitle only when it differs from the title. Prices are estimates (tile tooltip), not invoices.
+  const estimate = several ? "cheapest route" : "estimate", unpriced = "Not priced yet";
+  const subtitle = [model.public_name !== model.display_name ? <code key="api" className={s.mono}>{model.public_name}</code> : null, model.description || null].filter(Boolean);
   return <Stack gap={6} className={s.page}>
-    <PageHeader title={model.display_name} meta={<><EligibilityBadge eligibility={model.eligibility} />{off && <NotServingBadge />}</>} breadcrumbs={<BackLink {...back} />}
-      description={<><code className={s.mono}>{model.public_name}</code>{model.description ? <> · {model.description}</> : null}</>}
+    <PageHeader title={<TitleWithIcon icon={<LabIcon model={[model.public_name, model.display_name]} size="xl" />}>{model.display_name}</TitleWithIcon>} meta={<><EligibilityBadge eligibility={model.eligibility} hint={model.reason} />{off && <NotServingBadge hint={notServingNote} />}</>} breadcrumbs={<BackLink {...back} />}
+      description={subtitle.length ? <>{subtitle.map((part, i) => <span key={i}>{i ? " · " : ""}{part}</span>)}</> : undefined}
       actions={<PrevNext noun="model" position={{ index, total: rows.length }} prev={target(rows[index - 1])} next={target(rows[index + 1])} />} />
-    <StatTileGrid columns={4} label="Model summary">
+    <StatTileGrid columns={3} label="Model summary">
       <StatTile label="Type" value={workloadModalities[model.workload] ?? workloadLabels[model.workload] ?? model.workload} hint={model.protocols.map(protocolLabel).join(" · ")} />
-      <StatTile label="Input price" value={tokens ? input ?? null : "Not token-priced"} hint={tokens ? input ? `per M input tokens · ${several ? "cheapest route" : "estimate"}` : "Unknown · not free" : "Priced per unit"} />
-      <StatTile label="Output price" value={model.workload === "generation" ? output ?? null : "Not applicable"} hint={model.workload === "generation" ? output ? `per M output tokens · ${several ? "cheapest route" : "estimate"}` : "Unknown · not free" : undefined} />
-      <StatTile label="Availability" value={eligibilityLabels[model.eligibility] ?? "Unknown"} hint={off ? "Not serving: no route is turned on" : model.reason} />
+      <StatTile label="Input price" value={tokens ? input ?? null : "Not token-priced"} hint={tokens ? input ? <span title="Configured estimate, not a provider invoice">per M input tokens · {estimate}</span> : unpriced : "Priced per unit"} />
+      <StatTile label="Output price" value={model.workload === "generation" ? output ?? null : "Not applicable"} hint={model.workload === "generation" ? output ? <span title="Configured estimate, not a provider invoice">per M output tokens · {estimate}</span> : unpriced : undefined} />
     </StatTileGrid>
     <Card title="Overview" titleAs="h2"><DescriptionList dividers items={[
       { label: "API model name", value: <CopyId value={model.public_name} label="API model name" head={200} tail={0} /> },
-      { label: "Type", value: <>{workloadLabels[model.workload] ?? model.workload} <span className={s.secondary}>{workloadModalities[model.workload]}</span></> },
-      { label: "In this workspace", value: <><EligibilityBadge eligibility={model.eligibility} /> <span className={s.secondary}>{model.reason}</span></> },
-      ...(off ? [{ label: "Serving", value: <span className={m.unknown}>No route to a provider is turned on, so requests fail. A platform admin can enable one.</span> }] : []),
-      ...(model.created_at && model.eligibility !== "available_from_catalog" ? [{ label: "Added", value: <DateTime value={model.created_at} /> }] : []),
+      { label: "Type", value: workloadLabels[model.workload] ?? model.workload },
+      ...(off ? [{ label: "Serving", value: <span className={m.unknown}>{notServingNote}</span> }] : []),
+      // created_at is when the model was created on the gateway, not when this workspace added it.
+      ...(model.created_at ? [{ label: "Created", value: <DateTime value={model.created_at} /> }] : []),
     ]} /></Card>
-    <Card title="How to call it" titleAs="h2" description="Send requests to this gateway with an API key from this workspace. Anything not listed is refused, never silently dropped.">
+    <Card title="How to call it" titleAs="h2" description="Use an API key from this workspace.">
       <Stack gap={5}>{model.protocols.map(p => { const e = protocolEndpoints[p]; if (!e) return null;
         return <section key={p} className={m.endpoint} aria-label={protocolLabel(p)}>
           <h3 className={m.endpointLine}><Badge size="sm" variant="outline">{e.method}</Badge><code className={m.code}>{e.path}</code><span className={s.muted}>{protocolLabel(p)}</span></h3>
@@ -71,17 +75,11 @@ export function WorkspaceModelPage({ workspace, id }: Scope & { id: string }) {
             { label: "Headers", value: <ul className={m.chips}>{e.headers.map(h => <li key={h.name}><code className={m.code}>{h.name}: {h.value}</code></li>)}</ul> },
             { label: "Body", value: e.contentType },
             { label: "Key parameters", value: <ul className={s.plainList}>{e.params.map(x => <li key={x.name}><code className={m.code}>{x.name}</code>{x.required ? " (required)" : ""} · {x.name === "model" ? <code className={m.code}>{model.public_name}</code> : x.note}</li>)}</ul> },
-            { label: "Not supported", value: e.unsupported },
+            { label: "Not supported", value: <span title="Anything not listed is refused, never silently dropped.">{e.unsupported}</span> },
           ]} />
         </section>; })}</Stack>
     </Card>
-    <Card title="Pricing" titleAs="h2" description="Configured estimates for budgets, not provider invoices. A missing rate is unknown, never free.">
-      <DescriptionList dividers items={[
-        { label: "Input", value: tokens ? input ? <>{several ? "From " : ""}{input} / M input tokens</> : <span className={m.unknown}>Unknown · not free</span> : "Not token-priced" },
-        ...(model.workload === "generation" ? [{ label: "Output", value: output ? <>{several ? "From " : ""}{output} / M output tokens</> : <span className={m.unknown}>Unknown · not free</span> }] : []),
-      ]} />
-    </Card>
-    <Card title="Usage" titleAs="h2" description="Your requests and spend with this model.">
+    <Card title="Usage" titleAs="h2">
       <div className={m.inlineActions}>
         <Button variant="secondary" render={<ResourceLink search={{ page: "requests", ws: workspace.id, model: model.public_name }} />}>Requests with this model</Button>
         <Button variant="secondary" render={<ResourceLink search={{ page: "costs", ws: workspace.id, model_id: model.model_id }} />}>Usage &amp; costs for this model</Button>

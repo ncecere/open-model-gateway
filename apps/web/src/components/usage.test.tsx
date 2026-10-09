@@ -8,7 +8,7 @@ import { dashboardRouteTree } from "../router";
 import { abortRequests } from "../lib/api";
 import { session, admin, team, member, personal, report, markup, testClient } from "../lib/test-fixtures";
 import { Costs } from "../pages/usage/usage-costs";
-import { UsageOverviewTab } from "../pages/usage/overview";
+import { UsageOverviewTab, showsAccounting } from "../pages/usage/overview";
 import { UsageExploreTab } from "../pages/usage/explore";
 import { WorkspaceRecords } from "../pages/usage/records";
 import { AccountingReport } from "../pages/usage/accounting";
@@ -31,12 +31,12 @@ afterEach(() => { cleanup(); abortRequests(); vi.useRealTimers(); vi.unstubAllGl
 describe("Usage & costs overview", () => {
   it("shows three exact sub-cent tiles with deltas, the on-hold amount on Spend (no banner) and a link to unresolved records", () => {
     const html = markup(<UsageOverviewTab workspace={team} ctx={usageContext(team)} period={period} nav={nav()} />, [[`/api/v1/workspaces/team/usage/overview?${q}`, overview([{ id: "u1", name: "alex@example.invalid", spend_microusd: "2723", requests: "21", tokens: "5000", share: "1" }])], ["/api/v1/workspaces/team/policy", { budgets: [{ layer: "local", period: "month", amount_microusd: "100000000", usage_visible: true, used_microusd: "10323", unresolved_usage: true, window_start: "2026-10-01T00:00:00Z", window_end: "2026-11-01T00:00:00Z" }] }]]);
-    for (const text of ["$0.002723", "+$0.0076 on hold", "including 2 retries", "At least 5,000", "+172.3%", "+110%", "+25%", "vs previous 8 days", "Top members", "alex@example.invalid", "Laptop key", "$0.000081", "Budgets", "Workspace monthly budget", "$0.010323 / $100.00 · Monthly", "Resets Nov 1, 2026", "Accounting details", "View all in Explore", "Estimates from configured prices, not invoices"]) expect(html).toContain(text);
+    for (const text of ["$0.002723", "+$0.0076 on hold", "including 2 retries", "At least 5,000", "+172.3%", "+110%", "+25%", "vs previous 8 days", "Top members", "alex@example.invalid", "Laptop key", "$0.000081", "Budgets", "Workspace monthly budget", "$0.010323 / $100.00 · Monthly", "Resets Nov 1, 2026", ">Accounting</h2>", "View all in Explore", "Estimates from configured prices, not invoices"]) expect(html).toContain(text);
     // The on-hold explanation is the Spend tile's tooltip (and screen-reader sentence); no "Some costs aren't final yet" banner.
     expect(html).toContain("$0.0076 is on hold for 5 requests whose final cost isn&#x27;t known yet");
     expect(html).not.toContain("Some costs aren"); expect(html).not.toContain('role="alert"');
     expect(html).toMatch(/<a [^>]*href="\/workspaces\/team\/costs\?tab=records&amp;cost_status=on_hold"[^>]*>View unresolved<\/a>/);
-    // Only Spend, Requests and Tokens are tiles; cache hit rate and $/1M are in Explore and Accounting details.
+    // Only Spend, Requests and Tokens are tiles; cache hit rate and $/1M are in Explore and the Accounting card.
     expect(html.match(/role="group" aria-label="Usage summary"/g)).toHaveLength(1);
     expect(html).not.toContain("Cache hit rate</a>"); expect(html).not.toContain("Cost per 1M tokens</a>"); expect(html).not.toContain("per 1M tokens</");
     expect(html).toContain('href="/workspaces/team/costs?tab=chart&amp;metric=spend"');
@@ -75,7 +75,7 @@ describe("Usage & costs overview", () => {
     const o = overview(null), one = (daily: { date: string; value: string | null }[]) => daily.map(d => ({ ...d, value: d.date === "2026-10-08" ? d.value : "0" }));
     o.tiles.spend.daily = one(o.tiles.spend.daily); o.tiles.requests.daily = one(o.tiles.requests.daily); o.tiles.tokens.daily = one(o.tiles.tokens.daily);
     const html = markup(<UsageOverviewTab workspace={team} ctx={usageContext(team)} period={period} nav={nav()} />, [[`/api/v1/workspaces/team/usage/overview?${q}`, o], ["/api/v1/workspaces/team/policy", { budgets: [] }]]);
-    expect(html).toContain("All activity in this period is on one UTC day"); expect(html).not.toContain("Daily spend"); expect(html).not.toContain("Chart measure");
+    expect(html).not.toContain("All activity in this period is on one UTC day"); expect(html).not.toContain("Daily spend"); expect(html).not.toContain("Chart measure");
     expect(html).not.toContain("Budgets"); expect(html).not.toContain("No budget is set");
     // Two days: the chart with Spend / Requests / Tokens only.
     const chart = markup(<UsageOverviewTab workspace={team} ctx={usageContext(team)} period={period} nav={nav()} />, [[`/api/v1/workspaces/team/usage/overview?${q}`, overview(null)]]);
@@ -153,13 +153,51 @@ describe("Usage & costs overview", () => {
     expect(markup(<Costs session={session} workspace={member} />)).toContain("Your usage in Product");
     expect(markup(<Costs session={session} workspace={personal} />)).toContain("Your usage");
   });
-  it("keeps accounting internals exact and separate (collapsed by default)", () => {
-    const html = markup(<AccountingReport report={report} />);
-    for (const text of ["Unknown-cost attempts", "Attempts missing a reservation", "Legacy pinned pricing", "$9,007,199,254.740993", "incomplete billing", "Cache writes (total of the three rows below)", "don&#x27;t add them up"]) expect(html).toContain(text);
-    const client = testClient();
-    expect(markup(<UsageOverviewTab workspace={team} ctx={usageContext(team)} period={period} nav={nav()} />, [[`/api/v1/workspaces/team/usage/overview?${q}`, overview(null)]], client)).not.toContain("Legacy pinned pricing");
-    expect(paths(client).some(p => p.includes("cost-report"))).toBe(false);
-    client.clear();
+  it("summarizes accounting in one compact section: four stats, one status line, non-zero cache rows, coverage on demand", () => {
+    const o = overview(null), html = markup(<AccountingReport report={report} rates={o} unresolved={{ page: "costs", ws: "team", tab: "records" }} statusFilter />);
+    document.body.innerHTML = html;
+    const stats = document.querySelector("[aria-label='Accounting summary']")!;
+    expect([...stats.querySelectorAll("dt")].map(d => d.textContent)).toEqual(["Cache hit rate", "Cost per 1M tokens", "Costs pending", "Unpriced"]);
+    // Pending + unknown (aged holds are a subset, named in the tooltip but not added again).
+    expect(stats.querySelectorAll("dd")[2]!.textContent).toContain("3"); expect(html).toContain("Pending 1 · Unknown 2 · Aged holds 1 (included above)");
+    expect(html).toContain("3 requests still have unknown cost");
+    expect(screen.getByRole("link", { name: "View records" }).getAttribute("href")).toBe("/workspaces/team/costs?tab=records&cost_status=cost_unknown");
+    // Exact money; unknown token counts stay "Unknown"; no explanatory paragraphs or overlapping aggregate row.
+    for (const text of ["Legacy pinned pricing", "$9,007,199,254.740993", "Unknown"]) expect(html).toContain(text);
+    for (const text of ["don&#x27;t add them up", "Six separate charge categories", "Cache writes (total", "Attempts: 12 for 10 requests", "Period rates", "Accounting health"]) expect(html).not.toContain(text);
+    // Coverage numbers stay reachable in a closed disclosure.
+    const coverage = screen.getByRole("button", { name: /Coverage/ });
+    expect(coverage.getAttribute("aria-expanded")).toBe("false");
+    for (const text of ["Unknown-cost attempts", "Attempts missing a reservation", "Incomplete billing", "Complete billing"]) expect(html).toContain(text);
+  });
+  it("says all costs are known in green, and shows one line instead of an all-zero cache table", () => {
+    const zero = { pending_attempts: "0", unknown_attempts: "0", missing_reservation_attempts: "0", unpriced_attempts: "0", aged_hold_attempts: "0", unbounded_attempts: "0" };
+    const billing = { total_input_tokens: "49", uncached_input_tokens: "49", cache_read_input_tokens: "0", cache_write_input_tokens: "0", cache_write_default_input_tokens: "0", cache_write_5m_input_tokens: "0", cache_write_1h_input_tokens: "0" };
+    const clean = { ...report, health: zero, billing_usage: billing, cost_components: { ...report.cost_components, uncached_input_microusd: "5", output_microusd: "12", legacy_microusd: "0" } };
+    const html = markup(<AccountingReport report={clean} />);
+    expect(html).toContain("All costs known"); expect(html).not.toContain("unknown cost");
+    expect(html).toContain("No prompt caching this period"); expect(html).not.toContain("<table"); expect(html).not.toContain("Legacy pinned pricing");
+    // With caching: only non-zero categories, tokens and spend side by side in one table.
+    const cached = { ...clean, billing_usage: { ...billing, cache_read_input_tokens: "40", cache_write_input_tokens: "0" }, cost_components: { ...clean.cost_components, cache_read_microusd: "1" } };
+    document.body.innerHTML = markup(<AccountingReport report={cached} />);
+    const table = screen.getByRole("table", { name: "Charges by category" });
+    expect(within(table).getAllByRole("columnheader").map(h => h.textContent)).toEqual(["Category", "Tokens", "Spent"]);
+    expect(within(table).getAllByRole("rowheader").map(h => h.textContent)).toEqual(["Uncached input", "Cache read", "Output"]);
+    expect(table.textContent).toContain("$0.000001");
+  });
+  it("shows Accounting only to workspace admins and platform readers; plain members see tiles and charts only", () => {
+    const seeded: [string, unknown][] = [[`/api/v1/workspaces/team/usage/overview?${q}`, overview(null)]];
+    const asMember = testClient();
+    expect(markup(<UsageOverviewTab workspace={member} ctx={usageContext(member)} period={period} nav={nav()} />, seeded, asMember)).not.toContain(">Accounting</h2>");
+    expect(paths(asMember).some(p => p.includes("cost-report"))).toBe(false);
+    asMember.clear();
+    const asAdmin = testClient();
+    expect(markup(<UsageOverviewTab workspace={team} ctx={usageContext(team)} period={period} nav={nav()} />, seeded, asAdmin)).toContain(">Accounting</h2>");
+    expect(paths(asAdmin).some(p => p.includes("/workspaces/team/cost-report?"))).toBe(true);
+    asAdmin.clear();
+    // A platform reader who is a plain member still sees it (UsageCosts passes platform_read).
+    expect(markup(<UsageOverviewTab workspace={member} ctx={usageContext(member)} period={period} nav={nav()} accounting />, seeded)).toContain(">Accounting</h2>");
+    expect(showsAccounting(member)).toBe(false); expect(showsAccounting(team)).toBe(true); expect(showsAccounting()).toBe(true);
   });
 });
 
@@ -206,6 +244,23 @@ describe("Usage & costs routing", () => {
     expect(requested.some(p => p.startsWith(`/api/v1/workspaces/${foreign}`))).toBe(false);
     expect(requested.some(p => /platform\/users|\/keys|\/executions|\/costs\?|\/requests/.test(p))).toBe(false);
     expect(requested.filter(p => p.includes(foreign)).every(p => p.startsWith("/api/v1/platform/"))).toBe(true);
+    client.clear();
+  });
+  it("puts By workspace's Columns menu at the end of the one filter row, not on a row of its own", async () => {
+    const user = userEvent.setup();
+    serve(admin, p => p.startsWith("/api/v1/platform/cost-report?") ? { ...report, scope: "platform", breakdowns: { ...report.breakdowns, workspaces: [{ id: "w1", name: "Research", totals: report.totals }] } } : p.startsWith("/api/v1/platform/usage/explore?") ? { ...explore, group_by: "workspace", rows: [], series: [] } : p.startsWith("/api/v1/platform/usage/overview?") ? overview([]) : undefined);
+    const { client } = await mount("/admin/costs?tab=records");
+    const table = await screen.findByRole("table", { name: "By workspace" });
+    await within(table).findByText("Research");
+    const filters = screen.getByRole("group", { name: "Filters" });
+    const columns = within(filters).getByRole("button", { name: "Columns" });
+    expect(screen.getAllByRole("button", { name: "Columns" })).toHaveLength(1);
+    await user.click(columns);
+    await user.click(await screen.findByRole("menuitemcheckbox", { name: "On hold" }));
+    await waitFor(() => expect(within(table).queryByRole("columnheader", { name: "On hold" })).toBeNull());
+    // Other tabs have no Columns on the filter row.
+    await user.click(screen.getByRole("tab", { name: "Overview" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Columns" })).toBeNull());
     client.clear();
   });
 });

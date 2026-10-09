@@ -17,10 +17,12 @@ import { ErrorNotice, Heading, NativeSelect, Stack, useApi } from "../../compone
 import { Tabs, TabsList, Tab, TabsPanel } from "../../components/ui/tabs/tabs";
 import { PeriodControl, scopeLine, useUsageSearch, type UsageNav } from "./shared";
 import { UsageFilterBar, useFilterOptions } from "./filters";
-import { UsageOverviewTab } from "./overview";
+import { UsageOverviewTab, showsAccounting } from "./overview";
 import { UsageExploreTab } from "./explore";
-import { PlatformRecords, WorkspaceRecords } from "./records";
-import { BackToUsage, UsageChart } from "./chart";
+import { PlatformRecords, WorkspaceRecords, usePlatformRecordColumns } from "./records";
+import { UsageChart } from "./chart";
+import { BackLink } from "../../components/templates/form-page";
+import { PageHeader } from "../../components/ui/page-header/page-header";
 import s from "../shared.module.css";
 import u from "./usage.module.css";
 
@@ -39,7 +41,9 @@ export function UsageCosts({ session, workspace }: { session: Session; workspace
   const options = useFilterOptions(workspace, ctx, period, workspaceFilter);
   // Workspace scope: the cost center is a fact about the page (the platform assigns it), not a filter.
   const centers = options.costCenters.filter(c => c.value !== "unallocated"), centerFact = workspace && centers.length ? centers.length === 1 ? `Cost center: ${String(centers[0]!.label)}` : `${centers.length} cost centers` : undefined;
-  const header = (title: string) => <Heading title={title} description={<span className={u.scope}><span>{scopeLine(workspace)}</span>{period && <span>· {periodLabel(period)}</span>}{centerFact && <span>· {centerFact}</span>}</span>} />;
+  // One plain line that wraps like text (separate "· …" spans started wrapped lines with a dot on a phone).
+  const scopeText = [scopeLine(workspace), period && periodLabel(period), centerFact].filter(Boolean).join(" · ");
+  const header = (title: string) => <Heading title={title} description={scopeText} />;
   const periodControl = <PeriodControl key={`${period?.start_date}-${period?.end_date}-${period?.preset}`} period={period} navigate={nav.navigate} />;
   // Admin: narrow every tab to one workspace (a leading toolbar control with its own chip).
   const scoped = !workspace && session.capabilities.platform_read && !!period, spaces = useWorkspaceScope(period, scoped);
@@ -47,10 +51,13 @@ export function UsageCosts({ session, workspace }: { session: Session; workspace
   const scopeChips = scoped && workspaceFilter ? [{ key: "workspace", label: "Workspace", text: spaces.find(w => w.id === workspaceFilter)?.label ?? "Selected workspace", onRemove: () => nav.navigate({ workspace_id: undefined }) }] : [];
   // One FilterToolbar row; it collapses in place behind "Filters (n)" on a phone (no sheet). An invalid custom period
   // still gets the Period control so it can be fixed.
-  const filters = <UsageFilterBar options={options} ctx={ctx} nav={nav} records={tab === "records"} start={<>{periodControl}{scope || null}</>} extraChips={scopeChips} extraActive={period && period.preset === "month" ? 0 : 1} />;
+  // By workspace: its Columns menu sits at the right end of this same row (Grounded list-page), not on a row of its own.
+  const platformCols = usePlatformRecordColumns();
+  const filters = <UsageFilterBar options={options} ctx={ctx} nav={nav} records={tab === "records"} start={<>{periodControl}{scope || null}</>} end={!workspace && tab === "records" && period ? platformCols.menu : undefined} extraChips={scopeChips} extraActive={period && period.preset === "month" ? 0 : 1} />;
   if (tab === "chart") {
     const metric: ChartMetric = chartMetrics.includes(nav.search.metric as ChartMetric) ? nav.search.metric as ChartMetric : "spend";
-    return <Stack gap={6} className={s.page}><BackToUsage nav={nav} />{header(chartTitle(metric))}{filters}
+    // Same header as every record page: "Back to …" as the breadcrumb line, then the title (no extra ghost-button row).
+    return <Stack gap={6} className={s.page}><PageHeader title={chartTitle(metric)} description={scopeText} breadcrumbs={<BackLink label="Usage & costs" search={{ ...nav.search, tab: undefined, metric: undefined, offset: undefined }} />} />{filters}
       {invalid || !period ? <ErrorNotice error={invalid} /> : <UsageChart workspace={workspace} metric={metric} period={period} nav={nav} workspaceFilter={workspaceFilter} />}</Stack>;
   }
   return <Stack gap={6} className={s.page}>
@@ -60,9 +67,9 @@ export function UsageCosts({ session, workspace }: { session: Session; workspace
       <TabsList variant="pills" overflow="scroll" aria-label="Usage & costs views"><Tab value="overview">Overview</Tab><Tab value="explore">Explore</Tab><Tab value="records">{workspace ? "Cost records" : "By workspace"}</Tab></TabsList>
       {filters}
       {invalid || !period ? <ErrorNotice error={invalid} /> : <>
-      <TabsPanel value="overview"><UsageOverviewTab workspace={workspace} ctx={ctx} period={period} nav={nav} workspaceFilter={workspaceFilter} /></TabsPanel>
+      <TabsPanel value="overview"><UsageOverviewTab workspace={workspace} ctx={ctx} period={period} nav={nav} workspaceFilter={workspaceFilter} accounting={showsAccounting(workspace) || session.capabilities.platform_read} /></TabsPanel>
       <TabsPanel value="explore"><UsageExploreTab workspace={workspace} ctx={ctx} period={period} nav={nav} workspaceFilter={workspaceFilter} /></TabsPanel>
-      <TabsPanel value="records">{workspace ? <WorkspaceRecords session={session} workspace={workspace} ctx={ctx} period={period} nav={nav} /> : <PlatformRecords session={session} ctx={ctx} period={period} nav={nav} workspaceFilter={workspaceFilter} />}</TabsPanel>
+      <TabsPanel value="records">{workspace ? <WorkspaceRecords session={session} workspace={workspace} ctx={ctx} period={period} nav={nav} /> : <PlatformRecords session={session} ctx={ctx} period={period} nav={nav} workspaceFilter={workspaceFilter} cols={platformCols} />}</TabsPanel>
       </>}
       </Stack>
     </Tabs>

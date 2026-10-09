@@ -20,6 +20,7 @@ import { ResourceLink, useDashboardNavigation } from "../components/navigation-l
 import { useResourceName } from "../components/layout/breadcrumbs";
 import { DetailTime } from "../components/templates/when";
 import { BackLink } from "../components/templates/form-page";
+import { CopyId } from "../components/templates/copy-id";
 import { StatTile, StatTileGrid } from "../components/templates/stat-tile";
 import { Card } from "../components/ui/card/card";
 import { DescriptionList } from "../components/ui/description-list/description-list";
@@ -66,7 +67,8 @@ function SessionView({ scope }: { scope: LogsScope }) {
   const sessionFilters: RequestFilters = { ...period, session_id: id, ...(scope.kind === "platform" ? { workspace_id: ws } : {}) };
   const tableQuery = requestQuery(sessionFilters).query;
   return <Stack gap={6} className={s.page}>
-    <PageHeader title="Session" description={<code className={s.mono}>{id}</code>} breadcrumbs={<BackLink {...back} />} />
+    {/* Title like "Request d166ee7c": the ID once, in the title (not again as the subtitle). */}
+    <PageHeader title={`Session ${id!.length > 40 ? `${id!.slice(0, 40)}…` : id}`} breadcrumbs={<BackLink {...back} />} />
     {summary.isPending ? <p role="status">Loading session…</p> : summary.isError ? <ErrorNotice error={summary.error} retry={() => void summary.refetch()} /> : <>
       <StatTileGrid columns={4} label="Session summary">
         <StatTile label="Requests" value={countText(r!.requests)} hint={`${countText(r!.failed_requests)} failed · ${countText(r!.attempts)} attempts`} />
@@ -75,17 +77,17 @@ function SessionView({ scope }: { scope: LogsScope }) {
         <StatTile label="Duration" value={durationText(r!.first_at, r!.last_at)} hint="First to last request start" />
       </StatTileGrid>
       <Card title="Details" titleAs="h2"><DescriptionList dividers items={[
-        { label: "Session ID", value: <code className={s.mono}>{r!.session_id}</code> },
+        { label: "Session ID", value: <CopyId value={r!.session_id} label="session ID" head={200} tail={0} /> },
         ...(scope.kind === "platform" ? [{ label: "Workspace", value: `${r!.workspace.name} · ${r!.workspace.kind === "project" ? "Project" : "Team"}` }] : []),
-        { label: "App", value: r!.app ?? <span className={s.secondary}>Unknown (no X-Title header)</span> },
+        { label: "App", value: r!.app ?? <span className={s.secondary} title="The client sent no X-Title header">Unknown</span> },
         { label: "Models", value: r!.models.join(", ") + (r!.model_count > r!.models.length ? ` and ${r!.model_count - r!.models.length} more` : "") },
         { label: "First request", value: <DetailTime value={r!.first_at} fallback={r!.first_at} /> },
         { label: "Last request", value: <DetailTime value={r!.last_at} fallback={r!.last_at} /> },
       ]} /></Card>
     </>}
-    <Card title="Requests" titleAs="h2" description="This session's requests in the period, newest first.">
+    <Card title="Requests" titleAs="h2" description="Newest first.">
       <RequestsTable caption="Session requests" scope={scope} search={search} filters={sessionFilters} query={tableQuery} enabled={valid} narrow={narrow} go={go} filtered tools={() => {}} />
     </Card>
-    <p className={s.note}>A session ID is a label the client sends; it groups requests and is never used for access. Prompts and responses are never stored.</p>
+    <p className={s.note}>A session ID is a label the client sends; it is never used for access.</p>
   </Stack>;
 }

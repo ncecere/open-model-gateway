@@ -2,9 +2,11 @@
  * FilterToolbar: the one filter row above every list, table, catalog and
  * report (Grounded's ListPage/DataTable layout). It wraps Bitop's FilterBar
  * (vendored, not edited): a search box, then facets with small labels above
- * the controls, all bottom-aligned and wrapping; page actions (Sort, View,
- * Columns, Export) sit at the end of the same row. Under it, one chip per
- * active filter and "Clear all".
+ * the controls, all bottom-aligned; a flexible gap, then page actions (Sort,
+ * View, Columns, Export) at the end of the same row WITHOUT labels of their
+ * own (`SortSelect`, `ViewToggle`, `ColumnChooser`; accessible names only).
+ * Result counts live next to the tabs or in the table footer, never on a line
+ * of their own. Under the row, one chip per active filter and "Clear all".
  *
  * Facets are Bitop's (`toggle` = segmented control for a few options,
  * `select` = combobox, `multiple` for a multi-select popover with counts,
@@ -32,12 +34,13 @@
  *     facets={[{ id: "status", label: "Status", type: "toggle", allLabel: "All", options }]}
  *     values={values} onChange={setValues} end={<ColumnChooser … />} />
  */
-import { ChevronDown, Search, SlidersHorizontal, X } from "lucide-react";
+import { ArrowUpDown, ChevronDown, LayoutList, Search, SlidersHorizontal, Table2, X } from "lucide-react";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { Button } from "../ui/button/button";
 import { Field } from "../ui/field/field";
 import { type Facet, type FacetCounts, FilterBar, type FilterValue, type FilterValues, isFacetActive } from "../ui/filter-bar/filter-bar";
-import { Input } from "../ui/input/input";
+import { Input, NativeSelect } from "../ui/input/input";
+import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group/toggle-group";
 import { Popover } from "../ui/popover/popover";
 import { dateRangePresets, type DateRangeSelection } from "../ui/date-picker/date-picker";
 import { cx, useMediaQuery } from "../../lib/bitop-utils";
@@ -97,6 +100,13 @@ export type FilterToolbarProps<T = unknown> = {
    * button so the row fits one line (use it when a toolbar has more than four facets).
    */
   more?: string[];
+  /**
+   * Custom controls (wrapped in ToolbarField) that belong with the `more` facets, e.g. an exact-ID text filter: inside
+   * the "More filters" popover on a wide screen, inline after `start` on a phone. Count them in `extraActive`/`extraChips`.
+   */
+  moreStart?: ReactNode;
+  /** How many `moreStart` controls are active (added to the "More filters (n)" count). */
+  moreStartActive?: number;
   className?: string;
 };
 
@@ -173,6 +183,23 @@ export function ToolbarField({ label, children, hint, group = false, className }
   );
 }
 
+/** Sort for the end of the row: no visible label (its name is "Sort by"), an arrows icon and the current order. */
+export function SortSelect<V extends string>({ value, options, onChange, label = "Sort by", className }: { value: V; options: readonly { value: V; label: string }[]; onChange: (next: V) => void; label?: string; className?: string }) {
+  return <span className={cx(styles.sort, className)} title={label}>
+    <ArrowUpDown aria-hidden className={styles.sortIcon} />
+    <NativeSelect size="sm" aria-label={label} className={styles.sortSelect} value={value} onChange={event => onChange(event.target.value as V)}>{options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}</NativeSelect>
+  </span>;
+}
+
+export type ListLayout = "list" | "table";
+/** List / Table as two icon buttons (names "List" and "Table", with tooltips), no visible label. */
+export function ViewToggle({ value, onChange, label = "Layout" }: { value: ListLayout; onChange: (next: ListLayout) => void; label?: string }) {
+  return <ToggleGroup aria-label={label} joined variant="outline" size="sm" value={[value]} onValueChange={next => { const v = next[0] as ListLayout | undefined; if (v && v !== value) onChange(v); }}>
+    <ToggleGroupItem value="list" iconOnly aria-label="List" title="List"><LayoutList aria-hidden /></ToggleGroupItem>
+    <ToggleGroupItem value="table" iconOnly aria-label="Table" title="Table"><Table2 aria-hidden /></ToggleGroupItem>
+  </ToggleGroup>;
+}
+
 type Chip = { key: string; label: string; text: string; remove: () => void };
 
 function chipsOf<T>(facets: ToolbarFacet<T>[], values: ToolbarValues, set: (next: ToolbarValues) => void): Chip[] {
@@ -199,7 +226,7 @@ function chipsOf<T>(facets: ToolbarFacet<T>[], values: ToolbarValues, set: (next
   return chips;
 }
 
-export function FilterToolbar<T>({ facets = [], values = {}, onChange, counts, search, start, end, extraChips = [], extraActive = 0, note, label = "Filters", more = [], className }: FilterToolbarProps<T>) {
+export function FilterToolbar<T>({ facets = [], values = {}, onChange, counts, search, start, end, extraChips = [], extraActive = 0, note, label = "Filters", more = [], moreStart, moreStartActive = 0, className }: FilterToolbarProps<T>) {
   const id = useId(), [open, setOpen] = useState(false);
   const narrow = useMediaQuery(TOOLBAR_NARROW_QUERY);
   const panelRef = useRef<HTMLDivElement>(null), chipsRef = useRef<HTMLUListElement>(null);
@@ -249,16 +276,18 @@ export function FilterToolbar<T>({ facets = [], values = {}, onChange, counts, s
       </Field>
     </div>
   );
-  const leading = (searchBox || start || ranges.length > 0) && <>
+  const leading = (searchBox || start || ranges.length > 0 || narrow && moreStart) && <>
     {searchBox}
     {start}
+    {narrow && moreStart}
     {ranges.map(r => <RangeControl key={r.id} facet={r} value={(values[r.id] as string[] | undefined) ?? []} onChange={next => setRange(r, next)} />)}
   </>;
   const moreFacets = hidden.filter((f): f is Facet<T> => !isRange(f)), moreRanges = hidden.filter(isRange);
-  const moreActive = activeToolbarCount(hidden, values);
-  const moreButton = hidden.length > 0 && (
+  const moreActive = activeToolbarCount(hidden, values) + (narrow ? 0 : moreStartActive);
+  const moreButton = (hidden.length > 0 || !narrow && !!moreStart) && (
     <Popover title="More filters" align="start" className={styles.morePopup}
       trigger={<Button size="sm" variant="secondary" className={styles.moreButton} aria-label={moreActive > 0 ? `More filters, ${moreActive} active` : undefined}><SlidersHorizontal aria-hidden />More filters{moreActive > 0 && ` (${moreActive})`}</Button>}>
+      {!narrow && moreStart}
       {moreRanges.map(r => <RangeControl key={r.id} facet={r} value={(values[r.id] as string[] | undefined) ?? []} onChange={next => setRange(r, next)} />)}
       {moreFacets.length > 0 && <FilterBar<T> className={styles.moreBar} facets={moreFacets} value={valuesOf(moreFacets)} onValueChange={next => merge(moreFacets, next)} counts={counts} chips={false} labels={{ group: "More filters" }} />}
     </Popover>

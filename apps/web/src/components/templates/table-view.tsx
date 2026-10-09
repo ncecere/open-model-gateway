@@ -44,10 +44,12 @@ export type ColumnChooserProps = {
   /** Column ids hidden by default; adds a "Reset columns" item. */
   defaultHidden?: string[];
   label?: string;
+  /** Adds a "Compact rows" item, so a toolbar needs no separate density toggle. */
+  density?: { value: Density; onChange: (density: Density) => void };
 };
 
 /** A "Columns" menu of checkbox items to show and hide columns of a hand-built table. */
-export function ColumnChooser({ columns, hidden, onHiddenChange, defaultHidden, label = "Columns" }: ColumnChooserProps) {
+export function ColumnChooser({ columns, hidden, onHiddenChange, defaultHidden, label = "Columns", density }: ColumnChooserProps) {
   const hideable = columns.filter(c => c.hideable !== false);
   const visibleCount = columns.filter(c => !hidden.includes(c.id) || c.hideable === false).length;
   return (
@@ -58,6 +60,7 @@ export function ColumnChooser({ columns, hidden, onHiddenChange, defaultHidden, 
           return <MenuCheckboxItem key={c.id} checked={shown} disabled={shown && visibleCount <= 1} onCheckedChange={checked => onHiddenChange(checked ? hidden.filter(id => id !== c.id) : [...hidden.filter(id => id !== c.id), c.id])}>{c.label}</MenuCheckboxItem>;
         })}
       </MenuGroup>
+      {density && <><MenuSeparator /><MenuCheckboxItem checked={density.value === "compact"} onCheckedChange={checked => density.onChange(checked ? "compact" : "comfortable")}>Compact rows</MenuCheckboxItem></>}
       {defaultHidden && <><MenuSeparator /><MenuItem onClick={() => onHiddenChange(defaultHidden)}>Reset columns</MenuItem></>}
     </Menu>
   );

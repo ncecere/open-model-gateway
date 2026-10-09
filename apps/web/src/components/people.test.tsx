@@ -53,7 +53,9 @@ describe("Grounded-style people pages", () => {
   it("renders one user page of cards with shared memberships only", () => {
     const path = `/api/v1/platform/users/${uid}`, detail = { ...alex, first_sign_in_at: "2026-01-02T00:00:00Z", shared_memberships: [{ workspace_id: wid, name: "Product", kind: "team", role: "owner", sources: ["group", "manual"], grants: [{ role: "admin", source: "group" }, { role: "owner", source: "manual" }] }] };
     const html = ["overview", "workspaces"].map(tab => markup(<UserDetail session={admin} id={uid} tab={tab} onTabChange={noop} />, [[path, detail]])).join(""), visible = text(html);
-    for (const label of ["Profile and access", "Shared workspaces", "Product", "Owner", "Admin · group", "Owner · manual", "First signed in", "Last sign-in", "1 shared workspace", "Grant role"]) expect(visible).toContain(label);
+    for (const label of ["Profile and access", "Shared workspaces", "Product", "Owner", "Admin · group", "Owner · manual", "First signed in", "Last sign-in", "Grant role"]) expect(visible).toContain(label);
+    expect(visible).not.toContain("1 shared workspace"); // the tab count says it once
+    expect(visible).not.toContain("private keys or request details");
     expect(html).toContain('aria-label="More actions"');
     expect(html).toContain('role="tablist"');
     expect(visible).not.toContain(uid);
@@ -80,9 +82,10 @@ describe("Grounded-style people pages", () => {
   });
   it("shows a Grounded header, icon tabs with counts and stat cards on the team page", () => {
     const path = `/api/v1/platform/workspaces/${wid}`, html = markup(<WorkspaceDetail session={admin} id={wid} onTabChange={noop} />, [[path, product], [`${path}/catalogs`, { mode: "inherit", catalog_ids: [], effective_catalog_ids: ["c1", "c2"] }]]), visible = text(html);
-    for (const label of ["Team", "3 members", "Research", "Available catalogs", "Uses team defaults", "Your membership"]) expect(visible).toContain(label);
+    for (const label of ["Team", "Members", "Research", "Available catalogs", "Uses team defaults", "Your membership"]) expect(visible).toContain(label);
     expect(html).toContain('aria-label="More actions"');
     expect(html).toMatch(/Members<span[^>]*>3<\/span>/);
+    expect(visible).not.toContain("3 members"); // the stat card and tab count say it once
     // Catalogs and Models are one "Model access" tab (catalogs still counted in the stat card).
     expect(html).toContain(">Models<");
     expect(html).not.toMatch(/>Catalogs<span/);
@@ -124,6 +127,7 @@ describe("Grounded-style people pages", () => {
     ] }]], client), visible = text(html);
     // Admin never reads keys: a shared workspace's key is named by its team.
     expect(visible).toContain("API key in Product"); expect(visible).toContain("Enabled API key");
+    expect(visible).not.toContain("API key in Product API key"); // the type isn't repeated under it
     for (const label of ["alex@demo.invalid", "Changed workspace", "Product", "System", "Seeded the demo", "API key", "gpt-6-luna on OpenAI", "Price v1 for gpt-6-luna on OpenAI", "Added model", "Assigned model"]) expect(visible).toContain(label);
     // The event code is a tooltip, not a second line under every row.
     expect(visible).not.toContain("workspace.updated"); expect(html).toContain('title="workspace.updated"');
@@ -198,7 +202,7 @@ describe("user role, grant removal and activity", () => {
       [`/api/v1/platform/cost-report?start_date=${range.start_date}&end_date=${range.end_date}&actor_user_id=${uid}`, usage],
     ], client), visible = text(html);
     expect(html).toMatch(/Activity/);
-    for (const label of ["Recent actions", "Sign-in events", "When", "Action", "Target", "Team or project", "Changed workspace", "workspace.updated", "Product", "Usage (last 30 days)", "Personal workspace (private)", "Totals only", "Upstream attempts"]) expect(visible).toContain(label);
+    for (const label of ["Recent actions", "Sign-in events", "When", "Action", "Target", "Team or project", "Changed workspace", "workspace.updated", "Product", "Usage (last 30 days)", "Personal workspace (private)", "Totals only", "Requests", "On hold"]) expect(visible).toContain(label);
     expect(visible).not.toContain("Alex private sandbox");
     expect(html).not.toContain(personalId);
     expect(visible).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
@@ -206,6 +210,16 @@ describe("user role, grant removal and activity", () => {
     expect(html).not.toMatch(/>Personal</); // no personal kind badge or name
     expect(client.getQueryCache().getAll().map(q => String(q.queryKey[2]))).not.toContainEqual(expect.stringMatching(/\/keys|\/executions|\/costs\b|\/usage/));
     client.clear();
+  });
+  it("says no changes, not 'no results', when the default sign-in filter leaves Activity empty", () => {
+    const path = `/api/v1/platform/users/${uid}`, range = last30Days();
+    const visible = text(markup(<UserDetail session={auditor} id={uid} tab="activity" onTabChange={noop} />, [
+      [path, { ...alex, shared_memberships: [] }],
+      [`/api/v1/platform/audit?actor_user_id=${uid}&limit=50&offset=0&hide_sign_ins=true`, { data: [], has_more: false }],
+      [`/api/v1/platform/cost-report?start_date=${range.start_date}&end_date=${range.end_date}&actor_user_id=${uid}`, report],
+    ]));
+    expect(visible).toContain("No changes recorded.");
+    expect(visible).not.toContain("No results match these filters");
   });
   it("aggregates every non-shared workspace into one private total", () => {
     const t = (n: string) => ({ known_cost_microusd: n, held_microusd: "1", attempts: n, root_requests: n, unresolved_attempts: "0" });

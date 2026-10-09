@@ -72,7 +72,7 @@ const keep = (list: FacetOption[], current: string | undefined, fallback: string
 /** Facets behind "More filters" (Records' Cost state stays inline: it's that tab's own question). */
 export const moreFacetIds = ["model", "key", "member", "status", "cost_center", "service_account"];
 
-export function UsageFilterBar({ options, ctx, nav, records = false, start, extraChips, extraActive }: { options: FilterOptions; ctx: UsageContext; nav: UsageNav; records?: boolean; /** Leading controls: Period, then Admin's workspace scope. */ start?: ReactNode; extraChips?: ToolbarChip[]; extraActive?: number }) {
+export function UsageFilterBar({ options, ctx, nav, records = false, start, end, extraChips, extraActive }: { options: FilterOptions; ctx: UsageContext; nav: UsageNav; records?: boolean; /** Leading controls: Period, then Admin's workspace scope. */ start?: ReactNode; /** Page actions at the right end of the row (e.g. By workspace's Columns). */ end?: ReactNode; extraChips?: ToolbarChip[]; extraActive?: number }) {
   const s = nav.search, f = usageFilters(s, ctx);
   const facets: Facet[] = [
     { id: "model", label: "Model", type: "select", placeholder: "All models", options: keep(options.models, f.model_id, "Selected model") },
@@ -91,5 +91,5 @@ export function UsageFilterBar({ options, ctx, nav, records = false, start, extr
     if (records) patch.cost_status = first(next.cost) as RecordStatus | undefined;
     nav.navigate(patch);
   };
-  return <FilterToolbar facets={facets} values={value} onChange={change} start={start} extraChips={extraChips} extraActive={extraActive} more={moreFacetIds} />;
+  return <FilterToolbar facets={facets} values={value} onChange={change} start={start} end={end} extraChips={extraChips} extraActive={extraActive} more={moreFacetIds} />;
 }

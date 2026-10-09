@@ -20,20 +20,19 @@ import { api, platformPath, type Session } from "../../lib/api";
 import type { Policy } from "../../lib/governance";
 import { draftErrors, draftLimits, draftOf, hasErrors, limitsBody, limitsOf, limitsSaveError, sameDraft, type LimitsDraft } from "../../lib/limits";
 import { Button, ErrorNotice, Stack, useApi } from "../../components/ui";
-import { NavigationGuard } from "../../components/navigation-guard";
+import { DiscardChangesDialog, NavigationGuard } from "../../components/navigation-guard";
 import { ResourcePage } from "../../components/resource-page";
 import { LimitsTable } from "../../components/scope-limits";
 import { Card } from "../../components/ui/card/card";
-import { AlertDialog } from "../../components/ui/dialog/dialog";
 import { StickySaveBar } from "../../components/templates/sticky-save-bar";
 import { toast } from "../../components/ui/toast/toast";
 import s from "../shared.module.css";
 
 export const limitScopes = [
-  { id: "installation", label: "Installation ceiling", description: "An extra limit shared by every workspace together, on top of everything else. It isn't a default.", path: `${platformPath}/installation/policy` },
-  { id: "personal", label: "Personal default", description: "Applies to each personal workspace on its own, unless a Platform Admin overrides it.", path: `${platformPath}/workspace-types/personal/policy` },
-  { id: "team", label: "Team default", description: "Applies to each team on its own, unless the team has an override.", path: `${platformPath}/workspace-types/team/policy` },
-  { id: "project", label: "Project default", description: "Applies to each project on its own, unless the project has an override.", path: `${platformPath}/workspace-types/project/policy` },
+  { id: "installation", label: "Installation ceiling", description: "Shared by all workspaces together, on top of everything else.", path: `${platformPath}/installation/policy` },
+  { id: "personal", label: "Personal default", description: "Each personal workspace, unless overridden.", path: `${platformPath}/workspace-types/personal/policy` },
+  { id: "team", label: "Team default", description: "Each team, unless overridden.", path: `${platformPath}/workspace-types/team/policy` },
+  { id: "project", label: "Project default", description: "Each project, unless overridden.", path: `${platformPath}/workspace-types/project/policy` },
 ] as const;
 export type LimitScopeId = typeof limitScopes[number]["id"];
 /** The tab in the URL, or the first (installation) for anything else. */
@@ -50,11 +49,11 @@ export function PlatformLimits({ session, tab, onTabChange }: { session: Session
   const changeTab = (next: string) => { if (next === current) return; if (dirty) { setPending(next); return; } go(next); };
   const confirmSwitch = () => { if (!pending) return; switching.current = true; setDirty(false); setPending(undefined); go(pending); };
   return <>
-    <ResourcePage title="Defaults & limits" description="Defaults apply to each workspace on its own, unless it has an override. The installation ceiling is shared by all of them. Every limit that applies is enforced: the lowest wins."
+    <ResourcePage title="Defaults & limits" description="Every limit that applies is enforced; the lowest wins."
       tab={current} onTabChange={changeTab}
       tabs={limitScopes.map(scope => ({ value: scope.id, label: scope.label, content: <ScopeTab key={scope.id} scope={scope} writable={session.capabilities.platform_write} onDirtyChange={setDirty} /> }))} />
-    <AlertDialog open={pending !== undefined} onOpenChange={open => { if (!open) setPending(undefined); }} title="Switch tabs without saving?"
-      description={`Unsaved changes to ${limitScopes.find(scope => scope.id === current)!.label} will be discarded.`} confirmLabel="Discard and switch" cancelLabel="Keep editing" onConfirm={confirmSwitch} />
+    <DiscardChangesDialog open={pending !== undefined} onOpenChange={open => { if (!open) setPending(undefined); }}
+      description={`Your changes to ${limitScopes.find(scope => scope.id === current)!.label} haven't been saved.`} onDiscard={confirmSwitch} />
     {/* Leaving the page (not a confirmed tab switch) is guarded by the router. */}
     {session.capabilities.platform_write && <NavigationGuard dirty={dirty} allow={() => switching.current} />}
   </>;

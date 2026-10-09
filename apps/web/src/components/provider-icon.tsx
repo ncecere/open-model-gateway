@@ -216,13 +216,21 @@ export function IconCell({ icon, children }: { icon: ReactNode; children: ReactN
   return <span className={st.cell}>{icon}<span className={st.cellText}>{children}</span></span>;
 }
 
-/** Header meta: the connection profile's logo and name. */
-export function ProviderBadge({ profile, label }: { profile: string; label: string }) {
-  return <Badge variant="outline" className={st.badge}><ProviderIcon profile={profile} size="sm" />{label}</Badge>;
+/**
+ * A record page's title with its logo on the left, like the list rows (ui-principles 11). The logo is decorative;
+ * the heading's accessible name stays the title text.
+ */
+export function TitleWithIcon({ icon, children }: { icon: ReactNode; children: ReactNode }) {
+  return <span className={st.title} data-title-icon="">{icon}<span className={st.text}>{children}</span></span>;
 }
 
-/** Header meta: the model's lab, or nothing when it cannot be inferred. */
-export function LabBadge({ model }: { model: (string | null | undefined)[] }) {
+/** Header meta: the connection profile's name, with its logo unless the title already shows it (`icon={false}`). */
+export function ProviderBadge({ profile, label, icon = true }: { profile: string; label: string; icon?: boolean }) {
+  return <Badge variant="outline" className={st.badge}>{icon && <ProviderIcon profile={profile} size="sm" />}{label}</Badge>;
+}
+
+/** Header meta: the model's lab, or nothing when it cannot be inferred; `icon={false}` when the title already shows the logo. */
+export function LabBadge({ model, icon = true }: { model: (string | null | undefined)[]; icon?: boolean }) {
   const found = inferLabFrom(model);
-  return found ? <Badge variant="outline" className={st.badge}><BrandIcon brand={found.icon} size="sm" />{found.label}</Badge> : null;
+  return found ? <Badge variant="outline" className={st.badge}>{icon && <BrandIcon brand={found.icon} size="sm" />}{found.label}</Badge> : null;
 }

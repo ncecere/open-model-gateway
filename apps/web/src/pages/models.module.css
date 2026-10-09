@@ -8,26 +8,12 @@
   min-width: 0;
 }
 
-.sort {
-  width: 11rem;
-  max-width: 100%;
-
-  @media (max-width: 40rem) {
-    width: 100%;
-  }
-}
-
-/* "14 models" above the results (known counts only). */
-.summary {
-  margin: 0 0 calc(-1 * var(--space-2));
-  font-size: var(--font-size-sm);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  color: var(--color-text-muted);
-}
-
-/* List view: one bordered card per model. */
-.cards {
+/*
+ * List view: compact two-line rows (Grounded's models list). Columns: name +
+ * mono API name | type | status | price | connection or eligibility | action.
+ * No descriptions or sentences in rows; the why is each badge's tooltip.
+ */
+.rows {
   display: flex;
   flex-direction: column;
   margin: 0;
@@ -39,87 +25,106 @@
   overflow: hidden;
 }
 
-.card {
-  display: flex;
-  gap: var(--space-3);
-  padding: var(--space-4);
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 2.2fr) 9.5rem 8.5rem minmax(0, 1.5fr) minmax(0, 1.3fr) 4.5rem;
+  align-items: center;
+  gap: var(--space-4);
+  min-height: 3.75rem;
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--font-size-sm);
 
   & + & {
     border-top: 1px solid var(--color-border-muted);
   }
 }
 
-.cardIcon {
-  flex: none;
-  padding-top: 0.125rem;
+/* Admin rows: the connection column gets more room than the price (long connection names wrap, not truncate). */
+.adminRow {
+  grid-template-columns: minmax(0, 2fr) 9.5rem 8.5rem minmax(0, 1.3fr) minmax(0, 1.7fr) 4.5rem;
 }
 
-.cardBody {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
+.rowName,
+.rowPrice,
+.rowSource {
   min-width: 0;
-  flex: 1;
 }
 
-.cardTitle {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-  margin: 0;
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-}
-
-.cardActions {
-  flex: none;
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-2);
-}
-
-.description {
+/* A connection name: wraps to at most two lines; the full list is the tooltip. */
+.sourceWrap {
   display: -webkit-box;
-  margin: 0;
   overflow: hidden;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   line-clamp: 2;
 }
 
-.meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-1) var(--space-3);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
+.rowLink {
+  font-weight: var(--font-weight-medium);
+}
 
-  & > li + li::before {
-    content: "|";
-    margin-right: var(--space-3);
-    color: var(--color-border);
+.rowId {
+  display: block;
+  overflow: hidden;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+}
+
+.rowType,
+.rowStatus {
+  display: flex;
+  min-width: 0;
+}
+
+.price {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.rowActions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Tablet and phone: name and action on the first line, the rest wraps under it. */
+@media (max-width: 60rem) {
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-3);
+  }
+
+  .rowName {
+    flex: 1 1 calc(100% - 5rem);
+  }
+
+  .rowActions {
+    order: 1;
+    flex: none;
+  }
+
+  .rowType,
+  .rowStatus,
+  .rowPrice,
+  .rowSource {
+    order: 2;
+  }
+
+  .rowPrice,
+  .rowSource {
+    flex: 0 1 auto;
   }
 }
 
 .unknown {
   color: var(--color-warning-text);
-}
-
-@media (max-width: 37.5rem) {
-  .card {
-    flex-wrap: wrap;
-  }
-
-  .cardActions {
-    width: 100%;
-  }
 }
 
 /* Model and route pages. */

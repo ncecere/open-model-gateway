@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from "react";
-import { Bot, Boxes, Gauge, LayoutDashboard, Library, ScrollText, Settings2, UsersRound } from "lucide-react";
+import { Bot, Boxes, Gauge, LayoutDashboard, Library, ScrollText, Settings2, ShieldCheck, UsersRound } from "lucide-react";
 import { api, wsPath, platformWorkspacePath, type Session, type Workspace, type CostCenter, type CatalogAvailability, type Grant } from "../lib/api";
 import { ResourcePage } from "../components/resource-page";
 import { DateTime, ErrorNotice, Panel, Stack, Alert, StatCard, useApi, useChoices, Button, useAction } from "../components/ui";
@@ -10,7 +10,8 @@ import { ActionMenu } from "../components/templates/action-menu";
 import { RoleBadge, WorkspaceStatusBadge, copyIdAction } from "../components/people";
 import { Badge } from "../components/ui/badge/badge";
 import { Card } from "../components/ui/card/card";
-import { DescriptionList, FactsLine } from "../components/ui/description-list/description-list";
+import { DescriptionList } from "../components/ui/description-list/description-list";
+import { DangerAction, DangerZone } from "../components/templates/notices";
 import { WorkspaceMembers, ServiceAccounts } from "./workspace";
 import { AuditHistory } from "./organization";
 import { EffectiveLimits } from "./workspace-limits";
@@ -25,15 +26,17 @@ import type { Scope } from "./workspace";
 import s from "./shared.module.css";
 /*
  * Settings (Workspace portal). Team/Project: General, Members, Service accounts
- * (admins), Limits, Audit log. Personal: Limits (read-only, set by the
- * platform) and Audit log; its name is fixed and it has no General tab.
+ * (admins), Limits, Access, Audit log. Personal: Limits (read-only, set by the
+ * platform), Access and Audit log; its name is fixed and it has no General tab.
+ * Access (effective access: why a model can't be used, layers collapsed) is its
+ * own tab so Limits stays a short table.
  * API keys and Usage & costs are pages of their own, not settings tabs
  * (their old ?tab= links redirect; lib/locations.ts). Members see read-only
  * Members, Limits and Audit log.
  */
 export function workspaceSettingsTabs(session: Session, workspace: Workspace): string[] {
-  if (workspace.kind === "personal") return ["limits", "audit"];
-  return ["overview", "members", ...(permissions(session, workspace).manageServiceAccounts ? ["service-accounts"] : []), "limits", "audit"];
+  if (workspace.kind === "personal") return ["limits", "access", "audit"];
+  return ["overview", "members", ...(permissions(session, workspace).manageServiceAccounts ? ["service-accounts"] : []), "limits", "access", "audit"];
 }
 export function WorkspaceSettings({ session, workspace, tab, onTabChange }: Scope & { tab?: string; onTabChange: (tab: string) => void }) {
   const personal = workspace.kind === "personal", editLimits = !personal && permissions(session, workspace).managePolicy;
@@ -43,11 +46,12 @@ export function WorkspaceSettings({ session, workspace, tab, onTabChange }: Scop
     members: { label: "Members", icon: <UsersRound aria-hidden />, content: <WorkspaceMembers session={session} workspace={workspace} /> },
     "service-accounts": { label: "Service accounts", icon: <Bot aria-hidden />, content: <ServiceAccounts session={session} workspace={workspace} /> },
     limits: { label: "Limits", icon: <Gauge aria-hidden />, content: editLimits ? <Governance session={session} workspace={workspace} /> : <EffectiveLimits workspace={workspace} /> },
+    access: { label: "Access", icon: <ShieldCheck aria-hidden />, content: <EffectiveAccess workspace={workspace} title="Access" canManageModels={permissions(session, workspace).manageGrants} /> },
     audit: { label: "Audit log", icon: <ScrollText aria-hidden />, content: <AuditHistory session={session} workspace={workspace} /> },
   };
   // Invitations now live in Members.
   const current = tab === "invitations" ? "members" : tab;
-  return <ResourcePage title="Settings" description={personal ? "Your personal workspace can't be shared. Platform admins can see its cost totals, but never its keys or requests." : `Name, members, ${permissions(session, workspace).manageServiceAccounts ? "service accounts, " : ""}limits and audit log for ${workspace.name}.`} tab={current} onTabChange={onTabChange} tabs={workspaceSettingsTabs(session, workspace).map(value => ({ value, ...content[value]! }))} />;
+  return <ResourcePage title="Settings" description={personal ? "Private to you. Admins see cost totals only." : `Members, limits and access for ${workspace.name}.`} tab={current} onTabChange={onTabChange} tabs={workspaceSettingsTabs(session, workspace).map(value => ({ value, ...content[value]! }))} />;
 }
 function WorkspaceGeneral({ session, workspace }: Scope) {
   const rename = canRenameWorkspace(workspace);
@@ -55,7 +59,7 @@ function WorkspaceGeneral({ session, workspace }: Scope) {
   const detail = useApi<Workspace>(wsPath(workspace.id)), center = detail.data?.cost_center;
   const centerText = detail.isPending ? "Loading…" : detail.isError ? "Unknown · couldn't load" : center ? `${center.name} · ${center.code} · set by a Platform Admin` : detail.data?.cost_center_id ? "Assigned · set by a Platform Admin" : "None · set by a Platform Admin";
   return <Stack gap={6}>
-    <Card title="About this workspace" description="Shared with the people in Members. Being in another team or project doesn't give access.">
+    <Card title="About this workspace">
       <DescriptionList items={[
         { label: "Type", value: kindLabels[workspace.kind] },
         { label: "Your role", value: <RoleBadge role={workspace.role} /> },
@@ -64,7 +68,7 @@ function WorkspaceGeneral({ session, workspace }: Scope) {
         ...(rename ? [] : [{ label: "Name", value: workspace.name }]),
       ]} />
     </Card>
-    {rename && <Panel title="Name"><SettingsForm fields={[{ ...nameField, value: workspace.name }]} writable onSave={(v, signal) => api(wsPath(workspace.id), { method: "PATCH", body: { name: v.name }, signal })} /></Panel>}
+    {rename && <Panel title="Rename"><SettingsForm fields={[{ ...nameField, value: workspace.name }]} writable onSave={(v, signal) => api(wsPath(workspace.id), { method: "PATCH", body: { name: v.name }, signal })} /></Panel>}
     {session.capabilities.platform_read && <p className={s.note}>You can also manage this {kindLabels[workspace.kind].toLowerCase()} from <ResourceLink search={{ page: "workspace-detail", record: workspace.id, kind: workspace.kind }}>Admin</ResourceLink>.</p>}
   </Stack>;
 }
@@ -90,27 +94,30 @@ export function WorkspaceDetail({ session, id, kind, tab, onTabChange }: { sessi
   const disabled = !!q.data.disabled_at, writable = session.capabilities.platform_write && !disabled;
   const readSession: Session = disabled ? { ...session, capabilities: { ...session.capabilities, platform_write: false } } : session;
   const workspace: Workspace = { ...q.data, owner_user_id: null, role: mine?.role ?? null, membership_source: mine?.membership_source ?? null, capabilities: { issue_own_key: false, manage_members: writable, manage_service_accounts: writable, manage_policy: writable, delegate_models: writable, view_all_activity: writable } };
-  const data = q.data, noun = kindLabels[workspace.kind], members = data.member_count, center = data.cost_center, centerName = center ? center.name : workspace.cost_center_id ? "Cost center assigned" : "Unallocated";
-  const toggle = () => ask({ title: `${workspace.disabled_at ? "Enable" : "Disable"} ${workspace.name}?`, description: workspace.disabled_at ? "Revoked credentials do not reactivate. Issue new keys after enabling." : "Disables new inference and revokes workspace keys. Historical accounting is retained.", danger: !workspace.disabled_at, submitLabel: workspace.disabled_at ? "Enable workspace" : "Disable workspace", run: (_, signal) => api(platformWorkspacePath(id), { method: "PATCH", body: { disabled: !workspace.disabled_at }, signal }) });
+  const data = q.data, noun = kindLabels[workspace.kind], members = data.member_count, center = data.cost_center;
+  const toggle = () => ask({ title: `${workspace.disabled_at ? "Enable" : "Disable"} ${workspace.name}?`, description: workspace.disabled_at ? "Revoked keys don't come back; issue new ones after enabling." : "Refuses new requests and revokes its keys. Past usage is kept.", danger: !workspace.disabled_at, submitLabel: workspace.disabled_at ? "Enable workspace" : "Disable workspace", run: (_, signal) => api(platformWorkspacePath(id), { method: "PATCH", body: { disabled: !workspace.disabled_at }, signal }) });
   // Admin is read-only for Auditors even if an independent membership authorizes
   // workspace-mode administration. Member/private operations stay in Workspace.
-  return <ResourcePage title={workspace.name} meta={<WorkspaceStatusBadge disabled={!!workspace.disabled_at} />}
-    facts={<FactsLine items={[{ label: "Type", value: <Badge size="sm">{noun}</Badge> }, ...(members === undefined ? [] : [{ label: "Members", value: `${members} ${members === 1 ? "member" : "members"}` }]), { label: "Cost center", value: centerName }]} />}
+  // Each fact once: kind and status in the header, members and cost center in the stat cards (tab counts repeat nothing new).
+  return <ResourcePage title={workspace.name} meta={<><Badge size="sm">{noun}</Badge><WorkspaceStatusBadge disabled={!!workspace.disabled_at} /></>}
     actions={<ActionMenu label="More actions" size="md" actions={[{ label: "Open workspace", hidden: !mine?.role || disabled, render: <ResourceLink search={{ page: "overview", ws: id }} /> }, { label: "Enable workspace…", hidden: !session.capabilities.platform_write || !disabled, onSelect: toggle }, copyIdAction(id), { label: "Disable workspace…", danger: true, hidden: !writable || !!workspace.disabled_at, onSelect: toggle }]} />}
-    notices={disabled && <Alert tone="warning" title="Disabled">New inference is refused and workspace keys were revoked. Enabling does not restore revoked keys. Settings below are read-only until the {noun.toLowerCase()} is enabled.</Alert>}
+    notices={disabled && <Alert tone="warning" title="Disabled">Requests are refused and keys were revoked; enabling doesn't restore them. Read-only until enabled.</Alert>}
     tab={legacyTab ? "model-access" : tab} onTabChange={onTabChange} tabs={[
       { value: "overview", label: "Overview", icon: <LayoutDashboard aria-hidden />, content: <Stack gap={6}>
         <div className={s.stats}>
           <StatCard label="Members" value={members ?? "—"} icon={<UsersRound />} hint={mine?.role ? <>You are <RoleBadge role={mine.role} /></> : "Users holding an active grant"} />
           <StatCard label="Available catalogs" value={catalogs.data ? catalogs.data.effective_catalog_ids.length : "—"} icon={<Library />} hint={catalogs.data ? catalogs.data.mode === "inherit" ? `Uses ${noun.toLowerCase()} defaults` : "Own catalog choice" : catalogs.isError ? "Unavailable" : undefined} />
           {modelsVisible && <StatCard label="Models available" value={models.data ? models.data.length : "—"} icon={<Boxes />} hint={models.data ? `${models.data.filter(g => g.direct_granted).length} assigned directly` : models.isError ? "Unavailable" : undefined} />}
-          <StatCard label="Cost center" value={center?.code ?? (workspace.cost_center_id ? "Assigned" : "None")} hint={center ? center.name : workspace.cost_center_id ? "Name unavailable" : "Future usage is unallocated"} />
+          <StatCard label="Cost center" value={center?.code ?? (workspace.cost_center_id ? "Assigned" : "Unallocated")} hint={center ? center.name : workspace.cost_center_id ? "Name unavailable" : "Applies to new requests"} />
         </div>
-        <Card title="Details"><DescriptionList items={[{ label: "Kind", value: noun }, { label: "Status", value: <WorkspaceStatusBadge disabled={!!workspace.disabled_at} /> }, { label: "Cost center", value: center ? `${center.name} · ${center.code}` : centerName }, { label: "Your membership", value: mine?.role ? <RoleBadge role={mine.role} /> : <span className={s.muted}>None · platform metadata access only</span> }, { label: "Created", value: <DateTime value={workspace.created_at} /> }]} /></Card>
+        <Card title="Details"><DescriptionList items={[...(mine?.role ? [] : [{ label: "Your membership", value: <span className={s.muted}>None</span> }]), { label: "Created", value: <DateTime value={workspace.created_at} /> }]} /></Card>
       </Stack> },
       { value: "members", label: "Members", icon: <UsersRound aria-hidden />, count: members, content: <WorkspaceMembers session={readSession} workspace={workspace} platform /> },
       { value: "model-access", label: "Models", icon: <Boxes aria-hidden />, count: modelsVisible ? models.data?.length : undefined, content: <WorkspaceModelAccess session={session} workspace={workspace} /> },
-      { value: "limits", label: "Limits", icon: <Gauge aria-hidden />, content: <Stack gap={6}><ScopeLimits mode="replacement" path={`${platformWorkspacePath(id)}/policy`} writable={writable} kind={workspace.kind} /><EffectiveAccess workspace={workspace} /></Stack> },
-      { value: "settings", label: "General", icon: <Settings2 aria-hidden />, content: <Stack gap={6}><Panel title="Administrative settings"><SettingsForm fields={[{ ...nameField, value: workspace.name }, { name: "cost_center_id", label: "Cost center", type: "select", value: workspace.cost_center_id ?? "", options: centers.data?.filter(c => !c.archived_at).map(c => ({ value: c.id, label: `${c.name} · ${c.code}` })) ?? [], help: "Applies to new requests; past usage keeps its label. Leave empty for \"Unallocated\"." }]} writable={writable && centers.isSuccess} onSave={(v, signal) => api(platformWorkspacePath(id), { method: "PATCH", body: { name: v.name, cost_center_id: v.cost_center_id || null }, signal })} />{centers.isError && <ErrorNotice error={centers.error} />}</Panel>{session.capabilities.platform_write && <Panel title="Danger zone"><Button variant="secondary" onClick={toggle}>{workspace.disabled_at ? "Enable workspace" : "Disable workspace"}</Button></Panel>}</Stack> },
+      { value: "limits", label: "Limits", icon: <Gauge aria-hidden />, content: <ScopeLimits mode="replacement" path={`${platformWorkspacePath(id)}/policy`} writable={writable} kind={workspace.kind} /> },
+      { value: "access", label: "Access", icon: <ShieldCheck aria-hidden />, content: <EffectiveAccess workspace={workspace} title="Access" /> },
+      { value: "settings", label: "General", icon: <Settings2 aria-hidden />, content: <Stack gap={6}><Panel title="Administrative settings"><SettingsForm fields={[{ ...nameField, value: workspace.name }, { name: "cost_center_id", label: "Cost center", type: "select", value: workspace.cost_center_id ?? "", options: centers.data?.filter(c => !c.archived_at).map(c => ({ value: c.id, label: `${c.name} · ${c.code}` })) ?? [], help: "Applies to new requests only. Empty: Unallocated." }]} writable={writable && centers.isSuccess} onSave={(v, signal) => api(platformWorkspacePath(id), { method: "PATCH", body: { name: v.name, cost_center_id: v.cost_center_id || null }, signal })} />{centers.isError && <ErrorNotice error={centers.error} />}</Panel>{session.capabilities.platform_write && (disabled
+        ? <Panel title="Disabled"><Button variant="secondary" onClick={toggle}>Enable workspace</Button></Panel>
+        : <DangerZone><DangerAction title={`Disable ${noun.toLowerCase()}`} description="Refuses new requests and revokes its keys. Enabling later doesn't restore them." action={<Button variant="danger" onClick={toggle}>Disable workspace</Button>} /></DangerZone>)}</Stack> },
     ]} />;
 }

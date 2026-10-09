@@ -4,9 +4,10 @@ import { cssPercent, formatShare, shareBasisPoints } from "../../components/temp
  * Usage & costs › Overview, calm Grounded-style layout: three tiles (Spend,
  * Requests, Tokens; Δ only when the previous period has data), one compact
  * Budgets row when budgets exist, the daily chart (or a one-line note), top-5
- * lists as compact tables, the collapsed accounting details and a muted footer
- * ("Estimates from configured prices, not invoices · updated …").
- * Cache hit rate and cost per 1M tokens live in Explore and Accounting details.
+ * lists as compact tables, the compact Accounting card (workspace admins and
+ * platform readers only) and a muted footer ("Estimates from configured
+ * prices, not invoices · updated …").
+ * Cache hit rate and cost per 1M tokens live in Explore and Accounting.
  * Each tile opens its routed chart page.
  */
 import { useId, type ReactElement, type ReactNode } from "react";
@@ -16,7 +17,8 @@ import { formatMicroUsd } from "../../lib/governance";
 import type { DashboardSearch } from "../../lib/permissions";
 import { countLabel, formatCount } from "../../lib/reports";
 import { activeDays, chartLabeler, chartNumber, filterCount, formatMetric, longDate, metricInfo, resetsAt, shortDate, tileDelta, usageFilters, usageQuery, visibleBudgets, type BudgetSpan, type Tile, type TopRow, type UsageBudgetWindow, type UsageContext, type UsageOverview, type UsagePeriod } from "../../lib/usage";
-import { ErrorNotice, Stack, useApi } from "../../components/ui";
+import { Button, ErrorNotice, Stack, useApi } from "../../components/ui";
+import { ArrowRight } from "lucide-react";
 import { ResourceLink } from "../../components/navigation-link";
 import { StatTile, StatTileGrid } from "../../components/templates/stat-tile";
 import { UsageBar } from "../../components/templates/usage-bar";
@@ -25,7 +27,8 @@ import { BarChart } from "../../components/ui/bar-chart/bar-chart";
 import { EmptyState } from "../../components/ui/empty-state/empty-state";
 import { Table, Td, Th, Tr } from "../../components/ui/table/table";
 import { ToggleGroup, ToggleGroupItem } from "../../components/ui/toggle-group/toggle-group";
-import { AccountingDetails } from "./accounting";
+import { AccountingSection } from "./accounting";
+import { isAdmin } from "../../lib/permissions";
 import type { UsageNav } from "./shared";
 import u from "./usage.module.css";
 
@@ -40,7 +43,9 @@ const labels = (metric: OverviewMetric, t: Tile) => chartLabeler(metric, t.daily
 /** How many top rows the overview lists; the rest are in Explore. */
 export const TOP_ROWS = 5;
 
-export function UsageOverviewTab({ workspace, ctx, period, nav, workspaceFilter }: { workspace?: Workspace; ctx: UsageContext; period: UsagePeriod; nav: UsageNav; workspaceFilter?: string }) {
+/** Who sees Accounting by default: workspace admins (and every Admin-portal viewer, who are platform readers). */
+export const showsAccounting = (workspace?: Workspace) => !workspace || isAdmin(workspace.role) || workspace.capabilities.view_all_activity;
+export function UsageOverviewTab({ workspace, ctx, period, nav, workspaceFilter, accounting = showsAccounting(workspace) }: { workspace?: Workspace; ctx: UsageContext; period: UsagePeriod; nav: UsageNav; workspaceFilter?: string; /** Show the Accounting card (roles that act on it); plain members see only tiles and charts. */ accounting?: boolean }) {
   const base = workspace ? wsPath(workspace.id) : platformPath, filters = usageFilters(nav.search, ctx), filtered = filterCount(filters) > 0;
   const q = useApi<UsageOverview>(`${base}/usage/overview?${usageQuery(period, workspaceFilter, filters)}`);
   if (q.isPending) return <p role="status">Loading usage…</p>;
@@ -54,12 +59,12 @@ export function UsageOverviewTab({ workspace, ctx, period, nav, workspaceFilter 
   const accountingPath = `${base}/cost-report?${usageQuery(period, workspaceFilter)}&compare=none`;
   return <Stack gap={6}>
     <Stack gap={3}>
+      {/* One day of data: the tiles' sparklines say it all (no sentence explaining the missing chart). */}
       <StatTileGrid label="Usage summary" columns={3}>
         <SpendTile overview={o} workspace={workspace} nav={nav} period={period} render={chart("spend")} />
         <StatTile label="Requests" value={t.requests.value == null ? null : formatCount(t.requests.value)} hint={retries > 0n ? `including ${formatCount(retries.toString())} retr${retries === 1n ? "y" : "ies"}` : undefined} series={series("requests", t.requests)} formatSeriesValue={labels("requests", t.requests)} delta={tileDelta(t.requests.value, t.requests.previous, "neutral", period.days)} render={chart("requests")} />
         <StatTile label="Tokens" value={t.tokens.value == null ? null : `${unknownTokens ? "At least " : ""}${formatCount(t.tokens.value)}`} hint={unknownTokens ? `${countLabel(t.tokens.unknown_token_attempts, "request")} didn't report tokens` : t.tokens.input_tokens != null && t.tokens.output_tokens != null ? `${formatCount(t.tokens.input_tokens)} in · ${formatCount(t.tokens.output_tokens)} out` : undefined} series={series("tokens", t.tokens)} formatSeriesValue={labels("tokens", t.tokens)} delta={tileDelta(t.tokens.value, t.tokens.previous, "neutral", period.days)} render={chart("tokens")} />
       </StatTileGrid>
-      {!idle && chartDays === 1 && <p className={u.note}>All activity in this period is on one UTC day, so there is no daily chart yet.</p>}
     </Stack>
     {workspace ? <WorkspaceBudgetRow workspace={workspace} /> : <InstallationBudgetRow budgets={o.installation_budgets} />}
     {idle ? <Card><EmptyState title={filtered ? "No requests match these filters" : "No requests in this period"} titleAs="h2" description={filtered ? "Change or clear the filters to see more." : workspace ? `Requests made with ${workspace.kind === "personal" || !workspace.capabilities.view_all_activity ? "your keys" : `${workspace.name}'s keys`} appear here.` : "Requests made in any workspace appear here."} /></Card> : <>
@@ -71,7 +76,7 @@ export function UsageOverviewTab({ workspace, ctx, period, nav, workspaceFilter 
         {ctx.members && o.top.members !== null && <TopList title="Top members" nameHeader="Member" rows={o.top.members} total={t.spend.value} more={{ ...nav.search, tab: "explore", group: "member", metric: undefined, then: undefined }} empty="No member spent anything yet." open={r => !workspace && r.id ? { page: "user-detail", record: r.id } : undefined} />}
       </div>
     </>}
-    <AccountingDetails path={accountingPath} rates={o} />
+    {accounting && <AccountingSection path={accountingPath} rates={o} unresolved={{ ...nav.search, tab: "records", metric: undefined, offset: undefined }} statusFilter={!!workspace} />}
     <p className={u.footer}>Estimates from configured prices, not invoices{o.observed_at && <> · updated <DetailTime value={o.observed_at} fallback={o.observed_at} /></>}</p>
   </Stack>;
 }
@@ -107,7 +112,8 @@ function DailyChart({ overview, metric, onMetric }: { overview: UsageOverview; m
 /** A top-5 list as one compact table: name (opens the entity where there is a page) with requests, share and a share bar beneath | spend. Two columns fit a one-third-width card. */
 function TopList({ title, nameHeader, rows, total, more, empty, open }: { title: string; nameHeader: string; rows: TopRow[]; total: string | null; more: DashboardSearch; empty: string; open?: (row: TopRow) => DashboardSearch | undefined }) {
   const shown = rows.slice(0, TOP_ROWS);
-  return <Card title={title} titleAs="h2" actions={<ResourceLink search={more}>View all in Explore</ResourceLink>} flush>
+  // A short ghost link in the header, like Overview's "All requests →" (a long underlined link wrapped under the title in a one-third card).
+  return <Card title={title} titleAs="h2" actions={<Button variant="ghost" size="sm" render={<ResourceLink search={more} aria-label="View all in Explore" />}>View all <ArrowRight aria-hidden /></Button>} flush>
     {shown.length === 0 ? <p className={u.cardNote}>{empty}</p> : <Table caption={title} stack className={u.topTable} columns={[nameHeader, { label: "Spend", numeric: true, width: "7.5rem" }]}>
       {shown.map((r, i) => { const name = r.name ?? (r.id === null ? "Service accounts" : "Unknown"), page = open?.(r); return <Tr key={`${r.id ?? "none"}-${i}`}>
         <Th scope="row"><span className={u.topName} title={r.name ?? undefined}>{page ? <ResourceLink search={page}>{name}</ResourceLink> : name}</span><span className={u.topMeta}>{formatCount(r.requests)} {r.requests === "1" ? "request" : "requests"} · {formatShare(r.spend_microusd, total)} of spend</span><span className={u.topTrack} aria-hidden><span className={u.topBar} style={{ "--percent": cssPercent(shareBasisPoints(r.spend_microusd, total)) } as CSSProperties} /></span></Th>

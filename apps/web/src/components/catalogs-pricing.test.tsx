@@ -175,7 +175,7 @@ describe("Pricing lives in the Models table", () => {
     expect(isUnpricedModel(rows[1]!)).toBe(true); expect(isUnpricedModel(rows[0]!)).toBe(false); expect(isUnpricedModel({ readiness: undefined })).toBe(false);
     const html = page({ page: "models", layout: "table", pricing: "unpriced" }, false);
     expect(html).toContain("Bare model"); expect(html).not.toContain("Smart model");
-    expect(html).toContain("Unpriced only"); expect(html).toContain("usage is recorded with unknown cost");
+    expect(html).toContain("More filters (1)"); expect(html).toContain("usage is recorded with unknown cost");
   });
 });
 
@@ -184,9 +184,12 @@ describe("Disabled workspaces: read-only for platform readers", () => {
   const policy = { policy: { requests_per_minute: 10, tokens_per_minute: null, concurrent_requests: null, budgets: [] }, effective: { requests_per_minute: 10, tokens_per_minute: null, concurrent_requests: null, budgets: [] }, mode: "inherit", provenance: { platform_source: "type_default", platform: { requests_per_minute: 10, tokens_per_minute: null, concurrent_requests: null, budgets: [] }, local: { requests_per_minute: null, tokens_per_minute: null, concurrent_requests: null, budgets: [] }, key: null, type_default: { requests_per_minute: 10, tokens_per_minute: null, concurrent_requests: null, budgets: [] } }, budgets: [] };
   const access = { workspace_id: "acc", key_id: null, workspace_disabled: true, truncated: false, summary: { available: 0, partial: 0, unavailable: 1 }, layers: [], models: [{ model_id: "m", public_name: "company/smart", display_name: "Smart model", status: "unavailable", reasons: [{ code: "workspace_disabled", layer: "platform" }] }] };
   const fixtures: [string, unknown][] = [[`${platformPath}/workspaces/acc`, disabled], [`${platformPath}/workspaces/acc/policy`, policy], ["/api/v1/workspaces/acc/access", access], [`${platformPath}/workspaces/acc/catalogs`, { mode: "inherit", catalog_ids: [], effective_catalog_ids: ["approved"] }], [`${platformPath}/workspace-types/project/catalogs`, { kind: "project", catalog_ids: ["approved"] }]];
-  it("Limits shows the banner, read-only limits and effective access, never Not found", () => {
+  it("Limits shows the banner and read-only limits; Access its own tab with effective access, never Not found", () => {
     const html = markup(<WorkspaceDetail session={admin} id="acc" kind="project" tab="limits" onTabChange={vi.fn()} />, fixtures);
-    for (const text of ["Disabled", "read-only until the project is enabled", "Disabled: no models can be used", "Smart model"]) expect(html).toContain(text);
+    for (const text of ["Disabled", "Read-only until enabled"]) expect(html).toContain(text);
+    expect(html).not.toContain("Why can&#x27;t I use this model?"); // effective access is not stacked under limits
+    const access = markup(<WorkspaceDetail session={admin} id="acc" kind="project" tab="access" onTabChange={vi.fn()} />, fixtures);
+    for (const text of ["Disabled: no models can be used", "Smart model", "How limits combine"]) expect(access).toContain(text);
     expect(html).not.toContain("Not found"); expect(html).not.toContain("Save limits"); expect(html).not.toContain("Disable workspace…");
     expect(html).toMatch(/role="radiogroup" aria-disabled="true"/);
   });

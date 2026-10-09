@@ -62,3 +62,13 @@
 .badge {
   gap: 0.375rem;
 }
+
+/* A record page's title with its logo (TitleWithIcon). */
+.title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  max-width: 100%;
+  vertical-align: middle;
+}

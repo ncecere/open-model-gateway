@@ -7,7 +7,7 @@ export const keyRotationDescription = "A new secret replaces this one, and the o
 export function keyModelOptions(grants: Grant[]): Option[] {
   // Use only effective grants, including authorized owner-personal grants. Do
   // not filter disabled models: inference, not this restriction, gates serving.
-  return [...new Map(grants.map((grant) => [grant.model_id, { value: grant.model_id, label: `${grant.display_name} (${grant.public_name})` }])).values()];
+  return [...new Map(grants.map((grant) => [grant.model_id, { value: grant.model_id, label: grant.display_name === grant.public_name ? grant.public_name : `${grant.display_name} (${grant.public_name})` }])).values()];
 }
 export function keyModelFields(options: Option[]): Field[] {
   return [
@@ -30,7 +30,7 @@ export function keyModelSummary(key: Pick<Key, "model_ids">, options: Option[] =
   if (key.model_ids == null) return { label: "All workspace models", models: [] };
   if (!key.model_ids.length) return { label: "No models", models: [] };
   const labels = new Map(options.map((option) => [option.value, option.label]));
-  return { label: `${key.model_ids.length} selected`, models: key.model_ids.map((id) => labels.get(id) ?? id) };
+  return { label: `${key.model_ids.length} model${key.model_ids.length === 1 ? "" : "s"}`, models: key.model_ids.map((id) => labels.get(id) ?? id) };
 }
 /** Create-key model selection: everything in the workspace (null) or 1–200 chosen models. */
 export function selectedModelIds(mode: "inherit" | "selected", selected: string[], options: Option[]): { model_ids: string[] | null } | { error: string } {

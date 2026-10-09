@@ -13,3 +13,9 @@ select[data-size="sm"][data-size] {
 :is(h1, h2)[tabindex="-1"]:focus {
   outline: none;
 }
+
+/* While a sticky save bar is open (StickySaveBar publishes --save-bar-space on
+   <html>), toasts float above it instead of covering its Save/Discard buttons. */
+html[style*="--save-bar-space"] [data-position^="bottom"][aria-label="Notifications"] {
+  bottom: calc(var(--save-bar-space) + var(--space-2));
+}

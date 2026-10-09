@@ -6,7 +6,9 @@ describe("verified browser access denial", () => {
   it("explains lack of access without identity or callback details and allows another sign-in", () => {
     const html = renderToStaticMarkup(<AuthRequired denied refresh={() => {}} />);
     expect(html).toContain("No access yet");
-    expect(html).toContain("Your account doesn&#x27;t have access yet. Ask a platform admin to add you.");
+    expect(html).toContain("Ask a platform admin to add you.");
+    // Said once: the alert, not again in the footer note.
+    expect(html).not.toContain("Signing in alone doesn&#x27;t give access");
     expect(html).not.toContain("entitlement");
     expect(html).toContain('href="/api/v1/auth/login"');
     expect(html).not.toContain("Request verification failed");

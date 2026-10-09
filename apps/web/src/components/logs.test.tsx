@@ -28,9 +28,13 @@ describe("Logs page", () => {
     expect([...doc.querySelectorAll('[role="tab"]')].map(t => t.textContent)).toEqual(["Requests", "Generations", "Sessions"]);
     for (const text of ["12", "10%", "850 ms", "Median · p95 3.2 s", "140 ms", "41.2 tok/s"]) expect(html).toContain(text);
     const table = doc.querySelector("table")!;
-    expect([...table.tHead!.rows[0]!.cells].map(c => c.textContent)).toEqual(["Started", "Model", "Key / app", "Tokens", "Cost", "Latency", "TTFT", "Speed", "Finish", "Status", "Attempts"]);
+    // Streaming telemetry (TTFT, speed) is under Columns by default so rows stay short; the tiles summarize it.
+    expect([...table.tHead!.rows[0]!.cells].map(c => c.textContent)).toEqual(["Started", "Model", "Key / app", "Tokens", "Cost", "Latency", "Finish", "Status", "Attempts"]);
     const cells = [...table.tBodies[0]!.rows[0]!.cells].map(c => c.textContent);
-    expect(cells).toContain("120 ms"); expect(cells).toContain("10 tok/s"); expect(cells).toContain("Length limit"); expect(cells).toContain("CI runnerAgent");
+    expect(cells).toContain("Length limit"); expect(cells).toContain("CI runnerAgent");
+    const all = new DOMParser().parseFromString(markup(nav({ ...search, cols: "none" }, <LogsPage scope={{ kind: "workspace", workspace: team }} />), [[`${ws}/logs/metrics?finish_reason=length&streamed=true`, metrics], [`${ws}/requests?finish_reason=length&streamed=true&limit=50`, { data: [row], next_cursor: null }]]), "text/html");
+    const allCells = [...all.querySelector("table")!.tBodies[0]!.rows[0]!.cells].map(c => c.textContent);
+    expect(allCells).toContain("120 ms"); expect(allCells).toContain("10 tok/s");
     expect(html).toContain('href="/workspaces/team/requests/1a2b3c4d-0000-0000-0000-000000000001?finish_reason=length&amp;streamed=true"');
     expect(html).not.toContain(">Workspace<");
   });
@@ -55,6 +59,7 @@ describe("Session and platform request pages", () => {
     const html = markup(nav({ page: "session-detail", ws: "team", session_id: "conv 7/a" }, <SessionDetailPage session={session} workspace={team} />), [[`${ws}/sessions/conv%207%2Fa`, sessionRow], [`${ws}/requests?session_id=conv+7%2Fa&limit=50`, { data: [row], next_cursor: null }]]);
     for (const text of ["conv 7/a", "At least $0.00002", "$0.000005 on hold", "60 min", "Agent", "Session requests"]) expect(html).toContain(text);
     expect(html).toContain('href="/workspaces/team/logs?tab=sessions"');
+    expect(new DOMParser().parseFromString(html, "text/html").querySelector("h1")?.textContent).toBe("Session conv 7/a");
   });
   it("says a missing session isn't visible", () => {
     expect(markup(nav({ page: "platform-log-session" }, <PlatformSessionDetailPage session={admin} />))).toContain("Session not found");
