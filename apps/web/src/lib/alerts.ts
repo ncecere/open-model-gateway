@@ -7,7 +7,7 @@
 import { API, platformPath, wsPath } from "./api";
 import { dollarsToMicroUsd, formatMicroUsd, microUsdToDollars } from "./governance";
 
-export type AlertKind = "budget_threshold" | "spend_spike" | "error_rate" | "provider_failing";
+export type AlertKind = "budget_threshold" | "spend_spike" | "error_rate" | "provider_failing" | "batch_failed" | "batch_stalled";
 export type BudgetLayer = "installation" | "type" | "override" | "local" | "key";
 export type AlertRule = {
   id: string; scope: "installation" | "workspace"; workspace_id: string | null; kind: AlertKind; name: string; enabled: boolean;
@@ -39,15 +39,17 @@ export const eventsPath = (scope: AlertScope) => `${base(scope)}/events`;
 export const notificationsPath = `${API}/me/notifications`;
 export const notificationSummaryPath = `${notificationsPath}/summary`;
 
-export const kindLabels: Record<AlertKind, string> = { budget_threshold: "Budget", spend_spike: "Spend spike", error_rate: "Error rate", provider_failing: "Failing connection" };
+export const kindLabels: Record<AlertKind, string> = { budget_threshold: "Budget", spend_spike: "Spend spike", error_rate: "Error rate", provider_failing: "Failing connection", batch_failed: "Batch failed", batch_stalled: "Batch stalled" };
 export const kindHints: Record<AlertKind, string> = {
   budget_threshold: "Spend reaches a share of a budget.",
   spend_spike: "Last hour's spend is far above the 7-day hourly average.",
   error_rate: "Too many requests fail.",
   provider_failing: "A connection keeps failing upstream.",
+  batch_failed: "A batch fails or expires.",
+  batch_stalled: "A running batch makes no progress.",
 };
 export const layerLabels: Record<BudgetLayer, string> = { installation: "Installation", type: "Type default", override: "Platform override", local: "Workspace", key: "API keys" };
-export const kindsFor = (scope: AlertScope): AlertKind[] => scope.kind === "platform" ? ["budget_threshold", "spend_spike", "error_rate", "provider_failing"] : ["budget_threshold", "spend_spike", "error_rate"];
+export const kindsFor = (scope: AlertScope): AlertKind[] => scope.kind === "platform" ? ["budget_threshold", "spend_spike", "error_rate", "provider_failing", "batch_failed", "batch_stalled"] : ["budget_threshold", "spend_spike", "error_rate", "batch_failed", "batch_stalled"];
 export const layersFor = (scope: AlertScope): BudgetLayer[] => scope.kind === "platform" ? ["installation", "type", "override", "local", "key"] : ["type", "override", "local", "key"];
 
 export type RuleDraft = {
@@ -57,7 +59,7 @@ export type RuleDraft = {
 };
 export function newDraft(scope: AlertScope, kind: AlertKind = "budget_threshold"): RuleDraft {
   const platform = scope.kind === "platform";
-  return { name: "", kind, enabled: true, layers: platform ? ["installation", "local"] : ["local", "key"], thresholds: "50, 80, 100", factor: "3", minSpend: "1.00", window: "15", rate: kind === "provider_failing" ? "" : "20", minRequests: kind === "provider_failing" ? "" : "20", consecutive: "5", connection: "", notifyWorkspaceAdmins: !platform, notifyPlatformAdmins: platform, emails: "" };
+  return { name: "", kind, enabled: true, layers: platform ? ["installation", "local"] : ["local", "key"], thresholds: "50, 80, 100", factor: "3", minSpend: "1.00", window: kind === "batch_stalled" ? "60" : "15", rate: kind === "provider_failing" ? "" : "20", minRequests: kind === "provider_failing" ? "" : "20", consecutive: "5", connection: "", notifyWorkspaceAdmins: !platform, notifyPlatformAdmins: platform, emails: "" };
 }
 export function draftOf(rule: AlertRule): RuleDraft {
   const scope: AlertScope = rule.workspace_id ? { kind: "workspace", ws: rule.workspace_id } : { kind: "platform" };
@@ -113,6 +115,7 @@ export function ruleErrors(d: RuleDraft): RuleErrors {
     const f = factorToPercent(d.factor); if (typeof f === "string") e.factor = f;
     try { if (BigInt(dollarsToMicroUsd(d.minSpend)) < 1n) e.minSpend = "Enter more than $0.00."; } catch (error) { e.minSpend = (error as Error).message; }
   }
+  if (d.kind === "batch_stalled" && !intIn(d.window, 5, 1440)) e.window = "Enter 5–1440 minutes.";
   if (d.kind === "error_rate" || d.kind === "provider_failing") {
     if (!intIn(d.window, 5, 1440)) e.window = "Enter 5–1440 minutes.";
     const rateSet = !!d.rate.trim() || !!d.minRequests.trim();
@@ -139,6 +142,7 @@ export function ruleBody(d: RuleDraft, scope: AlertScope) {
     body.window_minutes = Number(d.window);
     if (d.kind === "error_rate" || d.rate.trim()) Object.assign(body, { error_rate_percent: Number(d.rate), min_requests: Number(d.minRequests) });
   }
+  if (d.kind === "batch_stalled") body.window_minutes = Number(d.window);
   if (d.kind === "provider_failing") {
     if (d.consecutive.trim()) body.consecutive_failures = Number(d.consecutive);
     if (d.connection) body.provider_connection_id = d.connection;
@@ -156,6 +160,8 @@ export function conditionText(r: Pick<AlertRule, "kind" | "budget_layers" | "thr
       const parts = [r.consecutive_failures ? `${r.consecutive_failures} failures in a row` : "", r.error_rate_percent ? `≥ ${r.error_rate_percent}% failed over ${r.window_minutes} min` : ""].filter(Boolean);
       return `${r.provider_connection?.name ?? "Any connection"}: ${parts.join(" or ")}`;
     }
+    case "batch_failed": return "Any batch fails or expires";
+    case "batch_stalled": return `No progress for ${r.window_minutes} min`;
   }
 }
 export function recipientsText(r: Pick<AlertRule, "notify_workspace_admins" | "notify_platform_admins" | "notify_emails">): string {

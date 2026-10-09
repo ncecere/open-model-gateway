@@ -74,7 +74,7 @@ function ScopeTab({ scope, writable, onDirtyChange }: { scope: typeof limitScope
     if (!form || invalid || busy) return;
     setBusy(true); setError(undefined);
     try {
-      await api(scope.path, { method: "PUT", body: limitsBody(draftLimits(form)) });
+      await api(scope.path, { method: "PUT", body: limitsBody(draftLimits(form), scope.id !== "installation") });
       await client.invalidateQueries({ queryKey: ["api"] });
       setEdits(undefined);
       toast.success("Limits saved", scope.label);
@@ -86,7 +86,7 @@ function ScopeTab({ scope, writable, onDirtyChange }: { scope: typeof limitScope
   return <Stack gap={6}>
     {error !== undefined && <ErrorNotice error={error} />}
     <Card title={scope.label} description={scope.description} flush>
-      <LimitsTable caption={`${scope.label} limits`} scopeLabel={scope.label} draft={form} onChange={setEdits} editing={writable} busy={busy} errors={errors} emptyText="No limit" placeholder={() => "No limit"} />
+      <LimitsTable caption={`${scope.label} limits`} scopeLabel={scope.label} draft={form} onChange={setEdits} editing={writable} busy={busy} errors={errors} emptyText="No limit" placeholder={() => "No limit"} storage={scope.id !== "installation"} />
     </Card>
     <p className={s.note}>Workspace overrides and workspace caps are on each team's and project's page. Raising a limit or changing a budget never resets spending.</p>
     {writable && <StickySaveBar open={changed} message={invalid ? "Not saved: fix the highlighted limits" : `Unsaved changes: ${scope.label}`}><Button variant="secondary" disabled={busy} onClick={() => { setEdits(undefined); setError(undefined); }}>Discard</Button><Button loading={busy} disabled={invalid} onClick={() => void save()}>Save limits</Button></StickySaveBar>}

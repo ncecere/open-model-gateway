@@ -25,6 +25,11 @@ pub(super) struct Policy {
     /// stored value; explicit null clears it (tighten-only rules still apply).
     #[serde(default, deserialize_with = "supplied")]
     concurrent_jobs: Option<Option<i64>>,
+    /// "Storage" quota in bytes (0020): type default, platform override and
+    /// workspace local layers only. Absent keeps the stored value; explicit
+    /// null clears it (tighten-only rules still apply).
+    #[serde(default, deserialize_with = "supplied")]
+    storage_bytes: Option<Option<i64>>,
     /// Deprecated single budget (amount per `budget_period`). Required unless
     /// `budgets` is supplied; then it must be absent.
     #[serde(default, deserialize_with = "supplied")]
@@ -57,17 +62,35 @@ pub(crate) struct Limits {
     pub(crate) concurrent_requests: Option<i64>,
     /// Concurrent active async jobs (video + batch).
     pub(crate) concurrent_jobs: Option<i64>,
+    /// File store quota in bytes (workspace layers only; never installation/key).
+    pub(crate) storage_bytes: Option<i64>,
     pub(crate) budgets: Budgets,
 }
-type Row = (Option<i64>, Option<i64>, Option<i64>, Option<i64>);
+type Row = (
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+);
 const COLS: &str = "requests_per_minute,tokens_per_minute,concurrent_requests,concurrent_jobs";
+/// Largest storage quota (1 PiB); rate limits stay within i32.
+const MAX_STORAGE_BYTES: i64 = 1 << 50;
+/// The storage column of a layer table: real on workspace layers, NULL elsewhere.
+fn storage_col(scope: &Scope) -> &'static str {
+    match scope {
+        Scope::Type(_) | Scope::Override(_) | Scope::Local(_) => "storage_bytes",
+        Scope::Installation | Scope::Key(..) => "NULL::bigint",
+    }
+}
 impl Limits {
-    fn rates(&self) -> [Option<i64>; 4] {
+    fn rates(&self) -> [Option<i64>; 5] {
         [
             self.requests_per_minute,
             self.tokens_per_minute,
             self.concurrent_requests,
             self.concurrent_jobs,
+            self.storage_bytes,
         ]
     }
     /// Deprecated single-budget mirror: the smallest amount (ties prefer the shorter period).
@@ -84,12 +107,13 @@ impl Limits {
     }
 }
 fn rates(row: Option<Row>) -> Limits {
-    let (r, t, c, j) = row.unwrap_or_default();
+    let (r, t, c, j, st) = row.unwrap_or_default();
     Limits {
         requests_per_minute: r,
         tokens_per_minute: t,
         concurrent_requests: c,
         concurrent_jobs: j,
+        storage_bytes: st,
         budgets: Budgets::new(),
     }
 }
@@ -168,6 +192,10 @@ impl Policy {
         .into_iter()
         .flatten()
         .any(|n| !positive_limit(n))
+            || self
+                .storage_bytes
+                .flatten()
+                .is_some_and(|n| !(1..=MAX_STORAGE_BYTES).contains(&n))
         {
             return Err(invalid());
         }
@@ -195,6 +223,7 @@ impl Policy {
             tokens_per_minute: self.tokens_per_minute,
             concurrent_requests: self.concurrent_requests,
             concurrent_jobs: self.concurrent_jobs.unwrap_or(stored.concurrent_jobs),
+            storage_bytes: self.storage_bytes.unwrap_or(stored.storage_bytes),
             budgets,
         })
     }
@@ -208,7 +237,7 @@ pub(crate) fn json_budgets(b: &Budgets) -> Value {
 }
 pub(crate) fn json_limits(l: &Limits) -> Value {
     let legacy = l.legacy();
-    json!({"requests_per_minute":l.requests_per_minute,"tokens_per_minute":l.tokens_per_minute,"concurrent_requests":l.concurrent_requests,"concurrent_jobs":l.concurrent_jobs,"monthly_budget_microusd":legacy.map(|(_,a)|a.to_string()),"budget_period":legacy.map_or("month",|(p,_)|p.as_str()),"budgets":json_budgets(&l.budgets)})
+    json!({"requests_per_minute":l.requests_per_minute,"tokens_per_minute":l.tokens_per_minute,"concurrent_requests":l.concurrent_requests,"concurrent_jobs":l.concurrent_jobs,"storage_bytes":l.storage_bytes,"monthly_budget_microusd":legacy.map(|(_,a)|a.to_string()),"budget_period":legacy.map_or("month",|(p,_)|p.as_str()),"budgets":json_budgets(&l.budgets)})
 }
 /// Rate limits and same-period budgets take the minimum. Budgets of different
 /// periods are all enforced independently.
@@ -231,6 +260,7 @@ pub(crate) fn compose(a: &Limits, b: &Limits) -> Limits {
         tokens_per_minute: min(a.tokens_per_minute, b.tokens_per_minute),
         concurrent_requests: min(a.concurrent_requests, b.concurrent_requests),
         concurrent_jobs: min(a.concurrent_jobs, b.concurrent_jobs),
+        storage_bytes: min(a.storage_bytes, b.storage_bytes),
         budgets,
     }
 }
@@ -247,11 +277,12 @@ pub(crate) fn compose(a: &Limits, b: &Limits) -> Limits {
 /// Rejections carry a stable `error.reason` and the period/limit name, never
 /// an amount (see `POLICY_REASONS`).
 fn validate_tighten(new: &Limits, parents: &[&Limits], old: &Limits) -> Result<(), ApiError> {
-    const RATE_NAMES: [&str; 4] = [
+    const RATE_NAMES: [&str; 5] = [
         "requests_per_minute",
         "tokens_per_minute",
         "concurrent_requests",
         "concurrent_jobs",
+        "storage_bytes",
     ];
     let bad = StatusCode::BAD_REQUEST;
     let forbidden = StatusCode::FORBIDDEN;
@@ -320,6 +351,7 @@ pub(crate) fn initial_key_limits(
         tokens_per_minute,
         concurrent_requests,
         concurrent_jobs,
+        storage_bytes: None,
         budgets,
     };
     Ok((l != Limits::default()).then_some(l))
@@ -377,31 +409,42 @@ async fn get_rates<
     table: &str,
     col: &str,
     id: T,
+    storage: &str,
 ) -> Result<Limits, ApiError> {
     Ok(rates(
-        sqlx::query_as(&format!("SELECT {COLS} FROM {table} WHERE {col}=$1"))
-            .bind(id)
-            .fetch_optional(&mut **tx)
-            .await?,
+        sqlx::query_as(&format!(
+            "SELECT {COLS},{storage} FROM {table} WHERE {col}=$1"
+        ))
+        .bind(id)
+        .fetch_optional(&mut **tx)
+        .await?,
     ))
 }
 async fn get_layer(tx: &mut Transaction<'_, Postgres>, scope: &Scope) -> Result<Limits, ApiError> {
+    let st = storage_col(scope);
     let mut l = match scope {
-        Scope::Installation => get_rates(tx, "installation_policy", "singleton", true).await?,
-        Scope::Type(k) => get_rates(tx, "workspace_type_policies", "kind", k.clone()).await?,
+        Scope::Installation => {
+            get_rates(tx, "installation_policy", "singleton", true, st).await?
+        }
+        Scope::Type(k) => {
+            get_rates(tx, "workspace_type_policies", "kind", k.clone(), st).await?
+        }
         Scope::Override(w) => {
             get_rates(
                 tx,
                 "workspace_platform_policy_overrides",
                 "workspace_id",
                 *w,
+                st,
             )
             .await?
         }
-        Scope::Local(w) => get_rates(tx, "workspace_local_policies", "workspace_id", *w).await?,
+        Scope::Local(w) => {
+            get_rates(tx, "workspace_local_policies", "workspace_id", *w, st).await?
+        }
         Scope::Key(w, k) => rates(
             sqlx::query_as(&format!(
-                "SELECT {COLS} FROM key_policies WHERE workspace_id=$1 AND governance_key_id=$2"
+                "SELECT {COLS},{st} FROM key_policies WHERE workspace_id=$1 AND governance_key_id=$2"
             ))
             .bind(w)
             .bind(k)
@@ -418,9 +461,16 @@ async fn put_layer(
     l: &Limits,
 ) -> Result<(), ApiError> {
     let sets = "requests_per_minute=excluded.requests_per_minute,tokens_per_minute=excluded.tokens_per_minute,concurrent_requests=excluded.concurrent_requests,concurrent_jobs=excluded.concurrent_jobs";
+    // Installation and key layers have no storage column; workspace layers
+    // store it like the other limits.
     let q = |table: &str, col: &str| {
         format!(
             "INSERT INTO {table}({col},{COLS}) VALUES($1,$2,$3,$4,$5) ON CONFLICT({col}) DO UPDATE SET {sets}"
+        )
+    };
+    let qs = |table: &str, col: &str| {
+        format!(
+            "INSERT INTO {table}({col},{COLS},storage_bytes) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT({col}) DO UPDATE SET {sets},storage_bytes=excluded.storage_bytes"
         )
     };
     fn rates<'q>(
@@ -443,25 +493,28 @@ async fn put_layer(
         }
         Scope::Type(k) => {
             rates(
-                sqlx::query(&q("workspace_type_policies", "kind")).bind(k),
+                sqlx::query(&qs("workspace_type_policies", "kind")).bind(k),
                 l,
             )
+            .bind(l.storage_bytes)
             .execute(&mut **tx)
             .await?;
         }
         Scope::Override(w) => {
             rates(
-                sqlx::query(&q("workspace_platform_policy_overrides", "workspace_id")).bind(w),
+                sqlx::query(&qs("workspace_platform_policy_overrides", "workspace_id")).bind(w),
                 l,
             )
+            .bind(l.storage_bytes)
             .execute(&mut **tx)
             .await?;
         }
         Scope::Local(w) => {
             rates(
-                sqlx::query(&q("workspace_local_policies", "workspace_id")).bind(w),
+                sqlx::query(&qs("workspace_local_policies", "workspace_id")).bind(w),
                 l,
             )
+            .bind(l.storage_bytes)
             .execute(&mut **tx)
             .await?;
         }
@@ -592,6 +645,25 @@ pub(crate) async fn budget_windows(
     }
     Ok(out)
 }
+/// The workspace's storage quota and (when the caller may see workspace-wide
+/// usage) the bytes counted against it: live files plus uploads in progress.
+pub(crate) async fn storage_json(
+    tx: &mut Transaction<'_, Postgres>,
+    ws: Uuid,
+    usage_visible: bool,
+) -> Result<Value, ApiError> {
+    let u = crate::filestore::files::workspace_storage(&mut **tx, ws)
+        .await
+        .map_err(|_| {
+            ApiError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Management storage unavailable",
+            )
+        })?;
+    Ok(
+        json!({"quota_bytes":u.quota_bytes,"used_bytes":usage_visible.then_some(u.used_bytes),"usage_visible":usage_visible}),
+    )
+}
 /// Creation time of a key lineage (its first credential).
 pub(crate) async fn lineage_created(
     tx: &mut Transaction<'_, Postgres>,
@@ -713,7 +785,8 @@ async fn response(
         entries.push(("key", &k.budgets, key, true, key_created));
     }
     let budgets = budget_windows(tx, ws, &entries).await?;
-    let mut value = json!({"policy":json_limits(if key.is_some(){&k}else if local_response{&l}else{&p}),"effective":json_limits(&compose(&compose(&p,&l),&k)),"mode":if source=="workspace_override"{"replace"}else{"inherit"},"provenance":{"platform_source":source,"platform":json_limits(&p),"local":json_limits(&l),"key":key.map(|_|json_limits(&k))},"budgets":budgets});
+    let storage = storage_json(tx, ws, workspace_usage).await?;
+    let mut value = json!({"storage":storage,"policy":json_limits(if key.is_some(){&k}else if local_response{&l}else{&p}),"effective":json_limits(&compose(&compose(&p,&l),&k)),"mode":if source=="workspace_override"{"replace"}else{"inherit"},"provenance":{"platform_source":source,"platform":json_limits(&p),"local":json_limits(&l),"key":key.map(|_|json_limits(&k))},"budgets":budgets});
     // Platform readers also see the live type default behind an override.
     if platform {
         value["provenance"]["type_default"] = json_limits(&type_default);
@@ -734,6 +807,9 @@ pub(super) async fn put_installation_policy(
     Extension(u): Extension<BrowserPrincipal>,
     Json(p): Json<Policy>,
 ) -> ApiResult {
+    if p.storage_bytes.flatten().is_some() {
+        return Err(invalid());
+    }
     let mut tx = platform_tx(&s, &u, true).await?;
     let old = get_layer(&mut tx, &Scope::Installation).await?;
     let l = p.limits(&old, BudgetPeriod::Month)?;
@@ -930,6 +1006,10 @@ pub(super) async fn put_key_policy(
     Path((ws, key)): Path<(Uuid, Uuid)>,
     Json(p): Json<Policy>,
 ) -> ApiResult {
+    // Storage is a workspace quota; keys have no storage layer.
+    if p.storage_bytes.flatten().is_some() {
+        return Err(invalid());
+    }
     let (mut tx, a) = resources::workspace_tx(&s, &u, ws).await?;
     let key = lineage(&mut tx, &u, ws, key, a.admin || a.owner).await?;
     let current = layers(&mut tx, ws).await?;

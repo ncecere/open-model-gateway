@@ -1,0 +1,13 @@
+/* Workspace › Files: name over the file id; the native file input matches field text. */
+.name {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.fileInput {
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+  max-width: 100%;
+}

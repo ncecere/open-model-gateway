@@ -156,6 +156,8 @@ export function AlertRulePage({ session, scope, workspace, id }: { session: Sess
           <FormField label="Connection"><NativeSelect value={form.connection} disabled={busy} onChange={ev => set("connection", ev.target.value)}><option value="">Any enabled connection</option>{connections.data?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</NativeSelect></FormField>
           {field("consecutive", "Failures in a row", { optional: true, inputMode: "numeric" })}
         </>}
+        {form.kind === "batch_stalled" && field("window", "No progress for (minutes)", { inputMode: "numeric" })}
+        {form.kind === "batch_failed" && <p className={s.note}>Fires once per failed or expired batch{scope.kind === "platform" ? " in teams and projects" : ""}.</p>}
         {(form.kind === "error_rate" || form.kind === "provider_failing") && <>
           {field("window", "Window (minutes)", { inputMode: "numeric" })}
           {field("rate", "Failed requests (%)", { optional: form.kind === "provider_failing", inputMode: "numeric" })}

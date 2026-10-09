@@ -148,6 +148,14 @@ pub(super) fn validate(b: RuleInput, workspace: bool) -> Result<Valid, ApiError>
         Kind::Spike => !budget && !window && !provider,
         Kind::ErrorRate => !budget && !spike && !provider,
         Kind::Provider => !budget && !spike,
+        Kind::BatchFailed => !budget && !spike && !window && !provider,
+        Kind::BatchStalled => {
+            !budget
+                && !spike
+                && !provider
+                && b.error_rate_percent.is_none()
+                && b.min_requests.is_none()
+        }
     };
     if !allowed {
         return Err(invalid());
@@ -192,6 +200,16 @@ pub(super) fn validate(b: RuleInput, workspace: bool) -> Result<Valid, ApiError>
             }
             v.spike_factor_percent = Some(factor);
             v.min_spend_microusd = Some(floor);
+        }
+        // A batch failed or expired: no parameters.
+        Kind::BatchFailed => {}
+        // No progress for `window_minutes`.
+        Kind::BatchStalled => {
+            let minutes = b.window_minutes.ok_or_else(invalid)?;
+            if !(5..=1440).contains(&minutes) {
+                return Err(invalid());
+            }
+            v.window_minutes = Some(minutes);
         }
         Kind::ErrorRate | Kind::Provider => {
             let minutes = b.window_minutes.ok_or_else(invalid)?;

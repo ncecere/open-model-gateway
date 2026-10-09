@@ -8,7 +8,12 @@ use futures_util::Stream;
 
 use crate::{
     billing::MeterVariant,
-    inference::{error::InferenceError, types::Usage},
+    inference::{
+        error::InferenceError,
+        types::{
+            ApiProtocol, ChatRequest, ChatResponse, EmbeddingRequest, EmbeddingResponse, Usage,
+        },
+    },
 };
 
 /// Video prompt cap (bytes), independent of the HTTP body cap.
@@ -16,8 +21,101 @@ pub const VIDEO_MAX_PROMPT_BYTES: usize = 32 * 1024;
 /// Batch input bounds (OpenAI Batch API limits).
 pub const BATCH_MAX_REQUESTS: u32 = 50_000;
 pub const BATCH_MAX_LINE_BYTES: usize = 4 * 1024 * 1024;
-pub const BATCH_ENDPOINT: &str = "/v1/chat/completions";
 pub const BATCH_COMPLETION_WINDOW: &str = "24h";
+
+/// Endpoints a batch's lines may target (every line of a batch uses the
+/// batch's endpoint). Each is the gateway's normal inference contract.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BatchEndpoint {
+    ChatCompletions,
+    Responses,
+    Embeddings,
+    /// Anthropic Messages shape.
+    Messages,
+}
+impl BatchEndpoint {
+    pub const ALL: [BatchEndpoint; 4] = [
+        Self::ChatCompletions,
+        Self::Responses,
+        Self::Embeddings,
+        Self::Messages,
+    ];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ChatCompletions => "/v1/chat/completions",
+            Self::Responses => "/v1/responses",
+            Self::Embeddings => "/v1/embeddings",
+            Self::Messages => "/v1/messages",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|e| e.as_str() == s)
+    }
+    pub fn protocol(self) -> ApiProtocol {
+        match self {
+            Self::ChatCompletions => ApiProtocol::ChatCompletions,
+            Self::Responses => ApiProtocol::Responses,
+            Self::Embeddings => ApiProtocol::Embeddings,
+            Self::Messages => ApiProtocol::Messages,
+        }
+    }
+    /// Generation (chat-like) endpoints share the canonical chat request.
+    pub fn is_generation(self) -> bool {
+        self != Self::Embeddings
+    }
+}
+
+/// A validated batch line in canonical form. No `Debug`: it is content.
+#[derive(Clone)]
+pub enum BatchRequest {
+    Chat(ChatRequest),
+    Embeddings(EmbeddingRequest),
+}
+impl BatchRequest {
+    pub fn model(&self) -> &str {
+        match self {
+            Self::Chat(r) => &r.model,
+            Self::Embeddings(r) => &r.model,
+        }
+    }
+    /// The line's output maximum (0 for embeddings).
+    pub fn max_output(&self) -> u32 {
+        match self {
+            Self::Chat(r) => r.max_output_tokens.unwrap_or(0),
+            Self::Embeddings(_) => 0,
+        }
+    }
+}
+/// A successful line result in canonical form. No `Debug`: it is content.
+pub enum BatchResponse {
+    Chat(ChatResponse),
+    Embeddings(EmbeddingResponse),
+}
+impl BatchResponse {
+    pub fn usage(&self) -> Usage {
+        match self {
+            Self::Chat(r) => r.usage,
+            Self::Embeddings(r) => r.usage,
+        }
+    }
+}
+/// One decoded native batch result line. `custom_id` is the gateway's
+/// upstream id of the line (`l<n>`), never the client's.
+pub struct NativeResult {
+    pub custom_id: String,
+    pub outcome: NativeOutcome,
+}
+pub enum NativeOutcome {
+    Succeeded(Box<BatchResponse>),
+    /// The provider answered the line with an error (HTTP-like status and a
+    /// sanitized code; never the provider's message).
+    Failed {
+        status: u16,
+        code: ErrorCode,
+    },
+    Cancelled,
+    Expired,
+}
 
 /// A provider job/file id: 1..=128 of `[A-Za-z0-9._:-]`. Never returned to
 /// clients (gateway ids replace it).
@@ -245,13 +343,6 @@ pub struct UpstreamVideo {
 
 // ---------------------------------------------------------------- Batch ----
 
-/// Upstream file created from a streamed upload.
-#[derive(Clone, Debug)]
-pub struct UpstreamFile {
-    pub id: UpstreamId,
-    pub bytes: Option<u64>,
-}
-
 /// Provider batch status vocabulary (OpenAI).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BatchStatus {
@@ -315,6 +406,8 @@ pub struct RequestCounts {
 pub struct UpstreamBatch {
     pub id: UpstreamId,
     pub status: BatchStatus,
+    /// The provider copy of the input (deleted after the results are stored).
+    pub input_file: Option<UpstreamId>,
     pub output_file: Option<UpstreamId>,
     pub error_file: Option<UpstreamId>,
     pub counts: Option<RequestCounts>,
@@ -340,12 +433,43 @@ pub fn valid_metadata(v: &serde_json::Map<String, serde_json::Value>) -> bool {
         })
 }
 
-/// Aggregated usage parsed from a batch output file (bodies discarded).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct OutputUsage {
-    pub lines: u64,
-    /// `None` when any line lacked valid usage (unknown, never zero).
-    pub usage: Option<Usage>,
+/// Sum of two usage observations; any unknown counter stays unknown.
+pub fn add_usage(a: Usage, b: Usage) -> Usage {
+    let sum = |x: Option<u64>, y: Option<u64>| x.zip(y).and_then(|(x, y)| x.checked_add(y));
+    let billing = a
+        .billing
+        .zip(b.billing)
+        .map(|(x, y)| crate::billing::BillingUsage {
+            total_input_tokens: sum(x.total_input_tokens, y.total_input_tokens),
+            uncached_input_tokens: sum(x.uncached_input_tokens, y.uncached_input_tokens),
+            cache_read_input_tokens: sum(x.cache_read_input_tokens, y.cache_read_input_tokens),
+            cache_write_input_tokens: sum(x.cache_write_input_tokens, y.cache_write_input_tokens),
+            cache_write_default_input_tokens: sum(
+                x.cache_write_default_input_tokens,
+                y.cache_write_default_input_tokens,
+            ),
+            cache_write_5m_input_tokens: sum(
+                x.cache_write_5m_input_tokens,
+                y.cache_write_5m_input_tokens,
+            ),
+            cache_write_1h_input_tokens: sum(
+                x.cache_write_1h_input_tokens,
+                y.cache_write_1h_input_tokens,
+            ),
+        });
+    // A side without billing metadata makes the aggregate's billing unknown.
+    let billing = match (a.billing.is_some(), b.billing.is_some()) {
+        (false, false) => None,
+        (true, true) => billing,
+        _ => None,
+    };
+    Usage {
+        input_tokens: sum(a.input_tokens, b.input_tokens),
+        output_tokens: sum(a.output_tokens, b.output_tokens),
+        billing,
+        reasoning_tokens: sum(a.reasoning_tokens, b.reasoning_tokens),
+        ..Usage::default()
+    }
 }
 
 pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, InferenceError>> + Send>>;

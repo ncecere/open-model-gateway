@@ -28,6 +28,7 @@ import { EmptyState } from "../../components/ui/empty-state/empty-state";
 import { Table, Td, Th, Tr } from "../../components/ui/table/table";
 import { ToggleGroup, ToggleGroupItem } from "../../components/ui/toggle-group/toggle-group";
 import { AccountingSection } from "./accounting";
+import { StorageUsageCard } from "./storage";
 import { isAdmin } from "../../lib/permissions";
 import type { UsageNav } from "./shared";
 import u from "./usage.module.css";
@@ -76,6 +77,7 @@ export function UsageOverviewTab({ workspace, ctx, period, nav, workspaceFilter,
         {ctx.members && o.top.members !== null && <TopList title="Top members" nameHeader="Member" rows={o.top.members} total={t.spend.value} more={{ ...nav.search, tab: "explore", group: "member", metric: undefined, then: undefined }} empty="No member spent anything yet." open={r => !workspace && r.id ? { page: "user-detail", record: r.id } : undefined} />}
       </div>
     </>}
+    <StorageUsageCard workspace={workspace} period={period} workspaceFilter={workspaceFilter} />
     {accounting && <AccountingSection path={accountingPath} rates={o} unresolved={{ ...nav.search, tab: "records", metric: undefined, offset: undefined }} statusFilter={!!workspace} />}
     <p className={u.footer}>Estimates from configured prices, not invoices{o.observed_at && <> · updated <DetailTime value={o.observed_at} fallback={o.observed_at} /></>}</p>
   </Stack>;

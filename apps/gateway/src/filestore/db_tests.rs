@@ -200,7 +200,7 @@ async fn files_are_scoped_toggled_and_tracked(pool: PgPool) {
     capped.max_bytes = Some(2);
     assert_eq!(
         f.files.create(capped, body(b"abc")).await.unwrap_err(),
-        FileError::Store(FileStoreError::TooLarge)
+        FileError::TooLarge
     );
     // Delete: object gone, row kept with names cleared; second delete is a no-op.
     assert!(f.files.delete(file.id, Some(f.ws)).await.unwrap());

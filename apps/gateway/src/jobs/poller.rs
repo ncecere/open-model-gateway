@@ -58,9 +58,14 @@ impl Jobs {
             Some(JobKind::Video) => {
                 self.refresh_video(job).await?;
             }
-            Some(JobKind::Batch) => {
-                self.refresh_batch(job, true).await?;
-            }
+            Some(JobKind::Batch) => match job.mode() {
+                Some(BatchMode::Native) => self.poll_native(job).await?,
+                // Gateway-run batches belong to the batch runner.
+                Some(BatchMode::Gateway) => {}
+                None => {
+                    self.refresh_legacy(job).await?;
+                }
+            },
             None => return Err(InferenceError::Storage.into()),
         }
         Ok(())

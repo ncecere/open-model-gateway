@@ -130,11 +130,11 @@ export function workloadOf(protocols: readonly (ModelProtocol | string)[]): Work
 export type MeterMode = "unknown" | "priced" | "free" | "not_applicable";
 export const meterModes: { value: MeterMode; label: string }[] = [{ value: "priced", label: "Priced" }, { value: "free", label: "Free · explicit $0" }, { value: "unknown", label: "Unknown · cannot assume free" }, { value: "not_applicable", label: "Not applicable" }];
 /** One rate. `variant`/`minPromptTokens` are present (possibly empty) only on tier rows. */
-export type RateRow = { id: string; usd: string; sku: string; variant?: string; minPromptTokens?: string; review?: boolean; note?: string };
+export type RateRow = { id: string; usd: string; sku: string; variant?: string; minPromptTokens?: string; review?: boolean; note?: string; /** Native batch rate (when the draft publishes batch prices). */ batchUsd?: string };
 export type MeterDraft = { mode: MeterMode; batch: number; rows: RateRow[]; maxUnits: string; review?: boolean; note?: string };
 export type ImportInfo = { model: string; needsReview: boolean; warnings: string[]; endpoint?: SuggestionEndpoint; ceilings?: SuggestionCeilings; /** Ceilings the admin had entered, kept instead of the imported ones until confirmed. */ keptCeilings?: { input: string; output: string; importedInput: string; importedOutput: string } };
-export type PriceDraft = { workload: WorkloadKind; shown: Meter[]; meters: Record<Meter, MeterDraft>; inputTokenLimit: string; outputTokenLimit: string; import?: ImportInfo };
-export type PriceBody = { pricing_version: 3; input_token_limit: number; output_token_limit: number; price_lines: PriceLine[]; max_units: Partial<Record<UnitMeter, string>> };
+export type PriceDraft = { workload: WorkloadKind; shown: Meter[]; meters: Record<Meter, MeterDraft>; inputTokenLimit: string; outputTokenLimit: string; import?: ImportInfo; /** Also publish a batch price list (native batch APIs; the provider's published batch rates, never derived). */ batchPrices?: boolean };
+export type PriceBody = { pricing_version: 3; input_token_limit: number; output_token_limit: number; price_lines: PriceLine[]; max_units: Partial<Record<UnitMeter, string>>; batch_price_lines?: PriceLine[] };
 
 let rowCounter = 0;
 export const newRow = (meter: Meter, extra: Partial<RateRow> = {}): RateRow => ({ id: `r${++rowCounter}`, usd: "", sku: METER_SPECS[meter].sku, ...extra });
@@ -174,13 +174,27 @@ function metersFromLines(workload: WorkloadKind, lines: AnyLine[], maxUnits: Rec
 /** Prefill from the current price: v3 lines as-is; v1/v2 token rates become lines (v1/v2 had no request fee). */
 export function draftFromPrice(price: Price, workload: WorkloadKind): PriceDraft {
   const base = { workload, inputTokenLimit: String(price.input_token_limit), outputTokenLimit: String(price.output_token_limit) };
-  if (price.pricing_version === 3 && price.price_lines) return { ...base, ...metersFromLines(workload, price.price_lines, price.max_units as Record<string, string>) };
+  if (price.pricing_version === 3 && price.price_lines) return withBatchRates({ ...base, ...metersFromLines(workload, price.price_lines, price.max_units as Record<string, string>) }, price.batch_price_lines);
   const line = (meter: Meter, microusd: string | null | undefined): AnyLine[] => microusd == null ? [] : [{ meter, microusd_per_batch: microusd, batch: 1000000, sku_label: METER_SPECS[meter].sku }];
   const cache = (meter: Meter, key: "read" | "write" | "write_5m" | "write_1h"): AnyLine[] => { const r = price.cache_pricing?.[key]; return !r ? [] : r.status === "priced" ? line(meter, r.microusd_per_million) : r.status === "not_applicable" ? [{ meter, not_applicable: true }] : []; };
   const lines = [...line("input_tokens", price.input_microusd_per_million), ...line("output_tokens", price.output_microusd_per_million), ...cache("cache_read_tokens", "read"), ...cache("cache_write_tokens", "write"), ...cache("cache_write_5m_tokens", "write_5m"), ...cache("cache_write_1h_tokens", "write_1h"), { meter: "requests" as Meter, microusd_per_batch: "0", batch: 1 }];
   const draft = { ...base, ...metersFromLines(workload, lines, null) };
   for (const meter of metersFor(workload)) if (!WORKLOAD_METERS[workload].includes(meter) && !lines.some(l => l.meter === meter)) draft.meters[meter] = meterDraft(meter, "not_applicable");
   return draft;
+}
+/** Fill each priced row's batch rate from a published batch list (same meter, variant and tier). */
+function withBatchRates(draft: PriceDraft, batch: PriceLine[] | null | undefined): PriceDraft {
+  if (!batch?.length) return draft;
+  const meters = { ...draft.meters };
+  for (const meter of draft.shown) {
+    const m = meters[meter];
+    if (m.mode !== "priced") continue;
+    meters[meter] = { ...m, rows: m.rows.map(row => {
+      const line = batch.find(l => l.meter === meter && "batch" in l && (l.variant ?? undefined) === (row.variant?.trim() || undefined) && (l.min_prompt_tokens === undefined ? undefined : String(l.min_prompt_tokens)) === (row.minPromptTokens?.trim() || undefined)) as Extract<PriceLine, { batch: number }> | undefined;
+      return line && /^\d+$/.test(line.microusd_per_batch) ? { ...row, batchUsd: microUsdToUsdText(BigInt(line.microusd_per_batch) * BigInt(m.batch / (line.batch || m.batch))) } : row;
+    }) };
+  }
+  return { ...draft, meters, batchPrices: true };
 }
 export type SuggestionLine = AnyLine & { needs_review: boolean; source?: string; unit_label?: string };
 /** Which OpenRouter endpoint the imported rates came from. */
@@ -202,7 +216,7 @@ export function mergeImport(current: PriceDraft, imported: PriceDraft): PriceDra
   const keepInput = applies.input && entered(current.inputTokenLimit), keepOutput = applies.output && entered(current.outputTokenLimit);
   const input = keepInput ? current.inputTokenLimit : imported.inputTokenLimit, output = keepOutput ? current.outputTokenLimit : imported.outputTokenLimit;
   const differs = (keepInput && current.inputTokenLimit.trim() !== imported.inputTokenLimit.trim()) || (keepOutput && current.outputTokenLimit.trim() !== imported.outputTokenLimit.trim());
-  return { ...imported, inputTokenLimit: input, outputTokenLimit: output, import: imported.import && { ...imported.import, keptCeilings: differs ? { input, output, importedInput: imported.inputTokenLimit, importedOutput: imported.outputTokenLimit } : undefined } };
+  return { ...imported, batchPrices: current.batchPrices, inputTokenLimit: input, outputTokenLimit: output, import: imported.import && { ...imported.import, keptCeilings: differs ? { input, output, importedInput: imported.inputTokenLimit, importedOutput: imported.outputTokenLimit } : undefined } };
 }
 /** Accept the imported token ceilings after the admin confirms. */
 export function acceptImportedCeilings(draft: PriceDraft): PriceDraft {
@@ -235,7 +249,7 @@ export function priceTokenCeilings(price: Pick<Price, "pricing_version" | "price
 // Validation and body
 // ---------------------------------------------------------------------------
 /** Stable error keys: "limits.input", "<meter>.mode", "<meter>.rows", "<meter>.max", "<meter>.<row>.usd|variant|tier". */
-export const rowKey = (meter: Meter, row: RateRow, part: "usd" | "variant" | "tier") => `${meter}.${row.id}.${part}`;
+export const rowKey = (meter: Meter, row: RateRow, part: "usd" | "variant" | "tier" | "batch") => `${meter}.${row.id}.${part}`;
 const intError = (value: string, min: number, max: number, what: string) => /^\d+$/.test(value.trim()) && BigInt(value.trim()) >= BigInt(min) && BigInt(value.trim()) <= BigInt(max) ? undefined : `Enter ${what} from ${grouped(min)} to ${grouped(max)}, without exponent notation.`;
 export const tierLabel = (row: Pick<RateRow, "variant" | "minPromptTokens">) => [row.variant?.trim() || undefined, row.minPromptTokens?.trim() && /^\d+$/.test(row.minPromptTokens.trim()) ? `prompt > ${grouped(row.minPromptTokens.trim())} tokens` : undefined].filter(Boolean).join(", ");
 /** Larger units in which this exact price becomes whole micro-dollars (always offered as a fix, never applied silently). */
@@ -265,6 +279,7 @@ export function validateDraft(draft: PriceDraft): Record<string, string> {
     for (const row of m.rows) {
       const usd = usdError(meter, row.usd, m.batch);
       if (usd) errors[rowKey(meter, row, "usd")] = usd;
+      if (draft.batchPrices) { const batch = usdError(meter, row.batchUsd ?? "", m.batch); if (batch) errors[rowKey(meter, row, "batch")] = batch.replace("or choose Free, Unknown or Not applicable", "or turn batch prices off"); }
       if (row.variant !== undefined && !/^[A-Za-z0-9._:-]{1,32}$/.test(row.variant.trim())) errors[rowKey(meter, row, "variant")] = "Use 1–32 letters, digits, dots, colons, underscores or hyphens (e.g. 768, 1K, 1024x1024).";
       if (row.minPromptTokens !== undefined) { const tier = intError(row.minPromptTokens, 1, MAX_TOKEN_LIMIT, "a prompt-size threshold"); if (tier) errors[rowKey(meter, row, "tier")] = tier; }
       const key = `${row.variant?.trim() ?? ""}|${row.minPromptTokens?.trim() ?? ""}`;
@@ -287,23 +302,30 @@ export function validateDraft(draft: PriceDraft): Record<string, string> {
 }
 /** The v3 POST body. Throws on invalid money: validate first. */
 export function draftBody(draft: PriceDraft): PriceBody {
-  const price_lines: PriceLine[] = [], max_units: Partial<Record<UnitMeter, string>> = {};
+  const price_lines: PriceLine[] = [], batch_lines: PriceLine[] = [], max_units: Partial<Record<UnitMeter, string>> = {};
   for (const meter of metersFor(draft.workload)) {
     const m = draft.meters[meter], unit = unitFor(meter, m.batch) ?? unitFor(meter, defaultBatch(meter))!;
-    if (!draft.shown.includes(meter) || m.mode === "not_applicable") { price_lines.push({ meter, not_applicable: true }); continue; }
+    if (!draft.shown.includes(meter) || m.mode === "not_applicable") { price_lines.push({ meter, not_applicable: true }); batch_lines.push({ meter, not_applicable: true }); continue; }
     if (m.mode === "unknown") continue;
     const rows = m.mode === "free" ? [{ ...m.rows[0], usd: "0", variant: undefined, minPromptTokens: undefined, sku: m.rows[0]?.sku || METER_SPECS[meter].sku }] : m.rows;
     for (const row of rows) {
       const money = usdToMicroUsd(row.usd);
       if (!money.ok) throw new Error(`Invalid ${METER_SPECS[meter].title} price.`);
-      price_lines.push({ meter, microusd_per_batch: money.microusd.toString(), batch: unit.batch, unit_label: unit.unitLabel, sku_label: row.sku.trim() || METER_SPECS[meter].sku, ...(row.variant !== undefined ? { variant: row.variant.trim() } : {}), ...(row.minPromptTokens !== undefined ? { min_prompt_tokens: Number(row.minPromptTokens.trim()) } : {}) });
+      const line = { meter, microusd_per_batch: money.microusd.toString(), batch: unit.batch, unit_label: unit.unitLabel, sku_label: row.sku.trim() || METER_SPECS[meter].sku, ...(row.variant !== undefined ? { variant: row.variant.trim() } : {}), ...(row.minPromptTokens !== undefined ? { min_prompt_tokens: Number(row.minPromptTokens.trim()) } : {}) };
+      price_lines.push(line);
+      if (draft.batchPrices) {
+        // Free meters stay free in the batch list; priced rows take their entered batch rate.
+        const batch = m.mode === "free" ? usdToMicroUsd("0") : usdToMicroUsd(row.batchUsd ?? "");
+        if (!batch.ok) throw new Error(`Invalid ${METER_SPECS[meter].title} batch price.`);
+        batch_lines.push({ ...line, microusd_per_batch: batch.microusd.toString() });
+      }
     }
     const spec = METER_SPECS[meter].maxUnits;
     if (spec && m.mode === "priced" && /^\d+$/.test(m.maxUnits.trim())) max_units[meter as UnitMeter] = (BigInt(m.maxUnits.trim()) * spec.scale).toString();
   }
   // Non-applicable token ceilings are sent as 0 (the gateway accepts a zero input ceiling only then).
   const ceilings = tokenCeilings(draft);
-  return { pricing_version: 3, input_token_limit: ceilings.input ? Number(draft.inputTokenLimit.trim()) : 0, output_token_limit: ceilings.output ? Number(draft.outputTokenLimit.trim()) : 0, price_lines, max_units };
+  return { pricing_version: 3, input_token_limit: ceilings.input ? Number(draft.inputTokenLimit.trim()) : 0, output_token_limit: ceilings.output ? Number(draft.outputTokenLimit.trim()) : 0, price_lines, max_units, ...(draft.batchPrices ? { batch_price_lines: batch_lines } : {}) };
 }
 export type Bound = { microusd: bigint | null; unbounded: { meter: Meter; reason: "unknown" | "no_base" | "no_ceiling" }[]; overflow: boolean };
 /** Mirrors the gateway's conservative admission hold (billing::v3::bound) for a preview; the server stays authoritative. */

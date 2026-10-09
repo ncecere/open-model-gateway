@@ -38,6 +38,7 @@ import { StatusBadge } from "../components/ui/badge/badge";
 import type { DataTableColumn } from "../components/ui/data-table/data-table";
 import { EmptyState } from "../components/ui/empty-state/empty-state";
 import { Input, NativeSelect } from "../components/ui/input/input";
+import { BatchesPanel } from "./batches";
 import s from "./shared.module.css";
 import rq from "./requests.module.css";
 
@@ -150,6 +151,8 @@ const tables = {
   requests: { ids: requestColumnIds, hidden: requestDefaultHidden, narrow: requestNarrowHidden },
   generations: { ids: generationColumnIds, hidden: generationDefaultHidden, narrow: generationNarrowHidden },
   sessions: { ids: sessionColumnIds, hidden: sessionDefaultHidden, narrow: sessionNarrowHidden },
+  // Batches keep their own compact table (pages/batches.tsx).
+  batches: { ids: [], hidden: [], narrow: [] },
 } satisfies Record<LogTab, { ids: string[]; hidden: string[]; narrow: string[] }>;
 const defaultHiddenFor = (tab: LogTab, narrow: boolean) => narrow ? [...tables[tab].hidden, ...tables[tab].narrow] : tables[tab].hidden;
 /** The table view in the URL. Hidden-by-default columns shown again are written as `cols=none` (nothing hidden). */
@@ -305,10 +308,10 @@ export function LogsPage({ scope }: { scope: LogsScope }) {
   const defaults = defaultHiddenFor(tab, narrow);
   return <Stack gap={6} className={s.page}>
     <Heading title="Logs" description={scope.kind === "platform" ? platformDescription : requestsDescription(scope.workspace)} />
-    <LogMetricsTiles scope={scope} query={query} enabled={!filterError} />
-    <TypeTabs label="Log view" value={tab} onChange={next => nav?.navigate(logsSearch(scope, filters, next as LogTab))}
-      items={[{ value: "requests", label: "Requests" }, { value: "generations", label: "Generations" }, { value: "sessions", label: "Sessions" }]}>
-      <div className={s.list}>
+    {tab !== "batches" && <LogMetricsTiles scope={scope} query={query} enabled={!filterError} />}
+    <TypeTabs label="Log view" value={tab} onChange={next => nav?.navigate(next === "batches" ? { ...(scope.kind === "platform" ? { page: "platform-logs" } : { page: "requests", ws: scope.workspace.id }), tab: "batches" } : logsSearch(scope, filters, next as LogTab))}
+      items={[{ value: "requests", label: "Requests" }, { value: "generations", label: "Generations" }, { value: "sessions", label: "Sessions" }, { value: "batches", label: "Batches" }]}>
+      {tab === "batches" ? <BatchesPanel scope={scope} /> : <div className={s.list}>
         {/* One row at 1440 (ui-principles 3): Search, Period, Model, Status, More filters (key/workspace, finish, streamed, session) … Columns, density. */}
         <FilterToolbar search={{ label: "Search by request ID (at least 4 characters)", placeholder: "Request ID", value: search.q ?? "", onChange: next => go({ q: next || undefined, cursor: undefined }) }}
           start={<PeriodControl filters={filters} onChange={patch => go({ ...patch, cursor: undefined })} />} extraActive={periodActive} extraChips={chips}
@@ -317,7 +320,7 @@ export function LogsPage({ scope }: { scope: LogsScope }) {
           end={tools && <><ColumnChooser columns={tools.columns} hidden={tools.view.hidden} onHiddenChange={hidden => go(logViewSearch({ ...tools.view, hidden }, tab, narrow))} defaultHidden={defaults} /><DensityToggle value={tools.view.density} onChange={density => go(logViewSearch({ ...tools.view, density }, tab, narrow))} /></>} />
         {filterError && <InfoBanner tone="warning" title="Filters not applied">{filterError}</InfoBanner>}
         {tab === "requests" ? <RequestsTable {...props} /> : tab === "generations" ? <GenerationsTable {...props} /> : <SessionsTable {...props} />}
-      </div>
+      </div>}
     </TypeTabs>
     <p className={s.note}>Metadata only: prompts and responses are never stored. Costs are estimates; periods are UTC days.</p>
   </Stack>;

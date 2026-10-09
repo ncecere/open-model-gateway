@@ -301,68 +301,158 @@ fn batch(status: &str) -> Value {
                  "output_tokens_details":{"reasoning_tokens":5},"total_tokens":290}})
 }
 
-#[tokio::test]
-async fn batch_upload_streams_a_multipart_file_and_aborts_on_error() {
-    let mock = Mock::new(vec![json_reply(
-        json!({"id":"file-in1","object":"file","bytes":12,"created_at":1,"filename":"batch.jsonl","purpose":"batch","status":"processed"}),
-    )])
-    .await;
-    let a = mock.adapter();
+fn records(lines: &[&'static [u8]]) -> ByteStream {
+    Box::pin(futures_util::stream::iter(
+        lines
+            .iter()
+            .map(|l| Ok(axum::body::Bytes::from_static(l)))
+            .collect::<Vec<_>>(),
+    ))
+}
+fn chat_request() -> BatchRequest {
+    BatchRequest::Chat(crate::inference::types::ChatRequest {
+        model: "company/chat".into(),
+        messages: vec![crate::inference::types::Message {
+            role: crate::inference::types::Role::User,
+            content: Some("hi".into()),
+            tool_calls: vec![],
+            tool_call_id: None,
+        }],
+        tools: vec![],
+        tool_choice: None,
+        temperature: None,
+        max_output_tokens: Some(16),
+        stream: false,
+    })
+}
+
+#[test]
+fn native_lines_use_gateway_ids_and_the_upstream_model() {
     let t = target("gpt-x");
-    let content: ByteStream = Box::pin(futures_util::stream::iter(vec![
-        Ok(axum::body::Bytes::from_static(b"{\"a\":1}\n")),
-        Ok(axum::body::Bytes::from_static(b"{\"b\":2}\n")),
-    ]));
-    let file = a.upload_batch_file(&t, content).await.unwrap();
-    assert_eq!((file.id.as_str(), file.bytes), ("file-in1", Some(12)));
-    let sent = mock.last();
-    assert_eq!(sent.uri, "/v1/files");
-    let ct = sent.headers["content-type"].to_str().unwrap().to_owned();
-    let boundary = crate::protocols::audio::multipart::boundary(&ct).unwrap();
-    let parts = crate::protocols::audio::multipart::parse(&sent.body, &boundary, 4).unwrap();
-    assert_eq!(parts[0].name, "purpose");
-    assert_eq!(parts[0].data, b"batch");
-    assert_eq!(parts[1].name, "file");
-    assert_eq!(parts[1].data, b"{\"a\":1}\n{\"b\":2}\n");
-    // A failing content stream never yields a complete upstream form.
-    let aborted = Mock::new(vec![json_reply(json!({"id":"file-x","object":"file"}))]).await;
-    let content: ByteStream = Box::pin(futures_util::stream::iter(vec![
-        Ok(axum::body::Bytes::from_static(b"{\"a\":1}\n")),
-        Err(InferenceError::InvalidRequest),
-    ]));
-    assert!(
-        aborted
-            .adapter()
-            .upload_batch_file(&t, content)
-            .await
-            .is_err()
+    let chat: Value = serde_json::from_slice(
+        &encode_native_line(&t, BatchEndpoint::Responses, "l7", &chat_request()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(chat["custom_id"], "l7");
+    assert_eq!(chat["url"], "/v1/chat/completions");
+    assert_eq!(chat["body"]["model"], "gpt-x");
+    assert_eq!(chat["body"]["max_completion_tokens"], 16);
+    assert!(chat["body"].get("stream_options").is_none());
+    let embeddings = BatchRequest::Embeddings(crate::inference::types::EmbeddingRequest {
+        model: "company/embed".into(),
+        input: vec!["a".into(), "b".into()],
+        dimensions: None,
+    });
+    let e: Value = serde_json::from_slice(
+        &encode_native_line(&t, BatchEndpoint::Embeddings, "l0", &embeddings).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        (e["url"].as_str(), e["body"]["model"].as_str()),
+        (Some("/v1/embeddings"), Some("gpt-x"))
     );
+    // A chat line can't go to the embeddings endpoint and vice versa.
+    assert!(encode_native_line(&t, BatchEndpoint::Embeddings, "l0", &chat_request()).is_err());
+    // Only the fixed OpenAI origin is native.
+    let mut other = target("gpt-x");
+    other.endpoint = Some("https://proxy.example".into());
+    assert!(!native_batch(&other));
+    assert!(native_batch(&t));
 }
 
 #[tokio::test]
-async fn batch_create_retrieve_cancel_and_usage() {
+async fn native_submit_uploads_the_records_then_creates_the_batch() {
     let mock = Mock::new(vec![
+        json_reply(
+            json!({"id":"file-in1","object":"file","bytes":12,"created_at":1,"filename":"batch.jsonl","purpose":"batch","status":"processed"}),
+        ),
         json_reply(batch("validating")),
-        json_reply(batch("completed")),
-        json_reply(batch("cancelling")),
-        json_reply(json!({"id":"batch_up1","object":"batch","status":"completed","endpoint":"/v1/embeddings"})),
     ])
     .await;
     let a = mock.adapter();
     let t = target("gpt-x");
-    let input = UpstreamId::parse("file-in1").unwrap();
-    let metadata = json!({"team":"search"}).as_object().cloned();
-    let b = a.create_batch(&t, &input, metadata).await.unwrap();
+    let b = a
+        .submit_native_batch(
+            &t,
+            BatchEndpoint::ChatCompletions,
+            records(&[b"{\"a\":1}", b"{\"b\":2}"]),
+        )
+        .await
+        .unwrap();
     assert_eq!(b.status, BatchStatus::Validating);
-    let sent = mock.last();
+    assert_eq!(b.input_file.unwrap().as_str(), "file-in1");
+    let created = mock.last();
     assert_eq!(
-        (sent.method, sent.uri.as_str()),
+        (created.method, created.uri.as_str()),
         (Method::POST, "/v1/batches")
     );
+    // No client metadata is ever sent upstream.
     assert_eq!(
-        serde_json::from_slice::<Value>(&sent.body).unwrap(),
-        json!({"input_file_id":"file-in1","endpoint":"/v1/chat/completions","completion_window":"24h","metadata":{"team":"search"}})
+        serde_json::from_slice::<Value>(&created.body).unwrap(),
+        json!({"input_file_id":"file-in1","endpoint":"/v1/chat/completions","completion_window":"24h"})
     );
+    let upload = mock.last();
+    assert_eq!(upload.uri, "/v1/files");
+    let ct = upload.headers["content-type"].to_str().unwrap().to_owned();
+    let boundary = crate::protocols::audio::multipart::boundary(&ct).unwrap();
+    let parts = crate::protocols::audio::multipart::parse(&upload.body, &boundary, 4).unwrap();
+    assert_eq!(parts[0].name, "purpose");
+    assert_eq!(parts[0].data, b"batch");
+    assert_eq!(parts[1].data, b"{\"a\":1}\n{\"b\":2}\n");
+}
+
+#[tokio::test]
+async fn native_submit_failures_abort_or_clean_up() {
+    // A failing record stream never yields a complete upstream form.
+    let aborted = Mock::new(vec![json_reply(json!({"id":"file-x","object":"file"}))]).await;
+    let content: ByteStream = Box::pin(futures_util::stream::iter(vec![
+        Ok(axum::body::Bytes::from_static(b"{\"a\":1}")),
+        Err(InferenceError::InvalidRequest),
+    ]));
+    let t = target("gpt-x");
+    assert!(
+        aborted
+            .adapter()
+            .submit_native_batch(&t, BatchEndpoint::ChatCompletions, content)
+            .await
+            .is_err()
+    );
+    // A refused batch deletes the uploaded copy; one attempt, no retry.
+    let mock = Mock::new(vec![
+        json_reply(json!({"id":"file-in1","object":"file","purpose":"batch"})),
+        Reply {
+            status: 400,
+            content_type: "application/json",
+            body: b"{\"error\":{\"message\":\"secret detail\"}}".to_vec(),
+        },
+        json_reply(json!({"id":"file-in1","object":"file","deleted":true})),
+    ])
+    .await;
+    assert_eq!(
+        mock.adapter()
+            .submit_native_batch(&t, BatchEndpoint::ChatCompletions, records(&[b"{}"]))
+            .await
+            .err(),
+        Some(InferenceError::UpstreamRejected)
+    );
+    let deleted = mock.last();
+    assert_eq!(
+        (deleted.method, deleted.uri.as_str()),
+        (Method::DELETE, "/v1/files/file-in1")
+    );
+    assert_eq!(mock.count(), 2);
+}
+
+#[tokio::test]
+async fn native_retrieve_cancel_and_usage() {
+    let mock = Mock::new(vec![
+        json_reply(batch("completed")),
+        json_reply(batch("cancelling")),
+        json_reply(json!({"id":"batch_up1","object":"batch","status":"completed","endpoint":"/v1/responses"})),
+    ])
+    .await;
+    let a = mock.adapter();
+    let t = target("gpt-x");
     let id = UpstreamId::parse("batch_up1").unwrap();
     let done = a.retrieve_batch(&t, &id).await.unwrap();
     assert_eq!(done.status, BatchStatus::Completed);
@@ -385,6 +475,7 @@ async fn batch_create_retrieve_cancel_and_usage() {
         (Some(50), Some(200))
     );
     assert_eq!(done.output_file.unwrap().as_str(), "file-out1");
+    assert_eq!(done.input_file.unwrap().as_str(), "file-in1");
     let c = a.cancel_batch(&t, &id).await.unwrap();
     assert_eq!(c.status, BatchStatus::Cancelling);
     assert_eq!(mock.last().uri, "/v1/batches/batch_up1/cancel");
@@ -400,38 +491,108 @@ async fn batch_create_retrieve_cancel_and_usage() {
     assert_eq!(parse_batch(&bad).unwrap().usage, None);
 }
 
-fn output_line(input: u64, output: u64) -> String {
-    json!({"id":"r","custom_id":"c","response":{"status_code":200,"request_id":"q","body":{"id":"x","choices":[{"message":{"content":"long private answer"}}],
-        "usage":{"prompt_tokens":input,"completion_tokens":output,"total_tokens":input+output,"prompt_tokens_details":{"cached_tokens":0}}}},"error":null}).to_string()
+fn jsonl_reply(lines: &[Value]) -> Reply {
+    let mut body = Vec::new();
+    for l in lines {
+        body.extend_from_slice(&serde_json::to_vec(l).unwrap());
+        body.push(b'\n');
+    }
+    Reply {
+        status: 200,
+        content_type: "application/jsonl",
+        body,
+    }
 }
 
 #[tokio::test]
-async fn output_usage_sums_lines_and_unknown_stays_unknown() {
-    let good = format!("{}\n{}\n", output_line(10, 2), output_line(20, 3));
-    let partial = format!(
-        "{}\n{}\n",
-        output_line(10, 2),
-        json!({"id":"r","custom_id":"c","response":{"status_code":200,"body":{}}})
-    );
-    let file = |body: String| Reply {
-        status: 200,
-        content_type: "application/octet-stream",
-        body: body.into_bytes(),
-    };
-    let mock = Mock::new(vec![file(good.clone()), file(partial), file(good)]).await;
+async fn native_results_join_output_and_error_files_and_decode_lines() {
+    let ok = json!({"id":"r1","custom_id":"l0","response":{"status_code":200,"request_id":"q","body":{"id":"x","model":"gpt-x","choices":[{"index":0,"message":{"role":"assistant","content":"answer","refusal":null},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}},"error":null});
+    let rejected = json!({"id":"r2","custom_id":"l1","response":{"status_code":400,"request_id":"q","body":{"error":{"message":"private text","code":"invalid_value"}}},"error":null});
+    let expired = json!({"id":"r3","custom_id":"l2","response":null,"error":{"code":"batch_expired","message":"x"}});
+    let mock = Mock::new(vec![jsonl_reply(&[ok]), jsonl_reply(&[rejected, expired])]).await;
     let a = mock.adapter();
     let t = target("gpt-x");
-    let id = UpstreamId::parse("file-out1").unwrap();
-    let u = a.batch_output_usage(&t, &id, 1 << 20).await.unwrap();
-    assert_eq!(u.lines, 2);
-    let usage = u.usage.unwrap();
+    let mut upstream = parse_batch(&batch("completed")).unwrap();
+    upstream.error_file = UpstreamId::parse("file-err1");
+    let mut stream = a.native_batch_results(&t, &upstream).await.unwrap();
+    let mut all = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        all.extend_from_slice(&chunk.unwrap());
+    }
+    let lines: Vec<&[u8]> = all
+        .split(|b| *b == b'\n')
+        .filter(|l| !l.is_empty())
+        .collect();
+    assert_eq!(lines.len(), 3);
+    let first = decode_native_result(BatchEndpoint::ChatCompletions, lines[0]).unwrap();
+    assert_eq!(first.custom_id, "l0");
+    let NativeOutcome::Succeeded(response) = first.outcome else {
+        panic!("expected a success")
+    };
+    let BatchResponse::Chat(r) = *response else {
+        panic!("expected a chat result")
+    };
     assert_eq!(
-        (usage.input_tokens, usage.output_tokens),
-        (Some(30), Some(5))
+        (r.usage.input_tokens, r.usage.output_tokens),
+        (Some(10), Some(2))
     );
-    assert_eq!(mock.last().uri, "/v1/files/file-out1/content");
-    let u = a.batch_output_usage(&t, &id, 1 << 20).await.unwrap();
-    assert_eq!((u.lines, u.usage), (2, None));
-    // Beyond the scan cap: unknown.
-    assert_eq!(a.batch_output_usage(&t, &id, 16).await.unwrap().usage, None);
+    match decode_native_result(BatchEndpoint::ChatCompletions, lines[1])
+        .unwrap()
+        .outcome
+    {
+        NativeOutcome::Failed { status, code } => {
+            assert_eq!((status, code.as_str()), (400, "invalid_value"))
+        }
+        _ => panic!("expected a failure"),
+    }
+    assert!(matches!(
+        decode_native_result(BatchEndpoint::ChatCompletions, lines[2])
+            .unwrap()
+            .outcome,
+        NativeOutcome::Expired
+    ));
+    assert!(decode_native_result(BatchEndpoint::ChatCompletions, b"{}").is_err());
+    let uris: Vec<String> = mock
+        .seen
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|c| c.uri.clone())
+        .collect();
+    assert_eq!(
+        uris,
+        ["/v1/files/file-out1/content", "/v1/files/file-err1/content"]
+    );
+}
+
+#[tokio::test]
+async fn native_cleanup_deletes_every_provider_copy() {
+    let mock = Mock::new(vec![
+        json_reply(json!({"id":"file-in1","object":"file","deleted":true})),
+        Reply {
+            status: 404,
+            content_type: "application/json",
+            body: b"{}".to_vec(),
+        },
+    ])
+    .await;
+    let upstream = parse_batch(&batch("completed")).unwrap();
+    mock.adapter()
+        .delete_native_batch(&target("gpt-x"), &upstream)
+        .await
+        .unwrap();
+    let uris: Vec<(Method, String)> = mock
+        .seen
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|c| (c.method.clone(), c.uri.clone()))
+        .collect();
+    assert_eq!(
+        uris,
+        [
+            (Method::DELETE, "/v1/files/file-in1".to_owned()),
+            (Method::DELETE, "/v1/files/file-out1".to_owned()),
+        ]
+    );
 }

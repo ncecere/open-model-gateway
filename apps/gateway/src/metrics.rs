@@ -73,6 +73,10 @@ pub struct Metrics {
     collection_errors: Family<L1, Counter>,
     file_store_ops: Family<L3, Counter>,
     file_store_bytes: Family<L2, Counter>,
+    batches: Family<L2, Counter>,
+    batch_lines: Family<L3, Counter>,
+    batch_queue: Family<L1, Gauge>,
+    batch_workers: Family<L1, Gauge>,
     providers: Mutex<HashSet<String>>,
     models: Mutex<HashSet<String>>,
     reservations_refreshed: Mutex<Option<Instant>>,
@@ -168,6 +172,10 @@ impl Metrics {
             collection_errors: Family::default(),
             file_store_ops: Family::default(),
             file_store_bytes: Family::default(),
+            batches: Family::default(),
+            batch_lines: Family::default(),
+            batch_queue: Family::default(),
+            batch_workers: Family::default(),
             providers: Mutex::default(),
             models: Mutex::default(),
             reservations_refreshed: Mutex::default(),
@@ -264,6 +272,26 @@ impl Metrics {
             "file_store_bytes",
             "Plaintext bytes written (put) and read to the end (get) by backend",
             metrics.file_store_bytes.clone(),
+        );
+        registry.register(
+            "batches",
+            "Batches by mode (native, gateway) and event (created, submitted, or the final state)",
+            metrics.batches.clone(),
+        );
+        registry.register(
+            "batch_lines",
+            "Batch lines processed by mode, provider kind and outcome (completed, failed)",
+            metrics.batch_lines.clone(),
+        );
+        registry.register(
+            "batch_queue_depth",
+            "Unfinished batches by mode",
+            metrics.batch_queue.clone(),
+        );
+        registry.register(
+            "batch_workers",
+            "Gateway-run batch line workers of this process: capacity and busy",
+            metrics.batch_workers.clone(),
         );
         Self {
             registry,
@@ -408,6 +436,59 @@ impl Metrics {
         self.file_store_bytes
             .get_or_create(&[("backend", backend.to_owned()), ("op", op.to_owned())])
             .inc_by(bytes);
+    }
+
+    pub fn observe_batch_created(&self, mode: &'static str) {
+        self.batches
+            .get_or_create(&[("mode", mode.to_owned()), ("event", "created".to_owned())])
+            .inc();
+    }
+    pub fn observe_batch_submitted(&self, _provider: &str) {
+        self.batches
+            .get_or_create(&[
+                ("mode", "native".to_owned()),
+                ("event", "submitted".to_owned()),
+            ])
+            .inc();
+    }
+    /// `state` is a terminal job state (fixed set).
+    pub fn observe_batch_finished(&self, mode: &'static str, state: &'static str) {
+        self.batches
+            .get_or_create(&[("mode", mode.to_owned()), ("event", state.to_owned())])
+            .inc();
+    }
+    pub fn observe_batch_lines(
+        &self,
+        mode: &'static str,
+        provider: &str,
+        completed: u64,
+        failed: u64,
+    ) {
+        let provider = bounded(&self.providers, provider);
+        for (outcome, n) in [("completed", completed), ("failed", failed)] {
+            if n > 0 {
+                self.batch_lines
+                    .get_or_create(&[
+                        ("mode", mode.to_owned()),
+                        ("provider", provider.clone()),
+                        ("outcome", outcome.to_owned()),
+                    ])
+                    .inc_by(n);
+            }
+        }
+    }
+    pub fn set_batch_queue(&self, mode: &'static str, unfinished: u64) {
+        self.batch_queue
+            .get_or_create(&[("mode", mode.to_owned())])
+            .set(unfinished.min(i64::MAX as u64) as i64);
+    }
+    pub fn set_batch_workers(&self, capacity: u64, busy: u64) {
+        self.batch_workers
+            .get_or_create(&[("state", "capacity".to_owned())])
+            .set(capacity as i64);
+        self.batch_workers
+            .get_or_create(&[("state", "busy".to_owned())])
+            .set(busy as i64);
     }
 
     fn collection_error(&self, collector: &'static str) {

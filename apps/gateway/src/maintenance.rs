@@ -71,6 +71,18 @@ pub fn start(store: Store, retention_days: Option<i32>) -> tokio::task::JoinHand
                 Ok(Ok(_)) => {}
                 _ => tracing::warn!("execution reconciliation incomplete; retrying next interval"),
             }
+            // Storage usage (not charged): record completed hours every 5 minutes.
+            if counter.is_multiple_of(60) {
+                match tokio::time::timeout(
+                    Duration::from_secs(4),
+                    crate::filestore::usage::record_hours(&store, 48),
+                )
+                .await
+                {
+                    Ok(Ok(_)) => {}
+                    _ => tracing::warn!("storage usage recording incomplete; retrying later"),
+                }
+            }
             if counter.is_multiple_of(720)
                 && let Some(days) = retention_days.or(installation_retention)
             {

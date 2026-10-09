@@ -75,6 +75,19 @@ pub async fn handle(
         Err(e) => super::chat_completions::error_response(e),
     }
 }
+/// `/v1/batches` line body (`crate::jobs::lines`).
+pub(crate) fn batch_request(body: Value) -> Result<EmbeddingRequest, InferenceError> {
+    serde_json::from_value::<Request>(body)
+        .map_err(|_| InferenceError::InvalidRequest)?
+        .normalize()
+}
+/// `/v1/batches` line result body.
+pub(crate) fn batch_response(
+    response: EmbeddingResponse,
+    model: &str,
+) -> Result<Value, InferenceError> {
+    render(response, model)
+}
 fn render(response: EmbeddingResponse, model: &str) -> Result<Value, InferenceError> {
     let data: Vec<_> = response
         .embeddings

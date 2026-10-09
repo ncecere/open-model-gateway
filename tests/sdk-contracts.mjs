@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import OpenAI from "openai";
+import OpenAI, { toFile } from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 
 const base = process.env.SDK_TEST_BASE_URL;
@@ -39,3 +39,45 @@ assert.equal(finalMessage.usage.output_tokens, 4);
 assert.equal(finalMessage.content[0].text, "Hello from fixture");
 assert.equal(finalMessage.stop_reason, "end_turn");
 console.log("OpenAI Chat, Responses, and Anthropic Messages SDK contracts passed (JSON + streaming helpers)");
+// Files API (gateway-owned store): the official SDK's multipart order works.
+const jsonl = '{"custom_id":"a","method":"POST","url":"/v1/chat/completions","body":{}}\n';
+const uploaded = await openai.files.create({ file: await toFile(Buffer.from(jsonl), "input.jsonl"), purpose: "batch" });
+assert.match(uploaded.id, /^file-[0-9a-f]{32}$/);
+assert.equal(uploaded.purpose, "batch");
+assert.equal(uploaded.bytes, Buffer.byteLength(jsonl));
+assert.equal(uploaded.filename, "input.jsonl");
+const userFile = await openai.files.create({
+  file: await toFile(Buffer.from("notes"), "notes.txt"),
+  purpose: "user_data",
+  expires_after: { anchor: "created_at", seconds: 3600 },
+});
+assert.equal(userFile.expires_at - userFile.created_at, 3600);
+assert.equal((await openai.files.retrieve(uploaded.id)).id, uploaded.id);
+const listed = [];
+for await (const file of openai.files.list({ purpose: "batch" })) listed.push(file.id);
+assert.deepEqual(listed, [uploaded.id]);
+assert.equal(await (await openai.files.content(uploaded.id)).text(), jsonl);
+assert.equal((await openai.files.delete(uploaded.id)).deleted, true);
+await assert.rejects(openai.files.retrieve(uploaded.id), (e) => e.status === 404);
+// Batch API (gateway files, any model): the official SDK creates, retrieves, lists and cancels.
+const batchInput = await openai.files.create({
+  file: await toFile(Buffer.from('{"custom_id":"one","method":"POST","url":"/v1/chat/completions","body":{"model":"company/batch","messages":[{"role":"user","content":"hi"}],"max_completion_tokens":8}}\n'), "batch.jsonl"),
+  purpose: "batch",
+});
+const batch = await openai.batches.create({ input_file_id: batchInput.id, endpoint: "/v1/chat/completions", completion_window: "24h", metadata: { omg_mode: "gateway" } });
+assert.match(batch.id, /^batch_[0-9a-f]{32}$/);
+assert.equal(batch.status, "validating");
+assert.equal(batch.input_file_id, batchInput.id);
+assert.deepEqual(batch.request_counts, { total: 1, completed: 0, failed: 0 });
+assert.equal((await openai.batches.retrieve(batch.id)).id, batch.id);
+const batches = [];
+for await (const b of openai.batches.list()) batches.push(b.id);
+assert.deepEqual(batches, [batch.id]);
+assert.equal((await openai.batches.cancel(batch.id)).status, "cancelling");
+// An invalid file is refused with a line-numbered report.
+const badInput = await openai.files.create({ file: await toFile(Buffer.from('{"custom_id":"x","method":"POST","url":"/v1/chat/completions","body":{"model":"company/unknown","messages":[{"role":"user","content":"hi"}],"max_completion_tokens":8}}\n'), "bad.jsonl"), purpose: "batch" });
+await assert.rejects(
+  openai.batches.create({ input_file_id: badInput.id, endpoint: "/v1/chat/completions", completion_window: "24h" }),
+  (e) => e.status === 400 && e.code === "invalid_batch_input",
+);
+console.log("Files API and Batch API SDK contracts passed");

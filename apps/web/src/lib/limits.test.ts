@@ -15,7 +15,7 @@ describe("stacked budgets", () => {
   it("composes rates by minimum and budgets by minimum per period; other periods all apply", () => {
     const platform = limits({ requests_per_minute: 60, budgets: [{ period: "month", amount_microusd: "100000000" }] });
     const local = limits({ requests_per_minute: 80, budgets: [{ period: "month", amount_microusd: "9007199254740993" }, { period: "day", amount_microusd: "5000000" }] });
-    expect(composeLimits(platform, local)).toEqual({ requests_per_minute: 60, tokens_per_minute: null, concurrent_requests: null, concurrent_jobs: null, budgets: [{ period: "day", amount_microusd: "5000000" }, { period: "month", amount_microusd: "100000000" }] });
+    expect(composeLimits(platform, local)).toEqual({ requests_per_minute: 60, tokens_per_minute: null, concurrent_requests: null, concurrent_jobs: null, budgets: [{ period: "day", amount_microusd: "5000000" }, { period: "month", amount_microusd: "100000000" }], storage_bytes: null });
     expect(composeLimits(limits({ budgets: [{ period: "month", amount_microusd: "9007199254740993" }] }), limits({ budgets: [{ period: "month", amount_microusd: "9007199254740992" }] })).budgets[0]!.amount_microusd).toBe("9007199254740992");
   });
   it("sends the full set with exact BigInt money, never the legacy fields", () => {

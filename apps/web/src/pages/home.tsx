@@ -8,6 +8,8 @@ import { clearRememberedPortals, landingSearch, rememberPortal, rememberWorkspac
 import { inWorkspacePortal } from "../lib/permissions";
 import { HomePortal } from "./home-portal";
 import { Requests } from "./requests";
+import { FilesPage } from "./files";
+import { BatchDetailPage } from "./batches";
 import { PlatformRequestDetailPage, RequestDetailPage } from "./request-detail";
 import { LogsPage } from "./logs";
 import { PlatformSessionDetailPage, SessionDetailPage } from "./logs-session";
@@ -116,6 +118,8 @@ export function DashboardContent({ session, search, workspace, navigate }: { ses
     case "overview": return <Overview session={session} workspace={workspace} />;
     case "keys": return <Keys session={session} workspace={workspace} />;
     case "requests": return <Requests session={session} workspace={workspace} />;
+    case "files": return <FilesPage session={session} workspace={workspace} />;
+    case "batch-detail": return search.record ? <BatchDetailPage session={session} workspace={workspace} id={search.record} /> : <PermissionNotice title="Missing batch identifier" />;
     case "session-detail": return <SessionDetailPage session={session} workspace={workspace} />;
     case "request-detail": return search.record ? <RequestDetailPage session={session} workspace={workspace} id={search.record} /> : <PermissionNotice title="Missing request identifier" />;
     case "key-detail": return search.record ? <KeyDetail session={session} workspace={workspace} id={search.record} /> : <PermissionNotice title="Missing key identifier" />;

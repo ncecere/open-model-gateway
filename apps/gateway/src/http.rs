@@ -21,7 +21,7 @@ use crate::{
     identity::IdentityState,
     inference::{Engine, EngineLimits, types::WorkloadKind},
     protocols::{
-        audio, batches, chat_completions, embeddings, images, messages, realtime, rerank,
+        audio, batches, chat_completions, embeddings, files, images, messages, realtime, rerank,
         responses, systemone, videos,
     },
     providers::ProviderRegistry,
@@ -128,8 +128,7 @@ fn build_router(
             .layer::<_, std::convert::Infallible>(DefaultBodyLimit::max(bytes))
             .layer(RequestBodyLimitLayer::new(bytes))
     };
-    let upload_bytes =
-        usize::try_from(job_limits.batch_file_bytes + 64 * 1024).unwrap_or(usize::MAX);
+    let file_bytes = crate::filestore::upload::limits().body_bytes();
     let small = 2 * 1024 * 1024;
     let jobs = Router::new()
         .route(
@@ -144,12 +143,16 @@ fn build_router(
             cap(small, get(videos::retrieve).delete(videos::delete)),
         )
         .route("/v1/videos/{id}/content", cap(small, get(videos::content)))
-        .route("/v1/files", cap(upload_bytes, post(batches::upload)))
-        .route("/v1/files/{id}", cap(small, get(batches::file)))
+        // Gateway-owned Files API on the encrypted file store (docs/files-api.md).
         .route(
-            "/v1/files/{id}/content",
-            cap(small, get(batches::file_content)),
+            "/v1/files",
+            cap(file_bytes, post(files::upload).get(files::list)),
         )
+        .route(
+            "/v1/files/{id}",
+            cap(small, get(files::retrieve).delete(files::delete)),
+        )
+        .route("/v1/files/{id}/content", cap(small, get(files::content)))
         .route(
             "/v1/batches",
             cap(small, post(batches::create).get(batches::list)),
@@ -161,7 +164,10 @@ fn build_router(
 
     let ready_web = web.clone();
     let mut root = Router::new();
+    // Dashboard file uploads carry their own cap (GATEWAY_FILES_MAX_BYTES).
+    let mut uploads = Router::new();
     if let Some(identity) = identity {
+        uploads = crate::management::upload_router(identity.clone());
         root = root
             .merge(crate::identity::router(identity.clone()))
             .merge(crate::management::router(identity));
@@ -190,6 +196,7 @@ fn build_router(
     .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024))
     .merge(workloads)
     .merge(jobs)
+    .merge(uploads)
     .layer(Extension(engine))
     .layer(middleware::from_fn(request_context))
     .with_state(store)
@@ -430,7 +437,9 @@ mod tests {
                 "GET",
             ),
             ("/v1/files", "POST"),
+            ("/v1/files", "GET"),
             ("/v1/files/file-00000000000000000000000000000000", "GET"),
+            ("/v1/files/file-00000000000000000000000000000000", "DELETE"),
             (
                 "/v1/files/file-00000000000000000000000000000000/content",
                 "GET",

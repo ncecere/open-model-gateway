@@ -1,8 +1,10 @@
 mod access;
 mod alerts;
+mod batches;
 mod catalogs;
 mod compare;
 mod directory;
+mod files;
 mod governance;
 mod key_safety;
 mod keys;
@@ -14,6 +16,7 @@ mod requests;
 pub(crate) mod resources;
 mod settings;
 mod setup;
+mod storage_usage;
 #[cfg(all(test, feature = "integration-tests"))]
 mod tests;
 mod usage;
@@ -149,6 +152,12 @@ const POLICY_REASONS: &[(&str, &str, &str, &str)] = &[
         "concurrent_jobs",
     ),
     (
+        "storage_bytes exceeds a parent limit",
+        "exceeds_parent_rate",
+        "limit",
+        "storage_bytes",
+    ),
+    (
         "A stored day budget cannot be raised",
         "stored_budget_raise_not_allowed",
         "period",
@@ -219,6 +228,12 @@ const POLICY_REASONS: &[(&str, &str, &str, &str)] = &[
         "stored_rate_loosen_not_allowed",
         "limit",
         "concurrent_jobs",
+    ),
+    (
+        "A stored storage_bytes cap cannot be raised or removed",
+        "stored_rate_loosen_not_allowed",
+        "limit",
+        "storage_bytes",
     ),
 ];
 /// Policy rejection with `reason` and detail value (a period or limit name).
@@ -312,6 +327,11 @@ pub fn router(identity: IdentityState) -> Router<Store> {
         .layer(Extension(sign_in))
         .route_layer(middleware::from_fn_with_state(identity, require_session))
 }
+/// Session routes with their own (larger) body cap; mount outside the shared
+/// 2 MiB request limit.
+pub fn upload_router(identity: IdentityState) -> Router<Store> {
+    files::upload_routes().route_layer(middleware::from_fn_with_state(identity, require_session))
+}
 fn routes() -> Router<Store> {
     Router::new()
         .merge(directory::routes())
@@ -325,6 +345,8 @@ fn routes() -> Router<Store> {
         .merge(key_safety::routes())
         .merge(compare::routes())
         .merge(alerts::routes())
+        .merge(files::routes())
+        .merge(batches::routes())
         .route("/api/v1/me", get(me))
         .route("/api/v1/me/summary", get(me::summary))
         .route("/api/v1/me/keys", get(me::my_keys))
@@ -351,6 +373,14 @@ fn routes() -> Router<Store> {
         .route(
             "/api/v1/platform/usage/overview",
             get(usage::platform_overview),
+        )
+        .route(
+            "/api/v1/workspaces/{ws}/usage/storage",
+            get(storage_usage::workspace_storage_usage),
+        )
+        .route(
+            "/api/v1/platform/usage/storage",
+            get(storage_usage::platform_storage_usage),
         )
         .route(
             "/api/v1/platform/usage/explore",

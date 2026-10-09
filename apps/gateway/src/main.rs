@@ -332,6 +332,12 @@ async fn main() -> Result<()> {
             )
             .await?;
             tracing::info!(backend = files.backend_name(), "file store configured");
+            // Files API upload cap (GATEWAY_FILES_MAX_BYTES).
+            open_model_gateway::filestore::upload::configure(
+                open_model_gateway::filestore::upload::FilesApiLimits::from_lookup(|name| {
+                    std::env::var(name).ok()
+                })?,
+            )?;
             let alert_interval = open_model_gateway::alerts::interval_from_env()?;
             // Async jobs (video, batch): limits and the background poller.
             open_model_gateway::jobs::configure(open_model_gateway::jobs::JobLimits::from_lookup(
@@ -356,9 +362,12 @@ async fn main() -> Result<()> {
             let maintenance = open_model_gateway::maintenance::start(store.clone(), retention);
             let file_sweeper =
                 open_model_gateway::filestore::sweep::start(store.clone(), files.clone());
-            let job_poller = open_model_gateway::jobs::poller::start(
-                open_model_gateway::jobs::Jobs::new(store.clone(), &engine),
-            );
+            // Async jobs: the provider poller (video, native batches) and the
+            // gateway-run batch runner (GATEWAY_BATCH_WORKERS).
+            let batch_jobs = open_model_gateway::jobs::Jobs::new(store.clone(), &engine)
+                .with_files(Some(files.clone()));
+            let job_poller = open_model_gateway::jobs::poller::start(batch_jobs.clone());
+            let batch_runner = open_model_gateway::jobs::runner::start(batch_jobs);
             let alerts =
                 alert_interval.map(|every| open_model_gateway::alerts::start(store.clone(), every));
             let lifecycle_store = store.clone();
@@ -399,6 +408,10 @@ async fn main() -> Result<()> {
             if let Some(poller) = job_poller {
                 poller.abort();
                 let _ = poller.await;
+            }
+            if let Some(runner) = batch_runner {
+                runner.abort();
+                let _ = runner.await;
             }
             if let Some(sweeper) = file_sweeper {
                 sweeper.abort();

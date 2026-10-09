@@ -20,7 +20,7 @@ The dashboard follows Grounded's Bitop UI and Workspace/Admin composition, with 
 - **Admin:** Users, Teams, Projects, SSO group mappings, Connections (OpenAI, Anthropic, OpenRouter, AWS Bedrock with default/profile/role access modes, approved local endpoints), Models with routes and immutable prices, Catalogs and defaults, limits and budgets, cost centers, Logs and Usage (Team/Project rows only), key safety, audit, Settings (general, limits, data & privacy, email, sign-in) and Alerts (budget thresholds, spend spikes, error rates, failing connections; in-app and email). Auditors get the same views read-only.
 - **Checks:** Rust unit/integration tests on real PostgreSQL, mock-provider and SDK contracts, Vitest, and a Playwright journey with axe accessibility scans for every persona ([verification](docs/verification.md), [accessibility](docs/accessibility.md)).
 
-**Planned, not implemented:** an OpenRouter video adapter (video has no supported provider: OpenAI shut down the Sora 2 models and the Videos API on 2026-09-24), video remix/edits/references, batches beyond Chat Completions, image edits and vision input, token-by-token Responses/Messages streaming, active health probes, webhooks and key-expiry notifications, provider-invoice reconciliation. See [roadmap](docs/roadmap.md).
+**Planned, not implemented:** an OpenRouter video adapter (video has no supported provider: OpenAI shut down the Sora 2 models and the Videos API on 2026-09-24), video remix/edits/references, native batches beyond OpenAI and Anthropic, image edits and vision input, token-by-token Responses/Messages streaming, active health probes, webhooks and key-expiry notifications, provider-invoice reconciliation. See [roadmap](docs/roadmap.md).
 
 ## Local account picker
 
@@ -77,7 +77,7 @@ Keep the binary and compiled SPA from the same verified revision. Use a separate
 | `POST /v1/embeddings` | String/string-batch input, float vectors; declared embedding profiles |
 | `POST /v1/rerank` | `{model,query,documents,top_n?}` → scored indices; OpenRouter |
 | `POST /v1/systemone` | TypeSafe System One contract (TypeSafe SDK compatible); OpenRouter |
-| `/v1/videos`, `/v1/files`, `/v1/batches` | Async jobs: Chat Completions batches (OpenAI), workspace-owned gateway ids. `/v1/videos` returns `unsupported_capability`: no supported video provider since OpenAI's Videos API shutdown (2026-09-24) ([async jobs](docs/async-jobs.md)) |
+| `/v1/videos`, `/v1/files`, `/v1/batches` | Gateway Files API; batches for any model (native OpenAI/Anthropic batch APIs or gateway-run lines, [batches](docs/batches.md)), workspace-owned gateway ids. `/v1/videos` returns `unsupported_capability`: no supported video provider since OpenAI's Videos API shutdown (2026-09-24) ([async jobs](docs/async-jobs.md)) |
 | `/api/v1/*` | Browser-session management with exact-Origin/CSRF checks |
 
 Inference keys never authorize management. Model-declared protocols must intersect adapter support. OpenAI, Anthropic, AWS Bedrock and OpenRouter have separate adapters; local vLLM, SGLang, Ollama and generic-compatible profiles have explicit, narrow contracts. Local HTTP requires exact server-controlled endpoint approval and pinned IP destinations; cloud requires HTTPS. Redirects, ambient proxies and implicit retries are disabled.

@@ -18,6 +18,11 @@ pub(crate) struct Price {
     price_lines: Option<PriceLines>,
     #[serde(default)]
     max_units: Option<MaxUnits>,
+    /// Batch price list (0021, v3 only): the rates native batches are charged
+    /// (a provider's published batch prices; never derived). Shares the token
+    /// ceilings and `max_units`.
+    #[serde(default)]
+    batch_price_lines: Option<PriceLines>,
 }
 fn legacy() -> i16 {
     1
@@ -31,7 +36,7 @@ pub(super) async fn prices(
     let mut tx = resources::catalog_tx(&s, &u, false).await?;
     exists(&mut tx, "deployments", id).await?;
     let (limit, offset) = page.bounds()?;
-    let mut data:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',id,'deployment_id',deployment_id,'input_microusd_per_million',input_microusd_per_million::text,'output_microusd_per_million',output_microusd_per_million::text,'input_token_limit',input_token_limit,'output_token_limit',output_token_limit,'pricing_version',pricing_version,'cache_pricing',cache_pricing,'price_lines',price_lines,'max_units',max_units,'created_at',created_at) FROM deployment_prices WHERE deployment_id=$1 ORDER BY created_at DESC,id DESC LIMIT $2 OFFSET $3").bind(id).bind(limit+1).bind(offset).fetch_all(&mut *tx).await?;
+    let mut data:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',id,'deployment_id',deployment_id,'input_microusd_per_million',input_microusd_per_million::text,'output_microusd_per_million',output_microusd_per_million::text,'input_token_limit',input_token_limit,'output_token_limit',output_token_limit,'pricing_version',pricing_version,'cache_pricing',cache_pricing,'price_lines',price_lines,'max_units',max_units,'batch_price_lines',batch_price_lines,'created_at',created_at) FROM deployment_prices WHERE deployment_id=$1 ORDER BY created_at DESC,id DESC LIMIT $2 OFFSET $3").bind(id).bind(limit+1).bind(offset).fetch_all(&mut *tx).await?;
     let more = data.len() > limit as usize;
     data.truncate(limit as usize);
     for row in &mut data {
@@ -49,23 +54,55 @@ async fn exists(tx: &mut Transaction<'_, Postgres>, table: &str, id: Uuid) -> Re
     Ok(())
 }
 /// Exact human display for v3 lines, computed from integers (never floats).
-/// `display_lines[i]` describes `price_lines[i]`; v1/v2 rows get null.
+/// `display_lines[i]` describes `price_lines[i]`; v1/v2 rows get null. A
+/// batch price list gets `batch_display_lines`/`batch_display_summary`.
 pub(crate) fn add_display(row: &mut Value) {
-    let lines = row
-        .get("price_lines")
-        .cloned()
-        .and_then(|v| serde_json::from_value::<PriceLines>(v).ok());
-    let (lines_display, summary) = match lines {
-        Some(l) => (
-            json!(l.0.iter().map(display_line).collect::<Vec<_>>()),
-            json!(display_summary(&l)),
-        ),
-        None => (Value::Null, Value::Null),
+    let display = |key: &str| {
+        let lines = row
+            .get(key)
+            .cloned()
+            .and_then(|v| serde_json::from_value::<PriceLines>(v).ok());
+        match lines {
+            Some(l) => (
+                json!(l.0.iter().map(display_line).collect::<Vec<_>>()),
+                json!(display_summary(&l)),
+            ),
+            None => (Value::Null, Value::Null),
+        }
     };
+    let (lines_display, summary) = display("price_lines");
+    let (batch_display, batch_summary) = display("batch_price_lines");
     if let Some(obj) = row.as_object_mut() {
         obj.insert("display_lines".into(), lines_display);
         obj.insert("display_summary".into(), summary);
+        obj.insert("batch_display_lines".into(), batch_display);
+        obj.insert("batch_display_summary".into(), batch_summary);
     }
+}
+/// A batch list covers exactly the standard list's meters (same meter,
+/// variant and tier keys, same not-applicable meters), so switching lists
+/// never turns a priced meter into a missing one.
+fn same_meters(standard: &PriceLines, batch: &PriceLines) -> bool {
+    let keys = |l: &PriceLines| {
+        let mut k: Vec<String> = serde_json::to_value(l)
+            .ok()
+            .and_then(|v| v.as_array().cloned())
+            .unwrap_or_default()
+            .iter()
+            .map(|line| {
+                format!(
+                    "{}|{}|{}|{}",
+                    line["meter"],
+                    line["variant"],
+                    line["min_prompt_tokens"],
+                    line["not_applicable"]
+                )
+            })
+            .collect();
+        k.sort();
+        k
+    };
+    keys(standard) == keys(batch)
 }
 /// A price version whose exact integer bounds have been checked; only this can be inserted.
 pub(crate) struct ValidPrice {
@@ -116,6 +153,20 @@ pub(crate) fn validate_price(p: Price) -> Result<ValidPrice, ApiError> {
             p.output_token_limit as u64,
         )
         .map_err(|_| invalid())?;
+        // The batch list is validated the same way and must price the same
+        // meters (it replaces the standard list for native batches).
+        if let Some(batch) = &p.batch_price_lines {
+            crate::billing::v3::bound(
+                batch,
+                p.max_units.as_ref().unwrap_or(&MaxUnits::default()),
+                p.input_token_limit as u64,
+                p.output_token_limit as u64,
+            )
+            .map_err(|_| invalid())?;
+            if !same_meters(lines, batch) {
+                return Err(invalid());
+            }
+        }
         return Ok(ValidPrice {
             price: Price {
                 max_units: Some(p.max_units.clone().unwrap_or_default()),
@@ -125,7 +176,7 @@ pub(crate) fn validate_price(p: Price) -> Result<ValidPrice, ApiError> {
             output: None,
         });
     }
-    if p.price_lines.is_some() || p.max_units.is_some() {
+    if p.price_lines.is_some() || p.max_units.is_some() || p.batch_price_lines.is_some() {
         return Err(invalid());
     }
     let input = money(
@@ -183,7 +234,7 @@ pub(crate) async fn insert_price(
     } = v;
     exists(tx, "deployments", deployment).await?;
     let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version,cache_pricing,price_lines,max_units) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)").bind(id).bind(deployment).bind(input).bind(output).bind(p.input_token_limit).bind(p.output_token_limit).bind(p.pricing_version).bind(p.cache_pricing.map(serde_json::to_value).transpose().map_err(|_|invalid())?).bind(p.price_lines.map(serde_json::to_value).transpose().map_err(|_|invalid())?).bind(p.max_units.map(serde_json::to_value).transpose().map_err(|_|invalid())?).execute(&mut **tx).await?;
+    sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version,cache_pricing,price_lines,max_units,batch_price_lines) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)").bind(id).bind(deployment).bind(input).bind(output).bind(p.input_token_limit).bind(p.output_token_limit).bind(p.pricing_version).bind(p.cache_pricing.map(serde_json::to_value).transpose().map_err(|_|invalid())?).bind(p.price_lines.map(serde_json::to_value).transpose().map_err(|_|invalid())?).bind(p.max_units.map(serde_json::to_value).transpose().map_err(|_|invalid())?).bind(p.batch_price_lines.map(serde_json::to_value).transpose().map_err(|_|invalid())?).execute(&mut **tx).await?;
     resources::audit(
         tx,
         u,

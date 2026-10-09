@@ -79,7 +79,7 @@ export function StorageSection({ session }: { session: Session }) {
             <Td>{!g.toggle ? <span className={st.note}>{off ? "Store off" : "Always"}</span> : writable
               ? <Switch label={<span className="sr-only">Allow {g.label.toLowerCase()}</span>} checked={row.enabled} disabled={busy || (off && !row.enabled)} onCheckedChange={checked => set(g.group, { enabled: checked })} />
               : g.enabled ? <Badge tone="good">Allowed</Badge> : <Badge>Off</Badge>}</Td>
-            <Td numeric>{g.objects ? formatBytes(g.bytes) : "—"}</Td>
+            <Td numeric><span title={`${g.objects.toLocaleString("en-US")} file${g.objects === 1 ? "" : "s"}`}>{off && !g.objects ? "—" : formatBytes(g.bytes)}</span></Td>
           </Tr>;
         })}
       </Table>

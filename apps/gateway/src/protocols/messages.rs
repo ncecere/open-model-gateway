@@ -266,6 +266,29 @@ fn start_usage(terminal: &Value) -> Value {
     }
     usage
 }
+/// `/v1/batches` line body (`crate::jobs::lines`, Anthropic shape): the
+/// interactive contract, never streamed.
+pub(crate) fn batch_request(body: Value) -> Result<ChatRequest> {
+    let wire: Request = serde_json::from_value(body).map_err(|_| InferenceError::InvalidRequest)?;
+    if wire.stream
+        || wire
+            .metadata
+            .as_ref()
+            .and_then(|m| m.user_id.as_ref())
+            .is_some_and(|u| u.chars().count() > 256)
+    {
+        return Err(InferenceError::InvalidRequest);
+    }
+    wire.normalize()
+}
+/// `/v1/batches` line result body (an Anthropic `message`).
+pub(crate) fn batch_response(id: &str, model: &str, response: &ChatResponse) -> Result<Value> {
+    snapshot(id, model, response)
+}
+/// `/v1/batches` line error body (Anthropic shape).
+pub(crate) fn batch_error_body(e: InferenceError) -> Value {
+    error_body(e)
+}
 fn snapshot(id: &str, model: &str, response: &ChatResponse) -> Result<Value> {
     let mut content = vec![];
     if let Some(text) = &response.content {

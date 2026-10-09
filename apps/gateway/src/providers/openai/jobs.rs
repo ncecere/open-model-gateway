@@ -6,17 +6,17 @@
 //!   OpenAI shut down the Sora 2 models and this API on 2026-09-24, so the
 //!   adapter no longer offers the `videos` protocol: new jobs are refused
 //!   before admission. These calls remain for jobs created earlier.
-//! - Files + Batch: `POST /files` (multipart `purpose=batch` + a streamed
-//!   JSONL `file`, chunked), `POST /batches`, `GET /batches/{id}`,
-//!   `POST /batches/{id}/cancel`, `GET /files/{id}/content`.
+//! - Native batches (`jobs::native`): `POST /files` (multipart
+//!   `purpose=batch` + a streamed JSONL `file` the gateway encodes), `POST
+//!   /batches`, `GET /batches/{id}`, `POST /batches/{id}/cancel`, `GET
+//!   /files/{id}/content` (output and error files) and `DELETE /files/{id}`.
 //!
 //! Upstream ids are validated (`[A-Za-z0-9._:-]{1,128}`) before they are put
 //! in a path. Error bodies are never read; job error messages are dropped
 //! (codes only). Content bodies are streamed, never buffered or logged.
 use futures_util::StreamExt;
 use reqwest::header::{self, HeaderValue};
-use serde::Deserialize;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use super::{BASE, OpenAiAdapter, check_status, transport_error};
 use crate::{
@@ -33,8 +33,6 @@ type Result<T> = std::result::Result<T, InferenceError>;
 
 /// Job/file objects are small JSON documents.
 const OBJECT_LIMIT: usize = 1024 * 1024;
-/// One batch output line (a full chat completion) may be large.
-const OUTPUT_LINE_LIMIT: usize = 16 * 1024 * 1024;
 
 /// Validate the connection before resolving credentials.
 fn authorization(adapter: &OpenAiAdapter, target: &Deployment) -> Result<HeaderValue> {
@@ -295,22 +293,81 @@ pub(super) async fn video_content(
 }
 
 // ---------------------------------------------------------------- Batch ----
+//
+// Native batches (`jobs::native`): the gateway encodes each validated line
+// itself (`custom_id` = the gateway's `l<n>`, model = the upstream model),
+// uploads the JSONL as one streamed multipart file, creates the batch, and
+// later downloads the output and error files, decodes each line into a
+// canonical result and deletes the provider's files.
 
-pub(super) async fn upload_batch_file(
+/// The upstream URL of an endpoint's lines: chat-like lines are sent as
+/// Chat Completions, embeddings as Embeddings.
+fn upstream_url(endpoint: BatchEndpoint) -> &'static str {
+    if endpoint.is_generation() {
+        "/v1/chat/completions"
+    } else {
+        "/v1/embeddings"
+    }
+}
+
+/// Connection shape accepted for native batches (before any secret lookup).
+pub(super) fn native_batch(target: &Deployment) -> bool {
+    target.provider == "openai"
+        && target.credential_ref != "none"
+        && target
+            .endpoint
+            .as_deref()
+            .is_none_or(|v| v == BASE || v == "https://api.openai.com/v1/")
+        && target.region.as_deref().is_none_or(str::is_empty)
+        && !target.upstream_model.trim().is_empty()
+}
+
+pub(super) fn encode_native_line(
+    target: &Deployment,
+    endpoint: BatchEndpoint,
+    custom_id: &str,
+    request: &BatchRequest,
+) -> Result<Vec<u8>> {
+    let body = match (request, endpoint.is_generation()) {
+        (BatchRequest::Chat(r), true) if !r.stream => super::encode(&target.upstream_model, r),
+        (BatchRequest::Embeddings(r), false) => {
+            crate::providers::embeddings::validate(r)?;
+            crate::providers::embeddings::encode(&target.upstream_model, r)
+        }
+        _ => return Err(InferenceError::InvalidRequest),
+    };
+    serde_json::to_vec(&json!({
+        "custom_id": custom_id,
+        "method": "POST",
+        "url": upstream_url(endpoint),
+        "body": body,
+    }))
+    .map_err(|_| InferenceError::InvalidRequest)
+}
+
+/// Stream the records as one JSONL `purpose=batch` file. An error item
+/// aborts the request body, so the provider never receives a complete form.
+async fn upload_records(
     adapter: &OpenAiAdapter,
     target: &Deployment,
-    content: ByteStream,
-) -> Result<UpstreamFile> {
+    records: ByteStream,
+) -> Result<UpstreamId> {
     let auth = authorization(adapter, target)?;
     let boundary = format!("omg-{}", uuid::Uuid::new_v4().simple());
     let head = format!(
         "--{boundary}\r\nContent-Disposition: form-data; name=\"purpose\"\r\n\r\nbatch\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"batch.jsonl\"\r\nContent-Type: application/jsonl\r\n\r\n"
     );
     let tail = format!("\r\n--{boundary}--\r\n");
-    // A content error (validation failure, client abort) aborts the request
-    // body, so the provider never receives a complete form.
+    let lines = records.map(|record| {
+        record.map(|bytes| {
+            let mut line = Vec::with_capacity(bytes.len() + 1);
+            line.extend_from_slice(&bytes);
+            line.push(b'\n');
+            axum::body::Bytes::from(line)
+        })
+    });
     let body = futures_util::stream::once(async move { Ok(axum::body::Bytes::from(head)) })
-        .chain(content)
+        .chain(lines)
         .chain(futures_util::stream::once(async move {
             Ok(axum::body::Bytes::from(tail))
         }));
@@ -331,17 +388,46 @@ pub(super) async fn upload_batch_file(
     if value["purpose"].as_str().is_some_and(|p| p != "batch") {
         return Err(InferenceError::InvalidUpstream);
     }
-    Ok(UpstreamFile {
-        id: id(&value["id"])?,
-        bytes: value["bytes"].as_u64(),
-    })
+    id(&value["id"])
 }
 
-/// Inclusive OpenAI token usage whose schema defines only cached reads (the
-/// Batch `usage` object and a batch line's Chat `usage`): like the Images
-/// API, cache writes are not a category of this schema, so they are zero;
-/// a missing `cached_tokens` is zero for the same reason. Both totals are
-/// required; malformed usage is unknown, never zero.
+pub(super) async fn submit_native_batch(
+    adapter: &OpenAiAdapter,
+    target: &Deployment,
+    endpoint: BatchEndpoint,
+    records: ByteStream,
+) -> Result<UpstreamBatch> {
+    let input = upload_records(adapter, target, records).await?;
+    let auth = authorization(adapter, target)?;
+    let created = async {
+        let response = adapter
+            .client
+            .post(format!("{}/batches", adapter.base))
+            .header(header::AUTHORIZATION, auth)
+            .json(&json!({
+                "input_file_id": input.as_str(),
+                "endpoint": upstream_url(endpoint),
+                "completion_window": BATCH_COMPLETION_WINDOW,
+            }))
+            .send()
+            .await
+            .map_err(transport_error)?;
+        parse_batch(&read_object(response).await?)
+    }
+    .await;
+    match created {
+        Ok(mut batch) => {
+            batch.input_file.get_or_insert(input);
+            Ok(batch)
+        }
+        Err(e) => {
+            // The batch was not created: remove the uploaded copy (best effort).
+            let _ = delete_file(adapter, target, &input).await;
+            Err(e)
+        }
+    }
+}
+
 pub(super) fn schema_usage(
     value: &Value,
     input_key: &str,
@@ -400,7 +486,7 @@ pub(super) fn parse_batch(value: &Value) -> Result<UpstreamBatch> {
     object_kind(value, "batch")?;
     if value["endpoint"]
         .as_str()
-        .is_some_and(|e| e != BATCH_ENDPOINT)
+        .is_some_and(|e| e != "/v1/chat/completions" && e != "/v1/embeddings")
     {
         return Err(InferenceError::InvalidUpstream);
     }
@@ -433,6 +519,7 @@ pub(super) fn parse_batch(value: &Value) -> Result<UpstreamBatch> {
     Ok(UpstreamBatch {
         id: id(&value["id"])?,
         status,
+        input_file: optional_id(&value["input_file_id"])?,
         output_file: optional_id(&value["output_file_id"])?,
         error_file: optional_id(&value["error_file_id"])?,
         counts,
@@ -448,35 +535,6 @@ pub(super) fn parse_batch(value: &Value) -> Result<UpstreamBatch> {
         expires_at: timestamp(&value["expires_at"]),
         metadata,
     })
-}
-
-pub(super) async fn create_batch(
-    adapter: &OpenAiAdapter,
-    target: &Deployment,
-    input: &UpstreamId,
-    metadata: Option<Map<String, Value>>,
-) -> Result<UpstreamBatch> {
-    let auth = authorization(adapter, target)?;
-    let mut body = json!({
-        "input_file_id": input.as_str(),
-        "endpoint": BATCH_ENDPOINT,
-        "completion_window": BATCH_COMPLETION_WINDOW,
-    });
-    if let Some(m) = metadata {
-        if !valid_metadata(&m) {
-            return Err(InferenceError::InvalidRequest);
-        }
-        body["metadata"] = Value::Object(m);
-    }
-    let response = adapter
-        .client
-        .post(format!("{}/batches", adapter.base))
-        .header(header::AUTHORIZATION, auth)
-        .json(&body)
-        .send()
-        .await
-        .map_err(transport_error)?;
-    parse_batch(&read_object(response).await?)
 }
 
 pub(super) async fn batch_action(
@@ -535,130 +593,122 @@ async fn open_file(
     Ok(response)
 }
 
-pub(super) async fn file_content(
+/// The output file followed by the error file (a newline between them).
+pub(super) async fn native_batch_results(
     adapter: &OpenAiAdapter,
     target: &Deployment,
-    file: &UpstreamId,
-) -> Result<ContentStream> {
-    let response = open_file(adapter, target, file).await?;
-    Ok(stream(response, "application/jsonl"))
-}
-
-#[derive(Deserialize)]
-struct OutputLine {
-    response: Option<OutputResponse>,
-}
-#[derive(Deserialize)]
-struct OutputResponse {
-    status_code: Option<u16>,
-    body: Option<OutputBody>,
-}
-#[derive(Deserialize)]
-struct OutputBody {
-    usage: Option<Value>,
-}
-
-/// Sum of two observations; any unknown counter stays unknown.
-fn add(a: Usage, b: Usage) -> Usage {
-    let sum = |x: Option<u64>, y: Option<u64>| x.zip(y).and_then(|(x, y)| x.checked_add(y));
-    let billing = a
-        .billing
-        .zip(b.billing)
-        .map(|(x, y)| crate::billing::BillingUsage {
-            total_input_tokens: sum(x.total_input_tokens, y.total_input_tokens),
-            uncached_input_tokens: sum(x.uncached_input_tokens, y.uncached_input_tokens),
-            cache_read_input_tokens: sum(x.cache_read_input_tokens, y.cache_read_input_tokens),
-            cache_write_input_tokens: sum(x.cache_write_input_tokens, y.cache_write_input_tokens),
-            cache_write_default_input_tokens: sum(
-                x.cache_write_default_input_tokens,
-                y.cache_write_default_input_tokens,
-            ),
-            cache_write_5m_input_tokens: sum(
-                x.cache_write_5m_input_tokens,
-                y.cache_write_5m_input_tokens,
-            ),
-            cache_write_1h_input_tokens: sum(
-                x.cache_write_1h_input_tokens,
-                y.cache_write_1h_input_tokens,
-            ),
-        });
-    Usage {
-        input_tokens: sum(a.input_tokens, b.input_tokens),
-        output_tokens: sum(a.output_tokens, b.output_tokens),
-        billing,
-        reasoning_tokens: sum(a.reasoning_tokens, b.reasoning_tokens),
-        ..Usage::default()
-    }
-}
-
-/// Stream the output file and sum each line's `response.body.usage`
-/// (Chat Completions counters). Bodies are parsed only for usage and
-/// dropped line by line; nothing is stored. Any line without valid usage,
-/// an oversized line, or more than `max_bytes` makes the usage unknown.
-pub(super) async fn output_usage(
-    adapter: &OpenAiAdapter,
-    target: &Deployment,
-    file: &UpstreamId,
-    max_bytes: u64,
-) -> Result<OutputUsage> {
-    let response = open_file(adapter, target, file).await?;
-    let mut chunks = response.bytes_stream();
-    let mut line = Vec::new();
-    let mut lines = 0u64;
-    let mut total = 0u64;
-    let mut usage: Option<Usage> = None;
-    let mut unknown = false;
-    let mut consume = |line: &[u8], lines: &mut u64| {
-        if line.iter().all(u8::is_ascii_whitespace) {
-            return;
+    batch: &UpstreamBatch,
+) -> Result<ByteStream> {
+    let mut parts: Vec<ByteStream> = Vec::new();
+    for file in [&batch.output_file, &batch.error_file]
+        .into_iter()
+        .flatten()
+    {
+        let response = open_file(adapter, target, file).await?;
+        if !parts.is_empty() {
+            parts.push(Box::pin(futures_util::stream::once(async {
+                Ok(axum::body::Bytes::from_static(b"\n"))
+            })));
         }
-        *lines += 1;
-        let parsed = serde_json::from_slice::<OutputLine>(line)
-            .ok()
-            .and_then(|l| l.response)
-            .filter(|r| r.status_code == Some(200))
-            .and_then(|r| r.body)
-            .and_then(|b| b.usage)
-            .and_then(|u| {
-                schema_usage(
-                    &u,
-                    "prompt_tokens",
-                    "completion_tokens",
-                    "prompt_tokens_details",
-                )
-            });
-        match parsed {
-            Some(u) if !unknown => usage = Some(usage.map_or(u, |a| add(a, u))),
-            _ => unknown = true,
+        parts.push(Box::pin(
+            response
+                .bytes_stream()
+                .map(|chunk| chunk.map_err(transport_error)),
+        ));
+    }
+    Ok(Box::pin(futures_util::stream::iter(parts).flatten()))
+}
+
+/// One output/error file line: `{custom_id, response:{status_code, body},
+/// error}`. Error messages are never read; only codes.
+pub(super) fn decode_native_result(endpoint: BatchEndpoint, line: &[u8]) -> Result<NativeResult> {
+    let value: Value = serde_json::from_slice(line).map_err(|_| InferenceError::InvalidUpstream)?;
+    let custom_id = value["custom_id"]
+        .as_str()
+        .filter(|s| !s.is_empty() && s.len() <= 64)
+        .ok_or(InferenceError::InvalidUpstream)?
+        .to_owned();
+    let response = &value["response"];
+    let outcome = if response.is_object() {
+        let status = response["status_code"]
+            .as_u64()
+            .and_then(|n| u16::try_from(n).ok())
+            .filter(|n| (100..=599).contains(n))
+            .ok_or(InferenceError::InvalidUpstream)?;
+        let body = &response["body"];
+        if status == 200 {
+            NativeOutcome::Succeeded(Box::new(if endpoint.is_generation() {
+                BatchResponse::Chat(super::decode_complete(body)?)
+            } else {
+                let n = body["data"].as_array().map_or(0, Vec::len);
+                let request = crate::inference::types::EmbeddingRequest {
+                    model: String::new(),
+                    input: vec![String::from("x"); n],
+                    dimensions: None,
+                };
+                BatchResponse::Embeddings(crate::providers::embeddings::decode(body, &request)?)
+            }))
+        } else {
+            let code = body["error"]["code"]
+                .as_str()
+                .or_else(|| body["error"]["type"].as_str())
+                .unwrap_or("");
+            NativeOutcome::Failed {
+                status,
+                code: ErrorCode::parse(code),
+            }
+        }
+    } else {
+        match value["error"]["code"].as_str() {
+            Some("batch_expired") => NativeOutcome::Expired,
+            Some("batch_cancelled") => NativeOutcome::Cancelled,
+            Some(code) => NativeOutcome::Failed {
+                status: 500,
+                code: ErrorCode::parse(code),
+            },
+            None => return Err(InferenceError::InvalidUpstream),
         }
     };
-    while let Some(chunk) = chunks.next().await {
-        let chunk = chunk.map_err(transport_error)?;
-        total = total.saturating_add(chunk.len() as u64);
-        if total > max_bytes {
-            return Ok(OutputUsage { lines, usage: None });
-        }
-        let mut rest: &[u8] = &chunk;
-        while let Some(pos) = rest.iter().position(|b| *b == b'\n') {
-            line.extend_from_slice(&rest[..pos]);
-            if line.len() > OUTPUT_LINE_LIMIT {
-                return Ok(OutputUsage { lines, usage: None });
-            }
-            consume(&line, &mut lines);
-            line.clear();
-            rest = &rest[pos + 1..];
-        }
-        line.extend_from_slice(rest);
-        if line.len() > OUTPUT_LINE_LIMIT {
-            return Ok(OutputUsage { lines, usage: None });
+    Ok(NativeResult { custom_id, outcome })
+}
+
+async fn delete_file(
+    adapter: &OpenAiAdapter,
+    target: &Deployment,
+    file: &UpstreamId,
+) -> Result<()> {
+    let auth = authorization(adapter, target)?;
+    let response = adapter
+        .client
+        .delete(format!("{}/files/{}", adapter.base, file.as_str()))
+        .header(header::AUTHORIZATION, auth)
+        .send()
+        .await
+        .map_err(transport_error)?;
+    // Already gone is done.
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(());
+    }
+    check_status(response.status())
+}
+
+/// Delete the provider's input, output and error files (batches themselves
+/// cannot be deleted on OpenAI). Every file is attempted.
+pub(super) async fn delete_native_batch(
+    adapter: &OpenAiAdapter,
+    target: &Deployment,
+    batch: &UpstreamBatch,
+) -> Result<()> {
+    let mut result = Ok(());
+    for file in [&batch.input_file, &batch.output_file, &batch.error_file]
+        .into_iter()
+        .flatten()
+    {
+        if let Err(e) = delete_file(adapter, target, file).await {
+            result = Err(e);
         }
     }
-    consume(&line, &mut lines);
-    drop(line);
-    Ok(OutputUsage {
-        lines,
-        usage: if unknown { None } else { usage },
-    })
+    result
 }
 
 #[cfg(test)]

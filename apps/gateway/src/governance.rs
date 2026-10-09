@@ -72,9 +72,27 @@ struct Price {
     cache_pricing: Option<serde_json::Value>,
     price_lines: Option<serde_json::Value>,
     max_units: Option<serde_json::Value>,
+    /// Batch price list (0021, v3 only): applies to native batches.
+    batch_price_lines: Option<serde_json::Value>,
 }
-const PRICE_COLUMNS: &str = "id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version,cache_pricing,price_lines,max_units";
+const PRICE_COLUMNS: &str = "id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version,cache_pricing,price_lines,max_units,batch_price_lines";
 impl Price {
+    /// Whether this version publishes a batch price list (`batch::PriceTier`).
+    fn has_batch_lines(&self) -> bool {
+        self.pricing_version == 3 && self.batch_price_lines.is_some()
+    }
+    /// The price as valued under a reservation's pinned tier (`price_tier`,
+    /// 0021): the batch tier swaps in the batch price list.
+    fn tiered(mut self, tier: &str) -> Result<Price, InferenceError> {
+        match tier {
+            "standard" => Ok(self),
+            "batch" if self.has_batch_lines() => {
+                self.price_lines = self.batch_price_lines.take();
+                Ok(self)
+            }
+            _ => Err(InferenceError::Storage),
+        }
+    }
     fn rates(&self) -> Result<CachePricing, InferenceError> {
         serde_json::from_value(self.cache_pricing.clone().ok_or(InferenceError::Storage)?)
             .map_err(|_| InferenceError::Storage)
@@ -275,8 +293,10 @@ const POLICIES: &str = "SELECT NULL::uuid workspace_id,NULL::uuid api_key_id,req
 /// - A job holds a "requests at once" slot only while its submission runs
 ///   (no `async_jobs` row yet); afterwards it holds a job slot until the job
 ///   is terminal, cancel was requested, or the lease expired.
+/// - Gateway-run batch lines (`batch_job_id`, 0021) count toward nothing:
+///   their batch holds the job slot.
 const RATE_ACCOUNTING: &str = r#"WITH accounting AS (
-  SELECT r.workspace_id,r.api_key_id,r.minute_start,r.state,r.lease_expires_at,r.reserved_tokens,r.input_tokens,r.output_tokens,r.billing_usage,e.workload_kind IN('videos','batches') AS job,j.id IS NOT NULL AS accepted,coalesce(j.state IN('completed','failed','cancelled','expired') OR j.cancel_requested_at IS NOT NULL,false) AS job_done FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id LEFT JOIN async_jobs j ON j.execution_id=r.execution_id WHERE r.minute_start=date_trunc('minute',$3::timestamptz,'UTC') OR (r.state='pending' AND r.lease_expires_at>$3)
+  SELECT r.workspace_id,r.api_key_id,r.minute_start,r.state,r.lease_expires_at,r.reserved_tokens,r.input_tokens,r.output_tokens,r.billing_usage,e.workload_kind IN('videos','batches') OR e.batch_job_id IS NOT NULL AS job,j.id IS NOT NULL OR e.batch_job_id IS NOT NULL AS accepted,coalesce(j.state IN('completed','failed','cancelled','expired') OR j.cancel_requested_at IS NOT NULL,e.batch_job_id IS NOT NULL) AS job_done FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id LEFT JOIN async_jobs j ON j.execution_id=r.execution_id WHERE r.minute_start=date_trunc('minute',$3::timestamptz,'UTC') OR (r.state='pending' AND r.lease_expires_at>$3)
   UNION ALL SELECT e.workspace_id,e.api_key_id,date_trunc('minute',e.started_at,'UTC'),'unknown',NULL::timestamptz,NULL::bigint,e.input_tokens,e.output_tokens,e.billing_usage,false,false,false FROM inference_executions e WHERE e.started_at>=date_trunc('minute',$3::timestamptz,'UTC') AND e.started_at<date_trunc('minute',$3::timestamptz,'UTC')+interval '1 minute' AND NOT EXISTS(SELECT 1 FROM governance_reservations r WHERE r.execution_id=e.id)
   ) SELECT
   ($4::bigint IS NULL OR count(*) FILTER(WHERE NOT job AND minute_start=date_trunc('minute',$3::timestamptz,'UTC'))::numeric+1<=$4)
@@ -299,6 +319,8 @@ pub(crate) const BUDGETS: &str = "SELECT NULL::uuid workspace_id,NULL::uuid api_
 /// unbounded/unpriced usage makes the sum a lower bound. Read from the
 /// maintained totals (migration 0015) that admission also uses.
 pub(crate) use totals::budget_consumption;
+/// Batch admission, line admission and closing (`crate::jobs::batch`, 0021).
+pub mod batch;
 /// Lease extension and bound preview for async jobs (`crate::jobs`).
 pub mod jobs;
 /// Maintained per-scope, per-period budget totals and their consistency check.
@@ -432,18 +454,6 @@ async fn admit_unobserved(
     let lease = now
         .checked_add_signed(chrono::TimeDelta::seconds(lease_seconds))
         .ok_or(InferenceError::Configuration)?;
-    let policies = sqlx::query_as::<_, Policy>(POLICIES)
-        .bind(workspace)
-        .bind(lineage)
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(storage)?;
-    let budgets = sqlx::query_as::<_, Budget>(BUDGETS)
-        .bind(workspace)
-        .bind(lineage)
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(storage)?;
     let price=sqlx::query_as::<_,Price>(&format!("SELECT {PRICE_COLUMNS} FROM deployment_prices WHERE deployment_id=$1 ORDER BY created_at DESC,id DESC LIMIT 1")).bind(record.deployment_id).fetch_optional(&mut *tx).await.map_err(storage)?;
     let (tokens, held) = if let Some(p) = &price {
         let output = match workload.output {
@@ -523,6 +533,87 @@ async fn admit_unobserved(
     // Async jobs (video, batch) are exempt from requests/tokens-per-minute
     // limits and are counted by "jobs at once"; budgets apply in full.
     let job = matches!(workload.kind, WorkloadKind::Videos | WorkloadKind::Batches);
+    enforce_limits(
+        &mut tx,
+        workspace,
+        lineage,
+        now,
+        if job {
+            LimitMode::Job
+        } else {
+            LimitMode::Interactive
+        },
+        tokens,
+        held,
+        v3_unbounded,
+    )
+    .await?;
+    sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,started_at,root_request_id,attempt_number,workload_kind,cost_center_id,cost_center_name,cost_center_code,upstream_model,client_session_id,client_app) SELECT $1,w.id,$3,$4,$5,$6,$7,'started',$8,$9,$10,$11,w.cost_center_id,c.name,c.code,$12,$13,$14 FROM workspaces w LEFT JOIN cost_centers c ON c.id=w.cost_center_id WHERE w.id=$2")
+        .bind(record.id).bind(workspace).bind(key).bind(record.deployment_id).bind(&record.model).bind(&record.provider).bind(record.streamed).bind(now).bind(record.root_request_id).bind(record.attempt_number).bind(workload.kind.as_str()).bind(&record.upstream_model).bind(&record.client.session_id).bind(&record.client.app).execute(&mut *tx).await.map_err(storage)?;
+    // An async batch records its request count (0016) for settlement checks.
+    let request_count = match workload.output {
+        OutputReservation::Batch { requests, .. } => {
+            Some(i32::try_from(requests).map_err(|_| InferenceError::Configuration)?)
+        }
+        _ => None,
+    };
+    sqlx::query("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,price_id,admitted_at,minute_start,month_start,lease_expires_at,state,reserved_tokens,held_microusd,unbounded_cost,request_count) VALUES($1,$2,$3,$4,$5,$6,date_trunc('minute',$6::timestamptz,'UTC'),date_trunc('month',$6::timestamptz,'UTC'),$7,'pending',$8,$9,$10,$11)")
+        .bind(record.id).bind(workspace).bind(key).bind(record.deployment_id).bind(price.as_ref().map(|p|p.id)).bind(now).bind(lease).bind(tokens).bind(held).bind(held.is_none()).bind(request_count).execute(&mut *tx).await.map_err(storage)?;
+    ledger(
+        &mut tx,
+        record.id,
+        "hold",
+        held,
+        Usage::default(),
+        None,
+        None,
+    )
+    .await?;
+    tx.commit().await.map_err(storage)
+}
+/// Which limits an admission is subject to.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LimitMode {
+    /// Interactive requests: every rate and concurrency limit, never jobs.
+    Interactive,
+    /// Async jobs (video, batch): "jobs at once" and "requests at once" only.
+    Job,
+    /// A gateway-run batch line (0021): its batch already holds the job slot
+    /// and ceiling, so only budgets apply (to the part of the hold its batch
+    /// does not cover).
+    BatchLine,
+}
+/// Evaluate every applicable policy layer and budget under the installation
+/// lock and return the most actionable denial: budget/accounting (narrowest
+/// scope first) before the job limit before retryable rate limits.
+#[allow(clippy::too_many_arguments)]
+async fn enforce_limits(
+    tx: &mut Tx<'_>,
+    workspace: Uuid,
+    lineage: Uuid,
+    now: DateTime<Utc>,
+    mode: LimitMode,
+    tokens: Option<i64>,
+    held: Option<i64>,
+    v3_unbounded: bool,
+) -> Result<(), InferenceError> {
+    let job = mode == LimitMode::Job;
+    let policies = if mode == LimitMode::BatchLine {
+        Vec::new()
+    } else {
+        sqlx::query_as::<_, Policy>(POLICIES)
+            .bind(workspace)
+            .bind(lineage)
+            .fetch_all(&mut **tx)
+            .await
+            .map_err(storage)?
+    };
+    let budgets = sqlx::query_as::<_, Budget>(BUDGETS)
+        .bind(workspace)
+        .bind(lineage)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(storage)?;
     if policies
         .iter()
         .any(|p| p.tokens_per_minute.is_some() && tokens.is_none() && !job)
@@ -591,7 +682,7 @@ async fn admit_unobserved(
             .bind(p.concurrent_requests)
             .bind(tokens)
             .bind(concurrent_jobs)
-            .fetch_one(&mut *tx)
+            .fetch_one(&mut **tx)
             .await
             .map_err(storage)?;
         if !jobs_ok {
@@ -608,9 +699,7 @@ async fn admit_unobserved(
         let period = BudgetPeriod::parse(&b.period).ok_or(InferenceError::Storage)?;
         windows.push((totals::Scope::of(b.workspace_id, b.api_key_id), period));
     }
-    let consumption = totals::read(&mut tx, &windows, now)
-        .await
-        .map_err(storage)?;
+    let consumption = totals::read(tx, &windows, now).await.map_err(storage)?;
     let new_hold = i128::from(if v3_unbounded { 0 } else { held.unwrap_or(0) });
     for (b, c) in budgets.iter().zip(consumption) {
         let scope = limit_scope(b.workspace_id, b.api_key_id);
@@ -628,31 +717,10 @@ async fn admit_unobserved(
             deny((rank(scope), InferenceError::BudgetExceeded(scope)));
         }
     }
-    if let Some((_, error)) = denial {
-        return Err(error);
+    match denial {
+        Some((_, error)) => Err(error),
+        None => Ok(()),
     }
-    sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,started_at,root_request_id,attempt_number,workload_kind,cost_center_id,cost_center_name,cost_center_code,upstream_model,client_session_id,client_app) SELECT $1,w.id,$3,$4,$5,$6,$7,'started',$8,$9,$10,$11,w.cost_center_id,c.name,c.code,$12,$13,$14 FROM workspaces w LEFT JOIN cost_centers c ON c.id=w.cost_center_id WHERE w.id=$2")
-        .bind(record.id).bind(workspace).bind(key).bind(record.deployment_id).bind(&record.model).bind(&record.provider).bind(record.streamed).bind(now).bind(record.root_request_id).bind(record.attempt_number).bind(workload.kind.as_str()).bind(&record.upstream_model).bind(&record.client.session_id).bind(&record.client.app).execute(&mut *tx).await.map_err(storage)?;
-    // An async batch records its request count (0016) for settlement checks.
-    let request_count = match workload.output {
-        OutputReservation::Batch { requests, .. } => {
-            Some(i32::try_from(requests).map_err(|_| InferenceError::Configuration)?)
-        }
-        _ => None,
-    };
-    sqlx::query("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,price_id,admitted_at,minute_start,month_start,lease_expires_at,state,reserved_tokens,held_microusd,unbounded_cost,request_count) VALUES($1,$2,$3,$4,$5,$6,date_trunc('minute',$6::timestamptz,'UTC'),date_trunc('month',$6::timestamptz,'UTC'),$7,'pending',$8,$9,$10,$11)")
-        .bind(record.id).bind(workspace).bind(key).bind(record.deployment_id).bind(price.as_ref().map(|p|p.id)).bind(now).bind(lease).bind(tokens).bind(held).bind(held.is_none()).bind(request_count).execute(&mut *tx).await.map_err(storage)?;
-    ledger(
-        &mut tx,
-        record.id,
-        "hold",
-        held,
-        Usage::default(),
-        None,
-        None,
-    )
-    .await?;
-    tx.commit().await.map_err(storage)
 }
 #[derive(sqlx::FromRow)]
 struct Reservation {
@@ -673,9 +741,11 @@ struct Reservation {
     public_model: String,
     /// Requests covered by one async batch attempt (0016); `None` = one.
     request_count: Option<i32>,
+    /// Pinned price list (0021): `standard` or `batch`.
+    price_tier: String,
 }
 async fn reservation(tx: &mut Tx<'_>, id: Uuid) -> Result<Reservation, InferenceError> {
-    sqlx::query_as("SELECT r.workspace_id,r.deployment_id,r.price_id,r.state,r.input_tokens,r.output_tokens,r.billing_usage,e.workload_kind,r.reserved_tokens,r.meter_usage,r.output_image_variant,r.provider_cost_microusd,e.provider,e.public_model,r.request_count FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id WHERE r.execution_id=$1").bind(id).fetch_one(&mut **tx).await.map_err(storage)
+    sqlx::query_as("SELECT r.workspace_id,r.deployment_id,r.price_id,r.state,r.input_tokens,r.output_tokens,r.billing_usage,e.workload_kind,r.reserved_tokens,r.meter_usage,r.output_image_variant,r.provider_cost_microusd,e.provider,e.public_model,r.request_count,r.price_tier FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id WHERE r.execution_id=$1").bind(id).fetch_one(&mut **tx).await.map_err(storage)
 }
 /// Meter, variant and provider-cost evidence as stored columns.
 struct MeterEvidence {
@@ -864,7 +934,8 @@ async fn pinned_value(
     .bind(r.deployment_id)
     .fetch_one(&mut **tx)
     .await
-    .map_err(storage)?;
+    .map_err(storage)?
+    .tiered(&r.price_tier)?;
     // Validate observations and rates before distinguishing monetary overflow.
     // BillingError::Overflow can also mean an invalid, unstoreable token count;
     // that must remain an error rather than being accepted as unknown cost.
@@ -1028,7 +1099,8 @@ async fn pinned_v3_lines(
     .bind(r.deployment_id)
     .fetch_one(&mut **tx)
     .await
-    .map_err(storage)?;
+    .map_err(storage)?
+    .tiered(&r.price_tier)?;
     if p.pricing_version != 3 {
         return Ok(None);
     }

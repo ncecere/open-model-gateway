@@ -1,4 +1,11 @@
-//! Async jobs: video generation and batches (see `docs/async-jobs.md`).
+//! Async jobs: video generation and batches (see `docs/async-jobs.md` and
+//! `docs/batches.md`).
+//!
+//! Batches (0021) run any model: [`batch`] validates the gateway input file
+//! and admits the batch; [`native`] runs it on a provider batch API when every
+//! line routes to one deployment whose adapter supports it; otherwise
+//! [`runner`] executes each line through the inference engine with its own
+//! reservation.
 //!
 //! A job is **one upstream attempt** with one durable execution and
 //! reservation, admitted through the ordinary `governance` functions when the
@@ -12,10 +19,14 @@
 //! by the principal's workspace, so another workspace's id is "not found".
 //! Client ids are gateway ids; upstream ids never leave the gateway.
 pub mod batch;
+pub(crate) mod io;
+pub(crate) mod lines;
+pub mod native;
+pub mod plan;
 pub mod poller;
+pub mod runner;
 mod store;
 pub mod types;
-pub(crate) mod upload;
 pub mod video;
 
 use std::{
@@ -29,6 +40,7 @@ use uuid::Uuid;
 use crate::{
     auth::Principal,
     billing::MeterUsage,
+    filestore::{FileStorage, FileStoreRuntime},
     inference::{
         Engine,
         error::InferenceError,
@@ -39,7 +51,11 @@ use crate::{
     providers::{ProviderAdapter, ProviderRegistry},
     store::Store,
 };
-pub use store::JobRow;
+pub use store::{BatchMode, JobRow};
+/// Columns of [`JobRow`] (management reads).
+pub(crate) fn job_columns() -> &'static str {
+    store::JOB_COLUMNS
+}
 use types::*;
 
 /// Video jobs are polled (and their lease kept) for at most this long.
@@ -65,6 +81,12 @@ pub struct JobLimits {
     pub batch_file_bytes: u64,
     /// `GATEWAY_BATCH_MAX_OUTPUT_SCAN_BYTES` (default 1 GiB, 1 MiB–16 GiB).
     pub output_scan_bytes: u64,
+    /// `GATEWAY_BATCH_WORKERS` (default 4, 0 disables the gateway-run
+    /// runner, ≤ 256): lines executing at once across all gateway-run batches.
+    pub batch_workers: usize,
+    /// `GATEWAY_BATCH_CONCURRENCY` (default 2, 1–64): lines of one batch
+    /// executing at once.
+    pub batch_concurrency: usize,
 }
 const MIB: u64 = 1024 * 1024;
 impl Default for JobLimits {
@@ -74,6 +96,8 @@ impl Default for JobLimits {
             video_body_bytes: 2 * MIB as usize,
             batch_file_bytes: 200 * MIB,
             output_scan_bytes: 1024 * MIB,
+            batch_workers: 4,
+            batch_concurrency: 2,
         }
     }
 }
@@ -117,6 +141,17 @@ impl JobLimits {
             );
             limits.output_scan_bytes = n;
         }
+        if let Some(n) = int("GATEWAY_BATCH_WORKERS")? {
+            anyhow::ensure!(n <= 256, "GATEWAY_BATCH_WORKERS must be 0..=256");
+            limits.batch_workers = n as usize;
+        }
+        if let Some(n) = int("GATEWAY_BATCH_CONCURRENCY")? {
+            anyhow::ensure!(
+                (1..=64).contains(&n),
+                "GATEWAY_BATCH_CONCURRENCY must be 1..=64"
+            );
+            limits.batch_concurrency = n as usize;
+        }
         Ok(limits)
     }
 }
@@ -137,6 +172,8 @@ pub fn limits() -> JobLimits {
 pub enum JobError {
     NotFound,
     Conflict(&'static str, &'static str),
+    /// A client error with a specific code and fixed message (HTTP 400).
+    Invalid(&'static str, &'static str),
     Inference(InferenceError),
 }
 impl From<InferenceError> for JobError {
@@ -151,23 +188,46 @@ impl From<sqlx::Error> for JobError {
 }
 pub type JobResult<T> = Result<T, JobError>;
 
-/// The job service: storage, adapters and deadlines.
+/// The job service: storage, adapters and deadlines; batches also need the
+/// file store (inputs, results) and the engine (gateway-run lines).
 #[derive(Clone)]
 pub struct Jobs {
     pub(crate) store: Store,
     pub(crate) registry: ProviderRegistry,
     pub(crate) limits: JobLimits,
+    pub(crate) files: Option<FileStorage>,
+    pub(crate) engine: Option<Engine>,
 }
 impl Jobs {
     pub fn new(store: Store, engine: &Engine) -> Self {
-        Self::with(store, engine.registry().clone(), limits())
+        let mut jobs = Self::with(store, engine.registry().clone(), limits());
+        jobs.engine = Some(engine.clone());
+        jobs
     }
     pub fn with(store: Store, registry: ProviderRegistry, limits: JobLimits) -> Self {
         Self {
             store,
             registry,
             limits,
+            files: None,
+            engine: None,
         }
+    }
+    /// Attach the file store (batch inputs and results).
+    pub fn with_files(mut self, runtime: Option<FileStoreRuntime>) -> Self {
+        self.files = runtime.map(|r| FileStorage::new(self.store.clone(), r));
+        self
+    }
+    /// Attach the engine that runs gateway-run batch lines.
+    pub fn with_engine(mut self, engine: Engine) -> Self {
+        self.engine = Some(engine);
+        self
+    }
+    pub(crate) fn files(&self) -> JobResult<&FileStorage> {
+        self.files.as_ref().ok_or(JobError::Invalid(
+            "batch_files_disabled",
+            "Batches need the gateway file store with batch files allowed",
+        ))
     }
 
     /// Route a new job: live catalog/key filtering, protocol and adapter
@@ -410,6 +470,8 @@ pub(crate) async fn call<T>(
         .map_err(|_| InferenceError::Timeout)?
 }
 
+#[cfg(all(test, feature = "integration-tests"))]
+mod batch_tests;
 #[cfg(all(test, feature = "integration-tests"))]
 mod db_tests;
 #[cfg(test)]

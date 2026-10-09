@@ -12,8 +12,8 @@ use crate::inference::{
     },
 };
 use crate::jobs::types::{
-    ByteStream, ContentStream, OutputUsage, UpstreamBatch, UpstreamFile, UpstreamId, UpstreamVideo,
-    VideoAsset, VideoRequest,
+    BatchEndpoint, BatchRequest, ByteStream, ContentStream, NativeResult, UpstreamBatch,
+    UpstreamId, UpstreamVideo, VideoAsset, VideoRequest,
 };
 
 pub mod anthropic;
@@ -161,21 +161,61 @@ pub trait ProviderAdapter: Send + Sync {
     ) -> Result<ContentStream, InferenceError> {
         Err(InferenceError::Unsupported)
     }
-    /// Stream already-validated JSONL to a provider batch input file. An
-    /// error item in `content` must abort the upload.
-    async fn upload_batch_file(
+    // Native batch APIs (`jobs::native`, docs/batches.md). The engine never
+    // switches on providers: an adapter opts in per target and endpoint and
+    // translates canonical lines/results itself. Line ids sent upstream are
+    // gateway ids (`l<n>`), never client `custom_id`s.
+    /// Whether a batch of `endpoint` lines for this target can run on the
+    /// provider's batch API.
+    fn native_batch(&self, _target: &Deployment, _endpoint: BatchEndpoint) -> bool {
+        false
+    }
+    /// One upstream batch input record for a validated line (no separator).
+    fn encode_native_line(
         &self,
         _target: &Deployment,
-        _content: ByteStream,
-    ) -> Result<UpstreamFile, InferenceError> {
+        _endpoint: BatchEndpoint,
+        _custom_id: &str,
+        _request: &BatchRequest,
+    ) -> Result<Vec<u8>, InferenceError> {
         Err(InferenceError::Unsupported)
     }
-    async fn create_batch(
+    /// Create the upstream batch from encoded records streamed in `records`
+    /// (one item per record). An error item must abort the request so the
+    /// provider never receives a complete batch. One attempt, no retries.
+    async fn submit_native_batch(
         &self,
         _target: &Deployment,
-        _input: &UpstreamId,
-        _metadata: Option<serde_json::Map<String, serde_json::Value>>,
+        _endpoint: BatchEndpoint,
+        _records: ByteStream,
     ) -> Result<UpstreamBatch, InferenceError> {
+        Err(InferenceError::Unsupported)
+    }
+    /// Raw result lines (JSONL, successes and failures) of a finished batch;
+    /// empty when the provider produced none.
+    async fn native_batch_results(
+        &self,
+        _target: &Deployment,
+        _batch: &UpstreamBatch,
+    ) -> Result<ByteStream, InferenceError> {
+        Err(InferenceError::Unsupported)
+    }
+    /// Decode one result line into a canonical result.
+    fn decode_native_result(
+        &self,
+        _target: &Deployment,
+        _endpoint: BatchEndpoint,
+        _line: &[u8],
+    ) -> Result<NativeResult, InferenceError> {
+        Err(InferenceError::Unsupported)
+    }
+    /// Delete the provider's copies (input, results, batch) once the gateway
+    /// stored the results. Best effort; never affects accounting.
+    async fn delete_native_batch(
+        &self,
+        _target: &Deployment,
+        _batch: &UpstreamBatch,
+    ) -> Result<(), InferenceError> {
         Err(InferenceError::Unsupported)
     }
     async fn retrieve_batch(
@@ -190,24 +230,6 @@ pub trait ProviderAdapter: Send + Sync {
         _target: &Deployment,
         _batch: &UpstreamId,
     ) -> Result<UpstreamBatch, InferenceError> {
-        Err(InferenceError::Unsupported)
-    }
-    /// Batch input/output/error file body passed through unbuffered.
-    async fn file_content(
-        &self,
-        _target: &Deployment,
-        _file: &UpstreamId,
-    ) -> Result<ContentStream, InferenceError> {
-        Err(InferenceError::Unsupported)
-    }
-    /// Usage summed from a batch output file (stream-parsed, bodies dropped),
-    /// for batches whose provider object reports no aggregate usage.
-    async fn batch_output_usage(
-        &self,
-        _target: &Deployment,
-        _file: &UpstreamId,
-        _max_bytes: u64,
-    ) -> Result<OutputUsage, InferenceError> {
         Err(InferenceError::Unsupported)
     }
     /// Realtime (`inference::realtime`): connect one upstream session with the

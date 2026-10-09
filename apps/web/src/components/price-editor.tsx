@@ -35,9 +35,10 @@ export function PriceLinesEditor({ draft, onChange, errors, disabled, idPrefix }
       {ceilings.input && <FormField name="input_token_limit" label="Hard upstream input token ceiling" description="Includes cache tokens. Reserved with the output ceiling against tokens-per-minute limits, so keep both within them." error={errors["limits.input"]}><Input id={fid("limits.input")} inputMode="numeric" autoComplete="off" disabled={disabled} value={draft.inputTokenLimit} onChange={e => onChange({ ...draft, inputTokenLimit: e.target.value })} /></FormField>}
       {ceilings.output && <FormField name="output_token_limit" label="Hard upstream output token ceiling" description={draft.workload === "generation" || draft.workload === "systemone" ? "Must be positive." : "Zero is valid when the workload produces no output tokens."} error={errors["limits.output"]}><Input id={fid("limits.output")} inputMode="numeric" autoComplete="off" disabled={disabled} value={draft.outputTokenLimit} onChange={e => onChange({ ...draft, outputTokenLimit: e.target.value })} /></FormField>}
     </div> : <p className={s.note}>No token meters apply, so no token ceilings are needed (published as 0).</p>}
+    {(draft.workload === "generation" || draft.workload === "embeddings" || draft.workload === "batches") && <label className={styles.rowActions}><input type="checkbox" checked={!!draft.batchPrices} disabled={disabled} onChange={e => onChange({ ...draft, batchPrices: e.target.checked })} /><span>Batch prices</span><span className={s.note}>The provider's published batch rates, used for native batches.</span></label>}
     {canMarkFree && <div className={styles.rowActions}><Button size="sm" variant="secondary" disabled={disabled} onClick={() => onChange(markAllFree(draft))}>Mark all free</Button><span className={s.note}>Sets every applicable meter to $0.</span></div>}
     {draft.shown.some(m => draft.meters[m].mode === "unknown") && <p className={s.note}>Unknown meters publish no line: their usage is recorded with unknown cost, and budgeted requests are refused while they could apply.</p>}
-    {draft.shown.map(meter => <MeterEditor key={meter} meter={meter} m={draft.meters[meter]} errors={errors} disabled={disabled} fid={fid} onChange={next => setMeter(meter, next)} />)}
+    {draft.shown.map(meter => <MeterEditor key={meter} meter={meter} m={draft.meters[meter]} errors={errors} disabled={disabled} fid={fid} batchPrices={!!draft.batchPrices} onChange={next => setMeter(meter, next)} />)}
     {hidden.length > 0 && <p className={s.note}>Not applicable to {workloadLabels[draft.workload].toLowerCase()} models and published as not applicable: {hidden.map(m => METER_SPECS[m].title.toLowerCase()).join(", ")}.</p>}
     <PricePreview draft={draft} />
   </div>;
@@ -56,7 +57,7 @@ function ImportNotice({ info, disabled, onUseImported }: { info: ImportInfo; dis
   </Alert>;
 }
 
-function MeterEditor({ meter, m, errors, disabled, fid, onChange }: { meter: Meter; m: MeterDraft; errors: Record<string, string>; disabled?: boolean; fid: (key: string) => string; onChange: (next: Partial<MeterDraft>) => void }) {
+function MeterEditor({ meter, m, errors, disabled, fid, batchPrices, onChange }: { meter: Meter; m: MeterDraft; errors: Record<string, string>; disabled?: boolean; fid: (key: string) => string; batchPrices: boolean; onChange: (next: Partial<MeterDraft>) => void }) {
   const spec = METER_SPECS[meter], unit = unitFor(meter, m.batch)!, priced = m.mode === "priced";
   // Priced meters are reviewed row by row; other modes carry the meter-level flag until the mode is confirmed.
   const review = priced ? m.rows.some(r => r.review) : !!m.review;
@@ -79,6 +80,7 @@ function MeterEditor({ meter, m, errors, disabled, fid, onChange }: { meter: Met
       const hint = row.review && row.note ? row.note : money.ok ? `Shown as ${formatUsd(money.microusd)}${unit.display}${q ? ` (${q})` : ""}` : undefined;
       return <li key={row.id} className={styles.row} data-review={row.review ? "true" : undefined}>
         <FormField name={usdKey} label={`${unit.input}${q ? ` (${q})` : tier ? " (tier)" : ""}`} description={hint} error={errors[usdKey]}><Input id={fid(usdKey)} inputMode="decimal" autoComplete="off" spellCheck={false} placeholder="0.00" disabled={disabled} value={row.usd} onChange={e => setRow(row, { usd: e.target.value })} /></FormField>
+        {batchPrices && <FormField name={rowKey(meter, row, "batch")} label="Batch" error={errors[rowKey(meter, row, "batch")]}><Input id={fid(rowKey(meter, row, "batch"))} inputMode="decimal" autoComplete="off" spellCheck={false} placeholder="0.00" disabled={disabled} value={row.batchUsd ?? ""} onChange={e => setRow(row, { batchUsd: e.target.value })} /></FormField>}
         {row.variant !== undefined && <FormField name={rowKey(meter, row, "variant")} label="Variant" description="Resolution or size the provider reports, e.g. 768, 1K or 1024x1024." error={errors[rowKey(meter, row, "variant")]}><Input id={fid(rowKey(meter, row, "variant"))} autoComplete="off" spellCheck={false} disabled={disabled} value={row.variant} onChange={e => setRow(row, { variant: e.target.value })} /></FormField>}
         {row.minPromptTokens !== undefined && <FormField name={rowKey(meter, row, "tier")} label="Applies when prompt exceeds (tokens)" description="Strictly greater than: 272000 means “> 272K tokens”." error={errors[rowKey(meter, row, "tier")]}><Input id={fid(rowKey(meter, row, "tier"))} inputMode="numeric" autoComplete="off" disabled={disabled} value={row.minPromptTokens} onChange={e => setRow(row, { minPromptTokens: e.target.value })} /></FormField>}
         {(better || tier) && <div className={styles.rowActions}>
@@ -173,5 +175,6 @@ export function PriceLinesView({ price }: { price: Price }) {
     {lines.some(l => l.notApplicable) && <><dt>Not applicable</dt><dd>{lines.filter(l => l.notApplicable).map(l => l.label).join(", ")}</dd></>}
     {unpriced.length > 0 && <><dt>Not priced</dt><dd>{unpriced.map(m => METER_SPECS[m].title).join(", ")} · cost unknown, never free</dd></>}
     <dt>Ceilings</dt><dd>{ceilingSummary(price, max)}</dd>
+    {price.batch_price_lines?.length ? <><dt>Batch prices</dt><dd>{price.batch_display_summary ?? "Published"}</dd></> : null}
   </dl>;
 }

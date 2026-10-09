@@ -126,7 +126,7 @@ describe("Admin › Costs › Set custom limits", () => {
     await user.type(screen.getByRole("textbox", { name: /^Daily budget \(USD\)/ }), "2.5");
     await user.click(screen.getByRole("button", { name: "Save custom limits" }));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
-    expect(api.writes()).toEqual([{ method: "PUT", url: path, body: { requests_per_minute: 60, tokens_per_minute: null, concurrent_requests: null, concurrent_jobs: null, budgets: [{ period: "day", amount_microusd: "2500000" }, { period: "month", amount_microusd: "100000000" }] } }]);
+    expect(api.writes()).toEqual([{ method: "PUT", url: path, body: { requests_per_minute: 60, tokens_per_minute: null, concurrent_requests: null, concurrent_jobs: null, storage_bytes: null, budgets: [{ period: "day", amount_microusd: "2500000" }, { period: "month", amount_microusd: "100000000" }] } }]);
     api.client.clear();
   });
 });

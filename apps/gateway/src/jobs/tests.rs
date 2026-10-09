@@ -23,12 +23,21 @@ fn limits_parse_strictly() {
     .unwrap();
     assert_eq!(l.poll_interval, None);
     assert_eq!(l.batch_file_bytes, 1_048_576);
+    assert_eq!((l.batch_workers, l.batch_concurrency), (4, 2));
+    let l = JobLimits::from_lookup(env(&[
+        ("GATEWAY_BATCH_WORKERS", "0"),
+        ("GATEWAY_BATCH_CONCURRENCY", "8"),
+    ]))
+    .unwrap();
+    assert_eq!((l.batch_workers, l.batch_concurrency), (0, 8));
     for bad in [
         ("GATEWAY_JOB_POLL_INTERVAL_SECONDS", "3601"),
         ("GATEWAY_JOB_POLL_INTERVAL_SECONDS", "-1"),
         ("GATEWAY_MAX_BATCH_FILE_BYTES", "1"),
         ("GATEWAY_MAX_BODY_BYTES_VIDEOS", "x"),
         ("GATEWAY_BATCH_MAX_OUTPUT_SCAN_BYTES", "10"),
+        ("GATEWAY_BATCH_WORKERS", "257"),
+        ("GATEWAY_BATCH_CONCURRENCY", "0"),
     ] {
         let pairs: &'static [(&str, &str)] = Box::leak(Box::new([bad]));
         assert!(JobLimits::from_lookup(env(pairs)).is_err(), "{bad:?}");
@@ -45,7 +54,7 @@ fn row(state: &str) -> JobRow {
         execution_id: Uuid::new_v4(),
         public_model: "company/video".into(),
         provider: "openai".into(),
-        upstream_id: "video_up".into(),
+        upstream_id: Some("video_up".into()),
         state: state.into(),
         upstream_status: Some(state.into()),
         progress: None,
@@ -63,6 +72,18 @@ fn row(state: &str) -> JobRow {
         request_total: None,
         request_completed: None,
         request_failed: None,
+        batch_mode: None,
+        user_id: None,
+        input_file_id: None,
+        work_file_id: None,
+        output_file_id: None,
+        error_file_id: None,
+        price_tier: None,
+        retry_limit: 0,
+        submit_started_at: None,
+        in_progress_at: None,
+        finalizing_at: None,
+        last_progress_at: None,
     }
 }
 fn upstream(state: JobState, seconds: Option<u32>) -> UpstreamVideo {
@@ -141,13 +162,26 @@ fn rendering_uses_gateway_ids_and_no_content() {
     assert!(v.get("prompt").is_none());
     let mut b = row("in_progress");
     b.kind = "batch".into();
-    b.batch_endpoint = Some(BATCH_ENDPOINT.into());
+    b.batch_endpoint = Some(BatchEndpoint::Responses.as_str().into());
+    b.batch_mode = Some("gateway".into());
     b.upstream_status = Some("finalizing".into());
     b.request_total = Some(3);
     let input = Uuid::new_v4();
-    let v = batch::render_batch(&b, (Some(input), None, None), None);
+    b.input_file_id = Some(input);
+    let v = batch::render_batch(&b, None);
     assert_eq!(v["status"], "finalizing");
+    assert_eq!(v["endpoint"], "/v1/responses");
     assert_eq!(v["input_file_id"], client_id(FILE_PREFIX, input));
     assert_eq!(v["request_counts"]["total"], 3);
+    assert!(v["metadata"].is_null());
     assert!(!v.to_string().contains("video_up"));
+    // Terminal rows show their state; legacy rows their 0016 file ids.
+    let mut done = b.clone();
+    done.state = "cancelled".into();
+    done.completed_at = Some(Utc::now());
+    let legacy = Uuid::new_v4();
+    let v = batch::render_batch(&done, Some((Some(legacy), None, None)));
+    assert_eq!(v["status"], "cancelled");
+    assert!(v["cancelled_at"].is_number());
+    assert_eq!(v["input_file_id"], client_id(FILE_PREFIX, legacy));
 }

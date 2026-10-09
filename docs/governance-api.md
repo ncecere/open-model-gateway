@@ -14,7 +14,7 @@ Money and financial aggregate/token counts are decimal **strings**; unknown meas
 | `/workspaces/{ws}/policy` | GET/PUT local tightening by owner/shared administrator. |
 | `/workspaces/{ws}/keys/{key}/policy` | GET/PUT visible key-lineage tightening; rotations retain consumption. |
 
-PUT accepts the **inner** object, with the three rate fields explicit plus one budget form, and returns `{ok:true}`. `concurrent_jobs` ("Jobs at once", 0018) is optional: absent keeps the stored value, null clears it (subject to tighten-only rules). GET always returns it.
+PUT accepts the **inner** object, with the three rate fields explicit plus one budget form, and returns `{ok:true}`. `concurrent_jobs` ("Jobs at once", 0018) is optional: absent keeps the stored value, null clears it (subject to tighten-only rules). GET always returns it. `storage_bytes` ("Storage", 0020; bytes, 1 to 2^50) works the same way on the workspace-type default, platform override and workspace local layers. Installation and key layers have no storage limit: GET returns null, and a non-null value on their PUT is `400`. Workspace policy responses add `storage:{quota_bytes, used_bytes, usage_visible}` ([Files API](files-api.md#storage-quota)).
 
 ```json
 {"requests_per_minute":120,"tokens_per_minute":null,"concurrent_requests":8,"concurrent_jobs":2,
@@ -42,7 +42,7 @@ Tighten-only rejections keep their HTTP status and add a stable `error.reason` p
 | Status | `reason` | Detail | Cause |
 | --- | --- | --- | --- |
 | 400 | `exceeds_parent_budget` | `period` | Budget for P is above a parent budget for the same P. |
-| 400 | `exceeds_parent_rate` | `limit` | `requests_per_minute`, `tokens_per_minute`, `concurrent_requests` or `concurrent_jobs` is above a parent cap. |
+| 400 | `exceeds_parent_rate` | `limit` | `requests_per_minute`, `tokens_per_minute`, `concurrent_requests`, `concurrent_jobs` or `storage_bytes` is above a parent cap. |
 | 403 | `stored_budget_raise_not_allowed` | `period` | Raises the stored budget for that period. |
 | 403 | `period_change_not_allowed` | `period` | Removes the stored budget for that period, including moving it to another period. |
 | 403 | `stored_rate_loosen_not_allowed` | `limit` | Raises or clears a stored rate cap. |
@@ -110,6 +110,23 @@ Omitting `pricing_version` uses legacy v1 with `cache_pricing:null`; the dashboa
 ```
 
 Validation, tiers, variants and admission bounds are in [cache pricing](cache-pricing.md#pricing-v3-price-lines-and-meters). GET rows add `price_lines`, `max_units`, `display_lines` (aligned with `price_lines`) and `display_summary`; v1/v2 rows return null for these, v3 rows return null scalar rates. Strings are exact and computed without floating point.
+
+### Batch price lists
+
+A v3 POST may add `batch_price_lines`: the rates the provider publishes for its batch API (for example OpenAI Batch or Anthropic Message Batches). They apply only to **native** batches ([batches](batches.md#pricing-and-budgets)); gateway-run batch lines and interactive requests always use `price_lines`.
+
+```json
+{"pricing_version":3,"input_token_limit":8192,"output_token_limit":1024,
+ "price_lines":[{"meter":"input_tokens","microusd_per_batch":"2500000","batch":1000000,"unit_label":"/M tokens","sku_label":"Input"},
+                {"meter":"output_tokens","microusd_per_batch":"10000000","batch":1000000,"unit_label":"/M tokens","sku_label":"Output"}],
+ "batch_price_lines":[{"meter":"input_tokens","microusd_per_batch":"1250000","batch":1000000,"unit_label":"/M tokens","sku_label":"Input"},
+                      {"meter":"output_tokens","microusd_per_batch":"5000000","batch":1000000,"unit_label":"/M tokens","sku_label":"Output"}]}
+```
+
+- **Validation:** same as `price_lines`, and it must cover exactly the same meters (meter, variant, tier and not-applicable keys). It shares the token ceilings and `max_units`. v1/v2 bodies reject it (400).
+- **Never derived:** the gateway never computes batch rates from standard ones. Without a batch list, native batches use `price_lines`, and the batch is shown as "No batch price".
+- **Pinning:** a native batch's reservation pins the price version and its tier (`governance_reservations.price_tier`: `batch` or `standard`). A later price version never reprices it.
+- **GET:** rows add `batch_price_lines`, `batch_display_lines` and `batch_display_summary` (null when absent). The model route detail returns `batch_price_lines` in its current price.
 
 ### OpenRouter price suggestion
 

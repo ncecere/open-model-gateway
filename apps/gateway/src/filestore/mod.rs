@@ -25,12 +25,15 @@ pub mod files;
 #[cfg(unix)]
 mod local;
 mod memory;
+pub mod multipart;
 pub mod s3;
 pub mod sweep;
+pub mod upload;
+pub mod usage;
 
 pub use config::{BackendKind, FileStoreConfig, FileStoreRuntime};
 pub use crypto::KeyRing;
-pub use files::{FileError, FileStorage, NewFile, StoredFile};
+pub use files::{FileError, FileStorage, NewFile, QuotaMode, StoredFile};
 pub use memory::memory_store;
 
 /// A stream of plaintext (from [`FileStore::get`]) or caller-provided bytes (to [`FileStore::put`]).
@@ -570,6 +573,8 @@ impl<B: Backend> FileStore for Encrypted<B> {
     }
 }
 
+#[cfg(all(test, feature = "integration-tests"))]
+mod api_tests;
 #[cfg(all(test, feature = "integration-tests"))]
 mod db_tests;
 #[cfg(test)]

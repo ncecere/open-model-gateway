@@ -287,6 +287,24 @@ pub async fn handle(
     };
     render(output, id, model, created)
 }
+/// `/v1/batches` line body (`crate::jobs::lines`): the interactive contract,
+/// never streamed.
+pub(crate) fn batch_request(body: Value) -> Result<ChatRequest> {
+    let wire: Request = serde_json::from_value(body).map_err(|_| InferenceError::InvalidRequest)?;
+    if wire.stream || !client::valid_openai_metadata(wire.metadata.as_ref()) {
+        return Err(InferenceError::InvalidRequest);
+    }
+    wire.normalize()
+}
+/// `/v1/batches` line result body (a completed `response` object).
+pub(crate) fn batch_response(
+    id: &str,
+    created: u64,
+    model: &str,
+    response: &ChatResponse,
+) -> Value {
+    snapshot(id, model, created, response)
+}
 fn snapshot(id: &str, model: &str, created: u64, response: &ChatResponse) -> Value {
     let mut output = vec![];
     if let Some(text) = &response.content {

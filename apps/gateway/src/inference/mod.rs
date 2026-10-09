@@ -80,6 +80,26 @@ impl Engine {
         })
     }
 
+    /// The same engine (adapters, limits, deadlines) with another repository
+    /// and its own capacity, for background work such as gateway-run batch
+    /// lines (`jobs::runner`), whose admission differs from interactive
+    /// requests but whose execution path must not.
+    pub fn with_repository(
+        &self,
+        repository: Arc<dyn InferenceRepository>,
+        max_concurrent: usize,
+    ) -> Self {
+        Self {
+            repository,
+            registry: self.registry.clone(),
+            capacity: Arc::new(Semaphore::new(
+                max_concurrent.clamp(1, Semaphore::MAX_PERMITS),
+            )),
+            limits: self.limits,
+            realtime: self.realtime,
+        }
+    }
+
     pub async fn execute(
         &self,
         principal: Principal,

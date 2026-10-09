@@ -1,6 +1,9 @@
 //! Anthropic's fixed-origin Messages transport, restricted to text and function tools.
 use super::{ProviderAdapter, framing::*, secrets::SecretResolver};
 use crate::inference::{error::InferenceError, types::*};
+use crate::jobs::types::{
+    BatchEndpoint, BatchRequest, ByteStream, NativeResult, UpstreamBatch, UpstreamId,
+};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
@@ -52,6 +55,54 @@ impl ProviderAdapter for AnthropicAdapter {
             protocol,
             ApiProtocol::ChatCompletions | ApiProtocol::Messages
         )
+    }
+    fn native_batch(&self, target: &Deployment, endpoint: BatchEndpoint) -> bool {
+        batches::native_batch(target, endpoint)
+    }
+    fn encode_native_line(
+        &self,
+        target: &Deployment,
+        endpoint: BatchEndpoint,
+        custom_id: &str,
+        request: &BatchRequest,
+    ) -> Result<Vec<u8>> {
+        batches::encode_native_line(target, endpoint, custom_id, request)
+    }
+    async fn submit_native_batch(
+        &self,
+        target: &Deployment,
+        endpoint: BatchEndpoint,
+        records: ByteStream,
+    ) -> Result<UpstreamBatch> {
+        batches::submit_native_batch(self, target, endpoint, records).await
+    }
+    async fn retrieve_batch(
+        &self,
+        target: &Deployment,
+        batch: &UpstreamId,
+    ) -> Result<UpstreamBatch> {
+        batches::batch_action(self, target, batch, false).await
+    }
+    async fn cancel_batch(&self, target: &Deployment, batch: &UpstreamId) -> Result<UpstreamBatch> {
+        batches::batch_action(self, target, batch, true).await
+    }
+    async fn native_batch_results(
+        &self,
+        target: &Deployment,
+        batch: &UpstreamBatch,
+    ) -> Result<ByteStream> {
+        batches::native_batch_results(self, target, batch).await
+    }
+    fn decode_native_result(
+        &self,
+        _target: &Deployment,
+        endpoint: BatchEndpoint,
+        line: &[u8],
+    ) -> Result<NativeResult> {
+        batches::decode_native_result(endpoint, line)
+    }
+    async fn delete_native_batch(&self, target: &Deployment, batch: &UpstreamBatch) -> Result<()> {
+        batches::delete_native_batch(self, target, batch).await
     }
     async fn execute(&self, target: &Deployment, request: ChatRequest) -> Result<ProviderOutput> {
         if target.provider != "anthropic"
@@ -410,5 +461,7 @@ impl State {
         Ok(events)
     }
 }
+/// Native Message Batches (`jobs::native`).
+mod batches;
 #[cfg(test)]
 mod tests;

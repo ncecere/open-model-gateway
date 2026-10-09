@@ -1,90 +1,36 @@
-//! OpenAI-compatible Files (batch input/output only) and Batch API (async
-//! jobs, see `crate::jobs`):
-//! - `POST /v1/files` multipart `purpose=batch` then `file` (JSONL): streamed
-//!   to the provider while every line is validated; never stored or logged.
-//! - `GET /v1/files/{id}`, `GET /v1/files/{id}/content` (streamed through).
-//! - `POST /v1/batches` `{input_file_id, endpoint:"/v1/chat/completions",
-//!   completion_window:"24h", metadata?}`, `GET /v1/batches` (gateway
-//!   records of this workspace), `GET /v1/batches/{id}`,
-//!   `POST /v1/batches/{id}/cancel`.
+//! OpenAI-compatible Batch API (`crate::jobs`, docs/batches.md):
+//! - `POST /v1/batches` `{input_file_id, endpoint, completion_window:"24h",
+//!   metadata?}` where `input_file_id` is a gateway file (`purpose=batch`,
+//!   `/v1/files`) and `endpoint` is `/v1/chat/completions`, `/v1/responses`,
+//!   `/v1/embeddings` or `/v1/messages`. An invalid file is rejected with a
+//!   line-numbered report (`errors.data[].line`).
+//! - `GET /v1/batches` (this workspace's batches, newest first),
+//!   `GET /v1/batches/{id}`, `POST /v1/batches/{id}/cancel`.
 use axum::{
     Extension, Json,
-    body::Body,
     extract::{Path, Query, State, rejection::JsonRejection},
-    http::{HeaderMap, StatusCode, header},
+    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
-use super::videos::{ListQuery, job_error, list_page, page_params, stream_response};
+use super::videos::{ListQuery, job_error, list_page, page_params};
 use crate::{
     auth::Principal,
+    filestore::FileStoreRuntime,
     http::RequestId,
     inference::{Engine, error::InferenceError},
     jobs::{
         Jobs,
-        batch::{render_batch, render_file},
-        types::{BATCH_COMPLETION_WINDOW, BATCH_ENDPOINT},
+        batch::{CreateBatch, CreateError},
+        types::{BATCH_COMPLETION_WINDOW, BatchEndpoint},
     },
     store::Store,
 };
 
-pub async fn upload(
-    State(store): State<Store>,
-    Extension(engine): Extension<Engine>,
-    Extension(principal): Extension<Principal>,
-    Extension(request_id): Extension<RequestId>,
-    headers: HeaderMap,
-    body: Body,
-) -> Response {
-    let Some(content_type) = headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned)
-    else {
-        return job_error(InferenceError::InvalidRequest.into());
-    };
-    let jobs = Jobs::new(store, &engine);
-    match jobs
-        .upload_batch_file(
-            principal,
-            request_id.0,
-            &content_type,
-            body.into_data_stream(),
-        )
-        .await
-    {
-        Ok(file) => Json(render_file(&file)).into_response(),
-        Err(e) => job_error(e),
-    }
-}
-
-pub async fn file(
-    State(store): State<Store>,
-    Extension(engine): Extension<Engine>,
-    Extension(principal): Extension<Principal>,
-    Path(id): Path<String>,
-) -> Response {
-    match Jobs::new(store, &engine).get_file(&principal, &id).await {
-        Ok(f) => Json(render_file(&f)).into_response(),
-        Err(e) => job_error(e),
-    }
-}
-
-pub async fn file_content(
-    State(store): State<Store>,
-    Extension(engine): Extension<Engine>,
-    Extension(principal): Extension<Principal>,
-    Path(id): Path<String>,
-) -> Response {
-    match Jobs::new(store, &engine)
-        .file_content(&principal, &id)
-        .await
-    {
-        Ok(content) => stream_response(content),
-        Err(e) => job_error(e),
-    }
+fn jobs(store: Store, engine: &Engine, files: Option<Extension<FileStoreRuntime>>) -> Jobs {
+    Jobs::new(store, engine).with_files(files.map(|Extension(f)| f))
 }
 
 #[derive(Deserialize)]
@@ -97,11 +43,33 @@ pub struct CreateRequest {
     output_expires_after: Option<Value>,
 }
 
+/// 400 with the validation report (OpenAI `errors` list shape).
+fn invalid_input(issues: &[crate::jobs::plan::Issue]) -> Response {
+    let data: Vec<Value> = issues
+        .iter()
+        .map(|i| json!({"code": i.error.code(), "message": i.error.message(), "line": i.line, "param": null}))
+        .collect();
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({
+            "error": {
+                "message": "The input file has invalid lines; see errors.data (at most 20 are listed).",
+                "type": "invalid_request_error",
+                "code": "invalid_batch_input",
+                "param": "input_file_id",
+            },
+            "errors": {"object": "list", "data": data},
+        })),
+    )
+        .into_response()
+}
+
 pub async fn create(
     State(store): State<Store>,
     Extension(engine): Extension<Engine>,
     Extension(principal): Extension<Principal>,
     Extension(request_id): Extension<RequestId>,
+    files: Option<Extension<FileStoreRuntime>>,
     input: Result<Json<CreateRequest>, JsonRejection>,
 ) -> Response {
     let request = match input {
@@ -115,24 +83,28 @@ pub async fn create(
     if request.completion_window != BATCH_COMPLETION_WINDOW {
         return job_error(InferenceError::InvalidRequest.into());
     }
-    if request.endpoint != BATCH_ENDPOINT {
+    let Some(endpoint) = BatchEndpoint::parse(&request.endpoint) else {
         return job_error(InferenceError::Unsupported.into());
-    }
-    let jobs = Jobs::new(store, &engine);
+    };
+    let jobs = jobs(store, &engine, files);
     match jobs
         .create_batch(
             principal,
             request_id.0,
-            &request.input_file_id,
-            request.metadata,
+            CreateBatch {
+                input_file_id: request.input_file_id,
+                endpoint,
+                metadata: request.metadata,
+            },
         )
         .await
     {
-        Ok((job, upstream)) => match jobs.batch_files(&job).await {
-            Ok(files) => Json(render_batch(&job, files, Some(&upstream))).into_response(),
+        Ok(job) => match jobs.batch_object(&job).await {
+            Ok(v) => Json(v).into_response(),
             Err(e) => job_error(e),
         },
-        Err(e) => job_error(e),
+        Err(CreateError::Invalid(issues)) => invalid_input(&issues),
+        Err(CreateError::Job(e)) => job_error(e),
     }
 }
 
@@ -140,14 +112,11 @@ pub async fn retrieve(
     State(store): State<Store>,
     Extension(engine): Extension<Engine>,
     Extension(principal): Extension<Principal>,
+    files: Option<Extension<FileStoreRuntime>>,
     Path(id): Path<String>,
 ) -> Response {
-    let jobs = Jobs::new(store, &engine);
-    match jobs.get_batch(&principal, &id).await {
-        Ok((job, upstream)) => match jobs.batch_files(&job).await {
-            Ok(files) => Json(render_batch(&job, files, upstream.as_ref())).into_response(),
-            Err(e) => job_error(e),
-        },
+    match jobs(store, &engine, files).get_batch(&principal, &id).await {
+        Ok(v) => Json(v).into_response(),
         Err(e) => job_error(e),
     }
 }
@@ -156,14 +125,14 @@ pub async fn cancel(
     State(store): State<Store>,
     Extension(engine): Extension<Engine>,
     Extension(principal): Extension<Principal>,
+    files: Option<Extension<FileStoreRuntime>>,
     Path(id): Path<String>,
 ) -> Response {
-    let jobs = Jobs::new(store, &engine);
-    match jobs.cancel_batch(&principal, &id).await {
-        Ok((job, upstream)) => match jobs.batch_files(&job).await {
-            Ok(files) => Json(render_batch(&job, files, Some(&upstream))).into_response(),
-            Err(e) => job_error(e),
-        },
+    match jobs(store, &engine, files)
+        .cancel_batch(&principal, &id)
+        .await
+    {
+        Ok(v) => Json(v).into_response(),
         Err(e) => job_error(e),
     }
 }
@@ -172,6 +141,7 @@ pub async fn list(
     State(store): State<Store>,
     Extension(engine): Extension<Engine>,
     Extension(principal): Extension<Principal>,
+    files: Option<Extension<FileStoreRuntime>>,
     query: Result<Query<ListQuery>, axum::extract::rejection::QueryRejection>,
 ) -> Response {
     let Ok(Query(q)) = query else {
@@ -185,17 +155,11 @@ pub async fn list(
         // The Batch API lists newest first only.
         return job_error(InferenceError::InvalidRequest.into());
     }
-    match Jobs::new(store, &engine)
+    match jobs(store, &engine, files)
         .list_batches(&principal, q.after.as_deref(), limit + 1)
         .await
     {
-        Ok(rows) => Json(list_page(
-            rows.iter()
-                .map(|(job, files)| render_batch(job, *files, None))
-                .collect(),
-            limit,
-        ))
-        .into_response(),
+        Ok(rows) => Json(list_page(rows, limit)).into_response(),
         Err(e) => job_error(e),
     }
 }

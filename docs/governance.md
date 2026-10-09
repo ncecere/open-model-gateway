@@ -23,6 +23,17 @@ Requests/tokens use fixed UTC minutes, sampled from database wall-clock **after 
 
 The count is taken in the same admission transaction, after the catalog and installation locks, from the current minute and live leases only, so concurrent submissions cannot both take the last slot and the cost does not grow with history.
 
+### Storage
+
+`0020_files_api.sql` adds `storage_bytes` (**Storage**) to the workspace layers: workspace-type default, platform per-workspace override and workspace local. There is no installation or key storage layer. It is how many bytes a workspace may keep in the gateway's [file store](file-storage.md): live [Files API](files-api.md) uploads and batch inputs and outputs, plus uploads in progress.
+
+- **Composition.** It works like the other limits: the override replaces the type default (an all-null override means no storage cap), the local layer is tighten-only (it can't exceed the platform layer, and a stored cap can't be raised or removed), and the lowest applicable value wins.
+- **Defaults.** Type defaults start at **1 GiB** per workspace. Values are bytes, 1 to 2^50. Overrides that existed before 0020 have no storage value, like 0018's jobs-at-once column.
+- **Enforcement.** The quota is enforced while an upload streams. The upload reserves bytes ahead (`stored_files.reserved_bytes`), and each reservation step takes the catalog advisory lock (shared, as admission does first) and then a per-workspace transaction advisory lock. It counts committed sizes plus other live reservations, so concurrent uploads never jointly exceed the quota. No I/O happens while the lock is held. A refusal aborts the upload, deletes the partial object and returns `413 storage_quota_exceeded`.
+- **Dashboard.** Effective access and the limits pages show it as **Storage**. Workspace admins see a used/quota bar.
+
+Storage usage is tracked as GB-days but **not charged** (see [Files API](files-api.md#storage-usage-not-charged)).
+
 ### Budget periods
 
 Each scope may stack up to one budget per period, all enforced over their own half-open UTC window by **admission time**: `day` is the UTC calendar day, `week` the ISO week from Monday 00:00 UTC, `month` the UTC calendar month and `lifetime` all time since the scope was created. Each budget sums settled actual cost plus active pending/unknown holds of its scope (workspace, key lineage or installation) admitted in its window; the unknown/unbounded and `budget_exceeded`/`unresolved_usage` rules are unchanged. Every budget at every layer applies, so a $10/day local budget under a $200/month override binds on whichever is exhausted first. Override budgets apply only while the replacement header exists; type-default budgets only without one.

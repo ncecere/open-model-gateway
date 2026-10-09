@@ -12,6 +12,8 @@ mod alert_tests;
 mod catalog_ux_tests;
 #[path = "directory/tests.rs"]
 mod directory_tests;
+#[path = "files_tests.rs"]
+mod files_tests;
 #[path = "key_safety_tests.rs"]
 mod key_safety_tests;
 #[path = "keys/tests.rs"]

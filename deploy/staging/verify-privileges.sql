@@ -33,10 +33,11 @@ DO $$ DECLARE r record; t text; BEGIN
  END LOOP;
  IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'realtime_responses_%' AND tgenabled='O' AND NOT tgisinternal)<>3 THEN RAISE EXCEPTION 'realtime response guards missing or disabled'; END IF;
  -- Async jobs (0016): no removal; identity, ownership and reservation link fixed.
+ -- upstream_id is written once (0021: native batches are submitted after creation; trigger).
  FOREACH t IN ARRAY ARRAY['async_jobs','async_job_files'] LOOP
   IF has_table_privilege('gateway_runtime','public.'||t,'DELETE,TRUNCATE') THEN RAISE EXCEPTION 'async job history removable: %',t; END IF;
  END LOOP;
- FOREACH t IN ARRAY ARRAY['id','kind','workspace_id','api_key_id','deployment_id','execution_id','public_model','provider','upstream_id','created_at','poll_deadline_at','video_seconds','video_size','batch_endpoint'] LOOP
+ FOREACH t IN ARRAY ARRAY['id','kind','workspace_id','api_key_id','deployment_id','execution_id','public_model','provider','created_at','poll_deadline_at','video_seconds','video_size','batch_endpoint'] LOOP
   IF has_column_privilege('gateway_runtime','public.async_jobs',t,'UPDATE') THEN RAISE EXCEPTION 'mutable async job identity: %',t; END IF;
  END LOOP;
  FOREACH t IN ARRAY ARRAY['id','workspace_id','api_key_id','deployment_id','public_model','upstream_id','purpose','bytes','request_count','output_token_sum','max_line_output','created_at'] LOOP
@@ -74,6 +75,26 @@ DO $$ DECLARE r record; t text; BEGIN
  END LOOP;
  IF NOT has_table_privilege('gateway_runtime','public.stored_files','SELECT,INSERT') OR NOT has_column_privilege('gateway_runtime','public.stored_files','deleted_at','UPDATE') THEN RAISE EXCEPTION 'stored files not maintainable by runtime'; END IF;
  IF (SELECT count(*) FROM pg_trigger WHERE tgname='stored_files_guard' AND tgenabled='O' AND NOT tgisinternal)<>1 THEN RAISE EXCEPTION 'stored file guard missing or disabled'; END IF;
+ -- Files API (0020): api_purpose written once (trigger); reservations runtime-maintained; usage history append-only; progress forward-only.
+ IF NOT has_column_privilege('gateway_runtime','public.stored_files','reserved_bytes','UPDATE') OR NOT has_column_privilege('gateway_runtime','public.stored_files','api_purpose','UPDATE') THEN RAISE EXCEPTION 'upload reservations/purpose not maintainable'; END IF;
+ IF has_table_privilege('gateway_runtime','public.storage_usage_hours','UPDATE') OR has_table_privilege('gateway_runtime','public.storage_usage_hours','DELETE,TRUNCATE') THEN RAISE EXCEPTION 'storage usage history mutable'; END IF;
+ IF has_any_column_privilege('gateway_runtime','public.storage_usage_hours','UPDATE') THEN RAISE EXCEPTION 'storage usage history columns mutable'; END IF;
+ IF has_table_privilege('gateway_runtime','public.storage_usage_progress','INSERT') OR has_table_privilege('gateway_runtime','public.storage_usage_progress','DELETE,TRUNCATE') THEN RAISE EXCEPTION 'storage usage progress re-keyable'; END IF;
+ IF NOT has_table_privilege('gateway_runtime','public.storage_usage_hours','SELECT,INSERT') THEN RAISE EXCEPTION 'storage usage not recordable'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname IN ('storage_usage_hours_guard','storage_usage_progress_guard') AND tgenabled='O' AND NOT tgisinternal)<>2 THEN RAISE EXCEPTION 'storage usage guards missing or disabled'; END IF;
+ -- Batch engine (0021): line/segment history never removed; identity fixed; pinned tier and line link fixed; guards present.
+ FOREACH t IN ARRAY ARRAY['batch_lines','batch_segments'] LOOP
+  IF has_table_privilege('gateway_runtime','public.'||t,'DELETE,TRUNCATE') THEN RAISE EXCEPTION 'batch history removable: %',t; END IF;
+ END LOOP;
+ FOREACH t IN ARRAY ARRAY['job_id','workspace_id','line_no','started_at'] LOOP
+  IF has_column_privilege('gateway_runtime','public.batch_lines',t,'UPDATE') THEN RAISE EXCEPTION 'mutable batch line identity: %',t; END IF;
+ END LOOP;
+ IF has_any_column_privilege('gateway_runtime','public.batch_segments','UPDATE') THEN RAISE EXCEPTION 'batch segments mutable'; END IF;
+ FOREACH t IN ARRAY ARRAY['batch_mode','user_id','input_file_id','work_file_id','price_tier','retry_limit'] LOOP
+  IF has_column_privilege('gateway_runtime','public.async_jobs',t,'UPDATE') THEN RAISE EXCEPTION 'mutable batch identity: %',t; END IF;
+ END LOOP;
+ IF has_column_privilege('gateway_runtime','public.governance_reservations','price_tier','UPDATE') OR has_column_privilege('gateway_runtime','public.inference_executions','batch_job_id','UPDATE') OR has_column_privilege('gateway_runtime','public.deployment_prices','batch_price_lines','UPDATE') THEN RAISE EXCEPTION 'mutable batch pricing snapshot'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname IN ('batch_lines_guard','batch_lines_no_delete','batch_segments_no_update') AND tgenabled='O' AND NOT tgisinternal)<>3 THEN RAISE EXCEPTION 'batch guards missing or disabled'; END IF;
  IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units','valid_model_protocols_base','valid_cost_components_base','valid_price_lines_base','valid_upstream_job_id')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
 END $$;
 BEGIN;
@@ -336,6 +357,85 @@ BEGIN
   BEGIN INSERT INTO stored_files(id,object_key,purpose,backend,encryption_key_id) VALUES(x1,'batch_output/installation/'||x1,'batch_output','s3','k'); RAISE EXCEPTION 'installation-scoped customer content allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN INSERT INTO stored_files(id,object_key,purpose,workspace_id,filename,backend,encryption_key_id) VALUES(x2,'user_file/'||ws||'/'||x2,'user_file',ws,'../etc/passwd','s3','k'); RAISE EXCEPTION 'path-like filename allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN INSERT INTO stored_files(id,object_key,purpose,workspace_id,created_by_api_key_id,backend,encryption_key_id) VALUES(x3,'export/'||personal||'/'||x3,'export',personal,k,'s3','k'); RAISE EXCEPTION 'cross-workspace key attribution allowed'; EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+ END;
+ -- Files API (0020): storage quota layers, a reserved upload, listing, usage rows (append-only).
+ DECLARE f2 uuid:=gen_random_uuid(); x4 uuid:=gen_random_uuid(); BEGIN
+  UPDATE workspace_type_policies SET storage_bytes=2147483648 WHERE kind='team';
+  IF (SELECT storage_bytes FROM workspace_type_policies WHERE kind='personal') IS DISTINCT FROM 1073741824 THEN RAISE EXCEPTION 'storage type default missing'; END IF;
+  INSERT INTO workspace_platform_policy_overrides(workspace_id,storage_bytes) VALUES(ws,5000) ON CONFLICT(workspace_id) DO UPDATE SET storage_bytes=EXCLUDED.storage_bytes;
+  INSERT INTO workspace_local_policies(workspace_id,storage_bytes) VALUES(ws,4000) ON CONFLICT(workspace_id) DO UPDATE SET storage_bytes=EXCLUDED.storage_bytes;
+  BEGIN UPDATE workspace_local_policies SET storage_bytes=0 WHERE workspace_id=ws; RAISE EXCEPTION 'non-positive storage quota allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  PERFORM pg_advisory_xact_lock_shared(72419502);
+  PERFORM pg_advisory_xact_lock(hashtextextended('storage_quota:'||ws::text,0));
+  INSERT INTO stored_files(id,object_key,purpose,workspace_id,created_by_user_id,created_by_api_key_id,filename,content_type,backend,encryption_key_id,expires_at,api_purpose) VALUES(f2,'user_file/'||ws||'/'||f2,'user_file',ws,u,k,'photo.png','image/png','s3','k2026',least(NULL::timestamptz,now()+make_interval(secs=>3600)),'vision');
+  UPDATE stored_files SET reserved_bytes=greatest(reserved_bytes,100) WHERE id=f2 AND workspace_id=ws AND committed_at IS NULL AND deleted_at IS NULL;
+  BEGIN UPDATE stored_files SET reserved_bytes=1 WHERE id=f2; RAISE EXCEPTION 'reservation shrink allowed'; EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'stored file reservations only grow while pending' THEN RAISE; END IF; END;
+  UPDATE stored_files SET size_bytes=10,sha256=decode(repeat('ab',32),'hex'),committed_at=clock_timestamp() WHERE id=f2 AND committed_at IS NULL AND deleted_at IS NULL;
+  BEGIN UPDATE stored_files SET reserved_bytes=500 WHERE id=f2; RAISE EXCEPTION 'committed reservation changed'; EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'stored file reservations only grow while pending' THEN RAISE; END IF; END;
+  BEGIN UPDATE stored_files SET api_purpose='evals' WHERE id=f2; RAISE EXCEPTION 'api purpose rewrite allowed'; EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'stored file api purpose is written once' THEN RAISE; END IF; END;
+  BEGIN INSERT INTO stored_files(id,object_key,purpose,workspace_id,backend,encryption_key_id,api_purpose) VALUES(x4,'batch_input/'||ws||'/'||x4,'batch_input',ws,'s3','k','user_data'); RAISE EXCEPTION 'mismatched api purpose allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  PERFORM coalesce(sum(CASE WHEN committed_at IS NOT NULL THEN size_bytes ELSE reserved_bytes END),0) FROM stored_files WHERE workspace_id=ws AND deleted_at IS NULL;
+  PERFORM id FROM stored_files WHERE workspace_id=ws AND api_purpose IS NOT NULL AND deleted_at IS NULL ORDER BY created_at DESC,id DESC LIMIT 101;
+  PERFORM recorded_through FROM storage_usage_progress WHERE singleton FOR UPDATE SKIP LOCKED;
+  INSERT INTO storage_usage_hours(workspace_id,purpose,hour_start,byte_seconds,file_count) VALUES(ws,'user_file',date_trunc('hour',now(),'UTC')-interval '1 hour',36000,1) ON CONFLICT DO NOTHING;
+  UPDATE storage_usage_progress SET recorded_through=recorded_through+interval '1 hour' WHERE singleton;
+  PERFORM purpose,sum(byte_seconds) FROM storage_usage_hours WHERE workspace_id=ws GROUP BY purpose;
+  BEGIN UPDATE storage_usage_hours SET byte_seconds=1 WHERE workspace_id=ws; RAISE EXCEPTION 'storage usage rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN DELETE FROM storage_usage_hours WHERE workspace_id=ws; RAISE EXCEPTION 'storage usage removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE storage_usage_progress SET recorded_through=recorded_through-interval '2 hours' WHERE singleton; RAISE EXCEPTION 'storage usage progress moved back'; EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'storage usage progress only moves forward' THEN RAISE; END IF; END;
+  BEGIN INSERT INTO storage_usage_hours(workspace_id,purpose,hour_start,byte_seconds,file_count) VALUES(ws,'user_file',date_trunc('hour',now(),'UTC')+interval '90 seconds',1,1); RAISE EXCEPTION 'unaligned usage hour allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN INSERT INTO storage_usage_hours(workspace_id,purpose,hour_start,byte_seconds,file_count) VALUES(ws,'branding',date_trunc('hour',now(),'UTC')-interval '2 hours',1,1); RAISE EXCEPTION 'installation purpose usage allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+ END;
+ -- Batch engine (0021): batch prices; a gateway-run batch's envelope, line
+ -- claims, transfers, segments, results and close; a native batch's upstream id.
+ DECLARE bp uuid:=gen_random_uuid(); env uuid:=gen_random_uuid(); line uuid:=gen_random_uuid(); bj uuid:=gen_random_uuid(); nj uuid:=gen_random_uuid(); nenv uuid:=gen_random_uuid(); fin uuid:=gen_random_uuid(); fw uuid:=gen_random_uuid(); fs uuid:=gen_random_uuid(); fo uuid:=gen_random_uuid(); BEGIN
+  INSERT INTO deployment_prices(id,deployment_id,input_token_limit,output_token_limit,pricing_version,price_lines,batch_price_lines,max_units) VALUES(bp,d,100,10,3,'[{"meter":"input_tokens","microusd_per_batch":"100000","batch":1000000,"unit_label":"/M tokens","sku_label":"Input"}]','[{"meter":"input_tokens","microusd_per_batch":"50000","batch":1000000,"unit_label":"/M tokens","sku_label":"Input (batch)"}]','{}');
+  BEGIN INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version,batch_price_lines) VALUES(gen_random_uuid(),d,1,1,100,10,1,'[]'); RAISE EXCEPTION 'v1 batch prices allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE deployment_prices SET batch_price_lines=NULL WHERE id=bp; RAISE EXCEPTION 'batch price rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  INSERT INTO stored_files(id,object_key,purpose,workspace_id,created_by_api_key_id,backend,encryption_key_id,api_purpose) VALUES(fin,'batch_input/'||ws||'/'||fin,'batch_input',ws,k,'s3','k2026','batch');
+  INSERT INTO stored_files(id,object_key,purpose,workspace_id,created_by_api_key_id,backend,encryption_key_id) VALUES(fw,'batch_output/'||ws||'/'||fw,'batch_output',ws,k,'s3','k2026');
+  INSERT INTO stored_files(id,object_key,purpose,workspace_id,created_by_api_key_id,backend,encryption_key_id) VALUES(fs,'batch_output/'||ws||'/'||fs,'batch_output',ws,k,'s3','k2026');
+  INSERT INTO stored_files(id,object_key,purpose,workspace_id,created_by_api_key_id,backend,encryption_key_id,api_purpose) VALUES(fo,'batch_output/'||ws||'/'||fo,'batch_output',ws,k,'s3','k2026','batch_output');
+  INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,workload_kind) VALUES(env,ws,k,d,'mixed','mixed',false,'started',env,'batches');
+  INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,reserved_tokens,held_microusd,request_count,price_tier) VALUES(env,ws,k,d,now(),date_trunc('minute',now()),date_trunc('month',now()),now()+interval '26 hours','pending',220,10,2,'standard');
+  INSERT INTO async_jobs(id,kind,workspace_id,api_key_id,deployment_id,execution_id,public_model,provider,poll_deadline_at,batch_endpoint,batch_mode,user_id,input_file_id,work_file_id,request_total,request_completed,request_failed,upstream_status) VALUES(bj,'batch',ws,k,d,env,'mixed','mixed',now()+interval '26 hours','/v1/responses','gateway',u,fin,fw,2,0,0,'validating');
+  UPDATE async_jobs SET runner_id=gen_random_uuid(),runner_lease_until=clock_timestamp()+interval '60 seconds' WHERE id IN(SELECT id FROM async_jobs WHERE batch_mode='gateway' AND settled_at IS NULL AND (runner_lease_until IS NULL OR runner_lease_until<clock_timestamp()) LIMIT 1 FOR UPDATE SKIP LOCKED);
+  UPDATE async_jobs SET state='in_progress',upstream_status='in_progress',in_progress_at=clock_timestamp(),last_progress_at=clock_timestamp() WHERE id=bj AND state='queued';
+  INSERT INTO batch_lines(job_id,workspace_id,line_no,state,execution_id) VALUES(bj,ws,0,'running',line) ON CONFLICT DO NOTHING;
+  PERFORM r.state,r.held_microusd FROM governance_reservations r JOIN async_jobs j ON j.execution_id=r.execution_id WHERE r.execution_id=env AND j.id=bj AND j.batch_mode='gateway' FOR UPDATE OF r;
+  INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,batch_job_id) VALUES(line,ws,k,d,'rollback','openai_compatible',false,'started',line,bj);
+  INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,price_id,admitted_at,minute_start,month_start,lease_expires_at,state,reserved_tokens,held_microusd) VALUES(line,ws,k,d,bp,now(),date_trunc('minute',now()),date_trunc('month',now()),now()+interval '2 minutes','pending',110,5);
+  UPDATE governance_reservations SET held_microusd=held_microusd-5 WHERE execution_id=env AND state='pending' AND held_microusd>=5;
+  UPDATE batch_lines SET state='failed',status_code=429,error_code='rate_limit_error',finished_at=clock_timestamp() WHERE job_id=bj AND line_no=0 AND state='running';
+  UPDATE batch_lines SET state='running',attempts=attempts+1,execution_id=gen_random_uuid(),status_code=NULL,error_code=NULL,finished_at=NULL WHERE job_id=bj AND line_no=0 AND state='failed' AND attempts=1 AND segment IS NULL;
+  UPDATE batch_lines SET state='succeeded',status_code=200,finished_at=clock_timestamp() WHERE job_id=bj AND line_no=0 AND state='running';
+  UPDATE async_jobs SET request_completed=coalesce(request_completed,0)+1,request_failed=coalesce(request_failed,0)+0,last_progress_at=clock_timestamp() WHERE id=bj;
+  INSERT INTO batch_segments(job_id,workspace_id,seq,file_id,lines) VALUES(bj,ws,0,fs,1);
+  UPDATE batch_lines SET segment=0 WHERE job_id=bj AND line_no=ANY(ARRAY[0]) AND segment IS NULL AND state<>'running';
+  UPDATE batch_lines SET state='interrupted',error_code='interrupted',finished_at=clock_timestamp() WHERE job_id=bj AND state='running';
+  PERFORM seq,file_id FROM batch_segments WHERE job_id=bj ORDER BY seq;
+  PERFORM coalesce(sum(r.actual_microusd) FILTER(WHERE r.state='settled'),0) FROM governance_reservations r WHERE r.execution_id IN (SELECT e2.id FROM inference_executions e2 WHERE e2.batch_job_id=bj);
+  BEGIN UPDATE batch_lines SET state='running' WHERE job_id=bj AND line_no=0; RAISE EXCEPTION 'finished batch line restarted'; EXCEPTION WHEN raise_exception THEN IF SQLERRM NOT LIKE 'invalid batch line transition%' THEN RAISE; END IF; END;
+  BEGIN UPDATE batch_lines SET segment=1 WHERE job_id=bj AND line_no=0; RAISE EXCEPTION 'batch line segment rewritten'; EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'batch line identity is immutable' THEN RAISE; END IF; END;
+  BEGIN DELETE FROM batch_lines WHERE job_id=bj; RAISE EXCEPTION 'batch line removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE batch_segments SET lines=2 WHERE job_id=bj; RAISE EXCEPTION 'batch segment rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE async_jobs SET batch_mode='native' WHERE id=bj; RAISE EXCEPTION 'batch mode rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  UPDATE async_jobs SET state='completed',upstream_status='completed',output_file_id=coalesce(output_file_id,fo),completed_at=coalesce(completed_at,clock_timestamp()),runner_lease_until=NULL WHERE id=bj AND state IN('queued','in_progress');
+  BEGIN UPDATE async_jobs SET output_file_id=fin WHERE id=bj; RAISE EXCEPTION 'batch output rewrite allowed'; EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'async job identity is immutable' THEN RAISE; END IF; END;
+  UPDATE governance_reservations SET state='settled',actual_microusd=0,input_tokens=0,output_tokens=0 WHERE execution_id=env AND state='pending';
+  UPDATE inference_executions SET state='succeeded',input_tokens=0,output_tokens=0,elapsed_ms=1,completed_at=clock_timestamp(),finish_reason='stop' WHERE id=env AND state='started' AND workload_kind='batches';
+  INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd,input_tokens,output_tokens) VALUES(gen_random_uuid(),env,'settlement',0,0,0);
+  UPDATE async_jobs SET settled_at=clock_timestamp() WHERE id=bj AND settled_at IS NULL;
+  -- Native: created before submission, upstream id written once, batch tier pinned.
+  INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,workload_kind) VALUES(nenv,ws,k,d,'rollback','openai',false,'started',nenv,'batches');
+  INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,price_id,admitted_at,minute_start,month_start,lease_expires_at,state,reserved_tokens,held_microusd,request_count,price_tier) VALUES(nenv,ws,k,d,bp,now(),date_trunc('minute',now()),date_trunc('month',now()),now()+interval '26 hours','pending',110,1,1,'batch');
+  INSERT INTO async_jobs(id,kind,workspace_id,api_key_id,deployment_id,execution_id,public_model,provider,poll_deadline_at,batch_endpoint,batch_mode,input_file_id,work_file_id,price_tier,request_total,request_completed,request_failed) VALUES(nj,'batch',ws,k,d,nenv,'rollback','openai',now()+interval '26 hours','/v1/embeddings','native',fin,fw,'batch',1,0,0);
+  UPDATE async_jobs SET submit_started_at=clock_timestamp() WHERE id=nj AND submit_started_at IS NULL AND upstream_id IS NULL AND cancel_requested_at IS NULL AND state='queued';
+  UPDATE async_jobs SET upstream_id='batch_native_probe' WHERE id=nj AND upstream_id IS NULL;
+  BEGIN UPDATE async_jobs SET upstream_id='batch_other' WHERE id=nj; RAISE EXCEPTION 'native upstream id rewrite allowed'; EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'async job identity is immutable' THEN RAISE; END IF; END;
+  BEGIN INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,price_tier) VALUES(gen_random_uuid(),ws,k,d,now(),now(),now(),now(),'pending','batch'); RAISE EXCEPTION 'unpinned batch tier allowed'; EXCEPTION WHEN check_violation OR foreign_key_violation THEN NULL; END;
+  BEGIN INSERT INTO async_jobs(id,kind,workspace_id,api_key_id,deployment_id,execution_id,public_model,provider,upstream_id,poll_deadline_at,batch_endpoint,batch_mode,input_file_id,work_file_id) VALUES(gen_random_uuid(),'batch',ws,k,d,gen_random_uuid(),'x','x','batch_y',now(),'/v1/chat/completions','gateway',fin,fw); RAISE EXCEPTION 'gateway batch with upstream id allowed'; EXCEPTION WHEN check_violation OR foreign_key_violation THEN NULL; END;
+  PERFORM coalesce(batch_mode,'native'),count(*) FROM async_jobs WHERE kind='batch' AND settled_at IS NULL GROUP BY 1;
  END;
 END $$;
 ROLLBACK;

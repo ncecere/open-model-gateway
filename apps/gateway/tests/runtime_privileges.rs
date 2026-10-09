@@ -39,6 +39,9 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         "async_jobs",
         "async_job_files",
         "stored_files",
+        "storage_usage_hours",
+        "batch_lines",
+        "batch_segments",
     ] {
         assert_eq!(
             sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
@@ -54,6 +57,7 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
     scim_provisioning_runs_as_runtime(&pool).await;
     budget_totals_maintained_as_runtime(&pool).await;
     file_store_runs_as_runtime(&pool).await;
+    files_api_runs_as_runtime(&pool).await;
     // Last: its unknown batch hold would change the installation totals above.
     async_jobs_run_as_runtime(&pool).await;
     sqlx::query("SELECT pg_advisory_unlock(72419505)")
@@ -315,6 +319,143 @@ async fn alert_evaluation_runs_as_runtime(pool: &PgPool) {
     runtime.close().await;
 }
 
+/// Files API (0020): quota reservations (advisory locks + reserved_bytes),
+/// listing, quota reads, the upload pipeline and hourly usage recording run
+/// with the reviewed grants; usage history cannot be rewritten.
+async fn files_api_runs_as_runtime(pool: &PgPool) {
+    use futures::StreamExt;
+    use open_model_gateway::filestore::{
+        FileStoreRuntime, NewFile, Purpose,
+        files::{FileError, FileList, FileStorage},
+        upload::{Uploader, receive},
+        usage::record_hours,
+    };
+    let (ws, user, key) = (
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+    );
+    sqlx::query("INSERT INTO users(id,email) VALUES($1,$2)")
+        .bind(user)
+        .bind(format!("files-api-{user}@example.test"))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO workspaces(id,name,kind) VALUES($1,'Files API probe','team')")
+        .bind(ws)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash) VALUES($1,$2,$3,'files',decode(repeat('00',32),'hex'))").bind(key).bind(ws).bind(user).execute(pool).await.unwrap();
+    let runtime = runtime_pool(pool).await;
+    let store = open_model_gateway::store::Store::new(runtime.clone());
+    // Storage quota is edited like the other workspace limits.
+    sqlx::query("INSERT INTO workspace_platform_policy_overrides(workspace_id,storage_bytes) VALUES($1,64) ON CONFLICT(workspace_id) DO UPDATE SET storage_bytes=excluded.storage_bytes").bind(ws).execute(&runtime).await.unwrap();
+    sqlx::query("INSERT INTO workspace_local_policies(workspace_id,storage_bytes) VALUES($1,48) ON CONFLICT(workspace_id) DO UPDATE SET storage_bytes=excluded.storage_bytes").bind(ws).execute(&runtime).await.unwrap();
+    sqlx::query("UPDATE installation_settings SET file_user_files_enabled=true,file_batch_enabled=true WHERE singleton").execute(&runtime).await.unwrap();
+    let files = FileStorage::new(store.clone(), FileStoreRuntime::memory());
+    let boundary = "probe";
+    let form = |data: &str| {
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"purpose\"\r\n\r\nuser_data\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.txt\"\r\n\r\n{data}\r\n--{boundary}--\r\n"
+        )
+    };
+    let who = Uploader {
+        workspace_id: ws,
+        api_key_id: Some(key),
+        user_id: Some(user),
+    };
+    let ct = format!("multipart/form-data; boundary={boundary}");
+    let stream =
+        |s: String| futures::stream::iter([Ok::<_, std::io::Error>(bytes::Bytes::from(s))]);
+    let stored = receive(
+        &files,
+        who,
+        Some(&ct),
+        stream(form(&"a".repeat(40))),
+        1 << 20,
+    )
+    .await
+    .unwrap();
+    assert_eq!(stored.api_purpose.as_deref(), Some("user_data"));
+    assert!(
+        receive(
+            &files,
+            who,
+            Some(&ct),
+            stream(form(&"b".repeat(20))),
+            1 << 20
+        )
+        .await
+        .is_err()
+    );
+    let usage = files.workspace_storage(ws).await.unwrap();
+    assert_eq!((usage.used_bytes, usage.quota_bytes), (40, Some(48)));
+    let out = files
+        .create(
+            NewFile::new(Purpose::BatchOutput, Some(ws)),
+            futures::stream::iter([Ok(bytes::Bytes::from_static(b"12345678901"))]).boxed(),
+        )
+        .await;
+    assert_eq!(out.unwrap_err(), FileError::QuotaExceeded);
+    let (page, more) = files
+        .list(
+            ws,
+            &FileList {
+                limit: 10,
+                ..FileList::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!((page.len(), more), (1, false));
+    // Hourly usage: backdate the progress mark and the file (as owner), record as runtime.
+    sqlx::query("ALTER TABLE storage_usage_progress DISABLE TRIGGER storage_usage_progress_guard")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE storage_usage_progress SET recorded_through=date_trunc('hour', now(), 'UTC') - interval '3 hours'").execute(pool).await.unwrap();
+    sqlx::query("ALTER TABLE storage_usage_progress ENABLE TRIGGER storage_usage_progress_guard")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("ALTER TABLE stored_files DISABLE TRIGGER stored_files_guard")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE stored_files SET committed_at=now()-interval '3 hours' WHERE id=$1")
+        .bind(stored.id)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("ALTER TABLE stored_files ENABLE TRIGGER stored_files_guard")
+        .execute(pool)
+        .await
+        .unwrap();
+    assert!(record_hours(&store, 48).await.unwrap() >= 2);
+    let rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM storage_usage_hours WHERE workspace_id=$1")
+            .bind(ws)
+            .fetch_one(&runtime)
+            .await
+            .unwrap();
+    assert!(rows >= 2);
+    assert!(
+        sqlx::query("UPDATE storage_usage_hours SET byte_seconds=1")
+            .execute(&runtime)
+            .await
+            .is_err()
+    );
+    assert!(
+        sqlx::query("DELETE FROM storage_usage_hours")
+            .execute(&runtime)
+            .await
+            .is_err()
+    );
+    assert!(files.delete(stored.id, Some(ws)).await.unwrap());
+    runtime.close().await;
+}
+
 /// File store (0019): metadata writes, scoped reads, deletion, retention sweeps,
 /// verification and the Admin › Settings › Storage statements need nothing
 /// beyond the reviewed grants; rows are never deleted.
@@ -437,7 +578,10 @@ mod jobs_fake {
     use open_model_gateway::{
         inference::{
             error::InferenceError,
-            types::{ApiProtocol, Capabilities, ChatRequest, Deployment, ProviderOutput},
+            types::{
+                ApiProtocol, Capabilities, ChatRequest, ChatResponse, Deployment, FinishReason,
+                ProviderOutput, Usage,
+            },
         },
         jobs::types::*,
         providers::ProviderAdapter,
@@ -459,10 +603,23 @@ mod jobs_fake {
             error: None,
         }
     }
+    fn answer() -> ChatResponse {
+        ChatResponse {
+            content: Some("probe".into()),
+            tool_calls: vec![],
+            finish_reason: FinishReason::Stop,
+            usage: Usage {
+                input_tokens: Some(10),
+                output_tokens: Some(5),
+                ..Usage::default()
+            },
+        }
+    }
     fn batch(status: BatchStatus) -> UpstreamBatch {
         UpstreamBatch {
             id: UpstreamId::parse("batch_runtime").unwrap(),
             status,
+            input_file: None,
             output_file: None,
             error_file: Some(UpstreamId::parse("file-err-runtime").unwrap()),
             counts: None,
@@ -486,13 +643,16 @@ mod jobs_fake {
         }
         fn capabilities(&self) -> Capabilities {
             Capabilities {
-                text_chat: false,
+                text_chat: true,
                 streaming: false,
                 tools: false,
             }
         }
         fn supports_protocol(&self, p: ApiProtocol) -> bool {
-            matches!(p, ApiProtocol::Videos | ApiProtocol::Batches)
+            matches!(
+                p,
+                ApiProtocol::Videos | ApiProtocol::Batches | ApiProtocol::ChatCompletions
+            )
         }
         fn supports_video_request(&self, _: &Deployment, _: &VideoRequest) -> bool {
             true
@@ -502,7 +662,8 @@ mod jobs_fake {
             _: &Deployment,
             _: ChatRequest,
         ) -> Result<ProviderOutput, InferenceError> {
-            Err(InferenceError::Unsupported)
+            self.0.lock().unwrap().push("line");
+            Ok(ProviderOutput::Complete(answer()))
         }
         async fn create_video(
             &self,
@@ -518,27 +679,67 @@ mod jobs_fake {
         ) -> Result<UpstreamVideo, InferenceError> {
             Ok(video(JobState::Completed))
         }
-        async fn upload_batch_file(
+        fn native_batch(&self, _: &Deployment, _: BatchEndpoint) -> bool {
+            true
+        }
+        fn encode_native_line(
             &self,
             _: &Deployment,
-            mut content: ByteStream,
-        ) -> Result<UpstreamFile, InferenceError> {
-            use futures_util::StreamExt;
-            while let Some(chunk) = content.next().await {
-                chunk?;
-            }
-            Ok(UpstreamFile {
-                id: UpstreamId::parse("file-in-runtime").unwrap(),
-                bytes: None,
-            })
+            _: BatchEndpoint,
+            custom_id: &str,
+            _: &BatchRequest,
+        ) -> Result<Vec<u8>, InferenceError> {
+            Ok(format!("{{\"custom_id\":\"{custom_id}\"}}").into_bytes())
         }
-        async fn create_batch(
+        async fn submit_native_batch(
+            &self,
+            _: &Deployment,
+            _: BatchEndpoint,
+            mut records: ByteStream,
+        ) -> Result<UpstreamBatch, InferenceError> {
+            use futures_util::StreamExt;
+            while let Some(record) = records.next().await {
+                record?;
+            }
+            self.0.lock().unwrap().push("submit");
+            Ok(batch(BatchStatus::InProgress))
+        }
+        async fn retrieve_batch(
             &self,
             _: &Deployment,
             _: &UpstreamId,
-            _: Option<serde_json::Map<String, serde_json::Value>>,
         ) -> Result<UpstreamBatch, InferenceError> {
-            Ok(batch(BatchStatus::InProgress))
+            Ok(batch(BatchStatus::Completed))
+        }
+        async fn native_batch_results(
+            &self,
+            _: &Deployment,
+            _: &UpstreamBatch,
+        ) -> Result<ByteStream, InferenceError> {
+            Ok(Box::pin(futures_util::stream::once(async {
+                Ok(axum::body::Bytes::from_static(b"{\"custom_id\":\"l0\"}\n"))
+            })))
+        }
+        fn decode_native_result(
+            &self,
+            _: &Deployment,
+            _: BatchEndpoint,
+            line: &[u8],
+        ) -> Result<NativeResult, InferenceError> {
+            let v: serde_json::Value =
+                serde_json::from_slice(line).map_err(|_| InferenceError::InvalidUpstream)?;
+            Ok(NativeResult {
+                custom_id: v["custom_id"].as_str().unwrap_or_default().to_owned(),
+                outcome: NativeOutcome::Succeeded(Box::new(BatchResponse::Chat(answer()))),
+            })
+        }
+        async fn delete_native_batch(
+            &self,
+            _: &Deployment,
+            _: &UpstreamBatch,
+        ) -> Result<(), InferenceError> {
+            self.0.lock().unwrap().push("delete");
+            Ok(())
         }
         async fn cancel_batch(
             &self,
@@ -572,7 +773,7 @@ async fn async_jobs_run_as_runtime(pool: &PgPool) {
  INSERT INTO workspaces(id,name,kind) VALUES('{ws}','Jobs project','project');
  INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source) VALUES('{ws}','{user}','owner','manual');
  INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash) VALUES('{key}','{ws}','{user}','Jobs',decode(repeat('06',32),'hex'));
- INSERT INTO models(id,public_name,supported_protocols) VALUES('{video_model}','video-{video_model}',ARRAY['videos']),('{batch_model}','batch-{batch_model}',ARRAY['batches']);
+ INSERT INTO models(id,public_name,supported_protocols) VALUES('{video_model}','video-{video_model}',ARRAY['videos']),('{batch_model}','batch-{batch_model}',ARRAY['chat_completions']);
  INSERT INTO provider_connections(id,name,provider,credential_ref,enabled) VALUES(pc,'Jobs','openai','env:UNUSED',true);
  INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model,enabled) VALUES(dv,'{video_model}',pc,'sora-2',true),(db,'{batch_model}',pc,'gpt-x',true);
  INSERT INTO workspace_model_grants(workspace_id,model_id,source) VALUES('{ws}','{video_model}','direct'),('{ws}','{batch_model}','direct');
@@ -648,43 +849,121 @@ async fn async_jobs_run_as_runtime(pool: &PgPool) {
     .await
     .unwrap();
     assert_eq!((state.as_str(), actual), ("settled", Some(400_000)));
-    // Batch: streamed upload, file claim, admission, cancel, settlement.
+    // Batches (0021): a gateway input file, native admission at the pinned
+    // price, cancel before submission (released at zero), a native
+    // submit/poll/collect, and a gateway-run batch through the engine.
+    use open_model_gateway::{
+        filestore::{FileStoreRuntime, NewFile, Purpose, QuotaMode, files::FileStorage},
+        jobs::{BatchMode, batch::CreateBatch, runner::Runner},
+    };
+    sqlx::query("UPDATE installation_settings SET file_batch_enabled=true WHERE singleton")
+        .execute(pool)
+        .await
+        .unwrap();
+    let store = jobs_store(pool).await;
+    let files_runtime = FileStoreRuntime::memory();
+    let files = FileStorage::new(store.clone(), files_runtime.clone());
+    let mut registry = ProviderRegistry::default();
+    registry.register(fake.clone()).unwrap();
+    let engine = open_model_gateway::inference::Engine::new(
+        std::sync::Arc::new(store.clone()),
+        registry.clone(),
+        open_model_gateway::inference::EngineLimits::default(),
+    )
+    .unwrap();
+    let jobs = Jobs::with(store, registry, JobLimits::default())
+        .with_files(Some(files_runtime))
+        .with_engine(engine);
     let line = format!(
-        "{{\"custom_id\":\"a\",\"method\":\"POST\",\"url\":\"/v1/chat/completions\",\"body\":{{\"model\":\"batch-{batch_model}\",\"messages\":[],\"max_tokens\":10}}}}\n"
+        "{{\"custom_id\":\"a\",\"method\":\"POST\",\"url\":\"/v1/chat/completions\",\"body\":{{\"model\":\"batch-{batch_model}\",\"messages\":[{{\"role\":\"user\",\"content\":\"probe\"}}],\"max_tokens\":10}}}}\n"
     );
-    let form = format!(
-        "--B\r\nContent-Disposition: form-data; name=\"purpose\"\r\n\r\nbatch\r\n--B\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.jsonl\"\r\n\r\n{line}\r\n--B--\r\n"
-    );
-    let body =
-        futures_util::stream::iter(vec![Ok::<_, std::io::Error>(axum::body::Bytes::from(form))]);
-    let file = jobs
-        .upload_batch_file(
-            principal,
-            uuid::Uuid::new_v4(),
-            "multipart/form-data; boundary=B",
-            body,
-        )
+    let mut inputs = Vec::new();
+    for _ in 0..3 {
+        let body = line.clone().into_bytes();
+        let stored = files
+            .create(
+                NewFile {
+                    created_by_api_key_id: Some(key),
+                    quota: QuotaMode::CountOnly,
+                    ..NewFile::new(Purpose::BatchInput, Some(ws))
+                },
+                Box::pin(futures_util::stream::once(async move {
+                    Ok(axum::body::Bytes::from(body))
+                })),
+            )
+            .await
+            .unwrap();
+        inputs.push(open_model_gateway::filestore::files::public_id(stored.id));
+    }
+    let create = |file: String, gateway: bool| CreateBatch {
+        input_file_id: file,
+        endpoint: BatchEndpoint::ChatCompletions,
+        metadata: gateway.then(|| {
+            serde_json::json!({"omg_mode":"gateway"})
+                .as_object()
+                .cloned()
+                .unwrap()
+        }),
+    };
+    let first = uuid::Uuid::new_v4();
+    let job = jobs
+        .create_batch(principal, first, create(inputs[0].clone(), false))
         .await
         .unwrap();
-    let batch = uuid::Uuid::new_v4();
-    let (job, _) = jobs
-        .create_batch(principal, batch, &client_id(FILE_PREFIX, file.id), None)
-        .await
-        .unwrap();
-    let (job, _) = jobs
+    assert_eq!(job.mode(), Some(BatchMode::Native));
+    let cancelled = jobs
         .cancel_batch(&principal, &client_id("batch_", job.id))
         .await
         .unwrap();
-    assert_eq!(job.state, "cancelled");
-    assert!(job.settled_at.is_some());
-    assert_eq!(*fake.0.lock().unwrap(), ["cancel"]);
-    let state: String =
-        sqlx::query_scalar("SELECT state FROM governance_reservations WHERE execution_id=$1")
-            .bind(batch)
+    assert_eq!(cancelled["status"], "cancelled");
+    let (state, actual): (String, Option<i64>) = sqlx::query_as(
+        "SELECT state,actual_microusd FROM governance_reservations WHERE execution_id=$1",
+    )
+    .bind(first)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!((state.as_str(), actual), ("settled", Some(0)));
+    let native = uuid::Uuid::new_v4();
+    jobs.create_batch(principal, native, create(inputs[1].clone(), false))
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        sqlx::query("UPDATE async_jobs SET next_poll_at=now()")
+            .execute(pool)
+            .await
+            .unwrap();
+        jobs.poll_once().await.unwrap();
+    }
+    let (state, actual): (String, Option<i64>) = sqlx::query_as(
+        "SELECT state,actual_microusd FROM governance_reservations WHERE execution_id=$1",
+    )
+    .bind(native)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!((state.as_str(), actual), ("settled", Some(15)));
+    let gateway = jobs
+        .create_batch(
+            principal,
+            uuid::Uuid::new_v4(),
+            create(inputs[2].clone(), true),
+        )
+        .await
+        .unwrap();
+    assert!(Runner::new(jobs.clone()).run_next().await.unwrap());
+    let done: (String, Option<i32>) =
+        sqlx::query_as("SELECT state,request_completed FROM async_jobs WHERE id=$1")
+            .bind(gateway.id)
             .fetch_one(pool)
             .await
             .unwrap();
-    assert_eq!(state, "unknown");
+    assert_eq!((done.0.as_str(), done.1), ("completed", Some(1)));
+    assert_eq!(
+        *fake.0.lock().unwrap(),
+        ["submit", "delete", "line"],
+        "no cancelled batch reached the provider"
+    );
     let report = open_model_gateway::governance::totals::verify(&jobs_store(pool).await)
         .await
         .unwrap();

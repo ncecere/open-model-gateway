@@ -174,6 +174,31 @@ GRANT UPDATE(file_batch_enabled,file_batch_retention_days,file_video_enabled,
  file_video_retention_days,file_user_files_enabled,file_user_files_retention_days,
  file_export_retention_days,file_store_last_check_at,file_store_last_check_ok,
  file_store_last_check_error,file_store_last_check_target) ON public.installation_settings TO gateway_runtime;
+-- Files API (0020). stored_files gains api_purpose, written once (at insert, or
+-- at commit for uploads that sent the file before its purpose; trigger), and
+-- reserved_bytes, the upload's quota reservation: it only grows while the row
+-- is pending (trigger). Storage quota is edited like
+-- the other workspace limits (type default, override, local; no key or
+-- installation column). Storage usage rows are append-only (INSERT, never
+-- UPDATE/DELETE; a trigger refuses both) and the progress mark only moves
+-- forward (trigger); FOR UPDATE SKIP LOCKED needs its UPDATE column.
+GRANT UPDATE(reserved_bytes,api_purpose) ON public.stored_files TO gateway_runtime;
+GRANT UPDATE(storage_bytes) ON public.workspace_type_policies,
+ public.workspace_platform_policy_overrides,public.workspace_local_policies TO gateway_runtime;
+GRANT SELECT,INSERT ON public.storage_usage_hours TO gateway_runtime;
+GRANT SELECT,UPDATE(recorded_through) ON public.storage_usage_progress TO gateway_runtime;
+-- Batch engine (0021). Batch price lists are a column of the append-only
+-- deployment_prices (INSERT only, like every price column); reservations pin
+-- their price_tier and line executions their batch_job_id at INSERT. A native
+-- batch records its upstream id once and a gateway-run batch's runner holds a
+-- renewable lease; result files are written once (trigger). Line rows are
+-- claimed by INSERT and move running -> finished (or a counted explicit
+-- retry); segments are insert-only. No DELETE or TRUNCATE.
+GRANT UPDATE(upstream_id,output_file_id,error_file_id,runner_id,runner_lease_until,
+ submit_started_at,in_progress_at,finalizing_at,last_progress_at) ON public.async_jobs TO gateway_runtime;
+GRANT SELECT,INSERT ON public.batch_lines,public.batch_segments TO gateway_runtime;
+GRANT UPDATE(state,attempts,execution_id,status_code,error_code,segment,finished_at)
+ ON public.batch_lines TO gateway_runtime;
 -- No UPDATE/DELETE/TRUNCATE of immutable prices, ledger or audit; no removal of
 -- users/workspaces/keys/history and no rewrite of immutable admission snapshots.
 COMMIT;

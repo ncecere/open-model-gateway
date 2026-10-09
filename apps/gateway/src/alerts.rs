@@ -135,6 +135,10 @@ pub enum Kind {
     Spike,
     ErrorRate,
     Provider,
+    /// A batch ended failed or expired (0021).
+    BatchFailed,
+    /// An unfinished batch made no progress for `window_minutes` (0021).
+    BatchStalled,
 }
 impl Kind {
     pub fn parse(value: &str) -> Option<Self> {
@@ -143,6 +147,8 @@ impl Kind {
             "spend_spike" => Some(Self::Spike),
             "error_rate" => Some(Self::ErrorRate),
             "provider_failing" => Some(Self::Provider),
+            "batch_failed" => Some(Self::BatchFailed),
+            "batch_stalled" => Some(Self::BatchStalled),
             _ => None,
         }
     }
@@ -152,6 +158,8 @@ impl Kind {
             Self::Spike => "spend_spike",
             Self::ErrorRate => "error_rate",
             Self::Provider => "provider_failing",
+            Self::BatchFailed => "batch_failed",
+            Self::BatchStalled => "batch_stalled",
         }
     }
 }
@@ -532,6 +540,111 @@ async fn provider_conditions(
     Ok(out)
 }
 
+/// How long a failed batch keeps its incident open.
+pub const BATCH_FAILED_HOURS: i64 = 24;
+/// Batch alerts watch one workspace (workspace rules) or every Team/Project
+/// (installation rules; personal batches are private).
+const BATCH_SCOPE: &str = "j.kind='batch' AND w.disabled_at IS NULL AND CASE WHEN $1::uuid IS NULL THEN w.kind IN('team','project') ELSE j.workspace_id=$1 END";
+
+/// (id, workspace, state, error code, mode, total, completed, failed).
+type FailedBatch = (
+    Uuid,
+    Uuid,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<i32>,
+    Option<i32>,
+    Option<i32>,
+);
+/// (id, workspace, mode, total, done, last progress).
+type StalledBatch = (
+    Uuid,
+    Uuid,
+    Option<String>,
+    Option<i32>,
+    Option<i32>,
+    DateTime<Utc>,
+);
+
+/// One incident per batch that ended failed or expired in the last day.
+async fn batch_failed_conditions(
+    tx: &mut Transaction<'_, Postgres>,
+    rule: &Rule,
+    now: DateTime<Utc>,
+) -> Result<Vec<Condition>, sqlx::Error> {
+    let rows: Vec<FailedBatch> = sqlx::query_as(&format!("SELECT j.id,j.workspace_id,j.state,j.error_code,j.batch_mode,j.request_total,j.request_completed,j.request_failed FROM async_jobs j JOIN workspaces w ON w.id=j.workspace_id WHERE {BATCH_SCOPE} AND j.state IN('failed','expired') AND j.completed_at>$2 AND j.completed_at<=$3 ORDER BY j.completed_at DESC LIMIT 100"))
+        .bind(rule.workspace_id)
+        .bind(now - TimeDelta::hours(BATCH_FAILED_HOURS))
+        .bind(now)
+        .fetch_all(&mut **tx)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, ws, state, code, mode, total, completed, failed)| {
+            let expired = state == "expired";
+            Condition {
+                subject: format!("batch:{id}"),
+                level: 1,
+                critical: false,
+                workspace_id: Some(ws),
+                connection_id: None,
+                summary: if expired {
+                    "Batch expired before it finished".into()
+                } else if code.as_deref() == Some("budget_exceeded") {
+                    "Batch stopped: a budget was exhausted".into()
+                } else {
+                    "Batch failed".into()
+                },
+                details: json!({
+                    "batch_id": crate::jobs::types::client_id("batch_", id),
+                    "state": state,
+                    "error_code": code,
+                    "mode": mode.unwrap_or_else(|| "native".into()),
+                    "total": total,
+                    "completed": completed,
+                    "failed": failed,
+                }),
+            }
+        })
+        .collect())
+}
+
+/// One incident per unfinished batch without progress for the window.
+async fn batch_stalled_conditions(
+    tx: &mut Transaction<'_, Postgres>,
+    rule: &Rule,
+    now: DateTime<Utc>,
+) -> Result<Vec<Condition>, sqlx::Error> {
+    let Some(window) = rule.window_minutes else {
+        return Ok(vec![]);
+    };
+    let rows: Vec<StalledBatch> = sqlx::query_as(&format!("SELECT j.id,j.workspace_id,j.batch_mode,j.request_total,coalesce(j.request_completed,0)+coalesce(j.request_failed,0),coalesce(j.last_progress_at,j.in_progress_at,j.created_at) FROM async_jobs j JOIN workspaces w ON w.id=j.workspace_id WHERE {BATCH_SCOPE} AND j.settled_at IS NULL AND j.state IN('queued','in_progress') AND coalesce(j.last_progress_at,j.in_progress_at,j.created_at)<=$2 ORDER BY 6 LIMIT 100"))
+        .bind(rule.workspace_id)
+        .bind(now - TimeDelta::minutes(i64::from(window)))
+        .fetch_all(&mut **tx)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, ws, mode, total, done, since)| Condition {
+            subject: format!("batch:{id}"),
+            level: 1,
+            critical: false,
+            workspace_id: Some(ws),
+            connection_id: None,
+            summary: format!("Batch stalled: no progress for {window} min"),
+            details: json!({
+                "batch_id": crate::jobs::types::client_id("batch_", id),
+                "mode": mode.unwrap_or_else(|| "native".into()),
+                "total": total,
+                "done": done,
+                "minutes_without_progress": (now - since).num_minutes().max(0),
+                "window_minutes": window,
+            }),
+        })
+        .collect())
+}
+
 async fn evaluate_rule(
     tx: &mut Transaction<'_, Postgres>,
     rule: &Rule,
@@ -554,6 +667,8 @@ async fn evaluate_rule(
         Some(Kind::Spike) => spike_conditions(tx, rule, now).await,
         Some(Kind::ErrorRate) => error_rate_conditions(tx, rule, now).await,
         Some(Kind::Provider) => provider_conditions(tx, rule, now).await,
+        Some(Kind::BatchFailed) => batch_failed_conditions(tx, rule, now).await,
+        Some(Kind::BatchStalled) => batch_stalled_conditions(tx, rule, now).await,
         None => Ok(vec![]),
     }
 }

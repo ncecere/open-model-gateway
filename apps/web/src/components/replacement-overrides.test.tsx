@@ -121,7 +121,7 @@ describe("Limits · replacement override", () => {
     await user.type(screen.getByRole("textbox", { name: /^Daily budget \(USD\)/ }), "5");
     expect(screen.getAllByText("Resets daily at 00:00 UTC").length).toBeGreaterThan(0);
     await user.click(screen.getByRole("button", { name: "Save limits" }));
-    await waitFor(() => expect(api.writes()).toEqual([{ method: "PUT", body: { requests_per_minute: 60, tokens_per_minute: 100000, concurrent_requests: 8, concurrent_jobs: null, budgets: [{ period: "day", amount_microusd: "5000000" }, { period: "month", amount_microusd: "100000000" }] } }]));
+    await waitFor(() => expect(api.writes()).toEqual([{ method: "PUT", body: { requests_per_minute: 60, tokens_per_minute: 100000, concurrent_requests: 8, concurrent_jobs: null, storage_bytes: null, budgets: [{ period: "day", amount_microusd: "5000000" }, { period: "month", amount_microusd: "100000000" }] } }]));
     api.client.clear();
   });
   it("saves a removed budget row as no budget, not the inherited type default (live acceptance F3)", async () => {
@@ -130,7 +130,7 @@ describe("Limits · replacement override", () => {
     await user.click(screen.getByRole("radio", { name: "Override for this project" }));
     await user.click(screen.getByRole("button", { name: "Remove monthly budget" }));
     await user.click(screen.getByRole("button", { name: "Save limits" }));
-    await waitFor(() => expect(api.writes()).toEqual([{ method: "PUT", body: { requests_per_minute: 60, tokens_per_minute: 100000, concurrent_requests: 8, concurrent_jobs: null, budgets: [] } }]));
+    await waitFor(() => expect(api.writes()).toEqual([{ method: "PUT", body: { requests_per_minute: 60, tokens_per_minute: 100000, concurrent_requests: 8, concurrent_jobs: null, storage_bytes: null, budgets: [] } }]));
     api.client.clear();
   });
   it("allows one budget per period: the period select offers only unused periods and Add stops at four", async () => {
@@ -177,7 +177,7 @@ describe("Limits · tighten-only workspace restrictions", () => {
     await user.click(screen.getByRole("button", { name: "Add budget" }));
     await user.type(screen.getByRole("textbox", { name: /^Daily budget \(USD\)/ }), "1000");
     await user.click(screen.getByRole("button", { name: "Save limits" }));
-    await waitFor(() => expect(api.writes()).toEqual([{ method: "PUT", body: { requests_per_minute: 30, tokens_per_minute: null, concurrent_requests: null, concurrent_jobs: null, budgets: [{ period: "day", amount_microusd: "1000000000" }, { period: "month", amount_microusd: "50000000" }] } }]));
+    await waitFor(() => expect(api.writes()).toEqual([{ method: "PUT", body: { requests_per_minute: 30, tokens_per_minute: null, concurrent_requests: null, concurrent_jobs: null, storage_bytes: null, budgets: [{ period: "day", amount_microusd: "1000000000" }, { period: "month", amount_microusd: "50000000" }] } }]));
     api.client.clear();
   });
   it("never raises or removes a saved budget: its period is fixed and it can only be lowered", async () => {
@@ -191,7 +191,7 @@ describe("Limits · tighten-only workspace restrictions", () => {
     expect((screen.getByRole("button", { name: "Save limits" }) as HTMLButtonElement).disabled).toBe(true);
     await user.clear(weekly); await user.type(weekly, "4.5");
     await user.click(screen.getByRole("button", { name: "Save limits" }));
-    await waitFor(() => expect(api.writes()).toEqual([{ method: "PUT", body: { requests_per_minute: null, tokens_per_minute: null, concurrent_requests: null, concurrent_jobs: null, budgets: [{ period: "week", amount_microusd: "4500000" }] } }]));
+    await waitFor(() => expect(api.writes()).toEqual([{ method: "PUT", body: { requests_per_minute: null, tokens_per_minute: null, concurrent_requests: null, concurrent_jobs: null, storage_bytes: null, budgets: [{ period: "week", amount_microusd: "4500000" }] } }]));
     api.client.clear();
   });
 });

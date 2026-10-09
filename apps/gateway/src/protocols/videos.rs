@@ -43,7 +43,9 @@ pub(crate) fn job_error(e: JobError) -> Response {
     };
     match e {
         JobError::NotFound => body(StatusCode::NOT_FOUND, "not_found", "No such object"),
-        JobError::Conflict(code, message) => body(StatusCode::BAD_REQUEST, code, message),
+        JobError::Conflict(code, message) | JobError::Invalid(code, message) => {
+            body(StatusCode::BAD_REQUEST, code, message)
+        }
         JobError::Inference(e) => super::workload_error(e, StatusCode::BAD_REQUEST),
     }
 }

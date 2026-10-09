@@ -31,11 +31,14 @@ See [realtime](#realtime-audio) below and [realtime](realtime.md).
 
 ### Async jobs
 
-| Adapter | Videos `/v1/videos` | Files + Batches `/v1/files`, `/v1/batches` |
+| Adapter | Videos `/v1/videos` | Native batches (`/v1/batches`) |
 | --- | --- | --- |
-| `openai` | **No longer offered.** OpenAI shut down the Sora 2 models and the Videos API on 2026-09-24. The `sora-*` wire code remains only for jobs created before then | `purpose=batch` JSONL for `/v1/chat/completions` only; create, retrieve, list, cancel, file content |
-| `openrouter` | Planned: an OpenRouter video adapter (another API shape) | No (no Batch API) |
-| Others | No | No |
+| `openai` | **No longer offered.** OpenAI shut down the Sora 2 models and the Videos API on 2026-09-24. The `sora-*` wire code remains only for jobs created before then | OpenAI Batch: chat-like lines as Chat Completions, embeddings as Embeddings; the gateway uploads its copy, collects results into gateway files and deletes the provider's files |
+| `anthropic` | No | Message Batches for Chat Completions, Responses and Messages lines |
+| `openrouter` | Planned: an OpenRouter video adapter (another API shape) | No (no Batch API): gateway-run |
+| Others | No | No: gateway-run |
+
+Any model can be batched: batches without a native path run line by line through the gateway ([batches](batches.md)). Files are always gateway files ([Files API](files-api.md)).
 
 See [async jobs](#async-jobs-video-and-batch) below and [async jobs](async-jobs.md).
 
@@ -191,13 +194,13 @@ Details, limits and pricing: [realtime](realtime.md).
 
 ## Async jobs (video and batch)
 
-Model protocols `videos` and `batches`, each its own workload. Jobs belong to the creating workspace: ids are gateway ids (`video_…`, `batch_…`, `file-…`), never upstream ids, and another workspace's key gets 404. Lists come from gateway records, not the provider account.
+Model protocols `videos` and `batches` (a legacy native-only Batch model type), each its own workload; batches of ordinary chat and embeddings models need no special protocol. Jobs belong to the creating workspace: ids are gateway ids (`video_…`, `batch_…`, `file-…`), never upstream ids, and another workspace's key gets 404. Lists come from gateway records, not the provider account.
 
 - **Video has no supported provider.** OpenAI shut down the Sora 2 models and the Videos API on 2026-09-24, with no replacement ([OpenAI video generation guide](https://developers.openai.com/api/docs/guides/video-generation)). `POST /v1/videos` validates the request and then returns **400 `unsupported_capability`** before admission: no job, execution or hold is created. Reads of jobs created before the shutdown still work from gateway records. An OpenRouter video adapter is planned. The contract below is what that adapter will serve.
 - **`POST /v1/videos`** (multipart like the SDKs, or JSON): `model, prompt` (≤ 32 KiB), `seconds` `4|8|12` (default 4) and `size` `720x1280|1280x720|1024x1792|1792x1024` (default `720x1280`), always sent upstream. `input_reference`, remix, edits, extensions and characters are `unsupported_capability`. `GET /v1/videos[/{id}]`, `GET /v1/videos/{id}/content?variant=video|thumbnail|spritesheet` (completed only; streamed, allowlisted media types), `DELETE /v1/videos/{id}` (finished jobs only).
-- **`POST /v1/files`** multipart, `purpose=batch` then `file`: streamed to the provider while each line is validated (never stored or logged; ≤ `GATEWAY_MAX_BATCH_FILE_BYTES`, ≤ 50,000 lines, ≤ 4 MiB per line). Every line is `{custom_id, method:"POST", url:"/v1/chat/completions", body}` naming the same batch model with exactly one positive `max_completion_tokens`/`max_tokens` within the price's output ceiling. `stream`, `n>1`, audio output, web search and predicted outputs are rejected. An unpriced or unbounded file is refused before the upload completes. `GET /v1/files/{id}[/content]` for workspace-owned input/output/error files.
-- **`POST /v1/batches`** `{input_file_id, endpoint:"/v1/chat/completions", completion_window:"24h", metadata?}` (`output_expires_after` unsupported; one batch per file), `GET /v1/batches[/{id}]`, `POST /v1/batches/{id}/cancel`.
-- **Accounting:** one attempt and reservation per job, through the ordinary admission (budget totals included). Video holds `seconds × highest resolution rate`; batches hold `lines × input ceiling` plus the sum of line maxima. Settlement on a terminal state, by the poller or a read: actual video seconds; provider batch usage, else per-line usage stream-parsed from the output file. Unknown usage, cancellation and expiry keep the hold.
+- **`/v1/files`** is the gateway-owned [Files API](files-api.md) on the encrypted file store: `POST` (multipart `file`, `purpose`, optional `expires_after`; any field order), `GET` list (`purpose`, `limit`, `after`, `order`), `GET /{id}`, `GET /{id}/content`, `DELETE /{id}`. `batch` files are batch inputs; `user_data`, `vision`, `assistants` and `evals` are stored for phase 2 (`file_id` in requests is not implemented yet); `batch_output` files are written by the batch engine. Workspace-scoped gateway ids, storage quota (`413 storage_quota_exceeded`), never an upstream file id.
+- **`POST /v1/batches`** `{input_file_id, endpoint, completion_window:"24h", metadata?}` with `endpoint` `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings` or `/v1/messages`; every line is validated against that endpoint's interactive contract up front (400 `invalid_batch_input` with line numbers). `GET /v1/batches[/{id}]`, `POST /v1/batches/{id}/cancel`. `output_expires_after` is unsupported and `metadata` is not echoed. Native (provider batch API, batch price list when published) or gateway-run (one attempt and reservation per line, standard prices); see [batches](batches.md).
+- **Accounting:** video jobs and native batches are one attempt and reservation each; gateway-run batch lines are their own attempts, transferred out of the batch's ceiling. Video holds `seconds × highest resolution rate`; a batch holds the sum of its lines' bounds and one "Jobs at once" slot. Unknown usage, cancellation and expiry keep holds.
 
 ## Streaming and evidence boundaries
 

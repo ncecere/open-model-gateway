@@ -3,9 +3,9 @@
 The gateway proxies two kinds of long-running provider job:
 
 - **Video generation:** `POST /v1/videos`. **No supported provider at the moment** (see below).
-- **Batch Chat Completions:** `POST /v1/files` (`purpose=batch`) and then `POST /v1/batches` (OpenAI).
+- **Batches:** `POST /v1/batches` from a gateway file (`purpose=batch`, [Files API](files-api.md)), for any model. They run natively on a provider batch API or line by line through the gateway. See [batches](batches.md); this page keeps what batches share with video jobs.
 
-A job is **one upstream attempt**, with one execution and one durable reservation. It is admitted when it is created and settled when the provider reports a terminal state. Migration `0016_async_jobs.sql` stores metadata only: never prompts, batch lines, outputs, `metadata` values, provider messages or media.
+A video job and a native batch are **one upstream attempt**, with one execution and one durable reservation, admitted when created and settled when the provider reports a terminal state. A gateway-run batch's lines are separate attempts with their own reservations ([batches](batches.md#pricing-and-budgets)). Migrations `0016_async_jobs.sql` and `0021_batch_engine.sql` store metadata only: never prompts, batch lines, outputs, `metadata` values, provider messages or media.
 
 This page describes the current source. It is mock-tested only. No live or paid video or batch request has been made.
 
@@ -24,18 +24,13 @@ This page describes the current source. It is mock-tested only. No live or paid 
 | `GET /v1/videos`, `GET /v1/videos/{id}` | Lists this workspace's jobs; `after`, `limit` 1–100 and `order` are supported. A single read refreshes from the provider until the job is settled. |
 | `GET /v1/videos/{id}/content?variant=video\|thumbnail\|spritesheet` | Available for completed jobs only. Streamed through unbuffered, with allowlisted media types. |
 | `DELETE /v1/videos/{id}` | Finished jobs only (completed or failed), because the accounting of a running job is still open. |
-| `POST /v1/files` | Multipart with `purpose=batch` first, then `file` (JSONL). See [batch input](#batch-input). |
-| `GET /v1/files/{id}`, `GET /v1/files/{id}/content` | Batch input, output and error files owned by the workspace. Content is streamed from the provider and never stored. |
-| `POST /v1/batches` | `{input_file_id, endpoint:"/v1/chat/completions", completion_window:"24h", metadata?}`. One batch per input file. |
-| `GET /v1/batches`, `GET /v1/batches/{id}`, `POST /v1/batches/{id}/cancel` | Gateway records, newest first. Cancel is passed through to the provider, and settlement follows the provider's final state. |
+| `/v1/files` | The gateway-owned [Files API](files-api.md): `purpose=batch` uploads are stored (encrypted) in the gateway's file store; batch output and error files appear there as `batch_output`. |
+| `/v1/batches` | Create, retrieve, list and cancel for `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings` and `/v1/messages` lines; see [batches](batches.md). |
 
 **Not supported** (each returns an explicit `unsupported_capability` or `invalid_request_error`):
 
 - Video: `input_reference`, remix, edits, extensions and characters.
-- Batch endpoints other than `/v1/chat/completions`.
-- `output_expires_after` and `expires_after`.
-- File purposes other than `batch`.
-- Batch lines with `stream`, `n > 1`, audio output or modalities, `web_search_options` or `prediction`.
+- Batch `output_expires_after`, and batch lines the endpoint itself rejects (streaming, `n > 1`, unsupported fields): see [batches](batches.md#validation-report).
 - Video on any provider, for now (see above). OpenRouter video is planned; OpenRouter has no Batch API.
 
 ## Identity, ownership and privacy
@@ -70,13 +65,7 @@ Both kinds use the ordinary `governance` admission and `finish`. Every budget an
 - **Longer than requested:** the evidence is kept and the hold is retained.
 - **Failed:** the attempt is failed without usage. It stays unknown unless every line of the price is free or not applicable.
 
-**Batch.** The workload is `batches`; the price is any token price (v1/v2/v3).
-
-- **Hold:** `lines × input_token_limit` input, plus the sum of every line's `max_completion_tokens`/`max_tokens`. Each line's maximum must be within the price's `output_token_limit`. The reservation records its request count (`governance_reservations.request_count`), so settlement checks the aggregated usage against `lines × input ceiling`.
-- **Completed with provider `usage`:** exact settlement (cached reads included; this schema has no cache writes).
-- **Completed without `usage`:** the background poller streams the output file and sums each line's `response.body.usage`, discarding bodies. Any line without valid usage, a line count that differs from `request_counts.completed`, or more than `GATEWAY_BATCH_MAX_OUTPUT_SCAN_BYTES` leaves the usage unknown and the hold retained. A client read never scans the output file while a poller is configured.
-- **Failed:** failed without usage (unknown unless the price is entirely free).
-- **Cancelled or expired:** any reported usage is recorded as evidence (a known floor), and the hold is retained as unknown for reconciliation, because partial work may be billed.
+**Batch.** The workload is `batches`. Holds, batch price lists, line transfers and settlement are described in [batches](batches.md#pricing-and-budgets). A native batch settles like a job: from the provider's aggregate usage, else the sum of its decoded lines' usage. Cancelled and expired batches record usage as evidence and keep the hold. Batches created by the 0016 passthrough (`batch_mode` NULL) are still polled and settle only from the provider's aggregate usage (otherwise unknown, hold retained).
 
 **Leases.** A job's lease is extended to its poll deadline (video: 6 hours; batch: 26 hours) plus 10 minutes. The extension runs under the installation lock and never shortens a lease. If the deadline passes without a terminal state, lease reconciliation marks the reservation unknown and keeps the hold. A later terminal observation records the job state but leaves that reservation alone.
 
@@ -96,31 +85,23 @@ Long-running jobs do not consume interactive limits. Migration `0018_job_limits.
 | Requests and tokens per minute | Not checked, and job reservations never count toward them. |
 | Budgets | Fully applied: the conservative ceiling is reserved at admission, as before. |
 
-A slot is released when the job reaches a terminal state (`completed`, `failed`, `cancelled`, `expired`), as soon as cancel is requested, or when the lease expires. A refused job returns `429` with `error.code` `job_limit_exceeded` (`rate_limit_error` type, retryable) and a message naming the scope kind: API key, workspace or installation. Nothing is sent upstream, and a claimed batch input file is released for reuse.
+A slot is released when the job reaches a terminal state (`completed`, `failed`, `cancelled`, `expired`), as soon as cancel is requested, or when the lease expires. A refused job returns `429` with `error.code` `job_limit_exceeded` (`rate_limit_error` type, retryable) and a message naming the scope kind: API key, workspace or installation. Nothing is sent upstream.
 
 Edit the limit with the other limits: Admin › Settings › Defaults & limits (installation and type defaults), a workspace's platform override, Workspace › Settings › Limits (tighten only) and each key's limits. Effective access shows it per layer.
 
 ## Batch input
 
-The gateway reads `POST /v1/files` as a stream. It holds at most one line (≤ 4 MiB) plus one network chunk and writes each validated line to the provider's multipart upload. Nothing is stored or logged.
-
-Each line must be exactly `{custom_id, method:"POST", url:"/v1/chat/completions", body}` with:
-
-- `body.model`: the same gateway API model name on every line, for a model declaring `batches`. It is rewritten to the route's upstream model.
-- `body.messages`: an array.
-- Exactly one positive integer `max_completion_tokens` or `max_tokens`.
-
-The first line selects the route (no failover). Before the upload is allowed to complete, the whole file's hold is previewed against the route's current price. An unpriced, unbounded or over-ceiling file is refused, and the upstream body is aborted, so the provider never receives a complete form. Limits: `GATEWAY_MAX_BATCH_FILE_BYTES` (default 200 MiB) and 50,000 lines.
+Batch inputs are gateway files ([Files API](files-api.md)). `POST /v1/batches` streams the file once, validates every line and copies the valid lines to the batch's private copy; see [batches](batches.md#validation-report). Limits: 50,000 lines and 4 MiB per line.
 
 ## Poller
 
 `serve` starts a background poller on the runtime database role. Every interval it:
 
-1. Claims at most 32 due, unsettled jobs that are still within their poll deadline (`FOR UPDATE SKIP LOCKED`, so multiple gateway processes never poll the same job at once).
-2. Refreshes each job from its provider with a bounded deadline.
+1. Claims at most 32 due, unsettled provider jobs (videos and native batches; gateway-run batches belong to the [batch runner](batches.md#execution-of-gateway-run-batches)) that are still within their poll deadline (`FOR UPDATE SKIP LOCKED`, so multiple gateway processes never poll the same job at once).
+2. Refreshes each job from its provider with a bounded deadline. A native batch is first submitted (once); when it ends, its results are collected into gateway files.
 3. Applies the state machine and settles terminal jobs.
 
-Failures back off per job, up to 32 × the interval. With the poller disabled, client reads still refresh and settle jobs, and then a batch read may scan the output file.
+Failures back off per job, up to 32 × the interval. With the poller disabled, video reads still refresh and settle jobs, but native batches are not processed.
 
 ## Configuration
 
@@ -128,11 +109,12 @@ Failures back off per job, up to 32 × the interval. With the poller disabled, c
 | --- | --- | --- |
 | `GATEWAY_JOB_POLL_INTERVAL_SECONDS` | `30` | Poller interval, `0`–`3600`; `0` disables the poller. |
 | `GATEWAY_MAX_BODY_BYTES_VIDEOS` | 2 MiB | `POST /v1/videos` body cap (1 KiB–64 MiB). |
-| `GATEWAY_MAX_BATCH_FILE_BYTES` | 200 MiB | Batch input file cap (1 KiB–512 MiB). |
-| `GATEWAY_BATCH_MAX_OUTPUT_SCAN_BYTES` | 1 GiB | Largest output file scanned for usage (1 MiB–16 GiB). |
+| `GATEWAY_BATCH_WORKERS`, `GATEWAY_BATCH_CONCURRENCY` | `4`, `2` | Gateway-run batch lines at once per process and per batch ([batches](batches.md#configuration)). |
+| `GATEWAY_MAX_BATCH_FILE_BYTES`, `GATEWAY_BATCH_MAX_OUTPUT_SCAN_BYTES` | 200 MiB, 1 GiB | Still validated at startup but no longer used: inputs are Files API uploads and native outputs are decoded line by line. |
 
 ## Model setup and grants
 
-- **Add model:** the **Video** and **Batch** types each have one protocol (`videos`, `batches`). Batch is offered on OpenAI connections. Video is disabled on every connection ("No supported provider yet"). The price editor shows the video-seconds meter with resolution tiers for video models, and token meters for batch models.
+- **Add model:** the **Video** and **Batch** types each have one protocol (`videos`, `batches`). A Batch model is no longer needed: any chat or embeddings model can be batched, and a Batch model runs Chat Completions natively only. Video is disabled on every connection ("No supported provider yet"). The price editor shows the video-seconds meter with resolution tiers for video models, and token meters for batch models.
 - **Runtime grants** (`deploy/staging/runtime-grants.sql`): `SELECT`/`INSERT` on `async_jobs` and `async_job_files`, `UPDATE` of their state columns only, `UPDATE(lease_expires_at)` on reservations and `EXECUTE` on `valid_upstream_job_id`. No `DELETE` or `TRUNCATE`.
-- **Probes:** `verify-privileges.sql` and the ignored `runtime_privileges` test check these grants and run a full video and batch lifecycle as the runtime role.
+- **Batch engine grants (0021):** see [batches](batches.md#storage-and-grants).
+- **Probes:** `verify-privileges.sql` and the ignored `runtime_privileges` test check these grants and run a video job, native batches and a gateway-run batch as the runtime role.

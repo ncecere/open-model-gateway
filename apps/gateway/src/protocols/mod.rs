@@ -2,6 +2,7 @@ pub mod audio;
 pub mod batches;
 pub mod chat_completions;
 pub mod embeddings;
+pub mod files;
 pub mod images;
 pub mod messages;
 pub mod realtime;
@@ -68,6 +69,17 @@ fn payload_too_large() -> Response {
         axum::Json(serde_json::json!({"error":{"message":"Request body too large","type":"invalid_request_error","code":"payload_too_large","param":null}})),
     )
         .into_response()
+}
+
+/// HTTP status and body a `/v1/batches` line reports for `error`: exactly what
+/// the endpoint returns interactively (Anthropic shape for `/v1/messages`).
+pub(crate) fn batch_line_error(anthropic: bool, error: InferenceError) -> (u16, serde_json::Value) {
+    let body = if anthropic {
+        messages::batch_error_body(error)
+    } else {
+        openai_error_body(error)
+    };
+    (responses::status(error).as_u16(), body)
 }
 
 /// OpenAI-wire error envelope. Budget denials use `insufficient_quota` as the

@@ -89,6 +89,12 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "realtime_responses",
     // 0019 file store
     "stored_files",
+    // 0020 Files API storage usage
+    "storage_usage_hours",
+    "storage_usage_progress",
+    // 0021 batch engine
+    "batch_lines",
+    "batch_segments",
 ];
 
 fn lineage_matches(

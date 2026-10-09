@@ -25,7 +25,7 @@ describe("Logs page", () => {
     const html = markup(nav(search, <LogsPage scope={{ kind: "workspace", workspace: team }} />), [[`${ws}/logs/metrics?finish_reason=length&streamed=true`, metrics], [`${ws}/requests?finish_reason=length&streamed=true&limit=50`, { data: [row], next_cursor: null }]]);
     const doc = new DOMParser().parseFromString(html, "text/html");
     expect(doc.querySelector("h1")?.textContent).toBe("Logs");
-    expect([...doc.querySelectorAll('[role="tab"]')].map(t => t.textContent)).toEqual(["Requests", "Generations", "Sessions"]);
+    expect([...doc.querySelectorAll('[role="tab"]')].map(t => t.textContent)).toEqual(["Requests", "Generations", "Sessions", "Batches"]);
     for (const text of ["12", "10%", "850 ms", "Median · p95 3.2 s", "140 ms", "41.2 tok/s"]) expect(html).toContain(text);
     const table = doc.querySelector("table")!;
     // Streaming telemetry (TTFT, speed) is under Columns by default so rows stay short; the tiles summarize it.

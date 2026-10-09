@@ -24,7 +24,7 @@ import { platformPath, wsPath, type Workspace } from "./api";
  * (Admin › Usage & spend › Logs; Team/Project workspaces only, never personal rows).
  */
 export type LogsScope = { kind: "workspace"; workspace: Workspace } | { kind: "platform" };
-export const logTabs = ["requests", "generations", "sessions"] as const;
+export const logTabs = ["requests", "generations", "sessions", "batches"] as const;
 export type LogTab = typeof logTabs[number];
 export const logTab = (tab?: string): LogTab => logTabs.includes(tab as LogTab) ? tab as LogTab : "requests";
 /** API collections of a scope. */

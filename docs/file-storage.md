@@ -4,7 +4,14 @@ The gateway can store files it owns, such as batch inputs and outputs, exports, 
 
 The store is **off by default**. When it's off, nothing is written, and the purposes that hold customer content can't be turned on.
 
-What's implemented today: the store itself (local disk and S3-compatible), encryption, metadata and retention (`stored_files`, migration 0019), the retention sweeper, the `files verify` and `files sweep` commands, metrics, and Admin › Settings › Data & privacy › Storage. **No feature writes files yet.** Gateway-run batch jobs, the Files API, CSV exports, the Settings logo and video outputs will use the store as they're built (see [Consumers](#consumers)).
+What's implemented today:
+
+- The store itself: local disk and S3-compatible.
+- Encryption, metadata and retention (`stored_files`, migration 0019).
+- The retention sweeper, the `files verify` and `files sweep` commands, metrics, and Admin › Settings › Data & privacy › Storage.
+- The gateway-owned **[Files API](files-api.md)** (`/v1/files`, migration 0020), with a stacked per-workspace storage quota and storage usage tracking (GB-days, not charged).
+
+The batch engine, CSV exports, the Settings logo and video outputs use or will use the store as they're built (see [Consumers](#consumers)).
 
 ## Configuration
 
@@ -125,7 +132,7 @@ Keep the key variable in your secret manager, not in the gateway's database or b
 
 ## Metadata, purposes and retention
 
-`stored_files` (migration 0019) holds **metadata only**: object key, purpose, owning workspace (NULL for installation scope), the creating user and API key, the sanitized original filename, content type, plaintext size and SHA-256, backend, encryption key ID, `created_at`, `committed_at`, an explicit `expires_at`, `deleted_at`, and the delete-attempt counters. The partial index on live rows per workspace makes "bytes stored by this workspace" cheap, ready for a future storage quota.
+`stored_files` (migrations 0019 and 0020) holds **metadata only**: object key, purpose, owning workspace (NULL for installation scope), the creating user and API key, the sanitized original filename, content type, plaintext size and SHA-256, backend, encryption key ID, `created_at`, `committed_at`, an explicit `expires_at`, `deleted_at`, and the delete-attempt counters, plus (0020) the Files API purpose (`api_purpose`, written once) and the upload's quota reservation (`reserved_bytes`, which only grows while pending). Partial indexes on live rows per workspace keep quota checks and listings cheap.
 
 | Purpose | Scope | Settings group | Default retention | Allow toggle |
 | --- | --- | --- | --- | --- |
@@ -204,7 +211,7 @@ The **Storage** card shows:
 - **Encryption key:** the active key ID and how many decrypt-only keys are configured.
 - **Health:** the last health check, shown only if it was run against the current configuration.
 
-Below that is a compact table, one row per purpose group: retention in days, an Allow switch for groups that hold customer content (batch files, video outputs, user files), and the bytes stored.
+Below that is a compact table, one row per purpose group: retention in days, an Allow switch for groups that hold customer content (batch files, video outputs, user files), and the bytes stored (the file count is in its tooltip).
 
 Platform Admins can:
 
@@ -226,15 +233,17 @@ let stored = files.create(NewFile { created_by_api_key_id: Some(key), max_bytes:
     ..NewFile::new(Purpose::BatchOutput, Some(workspace_id)) }, body).await?;
 let (meta, stream) = files.open(stored.id, Some(workspace_id)).await?; // exact scope
 files.delete(stored.id, Some(workspace_id)).await?;
-files.workspace_stored_bytes(workspace_id).await?;                     // future quota
+files.workspace_storage(workspace_id).await?;                         // used vs quota
 ```
 
 The raw `FileStore` trait (`put`, `get`, `delete`, `head`, `health`) is the low-level interface. Tests can use `filestore::memory_store()` or `FileStoreRuntime::memory()`, both encrypted with a random key.
 
-Planned uses, none wired yet:
+`create` enforces the workspace's storage quota while streaming (`QuotaMode::Enforce`, the default) or only counts it (`QuotaMode::CountOnly`). See [Files API](files-api.md#storage-quota).
 
-- **Batch engine:** `batch_input` for uploaded JSONL and `batch_output` for results and errors, scoped to the workspace with the creating key recorded. Both require "Batch files" to be allowed.
-- **Files API (`/v1/files`):** `user_file` (OpenAI `user_data`, `vision`, `assistants`, `evals`) and `batch_input` (`batch`), mapped by `Purpose::from_openai`. It keeps the sanitized original filename and content type, honors a client `expires_after` through `NewFile::expires_at`, and can enforce a per-workspace quota from `workspace_stored_bytes`.
+Uses:
+
+- **Batch engine:** reads `batch_input` files by gateway id and writes `batch_output` for results and errors, scoped to the workspace with the creating key recorded. Both require "Batch files" to be allowed. Contract: `.local/enterprise-rebuild/files-batch-contract.md`.
+- **Files API (`/v1/files`), implemented:** `user_file` (OpenAI `user_data`, `vision`, `assistants`, `evals`) and `batch_input` (`batch`), mapped by `Purpose::from_openai`. It keeps the sanitized original filename and content type, honors a client `expires_after` (relative to `created_at`), enforces the storage quota while streaming, and lists `batch_output` files too. See [Files API](files-api.md).
 - **CSV exports:** `export` in the requesting workspace (or installation scope for platform reports), with an explicit short `expires_at` for download links. Retention defaults to 1 day.
 - **Settings logo:** `branding/installation/<uuid>`, which never expires. The general settings will reference the file ID instead of an external URL. Re-encrypting non-expiring objects for key retirement is a planned command (see operations).
 - **Video outputs:** `video_output` copies of provider results, scoped to the workspace. Requires "Video outputs" to be allowed.

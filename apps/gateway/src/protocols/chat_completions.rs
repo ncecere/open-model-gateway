@@ -259,16 +259,7 @@ pub async fn handle(
     };
     match output {
         ProviderOutput::Complete(response) => {
-            let mut message = json!({"role":"assistant", "content": response.content});
-            if !response.tool_calls.is_empty() {
-                message["tool_calls"] = Value::Array(response.tool_calls.into_iter().map(|call| json!({"id":call.id,"type":"function","function":{"name":call.name,"arguments":call.arguments}})).collect());
-            }
-            let mut body = json!({"id":id,"object":"chat.completion","created":created,"model":model,
-                "choices":[{"index":0,"message":message,"finish_reason":response.finish_reason}]});
-            if let Some(usage) = usage_json(response.usage) {
-                body["usage"] = usage;
-            }
-            Json(body).into_response()
+            Json(complete_body(&id, created, &model, response)).into_response()
         }
         ProviderOutput::Stream(mut upstream) => {
             let events = async_stream::stream! {
@@ -314,6 +305,41 @@ pub async fn handle(
                 .into_response()
         }
     }
+}
+
+/// A non-streaming `chat.completion` object.
+fn complete_body(id: &str, created: u64, model: &str, response: ChatResponse) -> Value {
+    let mut message = json!({"role":"assistant", "content": response.content});
+    if !response.tool_calls.is_empty() {
+        message["tool_calls"] = Value::Array(response.tool_calls.into_iter().map(|call| json!({"id":call.id,"type":"function","function":{"name":call.name,"arguments":call.arguments}})).collect());
+    }
+    let mut body = json!({"id":id,"object":"chat.completion","created":created,"model":model,
+        "choices":[{"index":0,"message":message,"finish_reason":response.finish_reason}]});
+    if let Some(usage) = usage_json(response.usage) {
+        body["usage"] = usage;
+    }
+    body
+}
+
+/// `/v1/batches` line body (`crate::jobs::lines`): the same contract as an
+/// interactive request, never streamed. `max_tokens` is accepted as the
+/// Batch API's legacy name of `max_completion_tokens` (not both).
+pub(crate) fn batch_request(mut body: Value) -> Result<ChatRequest, InferenceError> {
+    if let Some(fields) = body.as_object_mut()
+        && !fields.contains_key("max_completion_tokens")
+        && let Some(max) = fields.remove("max_tokens")
+    {
+        fields.insert("max_completion_tokens".into(), max);
+    }
+    let wire: Request = serde_json::from_value(body).map_err(|_| InferenceError::InvalidRequest)?;
+    if wire.stream || !client::valid_openai_metadata(wire.metadata.as_ref()) {
+        return Err(InferenceError::InvalidRequest);
+    }
+    wire.normalize()
+}
+/// `/v1/batches` line result body.
+pub(crate) fn batch_response(id: &str, created: u64, model: &str, response: ChatResponse) -> Value {
+    complete_body(id, created, model, response)
 }
 
 fn usage_json(usage: Usage) -> Option<Value> {

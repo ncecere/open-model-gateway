@@ -9,8 +9,8 @@ use serde_json::{Map, Value, json};
 use super::{ProviderAdapter, secrets::SecretResolver};
 use crate::inference::{error::InferenceError, types::*};
 use crate::jobs::types::{
-    ByteStream, ContentStream, OutputUsage, UpstreamBatch, UpstreamFile, UpstreamId, UpstreamVideo,
-    VideoAsset, VideoRequest,
+    BatchEndpoint, BatchRequest, ByteStream, ContentStream, NativeResult, UpstreamBatch,
+    UpstreamId, UpstreamVideo, VideoAsset, VideoRequest,
 };
 
 const BASE: &str = "https://api.openai.com/v1";
@@ -127,21 +127,48 @@ impl ProviderAdapter for OpenAiAdapter {
         jobs::video_content(self, target, video, asset).await
     }
 
-    async fn upload_batch_file(
-        &self,
-        target: &Deployment,
-        content: ByteStream,
-    ) -> Result<UpstreamFile> {
-        jobs::upload_batch_file(self, target, content).await
+    fn native_batch(&self, target: &Deployment, _endpoint: BatchEndpoint) -> bool {
+        jobs::native_batch(target)
     }
 
-    async fn create_batch(
+    fn encode_native_line(
         &self,
         target: &Deployment,
-        input: &UpstreamId,
-        metadata: Option<Map<String, Value>>,
+        endpoint: BatchEndpoint,
+        custom_id: &str,
+        request: &BatchRequest,
+    ) -> Result<Vec<u8>> {
+        jobs::encode_native_line(target, endpoint, custom_id, request)
+    }
+
+    async fn submit_native_batch(
+        &self,
+        target: &Deployment,
+        endpoint: BatchEndpoint,
+        records: ByteStream,
     ) -> Result<UpstreamBatch> {
-        jobs::create_batch(self, target, input, metadata).await
+        jobs::submit_native_batch(self, target, endpoint, records).await
+    }
+
+    async fn native_batch_results(
+        &self,
+        target: &Deployment,
+        batch: &UpstreamBatch,
+    ) -> Result<ByteStream> {
+        jobs::native_batch_results(self, target, batch).await
+    }
+
+    fn decode_native_result(
+        &self,
+        _target: &Deployment,
+        endpoint: BatchEndpoint,
+        line: &[u8],
+    ) -> Result<NativeResult> {
+        jobs::decode_native_result(endpoint, line)
+    }
+
+    async fn delete_native_batch(&self, target: &Deployment, batch: &UpstreamBatch) -> Result<()> {
+        jobs::delete_native_batch(self, target, batch).await
     }
 
     async fn retrieve_batch(
@@ -154,19 +181,6 @@ impl ProviderAdapter for OpenAiAdapter {
 
     async fn cancel_batch(&self, target: &Deployment, batch: &UpstreamId) -> Result<UpstreamBatch> {
         jobs::batch_action(self, target, batch, true).await
-    }
-
-    async fn file_content(&self, target: &Deployment, file: &UpstreamId) -> Result<ContentStream> {
-        jobs::file_content(self, target, file).await
-    }
-
-    async fn batch_output_usage(
-        &self,
-        target: &Deployment,
-        file: &UpstreamId,
-        max_bytes: u64,
-    ) -> Result<OutputUsage> {
-        jobs::output_usage(self, target, file, max_bytes).await
     }
 
     fn supports_transcription_request(&self, _: &Deployment, _: &TranscriptionRequest) -> bool {
