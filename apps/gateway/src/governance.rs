@@ -444,8 +444,12 @@ async fn admit_checked(
     lease_seconds: i64,
     expected: Option<&Deployment>,
 ) -> Result<(), InferenceError> {
-    let result = admit_unobserved(store, record, workload, lease_seconds, expected).await;
+    let mut timer = crate::metrics::PhaseTimer::start();
+    let result =
+        admit_unobserved(store, record, workload, lease_seconds, expected, &mut timer).await;
     crate::metrics::observe_admission(&result);
+    crate::metrics::METRICS
+        .observe_admission_phases(timer, crate::metrics::admission_outcome(&result));
     result
 }
 async fn admit_unobserved(
@@ -454,6 +458,7 @@ async fn admit_unobserved(
     workload: WorkloadAdmission,
     lease_seconds: i64,
     expected: Option<&Deployment>,
+    timer: &mut crate::metrics::PhaseTimer,
 ) -> Result<(), InferenceError> {
     if !(1..=86_400).contains(&lease_seconds) {
         return Err(InferenceError::Configuration);
@@ -461,8 +466,11 @@ async fn admit_unobserved(
     let workspace = record.principal.workspace_id;
     let key = record.principal.key_id;
     let _queued = gate(&store.lock_gates.admission).await;
+    timer.phase("queue");
     let mut tx = store.pool.begin().await.map_err(storage)?;
+    timer.phase("connect");
     lock(&mut tx).await?;
+    timer.phase("locks");
     let lineage = crate::auth::revalidate(&mut tx, &record.principal)
         .await
         .map_err(storage)?
@@ -574,6 +582,7 @@ async fn admit_unobserved(
     // Async jobs (video, batch) are exempt from requests/tokens-per-minute
     // limits and are counted by "jobs at once"; budgets apply in full.
     let job = matches!(workload.kind, WorkloadKind::Videos | WorkloadKind::Batches);
+    timer.phase("read");
     enforce_limits(
         &mut tx,
         workspace,
@@ -589,6 +598,7 @@ async fn admit_unobserved(
         v3_unbounded,
     )
     .await?;
+    timer.phase("limits");
     sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,started_at,root_request_id,attempt_number,workload_kind,cost_center_id,cost_center_name,cost_center_code,upstream_model,client_session_id,client_app) SELECT $1,w.id,$3,$4,$5,$6,$7,'started',$8,$9,$10,$11,w.cost_center_id,c.name,c.code,$12,$13,$14 FROM workspaces w LEFT JOIN cost_centers c ON c.id=w.cost_center_id WHERE w.id=$2")
         .bind(record.id).bind(workspace).bind(key).bind(record.deployment_id).bind(&record.model).bind(&record.provider).bind(record.streamed).bind(now).bind(record.root_request_id).bind(record.attempt_number).bind(workload.kind.as_str()).bind(&record.upstream_model).bind(&record.client.session_id).bind(&record.client.app).execute(&mut *tx).await.map_err(storage)?;
     // An async batch records its request count (0016) for settlement checks.
@@ -610,7 +620,10 @@ async fn admit_unobserved(
         None,
     )
     .await?;
-    tx.commit().await.map_err(storage)
+    timer.phase("write");
+    tx.commit().await.map_err(storage)?;
+    timer.phase("commit");
+    Ok(())
 }
 /// Which limits an admission is subject to.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1197,8 +1210,20 @@ pub async fn finish_with_telemetry(
     record: &ExecutionFinish,
     telemetry: &crate::inference::repository::AttemptTelemetry,
 ) -> Result<(), InferenceError> {
-    use crate::metrics::{AttemptObservation, METRICS, Settlement};
-    match finish_unobserved(store, record, telemetry).await {
+    use crate::metrics::{AttemptObservation, METRICS, PhaseTimer, Settlement};
+    let mut timer = PhaseTimer::start();
+    let result = finish_unobserved(store, record, telemetry, &mut timer).await;
+    METRICS.observe_settlement_phases(
+        timer,
+        match &result {
+            Ok(Finished::Replay) => "replay",
+            Ok(Finished::Conflict) => "conflict",
+            Ok(Finished::Committed { settled: true, .. }) => "settled",
+            Ok(Finished::Committed { settled: false, .. }) => "unknown",
+            Err(_) => "error",
+        },
+    );
+    match result {
         Ok(Finished::Replay) => Ok(()),
         Ok(Finished::Conflict) => Err(InferenceError::Storage),
         Ok(Finished::Committed {
@@ -1251,6 +1276,7 @@ async fn finish_unobserved(
     store: &Store,
     record: &ExecutionFinish,
     telemetry: &crate::inference::repository::AttemptTelemetry,
+    timer: &mut crate::metrics::PhaseTimer,
 ) -> Result<Finished, InferenceError> {
     let telemetry = telemetry.for_outcome(record.outcome);
     let ms = |v: Option<u64>| v.map(|n| n.min(i64::MAX as u64) as i64);
@@ -1262,8 +1288,11 @@ async fn finish_unobserved(
     // Provider-reported served model (0013), validated and bounded by type.
     let reported_model = record.usage.reported_model.map(|m| m.as_str().to_owned());
     let _queued = gate(&store.lock_gates.settlement).await;
+    timer.phase("queue");
     let mut tx = store.pool.begin().await.map_err(storage)?;
+    timer.phase("connect");
     lock(&mut tx).await?;
+    timer.phase("locks");
     let r = reservation(&mut tx, record.id).await?;
     let mut usage = workload_usage(&r, record.usage)?;
     // A free price's pre-processing rejection processed no tokens: record the
@@ -1304,6 +1333,7 @@ async fn finish_unobserved(
         None
     };
     let components = value.components.filter(|_| actual.is_some());
+    timer.phase("read");
     let changed=sqlx::query("UPDATE inference_executions SET state=$2,error_code=$3,input_tokens=$4,output_tokens=$5,billing_usage=$6,elapsed_ms=$7,completed_at=clock_timestamp(),meter_usage=$8,output_image_variant=$9,provider_cost_microusd=$10,finish_reason=$11,time_to_first_token_ms=$12,generation_ms=$13,reasoning_tokens=$14,reported_upstream_model=$15 WHERE id=$1 AND state='started'")
         .bind(record.id).bind(record.outcome.as_str()).bind(record.error.map(|e|e.code())).bind(input).bind(output).bind(&billing).bind(record.elapsed_ms.min(i64::MAX as u64)as i64).bind(&m.meters).bind(&m.variant).bind(m.provider_cost)
         .bind(telemetry.finish_reason.map(|f|f.as_str())).bind(ms(telemetry.time_to_first_token_ms)).bind(ms(telemetry.generation_ms)).bind(reasoning).bind(&reported_model).execute(&mut *tx).await.map_err(storage)?.rows_affected();
@@ -1326,7 +1356,9 @@ async fn finish_unobserved(
         None,
     )
     .await?;
+    timer.phase("write");
     tx.commit().await.map_err(storage)?;
+    timer.phase("commit");
     Ok(Finished::Committed {
         provider: r.provider,
         model: r.public_model,

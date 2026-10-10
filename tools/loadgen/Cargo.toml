@@ -1,0 +1,37 @@
+[package]
+name = "omg-loadgen"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+publish = false
+description = "Open-loop load generator, seeder and settlement verifier for Open Model Gateway (scale plan P0)"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "loadgen"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+futures-util = "0.3"
+hex = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "uuid"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "sync"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[features]
+# Database end-to-end test (tests/end_to_end.rs): needs DATABASE_URL.
+integration-tests = []
+
+[dev-dependencies]
+axum = "0.8"
+omg-mock-upstream = { path = "../mock-upstream" }
+open-model-gateway = { path = "../../apps/gateway" }

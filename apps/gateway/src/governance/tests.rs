@@ -855,6 +855,61 @@ pub(crate) mod db {
             2
         );
     }
+    /// `gateway_admission_seconds` / `gateway_settlement_seconds` time every
+    /// phase of the real transactions. The registry is process-global and
+    /// tests run in parallel, so counts are compared as lower bounds.
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn admission_and_settlement_phases_are_timed(pool: PgPool) {
+        use crate::metrics::{ADMISSION_PHASES, METRICS, SETTLEMENT_PHASES};
+        let admission = |outcome: &'static str| {
+            ADMISSION_PHASES.map(|p| METRICS.admission_phase_count(p, outcome))
+        };
+        let settlement = |outcome: &'static str| {
+            SETTLEMENT_PHASES.map(|p| METRICS.settlement_phase_count(p, outcome))
+        };
+        let f = fixture(pool).await;
+        f.price(1_000_000).await;
+        let (admitted, denied, settled, replayed) = (
+            admission("admitted"),
+            admission("denied"),
+            settlement("settled"),
+            settlement("replay"),
+        );
+        let start = f.start();
+        admit(&f.store, &start, &request(), 30).await.unwrap();
+        let done = done(start.id, Some(3), Some(2));
+        finish(&f.store, &done).await.unwrap();
+        finish(&f.store, &done).await.unwrap();
+        for (i, phase) in ADMISSION_PHASES.iter().enumerate() {
+            assert!(admission("admitted")[i] > admitted[i], "admission {phase}");
+        }
+        for (i, phase) in SETTLEMENT_PHASES.iter().enumerate() {
+            assert!(settlement("settled")[i] > settled[i], "settlement {phase}");
+        }
+        // A replayed finish stops after reading the reservation.
+        let replay = settlement("replay");
+        assert!(replay[2] > replayed[2], "replay locks");
+        assert!(replay[6] > replayed[6], "replay total");
+        // A budget denial is timed through `read`; `limits` is where it stops.
+        set_test_budget(
+            &f.store.pool,
+            "local",
+            None,
+            Some(f.principal.workspace_id),
+            None,
+            "month",
+            Some(0),
+        )
+        .await;
+        assert_eq!(
+            admit(&f.store, &f.start(), &request(), 30).await,
+            Err(InferenceError::BudgetExceeded(LimitScope::Workspace))
+        );
+        let now_denied = admission("denied");
+        for i in [0, 1, 2, 3, 7] {
+            assert!(now_denied[i] > denied[i], "denied {}", ADMISSION_PHASES[i]);
+        }
+    }
     #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn missing_usage_nonshrinking_floor_manual_resolution_and_evidence(pool: PgPool) {
         let f = fixture(pool).await;

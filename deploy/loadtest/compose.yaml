@@ -1,0 +1,169 @@
+# Laptop multi-replica load-test stack (docs/operations.md "Capacity baseline").
+# TEST ONLY: throwaway database, mock upstream, no provider credentials.
+# Drive it with scripts/loadtest.py, which generates the passwords into
+# .local/loadtest/stack.env and the PgBouncer userlist, and always uses the
+# Compose project name omg-loadtest. No Docker Hub pulls: PostgreSQL from
+# mirror.gcr.io, PgBouncer from ghcr.io (CloudNativePG), the gateway, mock
+# upstream and generator from the local image built by deploy/loadtest/Dockerfile.
+name: omg-loadtest
+
+x-gateway: &gateway
+  image: ${OMG_LOADTEST_IMAGE:-omg-loadtest:local}
+  restart: "no"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs: [/tmp:size=16m]
+  environment: &gateway-env
+    GATEWAY_ENV: production
+    GATEWAY_LISTEN: 0.0.0.0:8080
+    GATEWAY_METRICS_ADDR: 0.0.0.0:9464
+    # Through PgBouncer (transaction mode) by default; `loadtest.py gateways
+    # --via direct` points replicas straight at PostgreSQL instead.
+    DATABASE_URL: postgres://gateway_runtime:${OMG_LOADTEST_RUNTIME_PASSWORD:?run scripts/loadtest.py up}@${OMG_LOADTEST_DB_HOST:-pgbouncer}:${OMG_LOADTEST_DB_PORT:-6432}/${OMG_LOADTEST_DB:-omg_loadtest}
+    GATEWAY_DATABASE_MAX_CONNECTIONS: ${OMG_LOADTEST_POOL:-10}
+    GATEWAY_MAX_CONCURRENT_REQUESTS: ${OMG_LOADTEST_MAX_CONCURRENT:-128}
+    GATEWAY_LOCAL_UPSTREAMS: '[{"endpoint":"http://mock-upstream:8000/v1","addresses":["10.213.47.10"]}]'
+    RUST_LOG: ${OMG_LOADTEST_RUST_LOG:-open_model_gateway=info}
+  healthcheck:
+    test: ["CMD", "/usr/local/bin/open-model-gateway", "healthcheck", "--timeout", "2s"]
+    interval: 2s
+    timeout: 3s
+    retries: 30
+  depends_on:
+    mock-upstream: {condition: service_started}
+  networks: [loadtest]
+  logging: &logging
+    driver: json-file
+    options: {max-size: 10m, max-file: "2"}
+
+services:
+  postgres:
+    image: mirror.gcr.io/library/postgres:17-alpine
+    environment:
+      POSTGRES_USER: loadtest_admin
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: ${OMG_LOADTEST_ADMIN_PASSWORD:?run scripts/loadtest.py up}
+      MIGRATOR_PASSWORD: ${OMG_LOADTEST_MIGRATOR_PASSWORD:?run scripts/loadtest.py up}
+      RUNTIME_PASSWORD: ${OMG_LOADTEST_RUNTIME_PASSWORD:?run scripts/loadtest.py up}
+    # Tuned for an 8 GB Docker VM; see docs/operations.md for the reasoning.
+    command:
+      - postgres
+      - -c
+      - max_connections=300
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - effective_cache_size=3GB
+      - -c
+      - work_mem=16MB
+      - -c
+      - maintenance_work_mem=256MB
+      - -c
+      - wal_buffers=16MB
+      - -c
+      - max_wal_size=8GB
+      - -c
+      - checkpoint_timeout=15min
+      - -c
+      - wal_compression=lz4
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - effective_io_concurrency=200
+      - -c
+      - jit=off
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=all
+      - -c
+      - pg_stat_statements.max=5000
+      - -c
+      - track_io_timing=on
+      - -c
+      - log_lock_waits=on
+      - -c
+      - deadlock_timeout=1s
+      - -c
+      - idle_in_transaction_session_timeout=60s
+      - -c
+      - autovacuum_naptime=10s
+    shm_size: 1g
+    volumes:
+      - database:/var/lib/postgresql/data
+      - ./postgres-init.sh:/docker-entrypoint-initdb.d/10-loadtest.sh:ro
+      - ../staging/runtime-grants.sql:/opt/loadtest/runtime-grants.sql:ro
+    ports:
+      - "127.0.0.1:${OMG_LOADTEST_POSTGRES_PORT:-54369}:5432"
+    networks: [loadtest]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U loadtest_admin -d postgres]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    logging: *logging
+
+  pgbouncer:
+    image: ghcr.io/cloudnative-pg/pgbouncer:1.25.0@sha256:b8d8d5f521d27cfc4f681e3c27a59bef93ed99596561501dfa6ab49010b6929d
+    entrypoint: [pgbouncer, /etc/pgbouncer-loadtest/pgbouncer.ini]
+    volumes:
+      - ${OMG_LOADTEST_PGBOUNCER_INI:-./pgbouncer.ini}:/etc/pgbouncer-loadtest/pgbouncer.ini:ro
+      - ${OMG_LOADTEST_STATE_DIR:-../../.local/loadtest}/userlist.txt:/etc/pgbouncer-loadtest/userlist.txt:ro
+    depends_on:
+      postgres: {condition: service_healthy}
+    networks: [loadtest]
+    logging: *logging
+
+  mock-upstream:
+    image: ${OMG_LOADTEST_IMAGE:-omg-loadtest:local}
+    entrypoint: [/usr/local/bin/mock-upstream]
+    read_only: true
+    cap_drop: [ALL]
+    environment:
+      MOCK_LISTEN: 0.0.0.0:8000
+      MOCK_LATENCY_MS: ${OMG_LOADTEST_MOCK_LATENCY_MS:-50}
+      MOCK_TTFT_MS: ${OMG_LOADTEST_MOCK_TTFT_MS:-30}
+      MOCK_INTER_TOKEN_MS: ${OMG_LOADTEST_MOCK_INTER_TOKEN_MS:-5}
+      MOCK_COMPLETION_TOKENS: ${OMG_LOADTEST_MOCK_COMPLETION_TOKENS:-4}
+      MOCK_PROMPT_TOKENS: "12"
+      MOCK_ERROR_RATE: ${OMG_LOADTEST_MOCK_ERROR_RATE:-0}
+    networks:
+      loadtest:
+        ipv4_address: 10.213.47.10
+    logging: *logging
+
+  gateway-1:
+    <<: *gateway
+    ports: ["127.0.0.1:18301:8080"]
+  gateway-2:
+    <<: *gateway
+    ports: ["127.0.0.1:18302:8080"]
+  gateway-3:
+    <<: *gateway
+    ports: ["127.0.0.1:18303:8080"]
+
+  # One-off commands (`docker compose run --rm`): migrate and budget verify
+  # with the gateway binary, seed and run with the generator.
+  gateway-cli:
+    <<: *gateway
+    profiles: [tools]
+    depends_on: {}
+    healthcheck: {disable: true}
+  loadgen:
+    image: ${OMG_LOADTEST_IMAGE:-omg-loadtest:local}
+    profiles: [tools]
+    entrypoint: [/usr/local/bin/loadgen]
+    read_only: true
+    cap_drop: [ALL]
+    networks: [loadtest]
+    logging: *logging
+
+networks:
+  loadtest:
+    ipam:
+      config:
+        - subnet: 10.213.47.0/24
+
+volumes:
+  database:

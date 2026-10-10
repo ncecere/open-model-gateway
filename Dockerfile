@@ -17,6 +17,9 @@ FROM mirror.gcr.io/library/rust:1.99.0-bookworm AS build
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY apps/gateway/ apps/gateway/
+# Workspace members (load-test tools) must exist for Cargo to load the
+# workspace; only the gateway package is built into this image.
+COPY tools/ tools/
 # SQLx migrations are compiled into the binary; no live database is needed.
 ARG CARGO_BUILD_JOBS=2
 RUN cargo build --locked --release --jobs "$CARGO_BUILD_JOBS" -p open-model-gateway

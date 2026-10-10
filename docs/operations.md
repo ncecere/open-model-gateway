@@ -83,6 +83,8 @@ There are no workspace, key, user, request IDs, or prompt and response data in a
 | `gateway_upstream_time_to_first_token_seconds` | histogram | `provider`, `model` (streams) |
 | `gateway_inference_tokens_total` | counter | `provider`, `model`, `direction` (provider-reported only; unknown usage is not counted as zero) |
 | `gateway_settlements_total` | counter | `outcome`: `settled` (exact cost), `unknown` (hold retained), `held` (finalization failed; the reservation stays pending until reconciliation) |
+| `gateway_admission_seconds` | histogram | `phase`, `outcome`. Wall-clock time of each phase of a durable interactive admission transaction: `queue` (in-process wait for an installation-lock slot), `connect` (pool acquire and `BEGIN`), `locks` (catalog advisory lock plus the installation row lock: the lock wait), `read` (live authorization, deployment, clock, price), `limits` (policies, per-minute rate accounting, budget totals), `write` (execution, reservation and hold inserts with trigger fan-out), `commit`, and `total`. `outcome` is `admitted`, `denied` (a limit or budget denial), `rejected` (other refusals such as an unavailable model) or `error` (database failure). Phases after an early return are not observed. Buckets run from 100 µs to about 52 s. Batch-line and realtime-window admissions are not included. |
+| `gateway_settlement_seconds` | histogram | `phase` (`queue`, `connect`, `locks`, `read`, `write`, `commit`, `total`), `outcome` (`settled`, `unknown`, `replay`, `conflict`, `error`). Terminal settlement of an interactive attempt (`finish`); a replay stops after `locks`. |
 | `gateway_admission_denials_total` | counter | `code`, `scope` (`installation`, `workspace`, `api_key`, `policy` for rate/concurrency limits, `gateway_capacity`). `code="job_limit_exceeded"` counts video/batch jobs refused by a "Jobs at once" limit, with the scope that refused them. |
 | `gateway_reservations_held` | gauge | `state` (`pending`, `unknown`). Refreshed at scrape time, at most every 15 seconds, with a 2-second query timeout. |
 | `gateway_alert_evaluations_total` | counter | `result` (`ok`, `skipped` when another replica holds the lock, `failed`) |
@@ -109,7 +111,7 @@ How to respond:
 
 - **Held settlements:** these are database or finalization failures. Holds are retained and never refunded as zero. The maintenance loop moves expired leases to `unknown`. Fix database health first, then review unknown usage in the dashboard and resolve it deliberately.
 - **Unknown reservations:** they keep budget holds and can block budgeted admission (`unresolved_usage`). Resolve them; never delete reservations.
-- **Pool saturation or rising latency:** read the [load test](#load-test-baseline) section before raising pool sizes.
+- **Pool saturation or rising latency:** read the [load test](#load-test-baseline) section before raising pool sizes. Compare `histogram_quantile(0.99, sum by (le, phase) (rate(gateway_admission_seconds_bucket{outcome="admitted"}[5m])))` across phases: a large `queue` or `locks` share means requests wait for the installation lock (more replicas or connections will not help); a large `limits` share means per-minute rate accounting or budget reads are slow (see [pg_stat_statements](#finding-slow-queries-and-lock-waits)).
 
 ## Backups and restore
 
@@ -227,7 +229,7 @@ When SCIM is refused, the gateway writes the audit event `scim.last_admin_protec
 
 ## Load test baseline
 
-`apps/gateway/tests/load_test.rs` is a reproducible, ignored harness with no paid calls. An in-process mock adapter replaces the upstream: about 20 ms per non-stream response, and four deltas for streams. Everything else runs for real: authentication, routing, durable admission (installation lock, rate and budget policies), settlement and the ledger, against PostgreSQL over a real TCP listener. The harness creates and drops its own `omg_load_<random>` database on a loopback server.
+`apps/gateway/tests/load_test.rs` is a reproducible, ignored harness with no paid calls. For real gateway processes, several replicas and PgBouncer, see the [multi-replica harness](#multi-replica-load-test-harness) and the [capacity baseline](#capacity-baseline). An in-process mock adapter replaces the upstream: about 20 ms per non-stream response, and four deltas for streams. Everything else runs for real: authentication, routing, durable admission (installation lock, rate and budget policies), settlement and the ledger, against PostgreSQL over a real TCP listener. The harness creates and drops its own `omg_load_<random>` database on a loopback server.
 
 ```sh
 DATABASE_URL=postgres://gateway:gateway@127.0.0.1:54339/gateway \
@@ -266,6 +268,145 @@ Findings:
 1. **Fixed: pool starvation under concurrency.** Before the fix, at 200 concurrent requests on a 10-connection pool, transactions waiting for the installation lock held every pooled connection. Authentication timed out (105 × 503 out of 1000), and 40 streams could not be finalized (settlement `held`, stream ended with an error rather than `[DONE]`). Admission and settlement now queue in process (`governance::LockGates`). At most a quarter of the pool waits on the lock per queue, and settlements never queue behind admissions. Repeated runs now show zero errors. The pool size is configurable through `GATEWAY_DATABASE_MAX_CONNECTIONS`.
 2. **Throughput ceiling: about 115 to 150 req/s per installation in this environment.** Admission and settlement serialize on the installation row by design, so this ceiling is shared by all replicas. Adding replicas or connections does not raise it. Latency at higher concurrency is queueing (Little's law), not failure.
 3. **Fixed: budget checks no longer scale with history.** Before, each budget check aggregated every reservation in its window (plus the legacy execution anti-join) while holding the lock. With 200k reservations this month the installation check took about 59 ms, and throughput fell to 19 req/s. Admission now reads `budget_totals`: one indexed lookup for all budget layers, O(layers). Statement-level triggers maintain the table in the same transaction as every reservation and execution write. Rate and concurrency limits read only the current minute and live leases. With 200k history rows, throughput matches the no-history case. Monitoring, policy and alert *reports* outside admission (`alerts`, usage pages) still aggregate their own windows and are not on the admission path.
+
+## Multi-replica load-test harness
+
+The in-process harness above runs one gateway inside the test binary. The multi-replica harness (scale plan phase P0) runs real gateway processes against PostgreSQL and PgBouncer, so it measures what an operator would deploy. It is test-only: no provider is ever called, and it only creates throwaway databases named `omg_loadtest*`.
+
+| Part | What it does |
+|---|---|
+| `tools/mock-upstream` | Deterministic OpenAI-compatible upstream (`POST /v1/chat/completions`, complete and streamed). Configurable latency, time to first token, completion tokens, inter-token delay and a deterministic error rate. Usage is exact (12 prompt tokens, N completion tokens, a complete cache split), so every attempt settles at a known cost. It stores no prompt text, only a `nonce:<id>` marker, and lists its calls at `GET /__mock/calls`. |
+| `tools/loadgen run` | Open-loop generator: request *i* is sent at `start + i/rate` whatever earlier requests are doing, so overload shows up as latency and errors instead of a silently lower rate. It round-robins over several gateway URLs, spreads requests over many seeded keys (and therefore workspaces), mixes streamed and complete requests, and measures latency from the scheduled time. Each prompt carries a nonce; the gateway's `x-request-id` (its `root_request_id`) is recorded per request. |
+| `tools/loadgen seed` | Generates users, personal and shared workspaces, service accounts, keys, the mock catalog, policies and optional settled history server-side with set-based SQL (`tools/loadgen/seed.sql`). Keys are derived from a seed string by both the seeder and the generator, so no token is printed or stored. It refuses any database not named `omg_loadtest*` (in the client and in SQL), and must connect as the schema owner. |
+| `deploy/loadtest/compose.yaml` | Compose project `omg-loadtest`: PostgreSQL 17 (tuned, `pg_stat_statements`), PgBouncer 1.25 in transaction mode, three gateway replicas with metrics listeners, the mock upstream at a pinned private address (`GATEWAY_LOCAL_UPSTREAMS`), and the generator. Images come from `mirror.gcr.io`, `ghcr.io` and the local `deploy/loadtest/Dockerfile` build; nothing from Docker Hub. The gateways use the restricted runtime role and `deploy/staging/runtime-grants.sql`. |
+| `scripts/loadtest.py` | Runner: `up`, `reset-db`, `seed`, `gateways --replicas N --via pgbouncer\|direct`, `run`, `report`, `baseline`, `down`. Passwords are generated into `.local/loadtest/stack.env`; results are JSON files in `.local/loadtest/results/`. |
+
+After every run, `loadgen` checks, per request id:
+
+- every successful request reached the upstream exactly once (no implicit retries); denied requests never did; and no upstream call lacks a client request;
+- every successful request has exactly one execution, one settled reservation, one hold and one settlement ledger entry, with the mock's exact usage, the exact cost (20 µUSD each at the seeded price) and ledger sums equal to the reservation sums;
+- denied requests have no execution, nothing admitted during the run is still pending, and no execution lacks a reservation.
+
+The runner then runs `open-model-gateway budget verify`, saves the top statements from `pg_stat_statements` and PgBouncer's `SHOW STATS`, and fails the run on any violation. The JSON report also contains client latency (all, streamed, complete), time to first byte, gateway overhead (client service time minus the mock's own service time for the same nonce), per-replica counts, and the `gateway_admission_seconds` / `gateway_settlement_seconds` deltas summed over all replicas.
+
+```sh
+python3 scripts/loadtest.py up
+python3 scripts/loadtest.py reset-db
+python3 scripts/loadtest.py seed --users 5000 --shared 2000 --keys 20000 --history 0
+python3 scripts/loadtest.py gateways --replicas 3 --via pgbouncer
+python3 scripts/loadtest.py run --label 3r-pgb-60 --rate 60 --duration 45 --warmup 5
+python3 scripts/loadtest.py report
+python3 scripts/loadtest.py down          # removes containers, network, data volume and the image
+```
+
+`tools/loadgen/tests/end_to_end.rs` runs the same seed, real gateway (with the real `openai_compatible` adapter), mock, generator and verification in one process against a throwaway database on `DATABASE_URL`, as part of `cargo test --workspace --all-features`.
+
+The generator, mock, gateways and PostgreSQL share one machine in the laptop stack, so they compete for CPU. For certification runs (scale plan P8) put the generator and mock on separate hosts.
+
+## Capacity baseline
+
+Measured 2026-10-09/10 at commit `e05035f` plus the P0 changes (no admission changes), with `scripts/loadtest.py baseline`.
+
+- **Hardware:** Apple M4 Pro (12 cores, 48 GB), macOS 26.6. Docker Desktop 29.8.1 VM with 12 vCPUs and 7.7 GiB. Every container, including the generator and mock, ran in that VM.
+- **PostgreSQL 17 (alpine):** `shared_buffers=1GB`, `effective_cache_size=3GB`, `work_mem=16MB`, `max_wal_size=8GB`, `wal_compression=lz4`, `random_page_cost=1.1`, `jit=off`, `synchronous_commit=on` (default), `pg_stat_statements` and `track_io_timing` on.
+- **Gateways:** release build, `GATEWAY_DATABASE_MAX_CONNECTIONS=10` and `GATEWAY_MAX_CONCURRENT_REQUESTS=128` per replica, `info` logging.
+- **PgBouncer 1.25.0:** transaction mode, `default_pool_size=40`, `max_prepared_statements=200`.
+- **Data:** 5,000 users, 7,000 workspaces (2,000 shared), 20,000 keys; an installation rate policy, an installation monthly budget and workspace-type monthly budgets, so every admission evaluates the rate layer and budget totals. "Seeded" adds 2,000,000 settled historical attempts over 120 days (plus 1,000 unknown last month): 2 M executions, 2 M reservations, 4 M ledger entries, 2.7 M budget-total buckets, a 3.8 GB database. Seeding took 391 s.
+- **Traffic:** 45 s per run (the first 5 s excluded), 2,000 hot keys, half streamed, `max_completion_tokens` 16. The mock answers complete requests after 50 ms and streams 4 tokens (30 ms to the first, then 5 ms apart).
+
+Overhead is client time minus mock time. Admission, lock wait (`phase="locks"`) and settlement come from the gateway histograms (bucket-interpolated). 429s are `rate_limit_error` from the per-replica capacity limit.
+
+| History | Replicas | DB path | Offered/s | OK/s | Client p50 / p95 / p99 ms | Overhead p50 / p99 ms | Admission p50 / p99 ms | Lock wait p50 / p99 ms | Settlement p50 / p99 ms | 429s |
+|---|---|---|---|---|---|---|---|---|---|---|
+| empty | 1 | PgBouncer | 60 | 59.9 | 64 / 68 / 70 | 11 / 15 | 6.3 / 12.7 | 0.2 / 0.4 | 2.0 / 5.9 | 0 |
+| empty | 1 | direct | 60 | 59.9 | 63 / 67 / 69 | 10 / 14 | 6.9 / 12.7 | 0.1 / 0.2 | 1.3 / 5.3 | 0 |
+| empty | 3 | PgBouncer | 60 | 59.9 | 65 / 374 / 481 | 11 / 426 | 7.5 / 374 | 0.2 / 98 | 2.8 / 186 | 0 |
+| empty | 3 | direct | 60 | 59.9 | 67 / 72 / 85 | 14 / 31 | 9.5 / 25 | 0.1 / 1.6 | 1.4 / 19 | 0 |
+| empty | 1 | PgBouncer | 250 | 79.6 | 1,591 / 2,038 / 2,070 | 1,539 / 2,017 | 1,372 / 3,213 | 14.5 / 25 | 85 / 202 | 7,059 |
+| empty | 1 | direct | 250 | 99.1 | 1,284 / 1,743 / 1,783 | 1,232 / 1,731 | 1,113 / 2,582 | 11.2 / 25 | 115 / 381 | 6,589 |
+| empty | 3 | PgBouncer | 250 | 83.0 | 4,450 / 5,947 / 6,098 | 4,401 / 6,047 | 4,139 / 6,505 | 57 / 102 | 99 / 203 | 6,775 |
+| empty | 3 | direct | 250 | 69.7 | 4,950 / 6,610 / 6,705 | 4,898 / 6,653 | 4,593 / 6,514 | 68 / 102 | 143 / 394 | 6,965 |
+| 2 M | 1 | PgBouncer | 60 | 59.9 | 67 / 85 / 163 | 14 / 108 | 9.5 / 59 | 0.2 / 18 | 2.4 / 32 | 0 |
+| 2 M | 1 | direct | 60 | 59.9 | 65 / 72 / 86 | 12 / 32 | 8.3 / 25 | 0.1 / 1.6 | 2.1 / 17 | 0 |
+| 2 M | 3 | PgBouncer | 60 | 59.9 | 66 / 453 / 568 | 13 / 516 | 9.9 / 441 | 0.2 / 101 | 2.8 / 197 | 0 |
+| 2 M | 3 | direct | 60 | 59.9 | 66 / 85 / 121 | 13 / 58 | 9.8 / 26 | 0.1 / 20 | 1.6 / 25 | 0 |
+| 2 M | 1 | PgBouncer | 250 | 63.5 | 1,887 / 2,875 / 2,886 | 1,835 / 2,834 | 1,708 / 3,245 | 17.5 / 40 | 135 / 392 | 7,722 |
+| 2 M | 1 | direct | 250 | 86.1 | 1,423 / 2,214 / 2,433 | 1,371 / 2,380 | 1,273 / 3,198 | 12.1 / 26 | 73 / 202 | 6,957 |
+| 2 M | 3 | PgBouncer | 250 | 67.9 | 4,745 / 7,174 / 7,364 | 4,694 / 7,311 | 4,759 / ≥6,554 | 67 / 158 | 140 / 401 | 7,322 |
+| 2 M | 3 | direct | 250 | 72.4 | 4,928 / 7,145 / 7,356 | 4,877 / 7,301 | 4,575 / ≥6,554 | 63 / 109 | 153 / 402 | 7,023 |
+
+Every run passed every invariant: each successful request matched exactly one upstream call and one settled reservation with exact sums, no denied request executed, nothing stayed pending, and `budget verify` was consistent (0.3 s on the empty database, 21 s over 2.7 M buckets on the seeded one). "≥6,554" means the top bucket of the histogram build used for the baseline (later builds extend the buckets to 52 s).
+
+Findings:
+
+1. **The installation-wide ceiling on this laptop is about 65–100 successful requests/s, and replicas do not raise it.** Three replicas never beat one at overload; they only queue more work (3 × 128 permits), so p50 latency goes from 1.3–1.9 s to 4.4–4.9 s. Under overload the in-process `queue` phase is almost all of the admission time. A shorter 25 s probe reached 120/s; throughput falls as each UTC minute fills up (next finding).
+2. **The critical section is about 10 ms per admission at overload, and most of it is per-minute rate accounting.** At 250/s offered (1 replica, empty) the serialized phases were `locks` 14.5 ms p50 (waiting for the previous holder), `limits` 7.9 ms, `write` 1.2 ms, `read` 1.2 ms and `commit` 0.25 ms. The `RATE_ACCOUNTING` statement averaged 6.2 ms and the installation row lock statement accumulated 137 s of waiting in 45 s. This matches the scale design's §2.1/§2.3 analysis: removing the lock alone is not enough; the per-minute scan must become a maintained counter (P2).
+3. **History still costs admission time.** With 2 M historical attempts, rate accounting averaged 4.8 ms instead of 3.0 ms at 60/s, the `limits` phase 6.5 ms instead of 3.9 ms, and overload throughput through PgBouncer fell from 80 to 64/s.
+4. **Below saturation, admission meets the design target and settlement is cheap:** admission p50 6–10 ms, p99 13–26 ms; settlement p50 1.3–2.8 ms; gateway overhead p50 10–14 ms (two HTTP hops, authentication, routing, admission and settlement).
+5. **Three replicas through PgBouncer showed p95 spikes (374–453 ms) at 60/s** that the direct path did not, with lock-wait p99 around 100 ms. A 30 s repeat on the seeded database had p95 70 ms and p99 182 ms, and PgBouncer reported an average client wait of 0 µs and few server-side re-parses, so pooling is not the cause. The likely cause is periodic installation-lock work multiplied by replicas (lifecycle cleanup, reconciliation and the alert evaluator on every replica, design §2.6). The P0 histograms do not cover those jobs; this is not yet proven.
+6. **With `max_prepared_statements=0`, PgBouncer breaks the gateway (decision gate D4):** 98 of 100 requests failed (`503 accounting_unavailable`/`api_error` and some 401s from failed authentication lookups), with no ledger damage. With 200 it worked in every run.
+
+## PgBouncer
+
+Use transaction pooling with PgBouncer **1.21 or later and `max_prepared_statements` > 0** (200 in the load-test stack). sqlx caches *named* prepared statements per connection; without protocol-level prepared-statement support, statements land on server connections that never prepared them, and the gateway fails closed (see finding 6 above). With support enabled, PgBouncer re-prepares transparently; the baseline runs saw a few hundred server-side parses for tens of thousands of transactions.
+
+- Put the server's SCRAM secrets in `auth_file` (copy `rolpassword` from `pg_authid`), or use `auth_query`. With plaintext passwords in the userlist, PgBouncer authenticated clients against a secret with its own salt and then intermittently failed the server login ("password authentication failed"). `scripts/loadtest.py up` writes the userlist from the server's secrets.
+- Add `ignore_startup_parameters = extra_float_digits`; sqlx sends it at connect time.
+- Run `migrate` directly against PostgreSQL, never through PgBouncer. It takes a session-level advisory lock.
+- Everything the gateway does inside transactions works in transaction mode: transaction-scoped advisory locks, `SET LOCAL`, and `SET TRANSACTION ISOLATION LEVEL`.
+- Size `default_pool_size` for the sum of replica pools that are actually busy, not their maximum. Today the installation lock keeps only a few transactions active at a time.
+
+## Finding slow queries and lock waits
+
+Enable `pg_stat_statements` (and I/O timing) on the server. This needs a restart:
+
+```
+shared_preload_libraries = 'pg_stat_statements'
+pg_stat_statements.track = all     # include statements inside the budget-totals triggers
+track_io_timing = on
+```
+
+Create the extension in the `postgres` maintenance database, **not** in the gateway database. Readiness refuses unknown relations in the gateway database's `public` schema, and the extension's view is one. The statistics cover every database anyway. Read them as a role with `pg_read_all_stats`:
+
+```sql
+-- In the postgres database: CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+-- Reset before a measurement window:
+SELECT pg_stat_statements_reset();
+-- Top statements by total time for the gateway database:
+SELECT left(regexp_replace(query, '\s+', ' ', 'g'), 120) AS query, calls,
+       round(total_exec_time::numeric, 1) AS total_ms, round(mean_exec_time::numeric, 3) AS mean_ms,
+       rows, toplevel, shared_blks_read, round(shared_blk_read_time::numeric, 1) AS read_ms
+FROM pg_stat_statements
+WHERE dbid = (SELECT oid FROM pg_database WHERE datname = 'gateway')
+ORDER BY total_exec_time DESC LIMIT 20;
+```
+
+What to look for in the gateway's statements:
+
+- `SELECT id FROM installation WHERE singleton FOR NO KEY UPDATE`: its total time is time spent **waiting** for the installation lock, not work. When it dominates, the database is idle behind one serializer.
+- `WITH accounting AS (…)`: per-minute rate accounting. Its mean grows with traffic in the current UTC minute.
+- `INSERT INTO budget_totals …` (non-top-level): trigger fan-out, about 3 calls per reservation or execution write.
+- A `budget verify` full scan, if one ran in the window.
+
+Lock waits, live, in the gateway database (any role that can see `pg_stat_activity`, such as `pg_monitor`):
+
+```sql
+-- Who waits for whom right now:
+SELECT waiting.pid, waiting.wait_event_type, waiting.wait_event,
+       round(extract(epoch FROM clock_timestamp() - waiting.query_start)::numeric * 1000, 1) AS waiting_ms,
+       pg_blocking_pids(waiting.pid) AS blocked_by,
+       left(regexp_replace(waiting.query, '\s+', ' ', 'g'), 80) AS query
+FROM pg_stat_activity waiting
+WHERE waiting.datname = current_database() AND cardinality(pg_blocking_pids(waiting.pid)) > 0
+ORDER BY waiting.query_start;
+-- Wait events of active sessions, and ungranted locks by type:
+SELECT wait_event_type, wait_event, count(*) FROM pg_stat_activity
+WHERE datname = current_database() AND state <> 'idle' GROUP BY 1, 2 ORDER BY 3 DESC;
+SELECT locktype, mode, count(*) FROM pg_locks l JOIN pg_database d ON d.oid = l.database
+WHERE d.datname = current_database() AND NOT l.granted GROUP BY 1, 2;
+```
+
+Under overload these show a convoy on the installation row: one session waiting on `transactionid` and the rest on `tuple` `ExclusiveLock`, each blocked by the sessions ahead of it. For a history of waits, set `log_lock_waits = on` (with `deadlock_timeout`, default 1 s, as the threshold) and read the server log. Use the gateway's `gateway_admission_seconds{phase="locks"}` for the client-side view.
 
 ## Budget totals verification
 

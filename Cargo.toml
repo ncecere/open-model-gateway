@@ -1,5 +1,5 @@
 [workspace]
-members = ["apps/gateway"]
+members = ["apps/gateway", "tools/mock-upstream", "tools/loadgen"]
 resolver = "3"
 
 [profile.release]

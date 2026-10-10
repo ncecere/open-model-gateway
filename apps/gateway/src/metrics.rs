@@ -53,6 +53,88 @@ fn upstream_buckets() -> Histogram {
     // 10 ms .. ~164 s
     Histogram::new(exponential_buckets(0.01, 2.0, 15))
 }
+fn phase_buckets() -> Histogram {
+    // 100 µs .. ~52 s: admission/settlement phases are sub-millisecond when
+    // uncontended and seconds when queued behind the installation lock.
+    Histogram::new(exponential_buckets(0.0001, 2.0, 20))
+}
+
+/// Phases of one durable admission (`governance::admit*`), in order. The
+/// scale design's future scoped protocol renames `limits` to `lock_rows`.
+pub const ADMISSION_PHASES: [&str; 8] = [
+    "queue", "connect", "locks", "read", "limits", "write", "commit", "total",
+];
+/// Phases of one terminal settlement (`governance::finish*`), in order.
+pub const SETTLEMENT_PHASES: [&str; 7] = [
+    "queue", "connect", "locks", "read", "write", "commit", "total",
+];
+
+/// Wall-clock time per phase of one admission or settlement transaction.
+/// `phase` closes the span since the previous mark; phases never reached
+/// (early return) are simply not observed. `total` is always observed.
+pub(crate) struct PhaseTimer {
+    started: Instant,
+    mark: Instant,
+    spans: Vec<(&'static str, Duration)>,
+}
+impl PhaseTimer {
+    pub(crate) fn start() -> Self {
+        let now = Instant::now();
+        Self {
+            started: now,
+            mark: now,
+            spans: Vec::with_capacity(8),
+        }
+    }
+    pub(crate) fn phase(&mut self, name: &'static str) {
+        let now = Instant::now();
+        self.spans.push((name, now - self.mark));
+        self.mark = now;
+    }
+    fn observe(self, family: &Histograms<L2>, outcome: &'static str) {
+        let total = self.started.elapsed();
+        for (phase, elapsed) in self
+            .spans
+            .into_iter()
+            .chain(std::iter::once(("total", total)))
+        {
+            family
+                .get_or_create(&[("phase", phase.to_owned()), ("outcome", outcome.to_owned())])
+                .observe(elapsed.as_secs_f64());
+        }
+    }
+}
+
+/// Outcome label of an admission: `admitted`, `denied` (a limit, budget or
+/// unresolved-usage denial, also counted by `gateway_admission_denials_total`),
+/// `error` (storage/database failure) or `rejected` (any other refusal, such as
+/// a model that is no longer available or an unbounded price).
+pub(crate) fn admission_outcome(result: &Result<(), InferenceError>) -> &'static str {
+    match result {
+        Ok(()) => "admitted",
+        Err(InferenceError::Storage) => "error",
+        Err(error) if denial_scope(*error).is_some() => "denied",
+        Err(_) => "rejected",
+    }
+}
+
+/// Limit scope label of an admission denial; `None` for other errors.
+fn denial_scope(error: InferenceError) -> Option<&'static str> {
+    use crate::inference::error::LimitScope;
+    let scope = |s: LimitScope| match s {
+        LimitScope::Installation => "installation",
+        LimitScope::Workspace => "workspace",
+        LimitScope::ApiKey => "api_key",
+    };
+    match error {
+        InferenceError::Busy => Some("policy"),
+        InferenceError::BudgetExceeded(s)
+        | InferenceError::UnresolvedUsage(s)
+        | InferenceError::TokenReservationExceedsLimit(s)
+        | InferenceError::JobLimitExceeded(s) => Some(scope(s)),
+        _ => None,
+    }
+}
 
 pub struct Metrics {
     registry: Registry,
@@ -65,6 +147,8 @@ pub struct Metrics {
     tokens: Family<L3, Counter>,
     settlements: Family<L1, Counter>,
     denials: Family<L2, Counter>,
+    admission_phases: Histograms<L2>,
+    settlement_phases: Histograms<L2>,
     reservations: Family<L1, Gauge>,
     alert_runs: Family<L1, Counter>,
     alert_rule_failures: Counter,
@@ -168,6 +252,8 @@ impl Metrics {
             tokens: Family::default(),
             settlements: Family::default(),
             denials: Family::default(),
+            admission_phases: Family::new_with_constructor(phase_buckets),
+            settlement_phases: Family::new_with_constructor(phase_buckets),
             reservations: Family::default(),
             alert_runs: Family::default(),
             alert_rule_failures: Counter::default(),
@@ -240,6 +326,16 @@ impl Metrics {
             "admission_denials",
             "Admission denials by error code and limit scope",
             metrics.denials.clone(),
+        );
+        registry.register(
+            "admission_seconds",
+            "Durable admission transaction time by phase (queue, connect, locks, read, limits, write, commit, total) and outcome (admitted, denied, rejected, error)",
+            metrics.admission_phases.clone(),
+        );
+        registry.register(
+            "settlement_seconds",
+            "Terminal settlement transaction time by phase (queue, connect, locks, read, write, commit, total) and outcome (settled, unknown, replay, conflict, error)",
+            metrics.settlement_phases.clone(),
         );
         registry.register(
             "reservations_held",
@@ -396,22 +492,48 @@ impl Metrics {
             .inc();
     }
 
+    /// Phase timings of one admission transaction (`gateway_admission_seconds`).
+    pub(crate) fn observe_admission_phases(&self, timer: PhaseTimer, outcome: &'static str) {
+        timer.observe(&self.admission_phases, outcome);
+    }
+
+    /// Phase timings of one settlement transaction (`gateway_settlement_seconds`).
+    pub(crate) fn observe_settlement_phases(&self, timer: PhaseTimer, outcome: &'static str) {
+        timer.observe(&self.settlement_phases, outcome);
+    }
+
+    /// Observations so far of one admission phase and outcome (tests).
+    #[cfg(any(test, feature = "integration-tests"))]
+    pub fn admission_phase_count(&self, phase: &str, outcome: &str) -> u64 {
+        self.histogram_count("admission_seconds", phase, outcome)
+    }
+
+    /// Observations so far of one settlement phase and outcome (tests).
+    #[cfg(any(test, feature = "integration-tests"))]
+    pub fn settlement_phase_count(&self, phase: &str, outcome: &str) -> u64 {
+        self.histogram_count("settlement_seconds", phase, outcome)
+    }
+
+    /// Reads `_count` from the exposition (the histogram's own accessor is
+    /// test-only upstream); absent series read 0.
+    #[cfg(any(test, feature = "integration-tests"))]
+    fn histogram_count(&self, metric: &str, phase: &str, outcome: &str) -> u64 {
+        let mut out = String::new();
+        if encode(&mut out, &self.registry).is_err() {
+            return 0;
+        }
+        let prefix = format!("gateway_{metric}_count{{phase=\"{phase}\",outcome=\"{outcome}\"}} ");
+        out.lines()
+            .find_map(|line| line.strip_prefix(&prefix))
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(0)
+    }
+
     /// Admission denials only: rate/concurrency, budget, unresolved usage and
     /// oversize token reservations. Other admission errors are not denials.
     pub fn observe_admission_error(&self, error: InferenceError) {
-        use crate::inference::error::LimitScope;
-        let scope = |s: LimitScope| match s {
-            LimitScope::Installation => "installation",
-            LimitScope::Workspace => "workspace",
-            LimitScope::ApiKey => "api_key",
-        };
-        let scope = match error {
-            InferenceError::Busy => "policy",
-            InferenceError::BudgetExceeded(s)
-            | InferenceError::UnresolvedUsage(s)
-            | InferenceError::TokenReservationExceedsLimit(s)
-            | InferenceError::JobLimitExceeded(s) => scope(s),
-            _ => return,
+        let Some(scope) = denial_scope(error) else {
+            return;
         };
         self.denials
             .get_or_create(&[
@@ -743,6 +865,70 @@ mod tests {
         ));
         assert!(!out.contains("model_not_found"));
         assert!(!out.contains("accounting_unavailable"));
+    }
+
+    #[test]
+    fn phase_timer_observes_reached_phases_and_total_with_outcome() {
+        let m = Metrics::new();
+        let mut timer = PhaseTimer::start();
+        timer.phase("queue");
+        timer.phase("connect");
+        timer.phase("locks");
+        // An early return after `locks`: later phases are not observed.
+        m.observe_admission_phases(timer, "error");
+        let mut timer = PhaseTimer::start();
+        for phase in &ADMISSION_PHASES[..7] {
+            timer.phase(phase);
+        }
+        m.observe_admission_phases(timer, "admitted");
+        let mut timer = PhaseTimer::start();
+        for phase in &SETTLEMENT_PHASES[..6] {
+            timer.phase(phase);
+        }
+        m.observe_settlement_phases(timer, "settled");
+        assert_eq!(m.admission_phase_count("locks", "error"), 1);
+        assert_eq!(m.admission_phase_count("total", "error"), 1);
+        assert_eq!(m.admission_phase_count("read", "error"), 0);
+        for phase in ADMISSION_PHASES {
+            assert_eq!(m.admission_phase_count(phase, "admitted"), 1, "{phase}");
+        }
+        for phase in SETTLEMENT_PHASES {
+            assert_eq!(m.settlement_phase_count(phase, "settled"), 1, "{phase}");
+        }
+        let mut out = String::new();
+        encode(&mut out, &m.registry).unwrap();
+        for expected in [
+            "# TYPE gateway_admission_seconds histogram",
+            "# TYPE gateway_settlement_seconds histogram",
+            r#"gateway_admission_seconds_bucket{le="0.0001",phase="locks",outcome="error"}"#,
+            r#"gateway_admission_seconds_count{phase="total",outcome="admitted"} 1"#,
+            r#"gateway_settlement_seconds_count{phase="commit",outcome="settled"} 1"#,
+        ] {
+            assert!(out.contains(expected), "missing {expected} in\n{out}");
+        }
+    }
+
+    #[test]
+    fn admission_outcomes_are_a_fixed_set() {
+        use crate::inference::error::LimitScope;
+        assert_eq!(admission_outcome(&Ok(())), "admitted");
+        assert_eq!(admission_outcome(&Err(InferenceError::Storage)), "error");
+        for denial in [
+            InferenceError::Busy,
+            InferenceError::BudgetExceeded(LimitScope::Installation),
+            InferenceError::UnresolvedUsage(LimitScope::Workspace),
+            InferenceError::TokenReservationExceedsLimit(LimitScope::ApiKey),
+            InferenceError::JobLimitExceeded(LimitScope::Workspace),
+        ] {
+            assert_eq!(admission_outcome(&Err(denial)), "denied");
+        }
+        for other in [
+            InferenceError::ModelUnavailable,
+            InferenceError::Configuration,
+            InferenceError::PriceUnbounded,
+        ] {
+            assert_eq!(admission_outcome(&Err(other)), "rejected");
+        }
     }
 
     #[tokio::test]
