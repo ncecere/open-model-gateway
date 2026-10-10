@@ -11,6 +11,7 @@ named omg_loadtest*. Generated passwords and results stay in .local/loadtest/.
 
     python3 scripts/loadtest.py up            # build image (if missing), start PG/PgBouncer/mock
     python3 scripts/loadtest.py reset-db      # drop/create omg_loadtest, migrate, runtime grants
+    python3 scripts/loadtest.py migrate       # upgrade an existing (seeded) database, runtime grants
     python3 scripts/loadtest.py seed --users 5000 --keys 20000 --history 0
     python3 scripts/loadtest.py gateways --replicas 3 --via pgbouncer
     python3 scripts/loadtest.py run --label 3r-pgb --rate 100 --duration 45
@@ -213,13 +214,31 @@ def cmd_reset_db(stack, args):
         f'ALTER ROLE gateway_runtime IN DATABASE "{db}" SET search_path = pg_catalog, public',
         "ALTER DEFAULT PRIVILEGES FOR ROLE gateway_migrator REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC",
     ]), db=db)
+    migrate_and_grant(stack)
+
+
+def migrate_and_grant(stack):
     # Migrations take a session advisory lock: always direct, never via PgBouncer.
     stack.compose("run", "--rm", "-e", f"DATABASE_URL={stack.url('migrator')}", "gateway-cli", "migrate",
                   profiles=("tools",))
     subprocess.run(compose_command(stack.state, "exec", "-T", "postgres", "psql", "--no-psqlrc", "-v",
-                                   "ON_ERROR_STOP=1", "-q", "-U", "gateway_migrator", "-d", db, "-f",
+                                   "ON_ERROR_STOP=1", "-q", "-U", "gateway_migrator", "-d", stack.db, "-f",
                                    "/opt/loadtest/runtime-grants.sql"),
                    env=stack.process_env(), cwd=ROOT, check=True)
+
+
+def cmd_migrate(stack, args):
+    """Upgrade an existing (seeded) database with the selected image's
+    migrations, then reapply the runtime grants. Gateways are stopped first
+    (every migration runs drained)."""
+    disk_guard()
+    stack.compose("stop", *GATEWAYS, check=False)
+    started = time.monotonic()
+    migrate_and_grant(stack)
+    report = {"migrate_seconds": round(time.monotonic() - started, 1), "db": stack.db, "image": IMAGE}
+    save(stack, "migrate", report)
+    print(json.dumps(report, indent=2))
+    return report
 
 
 def cmd_seed(stack, args):
@@ -310,12 +329,15 @@ def cmd_run(stack, args):
     report["top_queries"] = top_queries(stack, args.top)
     report["pgbouncer"] = pgbouncer_stats(stack) if settings.get("via") == "pgbouncer" else None
     report["budget_verify"] = budget_verify(stack)
+    report["history_verify"] = history_verify(stack)
     report["wall_seconds"] = round(time.monotonic() - started, 1)
     path = save(stack, args.label, report)
     print(path)
     problems = list(report.get("violations", []))
     if not report["budget_verify"].get("consistent"):
         problems.append("budget verify reported mismatches")
+    if report["history_verify"] is not None and not report["history_verify"].get("consistent"):
+        problems.append("history verify reported findings")
     if problems:
         raise SystemExit(f"INVARIANT VIOLATIONS: {problems}")
     return report
@@ -330,6 +352,23 @@ def budget_verify(stack):
     except json.JSONDecodeError:
         return {"consistent": False, "error": result.stderr[-500:]}
     report["consistent"] = result.returncode == 0 and report.get("mismatch_count") == 0
+    report["seconds"] = round(time.monotonic() - started, 2)
+    return report
+
+
+def history_verify(stack):
+    """`history verify` (0034): orphans and scope mismatches of history rows
+    whose parents are checked at insert time. None on images without it."""
+    started = time.monotonic()
+    result = stack.compose("run", "--rm", "-e", f"DATABASE_URL={stack.url('runtime')}", "gateway-cli",
+                           "history", "verify", profiles=("tools",), capture=True, check=False, quiet=True)
+    if result.returncode == 2 and "unrecognized subcommand" in result.stderr:
+        return None
+    try:
+        report = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return {"consistent": False, "error": result.stderr[-500:]}
+    report["consistent"] = result.returncode == 0 and report.get("finding_count") == 0
     report["seconds"] = round(time.monotonic() - started, 2)
     return report
 
@@ -528,6 +567,7 @@ def main(argv=None):
     up = sub.add_parser("up")
     up.add_argument("--build", action="store_true", help="rebuild the image even if it exists")
     sub.add_parser("reset-db")
+    sub.add_parser("migrate", help="apply the selected image's migrations to an existing database")
     seed = sub.add_parser("seed")
     seed.add_argument("--users", type=int, default=5000)
     seed.add_argument("--shared", type=int, default=2000)
@@ -586,7 +626,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     configure(args.project, args.slot)
     stack = Stack(db=args.db)
-    {"up": cmd_up, "reset-db": cmd_reset_db, "seed": cmd_seed, "rollups": cmd_rollups, "gateways": cmd_gateways, "run": cmd_run,
+    {"up": cmd_up, "reset-db": cmd_reset_db, "migrate": cmd_migrate, "seed": cmd_seed, "rollups": cmd_rollups, "gateways": cmd_gateways, "run": cmd_run,
      "report": cmd_report, "down": cmd_down, "baseline": cmd_baseline}[args.command](stack, args)
 
 

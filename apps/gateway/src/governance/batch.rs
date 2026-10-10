@@ -288,6 +288,7 @@ async fn admit_batch_unobserved(
     ledger(
         &mut tx,
         record.id,
+        Some(now),
         "hold",
         Some(held),
         Usage::default(),
@@ -427,6 +428,7 @@ async fn admit_line_unobserved(
     ledger(
         &mut tx,
         record.id,
+        Some(now),
         "hold",
         Some(held),
         Usage::default(),
@@ -470,6 +472,9 @@ async fn close_batch_once(
 ) -> Result<bool, InferenceError> {
     let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
     settlement_prefix(store, &mut tx).await?;
+    // The envelope's admission time (scoped mode reads it with its lock):
+    // prunes the ledger's reservation lookup to its month.
+    let mut admitted = None;
     if scoped(store) {
         // The envelope row, then its totals rows.
         let row: Option<(Uuid, Uuid, DateTime<Utc>)> = sqlx::query_as("SELECT workspace_id,api_key_id,admitted_at FROM governance_reservations WHERE execution_id=$1 AND state='pending' FOR UPDATE")
@@ -477,6 +482,7 @@ async fn close_batch_once(
             .fetch_optional(&mut *tx)
             .await
             .map_err(storage)?;
+        admitted = row.map(|r| r.2);
         if let Some((workspace, api_key, at)) = row {
             lock_rows(
                 store,
@@ -515,6 +521,7 @@ async fn close_batch_once(
     ledger(
         &mut tx,
         envelope,
+        admitted,
         "settlement",
         Some(0),
         Usage {

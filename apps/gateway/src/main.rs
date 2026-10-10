@@ -67,6 +67,11 @@ enum Command {
         #[command(subcommand)]
         action: BudgetCommand,
     },
+    /// Request history consistency (docs/operations.md "MultiXacts and history parent checks").
+    History {
+        #[command(subcommand)]
+        action: HistoryCommand,
+    },
     /// Monthly history partitions (docs/operations.md "History partitions").
     Partitions {
         #[command(subcommand)]
@@ -186,6 +191,21 @@ enum RollupsCommand {
         once: bool,
         #[arg(long, default_value_t = 300)]
         budget_seconds: u64,
+    },
+}
+
+#[derive(Subcommand)]
+enum HistoryCommand {
+    /// Read-only (one snapshot): find executions and reservations whose
+    /// parents (workspace key, deployment, cost center, batch job, price
+    /// version) are missing or belong to another scope, and check that the
+    /// 0034 enforcement is intact; exits nonzero on any finding. A full,
+    /// clean run resolves the built-in `history_orphans` incident; findings
+    /// open it.
+    Verify {
+        /// Only history admitted at or after this RFC 3339 time (default: all).
+        #[arg(long)]
+        since: Option<String>,
     },
 }
 
@@ -373,6 +393,34 @@ async fn run(cli: Cli) -> Result<()> {
                 "{} budget total bucket(s) and {} rate counter(s) differ from the full scan",
                 report.mismatch_count,
                 report.rate_mismatch_count
+            );
+        }
+        Command::History {
+            action: HistoryCommand::Verify { since },
+        } => {
+            store.preflight_enterprise().await?;
+            let since = since
+                .map(|s| {
+                    chrono::DateTime::parse_from_rfc3339(&s)
+                        .map(|t| t.with_timezone(&chrono::Utc))
+                        .context("--since must be an RFC 3339 time")
+                })
+                .transpose()?;
+            let report = open_model_gateway::history::verify_store(&store, since)
+                .await
+                .context("history verification failed")?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            // Alert bookkeeping needs write access (runtime or migrator);
+            // a read-only role still gets the report and the exit status.
+            if let Err(error) =
+                open_model_gateway::history::record_cli_result(&store, &report).await
+            {
+                tracing::warn!(%error, "could not update the history_orphans incident");
+            }
+            anyhow::ensure!(
+                report.consistent(),
+                "{} history finding(s); see the report",
+                report.finding_count
             );
         }
         Command::Partitions { action } => {
@@ -669,6 +717,33 @@ async fn run(cli: Cli) -> Result<()> {
                     minute = minute.wrapping_add(1);
                 }
             });
+            // History parent consistency (0034, hourly, its own task so a
+            // long first window never delays rollups): the `history_verify`
+            // lease holder only.
+            let verify_leases = leases.clone();
+            let verify_store = store.clone();
+            let history_verify = tokio::spawn(async move {
+                let mut tick = tokio::time::interval(std::time::Duration::from_secs(3600));
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                // First run after the lease task has had time to take terms.
+                tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+                loop {
+                    tick.tick().await;
+                    open_model_gateway::leases::run_singleton(
+                        &verify_leases,
+                        open_model_gateway::leases::Lease::HistoryVerify,
+                        "history_verify",
+                        std::time::Duration::from_secs(900),
+                        |fence| {
+                            let store = verify_store.clone();
+                            async move {
+                                open_model_gateway::history::run_job(&store, Some(&fence)).await
+                            }
+                        },
+                    )
+                    .await;
+                }
+            });
             let lifecycle_leases = leases.clone();
             let lifecycle_store = store.clone();
             // The `lifecycle` lease holder only (one replica per minute).
@@ -727,6 +802,8 @@ async fn run(cli: Cli) -> Result<()> {
             lifecycle.abort();
             history.abort();
             let _ = history.await;
+            history_verify.abort();
+            let _ = history_verify.await;
             let _ = maintenance.await;
             let _ = lifecycle.await;
             if let Some(notifications) = notifications {

@@ -14,6 +14,7 @@ pub mod email;
 pub mod filestore;
 pub mod governance;
 pub mod healthcheck;
+pub mod history;
 pub mod http;
 pub mod identity;
 pub mod inference;

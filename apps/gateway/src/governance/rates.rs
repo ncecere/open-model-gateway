@@ -135,7 +135,7 @@ async fn read_state(
         r#"WITH pol AS MATERIALIZED (SELECT row_number() OVER () i,p.* FROM ({policies_sql}) p WHERE $4),
         bud AS MATERIALIZED (SELECT row_number() OVER () i,b.* FROM ({budgets_sql}) b),
         expired AS MATERIALIZED (SELECT k.governance_key_id lineage,c.inflight,c.jobs
-          FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id
+          FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id AND e.started_at=r.admitted_at
           JOIN api_keys k ON k.id=r.api_key_id LEFT JOIN async_jobs j ON j.execution_id=r.execution_id
           CROSS JOIN LATERAL rate_contribution(r,e.workload_kind,e.batch_job_id,j.id IS NOT NULL,j.state,j.cancel_requested_at,1) c
           WHERE r.state='pending' AND r.lease_expires_at<=$3 AND r.workspace_id=$1)

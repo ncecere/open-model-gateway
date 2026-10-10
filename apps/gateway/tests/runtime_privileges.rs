@@ -82,6 +82,7 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
     file_store_runs_as_runtime(&pool).await;
     files_api_runs_as_runtime(&pool).await;
     history_partitions_run_as_runtime(&pool).await;
+    history_verify_runs_as_runtime(&pool).await;
     // Last: its unknown batch hold would change the installation-wide totals above.
     async_jobs_run_as_runtime(&pool).await;
     sqlx::query("SELECT pg_advisory_unlock(72419505)")
@@ -776,6 +777,33 @@ async fn history_partitions_run_as_runtime(pool: &PgPool) {
         .await
         .unwrap();
     assert!(report.consistent(), "{report:#?}");
+    l.release_all(&runtime).await;
+    runtime.close().await;
+}
+
+/// History parent checks (0034): the leased `history_verify` job (full and
+/// windowed scans, the fenced history_orphans incident and its completion
+/// mark) and `history verify` need nothing beyond the reviewed grants.
+async fn history_verify_runs_as_runtime(pool: &PgPool) {
+    use open_model_gateway::{history, leases};
+    let runtime = runtime_pool(pool).await;
+    let store = open_model_gateway::store::Store::new(runtime.clone());
+    let full = history::verify(&runtime, None).await.unwrap();
+    assert!(full.consistent(), "{full:#?}");
+    assert!(full.executions_checked >= 1, "{full:#?}");
+    history::record_cli_result(&store, &full).await.unwrap();
+    let l = leases::Leases::new();
+    l.renew_once(&runtime).await;
+    let fence = l.held(leases::Lease::HistoryVerify).unwrap();
+    let job = history::run_job(&store, Some(&fence)).await.unwrap();
+    assert!(job.consistent() && job.since.is_some(), "{job:#?}");
+    let completed: bool = sqlx::query_scalar(
+        "SELECT last_completed_at IS NOT NULL FROM work_leases WHERE name='history_verify'",
+    )
+    .fetch_one(&runtime)
+    .await
+    .unwrap();
+    assert!(completed);
     l.release_all(&runtime).await;
     runtime.close().await;
 }

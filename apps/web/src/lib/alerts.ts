@@ -26,7 +26,7 @@ export type AlertRule = {
 export type RuleList = { data: AlertRule[]; /** Personal workspaces: the built-in budget alert (nothing configurable). */ builtin?: { thresholds: number[]; budget_layers: BudgetLayer[] } | null; writable?: boolean };
 export type EmailOutcome = { status: "pending" | "sent" | "partial" | "failed" | "not_configured" | "no_recipients"; recipients: number; sent: number; failed: number; error: string | null };
 /** Incident kinds: rule kinds plus the built-in installation incidents (no rule): the SCIM last-admin safeguard and missing history partitions. */
-export type AlertEventKind = AlertKind | "scim_last_admin" | "partitions_missing";
+export type AlertEventKind = AlertKind | "scim_last_admin" | "partitions_missing" | "history_orphans";
 export type AlertEvent = {
   id: string; rule: { id: string; name: string; scope: "installation" | "workspace"; deleted: boolean } | null; builtin: boolean; kind: AlertEventKind;
   state: "firing" | "resolved"; severity: "warning" | "critical"; level: number; summary: string; details: Record<string, unknown>;
@@ -189,7 +189,7 @@ export function whereText(e: Pick<AlertEvent, "workspace" | "connection" | "buil
   return "Installation";
 }
 /** Secondary label of an incident: its rule, or which built-in alert fired it. */
-export const sourceText = (e: Pick<AlertEvent, "rule" | "kind">) => e.rule?.name ?? (e.kind === "scim_last_admin" ? "Built-in SCIM safeguard" : e.kind === "partitions_missing" ? "Built-in partition check" : "Built-in budget alert");
+export const sourceText = (e: Pick<AlertEvent, "rule" | "kind">) => e.rule?.name ?? (e.kind === "scim_last_admin" ? "Built-in SCIM safeguard" : e.kind === "partitions_missing" ? "Built-in partition check" : e.kind === "history_orphans" ? "Built-in history check" : "Built-in budget alert");
 export const resolutionLabels: Record<NonNullable<AlertEvent["resolution"]>, string> = { cleared: "Cleared", superseded: "Replaced by a higher level", rule_disabled: "Rule turned off" };
 export const emailLabels: Record<EmailOutcome["status"], string> = { pending: "Sending", sent: "Sent", partial: "Partly sent", failed: "Failed", not_configured: "Email not set up", no_recipients: "No recipients" };
 /** Unknown cost is shown as a caveat, never folded into the spend. */

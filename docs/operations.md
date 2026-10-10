@@ -264,6 +264,8 @@ Reports (`cost-report`, `cost-summary`, `costs`, `usage-export`), usage (`usage/
 
 `0030_partition_history.sql` and `0031_partition_audit.sql` (scale plan P6) partition request history by UTC month without rewriting it (except the ledger, below); `0032_usage_rollups.sql` adds hourly usage rollups and `0033_partition_archive.sql` operator archival. Drain traffic (step 3) like every migration. For large installations, run `open-model-gateway partitions prepare` with the migrator **before** the drain: it builds the new keys with `CREATE INDEX CONCURRENTLY` while the old release keeps serving, so the drained window only validates and swaps. After step 4 run `open-model-gateway budget verify`, `open-model-gateway partitions status` and `open-model-gateway rollups run --once` (catch-up of existing history; `serve` continues it every minute). Details and measurements: [History partitions](#history-partitions-rollups-and-archival-p6).
 
+`0034_history_parent_checks.sql` (decision gate D3) replaces the foreign keys from executions and reservations to workspaces, keys, deployments, price versions, cost centers and batch jobs with insert-time checks that do not lock the parent, and makes those parents impossible to delete, truncate or re-key (triggers, for every role). It changes no history row and takes only brief metadata locks (35 ms on 2 M and 43 ms on 10 M seeded attempts). Drain traffic (step 3) like every migration, reapply `runtime-grants.sql` (no new privilege), then run `open-model-gateway history verify` once (it should report `finding_count: 0`). Operator scripts that deleted an unreferenced workspace, key, deployment or cost center now fail: disable, revoke or archive instead. Details: [MultiXacts and history parent checks](#multixacts-and-history-parent-checks).
+
 ## History partitions, rollups and archival (P6)
 
 **Partitions.** `inference_executions` (by `started_at`), `governance_reservations` and `monetary_ledger` (by `admitted_at`), `audit_events` (by `created_at`) and `storage_usage_hours` (by `hour_start`) are range-partitioned by UTC month. Rows from before the upgrade stay in each table's `<table>_p_legacy` partition (everything before the month after the newest row at upgrade time); later months get `<table>_pYYYY_MM`. Partitions are reached only through their parents: the runtime has no privilege on a partition, every partition has a TRUNCATE guard, row triggers (immutability, totals, counters, rollup markers) are defined on the parents, and an UPDATE that would move a row to another month is refused. `history_partitions` lists the partitioned tables; readiness accepts their partitions (`pg_class.relispartition`) and still rejects every other unknown relation.
@@ -298,6 +300,41 @@ open-model-gateway archive verify /secure/archive/history-2024-01-<id>       # c
 - **Refusals (nothing changes):** the month (or `legacy`) ends within `GATEWAY_HISTORY_RETENTION_MONTHS` (default 25) of the current month; for `history`, any reservation of the month is pending or unknown (holds must settle first), any execution of it is running or has no reservation (unknown cost), or any hour with history lacks a clean usage rollup; the month is already archived. The runtime role cannot archive: detaching and dropping need table ownership.
 - **What it does, in one transaction:** `SHARE` locks the month's partitions (only writes to that month wait), exports each with `COPY` as CSV into `<dir>/<group>-<month>-<id>/` with a SHA-256 per file, writes `manifest.json` (format `omg-archive-v1`, the migration lineage, exact sums of reservations and ledger) and `manifest.json.sha256`, records `archived_partitions` and, for history, each archived day's exact budget contribution per workspace and key (`archived_budget_contributions`, so `budget verify` still reconciles lifetime and monthly totals), then takes the parents' locks in admission order (bounded by `lock_timeout`) and detaches the partitions into schema `omg_archive` (outside `public`; no runtime access), or drops them with `--drop`. On failure it rolls back and removes the export directory.
 - **After archival:** usage of the month is still answered from its rollups; totals are unchanged; prices, the remaining ledger and audit history are untouched; `async_jobs` and `realtime_responses` keep referencing the archived ids (their insert-time existence checks replaced foreign keys). Keep exports encrypted and retained per your compliance policy; detached tables in `omg_archive` are included in `pg_dump` backups until dropped.
+
+## MultiXacts and history parent checks
+
+When several transactions hold a shared row lock on the same row at once, PostgreSQL records the set of lockers as a **MultiXact**: an id from a 32-bit counter plus one *member* entry per locker in a separate 32-bit member space (`pg_multixact/members`). Like transaction ids, both wrap around: autovacuum must freeze old MultiXacts (`autovacuum_multixact_freeze_max_age`, default 400 M ids) and keeps member usage below about 2^31 by forcing aggressive anti-wraparound vacuums as members are consumed. A workload that creates members quickly therefore causes frequent whole-table freezing vacuums and pressure on the MultiXact SLRU caches; in the worst case PostgreSQL stops assigning new MultiXacts (and writes fail) until vacuum catches up.
+
+**Where they came from.** A foreign-key check on `INSERT` locks the referenced row `FOR KEY SHARE`. Before `0034` every admission inserted an execution referencing its workspace, key, deployment and cost center, and a reservation referencing its price version, so concurrent admissions shared locks on the same few rows (the busiest deployment and price version above all). P6 measured a median 1.3 and up to 5.4 MultiXact members per successful request, 2.6–10.9 % of the 2^32 member space per day at 1,000 requests/s (gate D3: about 1 %). `0034` removes those keys (see [governance](governance.md#history-parent-checks)); scoped admission takes no shared row locks of its own, so the request path creates no MultiXacts. `GATEWAY_ADMISSION_MODE=global` (the rollback protocol) still reads keys, workspaces and catalog rows `FOR SHARE` and does create them.
+
+**Monitoring.** Track these with the PostgreSQL exporter or a periodic query; alert well before the defaults force aggressive vacuums:
+
+```sql
+-- Age of the oldest MultiXact still referenced, per database (alert above ~200 M;
+-- autovacuum forces freezing at autovacuum_multixact_freeze_max_age, 400 M).
+SELECT datname, mxid_age(datminmxid) FROM pg_database ORDER BY 2 DESC;
+-- Per table: which relations hold old MultiXacts (vacuum these first).
+SELECT c.oid::regclass, mxid_age(c.relminmxid) FROM pg_class c WHERE c.relkind IN ('r','m','t') ORDER BY 2 DESC LIMIT 10;
+-- Creation rate: next MultiXact id and member offset at the last checkpoint
+-- (superuser or pg_read_all_stats). Sample twice; the member delta per
+-- second x 86,400 / 2^32 is the share of the member space used per day.
+SELECT next_multixact_id, next_multi_offset, checkpoint_time FROM pg_control_checkpoint();
+-- SLRU pressure: reads and misses of the MultiXact caches (PostgreSQL 17 names
+-- them 'multixact_offset' and 'multixact_member'); rising blks_read means the
+-- caches are too small (multixact_member_buffers / multixact_offset_buffers).
+SELECT name, blks_hit, blks_read, blks_written FROM pg_stat_slru WHERE name LIKE 'multixact%';
+```
+
+With `0034` in scoped mode, expect members per request near zero on the request path (measured below); remaining sources are management transactions (catalog and price edits, which serialize) and operator SQL. If members per day exceed about 1 % of 2^32, find the hot rows with `pgrowlocks` on the suspected tables during load, and check that the `0034` triggers are present (`history verify` reports `enforcement_missing:*` otherwise).
+
+**`history verify`.** Executions and reservations are checked at insert by trigger; the verifier re-checks stored history:
+
+```sh
+open-model-gateway history verify                    # all history, one REPEATABLE READ snapshot
+open-model-gateway history verify --since 2026-10-01T00:00:00Z
+```
+
+It prints JSON (`executions_checked`, `reservations_checked`, `finding_count`, `findings` with up to five example ids per check) and exits nonzero on any finding. Checks: `execution_key_not_in_workspace`, `execution_workspace_missing`, `execution_deployment_missing`, `execution_cost_center_missing`, `execution_batch_job_not_in_workspace`, `reservation_price_not_of_deployment`, and `enforcement_missing:<trigger or key>` (a disabled or missing check/guard trigger, or a missing or unvalidated reservation → execution / ledger → reservation key). It reads every partition (about 4 s for 2 M and 30 s for 10 M attempts on the load-test laptop), so run full scans off-peak. `serve` runs it under the `history_verify` work lease every hour over the history admitted since the previous run (minus one hour of overlap; the last 25 hours on first start) and exports `gateway_history_verify_findings`. Any finding opens the built-in critical installation incident **Request history references missing or mismatched parents** (`history_orphans`; Platform Admins get email). A finding means an owner-level session wrote around the triggers (for example with `session_replication_role=replica` or a disabled trigger) or removed a parent: do not delete history; restore the parent or the triggers from a backup and investigate. Only a full `history verify` with no finding resolves the incident.
 
 ## Load test baseline
 
@@ -351,7 +388,7 @@ The in-process harness above runs one gateway inside the test binary. The multi-
 | `tools/loadgen run` | Open-loop generator: request *i* is sent at `start + i/rate` whatever earlier requests are doing, so overload shows up as latency and errors instead of a silently lower rate. It round-robins over several gateway URLs, spreads requests over many seeded keys (and therefore workspaces), mixes streamed and complete requests, and measures latency from the scheduled time. Each prompt carries a nonce; the gateway's `x-request-id` (its `root_request_id`) is recorded per request. |
 | `tools/loadgen seed` | Generates users, personal and shared workspaces, service accounts, keys, the mock catalog, policies and optional settled history server-side with set-based SQL (`tools/loadgen/seed.sql`). Keys are derived from a seed string by both the seeder and the generator, so no token is printed or stored. It refuses any database not named `omg_loadtest*` (in the client and in SQL), and must connect as the schema owner. |
 | `deploy/loadtest/compose.yaml` | Compose project `omg-loadtest`: PostgreSQL 17 (tuned, `pg_stat_statements`), PgBouncer 1.25 in transaction mode, three gateway replicas with metrics listeners, the mock upstream at a pinned private address (`GATEWAY_LOCAL_UPSTREAMS`), and the generator. Images come from `mirror.gcr.io`, `ghcr.io` and the local `deploy/loadtest/Dockerfile` build; nothing from Docker Hub. The gateways use the restricted runtime role and `deploy/staging/runtime-grants.sql`. |
-| `scripts/loadtest.py` | Runner: `up`, `reset-db`, `seed`, `gateways --replicas N --via pgbouncer\|direct`, `run`, `report`, `baseline`, `down`. Passwords are generated into `.local/loadtest/stack.env`; results are JSON files in `.local/loadtest/results/`. |
+| `scripts/loadtest.py` | Runner: `up`, `reset-db`, `migrate` (upgrade an existing seeded database with the image's migrations), `seed`, `gateways --replicas N --via pgbouncer\|direct`, `run`, `report`, `baseline`, `down`. Passwords are generated into `.local/loadtest/stack.env`; results are JSON files in `.local/loadtest/results/`. |
 
 After every run, `loadgen` checks, per request id:
 
@@ -359,7 +396,7 @@ After every run, `loadgen` checks, per request id:
 - every successful request has exactly one execution, one settled reservation, one hold and one settlement ledger entry, with the mock's exact usage, the exact cost (20 µUSD each at the seeded price) and ledger sums equal to the reservation sums;
 - denied requests have no execution, nothing admitted during the run is still pending, and no execution lacks a reservation.
 
-The runner then runs `open-model-gateway budget verify`, saves the top statements from `pg_stat_statements` and PgBouncer's `SHOW STATS`, and fails the run on any violation. The JSON report also contains client latency (all, streamed, complete), time to first byte, gateway overhead (client service time minus the mock's own service time for the same nonce), per-replica counts, and the `gateway_admission_seconds` / `gateway_settlement_seconds` deltas summed over all replicas.
+The runner then runs `open-model-gateway budget verify` and `history verify` (on images that have it), saves the top statements from `pg_stat_statements` and PgBouncer's `SHOW STATS`, and fails the run on any violation. The JSON report also contains client latency (all, streamed, complete), time to first byte, gateway overhead (client service time minus the mock's own service time for the same nonce), per-replica counts, and the `gateway_admission_seconds` / `gateway_settlement_seconds` deltas summed over all replicas.
 
 ```sh
 python3 scripts/loadtest.py up
@@ -608,7 +645,26 @@ Same stack and matrix as P4/P5 (project `omg-loadtest-p6`; pool 10 per replica; 
 
 - **History size no longer matters for admission:** 10 M attempts (21 GB) serve like 2 M. `budget verify` took 24 s on 2 M and 84–92 s on 10 M; the rollup catch-up of 10 M attempts (2,881 hours) took 928 s.
 - **Saturation cost:** at 1,500/s offered one replica lost 9–13 % and three replicas on an empty database 13 %; one hot workspace or key fell from about 202–250/s to 160–206/s. The admission and settlement statements on the partitioned tables take 5–15 % longer (foreign-key checks against partitioned parents, per-partition index probes for lookups by id), which matters most where requests serialize on one scope's totals rows.
-- **Decision gate D3 failed.** Foreign keys from history to hot parent rows (workspace, key, deployment, price, cost center) create MultiXacts under concurrency: a median 1.3 and up to 5.4 MultiXact members per successful request (2.6–10.9 % of the 2^32 member space per day at 1,000 requests/s; the gate is 1 %). With those keys dropped in an experiment on the 10 M database, three replicas at 1,000/s created none (42,712 MultiXacts and 155,005 members with them). Replacing them with checks under the catalog lock is the follow-up; until then raise `multixact_member_buffers` and watch `mxid_age(datminmxid)`.
+- **Decision gate D3 failed.** Foreign keys from history to hot parent rows (workspace, key, deployment, price, cost center) create MultiXacts under concurrency: a median 1.3 and up to 5.4 MultiXact members per successful request (2.6–10.9 % of the 2^32 member space per day at 1,000 requests/s; the gate is 1 %). With those keys dropped in an experiment on the 10 M database, three replicas at 1,000/s created none (42,712 MultiXacts and 155,005 members with them). Fixed by `0034` ([P6b](#history-parent-checks-p6b)).
+
+### History parent checks (P6b)
+
+Same stack, cells and settings as P6 (project `omg-loadtest-p6b`; 45 s runs; ok/s · client p99 ms), with `0034` (history parent checks without row locks, partition-pruned settlement in one statement). A same-session control on the P6 image reproduced the regressions first. Every run passed the ledger invariants, `budget verify` and `history verify`; no deadlocks. The 2 M database was vacuumed before its cells (its 2.6 M-row legacy partition otherwise carried up to 435 k dead tuples, which made the expired-lease read 3× slower and one replica 4–7 % slower in an unvacuumed pass).
+
+| Cell | P4/P5 | P6 | P6 control | P6b |
+|---|---|---|---|---|
+| empty, 1 replica, 1500/s | 1,074.9 · 139 | 974.5 · 153 | 989.4 · 152 | 1,059.6 · 138 |
+| empty, 3 replicas, 1500/s | 1,339.6 · 331 | 1,162.1 · 392 | 1,247.6 · 347 | 1,342.8 · 329 |
+| 2 M, 1 replica, 1000 / 1500/s | 998.3 · 111 / 1,026.9 · 152 | 945.8 · 158 / 890.7 · 185 | 981.0 · 148 / 967.5 · 153 | 996.3 · 135 / 1,035.4 · 153 |
+| 2 M, 3 replicas, 1500/s | 1,105.1 · 849 | 1,187.2 · 390 | 1,198.1 · 370 | 1,270.1 · 344 |
+| hot workspace, 1 replica, 250 / 500/s | 249.7 · 334 / 202.3 · 734 | 165.1 · 858 / 161.4 · 874 | 178.2 · 822 / 169.8 · 828 | 249.7 · 369 / 255.3 · 588 |
+| hot workspace, 3 replicas, 250 / 500/s | 248.7 · 1,277 / 221.1 · 2,128 | 172.6 · 2,495 / 160.6 · 2,579 | 162.7 · 2,483 / 160.3 · 2,900 | 243.0 · 1,757 / 242.8 · 1,824 |
+| hot key, 3 replicas, 250/s | 246.8 · 1,325 | 206.7 · 2,406 | 219.6 · 1,918 | 242.0 · 1,888 |
+
+- **D3 passes.** MultiXacts created in every P6b run: **0** (0 members per request; P6 control in the same session: median 1.65, up to 5.2 members per request, up to 10.5 % of the member space per day at 1,000/s). On the 10 M database with three replicas at 1,000/s: 998.5/s with 0 MultiXacts (control: 998.4/s with 39,330 MultiXacts and 119,836 members, 5.4 %/day).
+- **Hot scopes recovered and exceed P4/P5 at overload** (one replica 255/s at 500 offered, was 202/s): the 0034 change removes a lock per parent per insert, and settlement now holds the scope's totals rows for one statement instead of three, each touching only the admission month's partition. At 250/s offered three replicas reach 242–243/s (P4/P5 247–249, within this laptop's run-to-run spread of about ±5 %).
+- **Saturation is back at P4/P5 levels** (−1 % to +15 % per cell).
+- **Upgrade cost:** `0034` took 35 ms on the 2 M and 43 ms on the 10 M database (metadata only). `history verify` (full) took about 4 s on 2 M and 27–37 s on 10 M attempts; the hourly job reads one window.
 
 ## PostgreSQL settings for hot rows and group commit
 

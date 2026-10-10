@@ -173,6 +173,7 @@ pub struct Metrics {
     lease_terms: Family<L1, Counter>,
     background_runs: Family<L2, Counter>,
     partition_months: Family<L1, Gauge>,
+    history_findings: Gauge,
     rollup_hours: Family<L1, Counter>,
     providers: Mutex<HashSet<String>>,
     models: Mutex<HashSet<String>>,
@@ -288,6 +289,7 @@ impl Metrics {
             lease_terms: Family::default(),
             background_runs: Family::default(),
             partition_months: Family::default(),
+            history_findings: Gauge::default(),
             rollup_hours: Family::default(),
             providers: Mutex::default(),
             models: Mutex::default(),
@@ -477,6 +479,11 @@ impl Metrics {
             metrics.partition_months.clone(),
         );
         registry.register(
+            "history_verify_findings",
+            "Orphaned or scope-mismatched history references found by the history_verify job's last run on this replica (0034; alert on any)",
+            metrics.history_findings.clone(),
+        );
+        registry.register(
             "usage_rollup_hours",
             "Hours the rollups job (re)computed on this replica, by reason (new, changed)",
             metrics.rollup_hours.clone(),
@@ -491,6 +498,10 @@ impl Metrics {
         self.partition_months
             .get_or_create(&[("table", table.to_owned())])
             .set(months);
+    }
+
+    pub(crate) fn set_history_findings(&self, findings: i64) {
+        self.history_findings.set(findings);
     }
 
     pub(crate) fn observe_rollup_hours(&self, reason: &'static str, n: u64) {

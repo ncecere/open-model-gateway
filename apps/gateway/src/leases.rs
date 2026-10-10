@@ -50,10 +50,12 @@ pub enum Lease {
     Partitions,
     /// Hourly usage rollups (0032, every minute).
     Rollups,
+    /// History parent consistency check and the history_orphans alert (0034, hourly).
+    HistoryVerify,
 }
 
 impl Lease {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Alerts,
         Self::Compaction,
         Self::FileSweep,
@@ -62,6 +64,7 @@ impl Lease {
         Self::Metrics,
         Self::Partitions,
         Self::Rollups,
+        Self::HistoryVerify,
     ];
     pub fn as_str(self) -> &'static str {
         match self {
@@ -73,6 +76,7 @@ impl Lease {
             Self::Metrics => "metrics",
             Self::Partitions => "partitions",
             Self::Rollups => "rollups",
+            Self::HistoryVerify => "history_verify",
         }
     }
     fn index(self) -> usize {
@@ -140,7 +144,7 @@ pub struct Leases {
     holder: Uuid,
     ttl: Duration,
     margin: Duration,
-    terms: [Mutex<Option<Term>>; 8],
+    terms: [Mutex<Option<Term>>; 9],
 }
 
 impl Default for Leases {

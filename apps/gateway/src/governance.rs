@@ -1284,9 +1284,11 @@ async fn pinned_value(
         || output_bound.is_some_and(|limit| usage.output_tokens.is_some_and(|n| n > limit as u64));
     Ok(value)
 }
+#[allow(clippy::too_many_arguments)]
 async fn ledger(
     tx: &mut Tx<'_>,
     id: Uuid,
+    admitted_at: Option<DateTime<Utc>>,
     kind: &str,
     amount: Option<i64>,
     usage: Usage,
@@ -1296,8 +1298,13 @@ async fn ledger(
     let (input, output) = usage_values(usage)?;
     let m = meter_evidence(usage)?;
     // admitted_at (0030): the ledger is partitioned with its reservation.
-    let written = sqlx::query("INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd,input_tokens,output_tokens,billing_usage,cost_components,evidence,meter_usage,output_image_variant,provider_cost_microusd,admitted_at) SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,r.admitted_at FROM governance_reservations r WHERE r.execution_id=$2")
-        .bind(Uuid::now_v7()).bind(id).bind(kind).bind(amount).bind(input).bind(output).bind(billing_json(usage)?).bind(components.map(|c|c.to_value())).bind(evidence).bind(m.meters).bind(m.variant).bind(m.provider_cost).execute(&mut **tx).await.map_err(storage)?.rows_affected();
+    // A known admission time prunes the reservation lookup to its month.
+    let written = sqlx::query(if admitted_at.is_some() {
+        "INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd,input_tokens,output_tokens,billing_usage,cost_components,evidence,meter_usage,output_image_variant,provider_cost_microusd,admitted_at) SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,r.admitted_at FROM governance_reservations r WHERE r.execution_id=$2 AND r.admitted_at=$13"
+    } else {
+        "INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd,input_tokens,output_tokens,billing_usage,cost_components,evidence,meter_usage,output_image_variant,provider_cost_microusd,admitted_at) SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,r.admitted_at FROM governance_reservations r WHERE r.execution_id=$2 AND $13::timestamptz IS NULL"
+    })
+        .bind(Uuid::now_v7()).bind(id).bind(kind).bind(amount).bind(input).bind(output).bind(billing_json(usage)?).bind(components.map(|c|c.to_value())).bind(evidence).bind(m.meters).bind(m.variant).bind(m.provider_cost).bind(admitted_at).execute(&mut **tx).await.map_err(storage)?.rows_affected();
     if written != 1 {
         return Err(InferenceError::Storage);
     }
@@ -1511,28 +1518,24 @@ async fn finish_unobserved(
     // triggers then take the counter rows in canonical order).
     lock_rows(store, &mut tx, &[r.touch()], false).await?;
     timer.phase("lock_rows");
-    let changed=sqlx::query("UPDATE inference_executions SET state=$2,error_code=$3,input_tokens=$4,output_tokens=$5,billing_usage=$6,elapsed_ms=$7,completed_at=clock_timestamp(),meter_usage=$8,output_image_variant=$9,provider_cost_microusd=$10,finish_reason=$11,time_to_first_token_ms=$12,generation_ms=$13,reasoning_tokens=$14,reported_upstream_model=$15 WHERE id=$1 AND state='started'")
+    // One statement (one round trip while the totals rows are held): the
+    // execution's outcome, the reservation's settlement and the ledger
+    // entry. Each names the partition key (started_at = admitted_at,
+    // enforced by the reservation -> execution key), so it touches one month
+    // partition. The reservation and ledger writes run only when the
+    // execution was still running; anything else fails and rolls back.
+    let (executions, reservations, entries): (i64, i64, i64) = sqlx::query_as("WITH e AS (UPDATE inference_executions SET state=$2,error_code=$3,input_tokens=$4,output_tokens=$5,billing_usage=$6,elapsed_ms=$7,completed_at=clock_timestamp(),meter_usage=$8,output_image_variant=$9,provider_cost_microusd=$10,finish_reason=$11,time_to_first_token_ms=$12,generation_ms=$13,reasoning_tokens=$14,reported_upstream_model=$15 WHERE id=$1 AND started_at=$16 AND state='started' RETURNING 1),
+      r AS (UPDATE governance_reservations SET state=$17,actual_microusd=$18,input_tokens=$4,output_tokens=$5,billing_usage=$6,cost_components=$19,held_microusd=CASE WHEN $20::bigint IS NULL THEN held_microusd ELSE greatest(held_microusd,$20) END,unbounded_cost=unbounded_cost OR $21,meter_usage=$8,output_image_variant=$9,provider_cost_microusd=$10 WHERE execution_id=$1 AND admitted_at=$16 AND EXISTS(SELECT 1 FROM e) RETURNING 1),
+      l AS (INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd,input_tokens,output_tokens,billing_usage,cost_components,evidence,meter_usage,output_image_variant,provider_cost_microusd,admitted_at) SELECT $22,$1,$23,$24,$4,$5,$6,$19,NULL,$8,$9,$10,$16 WHERE EXISTS(SELECT 1 FROM r) RETURNING 1)
+      SELECT (SELECT count(*) FROM e),(SELECT count(*) FROM r),(SELECT count(*) FROM l)")
         .bind(record.id).bind(record.outcome.as_str()).bind(record.error.map(|e|e.code())).bind(input).bind(output).bind(&billing).bind(record.elapsed_ms.min(i64::MAX as u64)as i64).bind(&m.meters).bind(&m.variant).bind(m.provider_cost)
-        .bind(telemetry.finish_reason.map(|f|f.as_str())).bind(ms(telemetry.time_to_first_token_ms)).bind(ms(telemetry.generation_ms)).bind(reasoning).bind(&reported_model).execute(&mut *tx).await.map_err(storage)?.rows_affected();
-    if changed != 1 {
+        .bind(telemetry.finish_reason.map(|f|f.as_str())).bind(ms(telemetry.time_to_first_token_ms)).bind(ms(telemetry.generation_ms)).bind(reasoning).bind(&reported_model).bind(r.admitted_at)
+        .bind(if actual.is_some(){"settled"}else{"unknown"}).bind(actual).bind(components.map(|c|c.to_value())).bind(value.floor.filter(|_|actual.is_none())).bind(value.violated)
+        .bind(Uuid::now_v7()).bind(if actual.is_some(){"settlement"}else{"unknown"}).bind(actual.or(value.floor))
+        .fetch_one(&mut *tx).await.map_err(storage)?;
+    if (executions, reservations, entries) != (1, 1, 1) {
         return Err(InferenceError::Storage);
     }
-    sqlx::query("UPDATE governance_reservations SET state=$2,actual_microusd=$3,input_tokens=$4,output_tokens=$5,billing_usage=$6,cost_components=$7,held_microusd=CASE WHEN $8::bigint IS NULL THEN held_microusd ELSE greatest(held_microusd,$8) END,unbounded_cost=unbounded_cost OR $9,meter_usage=$10,output_image_variant=$11,provider_cost_microusd=$12 WHERE execution_id=$1")
-        .bind(record.id).bind(if actual.is_some(){"settled"}else{"unknown"}).bind(actual).bind(input).bind(output).bind(billing).bind(components.map(|c|c.to_value())).bind(value.floor.filter(|_|actual.is_none())).bind(value.violated).bind(m.meters).bind(m.variant).bind(m.provider_cost).execute(&mut *tx).await.map_err(storage)?;
-    ledger(
-        &mut tx,
-        record.id,
-        if actual.is_some() {
-            "settlement"
-        } else {
-            "unknown"
-        },
-        actual.or(value.floor),
-        usage,
-        components,
-        None,
-    )
-    .await?;
     timer.phase("write");
     tx.commit().await.map_err(storage)?;
     timer.phase("commit");
@@ -1728,11 +1731,12 @@ async fn resolve_usage_once(
     let value = pinned_value(&mut tx, &r, usage).await?;
     let actual = value.actual.ok_or(InferenceError::Configuration)?;
     lock_rows(store, &mut tx, &[r.touch()], false).await?;
-    sqlx::query("UPDATE governance_reservations SET state='settled',actual_microusd=$2,input_tokens=$3,output_tokens=$4,billing_usage=$5,cost_components=$6,meter_usage=$7,output_image_variant=$8,provider_cost_microusd=$9 WHERE execution_id=$1").bind(execution).bind(actual).bind(input).bind(output).bind(&billing).bind(value.components.map(|c|c.to_value())).bind(&m.meters).bind(&m.variant).bind(m.provider_cost).execute(&mut *tx).await.map_err(storage)?;
-    sqlx::query("UPDATE inference_executions SET input_tokens=$2,output_tokens=$3,billing_usage=$4,meter_usage=$5,output_image_variant=$6,provider_cost_microusd=$7 WHERE id=$1").bind(execution).bind(input).bind(output).bind(billing).bind(m.meters).bind(m.variant).bind(m.provider_cost).execute(&mut *tx).await.map_err(storage)?;
+    sqlx::query("UPDATE governance_reservations SET state='settled',actual_microusd=$2,input_tokens=$3,output_tokens=$4,billing_usage=$5,cost_components=$6,meter_usage=$7,output_image_variant=$8,provider_cost_microusd=$9 WHERE execution_id=$1 AND admitted_at=$10").bind(execution).bind(actual).bind(input).bind(output).bind(&billing).bind(value.components.map(|c|c.to_value())).bind(&m.meters).bind(&m.variant).bind(m.provider_cost).bind(r.admitted_at).execute(&mut *tx).await.map_err(storage)?;
+    sqlx::query("UPDATE inference_executions SET input_tokens=$2,output_tokens=$3,billing_usage=$4,meter_usage=$5,output_image_variant=$6,provider_cost_microusd=$7 WHERE id=$1 AND started_at=$8").bind(execution).bind(input).bind(output).bind(billing).bind(m.meters).bind(m.variant).bind(m.provider_cost).bind(r.admitted_at).execute(&mut *tx).await.map_err(storage)?;
     ledger(
         &mut tx,
         execution,
+        Some(r.admitted_at),
         "reconciliation",
         Some(actual),
         usage,

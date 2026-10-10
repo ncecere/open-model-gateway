@@ -58,7 +58,7 @@ DO $$ DECLARE r record; t text; BEGIN
   IF has_column_privilege('gateway_runtime','public.async_job_files',t,'UPDATE') THEN RAISE EXCEPTION 'mutable async job file: %',t; END IF;
  END LOOP;
  IF has_column_privilege('gateway_runtime','public.governance_reservations','request_count','UPDATE') OR has_column_privilege('gateway_runtime','public.governance_reservations','admitted_at','UPDATE') THEN RAISE EXCEPTION 'mutable reservation admission snapshot'; END IF;
- IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'async_job%' AND tgenabled='O' AND NOT tgisinternal)<>5 THEN RAISE EXCEPTION 'async job guards missing or disabled'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'async_job%' AND tgenabled='O' AND NOT tgisinternal)<>6 THEN RAISE EXCEPTION 'async job guards missing or disabled'; END IF;
  IF has_table_privilege('gateway_runtime','public.installation_settings','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.installation_settings','singleton','UPDATE') THEN RAISE EXCEPTION 'installation settings row replaceable'; END IF;
  -- Installation logo (0023): a reviewed column set, guarded by a trigger.
  IF NOT has_column_privilege('gateway_runtime','public.installation_settings','branding_logo_file_id','UPDATE') THEN RAISE EXCEPTION 'installation logo not maintainable by runtime'; END IF;
@@ -159,6 +159,19 @@ DO $$ DECLARE r record; t text; BEGIN
   IF has_table_privilege('gateway_runtime','public.'||t,'INSERT,UPDATE,DELETE,TRUNCATE') OR NOT has_table_privilege('gateway_runtime','public.'||t,'SELECT') THEN RAISE EXCEPTION 'archive records writable or unreadable: %',t; END IF;
  END LOOP;
  IF has_schema_privilege('gateway_runtime','omg_archive','USAGE') OR has_schema_privilege('gateway_runtime','omg_archive','CREATE') THEN RAISE EXCEPTION 'runtime reaches the archive schema'; END IF;
+ -- History parent checks (0034): parents of history are never removed or
+ -- re-keyed (no privilege, and triggers for every role); history inserts
+ -- check their scoped parents without locking them.
+ FOREACH t IN ARRAY ARRAY['workspaces','api_keys','deployments','deployment_prices','cost_centers','async_jobs'] LOOP
+  IF has_table_privilege('gateway_runtime','public.'||t,'DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.'||t,'id','UPDATE') THEN RAISE EXCEPTION 'history parent removable or re-keyable: %',t; END IF;
+ END LOOP;
+ IF has_column_privilege('gateway_runtime','public.api_keys','workspace_id','UPDATE') THEN RAISE EXCEPTION 'key scope rewritable'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE '%\_history\_parent%' AND tgenabled='O' AND NOT tgisinternal)<>9
+  OR (SELECT count(*) FROM pg_trigger WHERE tgname IN ('inference_executions_parent_check','governance_reservations_parent_check') AND tgenabled='O' AND tgparentid=0)<>2
+  OR EXISTS(SELECT FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid WHERE c.relispartition AND t.tgname LIKE '%\_parent\_check' AND t.tgenabled<>'O') THEN RAISE EXCEPTION 'history parent checks missing or disabled'; END IF;
+ IF EXISTS(SELECT FROM pg_constraint WHERE contype='f' AND conparentid=0 AND conrelid IN ('public.inference_executions'::regclass,'public.governance_reservations'::regclass)
+   AND confrelid NOT IN ('public.inference_executions'::regclass)) THEN RAISE EXCEPTION 'hot history foreign keys present (MultiXacts)'; END IF;
+ IF NOT EXISTS(SELECT FROM work_leases WHERE name='history_verify') THEN RAISE EXCEPTION 'history_verify lease missing'; END IF;
 END $$;
 BEGIN;
 SET LOCAL ROLE gateway_runtime;
@@ -324,6 +337,19 @@ BEGIN
  UPDATE inference_executions SET reported_upstream_model='openai/gpt-probe-2026-01-01' WHERE root_request_id=e;
  PERFORM count(*) FROM inference_executions WHERE root_request_id=e AND coalesce(reported_upstream_model,upstream_model) IS NOT NULL;
  BEGIN UPDATE inference_executions SET reported_upstream_model='has space' WHERE id=e; RAISE EXCEPTION 'reported model constraint absent'; EXCEPTION WHEN check_violation THEN NULL; END;
+ -- History parent checks (0034) as runtime: out-of-scope or missing parents are
+ -- refused at insert; parents cannot be removed, re-keyed or moved.
+ BEGIN INSERT INTO inference_executions(started_at,id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id) VALUES(now(),gen_random_uuid(),personal,k,d,'rollback','openai_compatible',false,'started',gen_random_uuid()); RAISE EXCEPTION 'execution with a key of another workspace'; EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+ BEGIN INSERT INTO inference_executions(started_at,id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id) VALUES(now(),gen_random_uuid(),ws,k,gen_random_uuid(),'rollback','openai_compatible',false,'started',gen_random_uuid()); RAISE EXCEPTION 'execution with a missing deployment'; EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+ BEGIN INSERT INTO inference_executions(started_at,id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,cost_center_id) VALUES(now(),gen_random_uuid(),ws,k,d,'rollback','openai_compatible',false,'started',gen_random_uuid(),gen_random_uuid()); RAISE EXCEPTION 'execution with a missing cost center'; EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+ DECLARE e2 uuid:=gen_random_uuid(); BEGIN
+  INSERT INTO inference_executions(started_at,id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id) VALUES(now(),e2,ws,k,d,'rollback','openai_compatible',false,'started',e2);
+  BEGIN INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,price_id,admitted_at,minute_start,month_start,lease_expires_at,state) SELECT id,workspace_id,api_key_id,deployment_id,gen_random_uuid(),started_at,date_trunc('minute',started_at,'UTC'),date_trunc('month',started_at,'UTC'),started_at+interval '1 minute','pending' FROM inference_executions WHERE id=e2; RAISE EXCEPTION 'reservation with a missing price'; EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+ END;
+ BEGIN DELETE FROM workspaces WHERE id=personal; RAISE EXCEPTION 'workspace removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN DELETE FROM api_keys WHERE id=k; RAISE EXCEPTION 'key removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN DELETE FROM deployments WHERE id=d; RAISE EXCEPTION 'deployment removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN UPDATE api_keys SET workspace_id=personal WHERE id=k; RAISE EXCEPTION 'key moved between workspaces'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  BEGIN UPDATE inference_executions SET reported_upstream_model=repeat('m',257) WHERE id=e; RAISE EXCEPTION 'reported model bound absent'; EXCEPTION WHEN check_violation THEN NULL; END;
  -- Platform overview aggregates are read-only over already-granted relations.
  PERFORM (SELECT count(*) FROM effective_platform_roles),(SELECT count(*) FROM oidc_group_mappings WHERE enabled),(SELECT count(*) FILTER(WHERE kind='team') FROM workspace_type_catalogs),(SELECT count(e2.id)::text||coalesce(sum(r.actual_microusd),0)::text FROM inference_executions e2 LEFT JOIN governance_reservations r ON r.execution_id=e2.id WHERE e2.started_at>=statement_timestamp()-interval '7 days');

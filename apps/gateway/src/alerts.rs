@@ -49,8 +49,11 @@ pub const SCIM_LAST_ADMIN_SUMMARY: &str = "SCIM tried to remove the last Platfor
 /// Built-in installation incident: a history table has fewer than
 /// `crate::partitions::ALERT_BELOW_MONTHS` future month partitions (0030).
 pub const PARTITIONS_MISSING: &str = "partitions_missing";
+/// Built-in installation incident: `history verify` found history rows whose
+/// parents are missing or belong to another scope (0034).
+pub const HISTORY_ORPHANS: &str = "history_orphans";
 /// Built-in installation incidents (no rule; Platform Admins are notified).
-pub const INSTALLATION_BUILTINS: [&str; 2] = [SCIM_LAST_ADMIN, PARTITIONS_MISSING];
+pub const INSTALLATION_BUILTINS: [&str; 3] = [SCIM_LAST_ADMIN, PARTITIONS_MISSING, HISTORY_ORPHANS];
 /// Attempt failures that indicate the upstream (not the request) is failing.
 pub const UPSTREAM_FAILURES: [&str; 4] = [
     "upstream_unavailable",
@@ -1175,6 +1178,7 @@ async fn deliver_one(store: &Store, id: Uuid) -> anyhow::Result<bool> {
             rule: rule_name.or_else(|| match builtin.as_deref() {
                 Some(SCIM_LAST_ADMIN) => Some("Built-in SCIM safeguard".to_owned()),
                 Some(PARTITIONS_MISSING) => Some("Built-in partition check".to_owned()),
+                Some(HISTORY_ORPHANS) => Some("Built-in history check".to_owned()),
                 _ => None,
             }),
             at: if resolved {

@@ -715,7 +715,7 @@ async fn platform_events(
         &q,
         // Installation rules plus the built-in installation incidents (SCIM
         // last-admin safeguard, missing history partitions).
-        "(r.scope='installation' OR e.builtin IN ('scim_last_admin','partitions_missing')) AND $6::uuid IS NULL",
+        "(r.scope='installation' OR e.builtin IN ('scim_last_admin','partitions_missing','history_orphans')) AND $6::uuid IS NULL",
         None,
     )
     .await?;
@@ -744,7 +744,7 @@ async fn workspace_events(
 // ---------- Notifications ----------
 
 /// Incidents the caller may see, by live authority (`$1` caller, `$2` platform reader).
-const VISIBLE: &str = "e.fired_at>now()-interval '90 days' AND ((e.builtin IS NOT NULL AND w.kind='personal' AND w.owner_user_id=$1 AND w.disabled_at IS NULL) OR (r.scope='installation' AND $2) OR (e.builtin IN ('scim_last_admin','partitions_missing') AND $2) OR (r.scope='workspace' AND w.kind IN ('team','project') AND w.disabled_at IS NULL AND (EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=e.workspace_id AND m.user_id=$1 AND m.role IN ('owner','admin')) OR (r.notify_platform_admins AND $2))))";
+const VISIBLE: &str = "e.fired_at>now()-interval '90 days' AND ((e.builtin IS NOT NULL AND w.kind='personal' AND w.owner_user_id=$1 AND w.disabled_at IS NULL) OR (r.scope='installation' AND $2) OR (e.builtin IN ('scim_last_admin','partitions_missing','history_orphans') AND $2) OR (r.scope='workspace' AND w.kind IN ('team','project') AND w.disabled_at IS NULL AND (EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=e.workspace_id AND m.user_id=$1 AND m.role IN ('owner','admin')) OR (r.notify_platform_admins AND $2))))";
 
 /// Notifications never take the installation lock (the bell polls).
 async fn viewer<'a>(

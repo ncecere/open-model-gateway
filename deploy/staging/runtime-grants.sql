@@ -292,6 +292,16 @@ GRANT EXECUTE ON FUNCTION public.omg_usage_aggregate(timestamptz,timestamptz),
 -- records (`budget verify` adds archived contributions) and has no access to
 -- schema omg_archive.
 GRANT SELECT ON public.archived_partitions,public.archived_budget_contributions TO gateway_runtime;
+-- History parent checks (0034): executions and reservations check their
+-- workspace key, deployment, cost center, batch job and price version with
+-- plain reads in BEFORE INSERT triggers (as the invoking runtime role, which
+-- already reads those tables) instead of foreign keys that locked the parent
+-- rows FOR KEY SHARE. Their safety rests on parents never being removed or
+-- re-keyed: no DELETE/TRUNCATE on workspaces, api_keys, deployments,
+-- deployment_prices, cost_centers or async_jobs and no UPDATE of their ids or
+-- api_keys.workspace_id (and triggers refuse it for every role). The leased
+-- history_verify job reads history and its parents and records the
+-- history_orphans incident through the alert grants above. No new privilege.
 -- No UPDATE/DELETE/TRUNCATE of immutable prices, ledger or audit; no removal of
 -- users/workspaces/keys/history and no rewrite of immutable admission snapshots.
 COMMIT;
