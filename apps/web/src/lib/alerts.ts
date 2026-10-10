@@ -9,7 +9,7 @@
 import { API, platformPath, wsPath } from "./api";
 import { dollarsToMicroUsd, formatMicroUsd, microUsdToDollars } from "./governance";
 
-export type AlertKind = "budget_threshold" | "spend_threshold" | "spend_spike" | "error_rate" | "provider_failing" | "batch_failed" | "batch_stalled";
+export type AlertKind = "budget_threshold" | "spend_threshold" | "spend_spike" | "error_rate" | "provider_failing" | "batch_failed" | "batch_stalled" | "admission_ceiling";
 export type BudgetLayer = "type" | "override" | "local" | "key";
 export type SpendPeriod = "day" | "week" | "month" | "lifetime";
 export type AlertRule = {
@@ -18,6 +18,8 @@ export type AlertRule = {
   spike_factor_percent: number | null; min_spend_microusd: string | null;
   /** Installation spend rules: the period and reference amount the percentages apply to (absent from older gateways). */
   spend_period?: SpendPeriod | null; spend_amount_microusd?: string | null;
+  /** Admission ceiling rules: sustained admissions/s of one workspace or key, and/or a lock-wait p95 bucket in ms (absent from older gateways). */
+  ceiling_requests_per_second?: number | null; ceiling_lock_wait_ms?: number | null;
   window_minutes: number | null; error_rate_percent: number | null; min_requests: number | null; consecutive_failures: number | null;
   provider_connection_id: string | null; provider_connection: { id: string; name: string; provider: string } | null;
   notify_workspace_admins: boolean; notify_platform_admins: boolean; notify_emails: string[];
@@ -44,7 +46,7 @@ export const eventsPath = (scope: AlertScope) => `${base(scope)}/events`;
 export const notificationsPath = `${API}/me/notifications`;
 export const notificationSummaryPath = `${notificationsPath}/summary`;
 
-export const kindLabels: Record<AlertKind, string> = { budget_threshold: "Budget", spend_threshold: "Installation spend", spend_spike: "Spend spike", error_rate: "Error rate", provider_failing: "Failing connection", batch_failed: "Batch failed", batch_stalled: "Batch stalled" };
+export const kindLabels: Record<AlertKind, string> = { budget_threshold: "Budget", spend_threshold: "Installation spend", spend_spike: "Spend spike", error_rate: "Error rate", provider_failing: "Failing connection", batch_failed: "Batch failed", batch_stalled: "Batch stalled", admission_ceiling: "Admission ceiling" };
 export const kindHints: Record<AlertKind, string> = {
   budget_threshold: "Spend reaches a share of a budget.",
   spend_threshold: "Total spend reaches a share of an amount. Notifies only; never blocks.",
@@ -53,20 +55,25 @@ export const kindHints: Record<AlertKind, string> = {
   provider_failing: "A connection keeps failing upstream.",
   batch_failed: "A batch fails or expires.",
   batch_stalled: "A running batch makes no progress.",
+  admission_ceiling: "One workspace or API key is near the request rate a single scope can sustain.",
 };
+/** Lock-wait p95 choices (ms): the bounds the gateway records. */
+export const lockWaitChoices = [10, 25, 50, 100, 250, 500, 1000, 2500] as const;
 export const layerLabels: Record<BudgetLayer, string> = { type: "Type default", override: "Platform override", local: "Workspace", key: "API keys" };
 export const spendPeriodLabels: Record<SpendPeriod, string> = { day: "Daily", week: "Weekly", month: "Monthly", lifetime: "Lifetime" };
-export const kindsFor = (scope: AlertScope): AlertKind[] => scope.kind === "platform" ? ["budget_threshold", "spend_threshold", "spend_spike", "error_rate", "provider_failing", "batch_failed", "batch_stalled"] : ["budget_threshold", "spend_spike", "error_rate", "batch_failed", "batch_stalled"];
+export const kindsFor = (scope: AlertScope): AlertKind[] => scope.kind === "platform" ? ["budget_threshold", "spend_threshold", "spend_spike", "error_rate", "provider_failing", "batch_failed", "batch_stalled", "admission_ceiling"] : ["budget_threshold", "spend_spike", "error_rate", "batch_failed", "batch_stalled"];
 export const layersFor = (_scope: AlertScope): BudgetLayer[] => ["type", "override", "local", "key"];
 
 export type RuleDraft = {
   name: string; kind: AlertKind; enabled: boolean; layers: BudgetLayer[]; thresholds: string; spendPeriod: SpendPeriod; spendAmount: string;
   factor: string; minSpend: string; window: string; rate: string; minRequests: string; consecutive: string; connection: string;
+  /** Admission ceiling: admissions per second ("" = off) and lock-wait p95 ms ("" = off). */
+  ceilingRate: string; ceilingWait: string;
   notifyWorkspaceAdmins: boolean; notifyPlatformAdmins: boolean; emails: string;
 };
 export function newDraft(scope: AlertScope, kind: AlertKind = "budget_threshold"): RuleDraft {
   const platform = scope.kind === "platform";
-  return { name: "", kind, enabled: true, layers: platform ? ["type", "local"] : ["local", "key"], thresholds: "50, 80, 100", spendPeriod: "month", spendAmount: "", factor: "3", minSpend: "1.00", window: kind === "batch_stalled" ? "60" : "15", rate: kind === "provider_failing" ? "" : "20", minRequests: kind === "provider_failing" ? "" : "20", consecutive: "5", connection: "", notifyWorkspaceAdmins: !platform, notifyPlatformAdmins: platform, emails: "" };
+  return { name: "", kind, enabled: true, layers: platform ? ["type", "local"] : ["local", "key"], thresholds: "50, 80, 100", spendPeriod: "month", spendAmount: "", factor: "3", minSpend: "1.00", window: kind === "batch_stalled" ? "60" : kind === "admission_ceiling" ? "5" : "15", rate: kind === "provider_failing" ? "" : "20", minRequests: kind === "provider_failing" ? "" : "20", consecutive: "5", connection: "", ceilingRate: "200", ceilingWait: "250", notifyWorkspaceAdmins: !platform, notifyPlatformAdmins: platform, emails: "" };
 }
 export function draftOf(rule: AlertRule): RuleDraft {
   const scope: AlertScope = rule.workspace_id ? { kind: "workspace", ws: rule.workspace_id } : { kind: "platform" };
@@ -78,6 +85,8 @@ export function draftOf(rule: AlertRule): RuleDraft {
     window: rule.window_minutes?.toString() ?? d.window, rate: rule.error_rate_percent?.toString() ?? (rule.kind === "provider_failing" ? "" : d.rate),
     minRequests: rule.min_requests?.toString() ?? (rule.kind === "provider_failing" ? "" : d.minRequests),
     consecutive: rule.kind === "provider_failing" ? rule.consecutive_failures?.toString() ?? "" : d.consecutive, connection: rule.provider_connection_id ?? "",
+    ceilingRate: rule.kind === "admission_ceiling" ? rule.ceiling_requests_per_second?.toString() ?? "" : d.ceilingRate,
+    ceilingWait: rule.kind === "admission_ceiling" ? rule.ceiling_lock_wait_ms?.toString() ?? "" : d.ceilingWait,
     notifyWorkspaceAdmins: rule.notify_workspace_admins, notifyPlatformAdmins: rule.notify_platform_admins, emails: rule.notify_emails.join(", "),
   };
 }
@@ -128,6 +137,12 @@ export function ruleErrors(d: RuleDraft): RuleErrors {
     try { if (BigInt(dollarsToMicroUsd(d.minSpend)) < 1n) e.minSpend = "Enter more than $0.00."; } catch (error) { e.minSpend = (error as Error).message; }
   }
   if (d.kind === "batch_stalled" && !intIn(d.window, 5, 1440)) e.window = "Enter 5–1440 minutes.";
+  if (d.kind === "admission_ceiling") {
+    if (!intIn(d.window, 5, 10)) e.window = "Enter 5–10 minutes.";
+    if (d.ceilingRate.trim() && !intIn(d.ceilingRate, 1, 100000)) e.ceilingRate = "Enter 1–100,000 requests per second.";
+    if (d.ceilingWait && !lockWaitChoices.some(v => String(v) === d.ceilingWait)) e.ceilingWait = "Choose a wait.";
+    if (!d.ceilingRate.trim() && !d.ceilingWait) e.ceilingRate = "Set a request rate, a lock wait, or both.";
+  }
   if (d.kind === "error_rate" || d.kind === "provider_failing") {
     if (!intIn(d.window, 5, 1440)) e.window = "Enter 5–1440 minutes.";
     const rateSet = !!d.rate.trim() || !!d.minRequests.trim();
@@ -140,13 +155,14 @@ export function ruleErrors(d: RuleDraft): RuleErrors {
       if (!d.consecutive.trim() && !rateSet) e.consecutive = "Set failures in a row, an error rate, or both.";
     }
   }
-  const emails = parseEmails(d.emails); if (typeof emails === "string") e.emails = emails;
+  // Admission ceiling incidents name workspaces: Platform admins only, no listed addresses.
+  const emails = parseEmails(d.emails); if (typeof emails === "string" && d.kind !== "admission_ceiling") e.emails = emails;
   return e;
 }
 /** The exact request body for a valid draft (fields of other kinds are omitted). */
 export function ruleBody(d: RuleDraft, scope: AlertScope) {
   const emails = parseEmails(d.emails);
-  const body: Record<string, unknown> = { name: d.name.trim(), kind: d.kind, enabled: d.enabled, notify_platform_admins: d.notifyPlatformAdmins, notify_emails: Array.isArray(emails) ? emails : [] };
+  const body: Record<string, unknown> = { name: d.name.trim(), kind: d.kind, enabled: d.enabled, notify_platform_admins: d.notifyPlatformAdmins, notify_emails: Array.isArray(emails) && d.kind !== "admission_ceiling" ? emails : [] };
   if (scope.kind === "workspace") body.notify_workspace_admins = d.notifyWorkspaceAdmins;
   if (d.kind === "budget_threshold") Object.assign(body, { budget_layers: layersFor(scope).filter(l => d.layers.includes(l)), thresholds: parseThresholds(d.thresholds) });
   if (d.kind === "spend_threshold") Object.assign(body, { spend_period: d.spendPeriod, spend_amount_microusd: dollarsToMicroUsd(d.spendAmount), thresholds: parseThresholds(d.thresholds) });
@@ -156,6 +172,11 @@ export function ruleBody(d: RuleDraft, scope: AlertScope) {
     if (d.kind === "error_rate" || d.rate.trim()) Object.assign(body, { error_rate_percent: Number(d.rate), min_requests: Number(d.minRequests) });
   }
   if (d.kind === "batch_stalled") body.window_minutes = Number(d.window);
+  if (d.kind === "admission_ceiling") {
+    body.window_minutes = Number(d.window);
+    if (d.ceilingRate.trim()) body.ceiling_requests_per_second = Number(d.ceilingRate);
+    if (d.ceilingWait) body.ceiling_lock_wait_ms = Number(d.ceilingWait);
+  }
   if (d.kind === "provider_failing") {
     if (d.consecutive.trim()) body.consecutive_failures = Number(d.consecutive);
     if (d.connection) body.provider_connection_id = d.connection;
@@ -164,7 +185,7 @@ export function ruleBody(d: RuleDraft, scope: AlertScope) {
 }
 
 /** One short line: what the rule watches. */
-export function conditionText(r: Pick<AlertRule, "kind" | "budget_layers" | "thresholds" | "spend_period" | "spend_amount_microusd" | "spike_factor_percent" | "min_spend_microusd" | "window_minutes" | "error_rate_percent" | "min_requests" | "consecutive_failures" | "provider_connection">): string {
+export function conditionText(r: Pick<AlertRule, "kind" | "budget_layers" | "thresholds" | "spend_period" | "spend_amount_microusd" | "spike_factor_percent" | "min_spend_microusd" | "window_minutes" | "error_rate_percent" | "min_requests" | "consecutive_failures" | "provider_connection" | "ceiling_requests_per_second" | "ceiling_lock_wait_ms">): string {
   switch (r.kind) {
     case "budget_threshold": return `${(r.thresholds ?? []).join("/")}% of ${(r.budget_layers ?? []).map(l => layerLabels[l] ?? l).join(", ")} budgets`;
     case "spend_threshold": return `${(r.thresholds ?? []).join("/")}% of ${formatMicroUsd(r.spend_amount_microusd ?? null)} ${(r.spend_period ? spendPeriodLabels[r.spend_period] : "").toLowerCase()} spend`;
@@ -176,6 +197,10 @@ export function conditionText(r: Pick<AlertRule, "kind" | "budget_layers" | "thr
     }
     case "batch_failed": return "Any batch fails or expires";
     case "batch_stalled": return `No progress for ${r.window_minutes} min`;
+    case "admission_ceiling": {
+      const parts = [r.ceiling_requests_per_second ? `≥ ${r.ceiling_requests_per_second}/s every minute` : "", r.ceiling_lock_wait_ms ? `lock wait p95 ≥ ${r.ceiling_lock_wait_ms} ms` : ""].filter(Boolean);
+      return `One workspace or key: ${parts.join(" or ")} over ${r.window_minutes} min`;
+    }
   }
 }
 export function recipientsText(r: Pick<AlertRule, "notify_workspace_admins" | "notify_platform_admins" | "notify_emails">): string {
@@ -183,8 +208,10 @@ export function recipientsText(r: Pick<AlertRule, "notify_workspace_admins" | "n
   return parts.length ? parts.join(" + ") : "In-app only";
 }
 /** Where an incident happened, without private details. */
-export function whereText(e: Pick<AlertEvent, "workspace" | "connection" | "builtin">): string {
+export function whereText(e: Pick<AlertEvent, "workspace" | "connection" | "builtin"> & Partial<Pick<AlertEvent, "kind" | "details">>): string {
   if (e.connection) return e.connection.name;
+  // Admission ceiling: a personal workspace is never named; Auditors get no workspace reference.
+  if (e.kind === "admission_ceiling" && !e.workspace) return e.details?.personal === true ? "A personal workspace" : "A workspace";
   if (e.workspace) return e.workspace.kind === "personal" ? "Personal workspace" : e.workspace.name;
   return "Installation";
 }

@@ -35,6 +35,9 @@ DO $$ DECLARE r record; t text; BEGIN
  END LOOP;
  IF has_column_privilege('gateway_runtime','public.rate_minute_counters','minute_start','UPDATE') THEN RAISE EXCEPTION 'rate counters re-keyable: minute'; END IF;
  IF has_table_privilege('gateway_runtime','public.inflight_counters','DELETE') THEN RAISE EXCEPTION 'in-flight counters removable'; END IF;
+ -- Scope-lock waits (0036): additive upsert of the counts and pruning only.
+ IF NOT has_table_privilege('gateway_runtime','public.admission_lock_waits','SELECT,INSERT,DELETE') OR NOT has_column_privilege('gateway_runtime','public.admission_lock_waits','waits','UPDATE') THEN RAISE EXCEPTION 'scope-lock waits not maintainable by runtime'; END IF;
+ IF has_table_privilege('gateway_runtime','public.admission_lock_waits','TRUNCATE') OR has_column_privilege('gateway_runtime','public.admission_lock_waits','scope_id','UPDATE') OR has_column_privilege('gateway_runtime','public.admission_lock_waits','minute_start','UPDATE') THEN RAISE EXCEPTION 'scope-lock waits re-keyable or truncatable'; END IF;
  IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'rate_counters_%' AND tgenabled='O' AND NOT tgisinternal AND tgparentid=0)<>8
   OR NOT EXISTS(SELECT FROM pg_trigger WHERE tgname='rate_minute_counters_retained' AND tgenabled='O') THEN RAISE EXCEPTION 'rate counter triggers missing or disabled'; END IF;
  -- Scoped admission (0027): authority and catalog triggers present and enabled.
@@ -392,6 +395,19 @@ BEGIN
    BEGIN INSERT INTO alert_rules(id,scope,workspace_id,kind,name,thresholds,spend_period,spend_amount_microusd) VALUES(gen_random_uuid(),'workspace',ws,'spend_threshold','x',ARRAY[50],'day',1); RAISE EXCEPTION 'workspace spend rule allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
    BEGIN INSERT INTO alert_rules(id,scope,kind,name,budget_layers,thresholds) VALUES(gen_random_uuid(),'installation','budget_threshold','x',ARRAY['installation'],ARRAY[50]); RAISE EXCEPTION 'installation budget layer alert allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
   END;
+  -- Admission ceiling rules (0036): installation only, 5-10 min, Platform Admins only.
+  DECLARE cr uuid:=gen_random_uuid(); BEGIN
+   INSERT INTO alert_rules(id,scope,kind,name,window_minutes,ceiling_requests_per_second,notify_platform_admins,created_by,updated_by) VALUES(cr,'installation','admission_ceiling','Rollback ceiling',5,200,true,u,u);
+   UPDATE alert_rules SET ceiling_lock_wait_ms=250,ceiling_requests_per_second=NULL,window_minutes=10,updated_at=now(),updated_by=u WHERE id=cr;
+   BEGIN INSERT INTO alert_rules(id,scope,workspace_id,kind,name,window_minutes,ceiling_requests_per_second) VALUES(gen_random_uuid(),'workspace',ws,'admission_ceiling','x',5,200); RAISE EXCEPTION 'workspace ceiling rule allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+   BEGIN INSERT INTO alert_rules(id,scope,kind,name,window_minutes,ceiling_requests_per_second,notify_emails) VALUES(gen_random_uuid(),'installation','admission_ceiling','x',5,200,ARRAY['ops@example.invalid']); RAISE EXCEPTION 'ceiling rule emailing listed addresses allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+   BEGIN INSERT INTO alert_rules(id,scope,kind,name,window_minutes,ceiling_lock_wait_ms) VALUES(gen_random_uuid(),'installation','admission_ceiling','x',30,250); RAISE EXCEPTION 'ceiling window beyond retained counters allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+   INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary,details) VALUES(gen_random_uuid(),cr,'admission_ceiling','workspace:'||ws,1,'warning',ws,'A workspace is near its admission ceiling','{"scope":"workspace"}');
+  END;
+  INSERT INTO admission_lock_waits(minute_start,scope_kind,scope_id,waits) VALUES(date_trunc('minute',now(),'UTC'),'workspace',ws,ARRAY[1,1,0,0,0,0,0,0]::bigint[])
+   ON CONFLICT(minute_start,scope_kind,scope_id) DO UPDATE SET waits=ARRAY(SELECT a+b FROM unnest(admission_lock_waits.waits,EXCLUDED.waits) WITH ORDINALITY u(a,b,i) ORDER BY i);
+  DELETE FROM admission_lock_waits WHERE minute_start<now()-interval '1 hour';
+  BEGIN UPDATE admission_lock_waits SET scope_id=gen_random_uuid() WHERE scope_id=ws; RAISE EXCEPTION 'scope-lock waits re-key allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   UPDATE alert_rules SET name='Rollback budgets 2',enabled=false,thresholds=ARRAY[90],notify_emails='{}',updated_at=now(),updated_by=u WHERE id=ar;
   PERFORM id FROM alert_rules WHERE id=ar FOR UPDATE;
   INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary,details) VALUES(ev,ar,'budget_threshold','local:'||ws||':-:month',80,'warning',ws,'Workspace monthly budget reached 80%','{"used_microusd":"8"}');
@@ -606,6 +622,9 @@ BEGIN
  -- History partitions (0030-0033) as runtime: future months through the
  -- definer function only; no DDL, no partition access, no archive writes.
  PERFORM * FROM omg_ensure_partitions(3);
+ -- 0035: reservation partitions (also the ones just created) clean dead index entries promptly.
+ IF EXISTS(SELECT FROM pg_inherits h JOIN pg_class c ON c.oid=h.inhrelid WHERE h.inhparent='public.governance_reservations'::regclass AND NOT coalesce('vacuum_index_cleanup=on'=ANY(c.reloptions),false)) THEN RAISE EXCEPTION 'reservation partition without threshold autovacuum'; END IF;
+ BEGIN PERFORM omg_partition_storage('governance_reservations'); RAISE EXCEPTION 'partition storage helper executable by runtime'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  IF EXISTS(SELECT FROM omg_partition_coverage() WHERE covered_until<omg_next_month(omg_next_month(omg_next_month(clock_timestamp())))) THEN RAISE EXCEPTION 'future partitions not ensured as runtime'; END IF;
  BEGIN PERFORM * FROM omg_ensure_partitions(3,now()+interval '10 years'); RAISE EXCEPTION 'arbitrary partition months creatable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  BEGIN ALTER TABLE inference_executions DETACH PARTITION inference_executions_p_legacy; RAISE EXCEPTION 'runtime detached a partition'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;

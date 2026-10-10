@@ -105,6 +105,33 @@ impl PhaseTimer {
     }
 }
 
+/// An in-progress scoped lock acquisition ([`Metrics::scope_lock_wait`]).
+pub(crate) struct ScopeLockWait {
+    metrics: &'static Metrics,
+    lock: &'static str,
+    path: &'static str,
+    started: Instant,
+}
+impl ScopeLockWait {
+    /// Time waited so far.
+    pub(crate) fn elapsed(&self) -> Duration {
+        self.started.elapsed()
+    }
+}
+impl Drop for ScopeLockWait {
+    fn drop(&mut self) {
+        let path = [("path", self.path.to_owned())];
+        self.metrics.scope_lock_waiting.get_or_create(&path).dec();
+        self.metrics
+            .scope_lock_wait
+            .get_or_create(&[
+                ("lock", self.lock.to_owned()),
+                ("path", self.path.to_owned()),
+            ])
+            .observe(self.started.elapsed().as_secs_f64());
+    }
+}
+
 /// Outcome label of an admission: `admitted`, `denied` (a limit, budget or
 /// unresolved-usage denial, also counted by `gateway_admission_denials_total`),
 /// `error` (storage/database failure) or `rejected` (any other refusal, such as
@@ -152,6 +179,8 @@ pub struct Metrics {
     alert_runs: Family<L1, Counter>,
     alert_rule_failures: Counter,
     deadlock_retries: Family<L1, Counter>,
+    scope_lock_wait: Histograms<L2>,
+    scope_lock_waiting: Family<L1, Gauge>,
     pool_connections: Family<L1, Gauge>,
     pool_max: Gauge,
     collection_errors: Family<L1, Counter>,
@@ -268,6 +297,8 @@ impl Metrics {
             alert_runs: Family::default(),
             alert_rule_failures: Counter::default(),
             deadlock_retries: Family::default(),
+            scope_lock_wait: Family::new_with_constructor(phase_buckets),
+            scope_lock_waiting: Family::default(),
             pool_connections: Family::default(),
             pool_max: Gauge::default(),
             collection_errors: Family::default(),
@@ -377,6 +408,16 @@ impl Metrics {
             "lock_deadlock_retries",
             "Governance transactions re-run after the database aborted them as a deadlock victim (SQLSTATE 40P01), by path",
             metrics.deadlock_retries.clone(),
+        );
+        registry.register(
+            "scope_lock_wait_seconds",
+            "Time to acquire scoped admission locks, by lock (authority: workspace type/workspace/user/key advisory locks; rows: the workspace and key totals and counter rows that serialize one scope) and path (admission, settlement). No scope identifiers; a single hot workspace or key shows as a rising rows/admission tail",
+            metrics.scope_lock_wait.clone(),
+        );
+        registry.register(
+            "scope_lock_waiting",
+            "Governance transactions of this replica waiting for scoped locks right now, by path (admission, settlement)",
+            metrics.scope_lock_waiting.clone(),
         );
         registry.register(
             "db_pool_connections",
@@ -649,6 +690,30 @@ impl Metrics {
         self.deadlock_retries
             .get_or_create(&[("path", path.to_owned())])
             .inc();
+    }
+
+    /// A scoped lock acquisition is starting on `path`; the returned guard
+    /// keeps `gateway_scope_lock_waiting{path}` raised until it is dropped
+    /// (also on error or cancellation) and then observes the wait.
+    pub(crate) fn scope_lock_wait(
+        &'static self,
+        lock: &'static str,
+        path: &'static str,
+    ) -> ScopeLockWait {
+        self.scope_lock_waiting
+            .get_or_create(&[("path", path.to_owned())])
+            .inc();
+        ScopeLockWait {
+            metrics: self,
+            lock,
+            path,
+            started: Instant::now(),
+        }
+    }
+
+    /// Scrape-time or background collector failure (`collector` from a fixed set).
+    pub(crate) fn observe_collection_error(&self, collector: &'static str) {
+        self.collection_error(collector);
     }
 
     /// Phase timings of one settlement transaction (`gateway_settlement_seconds`).
@@ -1072,6 +1137,41 @@ mod tests {
             r#"gateway_settlement_seconds_count{phase="commit",outcome="settled"} 1"#,
         ] {
             assert!(out.contains(expected), "missing {expected} in\n{out}");
+        }
+    }
+
+    #[test]
+    fn scope_lock_waits_are_observed_by_lock_and_path_without_identifiers() {
+        let waiting = |path: &str| {
+            METRICS
+                .scope_lock_waiting
+                .get_or_create(&[("path", path.to_owned())])
+                .get()
+        };
+        let before = waiting("settlement");
+        {
+            let wait = METRICS.scope_lock_wait("rows", "settlement");
+            assert_eq!(waiting("settlement"), before + 1);
+            assert!(wait.elapsed() < Duration::from_secs(5));
+        }
+        assert_eq!(waiting("settlement"), before);
+        drop(METRICS.scope_lock_wait("authority", "admission"));
+        let mut out = String::new();
+        encode(&mut out, &METRICS.registry).unwrap();
+        for expected in [
+            "# TYPE gateway_scope_lock_wait_seconds histogram",
+            r#"gateway_scope_lock_wait_seconds_count{lock="rows",path="settlement"}"#,
+            r#"gateway_scope_lock_wait_seconds_count{lock="authority",path="admission"}"#,
+            r#"gateway_scope_lock_waiting{path="settlement"}"#,
+        ] {
+            assert!(out.contains(expected), "missing {expected}");
+        }
+        // Two labels from fixed sets only: no workspace or key ids.
+        for line in out.lines().filter(|l| l.starts_with("gateway_scope_lock")) {
+            assert!(
+                !line.contains("workspace=") && !line.contains("key="),
+                "{line}"
+            );
         }
     }
 

@@ -1,0 +1,30 @@
+# Itself a pre-install,pre-upgrade hook (weight -1, before the migrate Job's
+# weight 0, with no delete policy so it just updates in place): an ordinary
+# (non-hook) resource is only applied *after* every pre-install/pre-upgrade
+# hook finishes, so gating this ConfigMap behind .Values.migrations.run (or
+# even rendering it unconditionally as a normal resource) left the Job's
+# volume mount unresolvable on the very first `migrations.run=true` release
+# (FailedMount: configmap not found), because nothing had created it yet in
+# that same release. Running it as an earlier-weighted hook guarantees it
+# exists before the Job hook, on every install and upgrade alike.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "omg.grantsConfigMapName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "omg.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-1"
+    # Hooks are created fresh each trigger (not patched in place), so without
+    # a delete policy a second install/upgrade would fail with "already
+    # exists"; delete-and-recreate right before creation instead.
+    helm.sh/hook-delete-policy: before-hook-creation
+    # Kept in sync by hand with deploy/staging/runtime-grants.sql (the
+    # reviewed allowlist AGENTS.md requires every migration to update); CI's
+    # helm-lint job diffs the two and fails if they drift.
+    omg.io/source: deploy/staging/runtime-grants.sql
+data:
+  runtime-grants.sql: |-
+{{ .Files.Get "files/runtime-grants.sql" | indent 4 }}

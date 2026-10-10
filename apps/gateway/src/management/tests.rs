@@ -16,6 +16,8 @@ mod branding_tests;
 mod catalog_ux_tests;
 #[path = "directory/tests.rs"]
 mod directory_tests;
+#[path = "entropy_tests.rs"]
+mod entropy_tests;
 #[path = "files_tests.rs"]
 mod files_tests;
 #[path = "key_safety_tests.rs"]

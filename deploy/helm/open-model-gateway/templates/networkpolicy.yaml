@@ -1,0 +1,107 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "omg.fullname" . }}-default-deny
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "omg.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "omg.gatewaySelectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "omg.fullname" . }}-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "omg.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "omg.gatewaySelectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingress.fromNamespace }}
+          {{- with .Values.networkPolicy.ingress.fromPodLabels }}
+          podSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+          {{- end }}
+      ports:
+        - { protocol: TCP, port: 8080 }
+    {{- if .Values.networkPolicy.ingress.metrics.enabled }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingress.metrics.fromNamespace }}
+          {{- with .Values.networkPolicy.ingress.metrics.fromPodLabels }}
+          podSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+          {{- end }}
+      ports:
+        - { protocol: TCP, port: 9464 }
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "omg.fullname" . }}-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "omg.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "omg.gatewaySelectorLabels" . | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    {{- if .Values.networkPolicy.egress.dns }}
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    {{- end }}
+    {{- if .Values.cnpg.cluster.enabled }}
+    # Direct to the CNPG Cluster (LISTEN, reporting replica) and the Pooler.
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: {{ include "omg.cnpg.clusterName" . }}
+      ports:
+        - { protocol: TCP, port: 5432 }
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/poolerName: {{ include "omg.cnpg.poolerName" . }}
+      ports:
+        - { protocol: TCP, port: 5432 }
+    {{- else }}
+    # External database/pooler: no in-cluster pod selector is known, so
+    # 5432/6432 stay open installation-wide; tighten with extraEgress below
+    # (for example a podSelector/ipBlock scoped to the database host) if your
+    # CNI supports it.
+    - ports:
+        - { protocol: TCP, port: 5432 }
+        - { protocol: TCP, port: 6432 }
+    {{- end }}
+    {{- if .Values.networkPolicy.egress.allowHttpsEgress }}
+    # OIDC issuer, provider APIs, SMTP relay and S3-compatible file stores.
+    # FQDN-scoped egress needs Cilium/Calico Enterprise; plain NetworkPolicy
+    # can only allow 443 broadly or via an explicit egress proxy
+    # (scale-design.md 8.1). Narrow with extraEgress when your CNI supports it.
+    - ports:
+        - { protocol: TCP, port: 443 }
+    {{- end }}
+    {{- range .Values.networkPolicy.egress.extraEgress }}
+    - {{ toYaml . | nindent 6 }}
+    {{- end }}
+{{- end }}

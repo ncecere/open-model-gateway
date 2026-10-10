@@ -152,7 +152,7 @@ async fn shared_global_deployment_requires_each_workspace_grant_and_uses_pinned_
             .unwrap();
     let workspace = Uuid::new_v4();
     let user = first.user_id.unwrap();
-    let key = NewApiKey::generate();
+    let key = NewApiKey::generate().unwrap();
     sqlx::query("INSERT INTO workspaces(id,name,kind) VALUES($1,'Consumer','project')")
         .bind(workspace)
         .execute(&pool)
@@ -470,7 +470,7 @@ async fn catalog_access_and_key_lineage_are_live_intersections_not_permission_un
     assert!(store.visible_models(&principal).await.unwrap().is_empty());
     sqlx::query("INSERT INTO key_model_selections(workspace_id,governance_key_id,model_id) VALUES($1,$2,$3)").bind(principal.workspace_id).bind(principal.key_id).bind(model).execute(&pool).await.unwrap();
     assert_eq!(store.visible_models(&principal).await.unwrap().len(), 1);
-    let rotated = NewApiKey::generate();
+    let rotated = NewApiKey::generate().unwrap();
     sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash,governance_key_id) VALUES($1,$2,$3,'rotated',$4,$5)").bind(rotated.id).bind(principal.workspace_id).bind(principal.user_id).bind(rotated.digest.as_slice()).bind(principal.key_id).execute(&pool).await.unwrap();
     sqlx::query("UPDATE api_keys SET revoked_at=now() WHERE id=$1")
         .bind(principal.key_id)

@@ -34,10 +34,11 @@ impl MemoryBackend {
 
 /// An encrypted in-memory [`FileStore`] with a random key, for tests of
 /// consumers (for example the batch engine). Contents vanish with the process.
+/// Test builds only; the key ring comes from the fallible OS CSPRNG.
 pub fn memory_store() -> Arc<dyn FileStore> {
     Arc::new(Encrypted::new(
         MemoryBackend::default(),
-        Arc::new(KeyRing::random("memory")),
+        Arc::new(KeyRing::random("memory").expect("OS random number generator (test fixture)")),
     ))
 }
 

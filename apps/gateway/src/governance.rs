@@ -74,16 +74,20 @@ fn scoped(store: &Store) -> bool {
 /// Lock prefix of a new admission (or admission-like growth) of `principal`:
 /// scoped, the shared catalog and authority locks (`locks::admission`);
 /// global, the catalog lock and the installation row.
+/// Returns the scoped authority-lock wait (zero in the global mode), also
+/// observed as `gateway_scope_lock_wait_seconds{lock="authority"}`.
 async fn admission_prefix(
     store: &Store,
     tx: &mut Tx<'_>,
     principal: &crate::auth::Principal,
-) -> Result<(), InferenceError> {
+) -> Result<std::time::Duration, InferenceError> {
     if scoped(store) {
+        let wait = crate::metrics::METRICS.scope_lock_wait("authority", "admission");
         locks::admission(tx, principal).await.map_err(storage)?;
-        Ok(())
+        Ok(wait.elapsed())
     } else {
-        lock(tx).await
+        lock(tx).await?;
+        Ok(std::time::Duration::ZERO)
     }
 }
 /// Live authorization of `principal` after [`admission_prefix`]: its key
@@ -123,17 +127,22 @@ async fn settlement_prefix(store: &Store, tx: &mut Tx<'_>) -> Result<(), Inferen
 }
 /// Scoped mode: lock the totals rows (and with `counters` the minute and
 /// in-flight rows) the next writes change, in canonical order. A no-op in the
-/// global mode, where the installation row serializes everything.
+/// global mode, where the installation row serializes everything. Returns the
+/// wait, observed as `gateway_scope_lock_wait_seconds{lock="rows"}` with path
+/// `admission` (counter rows: new consumption) or `settlement`.
 async fn lock_rows(
     store: &Store,
     tx: &mut Tx<'_>,
     touches: &[locks::Touch],
     counters: bool,
-) -> Result<(), InferenceError> {
-    if scoped(store) {
-        locks::rows(tx, touches, counters).await.map_err(storage)?;
+) -> Result<std::time::Duration, InferenceError> {
+    if !scoped(store) {
+        return Ok(std::time::Duration::ZERO);
     }
-    Ok(())
+    let path = if counters { "admission" } else { "settlement" };
+    let wait = crate::metrics::METRICS.scope_lock_wait("rows", path);
+    locks::rows(tx, touches, counters).await.map_err(storage)?;
+    Ok(wait.elapsed())
 }
 /// The `FOR SHARE` clause of the global mode's catalog row reads (scoped
 /// admission relies on the shared catalog lock, which every catalog writer
@@ -449,6 +458,7 @@ pub mod batch;
 pub mod jobs;
 /// Canonical lock order, authority scope locks and the admission mode.
 pub mod locks;
+pub mod pressure;
 /// Maintained per-scope, per-minute rate and in-flight counters.
 pub mod rates;
 /// Maintained per-scope, per-period budget totals and their consistency check.
@@ -608,8 +618,9 @@ async fn admit_unobserved(
     // errors are reported after the checks below, in the former order.
     // Scoped: the latest price id is read with the deployment check below
     // and its immutable row comes from the price cache (one round trip less).
+    let mut lock_wait = std::time::Duration::ZERO;
     let read_price = if scoped(store) {
-        admission_prefix(store, &mut tx, &record.principal).await?;
+        lock_wait += admission_prefix(store, &mut tx, &record.principal).await?;
         timer.phase("locks");
         None
     } else {
@@ -674,7 +685,7 @@ async fn admit_unobserved(
     timer.phase("read");
     // Scoped: hold this workspace's and lineage's totals and counter rows
     // (the ones the write below changes) before reading them.
-    lock_rows(
+    lock_wait += lock_rows(
         store,
         &mut tx,
         &[locks::Touch {
@@ -724,6 +735,12 @@ async fn admit_unobserved(
     timer.phase("write");
     tx.commit().await.map_err(storage)?;
     timer.phase("commit");
+    // Per-scope ceiling signal (`admission_ceiling` alerts): committed
+    // interactive admissions (the ones `rate_minute_counters` counts) that
+    // waited at least 10 ms for their scope locks.
+    if !job && scoped(store) {
+        pressure::record(now, workspace, lineage, lock_wait);
+    }
     Ok(())
 }
 /// The latest (immutable, append-only) price of a deployment.

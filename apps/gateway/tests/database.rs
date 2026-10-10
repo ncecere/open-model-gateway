@@ -155,7 +155,7 @@ async fn key_revocation_expiration_and_wrong_secret_deny_access(pool: PgPool) {
     assert!(store.authenticate(&wrong).await.unwrap().is_none());
     assert!(
         store
-            .authenticate(&NewApiKey::generate().token)
+            .authenticate(&NewApiKey::generate().unwrap().token)
             .await
             .unwrap()
             .is_none()
@@ -310,7 +310,7 @@ async fn database_enforces_workspace_lineage_and_service_account_foreign_keys(po
         .execute(&pool)
         .await
         .unwrap();
-    let foreign_key = NewApiKey::generate();
+    let foreign_key = NewApiKey::generate().unwrap();
     let result = sqlx::query("INSERT INTO api_keys(id,workspace_id,service_account_id,name,secret_hash) VALUES($1,$2,$3,'foreign service',$4)")
         .bind(foreign_key.id).bind(keys.personal_workspace_id).bind(account).bind(foreign_key.digest.as_slice()).execute(&pool).await;
     assert_eq!(
@@ -378,7 +378,7 @@ async fn service_keys_survive_human_entitlement_loss_but_not_account_or_workspac
 ) {
     let (store, keys) = fixture(&pool).await;
     let account = Uuid::new_v4();
-    let key = NewApiKey::generate();
+    let key = NewApiKey::generate().unwrap();
     sqlx::query("INSERT INTO service_accounts(id,workspace_id,name) VALUES($1,$2,'CI')")
         .bind(account)
         .bind(keys.team_workspace_id)

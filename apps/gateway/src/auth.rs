@@ -1,4 +1,3 @@
-use rand::{RngCore, rngs::OsRng};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
@@ -20,13 +19,14 @@ pub struct NewApiKey {
 }
 
 impl NewApiKey {
-    pub fn generate() -> Self {
+    /// A new key with a 256-bit secret from the OS CSPRNG; fails closed when
+    /// the OS random number generator fails (no key is created).
+    pub fn generate() -> Result<Self, crate::entropy::EntropyUnavailable> {
         let id = Uuid::new_v4();
-        let mut secret = [0u8; 32];
-        OsRng.fill_bytes(&mut secret);
-        let token = format!("omg_{}.{}", id.simple(), hex::encode(secret));
+        let secret = zeroize::Zeroizing::new(crate::entropy::bytes::<32>()?);
+        let token = format!("omg_{}.{}", id.simple(), hex::encode(secret.as_ref()));
         let digest = digest(&token);
-        Self { id, token, digest }
+        Ok(Self { id, token, digest })
     }
 }
 
@@ -303,8 +303,8 @@ mod tests {
     use super::*;
     #[test]
     fn keys_have_expected_format_and_independent_random_secrets() {
-        let first = NewApiKey::generate();
-        let second = NewApiKey::generate();
+        let first = NewApiKey::generate().unwrap();
+        let second = NewApiKey::generate().unwrap();
         assert_eq!(token_id(&first.token), Some(first.id));
         assert_eq!(first.digest, digest(&first.token));
         assert_ne!(first.digest, second.digest);
@@ -315,7 +315,7 @@ mod tests {
         for token in ["", "omg_bad.secret", "Bearer abc", &"é".repeat(101)] {
             assert!(token_id(token).is_none());
         }
-        let valid = NewApiKey::generate();
+        let valid = NewApiKey::generate().unwrap();
         assert!(token_id(&valid.token.replace('.', ":")).is_none());
         assert!(token_id(&valid.token.replacen("omg_", "sk__", 1)).is_none());
     }

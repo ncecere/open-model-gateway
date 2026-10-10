@@ -198,6 +198,60 @@ async fn months_are_created_ahead_and_rows_route_at_the_boundary(pool: PgPool) {
     );
 }
 
+/// 0035: every reservation partition (legacy, existing and future months)
+/// vacuums after 10 k + 1 % dead rows and always cleans its indexes (the
+/// expired-lease read walks dead `governance_leases` entries); other history
+/// keeps the defaults.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn reservation_partitions_get_threshold_autovacuum_now_and_when_created(pool: PgPool) {
+    async fn options(pool: &PgPool, parent: &str) -> Vec<(String, Option<Vec<String>>)> {
+        sqlx::query_as("SELECT c.relname::text,c.reloptions FROM pg_inherits h JOIN pg_class c ON c.oid=h.inhrelid WHERE h.inhparent=$1::regclass ORDER BY 1")
+            .bind(parent)
+            .fetch_all(pool)
+            .await
+            .unwrap()
+    }
+    let expected: Vec<String> = [
+        "autovacuum_vacuum_scale_factor=0.01",
+        "autovacuum_vacuum_threshold=10000",
+        "vacuum_index_cleanup=on",
+        "autovacuum_vacuum_cost_limit=2000",
+        "autovacuum_vacuum_cost_delay=2",
+    ]
+    .map(String::from)
+    .to_vec();
+    let before = options(&pool, "governance_reservations").await;
+    assert!(before.len() >= 4, "{before:?}");
+    for (name, opts) in &before {
+        assert_eq!(opts.as_ref(), Some(&expected), "{name}");
+    }
+    for parent in ["inference_executions", "monetary_ledger"] {
+        assert!(
+            options(&pool, parent)
+                .await
+                .iter()
+                .all(|(_, o)| o.is_none())
+        );
+    }
+    // Months the partitions job creates later get them too (runtime path).
+    let at = legacy_upper(&pool).await + chrono::Months::new(8);
+    let report = ensure_at(&pool, 0, at).await.unwrap();
+    let created = format!("governance_reservations_p{}", at.format("%Y_%m"));
+    assert!(
+        report.created.iter().any(|(_, n)| *n == created),
+        "{report:?}"
+    );
+    let after = options(&pool, "governance_reservations").await;
+    assert_eq!(after.len(), before.len() + 1);
+    assert!(after.iter().all(|(_, o)| o.as_ref() == Some(&expected)));
+    let runtime: Vec<(String, String)> =
+        sqlx::query_as("SELECT parent,partition FROM omg_ensure_partitions(3)")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert!(runtime.is_empty(), "{runtime:?}");
+}
+
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn missing_future_months_raise_and_clear_the_builtin_alert(pool: PgPool) {
     let upper = legacy_upper(&pool).await;

@@ -512,3 +512,92 @@ async fn scim_last_admin_incident_is_for_platform_readers(pool: PgPool) {
         );
     }
 }
+
+/// 0036: admission ceiling rules are installation-only, take a 5-10 minute
+/// window and a rate and/or a lock-wait bucket, and email Platform Admins
+/// only. The incident's workspace reference is shown to Platform Admins;
+/// Auditors see the incident without it.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn admission_ceiling_rules_and_scope_names_are_for_platform_admins(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let body = json!({"name":"Hot scopes","kind":"admission_ceiling","window_minutes":5,"ceiling_requests_per_second":200,"ceiling_lock_wait_ms":250,"notify_platform_admins":true});
+    let (status, created) = call(&f.s, &f.admin, "POST", RULES, body.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    assert_eq!(created["ceiling_requests_per_second"], 200);
+    assert_eq!(created["ceiling_lock_wait_ms"], 250);
+    let rule = id(&created);
+    let mut wait_only = body.clone();
+    wait_only["ceiling_requests_per_second"] = Value::Null;
+    wait_only["window_minutes"] = json!(10);
+    let (status, updated) =
+        call(&f.s, &f.admin, "PUT", &format!("{RULES}/{rule}"), wait_only).await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["ceiling_requests_per_second"], Value::Null);
+    for (field, value) in [
+        ("window_minutes", json!(4)),
+        ("window_minutes", json!(11)),
+        ("ceiling_lock_wait_ms", json!(300)),
+        ("ceiling_requests_per_second", json!(0)),
+        ("notify_emails", json!(["ops@example.test"])),
+        ("thresholds", json!([50])),
+        ("min_requests", json!(10)),
+    ] {
+        let mut bad = body.clone();
+        bad[field] = value;
+        let status = call(&f.s, &f.admin, "POST", RULES, bad).await.0;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{field}");
+    }
+    let mut neither = body.clone();
+    neither
+        .as_object_mut()
+        .unwrap()
+        .remove("ceiling_requests_per_second");
+    neither
+        .as_object_mut()
+        .unwrap()
+        .remove("ceiling_lock_wait_ms");
+    assert_eq!(
+        call(&f.s, &f.admin, "POST", RULES, neither).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    // Never a workspace rule.
+    assert_eq!(
+        call(&f.s, &f.owner, "POST", &ws_rules(f.team), body.clone())
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    // An incident naming a team: Platform Admins see the workspace, Auditors do not.
+    sqlx::query("INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary,details) VALUES($1,$2,'admission_ceiling',$3,1,'warning',$4,'A workspace is near its admission ceiling',jsonb_build_object('scope','workspace','personal',false,'workspace_name','Team'))")
+        .bind(Uuid::new_v4()).bind(rule).bind(format!("workspace:{}", f.team)).bind(f.team).execute(&pool).await.unwrap();
+    let events = |user: &BrowserPrincipal| {
+        let user = user.clone();
+        let s = f.s.clone();
+        async move {
+            call(
+                &s,
+                &user,
+                "GET",
+                "/api/v1/platform/alerts/events",
+                json!({}),
+            )
+            .await
+            .1["data"][0]
+                .clone()
+        }
+    };
+    let admin = events(&f.admin).await;
+    assert_eq!(admin["workspace"]["id"], json!(f.team));
+    assert_eq!(admin["details"]["workspace_name"], "Team");
+    let auditor = events(&f.auditor).await;
+    assert_eq!(auditor["kind"], "admission_ceiling");
+    assert_eq!(auditor["workspace"], Value::Null);
+    assert_eq!(auditor["details"].get("workspace_name"), None);
+    assert!(!auditor.to_string().contains(&f.team.to_string()));
+    let admin_feed = feed(&f, &f.admin).await;
+    assert_eq!(admin_feed[0]["workspace"]["id"], json!(f.team));
+    let auditor_feed = feed(&f, &f.auditor).await;
+    assert_eq!(auditor_feed[0]["workspace"], Value::Null);
+    // Team members and workspace admins never see installation incidents.
+    assert!(feed(&f, &f.owner).await.is_empty());
+}

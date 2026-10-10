@@ -1010,3 +1010,149 @@ async fn migration_converts_installation_budget_alerts(pool: PgPool) {
 async fn count_pool(pool: &PgPool, sql: &str) -> i64 {
     sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
 }
+
+/// 0036: one workspace or key lineage near its scoped-admission ceiling.
+/// Sustained rate means every complete minute of the window; lock-wait p95
+/// comes from the replicas' flushed wait counts. Shared scopes are named
+/// (workspace reference); personal workspaces only as "a personal
+/// workspace"; keys never by id or name. Email: Platform Admins only.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn admission_ceiling_fires_per_scope_and_names_only_shared_workspaces(pool: PgPool) {
+    let s = seed(pool).await;
+    let now: DateTime<Utc> = sqlx::query_scalar("SELECT date_trunc('minute',clock_timestamp())")
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+    let minute = |i: i64| now - TimeDelta::minutes(i);
+    // (scope kind, id, requests per minute, minutes back that have them).
+    let rows: [(&str, Uuid, i64, Vec<i64>); 4] = [
+        ("workspace", s.team, 13_000, (0..=7).collect()),
+        ("key", s.key, 13_000, vec![1, 4]),
+        ("workspace", s.personal, 1_000, (0..=7).collect()),
+        ("key", s.personal_key, 1_000, (0..=7).collect()),
+    ];
+    for (kind, id, n, minutes) in &rows {
+        for i in minutes {
+            sqlx::query("INSERT INTO rate_minute_counters(minute_start,scope_kind,scope_id,requests) VALUES($1,$2,$3,$4)")
+                .bind(minute(*i)).bind(kind).bind(id).bind(n).execute(&s.pool).await.unwrap();
+        }
+    }
+    // 300 of the personal scope's ~5,000 admissions waited 300 ms (6 %):
+    // p95 >= 250 ms. 20 of the team key's waited 2.6 s (too few to count).
+    crate::governance::pressure::reset();
+    for _ in 0..300 {
+        crate::governance::pressure::record(
+            minute(2) + TimeDelta::seconds(7),
+            s.personal,
+            s.personal_key,
+            std::time::Duration::from_millis(300),
+        );
+    }
+    for _ in 0..20 {
+        crate::governance::pressure::record(
+            minute(2),
+            s.team,
+            s.key,
+            std::time::Duration::from_millis(2600),
+        );
+    }
+    assert_eq!(
+        crate::governance::pressure::flush(&s.store).await.unwrap(),
+        4
+    );
+    // A second flush adds (replicas are additive), the first one is kept.
+    crate::governance::pressure::record(
+        minute(2),
+        s.team,
+        s.key,
+        std::time::Duration::from_millis(12),
+    );
+    crate::governance::pressure::flush(&s.store).await.unwrap();
+    let waits: Vec<i64> = sqlx::query_scalar(
+        "SELECT waits FROM admission_lock_waits WHERE scope_kind='workspace' AND scope_id=$1",
+    )
+    .bind(s.team)
+    .fetch_one(&s.pool)
+    .await
+    .unwrap();
+    assert_eq!(waits, [21, 20, 20, 20, 20, 20, 20, 20]);
+    rule(&s, "scope,kind,window_minutes,ceiling_requests_per_second,ceiling_lock_wait_ms,notify_platform_admins", "'installation','admission_ceiling',5,200,250,true").await;
+    assert_eq!(evaluate(&s).await.fired, 3);
+    let open = open(&s).await;
+    let mut expected = vec![
+        format!("key:{}", s.personal_key),
+        format!("workspace:{}", s.personal),
+        format!("workspace:{}", s.team),
+    ];
+    expected.sort();
+    let subjects: Vec<String> = open.iter().map(|o| o.0.clone()).collect();
+    assert_eq!(subjects, expected);
+    let events: Vec<(String, Option<Uuid>, String, Value)> = sqlx::query_as(
+        "SELECT subject_key,workspace_id,summary,details FROM alert_events ORDER BY subject_key",
+    )
+    .fetch_all(&s.pool)
+    .await
+    .unwrap();
+    let team_subject = format!("workspace:{}", s.team);
+    let team = events.iter().find(|e| e.0 == team_subject).unwrap();
+    assert_eq!(team.1, Some(s.team));
+    assert_eq!(team.2, "A workspace is near its admission ceiling");
+    assert_eq!(team.3["workspace_name"], "Platform team");
+    assert_eq!(team.3["by_rate"], true);
+    assert_eq!(team.3["admissions_per_second"], "216.6");
+    for (subject, ws, summary, details) in events.iter().filter(|e| e.0 != team_subject) {
+        assert_eq!(*ws, None, "{subject}");
+        assert!(summary.contains("personal workspace"), "{summary}");
+        assert_eq!(details["personal"], true);
+        assert_eq!(details["workspace_name"], Value::Null);
+        assert_eq!(details["by_lock_wait"], true);
+        assert_eq!(details["lock_wait_p95_at_least_ms"], 250);
+        let text = details.to_string();
+        assert!(
+            !text.contains(&s.personal.to_string()) && !text.contains(&s.personal_key.to_string())
+        );
+        assert!(!text.contains("Private key name") && !text.contains("owner@example.test"));
+    }
+    // Idempotent while the condition holds.
+    assert_eq!(evaluate(&s).await.fired, 0);
+    // Email: Platform Admins only; the team is named, the personal workspace is not.
+    let (port, mut rx) = mock::serve(Behaviour::default()).await;
+    relay(&s, port).await;
+    assert_eq!(deliver_pending(&s.store, 10).await, 3);
+    let mut bodies = Vec::new();
+    for _ in 0..3 {
+        let got = rx.recv().await.unwrap();
+        let to = got.rcpt_to.join(",");
+        assert!(
+            to.contains("admin@example.test") && !to.contains("owner"),
+            "{to}"
+        );
+        assert!(!got.data.contains("Secret key name") && !got.data.contains("Private key name"));
+        bodies.push(got.data);
+    }
+    assert!(bodies.iter().any(|b| b.contains("Team Platform team")));
+    assert_eq!(
+        bodies
+            .iter()
+            .filter(|b| b.contains("personal workspace"))
+            .count(),
+        2
+    );
+    // Traffic drops: everything resolves.
+    sqlx::query("UPDATE rate_minute_counters SET requests=1")
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(evaluate(&s).await.resolved, 3);
+}
+
+#[test]
+fn lock_wait_p95_is_the_largest_bound_five_percent_reached() {
+    assert_eq!(
+        p95_at_least_ms(&[100, 60, 50, 49, 0, 0, 0, 0], 1000),
+        Some(50)
+    );
+    assert_eq!(p95_at_least_ms(&[49, 0, 0, 0, 0, 0, 0, 0], 1000), None);
+    assert_eq!(p95_at_least_ms(&[1; 8], 0), None);
+    assert_eq!(p95_at_least_ms(&[1; 8], 20), Some(2500));
+}

@@ -88,7 +88,7 @@ mod db {
         )
     }
     async fn member_key(f: &Fixture) -> Uuid {
-        let k = NewApiKey::generate();
+        let k = NewApiKey::generate().unwrap();
         sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash) VALUES($1,$2,$3,'member',$4)").bind(k.id).bind(f.team.workspace_id).bind(f.other).bind(k.digest.as_slice()).execute(&f.store.pool).await.unwrap();
         k.id
     }

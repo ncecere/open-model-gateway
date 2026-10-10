@@ -61,7 +61,7 @@ pub(super) fn routes() -> Router<Store> {
 
 // ---------- Rule shape ----------
 
-const RULE_JSON: &str = "jsonb_build_object('id',r.id,'scope',r.scope,'workspace_id',r.workspace_id,'kind',r.kind,'name',r.name,'enabled',r.enabled,'budget_layers',to_jsonb(r.budget_layers),'thresholds',to_jsonb(r.thresholds),'spike_factor_percent',r.spike_factor_percent,'min_spend_microusd',r.min_spend_microusd::text,'window_minutes',r.window_minutes,'error_rate_percent',r.error_rate_percent,'min_requests',r.min_requests,'consecutive_failures',r.consecutive_failures,'provider_connection_id',r.provider_connection_id,'spend_period',r.spend_period,'spend_amount_microusd',r.spend_amount_microusd::text,'provider_connection',(SELECT jsonb_build_object('id',p.id,'name',p.name,'provider',p.provider) FROM provider_connections p WHERE p.id=r.provider_connection_id),'notify_workspace_admins',r.notify_workspace_admins,'notify_platform_admins',r.notify_platform_admins,'notify_emails',to_jsonb(r.notify_emails),'firing',(SELECT count(*) FROM alert_events e WHERE e.rule_id=r.id AND e.resolved_at IS NULL),'last_fired_at',(SELECT max(e.fired_at) FROM alert_events e WHERE e.rule_id=r.id),'created_at',r.created_at,'updated_at',r.updated_at)";
+const RULE_JSON: &str = "jsonb_build_object('id',r.id,'scope',r.scope,'workspace_id',r.workspace_id,'kind',r.kind,'name',r.name,'enabled',r.enabled,'budget_layers',to_jsonb(r.budget_layers),'thresholds',to_jsonb(r.thresholds),'spike_factor_percent',r.spike_factor_percent,'min_spend_microusd',r.min_spend_microusd::text,'window_minutes',r.window_minutes,'error_rate_percent',r.error_rate_percent,'min_requests',r.min_requests,'consecutive_failures',r.consecutive_failures,'provider_connection_id',r.provider_connection_id,'spend_period',r.spend_period,'spend_amount_microusd',r.spend_amount_microusd::text,'ceiling_requests_per_second',r.ceiling_requests_per_second,'ceiling_lock_wait_ms',r.ceiling_lock_wait_ms,'provider_connection',(SELECT jsonb_build_object('id',p.id,'name',p.name,'provider',p.provider) FROM provider_connections p WHERE p.id=r.provider_connection_id),'notify_workspace_admins',r.notify_workspace_admins,'notify_platform_admins',r.notify_platform_admins,'notify_emails',to_jsonb(r.notify_emails),'firing',(SELECT count(*) FROM alert_events e WHERE e.rule_id=r.id AND e.resolved_at IS NULL),'last_fired_at',(SELECT max(e.fired_at) FROM alert_events e WHERE e.rule_id=r.id),'created_at',r.created_at,'updated_at',r.updated_at)";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -84,6 +84,10 @@ pub(super) struct RuleInput {
     spend_period: Option<String>,
     /// Installation spend rules: reference amount, integer micro-USD string.
     spend_amount_microusd: Option<String>,
+    /// Admission ceiling rules: sustained admissions per second of one scope.
+    ceiling_requests_per_second: Option<i32>,
+    /// Admission ceiling rules: lock-wait p95 threshold (a bucket bound, ms).
+    ceiling_lock_wait_ms: Option<i32>,
     #[serde(default)]
     notify_workspace_admins: bool,
     #[serde(default)]
@@ -112,6 +116,8 @@ pub(super) struct Valid {
     provider_connection_id: Option<Uuid>,
     spend_period: Option<String>,
     spend_amount_microusd: Option<i64>,
+    ceiling_requests_per_second: Option<i32>,
+    ceiling_lock_wait_ms: Option<i32>,
     notify_workspace_admins: bool,
     notify_platform_admins: bool,
     notify_emails: Vec<String>,
@@ -150,7 +156,7 @@ pub(super) fn validate(b: RuleInput, workspace: bool) -> Result<Valid, ApiError>
         return Err(invalid());
     }
     let kind = Kind::parse(&b.kind).ok_or_else(invalid)?;
-    if workspace && matches!(kind, Kind::Provider | Kind::Spend) {
+    if workspace && matches!(kind, Kind::Provider | Kind::Spend | Kind::AdmissionCeiling) {
         return Err(invalid());
     }
     let mut v = Valid {
@@ -168,6 +174,8 @@ pub(super) fn validate(b: RuleInput, workspace: bool) -> Result<Valid, ApiError>
         provider_connection_id: None,
         spend_period: None,
         spend_amount_microusd: None,
+        ceiling_requests_per_second: None,
+        ceiling_lock_wait_ms: None,
         notify_workspace_admins: b.notify_workspace_admins,
         notify_platform_admins: b.notify_platform_admins,
         notify_emails: Vec::new(),
@@ -179,6 +187,7 @@ pub(super) fn validate(b: RuleInput, workspace: bool) -> Result<Valid, ApiError>
         b.window_minutes.is_some() || b.error_rate_percent.is_some() || b.min_requests.is_some();
     let provider = b.consecutive_failures.is_some() || b.provider_connection_id.is_some();
     let spend = b.spend_period.is_some() || b.spend_amount_microusd.is_some();
+    let ceiling = b.ceiling_requests_per_second.is_some() || b.ceiling_lock_wait_ms.is_some();
     // There is no installation budget layer any more (0026): say so plainly.
     if b.budget_layers
         .as_ref()
@@ -186,9 +195,19 @@ pub(super) fn validate(b: RuleInput, workspace: bool) -> Result<Valid, ApiError>
     {
         return Err(super::installation_limits_removed(StatusCode::BAD_REQUEST));
     }
-    let allowed = !spend || kind == Kind::Spend;
+    let allowed = (!spend || kind == Kind::Spend) && (!ceiling || kind == Kind::AdmissionCeiling);
     let allowed = allowed
         && match kind {
+            // Window plus a rate and/or lock-wait threshold; the incident
+            // names the workspace, so email goes to Platform Admins only.
+            Kind::AdmissionCeiling => {
+                !budget
+                    && !spike
+                    && !provider
+                    && b.error_rate_percent.is_none()
+                    && b.min_requests.is_none()
+                    && b.notify_emails.is_empty()
+            }
             Kind::Budget => !spike && !window && !provider,
             Kind::Spend => b.budget_layers.is_none() && !spike && !window && !provider,
             Kind::Spike => !budget && !window && !provider,
@@ -242,6 +261,29 @@ pub(super) fn validate(b: RuleInput, workspace: bool) -> Result<Valid, ApiError>
         }
         // A batch failed or expired: no parameters.
         Kind::BatchFailed => {}
+        // Minute counters are retained 10 minutes (0024).
+        Kind::AdmissionCeiling => {
+            let minutes = b.window_minutes.ok_or_else(invalid)?;
+            if !(5..=10).contains(&minutes) {
+                return Err(invalid());
+            }
+            v.window_minutes = Some(minutes);
+            if let Some(rate) = b.ceiling_requests_per_second {
+                if !(1..=100_000).contains(&rate) {
+                    return Err(invalid());
+                }
+                v.ceiling_requests_per_second = Some(rate);
+            }
+            if let Some(ms) = b.ceiling_lock_wait_ms {
+                if !crate::governance::pressure::WAIT_BUCKETS_MS.contains(&ms) {
+                    return Err(invalid());
+                }
+                v.ceiling_lock_wait_ms = Some(ms);
+            }
+            if v.ceiling_requests_per_second.is_none() && v.ceiling_lock_wait_ms.is_none() {
+                return Err(invalid());
+            }
+        }
         // No progress for `window_minutes`.
         Kind::BatchStalled => {
             let minutes = b.window_minutes.ok_or_else(invalid)?;
@@ -341,7 +383,7 @@ async fn insert_rule(
     }
     check_connection(tx, v).await?;
     let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO alert_rules(id,scope,workspace_id,kind,name,enabled,budget_layers,thresholds,spike_factor_percent,min_spend_microusd,window_minutes,error_rate_percent,min_requests,consecutive_failures,provider_connection_id,notify_workspace_admins,notify_platform_admins,notify_emails,created_by,updated_by,spend_period,spend_amount_microusd) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$19,$20,$21)")
+    sqlx::query("INSERT INTO alert_rules(id,scope,workspace_id,kind,name,enabled,budget_layers,thresholds,spike_factor_percent,min_spend_microusd,window_minutes,error_rate_percent,min_requests,consecutive_failures,provider_connection_id,notify_workspace_admins,notify_platform_admins,notify_emails,created_by,updated_by,spend_period,spend_amount_microusd,ceiling_requests_per_second,ceiling_lock_wait_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$19,$20,$21,$22,$23)")
         .bind(id)
         .bind(if ws.is_some() { "workspace" } else { "installation" })
         .bind(ws)
@@ -363,6 +405,8 @@ async fn insert_rule(
         .bind(u.user_id)
         .bind(&v.spend_period)
         .bind(v.spend_amount_microusd)
+        .bind(v.ceiling_requests_per_second)
+        .bind(v.ceiling_lock_wait_ms)
         .execute(&mut **tx)
         .await?;
     audit(
@@ -395,7 +439,7 @@ async fn update_rule(
         return Err(ApiError(StatusCode::CONFLICT, KIND_FIXED));
     }
     check_connection(tx, v).await?;
-    sqlx::query("UPDATE alert_rules SET name=$2,enabled=$3,budget_layers=$4,thresholds=$5,spike_factor_percent=$6,min_spend_microusd=$7,window_minutes=$8,error_rate_percent=$9,min_requests=$10,consecutive_failures=$11,provider_connection_id=$12,notify_workspace_admins=$13,notify_platform_admins=$14,notify_emails=$15,updated_by=$16,spend_period=$17,spend_amount_microusd=$18,updated_at=now() WHERE id=$1")
+    sqlx::query("UPDATE alert_rules SET name=$2,enabled=$3,budget_layers=$4,thresholds=$5,spike_factor_percent=$6,min_spend_microusd=$7,window_minutes=$8,error_rate_percent=$9,min_requests=$10,consecutive_failures=$11,provider_connection_id=$12,notify_workspace_admins=$13,notify_platform_admins=$14,notify_emails=$15,updated_by=$16,spend_period=$17,spend_amount_microusd=$18,ceiling_requests_per_second=$19,ceiling_lock_wait_ms=$20,updated_at=now() WHERE id=$1")
         .bind(id)
         .bind(&v.name)
         .bind(v.enabled)
@@ -414,6 +458,8 @@ async fn update_rule(
         .bind(u.user_id)
         .bind(&v.spend_period)
         .bind(v.spend_amount_microusd)
+        .bind(v.ceiling_requests_per_second)
+        .bind(v.ceiling_lock_wait_ms)
         .execute(&mut **tx)
         .await?;
     // A disabled rule's open incidents close now (silently), not on the next tick.
@@ -704,13 +750,30 @@ async fn events(
     data.truncate(l as usize);
     Ok(Json(json!({"data": data, "has_more": has_more})))
 }
+/// Admission ceiling incidents (0036) identify the workspace for Platform
+/// Admins only: other readers (Auditors) get the incident without the
+/// workspace reference or name. Personal workspaces are never named at all.
+fn redact_ceiling_scope(data: &mut Value, admin: bool) {
+    if admin {
+        return;
+    }
+    for e in data.as_array_mut().into_iter().flatten() {
+        if e["kind"] == Kind::AdmissionCeiling.as_str() {
+            e["workspace"] = Value::Null;
+            if let Some(d) = e.get_mut("details").and_then(Value::as_object_mut) {
+                d.remove("workspace_name");
+            }
+        }
+    }
+}
 async fn platform_events(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
     Query(q): Query<EventQuery>,
 ) -> ApiResult {
     let mut tx = platform_tx(&s, &u, false).await?;
-    let out = events(
+    let admin = resources::platform_role(&mut tx, u.user_id).await? == "admin";
+    let mut out = events(
         &mut tx,
         &q,
         // Installation rules plus the built-in installation incidents (SCIM
@@ -720,6 +783,7 @@ async fn platform_events(
     )
     .await?;
     tx.commit().await?;
+    redact_ceiling_scope(&mut out.0["data"], admin);
     Ok(out)
 }
 async fn workspace_events(
@@ -750,10 +814,14 @@ const VISIBLE: &str = "e.fired_at>now()-interval '90 days' AND ((e.builtin IS NO
 async fn viewer<'a>(
     s: &'a Store,
     u: &BrowserPrincipal,
-) -> Result<(Transaction<'a, Postgres>, bool), ApiError> {
+) -> Result<(Transaction<'a, Postgres>, bool, bool), ApiError> {
     let mut tx = crate::db::begin(&s.pool).await?;
     let role = resources::platform_role(&mut tx, u.user_id).await?;
-    Ok((tx, matches!(role.as_str(), "admin" | "auditor")))
+    Ok((
+        tx,
+        matches!(role.as_str(), "admin" | "auditor"),
+        role == "admin",
+    ))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -778,7 +846,7 @@ async fn notifications(
         Some("unread") => true,
         Some(_) => return Err(invalid()),
     };
-    let (mut tx, reader) = viewer(&s, &u).await?;
+    let (mut tx, reader, admin) = viewer(&s, &u).await?;
     let mut data: Vec<Value> = sqlx::query_scalar(&format!("SELECT {EVENT_JSON}||jsonb_build_object('read',x.event_id IS NOT NULL) {EVENT_FROM} LEFT JOIN alert_reads x ON x.event_id=e.id AND x.user_id=$1 WHERE {VISIBLE} AND (NOT $3 OR x.event_id IS NULL) ORDER BY e.fired_at DESC,e.id LIMIT $4 OFFSET $5"))
         .bind(u.user_id)
         .bind(reader)
@@ -790,13 +858,15 @@ async fn notifications(
     tx.commit().await?;
     let has_more = data.len() as i64 > l;
     data.truncate(l as usize);
+    let mut data = Value::Array(data);
+    redact_ceiling_scope(&mut data, admin);
     Ok(Json(json!({"data": data, "has_more": has_more})))
 }
 async fn notification_summary(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
 ) -> ApiResult {
-    let (mut tx, reader) = viewer(&s, &u).await?;
+    let (mut tx, reader, _) = viewer(&s, &u).await?;
     let (unread, firing): (i64, i64) = sqlx::query_as(&format!("SELECT count(*) FILTER(WHERE NOT EXISTS(SELECT 1 FROM alert_reads x WHERE x.event_id=e.id AND x.user_id=$1)),count(*) FILTER(WHERE e.resolved_at IS NULL) {EVENT_FROM} WHERE {VISIBLE}"))
         .bind(u.user_id)
         .bind(reader)
@@ -824,7 +894,7 @@ async fn mark_read(
     {
         return Err(invalid());
     }
-    let (mut tx, reader) = viewer(&s, &u).await?;
+    let (mut tx, reader, _) = viewer(&s, &u).await?;
     // Only incidents the caller can see; others are ignored, not disclosed.
     let marked = sqlx::query(&format!("INSERT INTO alert_reads(user_id,event_id) SELECT $1,e.id {EVENT_FROM} WHERE {VISIBLE} AND ($3::uuid[] IS NULL OR e.id=ANY($3)) AND NOT EXISTS(SELECT 1 FROM alert_reads x WHERE x.event_id=e.id AND x.user_id=$1) ORDER BY e.fired_at DESC LIMIT 1000 ON CONFLICT DO NOTHING"))
         .bind(u.user_id)

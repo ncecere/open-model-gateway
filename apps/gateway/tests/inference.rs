@@ -659,7 +659,7 @@ async fn type_limits_are_per_workspace_and_local_caps_compose(pool: PgPool) {
     // Per-minute ceilings: every request must be admitted in one UTC minute.
     store.freeze_admission_clock().await.unwrap();
     let project = Uuid::new_v4();
-    let project_key = open_model_gateway::auth::NewApiKey::generate();
+    let project_key = open_model_gateway::auth::NewApiKey::generate().unwrap();
     let user: Uuid = sqlx::query_scalar("SELECT issued_to_user_id FROM api_keys WHERE id=$1")
         .bind(keys.team_key.id)
         .fetch_one(&pool)

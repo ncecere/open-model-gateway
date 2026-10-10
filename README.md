@@ -109,7 +109,7 @@ npm run build:web
 npm run test:browser
 ```
 
-Mock-provider and SDK tests require no paid calls or real enterprise IdP modifications. See [staging](docs/staging.md) for restricted runtime roles, the image, TLS rehearsal and backup/restore tooling. **Use a new enterprise staging database; do not run initialization against an existing legacy deployment.** Production load/availability, real-provider certification, live IdP/SCIM acceptance, observability and off-host recovery acceptance remain unfinished.
+Mock-provider and SDK tests require no paid calls or real enterprise IdP modifications. See [staging](docs/staging.md) for restricted runtime roles, the image, TLS rehearsal and backup/restore tooling, and [Kubernetes](docs/kubernetes.md) for the Helm chart (explicit migration Job, optional CloudNativePG Cluster/Pooler, NetworkPolicy, loadtest profile). **Use a new enterprise staging database; do not run initialization against an existing legacy deployment.** Production load/availability, real-provider certification, live IdP/SCIM acceptance, observability and off-host recovery acceptance remain unfinished.
 
 ## Releases and security
 

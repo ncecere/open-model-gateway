@@ -1,0 +1,48 @@
+# Profile: external PostgreSQL (no chart-managed CNPG Cluster/Pooler).
+# Validation only: these existingSecret names need not exist for
+# `helm lint`/`helm template --validate=false`; create real Secrets first
+# for `helm install`.
+cnpg:
+  cluster:
+    enabled: false
+  pooler:
+    enabled: false
+
+secrets:
+  database:
+    runtime:
+      existingSecret: gateway-runtime-db
+      urlKey: DATABASE_URL
+    listen:
+      existingSecret: gateway-runtime-db
+      urlKey: GATEWAY_LISTEN_DATABASE_URL
+    reporting:
+      enabled: true
+      existingSecret: gateway-reporting-db
+      urlKey: GATEWAY_REPORTING_DATABASE_URL
+  migrator:
+    existingSecret: gateway-migrator-db
+    urlKey: DATABASE_URL
+  oidc:
+    enabled: true
+    existingSecret: gateway-oidc
+  providers:
+    openaiApiKey:
+      enabled: true
+      existingSecret: gateway-openai
+    anthropicApiKey:
+      enabled: true
+      existingSecret: gateway-anthropic
+  fileStore:
+    enabled: true
+    existingSecret: gateway-filestore-keys
+
+ingress:
+  enabled: true
+
+metrics:
+  serviceMonitor:
+    enabled: true
+
+hpa:
+  enabled: true

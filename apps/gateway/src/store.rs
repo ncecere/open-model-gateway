@@ -132,6 +132,10 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     // 0033 archived history months
     "archived_partitions",
     "archived_budget_contributions",
+    // 0034 history parent checks add triggers only; 0035 sets storage
+    // parameters only.
+    // 0036 per-scope lock waits (admission_ceiling alerts)
+    "admission_lock_waits",
 ];
 /// Partitioned parents (0030/0031). Any partition of one of these in
 /// `public` (`pg_class.relispartition`; month partitions are created ahead of

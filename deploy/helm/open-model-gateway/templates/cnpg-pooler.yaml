@@ -1,0 +1,33 @@
+{{- if and .Values.cnpg.cluster.enabled .Values.cnpg.pooler.enabled }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: {{ include "omg.cnpg.poolerName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "omg.labels" . | nindent 4 }}
+spec:
+  cluster:
+    name: {{ include "omg.cnpg.clusterName" . }}
+  type: {{ .Values.cnpg.pooler.type }}
+  instances: {{ .Values.cnpg.pooler.instances }}
+  pgbouncer:
+    poolMode: {{ .Values.cnpg.pooler.poolMode }}
+    # max_prepared_statements must be > 0 for sqlx's named prepared
+    # statements under transaction-mode pooling (docs/operations.md
+    # "PgBouncer in transaction mode"; PgBouncer >= 1.21).
+    parameters:
+      {{- range $key, $value := .Values.cnpg.pooler.parameters }}
+      {{ $key }}: {{ $value | quote }}
+      {{- end }}
+  template:
+    metadata:
+      labels:
+        {{- include "omg.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: pooler
+    spec:
+      containers:
+        - name: pgbouncer
+          resources:
+            {{- toYaml .Values.cnpg.pooler.resources | nindent 12 }}
+{{- end }}

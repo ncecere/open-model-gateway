@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use chrono::{DateTime, Utc};
 use rand::{
     SeedableRng,
-    distributions::{Distribution, WeightedIndex},
+    distr::{Distribution, weighted::WeightedIndex},
     rngs::StdRng,
 };
 use serde::Serialize;

@@ -50,7 +50,10 @@ lettre = { version = "=0.11.23", default-features = false, features = ["builder"
 percent-encoding = "2"
 # Prometheus/OpenMetrics exposition on the optional GATEWAY_METRICS_ADDR listener.
 prometheus-client = "=0.25.1"
-rand = "0.8"
+# Secrets come only from the OS CSPRNG (rand::rngs::SysRng, fallible; src/entropy.rs).
+# No ThreadRng (it panics when the OS RNG fails); seeded StdRng only for routing's
+# deterministic, non-secret weighted choice.
+rand = { version = "0.10", default-features = false, features = ["std", "sys_rng", "std_rng"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }

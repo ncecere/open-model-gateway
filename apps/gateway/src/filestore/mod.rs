@@ -24,6 +24,7 @@ pub mod crypto;
 pub mod files;
 #[cfg(unix)]
 mod local;
+#[cfg(any(test, feature = "integration-tests"))]
 mod memory;
 pub mod multipart;
 pub mod s3;
@@ -34,6 +35,7 @@ pub mod usage;
 pub use config::{BackendKind, FileStoreConfig, FileStoreRuntime};
 pub use crypto::KeyRing;
 pub use files::{FileError, FileStorage, NewFile, QuotaMode, StoredFile};
+#[cfg(any(test, feature = "integration-tests"))]
 pub use memory::memory_store;
 
 /// A stream of plaintext (from [`FileStore::get`]) or caller-provided bytes (to [`FileStore::put`]).
@@ -538,7 +540,7 @@ impl<B: Backend> FileStore for Encrypted<B> {
         let started = std::time::Instant::now();
         let key = ObjectKey::health_probe();
         let mut probe = vec![0u8; 1024];
-        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut probe);
+        crate::entropy::fill(&mut probe).map_err(|_| FileStoreError::Unavailable)?;
         let payload = Bytes::from(probe);
         let result = async {
             let body: ByteStream = futures::stream::iter([Ok(payload.clone())]).boxed();

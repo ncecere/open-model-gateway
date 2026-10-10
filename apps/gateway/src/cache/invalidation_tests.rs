@@ -44,7 +44,7 @@ pub(super) async fn issue(
     user: Option<Uuid>,
     account: Option<Uuid>,
 ) -> (String, Principal) {
-    let key = NewApiKey::generate();
+    let key = NewApiKey::generate().unwrap();
     sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,service_account_id,name,secret_hash) VALUES($1,$2,$3,$4,'cache',$5)")
         .bind(key.id)
         .bind(workspace)

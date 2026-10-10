@@ -1,0 +1,78 @@
+{{- if .Values.loadtest.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "omg.fullname" . }}-mock-upstream
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "omg.labels" . | nindent 4 }}
+    app.kubernetes.io/component: loadtest-mock-upstream
+spec:
+  replicas: {{ .Values.loadtest.mockUpstream.replicas }}
+  selector:
+    matchLabels:
+      {{- include "omg.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: loadtest-mock-upstream
+  template:
+    metadata:
+      labels:
+        {{- include "omg.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: loadtest-mock-upstream
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mock-upstream
+          image: "{{ .Values.loadtest.image.repository }}{{ if .Values.loadtest.image.digest }}@{{ .Values.loadtest.image.digest }}{{ else }}:{{ .Values.loadtest.image.tag }}{{ end }}"
+          imagePullPolicy: {{ .Values.loadtest.image.pullPolicy }}
+          command: ["/usr/local/bin/mock-upstream"]
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: MOCK_LISTEN
+              value: "0.0.0.0:8000"
+            - name: MOCK_LATENCY_MS
+              value: {{ .Values.loadtest.mockUpstream.latencyMs | quote }}
+            - name: MOCK_TTFT_MS
+              value: {{ .Values.loadtest.mockUpstream.ttftMs | quote }}
+            - name: MOCK_INTER_TOKEN_MS
+              value: {{ .Values.loadtest.mockUpstream.interTokenMs | quote }}
+            - name: MOCK_COMPLETION_TOKENS
+              value: {{ .Values.loadtest.mockUpstream.completionTokens | quote }}
+            - name: MOCK_ERROR_RATE
+              value: {{ .Values.loadtest.mockUpstream.errorRate | quote }}
+          resources:
+            {{- toYaml .Values.loadtest.mockUpstream.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "omg.fullname" . }}-mock-upstream
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "omg.labels" . | nindent 4 }}
+    app.kubernetes.io/component: loadtest-mock-upstream
+spec:
+  {{- with .Values.loadtest.mockUpstream.clusterIP }}
+  clusterIP: {{ . }}
+  {{- end }}
+  selector:
+    {{- include "omg.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: loadtest-mock-upstream
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+{{- end }}

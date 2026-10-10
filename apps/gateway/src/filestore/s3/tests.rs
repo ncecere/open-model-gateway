@@ -283,7 +283,7 @@ async fn store_for(origin: &str) -> Encrypted<S3Backend> {
     .unwrap();
     Encrypted::new(
         S3Backend::new(&settings).await.unwrap(),
-        Arc::new(KeyRing::random("mock")),
+        Arc::new(KeyRing::random("mock").unwrap()),
     )
 }
 

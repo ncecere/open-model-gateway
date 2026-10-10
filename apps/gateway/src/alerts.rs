@@ -23,7 +23,7 @@
 //! - No prompt data, key names or owner identities appear in incidents.
 use std::time::Duration;
 
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use serde_json::{Value, json};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
@@ -152,6 +152,9 @@ pub enum Kind {
     /// Installation-wide spend in a period reaches a share of a reference
     /// amount (0026). A notification only: nothing is ever denied by it.
     Spend,
+    /// One workspace or key lineage near its scoped-admission ceiling:
+    /// sustained admission rate or lock-wait p95 (0036; installation only).
+    AdmissionCeiling,
 }
 impl Kind {
     pub fn parse(value: &str) -> Option<Self> {
@@ -163,6 +166,7 @@ impl Kind {
             "batch_failed" => Some(Self::BatchFailed),
             "batch_stalled" => Some(Self::BatchStalled),
             "spend_threshold" => Some(Self::Spend),
+            "admission_ceiling" => Some(Self::AdmissionCeiling),
             _ => None,
         }
     }
@@ -175,6 +179,7 @@ impl Kind {
             Self::BatchFailed => "batch_failed",
             Self::BatchStalled => "batch_stalled",
             Self::Spend => "spend_threshold",
+            Self::AdmissionCeiling => "admission_ceiling",
         }
     }
 }
@@ -214,6 +219,8 @@ struct Rule {
     provider_connection_id: Option<Uuid>,
     spend_period: Option<String>,
     spend_amount_microusd: Option<i64>,
+    ceiling_requests_per_second: Option<i32>,
+    ceiling_lock_wait_ms: Option<i32>,
 }
 
 /// One firing condition produced by evaluation.
@@ -699,6 +706,131 @@ async fn batch_stalled_conditions(
         .collect())
 }
 
+/// Admissions a scope needs in the window before its lock-wait p95 counts.
+pub const CEILING_MIN_REQUESTS: i64 = 100;
+/// At most this many scopes per evaluation (the busiest first).
+const MAX_CEILING_SCOPES: i64 = 100;
+
+/// Scopes near their admission ceiling over the complete UTC minutes
+/// [`$1`, `$2`) (`$3` minutes): every minute at or above `$4` admissions/s
+/// (`rate_minute_counters`, interactive admissions), or with at least
+/// [`CEILING_MIN_REQUESTS`] admissions of which 5 % or more waited at least
+/// the `$5`-th lock-wait bucket (`admission_lock_waits`; lock-wait p95 at or
+/// above the threshold). Minutes are probed by primary key per candidate.
+/// Returns the scope, its workspace and the window's counts.
+pub(crate) const CEILING: &str = r#"WITH hot AS (SELECT scope_kind,scope_id FROM rate_minute_counters
+  WHERE $4::bigint IS NOT NULL AND minute_start>=$1 AND minute_start<$2 AND requests>=$4::bigint*60
+  GROUP BY 1,2 HAVING count(*)=$3),
+ lw AS (SELECT scope_kind,scope_id,ARRAY[sum(waits[1]),sum(waits[2]),sum(waits[3]),sum(waits[4]),sum(waits[5]),sum(waits[6]),sum(waits[7]),sum(waits[8])]::bigint[] waits
+  FROM admission_lock_waits WHERE $5::int IS NOT NULL AND minute_start>=$1 AND minute_start<$2 GROUP BY 1,2),
+ c AS (SELECT scope_kind,scope_id FROM hot UNION SELECT scope_kind,scope_id FROM lw),
+ x AS (SELECT c.scope_kind,c.scope_id,coalesce(lw.waits,'{0,0,0,0,0,0,0,0}') waits,m.requests,m.hot_minutes
+  FROM c LEFT JOIN lw USING(scope_kind,scope_id)
+  CROSS JOIN LATERAL (SELECT coalesce(sum(r.requests),0)::bigint requests,
+    count(*) FILTER(WHERE $4::bigint IS NOT NULL AND r.requests>=$4::bigint*60) hot_minutes
+   FROM generate_series($1::timestamptz,$2::timestamptz-interval '1 minute',interval '1 minute') g(m)
+   JOIN rate_minute_counters r ON r.minute_start=g.m AND r.scope_kind=c.scope_kind AND r.scope_id=c.scope_id) m)
+SELECT x.scope_kind,x.scope_id,w.id,w.kind,w.name,x.requests,x.hot_minutes,x.waits
+FROM x LEFT JOIN api_keys k ON x.scope_kind='key' AND k.id=x.scope_id
+JOIN workspaces w ON w.id=CASE WHEN x.scope_kind='workspace' THEN x.scope_id ELSE k.workspace_id END
+WHERE x.hot_minutes=$3 OR ($5::int IS NOT NULL AND x.requests>=$6 AND x.waits[$5]*20>=x.requests)
+ORDER BY x.requests DESC,x.scope_kind,x.scope_id LIMIT $7"#;
+
+type CeilingRow = (String, Uuid, Uuid, String, String, i64, i64, Vec<i64>);
+
+/// Lock-wait p95 lower bound (ms) from the bucket counts: the largest bound
+/// that 5 % or more of the window's admissions reached, if any.
+pub fn p95_at_least_ms(waits: &[i64], requests: i64) -> Option<i32> {
+    if requests <= 0 {
+        return None;
+    }
+    crate::governance::pressure::WAIT_BUCKETS_MS
+        .iter()
+        .zip(waits)
+        .filter(|(_, n)| **n * 20 >= requests)
+        .map(|(b, _)| *b)
+        .next_back()
+}
+
+/// One incident per workspace or key lineage near its admission ceiling.
+/// The incident identifies the scope for Platform Admins: a Team/Project by
+/// its workspace (`alert_events.workspace_id`, name in the details); a
+/// personal workspace only as "a personal workspace" (no id, name or owner),
+/// and keys only by their workspace (never key ids or names).
+async fn ceiling_conditions(
+    tx: &mut Transaction<'_, Postgres>,
+    rule: &Rule,
+    now: DateTime<Utc>,
+) -> Result<Vec<Condition>, sqlx::Error> {
+    let Some(window) = rule.window_minutes else {
+        return Ok(vec![]);
+    };
+    let rate = rule.ceiling_requests_per_second;
+    let wait_index = rule.ceiling_lock_wait_ms.and_then(|ms| {
+        crate::governance::pressure::WAIT_BUCKETS_MS
+            .iter()
+            .position(|b| *b == ms)
+            .map(|i| i as i32 + 1)
+    });
+    if rate.is_none() && wait_index.is_none() {
+        return Ok(vec![]);
+    }
+    let hi = now.duration_trunc(TimeDelta::minutes(1)).unwrap_or(now);
+    let lo = hi - TimeDelta::minutes(i64::from(window));
+    let rows: Vec<CeilingRow> = sqlx::query_as(CEILING)
+        .bind(lo)
+        .bind(hi)
+        .bind(i64::from(window))
+        .bind(rate.map(i64::from))
+        .bind(wait_index)
+        .bind(CEILING_MIN_REQUESTS)
+        .bind(MAX_CEILING_SCOPES)
+        .fetch_all(&mut **tx)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(kind, id, ws, ws_kind, ws_name, requests, hot_minutes, waits)| {
+            let personal = ws_kind == "personal";
+            let key = kind == "key";
+            let p95 = p95_at_least_ms(&waits, requests);
+            let by_rate = rate.is_some() && hot_minutes == i64::from(window);
+            let by_wait = rule
+                .ceiling_lock_wait_ms
+                .is_some_and(|t| p95.is_some_and(|p| p >= t) && requests >= CEILING_MIN_REQUESTS);
+            let what = match (key, personal) {
+                (false, false) => "A workspace",
+                (false, true) => "A personal workspace",
+                (true, false) => "An API key",
+                (true, true) => "An API key in a personal workspace",
+            };
+            let seconds = i64::from(window) * 60;
+            Condition {
+                subject: format!("{kind}:{id}"),
+                level: 1,
+                critical: false,
+                workspace_id: (!personal).then_some(ws),
+                connection_id: None,
+                summary: format!("{what} is near its admission ceiling"),
+                details: json!({
+                    "scope": kind,
+                    "personal": personal,
+                    "workspace_name": (!personal).then_some(ws_name),
+                    "workspace_kind": ws_kind,
+                    "window_minutes": window,
+                    "admissions": requests,
+                    // Tenths of admissions per second, rounded down.
+                    "admissions_per_second": format!("{}.{}", requests * 10 / seconds / 10, requests * 10 / seconds % 10),
+                    "by_rate": by_rate,
+                    "by_lock_wait": by_wait,
+                    "threshold_requests_per_second": rate,
+                    "lock_wait_p95_at_least_ms": p95,
+                    "threshold_lock_wait_ms": rule.ceiling_lock_wait_ms,
+                }),
+            }
+        })
+        .collect())
+}
+
 async fn evaluate_rule(
     tx: &mut Transaction<'_, Postgres>,
     rule: &Rule,
@@ -724,6 +856,7 @@ async fn evaluate_rule(
         Some(Kind::BatchFailed) => batch_failed_conditions(tx, rule, now).await,
         Some(Kind::BatchStalled) => batch_stalled_conditions(tx, rule, now).await,
         Some(Kind::Spend) => spend_conditions(tx, rule, now).await,
+        Some(Kind::AdmissionCeiling) => ceiling_conditions(tx, rule, now).await,
         None => Ok(vec![]),
     }
 }
@@ -882,7 +1015,7 @@ pub async fn evaluate_once_fenced(
             + resolve_scim_last_admin(&mut tx).await?,
         ..Report::default()
     };
-    let rules: Vec<Rule> = sqlx::query_as("SELECT r.id,r.workspace_id,r.kind,r.budget_layers,r.thresholds,r.spike_factor_percent,r.min_spend_microusd,r.window_minutes,r.error_rate_percent,r.min_requests,r.consecutive_failures,r.provider_connection_id,r.spend_period,r.spend_amount_microusd FROM alert_rules r LEFT JOIN workspaces w ON w.id=r.workspace_id WHERE r.enabled AND r.deleted_at IS NULL AND (r.workspace_id IS NULL OR w.disabled_at IS NULL) ORDER BY r.created_at,r.id LIMIT $1")
+    let rules: Vec<Rule> = sqlx::query_as("SELECT r.id,r.workspace_id,r.kind,r.budget_layers,r.thresholds,r.spike_factor_percent,r.min_spend_microusd,r.window_minutes,r.error_rate_percent,r.min_requests,r.consecutive_failures,r.provider_connection_id,r.spend_period,r.spend_amount_microusd,r.ceiling_requests_per_second,r.ceiling_lock_wait_ms FROM alert_rules r LEFT JOIN workspaces w ON w.id=r.workspace_id WHERE r.enabled AND r.deleted_at IS NULL AND (r.workspace_id IS NULL OR w.disabled_at IS NULL) ORDER BY r.created_at,r.id LIMIT $1")
         .bind(MAX_RULES)
         .fetch_all(&mut *tx)
         .await?;

@@ -8,7 +8,7 @@ use crate::{
     governance::tests::db::{Fixture, done, fixture, request},
     inference::error::LimitScope,
 };
-use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
+use rand::{RngExt, SeedableRng, rngs::StdRng, seq::IndexedRandom};
 use sqlx::{PgPool, migrate::Migrator};
 
 fn start_for(f: &Fixture, principal: Principal) -> ExecutionStart {
@@ -142,7 +142,7 @@ async fn random_interleavings_keep_totals_equal_to_the_scan(pool: PgPool) {
     let mut all: Vec<Uuid> = Vec::new();
     let mut denied = 0;
     for step in 0..400 {
-        let op = rng.gen_range(0..100);
+        let op = rng.random_range(0..100);
         let what;
         if op < 35 || pending.is_empty() {
             what = "admit";
@@ -160,34 +160,34 @@ async fn random_interleavings_keep_totals_equal_to_the_scan(pool: PgPool) {
             }
         } else if op < 60 {
             what = "settle";
-            let (id, _) = pending.swap_remove(rng.gen_range(0..pending.len()));
-            let (i, o) = (rng.gen_range(0..120), rng.gen_range(0..60));
+            let (id, _) = pending.swap_remove(rng.random_range(0..pending.len()));
+            let (i, o) = (rng.random_range(0..120), rng.random_range(0..60));
             finish(&f.store, &done(id, Some(i), Some(o))).await.unwrap();
         } else if op < 70 {
             what = "fail (unknown keeps hold)";
-            let e = pending.swap_remove(rng.gen_range(0..pending.len()));
+            let e = pending.swap_remove(rng.random_range(0..pending.len()));
             finish(&f.store, &failed(e.0)).await.unwrap();
             unknown.push(e);
         } else if op < 76 {
             what = "partial usage (unknown, floor may raise hold)";
-            let e = pending.swap_remove(rng.gen_range(0..pending.len()));
-            finish(&f.store, &done(e.0, Some(rng.gen_range(0..200)), None))
+            let e = pending.swap_remove(rng.random_range(0..pending.len()));
+            finish(&f.store, &done(e.0, Some(rng.random_range(0..200)), None))
                 .await
                 .unwrap();
             unknown.push(e);
         } else if op < 81 {
             what = "expire";
-            let e = pending.swap_remove(rng.gen_range(0..pending.len()));
+            let e = pending.swap_remove(rng.random_range(0..pending.len()));
             sqlx::query("UPDATE governance_reservations SET lease_expires_at=now()-interval '1 second' WHERE execution_id=$1")
                 .bind(e.0).execute(&pool).await.unwrap();
             assert_eq!(reconcile_expired(&f.store, 10).await.unwrap(), 1);
             unknown.push(e);
         } else if op < 87 && !unknown.is_empty() {
             what = "reconcile";
-            let (id, ws) = unknown.swap_remove(rng.gen_range(0..unknown.len()));
+            let (id, ws) = unknown.swap_remove(rng.random_range(0..unknown.len()));
             let usage = Usage {
                 input_tokens: Some(300),
-                output_tokens: Some(rng.gen_range(0..50)),
+                output_tokens: Some(rng.random_range(0..50)),
                 ..Default::default()
             };
             resolve_usage(&f.store, ws, id, usage, "receipt:test", f.owner)
@@ -198,19 +198,19 @@ async fn random_interleavings_keep_totals_equal_to_the_scan(pool: PgPool) {
             let id = Uuid::new_v4();
             let p = principals.choose(&mut rng).unwrap();
             sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,started_at) VALUES($1,$2,$3,$4,'company/smart','openai',false,'failed',$1,now()-make_interval(days=>$5))")
-                .bind(id).bind(p.workspace_id).bind(p.key_id).bind(f.deployment).bind(rng.gen_range(0..40)).execute(&pool).await.unwrap();
+                .bind(id).bind(p.workspace_id).bind(p.key_id).bind(f.deployment).bind(rng.random_range(0..40)).execute(&pool).await.unwrap();
         } else if op < 97 && !all.is_empty() {
             what = "move admission time (refused)";
             // Admission time is the partition key of the reservation and its
             // ledger (0030): an admitted request's time can never move.
             let id = *all.choose(&mut rng).unwrap();
-            let days: i32 = rng.gen_range(1..45);
+            let days: i32 = rng.random_range(1..45);
             assert!(sqlx::query("WITH e AS (UPDATE inference_executions SET started_at=started_at-make_interval(days=>$2) WHERE id=$1) UPDATE governance_reservations SET admitted_at=admitted_at-make_interval(days=>$2) WHERE execution_id=$1").bind(id).bind(days).execute(&pool).await.is_err());
         } else {
             what = "move or delete an unreserved execution";
             let orphan: Option<Uuid> = sqlx::query_scalar("SELECT id FROM inference_executions e WHERE NOT EXISTS(SELECT 1 FROM governance_reservations r WHERE r.execution_id=e.id) ORDER BY id LIMIT 1").fetch_optional(&pool).await.unwrap();
             if let Some(id) = orphan {
-                if rng.gen_bool(0.5) {
+                if rng.random_bool(0.5) {
                     sqlx::query("DELETE FROM inference_executions WHERE id=$1")
                         .bind(id)
                         .execute(&pool)

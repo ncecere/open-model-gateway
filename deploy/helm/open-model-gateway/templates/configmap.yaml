@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "omg.configMapName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "omg.labels" . | nindent 4 }}
+data:
+  {{- range $key, $value := .Values.gateway.env }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+  {{- if .Values.gateway.secretEnvAllowlist }}
+  GATEWAY_SECRET_ENV_ALLOWLIST: {{ .Values.gateway.secretEnvAllowlist | join "," | quote }}
+  {{- end }}
+  {{- if .Values.secrets.database.reporting.enabled }}
+  GATEWAY_REPORTING_MAX_LAG_SECONDS: {{ .Values.secrets.database.reporting.maxLagSeconds | default 30 | quote }}
+  {{- end }}
+  {{- if and .Values.loadtest.enabled .Values.loadtest.mockUpstream.clusterIP }}
+  # Computed from the mock-upstream Service's own pinned ClusterIP so the
+  # approval always matches the actual destination (docs/kubernetes.md
+  # "Loadtest profile"); do not also set GATEWAY_LOCAL_UPSTREAMS in
+  # gateway.env, which would collide with this generated key.
+  GATEWAY_LOCAL_UPSTREAMS: {{ printf "[{\"endpoint\":\"http://%s:8000/v1\",\"addresses\":[\"%s\"]}]" .Values.loadtest.mockUpstream.clusterIP .Values.loadtest.mockUpstream.clusterIP | quote }}
+  {{- end }}

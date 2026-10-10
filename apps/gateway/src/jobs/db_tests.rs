@@ -443,7 +443,7 @@ async fn the_state_machine_is_forward_only_and_identity_immutable(pool: PgPool) 
 }
 
 async fn bearer(f: &Fixture, workspace: Uuid) -> String {
-    let key = crate::auth::NewApiKey::generate();
+    let key = crate::auth::NewApiKey::generate().unwrap();
     sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash) VALUES($1,$2,$3,'http',$4)").bind(key.id).bind(workspace).bind(f.owner).bind(key.digest.as_slice()).execute(&f.store.pool).await.unwrap();
     format!("Bearer {}", key.token)
 }

@@ -11,6 +11,7 @@ pub mod config;
 pub(crate) mod db;
 pub mod demo;
 pub mod email;
+pub mod entropy;
 pub mod filestore;
 pub mod governance;
 pub mod healthcheck;

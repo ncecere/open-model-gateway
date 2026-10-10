@@ -9,7 +9,7 @@ Admin › Settings holds installation-wide settings. Platform Admins change them
 | Data & privacy | OpenRouter data collection, request log retention, prompt/response storage, and the encrypted file store (Storage). |
 | Email | SMTP relay for invitations, status, test send. |
 | Sign-in | Read-only OIDC configuration, signing-key (JWKS) status and SCIM provisioning status; SSO group mappings stay on Admin › SSO groups. |
-| Alerts | Installation rules and history, including **Installation spend** (`spend_threshold`): a non-blocking notification when total spend reaches a share of an amount. See [alerts](alerts.md). |
+| Alerts | Installation rules and history, including **Installation spend** (`spend_threshold`): a non-blocking notification when total spend reaches a share of an amount. **Admission ceiling** (`admission_ceiling`) names one workspace or key near the request rate a single scope can sustain (Platform Admins only). See [alerts](alerts.md). |
 
 ## General
 

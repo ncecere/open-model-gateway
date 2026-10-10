@@ -62,8 +62,9 @@ const SETTINGS_REFRESH: Duration = Duration::from_secs(60);
 /// `settings` version changes, at least every minute, and every tick while
 /// the versions are unconfirmed) and expired-lease reconciliation (a
 /// `SKIP LOCKED` queue: replicas never process or wait on the same rows).
+/// Every replica, every 5 s: its recorded scope-lock waits (0036).
 /// Lease holders only (`crate::leases`; every replica without leases, e.g.
-/// tests): rate-counter pruning every minute and storage-usage hours every 5
+/// tests): rate-counter and lock-wait pruning every minute and storage-usage hours every 5
 /// minutes (`maintenance`), detail compaction hourly (`compaction`).
 /// `retention_days` is the environment override; without it the
 /// installation setting applies. Compaction never touches the ledger,
@@ -113,8 +114,36 @@ pub fn start(store: Store, retention_days: Option<i32>) -> tokio::task::JoinHand
                 Ok(Ok(_)) => {}
                 _ => tracing::warn!("execution reconciliation incomplete; retrying next interval"),
             }
+            // This replica's scope-lock waits (0036), every tick: the
+            // `admission_ceiling` alert reads them from the database.
+            match tokio::time::timeout(
+                Duration::from_secs(2),
+                crate::governance::pressure::flush(&store),
+            )
+            .await
+            {
+                Ok(Ok(_)) => {}
+                _ => crate::metrics::METRICS.observe_collection_error("scope_lock_waits"),
+            }
             // Minute rate counters admission no longer reads (0024), every minute.
             if counter.is_multiple_of(12) {
+                singleton(
+                    &store,
+                    crate::leases::Lease::Maintenance,
+                    "lock_wait_prune",
+                    |fence| {
+                        let store = store.clone();
+                        async move {
+                            crate::governance::pressure::prune_fenced(
+                                &store,
+                                10_000,
+                                fence.as_ref(),
+                            )
+                            .await
+                        }
+                    },
+                )
+                .await;
                 singleton(
                     &store,
                     crate::leases::Lease::Maintenance,

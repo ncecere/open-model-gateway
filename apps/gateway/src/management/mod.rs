@@ -274,6 +274,14 @@ impl IntoResponse for ApiError {
         (self.0, Json(json!({ "error": error }))).into_response()
     }
 }
+/// The OS random number generator failed while creating a secret (key,
+/// invitation): nothing was created; the transaction rolls back (fail closed).
+pub(crate) const ENTROPY_UNAVAILABLE: &str = "Secure random number generation unavailable";
+impl From<crate::entropy::EntropyUnavailable> for ApiError {
+    fn from(_: crate::entropy::EntropyUnavailable) -> Self {
+        Self(StatusCode::SERVICE_UNAVAILABLE, ENTROPY_UNAVAILABLE)
+    }
+}
 impl From<sqlx::Error> for ApiError {
     fn from(e: sqlx::Error) -> Self {
         if e.as_database_error()

@@ -1,5 +1,4 @@
 use super::*;
-use rand::{RngCore, rngs::OsRng};
 use sha2::{Digest, Sha256};
 
 const MEMBERS_SQL: &str = "SELECT jsonb_build_object('user_id',g.user_id,'email',u.email,'display_name',u.display_name,'role',m.role,'disabled_at',u.disabled_at,'membership_source',CASE WHEN count(DISTINCT g.source)>1 THEN 'mixed' ELSE min(g.source) END,'grants',jsonb_agg(jsonb_build_object('id',g.id,'role',g.role,'source',g.source,'mapping_id',g.mapping_id) ORDER BY g.source,g.id)) FROM workspace_membership_grants g JOIN users u ON u.id=g.user_id LEFT JOIN effective_workspace_memberships m ON m.workspace_id=g.workspace_id AND m.user_id=g.user_id WHERE g.workspace_id=$1 AND g.revoked_at IS NULL GROUP BY g.user_id,u.email,u.display_name,u.disabled_at,m.role ORDER BY u.email,g.user_id LIMIT $2 OFFSET $3";
@@ -282,9 +281,8 @@ pub(super) async fn invite(
     {
         return Err(invalid());
     }
-    let mut bytes = [0u8; 32];
-    OsRng.fill_bytes(&mut bytes);
-    let token = hex::encode(bytes);
+    // Fails closed (503, nothing stored) when the OS RNG fails.
+    let token = crate::entropy::hex_token()?;
     let hash = Sha256::digest(token.as_bytes());
     let id = Uuid::new_v4();
     sqlx::query("INSERT INTO workspace_invitations(id,workspace_id,email,role,token_hash,expires_at,created_by) VALUES($1,$2,$3,$4,$5,now()+interval '72 hours',$6)").bind(id).bind(ws).bind(&email).bind(&b.role).bind(hash.as_slice()).bind(u.user_id).execute(&mut *tx).await?;

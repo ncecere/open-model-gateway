@@ -1,0 +1,81 @@
+{{- if .Values.cnpg.cluster.enabled }}
+{{- $migrator := .Values.cnpg.cluster.roles.migrator }}
+{{- $runtime := .Values.cnpg.cluster.roles.runtime }}
+{{- if not $migrator.existingSecret }}{{ fail "cnpg.cluster.roles.migrator.existingSecret is required when cnpg.cluster.enabled is true (a pre-created kubernetes.io/basic-auth Secret)" }}{{- end }}
+{{- if not $runtime.existingSecret }}{{ fail "cnpg.cluster.roles.runtime.existingSecret is required when cnpg.cluster.enabled is true (a pre-created kubernetes.io/basic-auth Secret)" }}{{- end }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ include "omg.cnpg.clusterName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "omg.labels" . | nindent 4 }}
+spec:
+  instances: {{ .Values.cnpg.cluster.instances }}
+  imageName: {{ .Values.cnpg.cluster.image }}
+  minSyncReplicas: {{ .Values.cnpg.cluster.minSyncReplicas }}
+  maxSyncReplicas: {{ .Values.cnpg.cluster.maxSyncReplicas }}
+  storage:
+    storageClass: {{ .Values.cnpg.cluster.storageClass }}
+    size: {{ .Values.cnpg.cluster.storageSize }}
+  walStorage:
+    storageClass: {{ .Values.cnpg.cluster.storageClass }}
+    size: {{ .Values.cnpg.cluster.walStorageSize }}
+  resources:
+    {{- toYaml .Values.cnpg.cluster.resources | nindent 4 }}
+  bootstrap:
+    initdb:
+      database: {{ .Values.cnpg.cluster.database }}
+      owner: {{ $migrator.name }}
+      # Never chart-generated: the operator pre-creates this basic-auth
+      # Secret, so CNPG uses it as-is instead of minting new credentials.
+      secret:
+        name: {{ $migrator.existingSecret }}
+  # A CNPG managed role for gateway_runtime, backed by its own pre-created
+  # Secret. The runtime role gets no superuser/createdb/createrole/login-DDL
+  # attribute here; its actual table/column privileges come only from
+  # deploy/staging/runtime-grants.sql, applied by the migration Job
+  # (AGENTS.md "explicit table/column ACLs, never owner credentials").
+  managed:
+    roles:
+      - name: {{ $runtime.name }}
+        ensure: present
+        login: true
+        superuser: false
+        createdb: false
+        createrole: false
+        passwordSecret:
+          name: {{ $runtime.existingSecret }}
+  postgresql:
+    parameters:
+      {{- range $key, $value := .Values.cnpg.cluster.postgresql.parameters }}
+      {{ $key }}: {{ $value | quote }}
+      {{- end }}
+  affinity:
+    podAntiAffinityType: {{ if .Values.cnpg.cluster.additionalPodAntiAffinity }}required{{ else }}preferred{{ end }}
+    topologyKey: kubernetes.io/hostname
+    {{- with .Values.cnpg.cluster.nodeSelector }}
+    nodeSelector:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+  {{- if .Values.cnpg.cluster.backup.enabled }}
+  backup:
+    barmanObjectStore:
+      {{- toYaml .Values.cnpg.cluster.backup.barmanObjectStore | nindent 6 }}
+  {{- end }}
+{{- if .Values.cnpg.cluster.backup.enabled }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: {{ include "omg.cnpg.clusterName" . }}-backup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "omg.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.cnpg.cluster.backup.scheduledBackup.schedule | quote }}
+  backupOwnerReference: self
+  cluster:
+    name: {{ include "omg.cnpg.clusterName" . }}
+{{- end }}
+{{- end }}

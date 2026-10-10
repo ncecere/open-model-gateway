@@ -426,6 +426,53 @@ mod local_backend {
             & 0o777
     }
 
+    /// rand 0.10: the data key, nonces, temp-file suffix and health probe
+    /// come from the fallible OS RNG. A failure writes nothing and reports
+    /// `unavailable`; it never panics or uses another generator.
+    #[tokio::test]
+    async fn writes_fail_closed_when_the_os_rng_fails() {
+        use crate::entropy::seam::fail_on_this_thread;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("store");
+        let s = local(&root);
+        let key = workspace_key(Purpose::VideoOutput);
+        let files = |root: &std::path::Path| {
+            fn walk(dir: &std::path::Path, n: &mut usize) {
+                for e in std::fs::read_dir(dir).unwrap() {
+                    let p = e.unwrap().path();
+                    if p.is_dir() { walk(&p, n) } else { *n += 1 }
+                }
+            }
+            let mut n = 0;
+            walk(root, &mut n);
+            n
+        };
+        {
+            let _fail = fail_on_this_thread();
+            // Encryption header (data key, prefix, wrap nonce).
+            let error = s
+                .put(&key, body(vec![b"secret".to_vec()]), PutMeta::default())
+                .await
+                .unwrap_err();
+            assert_eq!(error, FileStoreError::Unavailable);
+            // The backend's temp-file suffix on its own.
+            let error = s
+                .backend()
+                .put(&key, body(vec![b"x".to_vec()]))
+                .await
+                .unwrap_err();
+            assert_eq!(error, FileStoreError::Unavailable);
+            // The health probe payload.
+            assert_eq!(s.health().await.unwrap_err(), FileStoreError::Unavailable);
+            assert!(KeyRing::random("k").is_err());
+        }
+        assert_eq!(files(s.backend().root()), 0);
+        s.put(&key, body(vec![b"secret".to_vec()]), PutMeta::default())
+            .await
+            .unwrap();
+        assert_eq!(files(s.backend().root()), 1);
+    }
+
     #[tokio::test]
     async fn stores_private_files_atomically_and_deletes_idempotently() {
         let tmp = tempfile::tempdir().unwrap();

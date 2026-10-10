@@ -214,7 +214,7 @@ fn transport_and_origin_configuration_is_strict() {
 
 #[test]
 fn duplicate_and_malformed_cookies_are_rejected() {
-    let token = random_token();
+    let token = random_token().unwrap();
     assert!(is_token(&token));
     assert_eq!(hash(&token).len(), 32);
     let mut headers = cookie_header(SESSION, &token);
@@ -249,7 +249,7 @@ fn cookie_attributes_are_host_only_and_explicit() {
         set_cookie(
             &mut response,
             SESSION,
-            &random_token(),
+            &random_token().unwrap(),
             SESSION_SECONDS,
             secure,
             true,
@@ -257,7 +257,7 @@ fn cookie_attributes_are_host_only_and_explicit() {
         set_cookie(
             &mut response,
             CSRF,
-            &random_token(),
+            &random_token().unwrap(),
             SESSION_SECONDS,
             secure,
             false,
@@ -265,7 +265,7 @@ fn cookie_attributes_are_host_only_and_explicit() {
         set_cookie(
             &mut response,
             BROWSER,
-            &random_token(),
+            &random_token().unwrap(),
             LOGIN_SECONDS,
             secure,
             true,
@@ -290,7 +290,7 @@ fn cookie_attributes_are_host_only_and_explicit() {
 async fn discovery_and_csrf_origin_validation() {
     let mock = MockProvider::start(None).await;
     let state = mock.state(lazy_pool()).await;
-    let token = random_token();
+    let token = random_token().unwrap();
     let mut headers = HeaderMap::new();
     headers.insert("origin", "http://127.0.0.1:3000".parse().unwrap());
     headers.insert("x-csrf-token", token.parse().unwrap());
@@ -311,7 +311,7 @@ async fn discovery_and_csrf_origin_validation() {
         );
     }
     headers.insert("origin", "http://127.0.0.1:3000".parse().unwrap());
-    assert!(verify_csrf(&state, &headers, &hash(&random_token())).is_err());
+    assert!(verify_csrf(&state, &headers, &hash(&random_token().unwrap())).is_err());
     headers.append("x-csrf-token", token.parse().unwrap());
     assert!(verify_csrf(&state, &headers, &hash(&token)).is_err());
     headers.remove("x-csrf-token");
@@ -618,8 +618,8 @@ mod database {
 
     async fn seed(pool: &sqlx::PgPool) -> (Uuid, String, String) {
         let id = Uuid::new_v4();
-        let session = random_token();
-        let csrf = random_token();
+        let session = random_token().unwrap();
+        let csrf = random_token().unwrap();
         sqlx::query("INSERT INTO users(id,email) VALUES($1,$2)")
             .bind(id)
             .bind(format!("{id}@example.test"))
@@ -817,11 +817,11 @@ mod database {
     #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn attempts_are_bound_expiring_and_single_use(pool: sqlx::PgPool) {
         let store = Store::new(pool.clone());
-        let oauth_state = random_token();
-        let browser = random_token();
+        let oauth_state = random_token().unwrap();
+        let browser = random_token().unwrap();
         sqlx::query("INSERT INTO oidc_login_attempts VALUES($1,$2,'nonce','verifier',now()+interval '10 minutes')").bind(hash(&oauth_state)).bind(hash(&browser)).execute(&pool).await.unwrap();
         assert!(
-            consume_attempt(&store, &oauth_state, &random_token())
+            consume_attempt(&store, &oauth_state, &random_token().unwrap())
                 .await
                 .is_err()
         );
@@ -1194,6 +1194,80 @@ mod database {
         assert_eq!(safe_return_path(&format!("/{}", "a".repeat(2048))), None);
     }
 
+    /// rand 0.10: state, nonce, PKCE verifier, browser binding, session and
+    /// CSRF tokens come from the fallible OS RNG. A failure is a 500 that
+    /// stores nothing and signs nobody in; it never panics.
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn sign_in_fails_closed_when_the_os_rng_fails(pool: sqlx::PgPool) {
+        use crate::entropy::seam::fail_on_this_thread;
+        let mock = MockProvider::start(None).await;
+        let state = mock.state(pool.clone()).await;
+        let app = router(state.clone()).with_state(state.store.clone());
+        sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES($1,$2,'entitled','platform','user')")
+            .bind(Uuid::new_v4()).bind(&mock.issuer).execute(&pool).await.unwrap();
+        let login = || {
+            Request::builder()
+                .uri("/api/v1/auth/login")
+                .body(Body::empty())
+                .unwrap()
+        };
+        {
+            let _fail = fail_on_this_thread();
+            let response = app.clone().oneshot(login()).await.unwrap();
+            assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+            assert!(response.headers().get(header::LOCATION).is_none());
+            assert!(response.headers().get(header::SET_COOKIE).is_none());
+        }
+        let attempts = |pool: sqlx::PgPool| async move {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM oidc_login_attempts")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        };
+        assert_eq!(attempts(pool.clone()).await, 0);
+        // A working login, then a callback whose session tokens cannot be drawn.
+        let response = app.clone().oneshot(login()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let url = Url::parse(response.headers()[header::LOCATION].to_str().unwrap()).unwrap();
+        let params: HashMap<_, _> = url
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        assert_eq!(params["code_challenge"].len(), 43);
+        mock.claims.lock().unwrap()["nonce"] = json!(params["nonce"]);
+        let browser = response_cookie(&response, BROWSER);
+        let _fail = fail_on_this_thread();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/auth/callback?state={}&code=good",
+                        params["state"]
+                    ))
+                    .header(header::COOKIE, format!("{BROWSER}={browser}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            response
+                .headers()
+                .get_all(header::SET_COOKIE)
+                .iter()
+                .all(|h| !h.to_str().unwrap().starts_with(&format!("{SESSION}=")))
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM browser_sessions")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+    }
+
     #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn sign_in_returns_to_the_validated_deep_link(pool: sqlx::PgPool) {
         let mock = MockProvider::start(None).await;
@@ -1230,7 +1304,7 @@ mod database {
         assert_eq!(location, "/");
         // The database rejects an unsafe stored value even if the handler were bypassed.
         let rejected = sqlx::query("INSERT INTO oidc_login_attempts VALUES($1,$2,'n','v',now()+interval '1 minute','//evil.example')")
-            .bind(hash(&random_token())).bind(hash(&random_token())).execute(&pool).await;
+            .bind(hash(&random_token().unwrap())).bind(hash(&random_token().unwrap())).execute(&pool).await;
         assert!(rejected.is_err());
     }
 
@@ -1641,7 +1715,7 @@ mod database {
             .fetch_one(&pool)
             .await
             .unwrap();
-        let key = crate::auth::NewApiKey::generate();
+        let key = crate::auth::NewApiKey::generate().unwrap();
         sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash) VALUES($1,$2,$3,'Mine',$4)")
             .bind(key.id).bind(ws).bind(principal.user_id).bind(key.digest.as_slice()).execute(&pool).await.unwrap();
         // Profile divergence and even another account owning the signed email must not

@@ -1,0 +1,52 @@
+{{- if and .Values.loadtest.enabled .Values.loadtest.loadgen.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "omg.fullname" . }}-loadgen
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "omg.labels" . | nindent 4 }}
+    app.kubernetes.io/component: loadtest-loadgen
+  annotations:
+    # Not a Helm hook: this Job is a manual P8 trigger, run with
+    # `helm template ... | kubectl apply -f-` or `kubectl create job
+    # --from=job/...` once mock-upstream and the gateway are ready.
+    omg.io/manual-trigger: "true"
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        {{- include "omg.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: loadtest-loadgen
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: loadgen
+          image: "{{ .Values.loadtest.image.repository }}{{ if .Values.loadtest.image.digest }}@{{ .Values.loadtest.image.digest }}{{ else }}:{{ .Values.loadtest.image.tag }}{{ end }}"
+          imagePullPolicy: {{ .Values.loadtest.image.pullPolicy }}
+          command: ["/usr/local/bin/loadgen"]
+          args:
+            - "run"
+            - "--base-url"
+            - "http://{{ include "omg.fullname" . }}:{{ .Values.service.port }}"
+            - "--requests"
+            - {{ .Values.loadtest.loadgen.requests | quote }}
+            - "--concurrency"
+            - {{ .Values.loadtest.loadgen.concurrency | quote }}
+          resources:
+            {{- toYaml .Values.loadtest.loadgen.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+{{- end }}

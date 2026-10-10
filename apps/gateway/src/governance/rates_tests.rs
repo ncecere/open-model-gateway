@@ -10,7 +10,7 @@ use crate::{
     auth::Principal,
     governance::tests::db::{Fixture, done, fixture, request},
 };
-use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
+use rand::{RngExt, SeedableRng, rngs::StdRng, seq::IndexedRandom};
 use sqlx::{PgPool, migrate::Migrator};
 
 fn start_for(f: &Fixture, principal: Principal) -> ExecutionStart {
@@ -248,13 +248,13 @@ async fn random_interleavings_keep_rate_counters_equal_to_the_scan(pool: PgPool)
         now + chrono::TimeDelta::seconds(3600),
     ];
     for step in 0..300 {
-        let op = rng.gen_range(0..100);
+        let op = rng.random_range(0..100);
         let p = *principals.choose(&mut rng).unwrap();
         let what;
         if op < 25 || pending.is_empty() {
             what = "admit";
             let s = start_for(&f, p);
-            match admit(&f.store, &s, &request(), rng.gen_range(1..90)).await {
+            match admit(&f.store, &s, &request(), rng.random_range(1..90)).await {
                 Ok(()) => {
                     pending.push(s.id);
                     all.push(s.id);
@@ -266,29 +266,33 @@ async fn random_interleavings_keep_rate_counters_equal_to_the_scan(pool: PgPool)
             }
         } else if op < 37 && !pending.is_empty() {
             what = "settle (observed excess raises tokens)";
-            let id = pending.swap_remove(rng.gen_range(0..pending.len()));
+            let id = pending.swap_remove(rng.random_range(0..pending.len()));
             let _ = finish(
                 &f.store,
-                &done(id, Some(rng.gen_range(0..100)), Some(rng.gen_range(0..50))),
+                &done(
+                    id,
+                    Some(rng.random_range(0..100)),
+                    Some(rng.random_range(0..50)),
+                ),
             )
             .await;
         } else if op < 42 && !pending.is_empty() {
             what = "fail (unknown)";
-            let id = pending.swap_remove(rng.gen_range(0..pending.len()));
+            let id = pending.swap_remove(rng.random_range(0..pending.len()));
             let _ = finish(&f.store, &failed(id)).await;
         } else if op < 47 && !pending.is_empty() {
             what = "expire lease (with or without reconciliation)";
             let id = *pending.choose(&mut rng).unwrap();
-            let offset = [-61, -30, -1, 0, 1, 30][rng.gen_range(0..6)];
+            let offset = [-61, -30, -1, 0, 1, 30][rng.random_range(0..6)];
             sqlx::query("UPDATE governance_reservations SET lease_expires_at=$2 WHERE execution_id=$1 AND state='pending'")
                 .bind(id).bind(now + chrono::TimeDelta::seconds(offset)).execute(&pool).await.unwrap();
-            if rng.gen_bool(0.3) {
+            if rng.random_bool(0.3) {
                 reconcile_expired(&f.store, 100).await.unwrap();
             }
         } else if op < 55 {
             what = "async job admission (video or native batch)";
-            let video = rng.gen_bool(0.5);
-            let at = instants[rng.gen_range(0..3)];
+            let video = rng.random_bool(0.5);
+            let at = instants[rng.random_range(0..3)];
             let e = insert_execution(
                 &pool,
                 &f,
@@ -303,23 +307,23 @@ async fn random_interleavings_keep_rate_counters_equal_to_the_scan(pool: PgPool)
                 &f,
                 p,
                 e,
-                minute + minute_s * rng.gen_range(-1..2),
-                now + chrono::TimeDelta::seconds(rng.gen_range(-5..4000)),
-                Some(rng.gen_range(0..500)),
+                minute + minute_s * rng.random_range(-1..2),
+                now + chrono::TimeDelta::seconds(rng.random_range(-5..4000)),
+                Some(rng.random_range(0..500)),
             )
             .await;
             all.push(e);
-            if rng.gen_bool(0.7) {
+            if rng.random_bool(0.7) {
                 let j = insert_job(&pool, &f, p, e, video).await;
                 jobs.push(j);
-                if !video && rng.gen_bool(0.5) {
+                if !video && rng.random_bool(0.5) {
                     batches.push((j, p));
                 }
             }
         } else if op < 60 && !jobs.is_empty() {
             what = "job progresses, finishes or is cancel-requested";
             let j = *jobs.choose(&mut rng).unwrap();
-            match rng.gen_range(0..3) {
+            match rng.random_range(0..3) {
                 0 => sqlx::query("UPDATE async_jobs SET state='in_progress' WHERE id=$1 AND state='queued'"),
                 1 => sqlx::query("UPDATE async_jobs SET state='completed',completed_at=now() WHERE id=$1 AND state IN('queued','in_progress')"),
                 _ => sqlx::query("UPDATE async_jobs SET cancel_requested_at=coalesce(cancel_requested_at,now()) WHERE id=$1"),
@@ -345,14 +349,14 @@ async fn random_interleavings_keep_rate_counters_equal_to_the_scan(pool: PgPool)
             all.push(e);
         } else if op < 72 {
             what = "unreserved execution";
-            let at =
-                instants[rng.gen_range(0..3)] + chrono::TimeDelta::seconds(rng.gen_range(-20..20));
+            let at = instants[rng.random_range(0..3)]
+                + chrono::TimeDelta::seconds(rng.random_range(-20..20));
             insert_execution(&pool, &f, p, "generation", at, None).await;
         } else if op < 77 {
             what = "unpriced or untruncated-minute reservation";
             let e = insert_execution(&pool, &f, p, "generation", now, None).await;
-            let at = if rng.gen_bool(0.5) { minute } else { now };
-            let reserved = if rng.gen_bool(0.5) { None } else { Some(40) };
+            let at = if rng.random_bool(0.5) { minute } else { now };
+            let reserved = if rng.random_bool(0.5) { None } else { Some(40) };
             insert_reservation(
                 &pool,
                 &f,
@@ -367,17 +371,17 @@ async fn random_interleavings_keep_rate_counters_equal_to_the_scan(pool: PgPool)
         } else if op < 82 && !pending.is_empty() {
             what = "window growth or normalized usage on a pending reservation";
             let id = *pending.choose(&mut rng).unwrap();
-            if rng.gen_bool(0.5) {
+            if rng.random_bool(0.5) {
                 sqlx::query("UPDATE governance_reservations SET reserved_tokens=reserved_tokens+$2 WHERE execution_id=$1 AND state='pending'")
-                    .bind(id).bind(rng.gen_range(0..300i64)).execute(&pool).await.unwrap();
+                    .bind(id).bind(rng.random_range(0..300i64)).execute(&pool).await.unwrap();
             } else {
                 sqlx::query("UPDATE governance_reservations SET input_tokens=50,output_tokens=$2,billing_usage=$3::jsonb WHERE execution_id=$1 AND state='pending'")
-                    .bind(id).bind(rng.gen_range(0..400i64)).bind(BILLING).execute(&pool).await.unwrap();
+                    .bind(id).bind(rng.random_range(0..400i64)).bind(BILLING).execute(&pool).await.unwrap();
             }
         } else if op < 88 && !all.is_empty() {
             what = "move reservation minute (execution start refused)";
             let id = *all.choose(&mut rng).unwrap();
-            let delta = minute_s * rng.gen_range(-1..2);
+            let delta = minute_s * rng.random_range(-1..2);
             sqlx::query("UPDATE governance_reservations SET minute_start=minute_start+$2 WHERE execution_id=$1")
                 .bind(id).bind(delta).execute(&pool).await.unwrap();
             // A reserved execution's start is its reservation's admission time (0030 key).
@@ -396,7 +400,7 @@ async fn random_interleavings_keep_rate_counters_equal_to_the_scan(pool: PgPool)
         } else if op < 93 && !all.is_empty() {
             what = "change workload or batch link";
             let id = *all.choose(&mut rng).unwrap();
-            let kind = ["generation", "videos", "batches", "embeddings"][rng.gen_range(0..4)];
+            let kind = ["generation", "videos", "batches", "embeddings"][rng.random_range(0..4)];
             sqlx::query("UPDATE inference_executions SET workload_kind=$2 WHERE id=$1")
                 .bind(id)
                 .bind(kind)
@@ -411,7 +415,7 @@ async fn random_interleavings_keep_rate_counters_equal_to_the_scan(pool: PgPool)
             what = "move or delete an unreserved execution";
             let orphan: Option<Uuid> = sqlx::query_scalar("SELECT id FROM inference_executions e WHERE NOT EXISTS(SELECT 1 FROM governance_reservations r WHERE r.execution_id=e.id) AND NOT EXISTS(SELECT 1 FROM async_jobs j WHERE j.execution_id=e.id) ORDER BY id LIMIT 1").fetch_optional(&pool).await.unwrap();
             if let Some(id) = orphan {
-                if rng.gen_bool(0.5) {
+                if rng.random_bool(0.5) {
                     sqlx::query("DELETE FROM inference_executions WHERE id=$1")
                         .bind(id)
                         .execute(&pool)

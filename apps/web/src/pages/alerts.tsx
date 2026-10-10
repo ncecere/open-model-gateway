@@ -9,7 +9,7 @@ import { useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { BellRing, CheckCheck, History, Plus } from "lucide-react";
 import { api, platformPath, type Provider, type Session, type Workspace } from "../lib/api";
-import { conditionText, draftOf, emailLabels, eventsPath, kindHints, kindLabels, kindsFor, layerLabels, layersFor, newDraft, notificationsPath, recipientsText, resolutionLabels, ruleBody, sourceText, ruleErrors, rulePath, rulesPath, spendPeriodLabels, unknownCostNote, whereText, type AlertEvent, type AlertKind, type AlertRule, type AlertScope, type BudgetLayer, type Notification, type RuleDraft, type RuleList, type SpendPeriod } from "../lib/alerts";
+import { conditionText, draftOf, emailLabels, eventsPath, kindHints, kindLabels, kindsFor, layerLabels, layersFor, lockWaitChoices, newDraft, notificationsPath, recipientsText, resolutionLabels, ruleBody, sourceText, ruleErrors, rulePath, rulesPath, spendPeriodLabels, unknownCostNote, whereText, type AlertEvent, type AlertKind, type AlertRule, type AlertScope, type BudgetLayer, type Notification, type RuleDraft, type RuleList, type SpendPeriod } from "../lib/alerts";
 import { permissions, type DashboardSearch } from "../lib/permissions";
 import { Button, ErrorNotice, FormField, Heading, Input, NativeSelect, Stack, Textarea, useAction, useApi, useChoices } from "../components/ui";
 import { ResourcePage } from "../components/resource-page";
@@ -162,6 +162,13 @@ export function AlertRulePage({ session, scope, workspace, id }: { session: Sess
           {field("consecutive", "Failures in a row", { optional: true, inputMode: "numeric" })}
         </>}
         {form.kind === "batch_stalled" && field("window", "No progress for (minutes)", { inputMode: "numeric" })}
+        {form.kind === "admission_ceiling" && <>
+          {field("window", "Window (minutes)", { inputMode: "numeric", description: "5–10 complete minutes." })}
+          {field("ceilingRate", "Requests per second", { optional: true, inputMode: "numeric", description: "Every minute of the window at or above this, for one workspace or key." })}
+          <FormField label="Lock wait p95" labelHint="Optional" description="Time one scope's requests wait for each other." error={shown.ceilingWait}>
+            <NativeSelect value={form.ceilingWait} disabled={busy} onChange={ev => set("ceilingWait", ev.target.value)}><option value="">Off</option>{lockWaitChoices.map(v => <option key={v} value={String(v)}>{v >= 1000 ? `${v / 1000} s` : `${v} ms`}</option>)}</NativeSelect>
+          </FormField>
+        </>}
         {form.kind === "batch_failed" && <p className={s.note}>Fires once per failed or expired batch{scope.kind === "platform" ? " in teams and projects" : ""}.</p>}
         {(form.kind === "error_rate" || form.kind === "provider_failing") && <>
           {field("window", "Window (minutes)", { inputMode: "numeric" })}
@@ -174,7 +181,9 @@ export function AlertRulePage({ session, scope, workspace, id }: { session: Sess
           {scope.kind === "workspace" && <Checkbox label="Workspace admins" checked={form.notifyWorkspaceAdmins} disabled={busy} onCheckedChange={checked => set("notifyWorkspaceAdmins", checked === true)} />}
           <Checkbox label="Platform admins" checked={form.notifyPlatformAdmins} disabled={busy} onCheckedChange={checked => set("notifyPlatformAdmins", checked === true)} />
         </Stack></Wide>
-        <Wide><FormField label="Other addresses" labelHint="Optional" error={shown.emails}><Textarea rows={2} value={form.emails} placeholder="finance@example.com" disabled={busy} onChange={ev => set("emails", ev.target.value)} /></FormField></Wide>
+        {form.kind === "admission_ceiling"
+          ? <p className={s.note}>These alerts name the workspace, so they're emailed to Platform admins only. Personal workspaces are never named.</p>
+          : <Wide><FormField label="Other addresses" labelHint="Optional" error={shown.emails}><Textarea rows={2} value={form.emails} placeholder="finance@example.com" disabled={busy} onChange={ev => set("emails", ev.target.value)} /></FormField></Wide>}
       </FormSection>
     </>}
   </FormPage>;

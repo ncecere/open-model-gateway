@@ -96,6 +96,16 @@ groups:
         annotations:
           summary: Database pool at 90% or more on {{ $labels.instance }}
           description: "Raise GATEWAY_DATABASE_MAX_CONNECTIONS within PostgreSQL max_connections, or scale replicas."
+      - alert: GatewayScopeLockWaitHigh
+        # One workspace or key near its scoped-admission ceiling (metrics carry
+        # no scope ids; the in-app `admission_ceiling` rule names the scope).
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(gateway_scope_lock_wait_seconds_bucket{lock="rows",path="admission"}[5m]))) > 0.1
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: Admissions wait over 100 ms (p95) for their workspace or key totals rows
+          description: "One hot workspace or key serializes its own admissions. Add an admission_ceiling alert rule to see which; spread the traffic over workspaces or keys."
       - alert: GatewayAlertEvaluatorFailing
         expr: increase(gateway_alert_evaluations_total{result="failed"}[30m]) > 2 or increase(gateway_alert_rule_failures_total[30m]) > 0
         labels: {severity: warning}

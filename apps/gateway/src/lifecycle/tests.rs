@@ -87,8 +87,8 @@ async fn loss_reactivation_cleanup_preserves_history_and_service_credentials(poo
         .fetch_one(&pool)
         .await
         .unwrap();
-    let human = NewApiKey::generate();
-    let service = NewApiKey::generate();
+    let human = NewApiKey::generate().unwrap();
+    let service = NewApiKey::generate().unwrap();
     let account = Uuid::new_v4();
     sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash) VALUES($1,$2,$3,'Human',$4)").bind(human.id).bind(personal).bind(user).bind(human.digest.as_slice()).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO service_accounts(id,workspace_id,name) VALUES($1,$2,'Robot')")
@@ -191,7 +191,7 @@ async fn shared_group_membership_loss_retires_keys_without_restoring_them_on_ret
         .execute(&pool)
         .await
         .unwrap();
-    let issued = NewApiKey::generate();
+    let issued = NewApiKey::generate().unwrap();
     sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash) VALUES($1,$2,$3,'Shared human',$4)").bind(issued.id).bind(shared).bind(user).bind(issued.digest.as_slice()).execute(&pool).await.unwrap();
     assert!(store.authenticate(&issued.token).await.unwrap().is_some());
     assert!(sync(&store, user, &[]).await); // manual platform entitlement is independent

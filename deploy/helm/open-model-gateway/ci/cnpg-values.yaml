@@ -1,0 +1,36 @@
+# Profile: chart-managed CloudNativePG Cluster + Pooler (bitop-talos
+# conventions: local-ssd StorageClass, Traefik internal ingress class).
+cnpg:
+  cluster:
+    enabled: true
+    instances: 2
+    storageClass: local-ssd
+    roles:
+      migrator:
+        existingSecret: gateway-migrator-role
+      runtime:
+        existingSecret: gateway-runtime-role
+  pooler:
+    enabled: true
+
+secrets:
+  migrator:
+    existingSecret: "" # unused: cnpg.cluster.roles.migrator.existingSecret wins
+  oidc:
+    enabled: true
+    existingSecret: gateway-oidc
+  fileStore:
+    enabled: true
+    existingSecret: gateway-filestore-keys
+
+ingress:
+  enabled: true
+  className: traefik-internal
+  host: gateway.bitop.dev
+
+networkPolicy:
+  enabled: true
+
+metrics:
+  serviceMonitor:
+    enabled: true

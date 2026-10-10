@@ -58,6 +58,23 @@ describe("alert rule form", () => {
     expect(unknownCostNote({ details: { unknown_cost_requests: 2 } })).toMatch(/2 requests have unknown cost/);
     expect(unknownCostNote({ details: { unknown_cost_requests: 0 } })).toBeUndefined();
   });
+  it("admission ceiling rules are installation-only, 5–10 min, Platform admins only", () => {
+    expect(kindsFor(platform)).toContain("admission_ceiling"); expect(kindsFor(workspace)).not.toContain("admission_ceiling");
+    const d = { ...newDraft(platform, "admission_ceiling"), name: "Hot scopes", emails: "ops@example.com" };
+    expect(ruleErrors(d)).toEqual({});
+    expect(ruleBody(d, platform)).toEqual({ name: "Hot scopes", kind: "admission_ceiling", enabled: true, notify_platform_admins: true, notify_emails: [], window_minutes: 5, ceiling_requests_per_second: 200, ceiling_lock_wait_ms: 250 });
+    expect(ruleBody({ ...d, ceilingRate: "" }, platform)).not.toHaveProperty("ceiling_requests_per_second");
+    expect(ruleErrors({ ...d, window: "11" }).window).toBeTruthy();
+    expect(ruleErrors({ ...d, ceilingRate: "", ceilingWait: "" }).ceilingRate).toBeTruthy();
+    expect(ruleErrors({ ...d, ceilingWait: "300" }).ceilingWait).toBeTruthy();
+    const stored: AlertRule = { ...rule, kind: "admission_ceiling", spike_factor_percent: null, min_spend_microusd: null, window_minutes: 10, ceiling_requests_per_second: null, ceiling_lock_wait_ms: 500, notify_emails: [] };
+    expect(draftOf(stored)).toMatchObject({ window: "10", ceilingRate: "", ceilingWait: "500" });
+    expect(conditionText(stored)).toBe("One workspace or key: lock wait p95 ≥ 500 ms over 10 min");
+    // Personal workspaces are never named; Auditors get no workspace reference.
+    expect(whereText({ kind: "admission_ceiling", builtin: false, connection: null, workspace: null, details: { personal: true } })).toBe("A personal workspace");
+    expect(whereText({ kind: "admission_ceiling", builtin: false, connection: null, workspace: null, details: {} })).toBe("A workspace");
+    expect(whereText({ kind: "admission_ceiling", builtin: false, connection: null, workspace: { id: "t", name: "Platform", kind: "team" }, details: {} })).toBe("Platform");
+  });
 });
 
 describe("alert locations and visibility", () => {

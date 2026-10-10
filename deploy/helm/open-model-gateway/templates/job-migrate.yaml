@@ -1,0 +1,84 @@
+{{- if .Values.migrations.run }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "omg.fullname" . }}-migrate-{{ .Release.Revision }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "omg.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "omg.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      # AGENTS.md: a separate migrator Secret, mounted only here (and a
+      # future cronjob-partitions), never in the gateway Deployment. The
+      # migrator connects directly (never through the transaction-mode
+      # Pooler): session-level advisory locks and DDL need a plain session.
+      initContainers:
+        - name: migrate
+          image: {{ include "omg.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["migrate"]
+          env:
+            {{- include "omg.env.migratorDatabase" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+      containers:
+        # No Rust `apply-runtime-grants` subcommand exists yet (the gateway
+        # image has no psql and this chart must not change Rust/migrations;
+        # see docs/kubernetes.md "Migration job and runtime grants"). This
+        # step runs the same deploy/staging/runtime-grants.sql through the
+        # standard PostgreSQL client image as the migrator role, exactly as
+        # `scripts/staging.py migrate` does outside Kubernetes.
+        - name: apply-runtime-grants
+          image: "{{ .Values.migrations.grants.image.repository }}{{ if .Values.migrations.grants.image.digest }}@{{ .Values.migrations.grants.image.digest }}{{ else }}:{{ .Values.migrations.grants.image.tag }}{{ end }}"
+          command: ["psql"]
+          # $(DATABASE_URL) is Kubernetes' own arg substitution (never a
+          # shell), resolved from the env entries below.
+          args: ["-v", "ON_ERROR_STOP=1", "-f", "/sql/runtime-grants.sql", "$(DATABASE_URL)"]
+          env:
+            - name: PGCONNECT_TIMEOUT
+              value: "10"
+            {{- include "omg.env.migratorDatabase" . | nindent 12 }}
+          volumeMounts:
+            - name: runtime-grants
+              mountPath: /sql
+              readOnly: true
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: runtime-grants
+          configMap:
+            name: {{ include "omg.grantsConfigMapName" . }}
+{{- end }}

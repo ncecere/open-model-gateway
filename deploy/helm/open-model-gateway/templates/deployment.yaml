@@ -1,0 +1,184 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "omg.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "omg.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.hpa.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: 3
+  strategy:
+    # AGENTS.md: serve never migrates. A release with migrations uses
+    # `migrations.run=true` plus `upgrade.mode: drain` (docs/kubernetes.md);
+    # the rolling default here is for migration-free releases only.
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "omg.gatewaySelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "omg.labels" . | nindent 8 }}
+        app.kubernetes.io/component: gateway
+        {{- with .Values.gateway.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.gateway.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "omg.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.gateway.serviceAccount.automount }}
+      terminationGracePeriodSeconds: {{ .Values.gateway.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.gateway.podSecurityContext | nindent 8 }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      topologySpreadConstraints:
+        {{- range .Values.gateway.topologySpreadConstraints }}
+        - maxSkew: {{ .maxSkew }}
+          topologyKey: {{ .topologyKey }}
+          whenUnsatisfiable: {{ .whenUnsatisfiable }}
+          labelSelector:
+            matchLabels:
+              {{- include "omg.gatewaySelectorLabels" $ | nindent 14 }}
+        {{- end }}
+      {{- with .Values.gateway.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.gateway.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.gateway.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: gateway
+          image: {{ include "omg.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["serve"]
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: metrics
+              containerPort: 9464
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "omg.configMapName" . }}
+            {{- range .Values.gateway.extraEnvFrom }}
+            - {{ toYaml . | nindent 14 }}
+            {{- end }}
+          env:
+            {{- include "omg.env.runtimeDatabase" . | nindent 12 }}
+            {{- include "omg.env.listenDatabase" . | nindent 12 }}
+            {{- include "omg.env.reportingDatabase" . | nindent 12 }}
+            {{- if .Values.secrets.oidc.enabled }}
+            - name: GATEWAY_OIDC_ISSUER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.oidc.existingSecret }}
+                  key: {{ .Values.secrets.oidc.issuerKey }}
+            - name: GATEWAY_OIDC_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.oidc.existingSecret }}
+                  key: {{ .Values.secrets.oidc.clientIdKey }}
+            - name: GATEWAY_OIDC_CLIENT_SECRET_FILE
+              value: /var/run/omg-secrets/oidc/{{ .Values.secrets.oidc.clientSecretKey }}
+            {{- end }}
+            {{- if .Values.secrets.providers.openaiApiKey.enabled }}
+            - name: OPENAI_API_KEY_FILE
+              value: /var/run/omg-secrets/openai/{{ .Values.secrets.providers.openaiApiKey.key }}
+            {{- end }}
+            {{- if .Values.secrets.providers.anthropicApiKey.enabled }}
+            - name: ANTHROPIC_API_KEY_FILE
+              value: /var/run/omg-secrets/anthropic/{{ .Values.secrets.providers.anthropicApiKey.key }}
+            {{- end }}
+            {{- if .Values.secrets.fileStore.enabled }}
+            - name: {{ .Values.secrets.fileStore.encryptionKeysEnvVar }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.fileStore.existingSecret }}
+                  key: {{ .Values.secrets.fileStore.encryptionKeysKey }}
+            {{- end }}
+            {{- range .Values.gateway.extraEnv }}
+            - {{ toYaml . | nindent 14 }}
+            {{- end }}
+          startupProbe:
+            {{- toYaml .Values.gateway.probes.startup | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.gateway.probes.liveness | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.gateway.probes.readiness | nindent 12 }}
+          lifecycle:
+            preStop:
+              # Readiness already fails fast on SIGTERM (GATEWAY_DRAIN_SECONDS,
+              # scale-design.md 8.1); this sleep keeps the pod routable while
+              # the load balancer/endpoint list catches up before shutdown.
+              sleep:
+                seconds: {{ .Values.gateway.drainSeconds }}
+          resources:
+            {{- toYaml .Values.gateway.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.gateway.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.secrets.oidc.enabled }}
+            - name: oidc-secret
+              mountPath: /var/run/omg-secrets/oidc
+              readOnly: true
+            {{- end }}
+            {{- if .Values.secrets.providers.openaiApiKey.enabled }}
+            - name: openai-secret
+              mountPath: /var/run/omg-secrets/openai
+              readOnly: true
+            {{- end }}
+            {{- if .Values.secrets.providers.anthropicApiKey.enabled }}
+            - name: anthropic-secret
+              mountPath: /var/run/omg-secrets/anthropic
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.gateway.tmpSizeLimit }}
+        {{- if .Values.secrets.oidc.enabled }}
+        - name: oidc-secret
+          secret:
+            secretName: {{ .Values.secrets.oidc.existingSecret }}
+            items:
+              - key: {{ .Values.secrets.oidc.clientSecretKey }}
+                path: {{ .Values.secrets.oidc.clientSecretKey }}
+        {{- end }}
+        {{- if .Values.secrets.providers.openaiApiKey.enabled }}
+        - name: openai-secret
+          secret:
+            secretName: {{ .Values.secrets.providers.openaiApiKey.existingSecret }}
+            items:
+              - key: {{ .Values.secrets.providers.openaiApiKey.key }}
+                path: {{ .Values.secrets.providers.openaiApiKey.key }}
+        {{- end }}
+        {{- if .Values.secrets.providers.anthropicApiKey.enabled }}
+        - name: anthropic-secret
+          secret:
+            secretName: {{ .Values.secrets.providers.anthropicApiKey.existingSecret }}
+            items:
+              - key: {{ .Values.secrets.providers.anthropicApiKey.key }}
+                path: {{ .Values.secrets.providers.anthropicApiKey.key }}
+        {{- end }}

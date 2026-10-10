@@ -75,8 +75,8 @@ pub async fn seed(store: &Store, environment: Environment) -> Result<Option<Deve
     let team_workspace_id = Uuid::new_v4();
     let provider_id = Uuid::new_v4();
     let model_id = Uuid::new_v4();
-    let personal_key = NewApiKey::generate();
-    let team_key = NewApiKey::generate();
+    let personal_key = NewApiKey::generate()?;
+    let team_key = NewApiKey::generate()?;
     sqlx::query(
         "INSERT INTO users(id,email,oidc_link_allowed) VALUES($1,'developer@local.invalid',true)",
     )

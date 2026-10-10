@@ -376,7 +376,7 @@ pub(crate) mod db {
         }
         let mut principals = Vec::new();
         for w in [ws, team] {
-            let key = NewApiKey::generate();
+            let key = NewApiKey::generate().unwrap();
             sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash) VALUES($1,$2,$3,'fixture',$4)").bind(key.id).bind(w).bind(owner).bind(key.digest.as_slice()).execute(&pool).await.unwrap();
             principals.push(Principal {
                 key_id: key.id,
@@ -607,7 +607,7 @@ pub(crate) mod db {
     async fn service_account_requires_live_account_and_workspace_grant(pool: PgPool) {
         let f = fixture(pool).await;
         let account = Uuid::new_v4();
-        let key = NewApiKey::generate();
+        let key = NewApiKey::generate().unwrap();
         sqlx::query("INSERT INTO service_accounts(id,workspace_id,name) VALUES($1,$2,'service')")
             .bind(account)
             .bind(f.team.workspace_id)
@@ -767,7 +767,7 @@ pub(crate) mod db {
     }
     async fn fixture_for_workspace(f: &Fixture) -> Fixture {
         let ws = Uuid::new_v4();
-        let key = NewApiKey::generate();
+        let key = NewApiKey::generate().unwrap();
         sqlx::query("INSERT INTO workspaces(id,name,kind) VALUES($1,'isolated','project')")
             .bind(ws)
             .execute(&f.store.pool)
@@ -1975,7 +1975,7 @@ pub(crate) mod db {
         f.store.freeze_admission_clock().await.unwrap();
         sqlx::query("INSERT INTO key_policies(workspace_id,governance_key_id,requests_per_minute) VALUES($1,$2,1)").bind(f.principal.workspace_id).bind(f.principal.key_id).execute(&f.store.pool).await.unwrap();
         admit(&f.store, &f.start(), &request(), 30).await.unwrap();
-        let key = NewApiKey::generate();
+        let key = NewApiKey::generate().unwrap();
         sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash,governance_key_id) VALUES($1,$2,$3,'rotated',$4,$5)").bind(key.id).bind(f.principal.workspace_id).bind(f.owner).bind(key.digest.as_slice()).bind(f.principal.key_id).execute(&f.store.pool).await.unwrap();
         sqlx::query("UPDATE api_keys SET revoked_at=now() WHERE id=$1")
             .bind(f.principal.key_id)

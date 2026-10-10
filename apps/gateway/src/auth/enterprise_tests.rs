@@ -8,7 +8,7 @@ async fn key(
     service: Option<Uuid>,
     lineage: Option<Uuid>,
 ) -> NewApiKey {
-    let key = NewApiKey::generate();
+    let key = NewApiKey::generate().unwrap();
     sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,service_account_id,name,secret_hash,governance_key_id) VALUES($1,$2,$3,$4,'Test',$5,$6)")
         .bind(key.id).bind(ws).bind(user).bind(service).bind(key.digest.as_slice()).bind(lineage).execute(pool).await.unwrap();
     key
@@ -147,7 +147,7 @@ async fn workspace_foreign_keys_and_personal_privacy_are_enforced(pool: sqlx::Pg
         .await
         .unwrap();
     let service = key(&pool, a, None, Some(sa), None).await;
-    let digest = NewApiKey::generate();
+    let digest = NewApiKey::generate().unwrap();
     assert!(sqlx::query("INSERT INTO api_keys(id,workspace_id,service_account_id,name,secret_hash) VALUES($1,$2,$3,'Wrong',$4)").bind(digest.id).bind(b).bind(sa).bind(digest.digest.as_slice()).execute(&pool).await.is_err());
     assert!(sqlx::query("INSERT INTO api_keys(id,workspace_id,service_account_id,name,secret_hash,governance_key_id) VALUES($1,$2,$3,'Wrong lineage',$4,$5)").bind(digest.id).bind(a).bind(sa).bind(digest.digest.as_slice()).bind(Uuid::new_v4()).execute(&pool).await.is_err());
     let foreign = key(&pool, personal, Some(outsider), None, None).await;

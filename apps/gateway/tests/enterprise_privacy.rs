@@ -16,7 +16,7 @@ fn period() -> String {
 }
 
 async fn key(pool: &PgPool, ws: Uuid, owner: Uuid, name: &str) -> NewApiKey {
-    let key = NewApiKey::generate();
+    let key = NewApiKey::generate().unwrap();
     sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash) VALUES($1,$2,$3,$4,$5)")
         .bind(key.id).bind(ws).bind(owner).bind(name).bind(key.digest.as_slice()).execute(pool).await.unwrap();
     key
@@ -199,7 +199,7 @@ async fn shared_members_activity_predicate_precedes_totals_and_dimension_discove
     )
     .await;
     let account = Uuid::new_v4();
-    let service_key = NewApiKey::generate();
+    let service_key = NewApiKey::generate().unwrap();
     sqlx::query(
         "INSERT INTO service_accounts(id,workspace_id,name) VALUES($1,$2,'Hidden service')",
     )

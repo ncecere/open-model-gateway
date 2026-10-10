@@ -12,7 +12,7 @@ use crate::{
     governance::tests::db::{Fixture, done, fixture, request},
     inference::error::LimitScope,
 };
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 use sqlx::PgPool;
 use std::time::Duration;
 
@@ -42,7 +42,7 @@ fn start_for(f: &Fixture, principal: Principal) -> ExecutionStart {
 
 /// A key for `user` in workspace `ws` (a member's own key).
 async fn key_for(pool: &PgPool, ws: Uuid, user: Uuid) -> Principal {
-    let key = NewApiKey::generate();
+    let key = NewApiKey::generate().unwrap();
     sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash) VALUES($1,$2,$3,'race',$4)")
         .bind(key.id).bind(ws).bind(user).bind(key.digest.as_slice()).execute(pool).await.unwrap();
     Principal {
@@ -512,13 +512,13 @@ async fn deadlock_freedom_fuzz(pool: PgPool) {
                     &store,
                     &s,
                     &request(),
-                    if rng.gen_bool(0.2) { 1 } else { 60 },
+                    if rng.random_bool(0.2) { 1 } else { 60 },
                 )
                 .await
                 {
                     Ok(()) => {
-                        if rng.gen_bool(0.7) {
-                            let record = if rng.gen_bool(0.2) {
+                        if rng.random_bool(0.7) {
+                            let record = if rng.random_bool(0.2) {
                                 ExecutionFinish {
                                     id: s.id,
                                     outcome: Outcome::Failed,
@@ -529,8 +529,8 @@ async fn deadlock_freedom_fuzz(pool: PgPool) {
                             } else {
                                 done(
                                     s.id,
-                                    Some(rng.gen_range(1..=100)),
-                                    Some(rng.gen_range(1..=10)),
+                                    Some(rng.random_range(1..=100)),
+                                    Some(rng.random_range(1..=10)),
                                 )
                             };
                             finish(&store, &record).await.unwrap();
@@ -544,7 +544,7 @@ async fn deadlock_freedom_fuzz(pool: PgPool) {
                     ) => {}
                     Err(e) => panic!("{e:?}"),
                 }
-                if rng.gen_bool(0.1) {
+                if rng.random_bool(0.1) {
                     reconcile_expired(&store, 100).await.unwrap();
                 }
             }
@@ -565,16 +565,16 @@ async fn deadlock_freedom_fuzz(pool: PgPool) {
             let mut rng = StdRng::seed_from_u64(1000 + worker);
             for _ in 0..25 {
                 let mut tx = pool.begin().await.unwrap();
-                let catalog = rng.gen_bool(0.1);
+                let catalog = rng.random_bool(0.1);
                 sqlx::query(if catalog { "SELECT pg_advisory_xact_lock(72419502)" } else { "SELECT pg_advisory_xact_lock_shared(72419502)" })
                     .execute(&mut *tx).await.unwrap();
                 sqlx::query("SELECT lock_installation()").execute(&mut *tx).await.unwrap();
-                let lineage = lineages[rng.gen_range(0..lineages.len())];
-                let op = rng.gen_range(0..7);
+                let lineage = lineages[rng.random_range(0..lineages.len())];
+                let op = rng.random_range(0..7);
                 // Explicit: every scope the change touches, up front, in
                 // canonical order (as the gateway does); otherwise the
                 // triggers take them lazily (one change per transaction).
-                if rng.gen_bool(0.5) {
+                if rng.random_bool(0.5) {
                     let scopes: Vec<locks::Scope> = match op {
                         0 | 1 => vec![locks::Scope::Lineage(lineage)],
                         2 => vec![locks::Scope::User(other)],
@@ -596,7 +596,7 @@ async fn deadlock_freedom_fuzz(pool: PgPool) {
                     _ => {}
                 }
                 tx.commit().await.unwrap();
-                tokio::time::sleep(Duration::from_millis(rng.gen_range(0..4))).await;
+                tokio::time::sleep(Duration::from_millis(rng.random_range(0..4))).await;
             }
         }));
     }
@@ -633,7 +633,7 @@ async fn deadlock_freedom_fuzz(pool: PgPool) {
 async fn lock_keys_match_and_audit_refuses_out_of_order_locks(pool: PgPool) {
     let mut rng = StdRng::seed_from_u64(7);
     for _ in 0..200 {
-        let id = Uuid::from_u128(rng.r#gen());
+        let id = Uuid::from_u128(rng.random());
         let key: i32 = sqlx::query_scalar("SELECT omg_scope_key($1)")
             .bind(id)
             .fetch_one(&pool)

@@ -52,6 +52,7 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         "usage_rollups_hourly",
         "usage_rollup_dirty",
         "archived_partitions",
+        "admission_lock_waits",
     ] {
         assert_eq!(
             sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
@@ -347,6 +348,9 @@ async fn alert_evaluation_runs_as_runtime(pool: &PgPool) {
  INSERT INTO alert_rules(id,scope,kind,name,window_minutes,error_rate_percent,min_requests) VALUES(gen_random_uuid(),'installation','error_rate','Errors',15,50,2);
  INSERT INTO alert_rules(id,scope,kind,name,window_minutes,consecutive_failures) VALUES(gen_random_uuid(),'installation','provider_failing','Upstream',15,3);
  INSERT INTO alert_rules(id,scope,workspace_id,kind,name,budget_layers,thresholds,notify_workspace_admins,notify_emails) VALUES(gen_random_uuid(),'workspace',ws,'budget_threshold','Project budgets',ARRAY['local'],ARRAY[80],true,ARRAY['ops@example.invalid']);
+ -- 0036: one project sustained 2 admissions/s (every minute of the window).
+ INSERT INTO rate_minute_counters(minute_start,scope_kind,scope_id,requests) SELECT date_trunc('minute',now(),'UTC')-make_interval(mins=>g),'workspace',ws,120 FROM generate_series(1,7) g;
+ INSERT INTO alert_rules(id,scope,kind,name,window_minutes,ceiling_requests_per_second,ceiling_lock_wait_ms,notify_platform_admins) VALUES(gen_random_uuid(),'installation','admission_ceiling','Ceiling',5,2,250,true);
  END $$"#)
         .execute(pool)
         .await
@@ -364,13 +368,29 @@ async fn alert_evaluation_runs_as_runtime(pool: &PgPool) {
         .await
         .unwrap();
     let store = open_model_gateway::store::Store::new(runtime.clone());
+    // 0036: replicas flush their scope-lock waits and maintenance prunes them, as runtime.
+    open_model_gateway::governance::pressure::record(
+        chrono::Utc::now(),
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+        std::time::Duration::from_millis(30),
+    );
+    assert!(
+        open_model_gateway::governance::pressure::flush(&store)
+            .await
+            .unwrap()
+            >= 2
+    );
+    open_model_gateway::governance::pressure::prune_fenced(&store, 100, None)
+        .await
+        .unwrap();
     let report = open_model_gateway::alerts::evaluate_once(&store)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(report.failed_rules, 0, "{report:?}");
-    // Installation spend day 80%, project local 120%, spike, error rate, connection, project rule, personal built-in.
-    assert_eq!(report.fired, 7, "{report:?}");
+    // Installation spend day 80%, project local 120%, spike, error rate, connection, project rule, personal built-in, admission ceiling.
+    assert_eq!(report.fired, 8, "{report:?}");
     assert_eq!(
         open_model_gateway::alerts::evaluate_once(&store)
             .await
@@ -382,8 +402,14 @@ async fn alert_evaluation_runs_as_runtime(pool: &PgPool) {
     // No relay configured: deliveries are recorded as such, as runtime.
     assert_eq!(
         open_model_gateway::alerts::deliver_pending(&store, 100).await,
-        7
+        8
     );
+    // The synthetic minute counters are not backed by history: zero them so
+    // `budget verify` below stays exact (zero rows equal missing ones).
+    sqlx::query("UPDATE rate_minute_counters SET requests=0 WHERE scope_kind='workspace' AND requests=120 AND unreserved=0 AND tokens=0")
+        .execute(pool)
+        .await
+        .unwrap();
     // Readiness and scrape-time metrics collectors need no extra grants.
     assert_eq!(
         store.readiness().await,

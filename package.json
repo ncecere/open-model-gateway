@@ -18,6 +18,7 @@
     "test:web": "npm run test --workspace @omg/web",
     "test:demo": "node --test tests/demo-oidc.test.mjs && python3 tests/demo-runtime.test.py",
     "test:container": "node --test tests/container-image.test.mjs",
+    "test:helm": "helm lint deploy/helm/open-model-gateway && helm lint deploy/helm/open-model-gateway -f deploy/helm/open-model-gateway/ci/external-db-values.yaml && helm lint deploy/helm/open-model-gateway -f deploy/helm/open-model-gateway/ci/cnpg-values.yaml && helm lint deploy/helm/open-model-gateway -f deploy/helm/open-model-gateway/ci/loadtest-values.yaml && node --test tests/helm-chart.test.mjs",
     "test:staging": "python3 tests/staging.test.py && python3 tests/provider-acceptance.test.py && python3 tests/backup.test.py",
     "test:browser": "playwright test -c tests/browser/playwright.config.ts"
   }

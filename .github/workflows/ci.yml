@@ -93,6 +93,50 @@ jobs:
           tool: cargo-deny@0.20.2
       - run: cargo deny --all-features check
 
+  # Helm chart (deploy/helm/open-model-gateway, scale plan P7): lint and
+  # render every values profile, kubeconform-validate the rendered output,
+  # and run the rendered-output assertions in tests/helm-chart.test.mjs.
+  # No cluster is created; no Docker Hub pulls (kubeconform's own release
+  # binary and SHA-pinned actions only).
+  helm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v3.18.4
+      # kubeconform isn't in taiki-e/install-action's manifest and isn't on
+      # crates.io (cargo-binstall fallback), so fetch its own GitHub Release
+      # binary directly and verify the published checksum.
+      - name: Install kubeconform (checksum-verified)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o kubeconform.tar.gz https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz
+          echo "c31518ddd122663b3f3aa874cfe8178cb0988de944f29c74a0b9260920d115d3  kubeconform.tar.gz" | sha256sum -c -
+          tar -xzf kubeconform.tar.gz kubeconform
+          sudo mv kubeconform /usr/local/bin/kubeconform
+      - run: helm lint deploy/helm/open-model-gateway
+      - run: helm lint deploy/helm/open-model-gateway -f deploy/helm/open-model-gateway/ci/external-db-values.yaml
+      - run: helm lint deploy/helm/open-model-gateway -f deploy/helm/open-model-gateway/ci/cnpg-values.yaml
+      - run: helm lint deploy/helm/open-model-gateway -f deploy/helm/open-model-gateway/ci/loadtest-values.yaml
+      - name: Render and kubeconform-validate every profile
+        run: |
+          set -euo pipefail
+          for profile in external-db cnpg loadtest; do
+            extra=()
+            [ "$profile" = "loadtest" ] || extra=(--set migrations.run=true)
+            helm template omg-ci deploy/helm/open-model-gateway \
+              -f "deploy/helm/open-model-gateway/ci/${profile}-values.yaml" "${extra[@]}" \
+              > "/tmp/render-${profile}.yaml"
+            kubeconform -strict -summary -kubernetes-version 1.36.0 -ignore-missing-schemas \
+              "/tmp/render-${profile}.yaml"
+          done
+      - run: node --test tests/helm-chart.test.mjs
+
   npm-audit:
     runs-on: ubuntu-latest
     timeout-minutes: 10

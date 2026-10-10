@@ -1,0 +1,27 @@
+Open Model Gateway ({{ .Chart.Name }}-{{ .Chart.Version }}, appVersion {{ .Chart.AppVersion }}) deployed as {{ include "omg.fullname" . }} in {{ .Release.Namespace }}.
+
+1. Run migrations explicitly before first use (never automatic; AGENTS.md):
+     helm upgrade --install {{ .Release.Name }} deploy/helm/open-model-gateway \
+       --namespace {{ .Release.Namespace }} --set migrations.run=true -f <your-values.yaml>
+
+2. Check readiness:
+     kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "omg.fullname" . }} -- \
+       /usr/local/bin/open-model-gateway healthcheck
+
+{{- if .Values.ingress.enabled }}
+3. The API is reachable at https://{{ .Values.ingress.host }}{{ .Values.ingress.path }}
+{{- else }}
+3. No Ingress is enabled; reach the Service at {{ include "omg.fullname" . }}:{{ .Values.service.port }} from inside the cluster, or set ingress.enabled=true.
+{{- end }}
+
+{{- if .Values.cnpg.cluster.enabled }}
+4. A CNPG Cluster ({{ include "omg.cnpg.clusterName" . }}) and Pooler ({{ include "omg.cnpg.poolerName" . }}) were rendered.
+   Pre-create their role Secrets (kubernetes.io/basic-auth, keys username/password)
+   referenced at cnpg.cluster.roles.migrator.existingSecret and .runtime.existingSecret
+   before installing, or the Cluster/Pooler templates fail with a clear `required` error.
+{{- else }}
+4. No database is managed by this release. Point secrets.database.* and
+   secrets.migrator.existingSecret at your external PostgreSQL.
+{{- end }}
+
+See docs/kubernetes.md for the full install/upgrade/CNPG/PgBouncer/backup reference.

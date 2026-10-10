@@ -1,0 +1,25 @@
+# Profile: P8 loadtest (mock-upstream + loadgen; chart-managed CNPG for a
+# throwaway cluster, as in the omg-loadtest Compose stack).
+cnpg:
+  cluster:
+    enabled: true
+    instances: 2
+    storageClass: local-ssd
+    roles:
+      migrator:
+        existingSecret: gateway-migrator-role
+      runtime:
+        existingSecret: gateway-runtime-role
+  pooler:
+    enabled: true
+
+loadtest:
+  enabled: true
+  # GATEWAY_LOCAL_UPSTREAMS is computed by templates/configmap.yaml from this
+  # pinned ClusterIP (the approval model never resolves DNS, so a Service
+  # name alone cannot be approved; see providers/local/endpoints.rs). Pick an
+  # address free in your cluster's service CIDR; this default fits kind's.
+  mockUpstream:
+    clusterIP: "10.96.200.200"
+
+replicaCount: 3

@@ -193,6 +193,7 @@ impl FileStoreRuntime {
     }
 
     /// An encrypted in-memory runtime (tests).
+    #[cfg(any(test, feature = "integration-tests"))]
     pub fn memory() -> Self {
         Self::from_store(
             super::memory_store(),

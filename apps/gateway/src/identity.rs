@@ -22,7 +22,6 @@ use openidconnect::{
         CoreRevocationErrorResponse, CoreTokenIntrospectionResponse, CoreTokenType,
     },
 };
-use rand::{RngCore, rngs::OsRng};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -546,10 +545,10 @@ fn private(mut response: Response) -> Response {
         .insert("referrer-policy", HeaderValue::from_static("no-referrer"));
     response
 }
-fn random_token() -> String {
-    let mut bytes = [0u8; 32];
-    OsRng.fill_bytes(&mut bytes);
-    hex::encode(bytes)
+/// 256-bit OS CSPRNG token; an RNG failure fails the request closed (500, no
+/// state stored, nothing signed in).
+fn random_token() -> Result<String, AuthError> {
+    crate::entropy::hex_token().map_err(|_| AuthError(StatusCode::INTERNAL_SERVER_ERROR))
 }
 fn hash(value: &str) -> Vec<u8> {
     Sha256::digest(value.as_bytes()).to_vec()
@@ -682,20 +681,28 @@ async fn login(
         .as_deref()
         .and_then(safe_return_path)
         .filter(|p| p != "/");
-    let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
+    // Every secret first, so an RNG failure stores and redirects nothing. The
+    // PKCE verifier is 32 OS CSPRNG bytes as well (RFC 7636 base64url).
+    let (state_token, nonce_token, browser) = (random_token()?, random_token()?, random_token()?);
+    let verifier = {
+        use base64::Engine as _;
+        let bytes = crate::entropy::bytes::<32>()
+            .map_err(|_| AuthError(StatusCode::INTERNAL_SERVER_ERROR))?;
+        PkceCodeVerifier::new(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+    };
+    let challenge = PkceCodeChallenge::from_code_verifier_sha256(&verifier);
     let (url, oauth_state, nonce) = provider
         .client
         .authorize_url(
             CoreAuthenticationFlow::AuthorizationCode,
-            || CsrfToken::new(random_token()),
-            || Nonce::new(random_token()),
+            move || CsrfToken::new(state_token),
+            move || Nonce::new(nonce_token),
         )
         .add_scope(Scope::new("email".into()))
         // `profile` carries the optional display name; it is presentation only.
         .add_scope(Scope::new("profile".into()))
         .set_pkce_challenge(challenge)
         .url();
-    let browser = random_token();
     sqlx::query("INSERT INTO oidc_login_attempts(state_hash,browser_hash,nonce,pkce_verifier,expires_at,return_to) VALUES($1,$2,$3,$4,now()+interval '10 minutes',$5)")
         .bind(hash(oauth_state.secret())).bind(hash(&browser)).bind(nonce.secret()).bind(verifier.secret()).bind(return_to)
         .execute(&state.store.pool).await.map_err(internal)?;
@@ -842,8 +849,8 @@ async fn callback(
         .map_err(internal)?;
     // Upstream access/refresh tokens are never persisted or forwarded.
     drop(tokens);
-    let session = random_token();
-    let csrf = random_token();
+    let session = random_token()?;
+    let csrf = random_token()?;
     let inserted = sqlx::query("INSERT INTO browser_sessions(token_hash,user_id,csrf_hash,expires_at,verified_email) SELECT $1,id,$3,now()+interval '12 hours',$4 FROM users WHERE id=$2 AND disabled_at IS NULL AND cleaned_at IS NULL AND EXISTS(SELECT 1 FROM effective_platform_roles p WHERE p.user_id=users.id)")
         .bind(hash(&session)).bind(user_id).bind(hash(&csrf)).bind(&email).execute(&state.store.pool).await.map_err(internal)?;
     if inserted.rows_affected() != 1 {

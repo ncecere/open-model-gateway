@@ -145,8 +145,7 @@ impl Backend for LocalBackend {
     async fn put(&self, key: &ObjectKey, mut body: ByteStream) -> Result<u64, FileStoreError> {
         let (dirs, name) = Self::split(key);
         let dir = self.directory(&dirs, true).await?;
-        let mut suffix = [0u8; 8];
-        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut suffix);
+        let suffix = crate::entropy::bytes::<8>().map_err(|_| FileStoreError::Unavailable)?;
         let temp = dir.join(format!(".tmp-{name}-{}", hex::encode(suffix)));
         let target = dir.join(name);
         let mut file = tokio::fs::OpenOptions::new()

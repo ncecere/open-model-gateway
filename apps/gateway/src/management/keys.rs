@@ -184,7 +184,7 @@ async fn insert_key(
     days: i32,
     lineage: Option<Uuid>,
 ) -> Result<NewApiKey, ApiError> {
-    let key = NewApiKey::generate();
+    let key = NewApiKey::generate()?;
     sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,service_account_id,name,secret_hash,expires_at,governance_key_id) VALUES($1,$2,$3,$4,$5,$6,now()+make_interval(days=>$7),$8)").bind(key.id).bind(ws).bind(user).bind(service).bind(name).bind(key.digest.as_slice()).bind(days).bind(lineage.unwrap_or(key.id)).execute(&mut **tx).await?;
     Ok(key)
 }

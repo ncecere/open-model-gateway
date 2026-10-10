@@ -140,17 +140,18 @@ impl KeyRing {
         Self::parse(&value)
     }
 
-    /// A random single-key ring for tests and ephemeral stores.
-    pub fn random(id: &str) -> Self {
+    /// A random single-key ring for tests and ephemeral stores (fails closed
+    /// when the OS random number generator fails).
+    pub fn random(id: &str) -> Result<Self, crate::entropy::EntropyUnavailable> {
         assert!(valid_key_id(id));
         let mut key = Zeroizing::new([0u8; 32]);
-        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, key.as_mut());
-        Self {
+        crate::entropy::fill(key.as_mut())?;
+        Ok(Self {
             keys: vec![MasterKey {
                 id: id.to_owned(),
                 cipher: Aes256Gcm::new_from_slice(key.as_ref()).expect("32-byte key"),
             }],
-        }
+        })
     }
 
     pub fn active_id(&self) -> &str {
@@ -262,15 +263,16 @@ impl Sealer {
 
 /// Header plus a sealer for a new object under the active key.
 fn begin(keys: &KeyRing, key: &ObjectKey) -> Result<(Bytes, Sealer), FileStoreError> {
-    use rand::RngCore;
     let master = &keys.keys[0];
-    let mut rng = rand::rngs::OsRng;
+    // Data key, nonce prefix and wrap nonce from the OS CSPRNG; a failure
+    // writes nothing (fail closed: `unavailable`), never a weaker nonce.
+    let entropy = |_| FileStoreError::Unavailable;
     let mut dek = Zeroizing::new([0u8; 32]);
-    rng.fill_bytes(dek.as_mut());
+    crate::entropy::fill(dek.as_mut()).map_err(entropy)?;
     let mut prefix = [0u8; PREFIX];
-    rng.fill_bytes(&mut prefix);
+    crate::entropy::fill(&mut prefix).map_err(entropy)?;
     let mut wrap_nonce = [0u8; 12];
-    rng.fill_bytes(&mut wrap_nonce);
+    crate::entropy::fill(&mut wrap_nonce).map_err(entropy)?;
     let mut kid = [0u8; KID_MAX];
     kid[..master.id.len()].copy_from_slice(master.id.as_bytes());
     let kid_len = master.id.len() as u8;
