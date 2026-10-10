@@ -15,6 +15,14 @@ pub struct Config {
     pub metrics_listen: Option<SocketAddr>,
     /// `GATEWAY_DATABASE_MAX_CONNECTIONS` (default 10) per replica.
     pub database_max_connections: u32,
+    /// Optional `GATEWAY_REPORTING_DATABASE_URL`: a read-only reporting
+    /// replica (or reporting pooler) for reports, usage and logs only. Unset
+    /// means those reads use the primary. Never used for admission,
+    /// settlement or authorization of writes.
+    pub reporting_database_url: Option<String>,
+    /// `GATEWAY_REPORTING_MAX_LAG_SECONDS` (default 30, 1-3600): a replica
+    /// replaying WAL further behind than this is skipped for the primary.
+    pub reporting_max_lag: Duration,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -90,6 +98,31 @@ impl Config {
             .ok()
             .filter(|n| (2..=500).contains(n))
             .context("GATEWAY_DATABASE_MAX_CONNECTIONS must be an integer from 2 to 500")?;
+        let reporting_database_url = match std::env::var("GATEWAY_REPORTING_DATABASE_URL") {
+            Ok(url) if url.trim().is_empty() => {
+                bail!("GATEWAY_REPORTING_DATABASE_URL must be unset or a PostgreSQL URL")
+            }
+            Ok(url) => {
+                // Validate now (never echo the value: it may hold credentials).
+                <sqlx::postgres::PgConnectOptions as std::str::FromStr>::from_str(&url).map_err(
+                    |_| {
+                        anyhow::anyhow!(
+                            "GATEWAY_REPORTING_DATABASE_URL is not a valid PostgreSQL URL"
+                        )
+                    },
+                )?;
+                Some(url)
+            }
+            Err(std::env::VarError::NotPresent) => None,
+            Err(_) => bail!("GATEWAY_REPORTING_DATABASE_URL is not valid Unicode"),
+        };
+        let reporting_max_lag = std::env::var("GATEWAY_REPORTING_MAX_LAG_SECONDS")
+            .unwrap_or_else(|_| "30".into())
+            .parse::<u64>()
+            .ok()
+            .filter(|n| (1..=3600).contains(n))
+            .map(Duration::from_secs)
+            .context("GATEWAY_REPORTING_MAX_LAG_SECONDS must be an integer from 1 to 3600")?;
         Ok(Self {
             database_url,
             listen,
@@ -99,6 +132,8 @@ impl Config {
             inference_limits,
             metrics_listen,
             database_max_connections,
+            reporting_database_url,
+            reporting_max_lag,
         })
     }
 
@@ -109,5 +144,23 @@ impl Config {
             .connect(&self.database_url)
             .await
             .context("could not connect to PostgreSQL")
+    }
+
+    /// The optional reporting pool, connected lazily: an unreachable replica
+    /// never blocks startup or readiness; reads fall back to the primary.
+    pub fn connect_reporting(&self) -> Result<Option<sqlx::PgPool>> {
+        let Some(url) = &self.reporting_database_url else {
+            return Ok(None);
+        };
+        Ok(Some(
+            PgPoolOptions::new()
+                .max_connections(self.database_max_connections)
+                // Short: a missing replica costs at most this before the primary fallback.
+                .acquire_timeout(Duration::from_secs(1))
+                .connect_lazy(url)
+                .map_err(|_| {
+                    anyhow::anyhow!("GATEWAY_REPORTING_DATABASE_URL is not a valid PostgreSQL URL")
+                })?,
+        ))
     }
 }

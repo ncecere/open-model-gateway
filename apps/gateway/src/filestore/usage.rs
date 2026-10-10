@@ -22,7 +22,7 @@ const SETTLE_MINUTES: i32 = 5;
 /// of hours recorded.
 pub async fn record_hours(db: &Store, max_hours: i32) -> Result<i64, sqlx::Error> {
     let max_hours = max_hours.clamp(1, 720);
-    let mut tx = db.pool.begin().await?;
+    let mut tx = crate::db::begin(&db.pool).await?;
     let Some(through): Option<DateTime<Utc>> = sqlx::query_scalar(
         "SELECT recorded_through FROM storage_usage_progress WHERE singleton FOR UPDATE SKIP LOCKED",
     )

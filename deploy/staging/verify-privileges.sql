@@ -26,6 +26,17 @@ DO $$ DECLARE r record; t text; BEGIN
  END LOOP;
  IF NOT has_table_privilege('gateway_runtime','public.budget_totals','SELECT,INSERT') OR NOT has_column_privilege('gateway_runtime','public.budget_totals','held_microusd','UPDATE') THEN RAISE EXCEPTION 'budget totals not maintainable by runtime'; END IF;
  IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'budget_totals_%' AND tgenabled='O' AND NOT tgisinternal)<>6 THEN RAISE EXCEPTION 'budget totals triggers missing or disabled'; END IF;
+ IF NOT has_column_privilege('gateway_runtime','public.budget_totals','held_unknown_microusd','UPDATE') THEN RAISE EXCEPTION 'budget totals detail not maintainable by runtime'; END IF;
+ -- Rate counters (0024): trigger-maintained; no truncation, no re-keying, in-flight rows never removed.
+ FOREACH t IN ARRAY ARRAY['rate_minute_counters','inflight_counters'] LOOP
+  IF has_table_privilege('gateway_runtime','public.'||t,'TRUNCATE') THEN RAISE EXCEPTION 'rate counters truncatable: %',t; END IF;
+  IF has_column_privilege('gateway_runtime','public.'||t,'scope_kind','UPDATE') OR has_column_privilege('gateway_runtime','public.'||t,'scope_id','UPDATE') THEN RAISE EXCEPTION 'rate counters re-keyable: %',t; END IF;
+  IF NOT has_table_privilege('gateway_runtime','public.'||t,'SELECT,INSERT') OR NOT has_column_privilege('gateway_runtime','public.'||t,'requests','UPDATE') THEN RAISE EXCEPTION 'rate counters not maintainable by runtime: %',t; END IF;
+ END LOOP;
+ IF has_column_privilege('gateway_runtime','public.rate_minute_counters','minute_start','UPDATE') THEN RAISE EXCEPTION 'rate counters re-keyable: minute'; END IF;
+ IF has_table_privilege('gateway_runtime','public.inflight_counters','DELETE') THEN RAISE EXCEPTION 'in-flight counters removable'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'rate_counters_%' AND tgenabled='O' AND NOT tgisinternal)<>8
+  OR NOT EXISTS(SELECT FROM pg_trigger WHERE tgname='rate_minute_counters_retained' AND tgenabled='O') THEN RAISE EXCEPTION 'rate counter triggers missing or disabled'; END IF;
  -- Realtime (0017): response rows are append-then-settle-once; identity and holds fixed.
  IF has_table_privilege('gateway_runtime','public.realtime_responses','DELETE,TRUNCATE') THEN RAISE EXCEPTION 'realtime responses removable'; END IF;
  FOREACH t IN ARRAY ARRAY['execution_id','sequence','window_hold_microusd','created_at'] LOOP
@@ -107,7 +118,7 @@ DO $$ DECLARE r record; t text; BEGIN
   IF has_column_privilege('gateway_runtime','public.batch_route_waits',t,'UPDATE') THEN RAISE EXCEPTION 'mutable batch demand identity: %',t; END IF;
  END LOOP;
  IF has_table_privilege('gateway_runtime','public.batch_route_waits','TRUNCATE') THEN RAISE EXCEPTION 'batch demand truncatable'; END IF;
- IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units','valid_model_protocols_base','valid_cost_components_base','valid_price_lines_base','valid_upstream_job_id')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
+ IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units','valid_model_protocols_base','valid_cost_components_base','valid_price_lines_base','valid_upstream_job_id','rate_reserved_tokens','rate_contribution')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
 END $$;
 BEGIN;
 SET LOCAL ROLE gateway_runtime;
@@ -201,7 +212,15 @@ BEGIN
  UPDATE governance_reservations SET state='unknown',meter_usage=(SELECT meter_usage FROM inference_executions WHERE id=e),output_image_variant='768',provider_cost_microusd=20500 WHERE execution_id=e;
  INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd,meter_usage,output_image_variant,provider_cost_microusd) SELECT gen_random_uuid(),e,'unknown',1,meter_usage,output_image_variant,provider_cost_microusd FROM inference_executions WHERE id=e;
  -- Budget totals (0015): the runtime's reservation writes maintained them; unknown keeps its hold.
- IF (SELECT (held_microusd,settled_microusd,reservations,pending,unknown)::text FROM budget_totals WHERE scope_kind='key' AND scope_id=k AND period='lifetime')<>'(1,0,1,0,1)' THEN RAISE EXCEPTION 'budget totals not maintained'; END IF;
+ IF (SELECT (held_microusd,settled_microusd,reservations,pending,unknown,held_unknown_microusd)::text FROM budget_totals WHERE scope_kind='key' AND scope_id=k AND period='lifetime')<>'(1,0,1,0,1,1)' THEN RAISE EXCEPTION 'budget totals not maintained'; END IF;
+ -- Rate counters (0024): the same writes maintained them; unknown released the in-flight slot.
+ IF (SELECT (requests,unreserved,tokens)::text FROM rate_minute_counters WHERE minute_start=date_trunc('minute',now(),'UTC') AND scope_kind='key' AND scope_id=k)<>'(1,0,110)'
+  OR (SELECT requests FROM inflight_counters WHERE scope_kind='key' AND scope_id=k)<>0 THEN RAISE EXCEPTION 'rate counters not maintained'; END IF;
+ PERFORM rate_contribution(r,'generation',NULL,false,NULL,NULL,1) FROM governance_reservations r WHERE execution_id=e;
+ BEGIN DELETE FROM rate_minute_counters WHERE scope_id=k; RAISE EXCEPTION 'retained rate counters removable'; EXCEPTION WHEN raise_exception THEN IF SQLERRM NOT LIKE 'rate counters of the retained window%' THEN RAISE; END IF; END;
+ BEGIN DELETE FROM inflight_counters WHERE scope_id=k; RAISE EXCEPTION 'in-flight counters removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN UPDATE rate_minute_counters SET minute_start='epoch' WHERE scope_id=k; RAISE EXCEPTION 'rate counters re-key allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN TRUNCATE TABLE inflight_counters; RAISE EXCEPTION 'in-flight counters truncate allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  PERFORM coalesce(sum(t.settled_microusd+t.held_microusd),0),bool_or(t.unresolved+t.unreserved_executions>0) FROM unnest(ARRAY['workspace'],ARRAY[ws],ARRAY['month'],ARRAY[date_trunc('month',now(),'UTC')]) q(kind,id,period,start) LEFT JOIN budget_totals t ON t.scope_kind=q.kind AND t.scope_id=q.id AND t.period=q.period AND t.period_start=q.start;
  BEGIN DELETE FROM budget_totals WHERE scope_id=k; RAISE EXCEPTION 'budget totals removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  BEGIN UPDATE budget_totals SET period_start='epoch' WHERE scope_id=k; RAISE EXCEPTION 'budget totals re-key allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;

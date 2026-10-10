@@ -14,7 +14,7 @@ pub async fn extend_lease(
     until: DateTime<Utc>,
 ) -> Result<bool, InferenceError> {
     let _queued = gate(&store.lock_gates.settlement).await;
-    let mut tx = store.pool.begin().await.map_err(storage)?;
+    let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
     lock(&mut tx).await?;
     let changed = sqlx::query("UPDATE governance_reservations SET lease_expires_at=greatest(lease_expires_at,$2) WHERE execution_id=$1 AND state='pending'")
         .bind(execution)
@@ -38,7 +38,7 @@ pub async fn batch_bound_preview(
     output_tokens: u64,
     max_line_output: u32,
 ) -> Result<Option<i64>, InferenceError> {
-    let mut tx = store.pool.begin().await.map_err(storage)?;
+    let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
     let price = sqlx::query_as::<_, Price>(&format!("SELECT {PRICE_COLUMNS} FROM deployment_prices WHERE deployment_id=$1 ORDER BY created_at DESC,id DESC LIMIT 1"))
         .bind(deployment)
         .fetch_optional(&mut *tx)

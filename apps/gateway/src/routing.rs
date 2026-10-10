@@ -271,9 +271,17 @@ fn affects_health(error: Option<InferenceError>) -> bool {
     )
 }
 
+/// How stale `last_observed_at` may get while a healthy route keeps succeeding.
+const OBSERVED_REFRESH_SECONDS: i32 = 30;
+
 /// Record an actual provider result, not local capacity/admission or accounting
 /// failures. Success means validated completion (for streams: valid terminal Done),
 /// not merely opening a response/stream. Updates serialize atomically in PostgreSQL.
+///
+/// A success on a route that is already healthy (no failures, no open
+/// circuit) and was observed within the last 30 s writes nothing: the health
+/// state would not change, so the per-success upsert of one hot row per
+/// deployment is skipped. Failures and recoveries always write.
 pub async fn record_result(
     store: &Store,
     deployment: Uuid,
@@ -281,6 +289,17 @@ pub async fn record_result(
 ) -> Result<(), InferenceError> {
     if !affects_health(error) {
         return Ok(());
+    }
+    if error.is_none() {
+        let unchanged: Option<bool> = sqlx::query_scalar("SELECT consecutive_failures=0 AND open_until IS NULL AND last_observed_at>clock_timestamp()-$2*interval '1 second' FROM deployment_health WHERE deployment_id=$1")
+            .bind(deployment)
+            .bind(OBSERVED_REFRESH_SECONDS)
+            .fetch_optional(&store.pool)
+            .await
+            .map_err(|_| InferenceError::Storage)?;
+        if unchanged == Some(true) {
+            return Ok(());
+        }
     }
     let result = sqlx::query(
         r#"WITH policy AS (

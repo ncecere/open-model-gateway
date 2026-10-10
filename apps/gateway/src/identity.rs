@@ -723,7 +723,7 @@ async fn consume_attempt(
     oauth_state: &str,
     browser: &str,
 ) -> Result<(String, String, Option<String>), AuthError> {
-    let mut tx = store.pool.begin().await.map_err(internal)?;
+    let mut tx = crate::db::begin(&store.pool).await.map_err(internal)?;
     let attempt = sqlx::query_as::<_, (String, String, Option<String>)>("DELETE FROM oidc_login_attempts WHERE state_hash=$1 AND browser_hash=$2 AND expires_at>now() RETURNING nonce,pkce_verifier,return_to")
         .bind(hash(oauth_state)).bind(hash(browser)).fetch_optional(&mut *tx).await.map_err(internal)?;
     // Commit before ANY token endpoint request: replay is impossible even if exchange fails.
@@ -916,7 +916,7 @@ async fn resolve_identity_with(
     scim: bool,
 ) -> Result<Uuid, AuthError> {
     let email = email.to_lowercase();
-    let mut tx = store.pool.begin().await.map_err(internal)?;
+    let mut tx = crate::db::begin(&store.pool).await.map_err(internal)?;
     lifecycle::lock(&mut tx).await.map_err(internal)?;
     advisory_lock(&mut tx, &format!("oidc:{}:{issuer}{subject}", issuer.len())).await?;
     let existing = sqlx::query_as::<_, (Uuid, bool, bool, Option<String>)>(

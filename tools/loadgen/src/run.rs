@@ -26,6 +26,7 @@ use uuid::Uuid;
 use crate::{
     keys,
     prom::{self, Sample, Summary},
+    reader::{self, ReaderStats},
     stats::{Percentiles, percentiles},
     verify::{self, DatabaseCheck},
 };
@@ -60,6 +61,11 @@ pub struct RunConfig {
     #[serde(skip)]
     pub database_url: Option<String>,
     pub label: Option<String>,
+    /// Concurrent closed-loop management readers (reports, usage, logs,
+    /// `/me`, `/v1/models`); 0 disables them. See [`crate::reader`].
+    pub readers: usize,
+    /// Report window of the readers, in days ending tomorrow (UTC).
+    pub reader_days: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -161,6 +167,8 @@ pub struct Report {
     pub gateway: Option<GatewayMetrics>,
     pub upstream: Option<UpstreamCheck>,
     pub database: Option<DatabaseCheck>,
+    /// Concurrent management readers (`--readers`), when enabled.
+    pub reader: Option<ReaderStats>,
     pub violations: Vec<String>,
 }
 
@@ -385,6 +393,27 @@ pub async fn run(config: RunConfig) -> anyhow::Result<Report> {
     let mut saturated = Vec::new();
     let start = Instant::now() + Duration::from_millis(50);
     let mut measured_start = start;
+    let mut readers = tokio::task::JoinSet::new();
+    if config.readers > 0 {
+        let cycle = reader::endpoints(&config.key_seed, config.reader_days);
+        let session = keys::session_token(&config.key_seed, "reader");
+        let key = keys::token(&config.key_seed, 0);
+        let until = start + Duration::from_secs_f64(config.duration_s);
+        for r in 0..config.readers {
+            // Spread readers over the cycle so every endpoint is always in use.
+            let offset = r * cycle.len() / config.readers;
+            readers.spawn(reader::reader(
+                client.clone(),
+                config.targets.clone(),
+                cycle.clone(),
+                session.clone(),
+                key.clone(),
+                offset,
+                until,
+                timeout,
+            ));
+        }
+    }
     for i in 0..total {
         let scheduled = start + Duration::from_secs_f64(i as f64 * interval);
         if i == warmup_requests && warmup_requests > 0 {
@@ -440,6 +469,10 @@ pub async fn run(config: RunConfig) -> anyhow::Result<Report> {
     while let Some(record) = set.join_next().await {
         records.push(record.context("request task")?);
     }
+    let mut reader_samples = Vec::new();
+    while let Some(samples) = readers.join_next().await {
+        reader_samples.extend(samples.context("reader task")?);
+    }
     let elapsed = start.elapsed();
     let (after, after_errors) = scrape(&client, &config.metrics_urls).await;
     records.sort_by_key(|r| r.index);
@@ -454,6 +487,15 @@ pub async fn run(config: RunConfig) -> anyhow::Result<Report> {
         measured_start,
         start,
     );
+    if config.readers > 0 {
+        report.reader = Some(reader::summarize(
+            config.readers,
+            config.reader_days,
+            &reader_samples,
+            measured_start,
+            scheduled_end.saturating_duration_since(measured_start),
+        ));
+    }
     if !config.metrics_urls.is_empty() {
         let admission = prom::histogram_deltas(&before, &after, "gateway_admission_seconds");
         let settlement = prom::histogram_deltas(&before, &after, "gateway_settlement_seconds");
@@ -576,6 +618,7 @@ fn summarize(
         gateway: None,
         upstream: None,
         database: None,
+        reader: None,
         totals,
         violations: Vec::new(),
     }
@@ -727,6 +770,19 @@ impl Report {
                 }
             }
         }
+        if let Some(r) = &self.reader {
+            out += &format!(
+                "\n  readers {}: {} requests, {} ok ({:.1}/s), statuses {:?}, ok latency ms p50/p95/p99 {:.1}/{:.1}/{:.1}",
+                r.readers,
+                r.requests,
+                r.ok,
+                r.ok_per_s,
+                r.by_status,
+                r.latency.p50_ms,
+                r.latency.p95_ms,
+                r.latency.p99_ms
+            );
+        }
         if self.violations.is_empty() {
             out += "\n  invariants: ok";
         } else {
@@ -759,6 +815,8 @@ mod tests {
             metrics_urls: vec![],
             database_url: None,
             label: None,
+            readers: 0,
+            reader_days: 7,
         }
     }
 

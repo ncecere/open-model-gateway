@@ -1,0 +1,6 @@
+# A cancelled `Pool::begin` future can leave a pooled connection inside an
+# untracked server-side transaction (sqlx 0.8); see `src/db.rs`.
+disallowed-methods = [
+  { path = "sqlx::Pool::begin", reason = "use crate::db::begin (cancellation-safe)" },
+  { path = "sqlx::Pool::begin_with", reason = "use crate::db::begin_with_setup (cancellation-safe)" },
+]

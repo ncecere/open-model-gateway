@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Laptop multi-replica load-test runner (docs/operations.md "Capacity baseline").
 
-TEST ONLY. Drives deploy/loadtest/compose.yaml under the fixed Compose project
-name `omg-loadtest`: PostgreSQL 17, PgBouncer (transaction mode), up to three
+TEST ONLY. Drives deploy/loadtest/compose.yaml under the Compose project
+`omg-loadtest` (or `--project omg-loadtest-<name> --slot N` for a second,
+isolated stack: own containers, volume, image tag, state directory, host ports
+and private subnet, so concurrent stacks never collide): PostgreSQL 17, PgBouncer (transaction mode), up to three
 gateway replicas, the mock upstream and the load generator. It never touches
 the demo stack (port 3000, PostgreSQL 54349), staging, or any database not
 named omg_loadtest*. Generated passwords and results stay in .local/loadtest/.
@@ -32,6 +34,9 @@ ROOT = Path(__file__).resolve().parents[1]
 DEPLOY = ROOT / "deploy" / "loadtest"
 PROJECT = "omg-loadtest"
 IMAGE = "omg-loadtest:local"
+PROJECT_NAME = re.compile(r"^omg-loadtest(-[a-z0-9]{1,20})?$")
+# Per-stack isolation (see configure): host ports and the private subnet move with the slot.
+SLOT = 0
 DEFAULT_DB = "omg_loadtest"
 DB_NAME = re.compile(r"^omg_loadtest[a-z0-9_]{0,40}$")
 GATEWAYS = ("gateway-1", "gateway-2", "gateway-3")
@@ -39,8 +44,36 @@ GATEWAYS = ("gateway-1", "gateway-2", "gateway-3")
 FORBIDDEN_PORTS = {3000, 54339, 54349}
 
 
+def configure(project=PROJECT, slot=0, image=None):
+    """Select the Compose project and its isolation slot. The default project
+    keeps slot 0 (ports 54369, 18301-18303; subnet 10.213.47.0/24; image
+    omg-loadtest:local; .local/loadtest). Another project needs its own slot
+    1-9: PostgreSQL 54369+100*slot, gateways 18301+10*slot.., subnet
+    10.213.(47+slot).0/24, image <project>:local, state .local/<project>."""
+    global PROJECT, IMAGE, SLOT
+    if not PROJECT_NAME.match(project):
+        raise SystemExit(f"refusing project {project!r}: only omg-loadtest or omg-loadtest-<name>")
+    if not 0 <= slot <= 9 or (slot == 0) != (project == "omg-loadtest"):
+        raise SystemExit("slot 0 is the default omg-loadtest project; other projects need --slot 1-9")
+    PROJECT, SLOT = project, slot
+    IMAGE = (image or os.environ.get("OMG_LOADTEST_IMAGE")
+             or ("omg-loadtest:local" if slot == 0 else f"{project}:local"))
+
+
+def slot_env():
+    """Compose variables of the selected slot (host ports, subnet, image)."""
+    ports = {"OMG_LOADTEST_POSTGRES_PORT": 54369 + 100 * SLOT}
+    ports.update({f"OMG_LOADTEST_GATEWAY_PORT_{i}": 18300 + 10 * SLOT + i for i in (1, 2, 3)})
+    if FORBIDDEN_PORTS & set(ports.values()):
+        raise SystemExit("refusing a forbidden host port")
+    env = {k: str(v) for k, v in ports.items()}
+    env.update({"OMG_LOADTEST_SUBNET": f"10.213.{47 + SLOT}", "OMG_LOADTEST_IMAGE": IMAGE})
+    return env
+
+
 def state_dir():
-    return Path(os.environ.get("OMG_LOADTEST_STATE", ROOT / ".local" / "loadtest"))
+    default = ROOT / ".local" / ("loadtest" if SLOT == 0 else PROJECT)
+    return Path(os.environ.get("OMG_LOADTEST_STATE", default))
 
 
 def check_db_name(name):
@@ -107,6 +140,7 @@ class Stack:
 
     def process_env(self):
         env = dict(os.environ)
+        env.update(slot_env())
         env.update({"OMG_LOADTEST_STATE_DIR": str(self.state), "OMG_LOADTEST_DB": self.db})
         env.update(self.extra_env)
         return env
@@ -243,7 +277,8 @@ def cmd_run(stack, args):
                "--database-url", stack.url("runtime"),
                "--rate", str(args.rate), "--duration", str(args.duration), "--warmup", str(args.warmup),
                "--stream-ratio", str(args.stream_ratio), "--keys", str(args.keys),
-               "--max-tokens", str(args.max_tokens), "--timeout", str(args.timeout), "--label", args.label]
+               "--max-tokens", str(args.max_tokens), "--timeout", str(args.timeout), "--label", args.label,
+               "--readers", str(getattr(args, "readers", 0)), "--reader-days", str(getattr(args, "reader_days", 7))]
     started = time.monotonic()
     result = stack.compose(*command, profiles=("tools",), capture=True, check=False)
     sys.stderr.write(result.stderr[-4000:])
@@ -352,20 +387,35 @@ def row(report):
     statuses = ", ".join(f"{k}:{v}" for k, v in sorted(report["totals"]["by_status"].items()))
     verified = "ok" if not report.get("violations") and (report.get("budget_verify") or {}).get("consistent") else "FAIL"
     f = lambda d, k: f"{d.get(k, 0):.1f}" if d else "-"
-    return (f"| {report['config'].get('label') or ''} | {s.get('replicas', '?')} | {s.get('via', '?')} | "
+    line = (f"| {report['config'].get('label') or ''} | {s.get('replicas', '?')} | {s.get('via', '?')} | "
             f"{report['config']['rate']:.0f} | {report['throughput_ok_per_s']:.1f} | "
             f"{f(lat, 'p50_ms')} / {f(lat, 'p95_ms')} / {f(lat, 'p99_ms')} | "
             f"{f(overhead, 'p50_ms')} / {f(overhead, 'p99_ms')} | "
             f"{f(adm, 'p50_ms')} / {f(adm, 'p99_ms')} | {f(lock, 'p50_ms')} / {f(lock, 'p99_ms')} | "
             f"{f(settle, 'p50_ms')} / {f(settle, 'p99_ms')} | {statuses} | {verified} |")
+    return line
+
+
+def reader_cells(report):
+    """Readers column: count, ok reads/s, ok latency p50/p99 and non-200 statuses."""
+    r = report.get("reader")
+    if not r:
+        return "-"
+    bad = ", ".join(f"{k}:{v}" for k, v in sorted(r.get("by_status", {}).items()) if k != "200")
+    lat = r.get("latency") or {}
+    return (f"{r['readers']}: {r.get('ok_per_s', 0):.1f}/s, {lat.get('p50_ms', 0):.0f} / {lat.get('p99_ms', 0):.0f} ms"
+            + (f" ({bad})" if bad else ""))
 
 
 HEADER = ("| run | replicas | DB path | offered/s | ok/s | client p50 / p95 / p99 ms | overhead p50 / p99 ms | "
           "admission p50 / p99 ms | lock wait p50 / p99 ms | settlement p50 / p99 ms | statuses | invariants |\n"
           "|---|---|---|---|---|---|---|---|---|---|---|---|")
+READER_HEADER = (HEADER.split("\n")[0] + " readers: ok/s, p50 / p99 ms |\n" + HEADER.split("\n")[1] + "---|")
 
 
 def render(reports):
+    if any(r.get("reader") for r in reports):
+        return "\n".join([READER_HEADER] + [f"{row(r)} {reader_cells(r)} |" for r in reports])
     return "\n".join([HEADER] + [row(r) for r in reports])
 
 
@@ -426,6 +476,10 @@ def cmd_baseline(stack, args):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--db", default=DEFAULT_DB, help="throwaway database name (omg_loadtest*)")
+    parser.add_argument("--project", default=os.environ.get("OMG_LOADTEST_PROJECT", PROJECT),
+                        help="Compose project: omg-loadtest (default) or omg-loadtest-<name> with --slot")
+    parser.add_argument("--slot", type=int, default=int(os.environ.get("OMG_LOADTEST_SLOT", "0")),
+                        help="isolation slot 1-9 for a non-default project (ports, subnet, image, state)")
     sub = parser.add_subparsers(dest="command", required=True)
     up = sub.add_parser("up")
     up.add_argument("--build", action="store_true", help="rebuild the image even if it exists")
@@ -454,6 +508,9 @@ def main(argv=None):
     run.add_argument("--max-tokens", type=int, default=16)
     run.add_argument("--timeout", type=float, default=60)
     run.add_argument("--top", type=int, default=10)
+    run.add_argument("--readers", type=int, default=0,
+                     help="concurrent closed-loop report/usage/logs/me readers (seeded reader session)")
+    run.add_argument("--reader-days", type=int, default=7, help="report window of the readers in days")
     report = sub.add_parser("report")
     report.add_argument("--match", default="")
     report.add_argument("--out")
@@ -474,6 +531,7 @@ def main(argv=None):
     base.add_argument("--max-concurrent", type=int, default=128)
     base.add_argument("--keep-going", action="store_true")
     args = parser.parse_args(argv)
+    configure(args.project, args.slot)
     stack = Stack(db=args.db)
     {"up": cmd_up, "reset-db": cmd_reset_db, "seed": cmd_seed, "gateways": cmd_gateways, "run": cmd_run,
      "report": cmd_report, "down": cmd_down, "baseline": cmd_baseline}[args.command](stack, args)

@@ -205,20 +205,23 @@ impl LogScope {
     }
 }
 /// Workspace scope: members (own human keys) or workspace-wide visibility.
-pub(super) async fn workspace_scope<'a>(
-    s: &'a Store,
+/// Logs take no catalog or installation lock: authorization in a lock-free
+/// primary snapshot, rows from the same snapshot or the reporting replica
+/// (`crate::reporting`).
+pub(super) async fn workspace_scope(
+    s: &Store,
     u: &BrowserPrincipal,
     ws: Uuid,
     p: &LogQuery,
-) -> Result<(Transaction<'a, Postgres>, LogScope), ApiError> {
+) -> Result<(Transaction<'static, Postgres>, LogScope), ApiError> {
     if p.workspace_id.is_some() {
         return Err(invalid());
     }
-    let (mut tx, a) = resources::workspace_tx(s, u, ws).await?;
+    let mut tx = s.snapshot().await?;
+    let a = resources::workspace_access_snapshot(&mut tx, u, ws).await?;
     resources::detail_access(&a)?;
-    timeout(&mut tx).await?;
     Ok((
-        tx,
+        s.reporting(tx).await?,
         LogScope {
             platform: false,
             workspace: Some(ws),
@@ -228,16 +231,15 @@ pub(super) async fn workspace_scope<'a>(
     ))
 }
 /// Platform scope: Admin/Auditor, Team/Project workspaces only.
-pub(super) async fn platform_scope<'a>(
-    s: &'a Store,
+pub(super) async fn platform_scope(
+    s: &Store,
     u: &BrowserPrincipal,
     p: &LogQuery,
-) -> Result<(Transaction<'a, Postgres>, LogScope), ApiError> {
-    let mut tx = resources::installation_tx(s).await?;
-    resources::platform_read(&mut tx, u.user_id).await?;
-    timeout(&mut tx).await?;
+) -> Result<(Transaction<'static, Postgres>, LogScope), ApiError> {
+    let mut tx = s.snapshot().await?;
+    resources::platform_read_snapshot(&mut tx, u.user_id).await?;
     Ok((
-        tx,
+        s.reporting(tx).await?,
         LogScope {
             platform: true,
             workspace: p.workspace_id,
@@ -245,12 +247,6 @@ pub(super) async fn platform_scope<'a>(
             user: u.user_id,
         },
     ))
-}
-async fn timeout(tx: &mut Transaction<'_, Postgres>) -> Result<(), ApiError> {
-    sqlx::query("SET LOCAL statement_timeout='10s'")
-        .execute(&mut **tx)
-        .await?;
-    Ok(())
 }
 
 /// Tokens per second of a successful generation attempt: output tokens over

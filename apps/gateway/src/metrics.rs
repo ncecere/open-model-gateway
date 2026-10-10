@@ -712,18 +712,19 @@ impl Metrics {
             }
             *refreshed = Some(Instant::now());
         }
+        // The installation lifetime totals row (0015) counts every pending and
+        // unknown reservation exactly: O(1), not a scan of history.
         let counted = tokio::time::timeout(
             Duration::from_secs(2),
-            sqlx::query_as::<_, (String, i64)>(
-                "SELECT state,count(*) FROM governance_reservations WHERE state IN ('pending','unknown') GROUP BY state",
+            sqlx::query_as::<_, (i64, i64)>(
+                "SELECT coalesce(t.pending,0),coalesce(t.unknown,0) FROM (SELECT) one LEFT JOIN budget_totals t ON t.scope_kind='installation' AND t.scope_id='00000000-0000-0000-0000-000000000000' AND t.period='lifetime' AND t.period_start='epoch'",
             )
-            .fetch_all(pool),
+            .fetch_one(pool),
         )
         .await;
         match counted {
-            Ok(Ok(rows)) => {
-                for state in ["pending", "unknown"] {
-                    let n = rows.iter().find(|(s, _)| s == state).map_or(0, |(_, n)| *n);
+            Ok(Ok((pending, unknown))) => {
+                for (state, n) in [("pending", pending), ("unknown", unknown)] {
                     self.reservations
                         .get_or_create(&[("state", state.to_owned())])
                         .set(n);

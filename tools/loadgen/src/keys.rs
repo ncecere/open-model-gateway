@@ -24,6 +24,18 @@ pub fn token(seed: &str, index: u64) -> String {
     )
 }
 
+/// Browser-session cookie token (`omg_session`) of seeded management reader
+/// `who` (64 lowercase hex characters). `seed.sql` stores its SHA-256 in
+/// `browser_sessions`; like keys, it is never printed or stored in clear.
+pub fn session_token(seed: &str, who: &str) -> String {
+    sha256_hex(&format!("{seed}:session:{who}"))
+}
+
+/// Id of a seeded row (`pg_temp.seed_id(label)` in `seed.sql`).
+pub fn seed_id(seed: &str, label: &str) -> uuid::Uuid {
+    uuid::Uuid::parse_str(&sha256_hex(&format!("{seed}:{label}"))[..32]).expect("32 hex digits")
+}
+
 /// SHA-256 of the token, as stored in `api_keys.secret_hash`.
 pub fn secret_hash(token: &str) -> [u8; 32] {
     Sha256::digest(token.as_bytes()).into()
@@ -54,6 +66,17 @@ mod tests {
         assert_eq!(
             secret_hash(&t),
             <[u8; 32]>::from(Sha256::digest(t.as_bytes()))
+        );
+        let session = session_token("s1", "reader");
+        assert_eq!(session.len(), 64);
+        assert!(
+            session
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        );
+        assert_eq!(
+            seed_id("s1", "key:0").simple().to_string(),
+            key_id_hex("s1", 0)
         );
     }
 }

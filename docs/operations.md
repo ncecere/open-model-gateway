@@ -8,6 +8,8 @@ This covers health checks, metrics and alerting, backups and restore, secret rot
 |---|---|---|
 | `GATEWAY_METRICS_ADDR` | unset (disabled) | Separate Prometheus listener, for example `127.0.0.1:9464`. It must use a different port from `GATEWAY_LISTEN`. |
 | `GATEWAY_DATABASE_MAX_CONNECTIONS` | `10` | Database pool size per replica (2 to 500). Size PostgreSQL `max_connections` for every replica plus migrator and backup sessions. |
+| `GATEWAY_REPORTING_DATABASE_URL` | unset (primary) | Optional read-only reporting replica (or a pooler in front of one) for reports, usage and request logs only. See [read snapshots and the reporting replica](#read-snapshots-and-the-reporting-replica). Use the runtime role; set it directly (it has no `_FILE` form). An empty value is refused. |
+| `GATEWAY_REPORTING_MAX_LAG_SECONDS` | `30` | Reporting replica replay lag (1 to 3600 s) beyond which reads use the primary instead. |
 | `GATEWAY_MAX_CONCURRENT_REQUESTS` | `128` (staging: 32) | Per-replica inference concurrency. Requests beyond it get 429 and are counted under `scope="gateway_capacity"`. |
 | `GATEWAY_REQUEST_TIMEOUT_SECONDS` | `120` | Inference deadline. Time spent waiting for admission counts toward it. |
 | `GATEWAY_FILE_STORE` | `off` | Encrypted file store: `off`, `local` or `s3`. See [file storage](file-storage.md) for the backend and encryption-key variables. |
@@ -83,10 +85,10 @@ There are no workspace, key, user, request IDs, or prompt and response data in a
 | `gateway_upstream_time_to_first_token_seconds` | histogram | `provider`, `model` (streams) |
 | `gateway_inference_tokens_total` | counter | `provider`, `model`, `direction` (provider-reported only; unknown usage is not counted as zero) |
 | `gateway_settlements_total` | counter | `outcome`: `settled` (exact cost), `unknown` (hold retained), `held` (finalization failed; the reservation stays pending until reconciliation) |
-| `gateway_admission_seconds` | histogram | `phase`, `outcome`. Wall-clock time of each phase of a durable interactive admission transaction: `queue` (in-process wait for an installation-lock slot), `connect` (pool acquire and `BEGIN`), `locks` (catalog advisory lock plus the installation row lock: the lock wait), `read` (live authorization, deployment, clock, price), `limits` (policies, per-minute rate accounting, budget totals), `write` (execution, reservation and hold inserts with trigger fan-out), `commit`, and `total`. `outcome` is `admitted`, `denied` (a limit or budget denial), `rejected` (other refusals such as an unavailable model) or `error` (database failure). Phases after an early return are not observed. Buckets run from 100 µs to about 52 s. Batch-line and realtime-window admissions are not included. |
+| `gateway_admission_seconds` | histogram | `phase`, `outcome`. Wall-clock time of each phase of a durable interactive admission transaction: `queue` (in-process wait for an installation-lock slot), `connect` (pool acquire and `BEGIN`), `price` (shared catalog lock, latest price and reservation bounds, resolved before the installation lock), `locks` (the installation row lock: the lock wait), `read` (live authorization and the deployment check with the admission clock, one statement each), `limits` (policies, budgets with their totals and the rate counters, one statement), `write` (execution, reservation and hold in one statement with trigger fan-out), `commit`, and `total`. Time under the installation lock is `read`+`limits`+`write`+`commit`. `outcome` is `admitted`, `denied` (a limit or budget denial), `rejected` (other refusals such as an unavailable model) or `error` (database failure). Phases after an early return are not observed. Buckets run from 100 µs to about 52 s. Batch-line and realtime-window admissions are not included. |
 | `gateway_settlement_seconds` | histogram | `phase` (`queue`, `connect`, `locks`, `read`, `write`, `commit`, `total`), `outcome` (`settled`, `unknown`, `replay`, `conflict`, `error`). Terminal settlement of an interactive attempt (`finish`); a replay stops after `locks`. |
 | `gateway_admission_denials_total` | counter | `code`, `scope` (`installation`, `workspace`, `api_key`, `policy` for rate/concurrency limits, `gateway_capacity`). `code="job_limit_exceeded"` counts video/batch jobs refused by a "Jobs at once" limit, with the scope that refused them. |
-| `gateway_reservations_held` | gauge | `state` (`pending`, `unknown`). Refreshed at scrape time, at most every 15 seconds, with a 2-second query timeout. |
+| `gateway_reservations_held` | gauge | `state` (`pending`, `unknown`). Refreshed at scrape time, at most every 15 seconds, with a 2-second query timeout. Read from the installation `lifetime` row of `budget_totals` (O(1), exact), not by counting history. |
 | `gateway_alert_evaluations_total` | counter | `result` (`ok`, `skipped` when another replica holds the lock, `failed`) |
 | `gateway_alert_rule_failures_total` | counter | none |
 | `gateway_db_pool_connections` | gauge | `state` (`idle`, `in_use`) |
@@ -216,6 +218,24 @@ Neither SCIM nor the management API can remove platform access from the last act
 
 When SCIM is refused, the gateway writes the audit event `scim.last_admin_protected` and opens the built-in installation alert "SCIM tried to remove the last Platform Admin" (Notifications, Admin › Settings › Alerts › History, and email to Platform Admins when a relay is set up). It means the identity provider wants to remove the only Admin. Grant Admin to a second person (a manual grant, or a mapped Admin group), then let the provider retry or repeat the change. The alert clears at the next evaluation once a second active Platform Admin exists. Keeping two Admins avoids the situation entirely. A sign-in claim that drops the last group-provenance Admin grant is not covered by this check.
 
+## Read snapshots and the reporting replica
+
+Reports (`cost-report`, `cost-summary`, `costs`, `usage-export`), usage (`usage/overview`, `usage/explore`, `usage`, `executions`), request logs (`requests`, `generations`, `sessions`, `logs/metrics`, workspace and platform), `/me`, `/me/summary`, `/me/keys` and `/v1/models` take **no installation lock and no catalog lock** (scale plan P1). Each runs in one `REPEATABLE READ READ ONLY` transaction with a 10 s statement timeout (plus the handlers' 10 s deadline):
+
+- **Authorization is inside the snapshot.** The live checks (user active, platform role, membership or personal ownership, workspace not disabled; for `/v1/models` the full key revalidation) run in the same snapshot as the data, without row locks. Privacy rules are unchanged: personal workspaces stay owner-private, platform readers see personal totals only, members see their own activity and workspace admins the whole workspace.
+- **Bounded staleness.** A read is consistent as of its first statement. A revocation (membership, platform role, user disable, key revoke, workspace disable) that commits while a read is running does not change that read, so it may still return what the caller could see when it started; the window is bounded by the read's duration (at most about 10 s). The next request takes a new snapshot and is denied.
+- **Inference is unaffected.** Admission is unchanged: it revalidates the key, user, grants and workspace live under its own locks, so a revocation blocks new upstream work immediately. `/v1/models` is only a listing.
+- **No interference.** Reads neither wait for admission, settlement, catalog writes or management changes, nor make them wait. Before P1 a 10 s report held the installation lock and stalled every admission behind it.
+- **Cancellation-safe transaction start.** Every transaction begins through `db::begin`, which finishes `BEGIN` (and the snapshot's `SET TRANSACTION`) in its own task. With sqlx 0.8, a begin that is dropped mid-flight, for example by a client disconnect or page navigation, returns the pooled connection inside a transaction sqlx does not track. Later plain statements run inside that transaction, and the next snapshot fails with `25001` (an intermittent 503). `clippy.toml` rejects direct `Pool::begin`.
+- **Diagnosable 503s.** When a management handler answers 503 "Management storage unavailable", it logs a `management storage error` warning with the request id, the SQLSTATE and the constraint, table, column and routine names. The PostgreSQL message is logged only for classes whose messages never contain values. Row data (DETAIL) and bound parameters are never logged.
+
+**Reporting replica.** Set `GATEWAY_REPORTING_DATABASE_URL` to an asynchronous hot standby (or a pooler in front of one) to move report, usage and log *data* off the primary. `/me`, `/v1/models`, admission, settlement, reconciliation and every write always use the primary.
+
+- The caller is authorized first on the primary (lock-free snapshot), so authorization is as fresh as without a replica; the data then comes from a snapshot on the replica.
+- The pool connects lazily: an unreachable replica never blocks startup or `/health/ready`. A read falls back to the primary snapshot it authorized in when the replica cannot be reached within 1 s, errors, or replays more than `GATEWAY_REPORTING_MAX_LAG_SECONDS` behind (lag is 0 when caught up; otherwise the age of the last replayed commit). Each fallback logs a warning with the reason, never the URL.
+- Use the runtime role (roles and grants replicate from the primary). Replica settings: `hot_standby_feedback=off` so reports never hold back vacuum on the primary, and `max_standby_streaming_delay` around 30 s; a report cancelled by recovery conflict returns 503 and can be retried.
+- The replica pool has the same size as `GATEWAY_DATABASE_MAX_CONNECTIONS`; count it in the standby's `max_connections`.
+
 ## Upgrade and migration procedure
 
 1. Read the release notes for migrations and any grant changes. Build or pull the image by digest.
@@ -267,7 +287,7 @@ Findings:
 
 1. **Fixed: pool starvation under concurrency.** Before the fix, at 200 concurrent requests on a 10-connection pool, transactions waiting for the installation lock held every pooled connection. Authentication timed out (105 × 503 out of 1000), and 40 streams could not be finalized (settlement `held`, stream ended with an error rather than `[DONE]`). Admission and settlement now queue in process (`governance::LockGates`). At most a quarter of the pool waits on the lock per queue, and settlements never queue behind admissions. Repeated runs now show zero errors. The pool size is configurable through `GATEWAY_DATABASE_MAX_CONNECTIONS`.
 2. **Throughput ceiling: about 115 to 150 req/s per installation in this environment.** Admission and settlement serialize on the installation row by design, so this ceiling is shared by all replicas. Adding replicas or connections does not raise it. Latency at higher concurrency is queueing (Little's law), not failure.
-3. **Fixed: budget checks no longer scale with history.** Before, each budget check aggregated every reservation in its window (plus the legacy execution anti-join) while holding the lock. With 200k reservations this month the installation check took about 59 ms, and throughput fell to 19 req/s. Admission now reads `budget_totals`: one indexed lookup for all budget layers, O(layers). Statement-level triggers maintain the table in the same transaction as every reservation and execution write. Rate and concurrency limits read only the current minute and live leases. With 200k history rows, throughput matches the no-history case. Monitoring, policy and alert *reports* outside admission (`alerts`, usage pages) still aggregate their own windows and are not on the admission path.
+3. **Fixed: budget checks no longer scale with history.** Before, each budget check aggregated every reservation in its window (plus the legacy execution anti-join) while holding the lock. With 200k reservations this month the installation check took about 59 ms, and throughput fell to 19 req/s. Admission now reads `budget_totals`: one indexed lookup for all budget layers, O(layers). Statement-level triggers maintain the table in the same transaction as every reservation and execution write. Rate and concurrency limits read only the current minute and live leases. With 200k history rows, throughput matches the no-history case. Monitoring, policy and alert *reports* outside admission (`alerts`, usage pages) still aggregate their own windows; since P1 they no longer take the installation lock either (see [read-path results](#read-path-results-p1)).
 
 ## Multi-replica load-test harness
 
@@ -298,6 +318,10 @@ python3 scripts/loadtest.py run --label 3r-pgb-60 --rate 60 --duration 45 --warm
 python3 scripts/loadtest.py report
 python3 scripts/loadtest.py down          # removes containers, network, data volume and the image
 ```
+
+A second, isolated stack (for example two agents measuring at once) uses `--project omg-loadtest-<name> --slot 1-9` on every command: its own containers, data volume, image tag (`<project>:local`), state directory (`.local/<project>`), host ports (PostgreSQL 54369+100×slot, gateways 18301+10×slot…) and private subnet (10.213.(47+slot).0/24). `down` only removes the selected project.
+
+`run --readers N` adds N concurrent closed-loop management readers for the duration of the run: platform cost report, usage overview and request log, a shared workspace's usage overview and requests, `/me/summary`, `/me` and `/v1/models`, over the last `--reader-days` (default 7) days. They use the seeded reader: user 1 is a platform Auditor that owns shared workspace 1, with a browser session whose cookie is derived from the seed like the keys. The JSON report gains `reader` (per-endpoint statuses and latency), and `report` adds a readers column.
 
 `tools/loadgen/tests/end_to_end.rs` runs the same seed, real gateway (with the real `openai_compatible` adapter), mock, generator and verification in one process against a throwaway database on `DATABASE_URL`, as part of `cargo test --workspace --all-features`.
 
@@ -346,6 +370,51 @@ Findings:
 5. **Three replicas through PgBouncer showed p95 spikes (374–453 ms) at 60/s** that the direct path did not, with lock-wait p99 around 100 ms. A 30 s repeat on the seeded database had p95 70 ms and p99 182 ms, and PgBouncer reported an average client wait of 0 µs and few server-side re-parses, so pooling is not the cause. The likely cause is periodic installation-lock work multiplied by replicas (lifecycle cleanup, reconciliation and the alert evaluator on every replica, design §2.6). The P0 histograms do not cover those jobs; this is not yet proven.
 6. **With `max_prepared_statements=0`, PgBouncer breaks the gateway (decision gate D4):** 98 of 100 requests failed (`503 accounting_unavailable`/`api_error` and some 401s from failed authentication lookups), with no ledger damage. With 200 it worked in every run.
 
+### Read-path results (P1)
+
+Measured 2026-10-10 on the same machine and stack, seeded database (2 M history attempts, 3.8 GB), via PgBouncer, 45 s runs. "Readers" are two concurrent closed-loop management readers (`run --readers 2`, 7-day window): platform cost report, usage overview and request log, a shared workspace's usage overview and requests, `/me/summary`, `/me` and `/v1/models`. The heavy queries take 1.0–1.5 s each on this dataset. "Before" is the gateway at commit `1d9d1c9` (reports, usage, logs and `/me` hold the installation lock); "after" is P1.
+
+| Replicas | Offered/s | Readers | OK/s before → after | Client p50 / p99 ms before → after | Lock wait p99 ms before → after | Reader p50 ms before → after |
+|---|---|---|---|---|---|---|
+| 1 | 60 | 0 | 59.9 → 59.2 | 70 / 228 → 70 / 529 | 25 → 25 | – |
+| 1 | 60 | 2 | 2.3 → 55.6 | 20,542 / 40,316 → 134 / 2,772 | 2,384 → 47 | 950 → 9 |
+| 1 | 250 | 2 | 2.2 → 48.5 | 21,769 / 42,296 → 2,004 / 9,401 | 2,372 → 173 | 994 → 10 |
+| 3 | 60 | 2 | 8.4 → 45.6 | 29,972 / 41,169 → 94 / 10,498 | 1,637 → 362 | 960 → 16 |
+| 3 | 250 | 2 | 6.4 → 48.0 | 22,188 / 41,047 → 7,143 / 8,259 | 1,614 → 205 | 988 → 9 |
+
+- **Before P1, two dashboard readers stopped inference.** Each heavy report held the installation lock for its whole query, so two readers kept it busy almost continuously: admission waited about 25 s (p50) and settlements timed out (`503 accounting_unavailable`, incomplete streams), leaving 12–26 reservations pending per run. The gateway failed closed (holds kept, `budget verify` consistent), but the harness's "nothing pending" invariant failed in three of the four runs.
+- **After P1 the readers take no lock.** Inference throughput with readers rose 6–24× (55.6 ok/s at 60/s offered on one replica), every invariant held, and the cheap read endpoints answer in about 10 ms instead of queueing behind reports.
+- **What remains is database CPU contention on a serialized admission path.** On this single shared VM the readers' scans slow every statement in the still-global admission section (the installation-lock statement averaged 14–64 ms with readers, 3–6 ms without), and that becomes queueing (p99 seconds, some capacity 429s). Shortening the admission section (scale plan P2/P3) and moving report scans to a [reporting replica](#read-snapshots-and-the-reporting-replica) address it. The replica path is covered by integration tests but was not part of this laptop run, which has no standby.
+- The no-reader control is unchanged within run-to-run noise.
+
+### Admission results (P2: maintained counters, shorter critical section)
+
+Measured 2026-10-10 on the same laptop and settings, in an isolated copy of the harness. Because the installation policy layer is being removed, the seed's installation rate limits were moved to workspace-type defaults and every key lineage (installation and type monthly budgets unchanged). "Before" is the previous release with that same policy setup; "after" adds `0024_rate_counters.sql`, `0025_budget_totals_detail.sql` and the shorter critical section (price and reservation bounds resolved under the shared catalog lock before the installation lock; one-statement revalidation, deployment check with clock, limit read, and execution/reservation/hold write; 6 round trips under the installation lock instead of about 14). Successful requests per second at overload:
+
+| History | Replicas | DB path | Offered/s | P0 (installation rate scan) | Before | After |
+|---|---|---|---|---|---|---|
+| empty | 1 | PgBouncer | 250 / 500 | 79.6 / – | 84.8 / – | 202.9 / 209.1 |
+| empty | 1 | direct | 250 | 99.1 | 176.7 | 225.3 |
+| empty | 3 | PgBouncer | 250 | 83.0 | 142.6 | 184.5 |
+| 2 M | 1 | PgBouncer | 250 / 800 | 63.5 / – | 143.4 | 172.4 / 175.5 |
+| 2 M | 1 | direct | 250 | 86.1 | 170.9 | 193.1 |
+| 2 M | 3 | PgBouncer | 250 / 800 | 67.9 / – | 136.6 | 161.9 / 160.3 |
+
+The 2 M rows were measured before a final trigger optimization worth about 10% (empty, 1 replica: 182 → 203/s). Every run passed every invariant and `budget verify`. Below saturation (60/s, 1 replica, PgBouncer) admission p50/p99 fell from 4.8/10.0 ms to 2.9/6.4 ms, and the time under the installation lock (`read`+`limits`+`write`+`commit` p50) from 4.5 to 3.1 ms. With 3 replicas through PgBouncer on the seeded database, client p99 at 60/s fell from 188 to 67 ms. Migrating the 2 M-row database to 0025 took 8.6 s, during which history writes are frozen.
+
+Findings:
+
+1. **The ceiling roughly doubled but is still one serializer, about 175–225 successful requests/s.** Replicas still do not raise it. This does not meet decision gate D1 (400/s); scoped admission (P3) remains next.
+2. **Fewer round trips matter most through PgBouncer** (85 → 203/s with 1 replica), because every round trip under the lock pays the proxy hop.
+3. **Counters trade scan time for trigger time.** With traffic spread over 7,000 workspaces, a scoped per-minute scan cost only 0.04 ms, while the counter triggers add about 0.3–0.5 ms per admission and settlement. The counters remove the growth with a scope's traffic (a 200 req/s workspace scans 12,000 rows per minute) and the installation-wide scan (6.2 ms in P0); a hot-scope run is still to do.
+4. **Group commit had no effect yet** (`commit_delay` 200 or 1,000 µs: within 2%), because the installation lock lets only one admission or settlement commit at a time.
+
+## PostgreSQL settings for hot rows and group commit
+
+- **Hot rows.** `budget_totals`, `rate_minute_counters` and `inflight_counters` are updated on every admission and settlement. Only their primary keys are indexed, and no indexed column is ever updated, so updates stay HOT (in-page) when there is free space: `budget_totals` uses `fillfactor=50`, the counter tables `fillfactor=70`. The migrations set threshold-driven autovacuum on all three (`autovacuum_vacuum_scale_factor=0`, `autovacuum_vacuum_threshold=1000`, `autovacuum_vacuum_cost_limit=2000`, `autovacuum_vacuum_cost_delay=1`), so vacuum frequency does not shrink as the tables grow. HOT pruning needs the global xmin to advance: avoid long transactions on the primary (run `budget verify` and reports on a replica where possible). Watch `n_tup_hot_upd`/`n_tup_upd` and `n_dead_tup` in `pg_stat_user_tables` for these tables.
+- **Minute counters** older than ten minutes are pruned every minute by `serve` (any replica; concurrent pruners skip each other's rows).
+- **Group commit.** Keep `synchronous_commit=on`: every upstream attempt needs a durable reservation. `commit_delay` (with `commit_siblings`) lets concurrent commits share one WAL flush, but only helps when at least `commit_siblings` transactions commit at once. Under the installation lock that never happens, so leave the defaults (`commit_delay=0`, `commit_siblings=5`) for now. Once admissions no longer serialize (P3), start at `commit_delay=200`–`1000` µs with `commit_siblings=5` on storage with slow flushes (network disks, synchronous replicas) and keep it only if commit latency p99 and throughput improve. The load-test stack exposes both as `OMG_LOADTEST_COMMIT_DELAY` and `OMG_LOADTEST_COMMIT_SIBLINGS`.
+
 ## PgBouncer
 
 Use transaction pooling with PgBouncer **1.21 or later and `max_prepared_statements` > 0** (200 in the load-test stack). sqlx caches *named* prepared statements per connection; without protocol-level prepared-statement support, statements land on server connections that never prepared them, and the gateway fails closed (see finding 6 above). With support enabled, PgBouncer re-prepares transparently; the baseline runs saw a few hundred server-side parses for tens of thousands of transactions.
@@ -384,7 +453,8 @@ ORDER BY total_exec_time DESC LIMIT 20;
 What to look for in the gateway's statements:
 
 - `SELECT id FROM installation WHERE singleton FOR NO KEY UPDATE`: its total time is time spent **waiting** for the installation lock, not work. When it dominates, the database is idle behind one serializer.
-- `WITH accounting AS (…)`: per-minute rate accounting. Its mean grows with traffic in the current UTC minute.
+- `WITH accounting AS (…)`: per-minute rate accounting by scan. Since 0024 only the installation policy layer (scheduled for removal) still uses it; workspace and key layers read `rate_minute_counters`/`inflight_counters` inside the single `WITH pol AS MATERIALIZED …` limits statement.
+- `INSERT INTO rate_minute_counters …`/`inflight_counters …` (non-top-level): rate-counter trigger fan-out, two scopes per write.
 - `INSERT INTO budget_totals …` (non-top-level): trigger fan-out, about 3 calls per reservation or execution write.
 - A `budget verify` full scan, if one ran in the window.
 
@@ -417,5 +487,6 @@ open-model-gateway budget verify
 ```
 
 - **What it does:** it runs read-only in one `REPEATABLE READ` snapshot and takes no installation lock. Traffic can continue, but the scan reads every reservation, so run it off-peak on large installations. It prints JSON (`buckets`, `mismatch_count`, up to 20 example `mismatches`) and exits nonzero on any difference. It works with the runtime role's grants.
+- **What it compares:** every budget-total column, including the 0025 unknown-cost split (`held_unknown_microusd`, `unresolved_unknown`), and the 0024 rate counters: every in-flight counter against all pending reservations, and every minute counter of the last five minutes against that window's reservations and executions (`rate_buckets`, `rate_mismatch_count`, `rate_mismatches`). Older minute rows are not read by admission and are pruned by maintenance, so they are not compared.
 - **When to run it:** after `migrate` (the migration backfills from existing history), after restores (restore drill step 5), and periodically.
 - **If it reports a mismatch:** do not edit, delete or "fix" reservations or the ledger. Drift is only possible through manual owner-level edits, such as deleting history, re-keying lineages, or disabling triggers. The runtime role cannot update keys, delete rows or truncate the table. Preserve the report and escalate. The table can be rebuilt by the migrator from the same scan the migration uses.

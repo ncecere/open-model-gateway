@@ -1,4 +1,6 @@
 #![cfg(feature = "integration-tests")]
+// Test probes may begin transactions directly (see `src/db.rs`).
+#![allow(clippy::disallowed_methods)]
 //! Explicitly opt in only on the dedicated disposable PostgreSQL test cluster.
 use sqlx::PgPool;
 #[sqlx::test(migrations = "./enterprise_migrations")]
@@ -35,6 +37,8 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         "monetary_ledger",
         "audit_events",
         "budget_totals",
+        "rate_minute_counters",
+        "inflight_counters",
         "realtime_responses",
         "async_jobs",
         "async_job_files",
@@ -59,6 +63,7 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
     realtime_accounting_runs_as_runtime(&pool).await;
     scim_provisioning_runs_as_runtime(&pool).await;
     budget_totals_maintained_as_runtime(&pool).await;
+    read_snapshots_run_as_runtime(&pool).await;
     file_store_runs_as_runtime(&pool).await;
     files_api_runs_as_runtime(&pool).await;
     // Last: its unknown batch hold would change the installation totals above.
@@ -82,6 +87,62 @@ async fn runtime_pool(pool: &PgPool) -> PgPool {
         .connect_with(options)
         .await
         .unwrap()
+}
+
+/// Scale plan P1: lock-free read snapshots and the reporting pool (including
+/// its replay-lag check) work with the runtime role alone; a missing grant
+/// would otherwise silently fall back to the primary.
+async fn read_snapshots_run_as_runtime(pool: &PgPool) {
+    let runtime = runtime_pool(pool).await;
+    let options = (*pool.connect_options())
+        .clone()
+        .application_name("omg_runtime_reporting");
+    let reporting = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .after_connect(|c, _| {
+            Box::pin(async move {
+                sqlx::Executor::execute(c, "SET ROLE gateway_runtime").await?;
+                Ok(())
+            })
+        })
+        .connect_with(options)
+        .await
+        .unwrap();
+    let store = open_model_gateway::store::Store::new(runtime)
+        .with_reporting(Some(reporting), std::time::Duration::from_secs(30));
+    let authorized = store.snapshot().await.unwrap();
+    let mut tx = store.reporting(authorized).await.unwrap();
+    let (name, role, read_only): (String, String, String) = sqlx::query_as(
+        "SELECT current_setting('application_name'),current_user::text,current_setting('transaction_read_only')",
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    assert_eq!(
+        (name.as_str(), role.as_str(), read_only.as_str()),
+        ("omg_runtime_reporting", "gateway_runtime", "on")
+    );
+    // The standby replay-lag functions are executable (null on a primary).
+    sqlx::query("SELECT pg_is_in_recovery(),pg_last_wal_receive_lsn()::text,pg_last_wal_replay_lsn()::text,pg_last_xact_replay_timestamp()")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    // The report/usage/log/me tables are readable in the snapshot.
+    for table in [
+        "inference_executions",
+        "governance_reservations",
+        "api_keys",
+        "workspaces",
+        "effective_workspace_memberships",
+        "effective_platform_roles",
+        "installation_settings",
+    ] {
+        sqlx::query(&format!("SELECT count(*) FROM {table}"))
+            .execute(&mut *tx)
+            .await
+            .unwrap_or_else(|e| panic!("{table}: {e}"));
+    }
+    tx.commit().await.unwrap();
 }
 
 /// SCIM provisioning, deactivation, group-provenance sync and account cleanup need
@@ -614,11 +675,16 @@ async fn budget_totals_maintained_as_runtime(pool: &PgPool) {
             .unwrap(),
         1
     );
+    // Pruning old minute counters (0024) runs as runtime; retained ones stay.
+    open_model_gateway::governance::rates::prune(&store, 100)
+        .await
+        .unwrap();
     let report = open_model_gateway::governance::totals::verify(&store)
         .await
         .unwrap();
     assert!(report.consistent(), "{report:?}");
     assert!(report.buckets > 0);
+    assert!(report.rate_buckets > 0);
     // The unknown attempt keeps its 500 micro-USD hold in every period.
     let held: Vec<String> = sqlx::query_scalar(
         "SELECT held_microusd::text FROM budget_totals WHERE scope_kind='installation' ORDER BY period",

@@ -159,7 +159,7 @@ pub async fn preview_line(
     protocol: ApiProtocol,
     output: u32,
 ) -> Result<LinePreview, InferenceError> {
-    let mut tx = store.pool.begin().await.map_err(storage)?;
+    let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
     let price = latest_price(&mut tx, deployment).await?;
     tx.commit().await.map_err(storage)?;
     let Some(p) = price else {
@@ -181,7 +181,7 @@ pub async fn batch_prices_published(
     store: &Store,
     deployment: Uuid,
 ) -> Result<bool, InferenceError> {
-    let mut tx = store.pool.begin().await.map_err(storage)?;
+    let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
     let price = latest_price(&mut tx, deployment).await?;
     tx.commit().await.map_err(storage)?;
     Ok(price.is_some_and(|p| p.has_batch_lines()))
@@ -222,7 +222,7 @@ async fn admit_batch_unobserved(
         .ok_or(InferenceError::Configuration)?;
     let workspace = record.principal.workspace_id;
     let _queued = gate(&store.lock_gates.admission).await;
-    let mut tx = store.pool.begin().await.map_err(storage)?;
+    let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
     lock(&mut tx).await?;
     let lineage = crate::auth::revalidate(&mut tx, &record.principal)
         .await
@@ -332,7 +332,7 @@ async fn admit_line_unobserved(
     }
     let workspace = record.principal.workspace_id;
     let _queued = gate(&store.lock_gates.admission).await;
-    let mut tx = store.pool.begin().await.map_err(storage)?;
+    let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
     lock(&mut tx).await?;
     let lineage = crate::auth::revalidate(&mut tx, &record.principal)
         .await
@@ -425,7 +425,7 @@ pub async fn close_batch(
     cancelled: bool,
 ) -> Result<bool, InferenceError> {
     let _queued = gate(&store.lock_gates.settlement).await;
-    let mut tx = store.pool.begin().await.map_err(storage)?;
+    let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
     lock(&mut tx).await?;
     let changed = sqlx::query("UPDATE governance_reservations SET state='settled',actual_microusd=0,input_tokens=0,output_tokens=0 WHERE execution_id=$1 AND state='pending'")
         .bind(envelope)

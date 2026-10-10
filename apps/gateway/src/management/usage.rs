@@ -213,23 +213,23 @@ fn dimension(name: &str, platform: bool) -> Option<(&'static str, &'static str)>
 fn share(value: &str, total: &str) -> String {
     format!("CASE WHEN {total}>0 THEN trim_scale(round(({value})/{total},4))::text END")
 }
-async fn scope<'a>(
-    s: &'a Store,
+/// Authorizes in a lock-free primary snapshot (no catalog or installation
+/// lock; `crate::reporting`) and returns the transaction to read usage in:
+/// the same snapshot, or one on the reporting replica.
+async fn scope(
+    s: &Store,
     u: &BrowserPrincipal,
     ws: Option<Uuid>,
     filter: Option<Uuid>,
     f: &Filters,
-) -> Result<(Transaction<'a, Postgres>, Scope), ApiError> {
-    let mut tx = resources::installation_tx(s).await?;
-    sqlx::query("SET LOCAL statement_timeout='10s'")
-        .execute(&mut *tx)
-        .await?;
+) -> Result<(Transaction<'static, Postgres>, Scope), ApiError> {
+    let mut tx = s.snapshot().await?;
     let scope = match ws {
         Some(ws) => {
             if filter.is_some_and(|f| f != ws) {
                 return Err(invalid());
             }
-            let a = resources::workspace_access(&mut tx, u, ws).await?;
+            let a = resources::workspace_access_snapshot(&mut tx, u, ws).await?;
             Scope {
                 workspace: Some(ws),
                 own: (!a.view_all_activity).then_some(u.user_id),
@@ -238,7 +238,7 @@ async fn scope<'a>(
             }
         }
         None => {
-            resources::platform_read(&mut tx, u.user_id).await?;
+            resources::platform_read_snapshot(&mut tx, u.user_id).await?;
             Scope {
                 workspace: filter,
                 own: None,
@@ -251,7 +251,7 @@ async fn scope<'a>(
     if f.member.is_some() && !scope.members {
         return Err(member_visibility());
     }
-    Ok((tx, scope))
+    Ok((s.reporting(tx).await?, scope))
 }
 async fn deadline<T>(
     future: impl std::future::Future<Output = Result<T, ApiError>>,

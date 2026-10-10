@@ -740,7 +740,7 @@ async fn active_admins(tx: &mut Transaction<'_, Postgres>) -> Result<i64, sqlx::
 /// same lock manual grant/suspend changes and sign-in take, so concurrent
 /// writes cannot both pass the last-admin check.
 async fn write_tx(store: &Store) -> Result<(Transaction<'_, Postgres>, AdminGuard), ScimError> {
-    let mut tx = store.pool.begin().await?;
+    let mut tx = crate::db::begin(&store.pool).await?;
     lifecycle::lock(&mut tx).await?;
     let had_admin = active_admins(&mut tx).await? > 0;
     Ok((tx, AdminGuard { had_admin }))
@@ -782,7 +782,7 @@ async fn record_last_admin_refusal(
     resource: &'static str,
     id: Uuid,
 ) -> Result<(), sqlx::Error> {
-    let mut tx = store.pool.begin().await?;
+    let mut tx = crate::db::begin(&store.pool).await?;
     lifecycle::lock(&mut tx).await?;
     sqlx::query("INSERT INTO audit_events(id,actor_user_id,action,resource_type,resource_id,metadata) VALUES($1,NULL,'scim.last_admin_protected',$2,$3,'{}')")
         .bind(Uuid::new_v4())

@@ -17,6 +17,11 @@ pub struct Store {
     /// `governance::LockGate`): waiters queue here instead of holding pooled
     /// connections, so authentication and settlement are not starved.
     pub(crate) lock_gates: std::sync::Arc<crate::governance::LockGates>,
+    /// Optional reporting replica (`GATEWAY_REPORTING_DATABASE_URL`) for
+    /// reports, usage and logs only; see [`crate::reporting`].
+    pub(crate) reporting: Option<PgPool>,
+    /// Replay lag beyond which the reporting replica is skipped.
+    pub(crate) reporting_max_lag: std::time::Duration,
     /// Test-only pinned admission instant shared by every clone of this store.
     /// Production builds have no override: admission always reads the
     /// database clock (see [`Store::admission_now`]).
@@ -99,6 +104,9 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "deployment_batch_scheduling",
     "deployment_batch_signals",
     "batch_route_waits",
+    // 0024 rate counters
+    "rate_minute_counters",
+    "inflight_counters",
 ];
 
 fn lineage_matches(
@@ -174,6 +182,8 @@ impl Store {
         Self {
             pool,
             lock_gates: std::sync::Arc::new(gates),
+            reporting: None,
+            reporting_max_lag: std::time::Duration::from_secs(30),
             #[cfg(any(test, feature = "integration-tests"))]
             admission_clock: Default::default(),
         }
@@ -194,6 +204,17 @@ impl Store {
             .await
     }
 
+    /// The pinned test admission instant, if any (never in production
+    /// builds): admission reads the database clock in one of its own
+    /// statements and lets this override it, like [`Store::admission_now`].
+    pub(crate) fn admission_override(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        #[cfg(any(test, feature = "integration-tests"))]
+        if let Some(at) = self.admission_clock.get() {
+            return Some(*at);
+        }
+        None
+    }
+
     /// Tests only: freeze admission time (for this store and all its clones)
     /// at the current database time and return it. Every later admission
     /// then evaluates the same UTC minute however slowly the test runs, so
@@ -208,6 +229,15 @@ impl Store {
             .set(now)
             .map_err(|_| anyhow::anyhow!("admission clock is already frozen"))?;
         Ok(now)
+    }
+
+    /// Tests only: pin admission time (for this store and all its clones) at
+    /// `at`, e.g. either side of a minute boundary. Pinning twice is an error.
+    #[cfg(any(test, feature = "integration-tests"))]
+    pub fn pin_admission_clock(&self, at: chrono::DateTime<chrono::Utc>) -> anyhow::Result<()> {
+        self.admission_clock
+            .set(at)
+            .map_err(|_| anyhow::anyhow!("admission clock is already frozen"))
     }
 
     /// Require a fully initialized current installation, including on serve/bootstrap.

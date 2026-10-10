@@ -11,15 +11,16 @@ const OWN: &str = "FROM inference_executions e JOIN api_keys k ON k.id=e.api_key
 fn empty_usage() -> Value {
     json!({"known_cost_microusd":"0","held_microusd":"0","requests":"0","attempts":"0","unresolved_attempts":"0","input_tokens":"0","output_tokens":"0","tokens":"0","unknown_token_attempts":"0"})
 }
-async fn me_tx<'a>(
-    s: &'a Store,
+/// A lock-free primary snapshot (`crate::reporting`; never the reporting
+/// replica): the live platform-role check, the caller's workspaces and their
+/// own activity all come from one snapshot, without the catalog or
+/// installation lock.
+async fn me_tx(
+    s: &Store,
     u: &BrowserPrincipal,
-) -> Result<(Transaction<'a, Postgres>, Vec<WorkspaceContextRow>), ApiError> {
-    let mut tx = resources::installation_tx(s).await?;
-    sqlx::query("SET LOCAL statement_timeout='10s'")
-        .execute(&mut *tx)
-        .await?;
-    resources::platform_role(&mut tx, u.user_id).await?;
+) -> Result<(Transaction<'static, Postgres>, Vec<WorkspaceContextRow>), ApiError> {
+    let mut tx = s.snapshot().await?;
+    resources::platform_role_snapshot(&mut tx, u.user_id).await?;
     let rows = my_workspaces(&mut tx, u.user_id).await?;
     Ok((tx, rows))
 }

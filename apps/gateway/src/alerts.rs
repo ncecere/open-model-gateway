@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use serde_json::{Value, json};
-use sqlx::{Acquire, Postgres, Transaction};
+use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::{
@@ -252,15 +252,20 @@ b AS (
  UNION ALL SELECT ws.id,'local',NULL,p.period,p.amount_microusd FROM ws JOIN policy_budgets p ON p.layer='local' AND p.workspace_id=ws.id
  UNION ALL SELECT ws.id,'key',p.governance_key_id,p.period,p.amount_microusd FROM ws JOIN policy_budgets p ON p.layer='key' AND p.workspace_id=ws.id WHERE EXISTS(SELECT 1 FROM api_keys k WHERE k.workspace_id=ws.id AND k.governance_key_id=p.governance_key_id AND k.revoked_at IS NULL)
 ),
-win AS (SELECT * FROM (VALUES ('day',$4::timestamptz,$5::timestamptz),('week',$6::timestamptz,$7::timestamptz),('month',$8::timestamptz,$9::timestamptz),('lifetime',$10::timestamptz,$11::timestamptz)) v(period,start_at,end_at))
-SELECT b.workspace_id,b.layer,b.lineage,b.period,b.amount_microusd,u.used::text,u.unknown
+win AS (SELECT * FROM (VALUES ('day',$4::timestamptz),('week',$5::timestamptz),('month',$6::timestamptz),('lifetime',$7::timestamptz)) v(period,start_at))
+SELECT b.workspace_id,b.layer,b.lineage,b.period,b.amount_microusd,
+ coalesce(t.settled_microusd+t.held_microusd-t.held_unknown_microusd,0)::text,
+ coalesce(t.unknown+t.unresolved-t.unresolved_unknown,0)::bigint
 FROM b JOIN win ON win.period=b.period
-CROSS JOIN LATERAL (SELECT coalesce(sum(CASE r.state WHEN 'settled' THEN r.actual_microusd WHEN 'pending' THEN r.held_microusd END),0) used,
-  count(*) FILTER(WHERE r.state='unknown' OR (r.state='pending' AND (r.unbounded_cost OR r.held_microusd IS NULL))) unknown
-  FROM governance_reservations r WHERE r.workspace_id=b.workspace_id AND r.admitted_at>=win.start_at AND r.admitted_at<win.end_at
-  AND (b.lineage IS NULL OR r.api_key_id IN(SELECT k.id FROM api_keys k WHERE k.workspace_id=b.workspace_id AND k.governance_key_id=b.lineage))) u
+LEFT JOIN budget_totals t ON t.scope_kind=CASE WHEN b.lineage IS NULL THEN 'workspace' ELSE 'key' END
+ AND t.scope_id=coalesce(b.lineage,b.workspace_id) AND t.period=b.period AND t.period_start=win.start_at
 WHERE b.amount_microusd>0 AND b.layer=ANY($3)
 ORDER BY b.workspace_id,b.layer,b.lineage,b.period LIMIT 5001"#;
+
+/// Alert spend of one budget window from the maintained totals (0015/0025):
+/// settled actual plus pending holds (unknown cost is reported separately,
+/// not added), and the requests whose cost is unknown or unresolved.
+const INSTALLATION_BUDGET: &str = "SELECT coalesce(t.settled_microusd+t.held_microusd-t.held_unknown_microusd,0)::text,coalesce(t.unknown+t.unresolved-t.unresolved_unknown,0)::bigint FROM (SELECT) one LEFT JOIN budget_totals t ON t.scope_kind='installation' AND t.scope_id='00000000-0000-0000-0000-000000000000' AND t.period=$1 AND t.period_start=$2";
 
 fn windows(now: DateTime<Utc>) -> [(DateTime<Utc>, DateTime<Utc>); 4] {
     BudgetPeriod::ALL.map(|p| p.window(now))
@@ -322,10 +327,9 @@ async fn budget_conditions(
                 .fetch_optional(&mut **tx)
                 .await?;
             let Some(amount) = amount else { continue };
-            let (start, end) = w[index];
-            let (used, unknown): (String, i64) = sqlx::query_as("SELECT coalesce(sum(CASE state WHEN 'settled' THEN actual_microusd WHEN 'pending' THEN held_microusd END),0)::text,count(*) FILTER(WHERE state='unknown' OR (state='pending' AND (unbounded_cost OR held_microusd IS NULL))) FROM governance_reservations WHERE admitted_at>=$1 AND admitted_at<$2")
-                .bind(start)
-                .bind(end)
+            let (used, unknown): (String, i64) = sqlx::query_as(INSTALLATION_BUDGET)
+                .bind(period.as_str())
+                .bind(w[index].0)
                 .fetch_one(&mut **tx)
                 .await?;
             let used: i128 = used.parse().unwrap_or(0);
@@ -352,13 +356,9 @@ async fn budget_conditions(
         .bind(one)
         .bind(layers)
         .bind(w[0].0)
-        .bind(w[0].1)
         .bind(w[1].0)
-        .bind(w[1].1)
         .bind(w[2].0)
-        .bind(w[2].1)
         .bind(w[3].0)
-        .bind(w[3].1)
         .fetch_all(&mut **tx)
         .await?;
     if rows.len() > MAX_CONDITIONS {
@@ -788,8 +788,15 @@ pub struct Report {
 }
 
 /// One bounded evaluation of every enabled rule and the built-in personal budget alerts.
+///
+/// A short claim transaction takes the evaluation lock with `try` (another
+/// replica evaluating means this tick does nothing), retires inactive
+/// incidents and lists the rules. Each rule is then evaluated and reconciled
+/// in its own short transaction that waits for the same lock, so no snapshot
+/// spans the whole tick (vacuum is not held back) and one rule's incidents
+/// are never reconciled concurrently. Budget rules read maintained totals.
 pub async fn evaluate_once(store: &Store) -> anyhow::Result<Option<Report>> {
-    let mut tx = store.pool.begin().await?;
+    let mut tx = crate::db::begin(&store.pool).await?;
     let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock($1)")
         .bind(EVALUATION_LOCK)
         .fetch_one(&mut *tx)
@@ -821,16 +828,24 @@ pub async fn evaluate_once(store: &Store) -> anyhow::Result<Option<Report>> {
         .filter_map(|r| Some((Source::Rule(r.id), Kind::parse(&r.kind)?, Some(r))))
         .collect();
     jobs.push((Source::Builtin, Kind::Budget, None));
+    tx.commit().await?;
     for (source, kind, rule) in jobs {
         report.rules += 1;
-        let mut savepoint = tx.begin().await?;
+        let mut tx = crate::db::begin(&store.pool).await?;
         let outcome = async {
+            sqlx::query("SET LOCAL statement_timeout='10s'")
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("SELECT pg_advisory_xact_lock($1)")
+                .bind(EVALUATION_LOCK)
+                .execute(&mut *tx)
+                .await?;
             let conditions = match &rule {
-                Some(rule) => evaluate_rule(&mut savepoint, rule, now).await?,
+                Some(rule) => evaluate_rule(&mut tx, rule, now).await?,
                 None => {
                     let layers = ["type", "override", "local", "key"].map(String::from);
                     budget_conditions(
-                        &mut savepoint,
+                        &mut tx,
                         Workspaces::Personal,
                         &layers,
                         &PERSONAL_THRESHOLDS,
@@ -839,22 +854,21 @@ pub async fn evaluate_once(store: &Store) -> anyhow::Result<Option<Report>> {
                     .await?
                 }
             };
-            reconcile(&mut savepoint, source, kind, conditions).await
+            reconcile(&mut tx, source, kind, conditions).await
         }
         .await;
         match outcome {
             Ok(changes) => {
-                savepoint.commit().await?;
+                tx.commit().await?;
                 report.fired += changes.fired;
                 report.resolved += changes.resolved;
             }
             Err(_) => {
-                savepoint.rollback().await?;
+                tx.rollback().await?;
                 report.failed_rules += 1;
             }
         }
     }
-    tx.commit().await?;
     Ok(Some(report))
 }
 
@@ -1012,7 +1026,7 @@ struct Pending {
 /// Send one pending delivery while holding its row lock (no double sends
 /// across replicas). Returns false when nothing was pending.
 async fn deliver_one(store: &Store, id: Uuid) -> anyhow::Result<bool> {
-    let mut tx = store.pool.begin().await?;
+    let mut tx = crate::db::begin(&store.pool).await?;
     let row: Option<Pending> = sqlx::query_as("SELECT d.transition,e.summary,e.severity,e.fired_at,e.resolved_at,e.rule_id,r.name rule_name,w.name workspace_name,w.kind workspace_kind,p.name connection_name,CASE WHEN e.builtin IS NOT NULL THEN e.workspace_id END personal_workspace,e.id event_id,e.builtin FROM alert_deliveries d JOIN alert_events e ON e.id=d.event_id LEFT JOIN alert_rules r ON r.id=e.rule_id LEFT JOIN workspaces w ON w.id=e.workspace_id LEFT JOIN provider_connections p ON p.id=e.provider_connection_id WHERE d.id=$1 AND d.status='pending' FOR UPDATE OF d SKIP LOCKED")
         .bind(id)
         .fetch_optional(&mut *tx)

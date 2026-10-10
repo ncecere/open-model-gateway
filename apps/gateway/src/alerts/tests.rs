@@ -610,3 +610,127 @@ async fn emails_reach_recipients_and_failures_are_recorded(pool: PgPool) {
     assert_eq!(deliver_pending(&s.store, 10).await, 0);
     let _ = s.owner;
 }
+
+/// The former budget-alert scans (before 0025), kept as the oracle.
+const OLD_WORKSPACE_BUDGETS: &str = r#"WITH ws AS (SELECT id,kind FROM workspaces WHERE disabled_at IS NULL AND CASE $1::text WHEN 'shared' THEN kind IN ('team','project') WHEN 'personal' THEN kind='personal' ELSE id=$2 AND kind IN ('team','project') END),
+b AS (
+ SELECT ws.id workspace_id,'type'::text layer,NULL::uuid lineage,p.period,p.amount_microusd FROM ws JOIN policy_budgets p ON p.layer='type' AND p.kind=ws.kind WHERE NOT EXISTS(SELECT 1 FROM workspace_platform_policy_overrides o WHERE o.workspace_id=ws.id)
+ UNION ALL SELECT ws.id,'override',NULL,p.period,p.amount_microusd FROM ws JOIN workspace_platform_policy_overrides o ON o.workspace_id=ws.id JOIN policy_budgets p ON p.layer='override' AND p.workspace_id=ws.id
+ UNION ALL SELECT ws.id,'local',NULL,p.period,p.amount_microusd FROM ws JOIN policy_budgets p ON p.layer='local' AND p.workspace_id=ws.id
+ UNION ALL SELECT ws.id,'key',p.governance_key_id,p.period,p.amount_microusd FROM ws JOIN policy_budgets p ON p.layer='key' AND p.workspace_id=ws.id WHERE EXISTS(SELECT 1 FROM api_keys k WHERE k.workspace_id=ws.id AND k.governance_key_id=p.governance_key_id AND k.revoked_at IS NULL)
+),
+win AS (SELECT * FROM (VALUES ('day',$4::timestamptz,$5::timestamptz),('week',$6::timestamptz,$7::timestamptz),('month',$8::timestamptz,$9::timestamptz),('lifetime',$10::timestamptz,$11::timestamptz)) v(period,start_at,end_at))
+SELECT b.workspace_id,b.layer,b.lineage,b.period,b.amount_microusd,u.used::text,u.unknown
+FROM b JOIN win ON win.period=b.period
+CROSS JOIN LATERAL (SELECT coalesce(sum(CASE r.state WHEN 'settled' THEN r.actual_microusd WHEN 'pending' THEN r.held_microusd END),0) used,
+  count(*) FILTER(WHERE r.state='unknown' OR (r.state='pending' AND (r.unbounded_cost OR r.held_microusd IS NULL))) unknown
+  FROM governance_reservations r WHERE r.workspace_id=b.workspace_id AND r.admitted_at>=win.start_at AND r.admitted_at<win.end_at
+  AND (b.lineage IS NULL OR r.api_key_id IN(SELECT k.id FROM api_keys k WHERE k.workspace_id=b.workspace_id AND k.governance_key_id=b.lineage))) u
+WHERE b.amount_microusd>0 AND b.layer=ANY($3)
+ORDER BY b.workspace_id,b.layer,b.lineage,b.period LIMIT 5001"#;
+
+const OLD_INSTALLATION_BUDGET: &str = "SELECT coalesce(sum(CASE state WHEN 'settled' THEN actual_microusd WHEN 'pending' THEN held_microusd END),0)::text,count(*) FILTER(WHERE state='unknown' OR (state='pending' AND (unbounded_cost OR held_microusd IS NULL))) FROM governance_reservations WHERE admitted_at>=$1 AND admitted_at<$2";
+
+/// Budget alerts read maintained totals (0015/0025) and report exactly what
+/// the former history scans reported, for every layer, period and state.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn budget_alert_totals_equal_the_former_scans(pool: PgPool) {
+    let s = seed(pool).await;
+    let rotated = Uuid::new_v4();
+    sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash,governance_key_id) VALUES($1,$2,$3,'rotated',decode(repeat('09',32),'hex'),$4)")
+        .bind(rotated).bind(s.team).bind(s.owner).bind(s.key).execute(&s.pool).await.unwrap();
+    let mut n = 0i64;
+    for (ws, key) in [
+        (s.team, s.key),
+        (s.team, rotated),
+        (s.personal, s.personal_key),
+    ] {
+        for (state, reservation, amount) in [
+            ("succeeded", "settled", Some(70)),
+            ("started", "pending", Some(40)),
+            ("started", "pending", None),
+            ("failed", "unknown", Some(25)),
+            ("failed", "unknown", None),
+        ] {
+            for minutes_ago in [0, 90, 60 * 30, 60 * 24 * 9, 60 * 24 * 40, 60 * 24 * 400] {
+                n += 1;
+                attempt(
+                    &s,
+                    ws,
+                    key,
+                    state,
+                    None,
+                    reservation,
+                    amount.map(|a| a + n),
+                    minutes_ago,
+                )
+                .await;
+            }
+        }
+    }
+    // An unknown attempt whose hold is unbounded (marked, finite floor).
+    sqlx::query("UPDATE governance_reservations SET unbounded_cost=true WHERE execution_id IN (SELECT execution_id FROM governance_reservations WHERE state='unknown' AND held_microusd IS NOT NULL LIMIT 3)").execute(&s.pool).await.unwrap();
+    for period in ["day", "week", "month", "lifetime"] {
+        budget(&s, "installation", None, period, 1_000).await;
+        budget(&s, "local", Some(s.team), period, 1_000).await;
+        budget(&s, "local", Some(s.personal), period, 1_000).await;
+        sqlx::query("INSERT INTO policy_budgets(layer,workspace_id,governance_key_id,period,amount_microusd) VALUES('key',$1,$2,$3,1000)").bind(s.team).bind(s.key).bind(period).execute(&s.pool).await.unwrap();
+        sqlx::query("INSERT INTO policy_budgets(layer,kind,period,amount_microusd) VALUES('type','team',$1,1000)").bind(period).execute(&s.pool).await.unwrap();
+    }
+    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+    let w = windows(now);
+    let layers: Vec<String> = BUDGET_LAYERS.iter().map(|l| l.to_string()).collect();
+    for (mode, one) in [("shared", None), ("personal", None), ("one", Some(s.team))] {
+        let new: Vec<BudgetRow> = sqlx::query_as(WORKSPACE_BUDGETS)
+            .bind(mode)
+            .bind(one)
+            .bind(&layers)
+            .bind(w[0].0)
+            .bind(w[1].0)
+            .bind(w[2].0)
+            .bind(w[3].0)
+            .fetch_all(&s.pool)
+            .await
+            .unwrap();
+        let old: Vec<BudgetRow> = sqlx::query_as(OLD_WORKSPACE_BUDGETS)
+            .bind(mode)
+            .bind(one)
+            .bind(&layers)
+            .bind(w[0].0)
+            .bind(w[0].1)
+            .bind(w[1].0)
+            .bind(w[1].1)
+            .bind(w[2].0)
+            .bind(w[2].1)
+            .bind(w[3].0)
+            .bind(w[3].1)
+            .fetch_all(&s.pool)
+            .await
+            .unwrap();
+        assert_eq!(new, old, "{mode}");
+        assert!(!new.is_empty());
+    }
+    for (index, period) in BudgetPeriod::ALL.iter().enumerate() {
+        let new: (String, i64) = sqlx::query_as(INSTALLATION_BUDGET)
+            .bind(period.as_str())
+            .bind(w[index].0)
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+        let old: (String, i64) = sqlx::query_as(OLD_INSTALLATION_BUDGET)
+            .bind(w[index].0)
+            .bind(w[index].1)
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+        assert_eq!(new, old, "{period:?}");
+        assert!(old.1 > 0);
+    }
+    // The metrics gauge reads the same totals: exact pending/unknown counts.
+    let gauge: (i64, i64) = sqlx::query_as("SELECT pending,unknown FROM budget_totals WHERE scope_kind='installation' AND period='lifetime'").fetch_one(&s.pool).await.unwrap();
+    let scanned: (i64, i64) = sqlx::query_as("SELECT count(*) FILTER(WHERE state='pending'),count(*) FILTER(WHERE state='unknown') FROM governance_reservations").fetch_one(&s.pool).await.unwrap();
+    assert_eq!(gauge, scanned);
+}

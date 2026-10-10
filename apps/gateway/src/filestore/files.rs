@@ -176,7 +176,9 @@ impl std::fmt::Display for FileError {
 }
 impl std::error::Error for FileError {}
 impl From<sqlx::Error> for FileError {
-    fn from(_: sqlx::Error) -> Self {
+    fn from(e: sqlx::Error) -> Self {
+        // Callers map this to a generic 503; keep the sanitized cause.
+        crate::management::log_storage_error(&e);
         Self::Database
     }
 }
@@ -445,7 +447,7 @@ pub(crate) async fn reserve(
     cap: Option<u64>,
     mode: QuotaMode,
 ) -> Result<u64, FileError> {
-    let mut tx = db.pool.begin().await?;
+    let mut tx = crate::db::begin(&db.pool).await?;
     sqlx::query("SELECT pg_advisory_xact_lock_shared(72419502)")
         .execute(&mut *tx)
         .await?;

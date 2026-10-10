@@ -139,6 +139,8 @@ GRANT SELECT,UPDATE(last_write_at) ON public.scim_state TO gateway_runtime;
 GRANT SELECT,INSERT ON public.budget_totals TO gateway_runtime;
 GRANT UPDATE(settled_microusd,held_microusd,reservations,pending,unknown,unresolved,
  unreserved_executions) ON public.budget_totals TO gateway_runtime;
+-- Budget totals detail (0025): the unknown-cost subset, maintained by the same trigger.
+GRANT UPDATE(held_unknown_microusd,unresolved_unknown) ON public.budget_totals TO gateway_runtime;
 -- Async jobs (0016): metadata rows only. Jobs and files are inserted once and
 -- never deleted (triggers also refuse it); identity/ownership columns are not
 -- updatable; state moves forward only (trigger). An admitted job keeps its
@@ -221,6 +223,20 @@ GRANT UPDATE(last_waited_at) ON public.async_jobs TO gateway_runtime;
 -- dimensions; uploads/removals go through the reviewed stored_files grants.
 GRANT UPDATE(branding_logo_file_id,branding_logo_updated_at,branding_logo_width,
  branding_logo_height) ON public.installation_settings TO gateway_runtime;
+-- Rate counters (0024): per-minute and in-flight counters of workspaces and
+-- key lineages, written only by the rate_counters_maintain() triggers inside
+-- reservation/execution/async-job writes (upsert: INSERT + UPDATE of the
+-- counters); keys are never re-keyed. Minute rows admission no longer reads
+-- are pruned by maintenance (DELETE; a trigger refuses removing the retained
+-- window). In-flight rows are never deleted. No TRUNCATE. The trigger and
+-- admission call the helper functions.
+GRANT SELECT,INSERT,DELETE ON public.rate_minute_counters TO gateway_runtime;
+GRANT UPDATE(requests,unreserved,tokens) ON public.rate_minute_counters TO gateway_runtime;
+GRANT SELECT,INSERT ON public.inflight_counters TO gateway_runtime;
+GRANT UPDATE(requests,jobs) ON public.inflight_counters TO gateway_runtime;
+GRANT EXECUTE ON FUNCTION public.rate_reserved_tokens(bigint,bigint,bigint,jsonb),
+ public.rate_contribution(public.governance_reservations,text,uuid,boolean,text,timestamptz,integer)
+ TO gateway_runtime;
 -- No UPDATE/DELETE/TRUNCATE of immutable prices, ledger or audit; no removal of
 -- users/workspaces/keys/history and no rewrite of immutable admission snapshots.
 COMMIT;

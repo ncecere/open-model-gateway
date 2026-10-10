@@ -26,7 +26,7 @@ impl Scope {
             (Some(_), Some(l)) => Self::KeyLineage(l),
         }
     }
-    fn key(self) -> (&'static str, Uuid) {
+    pub(crate) fn key(self) -> (&'static str, Uuid) {
         match self {
             Self::Installation => ("installation", Uuid::nil()),
             Self::Workspace(w) => ("workspace", w),
@@ -112,17 +112,20 @@ pub(crate) async fn budget_consumption(
 const EXPECTED: &str = r#"SELECT s.kind scope_kind,s.id scope_id,p.period,
  CASE WHEN p.period='lifetime' THEN 'epoch'::timestamptz ELSE date_trunc(p.period,c.at,'UTC') END period_start,
  sum(c.settled) settled_microusd,sum(c.held) held_microusd,sum(c.reservations) reservations,sum(c.pending) pending,
- sum(c.unknown) unknown,sum(c.unresolved) unresolved,sum(c.unreserved) unreserved_executions
+ sum(c.unknown) unknown,sum(c.unresolved) unresolved,sum(c.unreserved) unreserved_executions,
+ sum(c.held_unknown) held_unknown_microusd,sum(c.unresolved_unknown) unresolved_unknown
 FROM (
  SELECT r.workspace_id,r.api_key_id,r.admitted_at at,
   CASE WHEN r.state='settled' THEN coalesce(r.actual_microusd,0) ELSE 0 END::numeric settled,
   CASE WHEN r.state='settled' THEN 0 ELSE coalesce(r.held_microusd,0) END::numeric held,
   1::bigint reservations,(r.state='pending')::int::bigint pending,(r.state='unknown')::int::bigint unknown,
   (r.state<>'settled' AND (r.unbounded_cost OR r.held_microusd IS NULL))::int::bigint unresolved,
-  0::bigint unreserved
+  0::bigint unreserved,
+  CASE WHEN r.state='unknown' THEN coalesce(r.held_microusd,0) ELSE 0 END::numeric held_unknown,
+  (r.state='unknown' AND (r.unbounded_cost OR r.held_microusd IS NULL))::int::bigint unresolved_unknown
  FROM governance_reservations r
  UNION ALL
- SELECT e.workspace_id,e.api_key_id,e.started_at,0,0,0,0,0,0,1 FROM inference_executions e
+ SELECT e.workspace_id,e.api_key_id,e.started_at,0,0,0,0,0,0,1,0,0 FROM inference_executions e
  WHERE NOT EXISTS(SELECT 1 FROM governance_reservations r WHERE r.execution_id=e.id)
 ) c JOIN api_keys k ON k.id=c.api_key_id
 CROSS JOIN LATERAL (VALUES('installation','00000000-0000-0000-0000-000000000000'::uuid),('workspace',c.workspace_id),('key',k.governance_key_id)) s(kind,id)
@@ -136,7 +139,8 @@ pub struct Mismatch {
     pub scope_id: Uuid,
     pub period: String,
     pub period_start: DateTime<Utc>,
-    /// `settled,held,reservations,pending,unknown,unresolved,unreserved` as maintained.
+    /// `settled,held,reservations,pending,unknown,unresolved,unreserved,
+    /// held_unknown,unresolved_unknown` as maintained.
     pub maintained: String,
     /// The same quantities from the full scan.
     pub scanned: String,
@@ -149,10 +153,16 @@ pub struct VerifyReport {
     pub mismatch_count: i64,
     /// At most 20 examples.
     pub mismatches: Vec<Mismatch>,
+    /// Rate counters (0024) compared: every in-flight scope and every
+    /// (minute, scope) of the retained window.
+    pub rate_buckets: i64,
+    pub rate_mismatch_count: i64,
+    /// At most 20 examples.
+    pub rate_mismatches: Vec<super::rates::Mismatch>,
 }
 impl VerifyReport {
     pub fn consistent(&self) -> bool {
-        self.mismatch_count == 0
+        self.mismatch_count == 0 && self.rate_mismatch_count == 0
     }
 }
 
@@ -160,7 +170,7 @@ impl VerifyReport {
 /// takes no installation lock: the triggers commit totals atomically with the
 /// rows they summarize, so one snapshot sees both consistently.
 pub async fn verify(store: &crate::store::Store) -> Result<VerifyReport, sqlx::Error> {
-    let mut tx = store.pool.begin().await?;
+    let mut tx = crate::db::begin(&store.pool).await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         .execute(&mut *tx)
         .await?;
@@ -176,8 +186,8 @@ pub(crate) async fn verify_in(
         r#"WITH e AS ({EXPECTED}),
         j AS (SELECT coalesce(t.scope_kind,e.scope_kind) scope_kind,coalesce(t.scope_id,e.scope_id) scope_id,
           coalesce(t.period,e.period) period,coalesce(t.period_start,e.period_start) period_start,
-          concat_ws(',',coalesce(t.settled_microusd,0),coalesce(t.held_microusd,0),coalesce(t.reservations,0),coalesce(t.pending,0),coalesce(t.unknown,0),coalesce(t.unresolved,0),coalesce(t.unreserved_executions,0)) maintained,
-          concat_ws(',',coalesce(e.settled_microusd,0),coalesce(e.held_microusd,0),coalesce(e.reservations,0),coalesce(e.pending,0),coalesce(e.unknown,0),coalesce(e.unresolved,0),coalesce(e.unreserved_executions,0)) scanned
+          concat_ws(',',coalesce(t.settled_microusd,0),coalesce(t.held_microusd,0),coalesce(t.reservations,0),coalesce(t.pending,0),coalesce(t.unknown,0),coalesce(t.unresolved,0),coalesce(t.unreserved_executions,0),coalesce(t.held_unknown_microusd,0),coalesce(t.unresolved_unknown,0)) maintained,
+          concat_ws(',',coalesce(e.settled_microusd,0),coalesce(e.held_microusd,0),coalesce(e.reservations,0),coalesce(e.pending,0),coalesce(e.unknown,0),coalesce(e.unresolved,0),coalesce(e.unreserved_executions,0),coalesce(e.held_unknown_microusd,0),coalesce(e.unresolved_unknown,0)) scanned
           FROM budget_totals t FULL JOIN e ON e.scope_kind=t.scope_kind AND e.scope_id=t.scope_id AND e.period=t.period AND e.period_start=t.period_start)"#
     );
     let (buckets, mismatch_count): (i64, i64) = sqlx::query_as(&format!(
@@ -194,10 +204,14 @@ pub(crate) async fn verify_in(
     } else {
         Vec::new()
     };
+    let rate = super::rates::verify_in(tx).await?;
     Ok(VerifyReport {
         buckets,
         mismatch_count,
         mismatches,
+        rate_buckets: rate.buckets,
+        rate_mismatch_count: rate.mismatch_count,
+        rate_mismatches: rate.mismatches,
     })
 }
 

@@ -495,7 +495,7 @@ pub(crate) async fn insert_segment(
     file: Uuid,
     lines: &[i32],
 ) -> Result<()> {
-    let mut tx = store.pool.begin().await?;
+    let mut tx = crate::db::begin(&store.pool).await?;
     sqlx::query(
         "INSERT INTO batch_segments(job_id,workspace_id,seq,file_id,lines) VALUES($1,$2,$3,$4,$5)",
     )

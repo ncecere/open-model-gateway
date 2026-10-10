@@ -71,6 +71,18 @@ pub fn start(store: Store, retention_days: Option<i32>) -> tokio::task::JoinHand
                 Ok(Ok(_)) => {}
                 _ => tracing::warn!("execution reconciliation incomplete; retrying next interval"),
             }
+            // Minute rate counters admission no longer reads (0024), every minute.
+            if counter.is_multiple_of(12) {
+                match tokio::time::timeout(
+                    Duration::from_secs(4),
+                    crate::governance::rates::prune(&store, 10_000),
+                )
+                .await
+                {
+                    Ok(Ok(_)) => {}
+                    _ => tracing::warn!("rate counter pruning incomplete; retrying later"),
+                }
+            }
             // Storage usage (not charged): record completed hours every 5 minutes.
             if counter.is_multiple_of(60) {
                 match tokio::time::timeout(

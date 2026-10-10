@@ -20,7 +20,7 @@ pub async fn provision_user(store: &Store, email: &str, platform_admin: bool) ->
             && !email.chars().any(|c| c.is_whitespace() || c.is_control()),
         "invalid email"
     );
-    let mut tx = store.pool.begin().await?;
+    let mut tx = crate::db::begin(&store.pool).await?;
     lifecycle::lock(&mut tx).await?;
     let id: Uuid = sqlx::query_scalar("INSERT INTO users(id,email,oidc_link_allowed) VALUES($1,$2,true) ON CONFLICT(lower(email)) DO UPDATE SET oidc_link_allowed=NOT EXISTS(SELECT 1 FROM oidc_identities i WHERE i.user_id=users.id) RETURNING id")
         .bind(Uuid::new_v4()).bind(email).fetch_one(&mut *tx).await?;
@@ -49,7 +49,7 @@ pub async fn seed(store: &Store, environment: Environment) -> Result<Option<Deve
     if environment != Environment::Development {
         bail!("bootstrap-dev requires GATEWAY_ENV=development");
     }
-    let mut tx = store.pool.begin().await?;
+    let mut tx = crate::db::begin(&store.pool).await?;
     lifecycle::lock(&mut tx).await?;
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM users WHERE email='developer@local.invalid')",

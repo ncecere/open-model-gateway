@@ -785,7 +785,7 @@ impl Scheduler {
         deployment: Uuid,
         max_concurrency: i32,
     ) -> Result<Claim, sqlx::Error> {
-        let mut tx = self.store.pool.begin().await?;
+        let mut tx = crate::db::begin(&self.store.pool).await?;
         lock_route(&mut tx, deployment).await?;
         let running: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM batch_lines WHERE deployment_id=$1 AND state='running'",
@@ -844,7 +844,7 @@ impl Scheduler {
         deployment: Uuid,
         max_concurrency: i32,
     ) -> Result<Option<bool>, sqlx::Error> {
-        let mut tx = self.store.pool.begin().await?;
+        let mut tx = crate::db::begin(&self.store.pool).await?;
         lock_route(&mut tx, deployment).await?;
         let running: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM batch_lines WHERE deployment_id=$1 AND state='running'",
@@ -870,7 +870,7 @@ impl Scheduler {
         rows: &[WaitRow],
         legit: bool,
     ) -> Result<(), sqlx::Error> {
-        let mut tx = self.store.pool.begin().await?;
+        let mut tx = crate::db::begin(&self.store.pool).await?;
         let ids: Vec<Uuid> = rows.iter().map(|r| r.deployment).collect();
         let lines: Vec<i32> = rows
             .iter()

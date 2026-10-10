@@ -169,7 +169,7 @@ pub async fn reserve_window(
     armed: Option<ResponseBound>,
 ) -> Result<(), InferenceError> {
     let _queued = gate(&store.lock_gates.admission).await;
-    let mut tx = store.pool.begin().await.map_err(storage)?;
+    let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
     lock(&mut tx).await?;
     let lineage = crate::auth::revalidate(&mut tx, principal)
         .await
@@ -305,7 +305,7 @@ pub async fn open_response(
     sequence: i32,
     window: ResponseBound,
 ) -> Result<(), InferenceError> {
-    let mut tx = store.pool.begin().await.map_err(storage)?;
+    let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
     let s = session(&mut tx, id).await?;
     if s.state != "pending" {
         return Err(InferenceError::Storage);
@@ -406,7 +406,7 @@ pub async fn settle_response(
     window: ResponseBound,
 ) -> Result<(), InferenceError> {
     let _queued = gate(&store.lock_gates.settlement).await;
-    let mut tx = store.pool.begin().await.map_err(storage)?;
+    let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
     lock(&mut tx).await?;
     let s = session(&mut tx, id).await?;
     if s.state != "pending" {
@@ -499,7 +499,7 @@ async fn finish_unobserved(
     let telemetry = record.telemetry.for_outcome(record.outcome);
     let ms = |v: Option<u64>| v.map(|n| n.min(i64::MAX as u64) as i64);
     let _queued = gate(&store.lock_gates.settlement).await;
-    let mut tx = store.pool.begin().await.map_err(storage)?;
+    let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
     lock(&mut tx).await?;
     let r = reservation(&mut tx, record.id).await?;
     let s = session(&mut tx, record.id).await?;

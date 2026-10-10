@@ -416,4 +416,62 @@ mod database {
             2
         );
     }
+    /// Successes on a healthy, recently observed route write nothing (no
+    /// per-success hot-row update); failures, recoveries and a stale
+    /// observation still write.
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn healthy_successes_write_only_on_change(pool: PgPool) {
+        let f = fixture(pool).await;
+        let deployment = f
+            .store
+            .deployments(&f.principal, "company/smart")
+            .await
+            .unwrap()
+            .remove(0);
+        let version = || async {
+            sqlx::query_scalar::<_, String>(
+                "SELECT xmin::text FROM deployment_health WHERE deployment_id=$1",
+            )
+            .bind(deployment.id)
+            .fetch_optional(&f.store.pool)
+            .await
+            .unwrap()
+        };
+        record_result(&f.store, deployment.id, None).await.unwrap();
+        let first = version().await;
+        assert!(first.is_some(), "the first observation is recorded");
+        for _ in 0..3 {
+            record_result(&f.store, deployment.id, None).await.unwrap();
+        }
+        assert_eq!(version().await, first, "unchanged health is not rewritten");
+        record_result(&f.store, deployment.id, Some(InferenceError::Timeout))
+            .await
+            .unwrap();
+        assert_eq!(
+            health(&f.store, deployment.id)
+                .await
+                .unwrap()
+                .consecutive_failures,
+            1
+        );
+        record_result(&f.store, deployment.id, None).await.unwrap();
+        assert_eq!(
+            health(&f.store, deployment.id)
+                .await
+                .unwrap()
+                .consecutive_failures,
+            0
+        );
+        let recovered = version().await;
+        sqlx::query("UPDATE deployment_health SET last_observed_at=now()-interval '31 seconds'")
+            .execute(&f.store.pool)
+            .await
+            .unwrap();
+        let stale = version().await;
+        assert_ne!(stale, recovered);
+        record_result(&f.store, deployment.id, None).await.unwrap();
+        assert_ne!(version().await, stale, "a stale observation is refreshed");
+        let h = health(&f.store, deployment.id).await.unwrap();
+        assert!(h.last_observed_at.unwrap() > chrono::Utc::now() - chrono::TimeDelta::seconds(5));
+    }
 }

@@ -342,26 +342,25 @@ async fn report(
     .await
     .map_err(Into::into)
 }
-async fn report_tx(s: &Store) -> Result<Transaction<'_, Postgres>, ApiError> {
-    let mut tx = s.pool.begin().await?;
-    sqlx::query("SET LOCAL statement_timeout='10s'")
-        .execute(&mut *tx)
-        .await?;
-    resources::catalog_lock(&mut tx, false).await?;
-    sqlx::query_scalar::<_, Uuid>("SELECT id FROM installation WHERE singleton FOR NO KEY UPDATE")
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or_else(missing)?;
-    Ok(tx)
+/// Reports never take the catalog or installation lock: authorization and
+/// data come from lock-free read-only snapshots (`crate::reporting`), the
+/// data optionally from the reporting replica.
+async fn platform_report_tx(
+    s: &Store,
+    u: &BrowserPrincipal,
+) -> Result<Transaction<'static, Postgres>, ApiError> {
+    let mut tx = s.snapshot().await?;
+    resources::platform_read_snapshot(&mut tx, u.user_id).await?;
+    Ok(s.reporting(tx).await?)
 }
-async fn workspace_report_tx<'a>(
-    s: &'a Store,
+async fn workspace_report_tx(
+    s: &Store,
     u: &BrowserPrincipal,
     ws: Uuid,
-) -> Result<(Transaction<'a, Postgres>, resources::WorkspaceAccess), ApiError> {
-    let mut tx = report_tx(s).await?;
-    let access = resources::workspace_access(&mut tx, u, ws).await?;
-    Ok((tx, access))
+) -> Result<(Transaction<'static, Postgres>, resources::WorkspaceAccess), ApiError> {
+    let mut tx = s.snapshot().await?;
+    let access = resources::workspace_access_snapshot(&mut tx, u, ws).await?;
+    Ok((s.reporting(tx).await?, access))
 }
 async fn deadline<T>(
     future: impl std::future::Future<Output = Result<T, ApiError>>,
@@ -403,8 +402,7 @@ pub(super) async fn platform_report(
 ) -> ApiResult {
     deadline(async {
         let f = Filters::parse(raw, false, false)?;
-        let mut tx = report_tx(&s).await?;
-        resources::platform_read(&mut tx, u.user_id).await?;
+        let mut tx = platform_report_tx(&s, &u).await?;
         let value = report(&mut tx, &f, None, true).await?;
         tx.commit().await?;
         Ok(Json(value))

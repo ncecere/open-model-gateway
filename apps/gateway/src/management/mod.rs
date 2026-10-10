@@ -275,12 +275,90 @@ impl From<sqlx::Error> for ApiError {
                 "Resource conflicts with existing configuration",
             )
         } else {
+            log_storage_error(&e);
             Self(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Management storage unavailable",
             )
         }
     }
+}
+/// SQLSTATE classes whose PostgreSQL primary messages name only objects or
+/// conditions (transaction state, serialization, resources, operator action,
+/// connection, syntax/privilege, prerequisite state, unsupported feature,
+/// internal), never row or parameter values. Other classes (for example 22
+/// data exceptions, 23 integrity, P0 trigger raises) may interpolate values,
+/// so only their SQLSTATE and object names are logged.
+const MESSAGE_SAFE_CLASSES: &[&str] = &[
+    "08", "0A", "25", "40", "42", "53", "54", "55", "57", "58", "XX",
+];
+/// Sanitized diagnostics for a database error mapped to 503 (no row data,
+/// bound values or connection strings). Emitted inside the `http.request`
+/// span, so the line carries the request id.
+pub(crate) fn storage_error_fields(e: &sqlx::Error) -> StorageErrorFields {
+    let mut f = StorageErrorFields {
+        kind: match e {
+            sqlx::Error::Database(_) => "database",
+            sqlx::Error::PoolTimedOut => "pool_timed_out",
+            sqlx::Error::PoolClosed => "pool_closed",
+            sqlx::Error::Io(_) => "io",
+            sqlx::Error::Tls(_) => "tls",
+            sqlx::Error::Protocol(_) => "protocol",
+            sqlx::Error::RowNotFound => "row_not_found",
+            sqlx::Error::ColumnNotFound(_) => "column_not_found",
+            sqlx::Error::ColumnIndexOutOfBounds { .. } => "column_index_out_of_bounds",
+            sqlx::Error::ColumnDecode { .. } => "column_decode",
+            sqlx::Error::Decode(_) => "decode",
+            sqlx::Error::TypeNotFound { .. } => "type_not_found",
+            sqlx::Error::WorkerCrashed => "worker_crashed",
+            _ => "other",
+        },
+        ..StorageErrorFields::default()
+    };
+    match e {
+        sqlx::Error::Database(db) => {
+            f.sqlstate = db.code().map(|c| c.into_owned());
+            f.constraint = db.constraint().map(str::to_owned);
+            if let Some(pg) = db.try_downcast_ref::<sqlx::postgres::PgDatabaseError>() {
+                f.table = pg.table().map(str::to_owned);
+                f.column = pg.column().map(str::to_owned);
+                f.routine = pg.routine().map(str::to_owned);
+            }
+            if f.sqlstate
+                .as_deref()
+                .is_some_and(|c| MESSAGE_SAFE_CLASSES.iter().any(|k| c.starts_with(k)))
+            {
+                f.message = Some(db.message().chars().take(200).collect());
+            }
+        }
+        sqlx::Error::ColumnNotFound(c) => f.column = Some(c.clone()),
+        sqlx::Error::ColumnDecode { index, .. } => f.column = Some(index.clone()),
+        _ => {}
+    }
+    f
+}
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct StorageErrorFields {
+    pub(crate) kind: &'static str,
+    pub(crate) sqlstate: Option<String>,
+    pub(crate) constraint: Option<String>,
+    pub(crate) table: Option<String>,
+    pub(crate) column: Option<String>,
+    pub(crate) routine: Option<String>,
+    pub(crate) message: Option<String>,
+}
+pub(crate) fn log_storage_error(e: &sqlx::Error) {
+    let f = storage_error_fields(e);
+    tracing::warn!(
+        error_kind = f.kind,
+        sqlstate = f.sqlstate.as_deref(),
+        constraint = f.constraint.as_deref(),
+        table = f.table.as_deref(),
+        column = f.column.as_deref(),
+        routine = f.routine.as_deref(),
+        db_message = f.message.as_deref(),
+        "management storage error"
+    );
 }
 /// A management error that may carry a dynamic message, a stable machine code
 /// and detail fields (for example `missing_meters`). It uses the same envelope
@@ -544,8 +622,10 @@ async fn me(
     Extension(u): Extension<BrowserPrincipal>,
     files: Option<Extension<crate::filestore::FileStoreRuntime>>,
 ) -> ApiResult {
-    let mut tx = resources::installation_tx(&s).await?;
-    let role = resources::platform_role(&mut tx, u.user_id).await?;
+    // Lock-free primary snapshot (`crate::reporting`): no catalog or
+    // installation lock; the role and workspace list are live as of its start.
+    let mut tx = s.snapshot().await?;
+    let role = resources::platform_role_snapshot(&mut tx, u.user_id).await?;
     // Presentation settings (Admin > Settings > General) everyone may see.
     // `logo_url` is deprecated (never shown); `logo` is the uploaded logo.
     let mut installation: Value = sqlx::query_scalar(
@@ -589,14 +669,26 @@ pub(crate) async fn my_workspaces(
 ) -> Result<Vec<WorkspaceContextRow>, ApiError> {
     Ok(sqlx::query_as("SELECT w.id,w.name,w.kind,w.owner_user_id,m.role,(SELECT CASE WHEN count(DISTINCT g.source)>1 THEN 'mixed' ELSE min(g.source) END FROM workspace_membership_grants g WHERE g.workspace_id=w.id AND g.user_id=$1 AND g.revoked_at IS NULL) FROM workspaces w LEFT JOIN effective_workspace_memberships m ON m.workspace_id=w.id AND m.user_id=$1 WHERE w.disabled_at IS NULL AND ((w.kind='personal' AND w.owner_user_id=$1) OR (w.kind IN ('team','project') AND m.user_id IS NOT NULL)) ORDER BY CASE w.kind WHEN 'personal' THEN 0 ELSE 1 END,w.name,w.id").bind(user).fetch_all(&mut **tx).await?)
 }
+/// Workspace activity reads (executions, 30-day usage): members and admins
+/// only, authorized in a lock-free snapshot, rows from it or the reporting
+/// replica (`crate::reporting`).
+async fn activity_tx(
+    s: &Store,
+    u: &BrowserPrincipal,
+    ws: Uuid,
+) -> Result<(Transaction<'static, Postgres>, resources::WorkspaceAccess), ApiError> {
+    let mut tx = s.snapshot().await?;
+    let a = resources::workspace_access_snapshot(&mut tx, u, ws).await?;
+    resources::detail_access(&a)?;
+    Ok((s.reporting(tx).await?, a))
+}
 async fn executions(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
     Path(ws): Path<Uuid>,
     Query(p): Query<Page>,
 ) -> ApiResult {
-    let (mut tx, a) = resources::workspace_tx(&s, &u, ws).await?;
-    resources::detail_access(&a)?;
+    let (mut tx, a) = activity_tx(&s, &u, ws).await?;
     let (l, o) = p.bounds()?;
     let data:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',e.id,'public_model',e.public_model,'provider',e.provider,'state',e.state,'streamed',e.streamed,'input_tokens',e.input_tokens::text,'output_tokens',e.output_tokens::text,'elapsed_ms',e.elapsed_ms,'started_at',e.started_at,'error_code',e.error_code) FROM inference_executions e JOIN api_keys k ON k.id=e.api_key_id WHERE e.workspace_id=$1 AND ($2 OR k.issued_to_user_id=$3) ORDER BY e.started_at DESC,e.id LIMIT $4 OFFSET $5").bind(ws).bind(a.view_all_activity).bind(u.user_id).bind(l).bind(o).fetch_all(&mut *tx).await?;
     tx.commit().await?;
@@ -607,8 +699,7 @@ async fn usage(
     Extension(u): Extension<BrowserPrincipal>,
     Path(ws): Path<Uuid>,
 ) -> ApiResult {
-    let (mut tx, a) = resources::workspace_tx(&s, &u, ws).await?;
-    resources::detail_access(&a)?;
+    let (mut tx, a) = activity_tx(&s, &u, ws).await?;
     let v:Value=sqlx::query_scalar("SELECT jsonb_build_object('requests',count(*)::text,'input_tokens',CASE WHEN count(*) FILTER(WHERE e.input_tokens IS NULL)=0 THEN coalesce(sum(e.input_tokens),0)::text ELSE NULL END,'output_tokens',CASE WHEN count(*) FILTER(WHERE e.output_tokens IS NULL)=0 THEN coalesce(sum(e.output_tokens),0)::text ELSE NULL END,'unknown_usage_requests',(count(*) FILTER(WHERE e.input_tokens IS NULL OR e.output_tokens IS NULL))::text) FROM inference_executions e JOIN api_keys k ON k.id=e.api_key_id WHERE e.workspace_id=$1 AND ($2 OR k.issued_to_user_id=$3) AND e.started_at>=now()-interval '30 days'").bind(ws).bind(a.view_all_activity).bind(u.user_id).fetch_one(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(v))

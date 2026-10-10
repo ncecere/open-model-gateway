@@ -16,7 +16,7 @@ pub(crate) async fn catalog_lock(
     Ok(())
 }
 pub(crate) async fn installation_tx(s: &Store) -> Result<Transaction<'_, Postgres>, ApiError> {
-    let mut tx = s.pool.begin().await?;
+    let mut tx = crate::db::begin(&s.pool).await?;
     catalog_lock(&mut tx, false).await?;
     installation_lock(&mut tx).await?;
     Ok(tx)
@@ -32,9 +32,27 @@ pub(crate) async fn platform_role(
     tx: &mut Transaction<'_, Postgres>,
     user: Uuid,
 ) -> Result<String, ApiError> {
-    sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM users WHERE id=$1 AND disabled_at IS NULL AND cleaned_at IS NULL FOR SHARE",
-    )
+    role_inner(tx, user, true).await
+}
+/// [`platform_role`] without row locks, for `crate::reporting` snapshots
+/// (read-only transactions cannot lock rows). Same live checks, evaluated in
+/// the caller's snapshot.
+pub(crate) async fn platform_role_snapshot(
+    tx: &mut Transaction<'_, Postgres>,
+    user: Uuid,
+) -> Result<String, ApiError> {
+    role_inner(tx, user, false).await
+}
+async fn role_inner(
+    tx: &mut Transaction<'_, Postgres>,
+    user: Uuid,
+    lock: bool,
+) -> Result<String, ApiError> {
+    sqlx::query_scalar::<_, Uuid>(if lock {
+        "SELECT id FROM users WHERE id=$1 AND disabled_at IS NULL AND cleaned_at IS NULL FOR SHARE"
+    } else {
+        "SELECT id FROM users WHERE id=$1 AND disabled_at IS NULL AND cleaned_at IS NULL"
+    })
     .bind(user)
     .fetch_optional(&mut **tx)
     .await?
@@ -54,6 +72,19 @@ pub(crate) async fn platform_read(
     }
     Ok(())
 }
+/// [`platform_read`] in a lock-free snapshot (`crate::reporting`).
+pub(crate) async fn platform_read_snapshot(
+    tx: &mut Transaction<'_, Postgres>,
+    user: Uuid,
+) -> Result<(), ApiError> {
+    if !matches!(
+        platform_role_snapshot(tx, user).await?.as_str(),
+        "admin" | "auditor"
+    ) {
+        return Err(denied());
+    }
+    Ok(())
+}
 pub(crate) async fn platform_write(
     tx: &mut Transaction<'_, Postgres>,
     user: Uuid,
@@ -68,7 +99,7 @@ pub(crate) async fn catalog_tx<'a>(
     u: &BrowserPrincipal,
     write: bool,
 ) -> Result<Transaction<'a, Postgres>, ApiError> {
-    let mut tx = s.pool.begin().await?;
+    let mut tx = crate::db::begin(&s.pool).await?;
     catalog_lock(&mut tx, write).await?;
     installation_lock(&mut tx).await?;
     if write {
@@ -131,7 +162,7 @@ pub(crate) async fn workspace_read_tx<'a>(
     ws: Uuid,
 ) -> Result<(Transaction<'a, Postgres>, WorkspaceAccess), ApiError> {
     let mut tx = installation_tx(s).await?;
-    let a = access_inner(&mut tx, u, ws, true).await?;
+    let a = access_inner(&mut tx, u, ws, true, true).await?;
     Ok((tx, a))
 }
 pub(crate) async fn workspace_access(
@@ -139,17 +170,29 @@ pub(crate) async fn workspace_access(
     u: &BrowserPrincipal,
     ws: Uuid,
 ) -> Result<WorkspaceAccess, ApiError> {
-    access_inner(tx, u, ws, false).await
+    access_inner(tx, u, ws, false, true).await
+}
+/// [`workspace_access`] in a lock-free snapshot (`crate::reporting`): the
+/// same live membership/ownership rules, without row locks. Only for
+/// read-only handlers; a disabled workspace is missing, as for
+/// [`workspace_access`].
+pub(crate) async fn workspace_access_snapshot(
+    tx: &mut Transaction<'_, Postgres>,
+    u: &BrowserPrincipal,
+    ws: Uuid,
+) -> Result<WorkspaceAccess, ApiError> {
+    access_inner(tx, u, ws, false, false).await
 }
 async fn access_inner(
     tx: &mut Transaction<'_, Postgres>,
     u: &BrowserPrincipal,
     ws: Uuid,
     allow_disabled: bool,
+    lock: bool,
 ) -> Result<WorkspaceAccess, ApiError> {
-    let role = platform_role(tx, u.user_id).await?;
+    let role = role_inner(tx, u.user_id, lock).await?;
     let platform_reader = matches!(role.as_str(), "admin" | "auditor");
-    let(kind,owner_user,disabled):(String,Option<Uuid>,bool)=sqlx::query_as("SELECT kind,owner_user_id,disabled_at IS NOT NULL FROM workspaces WHERE id=$1 AND ($2 OR disabled_at IS NULL) FOR NO KEY UPDATE").bind(ws).bind(allow_disabled).fetch_optional(&mut **tx).await?.ok_or_else(missing)?;
+    let(kind,owner_user,disabled):(String,Option<Uuid>,bool)=sqlx::query_as(if lock {"SELECT kind,owner_user_id,disabled_at IS NOT NULL FROM workspaces WHERE id=$1 AND ($2 OR disabled_at IS NULL) FOR NO KEY UPDATE"} else {"SELECT kind,owner_user_id,disabled_at IS NOT NULL FROM workspaces WHERE id=$1 AND ($2 OR disabled_at IS NULL)"}).bind(ws).bind(allow_disabled).fetch_optional(&mut **tx).await?.ok_or_else(missing)?;
     if disabled {
         // Indistinguishable from a missing workspace unless a platform reader asks about a shared one.
         if !(platform_reader && shared(&kind)) {

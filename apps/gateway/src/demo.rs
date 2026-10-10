@@ -20,7 +20,7 @@ pub async fn seed(store: &Store, environment: Environment) -> Result<bool> {
     seed_data(store).await
 }
 async fn seed_data(store: &Store) -> Result<bool> {
-    let mut tx = store.pool.begin().await?;
+    let mut tx = crate::db::begin(&store.pool).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(72419502)")
         .execute(&mut *tx)
         .await?;

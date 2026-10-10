@@ -911,14 +911,22 @@ mod db {
             f.principal.workspace_id,
             range()
         );
+        // Scale plan P1: reports read a lock-free snapshot, so they return
+        // while the installation lock is held...
         let started = std::time::Instant::now();
-        let report = call(&f, &u, "GET", &path, Value::Null);
-        tokio::pin!(report);
-        assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(100), &mut report)
-                .await
-                .is_err()
+        let (status, value) = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            call(&f, &u, "GET", &path, Value::Null),
+        )
+        .await
+        .expect("report waited on the installation lock");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(value["totals"]["attempts"], "1");
+        eprintln!(
+            "financial report under a held installation lock: {}ms",
+            started.elapsed().as_millis()
         );
+        // ...while admission still serializes on it (unchanged by P1).
         let second = f.start();
         let admission = crate::governance::admit(&f.store, &second, &req, 30);
         tokio::pin!(admission);
@@ -928,16 +936,6 @@ mod db {
                 .is_err()
         );
         blocker.commit().await.unwrap();
-        let (status, value) = tokio::time::timeout(std::time::Duration::from_secs(2), &mut report)
-            .await
-            .unwrap();
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(value["totals"]["attempts"], "1");
-        assert!(started.elapsed() >= std::time::Duration::from_millis(200));
-        eprintln!(
-            "financial report/admission controlled installation contention: {}ms",
-            started.elapsed().as_millis()
-        );
         tokio::time::timeout(std::time::Duration::from_secs(2), &mut admission)
             .await
             .unwrap()

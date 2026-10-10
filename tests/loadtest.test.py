@@ -52,6 +52,30 @@ class LoadtestTests(unittest.TestCase):
             if line.strip().startswith("image:") and "OMG_LOADTEST_IMAGE" not in line:
                 self.assertRegex(line, r"image: (mirror\.gcr\.io|ghcr\.io)/")
 
+    def test_second_project_is_isolated_by_slot(self):
+        try:
+            loadtest.configure("omg-loadtest-p1", 1)
+            command = loadtest.compose_command(Path("/state"), "down")
+            self.assertEqual(command[:4], ["docker", "compose", "-p", "omg-loadtest-p1"])
+            env = loadtest.slot_env()
+            self.assertEqual(env["OMG_LOADTEST_POSTGRES_PORT"], "54469")
+            self.assertEqual([env[f"OMG_LOADTEST_GATEWAY_PORT_{i}"] for i in (1, 2, 3)],
+                             ["18311", "18312", "18313"])
+            self.assertEqual(env["OMG_LOADTEST_SUBNET"], "10.213.48")
+            self.assertTrue(str(loadtest.state_dir()).endswith(".local/omg-loadtest-p1")
+                            or "OMG_LOADTEST_STATE" in loadtest.os.environ)
+            self.assertIn(loadtest.IMAGE, ("omg-loadtest-p1:local", loadtest.os.environ.get("OMG_LOADTEST_IMAGE")))
+            for project, slot in (("omg-loadtest-p1", 0), ("omg-loadtest", 1), ("gateway", 1),
+                                  ("omg-loadtest-P1", 1), ("omg-loadtest-p1", 10)):
+                with self.assertRaises(SystemExit):
+                    loadtest.configure(project, slot)
+            compose = (loadtest.DEPLOY / "compose.yaml").read_text()
+            self.assertIn("${OMG_LOADTEST_SUBNET:-10.213.47}.0/24", compose)
+            self.assertIn("${OMG_LOADTEST_GATEWAY_PORT_3:-18303}", compose)
+        finally:
+            loadtest.configure()
+        self.assertEqual(loadtest.slot_env()["OMG_LOADTEST_POSTGRES_PORT"], "54369")
+
     def test_state_is_private_and_stable(self):
         with tempfile.TemporaryDirectory() as folder:
             state = Path(folder) / "loadtest"

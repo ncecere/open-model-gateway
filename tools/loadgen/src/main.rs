@@ -100,6 +100,14 @@ enum Command {
         /// Free-form label recorded in the report.
         #[arg(long)]
         label: Option<String>,
+        /// Concurrent closed-loop management readers (platform and workspace
+        /// reports, usage, logs, /me, /v1/models) with the seeded reader
+        /// session; 0 disables them.
+        #[arg(long, default_value_t = 0)]
+        readers: usize,
+        /// Report/usage/log window of the readers in days (1-93).
+        #[arg(long, default_value_t = 7)]
+        reader_days: u32,
         /// Write the JSON report here as well as to stdout.
         #[arg(long)]
         out: Option<PathBuf>,
@@ -160,6 +168,8 @@ async fn main() -> anyhow::Result<()> {
             metrics_urls,
             database_url,
             label,
+            readers,
+            reader_days,
             out,
         } => {
             let report = run(RunConfig {
@@ -180,6 +190,8 @@ async fn main() -> anyhow::Result<()> {
                 metrics_urls,
                 database_url,
                 label,
+                readers,
+                reader_days,
             })
             .await?;
             eprintln!("{}", report.headline());

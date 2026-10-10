@@ -708,7 +708,7 @@ async fn viewer<'a>(
     s: &'a Store,
     u: &BrowserPrincipal,
 ) -> Result<(Transaction<'a, Postgres>, bool), ApiError> {
-    let mut tx = s.pool.begin().await?;
+    let mut tx = crate::db::begin(&s.pool).await?;
     let role = resources::platform_role(&mut tx, u.user_id).await?;
     Ok((tx, matches!(role.as_str(), "admin" | "auditor")))
 }

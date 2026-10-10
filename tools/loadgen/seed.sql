@@ -27,8 +27,18 @@ CREATE TEMP TABLE seed_params AS SELECT
 INSERT INTO users(id, email)
   SELECT pg_temp.seed_id('user:' || i), 'loadtest-' || i || '@loadtest.invalid'
   FROM seed_params, generate_series(1, users) i;
+-- User 1 is a platform Auditor (Auditor includes User entitlement): the
+-- management reader of `loadgen run --readers` (platform reports, usage and
+-- logs, plus its own workspaces).
 INSERT INTO platform_role_grants(user_id, role, source)
-  SELECT pg_temp.seed_id('user:' || i), 'user', 'manual' FROM seed_params, generate_series(1, users) i;
+  SELECT pg_temp.seed_id('user:' || i), CASE WHEN i = 1 THEN 'auditor' ELSE 'user' END, 'manual'
+  FROM seed_params, generate_series(1, users) i;
+-- Its browser session: cookie token hex(sha256(seed || ':session:reader'))
+-- (derived by the generator like keys), stored as SHA-256 like real sign-ins.
+INSERT INTO browser_sessions(token_hash, user_id, csrf_hash, verified_email, expires_at)
+  SELECT sha256(convert_to(encode(sha256(convert_to(current_setting('omg_seed.seed') || ':session:reader', 'UTF8')), 'hex'), 'UTF8')),
+         pg_temp.seed_id('user:1'), sha256(convert_to(current_setting('omg_seed.seed') || ':csrf:reader', 'UTF8')),
+         'loadtest-1@loadtest.invalid', now() + interval '30 days';
 INSERT INTO workspaces(id, name, kind, owner_user_id)
   SELECT pg_temp.seed_id('personal:' || i), 'Personal', 'personal', pg_temp.seed_id('user:' || i)
   FROM seed_params, generate_series(1, users) i;

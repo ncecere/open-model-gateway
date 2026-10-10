@@ -33,6 +33,8 @@ fn config(targets: Vec<String>, mock: &str) -> RunConfig {
         metrics_urls: vec![],
         database_url: None,
         label: Some("mock".into()),
+        readers: 0,
+        reader_days: 7,
     }
 }
 

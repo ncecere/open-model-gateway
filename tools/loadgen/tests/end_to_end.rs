@@ -162,7 +162,11 @@ async fn scenario(options: PgConnectOptions) {
     let engine = Engine::new(Arc::new(store.clone()), registry, EngineLimits::default()).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let gateway = format!("http://{}", listener.local_addr().unwrap());
-    let app = http::router_with_engine(store.clone(), None, engine);
+    // Management routes too (session cookies, no OIDC provider), for --readers.
+    let identity = open_model_gateway::identity::IdentityState::new(store.clone(), None)
+        .await
+        .unwrap();
+    let app = http::router_with_identity(store.clone(), None, engine, identity);
     tokio::spawn(async move { axum::serve(listener, app).await });
     let metrics_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let metrics_url = format!("http://{}/metrics", metrics_listener.local_addr().unwrap());
@@ -187,6 +191,8 @@ async fn scenario(options: PgConnectOptions) {
         metrics_urls: vec![metrics_url],
         database_url: Some(url.clone()),
         label: Some("e2e".into()),
+        readers: 2,
+        reader_days: 31,
     })
     .await
     .unwrap();
@@ -214,6 +220,11 @@ async fn scenario(options: PgConnectOptions) {
             .contains_key("phase=locks,outcome=settled")
     );
     assert!(report.gateway_overhead_ms.as_ref().unwrap().count >= 90);
+    // The seeded reader session reads every report/usage/log/me endpoint.
+    let readers = report.reader.as_ref().unwrap();
+    assert!(readers.ok >= 8, "{readers:?}");
+    assert_eq!(readers.ok, readers.requests, "{readers:?}");
+    assert_eq!(readers.endpoints.len(), 8, "{readers:?}");
     let verified = open_model_gateway::governance::totals::verify(&store)
         .await
         .unwrap();

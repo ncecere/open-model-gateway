@@ -14,6 +14,8 @@ The enterprise schema separates:
 | `deployment_routing` | `priority`, `weight`, nullable `residency`, **`failure_threshold`, `cooldown_seconds`** |
 | `deployment_health` | `consecutive_failures`, `open_until`, `last_observed_at` |
 
+Health is written only when it changes: a success on a route that already has no failures and no open circuit, observed within the last 30 seconds, writes nothing (so busy deployments are not one hot row per success); `last_observed_at` can therefore lag by up to 30 seconds. Failures and recoveries always write.
+
 Threshold/cooldown are deployment settings, not model API fields, even though an internal routing type retains default fields. Disable a deployment through its `enabled` state, not a routing `operator_disabled` flag. Admin writes/Auditor reads use [governance API](governance-api.md).
 
 - **Priority:** lower signed integer first; ties retain deterministic repository order (`created_at,id`). Defaults preserve first-eligible selection without retries.

@@ -248,9 +248,7 @@ impl InferenceRepository for Store {
         principal: &Principal,
         model: &str,
     ) -> Result<Vec<Deployment>, InferenceError> {
-        let mut tx = self
-            .pool
-            .begin()
+        let mut tx = crate::db::begin(&self.pool)
             .await
             .map_err(|_| InferenceError::Storage)?;
         let lineage = crate::auth::revalidate(&mut tx, principal)

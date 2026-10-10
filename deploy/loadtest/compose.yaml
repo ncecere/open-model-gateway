@@ -23,7 +23,7 @@ x-gateway: &gateway
     DATABASE_URL: postgres://gateway_runtime:${OMG_LOADTEST_RUNTIME_PASSWORD:?run scripts/loadtest.py up}@${OMG_LOADTEST_DB_HOST:-pgbouncer}:${OMG_LOADTEST_DB_PORT:-6432}/${OMG_LOADTEST_DB:-omg_loadtest}
     GATEWAY_DATABASE_MAX_CONNECTIONS: ${OMG_LOADTEST_POOL:-10}
     GATEWAY_MAX_CONCURRENT_REQUESTS: ${OMG_LOADTEST_MAX_CONCURRENT:-128}
-    GATEWAY_LOCAL_UPSTREAMS: '[{"endpoint":"http://mock-upstream:8000/v1","addresses":["10.213.47.10"]}]'
+    GATEWAY_LOCAL_UPSTREAMS: '[{"endpoint":"http://mock-upstream:8000/v1","addresses":["${OMG_LOADTEST_SUBNET:-10.213.47}.10"]}]'
     RUST_LOG: ${OMG_LOADTEST_RUST_LOG:-open_model_gateway=info}
   healthcheck:
     test: ["CMD", "/usr/local/bin/open-model-gateway", "healthcheck", "--timeout", "2s"]
@@ -89,6 +89,14 @@ services:
       - idle_in_transaction_session_timeout=60s
       - -c
       - autovacuum_naptime=10s
+      # Group commit (synchronous_commit stays on). Measured in P2 with 200 and
+      # 1000 µs: no effect while the installation lock serializes commits
+      # (fewer than commit_siblings commit at once), so the defaults keep
+      # PostgreSQL's own. Retry after scoped admission (P3); see docs/operations.md.
+      - -c
+      - commit_delay=${OMG_LOADTEST_COMMIT_DELAY:-0}
+      - -c
+      - commit_siblings=${OMG_LOADTEST_COMMIT_SIBLINGS:-5}
     shm_size: 1g
     volumes:
       - database:/var/lib/postgresql/data
@@ -130,18 +138,18 @@ services:
       MOCK_ERROR_RATE: ${OMG_LOADTEST_MOCK_ERROR_RATE:-0}
     networks:
       loadtest:
-        ipv4_address: 10.213.47.10
+        ipv4_address: ${OMG_LOADTEST_SUBNET:-10.213.47}.10
     logging: *logging
 
   gateway-1:
     <<: *gateway
-    ports: ["127.0.0.1:18301:8080"]
+    ports: ["127.0.0.1:${OMG_LOADTEST_GATEWAY_PORT_1:-18301}:8080"]
   gateway-2:
     <<: *gateway
-    ports: ["127.0.0.1:18302:8080"]
+    ports: ["127.0.0.1:${OMG_LOADTEST_GATEWAY_PORT_2:-18302}:8080"]
   gateway-3:
     <<: *gateway
-    ports: ["127.0.0.1:18303:8080"]
+    ports: ["127.0.0.1:${OMG_LOADTEST_GATEWAY_PORT_3:-18303}:8080"]
 
   # One-off commands (`docker compose run --rm`): migrate and budget verify
   # with the gateway binary, seed and run with the generator.
@@ -163,7 +171,7 @@ networks:
   loadtest:
     ipam:
       config:
-        - subnet: 10.213.47.0/24
+        - subnet: ${OMG_LOADTEST_SUBNET:-10.213.47}.0/24
 
 volumes:
   database:

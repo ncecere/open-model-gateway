@@ -1,9 +1,12 @@
+// Test code may begin transactions directly; production code uses `db::begin`.
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
 pub mod alerts;
 pub mod auth;
 pub mod billing;
 pub mod bootstrap;
 pub mod catalog;
 pub mod config;
+pub(crate) mod db;
 pub mod demo;
 pub mod email;
 pub mod filestore;
@@ -19,6 +22,7 @@ pub mod management;
 pub mod metrics;
 pub mod protocols;
 pub mod providers;
+pub mod reporting;
 pub mod routing;
 pub mod scim;
 pub mod startup;

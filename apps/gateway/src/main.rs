@@ -191,7 +191,9 @@ async fn run(cli: Cli) -> Result<()> {
         ensure_demo_config(&config)?;
     }
     let pool = config.connect().await?;
-    let store = Store::new(pool.clone());
+    // Reports, usage and logs only (never admission, settlement or writes).
+    let store = Store::new(pool.clone())
+        .with_reporting(config.connect_reporting()?, config.reporting_max_lag);
     match cli.command.unwrap_or(Command::Serve) {
         Command::Migrate => {
             store
@@ -293,8 +295,9 @@ async fn run(cli: Cli) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&report)?);
             anyhow::ensure!(
                 report.consistent(),
-                "{} budget total bucket(s) differ from the full scan",
-                report.mismatch_count
+                "{} budget total bucket(s) and {} rate counter(s) differ from the full scan",
+                report.mismatch_count,
+                report.rate_mismatch_count
             );
         }
         Command::Files { action } => {
@@ -667,6 +670,8 @@ mod demo {
             inference_limits: Default::default(),
             metrics_listen: None,
             database_max_connections: 10,
+            reporting_database_url: None,
+            reporting_max_lag: std::time::Duration::from_secs(30),
         };
         assert!(ensure_demo_config(&config).is_ok());
         for url in [
