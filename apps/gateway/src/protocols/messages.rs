@@ -355,6 +355,7 @@ fn error_body(e: InferenceError) -> Value {
         | InferenceError::UpstreamRejected
         | InferenceError::Unsupported => "invalid_request_error",
         InferenceError::ModelUnavailable => "not_found_error",
+        InferenceError::Unauthenticated => "authentication_error",
         // Anthropic has no budget type for HTTP 429; the message distinguishes it.
         InferenceError::Busy
         | InferenceError::BudgetExceeded(_)

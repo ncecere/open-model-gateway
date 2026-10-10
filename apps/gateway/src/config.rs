@@ -27,6 +27,14 @@ pub struct Config {
     /// admission locks, or the former installation row lock as an
     /// operational rollback for one release (see `governance::locks`).
     pub admission_mode: crate::governance::locks::AdmissionMode,
+    /// `GATEWAY_LISTEN_DATABASE_URL` (default `DATABASE_URL`): the session
+    /// connection that LISTENs for configuration changes (`crate::notify`).
+    /// LISTEN needs a session, so behind a transaction-mode PgBouncer point it
+    /// at PostgreSQL directly (or a session-mode pooler).
+    pub listen_database_url: Option<String>,
+    /// `GATEWAY_CONFIG_CACHE` (`on`, default, or `off`): per-replica caches of
+    /// pre-admission reads (`crate::cache`). `off` reads everything live.
+    pub config_cache: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -128,6 +136,26 @@ impl Config {
             .map(Duration::from_secs)
             .context("GATEWAY_REPORTING_MAX_LAG_SECONDS must be an integer from 1 to 3600")?;
         let admission_mode = crate::governance::locks::AdmissionMode::from_env()?;
+        let listen_database_url = match std::env::var("GATEWAY_LISTEN_DATABASE_URL") {
+            Ok(url) if url.trim().is_empty() => {
+                bail!("GATEWAY_LISTEN_DATABASE_URL must be unset or a PostgreSQL URL")
+            }
+            Ok(url) => {
+                <sqlx::postgres::PgConnectOptions as std::str::FromStr>::from_str(&url).map_err(
+                    |_| {
+                        anyhow::anyhow!("GATEWAY_LISTEN_DATABASE_URL is not a valid PostgreSQL URL")
+                    },
+                )?;
+                Some(url)
+            }
+            Err(std::env::VarError::NotPresent) => None,
+            Err(_) => bail!("GATEWAY_LISTEN_DATABASE_URL is not valid Unicode"),
+        };
+        let config_cache = match std::env::var("GATEWAY_CONFIG_CACHE").as_deref() {
+            Ok("on") | Err(std::env::VarError::NotPresent) => true,
+            Ok("off") => false,
+            _ => bail!("GATEWAY_CONFIG_CACHE must be on or off"),
+        };
         Ok(Self {
             database_url,
             listen,
@@ -140,7 +168,30 @@ impl Config {
             reporting_database_url,
             reporting_max_lag,
             admission_mode,
+            listen_database_url,
+            config_cache,
         })
+    }
+
+    /// The dedicated LISTEN pool (one session connection, connected lazily
+    /// and reconnected by `crate::notify`), or `None` when caching is off.
+    pub fn connect_listener(&self) -> Result<Option<sqlx::PgPool>> {
+        if !self.config_cache {
+            return Ok(None);
+        }
+        let url = self
+            .listen_database_url
+            .as_ref()
+            .unwrap_or(&self.database_url);
+        Ok(Some(
+            PgPoolOptions::new()
+                .max_connections(1)
+                .acquire_timeout(Duration::from_secs(3))
+                .connect_lazy(url)
+                .map_err(|_| {
+                    anyhow::anyhow!("the LISTEN database URL is not a valid PostgreSQL URL")
+                })?,
+        ))
     }
 
     pub async fn connect(&self) -> Result<sqlx::PgPool> {

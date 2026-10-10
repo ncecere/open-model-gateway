@@ -830,7 +830,19 @@ pub struct Report {
 /// spans the whole tick (vacuum is not held back) and one rule's incidents
 /// are never reconciled concurrently. Budget rules read maintained totals.
 pub async fn evaluate_once(store: &Store) -> anyhow::Result<Option<Report>> {
+    Ok(evaluate_once_fenced(store, None).await?)
+}
+
+/// [`evaluate_once`] as the `alerts` lease holder: the claim and every rule
+/// transaction are fenced to the term (a replica whose term ended commits
+/// nothing more). The tick lock still excludes a concurrent operator
+/// `alerts evaluate --once`.
+pub async fn evaluate_once_fenced(
+    store: &Store,
+    fence: Option<&crate::leases::Fence>,
+) -> Result<Option<Report>, sqlx::Error> {
     let mut tx = crate::db::begin(&store.pool).await?;
+    crate::leases::fence(&mut tx, fence).await?;
     let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock($1)")
         .bind(EVALUATION_LOCK)
         .fetch_one(&mut *tx)
@@ -866,6 +878,7 @@ pub async fn evaluate_once(store: &Store) -> anyhow::Result<Option<Report>> {
     for (source, kind, rule) in jobs {
         report.rules += 1;
         let mut tx = crate::db::begin(&store.pool).await?;
+        crate::leases::fence(&mut tx, fence).await?;
         let outcome = async {
             sqlx::query("SET LOCAL statement_timeout='10s'")
                 .execute(&mut *tx)
@@ -1217,7 +1230,32 @@ pub fn start(store: Store, every: Duration) -> tokio::task::JoinHandle<()> {
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tick.tick().await;
-            match tokio::time::timeout(Duration::from_secs(60), evaluate_once(&store)).await {
+            // With leases (serve), only the `alerts` lease holder evaluates:
+            // before P5 each replica evaluated whenever its own tick found the
+            // tick lock free, so N replicas evaluated about N times per interval.
+            let evaluated = match store.leases() {
+                Some(leases) => match leases.held(crate::leases::Lease::Alerts) {
+                    Some(fence) => {
+                        tokio::time::timeout(
+                            Duration::from_secs(60),
+                            evaluate_once_fenced(&store, Some(&fence)),
+                        )
+                        .await
+                    }
+                    None => Ok(Ok(None)),
+                },
+                None => {
+                    tokio::time::timeout(
+                        Duration::from_secs(60),
+                        evaluate_once_fenced(&store, None),
+                    )
+                    .await
+                }
+            };
+            match evaluated {
+                Ok(Err(error)) if crate::leases::is_fenced(&error) => {
+                    crate::metrics::METRICS.observe_alert_run("skipped", 0)
+                }
                 Ok(Ok(Some(report))) => {
                     crate::metrics::METRICS.observe_alert_run("ok", report.failed_rules);
                     if report.fired + report.resolved + report.failed_rules > 0 {

@@ -354,7 +354,7 @@ async fn run(cli: Cli) -> Result<()> {
                 .map(WebAssets::load)
                 .transpose()?;
             let mut registry = ProviderRegistry::default();
-            let secrets = Arc::new(EnvSecrets::new(config.secret_env_allowlist));
+            let secrets = Arc::new(EnvSecrets::new(config.secret_env_allowlist.clone()));
             registry.register(Arc::new(OpenAiAdapter::new(secrets.clone())?))?;
             registry.register(Arc::new(AnthropicAdapter::new(secrets.clone())?))?;
             registry.register(Arc::new(BedrockAdapter::new()?))?;
@@ -396,8 +396,21 @@ async fn run(cli: Cli) -> Result<()> {
             open_model_gateway::jobs::configure(open_model_gateway::jobs::JobLimits::from_lookup(
                 |name| std::env::var(name).ok(),
             )?)?;
+            // Background work leases (P5): singleton jobs run on one replica.
+            let leases = Arc::new(open_model_gateway::leases::Leases::new());
+            leases.renew_once(&pool).await;
+            let lease_task = leases
+                .clone()
+                .start(pool.clone(), open_model_gateway::leases::RENEW);
+            let store = store.with_leases(leases.clone());
+            // Per-replica caches (P4): version polling plus LISTEN.
+            let notifications = config
+                .config_cache
+                .then(|| config.connect_listener())
+                .transpose()?
+                .map(|listen| store.start_change_notifications(listen));
             let listener = tokio::net::TcpListener::bind(config.listen).await?;
-            tracing::info!(address = %listener.local_addr()?, serving_web = web.is_some(), admission_mode = store.admission_mode().as_str(), "gateway listening");
+            tracing::info!(address = %listener.local_addr()?, serving_web = web.is_some(), admission_mode = store.admission_mode().as_str(), config_cache = config.config_cache, work_lease_holder = %leases.holder(), "gateway listening");
             // Separate, optional metrics listener: never the public port or SPA.
             let metrics = match config.metrics_listen {
                 Some(address) => {
@@ -430,24 +443,31 @@ async fn run(cli: Cli) -> Result<()> {
             let batch_runner = open_model_gateway::jobs::runner::start(batch_jobs);
             let alerts =
                 alert_interval.map(|every| open_model_gateway::alerts::start(store.clone(), every));
+            let lifecycle_leases = leases.clone();
             let lifecycle_store = store.clone();
+            // The `lifecycle` lease holder only (one replica per minute).
             let lifecycle = tokio::spawn(async move {
                 let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
                 tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 loop {
                     tick.tick().await;
-                    if !matches!(
-                        tokio::time::timeout(
-                            std::time::Duration::from_secs(30),
-                            open_model_gateway::lifecycle::cleanup_inactive_accounts(
-                                &lifecycle_store
-                            )
-                        )
-                        .await,
-                        Ok(Ok(_))
-                    ) {
-                        tracing::error!("account lifecycle cleanup failed; will retry");
-                    }
+                    open_model_gateway::leases::run_singleton(
+                        &lifecycle_leases,
+                        open_model_gateway::leases::Lease::Lifecycle,
+                        "lifecycle",
+                        std::time::Duration::from_secs(30),
+                        |fence| {
+                            let store = lifecycle_store.clone();
+                            async move {
+                                open_model_gateway::lifecycle::cleanup_inactive_accounts_fenced(
+                                    &store,
+                                    Some(&fence),
+                                )
+                                .await
+                            }
+                        },
+                    )
+                    .await;
                 }
             });
             let served = axum::serve(
@@ -481,6 +501,14 @@ async fn run(cli: Cli) -> Result<()> {
             lifecycle.abort();
             let _ = maintenance.await;
             let _ = lifecycle.await;
+            if let Some(notifications) = notifications {
+                notifications.abort();
+                let _ = notifications.await;
+            }
+            // Hand singleton work to another replica now instead of at expiry.
+            lease_task.abort();
+            let _ = lease_task.await;
+            leases.release_all(&pool).await;
             served?;
         }
     }
@@ -674,6 +702,8 @@ mod demo {
             reporting_database_url: None,
             reporting_max_lag: std::time::Duration::from_secs(30),
             admission_mode: Default::default(),
+            listen_database_url: None,
+            config_cache: true,
         };
         assert!(ensure_demo_config(&config).is_ok());
         for url in [

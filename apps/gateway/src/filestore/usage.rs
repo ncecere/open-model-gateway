@@ -21,8 +21,18 @@ const SETTLE_MINUTES: i32 = 5;
 /// `FOR UPDATE SKIP LOCKED`; a concurrent run returns 0. Returns the number
 /// of hours recorded.
 pub async fn record_hours(db: &Store, max_hours: i32) -> Result<i64, sqlx::Error> {
+    record_hours_fenced(db, max_hours, None).await
+}
+
+/// [`record_hours`] in a transaction fenced to a `maintenance` lease term.
+pub async fn record_hours_fenced(
+    db: &Store,
+    max_hours: i32,
+    fence: Option<&crate::leases::Fence>,
+) -> Result<i64, sqlx::Error> {
     let max_hours = max_hours.clamp(1, 720);
     let mut tx = crate::db::begin(&db.pool).await?;
+    crate::leases::fence(&mut tx, fence).await?;
     let Some(through): Option<DateTime<Utc>> = sqlx::query_scalar(
         "SELECT recorded_through FROM storage_usage_progress WHERE singleton FOR UPDATE SKIP LOCKED",
     )

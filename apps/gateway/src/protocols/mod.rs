@@ -34,6 +34,13 @@ fn error_with_body(error: InferenceError, body: serde_json::Value) -> Response {
             .headers_mut()
             .insert(axum::http::header::RETRY_AFTER, HeaderValue::from(seconds));
     }
+    if error == InferenceError::Unauthenticated {
+        // Exactly the authentication layer's refusal (`http::unauthorized`).
+        response.headers_mut().insert(
+            axum::http::header::WWW_AUTHENTICATE,
+            HeaderValue::from_static("Bearer"),
+        );
+    }
     response
 }
 
@@ -42,6 +49,7 @@ fn http_status(error: InferenceError) -> StatusCode {
         InferenceError::InvalidRequest | InferenceError::UpstreamRejected => {
             StatusCode::BAD_REQUEST
         }
+        InferenceError::Unauthenticated => StatusCode::UNAUTHORIZED,
         InferenceError::ModelUnavailable => StatusCode::NOT_FOUND,
         InferenceError::Unsupported => StatusCode::NOT_IMPLEMENTED,
         InferenceError::Busy

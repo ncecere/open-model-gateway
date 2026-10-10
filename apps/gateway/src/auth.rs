@@ -34,6 +34,12 @@ fn digest(token: &str) -> [u8; 32] {
     Sha256::digest(token.as_bytes()).into()
 }
 
+/// The key cache index of a presented token (its SHA-256; tests).
+#[cfg(test)]
+pub(crate) fn token_digest(token: &str) -> [u8; 32] {
+    digest(token)
+}
+
 fn token_id(token: &str) -> Option<Uuid> {
     if token.len() != 101 {
         return None;
@@ -57,16 +63,61 @@ struct KeyRecord {
     workspace_id: Uuid,
     issued_to_user_id: Option<Uuid>,
     secret_hash: Vec<u8>,
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl Store {
-    /// No authorization cache: entitlement, membership and revocation are live.
+    /// Live authentication: entitlement, membership and revocation are read
+    /// now. Every key-authenticated route that returns workspace data or
+    /// starts work outside the inference engine uses this.
     pub async fn authenticate(&self, token: &str) -> Result<Option<Principal>, sqlx::Error> {
+        Ok(self.authenticate_live(token).await?.map(|e| e.principal))
+    }
+
+    /// Authentication for engine routes (`/v1/chat/completions`,
+    /// `/v1/responses`, `/v1/messages`, embeddings, workloads, `/v1/models`)
+    /// through the per-replica key cache (`crate::cache`): a hit skips the
+    /// database. Safe because the engine's admission re-checks the key, user,
+    /// membership or service account and workspace live under its locks before
+    /// any upstream work, and `/v1/models` revalidates in its snapshot. The
+    /// cache is keyed by the SHA-256 of the token and holds no secret; it is
+    /// bypassed whenever the configuration versions are unconfirmed.
+    pub async fn authenticate_inference(
+        &self,
+        token: &str,
+    ) -> Result<Option<Principal>, sqlx::Error> {
+        use crate::cache::Lookup;
+        if token_id(token).is_none() {
+            return Ok(None);
+        }
+        let hash = digest(token);
+        let stamp = match self.caches.keys.get(&self.caches.versions, &hash) {
+            Lookup::Hit(entry) if entry.expires_at.is_none_or(|at| at > chrono::Utc::now()) => {
+                return Ok(Some(entry.principal));
+            }
+            Lookup::Hit(_) => {
+                self.caches.keys.remove(&hash);
+                None
+            }
+            Lookup::Miss(stamp) => Some(stamp),
+            Lookup::Bypass => None,
+        };
+        let entry = self.authenticate_live(token).await?;
+        if let (Some(entry), Some(stamp)) = (entry, stamp) {
+            self.caches.keys.insert(hash, entry, stamp);
+        }
+        Ok(entry.map(|e| e.principal))
+    }
+
+    async fn authenticate_live(
+        &self,
+        token: &str,
+    ) -> Result<Option<crate::cache::KeyEntry>, sqlx::Error> {
         let Some(id) = token_id(token) else {
             return Ok(None);
         };
         let record = sqlx::query_as::<_, KeyRecord>(
-            "SELECT k.id,k.workspace_id,k.issued_to_user_id,k.secret_hash FROM api_keys k
+            "SELECT k.id,k.workspace_id,k.issued_to_user_id,k.secret_hash,k.expires_at FROM api_keys k
              JOIN workspaces w ON w.id=k.workspace_id AND w.disabled_at IS NULL
              WHERE k.id=$1 AND k.revoked_at IS NULL AND k.disabled_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now())
              AND ((k.issued_to_user_id IS NOT NULL AND EXISTS(SELECT 1 FROM effective_platform_roles p WHERE p.user_id=k.issued_to_user_id)
@@ -81,10 +132,13 @@ impl Store {
         if !bool::from(record.secret_hash.as_slice().ct_eq(&digest(token))) {
             return Ok(None);
         }
-        Ok(Some(Principal {
-            key_id: record.id,
-            workspace_id: record.workspace_id,
-            user_id: record.issued_to_user_id,
+        Ok(Some(crate::cache::KeyEntry {
+            principal: Principal {
+                key_id: record.id,
+                workspace_id: record.workspace_id,
+                user_id: record.issued_to_user_id,
+            },
+            expires_at: record.expires_at,
         }))
     }
 }

@@ -165,6 +165,13 @@ pub struct Metrics {
     batch_paused_routes: Family<L1, Gauge>,
     batch_route_pauses: Family<L1, Counter>,
     batch_route_providers: Mutex<HashSet<String>>,
+    cache_lookups: Family<L2, Counter>,
+    config_changes: Family<L1, Counter>,
+    config_poll_failures: Counter,
+    config_listener: Gauge,
+    leases_held: Family<L1, Gauge>,
+    lease_terms: Family<L1, Counter>,
+    background_runs: Family<L2, Counter>,
     providers: Mutex<HashSet<String>>,
     models: Mutex<HashSet<String>>,
     reservations_refreshed: Mutex<Option<Instant>>,
@@ -271,6 +278,13 @@ impl Metrics {
             batch_paused_routes: Family::default(),
             batch_route_pauses: Family::default(),
             batch_route_providers: Mutex::default(),
+            cache_lookups: Family::default(),
+            config_changes: Family::default(),
+            config_poll_failures: Counter::default(),
+            config_listener: Gauge::default(),
+            leases_held: Family::default(),
+            lease_terms: Family::default(),
+            background_runs: Family::default(),
             providers: Mutex::default(),
             models: Mutex::default(),
             reservations_refreshed: Mutex::default(),
@@ -418,10 +432,97 @@ impl Metrics {
             "Times this process saw a route's batch gate close, by reason",
             metrics.batch_route_pauses.clone(),
         );
+        registry.register(
+            "cache_lookups",
+            "Per-replica cache lookups by cache (keys, candidates, routes, health, prices) and result (hit, miss, bypass: versions unconfirmed or caching off)",
+            metrics.cache_lookups.clone(),
+        );
+        registry.register(
+            "config_changes",
+            "Configuration version changes this replica observed, by topic (access, catalog, keys, policy, settings)",
+            metrics.config_changes.clone(),
+        );
+        registry.register(
+            "config_poll_failures",
+            "Failed configuration version polls (caches are bypassed after 3 s without a successful poll)",
+            metrics.config_poll_failures.clone(),
+        );
+        registry.register(
+            "config_listener_up",
+            "Whether this replica's configuration LISTEN connection is up (1) or not (0)",
+            metrics.config_listener.clone(),
+        );
+        registry.register(
+            "work_leases_held",
+            "Background work leases this replica holds (1) or not (0), by lease",
+            metrics.leases_held.clone(),
+        );
+        registry.register(
+            "work_lease_terms",
+            "Lease terms this replica started (acquisitions and takeovers), by lease",
+            metrics.lease_terms.clone(),
+        );
+        registry.register(
+            "background_runs",
+            "Singleton background job runs on this replica by job and result (ok, failed, fenced: the lease term ended)",
+            metrics.background_runs.clone(),
+        );
         Self {
             registry,
             ..metrics
         }
+    }
+
+    /// One cache lookup (`cache` and `result` from fixed sets).
+    pub(crate) fn observe_cache(&self, cache: &'static str, result: &'static str) {
+        self.observe_cache_n(cache, result, 1);
+    }
+
+    pub(crate) fn observe_cache_n(&self, cache: &'static str, result: &'static str, n: u64) {
+        if n > 0 {
+            self.cache_lookups
+                .get_or_create(&[("cache", cache.to_owned()), ("result", result.to_owned())])
+                .inc_by(n);
+        }
+    }
+
+    /// Lookups so far of one cache and result (tests, load reports).
+    pub fn cache_lookups(&self, cache: &str, result: &str) -> u64 {
+        self.cache_lookups
+            .get_or_create(&[("cache", cache.to_owned()), ("result", result.to_owned())])
+            .get()
+    }
+
+    pub(crate) fn observe_config_change(&self, topic: &'static str) {
+        self.config_changes
+            .get_or_create(&[("topic", topic.to_owned())])
+            .inc();
+    }
+
+    pub(crate) fn observe_config_poll_failure(&self) {
+        self.config_poll_failures.inc();
+    }
+
+    pub(crate) fn set_config_listener(&self, up: bool) {
+        self.config_listener.set(i64::from(up));
+    }
+
+    pub(crate) fn set_lease_held(&self, lease: &'static str, held: bool) {
+        self.leases_held
+            .get_or_create(&[("lease", lease.to_owned())])
+            .set(i64::from(held));
+    }
+
+    pub(crate) fn observe_lease_term(&self, lease: &'static str) {
+        self.lease_terms
+            .get_or_create(&[("lease", lease.to_owned())])
+            .inc();
+    }
+
+    pub(crate) fn observe_background_run(&self, job: &'static str, result: &'static str) {
+        self.background_runs
+            .get_or_create(&[("job", job.to_owned()), ("result", result.to_owned())])
+            .inc();
     }
 
     pub fn observe_http(
@@ -716,6 +817,19 @@ impl Metrics {
             .set((size - idle).max(0));
         self.pool_max
             .set(i64::from(pool.options().get_max_connections()));
+        // Installation-wide gauge: with leased background work (serve) only
+        // the `metrics` lease holder exports it, so summing over replicas
+        // does not multiply it.
+        if let Some(leases) = store.leases()
+            && leases.held(crate::leases::Lease::Metrics).is_none()
+        {
+            self.reservations.clear();
+            *self
+                .reservations_refreshed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = None;
+            return;
+        }
         {
             let mut refreshed = self
                 .reservations_refreshed

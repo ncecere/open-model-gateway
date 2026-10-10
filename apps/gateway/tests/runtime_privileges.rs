@@ -59,6 +59,18 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
             "rollback-only probe persisted {table}"
         );
     }
+    // Rollback-only probes leave the seeded versions and leases untouched.
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT ((SELECT sum(version) FROM config_versions)+(SELECT sum(epoch) FROM work_leases))::bigint"
+        )
+        .fetch_one(&mut *connection)
+        .await
+        .unwrap(),
+        0,
+        "rollback-only probe persisted configuration versions or lease terms"
+    );
+    change_notifications_and_leases_run_as_runtime(&pool).await;
     alert_evaluation_runs_as_runtime(&pool).await;
     realtime_accounting_runs_as_runtime(&pool).await;
     scim_provisioning_runs_as_runtime(&pool).await;
@@ -652,6 +664,64 @@ async fn file_store_runs_as_runtime(pool: &PgPool) {
         .await
         .unwrap();
     assert!(files.delete(logo.id, None).await.unwrap());
+    runtime.close().await;
+}
+
+/// Scale plan P4/P5: version polling, the LISTEN connection, a configuration
+/// write's bump and notification, and lease election, fencing, background
+/// jobs under a term and release all work with the runtime role alone.
+async fn change_notifications_and_leases_run_as_runtime(pool: &PgPool) {
+    use open_model_gateway::{leases, notify};
+    let runtime = runtime_pool(pool).await;
+    let store = open_model_gateway::store::Store::new(runtime.clone());
+    let versions = notify::ConfigVersions::new();
+    versions.enable();
+    notify::poll_once(&runtime, &versions).await.unwrap();
+    assert!(versions.fresh());
+    let mut listener = sqlx::postgres::PgListener::connect_with(&runtime)
+        .await
+        .unwrap();
+    listener.listen(notify::CHANNEL).await.unwrap();
+    let before = versions.version(notify::Topic::Settings);
+    sqlx::query("UPDATE installation_settings SET support_url='https://help.example.invalid/p4' WHERE singleton")
+        .execute(&runtime)
+        .await
+        .unwrap();
+    let note = tokio::time::timeout(std::time::Duration::from_secs(5), listener.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        notify::parse_payload(note.payload()),
+        Some((notify::Topic::Settings, before + 1))
+    );
+    notify::poll_once(&runtime, &versions).await.unwrap();
+    assert_eq!(versions.version(notify::Topic::Settings), before + 1);
+    // Leases: one of two replicas holds each; jobs run fenced to its term.
+    let (a, b) = (leases::Leases::new(), leases::Leases::new());
+    assert_eq!(a.renew_once(&runtime).await, leases::Lease::ALL.len());
+    assert_eq!(b.renew_once(&runtime).await, 0);
+    let fence = a.held(leases::Lease::Maintenance).unwrap();
+    open_model_gateway::governance::rates::prune_fenced(&store, 100, Some(&fence))
+        .await
+        .unwrap();
+    open_model_gateway::filestore::usage::record_hours_fenced(&store, 1, Some(&fence))
+        .await
+        .unwrap();
+    let lifecycle = a.held(leases::Lease::Lifecycle).unwrap();
+    open_model_gateway::lifecycle::cleanup_inactive_accounts_fenced(&store, Some(&lifecycle))
+        .await
+        .unwrap();
+    assert!(fence.complete(&runtime).await.unwrap());
+    a.release_all(&runtime).await;
+    assert_eq!(b.renew_once(&runtime).await, leases::Lease::ALL.len());
+    let stale = open_model_gateway::governance::rates::prune_fenced(&store, 100, Some(&fence))
+        .await
+        .unwrap_err();
+    assert!(leases::is_fenced(&stale), "{stale:?}");
+    b.release_all(&runtime).await;
+    listener.unlisten_all().await.unwrap();
+    drop(listener);
     runtime.close().await;
 }
 

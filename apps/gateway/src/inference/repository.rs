@@ -248,48 +248,35 @@ impl InferenceRepository for Store {
         principal: &Principal,
         model: &str,
     ) -> Result<Vec<Deployment>, InferenceError> {
-        let mut tx = crate::db::begin(&self.pool)
-            .await
-            .map_err(|_| InferenceError::Storage)?;
-        // Candidate planning only: admission re-checks everything live under
-        // its locks, so the scoped mode reads without row locks (no
-        // MultiXacts on authority rows in the hot path).
-        let lineage = if self.admission_mode == crate::governance::locks::AdmissionMode::Scoped {
-            crate::auth::revalidate_admission_with(&mut tx, principal, false).await
-        } else {
-            crate::auth::revalidate(&mut tx, principal).await
-        }
-        .map_err(|_| InferenceError::Storage)?;
-        let Some(lineage) = lineage else {
-            return Ok(Vec::new());
+        // Candidate planning only (admission re-checks every condition live):
+        // the per-replica cache serves the eligible deployments of a key and
+        // model while the catalog, access and key versions are unchanged.
+        use crate::cache::Lookup;
+        let cache_key = (principal.workspace_id, principal.key_id, model.to_owned());
+        let stamp = match self
+            .caches
+            .candidates
+            .get(&self.caches.versions, &cache_key)
+        {
+            Lookup::Hit(list) => return Ok(list.as_ref().clone()),
+            Lookup::Miss(stamp) => Some(stamp),
+            Lookup::Bypass => None,
         };
-        let deployments = sqlx::query_as::<_, Deployment>(r#"
-            SELECT d.id,p.provider,d.upstream_model,p.credential_ref,p.endpoint,p.region,m.supported_protocols
-            FROM models m JOIN deployments d ON d.model_id=m.id
-            JOIN provider_connections p ON p.id=d.provider_connection_id
-            WHERE m.public_name=$2 AND workspace_model_allowed($1,m.id) AND d.enabled AND p.enabled
-              AND (NOT EXISTS(SELECT 1 FROM key_model_restrictions WHERE workspace_id=$1 AND governance_key_id=$3)
-                OR EXISTS(SELECT 1 FROM key_model_selections WHERE workspace_id=$1 AND governance_key_id=$3 AND model_id=m.id))
-            ORDER BY d.created_at,d.id LIMIT 257
-        "#).bind(principal.workspace_id).bind(model).bind(lineage)
-            .fetch_all(&mut *tx).await.map_err(|_| InferenceError::Storage)?;
-        tx.commit().await.map_err(|_| InferenceError::Storage)?;
-        if deployments.len() > crate::routing::MAX_CANDIDATES {
-            return Err(InferenceError::Configuration);
+        let deployments = self.live_deployments(principal, model).await?;
+        if let Some(stamp) = stamp
+            && !deployments.is_empty()
+        {
+            self.caches.candidates.insert(
+                cache_key,
+                std::sync::Arc::new(deployments.clone()),
+                stamp,
+            );
         }
         Ok(deployments)
     }
 
     async fn start(&self, record: &ExecutionStart) -> Result<(), InferenceError> {
-        sqlx::query(r#"INSERT INTO inference_executions
-            (id, workspace_id, api_key_id, deployment_id, public_model, provider, streamed, state, root_request_id, attempt_number, upstream_model, client_session_id, client_app)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,'started',$8,$9,$10,$11,$12)"#)
-            .bind(record.id).bind(record.principal.workspace_id)
-            .bind(record.principal.key_id).bind(record.deployment_id).bind(&record.model)
-            .bind(&record.provider).bind(record.streamed).bind(record.root_request_id).bind(record.attempt_number)
-            .bind(&record.upstream_model).bind(&record.client.session_id).bind(&record.client.app).execute(&self.pool).await
-            .map_err(|_| InferenceError::Storage)?;
-        Ok(())
+        self.start_unaccounted(record).await
     }
 
     async fn finish(&self, record: &ExecutionFinish) -> Result<(), InferenceError> {
@@ -402,5 +389,62 @@ impl InferenceRepository for Store {
         record: &super::realtime::RealtimeFinish,
     ) -> Result<(), InferenceError> {
         crate::governance::realtime::finish(self, record).await
+    }
+}
+
+impl Store {
+    /// The eligible deployments of `model` for the principal, read live
+    /// (revalidation, catalog eligibility and key restrictions in one
+    /// transaction). `Unauthenticated` when the key is no longer valid.
+    async fn live_deployments(
+        &self,
+        principal: &Principal,
+        model: &str,
+    ) -> Result<Vec<Deployment>, InferenceError> {
+        let mut tx = crate::db::begin(&self.pool)
+            .await
+            .map_err(|_| InferenceError::Storage)?;
+        // Candidate planning only: admission re-checks everything live under
+        // its locks, so the scoped mode reads without row locks (no
+        // MultiXacts on authority rows in the hot path).
+        let lineage = if self.admission_mode == crate::governance::locks::AdmissionMode::Scoped {
+            crate::auth::revalidate_admission_with(&mut tx, principal, false).await
+        } else {
+            crate::auth::revalidate(&mut tx, principal).await
+        }
+        .map_err(|_| InferenceError::Storage)?;
+        let Some(lineage) = lineage else {
+            // The key is no longer valid (a stale key-cache hit, or revoked
+            // since authentication): refuse it as authentication would.
+            self.caches.forget_key(principal.key_id);
+            return Err(InferenceError::Unauthenticated);
+        };
+        let deployments = sqlx::query_as::<_, Deployment>(r#"
+            SELECT d.id,p.provider,d.upstream_model,p.credential_ref,p.endpoint,p.region,m.supported_protocols
+            FROM models m JOIN deployments d ON d.model_id=m.id
+            JOIN provider_connections p ON p.id=d.provider_connection_id
+            WHERE m.public_name=$2 AND workspace_model_allowed($1,m.id) AND d.enabled AND p.enabled
+              AND (NOT EXISTS(SELECT 1 FROM key_model_restrictions WHERE workspace_id=$1 AND governance_key_id=$3)
+                OR EXISTS(SELECT 1 FROM key_model_selections WHERE workspace_id=$1 AND governance_key_id=$3 AND model_id=m.id))
+            ORDER BY d.created_at,d.id LIMIT 257
+        "#).bind(principal.workspace_id).bind(model).bind(lineage)
+            .fetch_all(&mut *tx).await.map_err(|_| InferenceError::Storage)?;
+        tx.commit().await.map_err(|_| InferenceError::Storage)?;
+        if deployments.len() > crate::routing::MAX_CANDIDATES {
+            return Err(InferenceError::Configuration);
+        }
+        Ok(deployments)
+    }
+
+    async fn start_unaccounted(&self, record: &ExecutionStart) -> Result<(), InferenceError> {
+        sqlx::query(r#"INSERT INTO inference_executions
+            (id, workspace_id, api_key_id, deployment_id, public_model, provider, streamed, state, root_request_id, attempt_number, upstream_model, client_session_id, client_app)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,'started',$8,$9,$10,$11,$12)"#)
+            .bind(record.id).bind(record.principal.workspace_id)
+            .bind(record.principal.key_id).bind(record.deployment_id).bind(&record.model)
+            .bind(&record.provider).bind(record.streamed).bind(record.root_request_id).bind(record.attempt_number)
+            .bind(&record.upstream_model).bind(&record.client.session_id).bind(&record.client.app).execute(&self.pool).await
+            .map_err(|_| InferenceError::Storage)?;
+        Ok(())
     }
 }

@@ -251,6 +251,22 @@ GRANT EXECUTE ON FUNCTION public.omg_scope_key(uuid),public.omg_type_key(text),
  public.omg_lock_scope_rows(uuid[],uuid[],timestamptz[],boolean),
  public.omg_catalog_lock_mode(),public.omg_scope_lock_exclusive(integer,integer)
  TO gateway_runtime;
+-- Change notifications (0028): configuration writes bump their topic's
+-- version once per transaction through the omg_config_* triggers (as the
+-- invoking runtime role) and NOTIFY omg_config; every replica polls the
+-- versions. Topics are seeded (no INSERT/DELETE/TRUNCATE, topic not
+-- updatable) and versions only move forward (trigger).
+GRANT SELECT,UPDATE(version,changed_at) ON public.config_versions TO gateway_runtime;
+GRANT EXECUTE ON FUNCTION public.omg_config_bump(text) TO gateway_runtime;
+-- Work leases (0029): replicas take, renew, fence and release the seeded
+-- singleton-job leases through these helpers (FOR SHARE fencing needs an
+-- UPDATE column). Lease names are seeded and never created, renamed or
+-- removed at runtime; epochs only move forward (trigger).
+GRANT SELECT,UPDATE(holder,epoch,acquired_at,expires_at,last_completed_at,last_completed_epoch)
+ ON public.work_leases TO gateway_runtime;
+GRANT EXECUTE ON FUNCTION public.omg_lease_acquire(text,uuid,integer),
+ public.omg_lease_fence(text,uuid,bigint),public.omg_lease_complete(text,uuid,bigint),
+ public.omg_lease_release(text,uuid,bigint) TO gateway_runtime;
 -- No UPDATE/DELETE/TRUNCATE of immutable prices, ledger or audit; no removal of
 -- users/workspaces/keys/history and no rewrite of immutable admission snapshots.
 COMMIT;

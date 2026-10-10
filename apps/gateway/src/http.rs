@@ -84,7 +84,10 @@ fn build_router(
         )
         .route("/v1/realtime/calls", post(realtime::unsupported_route))
         .route_layer(middleware::from_fn(client_labels))
-        .route_layer(middleware::from_fn_with_state(store.clone(), authenticate));
+        .route_layer(middleware::from_fn_with_state(
+            store.clone(),
+            authenticate_engine,
+        ));
     // Non-generation workloads carry their own configured body caps instead
     // of the shared 2 MiB limit (transcriptions also cap the file part).
     let limits = engine.limits().workloads;
@@ -119,7 +122,10 @@ fn build_router(
             capped(WorkloadKind::AudioSpeech, post(audio::speech)),
         )
         .route_layer(middleware::from_fn(client_labels))
-        .route_layer(middleware::from_fn_with_state(store.clone(), authenticate));
+        .route_layer(middleware::from_fn_with_state(
+            store.clone(),
+            authenticate_engine,
+        ));
     // Async jobs (`crate::jobs`): video create and the streamed batch-file
     // upload have their own caps; everything else keeps 2 MiB.
     let job_limits = crate::jobs::limits();
@@ -285,7 +291,25 @@ async fn client_labels(request: Request, next: Next) -> Response {
         .await
 }
 
-async fn authenticate(State(store): State<Store>, mut request: Request, next: Next) -> Response {
+/// Live key authentication: jobs, files and every other route that returns
+/// workspace data or starts work outside the inference engine.
+async fn authenticate(State(store): State<Store>, request: Request, next: Next) -> Response {
+    authenticate_with(store, request, next, false).await
+}
+
+/// Key authentication of inference-engine routes through the per-replica key
+/// cache (`Store::authenticate_inference`); the engine's admission re-checks
+/// authorization live before any upstream work.
+async fn authenticate_engine(State(store): State<Store>, request: Request, next: Next) -> Response {
+    authenticate_with(store, request, next, true).await
+}
+
+async fn authenticate_with(
+    store: Store,
+    mut request: Request,
+    next: Next,
+    cached: bool,
+) -> Response {
     let protocol = if request.uri().path() == "/v1/messages" {
         Protocol::Anthropic
     } else {
@@ -294,7 +318,12 @@ async fn authenticate(State(store): State<Store>, mut request: Request, next: Ne
     let Some(token) = credential(request.headers(), protocol) else {
         return unauthorized(protocol);
     };
-    match store.authenticate(token).await {
+    let authenticated = if cached {
+        store.authenticate_inference(token).await
+    } else {
+        store.authenticate(token).await
+    };
+    match authenticated {
         Ok(Some(principal)) => {
             request.extensions_mut().insert(principal);
             next.run(request).await
@@ -329,8 +358,11 @@ async fn models(
     State(store): State<Store>,
     Extension(principal): Extension<Principal>,
 ) -> Response {
-    match store.visible_models(&principal).await {
-        Ok(models) => Json(json!({"object": "list", "data": models})).into_response(),
+    match store.key_models(&principal).await {
+        Ok(Some(models)) => Json(json!({"object": "list", "data": models})).into_response(),
+        // The key is no longer valid (a stale key-cache hit): exactly the
+        // authentication layer's refusal.
+        Ok(None) => unauthorized(Protocol::OpenAi),
         Err(_) => {
             tracing::error!("model catalog database lookup failed");
             api_error(

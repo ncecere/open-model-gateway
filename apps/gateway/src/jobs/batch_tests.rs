@@ -706,6 +706,45 @@ async fn budget_exhaustion_mid_batch_stops_and_keeps_partial_results(pool: PgPoo
     consistent(f).await;
 }
 
+/// A key revoked after its gateway-run batch was created: every line that
+/// runs afterwards fails exactly as the interactive endpoint refuses the key
+/// (401 `authentication_error`, never `model_not_found`), and nothing reaches
+/// a provider.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn lines_of_a_revoked_key_fail_with_the_authentication_error(pool: PgPool) {
+    let w = world(pool, false, false, 1).await;
+    let f = &w.f;
+    let file = w
+        .upload(
+            &f.principal,
+            &[
+                chat_line("a", "company/smart", "one"),
+                chat_line("b", "company/smart", "two"),
+            ],
+        )
+        .await;
+    let job = w
+        .create(f.principal, &file, BatchEndpoint::ChatCompletions, None)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE api_keys SET revoked_at=now() WHERE id=$1")
+        .bind(f.principal.key_id)
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    let _ = Runner::new(w.jobs.clone()).run_next().await;
+    let job = w.reload(&job).await;
+    assert!(w.openai.executed().is_empty());
+    let errors = w.read(f.principal.workspace_id, job.error_file_id).await;
+    assert_eq!(errors.len(), 2, "{} {:?}", job.state, job.error_code);
+    let refused = json!({"error":{"message":"Invalid or missing API key","type":"authentication_error","code":"authentication_error","param":null}});
+    for e in &errors {
+        assert_eq!(e["response"]["status_code"], 401, "{e}");
+        assert_eq!(e["response"]["body"], refused, "{e}");
+    }
+    consistent(f).await;
+}
+
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn cancel_failures_and_explicit_retries(pool: PgPool) {
     let w = world(pool, false, false, 1).await;

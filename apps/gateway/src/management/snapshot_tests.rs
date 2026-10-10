@@ -233,6 +233,7 @@ async fn open_snapshot_reads_do_not_block_writers_and_revocation_applies_to_the_
     let principal = f.s.authenticate(&a.member_token).await.unwrap();
     if let Some(p) = principal {
         assert!(f.s.visible_models(&p).await.unwrap().is_empty());
+        assert!(f.s.key_models(&p).await.unwrap().is_none());
     }
 }
 

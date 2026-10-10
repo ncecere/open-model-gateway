@@ -645,14 +645,12 @@ async fn deployment_resolution_cannot_cross_workspaces(pool: PgPool) {
         .unwrap()
         .unwrap();
     principal.workspace_id = keys.team_workspace_id;
-    // A forged principal retains the original key, which belongs to the personal workspace.
-    assert!(
-        store
-            .deployments(&principal, "company/smart")
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    // A forged principal retains the original key, which belongs to the
+    // personal workspace: it is not a valid credential for the team.
+    assert!(matches!(
+        store.deployments(&principal, "company/smart").await,
+        Err(InferenceError::Unauthenticated)
+    ));
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]

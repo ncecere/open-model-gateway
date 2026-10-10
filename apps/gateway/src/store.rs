@@ -26,6 +26,12 @@ pub struct Store {
     pub(crate) reporting: Option<PgPool>,
     /// Replay lag beyond which the reporting replica is skipped.
     pub(crate) reporting_max_lag: std::time::Duration,
+    /// Per-replica caches of pre-admission reads (`crate::cache`), shared by
+    /// every clone; bypassed until change notifications are started.
+    pub(crate) caches: std::sync::Arc<crate::cache::Caches>,
+    /// This replica's background work leases (`crate::leases`); `None`
+    /// outside `serve` (CLI one-shot commands and tests are not leased).
+    pub(crate) leases: Option<std::sync::Arc<crate::leases::Leases>>,
     /// Test-only pinned admission instant shared by every clone of this store.
     /// Production builds have no override: admission always reads the
     /// database clock (see [`Store::admission_now`]).
@@ -111,6 +117,10 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "rate_minute_counters",
     "inflight_counters",
     // 0027 scoped admission adds functions and triggers only.
+    // 0028 change notifications (per-replica cache invalidation)
+    "config_versions",
+    // 0029 work leases (singleton background jobs)
+    "work_leases",
 ];
 /// Relations that a later migration drops: accepted only before an explicit
 /// upgrade (`migrate`), never by readiness or serve on a current schema.
@@ -202,6 +212,8 @@ impl Store {
             admission_mode: mode,
             reporting: None,
             reporting_max_lag: std::time::Duration::from_secs(30),
+            caches: std::sync::Arc::new(crate::cache::Caches::new()),
+            leases: None,
             #[cfg(any(test, feature = "integration-tests"))]
             admission_clock: Default::default(),
         }
@@ -219,6 +231,38 @@ impl Store {
     /// The admission protocol in use.
     pub fn admission_mode(&self) -> crate::governance::locks::AdmissionMode {
         self.admission_mode
+    }
+
+    /// This replica's caches (`crate::cache`).
+    pub fn caches(&self) -> &crate::cache::Caches {
+        &self.caches
+    }
+
+    /// Enable the per-replica caches: poll `config_versions` every second
+    /// through the pool and LISTEN on `listen` (a dedicated session pool;
+    /// `None` polls only). Runs until the returned task is aborted.
+    pub fn start_change_notifications(
+        &self,
+        listen: Option<PgPool>,
+    ) -> tokio::task::JoinHandle<()> {
+        crate::notify::start(self.pool.clone(), listen, self.caches.versions.clone())
+    }
+
+    /// Run singleton background jobs under `leases` (serve).
+    pub fn with_leases(mut self, leases: std::sync::Arc<crate::leases::Leases>) -> Self {
+        self.leases = Some(leases);
+        self
+    }
+
+    /// This replica's work leases, if background work is leased (serve).
+    pub fn leases(&self) -> Option<&std::sync::Arc<crate::leases::Leases>> {
+        self.leases.as_ref()
+    }
+
+    /// The database pool (tests and tools).
+    #[cfg(any(test, feature = "integration-tests"))]
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
     }
 
     /// The instant admission evaluates per-minute rate windows, budget

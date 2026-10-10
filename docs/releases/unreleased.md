@@ -6,6 +6,7 @@ Notes for changes on `main` since v0.3.2. They become the next release's notes. 
 
 - **No installation-wide limits.** Limits now exist only on personal, team and project workspaces (workspace-type defaults, platform per-workspace overrides, tighten-only workspace caps) and on API keys. All of those stay hard limits, exactly as before. There is no installation budget (any period) and no installation requests per minute, tokens per minute, requests at once or jobs at once. Admission and settlement no longer read or write any installation-wide limit row, which removes the last global hot row from the request path's limit checks (scale plan, decision of 2026-10-09).
 - **Scoped admission (no global lock on the request path).** Admission and settlement no longer serialize on the installation row. Requests of different workspaces run in parallel; requests of one workspace still serialize on its own totals rows, so budgets stay exact. Revocations, suspensions, membership, key, policy and catalog changes take scope locks that admission respects, so nothing is admitted after such a change commits. On the laptop load-test stack the ceiling rose from about 240 to about 1,050–1,080 successful requests/s, and three replicas now serve more than one (998 vs 814/s at 1000/s offered). One very hot workspace or key tops out around 210–250 requests/s.
+- **Per-replica caches and one-replica background jobs.** Each replica now caches what it reads before admission (key metadata, candidate routes, routing configuration, immutable prices) and learns about configuration changes within milliseconds through PostgreSQL notifications (at most about a second without them). Admission still checks everything live, so a revoked key, removed member or tightened budget is refused immediately on every replica. Background jobs such as account cleanup, compaction and alert evaluation run on one replica at a time instead of on every replica. On the laptop load-test stack one replica now serves about 1,000 requests/s on a 10-connection pool (about 810 before) and three replicas about 1,340/s.
 - **Installation spend alert.** To keep an eye on total spend, Admin › Settings › Alerts has a new rule type, **Installation spend** (`spend_threshold`): it fires when installation-wide spend (settled plus on hold, all workspaces, personal ones as totals) in the current day, week, month or lifetime reaches up to five percentages of an amount you choose. It only notifies; it never blocks a request. Spend is exact integer micro-USD; requests with unknown cost are reported separately, never counted as zero.
 
 ## Migration
@@ -25,11 +26,27 @@ It briefly freezes history writes, like 0015 and 0025. On the 2 M-attempt load-t
 - Lock helpers for admission (`omg_admission_locks`), management (`omg_lock_scopes`) and totals/counter rows (`omg_lock_scope_rows`, which may create zero-valued `budget_totals`/counter rows; zeros equal missing rows for every reader and `budget verify`).
 - Authority triggers on users, grants, memberships, workspaces, service accounts, keys, key restrictions, policies, budgets and catalog assignments take the matching exclusive scope lock; catalog tables take the exclusive catalog lock.
 
+`0028_change_notifications.sql` (no write freeze; no existing table, column or history change):
+
+- `config_versions`: one version per topic (`access`, `catalog`, `keys`, `policy`, `settings`), seeded, forward-only.
+- Deferred constraint triggers (`omg_config_*`) on the catalog, routing, price, entitlement, membership, key, policy and settings tables bump the topic once per transaction at commit and `NOTIFY omg_config, '<topic>:<version>'`.
+
+`0029_work_leases.sql` (no write freeze):
+
+- `work_leases`: seeded singleton-job leases (`alerts`, `compaction`, `file_sweep`, `lifecycle`, `maintenance`, `metrics`) with forward-only fencing epochs, and the helpers `omg_lease_acquire`, `omg_lease_fence`, `omg_lease_complete`, `omg_lease_release`.
+
 ## New environment variables
 
+- `GATEWAY_CONFIG_CACHE` (`on` default, or `off`): per-replica caches of pre-admission reads. `off` reads everything live (no LISTEN connection, no version poll).
+- `GATEWAY_LISTEN_DATABASE_URL` (default `DATABASE_URL`): the one session connection per replica that LISTENs for configuration changes. Behind a transaction-mode PgBouncer, point it at PostgreSQL directly (or a session-mode pooler database). Count one extra connection per replica in `max_connections`.
 - `GATEWAY_ADMISSION_MODE` (`scoped` default, or `global`): `global` is an operational rollback to the former installation-row protocol, kept for one release. It needs no schema change; invalid values fail startup.
 
 ## Breaking and behaviour changes
+
+- **Configuration changes reach other replicas' caches within milliseconds, not instantly.** Authorization is unaffected (admission re-checks live): during that window a revoked, disabled or expired key (or one whose owner lost access) used on another replica is refused by the live re-check with the same `401 authentication_error` as authentication (nothing is sent upstream), and that replica forgets the key at once. Files, batches, videos and realtime always authenticate live.
+- **Singleton background jobs run on one replica** (the holder of its lease). With N replicas, alert rules are now evaluated once per interval instead of up to N times. `gateway_reservations_held` is exported only by the `metrics` lease holder (sum and max agree); `gateway_alert_evaluations_total{result="skipped"}` counts the other replicas' ticks.
+- **New metrics:** `gateway_cache_lookups_total{cache,result}`, `gateway_config_changes_total{topic}`, `gateway_config_poll_failures_total`, `gateway_config_listener_up`, `gateway_work_leases_held{lease}`, `gateway_work_lease_terms_total{lease}`, `gateway_background_runs_total{job,result}`.
+- **Manual SQL configuration changes** now also lock the `config_versions` rows at commit (after every other lock), so concurrent configuration transactions serialize briefly at commit.
 
 - **Per-replica database connections now raise throughput.** Each replica admits on up to half of `GATEWAY_DATABASE_MAX_CONNECTIONS` and settles on up to three tenths (before: a quarter each, because the global lock serialized them anyway). Size PgBouncer and `max_connections` for the busier pools.
 - **New metric** `gateway_lock_deadlock_retries_total{path}` and admission/settlement phase `lock_rows`; in scoped mode the admission `price` phase is folded into `read`.
@@ -47,6 +64,7 @@ It briefly freezes history writes, like 0015 and 0025. On the 2 M-attempt load-t
 1. Before upgrading, note any installation limits you still want and recreate them on type defaults, workspace overrides or keys after the upgrade (the migration records the old values in the audit log).
 2. Back up and drain traffic (the migration freezes history writes briefly).
 3. Run `open-model-gateway migrate` as the migrator.
-4. Reapply `deploy/staging/runtime-grants.sql` (alert rules gain `spend_period`/`spend_amount_microusd` update grants; `installation_policy` grants are gone; 0027 adds `EXECUTE` on the scope-lock helpers).
+4. Reapply `deploy/staging/runtime-grants.sql` (alert rules gain `spend_period`/`spend_amount_microusd` update grants; `installation_policy` grants are gone; 0027 adds `EXECUTE` on the scope-lock helpers; 0028 adds `SELECT`/`UPDATE(version,changed_at)` on `config_versions` and `EXECUTE` on `omg_config_bump`; 0029 adds `SELECT`/`UPDATE` of the lease columns on `work_leases` and `EXECUTE` on the lease helpers).
+4a. If replicas connect through a transaction-mode PgBouncer, set `GATEWAY_LISTEN_DATABASE_URL` to PostgreSQL directly and allow one more connection per replica.
 5. Run `open-model-gateway budget verify` and expect `mismatch_count: 0` and `rate_mismatch_count: 0`.
 6. Review Admin › Settings › Alerts: converted rules are named after the original, with "(installation … spend)" for extra periods.

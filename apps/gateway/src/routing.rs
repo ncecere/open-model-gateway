@@ -114,18 +114,34 @@ pub async fn plan(
     }
     let ids: Vec<_> = candidates.iter().map(|d| d.id).collect();
     validate_ids(&ids)?;
-    let policy = sqlx::query_as::<_, RoutingPolicy>(
-        r#"SELECT r.strategy, r.max_attempts, r.allow_ambiguous_failover,
-                  3 AS failure_threshold, 30 AS cooldown_seconds, r.required_residency
-           FROM routing_policies r JOIN models m ON m.id=r.model_id
-           WHERE workspace_model_allowed($1,m.id) AND m.public_name=$2"#,
-    )
-    .bind(principal.workspace_id)
-    .bind(model)
-    .fetch_optional(&store.pool)
-    .await
-    .map_err(|_| InferenceError::Storage)?
-    .unwrap_or_default();
+    let (policy, rows) = if store.caches.enabled() {
+        cached_inputs(store, principal, model, &ids).await?
+    } else {
+        live_inputs(store, principal, model, &ids).await?
+    };
+    let mut seed = Sha256::new();
+    seed.update(principal.workspace_id.as_bytes());
+    seed.update(request_id.as_bytes());
+    seed.update(model.as_bytes());
+    order_candidates(&policy, rows, seed.finalize().into())
+}
+
+/// Planning inputs read live: the model's routing policy (as the workspace
+/// sees it) and the candidates' routing rows and passive health, in input
+/// order, fenced to live catalog eligibility.
+async fn live_inputs(
+    store: &Store,
+    principal: &Principal,
+    model: &str,
+    ids: &[Uuid],
+) -> Result<(RoutingPolicy, Vec<Candidate>), InferenceError> {
+    let policy = sqlx::query_as::<_, RoutingPolicy>(POLICY_SQL)
+        .bind(principal.workspace_id)
+        .bind(model)
+        .fetch_optional(&store.pool)
+        .await
+        .map_err(|_| InferenceError::Storage)?
+        .unwrap_or_default();
     let rows = sqlx::query_as::<_, Candidate>(
         r#"SELECT d.id AS deployment_id, COALESCE(r.priority,0) AS priority,
                   COALESCE(r.weight,1) AS weight, COALESCE(r.residency,'unspecified') AS residency,
@@ -145,15 +161,135 @@ pub async fn plan(
     )
     .bind(principal.workspace_id)
     .bind(model)
-    .bind(&ids)
+    .bind(ids)
     .fetch_all(&store.pool)
     .await
     .map_err(|_| InferenceError::Storage)?;
-    let mut seed = Sha256::new();
-    seed.update(principal.workspace_id.as_bytes());
-    seed.update(request_id.as_bytes());
-    seed.update(model.as_bytes());
-    order_candidates(&policy, rows, seed.finalize().into())
+    Ok((policy, rows))
+}
+
+const POLICY_SQL: &str = r#"SELECT r.strategy, r.max_attempts, r.allow_ambiguous_failover,
+                  3 AS failure_threshold, 30 AS cooldown_seconds, r.required_residency
+           FROM routing_policies r JOIN models m ON m.id=r.model_id
+           WHERE workspace_model_allowed($1,m.id) AND m.public_name=$2"#;
+
+/// [`live_inputs`] through the per-replica caches: the routing snapshot of
+/// (workspace, model) while the catalog and access versions are unchanged,
+/// and passive health read at most once per [`crate::cache::HEALTH_TTL`]
+/// (this replica's own results invalidate it at once). Candidates missing
+/// from the snapshot are dropped, as the live join drops them.
+async fn cached_inputs(
+    store: &Store,
+    principal: &Principal,
+    model: &str,
+    ids: &[Uuid],
+) -> Result<(RoutingPolicy, Vec<Candidate>), InferenceError> {
+    use crate::cache::{HealthEntry, Lookup, RouteSnapshot};
+    let caches = &store.caches;
+    let key = (principal.workspace_id, model.to_owned());
+    let snapshot = match caches.routes.get(&caches.versions, &key) {
+        Lookup::Hit(snapshot) => snapshot,
+        lookup => {
+            let policy = sqlx::query_as::<_, RoutingPolicy>(POLICY_SQL)
+                .bind(principal.workspace_id)
+                .bind(model)
+                .fetch_optional(&store.pool)
+                .await
+                .map_err(|_| InferenceError::Storage)?;
+            let rows: Vec<(Uuid, i32, i32, String)> = sqlx::query_as(
+                r#"SELECT d.id, COALESCE(r.priority,0), COALESCE(r.weight,1), COALESCE(r.residency,'unspecified')
+                   FROM models m JOIN deployments d ON d.model_id=m.id
+                   JOIN provider_connections p ON p.id=d.provider_connection_id
+                   LEFT JOIN deployment_routing r ON r.deployment_id=d.id
+                   WHERE m.public_name=$2 AND workspace_model_allowed($1,m.id) AND d.enabled AND p.enabled
+                   LIMIT 257"#,
+            )
+            .bind(principal.workspace_id)
+            .bind(model)
+            .fetch_all(&store.pool)
+            .await
+            .map_err(|_| InferenceError::Storage)?;
+            if rows.len() > MAX_CANDIDATES {
+                return Err(InferenceError::Configuration);
+            }
+            let snapshot = std::sync::Arc::new(RouteSnapshot {
+                policy,
+                rows: rows
+                    .into_iter()
+                    .map(|(id, priority, weight, residency)| (id, (priority, weight, residency)))
+                    .collect(),
+            });
+            if let Lookup::Miss(stamp) = lookup {
+                caches.routes.insert(key, snapshot.clone(), stamp);
+            }
+            snapshot
+        }
+    };
+    let eligible: Vec<Uuid> = ids
+        .iter()
+        .copied()
+        .filter(|id| snapshot.rows.contains_key(id))
+        .collect();
+    let (mut health, missing) = caches.health(&eligible);
+    if !missing.is_empty() {
+        let loaded = std::time::Instant::now();
+        let rows: Vec<(Uuid, i32, Option<f64>, Option<f64>)> = sqlx::query_as(
+            "SELECT deployment_id,consecutive_failures,EXTRACT(EPOCH FROM open_until-clock_timestamp())::float8,EXTRACT(EPOCH FROM clock_timestamp()-last_observed_at)::float8 FROM deployment_health WHERE deployment_id=ANY($1)",
+        )
+        .bind(&missing)
+        .fetch_all(&store.pool)
+        .await
+        .map_err(|_| InferenceError::Storage)?;
+        let mut fresh: Vec<(Uuid, HealthEntry)> = missing
+            .iter()
+            .map(|id| {
+                (
+                    *id,
+                    HealthEntry {
+                        loaded,
+                        open_until: None,
+                        consecutive_failures: 0,
+                        observed_age: None,
+                    },
+                )
+            })
+            .collect();
+        for (id, failures, open_for, observed) in rows {
+            if let Some(entry) = fresh.iter_mut().find(|(d, _)| *d == id) {
+                entry.1.consecutive_failures = failures;
+                entry.1.open_until = open_for
+                    .filter(|s| *s > 0.0)
+                    .map(|s| loaded + std::time::Duration::from_secs_f64(s.min(86_400.0)));
+                entry.1.observed_age =
+                    observed.map(|s| std::time::Duration::from_secs_f64(s.clamp(0.0, 1e9)));
+            }
+        }
+        health.extend(fresh.iter().copied());
+        caches.store_health(fresh);
+    }
+    let now = std::time::Instant::now();
+    let rows = eligible
+        .into_iter()
+        .map(|id| {
+            let (priority, weight, residency) = snapshot.rows[&id].clone();
+            let open = health
+                .get(&id)
+                .and_then(|h| h.open_until)
+                .filter(|until| *until > now);
+            Candidate {
+                deployment_id: id,
+                priority,
+                weight,
+                residency,
+                operator_disabled: false,
+                circuit_open: open.is_some(),
+                cooldown_remaining_seconds: open.map_or(0, |until| {
+                    (until - now).as_secs_f64().ceil().clamp(1.0, 86_400.0) as i32
+                }),
+            }
+        })
+        .collect();
+    Ok((snapshot.policy.clone().unwrap_or_default(), rows))
 }
 
 fn validate_ids(ids: &[Uuid]) -> Result<(), InferenceError> {
@@ -290,6 +426,21 @@ pub async fn record_result(
     if !affects_health(error) {
         return Ok(());
     }
+    if error.is_none()
+        && store.caches.enabled()
+        && store.caches.health_entry(deployment).is_some_and(|h| {
+            h.consecutive_failures == 0
+                && h.open_until.is_none()
+                && h.observed_age.is_some_and(|age| {
+                    age + h.loaded.elapsed()
+                        < std::time::Duration::from_secs(OBSERVED_REFRESH_SECONDS as u64)
+                })
+        })
+    {
+        // Healthy and recently observed as of at most `HEALTH_TTL` ago: the
+        // write would change nothing (the same staleness the planner accepts).
+        return Ok(());
+    }
     if error.is_none() {
         let unchanged: Option<bool> = sqlx::query_scalar("SELECT consecutive_failures=0 AND open_until IS NULL AND last_observed_at>clock_timestamp()-$2*interval '1 second' FROM deployment_health WHERE deployment_id=$1")
             .bind(deployment)
@@ -324,6 +475,7 @@ pub async fn record_result(
             last_observed_at=clock_timestamp()"#,
     ).bind(deployment).bind(error.is_some()).execute(&store.pool)
         .await.map_err(|_| InferenceError::Storage)?;
+    store.caches.forget_health(deployment);
     if result.rows_affected() != 1 {
         return Err(InferenceError::ModelUnavailable);
     }

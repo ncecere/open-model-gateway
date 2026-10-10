@@ -24,6 +24,13 @@ impl LimitScope {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InferenceError {
     InvalidRequest,
+    /// The key is no longer valid (revoked, disabled, expired, its user,
+    /// membership, service account or workspace no longer active), found by a
+    /// live re-check after authentication (for example a per-replica key
+    /// cache hit just before invalidation arrived). Rendered exactly like the
+    /// authentication layer's refusal of an unknown key (HTTP 401
+    /// `authentication_error`), never as `model_not_found`.
+    Unauthenticated,
     ModelUnavailable,
     Unsupported,
     Configuration,
@@ -60,6 +67,7 @@ impl InferenceError {
     pub fn code(self) -> &'static str {
         match self {
             Self::InvalidRequest => "invalid_request_error",
+            Self::Unauthenticated => "authentication_error",
             Self::ModelUnavailable => "model_not_found",
             Self::Unsupported => "unsupported_capability",
             Self::Configuration => "provider_configuration_error",
@@ -99,6 +107,8 @@ impl InferenceError {
     pub fn message(self) -> &'static str {
         match self {
             Self::InvalidRequest => "Invalid or unsupported chat request fields",
+            // The authentication layer's message (`http::unauthorized`).
+            Self::Unauthenticated => "Invalid or missing API key",
             Self::ModelUnavailable => "Model not found or not available to this workspace",
             Self::Unsupported => "No registered deployment supports the requested capabilities",
             Self::Configuration => "Provider configuration is unavailable",

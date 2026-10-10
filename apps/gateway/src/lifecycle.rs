@@ -81,7 +81,25 @@ pub(crate) async fn cleanup_user(
 
 /// Bounded maintenance entry point. Service accounts and immutable accounting are untouched.
 pub async fn cleanup_inactive_accounts(store: &Store) -> Result<u64, sqlx::Error> {
+    cleanup_inactive_accounts_fenced(store, None).await
+}
+
+/// [`cleanup_inactive_accounts`] as the `lifecycle` lease holder: the
+/// transaction is fenced to the term, and a lock-free check first skips the
+/// catalog/installation locks entirely when nothing is due (the common case;
+/// before P5 every replica took the installation row every minute).
+pub async fn cleanup_inactive_accounts_fenced(
+    store: &Store,
+    fence: Option<&crate::leases::Fence>,
+) -> Result<u64, sqlx::Error> {
+    let due: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE disabled_at IS NOT NULL AND cleaned_at IS NULL AND cleanup_due_at<=now())")
+        .fetch_one(&store.pool)
+        .await?;
+    if !due {
+        return Ok(0);
+    }
     let mut tx = crate::db::begin(&store.pool).await?;
+    crate::leases::fence(&mut tx, fence).await?;
     lock(&mut tx).await?;
     let users: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM users WHERE disabled_at IS NOT NULL AND cleaned_at IS NULL AND cleanup_due_at<=now() ORDER BY cleanup_due_at,id LIMIT 100 FOR UPDATE")
         .fetch_all(&mut *tx).await?;

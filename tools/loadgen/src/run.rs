@@ -124,6 +124,10 @@ pub struct GatewayMetrics {
     pub settlement: BTreeMap<String, Summary>,
     pub admission_denials: BTreeMap<String, f64>,
     pub settlements: BTreeMap<String, f64>,
+    /// `gateway_cache_lookups_total` deltas by `cache=..,result=..` (P4).
+    pub cache_lookups: BTreeMap<String, f64>,
+    /// `gateway_background_runs_total` deltas by `job=..,result=..` (P5).
+    pub background_runs: BTreeMap<String, f64>,
     pub scrape_errors: u64,
 }
 
@@ -170,6 +174,47 @@ pub struct Report {
     /// Concurrent management readers (`--readers`), when enabled.
     pub reader: Option<ReaderStats>,
     pub violations: Vec<String>,
+    /// Per scheduled second (from `started_at_unix`): requests, failures
+    /// and client latency percentiles, to locate latency spikes in time
+    /// (for example background jobs on every replica).
+    pub timeline: Vec<TimelinePoint>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TimelinePoint {
+    pub second: u64,
+    pub requests: usize,
+    pub failed: usize,
+    pub p50_ms: f64,
+    pub p99_ms: f64,
+    pub max_ms: f64,
+}
+
+/// Group requests by the second they were scheduled in.
+pub fn timeline(records: &[RequestRecord], interval_s: f64) -> Vec<TimelinePoint> {
+    let mut seconds: BTreeMap<u64, (Vec<u64>, usize)> = BTreeMap::new();
+    for r in records {
+        let second = (r.index as f64 * interval_s).floor() as u64;
+        let entry = seconds.entry(second).or_default();
+        entry.0.push(r.latency_us);
+        if !r.ok {
+            entry.1 += 1;
+        }
+    }
+    seconds
+        .into_iter()
+        .map(|(second, (latencies, failed))| {
+            let p = crate::stats::percentiles(latencies);
+            TimelinePoint {
+                second,
+                requests: p.count,
+                failed,
+                p50_ms: p.p50_ms,
+                p99_ms: p.p99_ms,
+                max_ms: p.max_ms,
+            }
+        })
+        .collect()
 }
 
 fn splitmix(mut x: u64) -> u64 {
@@ -487,6 +532,7 @@ pub async fn run(config: RunConfig) -> anyhow::Result<Report> {
         measured_start,
         start,
     );
+    report.timeline = timeline(&records, interval);
     if config.readers > 0 {
         report.reader = Some(reader::summarize(
             config.readers,
@@ -512,6 +558,8 @@ pub async fn run(config: RunConfig) -> anyhow::Result<Report> {
                 .collect(),
             admission_denials: prom::counter_deltas(&before, &after, "gateway_admission_denials"),
             settlements: prom::counter_deltas(&before, &after, "gateway_settlements"),
+            cache_lookups: prom::counter_deltas(&before, &after, "gateway_cache_lookups"),
+            background_runs: prom::counter_deltas(&before, &after, "gateway_background_runs"),
             scrape_errors: scrape_errors + after_errors,
         });
     }
@@ -621,6 +669,7 @@ fn summarize(
         reader: None,
         totals,
         violations: Vec::new(),
+        timeline: Vec::new(),
     }
 }
 

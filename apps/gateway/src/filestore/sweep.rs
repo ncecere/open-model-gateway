@@ -28,12 +28,27 @@ pub async fn sweep_once(
     runtime: &FileStoreRuntime,
     limit: i64,
 ) -> Result<SweepReport, sqlx::Error> {
+    sweep_once_fenced(db, runtime, limit, None).await
+}
+
+/// [`sweep_once`] whose claim transaction is fenced to a `file_sweep` lease
+/// term (claims are also 5-minute row leases, so a former leader's claimed
+/// rows are simply retried later).
+pub async fn sweep_once_fenced(
+    db: &Store,
+    runtime: &FileStoreRuntime,
+    limit: i64,
+    fence: Option<&crate::leases::Fence>,
+) -> Result<SweepReport, sqlx::Error> {
     let limit = limit.clamp(1, 1000);
     let sql = format!(
         "UPDATE stored_files f SET last_delete_attempt_at=clock_timestamp() FROM (SELECT f.id FROM stored_files f CROSS JOIN installation_settings s WHERE s.singleton AND f.deleted_at IS NULL AND (f.last_delete_attempt_at IS NULL OR f.last_delete_attempt_at < now()-interval '5 minutes') AND ((f.committed_at IS NULL AND f.created_at < now()-interval '1 day') OR f.expires_at <= now() OR f.created_at + make_interval(days => {RETENTION_SQL}) <= now()) ORDER BY f.created_at,f.id LIMIT $1 FOR UPDATE OF f SKIP LOCKED) due WHERE f.id=due.id RETURNING f.id,f.object_key,f.backend"
     );
+    let mut tx = crate::db::begin(&db.pool).await?;
+    crate::leases::fence(&mut tx, fence).await?;
     let due: Vec<(Uuid, String, String)> =
-        sqlx::query_as(&sql).bind(limit).fetch_all(&db.pool).await?;
+        sqlx::query_as(&sql).bind(limit).fetch_all(&mut *tx).await?;
+    tx.commit().await?;
     let mut report = SweepReport {
         claimed: due.len() as u64,
         ..SweepReport::default()
@@ -74,16 +89,41 @@ pub fn start(db: Store, runtime: FileStoreRuntime) -> Option<tokio::task::JoinHa
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tick.tick().await;
-            match tokio::time::timeout(Duration::from_secs(50), sweep_once(&db, &runtime, 200))
-                .await
+            let swept =
+                match db.leases() {
+                    // One replica sweeps (the `file_sweep` lease holder).
+                    Some(leases) => crate::leases::run_singleton(
+                        leases,
+                        crate::leases::Lease::FileSweep,
+                        "file_sweep",
+                        Duration::from_secs(50),
+                        |fence| {
+                            let (db, runtime) = (db.clone(), runtime.clone());
+                            async move { sweep_once_fenced(&db, &runtime, 200, Some(&fence)).await }
+                        },
+                    )
+                    .await,
+                    None => match tokio::time::timeout(
+                        Duration::from_secs(50),
+                        sweep_once(&db, &runtime, 200),
+                    )
+                    .await
+                    {
+                        Ok(Ok(r)) => Some(r),
+                        _ => {
+                            tracing::warn!("stored file sweep incomplete; retrying next interval");
+                            None
+                        }
+                    },
+                };
+            if let Some(r) = swept
+                && r.claimed > 0
             {
-                Ok(Ok(r)) if r.claimed > 0 => tracing::info!(
+                tracing::info!(
                     deleted = r.deleted,
                     failed = r.failed,
                     "expired stored files swept"
-                ),
-                Ok(Ok(_)) => {}
-                _ => tracing::warn!("stored file sweep incomplete; retrying next interval"),
+                );
             }
         }
     }))

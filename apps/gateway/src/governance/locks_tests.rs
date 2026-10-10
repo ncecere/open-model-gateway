@@ -335,7 +335,7 @@ async fn revoked_key_is_never_admitted_after_revocation_commits(pool: PgPool) {
                 key,
             )
         },
-        InferenceError::ModelUnavailable,
+        InferenceError::Unauthenticated,
     )
     .await;
 }
@@ -346,7 +346,7 @@ async fn membership_removal_races_admission(pool: PgPool) {
     f.price(1_000_000).await;
     let member = key_for(&pool, f.team.workspace_id, f.other).await;
     let other = f.other;
-    race(&f, member, |pool| management(pool, false, "UPDATE workspace_membership_grants SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL RETURNING clock_timestamp()", other), InferenceError::ModelUnavailable).await;
+    race(&f, member, |pool| management(pool, false, "UPDATE workspace_membership_grants SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL RETURNING clock_timestamp()", other), InferenceError::Unauthenticated).await;
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
@@ -366,7 +366,7 @@ async fn user_suspension_races_admission(pool: PgPool) {
                 other,
             )
         },
-        InferenceError::ModelUnavailable,
+        InferenceError::Unauthenticated,
     )
     .await;
 }
@@ -539,6 +539,7 @@ async fn deadlock_freedom_fuzz(pool: PgPool) {
                     Err(
                         InferenceError::BudgetExceeded(_)
                         | InferenceError::Busy
+                        | InferenceError::Unauthenticated
                         | InferenceError::ModelUnavailable,
                     ) => {}
                     Err(e) => panic!("{e:?}"),

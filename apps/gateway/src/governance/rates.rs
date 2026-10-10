@@ -208,12 +208,25 @@ async fn read_state(
 /// Deletes up to `limit` minute rows that admission no longer reads (older
 /// than [`RETAINED_MINUTES`]). Concurrent pruners skip each other's rows.
 pub async fn prune(store: &crate::store::Store, limit: i64) -> Result<u64, sqlx::Error> {
-    Ok(sqlx::query("DELETE FROM rate_minute_counters WHERE (minute_start,scope_kind,scope_id) IN (SELECT minute_start,scope_kind,scope_id FROM rate_minute_counters WHERE minute_start<date_trunc('minute',clock_timestamp(),'UTC')-make_interval(mins=>$1) ORDER BY 1,2,3 LIMIT $2 FOR UPDATE SKIP LOCKED)")
+    prune_fenced(store, limit, None).await
+}
+
+/// [`prune`] in a transaction fenced to a `maintenance` lease term.
+pub async fn prune_fenced(
+    store: &crate::store::Store,
+    limit: i64,
+    fence: Option<&crate::leases::Fence>,
+) -> Result<u64, sqlx::Error> {
+    let mut tx = crate::db::begin(&store.pool).await?;
+    crate::leases::fence(&mut tx, fence).await?;
+    let pruned = sqlx::query("DELETE FROM rate_minute_counters WHERE (minute_start,scope_kind,scope_id) IN (SELECT minute_start,scope_kind,scope_id FROM rate_minute_counters WHERE minute_start<date_trunc('minute',clock_timestamp(),'UTC')-make_interval(mins=>$1) ORDER BY 1,2,3 LIMIT $2 FOR UPDATE SKIP LOCKED)")
         .bind(RETAINED_MINUTES)
         .bind(limit)
-        .execute(&store.pool)
+        .execute(&mut *tx)
         .await?
-        .rows_affected())
+        .rows_affected();
+    tx.commit().await?;
+    Ok(pruned)
 }
 
 /// The former scan's classification of every reservation and unreserved

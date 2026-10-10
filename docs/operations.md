@@ -11,6 +11,8 @@ This covers health checks, metrics and alerting, backups and restore, secret rot
 | `GATEWAY_REPORTING_DATABASE_URL` | unset (primary) | Optional read-only reporting replica (or a pooler in front of one) for reports, usage and request logs only. See [read snapshots and the reporting replica](#read-snapshots-and-the-reporting-replica). Use the runtime role; set it directly (it has no `_FILE` form). An empty value is refused. |
 | `GATEWAY_REPORTING_MAX_LAG_SECONDS` | `30` | Reporting replica replay lag (1 to 3600 s) beyond which reads use the primary instead. |
 | `GATEWAY_ADMISSION_MODE` | `scoped` | `scoped`: admission and settlement use scoped authority and row locks (0027, [governance](governance.md#scoped-admission-lock-order)). `global`: the former protocol, serializing every admission and settlement on the installation row; an operational rollback kept for one release, needing no schema change. Any other value fails startup. |
+| `GATEWAY_CONFIG_CACHE` | `on` | `on`: per-replica caches of pre-admission reads with change notifications ([governance](governance.md#caches-and-change-notifications)); admission always re-checks live. `off`: every read is live (no LISTEN connection, no version poll). Any other value fails startup. |
+| `GATEWAY_LISTEN_DATABASE_URL` | `DATABASE_URL` | The one session connection per replica that LISTENs for configuration changes. LISTEN needs a session: behind a transaction-mode PgBouncer point it at PostgreSQL directly (or a session-mode pooler database), with the runtime role. Without notifications caches still follow changes through the 1 s version poll. An empty value is refused. |
 | `GATEWAY_MAX_CONCURRENT_REQUESTS` | `128` (staging: 32) | Per-replica inference concurrency. Requests beyond it get 429 and are counted under `scope="gateway_capacity"`. |
 | `GATEWAY_REQUEST_TIMEOUT_SECONDS` | `120` | Inference deadline. Time spent waiting for admission counts toward it. |
 | `GATEWAY_FILE_STORE` | `off` | Encrypted file store: `off`, `local` or `s3`. See [file storage](file-storage.md) for the backend and encryption-key variables. |
@@ -90,7 +92,14 @@ There are no workspace, key, user, request IDs, or prompt and response data in a
 | `gateway_settlement_seconds` | histogram | `phase` (`queue`, `connect`, `locks`, `read`, `lock_rows`, `write`, `commit`, `total`), `outcome` (`settled`, `unknown`, `replay`, `conflict`, `error`). Terminal settlement of an interactive attempt (`finish`); a replay stops after `locks`. |
 | `gateway_lock_deadlock_retries_total` | counter | `path` (`admission`, `settlement`, `reconciliation`). Governance transactions re-run after PostgreSQL aborted them as a deadlock victim (SQLSTATE 40P01; at most two re-runs, never of upstream work). The canonical lock order keeps it at 0; a rise means a session changed authority scopes out of order. |
 | `gateway_admission_denials_total` | counter | `code`, `scope` (`workspace`, `api_key`, `policy` for rate/concurrency limits, `gateway_capacity`; `installation` no longer occurs since installation-wide limits were removed in 0026). `code="job_limit_exceeded"` counts video/batch jobs refused by a "Jobs at once" limit, with the scope that refused them. |
-| `gateway_reservations_held` | gauge | `state` (`pending`, `unknown`). Refreshed at scrape time, at most every 15 seconds, with a 2-second query timeout. Summed from the workspace `lifetime` rows of `budget_totals` (one row per workspace, exact), not by counting history. Since 0026 there is no installation-scope row. |
+| `gateway_reservations_held` | gauge | `state` (`pending`, `unknown`). Refreshed at scrape time, at most every 15 seconds, with a 2-second query timeout. Summed from the workspace `lifetime` rows of `budget_totals` (one row per workspace, exact), not by counting history. Since 0026 there is no installation-scope row. Installation-wide: since 0029 only the replica holding the `metrics` work lease exports it, so `sum` and `max` across replicas agree (briefly both during a handover). |
+| `gateway_cache_lookups_total` | counter | `cache` (`keys`, `candidates`, `routes`, `health`, `prices`), `result` (`hit`, `miss`, `bypass`: versions unconfirmed or caching off). Hit rate = hit / (hit + miss + bypass). |
+| `gateway_config_changes_total` | counter | `topic` (`access`, `catalog`, `keys`, `policy`, `settings`): configuration versions this replica observed advancing. |
+| `gateway_config_poll_failures_total` | counter | none. Failed 1 s version polls; after 3 s without a success every cache is bypassed. |
+| `gateway_config_listener_up` | gauge | none (1 while the LISTEN connection is up). |
+| `gateway_work_leases_held` | gauge | `lease` (`alerts`, `compaction`, `file_sweep`, `lifecycle`, `maintenance`, `metrics`): 1 on the replica holding it. Exactly one replica should report 1 per lease. |
+| `gateway_work_lease_terms_total` | counter | `lease`: terms this replica started (acquisitions and takeovers). |
+| `gateway_background_runs_total` | counter | `job`, `result` (`ok`, `failed`, `fenced`: the term ended during the run and nothing was committed). Singleton jobs on this replica. |
 | `gateway_alert_evaluations_total` | counter | `result` (`ok`, `skipped` when another replica holds the lock, `failed`) |
 | `gateway_alert_rule_failures_total` | counter | none |
 | `gateway_db_pool_connections` | gauge | `state` (`idle`, `in_use`) |
@@ -99,7 +108,7 @@ There are no workspace, key, user, request IDs, or prompt and response data in a
 | `gateway_file_store_operations_total` | counter | `backend` (`local`, `s3`), `op` (`put`, `get`, `read`, `head`, `delete`, `health`), `outcome` (`ok` or a safe error code such as `integrity`, `denied`, `unavailable`). `op="read"` counts failures while streaming an object. |
 | `gateway_file_store_bytes_total` | counter | `backend`, `op` (`put`; `get` counts objects read to the end). Plaintext bytes. |
 
-Gauges and counters are per replica. Aggregate them with `sum`. The reservation gauge counts the whole installation, so take `max` across replicas instead of summing it.
+Gauges and counters are per replica. Aggregate them with `sum`. The reservation gauge counts the whole installation and is exported by one replica (the `metrics` lease holder); `max` across replicas is the safest aggregation.
 
 ### Alerting and dashboards
 
@@ -517,10 +526,37 @@ Findings:
 5. **Group commit:** no effect on local NVMe; keep the defaults unless commit latency is high (network storage, synchronous standby).
 6. **Report readers** no longer cost inference throughput (1 replica, 2 M, 250/s: 241.9/s; 191.4/s after 0026). One main-matrix series with three replicas and readers on 2 M slowed every statement (a plain ledger insert 0.12 → 4.85 ms) while the report scans ran — machine-wide CPU/IO contention, not lock waits; its rerun was clean (above). Put report scans on a [reporting replica](#read-snapshots-and-the-reporting-replica).
 
+### Caching and background work (P4/P5)
+
+Measured 2026-10-10 on the same laptop and settings after `0028_change_notifications.sql` and `0029_work_leases.sql` ([governance](governance.md#caches-and-change-notifications)): offered 250, 500, 1000 and 1500/s on one and three replicas behind PgBouncer, pool 10 per replica, with and without two report readers, empty and 2 M history. The same-session control is the same image with `GATEWAY_CONFIG_CACHE=off`; the P3 column repeats the scoped results above. 61 of 62 runs passed every ledger invariant and `budget verify`; the exception (empty, 3 replicas, 2 readers, 500/s) ran inside a WAL-triggered checkpoint and failed closed (11 settlement deadlines, holds kept); four repeats after a `CHECKPOINT` were clean (489–499/s, p99 64–71 ms).
+
+| History | Setup | Readers | Offered/s | P3 scoped ok/s · p99 ms | Caches off (same session) | **P4/P5** ok/s · p99 ms |
+|---|---|---|---|---|---|---|
+| empty | 1 replica | 0 | 500 | 493.6 · 184 | – | 499.3 · 61 |
+| empty | 1 replica | 0 | 1000 | 813.8 · 190 | 822.7 · 184 | 998.6 · 88 |
+| empty | 1 replica | 0 | 1500 | – | 796.4 · 186 | 1,074.9 · 139 |
+| empty | 3 replicas | 0 | 1000 | 998.4 · 131 | 998.3 · 137 | 998.6 · 80 |
+| empty | 3 replicas | 0 | 1500 | – | 1,051.3 · 665 | 1,339.6 · 331 |
+| empty | 3 replicas | 2 | 500 | 474.3 · 895 | 498.1 · 71 (repeat) | 498.7 · 64 (repeat) |
+| 2 M | 1 replica | 0 | 1000 | 696.6 · 214 | 812.1 · 184 | 998.3 · 111 |
+| 2 M | 1 replica | 0 | 1500 | – | 747.6 · 402 | 1,026.9 · 152 |
+| 2 M | 3 replicas | 0 | 1000 | 962.9 · 527 | 958.2 · 538; 920.8 · 525 (repeat) | 918.5 · 1,739; 998.5 · 322 (repeat) |
+| 2 M | 3 replicas | 0 | 1500 | – | 917.8 · 569 | 1,105.1 · 849 |
+| 2 M | 3 replicas | 2 | 250 | 239.8 · 1,562 | 203.3 · 779 (repeat) | 232.3 · 3,832; 240.4 · 1,213 (repeat) |
+
+Findings:
+
+1. **One replica now reaches about 1,000/s on a 10-connection pool** (814/s in P3, 823/s with caches off). Pre-admission reads no longer use the pool on a cache hit and admission and settlement each save a price round trip, so settlements stop queueing in process (settlement mean at 1000/s 94 → 4 ms). PgBouncer counted about half as many transactions per successful request.
+2. **Laptop ceiling about 1,340 ok/s** on three replicas at pool 10 (1,051/s with caches off; P3 needed pool 20 for 1,080/s). Below saturation latency is unchanged.
+3. **Hit rates ~100 %** for keys, candidates and routes once a key has been seen on a replica (61–89 % at 250/s, where each of 2,000 keys reaches each replica only a few times); prices 100 %. In tests, invalidation through LISTEN took 5–10 ms.
+4. **Background work runs once.** Across three replicas each 50 s window saw at most one account-lifecycle check and one counter prune, on the lease holder, with no lock taken when nothing was due.
+5. **Remaining latency spikes come from checkpoints and report scans, not background jobs.** 46 of 117 spike seconds (p99 over 4× the run median) fell inside WAL- or time-triggered spread checkpoints; most others were in report-reader runs or at saturation. None appeared in no-reader runs at 500/s or less, apart from the row-lock-bound hot workspace. The spikes seen with three replicas in P0/P1 had a background-job share that is gone: every replica used to run lifecycle cleanup and lease reconciliation under the installation row and evaluate alerts on its own tick. Size `max_wal_size` so checkpoints are time-triggered, and put report scans on a reporting replica.
+6. **Hot workspace and hot key unchanged** (about 200–250/s): the scope's totals rows are the limit (scale plan P3b).
+
 ## PostgreSQL settings for hot rows and group commit
 
 - **Hot rows.** `budget_totals`, `rate_minute_counters` and `inflight_counters` are updated on every admission and settlement. Only their primary keys are indexed, and no indexed column is ever updated, so updates stay HOT (in-page) when there is free space: `budget_totals` uses `fillfactor=50`, the counter tables `fillfactor=70`. The migrations set threshold-driven autovacuum on all three (`autovacuum_vacuum_scale_factor=0`, `autovacuum_vacuum_threshold=1000`, `autovacuum_vacuum_cost_limit=2000`, `autovacuum_vacuum_cost_delay=1`), so vacuum frequency does not shrink as the tables grow. HOT pruning needs the global xmin to advance: avoid long transactions on the primary (run `budget verify` and reports on a replica where possible). Watch `n_tup_hot_upd`/`n_tup_upd` and `n_dead_tup` in `pg_stat_user_tables` for these tables.
-- **Minute counters** older than ten minutes are pruned every minute by `serve` (any replica; concurrent pruners skip each other's rows).
+- **Minute counters** older than ten minutes are pruned every minute by `serve` (the `maintenance` lease holder; concurrent pruners would skip each other's rows anyway).
 - **Group commit.** Keep `synchronous_commit=on`: every upstream attempt needs a durable reservation. `commit_delay` (with `commit_siblings`) lets concurrent commits share one WAL flush, but only helps when at least `commit_siblings` transactions commit at once. Under the installation lock that never happened. With scoped admission many transactions commit at once; see the [P3 results](#scoped-admission-p3) for the measured effect before changing the defaults (`commit_delay=0`, `commit_siblings=5`). On storage with slow flushes (network disks, synchronous replicas) start at `commit_delay=200`–`1000` µs with `commit_siblings=5` and keep it only if commit latency p99 and throughput improve. The load-test stack exposes both as `OMG_LOADTEST_COMMIT_DELAY` and `OMG_LOADTEST_COMMIT_SIBLINGS`.
 
 ## PgBouncer
@@ -530,6 +566,7 @@ Use transaction pooling with PgBouncer **1.21 or later and `max_prepared_stateme
 - Put the server's SCRAM secrets in `auth_file` (copy `rolpassword` from `pg_authid`), or use `auth_query`. With plaintext passwords in the userlist, PgBouncer authenticated clients against a secret with its own salt and then intermittently failed the server login ("password authentication failed"). `scripts/loadtest.py up` writes the userlist from the server's secrets.
 - Add `ignore_startup_parameters = extra_float_digits`; sqlx sends it at connect time.
 - Run `migrate` directly against PostgreSQL, never through PgBouncer. It takes a session-level advisory lock.
+- LISTEN does not work through transaction pooling: set `GATEWAY_LISTEN_DATABASE_URL` to PostgreSQL directly (one extra session connection per replica; count it in `max_connections`) or to a session-mode pooler database. `NOTIFY` from triggers works through any pool. Without a working listener the caches still follow changes through the 1 s version poll.
 - Everything the gateway does inside transactions works in transaction mode: transaction-scoped advisory locks, `SET LOCAL`, and `SET TRANSACTION ISOLATION LEVEL`.
 - Size `default_pool_size` for the sum of replica pools that are actually busy, not their maximum. With scoped admission, busy server connections ≈ (admissions + settlements per second) × mean transaction time; each replica admits on at most half its pool and settles on three tenths of it.
 

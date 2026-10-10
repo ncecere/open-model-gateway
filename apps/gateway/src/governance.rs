@@ -87,18 +87,29 @@ async fn admission_prefix(
     }
 }
 /// Live authorization of `principal` after [`admission_prefix`]: its key
-/// lineage, or `ModelUnavailable`. Scoped admission reads without row locks
-/// (the shared authority locks exclude concurrent revocation); the global
-/// mode keeps its `FOR SHARE` row locks.
+/// lineage, or `Unauthenticated` when the key is no longer valid (revoked,
+/// disabled, expired, or its user, membership, service account or workspace
+/// no longer active: exactly the conditions under which live authentication
+/// refuses the key), in which case this replica's cached entries of the key
+/// are dropped at once. Model availability is checked separately
+/// (`ModelUnavailable`). Scoped admission reads without row locks (the
+/// shared authority locks exclude concurrent revocation); the global mode
+/// keeps its `FOR SHARE` row locks.
 async fn authorize(
     store: &Store,
     tx: &mut Tx<'_>,
     principal: &crate::auth::Principal,
 ) -> Result<Uuid, InferenceError> {
-    crate::auth::revalidate_admission_with(tx, principal, !scoped(store))
+    match crate::auth::revalidate_admission_with(tx, principal, !scoped(store))
         .await
         .map_err(storage)?
-        .ok_or(InferenceError::ModelUnavailable)
+    {
+        Some(lineage) => Ok(lineage),
+        None => {
+            store.caches.forget_key(principal.key_id);
+            Err(InferenceError::Unauthenticated)
+        }
+    }
 }
 /// Settlement prefix: global, the catalog lock and the installation row;
 /// scoped, nothing (the reservation row lock taken by the next read
@@ -156,7 +167,7 @@ async fn installation_lock(tx: &mut Tx<'_>) -> Result<(), InferenceError> {
         .map_err(storage)?;
     Ok(())
 }
-#[derive(sqlx::FromRow)]
+#[derive(Clone, sqlx::FromRow)]
 struct Price {
     id: Uuid,
     /// Null for pricing v3, whose token rates live in `price_lines`.
@@ -172,6 +183,33 @@ struct Price {
     batch_price_lines: Option<serde_json::Value>,
 }
 const PRICE_COLUMNS: &str = "id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version,cache_pricing,price_lines,max_units,batch_price_lines";
+/// Price versions by (id, deployment): `deployment_prices` rows are
+/// append-only and immutable (0001 trigger; no runtime UPDATE/DELETE), so
+/// entries never need invalidation. Process-wide (ids are random UUIDs).
+static PRICES: std::sync::LazyLock<
+    crate::cache::ImmutableCache<(Uuid, Uuid), std::sync::Arc<Price>>,
+> = std::sync::LazyLock::new(|| crate::cache::ImmutableCache::new("prices", 20_000));
+/// The immutable price version `id` of `deployment` (cached; a missing row is
+/// a storage error, as before).
+async fn price_version(
+    tx: &mut Tx<'_>,
+    id: Uuid,
+    deployment: Uuid,
+) -> Result<Price, InferenceError> {
+    if let Some(price) = PRICES.get(&(id, deployment)) {
+        return Ok(price.as_ref().clone());
+    }
+    let price = sqlx::query_as::<_, Price>(&format!(
+        "SELECT {PRICE_COLUMNS} FROM deployment_prices WHERE id=$1 AND deployment_id=$2"
+    ))
+    .bind(id)
+    .bind(deployment)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(storage)?;
+    PRICES.insert((id, deployment), std::sync::Arc::new(price.clone()));
+    Ok(price)
+}
 impl Price {
     /// Whether this version publishes a batch price list (`batch::PriceTier`).
     fn has_batch_lines(&self) -> bool {
@@ -568,25 +606,37 @@ async fn admit_unobserved(
     // change under the exclusive authority locks of their scope (scoped) or
     // the installation lock (global), both held from here to commit. Bound
     // errors are reported after the checks below, in the former order.
-    let price = if scoped(store) {
+    // Scoped: the latest price id is read with the deployment check below
+    // and its immutable row comes from the price cache (one round trip less).
+    let read_price = if scoped(store) {
         admission_prefix(store, &mut tx, &record.principal).await?;
         timer.phase("locks");
-        latest_price(&mut tx, record.deployment_id).await?
+        None
     } else {
         catalog_lock(&mut tx).await?;
         let price = latest_price(&mut tx, record.deployment_id).await?;
         timer.phase("price");
         installation_lock(&mut tx).await?;
         timer.phase("locks");
-        price
+        Some(price)
     };
-    let bounds = reservation_bounds(price.as_ref(), &workload);
     let lineage = authorize(store, &mut tx, &record.principal).await?;
-    // The deployment check also reads the admission clock (one round trip).
-    let row=sqlx::query(&format!("SELECT d.id,p.provider,d.upstream_model,p.credential_ref,p.endpoint,p.region,m.supported_protocols,clock_timestamp() AS admission_now FROM deployments d JOIN provider_connections p ON p.id=d.provider_connection_id JOIN models m ON m.id=d.model_id WHERE d.id=$2 AND m.public_name=$3 AND workspace_model_allowed($1,m.id) AND d.enabled AND p.enabled AND (NOT EXISTS(SELECT 1 FROM key_model_restrictions WHERE workspace_id=$1 AND governance_key_id=$4) OR EXISTS(SELECT 1 FROM key_model_selections WHERE workspace_id=$1 AND governance_key_id=$4 AND model_id=m.id)){}", catalog_share(store)))
+    // The deployment check also reads the admission clock and the latest
+    // price id (one round trip).
+    let row=sqlx::query(&format!("SELECT d.id,p.provider,d.upstream_model,p.credential_ref,p.endpoint,p.region,m.supported_protocols,clock_timestamp() AS admission_now,(SELECT x.id FROM deployment_prices x WHERE x.deployment_id=d.id ORDER BY x.created_at DESC,x.id DESC LIMIT 1) AS latest_price_id FROM deployments d JOIN provider_connections p ON p.id=d.provider_connection_id JOIN models m ON m.id=d.model_id WHERE d.id=$2 AND m.public_name=$3 AND workspace_model_allowed($1,m.id) AND d.enabled AND p.enabled AND (NOT EXISTS(SELECT 1 FROM key_model_restrictions WHERE workspace_id=$1 AND governance_key_id=$4) OR EXISTS(SELECT 1 FROM key_model_selections WHERE workspace_id=$1 AND governance_key_id=$4 AND model_id=m.id)){}", catalog_share(store)))
         .bind(workspace).bind(record.deployment_id).bind(&record.model).bind(lineage).fetch_optional(&mut *tx).await.map_err(storage)?.ok_or(InferenceError::ModelUnavailable)?;
     let current = <Deployment as sqlx::FromRow<_>>::from_row(&row).map_err(storage)?;
     let database_now: DateTime<Utc> = sqlx::Row::try_get(&row, "admission_now").map_err(storage)?;
+    let price = match read_price {
+        Some(price) => price,
+        None => {
+            match sqlx::Row::try_get::<Option<Uuid>, _>(&row, "latest_price_id").map_err(storage)? {
+                Some(id) => Some(price_version(&mut tx, id, record.deployment_id).await?),
+                None => None,
+            }
+        }
+    };
+    let bounds = reservation_bounds(price.as_ref(), &workload);
     if current.provider != record.provider
         || expected.is_some_and(|e| {
             current.id != e.id
@@ -1114,15 +1164,9 @@ async fn pinned_value(
     let Some(id) = r.price_id else {
         return Ok(unresolved(false));
     };
-    let p = sqlx::query_as::<_, Price>(&format!(
-        "SELECT {PRICE_COLUMNS} FROM deployment_prices WHERE id=$1 AND deployment_id=$2"
-    ))
-    .bind(id)
-    .bind(r.deployment_id)
-    .fetch_one(&mut **tx)
-    .await
-    .map_err(storage)?
-    .tiered(&r.price_tier)?;
+    let p = price_version(tx, id, r.deployment_id)
+        .await?
+        .tiered(&r.price_tier)?;
     // Validate observations and rates before distinguishing monetary overflow.
     // BillingError::Overflow can also mean an invalid, unstoreable token count;
     // that must remain an error rather than being accepted as unknown cost.
@@ -1279,15 +1323,9 @@ async fn pinned_v3_lines(
     let Some(id) = r.price_id else {
         return Ok(None);
     };
-    let p = sqlx::query_as::<_, Price>(&format!(
-        "SELECT {PRICE_COLUMNS} FROM deployment_prices WHERE id=$1 AND deployment_id=$2"
-    ))
-    .bind(id)
-    .bind(r.deployment_id)
-    .fetch_one(&mut **tx)
-    .await
-    .map_err(storage)?
-    .tiered(&r.price_tier)?;
+    let p = price_version(tx, id, r.deployment_id)
+        .await?
+        .tiered(&r.price_tier)?;
     if p.pricing_version != 3 {
         return Ok(None);
     }

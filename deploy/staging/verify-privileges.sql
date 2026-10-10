@@ -121,7 +121,17 @@ DO $$ DECLARE r record; t text; BEGIN
   IF has_column_privilege('gateway_runtime','public.batch_route_waits',t,'UPDATE') THEN RAISE EXCEPTION 'mutable batch demand identity: %',t; END IF;
  END LOOP;
  IF has_table_privilege('gateway_runtime','public.batch_route_waits','TRUNCATE') THEN RAISE EXCEPTION 'batch demand truncatable'; END IF;
- IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units','valid_model_protocols_base','valid_cost_components_base','valid_price_lines_base','valid_upstream_job_id','rate_reserved_tokens','rate_contribution','omg_scope_key','omg_type_key','omg_scope_lock_audit_order','omg_lock_scopes','omg_admission_locks','omg_lock_scope_rows','omg_catalog_lock_mode','omg_scope_lock_exclusive')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
+ IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units','valid_model_protocols_base','valid_cost_components_base','valid_price_lines_base','valid_upstream_job_id','rate_reserved_tokens','rate_contribution','omg_scope_key','omg_type_key','omg_scope_lock_audit_order','omg_lock_scopes','omg_admission_locks','omg_lock_scope_rows','omg_catalog_lock_mode','omg_scope_lock_exclusive','omg_config_bump','omg_lease_acquire','omg_lease_fence','omg_lease_complete','omg_lease_release')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
+ -- Change notifications (0028): seeded topics, forward-only versions, triggers present.
+ IF has_table_privilege('gateway_runtime','public.config_versions','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.config_versions','topic','UPDATE') THEN RAISE EXCEPTION 'configuration topics mutable'; END IF;
+ IF NOT has_table_privilege('gateway_runtime','public.config_versions','SELECT') OR NOT has_column_privilege('gateway_runtime','public.config_versions','version','UPDATE') THEN RAISE EXCEPTION 'configuration versions not maintainable by runtime'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'omg\_config\_%' AND tgenabled='O' AND NOT tgisinternal)<>30
+  OR (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'config\_versions\_%' AND tgenabled='O' AND NOT tgisinternal)<>2 THEN RAISE EXCEPTION 'change notification triggers missing or disabled'; END IF;
+ IF (SELECT array_agg(topic ORDER BY topic) FROM config_versions)<>ARRAY['access','catalog','keys','policy','settings'] THEN RAISE EXCEPTION 'configuration topics changed'; END IF;
+ -- Work leases (0029): seeded names, forward-only epochs, guards present.
+ IF has_table_privilege('gateway_runtime','public.work_leases','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.work_leases','name','UPDATE') THEN RAISE EXCEPTION 'work leases creatable, removable or re-keyable'; END IF;
+ IF NOT has_table_privilege('gateway_runtime','public.work_leases','SELECT') OR NOT has_column_privilege('gateway_runtime','public.work_leases','epoch','UPDATE') THEN RAISE EXCEPTION 'work leases not usable by runtime'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'work\_leases\_%' AND tgenabled='O' AND NOT tgisinternal)<>2 THEN RAISE EXCEPTION 'work lease guards missing or disabled'; END IF;
 END $$;
 BEGIN;
 SET LOCAL ROLE gateway_runtime;
@@ -130,6 +140,7 @@ SELECT lock_installation();
 SELECT id FROM public.users WHERE false FOR UPDATE;
 SELECT model_id FROM public.workspace_model_grants WHERE false FOR SHARE;
 DO $$ DECLARE
+ versions_before jsonb:=(SELECT jsonb_object_agg(topic,version) FROM config_versions);
  u uuid:=gen_random_uuid(); ws uuid:=gen_random_uuid(); personal uuid:=gen_random_uuid();
  k uuid:=gen_random_uuid(); m uuid:=gen_random_uuid(); pc uuid:=gen_random_uuid();
  d uuid:=gen_random_uuid(); price uuid:=gen_random_uuid(); e uuid:=gen_random_uuid(); cat uuid:=gen_random_uuid(); changed uuid;
@@ -538,6 +549,31 @@ BEGIN
   PERFORM s.paused_reason,s.metrics_kv_cache_permille FROM (SELECT 1) one LEFT JOIN deployment_batch_signals s ON s.deployment_id=d;
   PERFORM count(*) FROM batch_lines l WHERE l.job_id=sj AND l.state='running';
   DELETE FROM batch_route_waits WHERE job_id=sj;
+ END;
+ -- Change notifications (0028): this transaction's configuration writes (key
+ -- disable, catalog, entitlement, policy and settings changes) bump each
+ -- topic exactly once, as runtime, when the deferred triggers fire (at commit;
+ -- forced here); versions never move back; topics are fixed.
+ SET CONSTRAINTS ALL IMMEDIATE;
+ IF (SELECT bool_or((versions_before->>topic)::bigint+1<>version) FROM config_versions) THEN RAISE EXCEPTION 'configuration versions not bumped once per transaction'; END IF;
+ BEGIN UPDATE config_versions SET version=0 WHERE topic='keys'; RAISE EXCEPTION 'configuration version rollback allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+ BEGIN UPDATE config_versions SET topic='other' WHERE topic='keys'; RAISE EXCEPTION 'configuration topic re-key allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN INSERT INTO config_versions(topic) VALUES('other'); RAISE EXCEPTION 'configuration topic insert allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN DELETE FROM config_versions; RAISE EXCEPTION 'configuration topic removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN TRUNCATE TABLE config_versions; RAISE EXCEPTION 'configuration topic truncate allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ -- Work leases (0029): election, renewal, fencing, release and takeover as runtime.
+ DECLARE me uuid:=gen_random_uuid(); other uuid:=gen_random_uuid(); term bigint; BEGIN
+  term:=omg_lease_acquire('lifecycle',me,30);
+  IF term IS NULL OR omg_lease_acquire('lifecycle',other,30) IS NOT NULL OR omg_lease_acquire('lifecycle',me,30)<>term THEN RAISE EXCEPTION 'work lease election failed'; END IF;
+  PERFORM omg_lease_fence('lifecycle',me,term);
+  BEGIN PERFORM omg_lease_fence('lifecycle',other,term); RAISE EXCEPTION 'foreign lease term fenced in'; EXCEPTION WHEN object_in_use THEN NULL; END;
+  IF NOT omg_lease_complete('lifecycle',me,term) OR omg_lease_complete('lifecycle',other,term) OR NOT omg_lease_release('lifecycle',me,term) THEN RAISE EXCEPTION 'work lease completion or release failed'; END IF;
+  IF omg_lease_acquire('lifecycle',other,30) IS DISTINCT FROM term+1 THEN RAISE EXCEPTION 'lease takeover did not advance the epoch'; END IF;
+  BEGIN PERFORM omg_lease_fence('lifecycle',me,term); RAISE EXCEPTION 'stale lease term fenced in'; EXCEPTION WHEN object_in_use THEN NULL; END;
+  BEGIN UPDATE work_leases SET epoch=0 WHERE name='lifecycle'; RAISE EXCEPTION 'lease epoch rollback allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE work_leases SET name='other' WHERE name='lifecycle'; RAISE EXCEPTION 'lease re-key allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN INSERT INTO work_leases(name) VALUES('probe'); RAISE EXCEPTION 'lease creation allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN DELETE FROM work_leases; RAISE EXCEPTION 'lease removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  END;
 END $$;
 ROLLBACK;

@@ -521,7 +521,7 @@ pub(crate) mod db {
         op.await.unwrap();
         assert_eq!(
             admit(&f.store, &f.start(), &request(), 30).await,
-            Err(InferenceError::ModelUnavailable)
+            Err(InferenceError::Unauthenticated)
         );
         sqlx::query("UPDATE users SET disabled_at=NULL WHERE id=$1")
             .bind(f.owner)
@@ -552,7 +552,7 @@ pub(crate) mod db {
                 .unwrap();
             assert_eq!(
                 admit(&f.store, &f.start(), &request(), 30).await,
-                Err(InferenceError::ModelUnavailable)
+                Err(InferenceError::Unauthenticated)
             );
             sqlx::query(restore)
                 .bind(id)
@@ -569,7 +569,7 @@ pub(crate) mod db {
         start.principal = f.team;
         assert_eq!(
             admit(&f.store, &start, &request(), 30).await,
-            Err(InferenceError::ModelUnavailable)
+            Err(InferenceError::Unauthenticated)
         );
         admit(&f.store, &f.start(), &request(), 30).await.unwrap();
     }
@@ -628,7 +628,7 @@ pub(crate) mod db {
             .unwrap();
         assert_eq!(
             admit(&f.store, &start, &request(), 30).await,
-            Err(InferenceError::ModelUnavailable)
+            Err(InferenceError::Unauthenticated)
         );
         sqlx::query("UPDATE service_accounts SET disabled_at=NULL WHERE id=$1")
             .bind(account)

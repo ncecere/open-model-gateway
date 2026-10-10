@@ -641,6 +641,65 @@ async fn budget_exhaustion_sends_an_error_event_and_closes(pool: PgPool) {
     assert!(RESPONSE + hold(second, 1000) > BUDGET);
 }
 
+/// A key revoked during a session: the next response's live re-check refuses
+/// it as authentication would (`authentication_error`, never
+/// `model_not_found`), with an error event and a policy close; nothing more
+/// is forwarded.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn a_key_revoked_mid_session_closes_with_an_authentication_error(pool: PgPool) {
+    let u = usage(10, 4, 20, 5, 10, 40);
+    let g = gateway(pool, Init::Safe, vec![Reply::Done(u)], limits()).await;
+    let mut client = g.connect().await;
+    opened(&mut client).await;
+    speak(&mut client).await;
+    respond(&mut client).await;
+    sqlx::query("UPDATE api_keys SET revoked_at=now() WHERE workspace_id=$1")
+        .bind(g.keys.team_workspace_id)
+        .execute(&g.pool)
+        .await
+        .unwrap();
+    send(
+        &mut client,
+        json!({"type":"response.create","event_id":"second"}),
+    )
+    .await;
+    let error = until(&mut client, "error").await;
+    assert_eq!(
+        (
+            error["error"]["type"].as_str(),
+            error["error"]["code"].as_str(),
+            error["error"]["message"].as_str()
+        ),
+        (
+            Some("authentication_error"),
+            Some("authentication_error"),
+            Some("Invalid or missing API key")
+        )
+    );
+    let close = next(&mut client).await;
+    assert_eq!(
+        (
+            close["type"].as_str(),
+            close["code"].as_u64(),
+            close["reason"].as_str()
+        ),
+        (Some("close"), Some(1008), Some("authentication_error"))
+    );
+    assert_eq!(g.mock.shared.received_of("response.create").len(), 1);
+    let row = g.finished().await;
+    assert_eq!(
+        (row["state"].as_str(), row["error_code"].as_str()),
+        (Some("failed"), Some("authentication_error"))
+    );
+    // A new session with the revoked key: the handshake's 401.
+    let mut request = g.request("company/smart");
+    request.headers_mut().insert(
+        "authorization",
+        format!("Bearer {}", g.key()).parse().unwrap(),
+    );
+    assert_eq!(g.refused(request).await, 401);
+}
+
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn unsupported_events_are_refused_with_an_error_and_never_forwarded(pool: PgPool) {
     let g = gateway(pool, Init::Safe, vec![], limits()).await;
