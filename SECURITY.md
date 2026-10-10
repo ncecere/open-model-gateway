@@ -20,8 +20,8 @@ Open Model Gateway is pre-1.0 development software. Security fixes are made on `
 
 | Version | Supported |
 |---|---|
-| 0.3.x (latest patch) | Yes |
-| 0.2.x, 0.1.x and earlier builds | No |
+| 0.4.x (latest patch) | Yes |
+| 0.3.x, 0.2.x, 0.1.x and earlier builds | No |
 
 Release images are signed from v0.3.0. Verify an image before you deploy it, as the [release notes](docs/releases/v0.3.0.md#verifying-the-images) describe.
 

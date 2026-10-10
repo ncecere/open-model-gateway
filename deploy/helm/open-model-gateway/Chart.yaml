@@ -3,7 +3,7 @@ name: open-model-gateway
 description: Single-enterprise model gateway (Rust API + optional SPA) with an explicit migration Job, optional CloudNativePG database/pooler, and a loadtest profile for P8 scale certification.
 type: application
 version: 0.4.0
-appVersion: "0.3.2"
+appVersion: "0.4.0"
 kubeVersion: ">=1.29.0-0"
 home: https://github.com/ncecere/open-model-gateway
 sources:
@@ -16,3 +16,7 @@ maintainers:
   - name: ncecere
 annotations:
   artifacthub.io/license: Apache-2.0
+  # Beta: validated with helm lint/template, kubeconform and a live CNPG
+  # server-side dry run, but not yet on sustained production load (see
+  # docs/kubernetes.md banner and docs/releases/v0.4.0.md).
+  artifacthub.io/prerelease: "true"

@@ -11,9 +11,12 @@ image:
   # Promote by digest (docs/staging.md "Image CI and registry publication").
   # repository+digest together form the pulled reference; `tag` is used only
   # when `digest` is empty (for local/dev iteration, never for a real rollout).
+  # v0.4.0's digest is unknown until CI publishes it; pin `digest` to the
+  # verified digest from docs/releases/v0.4.0.md#verifying-the-images before
+  # a real rollout.
   repository: ghcr.io/ncecere/open-model-gateway
   digest: ""
-  tag: ""
+  tag: v0.4.0
   pullPolicy: IfNotPresent
   pullSecrets: []
 

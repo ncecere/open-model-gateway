@@ -7,6 +7,13 @@ explicit migration step and runtime-role boundary as [staging](staging.md) and
 (CNPG) and an ingress controller. It is not a production-readiness claim by itself; combine it with
 the acceptance in [verification](verification.md) and your own cluster hardening.
 
+> **Beta until validated on a production-like cluster.** As of v0.4.0 this chart has passed `helm
+> lint`/`helm template` across four profiles, `kubeconform` against Kubernetes 1.36 schemas, a real
+> `kubectl apply --dry-run=server` against a live CloudNativePG 1.30.1 operator, and a `kind` smoke
+> test (install, migration, readiness, an idempotent upgrade, pod deletion under the PDB, primary-pod
+> recovery). It has not been run under sustained production load or on a non-homelab cluster. Treat
+> field names as stable but review every rendered manifest before a real rollout.
+
 ## Prerequisites
 
 - Kubernetes 1.29+ (validated against 1.36 schemas and a live CNPG 1.30.1 webhook; see
