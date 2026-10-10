@@ -1,6 +1,8 @@
 //! Effective access by layer and "why can't I use this model?" reasons.
-//! Read-only; same visibility as the workspace/key policy GET. Installation
-//! usage never contributes reasons (no headroom disclosure).
+//! Read-only; same visibility as the workspace/key policy GET. There are no
+//! installation-wide limits (0026), so `layers` starts at the workspace-type
+//! default. `platform` remains a reason layer for model-level facts (a model
+//! turned off, no enabled route); it has no limits and no layer row.
 use super::*;
 use crate::governance::{BudgetPeriod, budget_consumption};
 use chrono::{DateTime, Utc};
@@ -78,7 +80,6 @@ async fn access(
         None => None,
     };
     let l = governance::layers_with(&mut tx, ws, a.disabled).await?;
-    let installation = governance::installation_limits(&mut tx).await?;
     let k = match lineage {
         Some(lineage) => Some(governance::key_limits(&mut tx, ws, lineage).await?),
         None => None,
@@ -203,9 +204,7 @@ async fn access(
         }
         c
     };
-    let installation_visible = a.platform_reader;
     let layers = vec![
-        json!({"layer":"platform","source":"installation","applies":true,"visible":installation_visible,"limits":installation_visible.then(||rates(&installation)),"budgets":installation_visible.then(||governance::json_budgets(&installation.budgets)),"catalogs":null,"models":summary(0)}),
         json!({"layer":"type_default","source":"type_default","applies":!l.override_present,"catalogs_apply":!catalog_override,"limits":rates(&l.type_default),"budgets":governance::json_budgets(&l.type_default.budgets),"catalogs":type_catalogs,"models":summary(1)}),
         json!({"layer":"workspace_override","source":"workspace_override","applies":l.override_present,"catalogs_apply":catalog_override,"limits":l.override_present.then(||rates(&l.platform)),"budgets":l.override_present.then(||governance::json_budgets(&l.platform.budgets)),"catalogs":catalog_override.then_some(override_catalogs),"models":summary(2)}),
         json!({"layer":"workspace","source":"local","applies":true,"limits":rates(&l.local),"budgets":governance::json_budgets(&l.local.budgets),"catalogs":null,"selections":{"catalog":counts.0,"direct":counts.1},"models":summary(3)}),

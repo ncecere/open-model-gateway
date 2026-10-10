@@ -9,7 +9,7 @@ import { useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { BellRing, CheckCheck, History, Plus } from "lucide-react";
 import { api, platformPath, type Provider, type Session, type Workspace } from "../lib/api";
-import { conditionText, draftOf, emailLabels, eventsPath, kindHints, kindLabels, kindsFor, layerLabels, layersFor, newDraft, notificationsPath, recipientsText, resolutionLabels, ruleBody, sourceText, ruleErrors, rulePath, rulesPath, unknownCostNote, whereText, type AlertEvent, type AlertKind, type AlertRule, type AlertScope, type BudgetLayer, type Notification, type RuleDraft, type RuleList } from "../lib/alerts";
+import { conditionText, draftOf, emailLabels, eventsPath, kindHints, kindLabels, kindsFor, layerLabels, layersFor, newDraft, notificationsPath, recipientsText, resolutionLabels, ruleBody, sourceText, ruleErrors, rulePath, rulesPath, spendPeriodLabels, unknownCostNote, whereText, type AlertEvent, type AlertKind, type AlertRule, type AlertScope, type BudgetLayer, type Notification, type RuleDraft, type RuleList, type SpendPeriod } from "../lib/alerts";
 import { permissions, type DashboardSearch } from "../lib/permissions";
 import { Button, ErrorNotice, FormField, Heading, Input, NativeSelect, Stack, Textarea, useAction, useApi, useChoices } from "../components/ui";
 import { ResourcePage } from "../components/resource-page";
@@ -147,6 +147,11 @@ export function AlertRulePage({ session, scope, workspace, id }: { session: Sess
         {form.kind === "budget_threshold" && <>
           <Wide><CheckboxGroup legend="Budgets" error={shown.layers} orientation="horizontal" value={form.layers} disabled={busy} onValueChange={next => set("layers", next as BudgetLayer[])}>{layersFor(scope).map(l => <Checkbox key={l} value={l} label={layerLabels[l]} />)}</CheckboxGroup></Wide>
           {field("thresholds", "Alert at (%)", { description: "Up to five, such as 50, 80, 100.", inputMode: "numeric" })}
+        </>}
+        {form.kind === "spend_threshold" && <>
+          <FormField label="Period"><NativeSelect value={form.spendPeriod} disabled={busy} onChange={ev => set("spendPeriod", ev.target.value as SpendPeriod)}>{(Object.keys(spendPeriodLabels) as SpendPeriod[]).map(p => <option key={p} value={p}>{spendPeriodLabels[p]}{p === "lifetime" ? "" : " (UTC)"}</option>)}</NativeSelect></FormField>
+          {field("spendAmount", "Amount (USD)", { description: "Spent plus on hold, all workspaces.", inputMode: "decimal" })}
+          {field("thresholds", "Alert at (%)", { description: "Up to five, such as 80, 100.", inputMode: "numeric" })}
         </>}
         {form.kind === "spend_spike" && <>
           {field("factor", "Last hour vs. 7-day hourly average", { description: "A multiple, such as 3 (3×).", inputMode: "decimal" })}

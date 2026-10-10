@@ -13,8 +13,8 @@
  * Money is an integer micro-USD string, converted from dollars with BigInt only.
  *
  * "Storage" (`storage_bytes`, file store quota) exists on the workspace layers
- * only (type default, platform override, workspace local); installation and
- * key layers have none. It is typed with a unit ("5 GB", "500 MB"; a plain
+ * only (type default, platform override, workspace local); key layers have
+ * none. It is typed with a unit ("5 GB", "500 MB"; a plain
  * number is GB, 1 GB = 2^30 bytes) and follows the same tighten-only rules.
  */
 import { ApiError } from "./api";

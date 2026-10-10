@@ -199,7 +199,7 @@ async fn unknown_cache_bound_denies_every_monetary_scope_before_any_execution(po
     let ws = Some(f.principal.workspace_id);
     let key = Some(f.principal.key_id);
     for (layer, kind, w, k, period) in [
-        ("installation", None, None, None, "lifetime"),
+        ("override", None, ws, None, "lifetime"),
         ("override", None, ws, None, "day"),
         ("local", None, ws, None, "week"),
         ("key", None, ws, key, "month"),

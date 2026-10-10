@@ -346,11 +346,11 @@ export const protocolProfiles: Record<ModelProtocol, string[]> = {
 // ---------------------------------------------------------------------------
 // Admin overview checklist (contract §4). Done states come only from server counts.
 // ---------------------------------------------------------------------------
-export type SetupStepId = "connection" | "model" | "pricing" | "offer" | "defaults" | "access" | "budget";
+export type SetupStepId = "connection" | "model" | "pricing" | "offer" | "defaults" | "access";
 /** `optional` steps are offered but never block "Setup complete". */
 export type SetupStepState = { id: SetupStepId; title: string; description: string; done: boolean; optional?: boolean };
-/** Required steps first; an installation budget is the optional last step (known only when the overview reports budgets). */
-export function setupSteps(setup: PlatformOverviewData["setup"], installationBudgets?: unknown[] | null): SetupStepState[] {
+/** Every step is required; there is no installation-wide budget step (installation limits were removed). */
+export function setupSteps(setup: PlatformOverviewData["setup"]): SetupStepState[] {
   const types = [["personal", "Personal"], ["team", "Team"], ["project", "Project"]] as const;
   const missing = types.filter(([k]) => !setup.type_defaults[k]).map(([, label]) => label);
   const unpriced = Math.max(0, setup.enabled_routes - setup.priced_enabled_routes);
@@ -361,6 +361,5 @@ export function setupSteps(setup: PlatformOverviewData["setup"], installationBud
     { id: "offer", title: "Offer a model in a catalog", description: "Workspaces use models from their available catalogs, or by direct assignment.", done: setup.ready_models > 0 },
     { id: "defaults", title: "Choose default catalogs for each workspace type", description: missing.length ? `No default catalog yet for: ${missing.join(", ")}. New workspaces of that type start with no models.` : "Personal, Team and Project workspaces each get models from their default catalogs.", done: missing.length === 0 },
     { id: "access", title: "Give people access", description: "Map an SSO group or add users. Signing in alone doesn't give access.", done: setup.oidc_mappings > 0 || setup.entitled_users > 1 },
-    ...(installationBudgets === undefined ? [] : [{ id: "budget" as const, title: "Set an installation-wide budget (optional)", description: "A spending ceiling across every workspace, on top of team and project limits.", done: !!installationBudgets?.length, optional: true }]),
   ];
 }

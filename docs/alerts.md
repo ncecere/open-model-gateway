@@ -16,16 +16,17 @@ All money is exact integer micro-USD. Spend is never estimated from floats, and 
 
 | Kind | Fires when | Scopes |
 |---|---|---|
-| `budget_threshold` | Spend in a budget's current window reaches one of up to five percentages (default 50/80/100) of an applicable stacked budget. Layers: `installation`, `type` (type default, only while no platform override exists), `override`, `local` (workspace) and `key` (each key lineage with an active key). | Installation (all layers; Team/Project workspaces, never personal ones); workspace (all but `installation`) |
+| `budget_threshold` | Spend in a budget's current window reaches one of up to five percentages (default 50/80/100) of an applicable stacked budget. Layers: `type` (type default, only while no platform override exists), `override`, `local` (workspace) and `key` (each key lineage with an active key). There is no `installation` layer (installation-wide limits were removed; `400 reason:"installation_limits_removed"`). | Installation (Team/Project workspaces, never personal ones); workspace |
+| `spend_threshold` | **Installation spend.** Installation-wide spend in the current UTC window of `spend_period` (`day`, `week`, `month` or `lifetime`) reaches one of up to five percentages of `spend_amount_microusd`, a reference amount you choose. It is a notification only: nothing is ever denied (there is no installation budget). Spend is the sum over every workspace, personal ones included, as totals. | Installation only |
 | `spend_spike` | Settled spend admitted in the last hour ≥ factor × the trailing 7-day hourly average (the 168 hours before the last hour), and ≥ a minimum amount. The factor is an integer percent (`300` = 3×, 110–100000). | Installation (all workspaces, as totals); workspace |
 | `error_rate` | Attempts started in the window (5–1440 min): `failed / finished ≥ rate%`, with at least `min_requests` finished. | Installation; workspace |
 | `provider_failing` | For each enabled connection (or one chosen connection): the last N relevant attempts in the window all failed upstream, or the upstream error rate over the window crosses its threshold with enough volume. Upstream failures are `upstream_unavailable`, `timeout_error`, `invalid_upstream_response` and `provider_configuration_error`. Successes count; request-specific rejections and cancellations neither count nor reset. | Installation only |
 | `batch_failed` | One incident per batch that ended `failed` or `expired` in the last 24 hours (summary names a budget stop or expiry; details carry the batch id, mode and counts). It resolves 24 hours after the batch ended. See [batches](batches.md#monitoring). | Installation (Team/Project batches, never personal ones); workspace |
 | `batch_stalled` | One incident per unfinished batch whose last progress (a finished line, or new provider counts) is older than `window_minutes` (5–1440). It resolves on progress or when the batch ends. A gateway-run batch legitimately waiting for its routes (time window, live traffic, server load, concurrency, its turn) is not stalled; the clock starts when the wait ends ([scheduling](batches.md#scheduling-on-self-hosted-models)). Unreadable server metrics do not count as a wait. | Installation (Team/Project batches); workspace |
 
-Budget spend is settled actual cost plus in-flight pending holds, as admission counts them. Reservations in state `unknown`, and pending holds with no bounded amount, are not added to spend: they are reported as `unknown_cost_requests`, and the UI says the spend may be higher. Spend spikes use settled cost only and flag unknown cost the same way. Zero (deny-all) budgets never alert.
+Budget and installation spend is settled actual cost plus in-flight pending holds, as admission counts them. Reservations in state `unknown`, and pending holds with no bounded amount, are not added to spend: they are reported as `unknown_cost_requests`, and the UI says the spend may be higher. Spend spikes use settled cost only and flag unknown cost the same way. Zero (deny-all) budgets never alert.
 
-A budget alert fires at the highest threshold reached. When spend later reaches a higher one, the open incident is marked `superseded` and a new one fires (one email). When the window rolls over, the budget is raised or the key is revoked, the incident resolves (`cleared`).
+A budget or installation spend alert fires at the highest threshold reached. When spend later reaches a higher one, the open incident is marked `superseded` and a new one fires (one email). When the window rolls over, the budget (or reference amount) is raised or the key is revoked, the incident resolves (`cleared`).
 
 ## Evaluation
 
@@ -33,7 +34,7 @@ A budget alert fires at the highest threshold reached. When spend later reaches 
 
 - **Idempotent.** At most one open incident per rule (or built-in alert) and subject, enforced by a partial unique index. Repeated evaluation never fires twice; an incident resolves once (a trigger refuses re-resolution, edits and deletion).
 - **Bounded.** One replica evaluates at a time: a short claim transaction takes a transaction advisory lock with `try` (others skip that tick), then each rule is evaluated and reconciled in its own short transaction that waits for the same lock, so no snapshot spans the whole pass and vacuum is not held back. Statements time out after 10 seconds. A failing rule neither resolves its incidents nor affects other rules. At most 2000 rules and 5000 budget conditions per rule are considered.
-- **Budget rules read maintained totals** (`budget_totals`, migrations 0015/0025), so their cost does not grow with history, including `lifetime` windows. Spend is settled cost plus pending holds; unknown-cost requests are counted separately, exactly as the former scans reported. Spike and error-rate rules still read their own (bounded) windows.
+- **Budget rules read maintained totals** (`budget_totals`, migrations 0015/0025), so their cost does not grow with history, including `lifetime` windows. Installation spend rules sum the workspace rows of one window (one indexed range per rule; no installation-scope row exists since 0026). Spend is settled cost plus pending holds; unknown-cost requests are counted separately, exactly as the former scans reported. Spike and error-rate rules still read their own (bounded) windows.
 - **No admission impact.** The evaluator reads with the runtime role and never takes the installation lock.
 - Turning a rule off, deleting it (soft delete; its history stays) or disabling its workspace closes its open incidents as `rule_disabled`, without email.
 
@@ -47,6 +48,15 @@ A budget alert fires at the highest threshold reached. When spend later reaches 
 
 Incidents store a server-generated summary and typed facts (layer, period, amounts as strings, counts, window). They never contain prompt or response data, key names or ids, owner identities or request details. Platform rules never evaluate personal workspaces one by one (installation totals include them, as reports already do). Email bodies, recipients and relay replies are never logged.
 
+## Upgrade from installation budget alerts (0026)
+
+Migration `0026_remove_installation_limits.sql` removed the installation budget, so rules that watched the `installation` budget layer were converted, idempotently and with an audit event (`alert_rule.installation_layer_removed`) per rule:
+
+- A rule that watched only the installation layer became an installation spend rule in place (same id, name, thresholds, recipients and history) for its shortest former budget period, with that budget's amount as the reference. Each further period became a new spend rule named "<rule> (installation <period> spend)".
+- A rule that also watched other layers keeps them; its installation part became new spend rules as above.
+- A rule that watched only the installation layer while no installation budget existed could never fire; it was soft-deleted (history kept).
+- Open installation-budget incidents continue when the same rule keeps watching the same period; others were resolved as `superseded`, without a "resolved" email.
+
 ## Storage and grants
 
-`alert_rules` (soft-deleted; scope, workspace and kind fixed at creation), `alert_events` (incidents; resolve once), `alert_deliveries` (counts and a category per transition) and `alert_reads` (insert-only read marks). The runtime role has no DELETE or TRUNCATE on any of them; see `deploy/staging/runtime-grants.sql` and the probes in `verify-privileges.sql`. Migration 0011 also adds the `governance_reservations(workspace_id, admitted_at)` index used by budget alerts.
+`alert_rules` (soft-deleted; scope, workspace and kind fixed at creation; `spend_period`/`spend_amount_microusd` for installation spend rules, 0026), `alert_events` (incidents; resolve once), `alert_deliveries` (counts and a category per transition) and `alert_reads` (insert-only read marks). The runtime role has no DELETE or TRUNCATE on any of them; see `deploy/staging/runtime-grants.sql` and the probes in `verify-privileges.sql`. Migration 0011 also adds the `governance_reservations(workspace_id, admitted_at)` index used by budget alerts.

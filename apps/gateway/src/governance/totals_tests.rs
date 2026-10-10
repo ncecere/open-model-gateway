@@ -27,21 +27,22 @@ fn failed(id: Uuid) -> ExecutionFinish {
     }
 }
 
-/// Every scope of the fixture: installation, both workspaces and key lineages.
-struct Scopes(Vec<(Option<Uuid>, Option<Uuid>)>);
+/// Every scope of the fixture: both workspaces and key lineages (there is no
+/// installation scope since 0026).
+struct Scopes(Vec<(Uuid, Option<Uuid>)>);
 impl Scopes {
     async fn of(pool: &PgPool) -> Self {
-        let mut scopes = vec![(None, None)];
+        let mut scopes = Vec::new();
         let rows: Vec<(Uuid, Uuid)> =
             sqlx::query_as("SELECT DISTINCT workspace_id,governance_key_id FROM api_keys")
                 .fetch_all(pool)
                 .await
                 .unwrap();
         for (ws, lineage) in rows {
-            if !scopes.contains(&(Some(ws), None)) {
-                scopes.push((Some(ws), None));
+            if !scopes.contains(&(ws, None)) {
+                scopes.push((ws, None));
             }
-            scopes.push((Some(ws), Some(lineage)));
+            scopes.push((ws, Some(lineage)));
         }
         Self(scopes)
     }
@@ -63,7 +64,7 @@ async fn assert_consistent(pool: &PgPool, context: &str) {
                 .await
                 .unwrap()[0];
             let (start, end) = period.window(now);
-            let (used, unresolved) = scan_consumption(&mut tx, ws, lineage, start, end)
+            let (used, unresolved) = scan_consumption(&mut tx, Some(ws), lineage, start, end)
                 .await
                 .unwrap();
             assert_eq!(
@@ -72,6 +73,21 @@ async fn assert_consistent(pool: &PgPool, context: &str) {
                 "{context}: {ws:?}/{lineage:?} {period:?}"
             );
         }
+    }
+    // Installation-wide spend (alerts, the reservation gauge) is the sum of
+    // the workspace rows of a window, exactly the installation-wide scan.
+    for period in BudgetPeriod::ALL {
+        let (start, end) = period.window(now);
+        let summed: (String, bool) = sqlx::query_as("SELECT coalesce(sum(settled_microusd+held_microusd),0)::text,coalesce(sum(unresolved+unreserved_executions),0)>0 FROM budget_totals WHERE scope_kind='workspace' AND period=$1 AND period_start=$2")
+            .bind(period.as_str())
+            .bind(period.bucket_start(now))
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        let scanned = scan_consumption(&mut tx, None, None, start, end)
+            .await
+            .unwrap();
+        assert_eq!(summed, scanned, "{context}: installation {period:?}");
     }
     tx.rollback().await.unwrap();
 }
@@ -94,7 +110,12 @@ async fn random_interleavings_keep_totals_equal_to_the_scan(pool: PgPool) {
         },
     ];
     // Budgets large enough that most admissions pass, small enough to deny sometimes.
-    set_test_budget(&pool, "installation", None, None, None, "day", Some(20_000)).await;
+    let kind: String = sqlx::query_scalar("SELECT kind FROM workspaces WHERE id=$1")
+        .bind(f.principal.workspace_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    set_test_budget(&pool, "type", Some(&kind), None, None, "day", Some(20_000)).await;
     set_test_budget(
         &pool,
         "local",
@@ -205,7 +226,7 @@ async fn random_interleavings_keep_totals_equal_to_the_scan(pool: PgPool) {
     }
     assert!(denied > 0, "the interleaving should exercise denials");
     // Unknown cost retains holds in the totals.
-    let held: String = sqlx::query_scalar("SELECT held_microusd::text FROM budget_totals WHERE scope_kind='installation' AND period='lifetime'").fetch_one(&pool).await.unwrap();
+    let held: String = sqlx::query_scalar("SELECT sum(held_microusd)::text FROM budget_totals WHERE scope_kind='workspace' AND period='lifetime'").fetch_one(&pool).await.unwrap();
     let expected: String = sqlx::query_scalar("SELECT coalesce(sum(held_microusd),0)::text FROM governance_reservations WHERE state<>'settled'").fetch_one(&pool).await.unwrap();
     assert_eq!(held, expected);
 }
@@ -352,7 +373,15 @@ async fn migration_backfills_existing_history_exactly(pool: PgPool) {
     crate::store::MIGRATOR.run(&pool).await.unwrap();
     assert_consistent(&pool, "backfill").await;
     // Sums beyond i64 stay exact integers.
-    let settled: String = sqlx::query_scalar("SELECT settled_microusd::text FROM budget_totals WHERE scope_kind='installation' AND period='lifetime'").fetch_one(&pool).await.unwrap();
+    let settled: String = sqlx::query_scalar("SELECT sum(settled_microusd)::text FROM budget_totals WHERE scope_kind='workspace' AND period='lifetime'").fetch_one(&pool).await.unwrap();
+    // 0026 removed the installation scope rows the 0015 backfill created.
+    let installation: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM budget_totals WHERE scope_kind NOT IN ('workspace','key')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(installation, 0);
     let scanned: String = sqlx::query_scalar(
         "SELECT sum(actual_microusd)::text FROM governance_reservations WHERE state='settled'",
     )

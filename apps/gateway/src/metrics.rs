@@ -122,7 +122,6 @@ pub(crate) fn admission_outcome(result: &Result<(), InferenceError>) -> &'static
 fn denial_scope(error: InferenceError) -> Option<&'static str> {
     use crate::inference::error::LimitScope;
     let scope = |s: LimitScope| match s {
-        LimitScope::Installation => "installation",
         LimitScope::Workspace => "workspace",
         LimitScope::ApiKey => "api_key",
     };
@@ -712,14 +711,13 @@ impl Metrics {
             }
             *refreshed = Some(Instant::now());
         }
-        // The installation lifetime totals row (0015) counts every pending and
-        // unknown reservation exactly: O(1), not a scan of history.
+        // The workspace lifetime totals rows (0015) count every pending and
+        // unknown reservation exactly (each belongs to one workspace): one row
+        // per workspace through the 0026 window index, not a scan of history.
         let counted = tokio::time::timeout(
             Duration::from_secs(2),
-            sqlx::query_as::<_, (i64, i64)>(
-                "SELECT coalesce(t.pending,0),coalesce(t.unknown,0) FROM (SELECT) one LEFT JOIN budget_totals t ON t.scope_kind='installation' AND t.scope_id='00000000-0000-0000-0000-000000000000' AND t.period='lifetime' AND t.period_start='epoch'",
-            )
-            .fetch_one(pool),
+            sqlx::query_as::<_, (i64, i64)>(crate::governance::totals::RESERVATION_COUNTS)
+                .fetch_one(pool),
         )
         .await;
         match counted {
@@ -916,7 +914,7 @@ mod tests {
         assert_eq!(admission_outcome(&Err(InferenceError::Storage)), "error");
         for denial in [
             InferenceError::Busy,
-            InferenceError::BudgetExceeded(LimitScope::Installation),
+            InferenceError::BudgetExceeded(LimitScope::Workspace),
             InferenceError::UnresolvedUsage(LimitScope::Workspace),
             InferenceError::TokenReservationExceedsLimit(LimitScope::ApiKey),
             InferenceError::JobLimitExceeded(LimitScope::Workspace),

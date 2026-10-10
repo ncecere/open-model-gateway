@@ -1,15 +1,16 @@
 /*
  * Admin › Settings › Defaults & limits (formerly Admin › Limits; /admin/limits
  * redirects here): Grounded/ResourcePage pill tabs, one scope per tab (URL
- * `?tab=installation|personal|team|project`): the installation ceiling and the
- * live Personal/Team/Project type defaults. Each tab shows that scope's limits
+ * `?tab=personal|team|project`): the live Personal/Team/Project type
+ * defaults. There are no installation-wide limits (removed in migration 0026;
+ * an old `?tab=installation` link opens the first tab). Each tab shows that scope's limits
  * table (components/scope-limits.tsx): three rate rows and stacked budgets
  * (one per period: daily, weekly, monthly, lifetime; each enforced over its
  * own window, with its reset rule in plain words). Each tab saves or discards
  * on its own (PUT replaces that scope's rates and full budget set); switching
  * tabs with unsaved edits asks first, and leaving the page is guarded too.
  * Blank means no limit at that scope. Money is exact integer micro-USD via
- * BigInt. The installation ceiling is an additional shared limit, not a default.
+ * BigInt.
  *
  * Provenance: layout adapted from Grounded web/src/pages/admin/limits/
  * {platform,fields}.tsx (read-only reference).
@@ -29,14 +30,13 @@ import { toast } from "../../components/ui/toast/toast";
 import s from "../shared.module.css";
 
 export const limitScopes = [
-  { id: "installation", label: "Installation ceiling", description: "Shared by all workspaces together, on top of everything else.", path: `${platformPath}/installation/policy` },
   { id: "personal", label: "Personal default", description: "Each personal workspace, unless overridden.", path: `${platformPath}/workspace-types/personal/policy` },
   { id: "team", label: "Team default", description: "Each team, unless overridden.", path: `${platformPath}/workspace-types/team/policy` },
   { id: "project", label: "Project default", description: "Each project, unless overridden.", path: `${platformPath}/workspace-types/project/policy` },
 ] as const;
 export type LimitScopeId = typeof limitScopes[number]["id"];
-/** The tab in the URL, or the first (installation) for anything else. */
-export const limitScopeOf = (tab: string | undefined): LimitScopeId => limitScopes.find(scope => scope.id === tab)?.id ?? "installation";
+/** The tab in the URL, or the first (personal) for anything else. */
+export const limitScopeOf = (tab: string | undefined): LimitScopeId => limitScopes.find(scope => scope.id === tab)?.id ?? "personal";
 
 export function PlatformLimits({ session, tab, onTabChange }: { session: Session; /** `?tab=` (routed); local state otherwise. */ tab?: string; onTabChange?: (tab: string) => void }) {
   const [localTab, setLocalTab] = useState<string>();
@@ -49,7 +49,7 @@ export function PlatformLimits({ session, tab, onTabChange }: { session: Session
   const changeTab = (next: string) => { if (next === current) return; if (dirty) { setPending(next); return; } go(next); };
   const confirmSwitch = () => { if (!pending) return; switching.current = true; setDirty(false); setPending(undefined); go(pending); };
   return <>
-    <ResourcePage title="Defaults & limits" description="Every limit that applies is enforced; the lowest wins."
+    <ResourcePage title="Defaults & limits" description="Limits per workspace. Every limit that applies is enforced; the lowest wins."
       tab={current} onTabChange={changeTab}
       tabs={limitScopes.map(scope => ({ value: scope.id, label: scope.label, content: <ScopeTab key={scope.id} scope={scope} writable={session.capabilities.platform_write} onDirtyChange={setDirty} /> }))} />
     <DiscardChangesDialog open={pending !== undefined} onOpenChange={open => { if (!open) setPending(undefined); }}
@@ -74,7 +74,7 @@ function ScopeTab({ scope, writable, onDirtyChange }: { scope: typeof limitScope
     if (!form || invalid || busy) return;
     setBusy(true); setError(undefined);
     try {
-      await api(scope.path, { method: "PUT", body: limitsBody(draftLimits(form), scope.id !== "installation") });
+      await api(scope.path, { method: "PUT", body: limitsBody(draftLimits(form), true) });
       await client.invalidateQueries({ queryKey: ["api"] });
       setEdits(undefined);
       toast.success("Limits saved", scope.label);
@@ -86,7 +86,7 @@ function ScopeTab({ scope, writable, onDirtyChange }: { scope: typeof limitScope
   return <Stack gap={6}>
     {error !== undefined && <ErrorNotice error={error} />}
     <Card title={scope.label} description={scope.description} flush>
-      <LimitsTable caption={`${scope.label} limits`} scopeLabel={scope.label} draft={form} onChange={setEdits} editing={writable} busy={busy} errors={errors} emptyText="No limit" placeholder={() => "No limit"} storage={scope.id !== "installation"} />
+      <LimitsTable caption={`${scope.label} limits`} scopeLabel={scope.label} draft={form} onChange={setEdits} editing={writable} busy={busy} errors={errors} emptyText="No limit" placeholder={() => "No limit"} storage />
     </Card>
     <p className={s.note}>Workspace overrides and workspace caps are on each team's and project's page. Raising a limit or changing a budget never resets spending.</p>
     {writable && <StickySaveBar open={changed} message={invalid ? "Not saved: fix the highlighted limits" : `Unsaved changes: ${scope.label}`}><Button variant="secondary" disabled={busy} onClick={() => { setEdits(undefined); setError(undefined); }}>Discard</Button><Button loading={busy} disabled={invalid} onClick={() => void save()}>Save limits</Button></StickySaveBar>}

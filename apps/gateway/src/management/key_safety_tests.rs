@@ -70,9 +70,17 @@ async fn key_safety_findings_follow_effective_limits_and_list_visibility(pool: P
         .await
         .unwrap();
     assert_eq!(codes(&get(&f, &f.owner, &path).await.1, ok), ["no_limits"]);
-    // An installation budget applies to every key.
-    crate::governance::set_test_budget(&pool, "installation", None, None, None, "month", Some(9))
-        .await;
+    // A platform override budget applies to every key of the workspace.
+    crate::governance::set_test_budget(
+        &pool,
+        "override",
+        None,
+        Some(f.team),
+        None,
+        "month",
+        Some(9),
+    )
+    .await;
     let (_, v) = get(&f, &f.owner, &path).await;
     assert!(codes(&v, ok).is_empty() && codes(&v, mk).is_empty(), "{v}");
     assert_eq!(v["summary"]["flagged"], 0);

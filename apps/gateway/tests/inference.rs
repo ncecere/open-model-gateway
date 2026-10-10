@@ -291,7 +291,7 @@ async fn database_budget_admission_and_versioned_costs_reach_real_http(pool: PgP
     // Explicit v1 exercises legacy two-rate accounting; absent billing remains unknown.
     sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version) VALUES($1,$2,1000000,2000000,100,10,1)").bind(price).bind(deployment).execute(&pool).await.unwrap();
     sqlx::query(
-        "INSERT INTO policy_budgets(layer,period,amount_microusd) VALUES('installation','month',125)",
+        "INSERT INTO policy_budgets(layer,kind,period,amount_microusd) VALUES('type','personal','month',125)",
     )
     .execute(&pool)
     .await
@@ -328,10 +328,12 @@ async fn database_budget_admission_and_versioned_costs_reach_real_http(pool: PgP
         StatusCode::TOO_MANY_REQUESTS
     );
     assert_eq!(adapter.calls.load(Ordering::SeqCst), 1);
-    sqlx::query("UPDATE policy_budgets SET amount_microusd=1000 WHERE layer='installation'")
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE policy_budgets SET amount_microusd=1000 WHERE layer='type' AND kind='personal'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version) VALUES($1,$2,2000000,3000000,100,10,1)").bind(Uuid::new_v4()).bind(deployment).execute(&pool).await.unwrap();
     assert_eq!(
         app.oneshot(request(&keys.personal_key.token, body))
@@ -353,7 +355,7 @@ async fn independent_engines_share_database_request_limits(pool: PgPool) {
     let (app, keys, adapter, store) = fixture(&pool, false).await;
     // Both engines share this store's clock: one UTC minute for both racers.
     store.freeze_admission_clock().await.unwrap();
-    sqlx::query("INSERT INTO installation_policy(singleton,requests_per_minute) VALUES(true,1)")
+    sqlx::query("INSERT INTO workspace_type_policies(kind,requests_per_minute) VALUES('personal',1) ON CONFLICT(kind) DO UPDATE SET requests_per_minute=1")
         .execute(&pool)
         .await
         .unwrap();
@@ -363,7 +365,7 @@ async fn independent_engines_share_database_request_limits(pool: PgPool) {
     let other = http::router_with_engine(store, None, second);
     let (a, b) = tokio::join!(
         app.oneshot(request(&keys.personal_key.token, chat(false))),
-        other.oneshot(request(&keys.team_key.token, chat(false)))
+        other.oneshot(request(&keys.personal_key.token, chat(false)))
     );
     let statuses = [a.unwrap().status(), b.unwrap().status()];
     assert!(statuses.contains(&StatusCode::OK));
@@ -654,7 +656,7 @@ async fn deployment_resolution_cannot_cross_workspaces(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
-async fn platform_ceiling_is_shared_by_team_project_and_personal_requests(pool: PgPool) {
+async fn type_limits_are_per_workspace_and_local_caps_compose(pool: PgPool) {
     let (app, keys, adapter, store) = fixture(&pool, false).await;
     // Per-minute ceilings: every request must be admitted in one UTC minute.
     store.freeze_admission_clock().await.unwrap();
@@ -676,7 +678,9 @@ async fn platform_ceiling_is_shared_by_team_project_and_personal_requests(pool: 
         .bind(project_key.id).bind(project).bind(user).bind(project_key.digest.as_slice()).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO workspace_model_grants(workspace_id,model_id,source) SELECT $1,id,'direct' FROM models")
         .bind(project).execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO installation_policy(singleton,requests_per_minute) VALUES(true,2)")
+    // There is no installation-wide ceiling (0026): each workspace has its own
+    // type-default allowance.
+    sqlx::query("INSERT INTO workspace_type_policies(kind,requests_per_minute) VALUES('personal',2),('team',2),('project',2) ON CONFLICT(kind) DO UPDATE SET requests_per_minute=EXCLUDED.requests_per_minute")
         .execute(&pool)
         .await
         .unwrap();
@@ -691,8 +695,9 @@ async fn platform_ceiling_is_shared_by_team_project_and_personal_requests(pool: 
         (&keys.team_key.token, StatusCode::OK),
         (&keys.team_key.token, StatusCode::TOO_MANY_REQUESTS),
         (&project_key.token, StatusCode::OK),
+        (&project_key.token, StatusCode::OK),
         (&project_key.token, StatusCode::TOO_MANY_REQUESTS),
-        (&keys.personal_key.token, StatusCode::TOO_MANY_REQUESTS),
+        (&keys.personal_key.token, StatusCode::OK),
     ] {
         let response = app
             .clone()
@@ -701,20 +706,24 @@ async fn platform_ceiling_is_shared_by_team_project_and_personal_requests(pool: 
             .unwrap();
         assert_eq!(response.status(), expected);
     }
-    assert_eq!(adapter.calls.load(Ordering::SeqCst), 2);
-    // Removing a local restriction does not remove the separately-owned parent ceiling.
+    assert_eq!(adapter.calls.load(Ordering::SeqCst), 4);
+    // Removing a local restriction does not remove the separately-owned
+    // parent default: the team gets its second request, then the default binds.
     sqlx::query("DELETE FROM workspace_local_policies")
         .execute(&pool)
         .await
         .unwrap();
-    assert_eq!(
-        app.oneshot(request(&keys.team_key.token, chat(false)))
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::TOO_MANY_REQUESTS
-    );
-    assert_eq!(adapter.calls.load(Ordering::SeqCst), 2);
+    for expected in [StatusCode::OK, StatusCode::TOO_MANY_REQUESTS] {
+        assert_eq!(
+            app.clone()
+                .oneshot(request(&keys.team_key.token, chat(false)))
+                .await
+                .unwrap()
+                .status(),
+            expected
+        );
+    }
+    assert_eq!(adapter.calls.load(Ordering::SeqCst), 5);
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
@@ -728,7 +737,7 @@ async fn concurrent_budget_holds_are_atomic_and_price_is_pinned_before_dispatch(
     sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version) VALUES($1,$2,1000000,2000000,100,10,1)")
         .bind(first_price).bind(deployment).execute(&pool).await.unwrap();
     sqlx::query(
-        "INSERT INTO policy_budgets(layer,period,amount_microusd) VALUES('installation','month',125)",
+        "INSERT INTO policy_budgets(layer,kind,period,amount_microusd) VALUES('type','personal','month',125)",
     )
     .execute(&pool)
     .await
@@ -745,10 +754,11 @@ async fn concurrent_budget_holds_are_atomic_and_price_is_pinned_before_dispatch(
     )
     .await
     .unwrap();
+    // A second request of the same workspace sees the first hold.
     let mut second = chat(false);
     second["max_completion_tokens"] = 10.into();
     assert_eq!(
-        app.oneshot(request(&keys.team_key.token, second))
+        app.oneshot(request(&keys.personal_key.token, second))
             .await
             .unwrap()
             .status(),
@@ -795,7 +805,7 @@ async fn enabling_budget_after_unpriced_activity_does_not_invent_zero_cost(pool:
     sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version) SELECT $1,id,1000000,2000000,100,10,1 FROM deployments")
         .bind(Uuid::new_v4()).execute(&pool).await.unwrap();
     sqlx::query(
-        "INSERT INTO policy_budgets(layer,period,amount_microusd) VALUES('installation','month',1000)",
+        "INSERT INTO policy_budgets(layer,kind,period,amount_microusd) VALUES('type','personal','month',1000)",
     )
     .execute(&pool)
     .await
@@ -865,7 +875,7 @@ async fn embeddings_batch_dimensions_and_input_only_v2_budget_reach_http(pool: P
         .bind(price).bind(deployment).bind(cache).execute(&pool).await.unwrap();
     sqlx::query(
         // v2 reserves conservative independent input category ceilings: 450.
-        "INSERT INTO policy_budgets(layer,period,amount_microusd) VALUES('installation','month',455)",
+        "INSERT INTO policy_budgets(layer,kind,period,amount_microusd) VALUES('type','personal','month',455)",
     )
     .execute(&pool)
     .await
@@ -1144,7 +1154,7 @@ async fn rerank_reaches_http_with_v3_meter_settlement(pool: PgPool) {
         .bind(Uuid::new_v4()).bind(deployment).bind(lines).execute(&pool).await.unwrap();
     // Hold: 1000 input tokens + one search unit.
     sqlx::query(
-        "INSERT INTO policy_budgets(layer,period,amount_microusd) VALUES('installation','month',3000)",
+        "INSERT INTO policy_budgets(layer,kind,period,amount_microusd) VALUES('type','personal','month',3000)",
     )
     .execute(&pool)
     .await
@@ -1219,7 +1229,7 @@ async fn unbounded_v3_price_is_a_distinct_non_retryable_error(pool: PgPool) {
     sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_token_limit,output_token_limit,pricing_version,price_lines,max_units) VALUES($1,$2,1000,0,3,$3,'{}')")
         .bind(price).bind(deployment).bind(&lines).execute(&pool).await.unwrap();
     sqlx::query(
-        "INSERT INTO policy_budgets(layer,period,amount_microusd) VALUES('installation','month',1000000000)",
+        "INSERT INTO policy_budgets(layer,kind,period,amount_microusd) VALUES('type','personal','month',1000000000)",
     )
     .execute(&pool)
     .await

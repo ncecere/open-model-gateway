@@ -41,7 +41,7 @@ enum Command {
         /// Approved local endpoint of the mock upstream (GATEWAY_LOCAL_UPSTREAMS).
         #[arg(long, default_value = "http://mock-upstream:8000/v1")]
         endpoint: String,
-        /// Skip the installation rate policy and monthly budgets.
+        /// Skip the workspace-type and key rate limits and the type monthly budgets.
         #[arg(long)]
         no_policies: bool,
         /// Settled historical attempts to pre-seed.

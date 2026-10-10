@@ -21,7 +21,7 @@ import { BudgetMeters, LimitsTable } from "./scope-limits";
 import { FilterToolbar } from "./templates/filter-toolbar";
 import { StickySaveBar } from "./templates/sticky-save-bar";
 import { TypeTabs } from "./templates/type-tabs";
-import { InstallationBudgets, UsageOverviewTab } from "../pages/usage/overview";
+import { UsageOverviewTab } from "../pages/usage/overview";
 import { UsageExploreTab } from "../pages/usage/explore";
 import { Requests, requestView, requestViewSearch } from "../pages/requests";
 import { RequestDetailPage, isShortRequestId, shortIdLookup } from "../pages/request-detail";
@@ -231,14 +231,11 @@ describe("D-9 request page not found", () => {
   });
 });
 
-describe("D-10 installation budget", () => {
-  it("says when there is no installation-wide budget, on Costs and the Admin overview", () => {
-    expect(markup(<InstallationBudgets budgets={[]} />)).toContain("No installation-wide budget");
-    expect(markup(<InstallationBudgets budgets={null} />)).toBe("");
-    const overview = { setup: { connections: 1, enabled_connections: 1, models: 1, ready_models: 1, enabled_routes: 1, priced_enabled_routes: 1, catalogs: 1, type_defaults: { personal: 1, team: 1, project: 1 }, entitled_users: 1, oidc_mappings: 1 }, glance: { entitled_users: 1, teams: 1, projects: 0, ready_models: 1, attempts_7d: "1", known_cost_7d_microusd: "1" }, installation_budgets: [] };
+describe("D-10 no installation budget", () => {
+  it("shows no installation budget card or setup step on the Admin overview (installation limits were removed)", () => {
+    const overview = { setup: { connections: 1, enabled_connections: 1, models: 1, ready_models: 1, enabled_routes: 1, priced_enabled_routes: 1, catalogs: 1, type_defaults: { personal: 1, team: 1, project: 1 }, entitled_users: 1, oidc_mappings: 1 }, glance: { entitled_users: 1, teams: 1, projects: 0, ready_models: 1, attempts_7d: "1", known_cost_7d_microusd: "1" } };
     const html = markup(<PlatformOverview session={{ ...session, capabilities: { platform_read: true, platform_write: false, create_workspace: false } }} />, [["/api/v1/platform/overview", overview]]);
-    // The Admin overview shows the card only when a budget exists ("none" is not worth a card).
-    expect(html).not.toContain("No installation-wide budget"); expect(html).not.toContain("Installation budgets");
+    expect(html).not.toContain("installation-wide budget"); expect(html).not.toContain("Installation budgets");
     // New vocabulary (polish): no "Attempts" or "unresolved charges".
     expect(html).not.toContain("Attempts, last 7 days"); expect(html).not.toContain("unresolved charges"); expect(html).toContain("Spend this month");
   });

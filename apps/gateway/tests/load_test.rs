@@ -329,8 +329,8 @@ async fn run(options: PgConnectOptions) {
          UPDATE models SET supported_protocols=ARRAY['chat_completions'];
          INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version)
            SELECT gen_random_uuid(),id,1000000,2000000,100,10,1 FROM deployments;
-         INSERT INTO installation_policy(singleton,requests_per_minute,tokens_per_minute,concurrent_requests) VALUES(true,1000000,1000000000,100000);
-         INSERT INTO policy_budgets(layer,period,amount_microusd) VALUES('installation','month',1000000000000);",
+         INSERT INTO workspace_type_policies(kind,requests_per_minute,tokens_per_minute,concurrent_requests) SELECT k,1000000,1000000000,100000 FROM unnest(ARRAY['personal','team','project']) k ON CONFLICT(kind) DO UPDATE SET requests_per_minute=EXCLUDED.requests_per_minute,tokens_per_minute=EXCLUDED.tokens_per_minute,concurrent_requests=EXCLUDED.concurrent_requests;
+         INSERT INTO policy_budgets(layer,kind,period,amount_microusd) SELECT 'type',k,'month',1000000000000 FROM unnest(ARRAY['personal','team','project']) k;",
     )
     .execute(&pool)
     .await

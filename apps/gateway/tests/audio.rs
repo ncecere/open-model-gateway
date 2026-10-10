@@ -289,7 +289,7 @@ async fn transcription_reaches_http_with_per_minute_settlement(pool: PgPool) {
     )
     .await;
     sqlx::query(
-        "INSERT INTO policy_budgets(layer,period,amount_microusd) VALUES('installation','month',200)",
+        "INSERT INTO policy_budgets(layer,kind,period,amount_microusd) VALUES('type','personal','month',200)",
     )
     .execute(&pool)
     .await
@@ -347,7 +347,7 @@ async fn transcription_reaches_http_with_per_minute_settlement(pool: PgPool) {
     .await;
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(json_of(&body)["error"]["code"], "budget_exceeded");
-    sqlx::query("DELETE FROM policy_budgets WHERE layer='installation'")
+    sqlx::query("DELETE FROM policy_budgets WHERE layer='type' AND kind='personal'")
         .execute(&pool)
         .await
         .unwrap();

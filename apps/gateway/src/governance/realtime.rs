@@ -145,14 +145,6 @@ fn rank(scope: LimitScope) -> u8 {
     match scope {
         LimitScope::ApiKey => 3,
         LimitScope::Workspace => 2,
-        LimitScope::Installation => 1,
-    }
-}
-fn limit_scope(workspace: Option<Uuid>, key: Option<Uuid>) -> LimitScope {
-    match (workspace, key) {
-        (None, _) => LimitScope::Installation,
-        (Some(_), None) => LimitScope::Workspace,
-        (Some(_), Some(_)) => LimitScope::ApiKey,
     }
 }
 
@@ -235,7 +227,7 @@ pub async fn reserve_window(
         let Some(limit) = p.tokens_per_minute else {
             continue;
         };
-        let scope = limit_scope(p.workspace_id, p.api_key_id);
+        let scope = LimitScope::of(p.api_key_id);
         let Some((window_tokens, tokens)) = tokens else {
             return Err(InferenceError::Configuration);
         };
@@ -247,8 +239,8 @@ pub async fn reserve_window(
             continue;
         }
         // Async jobs are exempt from per-minute limits (0018) and never count here.
-        let fits: bool = sqlx::query_scalar("SELECT count(*) FILTER(WHERE reserved_tokens IS NULL)=0 AND coalesce(sum(reserved_tokens),0)+$4::bigint<=$5 FROM governance_reservations r WHERE minute_start=$3 AND NOT EXISTS(SELECT 1 FROM inference_executions e WHERE e.id=r.execution_id AND e.workload_kind IN('videos','batches')) AND ($1::uuid IS NULL OR workspace_id=$1) AND ($2::uuid IS NULL OR api_key_id IN(SELECT id FROM api_keys WHERE workspace_id=$1 AND governance_key_id=$2))")
-            .bind(p.workspace_id).bind(p.api_key_id).bind(s.minute_start).bind(tokens).bind(limit)
+        let fits: bool = sqlx::query_scalar("SELECT count(*) FILTER(WHERE reserved_tokens IS NULL)=0 AND coalesce(sum(reserved_tokens),0)+$4::bigint<=$5 FROM governance_reservations r WHERE minute_start=$3 AND NOT EXISTS(SELECT 1 FROM inference_executions e WHERE e.id=r.execution_id AND e.workload_kind IN('videos','batches')) AND workspace_id=$1 AND ($2::uuid IS NULL OR api_key_id IN(SELECT id FROM api_keys WHERE workspace_id=$1 AND governance_key_id=$2))")
+            .bind(s.workspace_id).bind(p.api_key_id).bind(s.minute_start).bind(tokens).bind(limit)
             .fetch_one(&mut *tx).await.map_err(storage)?;
         if !fits {
             deny((0, InferenceError::Busy));
@@ -264,21 +256,15 @@ pub async fn reserve_window(
     let mut windows = Vec::with_capacity(budgets.len());
     for b in &budgets {
         let period = BudgetPeriod::parse(&b.period).ok_or(InferenceError::Storage)?;
-        windows.push((totals::Scope::of(b.workspace_id, b.api_key_id), period));
+        windows.push((totals::Scope::of(s.workspace_id, b.api_key_id), period));
     }
     let consumption = totals::read(&mut tx, &windows, s.admitted_at)
         .await
         .map_err(storage)?;
     for (b, c) in budgets.iter().zip(consumption).filter(|_| grows) {
-        let scope = limit_scope(b.workspace_id, b.api_key_id);
+        let scope = LimitScope::of(b.api_key_id);
         if c.unresolved {
-            deny((
-                rank(scope),
-                match scope {
-                    LimitScope::Installation => InferenceError::BudgetExceeded(scope),
-                    _ => InferenceError::UnresolvedUsage(scope),
-                },
-            ));
+            deny((rank(scope), InferenceError::UnresolvedUsage(scope)));
         } else if s.unbounded_cost
             || s.held_microusd.is_none()
             || hold.is_none_or(|h| c.used_microusd + i128::from(h) > i128::from(b.amount_microusd))

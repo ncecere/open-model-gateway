@@ -25,7 +25,7 @@ Admission stores the center ID and exact name/code snapshot on each execution. R
 
 ## Budgets are admission controls
 
-Platform defaults apply independently by workspace kind. Platform workspace overrides replace type defaults; local/key restrictions only tighten. An optional installation-wide monthly budget provides a **shared additional ceiling**, not allocated capacity per workspace. Installation rate/concurrency ceilings can also apply.
+Platform defaults apply independently by workspace kind. Platform workspace overrides replace type defaults; local/key restrictions only tighten. There are no installation-wide limits (removed in migration 0026): every limit belongs to a workspace or a key. An installation spend [alert](alerts.md) reports total spend against an amount you choose, without blocking anything.
 
 Absent child caps do not remove a parent, and specified caps do not reserve a slice. Allowance changes/rotation never reset prior consumption. Ordinary users do not see shared installation headroom that could reveal others' private consumption.
 

@@ -98,15 +98,19 @@ INSERT INTO deployment_prices(id, deployment_id, input_microusd_per_million, out
 INSERT INTO workspace_model_grants(workspace_id, model_id, source)
   SELECT id, pg_temp.seed_id('model'), 'direct' FROM workspaces;
 
--- Generous but real limits, so admission evaluates the rate layer and the
--- installation and workspace-type monthly budgets exactly as production does.
+-- Generous but real limits, so admission evaluates the rate counters and the
+-- budget totals exactly as production does. There is no installation-wide
+-- layer (0026): limits live on the workspace-type defaults and every key
+-- lineage, budgets on the workspace-type defaults.
 DO $$ BEGIN
   IF current_setting('omg_seed.policies') = 'on' THEN
-    INSERT INTO installation_policy(singleton, requests_per_minute, tokens_per_minute, concurrent_requests)
-      VALUES (true, 10000000, 100000000000, 1000000)
-      ON CONFLICT (singleton) DO UPDATE SET requests_per_minute = EXCLUDED.requests_per_minute,
+    INSERT INTO workspace_type_policies(kind, requests_per_minute, tokens_per_minute, concurrent_requests)
+      SELECT kind, 10000000, 100000000000, 1000000 FROM unnest(ARRAY['personal', 'team', 'project']) kind
+      ON CONFLICT (kind) DO UPDATE SET requests_per_minute = EXCLUDED.requests_per_minute,
         tokens_per_minute = EXCLUDED.tokens_per_minute, concurrent_requests = EXCLUDED.concurrent_requests;
-    INSERT INTO policy_budgets(layer, period, amount_microusd) VALUES ('installation', 'month', 1000000000000000);
+    INSERT INTO key_policies(workspace_id, governance_key_id, requests_per_minute, tokens_per_minute, concurrent_requests)
+      SELECT workspace_id, id, 5000000, 50000000000, 500000 FROM api_keys WHERE id = governance_key_id
+      ON CONFLICT DO NOTHING;
     INSERT INTO policy_budgets(layer, kind, period, amount_microusd)
       SELECT 'type', kind, 'month', 100000000000 FROM unnest(ARRAY['personal', 'team', 'project']) kind;
   END IF;

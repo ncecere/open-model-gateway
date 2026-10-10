@@ -5,8 +5,8 @@
  * reset rule. Columns: the inherited value, this scope's value (inline input)
  * and the effective result. Budget rows are added and removed in place.
  *
- * `LimitsTable` is the table alone (also used by Admin › Limits for the
- * installation ceiling and type defaults). `ScopeLimits` loads a policy and
+ * `LimitsTable` is the table alone (also used by Admin › Settings › Defaults
+ * & limits for the type defaults). `ScopeLimits` loads a policy and
  * saves it, in three modes:
  *
  * - "replacement": the platform override of one Team/Project. Choose the live
@@ -161,7 +161,7 @@ export function ReplacementLimitsDialog({ workspaceId, name, onClose }: { worksp
     finally { setBusy(false); }
   }
   return <><Dialog open size="lg" title={`Set custom limits · ${name}`} hideClose={busy} onOpenChange={open => { if (!open && !busy) onClose(); }}
-    description="Replaces the type defaults for this workspace only. A blank field means no limit here (it doesn't fall back to the default). Workspace caps, key limits, installation limits and spending so far still apply."
+    description="Replaces the type defaults for this workspace only. A blank field means no limit here (it doesn't fall back to the default). Workspace caps, key limits and spending so far still apply."
     footer={<><Button variant="secondary" disabled={busy} onClick={onClose}>Cancel</Button><Button type="submit" form={formId} loading={busy} disabled={!form || invalid}>Save custom limits</Button></>}>
     <form id={formId} noValidate aria-busy={busy} onSubmit={event => { event.preventDefault(); void save(); }}>
       {query.isPending ? <p role="status">Loading limits…</p> : query.isError ? <ErrorNotice error={query.error} retry={() => void query.refetch()} /> : !form || !errors ? <ErrorNotice error={new Error("Limit sources are unavailable from this gateway.")} /> : <Stack gap={4}>
@@ -209,7 +209,7 @@ export function ScopeLimits({ path, mode, writable, kind = "team", scopeLabel, r
   const valid = picked === "defaults" ? undefined : draftLimitsValid(form, errors, mode === "replacement" ? noLimits : stored);
   const draftLayer = picked === "defaults" ? typeDefault : valid!.limits;
   const inherited = mode === "replacement" ? typeDefault : mode === "local" ? platform : composeLimits(platform, local);
-  // Live preview; installation-wide ceilings may additionally apply and are listed under Effective access.
+  // Live preview of every layer that applies (there are no installation-wide limits).
   const effective = !draftLayer ? undefined : mode === "replacement" ? composeLimits(draftLayer, local) : mode === "local" ? composeLimits(platform, draftLayer) : composeLimits(platform, local, draftLayer);
   const scopeName = scopeLabel ?? (mode === "replacement" ? `This ${lower}` : mode === "key" ? "This key" : "This workspace");
   const reset = () => { setDraft(undefined); setChoice(undefined); setError(undefined); setRejected(undefined); };
@@ -247,7 +247,7 @@ export function ScopeLimits({ path, mode, writable, kind = "team", scopeLabel, r
     </Card>}
     {/* The key page shows every layer's budget as rings from the key's stats (one card, not two). */}
     {mode !== "key" && <BudgetMeters windows={data.budgets ?? []} kind={kind} mode={data.mode} />}
-    {mode !== "key" && <p className={s.note}>Installation-wide limits may also apply. Raising a limit never resets spending.</p>}
+    {mode !== "key" && <p className={s.note}>Raising a limit never resets spending.</p>}
     {writable && <><StickySaveBar open={dirty} message={invalid ? "Not saved: fix the highlighted limits" : rejected ? "Not saved: see the highlighted limit" : mode === "replacement" && picked === "defaults" ? `Unsaved: use the ${noun} defaults` : mode === "replacement" && !replaced ? `Unsaved: create an override for this ${lower}` : "Unsaved changes"}><Button variant="secondary" disabled={busy} onClick={reset}>Discard</Button><Button loading={busy} disabled={invalid} onClick={() => void save()}>Save limits</Button></StickySaveBar><NavigationGuard dirty={dirty && !busy} /></>}
   </Stack>;
 }

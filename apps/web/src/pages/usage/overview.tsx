@@ -12,7 +12,7 @@ import { cssPercent, formatShare, shareBasisPoints } from "../../components/temp
  */
 import { useId, type ReactElement, type ReactNode } from "react";
 import { DetailTime } from "../../components/templates/when";
-import { wsPath, platformPath, type InstallationBudget, type Workspace } from "../../lib/api";
+import { wsPath, platformPath, type Workspace } from "../../lib/api";
 import { formatMicroUsd, formatUsd } from "../../lib/governance";
 import { Money } from "../../components/templates/money";
 import type { DashboardSearch } from "../../lib/permissions";
@@ -68,7 +68,7 @@ export function UsageOverviewTab({ workspace, ctx, period, nav, workspaceFilter,
         <StatTile label="Tokens" value={t.tokens.value == null ? null : `${unknownTokens ? "At least " : ""}${formatCount(t.tokens.value)}`} hint={unknownTokens ? `${countLabel(t.tokens.unknown_token_attempts, "request")} didn't report tokens` : t.tokens.input_tokens != null && t.tokens.output_tokens != null ? `${formatCount(t.tokens.input_tokens)} in · ${formatCount(t.tokens.output_tokens)} out` : undefined} series={series("tokens", t.tokens)} formatSeriesValue={labels("tokens", t.tokens)} delta={tileDelta(t.tokens.value, t.tokens.previous, "neutral", period.days)} render={chart("tokens")} />
       </StatTileGrid>
     </Stack>
-    {workspace ? <WorkspaceBudgetRow workspace={workspace} /> : <InstallationBudgetRow budgets={o.installation_budgets} />}
+    {workspace && <WorkspaceBudgetRow workspace={workspace} />}
     {idle ? <Card><EmptyState title={filtered ? "No requests match these filters" : "No requests in this period"} titleAs="h2" description={filtered ? "Change or clear the filters to see more." : workspace ? `Requests made with ${workspace.kind === "personal" || !workspace.capabilities.view_all_activity ? "your keys" : `${workspace.name}'s keys`} appear here.` : "Requests made in any workspace appear here."} /></Card> : <>
       {chartDays >= 2 && <DailyChart overview={o} metric={metric} onMetric={m => nav.navigate({ metric: m === "spend" ? undefined : m })} />}
       <div className={u.grid}>
@@ -146,28 +146,4 @@ function WorkspaceBudgetRow({ workspace }: { workspace: Workspace }) {
     {windows.map(w => <UsageBar key={`${w.layer}-${w.span}`} size="sm" label={`${layerNames[w.layer]} ${spanNames[w.span]} budget`} showLabel used={w.used_microusd} limit={w.amount} period={w.span}
       description={`${w.unresolved_usage ? "At least this much: some costs aren't known yet. " : ""}${resetsAt(w.window_end)}`} />)}
   </BudgetRow>;
-}
-/** Installation budgets (platform scope; not narrowed by filters). None configured: nothing (Admin › Limits sets them). */
-function InstallationBudgetRow({ budgets }: { budgets: InstallationBudget[] | null | undefined }) {
-  if (!budgets?.length) return null;
-  const order: BudgetSpan[] = ["day", "week", "month", "lifetime"], sorted = [...budgets].sort((a, b) => order.indexOf(a.period) - order.indexOf(b.period));
-  return <BudgetRow description="Installation budgets are shared by every workspace and not narrowed by filters. Used is spent plus on hold in each budget's current UTC window; every budget is enforced.">
-    {sorted.map(b => <UsageBar key={b.period} size="sm" label={`Installation ${spanNames[b.period]} budget${b.exhausted ? " (used up)" : ""}`} showLabel used={b.used_microusd} limit={b.amount_microusd} period={b.period}
-      description={`${b.unresolved_usage ? "At least this much: some costs aren't known yet. " : ""}Spent ${formatUsd(b.settled_microusd)} · on hold ${formatUsd(b.held_microusd)} · ${resetsAt(b.window_end, true)}`} />)}
-  </BudgetRow>;
-}
-
-/**
- * Installation budgets card (Admin › Overview): each period's amount, used (settled plus on hold, as admission counts
- * it), and both parts. A lower bound when some costs aren't known yet.
- */
-export function InstallationBudgets({ budgets }: { budgets: InstallationBudget[] | null | undefined }) {
-  // null/absent: not reported (workspace scope or an older gateway). An empty list is a real answer: none is set.
-  if (!budgets) return null;
-  if (!budgets.length) return <Card title="Installation budgets"><p className={u.note}>No installation-wide budget. Workspace budgets and type defaults still apply; Admin › Limits can add one shared by every workspace.</p></Card>;
-  const order: BudgetSpan[] = ["day", "week", "month", "lifetime"], sorted = [...budgets].sort((a, b) => order.indexOf(a.period) - order.indexOf(b.period));
-  return <Card title="Installation budgets" description="Shared by every workspace. Used is spent plus on hold in each budget's current UTC window; every budget is enforced. Not narrowed by filters.">
-    <div className={u.budgets}>{sorted.map(b => <UsageBar key={b.period} label={`Installation ${spanNames[b.period]} budget${b.exhausted ? " (used up)" : ""}`} showLabel used={b.used_microusd} limit={b.amount_microusd} period={b.period}
-      description={`${b.unresolved_usage ? "At least this much: some costs aren't known yet. " : ""}Spent ${formatUsd(b.settled_microusd)} · on hold ${formatUsd(b.held_microusd)} · ${resetsAt(b.window_end, true)}`} />)}</div>
-  </Card>;
 }

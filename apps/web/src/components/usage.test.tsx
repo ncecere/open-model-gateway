@@ -80,8 +80,8 @@ describe("Usage & costs overview", () => {
     // Two days: the chart with Spend / Requests / Tokens only.
     const chart = markup(<UsageOverviewTab workspace={team} ctx={usageContext(team)} period={period} nav={nav()} />, [[`/api/v1/workspaces/team/usage/overview?${q}`, overview(null)]]);
     expect(chart).toContain("Daily spend"); expect(chart).toContain("Chart measure"); expect(chart).not.toContain(">Cache hit<"); expect(chart).not.toContain(">$/1M<");
-    // Admin: no installation budget configured means no card at all.
-    const admin = markup(<UsageOverviewTab ctx={usageContext()} period={period} nav={nav({ page: "platform-costs" })} />, [[`/api/v1/platform/usage/overview?${q}`, { ...overview([]), installation_budgets: [] }]]);
+    // Admin: there is no installation budget (removed), so no budget row at all.
+    const admin = markup(<UsageOverviewTab ctx={usageContext()} period={period} nav={nav({ page: "platform-costs" })} />, [[`/api/v1/platform/usage/overview?${q}`, overview([])]]);
     expect(admin).not.toContain("Installation budgets"); expect(admin).not.toContain("No installation-wide budget"); expect(admin).not.toContain("Budgets");
   });
   it("orders the page: header, pill tabs, one filter row (Period + More filters), then the tab; no separate period block", () => {
@@ -237,12 +237,10 @@ describe("Usage & costs routing", () => {
   });
   it("keeps Admin › Costs on platform totals when narrowing to a foreign personal workspace", async () => {
     const user = userEvent.setup(), foreign = "00000000-0000-0000-0000-000000000099";
-    const fetch = serve(admin, p => p.startsWith("/api/v1/platform/usage/explore?") ? { ...explore, group_by: "workspace", rows: [{ group: { id: foreign, name: "Personal" }, then: null, value: "5", share: "1", held_microusd: "0", unresolved_attempts: "0" }], series: [] } : p.startsWith("/api/v1/platform/usage/overview?") ? { ...overview([]), installation_budgets: [{ period: "month", amount_microusd: "5000000", used_microusd: "1250000", settled_microusd: "1000000", held_microusd: "250000", unresolved_usage: true, exhausted: false, window_start: "2026-10-01T00:00:00Z", window_end: "2026-11-01T00:00:00Z" }] } : undefined);
+    const fetch = serve(admin, p => p.startsWith("/api/v1/platform/usage/explore?") ? { ...explore, group_by: "workspace", rows: [{ group: { id: foreign, name: "Personal" }, then: null, value: "5", share: "1", held_microusd: "0", unresolved_attempts: "0" }], series: [] } : p.startsWith("/api/v1/platform/usage/overview?") ? overview([]) : undefined);
     const { router, client } = await mount("/admin/costs");
     await screen.findByRole("heading", { name: "Usage & costs" });
-    await screen.findByText("Installation monthly budget");
-    expect(screen.getByText(/Spent \$1\.00 · on hold \$0\.25 · resets Nov 1, 2026/)).toBeTruthy();
-    expect(screen.getByText(/At least this much/)).toBeTruthy();
+    expect(screen.queryByText(/Installation .* budget/)).toBeNull();
     const select = await screen.findByRole("combobox", { name: /Workspace/ });
     await waitFor(() => expect(within(select).getByRole("option", { name: "Personal" })).toBeTruthy());
     await user.selectOptions(select, foreign);

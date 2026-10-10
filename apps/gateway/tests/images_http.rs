@@ -170,7 +170,7 @@ async fn images_reach_http_with_v3_per_image_and_token_settlement(pool: PgPool) 
         .bind(Uuid::new_v4()).bind(deployment).bind(lines).execute(&pool).await.unwrap();
     // Hold: 1000 × $2/M + 4000 × $8/M + 2 × $0.011 (highest variant) = 56,000.
     sqlx::query(
-        "INSERT INTO policy_budgets(layer,period,amount_microusd) VALUES('installation','month',56000)",
+        "INSERT INTO policy_budgets(layer,kind,period,amount_microusd) VALUES('type','personal','month',56000)",
     )
     .execute(&pool)
     .await

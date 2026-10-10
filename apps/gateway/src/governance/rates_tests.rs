@@ -29,9 +29,9 @@ fn failed(id: Uuid) -> ExecutionFinish {
     }
 }
 
-/// Every scope: installation, each workspace and each key lineage.
+/// Every scope: each workspace and each key lineage (no installation scope).
 async fn scopes(pool: &PgPool) -> Vec<(Option<Uuid>, Option<Uuid>)> {
-    let mut scopes = vec![(None, None)];
+    let mut scopes = Vec::new();
     let rows: Vec<(Uuid, Uuid)> =
         sqlx::query_as("SELECT DISTINCT workspace_id,governance_key_id FROM api_keys ORDER BY 1,2")
             .fetch_all(pool)
@@ -83,7 +83,6 @@ async fn assert_parity(pool: &PgPool, at: DateTime<Utc>, context: &str) {
                     .0,
             ),
             (Some(ws), Some(l)) => Some(rates::read_counters(&mut tx, ws, l, at).await.unwrap().1),
-            // No installation counters: that layer keeps the scan itself.
             _ => None,
         });
     }
@@ -207,7 +206,7 @@ async fn random_interleavings_keep_rate_counters_equal_to_the_scan(pool: PgPool)
     // personal workspace's tokens/minute denies while its minute holds an
     // unreserved execution or unpriced reservation (as the scan did).
     f.policy(
-        "installation_policy",
+        "workspace_platform_policy_overrides",
         Some(1_000_000),
         None,
         Some(1_000_000),
@@ -608,7 +607,7 @@ async fn migrations_backfill_existing_history_exactly(pool: PgPool) {
     for at in [now, now - chrono::TimeDelta::minutes(2)] {
         assert_parity(&pool, at, "backfill").await;
     }
-    let split: (String, String) = sqlx::query_as("SELECT held_unknown_microusd::text,(SELECT coalesce(sum(held_microusd),0) FROM governance_reservations WHERE state='unknown')::text FROM budget_totals WHERE scope_kind='installation' AND period='lifetime'").fetch_one(&pool).await.unwrap();
+    let split: (String, String) = sqlx::query_as("SELECT sum(held_unknown_microusd)::text,(SELECT coalesce(sum(held_microusd),0) FROM governance_reservations WHERE state='unknown')::text FROM budget_totals WHERE scope_kind='workspace' AND period='lifetime'").fetch_one(&pool).await.unwrap();
     assert_eq!(split.0, split.1);
     assert_ne!(split.0, "0");
 }
@@ -650,7 +649,7 @@ async fn batched_expiry_reconciliation_is_exact_and_concurrent_safe(pool: PgPool
     let report = totals::verify_in(&mut tx).await.unwrap();
     assert!(report.consistent(), "{report:#?}");
     // Unknown cost retains its hold in the totals and in the unknown split.
-    let held: (String, String) = sqlx::query_as("SELECT held_microusd::text,held_unknown_microusd::text FROM budget_totals WHERE scope_kind='installation' AND period='lifetime'").fetch_one(&mut *tx).await.unwrap();
+    let held: (String, String) = sqlx::query_as("SELECT sum(held_microusd)::text,sum(held_unknown_microusd)::text FROM budget_totals WHERE scope_kind='workspace' AND period='lifetime'").fetch_one(&mut *tx).await.unwrap();
     assert_eq!(held, ((130 * 110).to_string(), (130 * 110).to_string()));
 }
 

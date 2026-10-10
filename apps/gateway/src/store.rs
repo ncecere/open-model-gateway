@@ -61,7 +61,6 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "key_model_restrictions",
     "key_model_selections",
     "deployment_prices",
-    "installation_policy",
     "workspace_type_policies",
     "workspace_platform_policy_overrides",
     "workspace_local_policies",
@@ -108,6 +107,10 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "rate_minute_counters",
     "inflight_counters",
 ];
+/// Relations that a later migration drops: accepted only before an explicit
+/// upgrade (`migrate`), never by readiness or serve on a current schema.
+/// `installation_policy` is dropped by 0026 (installation limits removed).
+const RETIRED_RELATIONS: &[&str] = &["installation_policy"];
 
 fn lineage_matches(
     applied: &[(i64, Vec<u8>, bool)],
@@ -139,9 +142,10 @@ async fn preflight(connection: &mut PgConnection, initializing: bool) -> anyhow:
         return Ok(());
     }
     anyhow::ensure!(
-        relations
-            .iter()
-            .all(|n| ENTERPRISE_RELATIONS.contains(&n.as_str())),
+        relations.iter().all(|n| {
+            ENTERPRISE_RELATIONS.contains(&n.as_str())
+                || (initializing && RETIRED_RELATIONS.contains(&n.as_str()))
+        }),
         "Unexpected public relations; refusing an unrelated or legacy database before DDL"
     );
     anyhow::ensure!(

@@ -87,7 +87,7 @@ Platform Admins configure default budgets and rate limits by workspace type, plu
 
 Team/Project administrators may tighten local budgets and limits within platform-set ceilings, but cannot raise or bypass those ceilings. Applicable limits compose; an absent child limit does not reserve capacity or remove a parent restriction.
 
-Monthly budgets block new inference when the available allowance is exhausted. An optional installation-wide monthly budget provides an additional shared ceiling across all workspaces. Reporting or denial messages for ordinary users must not expose other users' personal consumption through installation-wide headroom.
+Monthly budgets block new inference when the available allowance is exhausted. There are no installation-wide limits (decision of 2026-10-09, migration 0026): limits exist only on workspaces and keys, and total spend is watched with a non-blocking installation spend alert. Reporting or denial messages for ordinary users must not expose other users' personal consumption.
 
 Preserve durable per-attempt reservations, immutable pinned prices, conservative unknown holds, rotation lineage, explicit failover, and exact integer monetary arithmetic. A partial known monetary floor is not proof of a finite upper bound.
 
@@ -127,7 +127,7 @@ Acceptance: catalog removal/live authorization tests, clear provider/model capab
 
 ### 3. Pricing and enforcement
 
-Cache-aware versioned rates, provider-normalized usage, immutable accounting, conservative per-attempt bounds, reconciliation, live policy defaults and overrides, hard monthly workspace limits and optional shared installation budget.
+Cache-aware versioned rates, provider-normalized usage, immutable accounting, conservative per-attempt bounds, reconciliation, live policy defaults and overrides, hard monthly workspace limits (the former optional installation budget was removed in 0026).
 
 Acceptance: exact arithmetic, missing/zero distinctions, TTL allocation ambiguity, no duplicate cache-write charges, unknown/unbounded budget denial before dispatch, non-shrinking unresolved holds, idempotency/evidence refinement, quota races, fallback attempt accounting, price pinning and runtime privilege probes. Embeddings are input-only workloads and require explicit valuation/bounds semantics.
 

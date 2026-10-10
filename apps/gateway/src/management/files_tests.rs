@@ -396,7 +396,7 @@ async fn storage_limit_stacks_and_is_tighten_only(pool: PgPool) {
     )
     .await;
     assert!(t["policy"]["storage_bytes"].is_null());
-    // Installation and key layers have no storage limit.
+    // There is no installation layer at all (0026).
     let (status, _) = call(
         &f.s,
         &f.admin,
@@ -405,7 +405,7 @@ async fn storage_limit_stacks_and_is_tighten_only(pool: PgPool) {
         body(json!(10)),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::GONE);
     let audited: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE action IN ('policy.local_updated','policy.override_updated','policy.type_updated')").fetch_one(&pool).await.unwrap();
     assert_eq!(audited, 3);
 }

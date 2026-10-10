@@ -82,7 +82,7 @@ Keep the binary and compiled SPA from the same verified revision. Use a separate
 
 Inference keys never authorize management. Model-declared protocols must intersect adapter support. OpenAI, Anthropic, AWS Bedrock and OpenRouter have separate adapters; local vLLM, SGLang, Ollama and generic-compatible profiles have explicit, narrow contracts. Local HTTP requires exact server-controlled endpoint approval and pinned IP destinations; cloud requires HTTPS. Redirects, ambient proxies and implicit retries are disabled.
 
-- Fixed-minute request/token quotas, leased concurrency and hard USD budgets per UTC day, ISO week or calendar month (chosen per policy layer) are shared across replicas. Optional installation-wide budgets add another ceiling.
+- Fixed-minute request/token quotas, leased concurrency and hard USD budgets per UTC day, ISO week or calendar month (chosen per policy layer) are shared across replicas. There are no installation-wide limits; an installation spend alert reports total spend without blocking.
 - Immutable prices pin each attempt. Cache reads and disjoint write allocations are accounted without double charging aggregate writes. Amounts use exact integer micro-USD arithmetic.
 - Unknown usage/rates are not zero. Partial known charges are not finite upper bounds. Monetary-budget requests without a finite admission bound are denied before dispatch; unresolved activity retains conservative holds.
 - Embeddings are an input-only workload, not synthetic chat. Local prices are configured token rates, not measured GPU/electricity costs.

@@ -511,30 +511,58 @@ async fn token_reservation_above_tokens_per_minute_is_a_distinct_denial(pool: Pg
     );
     f.policy("workspace_local_policies", None, None, None, None)
         .await;
-    f.policy("installation_policy", None, Some(100), None, None)
-        .await;
+    // The platform override layer reports the same workspace scope.
+    f.policy(
+        "workspace_platform_policy_overrides",
+        None,
+        Some(100),
+        None,
+        None,
+    )
+    .await;
     assert_eq!(
         admit(&f.store, &f.start(), &request(), 30).await,
         Err(InferenceError::TokenReservationExceedsLimit(
-            LimitScope::Installation
+            LimitScope::Workspace
         ))
     );
     // A reservation that fits stays an ordinary, retryable rate limit once
     // the minute's tokens are used.
-    f.policy("installation_policy", None, Some(110), None, None)
-        .await;
+    f.policy(
+        "workspace_platform_policy_overrides",
+        None,
+        Some(110),
+        None,
+        None,
+    )
+    .await;
     admit(&f.store, &f.start(), &request(), 30).await.unwrap();
     assert_eq!(
         admit(&f.store, &f.start(), &request(), 30).await,
         Err(InferenceError::Busy)
     );
     // Budget denials keep precedence at the narrower scope.
-    f.policy("installation_policy", None, Some(1), None, None)
-        .await;
-    budget(&f, Some(1)).await;
+    f.policy(
+        "workspace_platform_policy_overrides",
+        None,
+        Some(1),
+        None,
+        None,
+    )
+    .await;
+    crate::governance::set_test_budget(
+        &f.store.pool,
+        "key",
+        None,
+        Some(f.principal.workspace_id),
+        Some(f.principal.key_id),
+        "month",
+        Some(1),
+    )
+    .await;
     assert_eq!(
         admit(&f.store, &f.start(), &request(), 30).await,
-        Err(InferenceError::BudgetExceeded(LimitScope::Workspace))
+        Err(InferenceError::BudgetExceeded(LimitScope::ApiKey))
     );
     // No reservation was recorded for any denial.
     let reservations: i64 = sqlx::query_scalar("SELECT count(*) FROM governance_reservations")

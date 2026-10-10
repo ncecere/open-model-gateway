@@ -5,10 +5,11 @@ Admin › Settings holds installation-wide settings. Platform Admins change them
 | Page | Holds |
 | --- | --- |
 | General | Display name, support URL, logo, maximum lifetime of new human keys. |
-| Defaults & limits | The installation ceiling and Personal/Team/Project defaults (formerly Admin › Limits; `/admin/limits` still opens it). See [governance](governance.md). |
+| Defaults & limits | Personal/Team/Project defaults (formerly Admin › Limits; `/admin/limits` still opens it). There are no installation-wide limits; watch total spend with an installation spend alert. See [governance](governance.md#no-installation-wide-limits). |
 | Data & privacy | OpenRouter data collection, request log retention, prompt/response storage, and the encrypted file store (Storage). |
 | Email | SMTP relay for invitations, status, test send. |
 | Sign-in | Read-only OIDC configuration, signing-key (JWKS) status and SCIM provisioning status; SSO group mappings stay on Admin › SSO groups. |
+| Alerts | Installation rules and history, including **Installation spend** (`spend_threshold`): a non-blocking notification when total spend reaches a share of an amount. See [alerts](alerts.md). |
 
 ## General
 

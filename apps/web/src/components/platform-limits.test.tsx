@@ -43,13 +43,13 @@ describe("Admin › Settings › Defaults & limits tabs", () => {
     const { router, client } = await mount("/admin/settings/limits?tab=team");
     expect(await screen.findByRole("table", { name: "Team default limits" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Team default" }).getAttribute("aria-selected")).toBe("true");
-    expect(screen.queryByRole("table", { name: "Installation ceiling limits" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: /Installation/ })).toBeNull();
     // Only the open scope is fetched.
     expect(fetch.mock.calls.map(c => String(c[0])).filter(p => p.endsWith("/policy"))).toEqual(["/api/v1/platform/workspace-types/team/policy"]);
     await user.click(screen.getByRole("tab", { name: "Project default" }));
     await waitFor(() => expect(router.state.location.search).toMatchObject({ tab: "project" }));
     expect(await screen.findByRole("table", { name: "Project default limits" })).toBeTruthy();
-    expect(limitScopeOf(undefined)).toBe("installation"); expect(limitScopeOf("nope")).toBe("installation"); expect(limitScopeOf("personal")).toBe("personal");
+    expect(limitScopeOf(undefined)).toBe("personal"); expect(limitScopeOf("nope")).toBe("personal"); expect(limitScopeOf("installation")).toBe("personal"); expect(limitScopeOf("personal")).toBe("personal");
     client.clear();
   });
   it("asks before switching tabs with unsaved edits, then discards them", async () => {

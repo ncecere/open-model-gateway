@@ -261,7 +261,6 @@ async fn budget_thresholds_escalate_once_and_resolve(pool: PgPool) {
 async fn budgets_follow_layers_holds_keys_and_never_platform_scan_personal(pool: PgPool) {
     let s = seed(pool).await;
     // Pending holds count like admission; a pending unbounded hold only raises the flag.
-    budget(&s, "installation", None, "day", 10_000_000).await;
     sqlx::query("INSERT INTO policy_budgets(layer,workspace_id,governance_key_id,period,amount_microusd) VALUES('key',$1,$2,'lifetime',1000000)").bind(s.team).bind(s.key).execute(&s.pool).await.unwrap();
     budget(&s, "local", Some(s.personal), "month", 1_000_000).await;
     attempt(
@@ -290,14 +289,22 @@ async fn budgets_follow_layers_holds_keys_and_never_platform_scan_personal(pool:
     rule(
         &s,
         "scope,kind,budget_layers,thresholds",
-        "'installation','budget_threshold',ARRAY['installation','key','local'],ARRAY[100]",
+        "'installation','budget_threshold',ARRAY['key','local'],ARRAY[100]",
+    )
+    .await;
+    // Installation spend (0026): a notification against a reference amount.
+    rule(
+        &s,
+        "scope,kind,thresholds,spend_period,spend_amount_microusd",
+        "'installation','spend_threshold',ARRAY[100],'day',10000000",
     )
     .await;
     let report = evaluate(&s).await;
     assert_eq!(report.failed_rules, 0);
     let incidents = open(&s).await;
     let subjects: Vec<&str> = incidents.iter().map(|i| i.0.as_str()).collect();
-    // Installation: $10 of $10 (personal totals count toward the installation); key lineage: $1 of $1.
+    // Installation spend: $10 of $10 (personal totals count toward the
+    // installation); key lineage: $1 of $1.
     assert!(subjects.contains(&"installation:day"), "{subjects:?}");
     assert!(subjects.contains(&format!("key:{}:{}:lifetime", s.team, s.key).as_str()));
     let key = incidents.iter().find(|i| i.0.starts_with("key:")).unwrap();
@@ -671,7 +678,6 @@ async fn budget_alert_totals_equal_the_former_scans(pool: PgPool) {
     // An unknown attempt whose hold is unbounded (marked, finite floor).
     sqlx::query("UPDATE governance_reservations SET unbounded_cost=true WHERE execution_id IN (SELECT execution_id FROM governance_reservations WHERE state='unknown' AND held_microusd IS NOT NULL LIMIT 3)").execute(&s.pool).await.unwrap();
     for period in ["day", "week", "month", "lifetime"] {
-        budget(&s, "installation", None, period, 1_000).await;
         budget(&s, "local", Some(s.team), period, 1_000).await;
         budget(&s, "local", Some(s.personal), period, 1_000).await;
         sqlx::query("INSERT INTO policy_budgets(layer,workspace_id,governance_key_id,period,amount_microusd) VALUES('key',$1,$2,$3,1000)").bind(s.team).bind(s.key).bind(period).execute(&s.pool).await.unwrap();
@@ -714,12 +720,14 @@ async fn budget_alert_totals_equal_the_former_scans(pool: PgPool) {
         assert!(!new.is_empty());
     }
     for (index, period) in BudgetPeriod::ALL.iter().enumerate() {
-        let new: (String, i64) = sqlx::query_as(INSTALLATION_BUDGET)
-            .bind(period.as_str())
-            .bind(w[index].0)
-            .fetch_one(&s.pool)
-            .await
-            .unwrap();
+        let (used, _pending, unknown): (String, String, i64) =
+            sqlx::query_as(crate::governance::totals::INSTALLATION_SPEND)
+                .bind(period.as_str())
+                .bind(w[index].0)
+                .fetch_one(&s.pool)
+                .await
+                .unwrap();
+        let new = (used, unknown);
         let old: (String, i64) = sqlx::query_as(OLD_INSTALLATION_BUDGET)
             .bind(w[index].0)
             .bind(w[index].1)
@@ -730,7 +738,275 @@ async fn budget_alert_totals_equal_the_former_scans(pool: PgPool) {
         assert!(old.1 > 0);
     }
     // The metrics gauge reads the same totals: exact pending/unknown counts.
-    let gauge: (i64, i64) = sqlx::query_as("SELECT pending,unknown FROM budget_totals WHERE scope_kind='installation' AND period='lifetime'").fetch_one(&s.pool).await.unwrap();
+    let gauge: (i64, i64) = sqlx::query_as(crate::governance::totals::RESERVATION_COUNTS)
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
     let scanned: (i64, i64) = sqlx::query_as("SELECT count(*) FILTER(WHERE state='pending'),count(*) FILTER(WHERE state='unknown') FROM governance_reservations").fetch_one(&s.pool).await.unwrap();
     assert_eq!(gauge, scanned);
+}
+
+/// Installation spend thresholds (0026): exact integer percentages of a
+/// reference amount over the installation-wide window (settled plus pending
+/// holds, every workspace), escalation and resolution like budget rules, and
+/// no effect on admission (no installation budget exists to deny with).
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn installation_spend_thresholds_notify_without_limits(pool: PgPool) {
+    let s = seed(pool).await;
+    let r = rule(
+        &s,
+        "scope,kind,thresholds,spend_period,spend_amount_microusd,notify_platform_admins",
+        "'installation','spend_threshold',ARRAY[50,100],'month',10000000,true",
+    )
+    .await;
+    spend(&s, 4_999_999).await;
+    assert_eq!(evaluate(&s).await.fired, 0);
+    // A personal workspace's spend counts toward the installation total.
+    attempt(
+        &s,
+        s.personal,
+        s.personal_key,
+        "succeeded",
+        None,
+        "settled",
+        Some(1),
+        0,
+    )
+    .await;
+    assert_eq!(evaluate(&s).await.fired, 1);
+    let incidents = open(&s).await;
+    assert_eq!(incidents.len(), 1);
+    assert_eq!(incidents[0].0, "installation:month");
+    assert_eq!(incidents[0].1, 50);
+    assert_eq!(incidents[0].2["used_microusd"], "5000000");
+    assert_eq!(incidents[0].2["spend_amount_microusd"], "10000000");
+    // Pending holds count; unknown cost is flagged, never counted as spend.
+    attempt(
+        &s,
+        s.team,
+        s.key,
+        "started",
+        None,
+        "pending",
+        Some(5_000_000),
+        0,
+    )
+    .await;
+    attempt(
+        &s,
+        s.team,
+        s.key,
+        "indeterminate",
+        None,
+        "unknown",
+        Some(90_000_000),
+        0,
+    )
+    .await;
+    assert_eq!(evaluate(&s).await.fired, 1);
+    let incidents = open(&s).await;
+    assert_eq!(incidents[0].1, 100);
+    assert_eq!(incidents[0].2["used_microusd"], "10000000");
+    assert_eq!(incidents[0].2["pending_microusd"], "5000000");
+    assert_eq!(incidents[0].2["unknown_cost_requests"], 1);
+    let summary: String =
+        sqlx::query_scalar("SELECT summary FROM alert_events WHERE resolved_at IS NULL")
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+    assert_eq!(summary, "Installation monthly spend reached 100%");
+    // Idempotent.
+    let again = evaluate(&s).await;
+    assert_eq!((again.fired, again.resolved), (0, 0));
+    // Raising the reference amount clears it once.
+    sqlx::query("UPDATE alert_rules SET spend_amount_microusd=100000000 WHERE id=$1")
+        .bind(r)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(evaluate(&s).await.resolved, 1);
+    // Nothing installation-wide limits admission: no budget rows, no totals scope.
+    assert_eq!(
+        count(&s, "SELECT count(*) FROM policy_budgets WHERE layer NOT IN ('type','override','local','key')").await,
+        0
+    );
+    // Only installation rules may watch installation spend; shapes are enforced.
+    for bad in [
+        format!("INSERT INTO alert_rules(id,name,scope,workspace_id,kind,thresholds,spend_period,spend_amount_microusd) VALUES(gen_random_uuid(),'x','workspace','{}','spend_threshold',ARRAY[50],'day',1)", s.team),
+        "INSERT INTO alert_rules(id,name,scope,kind,thresholds,spend_period) VALUES(gen_random_uuid(),'x','installation','spend_threshold',ARRAY[50],'day')".to_owned(),
+        "INSERT INTO alert_rules(id,name,scope,kind,thresholds,spend_period,spend_amount_microusd,budget_layers) VALUES(gen_random_uuid(),'x','installation','spend_threshold',ARRAY[50],'day',1,ARRAY['local'])".to_owned(),
+        "INSERT INTO alert_rules(id,name,scope,kind,budget_layers,thresholds) VALUES(gen_random_uuid(),'x','installation','budget_threshold',ARRAY['installation'],ARRAY[50])".to_owned(),
+    ] {
+        assert!(sqlx::query(&bad).execute(&s.pool).await.is_err(), "{bad}");
+    }
+}
+
+/// (id, kind, name, layers, thresholds, spend period, spend amount, live, emails).
+type RuleRow = (
+    Uuid,
+    String,
+    String,
+    Option<Vec<String>>,
+    Option<Vec<i32>>,
+    Option<String>,
+    Option<i64>,
+    bool,
+    Vec<String>,
+);
+/// Upgrading a database that had an installation budget and installation
+/// budget alert rules (0025 -> 0026): thresholds and recipients are kept on
+/// installation spend rules, open incidents continue or are superseded
+/// without a "resolved" email, everything is audited, and history rows
+/// (reservations, ledger, executions) are untouched.
+#[sqlx::test(migrations = false)]
+async fn migration_converts_installation_budget_alerts(pool: PgPool) {
+    use sqlx::migrate::Migrator;
+    let prefix = Migrator {
+        migrations: std::borrow::Cow::Owned(
+            crate::store::MIGRATOR
+                .iter()
+                .filter(|m| m.version < 26)
+                .cloned()
+                .collect(),
+        ),
+        ignore_missing: false,
+        locking: true,
+        no_tx: false,
+    };
+    prefix.run(&pool).await.unwrap();
+    let (only, mixed, deleted) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    sqlx::raw_sql(&format!(r#"
+     INSERT INTO installation_policy(singleton,requests_per_minute,concurrent_jobs) VALUES(true,600,4);
+     INSERT INTO policy_budgets(layer,period,amount_microusd) VALUES('installation','month',10000000),('installation','day',500000),('installation','week',0);
+     INSERT INTO alert_rules(id,scope,kind,name,budget_layers,thresholds,notify_platform_admins,notify_emails) VALUES
+      ('{only}','installation','budget_threshold','Installation budget',ARRAY['installation'],ARRAY[50,80,100],true,ARRAY['ops@example.test']),
+      ('{mixed}','installation','budget_threshold','Budgets',ARRAY['installation','local','key'],ARRAY[80],false,'{{}}'),
+      ('{deleted}','installation','budget_threshold','Old',ARRAY['installation'],ARRAY[80],false,'{{}}');
+     UPDATE alert_rules SET deleted_at=now() WHERE id='{deleted}';
+     INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,summary) VALUES
+      (gen_random_uuid(),'{only}','budget_threshold','installation:day',80,'warning','Installation daily budget reached 80%'),
+      (gen_random_uuid(),'{only}','budget_threshold','installation:month',50,'warning','Installation monthly budget reached 50%'),
+      (gen_random_uuid(),'{mixed}','budget_threshold','installation:month',80,'warning','Installation monthly budget reached 80%');
+    "#)).execute(&pool).await.unwrap();
+    // The upgrade, then a second installation's re-run of the conversion
+    // statements would find nothing left to convert.
+    crate::store::MIGRATOR.run(&pool).await.unwrap();
+    let rules: Vec<RuleRow> = sqlx::query_as(
+        "SELECT id,kind,name,budget_layers,thresholds,spend_period,spend_amount_microusd,deleted_at IS NULL,notify_emails FROM alert_rules ORDER BY name,spend_period",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let find = |name: &str| rules.iter().filter(|r| r.2 == name).collect::<Vec<_>>();
+    // Installation-only rule: converted in place for its shortest period (the
+    // zero "week" budget never alerted and is not a reference amount).
+    let o = find("Installation budget");
+    assert_eq!(o.len(), 1);
+    assert_eq!(
+        (
+            o[0].0,
+            o[0].1.as_str(),
+            o[0].3.clone(),
+            o[0].4.clone(),
+            o[0].5.as_deref(),
+            o[0].6,
+            o[0].8.clone()
+        ),
+        (
+            only,
+            "spend_threshold",
+            None,
+            Some(vec![50, 80, 100]),
+            Some("day"),
+            Some(500_000),
+            vec!["ops@example.test".to_owned()]
+        )
+    );
+    let extra = find("Installation budget (installation monthly spend)");
+    assert_eq!(
+        (
+            extra[0].1.as_str(),
+            extra[0].5.as_deref(),
+            extra[0].6,
+            extra[0].4.clone()
+        ),
+        (
+            "spend_threshold",
+            Some("month"),
+            Some(10_000_000),
+            Some(vec![50, 80, 100])
+        )
+    );
+    // Mixed rule: keeps its other layers; installation part became spend rules.
+    let m = find("Budgets");
+    assert_eq!(
+        (m[0].0, m[0].3.clone()),
+        (mixed, Some(vec!["local".to_owned(), "key".to_owned()]))
+    );
+    assert_eq!(
+        find("Budgets (installation daily spend)")[0].6,
+        Some(500_000)
+    );
+    assert_eq!(
+        find("Budgets (installation monthly spend)")[0].6,
+        Some(10_000_000)
+    );
+    // Soft-deleted rules keep their stored configuration (history).
+    let d = find("Old");
+    assert_eq!(
+        (d[0].1.as_str(), d[0].3.clone(), d[0].7),
+        (
+            "budget_threshold",
+            Some(vec!["installation".to_owned()]),
+            false
+        )
+    );
+    // Open incidents: the in-place rule's day incident continues (same
+    // subject); the others were superseded without a "resolved" email.
+    let events: Vec<(Uuid, String, Option<String>)> = sqlx::query_as(
+        "SELECT rule_id,subject_key,resolution FROM alert_events ORDER BY rule_id,subject_key",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(events.contains(&(only, "installation:day".into(), None)));
+    assert!(events.contains(&(only, "installation:month".into(), Some("superseded".into()))));
+    assert!(events.contains(&(
+        mixed,
+        "installation:month".into(),
+        Some("superseded".into())
+    )));
+    let resolved_emails: i64 = sqlx::query_scalar("SELECT count(*) FROM alert_deliveries")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(resolved_emails, 0);
+    // Audited: the removed installation policy and each changed rule.
+    let actions: Vec<String> =
+        sqlx::query_scalar("SELECT action FROM audit_events ORDER BY action")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        actions,
+        [
+            "alert_rule.installation_layer_removed",
+            "alert_rule.installation_layer_removed",
+            "policy.installation_removed"
+        ]
+    );
+    // Installation limits are unrepresentable afterwards.
+    assert_eq!(
+        count_pool(&pool, "SELECT count(*) FROM policy_budgets").await,
+        0
+    );
+    assert!(
+        sqlx::query("SELECT 1 FROM installation_policy")
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+}
+async fn count_pool(pool: &PgPool, sql: &str) -> i64 {
+    sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
 }

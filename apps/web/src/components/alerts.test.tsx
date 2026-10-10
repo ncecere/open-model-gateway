@@ -13,7 +13,7 @@ import { bellCount, bellLabel } from "./notification-bell";
 beforeEach(() => { document.cookie = "omg_csrf=test-csrf; Path=/"; localStorage.clear(); sessionStorage.clear(); Object.defineProperty(Element.prototype, "getAnimations", { configurable: true, value: () => [] }); vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} }); });
 afterEach(() => { cleanup(); abortRequests(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
-const rule: AlertRule = { id: "r1", scope: "installation", workspace_id: null, kind: "budget_threshold", name: "Monthly budgets", enabled: true, budget_layers: ["installation", "local"], thresholds: [50, 80, 100], spike_factor_percent: null, min_spend_microusd: null, window_minutes: null, error_rate_percent: null, min_requests: null, consecutive_failures: null, provider_connection_id: null, provider_connection: null, notify_workspace_admins: false, notify_platform_admins: true, notify_emails: [], firing: 1, last_fired_at: "2026-10-08T00:00:00Z", created_at: "2026-10-08T00:00:00Z", updated_at: "2026-10-08T00:00:00Z" };
+const rule: AlertRule = { id: "r1", scope: "installation", workspace_id: null, kind: "budget_threshold", name: "Monthly budgets", enabled: true, budget_layers: ["type", "local"], thresholds: [50, 80, 100], spike_factor_percent: null, min_spend_microusd: null, window_minutes: null, error_rate_percent: null, min_requests: null, consecutive_failures: null, provider_connection_id: null, provider_connection: null, notify_workspace_admins: false, notify_platform_admins: true, notify_emails: [], firing: 1, last_fired_at: "2026-10-08T00:00:00Z", created_at: "2026-10-08T00:00:00Z", updated_at: "2026-10-08T00:00:00Z" };
 const notification: Notification = { id: "e1", rule: { id: "r1", name: "Monthly budgets", scope: "installation", deleted: false }, builtin: false, kind: "budget_threshold", state: "firing", severity: "warning", level: 80, summary: "Workspace monthly budget reached 80%", details: { unknown_cost_requests: 1 }, workspace: { id: "team", name: "Product", kind: "team" }, connection: null, fired_at: "2026-10-08T00:00:00Z", resolved_at: null, resolution: null, email: null, read: false };
 
 type Handler = (path: string, init?: RequestInit) => unknown;
@@ -42,7 +42,7 @@ describe("Admin › Settings › Alerts", () => {
     const { client } = await mount("/admin/settings/alerts");
     await screen.findByRole("heading", { name: "Alerts", level: 1 });
     expect(within(screen.getByRole("navigation", { name: "Main" })).getByRole("link", { name: "Alerts" }).getAttribute("href")).toBe("/admin/settings/alerts");
-    expect(await screen.findByText("50/80/100% of Installation, Workspace budgets")).toBeTruthy();
+    expect(await screen.findByText("50/80/100% of Type default, Workspace budgets")).toBeTruthy();
     expect(screen.getByText("Firing · 1")).toBeTruthy();
     expect(screen.getAllByRole("link", { name: /New rule/ })[0]!.getAttribute("href")).toBe("/admin/alerts/new");
     client.clear();
@@ -65,10 +65,27 @@ describe("Admin › Settings › Alerts", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/admin/settings/alerts"));
     client.clear();
   });
+  it("creates a non-blocking installation spend rule with an exact amount", async () => {
+    const user = userEvent.setup(), fetch = serve(admin, (path, init) => init?.method === "POST" && path === "/api/v1/platform/alerts/rules" ? { ...rule, id: "r3" } : undefined);
+    const { client } = await mount("/admin/alerts/new");
+    await screen.findByRole("heading", { name: "New alert rule", level: 1 });
+    // The budget kind offers no installation layer.
+    expect(screen.queryByRole("checkbox", { name: "Installation" })).toBeNull();
+    await user.type(screen.getByRole("textbox", { name: "Name" }), "Total spend");
+    await user.selectOptions(screen.getByRole("combobox", { name: /Type/ }), "spend_threshold");
+    expect(screen.getByText(/never blocks/)).toBeTruthy();
+    await user.selectOptions(screen.getByRole("combobox", { name: /Period/ }), "week");
+    await user.type(screen.getByRole("textbox", { name: /Amount/ }), "9007199254.740993");
+    const at = screen.getByRole("textbox", { name: /Alert at/ });
+    await user.clear(at); await user.type(at, "100, 80");
+    await user.click(screen.getByRole("button", { name: "Create rule" }));
+    await waitFor(() => expect(sent(fetch, "POST")).toEqual([["/api/v1/platform/alerts/rules", { name: "Total spend", kind: "spend_threshold", enabled: true, notify_platform_admins: true, notify_emails: [], spend_period: "week", spend_amount_microusd: "9007199254740993", thresholds: [80, 100] }]]));
+    client.clear();
+  });
   it("gives Auditors the list and read-only rule facts, never a form", async () => {
     serve(auditor, path => path === "/api/v1/platform/alerts/rules/r1" ? rule : undefined);
     const { client } = await mount("/admin/alerts/r1");
-    expect(await screen.findByText("50/80/100% of Installation, Workspace budgets")).toBeTruthy();
+    expect(await screen.findByText("50/80/100% of Type default, Workspace budgets")).toBeTruthy();
     expect(document.querySelector("main input, main textarea, main select")).toBeNull();
     expect(screen.queryByRole("button", { name: "Save rule" })).toBeNull();
     cleanup(); client.clear();

@@ -161,7 +161,7 @@ mod db {
                 &f,
                 &admin,
                 "PUT",
-                "/api/v1/platform/installation/policy",
+                "/api/v1/platform/workspace-types/team/policy",
                 policy()
             )
             .await
@@ -556,16 +556,6 @@ mod db {
             call(&f, &admin, "PUT", type_path, p).await.0,
             StatusCode::OK
         );
-        let mut install = policy();
-        install["monthly_budget_microusd"] = json!("5000");
-        call(
-            &f,
-            &admin,
-            "PUT",
-            "/api/v1/platform/installation/policy",
-            install,
-        )
-        .await;
         let path = format!("/api/v1/workspaces/{ws}/policy");
         let (_, v) = call(&f, &member, "GET", &path, Value::Null).await;
         assert_eq!(v["effective"]["monthly_budget_microusd"], "1000");
@@ -654,7 +644,7 @@ mod db {
             &f,
             &u,
             "PUT",
-            "/api/v1/platform/installation/policy",
+            "/api/v1/platform/workspace-types/team/policy",
             policy(),
         );
         tokio::pin!(op);
@@ -1382,7 +1372,20 @@ mod db {
         let admin = user(f.owner, true);
         let member = user(f.other, false);
         let ws = f.team.workspace_id;
-        let install = "/api/v1/platform/installation/policy";
+        // The former installation policy endpoint is gone (0026) and says so.
+        for method in ["GET", "PUT"] {
+            let (status, v) = call(
+                &f,
+                &admin,
+                method,
+                "/api/v1/platform/installation/policy",
+                policy(),
+            )
+            .await;
+            assert_eq!(status, StatusCode::GONE);
+            assert_eq!(v["error"]["reason"], "installation_limits_removed");
+        }
+        let install = "/api/v1/platform/workspace-types/personal/policy";
         let with = |budget: &str, period: Option<&str>| {
             let mut p = policy();
             p["requests_per_minute"] = Value::Null;
@@ -1434,11 +1437,11 @@ mod db {
                     .is_client_error()
             );
         }
-        let audit: Vec<Value> = sqlx::query_scalar("SELECT metadata FROM audit_events WHERE action='policy.installation_updated' ORDER BY created_at,id")
+        let audit: Vec<Value> = sqlx::query_scalar("SELECT metadata FROM audit_events WHERE action='policy.type_updated' ORDER BY created_at,id")
             .fetch_all(&f.store.pool).await.unwrap();
         assert_eq!(
             audit[0],
-            json!({"budget_period":"week","previous_budget_period":"month","count":1})
+            json!({"budget_period":"week","previous_budget_period":"month","count":1,"kind":"personal"})
         );
         // Team default 1000/month; local tighten-only considers amount and period.
         call(

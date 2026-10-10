@@ -5,7 +5,10 @@ use super::*;
 const RULES: &str = "/api/v1/platform/alerts/rules";
 
 fn budget_rule() -> Value {
-    json!({"name":"Budgets","kind":"budget_threshold","budget_layers":["installation","local"],"thresholds":[50,80,100],"notify_platform_admins":true})
+    json!({"name":"Budgets","kind":"budget_threshold","budget_layers":["type","local"],"thresholds":[50,80,100],"notify_platform_admins":true})
+}
+fn spend_rule() -> Value {
+    json!({"name":"Installation spend","kind":"spend_threshold","spend_period":"month","spend_amount_microusd":"9007199254740993","thresholds":[80,100],"notify_platform_admins":true})
 }
 fn ws_rules(ws: Uuid) -> String {
     format!("/api/v1/workspaces/{ws}/alerts/rules")
@@ -72,6 +75,29 @@ async fn installation_rules_are_admin_write_auditor_read(pool: PgPool) {
             "{bad}"
         );
     }
+    // There is no installation budget layer (0026): a stable reason says so.
+    let (status, err) = call(&f.s, &f.admin, "POST", RULES, json!({"name":"x","kind":"budget_threshold","budget_layers":["installation"],"thresholds":[80]})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(err["error"]["reason"], "installation_limits_removed");
+    // Installation spend rules round-trip exact micro-USD strings.
+    let (status, spend) = call(&f.s, &f.admin, "POST", RULES, spend_rule()).await;
+    assert_eq!(status, StatusCode::OK, "{spend}");
+    assert_eq!(
+        (
+            &spend["kind"],
+            &spend["spend_period"],
+            &spend["spend_amount_microusd"],
+            &spend["thresholds"],
+            &spend["budget_layers"]
+        ),
+        (
+            &json!("spend_threshold"),
+            &json!("month"),
+            &json!("9007199254740993"),
+            &json!([80, 100]),
+            &Value::Null
+        )
+    );
     let mut extra = budget_rule();
     extra["extra"] = json!(true);
     assert_eq!(
@@ -100,6 +126,7 @@ async fn installation_rules_are_admin_write_auditor_read(pool: PgPool) {
     assert_eq!(
         actions,
         [
+            "alert_rule.created",
             "alert_rule.created",
             "alert_rule.updated",
             "alert_rule.deleted"
@@ -145,9 +172,9 @@ async fn workspace_rules_belong_to_shared_admins_and_personal_is_built_in(pool: 
         call(&f.s, &f.admin, "POST", &path, spike.clone()).await.0,
         StatusCode::FORBIDDEN
     );
-    // Workspace rules never watch the installation budget or connections.
+    // Workspace rules never watch installation spend or connections.
     for bad in [
-        budget_rule(),
+        spend_rule(),
         json!({"name":"x","kind":"provider_failing","window_minutes":15,"consecutive_failures":3}),
     ] {
         assert_eq!(

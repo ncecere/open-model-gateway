@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { conditionText, draftOf, factorToPercent, newDraft, parseEmails, parseThresholds, percentToFactor, recipientsText, ruleBody, ruleErrors, unknownCostNote, whereText, type AlertRule, type AlertScope } from "./alerts";
+import { conditionText, draftOf, factorToPercent, kindsFor, layersFor, newDraft, parseEmails, parseThresholds, percentToFactor, recipientsText, ruleBody, ruleErrors, unknownCostNote, whereText, type AlertRule, type AlertScope } from "./alerts";
 import { dashboardHref, parseDashboardLocation } from "./locations";
 import { canView, dashboardSearch, type DashboardSearch } from "./permissions";
 import { admin, auditor, member, personal, session, team } from "./test-fixtures";
@@ -31,6 +31,17 @@ describe("alert rule form", () => {
     expect(ruleErrors({ ...spike, minSpend: "0" }).minSpend).toBeTruthy();
     expect(ruleErrors({ ...spike, minSpend: "0.0000001" }).minSpend).toBeTruthy();
     expect(ruleErrors({ ...budget, layers: [] }).layers).toBeTruthy();
+    // Installation spend: exact micro-USD from dollars (BigInt), never a float.
+    const spend = { ...newDraft(platform, "spend_threshold"), name: "Total", spendPeriod: "lifetime" as const, spendAmount: "9007199254.740993", thresholds: "100,80" };
+    expect(ruleErrors(spend)).toEqual({});
+    expect(ruleBody(spend, platform)).toEqual({ name: "Total", kind: "spend_threshold", enabled: true, notify_platform_admins: true, notify_emails: [], spend_period: "lifetime", spend_amount_microusd: "9007199254740993", thresholds: [80, 100] });
+    expect(ruleErrors({ ...spend, spendAmount: "0" }).spendAmount).toBeTruthy();
+    expect(ruleErrors({ ...spend, spendAmount: "" }).spendAmount).toBeTruthy();
+    // Only installation rules watch installation spend; no scope offers an installation budget layer.
+    expect(kindsFor(workspace)).not.toContain("spend_threshold"); expect(kindsFor(platform)).toContain("spend_threshold");
+    expect(layersFor(platform)).toEqual(["type", "override", "local", "key"]);
+    expect(conditionText({ ...rule, kind: "spend_threshold", thresholds: [80, 100], spend_period: "month", spend_amount_microusd: "5000000000" })).toBe("80/100% of $5,000.00 monthly spend");
+    expect(draftOf({ ...rule, kind: "spend_threshold", thresholds: [80], spend_period: "week", spend_amount_microusd: "1500000" })).toMatchObject({ spendPeriod: "week", spendAmount: "1.50", thresholds: "80" });
   });
   it("round trips a stored rule into the form", () => {
     const d = draftOf(rule);

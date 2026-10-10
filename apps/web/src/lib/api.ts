@@ -84,14 +84,7 @@ export type ModelSetupResult = { model_id: string; deployment_id: string; price_
 export type PlatformOverviewData = {
   setup: { connections: number; enabled_connections: number; models: number; ready_models: number; enabled_routes: number; priced_enabled_routes: number; catalogs: number; type_defaults: { personal: number; team: number; project: number }; entitled_users: number; oidc_mappings: number };
   glance: { entitled_users: number; teams: number; projects: number; ready_models: number; attempts_7d: string; known_cost_7d_microusd: string };
-  /** Installation-wide budgets with their current usage (wave 2; absent from older gateways). */
-  installation_budgets?: InstallationBudget[] | null;
 };
-/**
- * One installation budget and its current window (contract §5): `used = settled + held` by the admission rule, a lower
- * bound when `unresolved_usage`. Lifetime windows start at installation creation and have no end.
- */
-export type InstallationBudget = { period: "day" | "week" | "month" | "lifetime"; amount_microusd: string; used_microusd: string | null; settled_microusd: string | null; held_microusd: string | null; unresolved_usage: boolean | null; exhausted: boolean | null; window_start: string; window_end: string | null };
 export type Deployment = { id: string; model_id: string; model_public_name?: string; provider_connection_id: string; provider_name?: string; upstream_model: string; enabled: boolean };
 export type Catalog = { id: string; name: string; description: string | null; created_at?: string };
 export type CatalogAvailability = { mode: "inherit" | "replace"; catalog_ids: string[]; effective_catalog_ids: string[] };

@@ -1,17 +1,16 @@
 /*
  * Effective access, plain words first: how many models can be used, then
  * "Why can't I use this model?" (one row per model, reasons opening in place
- * with ExpandableRow, never a drawer). The layers that compose it (installation,
- * type defaults or platform override, this workspace, the key) with their
- * limits and cumulative counts (LayerTable) are collapsed under "How limits
- * combine" (progressive disclosure). Read-only; the server decides visibility
- * (installation limits only for platform readers) and never reports
- * installation headroom.
+ * with ExpandableRow, never a drawer). The layers that compose it (type
+ * defaults or platform override, this workspace, the key) with their limits
+ * and cumulative counts (LayerTable) are collapsed under "How limits combine"
+ * (progressive disclosure). There are no installation-wide limits; an older
+ * gateway's installation row is not shown. Read-only.
  */
 import { useState } from "react";
 import { ArrowRight, ShieldCheck } from "lucide-react";
 import { wsPath, type Workspace, type WorkspaceKind } from "../lib/api";
-import { accessStatusLabel, blockingReason, layerLabel, layerLimits, reasonLabel, reasonText, type AccessLayer, type AccessModel, type AccessResponse } from "../lib/effective-access";
+import { accessStatusLabel, blockingReason, layerLabel, layerLimits, reasonLabel, reasonText, type AccessLayer, type AccessLayerName, type AccessModel, type AccessResponse } from "../lib/effective-access";
 import { limitsSummary } from "../lib/limits";
 import type { KeyStatus } from "../lib/keys";
 import { Alert, ErrorNotice, useApi } from "./ui";
@@ -29,11 +28,10 @@ import s from "../pages/shared.module.css";
 const tone = { available: "success", partial: "warning", unavailable: "danger" } as const;
 export function AccessStatus({ status }: { status: AccessModel["status"] }) { return <StatusBadge tone={tone[status]} size="sm">{accessStatusLabel[status]}</StatusBadge>; }
 
-function layerRow(layer: AccessLayer, kind: WorkspaceKind, names: { workspace: string; key?: string }): Layer {
+function layerRow(layer: AccessLayer & { layer: Exclude<AccessLayerName, "platform"> }, kind: WorkspaceKind, names: { workspace: string; key?: string }): Layer {
   const limits = layerLimits(layer), counts = layer.models;
   const base = { id: layer.layer, counts };
   switch (layer.layer) {
-    case "platform": return { ...base, kind: "platform", name: "Installation", source: <Badge size="sm" variant="outline">Applies to everyone</Badge>, value: layer.visible ? limitsSummary(limits) : "Applies to everyone · details for platform staff", state: layer.visible && limits ? "set" : "none" };
     case "type_default": return { ...base, kind: kind as LayerKind, name: layerLabel("type_default", kind), source: <Badge size="sm" variant="outline">{layer.applies ? "Type default" : "Not used · own settings"}</Badge>, value: <>{limitsSummary(limits)}{layer.catalogs && <span className={s.secondary}>Catalogs{layer.catalogs_apply === false ? " (not used · own catalog choice)" : ""}: {layer.catalogs.length ? layer.catalogs.map(c => c.name).join(", ") : "none"}</span>}</>, state: layer.applies ? "set" : "inherited" };
     case "workspace_override": return { ...base, kind: "platform", name: "Platform override", source: <Badge size="sm" variant="outline">{layer.applies || layer.catalogs_apply ? "Replaced here" : "None"}</Badge>, value: layer.applies || layer.catalogs_apply ? <>{layer.applies ? limitsSummary(limits) : "Limits: type defaults"}{layer.catalogs && <span className={s.secondary}>Own catalog choice: {layer.catalogs.length ? layer.catalogs.map(c => c.name).join(", ") : "none"}</span>}</> : "Not set", state: layer.applies || layer.catalogs_apply ? "set" : "none" };
     case "workspace": return { ...base, kind: "workspace", name: names.workspace, source: <Badge size="sm" variant="outline">Own limits</Badge>, value: <>{limitsSummary(limits, "No extra caps")}{layer.selections && <span className={s.secondary}>{layer.selections.catalog} added from catalogs · {layer.selections.direct} assigned by a Platform Admin</span>}</>, state: limitsSummary(limits, "") ? "set" : "inherited" };
@@ -92,11 +90,13 @@ export function EffectiveAccess({ workspace, keyId, keyName, keyStatus, title = 
       <h3 className={s.groupHeading}>Why can't I use this model?</h3>
       <WhyUnavailable models={q.data.models} kind={workspace.kind} truncated={q.data.truncated} canManageModels={canManageModels} />
       <Disclosure title="How limits combine" summary="Every layer applies; the lowest limit wins" keepMounted>
-        <LayerTable caption={`${title} by layer`} valueHeader="Limits" showCounts layers={q.data.layers.filter(l => keyId || l.layer !== "key").map(l => layerRow(l, workspace.kind, { workspace: workspace.name, key: keyName }))} effective={{ value: "Lowest of each limit", counts: q.data.summary }} />
+        <LayerTable caption={`${title} by layer`} valueHeader="Limits" showCounts layers={q.data.layers.filter(isLimitLayer).filter(l => keyId || l.layer !== "key").map(l => layerRow(l, workspace.kind, { workspace: workspace.name, key: keyName }))} effective={{ value: "Lowest of each limit", counts: q.data.summary }} />
       </Disclosure>
     </>}
   </Card>;
 }
+/** Layers that carry limits: every layer but the platform (model facts only; no installation-wide limits). */
+const isLimitLayer = (l: AccessLayer): l is AccessLayer & { layer: Exclude<AccessLayerName, "platform"> } => l.layer !== "platform";
 /** "3 available · 1 partly available · 2 unavailable"; a zero "partly" or "unavailable" count is left out (available always shows). */
 export const countsText = (c: AccessResponse["summary"]) => [`${c.available} available`, ...(Number(c.partial) ? [`${c.partial} partly available`] : []), ...(Number(c.unavailable) ? [`${c.unavailable} unavailable`] : [])].join(" · ");
 

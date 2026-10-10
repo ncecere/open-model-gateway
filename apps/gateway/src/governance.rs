@@ -62,7 +62,12 @@ async fn catalog_lock(tx: &mut Tx<'_>) -> Result<(), InferenceError> {
         .map_err(storage)?;
     Ok(())
 }
-/// The installation row lock, taken after [`catalog_lock`].
+/// The installation row lock, taken after [`catalog_lock`]. Admission and
+/// settlement still serialize on it with authorization, membership and policy
+/// changes (management holds it too); it no longer guards any limit data:
+/// there are no installation-wide limits (0026) and admission reads only the
+/// workspace's and key lineage's own policies, budget totals and counters.
+/// Scale plan P3 replaces it in admission with scoped authority locks.
 async fn installation_lock(tx: &mut Tx<'_>) -> Result<(), InferenceError> {
     sqlx::query_scalar::<_, Uuid>("SELECT id FROM installation WHERE singleton FOR NO KEY UPDATE")
         .fetch_one(&mut **tx)
@@ -194,8 +199,8 @@ fn checked_cost(input: u64, output: u64, i: i64, o: i64) -> Result<i64, billing:
             .and_then(|b| a.checked_add(b).ok_or(billing::BillingError::Overflow))
     })
 }
-/// Budget window of one policy budget. Each scope (installation, type
-/// default, workspace override, workspace local, key lineage) may hold at most
+/// Budget window of one policy budget. Each scope (type default, workspace
+/// override, workspace local, key lineage) may hold at most
 /// one budget per period; every applicable budget is enforced over its own
 /// current UTC window. Changing budgets never resets or rewrites history.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -269,9 +274,12 @@ impl BudgetPeriod {
         }
     }
 }
+/// One applicable policy layer of the admitting workspace: the workspace
+/// layers (type default or platform override, then local) or, with
+/// `api_key_id`, the key lineage layer. There is no installation layer
+/// (removed in 0026): admission reads no installation-wide limit data.
 #[derive(sqlx::FromRow)]
 struct Policy {
-    workspace_id: Option<Uuid>,
     api_key_id: Option<Uuid>,
     requests_per_minute: Option<i64>,
     tokens_per_minute: Option<i64>,
@@ -279,17 +287,17 @@ struct Policy {
     /// "Jobs at once" (0018): active async jobs (video + batch).
     concurrent_jobs: Option<i64>,
 }
+/// One applicable budget of the admitting workspace (`api_key_id`: the key
+/// lineage layer).
 #[derive(sqlx::FromRow)]
 struct Budget {
-    workspace_id: Option<Uuid>,
     api_key_id: Option<Uuid>,
     period: String,
     amount_microusd: i64,
 }
 // A replacement HEADER, including all-null, replaces the type default. Local/key
 // policies compose, never coalesce away a stricter parent. Type limits are per workspace.
-const POLICIES: &str = "SELECT NULL::uuid workspace_id,NULL::uuid api_key_id,requests_per_minute,tokens_per_minute,concurrent_requests,concurrent_jobs FROM installation_policy
- UNION ALL SELECT $1::uuid,NULL::uuid,p.requests_per_minute,p.tokens_per_minute,p.concurrent_requests,p.concurrent_jobs FROM workspace_platform_policy_overrides p WHERE workspace_id=$1
+const POLICIES: &str = "SELECT $1::uuid workspace_id,NULL::uuid api_key_id,p.requests_per_minute,p.tokens_per_minute,p.concurrent_requests,p.concurrent_jobs FROM workspace_platform_policy_overrides p WHERE workspace_id=$1
  UNION ALL SELECT $1::uuid,NULL::uuid,p.requests_per_minute,p.tokens_per_minute,p.concurrent_requests,p.concurrent_jobs FROM workspace_type_policies p JOIN workspaces w ON w.kind=p.kind WHERE w.id=$1 AND NOT EXISTS(SELECT 1 FROM workspace_platform_policy_overrides WHERE workspace_id=$1)
  UNION ALL SELECT $1::uuid,NULL::uuid,requests_per_minute,tokens_per_minute,concurrent_requests,concurrent_jobs FROM workspace_local_policies WHERE workspace_id=$1
  UNION ALL SELECT $1::uuid,$2::uuid,requests_per_minute,tokens_per_minute,concurrent_requests,concurrent_jobs FROM key_policies WHERE workspace_id=$1 AND governance_key_id=$2";
@@ -306,8 +314,7 @@ const POLICIES: &str = "SELECT NULL::uuid workspace_id,NULL::uuid api_key_id,req
 /// only while the replacement header exists; type budgets only without one.
 /// Each budget is checked over its own window; a child can never loosen a
 /// parent because the parent's own window check still applies.
-pub(crate) const BUDGETS: &str = "SELECT NULL::uuid workspace_id,NULL::uuid api_key_id,period,amount_microusd FROM policy_budgets WHERE layer='installation'
- UNION ALL SELECT $1::uuid,NULL::uuid,b.period,b.amount_microusd FROM policy_budgets b JOIN workspace_platform_policy_overrides o ON o.workspace_id=b.workspace_id WHERE b.layer='override' AND b.workspace_id=$1
+pub(crate) const BUDGETS: &str = "SELECT $1::uuid workspace_id,NULL::uuid api_key_id,b.period,b.amount_microusd FROM policy_budgets b JOIN workspace_platform_policy_overrides o ON o.workspace_id=b.workspace_id WHERE b.layer='override' AND b.workspace_id=$1
  UNION ALL SELECT $1::uuid,NULL::uuid,b.period,b.amount_microusd FROM policy_budgets b JOIN workspaces w ON w.kind=b.kind WHERE b.layer='type' AND w.id=$1 AND NOT EXISTS(SELECT 1 FROM workspace_platform_policy_overrides WHERE workspace_id=$1)
  UNION ALL SELECT $1::uuid,NULL::uuid,period,amount_microusd FROM policy_budgets WHERE layer='local' AND workspace_id=$1
  UNION ALL SELECT $1::uuid,$2::uuid,period,amount_microusd FROM policy_budgets WHERE layer='key' AND workspace_id=$1 AND governance_key_id=$2";
@@ -656,8 +663,8 @@ enum LimitMode {
     /// does not cover).
     BatchLine,
 }
-/// Evaluate every applicable policy layer and budget under the installation
-/// lock and return the most actionable denial: budget/accounting (narrowest
+/// Evaluate every applicable policy layer and budget of the workspace and key
+/// lineage (no installation layer) under the installation lock and return the most actionable denial: budget/accounting (narrowest
 /// scope first) before the job limit before retryable rate limits.
 #[allow(clippy::too_many_arguments)]
 async fn enforce_limits(
@@ -694,18 +701,11 @@ async fn enforce_limits(
     }
     // Evaluate every applicable layer, then report the most actionable denial:
     // budget/accounting (narrowest scope first) before retryable rate limits.
-    let limit_scope =
-        |workspace_id: Option<Uuid>, api_key_id: Option<Uuid>| match (workspace_id, api_key_id) {
-            (None, _) => LimitScope::Installation,
-            (Some(_), None) => LimitScope::Workspace,
-            (Some(_), Some(_)) => LimitScope::ApiKey,
-        };
     // Budget/accounting denials rank above the job limit, which ranks above
     // other retryable rate limits.
     let rank = |scope| match scope {
         LimitScope::ApiKey => 4,
         LimitScope::Workspace => 3,
-        LimitScope::Installation => 2,
     };
     let mut denial: Option<(u8, InferenceError)> = None;
     let mut deny = |found: (u8, InferenceError)| {
@@ -714,10 +714,9 @@ async fn enforce_limits(
         }
     };
     // Rate layers: the maintained counters of the current UTC minute and live
-    // leases (O(scopes), not O(rows)). The installation layer (being removed)
-    // keeps the former scan, unchanged.
+    // leases (O(scopes), not O(rows)) of the workspace and the key lineage.
     for p in policies {
-        let scope = limit_scope(p.workspace_id, p.api_key_id);
+        let scope = LimitScope::of(p.api_key_id);
         // Jobs are exempt from per-minute limits; interactive work never
         // checks the job limit.
         let (requests_per_minute, tokens_per_minute, concurrent_jobs) = if job {
@@ -751,26 +750,12 @@ async fn enforce_limits(
             concurrent_requests: p.concurrent_requests,
             concurrent_jobs,
         };
-        let (rate_ok, jobs_ok) = match (p.workspace_id, p.api_key_id) {
-            (None, _) => sqlx::query_as(rates::SCAN)
-                .bind(None::<Uuid>)
-                .bind(None::<Uuid>)
-                .bind(now)
-                .bind(requests_per_minute)
-                .bind(tokens_per_minute)
-                .bind(p.concurrent_requests)
-                .bind(tokens)
-                .bind(concurrent_jobs)
-                .fetch_one(&mut **tx)
-                .await
-                .map_err(storage)?,
-            (Some(_), key) => counters
-                .iter()
-                .find(|(lineage, _)| *lineage == key)
-                .ok_or(InferenceError::Storage)?
-                .1
-                .admits(limits, tokens),
-        };
+        let (rate_ok, jobs_ok) = counters
+            .iter()
+            .find(|(lineage, _)| *lineage == p.api_key_id)
+            .ok_or(InferenceError::Storage)?
+            .1
+            .admits(limits, tokens);
         if !jobs_ok {
             deny((1, InferenceError::JobLimitExceeded(scope)));
         }
@@ -782,17 +767,9 @@ async fn enforce_limits(
     // (same statement), exactly the former window scan.
     let new_hold = i128::from(held.unwrap_or(0));
     for (b, c) in budgets.iter() {
-        let scope = limit_scope(b.workspace_id, b.api_key_id);
+        let scope = LimitScope::of(b.api_key_id);
         if c.unresolved {
-            // Installation-wide holds can belong to other workspaces; never
-            // reveal whether another scope has unresolved usage.
-            deny((
-                rank(scope),
-                match scope {
-                    LimitScope::Installation => InferenceError::BudgetExceeded(scope),
-                    _ => InferenceError::UnresolvedUsage(scope),
-                },
-            ));
+            deny((rank(scope), InferenceError::UnresolvedUsage(scope)));
         } else if c.used_microusd + new_hold > i128::from(b.amount_microusd) {
             deny((rank(scope), InferenceError::BudgetExceeded(scope)));
         }

@@ -9,8 +9,8 @@
 //!
 //! Findings are computed from live configuration on every request; nothing is
 //! stored and no key is changed. Effective limits compose every applicable
-//! layer: installation, type default (or its platform replacement), workspace
-//! local and key lineage.
+//! layer: type default (or its platform replacement), workspace local and key
+//! lineage (there are no installation-wide limits).
 use super::*;
 use chrono::{DateTime, TimeDelta, Utc};
 
@@ -149,8 +149,8 @@ pub(crate) fn findings(f: &Facts, now: DateTime<Utc>, t: &Thresholds) -> Vec<Fin
 const FACTS: &str = "WITH ks AS (SELECT k.id,k.name,k.workspace_id,w.name workspace_name,w.kind workspace_kind,k.issued_to_user_id,k.service_account_id,k.created_at,k.expires_at,k.governance_key_id,(SELECT max(e.started_at) FROM inference_executions e WHERE e.api_key_id=k.id) last_used_at,EXISTS(SELECT 1 FROM key_model_restrictions r WHERE r.workspace_id=k.workspace_id AND r.governance_key_id=k.governance_key_id) restricted,EXISTS(SELECT 1 FROM workspace_platform_policy_overrides o WHERE o.workspace_id=w.id) overridden FROM api_keys k JOIN workspaces w ON w.id=k.workspace_id WHERE w.disabled_at IS NULL AND k.revoked_at IS NULL AND k.disabled_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now()) AND {SCOPE}),
 wm AS (SELECT g.workspace_id,count(DISTINCT g.model_id) n FROM workspace_model_grants g WHERE g.workspace_id IN(SELECT workspace_id FROM ks) AND workspace_model_allowed(g.workspace_id,g.model_id) GROUP BY g.workspace_id)
 SELECT ks.id,ks.name,ks.workspace_id,ks.workspace_name,ks.workspace_kind,ks.issued_to_user_id,ks.service_account_id,ks.created_at,ks.expires_at,ks.last_used_at,ks.restricted,coalesce(wm.n,0) workspace_models,
-EXISTS(SELECT 1 FROM policy_budgets b WHERE b.layer='installation' OR (b.layer='type' AND NOT ks.overridden AND b.kind=ks.workspace_kind) OR (b.layer='override' AND ks.overridden AND b.workspace_id=ks.workspace_id) OR (b.layer='local' AND b.workspace_id=ks.workspace_id) OR (b.layer='key' AND b.workspace_id=ks.workspace_id AND b.governance_key_id=ks.governance_key_id)) has_budget,
-(EXISTS(SELECT 1 FROM installation_policy p WHERE {CAPPED}) OR (NOT ks.overridden AND EXISTS(SELECT 1 FROM workspace_type_policies p WHERE p.kind=ks.workspace_kind AND {CAPPED})) OR (ks.overridden AND EXISTS(SELECT 1 FROM workspace_platform_policy_overrides p WHERE p.workspace_id=ks.workspace_id AND {CAPPED})) OR EXISTS(SELECT 1 FROM workspace_local_policies p WHERE p.workspace_id=ks.workspace_id AND {CAPPED}) OR EXISTS(SELECT 1 FROM key_policies p WHERE p.workspace_id=ks.workspace_id AND p.governance_key_id=ks.governance_key_id AND {CAPPED})) has_caps,
+EXISTS(SELECT 1 FROM policy_budgets b WHERE (b.layer='type' AND NOT ks.overridden AND b.kind=ks.workspace_kind) OR (b.layer='override' AND ks.overridden AND b.workspace_id=ks.workspace_id) OR (b.layer='local' AND b.workspace_id=ks.workspace_id) OR (b.layer='key' AND b.workspace_id=ks.workspace_id AND b.governance_key_id=ks.governance_key_id)) has_budget,
+((NOT ks.overridden AND EXISTS(SELECT 1 FROM workspace_type_policies p WHERE p.kind=ks.workspace_kind AND {CAPPED})) OR (ks.overridden AND EXISTS(SELECT 1 FROM workspace_platform_policy_overrides p WHERE p.workspace_id=ks.workspace_id AND {CAPPED})) OR EXISTS(SELECT 1 FROM workspace_local_policies p WHERE p.workspace_id=ks.workspace_id AND {CAPPED}) OR EXISTS(SELECT 1 FROM key_policies p WHERE p.workspace_id=ks.workspace_id AND p.governance_key_id=ks.governance_key_id AND {CAPPED})) has_caps,
 (ks.issued_to_user_id IS NULL OR ks.workspace_kind='personal' OR EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=ks.workspace_id AND m.user_id=ks.issued_to_user_id)) holder_has_access
 FROM ks LEFT JOIN wm ON wm.workspace_id=ks.workspace_id ORDER BY ks.workspace_name,ks.workspace_id,ks.created_at DESC,ks.id";
 const CAPPED: &str =

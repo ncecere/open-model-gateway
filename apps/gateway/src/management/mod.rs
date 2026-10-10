@@ -80,7 +80,15 @@ const REASONS: &[(&str, &str)] = &[
     (alerts::PERSONAL_BUILTIN_ONLY, "personal_alerts_built_in"),
     (alerts::RULE_LIMIT, "alert_rule_limit"),
     (alerts::KIND_FIXED, "alert_rule_kind_fixed"),
+    (INSTALLATION_LIMITS_REMOVED, "installation_limits_removed"),
 ];
+/// Installation-wide limits were removed (0026): the former installation
+/// policy endpoint answers `410` and an alert rule watching the
+/// `installation` budget layer is `400`, both with this reason.
+pub(crate) const INSTALLATION_LIMITS_REMOVED: &str = "Installation-wide limits were removed; set limits on workspace-type defaults, workspaces or API keys, and use an installation spend alert to watch total spend";
+pub(crate) fn installation_limits_removed(status: StatusCode) -> ApiError {
+    ApiError(status, INSTALLATION_LIMITS_REMOVED)
+}
 const PERSONAL_NAME_FIXED: &str = "Personal workspace name is fixed";
 const PERSONAL_LIMITS: &str = "Personal workspace limits are set by the platform";
 const STACKED_LEGACY: &str = "This layer has several budgets; update them with the budgets field";

@@ -9,31 +9,42 @@ use chrono::{DateTime, Utc};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
-/// Consumption scope of a budget layer. Installation, type-default/override
-/// and local budgets read the installation or workspace scope; key budgets the
-/// key lineage.
+/// Consumption scope of a budget layer. Type-default/override and local
+/// budgets read the workspace scope; key budgets the key lineage. There is no
+/// installation scope (removed in 0026): no request updates a global row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Scope {
-    Installation,
     Workspace(Uuid),
     KeyLineage(Uuid),
 }
 impl Scope {
-    pub(crate) fn of(workspace: Option<Uuid>, lineage: Option<Uuid>) -> Self {
-        match (workspace, lineage) {
-            (None, _) => Self::Installation,
-            (Some(w), None) => Self::Workspace(w),
-            (Some(_), Some(l)) => Self::KeyLineage(l),
+    pub(crate) fn of(workspace: Uuid, lineage: Option<Uuid>) -> Self {
+        match lineage {
+            None => Self::Workspace(workspace),
+            Some(l) => Self::KeyLineage(l),
         }
     }
     pub(crate) fn key(self) -> (&'static str, Uuid) {
         match self {
-            Self::Installation => ("installation", Uuid::nil()),
             Self::Workspace(w) => ("workspace", w),
             Self::KeyLineage(l) => ("key", l),
         }
     }
 }
+
+/// Installation-wide spend of one period window (`$1` period, `$2` period
+/// start): the sum of every workspace row of that window, which is exact
+/// because every reservation and execution belongs to exactly one workspace
+/// (the 0026 `budget_totals_installation_spend` index finds the rows). Returns
+/// alert spend (settled plus *pending* holds; unknown-cost holds are not
+/// added) as a decimal string, the pending holds, and the requests whose cost
+/// is unknown or unresolved (never counted as zero).
+pub(crate) const INSTALLATION_SPEND: &str = "SELECT coalesce(sum(t.settled_microusd+t.held_microusd-t.held_unknown_microusd),0)::text,coalesce(sum(t.held_microusd-t.held_unknown_microusd),0)::text,coalesce(sum(t.unknown+t.unresolved-t.unresolved_unknown),0)::bigint FROM budget_totals t WHERE t.scope_kind='workspace' AND t.period=$1 AND t.period_start=$2";
+
+/// Installation-wide pending and unknown reservation counts (the
+/// `gateway_reservations_held` gauge): the sum of the workspace `lifetime`
+/// rows, exact for the same reason as [`INSTALLATION_SPEND`].
+pub(crate) const RESERVATION_COUNTS: &str = "SELECT coalesce(sum(t.pending),0)::bigint,coalesce(sum(t.unknown),0)::bigint FROM budget_totals t WHERE t.scope_kind='workspace' AND t.period='lifetime' AND t.period_start='epoch'";
 impl BudgetPeriod {
     /// Start of the bucket holding admissions at `at` (the epoch for lifetime).
     pub fn bucket_start(self, at: DateTime<Utc>) -> DateTime<Utc> {
@@ -102,7 +113,7 @@ pub(crate) async fn budget_consumption(
     period: BudgetPeriod,
     at: DateTime<Utc>,
 ) -> Result<(String, bool), sqlx::Error> {
-    let c = read(tx, &[(Scope::of(Some(workspace), lineage), period)], at).await?;
+    let c = read(tx, &[(Scope::of(workspace, lineage), period)], at).await?;
     let c = c.first().copied().unwrap_or_default();
     Ok((c.used_microusd.to_string(), c.unresolved))
 }
@@ -128,7 +139,7 @@ FROM (
  SELECT e.workspace_id,e.api_key_id,e.started_at,0,0,0,0,0,0,1,0,0 FROM inference_executions e
  WHERE NOT EXISTS(SELECT 1 FROM governance_reservations r WHERE r.execution_id=e.id)
 ) c JOIN api_keys k ON k.id=c.api_key_id
-CROSS JOIN LATERAL (VALUES('installation','00000000-0000-0000-0000-000000000000'::uuid),('workspace',c.workspace_id),('key',k.governance_key_id)) s(kind,id)
+CROSS JOIN LATERAL (VALUES('workspace',c.workspace_id),('key',k.governance_key_id)) s(kind,id)
 CROSS JOIN (VALUES('day'),('week'),('month'),('lifetime')) p(period)
 GROUP BY 1,2,3,4"#;
 

@@ -628,8 +628,9 @@ async fn video_jobs_are_exempt_from_per_minute_limits(pool: PgPool) {
     j.create_video(f.principal, video_request(), Uuid::new_v4())
         .await
         .unwrap();
-    // The installation-wide limit still applies on top.
-    sqlx::query("INSERT INTO installation_policy(singleton,concurrent_jobs) VALUES(true,3) ON CONFLICT(singleton) DO UPDATE SET concurrent_jobs=3")
+    // A key lineage limit still applies on top (there is no installation-wide limit).
+    sqlx::query("INSERT INTO key_policies(workspace_id,governance_key_id,concurrent_jobs) SELECT workspace_id,governance_key_id,3 FROM api_keys WHERE id=$1")
+        .bind(f.principal.key_id)
         .execute(&f.store.pool)
         .await
         .unwrap();
@@ -642,7 +643,7 @@ async fn video_jobs_are_exempt_from_per_minute_limits(pool: PgPool) {
             .await
             .err(),
         Some(JobError::Inference(InferenceError::JobLimitExceeded(
-            crate::inference::error::LimitScope::Installation
+            crate::inference::error::LimitScope::ApiKey
         )))
     );
 }

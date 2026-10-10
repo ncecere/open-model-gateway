@@ -107,9 +107,9 @@ describe("Add model form", () => {
 describe("setup checklist from server counts (contract §4)", () => {
   const setup: PlatformOverviewData["setup"] = { connections: 1, enabled_connections: 1, models: 2, ready_models: 0, enabled_routes: 2, priced_enabled_routes: 1, catalogs: 1, type_defaults: { personal: 0, team: 1, project: 0 }, entitled_users: 1, oidc_mappings: 0 };
   it("marks steps done from real state only", () => { const steps = setupSteps(setup); expect(steps.map(s => [s.id, s.done])).toEqual([["connection", true], ["model", true], ["pricing", false], ["offer", false], ["defaults", false], ["access", false]]); expect(steps[4].description).toContain("Personal, Project");
-    // Each workspace type needs a default; the installation budget is an optional extra step (only when the overview reports budgets).
+    // Each workspace type needs a default; there is no installation-wide budget step (installation limits were removed).
     expect(setupSteps({ ...setup, type_defaults: { personal: 1, team: 1, project: 1 } })[4].done).toBe(true);
-    expect(setupSteps(setup, []).at(-1)).toMatchObject({ id: "budget", done: false, optional: true }); expect(setupSteps(setup, [{}]).at(-1)?.done).toBe(true); expect(steps[2].description).toContain("1 enabled route is unpriced"); });
+    expect(steps.some(s => s.optional || /installation/i.test(s.title))).toBe(false); expect(steps[2].description).toContain("1 enabled route is unpriced"); });
   it("explains a disabled connection and an empty install", () => { const empty = setupSteps({ ...setup, enabled_connections: 0, enabled_routes: 0, priced_enabled_routes: 0, type_defaults: { personal: 0, team: 0, project: 0 } }); expect(empty[0]).toMatchObject({ done: false, description: "1 connection, none enabled." }); expect(empty[2].done).toBe(false); expect(empty[4].done).toBe(false); });
   it("counts access from SSO mappings or another entitled user", () => { expect(setupSteps({ ...setup, oidc_mappings: 1 })[5].done).toBe(true); expect(setupSteps({ ...setup, entitled_users: 2 })[5].done).toBe(true); });
 });

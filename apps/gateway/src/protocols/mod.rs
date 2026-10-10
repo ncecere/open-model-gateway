@@ -143,11 +143,7 @@ mod tests {
             openai_error_body(InferenceError::Busy)["error"]["type"],
             "rate_limit_error"
         );
-        for scope in [
-            LimitScope::ApiKey,
-            LimitScope::Workspace,
-            LimitScope::Installation,
-        ] {
+        for scope in [LimitScope::ApiKey, LimitScope::Workspace] {
             let ceiling = InferenceError::TokenReservationExceedsLimit(scope);
             let response = error_with_body(ceiling, openai_error_body(ceiling));
             assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);

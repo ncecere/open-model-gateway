@@ -2,6 +2,9 @@
  * Effective access by layer and "Why can't I use this model?" reasons
  * (ux-api-contract "Layers + why-unavailable"): GET /workspaces/{ws}/access and
  * /workspaces/{ws}/keys/{key}/access. Counts are cumulative up to each layer.
+ * There are no installation-wide limits (removed in migration 0026): `layers`
+ * starts at the type default; `platform` remains only as the layer of
+ * model-level reasons (a model or its routes turned off).
  */
 import type { BudgetPeriod, PolicyBudget } from "./governance";
 import type { WorkspaceKind } from "./api";
@@ -22,10 +25,10 @@ export type AccessResponse = { workspace_id: string; key_id: string | null; /** 
 
 export const accessStatusLabel: Record<AccessModel["status"], string> = { available: "Available", partial: "Partly available", unavailable: "Unavailable" };
 export function layerLabel(layer: AccessLayerName, kind: WorkspaceKind): string {
-  return { platform: "Installation", type_default: `${kindLabels[kind]} defaults`, workspace_override: "Platform override", workspace: "This workspace", key: "This key" }[layer];
+  return { platform: "Platform", type_default: `${kindLabels[kind]} defaults`, workspace_override: "Platform override", workspace: "This workspace", key: "This key" }[layer];
 }
 export const layerLimits = (layer: Pick<AccessLayer, "limits" | "budgets">): Limits | null => layer.limits ? { ...layer.limits, budgets: layer.budgets ?? [] } : null;
-const whereText = (layer: AccessLayerName, kind: WorkspaceKind) => ({ platform: "the installation", type_default: `the ${kindLabels[kind]} defaults`, workspace_override: "the platform override", workspace: "this workspace", key: "this key" }[layer]);
+const whereText = (layer: AccessLayerName, kind: WorkspaceKind) => ({ platform: "the platform", type_default: `the ${kindLabels[kind]} defaults`, workspace_override: "the platform override", workspace: "this workspace", key: "this key" }[layer]);
 /** One reason in plain words. Unknown codes are shown as they are, never hidden. */
 export function reasonText(reason: AccessReason, kind: WorkspaceKind, canManageModels = false): string {
   const period = reason.period ? periodName[reason.period].toLowerCase() : "";

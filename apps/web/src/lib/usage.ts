@@ -11,7 +11,6 @@
  * last included day.
  */
 import type { CostStatusFilter, DashboardSearch } from "./permissions";
-import type { InstallationBudget } from "./api";
 import { formatUsd, type Cost, type WorkloadKind } from "./governance";
 import { dateError, formatCount } from "./reports";
 import { requestStatuses, type RequestStatus } from "./requests";
@@ -33,8 +32,6 @@ export type UsageOverview = {
     blended_microusd_per_million: Tile;
   };
   top: { models: TopRow[]; keys: TopRow[]; members: TopRow[] | null };
-  /** Platform scope only (null for workspaces); ignores filters. */
-  installation_budgets?: InstallationBudget[] | null;
 };
 /**
  * A top-10 row. `blended_microusd_per_million`: the row's settled cost per 1M tokens of its settled attempts (decimal

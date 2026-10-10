@@ -421,10 +421,10 @@ pub(super) fn ready_model() -> String {
     )
 }
 /// Configuration check (best effort): the smallest tokens-per-minute limit
-/// among the installation policy and the workspace-type defaults that offer
+/// among the workspace-type defaults that offer
 /// model `m` through their default catalogs (every type when none does).
 /// Overrides and local/key limits are not considered.
-pub(super) const APPLICABLE_TYPE_TOKENS_PER_MINUTE: &str = "(SELECT min(t) FROM (SELECT tokens_per_minute t FROM installation_policy UNION ALL SELECT tp.tokens_per_minute FROM workspace_type_policies tp WHERE NOT EXISTS(SELECT 1 FROM workspace_type_catalogs wtc JOIN catalog_models cm ON cm.catalog_id=wtc.catalog_id WHERE cm.model_id=m.id) OR EXISTS(SELECT 1 FROM workspace_type_catalogs wtc JOIN catalog_models cm ON cm.catalog_id=wtc.catalog_id WHERE cm.model_id=m.id AND wtc.kind=tp.kind)) limits)";
+pub(super) const APPLICABLE_TYPE_TOKENS_PER_MINUTE: &str = "(SELECT min(t) FROM (SELECT tp.tokens_per_minute t FROM workspace_type_policies tp WHERE NOT EXISTS(SELECT 1 FROM workspace_type_catalogs wtc JOIN catalog_models cm ON cm.catalog_id=wtc.catalog_id WHERE cm.model_id=m.id) OR EXISTS(SELECT 1 FROM workspace_type_catalogs wtc JOIN catalog_models cm ON cm.catalog_id=wtc.catalog_id WHERE cm.model_id=m.id AND wtc.kind=tp.kind)) limits)";
 /// The latest price version's worst-case per-attempt token reservation.
 const ROUTE_TOKEN_CEILING: &str = "(SELECT dp.input_token_limit+dp.output_token_limit FROM deployment_prices dp WHERE dp.deployment_id=d.id ORDER BY dp.created_at DESC,dp.id DESC LIMIT 1)";
 /// Model metadata plus aggregate readiness counts. Connection labels never include credential references.

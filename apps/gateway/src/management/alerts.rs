@@ -1,11 +1,12 @@
 //! Alert rules, alert history and in-app notifications (docs/alerts.md).
 //!
 //! - Installation rules: Platform Admins write, Auditors read
-//!   (`/platform/alerts/*`). Every rule kind; budget rules watch the
-//!   installation budget and Team/Project budgets (never personal workspaces).
+//!   (`/platform/alerts/*`). Every rule kind; budget rules watch Team/Project
+//!   budgets (never personal workspaces); installation spend rules watch total
+//!   spend against a reference amount (there is no installation budget).
 //! - Workspace rules: Team/Project admins write (actual membership); platform
 //!   readers may read. Budget, spend-spike and error-rate kinds over that
-//!   workspace only, never the installation budget or connections.
+//!   workspace only, never installation spend or connections.
 //! - Personal workspaces have built-in budget alerts for their owner only;
 //!   nothing is configurable and nobody else sees them.
 //! - Notifications follow live authority: installation incidents for platform
@@ -60,7 +61,7 @@ pub(super) fn routes() -> Router<Store> {
 
 // ---------- Rule shape ----------
 
-const RULE_JSON: &str = "jsonb_build_object('id',r.id,'scope',r.scope,'workspace_id',r.workspace_id,'kind',r.kind,'name',r.name,'enabled',r.enabled,'budget_layers',to_jsonb(r.budget_layers),'thresholds',to_jsonb(r.thresholds),'spike_factor_percent',r.spike_factor_percent,'min_spend_microusd',r.min_spend_microusd::text,'window_minutes',r.window_minutes,'error_rate_percent',r.error_rate_percent,'min_requests',r.min_requests,'consecutive_failures',r.consecutive_failures,'provider_connection_id',r.provider_connection_id,'provider_connection',(SELECT jsonb_build_object('id',p.id,'name',p.name,'provider',p.provider) FROM provider_connections p WHERE p.id=r.provider_connection_id),'notify_workspace_admins',r.notify_workspace_admins,'notify_platform_admins',r.notify_platform_admins,'notify_emails',to_jsonb(r.notify_emails),'firing',(SELECT count(*) FROM alert_events e WHERE e.rule_id=r.id AND e.resolved_at IS NULL),'last_fired_at',(SELECT max(e.fired_at) FROM alert_events e WHERE e.rule_id=r.id),'created_at',r.created_at,'updated_at',r.updated_at)";
+const RULE_JSON: &str = "jsonb_build_object('id',r.id,'scope',r.scope,'workspace_id',r.workspace_id,'kind',r.kind,'name',r.name,'enabled',r.enabled,'budget_layers',to_jsonb(r.budget_layers),'thresholds',to_jsonb(r.thresholds),'spike_factor_percent',r.spike_factor_percent,'min_spend_microusd',r.min_spend_microusd::text,'window_minutes',r.window_minutes,'error_rate_percent',r.error_rate_percent,'min_requests',r.min_requests,'consecutive_failures',r.consecutive_failures,'provider_connection_id',r.provider_connection_id,'spend_period',r.spend_period,'spend_amount_microusd',r.spend_amount_microusd::text,'provider_connection',(SELECT jsonb_build_object('id',p.id,'name',p.name,'provider',p.provider) FROM provider_connections p WHERE p.id=r.provider_connection_id),'notify_workspace_admins',r.notify_workspace_admins,'notify_platform_admins',r.notify_platform_admins,'notify_emails',to_jsonb(r.notify_emails),'firing',(SELECT count(*) FROM alert_events e WHERE e.rule_id=r.id AND e.resolved_at IS NULL),'last_fired_at',(SELECT max(e.fired_at) FROM alert_events e WHERE e.rule_id=r.id),'created_at',r.created_at,'updated_at',r.updated_at)";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -79,6 +80,10 @@ pub(super) struct RuleInput {
     min_requests: Option<i32>,
     consecutive_failures: Option<i32>,
     provider_connection_id: Option<Uuid>,
+    /// Installation spend rules: `day`, `week`, `month` or `lifetime`.
+    spend_period: Option<String>,
+    /// Installation spend rules: reference amount, integer micro-USD string.
+    spend_amount_microusd: Option<String>,
     #[serde(default)]
     notify_workspace_admins: bool,
     #[serde(default)]
@@ -105,9 +110,37 @@ pub(super) struct Valid {
     min_requests: Option<i32>,
     consecutive_failures: Option<i32>,
     provider_connection_id: Option<Uuid>,
+    spend_period: Option<String>,
+    spend_amount_microusd: Option<i64>,
     notify_workspace_admins: bool,
     notify_platform_admins: bool,
     notify_emails: Vec<String>,
+}
+
+/// A positive integer micro-USD string of at most `digits` digits that fits i64.
+fn microusd(value: &str, digits: usize) -> Result<i64, ApiError> {
+    if value.is_empty() || value.len() > digits || !value.bytes().all(|c| c.is_ascii_digit()) {
+        return Err(invalid());
+    }
+    let n: i64 = value.parse().map_err(|_| invalid())?;
+    if n < 1 {
+        return Err(invalid());
+    }
+    Ok(n)
+}
+
+/// Percent thresholds: 1–5 distinct values from 1 to 100, sorted.
+fn thresholds(values: Option<Vec<i32>>) -> Result<Vec<i32>, ApiError> {
+    let mut thresholds = values.ok_or_else(invalid)?;
+    thresholds.sort_unstable();
+    thresholds.dedup();
+    if thresholds.is_empty()
+        || thresholds.len() > 5
+        || thresholds.iter().any(|t| !(1..=100).contains(t))
+    {
+        return Err(invalid());
+    }
+    Ok(thresholds)
 }
 
 /// Strict validation; `workspace` selects the narrower workspace-rule shape.
@@ -117,7 +150,7 @@ pub(super) fn validate(b: RuleInput, workspace: bool) -> Result<Valid, ApiError>
         return Err(invalid());
     }
     let kind = Kind::parse(&b.kind).ok_or_else(invalid)?;
-    if workspace && kind == Kind::Provider {
+    if workspace && matches!(kind, Kind::Provider | Kind::Spend) {
         return Err(invalid());
     }
     let mut v = Valid {
@@ -133,6 +166,8 @@ pub(super) fn validate(b: RuleInput, workspace: bool) -> Result<Valid, ApiError>
         min_requests: None,
         consecutive_failures: None,
         provider_connection_id: None,
+        spend_period: None,
+        spend_amount_microusd: None,
         notify_workspace_admins: b.notify_workspace_admins,
         notify_platform_admins: b.notify_platform_admins,
         notify_emails: Vec::new(),
@@ -143,20 +178,31 @@ pub(super) fn validate(b: RuleInput, workspace: bool) -> Result<Valid, ApiError>
     let window =
         b.window_minutes.is_some() || b.error_rate_percent.is_some() || b.min_requests.is_some();
     let provider = b.consecutive_failures.is_some() || b.provider_connection_id.is_some();
-    let allowed = match kind {
-        Kind::Budget => !spike && !window && !provider,
-        Kind::Spike => !budget && !window && !provider,
-        Kind::ErrorRate => !budget && !spike && !provider,
-        Kind::Provider => !budget && !spike,
-        Kind::BatchFailed => !budget && !spike && !window && !provider,
-        Kind::BatchStalled => {
-            !budget
-                && !spike
-                && !provider
-                && b.error_rate_percent.is_none()
-                && b.min_requests.is_none()
-        }
-    };
+    let spend = b.spend_period.is_some() || b.spend_amount_microusd.is_some();
+    // There is no installation budget layer any more (0026): say so plainly.
+    if b.budget_layers
+        .as_ref()
+        .is_some_and(|l| l.iter().any(|l| l == "installation"))
+    {
+        return Err(super::installation_limits_removed(StatusCode::BAD_REQUEST));
+    }
+    let allowed = !spend || kind == Kind::Spend;
+    let allowed = allowed
+        && match kind {
+            Kind::Budget => !spike && !window && !provider,
+            Kind::Spend => b.budget_layers.is_none() && !spike && !window && !provider,
+            Kind::Spike => !budget && !window && !provider,
+            Kind::ErrorRate => !budget && !spike && !provider,
+            Kind::Provider => !budget && !spike,
+            Kind::BatchFailed => !budget && !spike && !window && !provider,
+            Kind::BatchStalled => {
+                !budget
+                    && !spike
+                    && !provider
+                    && b.error_rate_percent.is_none()
+                    && b.min_requests.is_none()
+            }
+        };
     if !allowed {
         return Err(invalid());
     }
@@ -165,37 +211,30 @@ pub(super) fn validate(b: RuleInput, workspace: bool) -> Result<Valid, ApiError>
             let mut layers = b.budget_layers.ok_or_else(invalid)?;
             layers.sort_by_key(|l| BUDGET_LAYERS.iter().position(|x| x == l));
             layers.dedup();
-            if layers.is_empty()
-                || layers.iter().any(|l| {
-                    !BUDGET_LAYERS.contains(&l.as_str()) || (workspace && l == "installation")
-                })
-            {
-                return Err(invalid());
-            }
-            let mut thresholds = b.thresholds.ok_or_else(invalid)?;
-            thresholds.sort_unstable();
-            thresholds.dedup();
-            if thresholds.is_empty()
-                || thresholds.len() > 5
-                || thresholds.iter().any(|t| !(1..=100).contains(t))
-            {
+            if layers.is_empty() || layers.iter().any(|l| !BUDGET_LAYERS.contains(&l.as_str())) {
                 return Err(invalid());
             }
             v.budget_layers = Some(layers);
-            v.thresholds = Some(thresholds);
+            v.thresholds = Some(thresholds(b.thresholds)?);
+        }
+        // Installation spend: percent thresholds of a reference amount per period.
+        Kind::Spend => {
+            let period = b.spend_period.ok_or_else(invalid)?;
+            if crate::governance::BudgetPeriod::parse(&period).is_none() {
+                return Err(invalid());
+            }
+            // Like budget amounts: any positive i64.
+            v.spend_amount_microusd = Some(microusd(
+                b.spend_amount_microusd.as_deref().ok_or_else(invalid)?,
+                19,
+            )?);
+            v.spend_period = Some(period);
+            v.thresholds = Some(thresholds(b.thresholds)?);
         }
         Kind::Spike => {
             let factor = b.spike_factor_percent.ok_or_else(invalid)?;
-            let floor = b.min_spend_microusd.ok_or_else(invalid)?;
-            if !(110..=100_000).contains(&factor)
-                || floor.is_empty()
-                || floor.len() > 15
-                || !floor.bytes().all(|c| c.is_ascii_digit())
-            {
-                return Err(invalid());
-            }
-            let floor: i64 = floor.parse().map_err(|_| invalid())?;
-            if floor < 1 {
+            let floor = microusd(&b.min_spend_microusd.ok_or_else(invalid)?, 15)?;
+            if !(110..=100_000).contains(&factor) {
                 return Err(invalid());
             }
             v.spike_factor_percent = Some(factor);
@@ -302,7 +341,7 @@ async fn insert_rule(
     }
     check_connection(tx, v).await?;
     let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO alert_rules(id,scope,workspace_id,kind,name,enabled,budget_layers,thresholds,spike_factor_percent,min_spend_microusd,window_minutes,error_rate_percent,min_requests,consecutive_failures,provider_connection_id,notify_workspace_admins,notify_platform_admins,notify_emails,created_by,updated_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$19)")
+    sqlx::query("INSERT INTO alert_rules(id,scope,workspace_id,kind,name,enabled,budget_layers,thresholds,spike_factor_percent,min_spend_microusd,window_minutes,error_rate_percent,min_requests,consecutive_failures,provider_connection_id,notify_workspace_admins,notify_platform_admins,notify_emails,created_by,updated_by,spend_period,spend_amount_microusd) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$19,$20,$21)")
         .bind(id)
         .bind(if ws.is_some() { "workspace" } else { "installation" })
         .bind(ws)
@@ -322,6 +361,8 @@ async fn insert_rule(
         .bind(v.notify_platform_admins)
         .bind(&v.notify_emails)
         .bind(u.user_id)
+        .bind(&v.spend_period)
+        .bind(v.spend_amount_microusd)
         .execute(&mut **tx)
         .await?;
     audit(
@@ -354,7 +395,7 @@ async fn update_rule(
         return Err(ApiError(StatusCode::CONFLICT, KIND_FIXED));
     }
     check_connection(tx, v).await?;
-    sqlx::query("UPDATE alert_rules SET name=$2,enabled=$3,budget_layers=$4,thresholds=$5,spike_factor_percent=$6,min_spend_microusd=$7,window_minutes=$8,error_rate_percent=$9,min_requests=$10,consecutive_failures=$11,provider_connection_id=$12,notify_workspace_admins=$13,notify_platform_admins=$14,notify_emails=$15,updated_by=$16,updated_at=now() WHERE id=$1")
+    sqlx::query("UPDATE alert_rules SET name=$2,enabled=$3,budget_layers=$4,thresholds=$5,spike_factor_percent=$6,min_spend_microusd=$7,window_minutes=$8,error_rate_percent=$9,min_requests=$10,consecutive_failures=$11,provider_connection_id=$12,notify_workspace_admins=$13,notify_platform_admins=$14,notify_emails=$15,updated_by=$16,spend_period=$17,spend_amount_microusd=$18,updated_at=now() WHERE id=$1")
         .bind(id)
         .bind(&v.name)
         .bind(v.enabled)
@@ -371,6 +412,8 @@ async fn update_rule(
         .bind(v.notify_platform_admins)
         .bind(&v.notify_emails)
         .bind(u.user_id)
+        .bind(&v.spend_period)
+        .bind(v.spend_amount_microusd)
         .execute(&mut **tx)
         .await?;
     // A disabled rule's open incidents close now (silently), not on the next tick.
@@ -802,17 +845,52 @@ mod validation_tests {
     }
     #[test]
     fn rules_are_strict_per_kind_and_scope() {
-        let budget = json!({"name":" Budgets ","kind":"budget_threshold","budget_layers":["key","installation","local","key"],"thresholds":[100,50,80,80],"notify_platform_admins":true,"notify_emails":[" Ops@Example.test ","ops@example.test"]});
+        let budget = json!({"name":" Budgets ","kind":"budget_threshold","budget_layers":["key","type","local","key"],"thresholds":[100,50,80,80],"notify_platform_admins":true,"notify_emails":[" Ops@Example.test ","ops@example.test"]});
         let v = validate(input(budget.clone()), false).unwrap();
         assert_eq!(v.name, "Budgets");
         assert_eq!(
             v.budget_layers.as_deref().unwrap(),
-            ["installation", "local", "key"]
+            ["type", "local", "key"]
         );
         assert_eq!(v.thresholds.as_deref().unwrap(), [50, 80, 100]);
         assert_eq!(v.notify_emails, ["ops@example.test"]);
-        // Workspace rules never watch the installation budget or connections.
-        assert!(validate(input(budget), true).is_err());
+        // There is no installation budget layer (0026), in any scope, with a
+        // stable reason.
+        for workspace in [false, true] {
+            let err = validate(
+                input(json!({"name":"x","kind":"budget_threshold","budget_layers":["installation","local"],"thresholds":[80]})),
+                workspace,
+            )
+            .unwrap_err();
+            assert_eq!(err.0, StatusCode::BAD_REQUEST);
+            assert_eq!(err.1, crate::management::INSTALLATION_LIMITS_REMOVED);
+        }
+        // Installation spend rules: percent thresholds of a reference amount.
+        let spend = json!({"name":"Spend","kind":"spend_threshold","spend_period":"month","spend_amount_microusd":"5000000000","thresholds":[100,50],"notify_platform_admins":true});
+        let s = validate(input(spend.clone()), false).unwrap();
+        assert_eq!(
+            (
+                s.spend_period.as_deref(),
+                s.spend_amount_microusd,
+                s.thresholds.as_deref()
+            ),
+            (Some("month"), Some(5_000_000_000), Some(&[50, 100][..]))
+        );
+        // Installation only.
+        assert!(validate(input(spend), true).is_err());
+        for bad in [
+            json!({"name":"x","kind":"spend_threshold","spend_period":"year","spend_amount_microusd":"1","thresholds":[50]}),
+            json!({"name":"x","kind":"spend_threshold","spend_period":"day","spend_amount_microusd":"0","thresholds":[50]}),
+            json!({"name":"x","kind":"spend_threshold","spend_period":"day","spend_amount_microusd":"1.5","thresholds":[50]}),
+            json!({"name":"x","kind":"spend_threshold","spend_period":"day","spend_amount_microusd":"1"}),
+            json!({"name":"x","kind":"spend_threshold","spend_amount_microusd":"1","thresholds":[50]}),
+            json!({"name":"x","kind":"spend_threshold","spend_period":"day","spend_amount_microusd":"1","thresholds":[50],"budget_layers":["local"]}),
+            json!({"name":"x","kind":"budget_threshold","budget_layers":["local"],"thresholds":[50],"spend_period":"day"}),
+        ] {
+            assert!(validate(input(bad.clone()), false).is_err(), "{bad}");
+        }
+        // Workspace rules never watch connections.
+        assert!(validate(input(json!({"name":"x","kind":"provider_failing","window_minutes":15,"consecutive_failures":5})), true).is_err());
         for bad in [
             json!({"name":"x","kind":"budget_threshold","budget_layers":["local"],"thresholds":[0]}),
             json!({"name":"x","kind":"budget_threshold","budget_layers":["local"],"thresholds":[101]}),

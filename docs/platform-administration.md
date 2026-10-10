@@ -39,7 +39,7 @@ Model presence alone is not permission. Inference requires live authorization, e
 
 Type defaults apply **independently to each workspace**, not to a pool of all Teams or Projects. Workspaces without platform overrides follow changes live. A replacement override replaces the type policy even when all fields are null. Local workspace/key restrictions compose with that platform layer and cannot raise or erase a stored local cap merely because a stricter parent currently masks it.
 
-For example, a Team default of 2,000 requests/minute gives each inheriting Team that ceiling. A local cap of 500 imposes a second limit on that Team; it does not reserve 500 requests of installation capacity. The optional installation policy can impose a separate shared ceiling across all workspaces, including an installation-wide monthly budget. Absent child limits never remove parents.
+For example, a Team default of 2,000 requests/minute gives each inheriting Team that ceiling. A local cap of 500 imposes a second limit on that Team; it does not reserve 500 requests of anyone else's capacity. There is no installation-wide ceiling (removed in migration 0026); to watch total spend, add an installation spend alert. Absent child limits never remove parents.
 
 Budgets use UTC calendar months and block new admission when allowance is exhausted. Changes and key rotation do not reset recorded consumption. Unknown/unbounded charges are not free. Ordinary users do not receive installation headroom that could reveal others' personal consumption. See [governance](governance.md).
 

@@ -372,7 +372,8 @@ async fn usage_and_records_filters_are_strict_scoped_and_series_are_strings(pool
     let (status, v) = get(&f, &f.owner, &ov("")).await;
     assert_eq!(status, StatusCode::OK, "{v}");
     assert_eq!(spend(&v), "447");
-    assert!(v["installation_budgets"].is_null());
+    // Installation budgets were removed (0026): no field at all.
+    assert!(v.get("installation_budgets").is_none());
     // Top models: blended rate per model (300 over 15 tokens) and the model id.
     let top_alpha = v["top"]["models"]
         .as_array()
@@ -553,48 +554,18 @@ async fn usage_and_records_filters_are_strict_scoped_and_series_are_strings(pool
     .await;
     assert_eq!(status, StatusCode::OK, "{r}");
     assert_eq!(r["data"].as_array().unwrap().len(), 4);
-    // Platform: installation budget windows (amount, used, settled, held).
-    let mut held = simple(f.project, id(&owner_key), "flt-alpha", "now()", 0);
-    let (_, project_key) = key(&f, &f.owner, f.project, Value::Null).await;
-    held.key = id(&project_key);
-    held.actual = None;
-    held.held = Some(11);
-    attempt(&pool, &ra, held).await;
-    crate::governance::set_test_budget(&pool, "installation", None, None, None, "day", Some(460))
-        .await;
-    // set_test_budget replaces the layer; add a second period directly.
-    sqlx::query("INSERT INTO policy_budgets(layer,period,amount_microusd) VALUES('installation','lifetime',1000000)")
-        .execute(&pool)
-        .await
-        .unwrap();
+    // Platform overviews carry no installation budgets (removed in 0026).
     let (status, p) = get(
-        &f,
-        &f.auditor,
-        &format!("/api/v1/platform/usage/overview?{range}"),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{p}");
-    let budgets = p["installation_budgets"].as_array().unwrap();
-    assert_eq!(budgets.len(), 2);
-    assert_eq!(budgets[0]["period"], "day");
-    assert_eq!(budgets[0]["amount_microusd"], "460");
-    assert_eq!(budgets[0]["settled_microusd"], "452");
-    assert_eq!(budgets[0]["held_microusd"], "11");
-    assert_eq!(budgets[0]["used_microusd"], "463");
-    assert_eq!(budgets[0]["exhausted"], true);
-    assert_eq!(budgets[0]["unresolved_usage"], false);
-    assert!(budgets[1]["window_end"].is_null());
-    assert_eq!(budgets[1]["period"], "lifetime");
-    // Unaffected by filters; the admin overview exposes the same windows.
-    let (_, filtered) = get(
         &f,
         &f.auditor,
         &format!("/api/v1/platform/usage/overview?{range}&model_id={alpha}"),
     )
     .await;
-    assert_eq!(filtered["installation_budgets"], p["installation_budgets"]);
+    assert_eq!(status, StatusCode::OK, "{p}");
+    assert!(p.get("installation_budgets").is_none());
     let (_, o) = get(&f, &f.admin, "/api/v1/platform/overview").await;
-    assert_eq!(o["installation_budgets"][0]["used_microusd"], "463");
+    assert!(o.get("installation_budgets").is_none());
+    assert!(o["setup"].is_object());
     assert_eq!(
         get(&f, &f.owner, "/api/v1/platform/overview").await.0,
         StatusCode::FORBIDDEN

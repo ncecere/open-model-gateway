@@ -62,7 +62,7 @@ pub(crate) struct Limits {
     pub(crate) concurrent_requests: Option<i64>,
     /// Concurrent active async jobs (video + batch).
     pub(crate) concurrent_jobs: Option<i64>,
-    /// File store quota in bytes (workspace layers only; never installation/key).
+    /// File store quota in bytes (workspace layers only; never key layers).
     pub(crate) storage_bytes: Option<i64>,
     pub(crate) budgets: Budgets,
 }
@@ -80,7 +80,7 @@ const MAX_STORAGE_BYTES: i64 = 1 << 50;
 fn storage_col(scope: &Scope) -> &'static str {
     match scope {
         Scope::Type(_) | Scope::Override(_) | Scope::Local(_) => "storage_bytes",
-        Scope::Installation | Scope::Key(..) => "NULL::bigint",
+        Scope::Key(..) => "NULL::bigint",
     }
 }
 impl Limits {
@@ -119,8 +119,8 @@ fn rates(row: Option<Row>) -> Limits {
 }
 /// Storage scope of one policy layer.
 #[derive(Clone, Debug)]
+/// There is no installation layer (removed in 0026).
 pub(crate) enum Scope {
-    Installation,
     Type(String),
     Override(Uuid),
     Local(Uuid),
@@ -129,7 +129,6 @@ pub(crate) enum Scope {
 impl Scope {
     fn parts(&self) -> (&'static str, Option<String>, Option<Uuid>, Option<Uuid>) {
         match self {
-            Self::Installation => ("installation", None, None, None),
             Self::Type(k) => ("type", Some(k.clone()), None, None),
             Self::Override(w) => ("override", None, Some(*w), None),
             Self::Local(w) => ("local", None, Some(*w), None),
@@ -423,9 +422,6 @@ async fn get_rates<
 async fn get_layer(tx: &mut Transaction<'_, Postgres>, scope: &Scope) -> Result<Limits, ApiError> {
     let st = storage_col(scope);
     let mut l = match scope {
-        Scope::Installation => {
-            get_rates(tx, "installation_policy", "singleton", true, st).await?
-        }
         Scope::Type(k) => {
             get_rates(tx, "workspace_type_policies", "kind", k.clone(), st).await?
         }
@@ -461,13 +457,8 @@ async fn put_layer(
     l: &Limits,
 ) -> Result<(), ApiError> {
     let sets = "requests_per_minute=excluded.requests_per_minute,tokens_per_minute=excluded.tokens_per_minute,concurrent_requests=excluded.concurrent_requests,concurrent_jobs=excluded.concurrent_jobs";
-    // Installation and key layers have no storage column; workspace layers
-    // store it like the other limits.
-    let q = |table: &str, col: &str| {
-        format!(
-            "INSERT INTO {table}({col},{COLS}) VALUES($1,$2,$3,$4,$5) ON CONFLICT({col}) DO UPDATE SET {sets}"
-        )
-    };
+    // Key layers have no storage column; workspace layers store it like the
+    // other limits.
     let qs = |table: &str, col: &str| {
         format!(
             "INSERT INTO {table}({col},{COLS},storage_bytes) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT({col}) DO UPDATE SET {sets},storage_bytes=excluded.storage_bytes"
@@ -483,14 +474,6 @@ async fn put_layer(
             .bind(l.concurrent_jobs)
     }
     match scope {
-        Scope::Installation => {
-            rates(
-                sqlx::query(&q("installation_policy", "singleton")).bind(true),
-                l,
-            )
-            .execute(&mut **tx)
-            .await?;
-        }
         Scope::Type(k) => {
             rates(
                 sqlx::query(&qs("workspace_type_policies", "kind")).bind(k),
@@ -605,18 +588,13 @@ pub(crate) async fn key_limits(
 ) -> Result<Limits, ApiError> {
     get_layer(tx, &Scope::Key(ws, key)).await
 }
-pub(crate) async fn installation_limits(
-    tx: &mut Transaction<'_, Postgres>,
-) -> Result<Limits, ApiError> {
-    get_layer(tx, &Scope::Installation).await
-}
 /// One budget-window entry: `(layer, budgets, key lineage, usage visible, scope created_at)`.
 pub(crate) type WindowEntry<'a> = (&'a str, &'a Budgets, Option<Uuid>, bool, DateTime<Utc>);
 /// Every applicable budget (layer x period) with its own current UTC window.
 /// Consumption (settled actual plus active holds by admission time) is
 /// included only where the caller may see that scope's activity: workspace-wide
 /// usage for platform readers and workspace administrators, key-lineage usage
-/// to whoever may read that key's policy. Installation headroom is never included.
+/// to whoever may read that key's policy. There is no installation budget.
 pub(crate) async fn budget_windows(
     tx: &mut Transaction<'_, Postgres>,
     ws: Uuid,
@@ -793,39 +771,11 @@ async fn response(
     }
     Ok(value)
 }
-pub(super) async fn installation_policy(
-    State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
-) -> ApiResult {
-    let mut tx = platform_tx(&s, &u, false).await?;
-    let p = get_layer(&mut tx, &Scope::Installation).await?;
-    tx.commit().await?;
-    Ok(Json(json!({"policy":json_limits(&p)})))
-}
-pub(super) async fn put_installation_policy(
-    State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
-    Json(p): Json<Policy>,
-) -> ApiResult {
-    if p.storage_bytes.flatten().is_some() {
-        return Err(invalid());
-    }
-    let mut tx = platform_tx(&s, &u, true).await?;
-    let old = get_layer(&mut tx, &Scope::Installation).await?;
-    let l = p.limits(&old, BudgetPeriod::Month)?;
-    put_layer(&mut tx, &Scope::Installation, &l).await?;
-    resources::audit(
-        &mut tx,
-        &u,
-        None,
-        "policy.installation_updated",
-        "installation",
-        None,
-        period_audit(&l, &old),
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(ok())
+/// `GET`/`PUT /platform/installation/policy`: removed with the installation
+/// policy layer (0026). Answers `410 Gone` with reason
+/// `installation_limits_removed` so older clients fail loudly, never silently.
+pub(super) async fn installation_policy_removed() -> ApiError {
+    super::super::installation_limits_removed(StatusCode::GONE)
 }
 fn kind(k: &str) -> Result<(), ApiError> {
     if matches!(k, "personal" | "team" | "project") {

@@ -29,7 +29,8 @@ After v0.3.0 the remaining R-items were selected as one enterprise program, deli
 **Decisions**
 
 - **Identity:** generic OIDC and generic SCIM 2.0 only. No SAML, and no vendor-specific (Okta/Entra) work for now. Acceptance runs against a self-hosted Authentik.
-- **Scale:** tens of thousands of users, workspaces and API keys, with horizontally scaled gateway replicas. The single installation-wide admission lock (about 125–150 admissions/s today) must go.
+- **Scale:** tens of thousands of users, workspaces and API keys, with horizontally scaled gateway replicas. The single installation-wide admission lock (about 175–225 admissions/s after P2) must go.
+- **No installation-wide limits** (2026-10-09, done in migration 0026): limits only on personal/team/project workspaces and keys; total spend is watched with a non-blocking installation spend alert.
 - **Machine administration:** Platform-Admin-only admin API tokens, separate from inference keys (inference keys never authorize management), scoped, expiring and audited.
 - **Real self-hosted models:** acceptance uses the operator's own DGX Spark endpoints (chat, embeddings, rerank, System One).
 - **Guardrails** (PII redaction, moderation, DLP): needs a design decision before any build, because the gateway never inspects prompts today.
@@ -39,7 +40,7 @@ After v0.3.0 the remaining R-items were selected as one enterprise program, deli
 | Phase | Scope | Roadmap items | Status |
 | --- | --- | --- | --- |
 | 1. Foundations | Supply-chain scanning (Dependabot, cargo-deny, CodeQL); scale design; real acceptance (Spark models, Authentik OIDC) | R01, R04 | In progress |
-| 2. Scale | Admission without a global lock, multi-instance background work, paginated inventory and server-side search, partitioning, Helm chart, HA Postgres guidance, multi-replica load test | R06, parts of R03/R04 | Designing |
+| 2. Scale | Admission without a global lock, multi-instance background work, paginated inventory and server-side search, partitioning, Helm chart, HA Postgres guidance, multi-replica load test | R06, parts of R03/R04 | In progress: P0 measurement, P1 lock-free reads, P2 maintained counters and installation-layer removal (0024–0026) done; P3 scoped admission next |
 | 3. Security and compliance | OpenBao/Vault secret references, egress enforcement, SIEM audit export, user data export/deletion, legal hold, request-metadata retention, threat model, file-store key re-encryption, login abuse controls and session management | R02, R17, section 4–5 items | Planned |
 | 4. Operations and finance | OpenTelemetry traces/metrics/logs, key-expiry and hold-age notifications, signed webhooks, email retries, scheduled cost reports, provider-invoice reconciliation | R03, R12, R13, R19 | Planned |
 | 5. Admin and configuration as code | OpenAPI management contract, admin API tokens, Terraform provider, access requests and approvals, change previews and rollback, access reviews | R14, R15, R16, R18 | Planned |
@@ -312,7 +313,7 @@ Operational follow-up: live generic OIDC and SCIM acceptance (against Authentik)
 - [x] Logs (2026-10-08): per-attempt telemetry (finish reason, time to first token, generation time, reasoning tokens, upstream model snapshot) and optional client session/app labels; request, generation and session views with summary metrics in each workspace and on Admin (Team/Project only, never personal rows). Provider-reported served model (migration 0013, alongside the configured snapshot) and reasoning tokens from OpenAI/OpenRouter/compatible usage details and Anthropic `output_tokens_details.thinking_tokens` (2026-10-09); Bedrock reports the served model only through prompt-router traces and no reasoning breakdown, so those stay unknown. See [provider adapters](provider-adapters.md#logs-telemetry-served-model-and-reasoning-tokens).
 - [x] Backend APIs for the UX program (2026-10-08): own-scope Home summary and keys, request logs with attempt timelines, key statistics and reversible key disablement, usage overview/explore analytics, effective-access layers with per-model reasons, member picker and catalog filters. Browser UI for them is in progress.
 - [x] Key safety audit and model compare (2026-10-08): read-only findings per active key (no or overlong expiry, no effective budget or cap, holder left, unused or never used, all-models access, old secret) for workspaces and for Admin (Team/Project only, personal keys as counts), with fixes that reuse the existing key actions ([key safety](key-safety.md)). Side-by-side comparison of 2–4 models: exact price lines, ceilings, serving state and 30-day observed metrics scoped like Logs ([management API](management-api.md#model-compare)). The audit raises no notifications; alerts are separate.
-- [x] Alerts (2026-10-08): installation and Team/Project rules for stacked-budget thresholds, spend spikes, error rates and failing connections, plus owner-only built-in personal budget alerts; a bounded, idempotent background evaluator (`GATEWAY_ALERT_INTERVAL_SECONDS`, `alerts evaluate --once`); in-app notifications with a top-bar bell and per-user read state; email via the SMTP relay with recorded outcomes ([alerts](alerts.md)).
+- [x] Alerts (2026-10-08): installation and Team/Project rules for stacked-budget thresholds, installation spend thresholds (non-blocking, 0026), spend spikes, error rates and failing connections, plus owner-only built-in personal budget alerts; a bounded, idempotent background evaluator (`GATEWAY_ALERT_INTERVAL_SECONDS`, `alerts evaluate --once`); in-app notifications with a top-bar bell and per-user read state; email via the SMTP relay with recorded outcomes ([alerts](alerts.md)).
 - [x] Transactional, sanitized mutation audit records; personal audit privacy.
 - [x] Real PostgreSQL isolation and concurrent lifecycle tests.
 
@@ -333,7 +334,7 @@ Deliberate limits: native Responses/Messages frontend content is currently buffe
 
 ## 4. Governance, accounting, and routing — implemented bounded scope
 
-- [x] PostgreSQL-backed installation/workspace/key attempt, token and leased concurrency limits across replicas.
+- [x] PostgreSQL-backed workspace/key attempt, token and leased concurrency limits across replicas (installation-wide limits removed in 0026; an installation spend alert notifies without blocking).
 - [x] Live workspace-type defaults and platform overrides; tighten-only workspace/key restrictions share parent allowance and cannot remove or exceed effective parent limits.
 - [x] Stacked UTC daily/weekly (ISO)/monthly/lifetime USD budgets (one per period at every policy layer, all enforced) with serialized reservations; unknown usage retains holds; budget changes never reset consumption.
 - [x] Immutable deployment price versions and append-only integer-micro cost ledger.

@@ -753,22 +753,15 @@ async fn access_layers_explain_why_models_are_unavailable(pool: PgPool) {
             .iter()
             .map(|l| l["layer"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        [
-            "platform",
-            "type_default",
-            "workspace_override",
-            "workspace",
-            "key"
-        ]
+        // No installation layer (0026).
+        ["type_default", "workspace_override", "workspace", "key"]
     );
-    assert_eq!(layers[0]["visible"], false);
-    assert!(layers[0]["limits"].is_null());
-    assert_eq!(layers[1]["catalogs"][0]["id"], catalog.to_string());
-    assert_eq!(layers[2]["applies"], false);
-    assert_eq!(layers[3]["selections"], json!({"catalog":1,"direct":2}));
+    assert_eq!(layers[0]["catalogs"][0]["id"], catalog.to_string());
+    assert_eq!(layers[1]["applies"], false);
+    assert_eq!(layers[2]["selections"], json!({"catalog":1,"direct":2}));
     // Cumulative counts: before the workspace layer B is still a candidate.
-    assert_eq!(layers[1]["models"]["available"], 2);
-    assert_eq!(layers[3]["models"]["available"], 1);
+    assert_eq!(layers[0]["models"]["available"], 2);
+    assert_eq!(layers[2]["models"]["available"], 1);
     // Asking about a specific uncatalogued model.
     let (_, v) = get(&f, &f.member, &format!("{path}?model_id={e}")).await;
     assert_eq!(reasons(&v, "acc-e"), ["no_enabled_route", "not_in_catalog"]);
@@ -779,7 +772,7 @@ async fn access_layers_explain_why_models_are_unavailable(pool: PgPool) {
     assert_eq!(status, StatusCode::OK, "{v}");
     assert!(reasons(&v, "acc-a").is_empty());
     assert!(reasons(&v, "acc-d").contains(&"key_restriction".to_owned()));
-    assert_eq!(v["layers"][4]["restriction"]["mode"], "restricted");
+    assert_eq!(v["layers"][3]["restriction"]["mode"], "restricted");
     crate::governance::set_test_budget(&pool, "local", None, Some(f.team), None, "day", Some(10))
         .await;
     attempt(&pool, &ra, simple(f.team, id(&k), "acc-a", "now()", 10)).await;
@@ -822,10 +815,10 @@ async fn access_layers_explain_why_models_are_unavailable(pool: PgPool) {
         .0,
         StatusCode::FORBIDDEN
     );
-    // Non-member platform readers see installation limits (read-only metadata).
+    // Non-member platform readers see the same layers (read-only metadata).
     let (status, v) = get(&f, &f.auditor, &path).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(v["layers"][0]["visible"], true);
+    assert_eq!(v["layers"][0]["layer"], "type_default");
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]

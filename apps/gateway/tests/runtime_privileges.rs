@@ -66,7 +66,7 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
     read_snapshots_run_as_runtime(&pool).await;
     file_store_runs_as_runtime(&pool).await;
     files_api_runs_as_runtime(&pool).await;
-    // Last: its unknown batch hold would change the installation totals above.
+    // Last: its unknown batch hold would change the installation-wide totals above.
     async_jobs_run_as_runtime(&pool).await;
     sqlx::query("SELECT pg_advisory_unlock(72419505)")
         .execute(&mut *connection)
@@ -324,8 +324,8 @@ async fn alert_evaluation_runs_as_runtime(pool: &PgPool) {
   INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,actual_microusd,input_tokens,output_tokens) VALUES(e,CASE WHEN i=4 THEN personal ELSE ws END,CASE WHEN i=4 THEN pk ELSE k END,d,now(),date_trunc('minute',now()),date_trunc('month',now()),now(),'settled',2000000,1,1);
  END LOOP;
  INSERT INTO policy_budgets(layer,workspace_id,period,amount_microusd) VALUES('local',ws,'month',5000000),('local',personal,'month',1000000);
- INSERT INTO policy_budgets(layer,period,amount_microusd) VALUES('installation','day',10000000);
- INSERT INTO alert_rules(id,scope,kind,name,budget_layers,thresholds,notify_platform_admins) VALUES(gen_random_uuid(),'installation','budget_threshold','Budgets',ARRAY['installation','local','key'],ARRAY[50,80,100],true);
+ INSERT INTO alert_rules(id,scope,kind,name,thresholds,spend_period,spend_amount_microusd,notify_platform_admins) VALUES(gen_random_uuid(),'installation','spend_threshold','Installation spend',ARRAY[50,80,100],'day',10000000,true);
+ INSERT INTO alert_rules(id,scope,kind,name,budget_layers,thresholds,notify_platform_admins) VALUES(gen_random_uuid(),'installation','budget_threshold','Budgets',ARRAY['local','key'],ARRAY[50,80,100],true);
  INSERT INTO alert_rules(id,scope,kind,name,spike_factor_percent,min_spend_microusd) VALUES(gen_random_uuid(),'installation','spend_spike','Spike',300,1);
  INSERT INTO alert_rules(id,scope,kind,name,window_minutes,error_rate_percent,min_requests) VALUES(gen_random_uuid(),'installation','error_rate','Errors',15,50,2);
  INSERT INTO alert_rules(id,scope,kind,name,window_minutes,consecutive_failures) VALUES(gen_random_uuid(),'installation','provider_failing','Upstream',15,3);
@@ -352,7 +352,7 @@ async fn alert_evaluation_runs_as_runtime(pool: &PgPool) {
         .unwrap()
         .unwrap();
     assert_eq!(report.failed_rules, 0, "{report:?}");
-    // Installation day 60%, project local 120%, spike, error rate, connection, project rule, personal built-in.
+    // Installation spend day 80%, project local 120%, spike, error rate, connection, project rule, personal built-in.
     assert_eq!(report.fired, 7, "{report:?}");
     assert_eq!(
         open_model_gateway::alerts::evaluate_once(&store)
@@ -687,7 +687,7 @@ async fn budget_totals_maintained_as_runtime(pool: &PgPool) {
     assert!(report.rate_buckets > 0);
     // The unknown attempt keeps its 500 micro-USD hold in every period.
     let held: Vec<String> = sqlx::query_scalar(
-        "SELECT held_microusd::text FROM budget_totals WHERE scope_kind='installation' ORDER BY period",
+        "SELECT sum(held_microusd)::text FROM budget_totals WHERE scope_kind='workspace' GROUP BY period ORDER BY period",
     )
     .fetch_all(&runtime)
     .await

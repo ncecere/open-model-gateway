@@ -85,9 +85,9 @@ Long-running jobs do not consume interactive limits. Migration `0018_job_limits.
 | Requests and tokens per minute | Not checked, and job reservations never count toward them. |
 | Budgets | Fully applied: the conservative ceiling is reserved at admission, as before. |
 
-A slot is released when the job reaches a terminal state (`completed`, `failed`, `cancelled`, `expired`), as soon as cancel is requested, or when the lease expires. A refused job returns `429` with `error.code` `job_limit_exceeded` (`rate_limit_error` type, retryable) and a message naming the scope kind: API key, workspace or installation. Nothing is sent upstream.
+A slot is released when the job reaches a terminal state (`completed`, `failed`, `cancelled`, `expired`), as soon as cancel is requested, or when the lease expires. A refused job returns `429` with `error.code` `job_limit_exceeded` (`rate_limit_error` type, retryable) and a message naming the scope kind: API key or workspace. Nothing is sent upstream.
 
-Edit the limit with the other limits: Admin › Settings › Defaults & limits (installation and type defaults), a workspace's platform override, Workspace › Settings › Limits (tighten only) and each key's limits. Effective access shows it per layer.
+Edit the limit with the other limits: Admin › Settings › Defaults & limits (type defaults), a workspace's platform override, Workspace › Settings › Limits (tighten only) and each key's limits. Effective access shows it per layer.
 
 ## Batch input
 

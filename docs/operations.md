@@ -87,8 +87,8 @@ There are no workspace, key, user, request IDs, or prompt and response data in a
 | `gateway_settlements_total` | counter | `outcome`: `settled` (exact cost), `unknown` (hold retained), `held` (finalization failed; the reservation stays pending until reconciliation) |
 | `gateway_admission_seconds` | histogram | `phase`, `outcome`. Wall-clock time of each phase of a durable interactive admission transaction: `queue` (in-process wait for an installation-lock slot), `connect` (pool acquire and `BEGIN`), `price` (shared catalog lock, latest price and reservation bounds, resolved before the installation lock), `locks` (the installation row lock: the lock wait), `read` (live authorization and the deployment check with the admission clock, one statement each), `limits` (policies, budgets with their totals and the rate counters, one statement), `write` (execution, reservation and hold in one statement with trigger fan-out), `commit`, and `total`. Time under the installation lock is `read`+`limits`+`write`+`commit`. `outcome` is `admitted`, `denied` (a limit or budget denial), `rejected` (other refusals such as an unavailable model) or `error` (database failure). Phases after an early return are not observed. Buckets run from 100 µs to about 52 s. Batch-line and realtime-window admissions are not included. |
 | `gateway_settlement_seconds` | histogram | `phase` (`queue`, `connect`, `locks`, `read`, `write`, `commit`, `total`), `outcome` (`settled`, `unknown`, `replay`, `conflict`, `error`). Terminal settlement of an interactive attempt (`finish`); a replay stops after `locks`. |
-| `gateway_admission_denials_total` | counter | `code`, `scope` (`installation`, `workspace`, `api_key`, `policy` for rate/concurrency limits, `gateway_capacity`). `code="job_limit_exceeded"` counts video/batch jobs refused by a "Jobs at once" limit, with the scope that refused them. |
-| `gateway_reservations_held` | gauge | `state` (`pending`, `unknown`). Refreshed at scrape time, at most every 15 seconds, with a 2-second query timeout. Read from the installation `lifetime` row of `budget_totals` (O(1), exact), not by counting history. |
+| `gateway_admission_denials_total` | counter | `code`, `scope` (`workspace`, `api_key`, `policy` for rate/concurrency limits, `gateway_capacity`; `installation` no longer occurs since installation-wide limits were removed in 0026). `code="job_limit_exceeded"` counts video/batch jobs refused by a "Jobs at once" limit, with the scope that refused them. |
+| `gateway_reservations_held` | gauge | `state` (`pending`, `unknown`). Refreshed at scrape time, at most every 15 seconds, with a 2-second query timeout. Summed from the workspace `lifetime` rows of `budget_totals` (one row per workspace, exact), not by counting history. Since 0026 there is no installation-scope row. |
 | `gateway_alert_evaluations_total` | counter | `result` (`ok`, `skipped` when another replica holds the lock, `failed`) |
 | `gateway_alert_rule_failures_total` | counter | none |
 | `gateway_db_pool_connections` | gauge | `state` (`idle`, `in_use`) |
@@ -246,6 +246,8 @@ Reports (`cost-report`, `cost-summary`, `costs`, `usage-export`), usage (`usage/
 6. To roll back, redeploy the previous image digest only if no migration ran. Otherwise restore the pre-upgrade backup into a new database and cut over. There are no down migrations.
 
 `0018_job_limits.sql` adds the "Jobs at once" limit to every policy layer and sets the workspace-type defaults to 2 active video/batch jobs per workspace. After upgrading, review Admin › Settings › Defaults & limits if workspaces routinely run more jobs at once. It also adds the SCIM last-admin alert kind. Reapply `runtime-grants.sql` (step 4).
+
+`0026_remove_installation_limits.sql` (breaking) removes installation-wide limits: the installation budget (every period) and installation requests/tokens per minute, requests at once and jobs at once. Before upgrading, move any installation limit you still need to the workspace-type defaults, platform workspace overrides or keys. The migration records the removed values in the audit log (`policy.installation_removed`), converts installation budget alert rules to non-blocking installation spend rules, drops `installation_policy` and deletes the derived installation rows of `budget_totals`. It briefly freezes history writes (like 0015/0025), so drain traffic (step 3). Then reapply `runtime-grants.sql` (step 4) and run `open-model-gateway budget verify` (expect `mismatch_count: 0`). Clients of `/api/v1/platform/installation/policy` now get `410 reason:"installation_limits_removed"`. See [governance](governance.md#no-installation-wide-limits).
 
 ## Load test baseline
 
@@ -409,6 +411,44 @@ Findings:
 3. **Counters trade scan time for trigger time.** With traffic spread over 7,000 workspaces, a scoped per-minute scan cost only 0.04 ms, while the counter triggers add about 0.3–0.5 ms per admission and settlement. The counters remove the growth with a scope's traffic (a 200 req/s workspace scans 12,000 rows per minute) and the installation-wide scan (6.2 ms in P0); a hot-scope run is still to do.
 4. **Group commit had no effect yet** (`commit_delay` 200 or 1,000 µs: within 2%), because the installation lock lets only one admission or settlement commit at a time.
 
+### Combined capacity (P1 + P2 + no installation limits)
+
+Measured 2026-10-10 on the same laptop and settings: the full P0 matrix plus two report readers (`run --readers 2`), on an empty and on the 2 M-attempt database. "After P2" is commit `c43e1ae` with type and key rate limits, type monthly budgets and an installation monthly budget, rerun in the same session as a control. "After 0026" is the same code plus `0026_remove_installation_limits.sql` (the same type and key limits and budgets; no installation layer exists). "P0 baseline" is the [capacity baseline](#capacity-baseline) above; its reader rows are the P1 "before" runs, which exist only for the 2 M database. Each cell is successful requests per second and client p99 in ms. All 40 runs passed every ledger invariant and `budget verify`.
+
+| History | Setup | Readers | Offered/s | P0 baseline ok/s · client p99 ms | After P2 (c43e1ae) ok/s · p99 ms | After 0026 ok/s · p99 ms | ok/s change vs P2 |
+|---|---|---|---|---|---|---|---|
+| empty | 1 replica, PgBouncer | 0 | 60 | 59.9 · 70 | 59.9 · 67 | 59.9 · 65 | +0% |
+| empty | 1 replica, PgBouncer | 0 | 250 | 79.6 · 2,070 | 203.2 · 715 | 237.5 · 635 | +17% |
+| empty | 1 replica, PgBouncer | 2 | 60 | – | 59.8 · 67 | 59.8 · 64 | +0% |
+| empty | 1 replica, PgBouncer | 2 | 250 | – | 204.5 · 728 | 233.3 · 1,038 | +14% |
+| empty | 1 replica, direct | 0 | 60 | 59.9 · 69 | 59.9 · 66 | 59.9 · 65 | +0% |
+| empty | 1 replica, direct | 0 | 250 | 99.1 · 1,783 | 228.5 · 1,068 | 249.2 · 177 | +9% |
+| empty | 3 replicas, PgBouncer | 0 | 60 | 59.9 · 481 | 59.9 · 67 | 59.9 · 67 | +0% |
+| empty | 3 replicas, PgBouncer | 0 | 250 | 83.0 · 6,098 | 191.4 · 2,170 | 231.2 · 1,764 | +21% |
+| empty | 3 replicas, PgBouncer | 2 | 60 | – | 59.4 · 67 | 58.9 · 66 | -1% |
+| empty | 3 replicas, PgBouncer | 2 | 250 | – | 184.3 · 2,171 | 214.1 · 1,952 | +16% |
+| 2 M | 1 replica, PgBouncer | 0 | 60 | 59.9 · 163 | 59.9 · 67 | 59.9 · 67 | +0% |
+| 2 M | 1 replica, PgBouncer | 0 | 250 | 63.5 · 2,886 | 193.4 · 723 | 222.1 · 625 | +15% |
+| 2 M | 1 replica, PgBouncer | 2 | 60 | 2.3 · 40,316 | 58.3 · 144 | 59.1 · 112 | +1% |
+| 2 M | 1 replica, PgBouncer | 2 | 250 | 2.2 · 42,296 | 158.9 · 1,042 | 191.4 · 921 | +20% |
+| 2 M | 1 replica, direct | 0 | 60 | 59.9 · 86 | 59.9 · 65 | 59.9 · 65 | +0% |
+| 2 M | 1 replica, direct | 0 | 250 | 86.1 · 2,433 | 215.7 · 636 | 245.8 · 309 | +14% |
+| 2 M | 3 replicas, PgBouncer | 0 | 60 | 59.9 · 568 | 59.9 · 254 | 59.9 · 65 | +0% |
+| 2 M | 3 replicas, PgBouncer | 0 | 250 | 67.9 · 7,364 | 182.1 · 2,075 | 202.9 · 1,916 | +11% |
+| 2 M | 3 replicas, PgBouncer | 2 | 60 | 8.4 · 41,169 | 58.1 · 191 | 58.3 · 172 | +0% |
+| 2 M | 3 replicas, PgBouncer | 2 | 250 | 6.4 · 41,047 | 143.1 · 2,848 | 156.6 · 2,968 | +9% |
+
+Findings:
+
+1. **Removing the installation layer raised the overload ceiling by 9–21 %** in every saturated cell (one replica through PgBouncer: 203 → 238/s empty, 193 → 222/s with 2 M attempts). Below saturation throughput is unchanged and admission p50 fell by 0.1–1.4 ms.
+2. **Why:** each reservation or execution write updates 8 `budget_totals` rows instead of 12, and none of them is shared by every request. The admission write and the settlement update became 18–30 % cheaper, which shortens the time under the installation row lock. That lock is still the serializer: it remains the top statement, and three replicas still do not beat one.
+3. **One replica on direct connections no longer saturates at 250/s** (249/s, admission p50 3.2 ms, client p99 177 ms).
+4. **With two report readers** the gain holds (one replica, 2 M: 159 → 191/s); readers take no lock (P1) and keep their latency.
+5. **Against P0**, overload throughput is 2.5–3.5× without readers and 7–87× with readers.
+6. The ceiling (about 200–250/s on this machine) is still below decision gate D1 (400/s). Admission no longer needs any installation limit data, so scoped admission (P3) only has to replace the authorization serialization on the installation row.
+
+Upgrading the 2 M-attempt `c43e1ae` database to 0026 in place took 0.9 s; `budget verify` was consistent afterwards (2.73 M buckets, 22 s).
+
 ## PostgreSQL settings for hot rows and group commit
 
 - **Hot rows.** `budget_totals`, `rate_minute_counters` and `inflight_counters` are updated on every admission and settlement. Only their primary keys are indexed, and no indexed column is ever updated, so updates stay HOT (in-page) when there is free space: `budget_totals` uses `fillfactor=50`, the counter tables `fillfactor=70`. The migrations set threshold-driven autovacuum on all three (`autovacuum_vacuum_scale_factor=0`, `autovacuum_vacuum_threshold=1000`, `autovacuum_vacuum_cost_limit=2000`, `autovacuum_vacuum_cost_delay=1`), so vacuum frequency does not shrink as the tables grow. HOT pruning needs the global xmin to advance: avoid long transactions on the primary (run `budget verify` and reports on a replica where possible). Watch `n_tup_hot_upd`/`n_tup_upd` and `n_dead_tup` in `pg_stat_user_tables` for these tables.
@@ -453,9 +493,9 @@ ORDER BY total_exec_time DESC LIMIT 20;
 What to look for in the gateway's statements:
 
 - `SELECT id FROM installation WHERE singleton FOR NO KEY UPDATE`: its total time is time spent **waiting** for the installation lock, not work. When it dominates, the database is idle behind one serializer.
-- `WITH accounting AS (…)`: per-minute rate accounting by scan. Since 0024 only the installation policy layer (scheduled for removal) still uses it; workspace and key layers read `rate_minute_counters`/`inflight_counters` inside the single `WITH pol AS MATERIALIZED …` limits statement.
+- `WITH accounting AS (…)`: per-minute rate accounting by scan. Since 0026 admission never runs it (the installation layer, its last user, was removed); workspace and key layers read `rate_minute_counters`/`inflight_counters` inside the single `WITH pol AS MATERIALIZED …` limits statement.
 - `INSERT INTO rate_minute_counters …`/`inflight_counters …` (non-top-level): rate-counter trigger fan-out, two scopes per write.
-- `INSERT INTO budget_totals …` (non-top-level): trigger fan-out, about 3 calls per reservation or execution write.
+- `INSERT INTO budget_totals …` (non-top-level): trigger fan-out, workspace and key scopes (8 rows: 2 scopes × 4 periods) per reservation or execution write; no installation row since 0026.
 - A `budget verify` full scan, if one ran in the window.
 
 Lock waits, live, in the gateway database (any role that can see `pg_stat_activity`, such as `pg_monitor`):
@@ -480,7 +520,7 @@ Under overload these show a convoy on the installation row: one session waiting 
 
 ## Budget totals verification
 
-`budget_totals` (migration 0015) holds settled spend, active holds and unresolved counters per scope (installation, workspace, key lineage), period (day, ISO week, month, lifetime) and UTC period start, in exact integer micro-USD. Admission reads it instead of scanning history. Check it against a full scan of reservations and executions:
+`budget_totals` (migration 0015) holds settled spend, active holds and unresolved counters per scope (workspace, key lineage; the installation scope was removed in 0026), period (day, ISO week, month, lifetime) and UTC period start, in exact integer micro-USD. Admission reads it instead of scanning history. Check it against a full scan of reservations and executions:
 
 ```sh
 open-model-gateway budget verify

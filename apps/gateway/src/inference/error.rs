@@ -1,11 +1,23 @@
 use std::fmt;
 
 /// Policy layer that denied admission. Carries no identifiers or amounts.
+/// There is no installation scope: installation-wide limits were removed
+/// (migration 0026); every limit belongs to a workspace or a key lineage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LimitScope {
-    Installation,
     Workspace,
     ApiKey,
+}
+impl LimitScope {
+    /// The scope of a policy layer of the admitting workspace: the key
+    /// lineage layer when it carries a key, otherwise a workspace layer.
+    pub fn of<T>(key: Option<T>) -> Self {
+        if key.is_some() {
+            Self::ApiKey
+        } else {
+            Self::Workspace
+        }
+    }
 }
 
 /// Safe errors only. Never embed upstream bodies, URLs, credentials or prompts.
@@ -100,13 +112,10 @@ impl InferenceError {
             Self::BudgetExceeded(LimitScope::Workspace) => {
                 "Budget for this workspace would be exceeded in its current period"
             }
-            Self::BudgetExceeded(LimitScope::Installation) => {
-                "Installation-wide budget cannot admit this request in its current period"
-            }
             Self::UnresolvedUsage(LimitScope::ApiKey) => {
                 "Unresolved usage with unbounded cost blocks budgeted admission for this API key until reconciled"
             }
-            Self::UnresolvedUsage(_) => {
+            Self::UnresolvedUsage(LimitScope::Workspace) => {
                 "Unresolved usage with unbounded cost blocks budgeted admission for this workspace until reconciled"
             }
             Self::TokenReservationExceedsLimit(LimitScope::ApiKey) => {
@@ -115,17 +124,11 @@ impl InferenceError {
             Self::TokenReservationExceedsLimit(LimitScope::Workspace) => {
                 "The model's input+output token ceiling exceeds this workspace's tokens-per-minute limit; lower the price ceilings or raise the limit"
             }
-            Self::TokenReservationExceedsLimit(LimitScope::Installation) => {
-                "The model's input+output token ceiling exceeds the installation-wide tokens-per-minute limit; lower the price ceilings or raise the limit"
-            }
             Self::JobLimitExceeded(LimitScope::ApiKey) => {
                 "Too many jobs are running for this API key (jobs at once limit); wait for one to finish or cancel one"
             }
             Self::JobLimitExceeded(LimitScope::Workspace) => {
                 "Too many jobs are running for this workspace (jobs at once limit); wait for one to finish or cancel one"
-            }
-            Self::JobLimitExceeded(LimitScope::Installation) => {
-                "The installation-wide jobs at once limit is reached; try again when a job finishes"
             }
             Self::RouteCoolingDown(_) => {
                 "The model is temporarily unavailable after repeated provider failures; retry after the indicated delay"

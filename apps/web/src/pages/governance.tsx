@@ -25,7 +25,7 @@ export function Governance({ session, workspace }: Scope) {
   // Tabs hold cards, never a second page title (review rule 1): ScopeLimits is the "Workspace limits" card.
   return <Stack gap={6}><ScopeLimits mode="local" path={`${wsPath(workspace.id)}/policy`} writable={writable} kind={workspace.kind} readOnlyReason={workspace.kind === "personal" ? "Personal limits are set by a Platform Admin." : "Only workspace admins change these limits."} /><p className={s.note}>Cap a single key from <ResourceLink search={{ page: "keys", ws: workspace.id }}>API keys</ResourceLink>.</p></Stack>;
 }
-/** Admin › Limits: one pill tab per scope (installation ceiling, type defaults), `?tab=` (pages/settings/limits.tsx; Admin › Settings › Defaults & limits). */
+/** Admin › Limits: one pill tab per workspace type default, `?tab=` (pages/settings/limits.tsx; Admin › Settings › Defaults & limits). */
 export function PlatformPolicies({ session, tab, onTabChange }: { session: Session; tab?: string; onTabChange?: (tab: string) => void }) { return <PlatformLimits session={session} tab={tab} onTabChange={onTabChange} />; }
 /** Admin › Team/Project › Limits: live type defaults or this workspace's replacement override (components/scope-limits.tsx). */
 export function WorkspacePlatformPolicy({ session, workspace }: Scope) { return <Stack gap={6}><ScopeLimits mode="replacement" path={`${platformWorkspacePath(workspace.id)}/policy`} writable={session.capabilities.platform_write} kind={workspace.kind} /><EffectiveAccess workspace={workspace} /></Stack>; }

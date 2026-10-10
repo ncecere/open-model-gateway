@@ -306,7 +306,7 @@ mod db {
         assert_eq!(admit_once(&f).await, DENIED);
     }
     /// Override budgets apply only while the replacement header exists; type
-    /// budgets only without one; installation budgets always.
+    /// budgets only without one. There is no installation layer (0026).
     #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn platform_budget_layers_follow_the_replacement_header(pool: PgPool) {
         let f = fixture(pool).await;
@@ -353,20 +353,6 @@ mod db {
         set_test_budget(&f.store.pool, "type", Some(&kind), None, None, "day", None).await;
         // Orphaned override budgets never apply without their header.
         assert_eq!(admit_once(&f).await, Ok(()));
-        set_test_budget(
-            &f.store.pool,
-            "installation",
-            None,
-            None,
-            None,
-            "lifetime",
-            Some(1),
-        )
-        .await;
-        assert_eq!(
-            admit_once(&f).await,
-            Err(InferenceError::BudgetExceeded(LimitScope::Installation))
-        );
     }
     type BudgetRow = (
         String,
@@ -418,10 +404,11 @@ mod db {
         .fetch_all(&pool)
         .await
         .unwrap();
+        // The installation budget moved in 0005 and was removed with the
+        // installation layer in 0026 (recorded in the audit log).
         assert_eq!(
             rows,
             vec![
-                ("installation".into(), None, None, None, "day".into(), 1),
                 (
                     "type".into(),
                     Some("team".into()),
@@ -435,15 +422,23 @@ mod db {
                 ("key".into(), None, Some(ws), Some(key), "week".into(), 5),
             ]
         );
-        // Rate limits are retained; legacy columns are gone.
+        // Installation rate limits are gone with their table, recorded once.
+        let removed: serde_json::Value = sqlx::query_scalar(
+            "SELECT metadata FROM audit_events WHERE action='policy.installation_removed'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(removed["requests_per_minute"], 7);
         assert_eq!(
-            sqlx::query_scalar::<_, Option<i64>>(
-                "SELECT requests_per_minute FROM installation_policy"
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-            Some(7)
+            removed["budgets"],
+            serde_json::json!([{"period":"day","amount_microusd":"1"}])
+        );
+        assert!(
+            sqlx::query("SELECT 1 FROM installation_policy")
+                .execute(&pool)
+                .await
+                .is_err()
         );
         assert!(
             sqlx::query("SELECT monthly_budget_microusd FROM key_policies")

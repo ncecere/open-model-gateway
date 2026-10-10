@@ -2,9 +2,11 @@
 //! into incidents (`alert_events`) and emails recipients through the
 //! installation's SMTP relay.
 //!
-//! - Rule kinds: budget thresholds (% of any applicable stacked budget), spend
-//!   spikes (last hour vs the trailing 7-day hourly average), error rate and
-//!   failing provider connections. Personal workspaces get built-in budget
+//! - Rule kinds: budget thresholds (% of any applicable stacked workspace or
+//!   key budget), installation spend thresholds (% of a reference amount per
+//!   period; never blocks anything: there are no installation-wide limits),
+//!   spend spikes (last hour vs the trailing 7-day hourly average), error rate
+//!   and failing provider connections. Personal workspaces get built-in budget
 //!   alerts for their owner only.
 //! - Exact integer micro-USD math. Spend is settled actual plus in-flight
 //!   pending holds (as admission counts them); unknown-cost reservations are
@@ -139,6 +141,9 @@ pub enum Kind {
     BatchFailed,
     /// An unfinished batch made no progress for `window_minutes` (0021).
     BatchStalled,
+    /// Installation-wide spend in a period reaches a share of a reference
+    /// amount (0026). A notification only: nothing is ever denied by it.
+    Spend,
 }
 impl Kind {
     pub fn parse(value: &str) -> Option<Self> {
@@ -149,6 +154,7 @@ impl Kind {
             "provider_failing" => Some(Self::Provider),
             "batch_failed" => Some(Self::BatchFailed),
             "batch_stalled" => Some(Self::BatchStalled),
+            "spend_threshold" => Some(Self::Spend),
             _ => None,
         }
     }
@@ -160,14 +166,15 @@ impl Kind {
             Self::Provider => "provider_failing",
             Self::BatchFailed => "batch_failed",
             Self::BatchStalled => "batch_stalled",
+            Self::Spend => "spend_threshold",
         }
     }
 }
-/// Stacked-budget layers a budget rule can watch.
-pub const BUDGET_LAYERS: [&str; 5] = ["installation", "type", "override", "local", "key"];
+/// Stacked-budget layers a budget rule can watch. There is no installation
+/// layer (0026); installation spend has its own rule kind ([`Kind::Spend`]).
+pub const BUDGET_LAYERS: [&str; 4] = ["type", "override", "local", "key"];
 fn layer_label(layer: &str) -> &'static str {
     match layer {
-        "installation" => "Installation",
         "type" => "Type default",
         "override" => "Platform override",
         "local" => "Workspace",
@@ -197,6 +204,8 @@ struct Rule {
     min_requests: Option<i32>,
     consecutive_failures: Option<i32>,
     provider_connection_id: Option<Uuid>,
+    spend_period: Option<String>,
+    spend_amount_microusd: Option<i64>,
 }
 
 /// One firing condition produced by evaluation.
@@ -262,11 +271,6 @@ LEFT JOIN budget_totals t ON t.scope_kind=CASE WHEN b.lineage IS NULL THEN 'work
 WHERE b.amount_microusd>0 AND b.layer=ANY($3)
 ORDER BY b.workspace_id,b.layer,b.lineage,b.period LIMIT 5001"#;
 
-/// Alert spend of one budget window from the maintained totals (0015/0025):
-/// settled actual plus pending holds (unknown cost is reported separately,
-/// not added), and the requests whose cost is unknown or unresolved.
-const INSTALLATION_BUDGET: &str = "SELECT coalesce(t.settled_microusd+t.held_microusd-t.held_unknown_microusd,0)::text,coalesce(t.unknown+t.unresolved-t.unresolved_unknown,0)::bigint FROM (SELECT) one LEFT JOIN budget_totals t ON t.scope_kind='installation' AND t.scope_id='00000000-0000-0000-0000-000000000000' AND t.period=$1 AND t.period_start=$2";
-
 fn windows(now: DateTime<Utc>) -> [(DateTime<Utc>, DateTime<Utc>); 4] {
     BudgetPeriod::ALL.map(|p| p.window(now))
 }
@@ -320,32 +324,6 @@ async fn budget_conditions(
 ) -> Result<Vec<Condition>, sqlx::Error> {
     let w = windows(now);
     let mut out = Vec::new();
-    if matches!(set, Workspaces::Shared) && layers.iter().any(|l| l == "installation") {
-        for (index, period) in BudgetPeriod::ALL.iter().enumerate() {
-            let amount: Option<i64> = sqlx::query_scalar("SELECT amount_microusd FROM policy_budgets WHERE layer='installation' AND period=$1")
-                .bind(period.as_str())
-                .fetch_optional(&mut **tx)
-                .await?;
-            let Some(amount) = amount else { continue };
-            let (used, unknown): (String, i64) = sqlx::query_as(INSTALLATION_BUDGET)
-                .bind(period.as_str())
-                .bind(w[index].0)
-                .fetch_one(&mut **tx)
-                .await?;
-            let used: i128 = used.parse().unwrap_or(0);
-            out.extend(budget_condition(
-                format!("installation:{}", period.as_str()),
-                None,
-                "installation",
-                period.as_str(),
-                amount,
-                used,
-                unknown,
-                thresholds,
-                now,
-            ));
-        }
-    }
     let (mode, one) = match set {
         Workspaces::Shared => ("shared", None),
         Workspaces::Personal => ("personal", None),
@@ -385,6 +363,61 @@ async fn budget_conditions(
         ));
     }
     Ok(out)
+}
+
+/// Installation spend threshold (0026): installation-wide spend in the
+/// current UTC window of the rule's period (settled actual plus pending holds,
+/// summed over every workspace's maintained totals, exact integer micro-USD)
+/// against the rule's reference amount. Unknown-cost requests are reported
+/// in the details, never counted as zero spend. The subject is the former
+/// installation-budget subject, so a rule converted in place by 0026 keeps
+/// its open incident.
+async fn spend_conditions(
+    tx: &mut Transaction<'_, Postgres>,
+    rule: &Rule,
+    now: DateTime<Utc>,
+) -> Result<Vec<Condition>, sqlx::Error> {
+    let (Some(period), Some(amount), Some(thresholds)) = (
+        rule.spend_period.as_deref().and_then(BudgetPeriod::parse),
+        rule.spend_amount_microusd,
+        rule.thresholds.as_deref(),
+    ) else {
+        return Ok(vec![]);
+    };
+    let (start, end) = period.window(now);
+    let (used, pending, unknown): (String, String, i64) =
+        sqlx::query_as(crate::governance::totals::INSTALLATION_SPEND)
+            .bind(period.as_str())
+            .bind(period.bucket_start(now))
+            .fetch_one(&mut **tx)
+            .await?;
+    let used: i128 = used.parse().unwrap_or(0);
+    let Some(level) = threshold_level(used, i128::from(amount), thresholds) else {
+        return Ok(vec![]);
+    };
+    let lifetime = period == BudgetPeriod::Lifetime;
+    Ok(vec![Condition {
+        subject: format!("installation:{}", period.as_str()),
+        level,
+        critical: level >= 100,
+        workspace_id: None,
+        connection_id: None,
+        summary: format!(
+            "Installation {} spend reached {level}%",
+            period_word(period.as_str())
+        ),
+        details: json!({
+            "period": period.as_str(),
+            "threshold_percent": level,
+            "used_percent": percent_floor(used, i128::from(amount)).map(|p| p.to_string()),
+            "used_microusd": used.to_string(),
+            "pending_microusd": pending,
+            "spend_amount_microusd": amount.to_string(),
+            "unknown_cost_requests": unknown,
+            "window_start": (!lifetime).then_some(start),
+            "window_end": (!lifetime).then_some(end),
+        }),
+    }])
 }
 
 async fn spike_conditions(
@@ -673,6 +706,7 @@ async fn evaluate_rule(
         Some(Kind::Provider) => provider_conditions(tx, rule, now).await,
         Some(Kind::BatchFailed) => batch_failed_conditions(tx, rule, now).await,
         Some(Kind::BatchStalled) => batch_stalled_conditions(tx, rule, now).await,
+        Some(Kind::Spend) => spend_conditions(tx, rule, now).await,
         None => Ok(vec![]),
     }
 }
@@ -819,7 +853,7 @@ pub async fn evaluate_once(store: &Store) -> anyhow::Result<Option<Report>> {
             + resolve_scim_last_admin(&mut tx).await?,
         ..Report::default()
     };
-    let rules: Vec<Rule> = sqlx::query_as("SELECT r.id,r.workspace_id,r.kind,r.budget_layers,r.thresholds,r.spike_factor_percent,r.min_spend_microusd,r.window_minutes,r.error_rate_percent,r.min_requests,r.consecutive_failures,r.provider_connection_id FROM alert_rules r LEFT JOIN workspaces w ON w.id=r.workspace_id WHERE r.enabled AND r.deleted_at IS NULL AND (r.workspace_id IS NULL OR w.disabled_at IS NULL) ORDER BY r.created_at,r.id LIMIT $1")
+    let rules: Vec<Rule> = sqlx::query_as("SELECT r.id,r.workspace_id,r.kind,r.budget_layers,r.thresholds,r.spike_factor_percent,r.min_spend_microusd,r.window_minutes,r.error_rate_percent,r.min_requests,r.consecutive_failures,r.provider_connection_id,r.spend_period,r.spend_amount_microusd FROM alert_rules r LEFT JOIN workspaces w ON w.id=r.workspace_id WHERE r.enabled AND r.deleted_at IS NULL AND (r.workspace_id IS NULL OR w.disabled_at IS NULL) ORDER BY r.created_at,r.id LIMIT $1")
         .bind(MAX_RULES)
         .fetch_all(&mut *tx)
         .await?;

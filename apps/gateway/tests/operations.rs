@@ -134,7 +134,7 @@ async fn metrics_follow_real_admission_and_settlement(pool: PgPool) {
          UPDATE models SET supported_protocols=ARRAY['chat_completions'], public_name='ops/metrics';
          INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version)
            SELECT gen_random_uuid(),id,1000000,2000000,100,10,1 FROM deployments;
-         INSERT INTO installation_policy(singleton,requests_per_minute) VALUES(true,2);",
+         INSERT INTO workspace_type_policies(kind,requests_per_minute) VALUES('personal',2) ON CONFLICT(kind) DO UPDATE SET requests_per_minute=2;",
     )
     .execute(&pool)
     .await

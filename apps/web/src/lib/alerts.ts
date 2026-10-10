@@ -2,17 +2,22 @@
  * Alerts (docs/alerts.md): API shapes, plain-language labels and the rule
  * form's exact conversions. Money travels as integer micro-USD strings (BigInt
  * conversion, never floats); the spike factor is sent as an integer percent.
+ * There is no installation budget (installation-wide limits were removed);
+ * "Installation spend" (`spend_threshold`) only notifies, it never blocks.
  * The server stays authoritative for validation and authority.
  */
 import { API, platformPath, wsPath } from "./api";
 import { dollarsToMicroUsd, formatMicroUsd, microUsdToDollars } from "./governance";
 
-export type AlertKind = "budget_threshold" | "spend_spike" | "error_rate" | "provider_failing" | "batch_failed" | "batch_stalled";
-export type BudgetLayer = "installation" | "type" | "override" | "local" | "key";
+export type AlertKind = "budget_threshold" | "spend_threshold" | "spend_spike" | "error_rate" | "provider_failing" | "batch_failed" | "batch_stalled";
+export type BudgetLayer = "type" | "override" | "local" | "key";
+export type SpendPeriod = "day" | "week" | "month" | "lifetime";
 export type AlertRule = {
   id: string; scope: "installation" | "workspace"; workspace_id: string | null; kind: AlertKind; name: string; enabled: boolean;
   budget_layers: BudgetLayer[] | null; thresholds: number[] | null;
   spike_factor_percent: number | null; min_spend_microusd: string | null;
+  /** Installation spend rules: the period and reference amount the percentages apply to (absent from older gateways). */
+  spend_period?: SpendPeriod | null; spend_amount_microusd?: string | null;
   window_minutes: number | null; error_rate_percent: number | null; min_requests: number | null; consecutive_failures: number | null;
   provider_connection_id: string | null; provider_connection: { id: string; name: string; provider: string } | null;
   notify_workspace_admins: boolean; notify_platform_admins: boolean; notify_emails: string[];
@@ -39,33 +44,36 @@ export const eventsPath = (scope: AlertScope) => `${base(scope)}/events`;
 export const notificationsPath = `${API}/me/notifications`;
 export const notificationSummaryPath = `${notificationsPath}/summary`;
 
-export const kindLabels: Record<AlertKind, string> = { budget_threshold: "Budget", spend_spike: "Spend spike", error_rate: "Error rate", provider_failing: "Failing connection", batch_failed: "Batch failed", batch_stalled: "Batch stalled" };
+export const kindLabels: Record<AlertKind, string> = { budget_threshold: "Budget", spend_threshold: "Installation spend", spend_spike: "Spend spike", error_rate: "Error rate", provider_failing: "Failing connection", batch_failed: "Batch failed", batch_stalled: "Batch stalled" };
 export const kindHints: Record<AlertKind, string> = {
   budget_threshold: "Spend reaches a share of a budget.",
+  spend_threshold: "Total spend reaches a share of an amount. Notifies only; never blocks.",
   spend_spike: "Last hour's spend is far above the 7-day hourly average.",
   error_rate: "Too many requests fail.",
   provider_failing: "A connection keeps failing upstream.",
   batch_failed: "A batch fails or expires.",
   batch_stalled: "A running batch makes no progress.",
 };
-export const layerLabels: Record<BudgetLayer, string> = { installation: "Installation", type: "Type default", override: "Platform override", local: "Workspace", key: "API keys" };
-export const kindsFor = (scope: AlertScope): AlertKind[] => scope.kind === "platform" ? ["budget_threshold", "spend_spike", "error_rate", "provider_failing", "batch_failed", "batch_stalled"] : ["budget_threshold", "spend_spike", "error_rate", "batch_failed", "batch_stalled"];
-export const layersFor = (scope: AlertScope): BudgetLayer[] => scope.kind === "platform" ? ["installation", "type", "override", "local", "key"] : ["type", "override", "local", "key"];
+export const layerLabels: Record<BudgetLayer, string> = { type: "Type default", override: "Platform override", local: "Workspace", key: "API keys" };
+export const spendPeriodLabels: Record<SpendPeriod, string> = { day: "Daily", week: "Weekly", month: "Monthly", lifetime: "Lifetime" };
+export const kindsFor = (scope: AlertScope): AlertKind[] => scope.kind === "platform" ? ["budget_threshold", "spend_threshold", "spend_spike", "error_rate", "provider_failing", "batch_failed", "batch_stalled"] : ["budget_threshold", "spend_spike", "error_rate", "batch_failed", "batch_stalled"];
+export const layersFor = (_scope: AlertScope): BudgetLayer[] => ["type", "override", "local", "key"];
 
 export type RuleDraft = {
-  name: string; kind: AlertKind; enabled: boolean; layers: BudgetLayer[]; thresholds: string;
+  name: string; kind: AlertKind; enabled: boolean; layers: BudgetLayer[]; thresholds: string; spendPeriod: SpendPeriod; spendAmount: string;
   factor: string; minSpend: string; window: string; rate: string; minRequests: string; consecutive: string; connection: string;
   notifyWorkspaceAdmins: boolean; notifyPlatformAdmins: boolean; emails: string;
 };
 export function newDraft(scope: AlertScope, kind: AlertKind = "budget_threshold"): RuleDraft {
   const platform = scope.kind === "platform";
-  return { name: "", kind, enabled: true, layers: platform ? ["installation", "local"] : ["local", "key"], thresholds: "50, 80, 100", factor: "3", minSpend: "1.00", window: kind === "batch_stalled" ? "60" : "15", rate: kind === "provider_failing" ? "" : "20", minRequests: kind === "provider_failing" ? "" : "20", consecutive: "5", connection: "", notifyWorkspaceAdmins: !platform, notifyPlatformAdmins: platform, emails: "" };
+  return { name: "", kind, enabled: true, layers: platform ? ["type", "local"] : ["local", "key"], thresholds: "50, 80, 100", spendPeriod: "month", spendAmount: "", factor: "3", minSpend: "1.00", window: kind === "batch_stalled" ? "60" : "15", rate: kind === "provider_failing" ? "" : "20", minRequests: kind === "provider_failing" ? "" : "20", consecutive: "5", connection: "", notifyWorkspaceAdmins: !platform, notifyPlatformAdmins: platform, emails: "" };
 }
 export function draftOf(rule: AlertRule): RuleDraft {
   const scope: AlertScope = rule.workspace_id ? { kind: "workspace", ws: rule.workspace_id } : { kind: "platform" };
   const d = newDraft(scope, rule.kind);
   return {
-    ...d, name: rule.name, enabled: rule.enabled, layers: rule.budget_layers ?? d.layers, thresholds: rule.thresholds?.join(", ") ?? d.thresholds,
+    ...d, name: rule.name, enabled: rule.enabled, layers: rule.budget_layers?.filter(l => l in layerLabels) ?? d.layers, thresholds: rule.thresholds?.join(", ") ?? d.thresholds,
+    spendPeriod: rule.spend_period ?? d.spendPeriod, spendAmount: rule.spend_amount_microusd ? microUsdToDollars(rule.spend_amount_microusd) : d.spendAmount,
     factor: rule.spike_factor_percent ? percentToFactor(rule.spike_factor_percent) : d.factor, minSpend: rule.min_spend_microusd ? microUsdToDollars(rule.min_spend_microusd) : d.minSpend,
     window: rule.window_minutes?.toString() ?? d.window, rate: rule.error_rate_percent?.toString() ?? (rule.kind === "provider_failing" ? "" : d.rate),
     minRequests: rule.min_requests?.toString() ?? (rule.kind === "provider_failing" ? "" : d.minRequests),
@@ -111,6 +119,10 @@ export function ruleErrors(d: RuleDraft): RuleErrors {
     if (!d.layers.length) e.layers = "Choose at least one budget.";
     const t = parseThresholds(d.thresholds); if (typeof t === "string") e.thresholds = t;
   }
+  if (d.kind === "spend_threshold") {
+    const t = parseThresholds(d.thresholds); if (typeof t === "string") e.thresholds = t;
+    try { if (BigInt(dollarsToMicroUsd(d.spendAmount)) < 1n) e.spendAmount = "Enter more than $0.00."; } catch (error) { e.spendAmount = (error as Error).message; }
+  }
   if (d.kind === "spend_spike") {
     const f = factorToPercent(d.factor); if (typeof f === "string") e.factor = f;
     try { if (BigInt(dollarsToMicroUsd(d.minSpend)) < 1n) e.minSpend = "Enter more than $0.00."; } catch (error) { e.minSpend = (error as Error).message; }
@@ -137,6 +149,7 @@ export function ruleBody(d: RuleDraft, scope: AlertScope) {
   const body: Record<string, unknown> = { name: d.name.trim(), kind: d.kind, enabled: d.enabled, notify_platform_admins: d.notifyPlatformAdmins, notify_emails: Array.isArray(emails) ? emails : [] };
   if (scope.kind === "workspace") body.notify_workspace_admins = d.notifyWorkspaceAdmins;
   if (d.kind === "budget_threshold") Object.assign(body, { budget_layers: layersFor(scope).filter(l => d.layers.includes(l)), thresholds: parseThresholds(d.thresholds) });
+  if (d.kind === "spend_threshold") Object.assign(body, { spend_period: d.spendPeriod, spend_amount_microusd: dollarsToMicroUsd(d.spendAmount), thresholds: parseThresholds(d.thresholds) });
   if (d.kind === "spend_spike") Object.assign(body, { spike_factor_percent: factorToPercent(d.factor), min_spend_microusd: dollarsToMicroUsd(d.minSpend) });
   if (d.kind === "error_rate" || d.kind === "provider_failing") {
     body.window_minutes = Number(d.window);
@@ -151,9 +164,10 @@ export function ruleBody(d: RuleDraft, scope: AlertScope) {
 }
 
 /** One short line: what the rule watches. */
-export function conditionText(r: Pick<AlertRule, "kind" | "budget_layers" | "thresholds" | "spike_factor_percent" | "min_spend_microusd" | "window_minutes" | "error_rate_percent" | "min_requests" | "consecutive_failures" | "provider_connection">): string {
+export function conditionText(r: Pick<AlertRule, "kind" | "budget_layers" | "thresholds" | "spend_period" | "spend_amount_microusd" | "spike_factor_percent" | "min_spend_microusd" | "window_minutes" | "error_rate_percent" | "min_requests" | "consecutive_failures" | "provider_connection">): string {
   switch (r.kind) {
-    case "budget_threshold": return `${(r.thresholds ?? []).join("/")}% of ${(r.budget_layers ?? []).map(l => layerLabels[l]).join(", ")} budgets`;
+    case "budget_threshold": return `${(r.thresholds ?? []).join("/")}% of ${(r.budget_layers ?? []).map(l => layerLabels[l] ?? l).join(", ")} budgets`;
+    case "spend_threshold": return `${(r.thresholds ?? []).join("/")}% of ${formatMicroUsd(r.spend_amount_microusd ?? null)} ${(r.spend_period ? spendPeriodLabels[r.spend_period] : "").toLowerCase()} spend`;
     case "spend_spike": return `Last hour ≥ ${percentToFactor(r.spike_factor_percent ?? 0)}× hourly average, at least ${formatMicroUsd(r.min_spend_microusd)}`;
     case "error_rate": return `≥ ${r.error_rate_percent}% failed over ${r.window_minutes} min (at least ${r.min_requests})`;
     case "provider_failing": {

@@ -4,8 +4,7 @@
 //! unknown is null.
 use super::requests::strict_date;
 use super::*;
-use crate::governance::BudgetPeriod;
-use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
+use chrono::{NaiveDate, TimeDelta, Utc};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -260,28 +259,6 @@ async fn deadline<T>(
         .await
         .map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE, "Report deadline exceeded"))?
 }
-/// Installation-wide budget windows with settled, held and total use
-/// (settled actual plus active holds by admission time, the admission rule).
-/// Platform readers only; unaffected by report filters.
-pub(super) async fn installation_budgets(
-    tx: &mut Transaction<'_, Postgres>,
-) -> Result<Value, ApiError> {
-    let limits = governance::installation_limits(tx).await?;
-    let (now, created): (DateTime<Utc>, DateTime<Utc>) =
-        sqlx::query_as("SELECT clock_timestamp(),created_at FROM installation WHERE singleton")
-            .fetch_one(&mut **tx)
-            .await?;
-    let mut out = Vec::new();
-    for (period, amount) in &limits.budgets {
-        let (start, end) = period.window(now);
-        let (settled, held, unresolved): (String, String, bool) = sqlx::query_as("SELECT coalesce(sum(r.actual_microusd) FILTER(WHERE r.state='settled'),0)::text,coalesce(sum(r.held_microusd) FILTER(WHERE r.state<>'settled'),0)::text,count(*) FILTER(WHERE r.state<>'settled' AND (r.unbounded_cost OR r.held_microusd IS NULL))>0 OR EXISTS(SELECT 1 FROM inference_executions e WHERE e.started_at>=$1 AND e.started_at<$2 AND NOT EXISTS(SELECT 1 FROM governance_reservations x WHERE x.execution_id=e.id)) FROM governance_reservations r WHERE r.admitted_at>=$1 AND r.admitted_at<$2").bind(start).bind(end).fetch_one(&mut **tx).await?;
-        let parse = |v: &str| v.parse::<i128>().map_err(|_| invalid());
-        let used = parse(&settled)? + parse(&held)?;
-        let lifetime = *period == BudgetPeriod::Lifetime;
-        out.push(json!({"period":period.as_str(),"amount_microusd":amount.to_string(),"used_microusd":used.to_string(),"settled_microusd":settled,"held_microusd":held,"unresolved_usage":unresolved,"exhausted":used>=i128::from(*amount),"window_start":if lifetime {created} else {start},"window_end":if lifetime {None} else {Some(end)}}));
-    }
-    Ok(Value::Array(out))
-}
 async fn overview(s: Store, u: BrowserPrincipal, ws: Option<Uuid>, p: OverviewQuery) -> ApiResult {
     deadline(async {
         let (prior, start, end) = period(&p.start_date, &p.end_date)?;
@@ -349,15 +326,10 @@ async fn overview(s: Store, u: BrowserPrincipal, ws: Option<Uuid>, p: OverviewQu
             top("model")?,
             top("key")?,
         );
-        let mut v: Value = bind_base(sqlx::query_scalar(&sql), &sc, prior, end, &f)
+        let v: Value = bind_base(sqlx::query_scalar(&sql), &sc, prior, end, &f)
             .bind(start)
             .fetch_one(&mut *tx)
             .await?;
-        v["installation_budgets"] = if sc.platform {
-            installation_budgets(&mut tx).await?
-        } else {
-            Value::Null
-        };
         tx.commit().await?;
         Ok(Json(v))
     })

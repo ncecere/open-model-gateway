@@ -8,7 +8,6 @@ import { setupSteps, type SetupStepId } from "../lib/model-setup";
 import { ResourceLink } from "../components/navigation-link";
 import { Checklist } from "../components/templates/checklist";
 import { Button, ErrorNotice, Heading, Stack, StatCard, useApi } from "../components/ui";
-import { InstallationBudgets } from "./usage/overview";
 import { usagePeriod, usageQuery, type UsageOverview } from "../lib/usage";
 import s from "./shared.module.css";
 
@@ -22,7 +21,6 @@ const stepActions: Record<SetupStepId, { label: string; search: DashboardSearch 
   offer: { label: "Catalogs", search: { page: "catalogs" } },
   defaults: { label: "Catalog defaults", search: { page: "catalogs", tab: "team" } },
   access: { label: "SSO groups", search: { page: "oidc" } },
-  budget: { label: "Set a budget", search: { page: "policies" } },
 };
 /**
  * The checklist's visibility, remembered per user: "hidden" (dismissed, even while incomplete), "shown" (reopened),
@@ -37,7 +35,7 @@ export function PlatformOverview({ session }: { session: Session }) {
   const [choice, setChoice] = useState<SetupChoice>(() => readChoice(session.user.id));
   if (!session.capabilities.platform_read) return <Heading title="Access not available" />;
   const writable = session.capabilities.platform_write;
-  const steps = overview.data ? setupSteps(overview.data.setup, overview.data.installation_budgets ?? undefined) : [];
+  const steps = overview.data ? setupSteps(overview.data.setup) : [];
   const required = steps.filter(step => !step.optional), allDone = required.length > 0 && required.every(step => step.done);
   const next = steps.find(step => !step.done && !step.optional) ?? (allDone ? undefined : steps.find(step => !step.done));
   const remember = (value: "hidden" | "shown") => { try { localStorage.setItem(`${DISMISS_KEY}:${session.user.id}`, value); } catch { /* Storage is optional. */ } setChoice(value); };
@@ -51,8 +49,6 @@ export function PlatformOverview({ session }: { session: Session }) {
           steps={steps.map(step => ({ ...step, action: writable ? { label: stepActions[step.id].label, render: <ResourceLink search={stepActions[step.id].search} /> } : undefined }))} />
         : <p className={`${s.note} ${s.iconLine}`}>{allDone ? "Setup complete." : `Setup: ${doneCount} of ${required.length} done.`} <Button size="sm" variant="ghost" onClick={() => remember("shown")}>Show setup checklist</Button></p>}
       <Glance data={overview.data} />
-      {/* Only when a budget exists; "none" is not worth a card. */}
-      {(overview.data.installation_budgets?.length ?? 0) > 0 && <InstallationBudgets budgets={overview.data.installation_budgets} />}
     </>}
   </Stack>;
 }

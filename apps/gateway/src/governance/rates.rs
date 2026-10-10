@@ -143,8 +143,8 @@ async fn read_state(
         SELECT 1 g,i,workspace_id,api_key_id,requests_per_minute::bigint a,tokens_per_minute::bigint b,concurrent_requests::bigint c,concurrent_jobs::bigint d,NULL::text period,NULL::text v FROM pol
         UNION ALL
         SELECT 2,b.i,b.workspace_id,b.api_key_id,b.amount_microusd::bigint,(coalesce(t.unresolved+t.unreserved_executions,0)>0)::int::bigint,NULL,NULL,b.period,coalesce(t.settled_microusd+t.held_microusd,0)::text
-         FROM bud b LEFT JOIN budget_totals t ON t.scope_kind=CASE WHEN b.workspace_id IS NULL THEN 'installation' WHEN b.api_key_id IS NULL THEN 'workspace' ELSE 'key' END
-         AND t.scope_id=coalesce(b.api_key_id,b.workspace_id,'00000000-0000-0000-0000-000000000000'::uuid) AND t.period=b.period
+         FROM bud b LEFT JOIN budget_totals t ON t.scope_kind=CASE WHEN b.api_key_id IS NULL THEN 'workspace' ELSE 'key' END
+         AND t.scope_id=coalesce(b.api_key_id,b.workspace_id) AND t.period=b.period
          AND t.period_start=CASE WHEN b.period='lifetime' THEN 'epoch'::timestamptz ELSE date_trunc(b.period,$3::timestamptz,'UTC') END
         UNION ALL
         SELECT 3,s.i,$1,CASE WHEN s.kind='key' THEN $2::uuid END,coalesce(m.requests,0),coalesce(m.unreserved,0),coalesce(f.requests,0)-x.inflight,coalesce(f.jobs,0)-x.jobs,NULL,coalesce(m.tokens,0)::text
@@ -152,7 +152,7 @@ async fn read_state(
          LEFT JOIN rate_minute_counters m ON m.minute_start=date_trunc('minute',$3::timestamptz,'UTC') AND m.scope_kind=s.kind AND m.scope_id=s.id
          LEFT JOIN inflight_counters f ON f.scope_kind=s.kind AND f.scope_id=s.id
          CROSS JOIN LATERAL (SELECT coalesce(sum(d.inflight),0)::bigint inflight,coalesce(sum(d.jobs),0)::bigint jobs FROM expired d WHERE s.kind='workspace' OR d.lineage=s.id) x
-         WHERE $5 OR EXISTS(SELECT 1 FROM pol WHERE workspace_id IS NOT NULL)
+         WHERE $5 OR EXISTS(SELECT 1 FROM pol)
         ) q ORDER BY g,i"#,
         policies_sql = super::POLICIES,
         budgets_sql = super::BUDGETS,
@@ -170,10 +170,9 @@ async fn read_state(
         budgets: Vec::new(),
         counters: Vec::new(),
     };
-    for (g, _, workspace_id, api_key_id, a, b, c, d, period, v) in rows {
+    for (g, _, _workspace_id, api_key_id, a, b, c, d, period, v) in rows {
         match g {
             1 => state.policies.push(super::Policy {
-                workspace_id,
                 api_key_id,
                 requests_per_minute: a,
                 tokens_per_minute: b,
@@ -182,7 +181,6 @@ async fn read_state(
             }),
             2 => state.budgets.push((
                 super::Budget {
-                    workspace_id,
                     api_key_id,
                     period: period.unwrap_or_default(),
                     amount_microusd: a.unwrap_or_default(),
@@ -312,9 +310,9 @@ pub(crate) async fn verify_in(
 /// verbatim as the test oracle for the maintained counters. `$1` workspace,
 /// `$2` key lineage, `$3` admission time, `$4` requests/min, `$5` tokens/min,
 /// `$6` requests at once, `$7` reserved tokens, `$8` jobs at once. Returns
-/// (rate limits ok, job limit ok). Admission still uses it for the
-/// installation policy layer, which has no counters (that layer is being
-/// removed; counters would make the installation a single hot row).
+/// (rate limits ok, job limit ok). Admission no longer runs it: the
+/// installation policy layer, its last user, was removed in 0026.
+#[cfg(test)]
 pub(crate) const SCAN: &str = r#"WITH accounting AS (
   SELECT r.workspace_id,r.api_key_id,r.minute_start,r.state,r.lease_expires_at,r.reserved_tokens,r.input_tokens,r.output_tokens,r.billing_usage,e.workload_kind IN('videos','batches') OR e.batch_job_id IS NOT NULL AS job,j.id IS NOT NULL OR e.batch_job_id IS NOT NULL AS accepted,coalesce(j.state IN('completed','failed','cancelled','expired') OR j.cancel_requested_at IS NOT NULL,e.batch_job_id IS NOT NULL) AS job_done FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id LEFT JOIN async_jobs j ON j.execution_id=r.execution_id WHERE r.minute_start=date_trunc('minute',$3::timestamptz,'UTC') OR (r.state='pending' AND r.lease_expires_at>$3)
   UNION ALL SELECT e.workspace_id,e.api_key_id,date_trunc('minute',e.started_at,'UTC'),'unknown',NULL::timestamptz,NULL::bigint,e.input_tokens,e.output_tokens,e.billing_usage,false,false,false FROM inference_executions e WHERE e.started_at>=date_trunc('minute',$3::timestamptz,'UTC') AND e.started_at<date_trunc('minute',$3::timestamptz,'UTC')+interval '1 minute' AND NOT EXISTS(SELECT 1 FROM governance_reservations r WHERE r.execution_id=e.id)

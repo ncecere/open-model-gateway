@@ -309,40 +309,18 @@ pub(crate) mod db {
             concurrency: Option<i64>,
             budget: Option<i64>,
         ) {
-            let (col, id) = if table == "installation_policy" {
-                ("singleton", None)
-            } else {
-                ("workspace_id", Some(self.principal.workspace_id))
-            };
-            let query = if id.is_some() {
-                format!(
-                    "INSERT INTO {table}({col},requests_per_minute,tokens_per_minute,concurrent_requests) VALUES($1,$2,$3,$4) ON CONFLICT({col}) DO UPDATE SET requests_per_minute=$2,tokens_per_minute=$3,concurrent_requests=$4"
-                )
-            } else {
-                format!(
-                    "INSERT INTO {table}(singleton,requests_per_minute,tokens_per_minute,concurrent_requests) VALUES(true,$1,$2,$3) ON CONFLICT(singleton) DO UPDATE SET requests_per_minute=$1,tokens_per_minute=$2,concurrent_requests=$3"
-                )
-            };
-            if let Some(id) = id {
-                sqlx::query(&query)
-                    .bind(id)
-                    .bind(requests)
-                    .bind(tokens)
-                    .bind(concurrency)
-                    .execute(&self.store.pool)
-                    .await
-                    .unwrap();
-            } else {
-                sqlx::query(&query)
-                    .bind(requests)
-                    .bind(tokens)
-                    .bind(concurrency)
-                    .execute(&self.store.pool)
-                    .await
-                    .unwrap();
-            }
+            let id = Some(self.principal.workspace_id);
+            sqlx::query(&format!(
+                "INSERT INTO {table}(workspace_id,requests_per_minute,tokens_per_minute,concurrent_requests) VALUES($1,$2,$3,$4) ON CONFLICT(workspace_id) DO UPDATE SET requests_per_minute=$2,tokens_per_minute=$3,concurrent_requests=$4"
+            ))
+            .bind(id)
+            .bind(requests)
+            .bind(tokens)
+            .bind(concurrency)
+            .execute(&self.store.pool)
+            .await
+            .unwrap();
             let layer = match table {
-                "installation_policy" => "installation",
                 "workspace_platform_policy_overrides" => "override",
                 "workspace_local_policies" => "local",
                 other => panic!("unsupported policy table {other}"),
@@ -672,33 +650,34 @@ pub(crate) mod db {
         );
     }
     #[sqlx::test(migrations = "./enterprise_migrations")]
-    async fn installation_caps_pool_workspaces_type_caps_do_not(pool: PgPool) {
+    async fn no_installation_layer_type_caps_are_per_workspace(pool: PgPool) {
         let f = fixture(pool).await;
         // Per-minute caps: every admission must see the same UTC minute.
         f.store.freeze_admission_clock().await.unwrap();
         f.price(1_000_000).await;
+        // Installation-wide limits are unrepresentable (0026): no policy
+        // table, no installation budget rows, no installation totals scope.
+        let table: bool =
+            sqlx::query_scalar("SELECT to_regclass('public.installation_policy') IS NOT NULL")
+                .fetch_one(&f.store.pool)
+                .await
+                .unwrap();
+        assert!(!table);
+        assert!(
+            sqlx::query("INSERT INTO policy_budgets(layer,period,amount_microusd) VALUES('installation','month',1)")
+                .execute(&f.store.pool)
+                .await
+                .is_err()
+        );
         let mut team = f.start();
         team.principal = f.team;
         admit(&f.store, &team, &request(), 60).await.unwrap();
-        for (r, t, c, b) in [
-            (Some(1), None, None, None),
-            (None, Some(110), None, None),
-            (None, None, Some(1), None),
-            (None, None, None, Some(110)),
-        ] {
-            f.policy("installation_policy", r, t, c, b).await;
-            assert_eq!(
-                admit(&f.store, &f.start(), &request(), 30).await,
-                Err(if b.is_some() {
-                    // Never reveals whose usage exhausted the shared ceiling.
-                    InferenceError::BudgetExceeded(LimitScope::Installation)
-                } else {
-                    InferenceError::Busy
-                })
-            );
-        }
-        f.policy("installation_policy", None, None, None, None)
-            .await;
+        let scopes: Vec<String> =
+            sqlx::query_scalar("SELECT DISTINCT scope_kind FROM budget_totals ORDER BY 1")
+                .fetch_all(&f.store.pool)
+                .await
+                .unwrap();
+        assert_eq!(scopes, ["key", "workspace"]);
         sqlx::query("INSERT INTO workspace_type_policies(kind,concurrent_requests) VALUES('personal',1),('team',1) ON CONFLICT(kind) DO UPDATE SET concurrent_requests=EXCLUDED.concurrent_requests").execute(&f.store.pool).await.unwrap();
         admit(&f.store, &f.start(), &request(), 30).await.unwrap();
         let mut team = f.start();
@@ -1217,13 +1196,13 @@ pub(crate) mod db {
             ..rates()
         })
         .await;
-        f.policy("installation_policy", None, None, None, Some(10000))
+        f.policy("workspace_local_policies", None, None, None, Some(10000))
             .await;
         assert_eq!(
             admit(&f.store, &f.start(), &request(), 30).await,
             Err(InferenceError::Configuration)
         );
-        f.policy("installation_policy", None, None, None, None)
+        f.policy("workspace_local_policies", None, None, None, None)
             .await;
         let start = f.start();
         admit(&f.store, &start, &request(), 30).await.unwrap();
@@ -1398,7 +1377,6 @@ pub(crate) mod db {
         for e in [
             InferenceError::BudgetExceeded(LimitScope::ApiKey),
             InferenceError::BudgetExceeded(LimitScope::Workspace),
-            InferenceError::BudgetExceeded(LimitScope::Installation),
             InferenceError::UnresolvedUsage(LimitScope::Workspace),
         ] {
             assert!(e.is_budget_denial());

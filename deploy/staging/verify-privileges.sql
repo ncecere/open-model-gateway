@@ -154,13 +154,14 @@ BEGIN
  INSERT INTO catalog_models(catalog_id,model_id) SELECT unnest(ARRAY[cat]),m ON CONFLICT DO NOTHING RETURNING catalog_id INTO changed;
  IF changed IS NOT NULL OR NOT workspace_model_allowed(ws,m) THEN RAISE EXCEPTION 'model catalog delta failed'; END IF;
  -- Stacked budgets (0005): one budget per scope and period, replaced per scope.
- INSERT INTO installation_policy(singleton,requests_per_minute) VALUES(true,10) ON CONFLICT(singleton) DO UPDATE SET requests_per_minute=EXCLUDED.requests_per_minute;
+ -- No installation layer (0026): neither its table nor installation budget rows exist.
+ IF to_regclass('public.installation_policy') IS NOT NULL THEN RAISE EXCEPTION 'installation policy layer still present'; END IF;
+ BEGIN INSERT INTO policy_budgets(layer,period,amount_microusd) VALUES('installation','day',1); RAISE EXCEPTION 'installation budgets representable'; EXCEPTION WHEN check_violation THEN NULL; END;
  INSERT INTO workspace_type_policies(kind) VALUES('project') ON CONFLICT(kind) DO UPDATE SET tokens_per_minute=EXCLUDED.tokens_per_minute;
  INSERT INTO workspace_platform_policy_overrides(workspace_id) VALUES(ws) ON CONFLICT(workspace_id) DO UPDATE SET concurrent_requests=EXCLUDED.concurrent_requests;
  INSERT INTO workspace_local_policies(workspace_id) VALUES(ws) ON CONFLICT(workspace_id) DO NOTHING;
  INSERT INTO key_policies(workspace_id,governance_key_id) VALUES(ws,k) ON CONFLICT(workspace_id,governance_key_id) DO NOTHING;
  -- Jobs at once (0018): every policy layer stores and upserts concurrent_jobs; type defaults start at 2.
- INSERT INTO installation_policy(singleton,concurrent_jobs) VALUES(true,9) ON CONFLICT(singleton) DO UPDATE SET concurrent_jobs=EXCLUDED.concurrent_jobs;
  INSERT INTO workspace_type_policies(kind,concurrent_jobs) VALUES('team',3) ON CONFLICT(kind) DO UPDATE SET concurrent_jobs=EXCLUDED.concurrent_jobs;
  INSERT INTO workspace_platform_policy_overrides(workspace_id,concurrent_jobs) VALUES(ws,4) ON CONFLICT(workspace_id) DO UPDATE SET concurrent_jobs=EXCLUDED.concurrent_jobs;
  INSERT INTO workspace_local_policies(workspace_id,concurrent_jobs) VALUES(ws,2) ON CONFLICT(workspace_id) DO UPDATE SET concurrent_jobs=EXCLUDED.concurrent_jobs;
@@ -168,14 +169,13 @@ BEGIN
  IF (SELECT concurrent_jobs FROM workspace_type_policies WHERE kind='personal') IS DISTINCT FROM 2 THEN RAISE EXCEPTION 'jobs at once type default missing'; END IF;
  BEGIN INSERT INTO key_policies(workspace_id,governance_key_id,concurrent_jobs) VALUES(ws,k,0) ON CONFLICT(workspace_id,governance_key_id) DO UPDATE SET concurrent_jobs=EXCLUDED.concurrent_jobs; RAISE EXCEPTION 'non-positive jobs at once allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
  PERFORM count(*) FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id LEFT JOIN async_jobs j ON j.execution_id=r.execution_id WHERE r.state='pending' AND e.workload_kind IN('videos','batches') AND j.state NOT IN('completed','failed','cancelled','expired') AND j.cancel_requested_at IS NULL;
- INSERT INTO policy_budgets(layer,period,amount_microusd) VALUES('installation','day',1),('installation','lifetime',9);
- INSERT INTO policy_budgets(layer,kind,period,amount_microusd) VALUES('type','project','week',1);
+ INSERT INTO policy_budgets(layer,kind,period,amount_microusd) VALUES('type','project','week',1),('type','project','lifetime',9);
  INSERT INTO policy_budgets(layer,workspace_id,period,amount_microusd) VALUES('override',ws,'month',1),('local',ws,'day',1),('local',ws,'month',2);
  INSERT INTO policy_budgets(layer,workspace_id,governance_key_id,period,amount_microusd) VALUES('key',ws,k,'lifetime',1);
  DELETE FROM policy_budgets WHERE layer='local' AND workspace_id=ws AND period='day';
  IF (SELECT count(*) FROM policy_budgets WHERE workspace_id=ws)<>3 THEN RAISE EXCEPTION 'stacked budget replacement failed'; END IF;
  BEGIN INSERT INTO policy_budgets(layer,workspace_id,period,amount_microusd) VALUES('local',ws,'month',3); RAISE EXCEPTION 'one budget per scope and period absent'; EXCEPTION WHEN unique_violation THEN NULL; END;
- BEGIN INSERT INTO policy_budgets(layer,period,amount_microusd) VALUES('installation','year',1); RAISE EXCEPTION 'budget period constraint absent'; EXCEPTION WHEN check_violation THEN NULL; END;
+ BEGIN INSERT INTO policy_budgets(layer,kind,period,amount_microusd) VALUES('type','team','year',1); RAISE EXCEPTION 'budget period constraint absent'; EXCEPTION WHEN check_violation THEN NULL; END;
  BEGIN UPDATE policy_budgets SET amount_microusd=99 WHERE workspace_id=ws; RAISE EXCEPTION 'budget rows rewritable in place'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  -- Reversible key disablement; revocation stays a separate column.
  UPDATE api_keys SET disabled_at=now() WHERE id=k;
@@ -213,6 +213,9 @@ BEGIN
  INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd,meter_usage,output_image_variant,provider_cost_microusd) SELECT gen_random_uuid(),e,'unknown',1,meter_usage,output_image_variant,provider_cost_microusd FROM inference_executions WHERE id=e;
  -- Budget totals (0015): the runtime's reservation writes maintained them; unknown keeps its hold.
  IF (SELECT (held_microusd,settled_microusd,reservations,pending,unknown,held_unknown_microusd)::text FROM budget_totals WHERE scope_kind='key' AND scope_id=k AND period='lifetime')<>'(1,0,1,0,1,1)' THEN RAISE EXCEPTION 'budget totals not maintained'; END IF;
+ -- No installation scope (0026): no request writes a global totals row; installation spend sums workspace rows.
+ IF EXISTS(SELECT FROM budget_totals WHERE scope_kind NOT IN ('workspace','key')) THEN RAISE EXCEPTION 'installation totals scope maintained'; END IF;
+ PERFORM coalesce(sum(t.settled_microusd+t.held_microusd-t.held_unknown_microusd),0),coalesce(sum(t.unknown+t.unresolved-t.unresolved_unknown),0) FROM budget_totals t WHERE t.scope_kind='workspace' AND t.period='month' AND t.period_start=date_trunc('month',now(),'UTC');
  -- Rate counters (0024): the same writes maintained them; unknown released the in-flight slot.
  IF (SELECT (requests,unreserved,tokens)::text FROM rate_minute_counters WHERE minute_start=date_trunc('minute',now(),'UTC') AND scope_kind='key' AND scope_id=k)<>'(1,0,110)'
   OR (SELECT requests FROM inflight_counters WHERE scope_kind='key' AND scope_id=k)<>0 THEN RAISE EXCEPTION 'rate counters not maintained'; END IF;
@@ -309,6 +312,13 @@ BEGIN
   INSERT INTO alert_rules(id,scope,workspace_id,kind,name,budget_layers,thresholds,notify_workspace_admins,notify_emails,created_by,updated_by) VALUES(ar,'workspace',ws,'budget_threshold','Rollback budgets',ARRAY['local','key'],ARRAY[50,80,100],true,ARRAY['ops@example.invalid'],u,u);
   INSERT INTO alert_rules(id,scope,kind,name,window_minutes,consecutive_failures,provider_connection_id,notify_platform_admins) VALUES(gen_random_uuid(),'installation','provider_failing','Rollback upstream',15,3,pc,true);
   INSERT INTO alert_rules(id,scope,kind,name,spike_factor_percent,min_spend_microusd) VALUES(gen_random_uuid(),'installation','spend_spike','Rollback spike',300,1000000);
+  -- Installation spend rules (0026): created and edited as runtime; never workspace-scoped.
+  DECLARE sr uuid:=gen_random_uuid(); BEGIN
+   INSERT INTO alert_rules(id,scope,kind,name,thresholds,spend_period,spend_amount_microusd,notify_platform_admins,created_by,updated_by) VALUES(sr,'installation','spend_threshold','Rollback spend',ARRAY[80,100],'month',1000000,true,u,u);
+   UPDATE alert_rules SET spend_period='week',spend_amount_microusd=2000000,thresholds=ARRAY[50],updated_at=now(),updated_by=u WHERE id=sr;
+   BEGIN INSERT INTO alert_rules(id,scope,workspace_id,kind,name,thresholds,spend_period,spend_amount_microusd) VALUES(gen_random_uuid(),'workspace',ws,'spend_threshold','x',ARRAY[50],'day',1); RAISE EXCEPTION 'workspace spend rule allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+   BEGIN INSERT INTO alert_rules(id,scope,kind,name,budget_layers,thresholds) VALUES(gen_random_uuid(),'installation','budget_threshold','x',ARRAY['installation'],ARRAY[50]); RAISE EXCEPTION 'installation budget layer alert allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  END;
   UPDATE alert_rules SET name='Rollback budgets 2',enabled=false,thresholds=ARRAY[90],notify_emails='{}',updated_at=now(),updated_by=u WHERE id=ar;
   PERFORM id FROM alert_rules WHERE id=ar FOR UPDATE;
   INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary,details) VALUES(ev,ar,'budget_threshold','local:'||ws||':-:month',80,'warning',ws,'Workspace monthly budget reached 80%','{"used_microusd":"8"}');

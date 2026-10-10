@@ -646,8 +646,7 @@ async fn overview_counts_setup_and_aggregates_recent_attempts_and_known_cost(poo
         empty,
         json!({
             "setup":{"connections":0,"enabled_connections":0,"models":0,"ready_models":0,"enabled_routes":0,"priced_enabled_routes":0,"catalogs":0,"type_defaults":{"personal":0,"team":0,"project":0},"entitled_users":5,"oidc_mappings":0},
-            "glance":{"entitled_users":5,"teams":1,"projects":1,"ready_models":0,"attempts_7d":"0","known_cost_7d_microusd":"0"},
-            "installation_budgets":[]
+            "glance":{"entitled_users":5,"teams":1,"projects":1,"ready_models":0,"attempts_7d":"0","known_cost_7d_microusd":"0"}
         })
     );
     let on = connection(&pool, "On", true).await;
@@ -715,8 +714,7 @@ async fn overview_counts_setup_and_aggregates_recent_attempts_and_known_cost(poo
             o,
             json!({
                 "setup":{"connections":2,"enabled_connections":1,"models":1,"ready_models":1,"enabled_routes":1,"priced_enabled_routes":1,"catalogs":2,"type_defaults":{"personal":0,"team":1,"project":1},"entitled_users":4,"oidc_mappings":1},
-                "glance":{"entitled_users":4,"teams":1,"projects":1,"ready_models":1,"attempts_7d":"5","known_cost_7d_microusd":"9007199254742500"},
-                "installation_budgets":[]
+                "glance":{"entitled_users":4,"teams":1,"projects":1,"ready_models":1,"attempts_7d":"5","known_cost_7d_microusd":"9007199254742500"}
             })
         );
         let text = o.to_string();

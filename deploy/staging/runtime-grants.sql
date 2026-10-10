@@ -21,7 +21,7 @@ GRANT SELECT ON public.installation,public.users,public.oidc_identities,
  public.catalog_models,public.workspace_type_catalogs,public.workspace_catalog_overrides,
  public.workspace_catalog_override_items,public.workspace_model_grants,
  public.key_model_restrictions,public.key_model_selections,public.deployment_prices,
- public.installation_policy,public.workspace_type_policies,
+ public.workspace_type_policies,
  public.workspace_platform_policy_overrides,public.workspace_local_policies,public.key_policies,
  public.policy_budgets,
  public.inference_executions,public.governance_reservations,public.monetary_ledger,
@@ -51,7 +51,7 @@ GRANT INSERT ON public.oidc_identities,public.platform_role_grants,public.cost_c
  public.deployments,public.catalogs,public.catalog_models,public.workspace_type_catalogs,
  public.workspace_catalog_overrides,public.workspace_catalog_override_items,
  public.workspace_model_grants,public.key_model_restrictions,public.key_model_selections,
- public.deployment_prices,public.installation_policy,public.workspace_type_policies,
+ public.deployment_prices,public.workspace_type_policies,
  public.workspace_platform_policy_overrides,public.workspace_local_policies,public.key_policies,
  public.policy_budgets,
  public.inference_executions,public.governance_reservations,public.monetary_ledger,
@@ -60,7 +60,7 @@ GRANT INSERT ON public.oidc_identities,public.platform_role_grants,public.cost_c
 GRANT DELETE ON public.oidc_login_attempts,public.oidc_group_mappings,public.catalogs,
  public.catalog_models,public.workspace_type_catalogs,public.workspace_catalog_overrides,
  public.workspace_catalog_override_items,public.workspace_model_grants,
- public.key_model_selections,public.installation_policy,public.workspace_type_policies,
+ public.key_model_selections,public.workspace_type_policies,
  public.workspace_platform_policy_overrides,public.workspace_local_policies,public.key_policies,
  public.policy_budgets
  TO gateway_runtime;
@@ -89,9 +89,10 @@ GRANT UPDATE(name,description) ON public.catalogs TO gateway_runtime;
 GRANT UPDATE(model_id) ON public.workspace_model_grants TO gateway_runtime;
 -- Budgets (0005) live in policy_budgets and are replaced by DELETE+INSERT per
 -- scope; there is no UPDATE privilege on budget rows (amounts never rewrite in place).
--- concurrent_jobs ("Jobs at once", 0018) is edited like the other limits.
+-- concurrent_jobs ("Jobs at once", 0018) is edited like the other limits. There is
+-- no installation policy layer (dropped in 0026).
 GRANT UPDATE(requests_per_minute,tokens_per_minute,concurrent_requests,concurrent_jobs)
- ON public.installation_policy,public.workspace_type_policies,
+ ON public.workspace_type_policies,
  public.workspace_platform_policy_overrides,public.workspace_local_policies,public.key_policies
  TO gateway_runtime;
 -- 0009 telemetry is written at finish; client labels are cleared by detail
@@ -115,9 +116,11 @@ GRANT UPDATE(consecutive_failures,open_until,last_observed_at) ON public.deploym
 -- marks are insert-only. No DELETE/TRUNCATE on any alert table.
 GRANT SELECT,INSERT ON public.alert_rules,public.alert_events,public.alert_deliveries,
  public.alert_reads TO gateway_runtime;
+-- Installation spend rules (0026) edit their period and reference amount.
 GRANT UPDATE(name,enabled,budget_layers,thresholds,spike_factor_percent,min_spend_microusd,
  window_minutes,error_rate_percent,min_requests,consecutive_failures,provider_connection_id,
- notify_workspace_admins,notify_platform_admins,notify_emails,updated_by,updated_at,deleted_at)
+ notify_workspace_admins,notify_platform_admins,notify_emails,updated_by,updated_at,deleted_at,
+ spend_period,spend_amount_microusd)
  ON public.alert_rules TO gateway_runtime;
 GRANT UPDATE(resolved_at,resolution) ON public.alert_events TO gateway_runtime;
 GRANT UPDATE(status,recipients,sent,failed,error,completed_at) ON public.alert_deliveries TO gateway_runtime;
