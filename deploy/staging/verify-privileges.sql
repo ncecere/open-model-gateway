@@ -177,6 +177,9 @@ DO $$ DECLARE r record; t text; BEGIN
  IF NOT EXISTS(SELECT FROM work_leases WHERE name='history_verify') THEN RAISE EXCEPTION 'history_verify lease missing'; END IF;
 END $$;
 BEGIN;
+-- A probe-only work lease (rolled back with everything else) so the election
+-- checks never contend with leases held by a running gateway.
+INSERT INTO work_leases(name) VALUES('privilege_probe');
 SET LOCAL ROLE gateway_runtime;
 SELECT version,checksum,success FROM public._sqlx_migrations ORDER BY version;
 SELECT lock_installation();
@@ -661,15 +664,15 @@ BEGIN
  BEGIN TRUNCATE TABLE config_versions; RAISE EXCEPTION 'configuration topic truncate allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  -- Work leases (0029): election, renewal, fencing, release and takeover as runtime.
  DECLARE me uuid:=gen_random_uuid(); other uuid:=gen_random_uuid(); term bigint; BEGIN
-  term:=omg_lease_acquire('lifecycle',me,30);
-  IF term IS NULL OR omg_lease_acquire('lifecycle',other,30) IS NOT NULL OR omg_lease_acquire('lifecycle',me,30)<>term THEN RAISE EXCEPTION 'work lease election failed'; END IF;
-  PERFORM omg_lease_fence('lifecycle',me,term);
-  BEGIN PERFORM omg_lease_fence('lifecycle',other,term); RAISE EXCEPTION 'foreign lease term fenced in'; EXCEPTION WHEN object_in_use THEN NULL; END;
-  IF NOT omg_lease_complete('lifecycle',me,term) OR omg_lease_complete('lifecycle',other,term) OR NOT omg_lease_release('lifecycle',me,term) THEN RAISE EXCEPTION 'work lease completion or release failed'; END IF;
-  IF omg_lease_acquire('lifecycle',other,30) IS DISTINCT FROM term+1 THEN RAISE EXCEPTION 'lease takeover did not advance the epoch'; END IF;
-  BEGIN PERFORM omg_lease_fence('lifecycle',me,term); RAISE EXCEPTION 'stale lease term fenced in'; EXCEPTION WHEN object_in_use THEN NULL; END;
-  BEGIN UPDATE work_leases SET epoch=0 WHERE name='lifecycle'; RAISE EXCEPTION 'lease epoch rollback allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
-  BEGIN UPDATE work_leases SET name='other' WHERE name='lifecycle'; RAISE EXCEPTION 'lease re-key allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  term:=omg_lease_acquire('privilege_probe',me,30);
+  IF term IS NULL OR omg_lease_acquire('privilege_probe',other,30) IS NOT NULL OR omg_lease_acquire('privilege_probe',me,30)<>term THEN RAISE EXCEPTION 'work lease election failed'; END IF;
+  PERFORM omg_lease_fence('privilege_probe',me,term);
+  BEGIN PERFORM omg_lease_fence('privilege_probe',other,term); RAISE EXCEPTION 'foreign lease term fenced in'; EXCEPTION WHEN object_in_use THEN NULL; END;
+  IF NOT omg_lease_complete('privilege_probe',me,term) OR omg_lease_complete('privilege_probe',other,term) OR NOT omg_lease_release('privilege_probe',me,term) THEN RAISE EXCEPTION 'work lease completion or release failed'; END IF;
+  IF omg_lease_acquire('privilege_probe',other,30) IS DISTINCT FROM term+1 THEN RAISE EXCEPTION 'lease takeover did not advance the epoch'; END IF;
+  BEGIN PERFORM omg_lease_fence('privilege_probe',me,term); RAISE EXCEPTION 'stale lease term fenced in'; EXCEPTION WHEN object_in_use THEN NULL; END;
+  BEGIN UPDATE work_leases SET epoch=0 WHERE name='privilege_probe'; RAISE EXCEPTION 'lease epoch rollback allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE work_leases SET name='other' WHERE name='privilege_probe'; RAISE EXCEPTION 'lease re-key allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   BEGIN INSERT INTO work_leases(name) VALUES('probe'); RAISE EXCEPTION 'lease creation allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   BEGIN DELETE FROM work_leases; RAISE EXCEPTION 'lease removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  END;

@@ -918,14 +918,23 @@ mod db {
         );
         // ...and scoped admission (P3) never takes it either; the global
         // admission mode (operational rollback) still serializes on it.
+        // Scoped mode must finish while the lock is still held; the bound is
+        // generous because slow CI runners can take well over 100ms for an
+        // uncontended admission. Global mode must still be waiting at 100ms.
         let second = f.start();
         let admission = crate::governance::admit(&f.store, &second, &req, 30);
         tokio::pin!(admission);
-        let first =
-            tokio::time::timeout(std::time::Duration::from_millis(100), &mut admission).await;
+        let global = f.store.admission_mode() == crate::governance::locks::AdmissionMode::Global;
+        let bound = if global {
+            std::time::Duration::from_millis(100)
+        } else {
+            std::time::Duration::from_secs(10)
+        };
+        let first = tokio::time::timeout(bound, &mut admission).await;
         assert_eq!(
             first.is_err(),
-            f.store.admission_mode() == crate::governance::locks::AdmissionMode::Global
+            global,
+            "scoped admission must not wait on the installation lock; global must"
         );
         blocker.commit().await.unwrap();
         match first {
