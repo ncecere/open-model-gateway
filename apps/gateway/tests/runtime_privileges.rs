@@ -49,6 +49,9 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         "deployment_batch_scheduling",
         "deployment_batch_signals",
         "batch_route_waits",
+        "usage_rollups_hourly",
+        "usage_rollup_dirty",
+        "archived_partitions",
     ] {
         assert_eq!(
             sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
@@ -78,6 +81,7 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
     read_snapshots_run_as_runtime(&pool).await;
     file_store_runs_as_runtime(&pool).await;
     files_api_runs_as_runtime(&pool).await;
+    history_partitions_run_as_runtime(&pool).await;
     // Last: its unknown batch hold would change the installation-wide totals above.
     async_jobs_run_as_runtime(&pool).await;
     sqlx::query("SELECT pg_advisory_unlock(72419505)")
@@ -332,7 +336,7 @@ async fn alert_evaluation_runs_as_runtime(pool: &PgPool) {
  INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model,enabled) VALUES(d,m,pc,'x',true);
  FOR i IN 1..4 LOOP
   e:=gen_random_uuid();
-  INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,error_code,root_request_id,completed_at) VALUES(e,CASE WHEN i=4 THEN personal ELSE ws END,CASE WHEN i=4 THEN pk ELSE k END,d,'alerts','openai_compatible',false,'failed','upstream_unavailable',e,now());
+  INSERT INTO inference_executions(started_at,id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,error_code,root_request_id,completed_at) VALUES(now(),e,CASE WHEN i=4 THEN personal ELSE ws END,CASE WHEN i=4 THEN pk ELSE k END,d,'alerts','openai_compatible',false,'failed','upstream_unavailable',e,now());
   INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,actual_microusd,input_tokens,output_tokens) VALUES(e,CASE WHEN i=4 THEN personal ELSE ws END,CASE WHEN i=4 THEN pk ELSE k END,d,now(),date_trunc('minute',now()),date_trunc('month',now()),now(),'settled',2000000,1,1);
  END LOOP;
  INSERT INTO policy_budgets(layer,workspace_id,period,amount_microusd) VALUES('local',ws,'month',5000000),('local',personal,'month',1000000);
@@ -725,13 +729,64 @@ async fn change_notifications_and_leases_run_as_runtime(pool: &PgPool) {
     runtime.close().await;
 }
 
+/// Scale plan P6: the leased `partitions` job (future months through the
+/// SECURITY DEFINER function, the partitions_missing alert) and the
+/// `rollups` job need nothing beyond the reviewed grants; the owner-only
+/// two-argument form is refused.
+async fn history_partitions_run_as_runtime(pool: &PgPool) {
+    use open_model_gateway::{leases, partitions, rollups};
+    let runtime = runtime_pool(pool).await;
+    let store = open_model_gateway::store::Store::new(runtime.clone());
+    let report = partitions::ensure(&runtime, 4).await.unwrap();
+    assert!(
+        report.error.is_none() && report.short.is_empty(),
+        "{report:?}"
+    );
+    assert!(report.created.iter().all(|(_, p)| p.contains("_p20")));
+    let refused = partitions::ensure_at(&runtime, 3, chrono::Utc::now())
+        .await
+        .unwrap();
+    assert!(refused.error.is_some(), "{refused:?}");
+    let l = leases::Leases::new();
+    l.renew_once(&runtime).await;
+    let fence = l.held(leases::Lease::Partitions).unwrap();
+    let job = partitions::run_job(&store, 4, Some(&fence)).await.unwrap();
+    assert!(job.short.is_empty());
+    // An ended hour of history (owner-seeded), rolled up by the runtime.
+    sqlx::raw_sql(r#"DO $$ DECLARE e uuid:=gen_random_uuid(); r record; at timestamptz:=date_trunc('hour',now(),'UTC')-interval '3 hours'; BEGIN
+      SELECT k.id key_id,k.workspace_id,d.id deployment_id INTO STRICT r FROM api_keys k CROSS JOIN deployments d ORDER BY k.created_at,d.created_at LIMIT 1;
+      INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,started_at,input_tokens,output_tokens)
+       VALUES(e,r.workspace_id,r.key_id,r.deployment_id,'probe','openai',false,'succeeded',e,at,3,4);
+      INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,actual_microusd,input_tokens,output_tokens)
+       VALUES(e,r.workspace_id,r.key_id,r.deployment_id,at,date_trunc('minute',at),date_trunc('month',at),at,'settled',11,3,4); END $$"#)
+        .execute(pool)
+        .await
+        .unwrap();
+    let rolls = l.held(leases::Lease::Rollups).unwrap();
+    let rolled = rollups::run_once(&store, Some(&rolls), std::time::Duration::from_secs(30))
+        .await
+        .unwrap();
+    assert!(rolled.new_hours + rolled.changed_hours >= 1, "{rolled:?}");
+    let differ: i64 = sqlx::query_scalar("SELECT (SELECT count(*) FROM (SELECT * FROM omg_usage_rows(now()-interval '1 day',now()) EXCEPT ALL SELECT * FROM omg_usage_aggregate(now()-interval '1 day',now())) a)+(SELECT count(*) FROM (SELECT * FROM omg_usage_aggregate(now()-interval '1 day',now()) EXCEPT ALL SELECT * FROM omg_usage_rows(now()-interval '1 day',now())) b)")
+        .fetch_one(&runtime)
+        .await
+        .unwrap();
+    assert_eq!(differ, 0);
+    let report = open_model_gateway::governance::totals::verify(&store)
+        .await
+        .unwrap();
+    assert!(report.consistent(), "{report:#?}");
+    l.release_all(&runtime).await;
+    runtime.close().await;
+}
+
 /// Expiry reconciliation (a trigger-maintained reservation write) and the
 /// `budget verify` consistency check need nothing beyond the reviewed grants.
 async fn budget_totals_maintained_as_runtime(pool: &PgPool) {
     // Seed an expired pending attempt as owner, like an admission whose lease ran out.
     sqlx::raw_sql(r#"DO $$ DECLARE e uuid:=gen_random_uuid(); r record; BEGIN
       SELECT workspace_id,api_key_id,deployment_id INTO r FROM governance_reservations ORDER BY execution_id LIMIT 1;
-      INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id) VALUES(e,r.workspace_id,r.api_key_id,r.deployment_id,'alerts','openai_compatible',false,'started',e);
+      INSERT INTO inference_executions(started_at,id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id) VALUES(now(),e,r.workspace_id,r.api_key_id,r.deployment_id,'alerts','openai_compatible',false,'started',e);
       INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,held_microusd) VALUES(e,r.workspace_id,r.api_key_id,r.deployment_id,now(),date_trunc('minute',now()),date_trunc('month',now()),now()-interval '1 second','pending',500);
     END $$"#)
         .execute(pool)

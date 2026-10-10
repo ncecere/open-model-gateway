@@ -163,7 +163,8 @@ async fn insert_reservation(
     lease: DateTime<Utc>,
     reserved: Option<i64>,
 ) {
-    sqlx::query("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,reserved_tokens,held_microusd,unbounded_cost) VALUES($1,$2,$3,$4,$5,$5,date_trunc('month',$5::timestamptz,'UTC'),$6,'pending',$7,7,false)")
+    // Admitted at the execution's start (0030 key); the minute is the test's.
+    sqlx::query("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,reserved_tokens,held_microusd,unbounded_cost) SELECT $1,$2,$3,$4,e.started_at,$5,date_trunc('month',$5::timestamptz,'UTC'),$6,'pending',$7,7,false FROM inference_executions e WHERE e.id=$1")
         .bind(id).bind(p.workspace_id).bind(p.key_id).bind(f.deployment).bind(minute).bind(lease).bind(reserved)
         .execute(pool).await.unwrap();
 }
@@ -374,17 +375,24 @@ async fn random_interleavings_keep_rate_counters_equal_to_the_scan(pool: PgPool)
                     .bind(id).bind(rng.gen_range(0..400i64)).bind(BILLING).execute(&pool).await.unwrap();
             }
         } else if op < 88 && !all.is_empty() {
-            what = "move reservation minute or execution start";
+            what = "move reservation minute (execution start refused)";
             let id = *all.choose(&mut rng).unwrap();
             let delta = minute_s * rng.gen_range(-1..2);
             sqlx::query("UPDATE governance_reservations SET minute_start=minute_start+$2 WHERE execution_id=$1")
                 .bind(id).bind(delta).execute(&pool).await.unwrap();
-            sqlx::query("UPDATE inference_executions SET started_at=started_at+$2 WHERE id=$1")
-                .bind(id)
-                .bind(delta)
-                .execute(&pool)
-                .await
-                .unwrap();
+            // A reserved execution's start is its reservation's admission time (0030 key).
+            if delta != chrono::TimeDelta::zero() {
+                assert!(
+                    sqlx::query(
+                        "UPDATE inference_executions SET started_at=started_at+$2 WHERE id=$1"
+                    )
+                    .bind(id)
+                    .bind(delta)
+                    .execute(&pool)
+                    .await
+                    .is_err()
+                );
+            }
         } else if op < 93 && !all.is_empty() {
             what = "change workload or batch link";
             let id = *all.choose(&mut rng).unwrap();

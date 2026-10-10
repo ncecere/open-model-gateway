@@ -183,7 +183,7 @@ impl Engine {
             let execution_id = if attempt == 0 {
                 request_id
             } else {
-                Uuid::new_v4()
+                Uuid::now_v7()
             };
             let attempt_started = Instant::now();
             timeout_at(

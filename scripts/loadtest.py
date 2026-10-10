@@ -236,6 +236,19 @@ def cmd_seed(stack, args):
     return report
 
 
+def cmd_rollups(stack, args):
+    """Catch up hourly usage rollups (0032) once, e.g. after seeding history."""
+    started = time.monotonic()
+    result = stack.compose("run", "--rm", "-e", f"DATABASE_URL={stack.url('runtime')}", "gateway-cli",
+                           "rollups", "run", "--once", "--budget-seconds", str(args.budget_seconds),
+                           profiles=("tools",), capture=True)
+    report = json.loads(result.stdout)
+    report["wall_seconds"] = round(time.monotonic() - started, 1)
+    save(stack, "rollups", report)
+    print(json.dumps(report, indent=2))
+    return report
+
+
 def cmd_gateways(stack, args):
     via_direct = args.via == "direct"
     stack.extra_env.update({
@@ -372,7 +385,25 @@ def stack_facts(stack):
             f"SELECT deadlocks FROM pg_stat_database WHERE datname='{stack.db}'"))
     except (subprocess.CalledProcessError, ValueError):
         pass
+    facts["multixact"] = multixact_counters(stack)
     return facts
+
+
+def multixact_counters(stack):
+    """MultiXact ID and member counters after a CHECKPOINT (decision gate D3):
+    the difference between two runs' readings is the MultiXacts and members
+    created in between (both wrap at 2^32)."""
+    try:
+        stack.psql("CHECKPOINT")
+        row = stack.psql(
+            "SELECT next_multixact_id::text::bigint||','||next_multi_offset::text::bigint||','"
+            f"||(SELECT mxid_age(datminmxid) FROM pg_database WHERE datname='{stack.db}')||','"
+            "||extract(epoch FROM clock_timestamp()) FROM pg_control_checkpoint()")
+        next_id, next_offset, age, at = row.strip().split(",")
+        return {"next_id": int(next_id), "next_offset": int(next_offset), "db_mxid_age": int(age),
+                "at": float(at)}
+    except (subprocess.CalledProcessError, ValueError):
+        return None
 
 
 def save(stack, label, report):
@@ -504,6 +535,8 @@ def main(argv=None):
     seed.add_argument("--history", type=int, default=0)
     seed.add_argument("--history-unknown", type=int, default=0)
     seed.add_argument("--history-days", type=int, default=120)
+    ro = sub.add_parser("rollups", help="catch up hourly usage rollups once (after seeding)")
+    ro.add_argument("--budget-seconds", type=int, default=3600)
     gw = sub.add_parser("gateways")
     gw.add_argument("--replicas", type=int, choices=(1, 2, 3), default=3)
     gw.add_argument("--via", choices=("pgbouncer", "direct"), default="pgbouncer")
@@ -553,7 +586,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     configure(args.project, args.slot)
     stack = Stack(db=args.db)
-    {"up": cmd_up, "reset-db": cmd_reset_db, "seed": cmd_seed, "gateways": cmd_gateways, "run": cmd_run,
+    {"up": cmd_up, "reset-db": cmd_reset_db, "seed": cmd_seed, "rollups": cmd_rollups, "gateways": cmd_gateways, "run": cmd_run,
      "report": cmd_report, "down": cmd_down, "baseline": cmd_baseline}[args.command](stack, args)
 
 

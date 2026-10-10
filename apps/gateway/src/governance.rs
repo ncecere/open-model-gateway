@@ -714,9 +714,9 @@ async fn admit_unobserved(
     // for a hold without usage.
     let written = sqlx::query("WITH e AS (INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,started_at,root_request_id,attempt_number,workload_kind,cost_center_id,cost_center_name,cost_center_code,upstream_model,client_session_id,client_app) SELECT $1,w.id,$3,$4,$5,$6,$7,'started',$8,$9,$10,$11,w.cost_center_id,c.name,c.code,$12,$13,$14 FROM workspaces w LEFT JOIN cost_centers c ON c.id=w.cost_center_id WHERE w.id=$2 RETURNING id),
       r AS (INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,price_id,admitted_at,minute_start,month_start,lease_expires_at,state,reserved_tokens,held_microusd,unbounded_cost,request_count) SELECT e.id,$2,$3,$4,$15,$8,date_trunc('minute',$8::timestamptz,'UTC'),date_trunc('month',$8::timestamptz,'UTC'),$16,'pending',$17,$18,$19,$20 FROM e RETURNING execution_id)
-      INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd) SELECT $21,execution_id,'hold',$18 FROM r")
+      INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd,admitted_at) SELECT $21,execution_id,'hold',$18,$8 FROM r")
         .bind(record.id).bind(workspace).bind(key).bind(record.deployment_id).bind(&record.model).bind(&record.provider).bind(record.streamed).bind(now).bind(record.root_request_id).bind(record.attempt_number).bind(workload.kind.as_str()).bind(&record.upstream_model).bind(&record.client.session_id).bind(&record.client.app)
-        .bind(price.as_ref().map(|p|p.id)).bind(lease).bind(tokens).bind(held).bind(held.is_none()).bind(request_count).bind(Uuid::new_v4())
+        .bind(price.as_ref().map(|p|p.id)).bind(lease).bind(tokens).bind(held).bind(held.is_none()).bind(request_count).bind(Uuid::now_v7())
         .execute(&mut *tx).await.map_err(storage)?.rows_affected();
     if written != 1 {
         return Err(InferenceError::Storage);
@@ -1295,8 +1295,12 @@ async fn ledger(
 ) -> Result<(), InferenceError> {
     let (input, output) = usage_values(usage)?;
     let m = meter_evidence(usage)?;
-    sqlx::query("INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd,input_tokens,output_tokens,billing_usage,cost_components,evidence,meter_usage,output_image_variant,provider_cost_microusd) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)")
-        .bind(Uuid::new_v4()).bind(id).bind(kind).bind(amount).bind(input).bind(output).bind(billing_json(usage)?).bind(components.map(|c|c.to_value())).bind(evidence).bind(m.meters).bind(m.variant).bind(m.provider_cost).execute(&mut **tx).await.map_err(storage)?;
+    // admitted_at (0030): the ledger is partitioned with its reservation.
+    let written = sqlx::query("INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd,input_tokens,output_tokens,billing_usage,cost_components,evidence,meter_usage,output_image_variant,provider_cost_microusd,admitted_at) SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,r.admitted_at FROM governance_reservations r WHERE r.execution_id=$2")
+        .bind(Uuid::now_v7()).bind(id).bind(kind).bind(amount).bind(input).bind(output).bind(billing_json(usage)?).bind(components.map(|c|c.to_value())).bind(evidence).bind(m.meters).bind(m.variant).bind(m.provider_cost).execute(&mut **tx).await.map_err(storage)?.rows_affected();
+    if written != 1 {
+        return Err(InferenceError::Storage);
+    }
     Ok(())
 }
 /// Token meters a pinned v3 price marks `not_applicable` (all input-family
@@ -1598,7 +1602,7 @@ async fn reconcile_batch(store: &Store, batch: i64) -> Result<usize, InferenceEr
             }
             // The ledger row `ledger()` writes for an unknown outcome without
             // usage: no amount, no observations.
-            sqlx::query("INSERT INTO monetary_ledger(id,execution_id,kind) SELECT gen_random_uuid(),id,'unknown' FROM unnest($1::uuid[]) id")
+            sqlx::query("INSERT INTO monetary_ledger(id,execution_id,kind,admitted_at) SELECT gen_random_uuid(),r.execution_id,'unknown',r.admitted_at FROM governance_reservations r WHERE r.execution_id=ANY($1::uuid[])")
                 .bind(&ids)
                 .execute(&mut *tx)
                 .await

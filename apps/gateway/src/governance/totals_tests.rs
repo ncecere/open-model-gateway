@@ -200,11 +200,12 @@ async fn random_interleavings_keep_totals_equal_to_the_scan(pool: PgPool) {
             sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,started_at) VALUES($1,$2,$3,$4,'company/smart','openai',false,'failed',$1,now()-make_interval(days=>$5))")
                 .bind(id).bind(p.workspace_id).bind(p.key_id).bind(f.deployment).bind(rng.gen_range(0..40)).execute(&pool).await.unwrap();
         } else if op < 97 && !all.is_empty() {
-            what = "move admission time";
+            what = "move admission time (refused)";
+            // Admission time is the partition key of the reservation and its
+            // ledger (0030): an admitted request's time can never move.
             let id = *all.choose(&mut rng).unwrap();
-            let days: i32 = rng.gen_range(0..45);
-            sqlx::query("UPDATE governance_reservations SET admitted_at=admitted_at-make_interval(days=>$2) WHERE execution_id=$1").bind(id).bind(days).execute(&pool).await.unwrap();
-            sqlx::query("UPDATE inference_executions SET started_at=started_at-make_interval(days=>$2) WHERE id=$1").bind(id).bind(days).execute(&pool).await.unwrap();
+            let days: i32 = rng.gen_range(1..45);
+            assert!(sqlx::query("WITH e AS (UPDATE inference_executions SET started_at=started_at-make_interval(days=>$2) WHERE id=$1) UPDATE governance_reservations SET admitted_at=admitted_at-make_interval(days=>$2) WHERE execution_id=$1").bind(id).bind(days).execute(&pool).await.is_err());
         } else {
             what = "move or delete an unreserved execution";
             let orphan: Option<Uuid> = sqlx::query_scalar("SELECT id FROM inference_executions e WHERE NOT EXISTS(SELECT 1 FROM governance_reservations r WHERE r.execution_id=e.id) ORDER BY id LIMIT 1").fetch_optional(&pool).await.unwrap();
@@ -314,7 +315,7 @@ async fn concurrent_writers_keep_totals_exact(pool: PgPool) {
         tasks.push(tokio::spawn(async move {
             for _ in 0..10 {
                 sqlx::raw_sql(&format!("DO $$ DECLARE e uuid:=gen_random_uuid(); BEGIN
-                  INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id) VALUES(e,'{ws}','{key}','{d}','company/smart','openai',false,'succeeded',e);
+                  INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,started_at) VALUES(e,'{ws}','{key}','{d}','company/smart','openai',false,'succeeded',e,now());
                   INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,held_microusd) VALUES(e,'{ws}','{key}','{d}',now(),date_trunc('minute',now()),date_trunc('month',now()),now()+interval '1 minute','pending',7);
                   UPDATE governance_reservations SET state='settled',actual_microusd=3,input_tokens=1,output_tokens=1 WHERE execution_id=e; END $$"))
                     .execute(&pool).await.unwrap();
@@ -365,7 +366,7 @@ async fn migration_backfills_existing_history_exactly(pool: PgPool) {
       INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,started_at) VALUES(e,ws,CASE WHEN i%2=0 THEN k ELSE k2 END,d,'backfill','openai',false,'succeeded',e,now()-make_interval(days=>i));
       IF i%7<>0 THEN
        INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,held_microusd,actual_microusd,unbounded_cost,input_tokens,output_tokens)
-        VALUES(e,ws,CASE WHEN i%2=0 THEN k ELSE k2 END,d,now()-make_interval(days=>i,hours=>i),now(),now(),now(),
+        VALUES(e,ws,CASE WHEN i%2=0 THEN k ELSE k2 END,d,now()-make_interval(days=>i),now(),now(),now(),
          CASE i%3 WHEN 0 THEN 'settled' WHEN 1 THEN 'unknown' ELSE 'pending' END,
          CASE WHEN i%5=0 THEN NULL ELSE 100+i END,CASE WHEN i%3=0 THEN 9223372036854775807-i ELSE NULL END,i%4=0,CASE WHEN i%3=0 THEN 1 END,CASE WHEN i%3=0 THEN 1 END);
       END IF;

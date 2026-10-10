@@ -3,6 +3,8 @@ use super::*;
 use chrono::Utc;
 #[path = "logs_tests.rs"]
 mod logs_tests;
+#[path = "usage_rollup_tests.rs"]
+mod usage_rollups;
 #[path = "ux_wave2_tests.rs"]
 mod wave2;
 
@@ -40,7 +42,7 @@ async fn attempt(pool: &PgPool, r: &Route, a: Attempt<'_>) -> Uuid {
     } else {
         "unknown"
     };
-    sqlx::query(&format!("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,actual_microusd,held_microusd,unbounded_cost,input_tokens,output_tokens) VALUES($1,$2,$3,$4,{at},date_trunc('minute',{at},'UTC'),date_trunc('month',{at},'UTC'),{at},$5,$6,$7,$8,$9,$10)", at = a.at)).bind(id).bind(a.ws).bind(a.key).bind(r.deployment).bind(state).bind(a.actual).bind(a.held).bind(a.actual.is_none() && a.held.is_none()).bind(if a.actual.is_some() { input } else { None }).bind(if a.actual.is_some() { output } else { None }).execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,actual_microusd,held_microusd,unbounded_cost,input_tokens,output_tokens) SELECT $1,$2,$3,$4,e.started_at,date_trunc('minute',e.started_at,'UTC'),date_trunc('month',e.started_at,'UTC'),e.started_at,$5,$6,$7,$8,$9,$10 FROM inference_executions e WHERE e.id=$1").bind(id).bind(a.ws).bind(a.key).bind(r.deployment).bind(state).bind(a.actual).bind(a.held).bind(a.actual.is_none() && a.held.is_none()).bind(if a.actual.is_some() { input } else { None }).bind(if a.actual.is_some() { output } else { None }).execute(pool).await.unwrap();
     id
 }
 fn simple<'a>(ws: Uuid, key: Uuid, model: &'a str, at: &'a str, actual: i64) -> Attempt<'a> {

@@ -78,15 +78,10 @@ mod db {
         id
     }
     async fn move_to(f: &Fixture, id: Uuid, when: &str) {
+        // One statement: the reservation's admission time must equal its
+        // execution's start (0030 foreign key, checked at statement end).
         sqlx::query(&format!(
-            "UPDATE governance_reservations SET admitted_at={when} WHERE execution_id=$1"
-        ))
-        .bind(id)
-        .execute(&f.store.pool)
-        .await
-        .unwrap();
-        sqlx::query(&format!(
-            "UPDATE inference_executions SET started_at={when} WHERE id=$1"
+            "WITH e AS (UPDATE inference_executions SET started_at={when} WHERE id=$1) UPDATE governance_reservations SET admitted_at={when} WHERE execution_id=$1"
         ))
         .bind(id)
         .execute(&f.store.pool)

@@ -217,7 +217,8 @@ pub(crate) struct PublicCache;
 
 async fn request_context(mut request: Request, next: Next) -> Response {
     // Generate our own ID; do not reflect arbitrary client-supplied values into logs.
-    let id = Uuid::new_v4();
+    // UUIDv7: time-ordered ids append to the partitioned history indexes.
+    let id = Uuid::now_v7();
     request.extensions_mut().insert(RequestId(id));
     let request_id = id.to_string();
     let span = tracing::info_span!("http.request", request_id, method = %request.method());

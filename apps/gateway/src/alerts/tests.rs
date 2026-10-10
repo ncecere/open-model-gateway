@@ -91,7 +91,7 @@ async fn attempt(
     sqlx::query(&format!("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,error_code,root_request_id,started_at,completed_at) VALUES($1,$2,$3,$4,'alerts-model','openai_compatible',false,$5,$6,$1,{at},CASE WHEN $5='started' THEN NULL ELSE {at} END)"))
         .bind(id).bind(ws).bind(key).bind(s.deployment).bind(state).bind(error).execute(&s.pool).await.unwrap();
     let settled = reservation == "settled";
-    sqlx::query(&format!("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,actual_microusd,held_microusd,unbounded_cost,input_tokens,output_tokens) VALUES($1,$2,$3,$4,{at},date_trunc('minute',{at}),date_trunc('month',{at}),{at},$5,$6,$7,$8,$9,$9)"))
+    sqlx::query("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,actual_microusd,held_microusd,unbounded_cost,input_tokens,output_tokens) SELECT $1,$2,$3,$4,e.started_at,date_trunc('minute',e.started_at),date_trunc('month',e.started_at),e.started_at,$5,$6,$7,$8,$9,$9 FROM inference_executions e WHERE e.id=$1")
         .bind(id).bind(ws).bind(key).bind(s.deployment).bind(reservation)
         .bind(if settled { amount } else { None })
         .bind(if settled { None } else { amount })

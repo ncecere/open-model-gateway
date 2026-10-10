@@ -25,7 +25,7 @@ DO $$ DECLARE r record; t text; BEGIN
   IF has_column_privilege('gateway_runtime','public.budget_totals',t,'UPDATE') THEN RAISE EXCEPTION 'budget totals re-keyable: %',t; END IF;
  END LOOP;
  IF NOT has_table_privilege('gateway_runtime','public.budget_totals','SELECT,INSERT') OR NOT has_column_privilege('gateway_runtime','public.budget_totals','held_microusd','UPDATE') THEN RAISE EXCEPTION 'budget totals not maintainable by runtime'; END IF;
- IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'budget_totals_%' AND tgenabled='O' AND NOT tgisinternal)<>6 THEN RAISE EXCEPTION 'budget totals triggers missing or disabled'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'budget_totals_%' AND tgenabled='O' AND NOT tgisinternal AND tgparentid=0)<>6 THEN RAISE EXCEPTION 'budget totals triggers missing or disabled'; END IF;
  IF NOT has_column_privilege('gateway_runtime','public.budget_totals','held_unknown_microusd','UPDATE') THEN RAISE EXCEPTION 'budget totals detail not maintainable by runtime'; END IF;
  -- Rate counters (0024): trigger-maintained; no truncation, no re-keying, in-flight rows never removed.
  FOREACH t IN ARRAY ARRAY['rate_minute_counters','inflight_counters'] LOOP
@@ -35,7 +35,7 @@ DO $$ DECLARE r record; t text; BEGIN
  END LOOP;
  IF has_column_privilege('gateway_runtime','public.rate_minute_counters','minute_start','UPDATE') THEN RAISE EXCEPTION 'rate counters re-keyable: minute'; END IF;
  IF has_table_privilege('gateway_runtime','public.inflight_counters','DELETE') THEN RAISE EXCEPTION 'in-flight counters removable'; END IF;
- IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'rate_counters_%' AND tgenabled='O' AND NOT tgisinternal)<>8
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'rate_counters_%' AND tgenabled='O' AND NOT tgisinternal AND tgparentid=0)<>8
   OR NOT EXISTS(SELECT FROM pg_trigger WHERE tgname='rate_minute_counters_retained' AND tgenabled='O') THEN RAISE EXCEPTION 'rate counter triggers missing or disabled'; END IF;
  -- Scoped admission (0027): authority and catalog triggers present and enabled.
  IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'omg_authority_%' AND tgenabled='O' AND NOT tgisinternal)<>17
@@ -45,7 +45,7 @@ DO $$ DECLARE r record; t text; BEGIN
  FOREACH t IN ARRAY ARRAY['execution_id','sequence','window_hold_microusd','created_at'] LOOP
   IF has_column_privilege('gateway_runtime','public.realtime_responses',t,'UPDATE') THEN RAISE EXCEPTION 'mutable realtime response identity: %',t; END IF;
  END LOOP;
- IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'realtime_responses_%' AND tgenabled='O' AND NOT tgisinternal)<>3 THEN RAISE EXCEPTION 'realtime response guards missing or disabled'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'realtime_responses_%' AND tgenabled='O' AND NOT tgisinternal)<>4 THEN RAISE EXCEPTION 'realtime response guards missing or disabled'; END IF;
  -- Async jobs (0016): no removal; identity, ownership and reservation link fixed.
  -- upstream_id is written once (0021: native batches are submitted after creation; trigger).
  FOREACH t IN ARRAY ARRAY['async_jobs','async_job_files'] LOOP
@@ -58,7 +58,7 @@ DO $$ DECLARE r record; t text; BEGIN
   IF has_column_privilege('gateway_runtime','public.async_job_files',t,'UPDATE') THEN RAISE EXCEPTION 'mutable async job file: %',t; END IF;
  END LOOP;
  IF has_column_privilege('gateway_runtime','public.governance_reservations','request_count','UPDATE') OR has_column_privilege('gateway_runtime','public.governance_reservations','admitted_at','UPDATE') THEN RAISE EXCEPTION 'mutable reservation admission snapshot'; END IF;
- IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'async_job%' AND tgenabled='O' AND NOT tgisinternal)<>4 THEN RAISE EXCEPTION 'async job guards missing or disabled'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'async_job%' AND tgenabled='O' AND NOT tgisinternal)<>5 THEN RAISE EXCEPTION 'async job guards missing or disabled'; END IF;
  IF has_table_privilege('gateway_runtime','public.installation_settings','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.installation_settings','singleton','UPDATE') THEN RAISE EXCEPTION 'installation settings row replaceable'; END IF;
  -- Installation logo (0023): a reviewed column set, guarded by a trigger.
  IF NOT has_column_privilege('gateway_runtime','public.installation_settings','branding_logo_file_id','UPDATE') THEN RAISE EXCEPTION 'installation logo not maintainable by runtime'; END IF;
@@ -82,7 +82,8 @@ DO $$ DECLARE r record; t text; BEGIN
  FOREACH t IN ARRAY ARRAY['workload_kind','cost_center_id','cost_center_name','cost_center_code','workspace_id','api_key_id','deployment_id','upstream_model','root_request_id','attempt_number','streamed'] LOOP
   IF has_column_privilege('gateway_runtime','public.inference_executions',t,'UPDATE') THEN RAISE EXCEPTION 'mutable admission attribution: %',t; END IF;
  END LOOP;
- FOR t IN SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename<>'_sqlx_migrations' LOOP
+ -- Partitions are reached through their parents only (checked below).
+ FOR t IN SELECT c.relname FROM pg_class c WHERE c.relnamespace='public'::regnamespace AND c.relkind IN ('r','p') AND NOT c.relispartition AND c.relname<>'_sqlx_migrations' LOOP
   IF NOT has_table_privilege('gateway_runtime','public.'||t,'SELECT') THEN RAISE EXCEPTION 'unreviewed table: %',t; END IF;
  END LOOP;
  -- File store (0019): metadata rows are never removed; identity/ownership fixed; guard present.
@@ -98,7 +99,7 @@ DO $$ DECLARE r record; t text; BEGIN
  IF has_any_column_privilege('gateway_runtime','public.storage_usage_hours','UPDATE') THEN RAISE EXCEPTION 'storage usage history columns mutable'; END IF;
  IF has_table_privilege('gateway_runtime','public.storage_usage_progress','INSERT') OR has_table_privilege('gateway_runtime','public.storage_usage_progress','DELETE,TRUNCATE') THEN RAISE EXCEPTION 'storage usage progress re-keyable'; END IF;
  IF NOT has_table_privilege('gateway_runtime','public.storage_usage_hours','SELECT,INSERT') THEN RAISE EXCEPTION 'storage usage not recordable'; END IF;
- IF (SELECT count(*) FROM pg_trigger WHERE tgname IN ('storage_usage_hours_guard','storage_usage_progress_guard') AND tgenabled='O' AND NOT tgisinternal)<>2 THEN RAISE EXCEPTION 'storage usage guards missing or disabled'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname IN ('storage_usage_hours_guard','storage_usage_progress_guard') AND tgenabled='O' AND NOT tgisinternal AND tgparentid=0)<>2 THEN RAISE EXCEPTION 'storage usage guards missing or disabled'; END IF;
  -- Batch engine (0021): line/segment history never removed; identity fixed; pinned tier and line link fixed; guards present.
  FOREACH t IN ARRAY ARRAY['batch_lines','batch_segments'] LOOP
   IF has_table_privilege('gateway_runtime','public.'||t,'DELETE,TRUNCATE') THEN RAISE EXCEPTION 'batch history removable: %',t; END IF;
@@ -121,7 +122,7 @@ DO $$ DECLARE r record; t text; BEGIN
   IF has_column_privilege('gateway_runtime','public.batch_route_waits',t,'UPDATE') THEN RAISE EXCEPTION 'mutable batch demand identity: %',t; END IF;
  END LOOP;
  IF has_table_privilege('gateway_runtime','public.batch_route_waits','TRUNCATE') THEN RAISE EXCEPTION 'batch demand truncatable'; END IF;
- IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units','valid_model_protocols_base','valid_cost_components_base','valid_price_lines_base','valid_upstream_job_id','rate_reserved_tokens','rate_contribution','omg_scope_key','omg_type_key','omg_scope_lock_audit_order','omg_lock_scopes','omg_admission_locks','omg_lock_scope_rows','omg_catalog_lock_mode','omg_scope_lock_exclusive','omg_config_bump','omg_lease_acquire','omg_lease_fence','omg_lease_complete','omg_lease_release')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
+ IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units','valid_model_protocols_base','valid_cost_components_base','valid_price_lines_base','valid_upstream_job_id','rate_reserved_tokens','rate_contribution','omg_scope_key','omg_type_key','omg_scope_lock_audit_order','omg_lock_scopes','omg_admission_locks','omg_lock_scope_rows','omg_catalog_lock_mode','omg_scope_lock_exclusive','omg_config_bump','omg_lease_acquire','omg_lease_fence','omg_lease_complete','omg_lease_release','omg_ensure_partitions','omg_partition_coverage','omg_partition_bounds','omg_month_start','omg_next_month','omg_usage_aggregate','omg_usage_rows')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
  -- Change notifications (0028): seeded topics, forward-only versions, triggers present.
  IF has_table_privilege('gateway_runtime','public.config_versions','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.config_versions','topic','UPDATE') THEN RAISE EXCEPTION 'configuration topics mutable'; END IF;
  IF NOT has_table_privilege('gateway_runtime','public.config_versions','SELECT') OR NOT has_column_privilege('gateway_runtime','public.config_versions','version','UPDATE') THEN RAISE EXCEPTION 'configuration versions not maintainable by runtime'; END IF;
@@ -132,6 +133,32 @@ DO $$ DECLARE r record; t text; BEGIN
  IF has_table_privilege('gateway_runtime','public.work_leases','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.work_leases','name','UPDATE') THEN RAISE EXCEPTION 'work leases creatable, removable or re-keyable'; END IF;
  IF NOT has_table_privilege('gateway_runtime','public.work_leases','SELECT') OR NOT has_column_privilege('gateway_runtime','public.work_leases','epoch','UPDATE') THEN RAISE EXCEPTION 'work leases not usable by runtime'; END IF;
  IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'work\_leases\_%' AND tgenabled='O' AND NOT tgisinternal)<>2 THEN RAISE EXCEPTION 'work lease guards missing or disabled'; END IF;
+ -- History partitions (0030/0031): reached only through the parents; every
+ -- partition guarded against TRUNCATE; no default partition; the runtime may
+ -- only ask for canonical future months (one-argument SECURITY DEFINER form).
+ IF EXISTS(SELECT FROM pg_class c WHERE c.relnamespace='public'::regnamespace AND c.relispartition
+  AND (has_table_privilege('gateway_runtime',c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+   OR has_any_column_privilege('gateway_runtime',c.oid,'SELECT,INSERT,UPDATE,REFERENCES'))) THEN RAISE EXCEPTION 'runtime privileges on a partition'; END IF;
+ IF EXISTS(SELECT FROM history_partitions h JOIN pg_class p ON p.relname=h.parent AND p.relnamespace='public'::regnamespace
+  JOIN pg_inherits i ON i.inhparent=p.oid
+  WHERE NOT EXISTS(SELECT FROM pg_trigger t WHERE t.tgrelid=i.inhrelid AND t.tgtype&32=32 AND t.tgenabled='O' AND t.tgfoid='public.immutable_history'::regproc)) THEN RAISE EXCEPTION 'history partition without a TRUNCATE guard'; END IF;
+ IF (SELECT count(*) FROM pg_partitioned_table pt JOIN pg_class c ON c.oid=pt.partrelid WHERE c.relnamespace='public'::regnamespace)<>5
+  OR EXISTS(SELECT FROM pg_partitioned_table WHERE partdefid<>0) THEN RAISE EXCEPTION 'unexpected partitioned tables or a default partition'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE '%\_stay\_in\_partition' AND tgenabled='O' AND tgparentid=0)<>2 THEN RAISE EXCEPTION 'partition key guards missing or disabled'; END IF;
+ IF has_table_privilege('gateway_runtime','public.history_partitions','INSERT,UPDATE,DELETE,TRUNCATE') OR NOT has_table_privilege('gateway_runtime','public.history_partitions','SELECT') THEN RAISE EXCEPTION 'partition registry writable or unreadable'; END IF;
+ IF has_function_privilege('gateway_runtime','public.omg_ensure_partitions(integer,timestamptz)','EXECUTE') OR NOT has_function_privilege('gateway_runtime','public.omg_ensure_partitions(integer)','EXECUTE') THEN RAISE EXCEPTION 'partition creation grants'; END IF;
+ IF (SELECT prosecdef FROM pg_proc WHERE oid='public.omg_ensure_partitions(integer)'::regprocedure) IS NOT TRUE THEN RAISE EXCEPTION 'partition creation is not definer-scoped'; END IF;
+ -- Usage rollups (0032): derived and rebuildable; markers append-only for writers.
+ IF NOT has_table_privilege('gateway_runtime','public.usage_rollups_hourly','SELECT,INSERT,DELETE') OR has_table_privilege('gateway_runtime','public.usage_rollups_hourly','TRUNCATE') OR has_any_column_privilege('gateway_runtime','public.usage_rollups_hourly','UPDATE') THEN RAISE EXCEPTION 'rollup grants'; END IF;
+ IF NOT has_table_privilege('gateway_runtime','public.usage_rollup_dirty','SELECT,INSERT,DELETE') OR has_table_privilege('gateway_runtime','public.usage_rollup_dirty','TRUNCATE') OR has_any_column_privilege('gateway_runtime','public.usage_rollup_dirty','UPDATE') THEN RAISE EXCEPTION 'rollup marker grants'; END IF;
+ IF has_table_privilege('gateway_runtime','public.usage_rollup_progress','INSERT,DELETE,TRUNCATE') OR NOT has_column_privilege('gateway_runtime','public.usage_rollup_progress','rolled_through','UPDATE')
+  OR has_table_privilege('gateway_runtime','public.usage_rollup_hours','DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.usage_rollup_hours','hour_start','UPDATE') THEN RAISE EXCEPTION 'rollup progress grants'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'usage\_rollup\_%' AND tgenabled='O' AND tgparentid=0)<>8 THEN RAISE EXCEPTION 'rollup triggers missing or disabled'; END IF;
+ -- Archive (0033): operator-only; the runtime reads the records (budget verify) and nothing else.
+ FOREACH t IN ARRAY ARRAY['archived_partitions','archived_budget_contributions'] LOOP
+  IF has_table_privilege('gateway_runtime','public.'||t,'INSERT,UPDATE,DELETE,TRUNCATE') OR NOT has_table_privilege('gateway_runtime','public.'||t,'SELECT') THEN RAISE EXCEPTION 'archive records writable or unreadable: %',t; END IF;
+ END LOOP;
+ IF has_schema_privilege('gateway_runtime','omg_archive','USAGE') OR has_schema_privilege('gateway_runtime','omg_archive','CREATE') THEN RAISE EXCEPTION 'runtime reaches the archive schema'; END IF;
 END $$;
 BEGIN;
 SET LOCAL ROLE gateway_runtime;
@@ -218,13 +245,13 @@ BEGIN
  INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version,cache_pricing) VALUES(price,d,1,1,100,10,2,rates);
  -- Pricing v3: immutable price lines and per-meter ceilings.
  INSERT INTO deployment_prices(id,deployment_id,input_token_limit,output_token_limit,pricing_version,price_lines,max_units) VALUES(gen_random_uuid(),d,100,10,3,'[{"meter":"input_tokens","microusd_per_batch":"100000","batch":1000000,"unit_label":"/M tokens","sku_label":"Input"},{"meter":"output_images","microusd_per_batch":"20500","batch":1,"unit_label":"/image","sku_label":"Image","variant":"768"},{"meter":"search_units","not_applicable":true}]','{"output_images":"4"}');
- INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id) VALUES(e,ws,k,d,'rollback','openai_compatible',false,'started',e);
+ INSERT INTO inference_executions(started_at,id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id) VALUES(now(),e,ws,k,d,'rollback','openai_compatible',false,'started',e);
  INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,price_id,admitted_at,minute_start,month_start,lease_expires_at,state,reserved_tokens,held_microusd) VALUES(e,ws,k,d,price,now(),date_trunc('minute',now()),date_trunc('month',now()),now()+interval '1 minute','pending',110,1);
- INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd) VALUES(gen_random_uuid(),e,'hold',1);
+ INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd,admitted_at) VALUES(gen_random_uuid(),e,'hold',1,now());
  -- Settlement writes meter evidence on executions/reservations and appends it to the ledger.
  UPDATE inference_executions SET state='succeeded',meter_usage='{"output_images":"1","input_characters":null,"input_audio_seconds_ms":null,"output_audio_seconds_ms":null,"search_units":null,"requests":"1"}',output_image_variant='768',provider_cost_microusd=20500 WHERE id=e;
  UPDATE governance_reservations SET state='unknown',meter_usage=(SELECT meter_usage FROM inference_executions WHERE id=e),output_image_variant='768',provider_cost_microusd=20500 WHERE execution_id=e;
- INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd,meter_usage,output_image_variant,provider_cost_microusd) SELECT gen_random_uuid(),e,'unknown',1,meter_usage,output_image_variant,provider_cost_microusd FROM inference_executions WHERE id=e;
+ INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd,meter_usage,output_image_variant,provider_cost_microusd,admitted_at) SELECT gen_random_uuid(),e,'unknown',1,meter_usage,output_image_variant,provider_cost_microusd,started_at FROM inference_executions WHERE id=e;
  -- Budget totals (0015): the runtime's reservation writes maintained them; unknown keeps its hold.
  IF (SELECT (held_microusd,settled_microusd,reservations,pending,unknown,held_unknown_microusd)::text FROM budget_totals WHERE scope_kind='key' AND scope_id=k AND period='lifetime')<>'(1,0,1,0,1,1)' THEN RAISE EXCEPTION 'budget totals not maintained'; END IF;
  -- No installation scope (0026): no request writes a global totals row; installation spend sums workspace rows.
@@ -285,7 +312,7 @@ BEGIN
   OR NOT valid_price_lines('[{"meter":"input_tokens","not_applicable":true},{"meter":"output_audio_tokens","microusd_per_batch":"64000000","batch":1000000,"unit_label":"/M tokens","sku_label":"Audio output"}]'::jsonb)
   OR valid_price_lines('[{"meter":"output_audio_tokens","not_applicable":true}]'::jsonb) THEN RAISE EXCEPTION 'realtime validators'; END IF;
  -- Request telemetry (0009): admission snapshot + labels, finish telemetry, retention clearing.
- INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,attempt_number,upstream_model,client_session_id,client_app) VALUES(gen_random_uuid(),ws,k,d,'rollback','openai_compatible',true,'started',e,2,'disabled-probe','probe session','Probe app');
+ INSERT INTO inference_executions(started_at,id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,attempt_number,upstream_model,client_session_id,client_app) VALUES(now(),gen_random_uuid(),ws,k,d,'rollback','openai_compatible',true,'started',e,2,'disabled-probe','probe session','Probe app');
  UPDATE inference_executions SET finish_reason='stop',time_to_first_token_ms=1,generation_ms=2,reasoning_tokens=0 WHERE root_request_id=e;
  UPDATE inference_executions SET client_session_id=NULL,client_app=NULL,details_redacted_at=now() WHERE root_request_id=e AND client_session_id IS NOT NULL;
  PERFORM count(*) FROM inference_executions WHERE workspace_id=ws AND client_session_id='probe session';
@@ -293,7 +320,7 @@ BEGIN
  BEGIN UPDATE inference_executions SET finish_reason='bogus' WHERE id=e; RAISE EXCEPTION 'finish reason constraint absent'; EXCEPTION WHEN check_violation THEN NULL; END;
  BEGIN UPDATE inference_executions SET client_session_id=' padded' WHERE id=e; RAISE EXCEPTION 'session label constraint absent'; EXCEPTION WHEN check_violation THEN NULL; END;
  -- Reported upstream model (0013): written at finish (and on insert), bounded and validated.
- INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,attempt_number,upstream_model,reported_upstream_model) VALUES(gen_random_uuid(),ws,k,d,'rollback','openai_compatible',false,'started',e,3,'disabled-probe','probe-served-model');
+ INSERT INTO inference_executions(started_at,id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,attempt_number,upstream_model,reported_upstream_model) VALUES(now(),gen_random_uuid(),ws,k,d,'rollback','openai_compatible',false,'started',e,3,'disabled-probe','probe-served-model');
  UPDATE inference_executions SET reported_upstream_model='openai/gpt-probe-2026-01-01' WHERE root_request_id=e;
  PERFORM count(*) FROM inference_executions WHERE root_request_id=e AND coalesce(reported_upstream_model,upstream_model) IS NOT NULL;
  BEGIN UPDATE inference_executions SET reported_upstream_model='has space' WHERE id=e; RAISE EXCEPTION 'reported model constraint absent'; EXCEPTION WHEN check_violation THEN NULL; END;
@@ -474,14 +501,14 @@ BEGIN
   INSERT INTO stored_files(id,object_key,purpose,workspace_id,created_by_api_key_id,backend,encryption_key_id) VALUES(fw,'batch_output/'||ws||'/'||fw,'batch_output',ws,k,'s3','k2026');
   INSERT INTO stored_files(id,object_key,purpose,workspace_id,created_by_api_key_id,backend,encryption_key_id) VALUES(fs,'batch_output/'||ws||'/'||fs,'batch_output',ws,k,'s3','k2026');
   INSERT INTO stored_files(id,object_key,purpose,workspace_id,created_by_api_key_id,backend,encryption_key_id,api_purpose) VALUES(fo,'batch_output/'||ws||'/'||fo,'batch_output',ws,k,'s3','k2026','batch_output');
-  INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,workload_kind) VALUES(env,ws,k,d,'mixed','mixed',false,'started',env,'batches');
+  INSERT INTO inference_executions(started_at,id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,workload_kind) VALUES(now(),env,ws,k,d,'mixed','mixed',false,'started',env,'batches');
   INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,reserved_tokens,held_microusd,request_count,price_tier) VALUES(env,ws,k,d,now(),date_trunc('minute',now()),date_trunc('month',now()),now()+interval '26 hours','pending',220,10,2,'standard');
   INSERT INTO async_jobs(id,kind,workspace_id,api_key_id,deployment_id,execution_id,public_model,provider,poll_deadline_at,batch_endpoint,batch_mode,user_id,input_file_id,work_file_id,request_total,request_completed,request_failed,upstream_status) VALUES(bj,'batch',ws,k,d,env,'mixed','mixed',now()+interval '26 hours','/v1/responses','gateway',u,fin,fw,2,0,0,'validating');
   UPDATE async_jobs SET runner_id=gen_random_uuid(),runner_lease_until=clock_timestamp()+interval '60 seconds' WHERE id IN(SELECT id FROM async_jobs WHERE batch_mode='gateway' AND settled_at IS NULL AND (runner_lease_until IS NULL OR runner_lease_until<clock_timestamp()) LIMIT 1 FOR UPDATE SKIP LOCKED);
   UPDATE async_jobs SET state='in_progress',upstream_status='in_progress',in_progress_at=clock_timestamp(),last_progress_at=clock_timestamp() WHERE id=bj AND state='queued';
   INSERT INTO batch_lines(job_id,workspace_id,line_no,state,execution_id) VALUES(bj,ws,0,'running',line) ON CONFLICT DO NOTHING;
   PERFORM r.state,r.held_microusd FROM governance_reservations r JOIN async_jobs j ON j.execution_id=r.execution_id WHERE r.execution_id=env AND j.id=bj AND j.batch_mode='gateway' FOR UPDATE OF r;
-  INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,batch_job_id) VALUES(line,ws,k,d,'rollback','openai_compatible',false,'started',line,bj);
+  INSERT INTO inference_executions(started_at,id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,batch_job_id) VALUES(now(),line,ws,k,d,'rollback','openai_compatible',false,'started',line,bj);
   INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,price_id,admitted_at,minute_start,month_start,lease_expires_at,state,reserved_tokens,held_microusd) VALUES(line,ws,k,d,bp,now(),date_trunc('minute',now()),date_trunc('month',now()),now()+interval '2 minutes','pending',110,5);
   UPDATE governance_reservations SET held_microusd=held_microusd-5 WHERE execution_id=env AND state='pending' AND held_microusd>=5;
   UPDATE batch_lines SET state='failed',status_code=429,error_code='rate_limit_error',finished_at=clock_timestamp() WHERE job_id=bj AND line_no=0 AND state='running';
@@ -502,10 +529,10 @@ BEGIN
   BEGIN UPDATE async_jobs SET output_file_id=fin WHERE id=bj; RAISE EXCEPTION 'batch output rewrite allowed'; EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'async job identity is immutable' THEN RAISE; END IF; END;
   UPDATE governance_reservations SET state='settled',actual_microusd=0,input_tokens=0,output_tokens=0 WHERE execution_id=env AND state='pending';
   UPDATE inference_executions SET state='succeeded',input_tokens=0,output_tokens=0,elapsed_ms=1,completed_at=clock_timestamp(),finish_reason='stop' WHERE id=env AND state='started' AND workload_kind='batches';
-  INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd,input_tokens,output_tokens) VALUES(gen_random_uuid(),env,'settlement',0,0,0);
+  INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd,input_tokens,output_tokens,admitted_at) VALUES(gen_random_uuid(),env,'settlement',0,0,0,now());
   UPDATE async_jobs SET settled_at=clock_timestamp() WHERE id=bj AND settled_at IS NULL;
   -- Native: created before submission, upstream id written once, batch tier pinned.
-  INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,workload_kind) VALUES(nenv,ws,k,d,'rollback','openai',false,'started',nenv,'batches');
+  INSERT INTO inference_executions(started_at,id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,workload_kind) VALUES(now(),nenv,ws,k,d,'rollback','openai',false,'started',nenv,'batches');
   INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,price_id,admitted_at,minute_start,month_start,lease_expires_at,state,reserved_tokens,held_microusd,request_count,price_tier) VALUES(nenv,ws,k,d,bp,now(),date_trunc('minute',now()),date_trunc('month',now()),now()+interval '26 hours','pending',110,1,1,'batch');
   INSERT INTO async_jobs(id,kind,workspace_id,api_key_id,deployment_id,execution_id,public_model,provider,poll_deadline_at,batch_endpoint,batch_mode,input_file_id,work_file_id,price_tier,request_total,request_completed,request_failed) VALUES(nj,'batch',ws,k,d,nenv,'rollback','openai',now()+interval '26 hours','/v1/embeddings','native',fin,fw,'batch',1,0,0);
   UPDATE async_jobs SET submit_started_at=clock_timestamp() WHERE id=nj AND submit_started_at IS NULL AND upstream_id IS NULL AND cancel_requested_at IS NULL AND state='queued';
@@ -528,7 +555,7 @@ BEGIN
   PERFORM count(*) FROM inference_executions e JOIN governance_reservations r ON r.execution_id=e.id WHERE e.deployment_id=d AND e.state='started' AND e.batch_job_id IS NULL AND e.workload_kind NOT IN('batches','videos') AND r.state='pending' AND r.lease_expires_at>clock_timestamp();
   INSERT INTO stored_files(id,object_key,purpose,workspace_id,created_by_api_key_id,backend,encryption_key_id,api_purpose) VALUES(sin,'batch_input/'||ws||'/'||sin,'batch_input',ws,k,'s3','k2026','batch');
   INSERT INTO stored_files(id,object_key,purpose,workspace_id,created_by_api_key_id,backend,encryption_key_id) VALUES(swk,'batch_output/'||ws||'/'||swk,'batch_output',ws,k,'s3','k2026');
-  INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,workload_kind) VALUES(senv,ws,k,d,'mixed','mixed',false,'started',senv,'batches');
+  INSERT INTO inference_executions(started_at,id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,workload_kind) VALUES(now(),senv,ws,k,d,'mixed','mixed',false,'started',senv,'batches');
   INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,reserved_tokens,held_microusd,request_count,price_tier) VALUES(senv,ws,k,d,now(),date_trunc('minute',now()),date_trunc('month',now()),now()+interval '50 hours','pending',110,5,1,'standard');
   INSERT INTO async_jobs(id,kind,workspace_id,api_key_id,deployment_id,execution_id,public_model,provider,poll_deadline_at,batch_endpoint,batch_mode,user_id,input_file_id,work_file_id,request_total,request_completed,request_failed,upstream_status,completion_window_hours) VALUES(sj,'batch',ws,k,d,senv,'mixed','mixed',now()+interval '50 hours','/v1/chat/completions','gateway',u,sin,swk,1,0,0,'validating',48);
   BEGIN UPDATE async_jobs SET completion_window_hours=24 WHERE id=sj; RAISE EXCEPTION 'batch window rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
@@ -549,6 +576,32 @@ BEGIN
   PERFORM s.paused_reason,s.metrics_kv_cache_permille FROM (SELECT 1) one LEFT JOIN deployment_batch_signals s ON s.deployment_id=d;
   PERFORM count(*) FROM batch_lines l WHERE l.job_id=sj AND l.state='running';
   DELETE FROM batch_route_waits WHERE job_id=sj;
+ END;
+ -- History partitions (0030-0033) as runtime: future months through the
+ -- definer function only; no DDL, no partition access, no archive writes.
+ PERFORM * FROM omg_ensure_partitions(3);
+ IF EXISTS(SELECT FROM omg_partition_coverage() WHERE covered_until<omg_next_month(omg_next_month(omg_next_month(clock_timestamp())))) THEN RAISE EXCEPTION 'future partitions not ensured as runtime'; END IF;
+ BEGIN PERFORM * FROM omg_ensure_partitions(3,now()+interval '10 years'); RAISE EXCEPTION 'arbitrary partition months creatable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN ALTER TABLE inference_executions DETACH PARTITION inference_executions_p_legacy; RAISE EXCEPTION 'runtime detached a partition'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN CREATE TABLE inference_executions_p2999_01 PARTITION OF inference_executions FOR VALUES FROM ('2999-01-01') TO ('2999-02-01'); RAISE EXCEPTION 'runtime created a partition'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN DROP TABLE monetary_ledger_p_legacy; RAISE EXCEPTION 'runtime dropped a partition'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN TRUNCATE TABLE monetary_ledger_p_legacy; RAISE EXCEPTION 'runtime truncated a partition'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN PERFORM 1 FROM governance_reservations_p_legacy; RAISE EXCEPTION 'runtime reads a partition directly'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN INSERT INTO archived_partitions(id,archive_group,month,lower_bound,upper_bound,partitions,manifest_sha256,disposition) VALUES(gen_random_uuid(),'audit','2001-01','2001-01-01','2001-02-01','[]',repeat('0',64),'dropped'); RAISE EXCEPTION 'runtime recorded an archive'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ PERFORM count(*) FROM archived_budget_contributions;
+ BEGIN UPDATE inference_executions SET started_at=started_at+interval '100 days' WHERE id=e; RAISE EXCEPTION 'execution start rewritable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ -- Rollups (0032): a late write to an ended hour appends a marker as runtime;
+ -- readers and the job need nothing more.
+ DECLARE late uuid:=gen_random_uuid(); marks bigint:=(SELECT count(*) FROM usage_rollup_dirty); BEGIN
+  INSERT INTO inference_executions(started_at,id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id) VALUES(date_trunc('hour',now(),'UTC')-interval '2 hours',late,ws,k,d,'rollback','openai_compatible',false,'failed',late);
+  IF (SELECT count(*) FROM usage_rollup_dirty)<>marks+1 THEN RAISE EXCEPTION 'late history write left no rollup marker'; END IF;
+  PERFORM count(*) FROM omg_usage_rows(now()-interval '3 hours',now());
+  DELETE FROM usage_rollups_hourly WHERE hour_start=date_trunc('hour',now(),'UTC')-interval '2 hours';
+  INSERT INTO usage_rollups_hourly SELECT * FROM omg_usage_aggregate(date_trunc('hour',now(),'UTC')-interval '2 hours',date_trunc('hour',now(),'UTC')-interval '1 hour');
+  INSERT INTO usage_rollup_hours(hour_start,rolled_at,groups) VALUES(date_trunc('hour',now(),'UTC')-interval '2 hours',now(),1) ON CONFLICT(hour_start) DO UPDATE SET rolled_at=excluded.rolled_at,groups=excluded.groups,lease_epoch=excluded.lease_epoch;
+  DELETE FROM usage_rollup_dirty WHERE hour_start=date_trunc('hour',now(),'UTC')-interval '2 hours';
+  BEGIN UPDATE usage_rollup_progress SET rolled_through='2000-01-01'; RAISE EXCEPTION 'rollup progress moved back'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE usage_rollup_dirty SET hour_start=now(); RAISE EXCEPTION 'rollup markers rewritable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  END;
  -- Change notifications (0028): this transaction's configuration writes (key
  -- disable, catalog, entitlement, policy and settings changes) bump each

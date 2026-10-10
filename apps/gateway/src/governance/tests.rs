@@ -1130,8 +1130,17 @@ pub(crate) mod db {
         f.policy("workspace_local_policies", Some(1), None, None, Some(110))
             .await;
         let a = f.start();
-        admit(&f.store, &a, &request(), 30).await.unwrap();
-        sqlx::query("UPDATE governance_reservations SET admitted_at=date_trunc('month',now(),'UTC')-interval '1 second',minute_start=date_trunc('minute',now(),'UTC')-interval '1 minute',month_start=date_trunc('month',now(),'UTC')-interval '1 month'").execute(&f.store.pool).await.unwrap();
+        // Admitted one second before this UTC month (a second store pinned
+        // there; admission times are immutable partition keys since 0030).
+        let last_month: chrono::DateTime<chrono::Utc> =
+            sqlx::query_scalar("SELECT date_trunc('month',now(),'UTC')-interval '1 second'")
+                .fetch_one(&f.store.pool)
+                .await
+                .unwrap();
+        let past = crate::store::Store::new(f.store.pool.clone());
+        past.pin_admission_clock(last_month).unwrap();
+        admit(&past, &a, &request(), 30).await.unwrap();
+        sqlx::query("UPDATE governance_reservations SET lease_expires_at=now()+interval '30 seconds' WHERE execution_id=$1").bind(a.id).execute(&f.store.pool).await.unwrap();
         admit(&f.store, &f.start(), &request(), 30).await.unwrap();
         finish(&f.store, &done(a.id, Some(500), Some(1)))
             .await

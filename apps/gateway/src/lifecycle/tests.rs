@@ -112,8 +112,8 @@ async fn loss_reactivation_cleanup_preserves_history_and_service_credentials(poo
         .unwrap();
     sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model) VALUES($1,$2,$3,'test')").bind(deployment).bind(model).bind(provider).execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id) VALUES($1,$2,$3,$4,'test','openai',false,'started',$1)").bind(execution).bind(personal).bind(human.id).bind(deployment).execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state) VALUES($1,$2,$3,$4,now(),now(),now(),now(),'unknown')").bind(execution).bind(personal).bind(human.id).bind(deployment).execute(&pool).await.unwrap();
-    sqlx::query("INSERT INTO monetary_ledger(id,execution_id,kind) VALUES($1,$2,'unknown')")
+    sqlx::query("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state) SELECT $1,$2,$3,$4,e.started_at,now(),now(),now(),'unknown' FROM inference_executions e WHERE e.id=$1").bind(execution).bind(personal).bind(human.id).bind(deployment).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO monetary_ledger(id,execution_id,kind,admitted_at) SELECT $1,$2,'unknown',admitted_at FROM governance_reservations WHERE execution_id=$2")
         .bind(Uuid::new_v4())
         .bind(execution)
         .execute(&pool)

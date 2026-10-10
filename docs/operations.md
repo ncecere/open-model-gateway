@@ -183,6 +183,8 @@ Local evidence (2026-10-09) on a freshly migrated v14 database on the disposable
 - A second restore into the now non-empty target was refused, as was `--expect-version 99`.
 - All drill databases were dropped.
 
+Partitioned drill (2026-10-10, P6): a 0033 database with 6,000 attempts across the legacy and two month partitions (12,000 ledger rows, 600 unknown) backed up, verified and restored with `--create --gateway-binary` in 2 s; every partition's ledger count and sum, the unknown reservations and `partitions status` matched, and `budget verify` reported no mismatch on both. The drill found that restores of any populated database failed before 0033 (CHECK validators calling other validators unqualified under `pg_restore`'s empty `search_path`); 0033 fixes it.
+
 `tests/backup.test.py` covers the refusal paths with mocks. Its opt-in integration case runs in CI against the service database.
 
 ## Secret rotation
@@ -259,6 +261,43 @@ Reports (`cost-report`, `cost-summary`, `costs`, `usage-export`), usage (`usage/
 `0018_job_limits.sql` adds the "Jobs at once" limit to every policy layer and sets the workspace-type defaults to 2 active video/batch jobs per workspace. After upgrading, review Admin › Settings › Defaults & limits if workspaces routinely run more jobs at once. It also adds the SCIM last-admin alert kind. Reapply `runtime-grants.sql` (step 4).
 
 `0026_remove_installation_limits.sql` (breaking) removes installation-wide limits: the installation budget (every period) and installation requests/tokens per minute, requests at once and jobs at once. Before upgrading, move any installation limit you still need to the workspace-type defaults, platform workspace overrides or keys. The migration records the removed values in the audit log (`policy.installation_removed`), converts installation budget alert rules to non-blocking installation spend rules, drops `installation_policy` and deletes the derived installation rows of `budget_totals`. It briefly freezes history writes (like 0015/0025), so drain traffic (step 3). Then reapply `runtime-grants.sql` (step 4) and run `open-model-gateway budget verify` (expect `mismatch_count: 0`). Clients of `/api/v1/platform/installation/policy` now get `410 reason:"installation_limits_removed"`. See [governance](governance.md#no-installation-wide-limits).
+
+`0030_partition_history.sql` and `0031_partition_audit.sql` (scale plan P6) partition request history by UTC month without rewriting it (except the ledger, below); `0032_usage_rollups.sql` adds hourly usage rollups and `0033_partition_archive.sql` operator archival. Drain traffic (step 3) like every migration. For large installations, run `open-model-gateway partitions prepare` with the migrator **before** the drain: it builds the new keys with `CREATE INDEX CONCURRENTLY` while the old release keeps serving, so the drained window only validates and swaps. After step 4 run `open-model-gateway budget verify`, `open-model-gateway partitions status` and `open-model-gateway rollups run --once` (catch-up of existing history; `serve` continues it every minute). Details and measurements: [History partitions](#history-partitions-rollups-and-archival-p6).
+
+## History partitions, rollups and archival (P6)
+
+**Partitions.** `inference_executions` (by `started_at`), `governance_reservations` and `monetary_ledger` (by `admitted_at`), `audit_events` (by `created_at`) and `storage_usage_hours` (by `hour_start`) are range-partitioned by UTC month. Rows from before the upgrade stay in each table's `<table>_p_legacy` partition (everything before the month after the newest row at upgrade time); later months get `<table>_pYYYY_MM`. Partitions are reached only through their parents: the runtime has no privilege on a partition, every partition has a TRUNCATE guard, row triggers (immutability, totals, counters, rollup markers) are defined on the parents, and an UPDATE that would move a row to another month is refused. `history_partitions` lists the partitioned tables; readiness accepts their partitions (`pg_class.relispartition`) and still rejects every other unknown relation.
+
+How the upgrade converts large tables (each numbered step of 0030/0031 is its own transaction and is idempotent, so a failed or interrupted `migrate` resumes where it stopped):
+
+1. Build the new keys (which must include the month) as unique indexes on the existing tables: `SHARE` lock, so writes wait and reads continue (or nothing, after `partitions prepare`).
+2. Add `CHECK (key < cutover) NOT VALID`, then `VALIDATE` it under `SHARE UPDATE EXCLUSIVE` (reads and writes continue).
+3. A short transaction renames the table to `<table>_p_legacy`, creates the partitioned parent with the same columns, checks, indexes, foreign keys and triggers, and attaches the old table: the validated check proves the bound, and the prebuilt indexes and validated foreign keys are adopted, so nothing is scanned or rebuilt under the exclusive lock.
+4. The reservation → execution key now includes the time (`admitted_at = started_at`, as admission always wrote); it is added `NOT VALID` and validated before the swap. The migration refuses, without changing anything, if any reservation was admitted at a different time than its execution started.
+5. The ledger gains `admitted_at` (copied from its reservation), so it is copied once into its partitioned replacement while the old ledger is `SHARE` locked (reads continue), compared by count, amount sum and a per-row hash, and swapped at the end of that transaction. This is the one rewrite.
+
+Measured on the disposable 54339 cluster (PostgreSQL 17, laptop, parallel workers off) with 2,000,000 seeded attempts over 120 days (2 M executions, 1.96 M reservations, 3.9 M ledger rows, 1,000 audit events): `migrate` 0030–0033 took 27.7 s (0030 27.66 s, of which most is the ledger copy and the key builds; 0031 16 ms; 0032 6 ms; 0033 3 ms). The longest continuously observed `ACCESS EXCLUSIVE` lock on a history table was 0.68 s, `SHARE` (writes wait) 21.4 s; a reader of recent reservations polled every 20 ms throughout never waited more than 5 ms. Counts, sums and a hash of every ledger row were identical before and after, and `budget verify` took 9.0 s.
+
+**Future months.** There is no default partition: a write outside every partition fails (admission fails closed, nothing is dispatched). `serve` keeps `GATEWAY_PARTITIONS_AHEAD_MONTHS` (default 3, 2..12) future months under the `partitions` work lease, hourly, through `omg_ensure_partitions(ahead)`: a `SECURITY DEFINER` function that can only create canonical month partitions of registered tables (`CREATE TABLE … LIKE` then `ATTACH`, so the parent is never `ACCESS EXCLUSIVE` locked; `lock_timeout` 5 s, retried next hour). While any table covers fewer than 2 future months the built-in installation incident **History tables are running out of monthly partitions** (`partitions_missing`) is open (critical below 1), Platform Admins get email, and `gateway_history_partition_months_ahead{table}` shows the coverage. Operators can run the same with the migrator:
+
+```sh
+open-model-gateway partitions status          # read-only; exits 1 below 2 future months
+open-model-gateway partitions ensure --ahead 3
+```
+
+**Hourly usage rollups.** `usage_rollups_hourly` keeps exact integer sums per UTC hour, workspace, key, route, model alias, provider, cost-center snapshot, execution state and accounting state. Unknown is kept apart (`accounting_state` `unknown`, or none for attempts without a reservation) and never summed as zero. The `rollups` lease holder recomputes an hour once it ended before every running gateway transaction began (and at least an hour ago), at most 168 hours per minute; later writes to rows of an ended hour (settlement of a request that crossed the hour, a resolved unknown cost, operator corrections) append a change marker in the same transaction, and readers serve an hour from its rollup only when no marker is visible in their snapshot, so rollup-backed answers equal the raw scan exactly. Usage Explore over 7 days or more (spend, tokens, cache hit rate; not request counts, which are not additive) and the spend-spike alert's 7-day baseline read rollups; cost reports, overview tiles and logs stay on raw history (they need per-attempt prices, meters and distinct request counts). `GATEWAY_USAGE_ROLLUPS=off` makes every read raw. After an upgrade, `open-model-gateway rollups run --once --budget-seconds N` backfills existing history faster than the per-minute job.
+
+**Archival (operator only).** Default retention is unchanged: nothing is deleted. To move a closed month out of the hot tables, with the migrator:
+
+```sh
+open-model-gateway archive partition history 2024-01 --to /secure/archive   # executions, reservations, ledger
+open-model-gateway archive partition audit 2019-01 --to /secure/archive --retention-months 84
+open-model-gateway archive verify /secure/archive/history-2024-01-<id>       # checksums, no database
+```
+
+- **Refusals (nothing changes):** the month (or `legacy`) ends within `GATEWAY_HISTORY_RETENTION_MONTHS` (default 25) of the current month; for `history`, any reservation of the month is pending or unknown (holds must settle first), any execution of it is running or has no reservation (unknown cost), or any hour with history lacks a clean usage rollup; the month is already archived. The runtime role cannot archive: detaching and dropping need table ownership.
+- **What it does, in one transaction:** `SHARE` locks the month's partitions (only writes to that month wait), exports each with `COPY` as CSV into `<dir>/<group>-<month>-<id>/` with a SHA-256 per file, writes `manifest.json` (format `omg-archive-v1`, the migration lineage, exact sums of reservations and ledger) and `manifest.json.sha256`, records `archived_partitions` and, for history, each archived day's exact budget contribution per workspace and key (`archived_budget_contributions`, so `budget verify` still reconciles lifetime and monthly totals), then takes the parents' locks in admission order (bounded by `lock_timeout`) and detaches the partitions into schema `omg_archive` (outside `public`; no runtime access), or drops them with `--drop`. On failure it rolls back and removes the export directory.
+- **After archival:** usage of the month is still answered from its rollups; totals are unchanged; prices, the remaining ledger and audit history are untouched; `async_jobs` and `realtime_responses` keep referencing the archived ids (their insert-time existence checks replaced foreign keys). Keep exports encrypted and retained per your compliance policy; detached tables in `omg_archive` are included in `pg_dump` backups until dropped.
 
 ## Load test baseline
 
@@ -553,6 +592,24 @@ Findings:
 5. **Remaining latency spikes come from checkpoints and report scans, not background jobs.** 46 of 117 spike seconds (p99 over 4× the run median) fell inside WAL- or time-triggered spread checkpoints; most others were in report-reader runs or at saturation. None appeared in no-reader runs at 500/s or less, apart from the row-lock-bound hot workspace. The spikes seen with three replicas in P0/P1 had a background-job share that is gone: every replica used to run lifecycle cleanup and lease reconciliation under the installation row and evaluate alerts on its own tick. Size `max_wal_size` so checkpoints are time-triggered, and put report scans on a reporting replica.
 6. **Hot workspace and hot key unchanged** (about 200–250/s): the scope's totals rows are the limit (scale plan P3b).
 
+### Partitioned history (P6)
+
+Same stack and matrix as P4/P5 (project `omg-loadtest-p6`; pool 10 per replica; 45 s runs; ok/s · client p99 ms), now with history partitioned by month, hourly rollups maintained by the leased job, and a `CHECKPOINT` after every run to read MultiXact counters. 53 runs plus 4 D3 runs; invariants and `budget verify` passed in all, no deadlocks.
+
+| History | Setup | Offered/s | P4/P5 | P6 |
+|---|---|---|---|---|
+| empty | 1 replica | 1000 / 1500 | 998.6 · 88 / 1,074.9 · 139 | 961.7 · 173 / 974.5 · 153 |
+| empty | 3 replicas | 1000 / 1500 | 998.6 · 80 / 1,339.6 · 331 | 998.5 · 289 / 1,162.1 · 392 |
+| 2 M | 1 replica | 1000 / 1500 | 998.3 · 111 / 1,026.9 · 152 | 945.8 · 158 / 890.7 · 185 |
+| 2 M | 3 replicas | 1000 / 1500 | 918.5 · 1,739 / 1,105.1 · 849 | 998.5 · 88 / 1,187.2 · 390 |
+| 10 M | 1 replica | 1000 / 1500 | – | 949.3 · 160 / 923.2 · 192 |
+| 10 M | 3 replicas | 1000 / 1500 | – | 998.5 · 82 / 1,141.2 · 413 |
+| hot workspace | 1 / 3 replicas | 500 | 202.3 · 734 / 221.1 · 2,128 | 161.4 · 874 / 160.6 · 2,579 |
+
+- **History size no longer matters for admission:** 10 M attempts (21 GB) serve like 2 M. `budget verify` took 24 s on 2 M and 84–92 s on 10 M; the rollup catch-up of 10 M attempts (2,881 hours) took 928 s.
+- **Saturation cost:** at 1,500/s offered one replica lost 9–13 % and three replicas on an empty database 13 %; one hot workspace or key fell from about 202–250/s to 160–206/s. The admission and settlement statements on the partitioned tables take 5–15 % longer (foreign-key checks against partitioned parents, per-partition index probes for lookups by id), which matters most where requests serialize on one scope's totals rows.
+- **Decision gate D3 failed.** Foreign keys from history to hot parent rows (workspace, key, deployment, price, cost center) create MultiXacts under concurrency: a median 1.3 and up to 5.4 MultiXact members per successful request (2.6–10.9 % of the 2^32 member space per day at 1,000 requests/s; the gate is 1 %). With those keys dropped in an experiment on the 10 M database, three replicas at 1,000/s created none (42,712 MultiXacts and 155,005 members with them). Replacing them with checks under the catalog lock is the follow-up; until then raise `multixact_member_buffers` and watch `mxid_age(datminmxid)`.
+
 ## PostgreSQL settings for hot rows and group commit
 
 - **Hot rows.** `budget_totals`, `rate_minute_counters` and `inflight_counters` are updated on every admission and settlement. Only their primary keys are indexed, and no indexed column is ever updated, so updates stay HOT (in-page) when there is free space: `budget_totals` uses `fillfactor=50`, the counter tables `fillfactor=70`. The migrations set threshold-driven autovacuum on all three (`autovacuum_vacuum_scale_factor=0`, `autovacuum_vacuum_threshold=1000`, `autovacuum_vacuum_cost_limit=2000`, `autovacuum_vacuum_cost_delay=1`), so vacuum frequency does not shrink as the tables grow. HOT pruning needs the global xmin to advance: avoid long transactions on the primary (run `budget verify` and reports on a replica where possible). Watch `n_tup_hot_upd`/`n_tup_upd` and `n_dead_tup` in `pg_stat_user_tables` for these tables.
@@ -635,5 +692,6 @@ open-model-gateway budget verify
 
 - **What it does:** it runs read-only in one `REPEATABLE READ` snapshot and takes no installation lock. Traffic can continue, but the scan reads every reservation, so run it off-peak on large installations. It prints JSON (`buckets`, `mismatch_count`, up to 20 example `mismatches`) and exits nonzero on any difference. It works with the runtime role's grants.
 - **What it compares:** every budget-total column, including the 0025 unknown-cost split (`held_unknown_microusd`, `unresolved_unknown`), and the 0024 rate counters: every in-flight counter against all pending reservations, and every minute counter of the last five minutes against that window's reservations and executions (`rate_buckets`, `rate_mismatch_count`, `rate_mismatches`). Older minute rows are not read by admission and are pruned by maintenance, so they are not compared.
-- **When to run it:** after `migrate` (the migration backfills from existing history), after restores (restore drill step 5), and periodically.
+- **Partitions and archives:** the scan reads every partition through the parents and adds the recorded contributions of archived months (`archived_budget_contributions`), so it stays exact after `archive partition`.
+- **When to run it:** after `migrate` (the migration backfills from existing history), after restores (restore drill step 5), after archiving a month, and periodically.
 - **If it reports a mismatch:** do not edit, delete or "fix" reservations or the ledger. Drift is only possible through manual owner-level edits, such as deleting history, re-keying lineages, or disabling triggers. The runtime role cannot update keys, delete rows or truncate the table. Preserve the report and escalate. The table can be rebuilt by the migrator from the same scan the migration uses.

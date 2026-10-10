@@ -46,16 +46,22 @@ pub enum Lease {
     Maintenance,
     /// The installation-wide `gateway_reservations_held` gauge.
     Metrics,
+    /// Future history partitions and the partitions_missing alert (0030, hourly).
+    Partitions,
+    /// Hourly usage rollups (0032, every minute).
+    Rollups,
 }
 
 impl Lease {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
         Self::Alerts,
         Self::Compaction,
         Self::FileSweep,
         Self::Lifecycle,
         Self::Maintenance,
         Self::Metrics,
+        Self::Partitions,
+        Self::Rollups,
     ];
     pub fn as_str(self) -> &'static str {
         match self {
@@ -65,6 +71,8 @@ impl Lease {
             Self::Lifecycle => "lifecycle",
             Self::Maintenance => "maintenance",
             Self::Metrics => "metrics",
+            Self::Partitions => "partitions",
+            Self::Rollups => "rollups",
         }
     }
     fn index(self) -> usize {
@@ -132,7 +140,7 @@ pub struct Leases {
     holder: Uuid,
     ttl: Duration,
     margin: Duration,
-    terms: [Mutex<Option<Term>>; 6],
+    terms: [Mutex<Option<Term>>; 8],
 }
 
 impl Default for Leases {

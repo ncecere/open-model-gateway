@@ -119,7 +119,8 @@ pub(crate) async fn budget_consumption(
 }
 
 /// Exact expected totals from a full scan (the rules of migration 0015's
-/// backfill and of the former admission scan).
+/// backfill and of the former admission scan), plus the recorded
+/// contributions of archived months.
 const EXPECTED: &str = r#"SELECT s.kind scope_kind,s.id scope_id,p.period,
  CASE WHEN p.period='lifetime' THEN 'epoch'::timestamptz ELSE date_trunc(p.period,c.at,'UTC') END period_start,
  sum(c.settled) settled_microusd,sum(c.held) held_microusd,sum(c.reservations) reservations,sum(c.pending) pending,
@@ -137,7 +138,12 @@ FROM (
  FROM governance_reservations r
  UNION ALL
  SELECT e.workspace_id,e.api_key_id,e.started_at,0,0,0,0,0,0,1,0,0 FROM inference_executions e
- WHERE NOT EXISTS(SELECT 1 FROM governance_reservations r WHERE r.execution_id=e.id)
+ WHERE NOT EXISTS(SELECT 1 FROM governance_reservations r WHERE r.execution_id=e.id AND r.admitted_at=e.started_at)
+ UNION ALL
+ -- Archived months (0033): only settled reservations are archived; their
+ -- exact contribution per workspace, key and UTC day is kept.
+ SELECT a.workspace_id,a.api_key_id,a.day_start,a.settled_microusd,0,a.reservations,0,0,0,0,0,0
+ FROM archived_budget_contributions a
 ) c JOIN api_keys k ON k.id=c.api_key_id
 CROSS JOIN LATERAL (VALUES('workspace',c.workspace_id),('key',k.governance_key_id)) s(kind,id)
 CROSS JOIN (VALUES('day'),('week'),('month'),('lifetime')) p(period)

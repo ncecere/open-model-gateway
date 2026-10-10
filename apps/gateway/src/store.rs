@@ -121,6 +121,28 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "config_versions",
     // 0029 work leases (singleton background jobs)
     "work_leases",
+    // 0030/0031 monthly history partitions: the registry (partitions
+    // themselves are accepted through PARTITIONED_RELATIONS)
+    "history_partitions",
+    // 0032 hourly usage rollups
+    "usage_rollups_hourly",
+    "usage_rollup_hours",
+    "usage_rollup_progress",
+    "usage_rollup_dirty",
+    // 0033 archived history months
+    "archived_partitions",
+    "archived_budget_contributions",
+];
+/// Partitioned parents (0030/0031). Any partition of one of these in
+/// `public` (`pg_class.relispartition`; month partitions are created ahead of
+/// time by `omg_ensure_partitions`) is an enterprise relation. Detached
+/// archived partitions live in schema `omg_archive`, which preflight ignores.
+pub const PARTITIONED_RELATIONS: &[&str] = &[
+    "inference_executions",
+    "governance_reservations",
+    "monetary_ledger",
+    "audit_events",
+    "storage_usage_hours",
 ];
 /// Relations that a later migration drops: accepted only before an explicit
 /// upgrade (`migrate`), never by readiness or serve on a current schema.
@@ -143,12 +165,24 @@ fn lineage_matches(
 
 async fn preflight(connection: &mut PgConnection, initializing: bool) -> anyhow::Result<()> {
     // Read-only detection precedes even creation of SQLx's migration tracking table.
-    let relations: Vec<String> = sqlx::query_scalar(
-        "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+    // A partition is identified by its root parent (also in `public`).
+    let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT c.relname,CASE WHEN c.relispartition THEN (SELECT r.relname FROM pg_class r
+           WHERE r.oid=pg_partition_root(c.oid) AND r.relnamespace=c.relnamespace) END
+         FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
          WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','S','f') ORDER BY c.relname",
     )
     .fetch_all(&mut *connection)
     .await?;
+    let relations: Vec<String> = rows
+        .into_iter()
+        .filter(|(_, root)| {
+            !root
+                .as_deref()
+                .is_some_and(|r| PARTITIONED_RELATIONS.contains(&r))
+        })
+        .map(|(name, _)| name)
+        .collect();
     if relations.is_empty() {
         anyhow::ensure!(
             initializing,
@@ -320,6 +354,18 @@ impl Store {
     /// This read-only check neither initializes nor upgrades anything.
     pub async fn preflight_enterprise(&self) -> anyhow::Result<()> {
         preflight(&mut *self.pool.acquire().await?, false).await
+    }
+
+    /// Read-only: an initialized installation whose lineage is a recognized
+    /// prefix of this binary's (before an explicit upgrade), or current.
+    pub async fn preflight_upgrade(&self) -> anyhow::Result<()> {
+        let mut connection = self.pool.acquire().await?;
+        let initialized: bool =
+            sqlx::query_scalar("SELECT to_regclass('public.installation') IS NOT NULL")
+                .fetch_one(&mut *connection)
+                .await?;
+        anyhow::ensure!(initialized, "Enterprise installation is not initialized");
+        preflight(&mut connection, true).await
     }
 
     /// Explicit operator initialization/upgrade only. A matching nonempty enterprise

@@ -250,7 +250,7 @@ async fn spend(f: &Fixture, pool: &PgPool, ws: Uuid, user: &BrowserPrincipal, am
     sqlx::query("INSERT INTO provider_connections(id,name,provider,credential_ref) VALUES($1,'Mock','openai','env:TEST')").bind(p).execute(pool).await.unwrap();
     sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model) VALUES($1,$2,$3,'x')").bind(d).bind(m).bind(p).execute(pool).await.unwrap();
     sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id) VALUES($1,$2,$3,$4,'m','openai',false,'succeeded',$1)").bind(e).bind(ws).bind(id(&k)).bind(d).execute(pool).await.unwrap();
-    sqlx::query("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,actual_microusd,input_tokens,output_tokens) VALUES($1,$2,$3,$4,now(),now(),now(),now(),'settled',$5,1,1)").bind(e).bind(ws).bind(id(&k)).bind(d).bind(amount).execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,actual_microusd,input_tokens,output_tokens) SELECT $1,$2,$3,$4,e.started_at,now(),now(),now(),'settled',$5,1,1 FROM inference_executions e WHERE e.id=$1").bind(e).bind(ws).bind(id(&k)).bind(d).bind(amount).execute(pool).await.unwrap();
 }
 async fn local_budget(pool: &PgPool, ws: Uuid, amount: i64) {
     sqlx::query("INSERT INTO policy_budgets(layer,workspace_id,period,amount_microusd) VALUES('local',$1,'month',$2)").bind(ws).bind(amount).execute(pool).await.unwrap();

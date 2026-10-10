@@ -246,6 +246,25 @@ class DisposableDatabaseTests(unittest.TestCase):
             with self.assertRaises(backup.BackupError):
                 backup.restore(self.pg, manifest_path, self.target, create=True, expected_migrations=self.lineage)
 
+    def test_partitioned_history_with_nested_validators_restores(self):
+        # P6: history tables are partitioned and CHECK validators call other
+        # validators schema-qualified (pg_restore loads with an empty
+        # search_path); row counts per partition survive the round trip.
+        self.pg.query("""CREATE FUNCTION public.base_ok(v bigint) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT v>=0 $$;
+            CREATE FUNCTION public.amount_ok(v bigint) RETURNS boolean LANGUAGE plpgsql IMMUTABLE AS $$ BEGIN RETURN public.base_ok(v); END $$;
+            CREATE TABLE history(id uuid, at timestamptz NOT NULL, amount bigint CHECK(public.amount_ok(amount)), PRIMARY KEY(id,at)) PARTITION BY RANGE(at);
+            CREATE TABLE history_p_legacy PARTITION OF history FOR VALUES FROM (MINVALUE) TO ('2026-11-01');
+            CREATE TABLE history_p2026_11 PARTITION OF history FOR VALUES FROM ('2026-11-01') TO ('2026-12-01');
+            INSERT INTO history SELECT gen_random_uuid(),'2026-10-31'::timestamptz+make_interval(hours=>i),i FROM generate_series(1,48) i;""", self.source)
+        source = backup.Postgres(dict(self.env, PGDATABASE=self.source), self.pg.container)
+        with tempfile.TemporaryDirectory() as folder:
+            manifest_path = backup.backup(source, Path(folder))
+            backup.restore(self.pg, manifest_path, self.target, create=True, expected_migrations=self.lineage)
+            counts = "SELECT string_agg(t||'='||n, ',' ORDER BY t) FROM (SELECT tableoid::regclass::text t,count(*) n FROM history GROUP BY 1) x;"
+            self.assertEqual(self.pg.query(counts, self.target), self.pg.query(counts, self.source))
+            self.assertEqual(self.pg.query("SELECT count(*) FROM pg_inherits WHERE inhparent='history'::regclass;", self.target), "2")
+            self.assertEqual(self.pg.query("SELECT count(*) FROM history;", self.target), "48")
+
 
 if __name__ == "__main__":
     unittest.main()

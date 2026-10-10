@@ -608,8 +608,9 @@ async fn finish_once(store: &Store, record: &RealtimeFinish) -> Result<Finished,
         .bind(!all_settled).bind(held).bind(t.unbounded || (!all_settled && held.is_none()))
         .bind(&meter_json)
         .execute(&mut *tx).await.map_err(storage)?;
-    sqlx::query("INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd,input_tokens,output_tokens,billing_usage,cost_components,evidence,meter_usage) VALUES($1,$2,$3,$4,$5,$6,NULL,$7,NULL,$8)")
-        .bind(Uuid::new_v4()).bind(record.id)
+    // admitted_at (0030): the ledger is partitioned with its reservation.
+    sqlx::query("INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd,input_tokens,output_tokens,billing_usage,cost_components,evidence,meter_usage,admitted_at) SELECT $1,$2,$3,$4,$5,$6,NULL,$7,NULL,$8,r.admitted_at FROM governance_reservations r WHERE r.execution_id=$2")
+        .bind(Uuid::now_v7()).bind(record.id)
         .bind(if all_settled { "settlement" } else { "unknown" })
         .bind(actual.or(t.actual.checked_add(t.known_floor)))
         .bind(input).bind(output).bind(&components).bind(&meter_json)

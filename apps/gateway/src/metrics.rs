@@ -172,6 +172,8 @@ pub struct Metrics {
     leases_held: Family<L1, Gauge>,
     lease_terms: Family<L1, Counter>,
     background_runs: Family<L2, Counter>,
+    partition_months: Family<L1, Gauge>,
+    rollup_hours: Family<L1, Counter>,
     providers: Mutex<HashSet<String>>,
     models: Mutex<HashSet<String>>,
     reservations_refreshed: Mutex<Option<Instant>>,
@@ -285,6 +287,8 @@ impl Metrics {
             leases_held: Family::default(),
             lease_terms: Family::default(),
             background_runs: Family::default(),
+            partition_months: Family::default(),
+            rollup_hours: Family::default(),
             providers: Mutex::default(),
             models: Mutex::default(),
             reservations_refreshed: Mutex::default(),
@@ -467,9 +471,33 @@ impl Metrics {
             "Singleton background job runs on this replica by job and result (ok, failed, fenced: the lease term ended)",
             metrics.background_runs.clone(),
         );
+        registry.register(
+            "history_partition_months_ahead",
+            "Future UTC months covered by partitions, by history table (the partitions job's last check; alert below 2)",
+            metrics.partition_months.clone(),
+        );
+        registry.register(
+            "usage_rollup_hours",
+            "Hours the rollups job (re)computed on this replica, by reason (new, changed)",
+            metrics.rollup_hours.clone(),
+        );
         Self {
             registry,
             ..metrics
+        }
+    }
+
+    pub(crate) fn set_partition_months(&self, table: &'static str, months: i64) {
+        self.partition_months
+            .get_or_create(&[("table", table.to_owned())])
+            .set(months);
+    }
+
+    pub(crate) fn observe_rollup_hours(&self, reason: &'static str, n: u64) {
+        if n > 0 {
+            self.rollup_hours
+                .get_or_create(&[("reason", reason.to_owned())])
+                .inc_by(n);
         }
     }
 

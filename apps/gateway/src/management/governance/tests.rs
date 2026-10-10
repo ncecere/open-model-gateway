@@ -108,7 +108,7 @@ mod db {
             None
         };
         sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id,attempt_number,input_tokens,output_tokens) VALUES($1,$2,$3,$4,$5,'openai',false,'succeeded',$1,1,$6,CASE WHEN $6::bigint IS NOT NULL THEN 0 END)").bind(id).bind(workspace).bind(key).bind(f.deployment).bind(model).bind(actual).execute(&f.store.pool).await.unwrap();
-        sqlx::query("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,actual_microusd,held_microusd,unbounded_cost,price_id,input_tokens,output_tokens) VALUES($1,$2,$3,$4,now(),date_trunc('minute',now(),'UTC'),date_trunc('month',now(),'UTC'),now()-interval '1 day',$5,$6,$7,$8,$9,$6,CASE WHEN $6::bigint IS NOT NULL THEN 0 END)").bind(id).bind(workspace).bind(key).bind(f.deployment).bind(state).bind(actual).bind(held).bind(held.is_none()&&actual.is_none()).bind(price).execute(&f.store.pool).await.unwrap();
+        sqlx::query("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,actual_microusd,held_microusd,unbounded_cost,price_id,input_tokens,output_tokens) SELECT $1,$2,$3,$4,e.started_at,date_trunc('minute',e.started_at,'UTC'),date_trunc('month',e.started_at,'UTC'),now()-interval '1 day',$5,$6,$7,$8,$9,$6,CASE WHEN $6::bigint IS NOT NULL THEN 0 END FROM inference_executions e WHERE e.id=$1").bind(id).bind(workspace).bind(key).bind(f.deployment).bind(state).bind(actual).bind(held).bind(held.is_none()&&actual.is_none()).bind(price).execute(&f.store.pool).await.unwrap();
         id
     }
     #[sqlx::test(migrations = "./enterprise_migrations")]
@@ -753,7 +753,7 @@ mod db {
             None,
         )
         .await;
-        sqlx::query("INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd) VALUES($1,$2,'unknown',999999)").bind(Uuid::new_v4()).bind(unknown).execute(&f.store.pool).await.unwrap();
+        sqlx::query("INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd,admitted_at) SELECT $1,$2,'unknown',999999,admitted_at FROM governance_reservations WHERE execution_id=$2").bind(Uuid::new_v4()).bind(unknown).execute(&f.store.pool).await.unwrap();
         let p = format!(
             "/api/v1/workspaces/{}/cost-report?{}",
             f.principal.workspace_id,
@@ -835,7 +835,7 @@ mod db {
         )
         .await;
         sqlx::query(
-            "UPDATE inference_executions SET started_at=now()-interval '1 day' WHERE id=$1",
+            "WITH e AS (UPDATE inference_executions SET started_at=now()-interval '1 day' WHERE id=$1) UPDATE governance_reservations SET admitted_at=now()-interval '1 day' WHERE execution_id=$1",
         )
         .bind(old)
         .execute(&f.store.pool)

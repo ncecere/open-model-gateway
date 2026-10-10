@@ -46,6 +46,11 @@ pub const PERSONAL_BUILTIN: &str = "personal_budget";
 /// and subject: at most one is open at a time.
 pub const SCIM_LAST_ADMIN: &str = "scim_last_admin";
 pub const SCIM_LAST_ADMIN_SUMMARY: &str = "SCIM tried to remove the last Platform Admin";
+/// Built-in installation incident: a history table has fewer than
+/// `crate::partitions::ALERT_BELOW_MONTHS` future month partitions (0030).
+pub const PARTITIONS_MISSING: &str = "partitions_missing";
+/// Built-in installation incidents (no rule; Platform Admins are notified).
+pub const INSTALLATION_BUILTINS: [&str; 2] = [SCIM_LAST_ADMIN, PARTITIONS_MISSING];
 /// Attempt failures that indicate the upstream (not the request) is failing.
 pub const UPSTREAM_FAILURES: [&str; 4] = [
     "upstream_unavailable",
@@ -420,6 +425,15 @@ async fn spend_conditions(
     }])
 }
 
+/// Settled spend of the last hour ($2..$3) and of the baseline ($1..$2), and
+/// the last hour's unknown-cost attempts, optionally of one workspace ($4).
+/// The 7-day baseline reads hourly rollups (exact: `omg_usage_rows` uses an
+/// hour's rollup only when it matches raw history in this snapshot).
+pub(crate) const SPIKE: &str = "SELECT coalesce(sum(known_cost_microusd) FILTER(WHERE w='current' AND accounting_state='settled'),0)::text,coalesce(sum(known_cost_microusd) FILTER(WHERE w='baseline' AND accounting_state='settled'),0)::text,coalesce(sum(attempts) FILTER(WHERE w='current' AND accounting_state='unknown'),0)::bigint FROM (SELECT 'baseline' w,u.* FROM omg_usage_rows($1,$2) u UNION ALL SELECT 'current',u.* FROM omg_usage_rows($2,$3) u) x WHERE ($4::uuid IS NULL OR workspace_id=$4)";
+/// The former raw-history spike query (parity oracle for [`SPIKE`]).
+#[cfg(test)]
+pub(crate) const SPIKE_RAW: &str = "SELECT coalesce(sum(actual_microusd) FILTER(WHERE admitted_at>=$2 AND state='settled'),0)::text,coalesce(sum(actual_microusd) FILTER(WHERE admitted_at<$2 AND state='settled'),0)::text,count(*) FILTER(WHERE admitted_at>=$2 AND state='unknown') FROM governance_reservations WHERE admitted_at>=$1 AND admitted_at<$3 AND ($4::uuid IS NULL OR workspace_id=$4)";
+
 async fn spike_conditions(
     tx: &mut Transaction<'_, Postgres>,
     rule: &Rule,
@@ -431,7 +445,7 @@ async fn spike_conditions(
     let hour = now - TimeDelta::hours(1);
     let start = hour - TimeDelta::hours(BASELINE_HOURS as i64);
     // Settled spend only: in-flight holds are upper estimates, unknown cost is flagged.
-    let (current, baseline, unknown): (String, String, i64) = sqlx::query_as("SELECT coalesce(sum(actual_microusd) FILTER(WHERE admitted_at>=$2 AND state='settled'),0)::text,coalesce(sum(actual_microusd) FILTER(WHERE admitted_at<$2 AND state='settled'),0)::text,count(*) FILTER(WHERE admitted_at>=$2 AND state='unknown') FROM governance_reservations WHERE admitted_at>=$1 AND admitted_at<$3 AND ($4::uuid IS NULL OR workspace_id=$4)")
+    let (current, baseline, unknown): (String, String, i64) = sqlx::query_as(SPIKE)
         .bind(start)
         .bind(hour)
         .bind(now)
@@ -775,7 +789,7 @@ async fn reconcile(
     Ok(changes)
 }
 
-async fn resolve(
+pub(crate) async fn resolve(
     tx: &mut Transaction<'_, Postgres>,
     id: Uuid,
     resolution: &str,
@@ -1101,13 +1115,13 @@ async fn deliver_one(store: &Store, id: Uuid) -> anyhow::Result<bool> {
  UNION ALL SELECT u.email FROM alert_rules r JOIN effective_workspace_memberships m ON m.workspace_id=r.workspace_id AND m.role IN ('owner','admin') JOIN users u ON u.id=m.user_id WHERE r.id=$1 AND r.notify_workspace_admins
  UNION ALL SELECT u.email FROM alert_rules r JOIN effective_platform_roles p ON p.role='admin' JOIN users u ON u.id=p.user_id WHERE r.id=$1 AND r.notify_platform_admins
  UNION ALL SELECT u.email FROM workspaces w JOIN users u ON u.id=w.owner_user_id JOIN effective_platform_roles p ON p.user_id=u.id WHERE w.id=$2 AND w.kind='personal' AND w.disabled_at IS NULL
- UNION ALL SELECT u.email FROM alert_events e JOIN effective_platform_roles p ON p.role='admin' JOIN users u ON u.id=p.user_id WHERE e.id=$4 AND e.builtin=$5
+ UNION ALL SELECT u.email FROM alert_events e JOIN effective_platform_roles p ON p.role='admin' JOIN users u ON u.id=p.user_id WHERE e.id=$4 AND e.builtin=ANY($5)
 ) x WHERE x.email IS NOT NULL ORDER BY 1 LIMIT $3")
         .bind(rule)
         .bind(personal)
         .bind(MAX_RECIPIENTS)
         .bind(event_id)
-        .bind(SCIM_LAST_ADMIN)
+        .bind(&INSTALLATION_BUILTINS[..])
         .fetch_all(&mut *tx)
         .await?;
     let (settings, installation) = relay(&mut tx).await?;
@@ -1158,9 +1172,10 @@ async fn deliver_one(store: &Store, id: Uuid) -> anyhow::Result<bool> {
             resolved,
             critical: severity == "critical",
             scope,
-            rule: rule_name.or_else(|| {
-                (builtin.as_deref() == Some(SCIM_LAST_ADMIN))
-                    .then(|| "Built-in SCIM safeguard".to_owned())
+            rule: rule_name.or_else(|| match builtin.as_deref() {
+                Some(SCIM_LAST_ADMIN) => Some("Built-in SCIM safeguard".to_owned()),
+                Some(PARTITIONS_MISSING) => Some("Built-in partition check".to_owned()),
+                _ => None,
             }),
             at: if resolved {
                 resolved_at.unwrap_or(fired_at)

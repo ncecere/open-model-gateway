@@ -67,6 +67,21 @@ enum Command {
         #[command(subcommand)]
         action: BudgetCommand,
     },
+    /// Monthly history partitions (docs/operations.md "History partitions").
+    Partitions {
+        #[command(subcommand)]
+        action: PartitionsCommand,
+    },
+    /// Operator-only archival of closed history months (schema owner credentials).
+    Archive {
+        #[command(subcommand)]
+        action: ArchiveCommand,
+    },
+    /// Hourly usage rollups (`serve` maintains them every minute).
+    Rollups {
+        #[command(subcommand)]
+        action: RollupsCommand,
+    },
     /// Encrypted file store maintenance (docs/file-storage.md).
     Files {
         #[command(subcommand)]
@@ -124,6 +139,57 @@ enum FilesCommand {
 }
 
 #[derive(Subcommand)]
+enum PartitionsCommand {
+    /// Create missing month partitions up to --ahead months after the current
+    /// one and print coverage; exits nonzero below 2 future months.
+    Ensure {
+        #[arg(long, default_value_t = open_model_gateway::partitions::DEFAULT_AHEAD)]
+        ahead: i32,
+    },
+    /// Read-only: print partition coverage; exits nonzero below 2 future months.
+    Status,
+    /// Before upgrading to partitioned history: build the new keys online
+    /// (CREATE INDEX CONCURRENTLY) so the migration only validates and swaps.
+    Prepare,
+}
+
+#[derive(Subcommand)]
+enum ArchiveCommand {
+    /// Export one closed month of a group (history, audit or storage) with a
+    /// checksummed manifest, then detach it (kept in schema omg_archive, or
+    /// dropped with --drop). Refuses months with pending/unknown cost or
+    /// within retention. Requires the schema owner.
+    Partition {
+        /// history (executions, reservations, ledger), audit or storage.
+        group: String,
+        /// YYYY-MM, or `legacy` (rows from before partitioning).
+        month: String,
+        /// Directory receiving <group>-<month>-<id>/.
+        #[arg(long)]
+        to: std::path::PathBuf,
+        /// Drop the detached partitions instead of keeping them in omg_archive.
+        #[arg(long)]
+        drop: bool,
+        /// Months kept hot [default: GATEWAY_HISTORY_RETENTION_MONTHS or 25].
+        #[arg(long)]
+        retention_months: Option<u32>,
+    },
+    /// Re-check an archive directory's manifest and file checksums (no database).
+    Verify { directory: std::path::PathBuf },
+}
+
+#[derive(Subcommand)]
+enum RollupsCommand {
+    /// Roll due hours once (catch-up after an upgrade); prints a JSON report.
+    Run {
+        #[arg(long)]
+        once: bool,
+        #[arg(long, default_value_t = 300)]
+        budget_seconds: u64,
+    },
+}
+
+#[derive(Subcommand)]
 enum BudgetCommand {
     /// Read-only: compare maintained budget totals with a full scan of
     /// reservations and executions in one snapshot; exits nonzero on any mismatch.
@@ -155,6 +221,14 @@ fn main() -> Result<()> {
     }
     if matches!(cli.command, Some(Command::SchemaVersion)) {
         println!("{}", schema_version()?);
+        return Ok(());
+    }
+    if let Some(Command::Archive {
+        action: ArchiveCommand::Verify { directory },
+    }) = &cli.command
+    {
+        let manifest = open_model_gateway::archive::verify_directory(directory)?;
+        println!("{}", serde_json::to_string_pretty(&manifest)?);
         return Ok(());
     }
     tokio::runtime::Builder::new_multi_thread()
@@ -301,6 +375,106 @@ async fn run(cli: Cli) -> Result<()> {
                 report.rate_mismatch_count
             );
         }
+        Command::Partitions { action } => {
+            let report = match action {
+                PartitionsCommand::Prepare => {
+                    store.preflight_upgrade().await?;
+                    let built = open_model_gateway::partitions::prepare(&pool).await?;
+                    println!("{}", serde_json::json!({ "built": built }));
+                    pool.close().await;
+                    return Ok(());
+                }
+                PartitionsCommand::Ensure { ahead } => {
+                    store.preflight_enterprise().await?;
+                    anyhow::ensure!((0..=12).contains(&ahead), "--ahead must be 0..12");
+                    open_model_gateway::partitions::ensure(&pool, ahead).await?
+                }
+                PartitionsCommand::Status => {
+                    store.preflight_enterprise().await?;
+                    let coverage = open_model_gateway::partitions::coverage(&pool, None).await?;
+                    open_model_gateway::partitions::EnsureReport {
+                        short: coverage
+                            .iter()
+                            .filter(|c| {
+                                c.months_ahead < open_model_gateway::partitions::ALERT_BELOW_MONTHS
+                            })
+                            .map(|c| c.parent.clone())
+                            .collect(),
+                        coverage,
+                        ..Default::default()
+                    }
+                }
+            };
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            anyhow::ensure!(
+                report.error.is_none() && report.short.is_empty(),
+                "history partitions are short: {:?} {}",
+                report.short,
+                report.error.as_deref().unwrap_or("")
+            );
+        }
+        Command::Archive { action } => match action {
+            ArchiveCommand::Partition {
+                group,
+                month,
+                to,
+                drop,
+                retention_months,
+            } => {
+                store.preflight_enterprise().await?;
+                let request = open_model_gateway::archive::Request {
+                    group: open_model_gateway::archive::Group::parse(&group)
+                        .context("group must be history, audit or storage")?,
+                    month: open_model_gateway::archive::Month::parse(&month)
+                        .context("month must be YYYY-MM or legacy")?,
+                    to,
+                    drop,
+                    retention_months: match retention_months {
+                        Some(n) => {
+                            anyhow::ensure!(
+                                (1..=1200).contains(&n),
+                                "--retention-months must be 1..1200"
+                            );
+                            n
+                        }
+                        None => open_model_gateway::archive::retention_from_env()?,
+                    },
+                };
+                let report = open_model_gateway::archive::archive(&pool, &request).await?;
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            }
+            ArchiveCommand::Verify { .. } => unreachable!("handled before configuration"),
+        },
+        Command::Rollups {
+            action:
+                RollupsCommand::Run {
+                    once,
+                    budget_seconds,
+                },
+        } => {
+            anyhow::ensure!(once, "pass --once; `serve` rolls hours every minute");
+            store.preflight_enterprise().await?;
+            // Batches of up to 168 hours until nothing is due or the budget is spent.
+            let budget = std::time::Duration::from_secs(budget_seconds.clamp(1, 86_400));
+            let started = std::time::Instant::now();
+            let mut total = open_model_gateway::rollups::RollupReport::default();
+            loop {
+                let left = budget.saturating_sub(started.elapsed());
+                let report = open_model_gateway::rollups::run_once(&store, None, left).await?;
+                total.new_hours += report.new_hours;
+                total.changed_hours += report.changed_hours;
+                total.groups += report.groups;
+                total.remaining = report.remaining;
+                total.bound = report.bound;
+                if report.remaining == 0
+                    || report.new_hours + report.changed_hours == 0
+                    || started.elapsed() >= budget
+                {
+                    break;
+                }
+            }
+            println!("{}", serde_json::to_string_pretty(&total)?);
+        }
         Command::Files { action } => {
             store.preflight_enterprise().await?;
             let files = open_model_gateway::filestore::FileStoreRuntime::build(
@@ -443,6 +617,58 @@ async fn run(cli: Cli) -> Result<()> {
             let batch_runner = open_model_gateway::jobs::runner::start(batch_jobs);
             let alerts =
                 alert_interval.map(|every| open_model_gateway::alerts::start(store.clone(), every));
+            // History partitions (hourly) and usage rollups (every minute):
+            // the `partitions` and `rollups` lease holders only.
+            let partitions_ahead = open_model_gateway::partitions::ahead_from_env()?;
+            let history_leases = leases.clone();
+            let history_store = store.clone();
+            let history = tokio::spawn(async move {
+                let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                let mut minute = 0u64;
+                loop {
+                    tick.tick().await;
+                    if minute.is_multiple_of(60) {
+                        open_model_gateway::leases::run_singleton(
+                            &history_leases,
+                            open_model_gateway::leases::Lease::Partitions,
+                            "partitions",
+                            std::time::Duration::from_secs(60),
+                            |fence| {
+                                let store = history_store.clone();
+                                async move {
+                                    open_model_gateway::partitions::run_job(
+                                        &store,
+                                        partitions_ahead,
+                                        Some(&fence),
+                                    )
+                                    .await
+                                }
+                            },
+                        )
+                        .await;
+                    }
+                    open_model_gateway::leases::run_singleton(
+                        &history_leases,
+                        open_model_gateway::leases::Lease::Rollups,
+                        "rollups",
+                        std::time::Duration::from_secs(50),
+                        |fence| {
+                            let store = history_store.clone();
+                            async move {
+                                open_model_gateway::rollups::run_once(
+                                    &store,
+                                    Some(&fence),
+                                    std::time::Duration::from_secs(30),
+                                )
+                                .await
+                            }
+                        },
+                    )
+                    .await;
+                    minute = minute.wrapping_add(1);
+                }
+            });
             let lifecycle_leases = leases.clone();
             let lifecycle_store = store.clone();
             // The `lifecycle` lease holder only (one replica per minute).
@@ -499,6 +725,8 @@ async fn run(cli: Cli) -> Result<()> {
             }
             maintenance.abort();
             lifecycle.abort();
+            history.abort();
+            let _ = history.await;
             let _ = maintenance.await;
             let _ = lifecycle.await;
             if let Some(notifications) = notifications {

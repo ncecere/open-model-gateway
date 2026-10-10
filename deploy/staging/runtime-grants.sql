@@ -267,6 +267,31 @@ GRANT SELECT,UPDATE(holder,epoch,acquired_at,expires_at,last_completed_at,last_c
 GRANT EXECUTE ON FUNCTION public.omg_lease_acquire(text,uuid,integer),
  public.omg_lease_fence(text,uuid,bigint),public.omg_lease_complete(text,uuid,bigint),
  public.omg_lease_release(text,uuid,bigint) TO gateway_runtime;
+-- History partitions (0030/0031): every grant above is on the partitioned
+-- parents; partitions are reached only through them (no partition-level
+-- privilege; REVOKE ALL above covers new partitions). The runtime reads the
+-- registry and coverage and may only ask the SECURITY DEFINER
+-- omg_ensure_partitions(ahead) for missing canonical future months (the
+-- leased `partitions` job). It cannot create, attach, detach, drop or
+-- truncate partitions, and the ledger's admitted_at is INSERT-only.
+GRANT SELECT ON public.history_partitions TO gateway_runtime;
+GRANT EXECUTE ON FUNCTION public.omg_ensure_partitions(integer),public.omg_partition_coverage(timestamptz),
+ public.omg_partition_bounds(text),public.omg_month_start(timestamptz),public.omg_next_month(timestamptz)
+ TO gateway_runtime;
+-- Usage rollups (0032): derived, rebuildable data. The leased `rollups` job
+-- replaces an hour's rows (DELETE + INSERT), records the hour and advances
+-- the forward-only progress mark; the 0032 triggers append change markers
+-- as the invoking runtime role and the job deletes the ones it saw. Readers
+-- call omg_usage_rows. Raw history is never touched.
+GRANT SELECT,INSERT,DELETE ON public.usage_rollups_hourly,public.usage_rollup_dirty TO gateway_runtime;
+GRANT SELECT,INSERT,UPDATE(rolled_at,groups,lease_epoch) ON public.usage_rollup_hours TO gateway_runtime;
+GRANT SELECT,UPDATE(rolled_through) ON public.usage_rollup_progress TO gateway_runtime;
+GRANT EXECUTE ON FUNCTION public.omg_usage_aggregate(timestamptz,timestamptz),
+ public.omg_usage_rows(timestamptz,timestamptz) TO gateway_runtime;
+-- Archive (0033): operator-only (schema owner). The runtime reads the
+-- records (`budget verify` adds archived contributions) and has no access to
+-- schema omg_archive.
+GRANT SELECT ON public.archived_partitions,public.archived_budget_contributions TO gateway_runtime;
 -- No UPDATE/DELETE/TRUNCATE of immutable prices, ledger or audit; no removal of
 -- users/workspaces/keys/history and no rewrite of immutable admission snapshots.
 COMMIT;

@@ -59,9 +59,15 @@ pub fn allowed_database(name: &str) -> bool {
     name.starts_with("omg_loadtest")
 }
 
-fn chunk_sql(c: &SeedConfig, lo: u64, hi: u64) -> String {
+fn chunk_sql(c: &SeedConfig, lo: u64, hi: u64, partitioned_ledger: bool) -> String {
     // Only integers are interpolated; text parameters are session settings.
     let (days, keys, unknown) = (c.history_days.max(1), c.keys, c.history_unknown);
+    // From migration 0030 the ledger carries its reservation's admission time.
+    let (lcol, lval) = if partitioned_ledger {
+        (", admitted_at", ", ts")
+    } else {
+        ("", "")
+    };
     format!(
         r#"CREATE TEMP TABLE seed_chunk ON COMMIT DROP AS
   SELECT gen_random_uuid() AS id, k.id AS key_id, k.workspace_id, i < {unknown} AS unknown,
@@ -81,11 +87,11 @@ INSERT INTO governance_reservations(execution_id, workspace_id, api_key_id, depl
          date_trunc('month', ts, 'UTC'), ts + interval '120 seconds', CASE WHEN unknown THEN 'unknown' ELSE 'settled' END,
          1016, 1032, CASE WHEN NOT unknown THEN 20 END, CASE WHEN NOT unknown THEN 12 END, CASE WHEN NOT unknown THEN 4 END
   FROM seed_chunk;
-INSERT INTO monetary_ledger(id, execution_id, kind, amount_microusd, created_at)
-  SELECT gen_random_uuid(), id, 'hold', 1032, ts FROM seed_chunk;
-INSERT INTO monetary_ledger(id, execution_id, kind, amount_microusd, input_tokens, output_tokens, created_at)
+INSERT INTO monetary_ledger(id, execution_id, kind, amount_microusd, created_at{lcol})
+  SELECT gen_random_uuid(), id, 'hold', 1032, ts{lval} FROM seed_chunk;
+INSERT INTO monetary_ledger(id, execution_id, kind, amount_microusd, input_tokens, output_tokens, created_at{lcol})
   SELECT gen_random_uuid(), id, CASE WHEN unknown THEN 'unknown' ELSE 'settlement' END, CASE WHEN unknown THEN 1032 ELSE 20 END,
-         CASE WHEN NOT unknown THEN 12 END, CASE WHEN NOT unknown THEN 4 END, ts + interval '50 milliseconds'
+         CASE WHEN NOT unknown THEN 12 END, CASE WHEN NOT unknown THEN 4 END, ts + interval '50 milliseconds'{lval}
   FROM seed_chunk;"#
     )
 }
@@ -136,11 +142,32 @@ pub async fn seed(url: &str, config: SeedConfig) -> anyhow::Result<SeedReport> {
         .await
         .context("seeding identities, keys and catalog")?;
     let identities_seconds = started.elapsed().as_secs_f64();
+    let (partitioned_ledger,): (bool,) = sqlx::query_as(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='monetary_ledger' AND column_name='admitted_at')",
+    )
+    .fetch_one(&mut conn)
+    .await?;
+    // From 0032, every row written into an hour that already ended appends a
+    // usage-rollup change marker (one per row). Bulk history seeding would
+    // write millions; the throwaway seeder disables those two insert
+    // triggers (owner DDL) and marks each seeded hour once instead, which is
+    // exact because nothing else writes during seeding.
+    let (rollups,): (bool,) =
+        sqlx::query_as("SELECT to_regclass('public.usage_rollup_dirty') IS NOT NULL")
+            .fetch_one(&mut conn)
+            .await?;
+    let bulk = rollups && config.history > 0;
+    if bulk {
+        sqlx::raw_sql("ALTER TABLE inference_executions DISABLE TRIGGER usage_rollup_execution_insert; ALTER TABLE governance_reservations DISABLE TRIGGER usage_rollup_reservation_insert")
+            .execute(&mut conn)
+            .await
+            .context("pausing rollup markers")?;
+    }
     let started = Instant::now();
     let mut lo = 0;
     while lo < config.history {
         let hi = (lo + config.chunk).min(config.history) - 1;
-        sqlx::raw_sql(&chunk_sql(&config, lo, hi))
+        sqlx::raw_sql(&chunk_sql(&config, lo, hi, partitioned_ledger))
             .execute(&mut conn)
             .await
             .with_context(|| format!("seeding history rows {lo}..={hi}"))?;
@@ -150,6 +177,12 @@ pub async fn seed(url: &str, config: SeedConfig) -> anyhow::Result<SeedReport> {
             config.history,
             started.elapsed().as_secs_f64()
         );
+    }
+    if bulk {
+        sqlx::raw_sql("INSERT INTO usage_rollup_dirty(hour_start) SELECT DISTINCT date_trunc('hour',started_at,'UTC') FROM inference_executions; ALTER TABLE inference_executions ENABLE TRIGGER usage_rollup_execution_insert; ALTER TABLE governance_reservations ENABLE TRIGGER usage_rollup_reservation_insert")
+            .execute(&mut conn)
+            .await
+            .context("marking seeded hours for rollup")?;
     }
     let history_seconds = started.elapsed().as_secs_f64();
     let started = Instant::now();
@@ -223,8 +256,10 @@ mod tests {
             },
             5,
             9,
+            true,
         );
         assert!(sql.contains("generate_series(5, 9)"));
+        assert!(sql.contains("created_at, admitted_at"));
         assert!(sql.contains("i % 3"));
         assert!(sql.contains("i < 2"));
     }

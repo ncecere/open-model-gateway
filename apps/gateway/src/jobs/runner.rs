@@ -779,7 +779,7 @@ impl Lane {
                 self.head = Some(Head {
                     n,
                     raw,
-                    execution: Uuid::new_v4(),
+                    execution: Uuid::now_v7(),
                     request,
                     route: None,
                     cooling: false,
@@ -1026,7 +1026,7 @@ impl LineRun {
                         )
                         .await;
                         tokio::time::sleep(Duration::from_secs(1u64 << attempt)).await;
-                        let next = Uuid::new_v4();
+                        let next = Uuid::now_v7();
                         if self.claim_retry(n, attempt, next, pin).await {
                             attempt += 1;
                             execution = next;

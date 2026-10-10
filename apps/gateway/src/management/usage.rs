@@ -125,6 +125,34 @@ struct Scope {
 /// $7 member (human keys), $8 statuses, $9/$10 cost center/unallocated and
 /// $11 service account. Every predicate precedes aggregation.
 const BASE: &str = "WITH rows AS (SELECT e.id,e.root_request_id,e.started_at,e.public_model,d.model_id,e.provider,e.workspace_id,CASE WHEN $12 AND w.kind='personal' THEN 'Personal · '||coalesce(nullif(btrim(ow.display_name),''),ow.email,'former user') ELSE w.name END workspace_name,w.kind workspace_kind,e.api_key_id,k.name key_name,k.issued_to_user_id,CASE WHEN u.display_name IS NULL THEN u.email ELSE u.display_name||' · '||u.email END member_email,k.service_account_id,e.cost_center_id,e.cost_center_name,e.input_tokens,e.output_tokens,e.billing_usage,r.state accounting_state,r.actual_microusd,r.held_microusd FROM inference_executions e JOIN api_keys k ON k.id=e.api_key_id AND k.workspace_id=e.workspace_id JOIN workspaces w ON w.id=e.workspace_id LEFT JOIN users ow ON ow.id=w.owner_user_id JOIN deployments d ON d.id=e.deployment_id LEFT JOIN users u ON u.id=k.issued_to_user_id LEFT JOIN governance_reservations r ON r.execution_id=e.id WHERE ($1::uuid IS NULL OR e.workspace_id=$1) AND ($2::uuid IS NULL OR k.issued_to_user_id=$2) AND e.started_at>=($3::date::timestamp AT TIME ZONE 'UTC') AND e.started_at<($4::date::timestamp AT TIME ZONE 'UTC') AND ($5::uuid IS NULL OR d.model_id=$5) AND ($6::uuid IS NULL OR (e.api_key_id=$6 AND NOT ($12 AND w.kind='personal'))) AND ($7::uuid IS NULL OR (k.issued_to_user_id=$7 AND k.service_account_id IS NULL)) AND ($8::text[] IS NULL OR (CASE e.state WHEN 'started' THEN 'in_progress' ELSE e.state END)=ANY($8)) AND ($9::uuid IS NULL OR e.cost_center_id=$9) AND (NOT $10 OR e.cost_center_id IS NULL) AND ($11::uuid IS NULL OR k.service_account_id=$11))";
+/// `BASE` over hourly rollups (0032): the same visibility predicates and
+/// dimension columns, one row per (hour, rollup group) with measure columns
+/// (`m_*`) instead of one row per attempt. `omg_usage_rows` serves an hour
+/// from its rollup only when that equals the raw aggregation in this
+/// snapshot, so every additive metric below equals its `BASE` value.
+/// Distinct request counts are not additive and never use this.
+const ROLLUP_BASE: &str = "WITH rows AS (SELECT u.hour_start started_at,u.public_model,d.model_id,u.provider,u.workspace_id,CASE WHEN $12 AND w.kind='personal' THEN 'Personal · '||coalesce(nullif(btrim(ow.display_name),''),ow.email,'former user') ELSE w.name END workspace_name,w.kind workspace_kind,u.api_key_id,k.name key_name,k.issued_to_user_id,CASE WHEN m.display_name IS NULL THEN m.email ELSE m.display_name||' · '||m.email END member_email,k.service_account_id,u.cost_center_id,u.cost_center_name,u.accounting_state,u.attempts m_attempts,u.input_tokens m_input,u.output_tokens m_output,u.tokens m_tokens,u.unknown_token_attempts m_unknown_tokens,u.known_cost_microusd m_cost,u.held_microusd m_held,u.unresolved_attempts m_unresolved,u.cache_input_tokens m_cache_input,u.cache_read_tokens m_cache_read,u.priced_cost_microusd m_priced_cost,u.priced_tokens m_priced_tokens FROM omg_usage_rows($3::date::timestamp AT TIME ZONE 'UTC',$4::date::timestamp AT TIME ZONE 'UTC') u JOIN api_keys k ON k.id=u.api_key_id AND k.workspace_id=u.workspace_id JOIN workspaces w ON w.id=u.workspace_id LEFT JOIN users ow ON ow.id=w.owner_user_id JOIN deployments d ON d.id=u.deployment_id LEFT JOIN users m ON m.id=k.issued_to_user_id WHERE ($1::uuid IS NULL OR u.workspace_id=$1) AND ($2::uuid IS NULL OR k.issued_to_user_id=$2) AND ($5::uuid IS NULL OR d.model_id=$5) AND ($6::uuid IS NULL OR (u.api_key_id=$6 AND NOT ($12 AND w.kind='personal'))) AND ($7::uuid IS NULL OR (k.issued_to_user_id=$7 AND k.service_account_id IS NULL)) AND ($8::text[] IS NULL OR (CASE u.execution_state WHEN 'started' THEN 'in_progress' ELSE u.execution_state END)=ANY($8)) AND ($9::uuid IS NULL OR u.cost_center_id=$9) AND (NOT $10 OR u.cost_center_id IS NULL) AND ($11::uuid IS NULL OR k.service_account_id=$11))";
+/// [`metric`] over `ROLLUP_BASE` rows: sums of the rollup measures, with the
+/// same null handling and rounding.
+fn rolled_metric(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "spend" => "coalesce(sum(m_cost),0)::numeric",
+        "attempts" => "coalesce(sum(m_attempts),0)::numeric",
+        "tokens" => "coalesce(sum(m_tokens),0)::numeric",
+        "input_tokens" => "coalesce(sum(m_input),0)::numeric",
+        "output_tokens" => "coalesce(sum(m_output),0)::numeric",
+        "unknown_token_attempts" => "coalesce(sum(m_unknown_tokens),0)::numeric",
+        "held_microusd" => "coalesce(sum(m_held),0)::numeric",
+        "unresolved_attempts" => "coalesce(sum(m_unresolved),0)::numeric",
+        "cache_hit_rate" => {
+            "(CASE WHEN coalesce(sum(m_cache_input),0)>0 THEN trim_scale(round(sum(m_cache_read)/sum(m_cache_input),4)) END)"
+        }
+        "blended_microusd_per_million" => {
+            "(CASE WHEN coalesce(sum(m_priced_tokens),0)>0 THEN trim_scale(round(sum(m_priced_cost)*1000000/sum(m_priced_tokens),4)) END)"
+        }
+        _ => return None,
+    })
+}
 type Scalar<'q> = sqlx::query::QueryScalar<'q, Postgres, Value, sqlx::postgres::PgArguments>;
 /// Binds the `BASE` parameters $1..$12.
 fn bind_base<'q>(
@@ -351,8 +379,26 @@ pub(super) async fn platform_overview(
     overview(s, u, None, p).await
 }
 async fn explore(s: Store, u: BrowserPrincipal, ws: Option<Uuid>, p: ExploreQuery) -> ApiResult {
+    explore_with(s, u, ws, p, crate::rollups::mode()).await
+}
+/// Explore; long ranges of additive metrics read hourly rollups (identical
+/// results, see `ROLLUP_BASE`).
+async fn explore_with(
+    s: Store,
+    u: BrowserPrincipal,
+    ws: Option<Uuid>,
+    p: ExploreQuery,
+    rollups: crate::rollups::Mode,
+) -> ApiResult {
     deadline(async {
         let (_, start, end) = period(&p.start_date, &p.end_date)?;
+        let rolled =
+            p.metric != "requests" && crate::rollups::use_rollups(rollups, (end - start).num_days());
+        let (base, metric): (&str, fn(&str) -> Option<&'static str>) = if rolled {
+            (ROLLUP_BASE, rolled_metric)
+        } else {
+            (BASE, metric)
+        };
         if !matches!(
             p.metric.as_str(),
             "spend" | "requests" | "tokens" | "cache_hit_rate"
@@ -428,7 +474,7 @@ async fn explore(s: Store, u: BrowserPrincipal, ws: Option<Uuid>, p: ExploreQuer
             )
         };
         let sql = format!(
-            "{BASE}, groups AS (SELECT {gid} gid,{gname} gname,{m} value,{held} held,{unresolved} unresolved FROM rows GROUP BY 1,2), g AS (SELECT row_number() OVER (ORDER BY {order}) pos,* FROM groups ORDER BY {order} LIMIT {limit}), total AS (SELECT {m} value,{held} held,{unresolved} unresolved FROM rows) SELECT jsonb_build_object('scope','{}','metric',$13::text,'group_by',$14::text,'then_by',$15::text,'period',jsonb_build_object('start_date',$3::date::text,'end_date',$4::date::text,'timezone','UTC'),'basis','configured_rate_estimate','currency','USD','total',(SELECT jsonb_build_object('value',value::text,'held_microusd',held::text,'unresolved_attempts',unresolved::text) FROM total),'rows',{then_sql},'other',{other},'truncated',(SELECT count(*) FROM groups)>{limit},'series',{series})",
+            "{base}, groups AS (SELECT {gid} gid,{gname} gname,{m} value,{held} held,{unresolved} unresolved FROM rows GROUP BY 1,2), g AS (SELECT row_number() OVER (ORDER BY {order}) pos,* FROM groups ORDER BY {order} LIMIT {limit}), total AS (SELECT {m} value,{held} held,{unresolved} unresolved FROM rows) SELECT jsonb_build_object('scope','{}','metric',$13::text,'group_by',$14::text,'then_by',$15::text,'period',jsonb_build_object('start_date',$3::date::text,'end_date',$4::date::text,'timezone','UTC'),'basis','configured_rate_estimate','currency','USD','total',(SELECT jsonb_build_object('value',value::text,'held_microusd',held::text,'unresolved_attempts',unresolved::text) FROM total),'rows',{then_sql},'other',{other},'truncated',(SELECT count(*) FROM groups)>{limit},'series',{series})",
             if sc.platform { "platform" } else { "workspace" },
         );
         let v: Value = bind_base(sqlx::query_scalar(&sql), &sc, start, end, &f)

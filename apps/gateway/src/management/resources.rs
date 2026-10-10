@@ -296,7 +296,7 @@ pub(crate) async fn audit(
             }
         }
     }
-    sqlx::query("INSERT INTO audit_events(id,actor_user_id,workspace_id,action,resource_type,resource_id,metadata) VALUES($1,$2,$3,$4,$5,$6,$7)").bind(Uuid::new_v4()).bind(u.user_id).bind(ws).bind(action).bind(resource_type).bind(resource_id).bind(Value::Object(safe)).execute(&mut **tx).await?;
+    sqlx::query("INSERT INTO audit_events(id,actor_user_id,workspace_id,action,resource_type,resource_id,metadata) VALUES($1,$2,$3,$4,$5,$6,$7)").bind(Uuid::now_v7()).bind(u.user_id).bind(ws).bind(action).bind(resource_type).bind(resource_id).bind(Value::Object(safe)).execute(&mut **tx).await?;
     Ok(())
 }
 pub(super) fn platform_routes() -> Router<Store> {
