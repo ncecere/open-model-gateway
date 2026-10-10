@@ -919,6 +919,17 @@ async fn resolve_identity_with(
     let mut tx = crate::db::begin(&store.pool).await.map_err(internal)?;
     lifecycle::lock(&mut tx).await.map_err(internal)?;
     advisory_lock(&mut tx, &format!("oidc:{}:{issuer}{subject}", issuer.len())).await?;
+    // Every account this sign-in may change (the linked one, which may be
+    // cleaned up, and the one its email resolves to): authority scope locks
+    // up front, in canonical order (`lifecycle::lock_users`). New accounts
+    // (the id an account created here gets) have no keys or workspaces yet.
+    let new_user = Uuid::new_v4();
+    let mut candidates: Vec<Uuid> = sqlx::query_scalar("SELECT user_id FROM oidc_identities WHERE issuer=$1 AND subject=$2 UNION SELECT id FROM users WHERE lower(email)=$3")
+        .bind(issuer).bind(subject).bind(&email).fetch_all(&mut *tx).await.map_err(internal)?;
+    candidates.push(new_user);
+    lifecycle::lock_users(&mut tx, &candidates)
+        .await
+        .map_err(internal)?;
     let existing = sqlx::query_as::<_, (Uuid, bool, bool, Option<String>)>(
         "SELECT u.id,u.cleaned_at IS NOT NULL,coalesce(u.cleanup_due_at<=now(),false),u.disable_reason FROM oidc_identities i JOIN users u ON u.id=i.user_id WHERE i.issuer=$1 AND i.subject=$2 FOR UPDATE OF u",
     ).bind(issuer).bind(subject).fetch_optional(&mut *tx).await.map_err(internal)?;
@@ -955,7 +966,7 @@ async fn resolve_identity_with(
         let created = sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO users(id,email) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING id",
         )
-        .bind(Uuid::new_v4())
+        .bind(new_user)
         .bind(&email)
         .fetch_optional(&mut *tx)
         .await

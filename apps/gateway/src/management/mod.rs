@@ -24,6 +24,7 @@ mod tests;
 mod usage;
 
 use crate::{
+    governance::locks,
     identity::{BrowserPrincipal, IdentityState, require_session},
     store::Store,
 };

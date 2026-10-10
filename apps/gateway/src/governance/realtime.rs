@@ -161,12 +161,22 @@ pub async fn reserve_window(
     armed: Option<ResponseBound>,
 ) -> Result<(), InferenceError> {
     let _queued = gate(&store.lock_gates.admission).await;
+    locks::retry_deadlocks!(
+        "admission",
+        reserve_window_once(store, principal, id, model, window, armed).await
+    )
+}
+async fn reserve_window_once(
+    store: &Store,
+    principal: &Principal,
+    id: Uuid,
+    model: &str,
+    window: ResponseBound,
+    armed: Option<ResponseBound>,
+) -> Result<(), InferenceError> {
     let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
-    lock(&mut tx).await?;
-    let lineage = crate::auth::revalidate(&mut tx, principal)
-        .await
-        .map_err(storage)?
-        .ok_or(InferenceError::ModelUnavailable)?;
+    admission_prefix(store, &mut tx, principal).await?;
+    let lineage = authorize(store, &mut tx, principal).await?;
     let s = session(&mut tx, id).await?;
     if s.workspace_id != principal.workspace_id
         || s.api_key_id != principal.key_id
@@ -176,7 +186,7 @@ pub async fn reserve_window(
         return Err(InferenceError::Storage);
     }
     // Each new window is new work: the model must still be authorized.
-    let allowed: Option<Uuid> = sqlx::query_scalar("SELECT d.id FROM deployments d JOIN provider_connections p ON p.id=d.provider_connection_id JOIN models m ON m.id=d.model_id WHERE d.id=$2 AND m.public_name=$3 AND workspace_model_allowed($1,m.id) AND d.enabled AND p.enabled AND 'realtime'=ANY(m.supported_protocols) AND (NOT EXISTS(SELECT 1 FROM key_model_restrictions WHERE workspace_id=$1 AND governance_key_id=$4) OR EXISTS(SELECT 1 FROM key_model_selections WHERE workspace_id=$1 AND governance_key_id=$4 AND model_id=m.id)) FOR SHARE OF d,p,m")
+    let allowed: Option<Uuid> = sqlx::query_scalar(&format!("SELECT d.id FROM deployments d JOIN provider_connections p ON p.id=d.provider_connection_id JOIN models m ON m.id=d.model_id WHERE d.id=$2 AND m.public_name=$3 AND workspace_model_allowed($1,m.id) AND d.enabled AND p.enabled AND 'realtime'=ANY(m.supported_protocols) AND (NOT EXISTS(SELECT 1 FROM key_model_restrictions WHERE workspace_id=$1 AND governance_key_id=$4) OR EXISTS(SELECT 1 FROM key_model_selections WHERE workspace_id=$1 AND governance_key_id=$4 AND model_id=m.id)){}", catalog_share(store)))
         .bind(s.workspace_id).bind(s.deployment_id).bind(model).bind(lineage)
         .fetch_optional(&mut *tx).await.map_err(storage)?;
     if allowed.is_none() {
@@ -203,6 +213,19 @@ pub async fn reserve_window(
         None => (None, None),
     };
     let grows = hold.is_none_or(|h| h > 0) || tokens.is_some_and(|(_, d)| d > 0);
+    // Scoped: the session's totals and minute rows (its admission buckets)
+    // before reading them; every admission in that minute locks them too.
+    lock_rows(
+        store,
+        &mut tx,
+        &[locks::Touch {
+            workspace: s.workspace_id,
+            api_key: s.api_key_id,
+            at: s.admitted_at,
+        }],
+        true,
+    )
+    .await?;
     let policies = sqlx::query_as::<_, Policy>(POLICIES)
         .bind(s.workspace_id)
         .bind(lineage)
@@ -392,8 +415,21 @@ pub async fn settle_response(
     window: ResponseBound,
 ) -> Result<(), InferenceError> {
     let _queued = gate(&store.lock_gates.settlement).await;
+    locks::retry_deadlocks!(
+        "settlement",
+        settle_response_once(store, id, sequence, status, usage, window).await
+    )
+}
+async fn settle_response_once(
+    store: &Store,
+    id: Uuid,
+    sequence: i32,
+    status: Option<ResponseStatus>,
+    usage: Option<RealtimeUsage>,
+    window: ResponseBound,
+) -> Result<(), InferenceError> {
     let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
-    lock(&mut tx).await?;
+    settlement_prefix(store, &mut tx).await?;
     let s = session(&mut tx, id).await?;
     if s.state != "pending" {
         return Err(InferenceError::Storage);
@@ -416,6 +452,17 @@ pub async fn settle_response(
         None => floor.max(h) - h,
     });
     let count = |f: fn(&RealtimeUsage) -> u64| usage.map(|u| f(&u) as i64);
+    lock_rows(
+        store,
+        &mut tx,
+        &[locks::Touch {
+            workspace: s.workspace_id,
+            api_key: s.api_key_id,
+            at: s.admitted_at,
+        }],
+        false,
+    )
+    .await?;
     sqlx::query("UPDATE realtime_responses SET state=$3,status=$4,actual_microusd=$5,floor_microusd=$6,unbounded_cost=unbounded_cost OR $7,input_text_tokens=$8,cached_text_tokens=$9,input_audio_tokens=$10,cached_audio_tokens=$11,output_text_tokens=$12,output_audio_tokens=$13,cost_components=$14,completed_at=clock_timestamp() WHERE execution_id=$1 AND sequence=$2")
         .bind(id).bind(sequence)
         .bind(if actual.is_some() { "settled" } else { "unknown" })
@@ -482,12 +529,15 @@ async fn finish_unobserved(
     store: &Store,
     record: &RealtimeFinish,
 ) -> Result<Finished, InferenceError> {
+    let _queued = gate(&store.lock_gates.settlement).await;
+    locks::retry_deadlocks!("settlement", finish_once(store, record).await)
+}
+async fn finish_once(store: &Store, record: &RealtimeFinish) -> Result<Finished, InferenceError> {
     let telemetry = record.telemetry.for_outcome(record.outcome);
     let ms = |v: Option<u64>| v.map(|n| n.min(i64::MAX as u64) as i64);
-    let _queued = gate(&store.lock_gates.settlement).await;
     let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
-    lock(&mut tx).await?;
-    let r = reservation(&mut tx, record.id).await?;
+    settlement_prefix(store, &mut tx).await?;
+    let r = reservation(&mut tx, record.id, scoped(store)).await?;
     let s = session(&mut tx, record.id).await?;
     if r.state != "pending" {
         // Lease expiry already marked it unknown; never overwrite.
@@ -543,6 +593,7 @@ async fn finish_unobserved(
         ..MeterUsage::default()
     };
     let meter_json = serde_json::to_value(meters).map_err(|_| InferenceError::Storage)?;
+    lock_rows(store, &mut tx, &[r.touch()], false).await?;
     let changed = sqlx::query("UPDATE inference_executions SET state=$2,error_code=$3,input_tokens=$4,output_tokens=$5,billing_usage=NULL,elapsed_ms=$6,completed_at=clock_timestamp(),meter_usage=$7,finish_reason=$8,time_to_first_token_ms=$9,generation_ms=$10 WHERE id=$1 AND state='started'")
         .bind(record.id).bind(record.outcome.as_str()).bind(record.error.map(|e| e.code()))
         .bind(input).bind(output).bind(record.elapsed_ms.min(i64::MAX as u64) as i64).bind(&meter_json)

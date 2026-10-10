@@ -14,6 +14,34 @@ pub(crate) async fn lock(tx: &mut Transaction<'_, Postgres>) -> Result<(), sqlx:
     Ok(())
 }
 
+/// Exclusive authority locks (`governance::locks`) for changes to `users`
+/// (suspension, cleanup, entitlement loss, grant and membership changes, key
+/// revocation): their personal workspaces, the users, then the lineages of
+/// keys issued to them, in canonical order. Call before the first write, so
+/// the triggers' lazy acquisition never runs out of order.
+pub(crate) async fn lock_users(
+    tx: &mut Transaction<'_, Postgres>,
+    users: &[Uuid],
+) -> Result<(), sqlx::Error> {
+    use crate::governance::locks::{Scope, exclusive};
+    if users.is_empty() {
+        return Ok(());
+    }
+    let rows: Vec<(i16, Uuid)> = sqlx::query_as("SELECT 1::int2,id FROM workspaces WHERE kind='personal' AND owner_user_id=ANY($1) UNION SELECT 2::int2,u FROM unnest($1::uuid[]) u UNION SELECT 3::int2,governance_key_id FROM api_keys WHERE issued_to_user_id=ANY($1)")
+        .bind(users)
+        .fetch_all(&mut **tx)
+        .await?;
+    exclusive(
+        tx,
+        rows.into_iter().map(|(kind, id)| match kind {
+            1 => Scope::Workspace(id),
+            2 => Scope::User(id),
+            _ => Scope::Lineage(id),
+        }),
+    )
+    .await
+}
+
 pub(crate) async fn cleanup_user(
     tx: &mut Transaction<'_, Postgres>,
     user: Uuid,
@@ -57,6 +85,7 @@ pub async fn cleanup_inactive_accounts(store: &Store) -> Result<u64, sqlx::Error
     lock(&mut tx).await?;
     let users: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM users WHERE disabled_at IS NOT NULL AND cleaned_at IS NULL AND cleanup_due_at<=now() ORDER BY cleanup_due_at,id LIMIT 100 FOR UPDATE")
         .fetch_all(&mut *tx).await?;
+    lock_users(&mut tx, &users).await?;
     for user in &users {
         cleanup_user(&mut tx, *user).await?;
     }

@@ -50,7 +50,14 @@ pub async fn seed(store: &Store, environment: Environment) -> Result<Option<Deve
         bail!("bootstrap-dev requires GATEWAY_ENV=development");
     }
     let mut tx = crate::db::begin(&store.pool).await?;
-    lifecycle::lock(&mut tx).await?;
+    // Seeds the global catalog (providers, models, deployments): the
+    // exclusive catalog lock, then the installation row.
+    sqlx::query("SELECT pg_advisory_xact_lock(72419502)")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("SELECT lock_installation()")
+        .execute(&mut *tx)
+        .await?;
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM users WHERE email='developer@local.invalid')",
     )

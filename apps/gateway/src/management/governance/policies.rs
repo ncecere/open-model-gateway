@@ -451,11 +451,25 @@ async fn get_layer(tx: &mut Transaction<'_, Postgres>, scope: &Scope) -> Result<
     l.budgets = load_budgets(tx, scope).await?;
     Ok(l)
 }
+/// The authority scope a policy layer change affects: admissions of that
+/// scope hold it shared (`governance::locks`), so the change waits for them
+/// and every later admission sees it. Taken before the layer's first write.
+async fn lock_scope(tx: &mut Transaction<'_, Postgres>, scope: &Scope) -> Result<(), ApiError> {
+    use crate::governance::locks;
+    let scope = match scope {
+        Scope::Type(kind) => locks::Scope::of_kind(kind).ok_or_else(invalid)?,
+        Scope::Override(w) | Scope::Local(w) => locks::Scope::Workspace(*w),
+        Scope::Key(_, lineage) => locks::Scope::Lineage(*lineage),
+    };
+    locks::exclusive(tx, [scope]).await?;
+    Ok(())
+}
 async fn put_layer(
     tx: &mut Transaction<'_, Postgres>,
     scope: &Scope,
     l: &Limits,
 ) -> Result<(), ApiError> {
+    lock_scope(tx, scope).await?;
     let sets = "requests_per_minute=excluded.requests_per_minute,tokens_per_minute=excluded.tokens_per_minute,concurrent_requests=excluded.concurrent_requests,concurrent_jobs=excluded.concurrent_jobs";
     // Key layers have no storage column; workspace layers store it like the
     // other limits.
@@ -870,6 +884,7 @@ pub(super) async fn reset_platform_workspace_policy(
 ) -> ApiResult {
     let mut tx = platform_tx(&s, &u, true).await?;
     layers(&mut tx, ws).await?;
+    lock_scope(&mut tx, &Scope::Override(ws)).await?;
     store_budgets(&mut tx, &Scope::Override(ws), &Budgets::new()).await?;
     sqlx::query("DELETE FROM workspace_platform_policy_overrides WHERE workspace_id=$1")
         .bind(ws)

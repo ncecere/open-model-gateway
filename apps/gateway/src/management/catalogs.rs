@@ -56,6 +56,14 @@ pub(super) fn routes() -> Router<Store> {
 }
 // Effective availability is a replacement list, never a union of defaults and overrides.
 const ELIGIBLE: &str = "EXISTS(SELECT 1 FROM catalog_models cm WHERE cm.model_id=m.id AND ((EXISTS(SELECT 1 FROM workspace_catalog_overrides h WHERE h.workspace_id=w.id) AND EXISTS(SELECT 1 FROM workspace_catalog_override_items i WHERE i.workspace_id=w.id AND i.catalog_id=cm.catalog_id)) OR (NOT EXISTS(SELECT 1 FROM workspace_catalog_overrides h WHERE h.workspace_id=w.id) AND EXISTS(SELECT 1 FROM workspace_type_catalogs t WHERE t.kind=w.kind AND t.catalog_id=cm.catalog_id))))";
+/// [`retire`] limited to one workspace, for a change of only that
+/// workspace's grants (under its exclusive authority lock and the lineage
+/// locks of its key allowlists).
+async fn retire_workspace(tx: &mut Transaction<'_, Postgres>, ws: Uuid) -> Result<(), ApiError> {
+    sqlx::query(&format!("DELETE FROM workspace_model_grants g USING workspaces w,models m WHERE g.workspace_id=$1 AND w.id=$1 AND g.model_id=m.id AND g.source='catalog' AND (w.disabled_at IS NOT NULL OR NOT m.enabled OR NOT({ELIGIBLE}))")).bind(ws).execute(&mut **tx).await?;
+    sqlx::query("DELETE FROM key_model_selections s WHERE s.workspace_id=$1 AND NOT workspace_model_allowed(s.workspace_id,s.model_id)").bind(ws).execute(&mut **tx).await?;
+    Ok(())
+}
 /// Called under the exclusive catalog lock or the installation mutation lock.
 /// Delete only ineligible catalog-source grants, retaining independent direct grants.
 /// Selection headers survive so retired key allowlists become deny-all, not inheritance.
@@ -727,11 +735,20 @@ async fn change_model(
         }
     }
     let source = if direct { "direct" } else { "catalog" };
+    // The workspace, then (removal) the lineages whose model allowlists the
+    // workspace-scoped retirement below may shrink.
+    let mut scopes = if add {
+        Vec::new()
+    } else {
+        locks::key_lineages(&mut tx, "governance_key_id IN (SELECT governance_key_id FROM key_model_selections WHERE workspace_id=$1)", Some(ws), None).await?
+    };
+    scopes.push(locks::Scope::Workspace(ws));
+    locks::exclusive(&mut tx, scopes).await?;
     if add {
         sqlx::query("INSERT INTO workspace_model_grants(workspace_id,model_id,source) VALUES($1,$2,$3) ON CONFLICT DO NOTHING").bind(ws).bind(model).bind(source).execute(&mut *tx).await?;
     } else {
         sqlx::query("DELETE FROM workspace_model_grants WHERE workspace_id=$1 AND model_id=$2 AND source=$3").bind(ws).bind(model).bind(source).execute(&mut *tx).await?;
-        retire(&mut tx).await?;
+        retire_workspace(&mut tx, ws).await?;
     }
     audit(
         &mut tx,

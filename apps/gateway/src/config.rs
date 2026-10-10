@@ -23,6 +23,10 @@ pub struct Config {
     /// `GATEWAY_REPORTING_MAX_LAG_SECONDS` (default 30, 1-3600): a replica
     /// replaying WAL further behind than this is skipped for the primary.
     pub reporting_max_lag: Duration,
+    /// `GATEWAY_ADMISSION_MODE` (`scoped`, default, or `global`): scoped
+    /// admission locks, or the former installation row lock as an
+    /// operational rollback for one release (see `governance::locks`).
+    pub admission_mode: crate::governance::locks::AdmissionMode,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -123,6 +127,7 @@ impl Config {
             .filter(|n| (1..=3600).contains(n))
             .map(Duration::from_secs)
             .context("GATEWAY_REPORTING_MAX_LAG_SECONDS must be an integer from 1 to 3600")?;
+        let admission_mode = crate::governance::locks::AdmissionMode::from_env()?;
         Ok(Self {
             database_url,
             listen,
@@ -134,6 +139,7 @@ impl Config {
             database_max_connections,
             reporting_database_url,
             reporting_max_lag,
+            admission_mode,
         })
     }
 

@@ -23,6 +23,8 @@ x-gateway: &gateway
     DATABASE_URL: postgres://gateway_runtime:${OMG_LOADTEST_RUNTIME_PASSWORD:?run scripts/loadtest.py up}@${OMG_LOADTEST_DB_HOST:-pgbouncer}:${OMG_LOADTEST_DB_PORT:-6432}/${OMG_LOADTEST_DB:-omg_loadtest}
     GATEWAY_DATABASE_MAX_CONNECTIONS: ${OMG_LOADTEST_POOL:-10}
     GATEWAY_MAX_CONCURRENT_REQUESTS: ${OMG_LOADTEST_MAX_CONCURRENT:-128}
+    # Scoped admission locks (default) or the former installation row lock.
+    GATEWAY_ADMISSION_MODE: ${OMG_LOADTEST_ADMISSION_MODE:-scoped}
     GATEWAY_LOCAL_UPSTREAMS: '[{"endpoint":"http://mock-upstream:8000/v1","addresses":["${OMG_LOADTEST_SUBNET:-10.213.47}.10"]}]'
     RUST_LOG: ${OMG_LOADTEST_RUST_LOG:-open_model_gateway=info}
   healthcheck:
@@ -89,10 +91,9 @@ services:
       - idle_in_transaction_session_timeout=60s
       - -c
       - autovacuum_naptime=10s
-      # Group commit (synchronous_commit stays on). Measured in P2 with 200 and
-      # 1000 µs: no effect while the installation lock serializes commits
-      # (fewer than commit_siblings commit at once), so the defaults keep
-      # PostgreSQL's own. Retry after scoped admission (P3); see docs/operations.md.
+      # Group commit (synchronous_commit stays on). Measured in P2 (no effect
+      # under the installation lock) and again in P3 with scoped admission;
+      # the defaults keep PostgreSQL's own. See docs/operations.md.
       - -c
       - commit_delay=${OMG_LOADTEST_COMMIT_DELAY:-0}
       - -c

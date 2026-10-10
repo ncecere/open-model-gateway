@@ -43,6 +43,17 @@ async fn start(
         if let Some(sql) = setup {
             sqlx::Executor::execute(&mut *tx, sql).await?;
         }
+        // Test builds audit the scoped lock order (migration 0027): every
+        // gateway transaction that changes an authority scope must take its
+        // exclusive lock up front, in canonical order.
+        #[cfg(any(test, feature = "integration-tests"))]
+        if std::env::var("GATEWAY_SCOPE_LOCK_AUDIT").as_deref() != Ok("off") {
+            sqlx::Executor::execute(
+                &mut *tx,
+                "SELECT set_config('omg.scope_lock_audit','on',true)",
+            )
+            .await?;
+        }
         Ok(tx)
     });
     match task.await {

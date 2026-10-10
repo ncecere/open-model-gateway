@@ -151,6 +151,7 @@ pub struct Metrics {
     reservations: Family<L1, Gauge>,
     alert_runs: Family<L1, Counter>,
     alert_rule_failures: Counter,
+    deadlock_retries: Family<L1, Counter>,
     pool_connections: Family<L1, Gauge>,
     pool_max: Gauge,
     collection_errors: Family<L1, Counter>,
@@ -256,6 +257,7 @@ impl Metrics {
             reservations: Family::default(),
             alert_runs: Family::default(),
             alert_rule_failures: Counter::default(),
+            deadlock_retries: Family::default(),
             pool_connections: Family::default(),
             pool_max: Gauge::default(),
             collection_errors: Family::default(),
@@ -350,6 +352,11 @@ impl Metrics {
             "alert_rule_failures",
             "Individual alert rules that failed during an evaluation",
             metrics.alert_rule_failures.clone(),
+        );
+        registry.register(
+            "lock_deadlock_retries",
+            "Governance transactions re-run after the database aborted them as a deadlock victim (SQLSTATE 40P01), by path",
+            metrics.deadlock_retries.clone(),
         );
         registry.register(
             "db_pool_connections",
@@ -494,6 +501,14 @@ impl Metrics {
     /// Phase timings of one admission transaction (`gateway_admission_seconds`).
     pub(crate) fn observe_admission_phases(&self, timer: PhaseTimer, outcome: &'static str) {
         timer.observe(&self.admission_phases, outcome);
+    }
+
+    /// A governance transaction re-run after a deadlock (`path`: admission,
+    /// settlement or reconciliation).
+    pub(crate) fn observe_deadlock_retry(&self, path: &'static str) {
+        self.deadlock_retries
+            .get_or_create(&[("path", path.to_owned())])
+            .inc();
     }
 
     /// Phase timings of one settlement transaction (`gateway_settlement_seconds`).

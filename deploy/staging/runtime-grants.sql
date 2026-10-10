@@ -240,6 +240,17 @@ GRANT UPDATE(requests,jobs) ON public.inflight_counters TO gateway_runtime;
 GRANT EXECUTE ON FUNCTION public.rate_reserved_tokens(bigint,bigint,bigint,jsonb),
  public.rate_contribution(public.governance_reservations,text,uuid,boolean,text,timestamptz,integer)
  TO gateway_runtime;
+-- Scoped admission (0027): admission/management take transaction advisory
+-- scope locks through these helpers and lock (creating zero rows where
+-- missing) the totals/counter rows they will change; the authority triggers
+-- call the key/lock helpers as the invoking runtime role. No new table or
+-- column privilege.
+GRANT EXECUTE ON FUNCTION public.omg_scope_key(uuid),public.omg_type_key(text),
+ public.omg_scope_lock_audit_order(integer),public.omg_lock_scopes(integer[],integer[],boolean),
+ public.omg_admission_locks(uuid,uuid,uuid),
+ public.omg_lock_scope_rows(uuid[],uuid[],timestamptz[],boolean),
+ public.omg_catalog_lock_mode(),public.omg_scope_lock_exclusive(integer,integer)
+ TO gateway_runtime;
 -- No UPDATE/DELETE/TRUNCATE of immutable prices, ledger or audit; no removal of
 -- users/workspaces/keys/history and no rewrite of immutable admission snapshots.
 COMMIT;

@@ -896,6 +896,8 @@ async fn persist_user(
     if taken {
         return Err(conflict());
     }
+    // Suspension/reactivation below changes this user's authority.
+    lifecycle::lock_users(tx, &[id]).await?;
     if let Some(before) = before {
         if !before.email.eq_ignore_ascii_case(&draft.email) {
             sqlx::query("UPDATE users SET email=$2 WHERE id=$1")
@@ -1168,6 +1170,9 @@ async fn sync_users(
     let mut scope: BTreeSet<String> = managed_values(tx).await?.into_iter().collect();
     scope.extend(extra_scope.iter().cloned());
     let scope: Vec<String> = scope.into_iter().collect();
+    // Grant/membership changes, entitlement loss and key revocation of every
+    // affected user: authority scope locks first, in canonical order.
+    lifecycle::lock_users(tx, &users.iter().copied().collect::<Vec<_>>()).await?;
     for user in users {
         let live: Option<Uuid> = sqlx::query_scalar(
             "SELECT id FROM users WHERE id=$1 AND cleaned_at IS NULL FOR UPDATE",

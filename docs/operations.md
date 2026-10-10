@@ -10,6 +10,7 @@ This covers health checks, metrics and alerting, backups and restore, secret rot
 | `GATEWAY_DATABASE_MAX_CONNECTIONS` | `10` | Database pool size per replica (2 to 500). Size PostgreSQL `max_connections` for every replica plus migrator and backup sessions. |
 | `GATEWAY_REPORTING_DATABASE_URL` | unset (primary) | Optional read-only reporting replica (or a pooler in front of one) for reports, usage and request logs only. See [read snapshots and the reporting replica](#read-snapshots-and-the-reporting-replica). Use the runtime role; set it directly (it has no `_FILE` form). An empty value is refused. |
 | `GATEWAY_REPORTING_MAX_LAG_SECONDS` | `30` | Reporting replica replay lag (1 to 3600 s) beyond which reads use the primary instead. |
+| `GATEWAY_ADMISSION_MODE` | `scoped` | `scoped`: admission and settlement use scoped authority and row locks (0027, [governance](governance.md#scoped-admission-lock-order)). `global`: the former protocol, serializing every admission and settlement on the installation row; an operational rollback kept for one release, needing no schema change. Any other value fails startup. |
 | `GATEWAY_MAX_CONCURRENT_REQUESTS` | `128` (staging: 32) | Per-replica inference concurrency. Requests beyond it get 429 and are counted under `scope="gateway_capacity"`. |
 | `GATEWAY_REQUEST_TIMEOUT_SECONDS` | `120` | Inference deadline. Time spent waiting for admission counts toward it. |
 | `GATEWAY_FILE_STORE` | `off` | Encrypted file store: `off`, `local` or `s3`. See [file storage](file-storage.md) for the backend and encryption-key variables. |
@@ -85,8 +86,9 @@ There are no workspace, key, user, request IDs, or prompt and response data in a
 | `gateway_upstream_time_to_first_token_seconds` | histogram | `provider`, `model` (streams) |
 | `gateway_inference_tokens_total` | counter | `provider`, `model`, `direction` (provider-reported only; unknown usage is not counted as zero) |
 | `gateway_settlements_total` | counter | `outcome`: `settled` (exact cost), `unknown` (hold retained), `held` (finalization failed; the reservation stays pending until reconciliation) |
-| `gateway_admission_seconds` | histogram | `phase`, `outcome`. Wall-clock time of each phase of a durable interactive admission transaction: `queue` (in-process wait for an installation-lock slot), `connect` (pool acquire and `BEGIN`), `price` (shared catalog lock, latest price and reservation bounds, resolved before the installation lock), `locks` (the installation row lock: the lock wait), `read` (live authorization and the deployment check with the admission clock, one statement each), `limits` (policies, budgets with their totals and the rate counters, one statement), `write` (execution, reservation and hold in one statement with trigger fan-out), `commit`, and `total`. Time under the installation lock is `read`+`limits`+`write`+`commit`. `outcome` is `admitted`, `denied` (a limit or budget denial), `rejected` (other refusals such as an unavailable model) or `error` (database failure). Phases after an early return are not observed. Buckets run from 100 µs to about 52 s. Batch-line and realtime-window admissions are not included. |
-| `gateway_settlement_seconds` | histogram | `phase` (`queue`, `connect`, `locks`, `read`, `write`, `commit`, `total`), `outcome` (`settled`, `unknown`, `replay`, `conflict`, `error`). Terminal settlement of an interactive attempt (`finish`); a replay stops after `locks`. |
+| `gateway_admission_seconds` | histogram | `phase`, `outcome`. Wall-clock time of each phase of a durable interactive admission transaction: `queue` (in-process wait for an admission slot), `connect` (pool acquire and `BEGIN`), `locks` (scoped: the shared catalog and authority locks, one statement; global: the installation row lock wait), `price` (global mode only: shared catalog lock and latest price, before the installation lock), `read` (scoped: latest price, live authorization and the deployment check with the admission clock; global: authorization and deployment check), `lock_rows` (scoped: the workspace's and lineage's totals and counter rows, the wait for other admissions of the same workspace), `limits` (policies, budgets with their totals and the rate counters, one statement), `write` (execution, reservation and hold in one statement with trigger fan-out), `commit`, and `total`. Scoped admissions of one workspace serialize from `lock_rows` to `commit`; in the global mode everything from `locks` to `commit` is serialized installation-wide. Settlement phases: `queue`, `connect`, `locks` (its reservation row), `read`, `lock_rows` (its totals rows), `write`, `commit`. `outcome` is `admitted`, `denied` (a limit or budget denial), `rejected` (other refusals such as an unavailable model) or `error` (database failure). Phases after an early return are not observed. Buckets run from 100 µs to about 52 s. Batch-line and realtime-window admissions are not included. |
+| `gateway_settlement_seconds` | histogram | `phase` (`queue`, `connect`, `locks`, `read`, `lock_rows`, `write`, `commit`, `total`), `outcome` (`settled`, `unknown`, `replay`, `conflict`, `error`). Terminal settlement of an interactive attempt (`finish`); a replay stops after `locks`. |
+| `gateway_lock_deadlock_retries_total` | counter | `path` (`admission`, `settlement`, `reconciliation`). Governance transactions re-run after PostgreSQL aborted them as a deadlock victim (SQLSTATE 40P01; at most two re-runs, never of upstream work). The canonical lock order keeps it at 0; a rise means a session changed authority scopes out of order. |
 | `gateway_admission_denials_total` | counter | `code`, `scope` (`workspace`, `api_key`, `policy` for rate/concurrency limits, `gateway_capacity`; `installation` no longer occurs since installation-wide limits were removed in 0026). `code="job_limit_exceeded"` counts video/batch jobs refused by a "Jobs at once" limit, with the scope that refused them. |
 | `gateway_reservations_held` | gauge | `state` (`pending`, `unknown`). Refreshed at scrape time, at most every 15 seconds, with a 2-second query timeout. Summed from the workspace `lifetime` rows of `budget_totals` (one row per workspace, exact), not by counting history. Since 0026 there is no installation-scope row. |
 | `gateway_alert_evaluations_total` | counter | `result` (`ok`, `skipped` when another replica holds the lock, `failed`) |
@@ -113,7 +115,7 @@ How to respond:
 
 - **Held settlements:** these are database or finalization failures. Holds are retained and never refunded as zero. The maintenance loop moves expired leases to `unknown`. Fix database health first, then review unknown usage in the dashboard and resolve it deliberately.
 - **Unknown reservations:** they keep budget holds and can block budgeted admission (`unresolved_usage`). Resolve them; never delete reservations.
-- **Pool saturation or rising latency:** read the [load test](#load-test-baseline) section before raising pool sizes. Compare `histogram_quantile(0.99, sum by (le, phase) (rate(gateway_admission_seconds_bucket{outcome="admitted"}[5m])))` across phases: a large `queue` or `locks` share means requests wait for the installation lock (more replicas or connections will not help); a large `limits` share means per-minute rate accounting or budget reads are slow (see [pg_stat_statements](#finding-slow-queries-and-lock-waits)).
+- **Pool saturation or rising latency:** read the [load test](#load-test-baseline) section before raising pool sizes. Compare `histogram_quantile(0.99, sum by (le, phase) (rate(gateway_admission_seconds_bucket{outcome="admitted"}[5m])))` across phases: a large `lock_rows` share means one workspace is hot (its admissions serialize on its totals rows; split the traffic over workspaces); a large `locks` share means a management change of a scope (or, in the global mode, the installation lock) is held; a large `queue` share means the per-replica admission slots (half the pool) are busy; a large `limits` share means per-minute rate accounting or budget reads are slow (see [pg_stat_statements](#finding-slow-queries-and-lock-waits)).
 
 ## Backups and restore
 
@@ -214,7 +216,7 @@ Neither SCIM nor the management API can remove platform access from the last act
 
 - **SCIM:** deactivation, `DELETE`, and Group changes that would drop the last effective Admin grant are refused whole with `409` (`scimType: "mutability"`). See [SCIM](scim.md#the-last-platform-admin-is-protected).
 - **Manual:** Admin › Users refuses to revoke the last Admin grant or suspend the last Admin, and group mappings that hold it cannot be changed or deleted (`409 Cannot remove the last platform administrator`).
-- Both checks run under the installation lock, so concurrent changes cannot both pass.
+- Both checks run under the installation lock, so concurrent changes cannot both pass. (Scoped admission never takes that lock; it serializes management changes only.)
 
 When SCIM is refused, the gateway writes the audit event `scim.last_admin_protected` and opens the built-in installation alert "SCIM tried to remove the last Platform Admin" (Notifications, Admin › Settings › Alerts › History, and email to Platform Admins when a relay is set up). It means the identity provider wants to remove the only Admin. Grant Admin to a second person (a manual grant, or a mapped Admin group), then let the provider retry or repeat the change. The alert clears at the next evaluation once a second active Platform Admin exists. Keeping two Admins avoids the situation entirely. A sign-in claim that drops the last group-provenance Admin grant is not covered by this check.
 
@@ -449,11 +451,77 @@ Findings:
 
 Upgrading the 2 M-attempt `c43e1ae` database to 0026 in place took 0.9 s; `budget verify` was consistent afterwards (2.73 M buckets, 22 s).
 
+### Scoped admission (P3)
+
+Measured 2026-10-10 on the same laptop and settings after `0027_scoped_admission.sql` ([governance](governance.md#scoped-admission-lock-order)): the combined matrix extended to 500 and 1000/s offered, on an empty and on the 2 M-attempt database. "P3 global mode" is the same image with `GATEWAY_ADMISSION_MODE=global` (the former installation-row protocol), run in the same session as a control; the earlier columns repeat the table above. Pool 10 per replica. 62 of 63 runs passed every ledger invariant and `budget verify`; the exception (2 M, 3 replicas, 2 readers, 500/s) failed closed under overload: 35 settlements hit their deadline (`503 accounting_unavailable`) and 59 reservations stayed pending for lease reconciliation with their holds kept.
+
+| History | Setup | Readers | Offered/s | P0 baseline ok/s · client p99 ms | After P2 (c43e1ae) ok/s · p99 ms | After 0026 ok/s · p99 ms | P3 global mode (same session) ok/s · p99 ms | **P3 scoped** ok/s · p99 ms | P3 vs 0026 |
+|---|---|---|---|---|---|---|---|---|---|
+| empty | 1 replica, PgBouncer | 0 | 60 | 59.9 · 70 | 59.9 · 67 | 59.9 · 65 | – | 59.9 · 67 | +0% |
+| empty | 1 replica, PgBouncer | 0 | 250 | 79.6 · 2,070 | 203.2 · 715 | 237.5 · 635 | 236.3 · 646 | 249.6 · 63 | +5% |
+| empty | 1 replica, PgBouncer | 0 | 500 | – | – | – | 241.3 · 597 | 493.6 · 184 | – |
+| empty | 1 replica, PgBouncer | 0 | 1000 | – | – | – | – | 714.6 · 210 | – |
+| empty | 1 replica, PgBouncer | 2 | 60 | – | 59.8 · 67 | 59.8 · 64 | – | 59.8 · 67 | +0% |
+| empty | 1 replica, PgBouncer | 2 | 250 | – | 204.5 · 728 | 233.3 · 1,038 | – | 247.9 · 64 | +6% |
+| empty | 1 replica, PgBouncer | 2 | 500 | – | – | – | – | 489.7 · 71 | – |
+| empty | 1 replica, direct | 0 | 60 | 59.9 · 69 | 59.9 · 66 | 59.9 · 65 | – | 59.9 · 66 | +0% |
+| empty | 1 replica, direct | 0 | 250 | 99.1 · 1,783 | 228.5 · 1,068 | 249.2 · 177 | – | 249.7 · 61 | +0% |
+| empty | 1 replica, direct | 0 | 500 | – | – | – | – | 499.3 · 62 | – |
+| empty | 1 replica, direct | 0 | 1000 | – | – | – | – | 876.6 · 168 | – |
+| empty | 3 replicas, PgBouncer | 0 | 60 | 59.9 · 481 | 59.9 · 67 | 59.9 · 67 | – | 59.9 · 67 | +0% |
+| empty | 3 replicas, PgBouncer | 0 | 250 | 83.0 · 6,098 | 191.4 · 2,170 | 231.2 · 1,764 | 216.0 · 1,797 | 249.6 · 583 | +8% |
+| empty | 3 replicas, PgBouncer | 0 | 500 | – | – | – | 220.8 · 1,833 | 499.3 · 65 | – |
+| empty | 3 replicas, PgBouncer | 0 | 1000 | – | – | – | – | 991.7 · 432 | – |
+| empty | 3 replicas, PgBouncer | 2 | 60 | – | 59.4 · 67 | 58.9 · 66 | – | 57.6 · 419 | -2% |
+| empty | 3 replicas, PgBouncer | 2 | 250 | – | 184.3 · 2,171 | 214.1 · 1,952 | – | 238.8 · 860 | +12% |
+| empty | 3 replicas, PgBouncer | 2 | 500 | – | – | – | – | 474.3 · 895 | – |
+| 2 M | 1 replica, PgBouncer | 0 | 60 | 59.9 · 163 | 59.9 · 67 | 59.9 · 67 | – | 59.9 · 67 | +0% |
+| 2 M | 1 replica, PgBouncer | 0 | 250 | 63.5 · 2,886 | 193.4 · 723 | 222.1 · 625 | 208.6 · 661 | 249.6 · 63 | +12% |
+| 2 M | 1 replica, PgBouncer | 0 | 500 | – | – | – | 217.2 · 661 | 499.3 · 66 | – |
+| 2 M | 1 replica, PgBouncer | 0 | 1000 | – | – | – | – | 696.6 · 214 | – |
+| 2 M | 1 replica, PgBouncer | 2 | 60 | 2.3 · 40,316 | 58.3 · 144 | 59.1 · 112 | – | 59.3 · 182 | +0% |
+| 2 M | 1 replica, PgBouncer | 2 | 250 | 2.2 · 42,296 | 158.9 · 1,042 | 191.4 · 921 | – | 241.9 · 316 | +26% |
+| 2 M | 1 replica, PgBouncer | 2 | 500 | – | – | – | – | 453.8 · 448 | – |
+| 2 M | 1 replica, direct | 0 | 60 | 59.9 · 86 | 59.9 · 65 | 59.9 · 65 | – | 59.9 · 66 | +0% |
+| 2 M | 1 replica, direct | 0 | 250 | 86.1 · 2,433 | 215.7 · 636 | 245.8 · 309 | – | 249.6 · 317 | +2% |
+| 2 M | 1 replica, direct | 0 | 500 | – | – | – | – | 499.3 · 64 | – |
+| 2 M | 1 replica, direct | 0 | 1000 | – | – | – | – | 835.7 · 185 | – |
+| 2 M | 3 replicas, PgBouncer | 0 | 60 | 59.9 · 568 | 59.9 · 254 | 59.9 · 65 | – | 59.9 · 67 | +0% |
+| 2 M | 3 replicas, PgBouncer | 0 | 250 | 67.9 · 7,364 | 182.1 · 2,075 | 202.9 · 1,916 | 196.2 · 2,045 | 249.6 · 64 | +23% |
+| 2 M | 3 replicas, PgBouncer | 0 | 500 | – | – | – | 192.0 · 2,080 | 499.3 · 74 | – |
+| 2 M | 3 replicas, PgBouncer | 0 | 1000 | – | – | – | – | 962.9 · 527 | – |
+| 2 M | 3 replicas, PgBouncer | 2 | 60 | 8.4 · 41,169 | 58.1 · 191 | 58.3 · 172 | – | 54.0 · 942 | -7% |
+| 2 M | 3 replicas, PgBouncer | 2 | 250 | 6.4 · 41,047 | 143.1 · 2,848 | 156.6 · 2,968 | – | 239.8 · 1,562 | +53% |
+| 2 M | 3 replicas, PgBouncer | 2 | 500 | – | – | – | – | 393.2 · 5,173 ✗ | – |
+
+Follow-up with the final per-replica gates (settlement may use 3/10 of the pool; the matrix above used a quarter):
+
+| History | Setup | Pool | Offered/s | ok/s · client p99 ms |
+|---|---|---|---|---|
+| empty | 1 replica, PgBouncer | 10 | 1000 | 813.8 · 190 |
+| empty | 1 replica, direct | 10 | 1000 | 995.3 · 143 |
+| empty | 3 replicas, PgBouncer | 10 | 1000 | 998.4 · 131 |
+| empty | 1 replica, PgBouncer | 20 | 1000 | 991.1 · 154 |
+| empty | 3 replicas, PgBouncer | 20 | 1500 | 1,080.4 · 434 |
+| 2 M | 3 replicas, PgBouncer | 20 | 1500 | 1,044.2 · 437 |
+| 2 M | 3 replicas, PgBouncer, 2 readers | 10 | 250 | 247.3 · 203 (global mode: 172.5 · 2,449) |
+
+Hot scopes (empty, scoped): one shared workspace with 2,000 keys served 249.6/s at 250 and 206.3/s at 500 offered on one replica (248.7 and 231.0/s on three); one key 249.4/s at 250. Global mode on the hot workspace: 240.9/s. Group commit (`commit_delay=200` µs) changed nothing measurable (3 replicas at 1000/s: 994.4 vs 991.7/s).
+
+Findings:
+
+1. **No installation-wide serializer: three replicas now beat one.** In the same session the global mode stays at 236–241/s (empty) and 209–217/s (2 M) however much is offered; scoped admission serves 494–499/s at 500/s with client p99 66–184 ms, and three replicas 998/s at 1000/s (one replica 814/s). The ceiling on this laptop is now **about 1,050–1,080 ok/s**, about 4.4× the previous 231–250/s and above decision gate D1 (400/s). At that point PostgreSQL used 7.5 of the VM's 12 vCPUs (shared with PgBouncer, three gateways, the mock and the generator) and PgBouncer 82 % of its single core: the machine is the limit, not a lock.
+2. **Per replica, the pool is now the limit.** Admission may use half of `GATEWAY_DATABASE_MAX_CONNECTIONS` and settlement three tenths. At pool 10 one replica tops out near 800–1000/s; at pool 20 it served 991/s. Unlike under the installation lock, raising the pool now raises throughput (size PgBouncer and `max_connections` accordingly).
+3. **Below saturation, admission costs the same** (mean 3.5–3.9 ms; one extra round trip that locks the workspace's totals and counter rows, about 0.5 ms), and the locks are uncontended (authority locks p99 0.4 ms, row locks p99 1.1–1.6 ms).
+4. **One workspace (or key) tops out around 210–250/s.** Its totals rows serialize its admissions and settlements, as the scale design predicted for unsharded scopes; spread very hot service traffic over several workspaces. Per-scope sharding (scale plan P3b) would lift it.
+5. **Group commit:** no effect on local NVMe; keep the defaults unless commit latency is high (network storage, synchronous standby).
+6. **Report readers** no longer cost inference throughput (1 replica, 2 M, 250/s: 241.9/s; 191.4/s after 0026). One main-matrix series with three replicas and readers on 2 M slowed every statement (a plain ledger insert 0.12 → 4.85 ms) while the report scans ran — machine-wide CPU/IO contention, not lock waits; its rerun was clean (above). Put report scans on a [reporting replica](#read-snapshots-and-the-reporting-replica).
+
 ## PostgreSQL settings for hot rows and group commit
 
 - **Hot rows.** `budget_totals`, `rate_minute_counters` and `inflight_counters` are updated on every admission and settlement. Only their primary keys are indexed, and no indexed column is ever updated, so updates stay HOT (in-page) when there is free space: `budget_totals` uses `fillfactor=50`, the counter tables `fillfactor=70`. The migrations set threshold-driven autovacuum on all three (`autovacuum_vacuum_scale_factor=0`, `autovacuum_vacuum_threshold=1000`, `autovacuum_vacuum_cost_limit=2000`, `autovacuum_vacuum_cost_delay=1`), so vacuum frequency does not shrink as the tables grow. HOT pruning needs the global xmin to advance: avoid long transactions on the primary (run `budget verify` and reports on a replica where possible). Watch `n_tup_hot_upd`/`n_tup_upd` and `n_dead_tup` in `pg_stat_user_tables` for these tables.
 - **Minute counters** older than ten minutes are pruned every minute by `serve` (any replica; concurrent pruners skip each other's rows).
-- **Group commit.** Keep `synchronous_commit=on`: every upstream attempt needs a durable reservation. `commit_delay` (with `commit_siblings`) lets concurrent commits share one WAL flush, but only helps when at least `commit_siblings` transactions commit at once. Under the installation lock that never happens, so leave the defaults (`commit_delay=0`, `commit_siblings=5`) for now. Once admissions no longer serialize (P3), start at `commit_delay=200`–`1000` µs with `commit_siblings=5` on storage with slow flushes (network disks, synchronous replicas) and keep it only if commit latency p99 and throughput improve. The load-test stack exposes both as `OMG_LOADTEST_COMMIT_DELAY` and `OMG_LOADTEST_COMMIT_SIBLINGS`.
+- **Group commit.** Keep `synchronous_commit=on`: every upstream attempt needs a durable reservation. `commit_delay` (with `commit_siblings`) lets concurrent commits share one WAL flush, but only helps when at least `commit_siblings` transactions commit at once. Under the installation lock that never happened. With scoped admission many transactions commit at once; see the [P3 results](#scoped-admission-p3) for the measured effect before changing the defaults (`commit_delay=0`, `commit_siblings=5`). On storage with slow flushes (network disks, synchronous replicas) start at `commit_delay=200`–`1000` µs with `commit_siblings=5` and keep it only if commit latency p99 and throughput improve. The load-test stack exposes both as `OMG_LOADTEST_COMMIT_DELAY` and `OMG_LOADTEST_COMMIT_SIBLINGS`.
 
 ## PgBouncer
 
@@ -463,7 +531,7 @@ Use transaction pooling with PgBouncer **1.21 or later and `max_prepared_stateme
 - Add `ignore_startup_parameters = extra_float_digits`; sqlx sends it at connect time.
 - Run `migrate` directly against PostgreSQL, never through PgBouncer. It takes a session-level advisory lock.
 - Everything the gateway does inside transactions works in transaction mode: transaction-scoped advisory locks, `SET LOCAL`, and `SET TRANSACTION ISOLATION LEVEL`.
-- Size `default_pool_size` for the sum of replica pools that are actually busy, not their maximum. Today the installation lock keeps only a few transactions active at a time.
+- Size `default_pool_size` for the sum of replica pools that are actually busy, not their maximum. With scoped admission, busy server connections ≈ (admissions + settlements per second) × mean transaction time; each replica admits on at most half its pool and settles on three tenths of it.
 
 ## Finding slow queries and lock waits
 
@@ -492,7 +560,9 @@ ORDER BY total_exec_time DESC LIMIT 20;
 
 What to look for in the gateway's statements:
 
-- `SELECT id FROM installation WHERE singleton FOR NO KEY UPDATE`: its total time is time spent **waiting** for the installation lock, not work. When it dominates, the database is idle behind one serializer.
+- `SELECT omg_lock_scope_rows(…)`: scoped admission and settlement locking their workspace's totals and counter rows; its time is mostly **waiting** for other transactions of the same workspace (a hot workspace).
+- `SELECT lineage,kind FROM omg_admission_locks(…)`: the shared catalog and authority locks; it waits only behind a management change of the same scope or an exclusive catalog change.
+- `SELECT id FROM installation WHERE singleton FOR NO KEY UPDATE`: global admission mode and management only; its total time is time spent **waiting** for the installation lock. When it dominates in the global mode, the database is idle behind one serializer.
 - `WITH accounting AS (…)`: per-minute rate accounting by scan. Since 0026 admission never runs it (the installation layer, its last user, was removed); workspace and key layers read `rate_minute_counters`/`inflight_counters` inside the single `WITH pol AS MATERIALIZED …` limits statement.
 - `INSERT INTO rate_minute_counters …`/`inflight_counters …` (non-top-level): rate-counter trigger fan-out, two scopes per write.
 - `INSERT INTO budget_totals …` (non-top-level): trigger fan-out, workspace and key scopes (8 rows: 2 scopes × 4 periods) per reservation or execution write; no installation row since 0026.
@@ -516,7 +586,7 @@ SELECT locktype, mode, count(*) FROM pg_locks l JOIN pg_database d ON d.oid = l.
 WHERE d.datname = current_database() AND NOT l.granted GROUP BY 1, 2;
 ```
 
-Under overload these show a convoy on the installation row: one session waiting on `transactionid` and the rest on `tuple` `ExclusiveLock`, each blocked by the sessions ahead of it. For a history of waits, set `log_lock_waits = on` (with `deadlock_timeout`, default 1 s, as the threshold) and read the server log. Use the gateway's `gateway_admission_seconds{phase="locks"}` for the client-side view.
+In the global mode, overload shows a convoy on the installation row: one session waiting on `transactionid` and the rest on `tuple` `ExclusiveLock`, each blocked by the sessions ahead of it. With scoped admission, waits are per workspace (`tuple`/`transactionid` on `budget_totals` rows) or, briefly, `advisory` behind a management change; a deadlock is reported in the server log and counted in `gateway_lock_deadlock_retries_total`. For a history of waits, set `log_lock_waits = on` (with `deadlock_timeout`, default 1 s, as the threshold) and read the server log. Use the gateway's `gateway_admission_seconds{phase="locks"}` for the client-side view.
 
 ## Budget totals verification
 

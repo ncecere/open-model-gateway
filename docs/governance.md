@@ -2,7 +2,7 @@
 
 ## Admission boundary
 
-PostgreSQL is the durable source of truth across replicas. Catalog advisory locks precede the singleton installation row lock. Every actual upstream attempt receives a unique execution/reservation and `root_request_id`/`attempt_number` (1–3). Planning or a denied admission consumes no quota. Fallbacks require another admission and can incur another charge.
+PostgreSQL is the durable source of truth across replicas. Admission and settlement follow the [scoped lock order](#scoped-admission-lock-order) (0027): the catalog advisory lock, then authority locks of the key's workspace type, workspace, user and key lineage, then the reservation and totals rows. They no longer take the installation row lock. Every actual upstream attempt receives a unique execution/reservation and `root_request_id`/`attempt_number` (1–3). Planning or a denied admission consumes no quota. Fallbacks require another admission and can incur another charge.
 
 Admission revalidates the key, live human entitlement/membership or shared service account, enabled workspace/model/target, live catalog/direct grant and immutable key restriction lineage. The cached target's upstream model, endpoint, credential reference, region and protocol metadata must still match. Stale authorization/configuration fails before dispatch. Already-admitted work may finish after revocation.
 
@@ -21,7 +21,7 @@ Requests/tokens use fixed UTC minutes, sampled from database wall-clock **after 
 - **Realtime:** a session still counts as one request against requests per minute and requests at once.
 - **Denial:** `job_limit_exceeded` (HTTP 429, retryable). It ranks below budget/accounting denials and above other rate limits.
 
-The count is taken in the same admission transaction, after the catalog and installation locks, from the current minute and live leases only, so concurrent submissions cannot both take the last slot and the cost does not grow with history.
+The count is taken in the same admission transaction, after the scope locks and with the workspace's and lineage's counter rows held, from the current minute and live leases only, so concurrent submissions cannot both take the last slot and the cost does not grow with history.
 
 ### Storage
 
@@ -68,8 +68,61 @@ Tighten-only local/key rules are per period: a child budget for period P may not
 - **Configuration.** `installation_policy` is dropped and `policy_budgets` refuses `layer='installation'`. The values that were set are recorded once in the audit log (`policy.installation_removed`, with rates and budgets).
 - **Totals.** `budget_totals` keeps only the `workspace` and `key` scopes, and the trigger no longer touches an installation row. The former installation rows were derived data (trigger-maintained sums that `budget verify` recomputes from history) and each equalled the sum of the workspace rows of the same window exactly, so the migration deleted them instead of leaving them stale. Installation-wide spend is now that sum (partial index `budget_totals_installation_spend`). Reservations, executions, the ledger, prices and audit events are not touched.
 - **Visibility.** An installation **spend** alert (`spend_threshold`, see [alerts](alerts.md)) reports total spend against an amount you choose. It never blocks anything. The migration converts installation budget alert rules to it, keeping thresholds and recipients.
-- **Locks.** Admission and settlement still take the shared catalog lock and then the installation row lock. That row lock no longer protects any limit data: it serializes admission with authorization, membership and policy changes made by management (which take the same row lock) until scale plan P3 replaces it with scoped locks.
+- **Locks.** Since 0026 the installation row lock protected no limit data, only the serialization of admission with authorization, membership and policy changes. Scoped admission (0027, next section) replaced it in admission and settlement.
 - **API.** `GET/PUT /platform/installation/policy` answer `410` with `reason:"installation_limits_removed"` (see [governance API](governance-api.md)).
+
+### Scoped admission lock order
+
+`0027_scoped_admission.sql` (scale plan P3) removes the installation row lock from admission and settlement. Admissions of different workspaces no longer wait for each other; admissions of one workspace serialize on that workspace's totals and counter rows, so budgets stay exact. Every transaction takes a subset of these locks, always in this order, which makes the protocol deadlock-free:
+
+1. **Catalog advisory lock** `72419502`: shared in admission and ordinary management, exclusive for global catalog changes (unchanged).
+2. **Installation row** (`FOR NO KEY UPDATE`): management only, for management-versus-management serialization such as last-admin checks, SCIM and sign-in grants. Scoped admission and settlement never take it.
+3. **Authority advisory locks**, transaction-scoped, in the two-int key space `(class, key)`: workspace type `72419510` (key 1 personal, 2 team, 3 project), workspace `72419511`, user `72419512`, key lineage `72419513`. The key of a uuid scope is its first 32 bits (`omg_scope_key`). Within a class, keys are ascending. Admission takes the key's type, workspace, issuing user (human keys) and lineage **shared** in one call (`omg_admission_locks`). A management change that can affect admission takes the matching locks **exclusively** (`governance::locks::exclusive`). A key collision only serializes two unrelated scopes.
+4. **An existing reservation row** (`FOR UPDATE`): settlement, lease reconciliation, realtime windows, batch envelopes, usage resolution.
+5. **Totals and counter rows the write will change**, each table in primary-key order: `budget_totals`, then `rate_minute_counters`, then `inflight_counters` (`omg_lock_scope_rows`, which creates missing rows as zeros; zeros equal missing rows for every reader and for `budget verify`). The 0015/0024 triggers then only touch rows already held, in the same order.
+6. **New rows** (execution, reservation, ledger).
+
+Admission therefore runs: shared catalog and authority locks → latest price → live revalidation **without row locks** → deployment and entitlement check **without row locks** (the catalog lock fences catalog writers) → lock the workspace's and lineage's totals and counter rows at the admission instant → read policies, budgets, totals and counters → write → commit. The authority locks replace the former `FOR SHARE` row locks on keys, workspaces, users, grants, service accounts, deployments, providers and models, so the hot path creates no MultiXacts. A revocation or limit change takes its scope lock exclusively: it waits for admissions already holding the lock (they were admitted before it and may finish) and every later admission sees it. Settlement locks its reservation row and then the totals rows of its admission buckets, with no advisory lock.
+
+**Deadlock retry.** Gateway transactions cannot deadlock with each other, but a hand-written session that changes several scopes out of order could. A governance transaction the database aborts as a deadlock victim (SQLSTATE `40P01` only) is re-run at most twice (`gateway_lock_deadlock_retries_total{path}`). The failed attempt rolled back entirely; admission runs before dispatch and settlement after upstream work ended, so no upstream work is ever repeated.
+
+**Backstop triggers.** Authority triggers (0027) take the exclusive scope lock on every row change admission depends on, so no code path can forget it: management, SCIM, sign-in, lifecycle cleanup, the CLI or a manual SQL session. Statement triggers take the exclusive catalog lock on catalog writes. The gateway takes the same locks up front, in canonical order, before its first write. When `omg.scope_lock_audit` is on (the test suite sets it on every transaction), a transaction holding the catalog lock *shared* fails if it reaches such a write without having taken the lock up front, or if it requests scope locks out of canonical order. Transactions holding the catalog lock exclusively already exclude every admission.
+
+**Rollback.** `GATEWAY_ADMISSION_MODE=global` (one release) restores the former protocol: admission and settlement take the shared catalog lock and the installation row, revalidation keeps its `FOR SHARE` row locks, and management keeps taking the installation row. Both modes run the same schema, and the test suite runs under both. Invalid values fail startup.
+
+#### Authority change sites
+
+Every management change that can affect an admission decision, and the locks it takes. All rows also hold the installation row (management serialization) after the catalog lock.
+
+| Site | Change | Locks (exclusive unless noted) |
+|---|---|---|
+| `management/keys.rs` `update_key` | Disable or enable a key | Key lineage |
+| `management/keys.rs` `revoke_key` | Revoke a key | Key lineage |
+| `management/keys.rs` `rotate_key` | Rotate (new key in the lineage, old one revoked) | Key lineage |
+| `management/keys.rs` `create_key` | Model allowlist and initial key limits of a new lineage | Key lineage (new) |
+| `management/keys.rs` `update_account` | Service account disable (its keys revoked) or enable | Workspace, then the lineages of the account's keys |
+| `management/members.rs` `set_member` (add, role change, platform add) and `accept_invite` | Manual grant replaced | User |
+| `management/members.rs` `unset_member` (remove, platform remove) | Membership revoked, the member's keys in the workspace revoked | User, then the lineages of the member's keys there |
+| `management/governance/policies.rs` `put_type_policy` | Workspace-type default limits and budgets (every workspace of the type) | Workspace type |
+| `management/governance/policies.rs` `put_platform_workspace_policy`, `reset_platform_workspace_policy` | Platform per-workspace override and its budgets | Workspace |
+| `management/governance/policies.rs` `put_workspace_policy` | Tighten-only local limits and budgets | Workspace |
+| `management/governance/policies.rs` `put_key_policy`, `store_initial_key_limits` | Key lineage limits and budgets | Key lineage |
+| `management/catalogs.rs` `change_model` (select, deselect, direct grant, revoke direct) | Workspace model grants; removal retires that workspace's ineligible grants and key allowlist entries | Workspace, then (removal) the lineages with model allowlists in it |
+| `management/catalogs.rs` catalogs, catalog models, model catalogs, type catalogs, catalog defaults, workspace catalog overrides | Global or type-wide entitlement | Catalog lock exclusive (`catalog_tx(write)`) |
+| `management/resources.rs` providers, models, deployments; `management/governance/prices.rs` prices and routing; `management/setup.rs`; `management/batch_scheduling.rs` | Global catalog, routes, prices | Catalog lock exclusive |
+| `management/directory.rs` workspaces (create, disable, cost center), users (create, suspend, reactivate), platform role grant/revoke, entitlement-loss deactivation, group mappings, cost centers | Platform directory | Catalog lock exclusive (last-admin checks under the installation row) |
+| `lifecycle.rs` `cleanup_inactive_accounts` | Cleanup of suspended accounts (keys, grants, memberships revoked, personal workspace disabled) | `lock_users`: personal workspaces, users, lineages of their keys |
+| `identity.rs` `resolve_identity_with` | Sign-in: group grants, entitlement loss, cleanup, account rebinding | `lock_users` for the linked account, the email's account and the id a new account gets |
+| `scim.rs` `persist_user` (create, replace, patch, delete user) | SCIM suspension or reactivation | `lock_users` for that user (last-admin check under the installation row) |
+| `scim.rs` `sync_users` (group create, replace, patch, delete) | SCIM group grants, entitlement loss | `lock_users` for every affected user |
+| `bootstrap.rs` `seed`, `demo.rs` | Development seed, demo | Catalog lock exclusive |
+| `governance.rs` `resolve_usage` | Evidence-backed usage reconciliation | Shared workspace and actor-user locks, then the reservation row and its totals rows |
+
+Changes that cannot affect admission take no scope lock: settings, branding, alerts, invitations (an invitation authorizes nothing until accepted), file and batch management, cost center renames (the name is snapshotted at admission; either value is a valid order). Grants and insertions that only widen access (new keys, new grants) need no lock: a racing admission simply ran before them.
+
+Backstop triggers (`omg_authority_*`, `omg_catalog_*`): `users` (disable, cleanup), `platform_role_grants` and `workspace_membership_grants` (revoke, role or owner change, delete) → user; `workspaces` (disable, owner, cost center) and `service_accounts` (disable) → workspace; `api_keys` (revoke, disable, expiry) → lineage; `key_model_restrictions`, `key_model_selections`, `key_policies` → lineage; `policy_budgets` → by layer (type, workspace or lineage); `workspace_platform_policy_overrides`, `workspace_local_policies`, `workspace_catalog_overrides`, `workspace_catalog_override_items`, `workspace_model_grants` → workspace; `workspace_type_policies` (rate, concurrency, jobs) and `workspace_type_catalogs` → type; `catalogs`, `catalog_models`, `models`, `deployments`, `provider_connections`, `deployment_prices` → catalog exclusive.
+
+**Semantics kept.** Revocation is live for new work: no admission commits after the revocation commits, and already-admitted work may finish and settle. Budgets are never overspent at admission. Unknown cost keeps its hold. Amounts stay exact integer micro-USD. Lease extension of an async job takes only its reservation row (a lease change touches no totals or counter row; an admission that already counted the lease as expired is ordered before the extension).
 
 ## Bounds and prices
 

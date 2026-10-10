@@ -916,20 +916,25 @@ mod db {
             "financial report under a held installation lock: {}ms",
             started.elapsed().as_millis()
         );
-        // ...while admission still serializes on it (unchanged by P1).
+        // ...and scoped admission (P3) never takes it either; the global
+        // admission mode (operational rollback) still serializes on it.
         let second = f.start();
         let admission = crate::governance::admit(&f.store, &second, &req, 30);
         tokio::pin!(admission);
-        assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(100), &mut admission)
-                .await
-                .is_err()
+        let first =
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut admission).await;
+        assert_eq!(
+            first.is_err(),
+            f.store.admission_mode() == crate::governance::locks::AdmissionMode::Global
         );
         blocker.commit().await.unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(2), &mut admission)
-            .await
-            .unwrap()
-            .unwrap();
+        match first {
+            Ok(result) => result.unwrap(),
+            Err(_) => tokio::time::timeout(std::time::Duration::from_secs(2), &mut admission)
+                .await
+                .unwrap()
+                .unwrap(),
+        }
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT count(*) FROM governance_reservations")
                 .fetch_one(&f.store.pool)

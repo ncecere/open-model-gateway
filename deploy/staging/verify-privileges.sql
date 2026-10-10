@@ -37,6 +37,9 @@ DO $$ DECLARE r record; t text; BEGIN
  IF has_table_privilege('gateway_runtime','public.inflight_counters','DELETE') THEN RAISE EXCEPTION 'in-flight counters removable'; END IF;
  IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'rate_counters_%' AND tgenabled='O' AND NOT tgisinternal)<>8
   OR NOT EXISTS(SELECT FROM pg_trigger WHERE tgname='rate_minute_counters_retained' AND tgenabled='O') THEN RAISE EXCEPTION 'rate counter triggers missing or disabled'; END IF;
+ -- Scoped admission (0027): authority and catalog triggers present and enabled.
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'omg_authority_%' AND tgenabled='O' AND NOT tgisinternal)<>17
+  OR (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'omg_catalog_%' AND tgenabled='O' AND NOT tgisinternal)<>6 THEN RAISE EXCEPTION 'scope lock triggers missing or disabled'; END IF;
  -- Realtime (0017): response rows are append-then-settle-once; identity and holds fixed.
  IF has_table_privilege('gateway_runtime','public.realtime_responses','DELETE,TRUNCATE') THEN RAISE EXCEPTION 'realtime responses removable'; END IF;
  FOREACH t IN ARRAY ARRAY['execution_id','sequence','window_hold_microusd','created_at'] LOOP
@@ -118,7 +121,7 @@ DO $$ DECLARE r record; t text; BEGIN
   IF has_column_privilege('gateway_runtime','public.batch_route_waits',t,'UPDATE') THEN RAISE EXCEPTION 'mutable batch demand identity: %',t; END IF;
  END LOOP;
  IF has_table_privilege('gateway_runtime','public.batch_route_waits','TRUNCATE') THEN RAISE EXCEPTION 'batch demand truncatable'; END IF;
- IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units','valid_model_protocols_base','valid_cost_components_base','valid_price_lines_base','valid_upstream_job_id','rate_reserved_tokens','rate_contribution')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
+ IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units','valid_model_protocols_base','valid_cost_components_base','valid_price_lines_base','valid_upstream_job_id','rate_reserved_tokens','rate_contribution','omg_scope_key','omg_type_key','omg_scope_lock_audit_order','omg_lock_scopes','omg_admission_locks','omg_lock_scope_rows','omg_catalog_lock_mode','omg_scope_lock_exclusive')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
 END $$;
 BEGIN;
 SET LOCAL ROLE gateway_runtime;
@@ -216,6 +219,12 @@ BEGIN
  -- No installation scope (0026): no request writes a global totals row; installation spend sums workspace rows.
  IF EXISTS(SELECT FROM budget_totals WHERE scope_kind NOT IN ('workspace','key')) THEN RAISE EXCEPTION 'installation totals scope maintained'; END IF;
  PERFORM coalesce(sum(t.settled_microusd+t.held_microusd-t.held_unknown_microusd),0),coalesce(sum(t.unknown+t.unresolved-t.unresolved_unknown),0) FROM budget_totals t WHERE t.scope_kind='workspace' AND t.period='month' AND t.period_start=date_trunc('month',now(),'UTC');
+ -- Scoped admission (0027): the runtime takes admission's shared scope locks,
+ -- locks (creating) totals/counter rows, and management's exclusive scope locks.
+ PERFORM * FROM omg_admission_locks(ws,NULL,k);
+ PERFORM omg_lock_scope_rows(ARRAY[ws],ARRAY[k],ARRAY[now()],true);
+ PERFORM omg_lock_scopes(ARRAY[72419511,72419513],ARRAY[omg_scope_key(ws),omg_scope_key(k)],true);
+ IF (SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND pid=pg_backend_pid() AND objsubid=2 AND classid::bigint BETWEEN 72419510 AND 72419513)<3 THEN RAISE EXCEPTION 'scope locks not taken'; END IF;
  -- Rate counters (0024): the same writes maintained them; unknown released the in-flight slot.
  IF (SELECT (requests,unreserved,tokens)::text FROM rate_minute_counters WHERE minute_start=date_trunc('minute',now(),'UTC') AND scope_kind='key' AND scope_id=k)<>'(1,0,110)'
   OR (SELECT requests FROM inflight_counters WHERE scope_kind='key' AND scope_id=k)<>0 THEN RAISE EXCEPTION 'rate counters not maintained'; END IF;

@@ -71,13 +71,14 @@ pub struct BatchHold {
 /// The deployment of `id` serving `model` to this workspace/key right now
 /// (live catalog, key restrictions, enabled route and connection).
 async fn current_deployment(
+    store: &Store,
     tx: &mut Tx<'_>,
     workspace: Uuid,
     lineage: Uuid,
     id: Uuid,
     model: &str,
 ) -> Result<Deployment, InferenceError> {
-    sqlx::query_as::<_,Deployment>("SELECT d.id,p.provider,d.upstream_model,p.credential_ref,p.endpoint,p.region,m.supported_protocols FROM deployments d JOIN provider_connections p ON p.id=d.provider_connection_id JOIN models m ON m.id=d.model_id WHERE d.id=$2 AND m.public_name=$3 AND workspace_model_allowed($1,m.id) AND d.enabled AND p.enabled AND (NOT EXISTS(SELECT 1 FROM key_model_restrictions WHERE workspace_id=$1 AND governance_key_id=$4) OR EXISTS(SELECT 1 FROM key_model_selections WHERE workspace_id=$1 AND governance_key_id=$4 AND model_id=m.id)) FOR SHARE OF d,p,m")
+    sqlx::query_as::<_,Deployment>(&format!("SELECT d.id,p.provider,d.upstream_model,p.credential_ref,p.endpoint,p.region,m.supported_protocols FROM deployments d JOIN provider_connections p ON p.id=d.provider_connection_id JOIN models m ON m.id=d.model_id WHERE d.id=$2 AND m.public_name=$3 AND workspace_model_allowed($1,m.id) AND d.enabled AND p.enabled AND (NOT EXISTS(SELECT 1 FROM key_model_restrictions WHERE workspace_id=$1 AND governance_key_id=$4) OR EXISTS(SELECT 1 FROM key_model_selections WHERE workspace_id=$1 AND governance_key_id=$4 AND model_id=m.id)){}", catalog_share(store)))
         .bind(workspace).bind(id).bind(model).bind(lineage).fetch_optional(&mut **tx).await.map_err(storage)?.ok_or(InferenceError::ModelUnavailable)
 }
 fn same_target(current: &Deployment, expected: &Deployment) -> bool {
@@ -88,13 +89,6 @@ fn same_target(current: &Deployment, expected: &Deployment) -> bool {
         && current.endpoint == expected.endpoint
         && current.region == expected.region
         && current.supported_protocols == expected.supported_protocols
-}
-async fn latest_price(tx: &mut Tx<'_>, deployment: Uuid) -> Result<Option<Price>, InferenceError> {
-    sqlx::query_as::<_, Price>(&format!("SELECT {PRICE_COLUMNS} FROM deployment_prices WHERE deployment_id=$1 ORDER BY created_at DESC,id DESC LIMIT 1"))
-        .bind(deployment)
-        .fetch_optional(&mut **tx)
-        .await
-        .map_err(storage)
 }
 fn checked(a: i64, b: i64) -> Result<i64, InferenceError> {
     a.checked_add(b).ok_or(InferenceError::Configuration)
@@ -197,7 +191,10 @@ pub async fn admit_batch(
     native: bool,
     lease_seconds: i64,
 ) -> Result<BatchHold, InferenceError> {
-    let result = admit_batch_unobserved(store, record, groups, native, lease_seconds).await;
+    let result = locks::retry_deadlocks!(
+        "admission",
+        admit_batch_unobserved(store, record, groups, native, lease_seconds).await
+    );
     crate::metrics::observe_admission(&result.as_ref().map(|_| ()).map_err(|e| *e));
     result
 }
@@ -223,16 +220,20 @@ async fn admit_batch_unobserved(
     let workspace = record.principal.workspace_id;
     let _queued = gate(&store.lock_gates.admission).await;
     let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
-    lock(&mut tx).await?;
-    let lineage = crate::auth::revalidate(&mut tx, &record.principal)
-        .await
-        .map_err(storage)?
-        .ok_or(InferenceError::ModelUnavailable)?;
+    admission_prefix(store, &mut tx, &record.principal).await?;
+    let lineage = authorize(store, &mut tx, &record.principal).await?;
     let (mut tokens, mut held) = (0i64, 0i64);
     let mut pinned: Option<(Uuid, PriceTier)> = None;
     for g in groups {
-        let current =
-            current_deployment(&mut tx, workspace, lineage, g.deployment.id, &g.model).await?;
+        let current = current_deployment(
+            store,
+            &mut tx,
+            workspace,
+            lineage,
+            g.deployment.id,
+            &g.model,
+        )
+        .await?;
         if !same_target(&current, &g.deployment) || !serves(&current, g.protocol, native) {
             return Err(InferenceError::Configuration);
         }
@@ -257,6 +258,17 @@ async fn admit_batch_unobserved(
     let lease = now
         .checked_add_signed(chrono::TimeDelta::seconds(lease_seconds))
         .ok_or(InferenceError::Configuration)?;
+    lock_rows(
+        store,
+        &mut tx,
+        &[locks::Touch {
+            workspace,
+            api_key: record.principal.key_id,
+            at: now,
+        }],
+        true,
+    )
+    .await?;
     enforce_limits(
         &mut tx,
         workspace,
@@ -309,8 +321,10 @@ pub async fn admit_line(
     lease_seconds: i64,
     expected: &Deployment,
 ) -> Result<(), InferenceError> {
-    let result =
-        admit_line_unobserved(store, batch, record, workload, lease_seconds, expected).await;
+    let result = locks::retry_deadlocks!(
+        "admission",
+        admit_line_unobserved(store, batch, record, workload, lease_seconds, expected).await
+    );
     crate::metrics::observe_admission(&result);
     result
 }
@@ -333,20 +347,18 @@ async fn admit_line_unobserved(
     let workspace = record.principal.workspace_id;
     let _queued = gate(&store.lock_gates.admission).await;
     let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
-    lock(&mut tx).await?;
-    let lineage = crate::auth::revalidate(&mut tx, &record.principal)
-        .await
-        .map_err(storage)?
-        .ok_or(InferenceError::ModelUnavailable)?;
-    let envelope: Option<(String, Option<i64>)> = sqlx::query_as("SELECT r.state,r.held_microusd FROM governance_reservations r JOIN async_jobs j ON j.execution_id=r.execution_id WHERE r.execution_id=$1 AND r.workspace_id=$2 AND j.id=$3 AND j.batch_mode='gateway' FOR UPDATE OF r")
+    admission_prefix(store, &mut tx, &record.principal).await?;
+    let lineage = authorize(store, &mut tx, &record.principal).await?;
+    let envelope: Option<(String, Option<i64>, Uuid, DateTime<Utc>)> = sqlx::query_as("SELECT r.state,r.held_microusd,r.api_key_id,r.admitted_at FROM governance_reservations r JOIN async_jobs j ON j.execution_id=r.execution_id WHERE r.execution_id=$1 AND r.workspace_id=$2 AND j.id=$3 AND j.batch_mode='gateway' FOR UPDATE OF r")
         .bind(batch.envelope).bind(workspace).bind(batch.job).fetch_optional(&mut *tx).await.map_err(storage)?;
-    let Some((state, available)) = envelope else {
+    let Some((state, available, envelope_key, envelope_at)) = envelope else {
         return Err(InferenceError::Configuration);
     };
     if state != "pending" {
         return Err(InferenceError::Configuration);
     }
     let current = current_deployment(
+        store,
         &mut tx,
         workspace,
         lineage,
@@ -377,6 +389,26 @@ async fn admit_line_unobserved(
     let lease = now
         .checked_add_signed(chrono::TimeDelta::seconds(lease_seconds))
         .ok_or(InferenceError::Configuration)?;
+    // The line's buckets (now) and the envelope's (its admission time): the
+    // insert and the envelope transfer below change both.
+    lock_rows(
+        store,
+        &mut tx,
+        &[
+            locks::Touch {
+                workspace,
+                api_key: record.principal.key_id,
+                at: now,
+            },
+            locks::Touch {
+                workspace,
+                api_key: envelope_key,
+                at: envelope_at,
+            },
+        ],
+        true,
+    )
+    .await?;
     enforce_limits(
         &mut tx,
         workspace,
@@ -425,8 +457,40 @@ pub async fn close_batch(
     cancelled: bool,
 ) -> Result<bool, InferenceError> {
     let _queued = gate(&store.lock_gates.settlement).await;
+    locks::retry_deadlocks!(
+        "settlement",
+        close_batch_once(store, envelope, elapsed_ms, cancelled).await
+    )
+}
+async fn close_batch_once(
+    store: &Store,
+    envelope: Uuid,
+    elapsed_ms: u64,
+    cancelled: bool,
+) -> Result<bool, InferenceError> {
     let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
-    lock(&mut tx).await?;
+    settlement_prefix(store, &mut tx).await?;
+    if scoped(store) {
+        // The envelope row, then its totals rows.
+        let row: Option<(Uuid, Uuid, DateTime<Utc>)> = sqlx::query_as("SELECT workspace_id,api_key_id,admitted_at FROM governance_reservations WHERE execution_id=$1 AND state='pending' FOR UPDATE")
+            .bind(envelope)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(storage)?;
+        if let Some((workspace, api_key, at)) = row {
+            lock_rows(
+                store,
+                &mut tx,
+                &[locks::Touch {
+                    workspace,
+                    api_key,
+                    at,
+                }],
+                false,
+            )
+            .await?;
+        }
+    }
     let changed = sqlx::query("UPDATE governance_reservations SET state='settled',actual_microusd=0,input_tokens=0,output_tokens=0 WHERE execution_id=$1 AND state='pending'")
         .bind(envelope)
         .execute(&mut *tx)

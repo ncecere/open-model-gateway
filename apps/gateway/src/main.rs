@@ -193,7 +193,8 @@ async fn run(cli: Cli) -> Result<()> {
     let pool = config.connect().await?;
     // Reports, usage and logs only (never admission, settlement or writes).
     let store = Store::new(pool.clone())
-        .with_reporting(config.connect_reporting()?, config.reporting_max_lag);
+        .with_reporting(config.connect_reporting()?, config.reporting_max_lag)
+        .with_admission_mode(config.admission_mode);
     match cli.command.unwrap_or(Command::Serve) {
         Command::Migrate => {
             store
@@ -396,7 +397,7 @@ async fn run(cli: Cli) -> Result<()> {
                 |name| std::env::var(name).ok(),
             )?)?;
             let listener = tokio::net::TcpListener::bind(config.listen).await?;
-            tracing::info!(address = %listener.local_addr()?, serving_web = web.is_some(), "gateway listening");
+            tracing::info!(address = %listener.local_addr()?, serving_web = web.is_some(), admission_mode = store.admission_mode().as_str(), "gateway listening");
             // Separate, optional metrics listener: never the public port or SPA.
             let metrics = match config.metrics_listen {
                 Some(address) => {
@@ -672,6 +673,7 @@ mod demo {
             database_max_connections: 10,
             reporting_database_url: None,
             reporting_max_lag: std::time::Duration::from_secs(30),
+            admission_mode: Default::default(),
         };
         assert!(ensure_demo_config(&config).is_ok());
         for url in [

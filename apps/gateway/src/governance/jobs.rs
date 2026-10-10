@@ -5,9 +5,11 @@
 use super::*;
 
 /// Extend the lease of a still-pending job reservation to `until` (never
-/// shortens). Serialized on the installation lock like every other change
-/// to live leases (they count toward concurrency). Returns whether the
-/// reservation was still pending.
+/// shortens). Returns whether the reservation was still pending. Global mode:
+/// serialized on the installation lock like every other change to live
+/// leases. Scoped: the reservation row lock only; a lease change touches no
+/// totals or counter row (the triggers see a zero delta), and an admission
+/// that already treated the lease as expired linearizes before the extension.
 pub async fn extend_lease(
     store: &Store,
     execution: Uuid,
@@ -15,7 +17,7 @@ pub async fn extend_lease(
 ) -> Result<bool, InferenceError> {
     let _queued = gate(&store.lock_gates.settlement).await;
     let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
-    lock(&mut tx).await?;
+    settlement_prefix(store, &mut tx).await?;
     let changed = sqlx::query("UPDATE governance_reservations SET lease_expires_at=greatest(lease_expires_at,$2) WHERE execution_id=$1 AND state='pending'")
         .bind(execution)
         .bind(until)

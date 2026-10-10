@@ -5,6 +5,7 @@ Notes for changes on `main` since v0.3.2. They become the next release's notes. 
 ## Highlights
 
 - **No installation-wide limits.** Limits now exist only on personal, team and project workspaces (workspace-type defaults, platform per-workspace overrides, tighten-only workspace caps) and on API keys. All of those stay hard limits, exactly as before. There is no installation budget (any period) and no installation requests per minute, tokens per minute, requests at once or jobs at once. Admission and settlement no longer read or write any installation-wide limit row, which removes the last global hot row from the request path's limit checks (scale plan, decision of 2026-10-09).
+- **Scoped admission (no global lock on the request path).** Admission and settlement no longer serialize on the installation row. Requests of different workspaces run in parallel; requests of one workspace still serialize on its own totals rows, so budgets stay exact. Revocations, suspensions, membership, key, policy and catalog changes take scope locks that admission respects, so nothing is admitted after such a change commits. On the laptop load-test stack the ceiling rose from about 240 to about 1,050–1,080 successful requests/s, and three replicas now serve more than one (998 vs 814/s at 1000/s offered). One very hot workspace or key tops out around 210–250 requests/s.
 - **Installation spend alert.** To keep an eye on total spend, Admin › Settings › Alerts has a new rule type, **Installation spend** (`spend_threshold`): it fires when installation-wide spend (settled plus on hold, all workspaces, personal ones as totals) in the current day, week, month or lifetime reaches up to five percentages of an amount you choose. It only notifies; it never blocks a request. Spend is exact integer micro-USD; requests with unknown cost are reported separately, never counted as zero.
 
 ## Migration
@@ -19,7 +20,20 @@ Notes for changes on `main` since v0.3.2. They become the next release's notes. 
 
 It briefly freezes history writes, like 0015 and 0025. On the 2 M-attempt load-test database it took 0.9 s. On the laptop load-test stack the overload ceiling rose 9–21 % with the change ([operations](../operations.md#combined-capacity-p1--p2--no-installation-limits)).
 
+`0027_scoped_admission.sql` (functions and triggers only; no table, column or history change, no write freeze):
+
+- Lock helpers for admission (`omg_admission_locks`), management (`omg_lock_scopes`) and totals/counter rows (`omg_lock_scope_rows`, which may create zero-valued `budget_totals`/counter rows; zeros equal missing rows for every reader and `budget verify`).
+- Authority triggers on users, grants, memberships, workspaces, service accounts, keys, key restrictions, policies, budgets and catalog assignments take the matching exclusive scope lock; catalog tables take the exclusive catalog lock.
+
+## New environment variables
+
+- `GATEWAY_ADMISSION_MODE` (`scoped` default, or `global`): `global` is an operational rollback to the former installation-row protocol, kept for one release. It needs no schema change; invalid values fail startup.
+
 ## Breaking and behaviour changes
+
+- **Per-replica database connections now raise throughput.** Each replica admits on up to half of `GATEWAY_DATABASE_MAX_CONNECTIONS` and settles on up to three tenths (before: a quarter each, because the global lock serialized them anyway). Size PgBouncer and `max_connections` for the busier pools.
+- **New metric** `gateway_lock_deadlock_retries_total{path}` and admission/settlement phase `lock_rows`; in scoped mode the admission `price` phase is folded into `read`.
+- **Manual SQL changes** of users, grants, keys, policies or catalog assignments now wait for in-flight admissions of the affected scope (the triggers take the scope lock). Change several scopes in one transaction in the order type → workspace → user → key lineage to avoid deadlocks.
 
 - **`GET`/`PUT /api/v1/platform/installation/policy` return `410 Gone`** with `error.reason:"installation_limits_removed"`. Scripts that set installation limits must set workspace-type defaults (`/platform/workspace-types/{kind}/policy`), workspace overrides or key limits instead.
 - **Alert rules can't watch an `installation` budget layer.** `budget_layers` containing `installation` is `400` with `reason:"installation_limits_removed"`; use `kind:"spend_threshold"` with `spend_period`, `spend_amount_microusd` and `thresholds`.
@@ -33,6 +47,6 @@ It briefly freezes history writes, like 0015 and 0025. On the 2 M-attempt load-t
 1. Before upgrading, note any installation limits you still want and recreate them on type defaults, workspace overrides or keys after the upgrade (the migration records the old values in the audit log).
 2. Back up and drain traffic (the migration freezes history writes briefly).
 3. Run `open-model-gateway migrate` as the migrator.
-4. Reapply `deploy/staging/runtime-grants.sql` (alert rules gain `spend_period`/`spend_amount_microusd` update grants; `installation_policy` grants are gone).
+4. Reapply `deploy/staging/runtime-grants.sql` (alert rules gain `spend_period`/`spend_amount_microusd` update grants; `installation_policy` grants are gone; 0027 adds `EXECUTE` on the scope-lock helpers).
 5. Run `open-model-gateway budget verify` and expect `mismatch_count: 0` and `rate_mismatch_count: 0`.
 6. Review Admin › Settings › Alerts: converted rules are named after the original, with "(installation … spend)" for extra periods.

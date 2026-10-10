@@ -1,4 +1,7 @@
-//! Durable per-attempt accounting. Catalog lock precedes the installation row lock.
+//! Durable per-attempt accounting. Lock order: [`locks`] (catalog lock, then
+//! scoped authority locks, then the reservation row, then totals/counter rows
+//! in primary-key order; `GATEWAY_ADMISSION_MODE=global` takes the former
+//! installation row lock after the catalog lock instead).
 use crate::{
     billing::{
         self, BillingUsage, CachePricing, CacheRate, CostBreakdown, MeterUsage, MeterVariant,
@@ -16,28 +19,39 @@ use chrono::{DateTime, Utc};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 type Tx<'a> = Transaction<'a, Postgres>;
-fn storage(_: sqlx::Error) -> InferenceError {
+fn storage(error: sqlx::Error) -> InferenceError {
+    // A deadlock victim may be re-run (`locks::retry_deadlocks`).
+    locks::note(&error);
     InferenceError::Storage
 }
-/// Bounded in-process queues in front of the installation lock, one for
-/// admissions and one for settlements/reconciliation. Work under that lock is
-/// serialized anyway, so letting every concurrent request hold a pooled
-/// connection while it waits adds no throughput: it starves authentication,
-/// routing and settlement of connections (the load test saw 503s and
-/// unsettled streams at 200 concurrent requests on a 10-connection pool).
-/// Each queue lets at most a quarter of the pool wait on the database lock;
-/// other callers wait here without a connection. Settlements never queue
+/// Bounded in-process queues in front of the governance transactions, one for
+/// admissions and one for settlements/reconciliation. In the global mode work
+/// under the installation lock is serialized anyway, so letting every
+/// concurrent request hold a pooled connection while it waits adds no
+/// throughput: it starves authentication, routing and settlement of
+/// connections (the load test saw 503s and unsettled streams at 200
+/// concurrent requests on a 10-connection pool). There each queue lets at
+/// most a quarter of the pool wait on the database lock. Scoped admissions of
+/// different scopes run in parallel, so up to half the pool may admit and
+/// three tenths settle; the rest stays free for authentication and routing.
+/// Other callers wait here without a connection. Settlements never queue
 /// behind admissions in-process, so holds are released promptly.
 pub struct LockGates {
     admission: tokio::sync::Semaphore,
     settlement: tokio::sync::Semaphore,
 }
 impl LockGates {
-    pub(crate) fn for_pool(max_connections: u32) -> Self {
-        let permits = (max_connections as usize / 4).max(1);
+    pub(crate) fn for_pool(max_connections: u32, mode: locks::AdmissionMode) -> Self {
+        let pool = max_connections as usize;
+        let (admission, settlement) = match mode {
+            locks::AdmissionMode::Global => (pool / 4, pool / 4),
+            // P3 load test: with a quarter of the pool, one replica's
+            // settlements queued in process at 1000/s (2 permits of 10).
+            locks::AdmissionMode::Scoped => (pool / 2, pool * 3 / 10),
+        };
         Self {
-            admission: tokio::sync::Semaphore::new(permits),
-            settlement: tokio::sync::Semaphore::new(permits),
+            admission: tokio::sync::Semaphore::new(admission.max(1)),
+            settlement: tokio::sync::Semaphore::new(settlement.max(1)),
         }
     }
 }
@@ -49,9 +63,76 @@ async fn gate(semaphore: &tokio::sync::Semaphore) -> tokio::sync::SemaphorePermi
         .await
         .expect("installation lock gate is never closed")
 }
+/// The global-mode prefix: the shared catalog lock, then the installation row.
 async fn lock(tx: &mut Tx<'_>) -> Result<(), InferenceError> {
     catalog_lock(tx).await?;
     installation_lock(tx).await
+}
+fn scoped(store: &Store) -> bool {
+    store.admission_mode == locks::AdmissionMode::Scoped
+}
+/// Lock prefix of a new admission (or admission-like growth) of `principal`:
+/// scoped, the shared catalog and authority locks (`locks::admission`);
+/// global, the catalog lock and the installation row.
+async fn admission_prefix(
+    store: &Store,
+    tx: &mut Tx<'_>,
+    principal: &crate::auth::Principal,
+) -> Result<(), InferenceError> {
+    if scoped(store) {
+        locks::admission(tx, principal).await.map_err(storage)?;
+        Ok(())
+    } else {
+        lock(tx).await
+    }
+}
+/// Live authorization of `principal` after [`admission_prefix`]: its key
+/// lineage, or `ModelUnavailable`. Scoped admission reads without row locks
+/// (the shared authority locks exclude concurrent revocation); the global
+/// mode keeps its `FOR SHARE` row locks.
+async fn authorize(
+    store: &Store,
+    tx: &mut Tx<'_>,
+    principal: &crate::auth::Principal,
+) -> Result<Uuid, InferenceError> {
+    crate::auth::revalidate_admission_with(tx, principal, !scoped(store))
+        .await
+        .map_err(storage)?
+        .ok_or(InferenceError::ModelUnavailable)
+}
+/// Settlement prefix: global, the catalog lock and the installation row;
+/// scoped, nothing (the reservation row lock taken by the next read
+/// serializes settlement, reconciliation and growth of one reservation).
+async fn settlement_prefix(store: &Store, tx: &mut Tx<'_>) -> Result<(), InferenceError> {
+    if scoped(store) {
+        Ok(())
+    } else {
+        lock(tx).await
+    }
+}
+/// Scoped mode: lock the totals rows (and with `counters` the minute and
+/// in-flight rows) the next writes change, in canonical order. A no-op in the
+/// global mode, where the installation row serializes everything.
+async fn lock_rows(
+    store: &Store,
+    tx: &mut Tx<'_>,
+    touches: &[locks::Touch],
+    counters: bool,
+) -> Result<(), InferenceError> {
+    if scoped(store) {
+        locks::rows(tx, touches, counters).await.map_err(storage)?;
+    }
+    Ok(())
+}
+/// The `FOR SHARE` clause of the global mode's catalog row reads (scoped
+/// admission relies on the shared catalog lock, which every catalog writer
+/// takes exclusively).
+fn catalog_share(store: &Store) -> &'static str {
+    if scoped(store) {
+        ""
+    } else {
+        " FOR SHARE OF d,p,m"
+    }
 }
 /// The shared catalog lock: catalog writers (deployments, providers, models,
 /// prices) hold it exclusively, so it fences catalog configuration.
@@ -328,6 +409,8 @@ pub(crate) use totals::budget_consumption;
 pub mod batch;
 /// Lease extension and bound preview for async jobs (`crate::jobs`).
 pub mod jobs;
+/// Canonical lock order, authority scope locks and the admission mode.
+pub mod locks;
 /// Maintained per-scope, per-minute rate and in-flight counters.
 pub mod rates;
 /// Maintained per-scope, per-period budget totals and their consistency check.
@@ -452,8 +535,10 @@ async fn admit_checked(
     expected: Option<&Deployment>,
 ) -> Result<(), InferenceError> {
     let mut timer = crate::metrics::PhaseTimer::start();
-    let result =
-        admit_unobserved(store, record, workload, lease_seconds, expected, &mut timer).await;
+    let result = locks::retry_deadlocks!(
+        "admission",
+        admit_unobserved(store, record, workload, lease_seconds, expected, &mut timer).await
+    );
     crate::metrics::observe_admission(&result);
     crate::metrics::METRICS
         .observe_admission_phases(timer, crate::metrics::admission_outcome(&result));
@@ -479,22 +564,26 @@ async fn admit_unobserved(
     // Catalog configuration (deployments, providers, models and their
     // append-only prices) changes only under the exclusive catalog lock, so
     // once it is held shared the latest price and the reservation bounds are
-    // fixed for this transaction: resolve them before the installation lock.
-    // Authorization, entitlement and policies change under the installation
-    // lock and stay below it. Bound errors are reported after the checks
-    // below, in the former order.
-    catalog_lock(&mut tx).await?;
-    let price=sqlx::query_as::<_,Price>(&format!("SELECT {PRICE_COLUMNS} FROM deployment_prices WHERE deployment_id=$1 ORDER BY created_at DESC,id DESC LIMIT 1")).bind(record.deployment_id).fetch_optional(&mut *tx).await.map_err(storage)?;
+    // fixed for this transaction. Authorization, entitlement and policies
+    // change under the exclusive authority locks of their scope (scoped) or
+    // the installation lock (global), both held from here to commit. Bound
+    // errors are reported after the checks below, in the former order.
+    let price = if scoped(store) {
+        admission_prefix(store, &mut tx, &record.principal).await?;
+        timer.phase("locks");
+        latest_price(&mut tx, record.deployment_id).await?
+    } else {
+        catalog_lock(&mut tx).await?;
+        let price = latest_price(&mut tx, record.deployment_id).await?;
+        timer.phase("price");
+        installation_lock(&mut tx).await?;
+        timer.phase("locks");
+        price
+    };
     let bounds = reservation_bounds(price.as_ref(), &workload);
-    timer.phase("price");
-    installation_lock(&mut tx).await?;
-    timer.phase("locks");
-    let lineage = crate::auth::revalidate_admission(&mut tx, &record.principal)
-        .await
-        .map_err(storage)?
-        .ok_or(InferenceError::ModelUnavailable)?;
+    let lineage = authorize(store, &mut tx, &record.principal).await?;
     // The deployment check also reads the admission clock (one round trip).
-    let row=sqlx::query("SELECT d.id,p.provider,d.upstream_model,p.credential_ref,p.endpoint,p.region,m.supported_protocols,clock_timestamp() AS admission_now FROM deployments d JOIN provider_connections p ON p.id=d.provider_connection_id JOIN models m ON m.id=d.model_id WHERE d.id=$2 AND m.public_name=$3 AND workspace_model_allowed($1,m.id) AND d.enabled AND p.enabled AND (NOT EXISTS(SELECT 1 FROM key_model_restrictions WHERE workspace_id=$1 AND governance_key_id=$4) OR EXISTS(SELECT 1 FROM key_model_selections WHERE workspace_id=$1 AND governance_key_id=$4 AND model_id=m.id)) FOR SHARE OF d,p,m")
+    let row=sqlx::query(&format!("SELECT d.id,p.provider,d.upstream_model,p.credential_ref,p.endpoint,p.region,m.supported_protocols,clock_timestamp() AS admission_now FROM deployments d JOIN provider_connections p ON p.id=d.provider_connection_id JOIN models m ON m.id=d.model_id WHERE d.id=$2 AND m.public_name=$3 AND workspace_model_allowed($1,m.id) AND d.enabled AND p.enabled AND (NOT EXISTS(SELECT 1 FROM key_model_restrictions WHERE workspace_id=$1 AND governance_key_id=$4) OR EXISTS(SELECT 1 FROM key_model_selections WHERE workspace_id=$1 AND governance_key_id=$4 AND model_id=m.id)){}", catalog_share(store)))
         .bind(workspace).bind(record.deployment_id).bind(&record.model).bind(lineage).fetch_optional(&mut *tx).await.map_err(storage)?.ok_or(InferenceError::ModelUnavailable)?;
     let current = <Deployment as sqlx::FromRow<_>>::from_row(&row).map_err(storage)?;
     let database_now: DateTime<Utc> = sqlx::Row::try_get(&row, "admission_now").map_err(storage)?;
@@ -533,6 +622,20 @@ async fn admit_unobserved(
     // limits and are counted by "jobs at once"; budgets apply in full.
     let job = matches!(workload.kind, WorkloadKind::Videos | WorkloadKind::Batches);
     timer.phase("read");
+    // Scoped: hold this workspace's and lineage's totals and counter rows
+    // (the ones the write below changes) before reading them.
+    lock_rows(
+        store,
+        &mut tx,
+        &[locks::Touch {
+            workspace,
+            api_key: key,
+            at: now,
+        }],
+        true,
+    )
+    .await?;
+    timer.phase("lock_rows");
     enforce_limits(
         &mut tx,
         workspace,
@@ -572,6 +675,14 @@ async fn admit_unobserved(
     tx.commit().await.map_err(storage)?;
     timer.phase("commit");
     Ok(())
+}
+/// The latest (immutable, append-only) price of a deployment.
+async fn latest_price(tx: &mut Tx<'_>, deployment: Uuid) -> Result<Option<Price>, InferenceError> {
+    sqlx::query_as::<_, Price>(&format!("SELECT {PRICE_COLUMNS} FROM deployment_prices WHERE deployment_id=$1 ORDER BY created_at DESC,id DESC LIMIT 1"))
+        .bind(deployment)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(storage)
 }
 /// Token reservation and monetary hold of one attempt under `price` (none
 /// without a price): pure arithmetic over the immutable price row.
@@ -782,6 +893,8 @@ async fn enforce_limits(
 #[derive(sqlx::FromRow)]
 struct Reservation {
     workspace_id: Uuid,
+    api_key_id: Uuid,
+    admitted_at: DateTime<Utc>,
     deployment_id: Uuid,
     price_id: Option<Uuid>,
     state: String,
@@ -801,8 +914,25 @@ struct Reservation {
     /// Pinned price list (0021): `standard` or `batch`.
     price_tier: String,
 }
-async fn reservation(tx: &mut Tx<'_>, id: Uuid) -> Result<Reservation, InferenceError> {
-    sqlx::query_as("SELECT r.workspace_id,r.deployment_id,r.price_id,r.state,r.input_tokens,r.output_tokens,r.billing_usage,e.workload_kind,r.reserved_tokens,r.meter_usage,r.output_image_variant,r.provider_cost_microusd,e.provider,e.public_model,r.request_count,r.price_tier FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id WHERE r.execution_id=$1").bind(id).fetch_one(&mut **tx).await.map_err(storage)
+/// A reservation with its execution's labels. Scoped mode (`lock`): locks
+/// the reservation row, the serializer of everything that changes one
+/// reservation (settlement, reconciliation, realtime windows).
+async fn reservation(tx: &mut Tx<'_>, id: Uuid, lock: bool) -> Result<Reservation, InferenceError> {
+    sqlx::query_as(if lock {
+        "SELECT r.workspace_id,r.api_key_id,r.admitted_at,r.deployment_id,r.price_id,r.state,r.input_tokens,r.output_tokens,r.billing_usage,e.workload_kind,r.reserved_tokens,r.meter_usage,r.output_image_variant,r.provider_cost_microusd,e.provider,e.public_model,r.request_count,r.price_tier FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id WHERE r.execution_id=$1 FOR UPDATE OF r"
+    } else {
+        "SELECT r.workspace_id,r.api_key_id,r.admitted_at,r.deployment_id,r.price_id,r.state,r.input_tokens,r.output_tokens,r.billing_usage,e.workload_kind,r.reserved_tokens,r.meter_usage,r.output_image_variant,r.provider_cost_microusd,e.provider,e.public_model,r.request_count,r.price_tier FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id WHERE r.execution_id=$1"
+    }).bind(id).fetch_one(&mut **tx).await.map_err(storage)
+}
+impl Reservation {
+    /// The totals buckets a change of this reservation touches.
+    fn touch(&self) -> locks::Touch {
+        locks::Touch {
+            workspace: self.workspace_id,
+            api_key: self.api_key_id,
+            at: self.admitted_at,
+        }
+    }
 }
 /// Meter, variant and provider-cost evidence as stored columns.
 struct MeterEvidence {
@@ -1210,7 +1340,10 @@ pub async fn finish_with_telemetry(
 ) -> Result<(), InferenceError> {
     use crate::metrics::{AttemptObservation, METRICS, PhaseTimer, Settlement};
     let mut timer = PhaseTimer::start();
-    let result = finish_unobserved(store, record, telemetry, &mut timer).await;
+    let result = locks::retry_deadlocks!(
+        "settlement",
+        finish_unobserved(store, record, telemetry, &mut timer).await
+    );
     METRICS.observe_settlement_phases(
         timer,
         match &result {
@@ -1289,9 +1422,9 @@ async fn finish_unobserved(
     timer.phase("queue");
     let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
     timer.phase("connect");
-    lock(&mut tx).await?;
+    settlement_prefix(store, &mut tx).await?;
+    let r = reservation(&mut tx, record.id, scoped(store)).await?;
     timer.phase("locks");
-    let r = reservation(&mut tx, record.id).await?;
     let mut usage = workload_usage(&r, record.usage)?;
     // A free price's pre-processing rejection processed no tokens: record the
     // semantic zeros a settled row requires (see `free_rejection`).
@@ -1332,6 +1465,10 @@ async fn finish_unobserved(
     };
     let components = value.components.filter(|_| actual.is_some());
     timer.phase("read");
+    // Scoped: the reservation's totals rows, held from here to commit (its
+    // triggers then take the counter rows in canonical order).
+    lock_rows(store, &mut tx, &[r.touch()], false).await?;
+    timer.phase("lock_rows");
     let changed=sqlx::query("UPDATE inference_executions SET state=$2,error_code=$3,input_tokens=$4,output_tokens=$5,billing_usage=$6,elapsed_ms=$7,completed_at=clock_timestamp(),meter_usage=$8,output_image_variant=$9,provider_cost_microusd=$10,finish_reason=$11,time_to_first_token_ms=$12,generation_ms=$13,reasoning_tokens=$14,reported_upstream_model=$15 WHERE id=$1 AND state='started'")
         .bind(record.id).bind(record.outcome.as_str()).bind(record.error.map(|e|e.code())).bind(input).bind(output).bind(&billing).bind(record.elapsed_ms.min(i64::MAX as u64)as i64).bind(&m.meters).bind(&m.variant).bind(m.provider_cost)
         .bind(telemetry.finish_reason.map(|f|f.as_str())).bind(ms(telemetry.time_to_first_token_ms)).bind(ms(telemetry.generation_ms)).bind(reasoning).bind(&reported_model).execute(&mut *tx).await.map_err(storage)?.rows_affected();
@@ -1370,8 +1507,9 @@ const RECONCILE_BATCH: i64 = 50;
 /// Marks up to `limit` expired pending reservations unknown (their holds are
 /// retained) and their executions cancelled. Work is claimed in batches of
 /// [`RECONCILE_BATCH`] with `FOR UPDATE SKIP LOCKED`, one transaction per
-/// batch, so concurrent replicas never process (or wait on) the same rows and
-/// each batch takes the installation lock once instead of once per row.
+/// batch, so concurrent replicas never process (or wait on) the same rows.
+/// Scoped: claimed reservation rows, then their totals rows in canonical
+/// order; global: the installation lock once per batch.
 pub async fn reconcile_expired(store: &Store, limit: i64) -> Result<u64, InferenceError> {
     if !(1..=10_000).contains(&limit) {
         return Err(InferenceError::InvalidRequest);
@@ -1380,13 +1518,41 @@ pub async fn reconcile_expired(store: &Store, limit: i64) -> Result<u64, Inferen
     while (count as i64) < limit {
         let batch = RECONCILE_BATCH.min(limit - count as i64);
         let _queued = gate(&store.lock_gates.settlement).await;
+        let ids = locks::retry_deadlocks!("reconciliation", reconcile_batch(store, batch).await)?;
+        count += ids as u64;
+        if (ids as i64) < batch {
+            break;
+        }
+    }
+    Ok(count)
+}
+async fn reconcile_batch(store: &Store, batch: i64) -> Result<usize, InferenceError> {
+    {
         let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
-        lock(&mut tx).await?;
-        let ids: Vec<Uuid> = sqlx::query_scalar("WITH due AS (SELECT execution_id FROM governance_reservations WHERE state='pending' AND lease_expires_at<=clock_timestamp() ORDER BY lease_expires_at,execution_id LIMIT $1 FOR UPDATE SKIP LOCKED) UPDATE governance_reservations r SET state='unknown' FROM due WHERE r.execution_id=due.execution_id RETURNING r.execution_id")
+        settlement_prefix(store, &mut tx).await?;
+        let due: Vec<(Uuid, Uuid, Uuid, DateTime<Utc>)> = sqlx::query_as("SELECT execution_id,workspace_id,api_key_id,admitted_at FROM governance_reservations WHERE state='pending' AND lease_expires_at<=clock_timestamp() ORDER BY lease_expires_at,execution_id LIMIT $1 FOR UPDATE SKIP LOCKED")
             .bind(batch)
             .fetch_all(&mut *tx)
             .await
             .map_err(storage)?;
+        let touches: Vec<locks::Touch> = due
+            .iter()
+            .map(|d| locks::Touch {
+                workspace: d.1,
+                api_key: d.2,
+                at: d.3,
+            })
+            .collect();
+        lock_rows(store, &mut tx, &touches, false).await?;
+        let claimed: Vec<Uuid> = due.iter().map(|d| d.0).collect();
+        let ids: Vec<Uuid> = sqlx::query_scalar("UPDATE governance_reservations SET state='unknown' WHERE execution_id=ANY($1) AND state='pending' RETURNING execution_id")
+            .bind(&claimed)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(storage)?;
+        if ids.len() != claimed.len() {
+            return Err(InferenceError::Storage);
+        }
         if !ids.is_empty() {
             let changed=sqlx::query("UPDATE inference_executions SET state='cancelled',error_code='lease_expired',finish_reason='cancelled',completed_at=clock_timestamp() WHERE id=ANY($1) AND state='started'").bind(&ids).execute(&mut *tx).await.map_err(storage)?.rows_affected();
             if changed != ids.len() as u64 {
@@ -1405,12 +1571,8 @@ pub async fn reconcile_expired(store: &Store, limit: i64) -> Result<u64, Inferen
             }
         }
         tx.commit().await.map_err(storage)?;
-        count += ids.len() as u64;
-        if (ids.len() as i64) < batch {
-            break;
-        }
+        Ok(ids.len())
     }
-    Ok(count)
 }
 /// Authorization remains live after waiting. Personal details never become platform-public.
 pub async fn resolve_usage(
@@ -1427,15 +1589,43 @@ pub async fn resolve_usage(
     {
         return Err(InferenceError::InvalidRequest);
     }
+    locks::retry_deadlocks!(
+        "reconciliation",
+        resolve_usage_once(store, workspace, execution, usage, evidence, actor).await
+    )
+}
+async fn resolve_usage_once(
+    store: &Store,
+    workspace: Uuid,
+    execution: Uuid,
+    usage: Usage,
+    evidence: &str,
+    actor: Uuid,
+) -> Result<(), InferenceError> {
     let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
-    lock(&mut tx).await?;
-    let r = reservation(&mut tx, execution).await?;
+    if scoped(store) {
+        // The actor's authority (workspace, user) cannot be revoked until
+        // commit; then the reservation row, then its totals rows.
+        catalog_lock(&mut tx).await?;
+        locks::shared(
+            &mut tx,
+            [
+                locks::Scope::Workspace(workspace),
+                locks::Scope::User(actor),
+            ],
+        )
+        .await
+        .map_err(storage)?;
+    } else {
+        lock(&mut tx).await?;
+    }
+    let r = reservation(&mut tx, execution, scoped(store)).await?;
     // Realtime sessions are valued per response (`realtime`); an aggregate
     // reconciliation could not reproduce that valuation, so it is refused.
     if r.workspace_id != workspace || r.workload_kind == WorkloadKind::Realtime.as_str() {
         return Err(InferenceError::InvalidRequest);
     }
-    let authorized:Option<Uuid>=sqlx::query_scalar("SELECT u.id FROM users u JOIN effective_platform_roles p ON p.user_id=u.id AND p.role='admin' JOIN workspaces w ON w.id=$2 AND w.disabled_at IS NULL WHERE u.id=$1 AND u.disabled_at IS NULL AND u.cleaned_at IS NULL AND (w.kind IN('team','project') OR w.owner_user_id=u.id) FOR SHARE OF u,w")
+    let authorized:Option<Uuid>=sqlx::query_scalar(&format!("SELECT u.id FROM users u JOIN effective_platform_roles p ON p.user_id=u.id AND p.role='admin' JOIN workspaces w ON w.id=$2 AND w.disabled_at IS NULL WHERE u.id=$1 AND u.disabled_at IS NULL AND u.cleaned_at IS NULL AND (w.kind IN('team','project') OR w.owner_user_id=u.id){}", if scoped(store) { "" } else { " FOR SHARE OF u,w" }))
         .bind(actor).bind(workspace).fetch_optional(&mut *tx).await.map_err(storage)?;
     if authorized.is_none() {
         return Err(InferenceError::InvalidRequest);
@@ -1495,6 +1685,7 @@ pub async fn resolve_usage(
     }
     let value = pinned_value(&mut tx, &r, usage).await?;
     let actual = value.actual.ok_or(InferenceError::Configuration)?;
+    lock_rows(store, &mut tx, &[r.touch()], false).await?;
     sqlx::query("UPDATE governance_reservations SET state='settled',actual_microusd=$2,input_tokens=$3,output_tokens=$4,billing_usage=$5,cost_components=$6,meter_usage=$7,output_image_variant=$8,provider_cost_microusd=$9 WHERE execution_id=$1").bind(execution).bind(actual).bind(input).bind(output).bind(&billing).bind(value.components.map(|c|c.to_value())).bind(&m.meters).bind(&m.variant).bind(m.provider_cost).execute(&mut *tx).await.map_err(storage)?;
     sqlx::query("UPDATE inference_executions SET input_tokens=$2,output_tokens=$3,billing_usage=$4,meter_usage=$5,output_image_variant=$6,provider_cost_microusd=$7 WHERE id=$1").bind(execution).bind(input).bind(output).bind(billing).bind(m.meters).bind(m.variant).bind(m.provider_cost).execute(&mut *tx).await.map_err(storage)?;
     ledger(
@@ -1530,6 +1721,8 @@ pub(crate) async fn set_test_budget(
 }
 #[cfg(all(test, feature = "integration-tests"))]
 mod image_tests;
+#[cfg(all(test, feature = "integration-tests"))]
+mod locks_tests;
 #[cfg(test)]
 mod period_tests;
 #[cfg(all(test, feature = "integration-tests"))]

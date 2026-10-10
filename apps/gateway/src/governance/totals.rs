@@ -181,10 +181,11 @@ impl VerifyReport {
 /// takes no installation lock: the triggers commit totals atomically with the
 /// rows they summarize, so one snapshot sees both consistently.
 pub async fn verify(store: &crate::store::Store) -> Result<VerifyReport, sqlx::Error> {
-    let mut tx = crate::db::begin(&store.pool).await?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-        .execute(&mut *tx)
-        .await?;
+    let mut tx = crate::db::begin_with_setup(
+        &store.pool,
+        "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",
+    )
+    .await?;
     let report = verify_in(&mut tx).await?;
     tx.rollback().await?;
     Ok(report)

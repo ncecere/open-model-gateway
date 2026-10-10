@@ -243,6 +243,7 @@ def cmd_gateways(stack, args):
         "OMG_LOADTEST_DB_PORT": "5432" if via_direct else "6432",
         "OMG_LOADTEST_POOL": str(args.pool),
         "OMG_LOADTEST_MAX_CONCURRENT": str(args.max_concurrent),
+        "OMG_LOADTEST_ADMISSION_MODE": args.admission_mode,
     })
     if args.prepared == "off":
         stack.extra_env["OMG_LOADTEST_PGBOUNCER_INI"] = str(stack.state / "pgbouncer-noprepared.ini")
@@ -253,7 +254,9 @@ def cmd_gateways(stack, args):
         stack.compose("stop", *GATEWAYS[args.replicas:], check=False)
     stack.compose("up", "-d", "--force-recreate", "--wait", *active)
     settings = {"replicas": args.replicas, "via": args.via, "pool": args.pool,
-                "max_concurrent": args.max_concurrent, "pgbouncer_prepared": args.prepared}
+                "max_concurrent": args.max_concurrent, "pgbouncer_prepared": args.prepared,
+                "admission_mode": args.admission_mode,
+                "commit_delay": os.environ.get("OMG_LOADTEST_COMMIT_DELAY", "0")}
     (stack.state / "gateways.json").write_text(json.dumps(settings))
     return settings
 
@@ -277,6 +280,7 @@ def cmd_run(stack, args):
                "--database-url", stack.url("runtime"),
                "--rate", str(args.rate), "--duration", str(args.duration), "--warmup", str(args.warmup),
                "--stream-ratio", str(args.stream_ratio), "--keys", str(args.keys),
+               "--key-offset", str(getattr(args, "key_offset", 0)),
                "--max-tokens", str(args.max_tokens), "--timeout", str(args.timeout), "--label", args.label,
                "--readers", str(getattr(args, "readers", 0)), "--reader-days", str(getattr(args, "reader_days", 7))]
     started = time.monotonic()
@@ -358,6 +362,12 @@ def stack_facts(stack):
     facts["git"] = commit.stdout.strip()
     try:
         facts["db_size_bytes"] = int(stack.psql(f"SELECT pg_database_size('{stack.db}')"))
+    except (subprocess.CalledProcessError, ValueError):
+        pass
+    try:
+        # Cumulative since the database was created (reset-db): compare runs.
+        facts["db_deadlocks"] = int(stack.psql(
+            f"SELECT deadlocks FROM pg_stat_database WHERE datname='{stack.db}'"))
     except (subprocess.CalledProcessError, ValueError):
         pass
     return facts
@@ -459,7 +469,8 @@ def cmd_baseline(stack, args):
         for replicas in (1, 3):
             for via in ("pgbouncer", "direct"):
                 cmd_gateways(stack, argparse.Namespace(replicas=replicas, via=via, pool=args.pool,
-                                                       max_concurrent=args.max_concurrent, prepared="on"))
+                                                       max_concurrent=args.max_concurrent, prepared="on",
+                                                       admission_mode="scoped"))
                 for rate in rates:
                     run_args = argparse.Namespace(
                         label=f"{tag}-{replicas}r-{via}-{rate:g}", rate=rate, duration=args.duration,
@@ -496,6 +507,8 @@ def main(argv=None):
     gw.add_argument("--via", choices=("pgbouncer", "direct"), default="pgbouncer")
     gw.add_argument("--pool", type=int, default=10)
     gw.add_argument("--max-concurrent", type=int, default=128)
+    gw.add_argument("--admission-mode", choices=("scoped", "global"), default="scoped",
+                    help="GATEWAY_ADMISSION_MODE of the replicas (global: the former installation lock)")
     gw.add_argument("--prepared", choices=("on", "off"), default="on",
                     help="PgBouncer max_prepared_statements 200 (on) or 0 (off, decision gate D4 check)")
     run = sub.add_parser("run")
@@ -505,6 +518,9 @@ def main(argv=None):
     run.add_argument("--warmup", type=float, default=5)
     run.add_argument("--stream-ratio", type=float, default=0.5)
     run.add_argument("--keys", type=int, default=2000)
+    run.add_argument("--key-offset", type=int, default=0,
+                     help="first seeded key index of the hot set (hot-workspace runs: seed --shared 1, "
+                          "then the member/service keys from index 2 x users)")
     run.add_argument("--max-tokens", type=int, default=16)
     run.add_argument("--timeout", type=float, default=60)
     run.add_argument("--top", type=int, default=10)

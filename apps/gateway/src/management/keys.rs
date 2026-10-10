@@ -79,7 +79,10 @@ pub(super) async fn update_key(
 ) -> ApiResult {
     let (mut tx, a) = resources::workspace_tx(&s, &u, ws).await?;
     resources::detail_access(&a)?;
-    let (revoked, issued): (bool, Option<Uuid>) = sqlx::query_as("SELECT revoked_at IS NOT NULL,issued_to_user_id FROM api_keys WHERE workspace_id=$1 AND id=$2 AND ($3 OR issued_to_user_id=$4) FOR UPDATE").bind(ws).bind(id).bind(a.admin).bind(u.user_id).fetch_optional(&mut *tx).await?.ok_or_else(missing)?;
+    // Admissions of this lineage finish first; later ones see the change.
+    let lineage = locks::key_lineages(&mut tx, "id=$2", Some(ws), Some(id)).await?;
+    locks::exclusive(&mut tx, lineage).await?;
+    let (revoked, issued): (bool, Option<Uuid>) = sqlx::query_as("SELECT revoked_at IS NOT NULL,issued_to_user_id FROM api_keys WHERE workspace_id=$1 AND id=$2 AND ($3 OR issued_to_user_id=$4) FOR NO KEY UPDATE").bind(ws).bind(id).bind(a.admin).bind(u.user_id).fetch_optional(&mut *tx).await?.ok_or_else(missing)?;
     if !(a.admin || (a.member && issued == Some(u.user_id))) {
         return Err(denied());
     }
@@ -252,6 +255,9 @@ pub(super) async fn create_key(
         None,
     )
     .await?;
+    // A new lineage has no admissions yet; its lock keeps the canonical
+    // order for the restriction and limit rows below.
+    locks::exclusive(&mut tx, [locks::Scope::Lineage(key.id)]).await?;
     if let Some(ids) = &b.model_ids {
         sqlx::query(
             "INSERT INTO key_model_restrictions(workspace_id,governance_key_id) VALUES($1,$2)",
@@ -288,6 +294,10 @@ pub(super) async fn revoke_key(
 ) -> ApiResult {
     let (mut tx, a) = resources::workspace_tx(&s, &u, ws).await?;
     resources::detail_access(&a)?;
+    // Revocation waits for in-flight admissions of the lineage; no admission
+    // after commit can use the key.
+    let lineage = locks::key_lineages(&mut tx, "id=$2", Some(ws), Some(id)).await?;
+    locks::exclusive(&mut tx, lineage).await?;
     if sqlx::query("UPDATE api_keys SET revoked_at=coalesce(revoked_at,now()) WHERE workspace_id=$1 AND id=$2 AND ($3 OR issued_to_user_id=$4)").bind(ws).bind(id).bind(a.admin).bind(u.user_id).execute(&mut *tx).await?.rows_affected()!=1{return Err(missing())}
     audit(
         &mut tx,
@@ -311,7 +321,9 @@ pub(super) async fn rotate_key(
     let (mut tx, a) = resources::workspace_tx(&s, &u, ws).await?;
     resources::detail_access(&a)?;
     expiry(b.expires_in_days)?;
-    let(name,issued,service,lineage,disabled):(String,Option<Uuid>,Option<Uuid>,Uuid,bool)=sqlx::query_as("SELECT name,issued_to_user_id,service_account_id,governance_key_id,disabled_at IS NOT NULL FROM api_keys WHERE workspace_id=$1 AND id=$2 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>now()) FOR UPDATE").bind(ws).bind(id).fetch_optional(&mut *tx).await?.ok_or_else(missing)?;
+    let scopes = locks::key_lineages(&mut tx, "id=$2", Some(ws), Some(id)).await?;
+    locks::exclusive(&mut tx, scopes).await?;
+    let(name,issued,service,lineage,disabled):(String,Option<Uuid>,Option<Uuid>,Uuid,bool)=sqlx::query_as("SELECT name,issued_to_user_id,service_account_id,governance_key_id,disabled_at IS NOT NULL FROM api_keys WHERE workspace_id=$1 AND id=$2 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>now()) FOR NO KEY UPDATE").bind(ws).bind(id).fetch_optional(&mut *tx).await?.ok_or_else(missing)?;
     if disabled {
         return Err(key_disabled());
     }
@@ -414,6 +426,12 @@ pub(super) async fn update_account(
     if !shared(&a.kind) {
         return Err(invalid());
     }
+    // The workspace (service-account keys authorize through it), then the
+    // lineages of the account's keys (revoked below).
+    let mut scopes =
+        locks::key_lineages(&mut tx, "service_account_id=$2", Some(ws), Some(id)).await?;
+    scopes.push(locks::Scope::Workspace(ws));
+    locks::exclusive(&mut tx, scopes).await?;
     if sqlx::query("UPDATE service_accounts SET disabled_at=CASE WHEN $3 THEN coalesce(disabled_at,now()) ELSE NULL END WHERE workspace_id=$1 AND id=$2").bind(ws).bind(id).bind(b.disabled).execute(&mut *tx).await?.rows_affected()!=1{return Err(missing())}
     if b.disabled {
         sqlx::query("UPDATE api_keys SET revoked_at=coalesce(revoked_at,now()) WHERE workspace_id=$1 AND service_account_id=$2").bind(ws).bind(id).execute(&mut *tx).await?;

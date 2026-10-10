@@ -251,9 +251,15 @@ impl InferenceRepository for Store {
         let mut tx = crate::db::begin(&self.pool)
             .await
             .map_err(|_| InferenceError::Storage)?;
-        let lineage = crate::auth::revalidate(&mut tx, principal)
-            .await
-            .map_err(|_| InferenceError::Storage)?;
+        // Candidate planning only: admission re-checks everything live under
+        // its locks, so the scoped mode reads without row locks (no
+        // MultiXacts on authority rows in the hot path).
+        let lineage = if self.admission_mode == crate::governance::locks::AdmissionMode::Scoped {
+            crate::auth::revalidate_admission_with(&mut tx, principal, false).await
+        } else {
+            crate::auth::revalidate(&mut tx, principal).await
+        }
+        .map_err(|_| InferenceError::Storage)?;
         let Some(lineage) = lineage else {
             return Ok(Vec::new());
         };
