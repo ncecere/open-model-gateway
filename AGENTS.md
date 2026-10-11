@@ -2,6 +2,18 @@
 
 The single-enterprise rebuild is in progress. `docs/enterprise-rebuild.md` records the approved product decisions and scope; it supersedes legacy multi-organization assumptions. Implement the new schema on fresh, explicitly selected databases only. Never reset or migrate an old installation implicitly.
 
+## Execution cadence
+
+Keep work moving without lowering the quality bar.
+
+- Agree on the task's scope, acceptance criteria and required gates once. Surface any known additional approval requirements at the start, not as a surprise after implementation.
+- Once approved, carry the task through RED → minimal implementation → required regression/typecheck/build checks → standard review → authorized local commit and tracker update. Do not ask the user to reapprove routine steps or repeat `/build` to resume approved background work.
+- Do not turn one approved task into extra approval-gated micro-slices, speculative hardening, or optional review campaigns. Add another review round only for actionable findings, material artifact changes, an explicit user request, or a mandatory workflow requirement.
+- Reuse successful verification on unchanged relevant inputs. Rerun affected gates after changes or failures; do not repeat fresh installs, whole suites, builds, browser runs or provenance checks merely for reassurance. Reuse one owned test environment where safe; respect existing isolation and dependency-cache restrictions.
+- Pause only for a real blocker: unresolved failures, ambiguous requirements, scope expansion, missing authority, or a newly discovered high-risk/irreversible operation. Existing safety approvals and mandatory checks still apply; speed is never permission to skip tests, weaken assertions or conceal failures.
+- Give concise milestone updates stating what is complete, what remains and any actual blocker. Background agents/processes are work in progress, not new human checkpoints. Once gates pass and review findings are resolved, finish the authorized delivery steps rather than starting more investigation.
+- In single-task mode, complete the approved task and stop. Commits do not authorize pushes, merges, releases or deployments. Keep the parent issue open when only a slice is complete.
+
 ## Layout
 
 - `apps/gateway`: Rust modular monolith; owns all database access and authorization.
