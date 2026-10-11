@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { usagePeriod, usageQuery } from "../lib/usage";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -146,6 +146,75 @@ describe("Add model page", () => {
     expect(body.price.price_lines).toContainEqual({ meter: "requests", microusd_per_batch: "0", batch: 1, unit_label: "/request", sku_label: "Request" });
     expect(body.price.price_lines.filter((l: { meter: string }) => l.meter === "cache_read_tokens")).toEqual([{ meter: "cache_read_tokens", unknown: true }]); // stated unknown, never free
     expect(form().getAttribute("data-dirty")).toBeNull();
+  });
+  it("identifies missing below-fold price ceilings near the header and focuses/scrolls only after submission", async () => {
+    const fetch = vi.fn().mockImplementation(created), { user, navigate } = mountAddModel(fetch);
+    await user.type(screen.getByRole("textbox", { name: /Upstream model ID/ }), "llama3");
+    await user.type(screen.getByRole("textbox", { name: /Display name/ }), "Llama 3");
+    await user.click(screen.getByRole("button", { name: "Approved" }));
+    await user.click(screen.getByRole("button", { name: "Add price now (optional)" }));
+    await user.click(screen.getByRole("button", { name: "Mark all free" }));
+    const input = screen.getByRole("textbox", { name: /input token ceiling/ }), output = screen.getByRole("textbox", { name: /output token ceiling/ });
+    const scrollInput = vi.fn(), scrollOutput = vi.fn();
+    input.scrollIntoView = scrollInput; output.scrollIntoView = scrollOutput;
+    for (const field of [input, output]) expect(field.getAttribute("aria-required")).toBe("true");
+    expect(screen.getAllByText("Required")).toHaveLength(2);
+    const submit = screen.getByRole("button", { name: "Add model" });
+    expect(submit.closest("[data-form-actions]")).not.toBeNull();
+    await user.click(submit);
+    const summary = screen.getByRole("alert", { name: "Form validation" });
+    expect(within(summary).getByText("Fix 2 fields")).toBeTruthy();
+    for (const label of ["Input token ceiling", "Output token ceiling"]) expect(within(summary).getByRole("link", { name: label })).toBeTruthy();
+    expect(summary.compareDocumentPosition(screen.getByRole("group", { name: "Source" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(scrollInput).toHaveBeenCalledExactlyOnceWith({ block: "center", behavior: "auto" });
+    expect(fetch).not.toHaveBeenCalled();
+    await user.type(input, "1000");
+    expect(document.activeElement).toBe(input);
+    expect(scrollInput).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alert", { name: "Form validation" })).toBeNull();
+    await user.click(submit);
+    expect(within(screen.getByRole("alert", { name: "Form validation" })).getByText("Fix 1 field")).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(output));
+    expect(scrollOutput).toHaveBeenCalledTimes(1);
+    await user.type(output, "0");
+    await user.click(submit);
+    expect(screen.getByText("Must be positive.")).toBeTruthy();
+    expect(screen.getByText("Enter a whole number of tokens from 1 to 2,147,483,647, without exponent notation.")).toBeTruthy();
+    expect(fetch).not.toHaveBeenCalled();
+    await user.clear(output); await user.type(output, "10");
+    await user.click(submit);
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith({ page: "model-detail", record: "new-model" }));
+    const posts = fetch.mock.calls.filter(call => call[1]?.method === "POST");
+    expect(posts).toHaveLength(1);
+    expect(screen.queryByRole("alert", { name: "Form validation" })).toBeNull();
+    expect(JSON.parse(posts[0][1].body).price).toMatchObject({ input_token_limit: 1000, output_token_limit: 10 });
+  });
+  it("keeps header submission single-flight and controls disabled while adding a valid priced model", async () => {
+    let resolve!: (response: Response) => void;
+    const fetch = vi.fn().mockImplementation((path: string) => path === `${platformPath}/model-setup`
+      ? new Promise<Response>(done => { resolve = done; })
+      : Promise.resolve(Response.json({ data: path.startsWith(`${platformPath}/providers`) ? connections : catalogs, has_more: false })));
+    const { user, navigate } = mountAddModel(fetch);
+    await user.type(screen.getByRole("textbox", { name: /Upstream model ID/ }), "llama3");
+    await user.type(screen.getByRole("textbox", { name: /Display name/ }), "Llama 3");
+    await user.click(screen.getByRole("button", { name: "Add price now (optional)" }));
+    await user.type(screen.getByRole("textbox", { name: /input token ceiling/ }), "1000");
+    await user.type(screen.getByRole("textbox", { name: /output token ceiling/ }), "10");
+    const submit = screen.getByRole("button", { name: "Add model" });
+    await user.dblClick(submit);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("textbox", { name: /input token ceiling/ }) as HTMLInputElement).disabled).toBe(true);
+    expect(form().getAttribute("aria-busy")).toBe("true");
+    resolve(Response.json({ model_id: "new-model", deployment_id: "new-route", price_id: "new-price" }, { status: 201 }));
+    await waitFor(() => expect(navigate).toHaveBeenCalledOnce());
+    const posts = fetch.mock.calls.filter(call => call[1]?.method === "POST");
+    expect(posts).toHaveLength(1);
+    const lines = JSON.parse(posts[0][1].body).price.price_lines;
+    expect(lines).toContainEqual({ meter: "input_tokens", unknown: true });
+    expect(lines).not.toContainEqual(expect.objectContaining({ meter: "input_tokens", microusd_per_batch: "0" }));
   });
   it("maps a 409 to API name and connection fields, then retries after a fix", async () => {
     let setups = 0;

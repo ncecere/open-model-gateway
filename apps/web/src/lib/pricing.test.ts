@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Price, PriceLine } from "./governance";
+import type { Price, PriceLine, WorkloadKind } from "./governance";
 import { METERS as METER_LIST, acceptImportedCeilings, convertUsd, countNoun, draftBody, draftFromPrice, draftFromSuggestion, draftSummary, emptyDraft, exactAlternatives, formatAudio, lineDisplay, markAllFree, mergeImport, newRow, priceBound, priceDisplayLines, priceSummary, priceTokenCeilings, rowKey, tokenCeilings, unpricedMeters, usdError, usdToMicroUsd, validateDraft, workloadOf, type MeterMode, type PriceDraft, type PriceSuggestion } from "./pricing";
 import { toggleProtocol, protocolSetError, workloadGroups } from "./model-setup";
 import type { Meter } from "./governance";
@@ -180,6 +180,21 @@ describe("workload grouping", () => {
 });
 
 describe("token ceilings, free display and merges", () => {
+  it.each<WorkloadKind>(["generation", "systemone"])("requires positive output tokens for %s with a matching range error", workload => {
+    const draft = limits(emptyDraft(workload), "1000", "0");
+    const message = "Enter a whole number of tokens from 1 to 2,147,483,647, without exponent notation.";
+    for (const outputTokenLimit of ["", "0", "-1", "1e3", "2147483648"]) expect(validateDraft({ ...draft, outputTokenLimit })["limits.output"]).toBe(message);
+    for (const outputTokenLimit of ["1", "2147483647"]) expect(validateDraft({ ...draft, outputTokenLimit })).toEqual({});
+    draft.meters.output_tokens.mode = "not_applicable";
+    expect(validateDraft(draft)).toEqual({});
+    expect(draftBody(draft).output_token_limit).toBe(0); // hidden, non-applicable ceiling remains zero
+  });
+  it.each<WorkloadKind>(["embeddings", "images", "audio_transcriptions", "audio_speech", "rerank", "realtime", "videos", "batches"])("permits zero output tokens for %s without changing publication", workload => {
+    const draft = limits(emptyDraft(workload), "1000", "0");
+    expect(validateDraft(draft)).toEqual({});
+    expect(draftBody(draft).output_token_limit).toBe(0);
+    if (tokenCeilings(draft).output) expect(validateDraft({ ...draft, outputTokenLimit: "" })["limits.output"]).toContain("from 0 to 2,147,483,647");
+  });
   it("needs token ceilings only while a token meter can apply", () => {
     const tts = emptyDraft("audio_speech");
     expect(tokenCeilings(tts)).toEqual({ input: false, output: false });

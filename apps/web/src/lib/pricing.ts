@@ -27,6 +27,8 @@ const ALL_METERS: Meter[] = [...METERS, ...AUDIO_TOKEN_METERS, ...VIDEO_METERS];
 export const metersFor = (workload: WorkloadKind): Meter[] => workload === "realtime" ? [...METERS, ...AUDIO_TOKEN_METERS] : workload === "videos" ? [...METERS, ...VIDEO_METERS] : METERS;
 export const MAX_PRICE_LINES = 64;
 export const MAX_TOKEN_LIMIT = 2147483647;
+/** Generating text or decisions needs a positive output ceiling; other workloads may use zero. */
+export const outputTokenMinimum = (workload: WorkloadKind) => workload === "generation" || workload === "systemone" ? 1 : 0;
 const MAX_USD_INPUT_LENGTH = 40;
 
 // ---------------------------------------------------------------------------
@@ -274,7 +276,7 @@ export function validateDraft(draft: PriceDraft): Record<string, string> {
   const errors: Record<string, string> = {}, ceilings = tokenCeilings(draft);
   const input = ceilings.input ? intError(draft.inputTokenLimit, 1, MAX_TOKEN_LIMIT, "a whole number of tokens") : undefined;
   if (input) errors["limits.input"] = input;
-  const output = ceilings.output ? intError(draft.outputTokenLimit, 0, MAX_TOKEN_LIMIT, "a whole number of tokens") : undefined;
+  const output = ceilings.output ? intError(draft.outputTokenLimit, outputTokenMinimum(draft.workload), MAX_TOKEN_LIMIT, "a whole number of tokens") : undefined;
   if (output) errors["limits.output"] = output;
   for (const meter of draft.shown) {
     const m = draft.meters[meter], spec = METER_SPECS[meter];

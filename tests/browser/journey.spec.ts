@@ -79,17 +79,70 @@ test("platform admin adds a mock connection and a priced model for Product", asy
   await form.getByLabel("Display name").fill("Mock Chat");
   await form.getByLabel("API model name").fill("mock/chat");
   await form.getByRole("switch", { name: "Enabled" }).click();
+  await expect(form.getByRole("combobox", { name: "Type", exact: true })).toHaveText("Text");
   await page.getByRole("button", { name: /Add price now/ }).click();
-  await page.getByLabel("Hard upstream input token ceiling").fill("4096");
-  await page.getByLabel("Hard upstream output token ceiling").fill("1024");
   await page.getByLabel("Input tokens price").selectOption({ label: "Priced" });
   await page.getByLabel("$ per M input tokens").fill("2.50");
   await page.getByLabel("Output tokens price").selectOption({ label: "Priced" });
   await page.getByLabel("$ per M output tokens").fill("10");
   for (const meter of ["Cache read", "Cache write (default)", "Cache write (5-minute)", "Cache write (1-hour)"]) await page.getByLabel(`${meter} price`).selectOption({ label: "Not applicable" });
   await page.getByLabel("Requests price").selectOption({ label: "Free · explicit $0" });
-  await page.getByRole("button", { name: "Add model", exact: true }).click();
+
+  // #18: header submission must not silently leave required price errors below the fold.
+  let modelSetupPosts = 0;
+  page.on("request", request => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/api/v1/platform/model-setup") modelSetupPosts += 1;
+  });
+  const addModel = page.locator("[data-form-actions]").getByRole("button", { name: "Add model", exact: true });
+  const inputCeiling = form.getByRole("textbox", { name: "Hard upstream input token ceiling", exact: true });
+  const outputCeiling = form.getByRole("textbox", { name: "Hard upstream output token ceiling", exact: true });
+  const validation = form.getByRole("alert", { name: "Form validation" });
+  await expect(page.locator("[data-form-actions]")).toHaveCount(1);
+  for (const ceiling of [inputCeiling, outputCeiling]) await expect(ceiling).toHaveAttribute("aria-required", "true");
+  await expect(form.getByText("Required", { exact: true })).toHaveCount(2);
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await addModel.scrollIntoViewIfNeeded();
+    await expect(inputCeiling).not.toBeInViewport();
+    await addModel.click();
+    await expect(validation).toBeVisible();
+    await expect(validation.getByText("Fix 2 fields", { exact: true })).toBeVisible();
+    await expect(validation.getByRole("link")).toHaveCount(2);
+    await expect(validation.getByRole("link", { name: "Input token ceiling", exact: true })).toHaveAttribute("href", `#${await inputCeiling.getAttribute("id")}`);
+    await expect(validation.getByRole("link", { name: "Output token ceiling", exact: true })).toHaveAttribute("href", `#${await outputCeiling.getAttribute("id")}`);
+    expect(await validation.evaluate(node => !!(node.compareDocumentPosition(node.closest("form")!.querySelector("fieldset")!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+    await expect(inputCeiling).toHaveAttribute("aria-invalid", "true");
+    await expect(inputCeiling).toBeFocused();
+    await expect.poll(() => inputCeiling.evaluate(node => document.activeElement === node)).toBe(true);
+    await expect(inputCeiling).toBeInViewport({ ratio: 1 });
+    expect(await inputCeiling.evaluate(node => {
+      const box = node.getBoundingClientRect();
+      return document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2) === node;
+    }), "the focused ceiling is visible, not covered by the header").toBe(true);
+    expect(modelSetupPosts, "invalid header submission must send no create request").toBe(0);
+    if (viewport.width === 390) await expectNoHorizontalScroll(page);
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await inputCeiling.fill("4096");
+  await outputCeiling.fill("0");
+  await addModel.click();
+  await expect(validation.getByText("Fix 1 field", { exact: true })).toBeVisible();
+  await expect(validation.getByRole("link", { name: "Output token ceiling", exact: true })).toBeVisible();
+  await expect(outputCeiling).toHaveAttribute("aria-invalid", "true");
+  await expect(outputCeiling).toBeFocused();
+  await expect.poll(() => outputCeiling.evaluate(node => document.activeElement === node)).toBe(true);
+  await expect(outputCeiling).toBeInViewport({ ratio: 1 });
+  await expect(outputCeiling).toHaveAccessibleDescription(/Must be positive\..*Enter a whole number of tokens from 1 to 2,147,483,647/);
+  await expect(form.getByText("Enter a whole number of tokens from 1 to 2,147,483,647, without exponent notation.", { exact: true })).toBeVisible();
+  await expect(form.getByText(/Enter a whole number of tokens from 0 to/)).toHaveCount(0);
+  expect(modelSetupPosts, "zero output is invalid for text generation").toBe(0);
+  await outputCeiling.fill("1024");
+  await expect(validation).toHaveCount(0);
+  const created = page.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname === "/api/v1/platform/model-setup");
+  await addModel.click();
+  expect((await created).status()).toBe(201);
   await expect(page.getByRole("heading", { level: 1, name: "Mock Chat" })).toBeVisible();
+  expect(modelSetupPosts, "correcting the ceilings creates the model exactly once").toBe(1);
   await expect(page.getByText("$2.50 / $10.00")).toBeVisible();
   saveFixture({ model: idFrom(page) });
 
@@ -231,6 +284,13 @@ test("Logs deep links filter and fit at 1440; usage tiles line up their charts a
   await page.goto(`/workspaces/${product}/costs`);
   await expectTileChartsAligned(page, "Usage summary");
   await page.setViewportSize({ width: 390, height: 844 });
+  // A viewport resize fires matchMedia before React removes the desktop sidebar.
+  // Await the rendered mobile shell; keep the exact no-overflow assertion below.
+  await expect(page.getByRole("button", { name: "Open navigation", exact: true })).toBeVisible();
+  await expect.poll(
+    () => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
+    { message: "mobile document must fit after the responsive shell settles" },
+  ).toBe(0);
   await expectTileChartsAligned(page, "Usage summary");
   await expectNoHorizontalScroll(page);
   await alex.context.close();

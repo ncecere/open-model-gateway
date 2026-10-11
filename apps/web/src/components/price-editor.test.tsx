@@ -136,6 +136,38 @@ describe("v3 price editor dialog", () => {
 });
 
 describe("token ceilings, free shortcut and re-import", () => {
+  it.each<WorkloadKind>(["generation", "systemone"])("labels %s ceilings as required and rejects zero output consistently with its hint", async workload => {
+    const fetch = vi.fn(), { user } = mountEditor(fetch, workload);
+    const input = screen.getByRole("textbox", { name: /input token ceiling/ }), output = screen.getByRole("textbox", { name: /output token ceiling/ });
+    for (const field of [input, output]) expect(field.getAttribute("aria-required")).toBe("true");
+    expect(screen.getAllByText("Required")).toHaveLength(2);
+    await user.type(input, "1000"); await user.type(output, "0");
+    await user.click(publish());
+    expect(fetch).not.toHaveBeenCalled();
+    expect(output.getAttribute("aria-invalid")).toBe("true");
+    const descriptions = output.getAttribute("aria-describedby")!.split(" ").map(id => document.getElementById(id)?.textContent).join(" ");
+    expect(descriptions).toContain("Must be positive.");
+    expect(descriptions).toContain("Enter a whole number of tokens from 1 to 2,147,483,647");
+    expect(descriptions).not.toContain("from 0 to");
+    await waitFor(() => expect(document.activeElement).toBe(output));
+  });
+  it.each<WorkloadKind>(["images", "audio_transcriptions", "rerank"])("allows zero output for %s with a matching hint and one exact publication", async workload => {
+    const fetch = vi.fn().mockResolvedValue(Response.json({ id: "price" }, { status: 201 })), { user, onClose } = mountEditor(fetch, workload);
+    const input = screen.getByRole("textbox", { name: /input token ceiling/ }), output = screen.getByRole("textbox", { name: /output token ceiling/ });
+    expect(output.getAttribute("aria-required")).toBe("true");
+    expect(screen.getByText("Zero is valid when the workload produces no output tokens.")).toBeTruthy();
+    await user.type(input, "1000"); await user.type(output, "0");
+    await user.click(publish());
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(posts(fetch)).toHaveLength(1);
+    expect(JSON.parse(posts(fetch)[0][1].body).output_token_limit).toBe(0);
+  });
+  it("marks only the input ceiling required for embeddings", () => {
+    mountEditor(vi.fn(), "embeddings");
+    expect(screen.getByRole("textbox", { name: /input token ceiling/ }).getAttribute("aria-required")).toBe("true");
+    expect(screen.getAllByText("Required")).toHaveLength(1);
+    expect(screen.queryByRole("textbox", { name: /output token ceiling/ })).toBeNull();
+  });
   it("hides token ceilings for text to speech, marks every meter free and publishes zero ceilings", async () => {
     const fetch = vi.fn().mockResolvedValue(Response.json({ id: "price" }, { status: 201 }));
     const { user, onClose } = mountEditor(fetch, "audio_speech");

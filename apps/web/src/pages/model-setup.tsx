@@ -1,12 +1,12 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AudioLines, Binary, BrainCircuit, Clapperboard, Headphones, Image, Layers, ListOrdered, MessageSquareText, Mic } from "lucide-react";
 import { ApiError, api, platformPath, type Catalog, type ModelProtocol, type ModelSetupResult, type Provider, type Session } from "../lib/api";
 import { validateFields, type Values } from "../lib/forms";
 import { apiNameFrom, chosenConnection, defaultProtocols, initialSetupValues, protocolSupported, selectedIds, setupBody, setupFields, setupIdentityFields, setupSourceFields, workloadDisabledReason, workloadGroups, workloadSupported, type SetupChoices } from "../lib/model-setup";
-import type { WorkloadKind } from "../lib/governance";
-import { draftBody, emptyDraft, validateDraft, type PriceDraft } from "../lib/pricing";
-import { PriceLinesEditor, focusFirstPriceError } from "../components/price-editor";
+import type { Meter, WorkloadKind } from "../lib/governance";
+import { METER_SPECS, draftBody, emptyDraft, validateDraft, type PriceDraft } from "../lib/pricing";
+import { PriceLinesEditor, priceFieldId } from "../components/price-editor";
 import { Alert, FormField, Heading, Input, NativeSelect, Stack, useChoices } from "../components/ui";
 import { FieldControls, FormPage, FormSection } from "../components/templates/form-page";
 import { IconSelect } from "../components/icon-select";
@@ -32,12 +32,37 @@ export function AddModel({ session, connection }: { session: Session; connection
   return <AddModelForm connection={connection} />;
 }
 
+function focusInvalidField(id: string) {
+  const field = document.getElementById(id);
+  if (!field || field.matches(":disabled")) return false;
+  field.focus({ preventScroll: true });
+  field.scrollIntoView?.({ block: "center", behavior: "auto" });
+  return document.activeElement === field;
+}
+
+function priceErrorLabel(key: string) {
+  if (key === "limits.input") return "Input token ceiling";
+  if (key === "limits.output") return "Output token ceiling";
+  const parts = key.split("."), meter = METER_SPECS[parts[0] as Meter];
+  const partLabels: Record<string, string> = { usd: "price", batch: "batch price", variant: "variant", tier: "prompt-size tier", rows: "base price", max: "ceiling" };
+  const part = partLabels[parts.at(-1)!];
+  return meter ? `${meter.title}${part ? ` ${part}` : ""}` : "Pricing";
+}
+
 function AddModelForm({ connection }: { connection?: string }) {
   const nav = useDashboardNavigation(), client = useQueryClient(), id = useId();
   const connections = useChoices<Provider>(`${platformPath}/providers`), catalogs = useChoices<Catalog>(`${platformPath}/catalogs`);
   const [values, setValues] = useState<Values>(initialSetupValues), initial = useRef(values);
   const [price, setPrice] = useState<PriceDraft>(() => emptyDraft("generation")), initialPrice = useRef(price), [priceErrors, setPriceErrors] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<Record<string, string>>({}), [error, setError] = useState<unknown>(), [busy, setBusy] = useState(false);
+  const pendingFocus = useRef<string[] | null>(null), validationSummary = useRef<HTMLDivElement>(null);
+  // Wait for controlled errors to render before focusing. Editing never schedules a focus jump.
+  useLayoutEffect(() => {
+    const targets = pendingFocus.current;
+    if (!targets) return;
+    pendingFocus.current = null;
+    if (!targets.some(focusInvalidField)) validationSummary.current?.focus({ preventScroll: true });
+  }, [errors, priceErrors]);
   // One type per model; text protocols follow the connection's profile until picked by hand.
   const [workload, setWorkload] = useState<WorkloadKind>("generation"), [protocolsTouched, setProtocolsTouched] = useState(false);
   const completed = useRef(false), inFlight = useRef(false), controller = useRef<AbortController | undefined>(undefined);
@@ -77,9 +102,10 @@ function AddModelForm({ connection }: { connection?: string }) {
   async function submit() {
     if (inFlight.current || !connections.data || !catalogs.data) return;
     const fields = setupFields(choices, current), validation = validateFields(fields, current), priceValidation = current.pricing === "priced" ? validateDraft(price) : {};
+    const targets = [...Object.keys(validation).map(key => `${id}-${key}`), ...Object.keys(priceValidation).map(key => priceFieldId(`${id}-price`, key))];
+    pendingFocus.current = targets.length ? targets : null;
     setErrors(validation); setPriceErrors(priceValidation);
-    if (Object.keys(validation).length) { document.getElementById(`${id}-${Object.keys(validation)[0]}`)?.focus(); return; }
-    if (Object.keys(priceValidation).length) { focusFirstPriceError(`${id}-price`, priceValidation); return; }
+    if (targets.length) return;
     let body; try { body = setupBody(current, choices, current.pricing === "priced" ? draftBody(price) : null); } catch (caught) { setError(caught); return; }
     const request = new AbortController(); controller.current = request; inFlight.current = true; setBusy(true); setError(undefined);
     try {
@@ -91,7 +117,7 @@ function AddModelForm({ connection }: { connection?: string }) {
       nav?.navigate({ page: "model-detail", record: result.model_id });
     } catch (caught) {
       if (request.signal.aborted) return;
-      if (caught instanceof ApiError && caught.status === 409) { setErrors(conflictErrors); void connections.refetch(); document.getElementById(`${id}-public_name`)?.focus(); }
+      if (caught instanceof ApiError && caught.status === 409) { pendingFocus.current = [`${id}-public_name`]; setErrors(conflictErrors); void connections.refetch(); }
       else { setError(caught); if (caught instanceof ApiError && caught.status === 403) void client.invalidateQueries({ queryKey: ["session"] }); }
     } finally { inFlight.current = false; if (!request.signal.aborted) setBusy(false); }
   }
@@ -101,9 +127,17 @@ function AddModelForm({ connection }: { connection?: string }) {
   const selected = choices.connections.find(c => c.id === current.provider_connection_id);
   const [, upstreamField] = setupSourceFields(choices, profile, workload);
   const providerName = selected?.provider ? providerLabel(selected.provider) : "this connection";
+  const fields = setupFields(choices, current);
+  const validationIssues = [
+    ...Object.keys(errors).map(key => ({ id: `${id}-${key}`, label: fields.find(field => field.name === key)?.label ?? key })),
+    ...Object.keys(priceErrors).map(key => ({ id: priceFieldId(`${id}-price`, key), label: priceErrorLabel(key) })),
+  ];
   return <FormPage label="Add model" title="Add model" description="Offer a model from one of your connections." back={{ label: "Models", search: { page: "models" } }}
     onCancel={() => nav?.navigate({ page: "models" })} onSubmit={() => void submit()} submitLabel="Add model" busy={busy} dirty={dirty} allowLeave={() => completed.current} error={loadError ?? error}
     loading={!connections.data || !catalogs.data ? (loadError ? "Options could not be loaded." : "Loading…") : undefined}>
+    {validationIssues.length > 0 && <Alert ref={validationSummary} tabIndex={-1} tone="danger" aria-label="Form validation" title={`Fix ${validationIssues.length} field${validationIssues.length === 1 ? "" : "s"}`}>
+      {validationIssues.map((issue, index) => <Fragment key={issue.id}>{index > 0 && " · "}<a href={`#${issue.id}`} onClick={event => { event.preventDefault(); focusInvalidField(issue.id); }}>{issue.label}</a></Fragment>)}
+    </Alert>}
     {connections.data?.length === 0 && <Alert tone="warning" title="No connections yet">Add one first in <ResourceLink search={{ page: "providers" }}>Connections</ResourceLink>.</Alert>}
     <FormSection title="Source">
       <FormField name="provider_connection_id" label="Connection" description={selected?.enabled === false ? "This connection is disabled." : undefined} error={errors.provider_connection_id}>
