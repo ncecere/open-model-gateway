@@ -47,6 +47,34 @@ For a local production-style preview, run `npm run build:web`, then `GATEWAY_WEB
 - Database schema changes or new SQL operations must update and test `deploy/staging/runtime-grants.sql`; runtime has explicit table/column ACLs, never owner credentials. Preserve append-only price/ledger/audit access and protected platform-user columns.
 - Real OIDC/provider acceptance is opt-in; no paid smoke requests, example credentials, or production privilege relaxation in automated tests.
 
+## Running a branch on the cluster
+
+A branch can be tested as a running copy of the local demo on the bitop-talos homelab cluster instead of on the laptop. It is removed automatically after 8 hours.
+
+1. Push the branch. `.github/workflows/branch-images.yml` builds `ghcr.io/ncecere/open-model-gateway:dev-<first 12 characters of the commit>` (amd64 only; it does not wait for `ci.yml`, and it skips the staging rehearsal, scan and signature that `image.yml` runs). A branch cut before that workflow existed has no image: rebase it onto `main`.
+2. Create the environment with the `dev-env` tool from the homelab checkout, then forward it:
+
+   ```sh
+   DEVENV=~/homelab/bitop-talos/tools/dev-env/dev-env
+   $DEVENV up omg my-name --ref my-branch   # ~75 s; checks the image exists first
+   $DEVENV forward omg my-name              # http://127.0.0.1:<port> and the issuer on 127.0.0.1:18084; leave running
+   $DEVENV creds omg my-name                # the demo accounts
+   $DEVENV renew omg my-name --ttl 8h       # also: list, status, down
+   ```
+
+   `--ref` is a branch, tag or commit of this clone, or a release such as `v0.4.1`. The tool deploys the Helm chart of that ref, so a chart change is tested too. Always `down` an environment you are done with. Names are 2-20 characters (lowercase letters, digits, dashes). The tool needs `kubectl`, `helm` and Python 3 with PyYAML.
+
+What it does is `docs/local-demo.md` in Kubernetes, in the order the invariants above require (nothing migrates or bootstraps from `serve`): it creates the `gateway_runtime` role, runs the chart's migrate Job (`migrate` and `deploy/staging/runtime-grants.sql`), runs `bootstrap-demo`, then starts the gateway. Sign in at the forwarded address with SSO as `operator@demo.invalid` (Platform Admin), `auditor@demo.invalid`, `alex@demo.invalid`, `blair@demo.invalid`, or `unentitled@demo.invalid` (authenticates, platform access denied); see `docs/local-demo.md` for what each can do.
+
+- The demo is passwordless and loopback-only by design: when `GATEWAY_OIDC_ISSUER` is the demo issuer the gateway requires a loopback listener and a loopback database host, and `bootstrap-demo` seeds the personas under `http://127.0.0.1:18084`. So the gateway, a Postgres forwarder and the demo issuer run in one pod and are reached by `kubectl port-forward` only; there is no ingress. Never expose it or register its issuer anywhere: anyone who can reach the issuer can sign in as the platform admin.
+- The issuer is forwarded to local port 18084, so only one omg environment can be forwarded at a time.
+- Only `dev-omg` is used. Never deploy, apply or edit anything in another namespace to test a change. The environment has no resource limits and low scheduling priority; it yields to production, so do not leave it running.
+- Postgres is version 18 (CloudNativePG). OMG's CI and `deploy/staging` use PostgreSQL 17, so a result that depends on the server version needs checking against 17 locally.
+- Example connections and deployments start disabled, as in the local demo, and there is no model server or provider: nothing here is paid or live-provider acceptance.
+- Secrets are generated per environment and stay in the cluster. Do not print or commit them.
+
+Only environments exist. The Rust and web test suites, the container and staging tests, and the browser tests still run locally or on GitHub (see Checks); running them as Jobs on the cluster is planned.
+
 ## Checks
 
 ```sh
