@@ -100,7 +100,9 @@ test("platform admin adds a mock connection and a priced model for Product", asy
   await expect(page.locator("[data-form-actions]")).toHaveCount(1);
   for (const ceiling of [inputCeiling, outputCeiling]) await expect(ceiling).toHaveAttribute("aria-required", "true");
   await expect(form.getByText("Required", { exact: true })).toHaveCount(2);
-  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+  // Use a short desktop viewport deliberately: at 900px high, the ceiling can
+  // still fit on screen after returning to the header on some platforms.
+  for (const viewport of [{ width: 1440, height: 720 }, { width: 390, height: 844 }]) {
     await page.setViewportSize(viewport);
     await addModel.scrollIntoViewIfNeeded();
     await expect(inputCeiling).not.toBeInViewport();
