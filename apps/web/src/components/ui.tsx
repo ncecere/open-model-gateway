@@ -97,9 +97,13 @@ function ActionDialog({ action, onClose }: { action: Action; onClose: (success: 
   const [discarding, setDiscarding] = useState(false), [errors, setErrors] = useState<Record<string, string>>({}), [error, setError] = useState<unknown>(), [busy, setBusy] = useState(false), [token, setToken] = useState<string>(), [copied, setCopied] = useState(false), [copyError, setCopyError] = useState(false);
   // Closing/unmounting permanently invalidates retained Copy bindings and feedback.
   const copyGeneration = useRef(0), displayedGeneration = copyGeneration.current;
-  useLayoutEffect(() => () => { copyGeneration.current++; }, []);
-  const mounted = useRef(true), inFlight = useRef(false), completed = useRef(false), controller = useRef<AbortController | undefined>(undefined);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; controller.current?.abort(); }; }, []);
+  // StrictMode may replay mount liveness, but explicit retirement never resets.
+  const mounted = useRef(true), retired = useRef(false), inFlight = useRef(false), completed = useRef(false), controller = useRef<AbortController | undefined>(undefined);
+  useLayoutEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; copyGeneration.current++; };
+  }, []);
+  useEffect(() => () => { controller.current?.abort(); }, []);
   useEffect(() => { if (!dirty || token) return; const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; }; window.addEventListener("beforeunload", warn); return () => window.removeEventListener("beforeunload", warn); }, [dirty, token]);
   const changeValue = (name: string, value: string) => {
     if (busy || values[name] === value) return;
@@ -116,10 +120,10 @@ function ActionDialog({ action, onClose }: { action: Action; onClose: (success: 
       setCopied(true); setCopyError(false);
     } catch { if (copyGeneration.current === displayedGeneration) setCopyError(true); }
   }
-  const discard = () => { copyGeneration.current++; controller.current?.abort(); setToken(undefined); setValues({}); onClose(!!token); };
+  const discard = () => { retired.current = true; copyGeneration.current++; controller.current?.abort(); setToken(undefined); setValues({}); onClose(!!token); };
   const close = () => { if (busy) return; if (!token && dirty) setDiscarding(true); else discard(); };
   async function submit(event: React.FormEvent) {
-    event.preventDefault(); if (inFlight.current) return;
+    event.preventDefault(); if (!mounted.current || retired.current || inFlight.current) return;
     const validation = validateFields(fields, values); setErrors(validation);
     if (Object.keys(validation).length) { document.getElementById(`${id}-${Object.keys(validation)[0]}`)?.focus(); return; }
     const request = new AbortController(); controller.current = request; inFlight.current = true; setBusy(true); setError(undefined);
