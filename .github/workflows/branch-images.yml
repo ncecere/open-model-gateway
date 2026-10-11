@@ -1,0 +1,98 @@
+# Development images for branch pushes: ghcr.io/ncecere/open-model-gateway:dev-<first 12
+# characters of the commit>, so a cluster development environment can run exactly that commit
+# (dev-env up omg <name> --ref <branch> in the homelab repo).
+#
+# These are development builds, built straight away: they do not wait for the tests (ci.yml)
+# and are not scanned or signed, and they skip the staging rehearsal that image.yml runs.
+#   - linux/amd64 only (the homelab runs amd64), one build, no manifest join;
+#   - no latest, no version tag, no provenance or SBOM;
+#   - a tag names one commit.
+# Releases and the sha-<short> images of main are published by image.yml.
+#
+# Like image.yml, nothing comes from Docker Hub: BuildKit is pulled from mirror.gcr.io (the
+# Dockerfile's stages already are), and no SBOM generator is needed.
+name: branch-images
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit to build (default is the selected ref)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+# A newer push to the same branch replaces an older build of it.
+concurrency:
+  group: branch-images-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build open-model-gateway
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - name: Name the image
+        id: name
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          {
+            echo "sha=$sha"
+            echo "tag=dev-${sha:0:12}"
+            echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/open-model-gateway"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          # BuildKit from mirror.gcr.io instead of Docker Hub.
+          driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.name.outputs.image }}:${{ steps.name.outputs.tag }}
+          provenance: false
+          sbom: false
+          labels: |
+            org.opencontainers.image.title=open-model-gateway
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.name.outputs.sha }}
+            org.opencontainers.image.licenses=MIT
+          cache-from: type=gha,scope=image-linux-amd64
+          cache-to: type=gha,mode=max,scope=image-linux-amd64
+
+      - name: Summary
+        env:
+          IMAGE: ${{ steps.name.outputs.image }}
+          TAG: ${{ steps.name.outputs.tag }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          {
+            echo "\`$IMAGE:$TAG\`"
+            echo ""
+            echo "digest \`$DIGEST\`"
+          } >> "$GITHUB_STEP_SUMMARY"
