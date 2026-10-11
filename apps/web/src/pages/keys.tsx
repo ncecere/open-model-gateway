@@ -168,11 +168,19 @@ export function CreateKeyDialog({ session, workspace, options, accounts, onClose
   const [submitted, setSubmitted] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState<unknown>(), [result, setResult] = useState<{ id: string; token: string; policy: Policy | null }>(), [copied, setCopied] = useState(false);
   // Copy bindings retain only this lifetime's authority, never a later disclosure's.
   const copyGeneration = useRef(0), displayedGeneration = copyGeneration.current;
-  // Mount replay may revive this same owner, but never undo its explicit close.
+  // Mount replay may revive this same owner, but never undo its retirement.
   const creationLifetime = useRef({ mounted: false, closed: false });
   useLayoutEffect(() => {
     creationLifetime.current.mounted = true;
-    return () => { creationLifetime.current.mounted = false; copyGeneration.current++; };
+    // Home's checking/removal render is asynchronous; retire before dispatch returns.
+    const revoke = () => { creationLifetime.current.closed = true; copyGeneration.current++; };
+    window.addEventListener("omg:unauthorized", revoke);
+    window.addEventListener("omg:access-refresh", revoke);
+    return () => {
+      window.removeEventListener("omg:unauthorized", revoke);
+      window.removeEventListener("omg:access-refresh", revoke);
+      creationLifetime.current.mounted = false; copyGeneration.current++;
+    };
   }, []);
   const limitText = presetChoiceText(limit).trim(), maxDays = owner === "service" ? 365 : session.installation.key_max_lifetime_days ?? 365;
   const budgets: BudgetDraft[] = [...(limitText ? [{ key: "primary", period, amount: limitText }] : []), ...extra];
@@ -215,7 +223,7 @@ export function CreateKeyDialog({ session, workspace, options, accounts, onClose
     finally { setBusy(false); }
   }
   async function copySecret() {
-    if (copyGeneration.current !== displayedGeneration || !result) return;
+    if (creationLifetime.current.closed || copyGeneration.current !== displayedGeneration || !result) return;
     try {
       await navigator.clipboard.writeText(result.token);
       if (copyGeneration.current !== displayedGeneration) return;

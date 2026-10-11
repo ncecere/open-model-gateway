@@ -97,11 +97,19 @@ function ActionDialog({ action, onClose }: { action: Action; onClose: (success: 
   const [discarding, setDiscarding] = useState(false), [errors, setErrors] = useState<Record<string, string>>({}), [error, setError] = useState<unknown>(), [busy, setBusy] = useState(false), [token, setToken] = useState<string>(), [copied, setCopied] = useState(false), [copyError, setCopyError] = useState(false);
   // Closing/unmounting permanently invalidates retained Copy bindings and feedback.
   const copyGeneration = useRef(0), displayedGeneration = copyGeneration.current;
-  // StrictMode may replay mount liveness, but explicit retirement never resets.
+  // StrictMode may replay mount liveness, but retirement never resets.
   const mounted = useRef(true), retired = useRef(false), inFlight = useRef(false), completed = useRef(false), controller = useRef<AbortController | undefined>(undefined);
   useLayoutEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; copyGeneration.current++; };
+    // Home's checking/removal render is asynchronous; retire before dispatch returns.
+    const revoke = () => { retired.current = true; copyGeneration.current++; };
+    window.addEventListener("omg:unauthorized", revoke);
+    window.addEventListener("omg:access-refresh", revoke);
+    return () => {
+      window.removeEventListener("omg:unauthorized", revoke);
+      window.removeEventListener("omg:access-refresh", revoke);
+      mounted.current = false; copyGeneration.current++;
+    };
   }, []);
   useEffect(() => () => { controller.current?.abort(); }, []);
   useEffect(() => { if (!dirty || token) return; const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; }; window.addEventListener("beforeunload", warn); return () => window.removeEventListener("beforeunload", warn); }, [dirty, token]);
@@ -113,7 +121,7 @@ function ActionDialog({ action, onClose }: { action: Action; onClose: (success: 
     setErrors({});
   };
   async function copySecret() {
-    if (copyGeneration.current !== displayedGeneration || !token) return;
+    if (retired.current || copyGeneration.current !== displayedGeneration || !token) return;
     try {
       await navigator.clipboard.writeText(token);
       if (copyGeneration.current !== displayedGeneration) return;
