@@ -1,4 +1,4 @@
-import { createContext, Fragment, useContext, useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { createContext, Fragment, useContext, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api, type Collection, type OneTimeToken, type Session } from "../lib/api";
 import { parseCheckboxValues, validateFields, type Field, type Values } from "../lib/forms";
@@ -95,6 +95,9 @@ function ActionDialog({ action, onClose }: { action: Action; onClose: (success: 
   const [values, setValues] = useState<Values>(() => Object.fromEntries(fields.map(field => [field.name, field.value ?? (field.type === "checkboxes" ? "[]" : "")])));
   const initial = useRef(values), dirty = JSON.stringify(values) !== JSON.stringify(initial.current);
   const [discarding, setDiscarding] = useState(false), [errors, setErrors] = useState<Record<string, string>>({}), [error, setError] = useState<unknown>(), [busy, setBusy] = useState(false), [token, setToken] = useState<string>(), [copied, setCopied] = useState(false), [copyError, setCopyError] = useState(false);
+  // Closing/unmounting permanently invalidates retained Copy bindings and feedback.
+  const copyGeneration = useRef(0), displayedGeneration = copyGeneration.current;
+  useLayoutEffect(() => () => { copyGeneration.current++; }, []);
   const mounted = useRef(true), inFlight = useRef(false), completed = useRef(false), controller = useRef<AbortController | undefined>(undefined);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; controller.current?.abort(); }; }, []);
   useEffect(() => { if (!dirty || token) return; const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; }; window.addEventListener("beforeunload", warn); return () => window.removeEventListener("beforeunload", warn); }, [dirty, token]);
@@ -105,7 +108,15 @@ function ActionDialog({ action, onClose }: { action: Action; onClose: (success: 
     // Base UI lets the next submit revalidate the current values.
     setErrors({});
   };
-  const discard = () => { controller.current?.abort(); setToken(undefined); setValues({}); onClose(!!token); };
+  async function copySecret() {
+    if (copyGeneration.current !== displayedGeneration || !token) return;
+    try {
+      await navigator.clipboard.writeText(token);
+      if (copyGeneration.current !== displayedGeneration) return;
+      setCopied(true); setCopyError(false);
+    } catch { if (copyGeneration.current === displayedGeneration) setCopyError(true); }
+  }
+  const discard = () => { copyGeneration.current++; controller.current?.abort(); setToken(undefined); setValues({}); onClose(!!token); };
   const close = () => { if (busy) return; if (!token && dirty) setDiscarding(true); else discard(); };
   async function submit(event: React.FormEvent) {
     event.preventDefault(); if (inFlight.current) return;
@@ -124,7 +135,7 @@ function ActionDialog({ action, onClose }: { action: Action; onClose: (success: 
     finally { inFlight.current = false; if (mounted.current) setBusy(false); }
   }
   return <><Dialog open title={token ? action.secretLabel! : action.title} description={action.description} hideClose={busy} onOpenChange={open => { if (!open) close(); }} finalFocus={() => action.returnFocus?.isConnected ? action.returnFocus : true} footer={token ? <Button onClick={discard}>I have saved it</Button> : <><Button variant="secondary" disabled={busy} onClick={close}>Cancel</Button><Button type="submit" form={id} variant={action.danger ? "danger" : "primary"} loading={busy}>{action.submitLabel ?? "Save"}</Button></>}>
-    {token ? <Stack gap={4}><Alert tone="warning" title="Shown only once">Store it securely. Closing this dialog clears it from the page.</Alert><FormField label={`One-time ${action.secretNoun ?? "token"}`}><Textarea readOnly value={token} rows={4} spellCheck={false} autoComplete="off" autoFocus onFocus={event => event.currentTarget.select()} /></FormField><Button variant="secondary" onClick={async () => { try { await navigator.clipboard.writeText(token); setCopied(true); setCopyError(false); } catch { setCopyError(true); } }}>{copied ? "Copied" : `Copy ${action.secretNoun ?? "token"}`}</Button><p role="status">{copyError ? `Clipboard unavailable. Select and copy the ${action.secretNoun ?? "token"} manually.` : copied ? `Copied. Clear your clipboard after storing the ${action.secretNoun ?? "token"}.` : ""}</p></Stack> : <Form id={id} noValidate onSubmit={event => void submit(event)} aria-busy={busy} data-dirty={dirty && !token ? "true" : undefined}><Stack gap={4}>{fields.filter(field => !field.visibleWhen || field.visibleWhen(values)).map((field, index) => {
+    {token ? <Stack gap={4}><Alert tone="warning" title="Shown only once">Store it securely. Closing this dialog clears it from the page.</Alert><FormField label={`One-time ${action.secretNoun ?? "token"}`}><Textarea readOnly value={token} rows={4} spellCheck={false} autoComplete="off" autoFocus onFocus={event => event.currentTarget.select()} /></FormField><Button variant="secondary" onClick={copySecret}>{copied ? "Copied" : `Copy ${action.secretNoun ?? "token"}`}</Button><p role="status">{copyError ? `Clipboard unavailable. Select and copy the ${action.secretNoun ?? "token"} manually.` : copied ? `Copied. Clear your clipboard after storing the ${action.secretNoun ?? "token"}.` : ""}</p></Stack> : <Form id={id} noValidate onSubmit={event => void submit(event)} aria-busy={busy} data-dirty={dirty && !token ? "true" : undefined}><Stack gap={4}>{fields.filter(field => !field.visibleWhen || field.visibleWhen(values)).map((field, index) => {
       const fieldId = `${id}-${field.name}`;
       const common = { id: fieldId, name: field.name, required: field.required || field.requiredWhen?.(values), disabled: busy, value: values[field.name] ?? "", autoFocus: !action.danger && index === 0, onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => changeValue(field.name, event.target.value) };
       const help = field.helpFor?.(values) ?? field.help;
