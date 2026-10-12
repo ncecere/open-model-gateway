@@ -226,7 +226,7 @@ secrets:
     encryptionKeysEnvVar: GATEWAY_FILE_ENCRYPTION_KEYS_ENV
     encryptionKeysKey: GATEWAY_FILE_ENCRYPTION_KEYS
 
-# --- Migration Job (pre-install/pre-upgrade Helm hook). Disabled by default;
+# --- Migration Job (plain Job on first install, pre-upgrade hook after). Disabled by default;
 # AGENTS.md forbids automatic migration in `serve`, so running it is an
 # explicit operator action (`--set migrations.run=true`). ---
 migrations:

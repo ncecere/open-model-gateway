@@ -65,6 +65,19 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      initContainers:
+        # Wait for the migration Job's schema and grants (runtime credential)
+        # instead of crash-looping, e.g. during a first install.
+        - name: wait-for-schema
+          image: {{ include "omg.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["wait-for-database", "--schema"]
+          env:
+            {{- include "omg.env.runtimeDatabase" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.gateway.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.gateway.securityContext | nindent 12 }}
       containers:
         - name: gateway
           image: {{ include "omg.image" . }}
