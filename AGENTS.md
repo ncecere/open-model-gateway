@@ -2,6 +2,24 @@
 
 The single-enterprise rebuild is in progress. `docs/enterprise-rebuild.md` records the approved product decisions and scope; it supersedes legacy multi-organization assumptions. Implement the new schema on fresh, explicitly selected databases only. Never reset or migrate an old installation implicitly.
 
+## Execution cadence
+
+Keep work moving without lowering the quality bar.
+
+One GitHub issue at a time, one loop per issue:
+
+1. Branch from current `main`. Write a failing test that shows the problem.
+2. Make the smallest fix that passes it.
+3. Run the checks below for the areas the change touches (browser tests for UI flows, a real PostgreSQL database for SQL/authorization changes).
+4. One code review; fix actionable findings.
+5. Open a PR. When CI is green, merge it to `main` and close the issue. That is "done".
+
+- Releases are separate: cut one only when the user asks. A "release before the next issue" line in an older issue template does not block the loop.
+- Do not add bespoke evidence files, source hashing, copied candidate trees or repeat review rounds. CI and the PR are the record.
+- Do not expand scope: no speculative hardening, extra slices or side investigations. File a new issue instead. `backup/held-issue-work-b7f1d10` is a read-only archive of unaccepted work; do not port from it.
+- Pause only for a real blocker: an unresolved failure, an ambiguous requirement, or an action outside this loop (paid provider calls, production deployment, existing installations, other namespaces/repositories). Never skip tests, weaken assertions or hide failures to keep moving.
+- Updates are short: what is done, what is next, any blocker.
+
 ## Layout
 
 - `apps/gateway`: Rust modular monolith; owns all database access and authorization.

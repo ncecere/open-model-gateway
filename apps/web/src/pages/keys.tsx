@@ -14,7 +14,7 @@
  * Members see their own keys; workspace admins every key (the server decides).
  * Disabled keys can be enabled again; revoked keys never.
  */
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { KeyRound, Plus, X } from "lucide-react";
 import { api, wsPath, type Grant, type Member, type OneTimeToken, type ServiceAccount } from "../lib/api";
@@ -166,6 +166,22 @@ export function CreateKeyDialog({ session, workspace, options, accounts, onClose
   const [extra, setExtra] = useState<BudgetDraft[]>([]), [modelMode, setModelMode] = useState<"inherit" | "selected">("inherit"), [models, setModels] = useState<string[]>([]);
   const [rates, setRates] = useState<Record<RateKey, string>>({ requests_per_minute: "", tokens_per_minute: "", concurrent_requests: "", concurrent_jobs: "" }), [rejected, setRejected] = useState<DraftErrors>();
   const [submitted, setSubmitted] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState<unknown>(), [result, setResult] = useState<{ id: string; token: string; policy: Policy | null }>(), [copied, setCopied] = useState(false);
+  // Copy bindings retain only this lifetime's authority, never a later disclosure's.
+  const copyGeneration = useRef(0), displayedGeneration = copyGeneration.current;
+  // Mount replay may revive this same owner, but never undo its retirement.
+  const creationLifetime = useRef({ mounted: false, closed: false });
+  useLayoutEffect(() => {
+    creationLifetime.current.mounted = true;
+    // Home's checking/removal render is asynchronous; retire before dispatch returns.
+    const revoke = () => { creationLifetime.current.closed = true; copyGeneration.current++; };
+    window.addEventListener("omg:unauthorized", revoke);
+    window.addEventListener("omg:access-refresh", revoke);
+    return () => {
+      window.removeEventListener("omg:unauthorized", revoke);
+      window.removeEventListener("omg:access-refresh", revoke);
+      creationLifetime.current.mounted = false; copyGeneration.current++;
+    };
+  }, []);
   const limitText = presetChoiceText(limit).trim(), maxDays = owner === "service" ? 365 : session.installation.key_max_lifetime_days ?? 365;
   const budgets: BudgetDraft[] = [...(limitText ? [{ key: "primary", period, amount: limitText }] : []), ...extra];
   const draft: LimitsDraft = { ...rates, budgets };
@@ -186,6 +202,7 @@ export function CreateKeyDialog({ session, workspace, options, accounts, onClose
   const setRate = (key: RateKey, value: string) => { setRates({ ...rates, [key]: value }); setRejected(undefined); };
   const setExtraBudgets = (next: BudgetDraft[]) => { setExtra(next); setRejected(undefined); };
   async function submit() {
+    if (!creationLifetime.current.mounted || creationLifetime.current.closed) return;
     setSubmitted(true);
     if (invalid || busy) return;
     setBusy(true); setError(undefined); setRejected(undefined);
@@ -205,14 +222,22 @@ export function CreateKeyDialog({ session, workspace, options, accounts, onClose
     }
     finally { setBusy(false); }
   }
-  const close = (navigated = false) => { if (!busy) { setResult(undefined); onClose(navigated); } };
+  async function copySecret() {
+    if (creationLifetime.current.closed || copyGeneration.current !== displayedGeneration || !result) return;
+    try {
+      await navigator.clipboard.writeText(result.token);
+      if (copyGeneration.current !== displayedGeneration) return;
+      setCopied(true); toast.success("Copied", "Clear your clipboard after storing the key.");
+    } catch { if (copyGeneration.current === displayedGeneration) toast.error("Clipboard unavailable", "Select and copy the key manually."); }
+  }
+  const close = (navigated = false) => { if (!busy) { creationLifetime.current.closed = true; copyGeneration.current++; setResult(undefined); onClose(navigated); } };
   if (result) return <Dialog open title="Save your API key" description="Use it in your code to call models in this workspace. It can't sign in to this dashboard." onOpenChange={open => { if (!open) close(); }}
     footer={<><Button variant="secondary" onClick={() => { const id = result.id; close(true); nav?.navigate({ page: "key-detail", ws: workspace.id, record: id }); }}>Open key page</Button><Button onClick={() => close()}>I have saved it</Button></>}>
     <Stack gap={4}>
       <Alert tone="warning" title="Shown only once">Store this key securely. Closing this dialog clears it from the page.</Alert>
       <p className={s.note}>{result.policy ? `Key limits: ${limitsSummary(limitsOf(result.policy))}. Workspace and platform limits also apply.` : "No key limits: workspace and platform limits apply."}</p>
       <FormField label="API key"><Textarea readOnly value={result.token} rows={3} spellCheck={false} autoComplete="off" autoFocus onFocus={event => event.currentTarget.select()} /></FormField>
-      <Button variant="secondary" onClick={async () => { try { await navigator.clipboard.writeText(result.token); setCopied(true); toast.success("Copied", "Clear your clipboard after storing the key."); } catch { toast.error("Clipboard unavailable", "Select and copy the key manually."); } }}>{copied ? "Copied" : "Copy key"}</Button>
+      <Button variant="secondary" onClick={copySecret}>{copied ? "Copied" : "Copy key"}</Button>
     </Stack>
   </Dialog>;
   const used = new Set(budgets.map(b => b.period));
