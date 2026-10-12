@@ -173,7 +173,7 @@ Never recover over the live cluster. Never run down migrations. Never delete pen
 
 1. Take a fresh backup and run `verify`.
 2. Restore with `--create` into `gateway_restore_<date>` on a non-production cluster, using `--gateway-binary` from the release you intend to run.
-3. Apply `deploy/staging/runtime-grants.sql` as the migrator, then run `verify-privileges.sql`.
+3. Apply the runtime grants as the migrator with `open-model-gateway grants apply`, then run `open-model-gateway grants verify` with a role that can `SET ROLE gateway_runtime` (it runs `deploy/staging/verify-privileges.sql`, rollback-only).
 4. Start the matching release against the restored database. `/health/ready` must report `schema: ok`.
 5. Compare the restored ledger and execution counts (printed by `restore`) with the source. Spot-check costs, and confirm that pending and unknown reservations survived. Run `open-model-gateway budget verify` against it.
 6. Record the elapsed time (your measured RTO) and the backup age (RPO), then drop the drill database.
@@ -256,7 +256,7 @@ Reports (`cost-report`, `cost-summary`, `costs`, `usage-export`), usage (`usage/
 1. Read the release notes for migrations and any grant changes. Build or pull the image by digest.
 2. Take a backup and `verify` it. Run a restore drill for releases that include migrations.
 3. For incompatible migrations, drain traffic: stop ingress, then the gateway. Mixed-schema replicas are not supported.
-4. Run `open-model-gateway migrate` as the migrator, then reapply `runtime-grants.sql`. `staging.py migrate` does both.
+4. Run `open-model-gateway migrate`, then `open-model-gateway grants apply` (reapplies `deploy/staging/runtime-grants.sql`, embedded in the binary), both as the migrator. `staging.py migrate` does both.
 5. Start the new release. Wait for `/health/ready` to report `schema: ok`, then check metrics, sign-in, and one bounded inference request.
 6. To roll back, redeploy the previous image digest only if no migration ran. Otherwise restore the pre-upgrade backup into a new database and cut over. There are no down migrations.
 

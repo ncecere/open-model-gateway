@@ -108,19 +108,13 @@ mixed-schema replicas are not supported, so scale to 0 before a migrating upgrad
 Helm `pre-install,pre-upgrade` hook with two steps, both using the **migrator** Secret only (never
 mounted into the gateway Deployment):
 
-1. `migrate` (init container, the gateway image): runs `open-model-gateway migrate`.
-2. `apply-runtime-grants` (container, `mirror.gcr.io/library/postgres:17-alpine`): runs
-   `psql -f /sql/runtime-grants.sql "$(DATABASE_URL)"` against a ConfigMap built from
-   [`deploy/staging/runtime-grants.sql`](../deploy/staging/runtime-grants.sql).
+1. `migrate` (init container): runs `open-model-gateway migrate`.
+2. `apply-runtime-grants` (container): runs `open-model-gateway grants apply`, which applies the
+   reviewed [`deploy/staging/runtime-grants.sql`](../deploy/staging/runtime-grants.sql) embedded in
+   the binary.
 
-   No Rust `apply-runtime-grants` subcommand exists yet — the scale design (§8.1) proposed one, but
-   this chart deliberately does not add it: Rust code and migrations in this release are owned by a
-   parallel agent, and the gateway image has no `psql` to run arbitrary SQL anyway. Running the
-   reviewed grants file through the standard PostgreSQL client image reproduces exactly what
-   `scripts/staging.py migrate` already does outside Kubernetes. The chart's copy at
-   `deploy/helm/open-model-gateway/files/runtime-grants.sql` is kept in sync by hand with the
-   canonical `deploy/staging/runtime-grants.sql`; CI's `helm` job fails the build if they diverge.
-   Revisit this once/if a Rust subcommand lands (migration numbering is 0035+, out of scope here).
+Both steps use the gateway image, so there is no second image to pin and no copy of the SQL to keep
+in sync.
 
 ## PgBouncer caveats (read before enabling the Pooler)
 

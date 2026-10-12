@@ -5,7 +5,7 @@
 // `helm lint` (run separately; see docs/kubernetes.md#validation).
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -115,8 +115,15 @@ test("CNPG Pooler runs transaction mode with prepared statements enabled", () =>
   assert.match(pooler, /max_prepared_statements: "200"/);
 });
 
-test("chart's runtime-grants.sql copy matches deploy/staging/runtime-grants.sql", () => {
-  const canonical = readFileSync(join(root, "deploy/staging/runtime-grants.sql"), "utf8");
-  const copy = readFileSync(join(chart, "files/runtime-grants.sql"), "utf8");
-  assert.equal(copy, canonical, "re-copy deploy/staging/runtime-grants.sql into deploy/helm/open-model-gateway/files/runtime-grants.sql");
+test("migration Job applies runtime grants with the gateway image itself, from no copied SQL", () => {
+  const rendered = helmTemplate(["-f", join(chart, "ci/external-db-values.yaml"), "--set", "migrations.run=true"]);
+  const [job] = docsOfKind(rendered, "Job");
+  const images = [...job.matchAll(/^\s+image: (.+)$/gm)].map((m) => m[1]);
+  assert.ok(images.length >= 2, "migrate and grants steps");
+  assert.equal(new Set(images).size, 1, `one image for every step, got ${images.join(", ")}`);
+  assert.match(images[0], /ghcr\.io\/ncecere\/open-model-gateway/);
+  assert.match(job, /args: \["grants", "apply"\]/);
+  assert.doesNotMatch(job, /psql|configMap/);
+  assert.equal(docsOf(rendered).filter((d) => /runtime-grants/.test(d) && /^kind: ConfigMap$/m.test(d)).length, 0);
+  assert.equal(existsSync(join(chart, "files/runtime-grants.sql")), false, "the chart must not carry a copy of runtime-grants.sql");
 });

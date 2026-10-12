@@ -14,6 +14,9 @@
 !apps/gateway/src/**
 !apps/gateway/migrations/
 !apps/gateway/migrations/*.sql
+# Runtime grants and privilege probes are embedded in the binary (`grants apply|verify`).
+!deploy/staging/runtime-grants.sql
+!deploy/staging/verify-privileges.sql
 !tools/
 !tools/mock-upstream/
 !tools/mock-upstream/Cargo.toml

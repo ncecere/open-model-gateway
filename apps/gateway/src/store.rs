@@ -1,6 +1,11 @@
 use sqlx::{PgConnection, PgPool, migrate::Migrator};
 
 pub static MIGRATOR: Migrator = sqlx::migrate!("./enterprise_migrations");
+/// The one reviewed runtime-role allowlist; `grants apply`, staging and the Helm Job all run it.
+pub const RUNTIME_GRANTS_SQL: &str = include_str!("../../../deploy/staging/runtime-grants.sql");
+/// ACL assertions and rollback-only runtime probes run by `grants verify`.
+pub const VERIFY_PRIVILEGES_SQL: &str =
+    include_str!("../../../deploy/staging/verify-privileges.sql");
 
 /// `/health/ready` inputs; `Default` is "database unreachable".
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -392,6 +397,37 @@ impl Store {
             .execute(&mut connection)
             .await?;
         result
+    }
+
+    /// Applies the reviewed runtime-role allowlist (`deploy/staging/runtime-grants.sql`,
+    /// embedded in the binary) as the migrator, after every migration. Serialized with
+    /// `migrate` by the same session lock; an error closes the detached connection,
+    /// which releases the lock and rolls back the file's single transaction.
+    /// Requires the exact schema of this binary: an older binary's allowlist would
+    /// silently revoke runtime access to newer tables.
+    pub async fn apply_runtime_grants(&self) -> anyhow::Result<()> {
+        let mut connection = self.pool.acquire().await?.detach();
+        sqlx::query("SELECT pg_advisory_lock(72419503)")
+            .execute(&mut connection)
+            .await?;
+        preflight(&mut connection, false).await?;
+        sqlx::raw_sql(RUNTIME_GRANTS_SQL)
+            .execute(&mut connection)
+            .await?;
+        sqlx::query("SELECT pg_advisory_unlock(72419503)")
+            .execute(&mut connection)
+            .await?;
+        Ok(())
+    }
+
+    /// Runs `deploy/staging/verify-privileges.sql`: ACL assertions plus rollback-only
+    /// probes as `gateway_runtime` (the connecting role must be allowed to `SET ROLE` to it).
+    pub async fn verify_runtime_grants(&self) -> anyhow::Result<()> {
+        let mut connection = self.pool.acquire().await?.detach();
+        sqlx::raw_sql(VERIFY_PRIVILEGES_SQL)
+            .execute(&mut connection)
+            .await?;
+        Ok(())
     }
 
     /// Readiness checks the family AND exact checksums; it cannot initialize anything.

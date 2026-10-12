@@ -86,10 +86,6 @@ CNPG-managed resource names.
 {{ include "omg.fullname" . }}-env
 {{- end -}}
 
-{{- define "omg.grantsConfigMapName" -}}
-{{ include "omg.fullname" . }}-runtime-grants
-{{- end -}}
-
 {{/*
 Database connection wiring.
 

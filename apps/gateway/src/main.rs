@@ -34,6 +34,11 @@ enum Command {
     Serve,
     /// Apply database migrations explicitly, before starting replicas.
     Migrate,
+    /// Runtime-role privileges (deploy/staging/runtime-grants.sql, embedded).
+    Grants {
+        #[command(subcommand)]
+        action: GrantsCommand,
+    },
     /// Provision local development workspaces and print new keys once.
     BootstrapDev,
     /// Seed fixed local-demo personas and disabled sample configuration in gateway_demo only.
@@ -113,6 +118,14 @@ enum Command {
         #[arg(long)]
         allow_non_loopback: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum GrantsCommand {
+    /// Apply the reviewed runtime grants as the migrator; run after every `migrate`.
+    Apply,
+    /// Check the runtime role's privileges with rollback-only probes (needs a role that can SET ROLE gateway_runtime).
+    Verify,
 }
 
 #[derive(Subcommand)]
@@ -297,6 +310,22 @@ async fn run(cli: Cli) -> Result<()> {
                 .context("enterprise database initialization failed")?;
             println!("Migrations applied.");
         }
+        Command::Grants { action } => match action {
+            GrantsCommand::Apply => {
+                store
+                    .apply_runtime_grants()
+                    .await
+                    .context("applying runtime grants failed")?;
+                println!("Runtime grants applied.");
+            }
+            GrantsCommand::Verify => {
+                store
+                    .verify_runtime_grants()
+                    .await
+                    .context("runtime privilege verification failed")?;
+                println!("Runtime privileges verified.");
+            }
+        },
         Command::BootstrapDev => {
             store.preflight_enterprise().await?;
             let seeded = bootstrap::seed(&store, config.environment).await?;

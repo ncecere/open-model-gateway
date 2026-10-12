@@ -49,26 +49,14 @@ spec:
             capabilities:
               drop: [ALL]
       containers:
-        # No Rust `apply-runtime-grants` subcommand exists yet (the gateway
-        # image has no psql and this chart must not change Rust/migrations;
-        # see docs/kubernetes.md "Migration job and runtime grants"). This
-        # step runs the same deploy/staging/runtime-grants.sql through the
-        # standard PostgreSQL client image as the migrator role, exactly as
-        # `scripts/staging.py migrate` does outside Kubernetes.
+        # Same image, same migrator Secret: the reviewed runtime grants are
+        # embedded in the binary (deploy/staging/runtime-grants.sql).
         - name: apply-runtime-grants
-          image: "{{ .Values.migrations.grants.image.repository }}{{ if .Values.migrations.grants.image.digest }}@{{ .Values.migrations.grants.image.digest }}{{ else }}:{{ .Values.migrations.grants.image.tag }}{{ end }}"
-          command: ["psql"]
-          # $(DATABASE_URL) is Kubernetes' own arg substitution (never a
-          # shell), resolved from the env entries below.
-          args: ["-v", "ON_ERROR_STOP=1", "-f", "/sql/runtime-grants.sql", "$(DATABASE_URL)"]
+          image: {{ include "omg.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["grants", "apply"]
           env:
-            - name: PGCONNECT_TIMEOUT
-              value: "10"
             {{- include "omg.env.migratorDatabase" . | nindent 12 }}
-          volumeMounts:
-            - name: runtime-grants
-              mountPath: /sql
-              readOnly: true
           resources:
             {{- toYaml .Values.migrations.resources | nindent 12 }}
           securityContext:
@@ -77,8 +65,4 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]
-      volumes:
-        - name: runtime-grants
-          configMap:
-            name: {{ include "omg.grantsConfigMapName" . }}
 {{- end }}

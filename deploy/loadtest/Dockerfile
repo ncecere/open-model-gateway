@@ -7,6 +7,8 @@ FROM mirror.gcr.io/library/rust:1.99.0-bookworm AS build
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY apps/gateway/ apps/gateway/
+# Embedded by `open-model-gateway grants apply|verify`.
+COPY deploy/staging/runtime-grants.sql deploy/staging/verify-privileges.sql deploy/staging/
 COPY tools/ tools/
 ARG CARGO_BUILD_JOBS=8
 # Same release profile as the production image (thin LTO, one codegen unit).
