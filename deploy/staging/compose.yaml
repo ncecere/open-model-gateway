@@ -55,21 +55,14 @@ services:
     logging: *logging
 
   grant-runtime:
-    image: ${STAGING_POSTGRES_IMAGE:-postgres:17-bookworm}
+    <<: *gateway
     profiles: [ops]
-    user: '999:999'
-    read_only: true
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
+    # The reviewed allowlist (runtime-grants.sql) is embedded in the binary.
+    command: [grants, apply]
     environment:
-      PGHOST: postgres
-      PGUSER: gateway_migrator
-      PGDATABASE: gateway
-    entrypoint: [/bin/sh, /opt/gateway/grant-runtime.sh]
-    secrets: [migrator_password]
-    volumes:
-      - ./grant-runtime.sh:/opt/gateway/grant-runtime.sh:ro
-      - ./runtime-grants.sql:/opt/gateway/runtime-grants.sql:ro
+      DATABASE_URL_FILE: /run/secrets/migrator_database_url
+      GATEWAY_ENV: production
+    secrets: [migrator_database_url]
     networks: [database]
     depends_on:
       postgres: {condition: service_healthy}

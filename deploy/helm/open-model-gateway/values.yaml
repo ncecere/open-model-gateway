@@ -240,14 +240,6 @@ migrations:
     limits:
       cpu: "1"
       memory: 512Mi
-  # No Rust `apply-runtime-grants` subcommand exists yet (docs/kubernetes.md
-  # "Migration job and runtime grants"). The grants step runs psql against
-  # deploy/staging/runtime-grants.sql, embedded as a ConfigMap by this chart.
-  grants:
-    image:
-      repository: mirror.gcr.io/library/postgres
-      tag: "17-alpine"
-      digest: ""
 
 # --- CloudNativePG Cluster + Pooler (optional). Set cnpg.cluster.enabled to
 # deploy a dedicated database for this release; otherwise point

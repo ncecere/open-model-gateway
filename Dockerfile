@@ -17,6 +17,8 @@ FROM mirror.gcr.io/library/rust:1.99.0-bookworm AS build
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY apps/gateway/ apps/gateway/
+# Embedded by `open-model-gateway grants apply|verify`.
+COPY deploy/staging/runtime-grants.sql deploy/staging/verify-privileges.sql deploy/staging/
 # Workspace members (load-test tools) must exist for Cargo to load the
 # workspace; only the gateway package is built into this image.
 COPY tools/ tools/

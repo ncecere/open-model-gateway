@@ -20,16 +20,12 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
     let database = database.replace('"', "\"\"");
     sqlx::raw_sql(&format!("REVOKE ALL ON DATABASE \"{database}\" FROM PUBLIC,gateway_runtime; GRANT CONNECT ON DATABASE \"{database}\" TO gateway_runtime"))
         .execute(&mut *connection).await.unwrap();
-    sqlx::raw_sql(include_str!("../../../deploy/staging/runtime-grants.sql"))
-        .execute(&mut *connection)
-        .await
-        .unwrap();
-    sqlx::raw_sql(include_str!(
-        "../../../deploy/staging/verify-privileges.sql"
-    ))
-    .execute(&mut *connection)
-    .await
-    .unwrap();
+    // The same embedded files and code path as `open-model-gateway grants apply|verify`.
+    let store = open_model_gateway::store::Store::new(pool.clone());
+    store.apply_runtime_grants().await.unwrap();
+    // Idempotent: reapplying after every migration must succeed.
+    store.apply_runtime_grants().await.unwrap();
+    store.verify_runtime_grants().await.unwrap();
     for table in [
         "users",
         "api_keys",
