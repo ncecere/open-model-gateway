@@ -174,6 +174,19 @@ separately; this chart does not wrap `scripts/backup.py` in a Job.
 - **CNPG `Cluster`/`Pooler` rejected by the webhook:** usually a missing role Secret
   (`cnpg.cluster.roles.migrator`/`.runtime.existingSecret`) or a `storageClass` that doesn't exist;
   `kubectl describe cluster.postgresql.cnpg.io <release>-db` shows the CNPG-side reason.
+- **`kind load docker-image` fails with `ctr: content digest sha256:... not found`:** the published
+  image is a multi-platform index with signed SBOM/provenance attestations, and Docker Desktop keeps
+  only your platform's content, so kind can't import the whole index. A real cluster pulling from the
+  registry is unaffected. For a local kind cluster, either skip `kind load` and let the node pull the
+  public image from GHCR (the chart's default `IfNotPresent` pull policy does this), or load a
+  single-platform archive:
+
+  ```sh
+  IMAGE=ghcr.io/ncecere/open-model-gateway:v0.4.1
+  docker pull "$IMAGE"
+  docker save --platform "linux/$(docker version --format '{{.Server.Arch}}')" "$IMAGE" -o omg.tar
+  kind load image-archive omg.tar --name <your-kind-cluster>
+  ```
 
 ## Validation
 
