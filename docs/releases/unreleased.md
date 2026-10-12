@@ -2,6 +2,10 @@
 
 Notes for changes on `main` since v0.4.0. They become the next release's notes.
 
+## Inference
+
+- `POST /v1/responses` with `stream: true` now forwards text as `response.output_text.delta` events as the model generates it, instead of after the model finishes. Tool calls are still emitted whole, after the text; usage, settlement and the 4 MiB output bound are unchanged (#22).
+
 ## Dashboard
 
 - Add model now marks required pricing ceilings, shows a linked validation summary and focuses the first invalid field. Text and System One output-ceiling errors consistently require a positive value (#18).
