@@ -152,7 +152,7 @@ A served model is 1–256 bytes of printable, non-space ASCII. Anything else (ab
 
 Generation uses text/tool typed contracts, not arbitrary provider JSON. Unknown request fields/options fail rather than disappear. Upstream refusal/reasoning/audio content outside the subset is rejected. Adapter support never guarantees every upstream model accepts the request.
 
-Streams contain deltas, one Finish, optional cumulative Usage and one terminal Done; EOF/duplicates/malformed frames fail. Usage observations are snapshots, not additive. Chat emits `[DONE]` only on success; midstream sanitized errors close without success. Responses/Messages frontend buffering is documented in the matrix. Dropping execution/stream owns cancellation: no detached network producer or hidden adapter retry.
+Streams contain deltas, one Finish, optional cumulative Usage and one terminal Done; EOF/duplicates/malformed frames fail. Usage observations are snapshots, not additive. Chat emits `[DONE]` only on success; midstream sanitized errors close without success. Responses/Messages frontend streaming behavior is documented in the matrix. Dropping execution/stream owns cancellation: no detached network producer or hidden adapter retry.
 
 Inbound HTTP bodies are 2 MiB. Provider complete bodies are 4 MiB; SSE frames 1 MiB; Chat supports at most 128 tool-call indices. Embeddings allow 128 strings, 1 MiB aggregate input content, dimensions at most 16384, finite uniform vectors and a 4 MiB response. OpenAI-wire vectors require complete unique indices; native Ollama arrays preserve batch order.
 

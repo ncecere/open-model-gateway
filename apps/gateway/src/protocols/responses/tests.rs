@@ -159,3 +159,129 @@ fn responses_keep_max_output_tokens_and_reject_chat_maxima() {
         assert!(parse(v).is_err(), "{field}");
     }
 }
+fn text(t: &str) -> Result<ChatEvent> {
+    Ok(ChatEvent::Delta {
+        text: Some(t.into()),
+        tool_calls: vec![],
+    })
+}
+/// Frames available before the upstream stream ends (it stays open forever).
+async fn frames_while_open(events: Vec<Result<ChatEvent>>, want: usize) -> Vec<Value> {
+    use http_body_util::BodyExt;
+    let output = ProviderOutput::Stream(Box::pin(
+        futures_util::stream::iter(events).chain(futures_util::stream::pending()),
+    ));
+    let mut body = render(output, "r".into(), "m".into(), 1).into_body();
+    let mut text = String::new();
+    while frames(&text).len() < want {
+        let frame = tokio::time::timeout(Duration::from_secs(2), body.frame())
+            .await
+            .expect("frame arrives before upstream completion")
+            .unwrap()
+            .unwrap();
+        if let Ok(data) = frame.into_data() {
+            text.push_str(std::str::from_utf8(&data).unwrap());
+        }
+    }
+    frames(&text)
+}
+#[tokio::test]
+async fn text_deltas_reach_the_client_before_upstream_completion() {
+    let f = frames_while_open(vec![text("Hel"), text("lo")], 6).await;
+    let kinds: Vec<_> = f.iter().map(|v| v["type"].as_str().unwrap()).collect();
+    assert_eq!(
+        kinds,
+        [
+            "response.created",
+            "response.in_progress",
+            "response.output_item.added",
+            "response.content_part.added",
+            "response.output_text.delta",
+            "response.output_text.delta",
+        ]
+    );
+    assert_eq!(f[2]["item"]["id"], "msg_r");
+    assert_eq!(f[2]["item"]["status"], "in_progress");
+    assert_eq!(f[4]["delta"], "Hel");
+    assert_eq!(f[5]["delta"], "lo");
+    assert_eq!(f[5]["item_id"], "msg_r");
+}
+#[tokio::test]
+async fn incremental_text_then_tools_keep_snapshot_order() {
+    let output = stream(vec![
+        text("a"),
+        Ok(ChatEvent::Delta {
+            text: Some("b".into()),
+            tool_calls: vec![ToolCallDelta {
+                index: 0,
+                id: Some("call".into()),
+                name: Some("weather".into()),
+                arguments: Some("{\"c\":".into()),
+            }],
+        }),
+        Ok(ChatEvent::Delta {
+            text: None,
+            tool_calls: vec![ToolCallDelta {
+                index: 0,
+                id: None,
+                name: None,
+                arguments: Some("1}".into()),
+            }],
+        }),
+        Ok(ChatEvent::Finish(FinishReason::ToolCalls)),
+        Ok(ChatEvent::Done),
+    ]);
+    let f = frames(&body(render(output, "r".into(), "m".into(), 1)).await);
+    let kinds: Vec<_> = f.iter().map(|v| v["type"].as_str().unwrap()).collect();
+    assert_eq!(
+        kinds,
+        [
+            "response.created",
+            "response.in_progress",
+            "response.output_item.added",
+            "response.content_part.added",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.done",
+            "response.content_part.done",
+            "response.output_item.done",
+            "response.output_item.added",
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.done",
+            "response.output_item.done",
+            "response.completed",
+        ]
+    );
+    for (i, v) in f.iter().enumerate() {
+        assert_eq!(v["sequence_number"], i as u64);
+    }
+    let terminal = &f.last().unwrap()["response"];
+    // Events agree with the terminal snapshot.
+    assert_eq!(f[6]["text"], "ab");
+    assert_eq!(f[8]["item"], terminal["output"][0]);
+    assert_eq!(f[9]["output_index"], 1);
+    assert_eq!(f[11]["arguments"], "{\"c\":1}");
+    assert_eq!(f[12]["item"], terminal["output"][1]);
+    assert_eq!(
+        terminal["usage"],
+        Value::Null,
+        "unknown usage stays unknown"
+    );
+}
+#[tokio::test]
+async fn mid_stream_failure_after_deltas_never_completes() {
+    let b = body(render(
+        stream(vec![
+            text("partial"),
+            Err(InferenceError::UpstreamUnavailable),
+        ]),
+        "r".into(),
+        "m".into(),
+        1,
+    ))
+    .await;
+    assert!(b.contains("event: response.output_text.delta"));
+    assert!(b.contains("event: error"));
+    assert!(!b.contains("event: response.completed"));
+    assert!(!b.contains("event: response.output_text.done"));
+}

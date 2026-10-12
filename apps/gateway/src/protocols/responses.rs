@@ -368,11 +368,25 @@ fn render(output: ProviderOutput, id: String, model: String, created: u64) -> Re
                 let mut seq = 0; let mut start = snapshot(&id, &model, created, &ChatResponse { content: None, tool_calls: vec![], finish_reason: FinishReason::Stop, usage: Usage::default() }); start["status"] = "in_progress".into();
                 yield Ok::<_,Infallible>(numbered("response.created", json!({"response":start}), &mut seq));
                 yield Ok(numbered("response.in_progress", json!({"response":start}), &mut seq));
-                let mut accumulator = Accumulator::default(); let mut done = false;
+                // Text is forwarded as it arrives (message item at index 0, as in the
+                // snapshot). Tool calls stay buffered and are emitted whole after it, so
+                // parallel calls never interleave. Every event is still validated first.
+                let message_id = format!("msg_{id}");
+                let mut accumulator = Accumulator::default(); let mut done = false; let mut message_open = false;
                 while let Some(next) = stream.next().await {
+                    let delta = match &next { Ok(ChatEvent::Delta { text: Some(text), .. }) => Some(text.clone()), _ => None };
                     match next.and_then(|event| accumulator.push(event)) {
-                        Ok(false) => continue,
-                        Ok(true) => { done = true; break; }
+                        Ok(finished) => {
+                            if let Some(delta) = delta {
+                                if !message_open {
+                                    message_open = true;
+                                    yield Ok(numbered("response.output_item.added", json!({"output_index":0,"item":{"id":message_id,"type":"message","role":"assistant","status":"in_progress","content":[]}}), &mut seq));
+                                    yield Ok(numbered("response.content_part.added", json!({"output_index":0,"item_id":message_id,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}), &mut seq));
+                                }
+                                yield Ok(numbered("response.output_text.delta", json!({"output_index":0,"item_id":message_id,"content_index":0,"delta":delta}), &mut seq));
+                            }
+                            if finished { done = true; break; }
+                        }
                         Err(e) => { yield Ok(numbered("error", json!({"code":e.code(),"message":e.message(),"param":null}), &mut seq)); return; }
                     }
                 }
@@ -380,16 +394,13 @@ fn render(output: ProviderOutput, id: String, model: String, created: u64) -> Re
                 let response = match accumulator.finish() { Ok(r) => r, Err(e) => { yield Ok(numbered("error", json!({"code":e.code(),"message":e.message(),"param":null}), &mut seq)); return; } };
                 let terminal = snapshot(&id, &model, created, &response);
                 for (i, item) in terminal["output"].as_array().unwrap().iter().enumerate() {
-                    let mut initial = item.clone(); initial["status"] = "in_progress".into();
-                    if item["type"] == "message" { initial["content"] = json!([]); } else { initial["arguments"] = "".into(); }
-                    yield Ok(numbered("response.output_item.added", json!({"output_index":i,"item":initial}), &mut seq));
                     if item["type"] == "message" {
-                        let part = &item["content"][0]; let mut empty = part.clone(); empty["text"] = "".into();
-                        yield Ok(numbered("response.content_part.added", json!({"output_index":i,"item_id":item["id"],"content_index":0,"part":empty}), &mut seq));
-                        yield Ok(numbered("response.output_text.delta", json!({"output_index":i,"item_id":item["id"],"content_index":0,"delta":part["text"]}), &mut seq));
+                        let part = &item["content"][0];
                         yield Ok(numbered("response.output_text.done", json!({"output_index":i,"item_id":item["id"],"content_index":0,"text":part["text"]}), &mut seq));
                         yield Ok(numbered("response.content_part.done", json!({"output_index":i,"item_id":item["id"],"content_index":0,"part":part}), &mut seq));
                     } else {
+                        let mut initial = item.clone(); initial["status"] = "in_progress".into(); initial["arguments"] = "".into();
+                        yield Ok(numbered("response.output_item.added", json!({"output_index":i,"item":initial}), &mut seq));
                         yield Ok(numbered("response.function_call_arguments.delta", json!({"output_index":i,"item_id":item["id"],"delta":item["arguments"]}), &mut seq));
                         yield Ok(numbered("response.function_call_arguments.done", json!({"output_index":i,"item_id":item["id"],"arguments":item["arguments"],"name":item["name"]}), &mut seq));
                     }
