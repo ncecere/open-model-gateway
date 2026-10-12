@@ -52,7 +52,7 @@ Choose `responses` or `messages` only with an explicitly compatible deployment. 
 Each real inference test can incur charges. Agree a total request/spend envelope first; do not run a load test as an acceptance smoke.
 
 - Verify model listing, a successful JSON request, bounded output and actual reported token usage. Check known cost, holds, terminal execution state and append-only ledger through authorized views.
-- Test Chat SSE and downstream cancellation with a real client. Responses streams text incrementally and should be verified with a real client; Messages currently buffers bounded content.
+- Test Chat SSE and downstream cancellation with a real client. Responses and Messages stream text incrementally and should be verified with real clients.
 - Verify wrong workspace/organization/model access is denied before upstream dispatch, including service-account versus human-key membership rules.
 - Verify the platform ceiling aggregates personal/team/project traffic. A blank local limit must not remove the platform ceiling. Do not create fake usage records to simulate this.
 - Rotate the test key; old credentials stop working and consumed allowance/restrictions remain. Revoke the organization model entitlement and confirm child access is removed.

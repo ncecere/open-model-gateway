@@ -5,6 +5,7 @@ Notes for changes on `main` since v0.4.0. They become the next release's notes.
 ## Inference
 
 - `POST /v1/responses` with `stream: true` now forwards text as `response.output_text.delta` events as the model generates it, instead of after the model finishes. Tool calls are still emitted whole, after the text; usage, settlement and the 4 MiB output bound are unchanged (#22).
+- `POST /v1/messages` with `stream: true` now sends `message_start` immediately and streams text as `text_delta` events; tool calls arrive whole after the text. `message_start` usage is now `{"input_tokens":0}` (a placeholder); the observed input, cache and output counts arrive in `message_delta`, which the Anthropic SDKs apply (#23).
 
 ## Dashboard
 

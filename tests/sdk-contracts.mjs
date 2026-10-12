@@ -50,8 +50,9 @@ messageStream.on("streamEvent", (event) => {
   if (event.type === "message_start") startUsage = { ...event.message.usage };
 });
 const finalMessage = await messageStream.finalMessage();
-// Vendor shape: observed input at start, cumulative output replaced by message_delta.
-assert.deepEqual(startUsage, { input_tokens: 3, output_tokens: 0 });
+// Streamed: message_start is sent before usage is observed (input placeholder 0, no output);
+// message_delta carries the observed input and cumulative output, which the SDK applies.
+assert.deepEqual(startUsage, { input_tokens: 0 });
 assert.equal(finalMessage.usage.input_tokens, 3);
 assert.equal(finalMessage.usage.output_tokens, 4);
 assert.equal(finalMessage.content[0].text, "Hello from fixture");
