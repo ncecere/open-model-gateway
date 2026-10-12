@@ -6,13 +6,19 @@ The single-enterprise rebuild is in progress. `docs/enterprise-rebuild.md` recor
 
 Keep work moving without lowering the quality bar.
 
-- Agree on the task's scope, acceptance criteria and required gates once. Surface any known additional approval requirements at the start, not as a surprise after implementation.
-- Once approved, carry the task through RED → minimal implementation → required regression/typecheck/build checks → standard review → authorized local commit and tracker update. Do not ask the user to reapprove routine steps or repeat `/build` to resume approved background work.
-- Do not turn one approved task into extra approval-gated micro-slices, speculative hardening, or optional review campaigns. Add another review round only for actionable findings, material artifact changes, an explicit user request, or a mandatory workflow requirement.
-- Reuse successful verification on unchanged relevant inputs. Rerun affected gates after changes or failures; do not repeat fresh installs, whole suites, builds, browser runs or provenance checks merely for reassurance. Reuse one owned test environment where safe; respect existing isolation and dependency-cache restrictions.
-- Pause only for a real blocker: unresolved failures, ambiguous requirements, scope expansion, missing authority, or a newly discovered high-risk/irreversible operation. Existing safety approvals and mandatory checks still apply; speed is never permission to skip tests, weaken assertions or conceal failures.
-- Give concise milestone updates stating what is complete, what remains and any actual blocker. Background agents/processes are work in progress, not new human checkpoints. Once gates pass and review findings are resolved, finish the authorized delivery steps rather than starting more investigation.
-- In single-task mode, complete the approved task and stop. Commits do not authorize pushes, merges, releases or deployments. Keep the parent issue open when only a slice is complete.
+One GitHub issue at a time, one loop per issue:
+
+1. Branch from current `main`. Write a failing test that shows the problem.
+2. Make the smallest fix that passes it.
+3. Run the checks below for the areas the change touches (browser tests for UI flows, a real PostgreSQL database for SQL/authorization changes).
+4. One code review; fix actionable findings.
+5. Open a PR. When CI is green, merge it to `main` and close the issue. That is "done".
+
+- Releases are separate: cut one only when the user asks. A "release before the next issue" line in an older issue template does not block the loop.
+- Do not add bespoke evidence files, source hashing, copied candidate trees or repeat review rounds. CI and the PR are the record.
+- Do not expand scope: no speculative hardening, extra slices or side investigations. File a new issue instead. `backup/held-issue-work-b7f1d10` is a read-only archive of unaccepted work; do not port from it.
+- Pause only for a real blocker: an unresolved failure, an ambiguous requirement, or an action outside this loop (paid provider calls, production deployment, existing installations, other namespaces/repositories). Never skip tests, weaken assertions or hide failures to keep moving.
+- Updates are short: what is done, what is next, any blocker.
 
 ## Layout
 
