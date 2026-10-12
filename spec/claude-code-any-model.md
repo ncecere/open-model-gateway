@@ -1,6 +1,6 @@
 # Claude Code through the gateway, with any model (#70, #71)
 
-Status: revised proposal for approval. Nothing here is implemented yet.
+Status: approved 2026-10-12; implementation deferred until the phase 2 (scale) work is done. Nothing here is implemented yet.
 
 ## Goal
 
@@ -53,6 +53,10 @@ Claude Code sends whatever name it is configured with (`ANTHROPIC_MODEL`, `ANTHR
 5. `/v1/messages/count_tokens` (see the open question).
 6. #73: real Claude Code acceptance with paid calls, under your spending cap.
 
-## Open question
+## Decisions
 
-For `count_tokens` you answered "see 2", and I'm not sure what you meant. My reading is that it should also go through the gateway: Anthropic routes ask Anthropic, and other models get a gateway estimate. Without the endpoint, Claude Code just estimates context usage itself. Please confirm or correct.
+- No general passthrough: the gateway handles every field itself, per the table above, for every provider.
+- Output bound for Messages: 16 MiB.
+- Server tools (web search, code execution): refused for now; to be added once their charges are priced.
+- `count_tokens` (#72): handled by the gateway. Anthropic routes ask Anthropic; other models get a gateway estimate. Counting never bills or admits generation.
+- Real-client acceptance (#73): Claude Haiku as the main run, Claude Sonnet for a first validation run, plus `gpt-6-luna` through OpenAI and `kimi-k3` through OpenRouter. Spend is capped by a $5 lifetime budget on the gateway key used for the test; model prices are entered from the providers' pricing pages and checked before any paid call. It runs in a short-lived cluster dev environment; provider keys are cluster Secrets referenced by the gateway's connections, never given to the client, printed or committed.
