@@ -109,10 +109,13 @@ async fn native_message_blocks_and_usage() {
     );
     assert!(b.contains("世界"));
     assert!(b.contains("東京"));
+    // Unknown output is never reported, not even as message_start's 0; observed input
+    // arrives with message_delta.
     assert!(!b.contains("output_tokens"));
-    assert!(b.contains("input_tokens"));
     let start = sse_data(&b, "message_start");
-    assert_eq!(start["message"]["usage"], json!({"input_tokens":5}));
+    assert_eq!(start["message"]["usage"], json!({"input_tokens":0}));
+    let delta = sse_data(&b, "message_delta");
+    assert_eq!(delta["usage"], json!({"input_tokens":5}));
 }
 fn sse_data(body: &str, name: &str) -> Value {
     let mut lines = body.lines();
@@ -124,7 +127,8 @@ fn sse_data(body: &str, name: &str) -> Value {
     }
     panic!("{name} missing")
 }
-/// D3: message_start carries the Anthropic usage shape, never `{}` when known.
+/// D3 (streaming): message_start is sent before anything is observed, so its usage is only the
+/// `input_tokens: 0` placeholder strict clients require; message_delta carries observed usage.
 #[tokio::test]
 async fn message_start_usage_has_vendor_shape() {
     let output = stream(vec![
@@ -142,12 +146,12 @@ async fn message_start_usage_has_vendor_shape() {
     ]);
     let b = body(render(output, "msg_test".into(), "public".into())).await;
     let start = sse_data(&b, "message_start");
-    assert_eq!(
-        start["message"]["usage"],
-        json!({"input_tokens":13,"output_tokens":0})
-    );
+    assert_eq!(start["message"]["usage"], json!({"input_tokens":0}));
     let delta = sse_data(&b, "message_delta");
-    assert_eq!(delta["usage"]["output_tokens"], 14);
+    assert_eq!(
+        delta["usage"],
+        json!({"input_tokens":13,"output_tokens":14})
+    );
     assert!(
         b.find("event: message_start").unwrap() < b.find("event: content_block_start").unwrap()
     );
@@ -202,4 +206,144 @@ fn exclusive_and_ttl_counts_remain_protocol_native_numbers() {
     assert_eq!(value["cache_creation_input_tokens"], 20);
     assert_eq!(value["cache_creation"]["ephemeral_1h_input_tokens"], 12);
     assert!(value.get("total_input_tokens").is_none());
+}
+fn text(t: &str) -> Result<ChatEvent> {
+    Ok(ChatEvent::Delta {
+        text: Some(t.into()),
+        tool_calls: vec![],
+    })
+}
+/// (event name, data) pairs available before the upstream stream ends (it stays open).
+async fn events_while_open(events: Vec<Result<ChatEvent>>, want: usize) -> Vec<(String, Value)> {
+    use http_body_util::BodyExt;
+    let output = ProviderOutput::Stream(Box::pin(
+        futures_util::stream::iter(events).chain(futures_util::stream::pending()),
+    ));
+    let mut body = render(output, "msg_r".into(), "m".into()).into_body();
+    let mut raw = String::new();
+    loop {
+        let parsed = parse_events(&raw);
+        if parsed.len() >= want {
+            return parsed;
+        }
+        let frame = tokio::time::timeout(Duration::from_secs(2), body.frame())
+            .await
+            .expect("event arrives before upstream completion")
+            .unwrap()
+            .unwrap();
+        if let Ok(data) = frame.into_data() {
+            raw.push_str(std::str::from_utf8(&data).unwrap());
+        }
+    }
+}
+fn parse_events(body: &str) -> Vec<(String, Value)> {
+    let mut out = vec![];
+    let mut lines = body.lines();
+    while let Some(line) = lines.next() {
+        if let Some(name) = line.strip_prefix("event: ")
+            && let Some(data) = lines.next().and_then(|l| l.strip_prefix("data: "))
+        {
+            out.push((name.to_string(), serde_json::from_str(data).unwrap()));
+        }
+    }
+    out
+}
+#[tokio::test]
+async fn text_deltas_reach_the_client_before_upstream_completion() {
+    let e = events_while_open(vec![text("Hel"), text("lo")], 4).await;
+    let names: Vec<_> = e.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "message_start",
+            "content_block_start",
+            "content_block_delta",
+            "content_block_delta"
+        ]
+    );
+    // Nothing is observed yet: only the input placeholder, never an output count.
+    assert_eq!(e[0].1["message"]["usage"], json!({"input_tokens":0}));
+    assert_eq!(
+        e[1].1,
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}})
+    );
+    assert_eq!(e[2].1["delta"], json!({"type":"text_delta","text":"Hel"}));
+    assert_eq!(e[3].1["delta"], json!({"type":"text_delta","text":"lo"}));
+}
+#[tokio::test]
+async fn incremental_text_then_whole_tool_blocks_and_final_usage() {
+    let output = stream(vec![
+        text("a"),
+        Ok(ChatEvent::Delta {
+            text: Some("b".into()),
+            tool_calls: vec![ToolCallDelta {
+                index: 0,
+                id: Some("c".into()),
+                name: Some("weather".into()),
+                arguments: Some("{\"city\":".into()),
+            }],
+        }),
+        Ok(ChatEvent::Delta {
+            text: None,
+            tool_calls: vec![ToolCallDelta {
+                index: 0,
+                id: None,
+                name: None,
+                arguments: Some("\"x\"}".into()),
+            }],
+        }),
+        Ok(ChatEvent::Finish(FinishReason::ToolCalls)),
+        Ok(ChatEvent::Usage(Usage {
+            input_tokens: Some(5),
+            output_tokens: Some(7),
+            ..Usage::default()
+        })),
+        Ok(ChatEvent::Done),
+    ]);
+    let e = parse_events(&body(render(output, "msg_r".into(), "m".into())).await);
+    let names: Vec<_> = e.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "message_start",
+            "content_block_start",
+            "content_block_delta",
+            "content_block_delta",
+            "content_block_stop",
+            "content_block_start",
+            "content_block_delta",
+            "content_block_stop",
+            "message_delta",
+            "message_stop"
+        ]
+    );
+    assert_eq!(e[4].1["index"], 0);
+    assert_eq!(
+        e[5].1["content_block"],
+        json!({"type":"tool_use","id":"c","name":"weather","input":{}})
+    );
+    assert_eq!(e[5].1["index"], 1);
+    assert_eq!(
+        e[6].1["delta"],
+        json!({"type":"input_json_delta","partial_json":"{\"city\":\"x\"}"})
+    );
+    assert_eq!(e[8].1["delta"]["stop_reason"], "tool_use");
+    // Observed usage arrives with message_delta (the SDK overwrites input when present).
+    assert_eq!(e[8].1["usage"], json!({"input_tokens":5,"output_tokens":7}));
+}
+#[tokio::test]
+async fn mid_stream_failure_after_text_never_stops() {
+    let b = body(render(
+        stream(vec![
+            text("partial"),
+            Err(InferenceError::UpstreamUnavailable),
+        ]),
+        "id".into(),
+        "m".into(),
+    ))
+    .await;
+    assert!(b.contains("event: content_block_delta"));
+    assert!(b.contains("event: error"));
+    assert!(!b.contains("event: message_delta"));
+    assert!(!b.contains("event: message_stop"));
 }

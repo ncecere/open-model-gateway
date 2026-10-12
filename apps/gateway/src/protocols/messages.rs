@@ -253,19 +253,6 @@ fn usage_json(usage: Usage) -> Value {
     }
     value
 }
-/// `message_start` usage: observed input-side counters only. `output_tokens` is
-/// the vendor's cumulative count at stream start (0) and is emitted only when the
-/// final count is known, because `message_delta` must then replace it; unknown
-/// output stays absent rather than becoming an SDK-visible zero.
-fn start_usage(terminal: &Value) -> Value {
-    let mut usage = terminal.clone();
-    if let Some(fields) = usage.as_object_mut()
-        && fields.contains_key("output_tokens")
-    {
-        fields.insert("output_tokens".into(), 0.into());
-    }
-    usage
-}
 /// `/v1/batches` line body (`crate::jobs::lines`, Anthropic shape): the
 /// interactive contract, never streamed.
 pub(crate) fn batch_request(body: Value) -> Result<ChatRequest> {
@@ -320,24 +307,41 @@ fn render(output: ProviderOutput, id: String, model: String) -> Response {
         },
         ProviderOutput::Stream(mut stream) => {
             let events = async_stream::stream! {
-                let mut accumulator = Accumulator::default(); let mut done = false;
+                // Sent when the upstream stream opens, before any usage is observed (#23).
+                // `input_tokens: 0` is a stream-start placeholder that strict clients require
+                // (e.g. Vercel's @ai-sdk/anthropic); message_delta carries the observed input,
+                // cache and output counters, which the SDKs apply. `output_tokens` is left out:
+                // clients merge usage, so a start value that message_delta never replaces would
+                // turn unknown output into zero. Gateway accounting never uses these values.
+                yield Ok::<_, Infallible>(event("message_start", json!({"message":{"id":id,"type":"message","role":"assistant","model":model,"content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0}}})));
+                // Text streams live in block 0 (text precedes tools in the snapshot). Tool
+                // calls stay buffered and are emitted whole after it, so parallel calls never
+                // interleave. Every event is validated before anything is forwarded.
+                let mut accumulator = Accumulator::default(); let mut done = false; let mut text_open = false;
                 while let Some(next) = stream.next().await {
+                    let delta = match &next { Ok(ChatEvent::Delta { text: Some(text), .. }) => Some(text.clone()), _ => None };
                     match next.and_then(|e| accumulator.push(e)) {
-                        Ok(false) => continue, Ok(true) => { done = true; break; }
-                        Err(e) => { yield Ok::<_, Infallible>(event("error", error_body(e))); return; }
+                        Ok(finished) => {
+                            if let Some(delta) = delta {
+                                if !text_open {
+                                    text_open = true;
+                                    yield Ok(event("content_block_start", json!({"index":0,"content_block":{"type":"text","text":""}})));
+                                }
+                                yield Ok(event("content_block_delta", json!({"index":0,"delta":{"type":"text_delta","text":delta}})));
+                            }
+                            if finished { done = true; break; }
+                        }
+                        Err(e) => { yield Ok(event("error", error_body(e))); return; }
                     }
                 }
                 if !done { yield Ok(event("error", error_body(InferenceError::InvalidUpstream))); return; }
                 let terminal = match accumulator.finish().and_then(|r| snapshot(&id, &model, &r)) { Ok(v) => v, Err(e) => { yield Ok(event("error", error_body(e))); return; } };
-                // Output is buffered, so message_start follows validated completion
-                // and carries the observed input-side usage (vendor shape).
-                yield Ok(event("message_start", json!({"message":{"id":id,"type":"message","role":"assistant","model":model,"content":[],"stop_reason":null,"stop_sequence":null,"usage":start_usage(&terminal["usage"])}})));
-                // Serial blocks avoid illegal interleaving of parallel function argument deltas.
                 for (index, block) in terminal["content"].as_array().unwrap().iter().enumerate() {
-                    let mut start = block.clone();
-                    let delta = if block["type"] == "text" { start["text"] = "".into(); json!({"type":"text_delta","text":block["text"]}) } else { start["input"] = json!({}); json!({"type":"input_json_delta","partial_json":block["input"].to_string()}) };
-                    yield Ok(event("content_block_start", json!({"index":index,"content_block":start})));
-                    yield Ok(event("content_block_delta", json!({"index":index,"delta":delta})));
+                    if block["type"] != "text" {
+                        let mut start = block.clone(); start["input"] = json!({});
+                        yield Ok(event("content_block_start", json!({"index":index,"content_block":start})));
+                        yield Ok(event("content_block_delta", json!({"index":index,"delta":{"type":"input_json_delta","partial_json":block["input"].to_string()}})));
+                    }
                     yield Ok(event("content_block_stop", json!({"index":index})));
                 }
                 yield Ok(event("message_delta", json!({"delta":{"stop_reason":terminal["stop_reason"],"stop_sequence":null},"usage":terminal["usage"]})));
