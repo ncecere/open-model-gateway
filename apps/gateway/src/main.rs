@@ -34,6 +34,16 @@ enum Command {
     Serve,
     /// Apply database migrations explicitly, before starting replicas.
     Migrate,
+    /// Wait until PostgreSQL accepts connections (and, with --schema, until this
+    /// binary's schema and grants are in place), then exit 0. For init containers.
+    WaitForDatabase {
+        /// Also wait until the schema exactly matches this binary and is readable.
+        #[arg(long)]
+        schema: bool,
+        /// Give up (exit 1) after this many seconds.
+        #[arg(long, default_value_t = 600)]
+        timeout_seconds: u64,
+    },
     /// Runtime-role privileges (deploy/staging/runtime-grants.sql, embedded).
     Grants {
         #[command(subcommand)]
@@ -282,6 +292,38 @@ fn healthcheck(url: Option<&str>, timeout: &str, allow_non_loopback: bool) -> Re
     Ok(())
 }
 
+async fn wait_for_database(config: &Config, schema: bool, timeout_seconds: u64) -> Result<()> {
+    let deadline = std::time::Instant::now()
+        .checked_add(std::time::Duration::from_secs(timeout_seconds))
+        .context("--timeout-seconds is too large")?;
+    // Lazy: an unreachable or not-yet-created database is retried, not fatal.
+    let store = Store::new(config.connect_lazy()?);
+    loop {
+        let ready = store.readiness().await;
+        if ready.database && (!schema || ready.schema) {
+            println!(
+                "{}",
+                if schema {
+                    "Database schema is ready."
+                } else {
+                    "Database is reachable."
+                }
+            );
+            return Ok(());
+        }
+        anyhow::ensure!(
+            std::time::Instant::now() < deadline,
+            "timed out after {timeout_seconds}s waiting for the database{}",
+            if schema {
+                " schema; run `open-model-gateway migrate` and `grants apply`"
+            } else {
+                ""
+            }
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+}
+
 async fn run(cli: Cli) -> Result<()> {
     tracing_subscriber::fmt()
         .json()
@@ -297,12 +339,20 @@ async fn run(cli: Cli) -> Result<()> {
     {
         ensure_demo_config(&config)?;
     }
+    if let Some(Command::WaitForDatabase {
+        schema,
+        timeout_seconds,
+    }) = cli.command
+    {
+        return wait_for_database(&config, schema, timeout_seconds).await;
+    }
     let pool = config.connect().await?;
     // Reports, usage and logs only (never admission, settlement or writes).
     let store = Store::new(pool.clone())
         .with_reporting(config.connect_reporting()?, config.reporting_max_lag)
         .with_admission_mode(config.admission_mode);
     match cli.command.unwrap_or(Command::Serve) {
+        Command::WaitForDatabase { .. } => unreachable!("handled before connecting"),
         Command::Migrate => {
             store
                 .migrate_enterprise()

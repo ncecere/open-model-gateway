@@ -7,10 +7,15 @@ metadata:
   labels:
     {{- include "omg.labels" . | nindent 4 }}
     app.kubernetes.io/component: migrate
+  {{- if not .Release.IsInstall }}
+  # Upgrades migrate before any new gateway pod starts. A first install runs
+  # this Job as a plain resource instead (a pre-install hook would run before
+  # the chart's CNPG Cluster exists); gateway pods wait for the schema.
   annotations:
-    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook: pre-upgrade
     helm.sh/hook-weight: "0"
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+  {{- end }}
 spec:
   backoffLimit: {{ .Values.migrations.backoffLimit }}
   activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
@@ -34,6 +39,20 @@ spec:
       # migrator connects directly (never through the transaction-mode
       # Pooler): session-level advisory locks and DDL need a plain session.
       initContainers:
+        - name: wait-for-database
+          image: {{ include "omg.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["wait-for-database"]
+          env:
+            {{- include "omg.env.migratorDatabase" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
         - name: migrate
           image: {{ include "omg.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}

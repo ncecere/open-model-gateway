@@ -203,6 +203,15 @@ impl Config {
             .context("could not connect to PostgreSQL")
     }
 
+    /// The primary pool without an initial connection (`wait-for-database`).
+    pub fn connect_lazy(&self) -> Result<sqlx::PgPool> {
+        PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(Duration::from_secs(3))
+            .connect_lazy(&self.database_url)
+            .context("DATABASE_URL is not a valid PostgreSQL URL")
+    }
+
     /// The optional reporting pool, connected lazily: an unreachable replica
     /// never blocks startup or readiness; reads fall back to the primary.
     pub fn connect_reporting(&self) -> Result<Option<sqlx::PgPool>> {

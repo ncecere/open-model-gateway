@@ -78,26 +78,24 @@ Other provider credentials not covered by the four built-in `_FILE` names use `g
   is alnum-only, so no URL-encoding is attempted; if you supply a password with `: / @ ?` characters
   in a pre-created Secret, URL-encode it yourself first.
 
-## Bootstrapping chart-managed CNPG (first install)
+## First install (including chart-managed CNPG)
 
-With `cnpg.cluster.enabled=true` the `Cluster`/`Pooler` are plain templates, not
-hook resources, but the migration Job is a `pre-install,pre-upgrade` hook that
-runs *before* them. On a genuinely fresh database there is nothing yet for the
-Job to connect to, and the gateway Deployment cannot become Ready without the
-schema and runtime grants. Bootstrap in two steps:
+A first install is one command, so it works as a single Flux `HelmRelease`:
 
 ```sh
-helm install <release> deploy/helm/open-model-gateway -f <profile>-values.yaml   # no --wait; migrations.run stays false
-kubectl wait cluster.postgresql.cnpg.io <release>-db --for=condition=Ready --timeout=5m
-helm upgrade <release> deploy/helm/open-model-gateway -f <profile>-values.yaml --set migrations.run=true --wait
+helm install <release> deploy/helm/open-model-gateway -f <profile>-values.yaml \
+  --set migrations.run=true --wait --timeout 10m
 ```
 
-The first command creates the Cluster/Pooler (and leaves the gateway
-Deployment un-Ready, which is expected); the second runs migrate + runtime
-grants as a pre-upgrade hook against the now-existing Cluster, then rolls out
-gateway pods that can finally pass `/health/ready`. Every later migrating
-upgrade only needs the single `--set migrations.run=true --wait` command
-since the Cluster already exists.
+On a first install the migration Job is a plain resource, not a hook, so it starts alongside the
+chart's CNPG `Cluster`/`Pooler`. It first waits for the database to accept connections
+(`open-model-gateway wait-for-database`), then migrates and applies the runtime grants. Gateway
+pods have a `wait-for-schema` init container (`wait-for-database --schema`, with the runtime
+credential), so they wait for the schema instead of crash-looping, and `--wait` completes once they
+pass `/health/ready`. Verified on kind with CloudNativePG 1.30.1: about two minutes, no restarts.
+
+Every later migrating upgrade is `helm upgrade ... --set migrations.run=true --wait`; there the Job
+is a `pre-upgrade` hook, so the schema changes before any new gateway pod starts.
 
 ## Migration Job and runtime grants
 
@@ -105,11 +103,13 @@ since the Cluster already exists.
 `--set migrations.run=true` as an explicit, reviewed operator action on every upgrade that ships a
 migration (see `docs/operations.md` "Upgrade and migration procedure" for the full drain sequence —
 mixed-schema replicas are not supported, so scale to 0 before a migrating upgrade). The Job is a
-Helm `pre-install,pre-upgrade` hook with two steps, both using the **migrator** Secret only (never
-mounted into the gateway Deployment):
+plain resource on a first install and a Helm `pre-upgrade` hook on upgrades (see
+[First install](#first-install-including-chart-managed-cnpg)). Its steps all use the **migrator**
+Secret only (never mounted into the gateway Deployment):
 
-1. `migrate` (init container): runs `open-model-gateway migrate`.
-2. `apply-runtime-grants` (container): runs `open-model-gateway grants apply`, which applies the
+1. `wait-for-database` (init container): waits until PostgreSQL accepts connections.
+2. `migrate` (init container): runs `open-model-gateway migrate`.
+3. `apply-runtime-grants` (container): runs `open-model-gateway grants apply`, which applies the
    reviewed [`deploy/staging/runtime-grants.sql`](../deploy/staging/runtime-grants.sql) embedded in
    the binary.
 

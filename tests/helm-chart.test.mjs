@@ -81,7 +81,23 @@ test("migration Job is absent unless migrations.run=true, and never shares the r
   assert.equal(jobs.length, 1);
   assert.match(jobs[0], /gateway-migrator-db/, "migration Job must use the migrator Secret");
   assert.doesNotMatch(jobs[0], /gateway-runtime-db/, "migration Job must never reference the runtime Secret");
-  assert.match(jobs[0], /helm\.sh\/hook: pre-install,pre-upgrade/);
+});
+
+test("first install is one step: a plain migration Job waits for the database, gateway pods wait for the schema", () => {
+  const values = ["-f", join(chart, "ci/cnpg-values.yaml"), "--set", "migrations.run=true"];
+  const [install] = docsOfKind(helmTemplate(values), "Job");
+  // Not a pre-install hook: it must run after the chart's CNPG Cluster exists.
+  assert.doesNotMatch(install, /helm\.sh\/hook/);
+  assert.match(install, /args: \["wait-for-database"\][\s\S]*args: \["migrate"\][\s\S]*args: \["grants", "apply"\]/);
+
+  const [upgrade] = docsOfKind(helmTemplate([...values, "--is-upgrade"]), "Job");
+  assert.match(upgrade, /helm\.sh\/hook: pre-upgrade\n/);
+
+  const [deployment] = docsOfKind(helmTemplate(values), "Deployment");
+  const init = deployment.slice(deployment.indexOf("initContainers:"), deployment.indexOf("containers:\n        - name: gateway"));
+  assert.match(init, /args: \["wait-for-database", "--schema"\]/, "gateway pods wait instead of crash-looping");
+  assert.match(init, /OMG_DB_RUNTIME/);
+  assert.doesNotMatch(init, /MIGRATOR/, "the migrator credential stays in the Job");
 });
 
 test("no secret value is ever written as a literal into rendered YAML (CNPG profile)", () => {
