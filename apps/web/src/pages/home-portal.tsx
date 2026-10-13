@@ -86,8 +86,7 @@ function ModelsYouCanUse({ session, catalogs }: { session: Session; catalogs: Ca
   const all = selected && { page: "grants", ws: selected.id } as const;
   const hiddenNames = notServingCount - notServing.length;
   return <Card title="Models you can use" actions={all && <SeeAll render={<ResourceLink search={all} aria-label={`All models in ${selected.name}`} />}>All models</SeeAll>}>
-    {catalogs.isPending ? <Loading label="models" /> : <Stack gap={3}>
-      {catalogs.isError && <ErrorNotice error={catalogs.error} retry={() => void catalogs.refetch()} />}
+    {catalogs.isPending ? <Loading label="models" /> : catalogs.isError && !data ? <ErrorNotice error={catalogs.error} retry={() => void catalogs.refetch()} /> : <Stack gap={3}>
       {models.length === 0 ? <EmptyState size="compact" icon={<Boxes />} title={notServingCount ? "No model can serve requests yet." : "No models yet."} description={notServingCount ? "Ask a Platform Admin to enable a route." : undefined} action={!notServingCount && personal?.capabilities.delegate_models && <Button variant="secondary" render={<ResourceLink search={{ page: "grants", ws: personal.id }} />}>Add models</Button>} /> :
         <ul className={h.grid} aria-label="Models you can use">{models.slice(0, 6).map(m => <li key={m.model_id}>
           <ResourceLink className={h.tile} search={{ page: "workspace-model", ws: m.workspaces[0]!.id, record: m.model_id }}>

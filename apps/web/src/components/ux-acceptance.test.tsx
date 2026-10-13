@@ -150,6 +150,15 @@ describe("D-4 / D-12 models that can't serve", () => {
     expect(fetched.filter(url => url.includes("/catalog"))).toEqual([]);
     shared.clear(); c.clear();
   });
+  it("Home never claims there are no models when they couldn't be loaded", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: { code: "503", message: "Management storage unavailable" } }, { status: 503 })));
+    const c = testClient();
+    render(<QueryClientProvider client={c}><ActionProvider>{nav({ page: "home" }, <HomePortal session={session} />)}</ActionProvider></QueryClientProvider>);
+    await screen.findByText("Management storage unavailable");
+    expect(screen.queryByText("No models yet.")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add models" })).toBeNull();
+    c.clear();
+  });
 });
 
 describe("D-6 sticky save bar", () => {
