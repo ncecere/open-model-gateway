@@ -24,9 +24,18 @@ async fn me_tx(
     let rows = my_workspaces(&mut tx, u.user_id).await?;
     Ok((tx, rows))
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SummaryQuery {
+    /// Only the caller's totals (Home); skips the per-workspace breakdown and
+    /// its budget windows, whose cost grows with membership count.
+    #[serde(default)]
+    totals_only: bool,
+}
 pub(super) async fn summary(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
+    Query(q): Query<SummaryQuery>,
 ) -> ApiResult {
     let (mut tx, rows) = me_tx(&s, &u).await?;
     let ids: Vec<Uuid> = rows.iter().map(|r| r.0).collect();
@@ -37,7 +46,11 @@ pub(super) async fn summary(
     let prev_start = cur_start
         .checked_sub_months(Months::new(1))
         .ok_or_else(invalid)?;
-    let grouped: Vec<(Uuid, bool, Value)> = sqlx::query_as(&format!("SELECT e.workspace_id,e.started_at>=$3,{USAGE} {OWN} AND e.started_at>=$4 AND e.started_at<$5 GROUP BY 1,2")).bind(u.user_id).bind(&ids).bind(cur_start).bind(prev_start).bind(cur_end).fetch_all(&mut *tx).await?;
+    let grouped: Vec<(Uuid, bool, Value)> = if q.totals_only {
+        vec![]
+    } else {
+        sqlx::query_as(&format!("SELECT e.workspace_id,e.started_at>=$3,{USAGE} {OWN} AND e.started_at>=$4 AND e.started_at<$5 GROUP BY 1,2")).bind(u.user_id).bind(&ids).bind(cur_start).bind(prev_start).bind(cur_end).fetch_all(&mut *tx).await?
+    };
     let totals: Vec<(bool, Value)> = sqlx::query_as(&format!(
         "SELECT e.started_at>=$3,{USAGE} {OWN} AND e.started_at>=$4 AND e.started_at<$5 GROUP BY 1"
     ))
@@ -48,7 +61,11 @@ pub(super) async fn summary(
     .bind(cur_end)
     .fetch_all(&mut *tx)
     .await?;
-    let active: Vec<(Uuid, i64)> = sqlx::query_as("SELECT workspace_id,count(*) FROM api_keys WHERE issued_to_user_id=$1 AND workspace_id=ANY($2) AND revoked_at IS NULL AND disabled_at IS NULL AND (expires_at IS NULL OR expires_at>now()) GROUP BY 1").bind(u.user_id).bind(&ids).fetch_all(&mut *tx).await?;
+    let active: Vec<(Uuid, i64)> = if q.totals_only {
+        vec![]
+    } else {
+        sqlx::query_as("SELECT workspace_id,count(*) FROM api_keys WHERE issued_to_user_id=$1 AND workspace_id=ANY($2) AND revoked_at IS NULL AND disabled_at IS NULL AND (expires_at IS NULL OR expires_at>now()) GROUP BY 1").bind(u.user_id).bind(&ids).fetch_all(&mut *tx).await?
+    };
     let pick = |ws: Option<Uuid>, current: bool| {
         match ws {
             Some(ws) => grouped
@@ -63,7 +80,7 @@ pub(super) async fn summary(
         .unwrap_or_else(empty_usage)
     };
     let mut workspaces = Vec::new();
-    for (id, name, kind, _, membership, _) in &rows {
+    for (id, name, kind, _, membership, _) in rows.iter().filter(|_| !q.totals_only) {
         let role = if kind == "personal" {
             Some("owner")
         } else {
@@ -115,4 +132,38 @@ pub(super) async fn my_keys(
     keys::with_usage(&mut tx, &mut data, Some("workspace"), Uuid::nil()).await?;
     tx.commit().await?;
     Ok(Json(json!({"data":data,"has_more":more})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ModelsQuery {
+    limit: Option<i64>,
+}
+/// Home's "Models you can use" in one bounded request: the models added in
+/// the caller's own workspaces (personal and shared memberships, never other
+/// people's personal workspaces), aggregated across them. Usable models (an
+/// enabled route that serves them) come first by how many of the caller's
+/// workspaces have them, with at most two workspace names each; added models
+/// without a serving route are listed separately. The response size does not
+/// grow with membership count, except `workspaces_without_models` (ids only).
+pub(super) async fn models(
+    State(s): State<Store>,
+    Extension(u): Extension<BrowserPrincipal>,
+    Query(q): Query<ModelsQuery>,
+) -> ApiResult {
+    let limit = q.limit.unwrap_or(6);
+    if !(1..=50).contains(&limit) {
+        return Err(invalid());
+    }
+    let mut tx = s.snapshot().await?;
+    resources::platform_role_snapshot(&mut tx, u.user_id).await?;
+    let serving = &*resources::SERVING_ROUTE;
+    let name = "coalesce(nullif(p.display_name,''),p.public_name)";
+    let data: Value = sqlx::query_scalar(&format!("WITH mine AS (SELECT w.id,w.name,w.kind FROM workspaces w LEFT JOIN effective_workspace_memberships m ON m.workspace_id=w.id AND m.user_id=$1 WHERE w.disabled_at IS NULL AND ((w.kind='personal' AND w.owner_user_id=$1) OR (w.kind IN ('team','project') AND m.user_id IS NOT NULL))), added AS (SELECT m.id,m.public_name,m.display_name,w.id ws,w.name wname,w.kind FROM mine w JOIN models m ON m.enabled AND workspace_model_allowed(w.id,m.id)), p AS (SELECT a.id,a.public_name,a.display_name,count(*) n,(array_agg(jsonb_build_object('id',a.ws,'name',a.wname) ORDER BY a.kind<>'personal',a.wname,a.ws))[1:2] ws,EXISTS(SELECT 1 FROM deployments d WHERE d.model_id=a.id AND {serving}) serving FROM added a GROUP BY a.id,a.public_name,a.display_name) SELECT jsonb_build_object('models',coalesce((SELECT jsonb_agg(x ORDER BY n DESC,label,id) FROM (SELECT jsonb_build_object('model_id',p.id,'public_name',p.public_name,'display_name',p.display_name,'workspace_count',p.n,'workspaces',to_jsonb(p.ws)) x,p.n,{name} label,p.id FROM p WHERE p.serving ORDER BY p.n DESC,{name},p.id LIMIT $2) t),'[]'::jsonb),'usable_count',(SELECT count(*) FROM p WHERE p.serving),'not_serving',coalesce((SELECT jsonb_agg(x ORDER BY label,id) FROM (SELECT jsonb_build_object('model_id',p.id,'public_name',p.public_name,'display_name',p.display_name) x,{name} label,p.id FROM p WHERE NOT p.serving ORDER BY {name},p.id LIMIT 20) t),'[]'::jsonb),'not_serving_count',(SELECT count(*) FROM p WHERE NOT p.serving),'workspaces_without_models',coalesce((SELECT jsonb_agg(w.id ORDER BY w.kind<>'personal',w.name,w.id) FROM mine w WHERE NOT EXISTS(SELECT 1 FROM added a WHERE a.ws=w.id)),'[]'::jsonb))"))
+        .bind(u.user_id)
+        .bind(limit)
+        .fetch_one(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(Json(data))
 }

@@ -4,9 +4,13 @@
  * workspace-wide reports, other people's keys or request details.
  */
 import { ApiError, type Session, type Workspace, type WorkspaceKind, type Role } from "./api";
-import type { WorkspaceCatalogModel } from "./model-setup";
 import { personalWorkspace, portalWorkspaces } from "./navigation";
-export const ME_SUMMARY = "/api/v1/me/summary";
+/** Totals only: Home doesn't show the per-workspace breakdown, whose cost grows with membership count. */
+export const ME_SUMMARY = "/api/v1/me/summary?totals_only=true";
+/** "Models you can use" across your workspaces in one bounded request (never one per workspace). */
+export const ME_MODELS = "/api/v1/me/models";
+export type MeModel = { model_id: string; public_name: string; display_name: string; workspace_count: number; workspaces: { id: string; name: string }[] };
+export type MeModels = { models: MeModel[]; usable_count: number; not_serving: Pick<MeModel, "model_id" | "public_name" | "display_name">[]; not_serving_count: number; workspaces_without_models: string[] };
 export const ME_KEYS = "/api/v1/me/keys?status=active&limit=100";
 export type MeUsage = { known_cost_microusd: string | null; held_microusd: string | null; requests: string | null; attempts?: string | null; unresolved_attempts: string | null; input_tokens?: string | null; output_tokens?: string | null; tokens: string | null; unknown_token_attempts: string | null };
 export type MeSummary = {
@@ -27,31 +31,8 @@ export function sharedMemberships(session: Session): Workspace[] {
   const order = { team: 0, project: 1, personal: 2 } as const;
   return portalWorkspaces(session).filter(w => w.kind !== "personal").sort((a, b) => order[a.kind] - order[b.kind] || a.name.localeCompare(b.name));
 }
-/** A row of GET /workspaces/{ws}/catalog as Home uses it: eligibility and the number of enabled routes. */
-export type HomeCatalogRow = Pick<WorkspaceCatalogModel, "model_id" | "public_name" | "display_name" | "eligibility"> & { routes?: number | string | null };
-/** Added (selected or assigned) in that workspace, as opposed to only available to add. */
-export const addedModel = (row: Pick<HomeCatalogRow, "eligibility">) => row.eligibility !== "available_from_catalog";
 /** No enabled route (connection and route both on): requests fail. Unknown route counts are not flagged. */
-export const notServing = (row: Pick<HomeCatalogRow, "routes">) => row.routes != null && Number(row.routes) === 0;
-/** Home model cards: one per model, listing every workspace of yours where it is added (Personal first). */
-export type HomeModel = { model: HomeCatalogRow; workspaces: Workspace[] };
-/**
- * "Models you can use": added models that can serve. Added models without an enabled route are returned separately
- * (`notServing`), matching the access reasons ("No route to a provider is turned on"), never listed as usable.
- */
-export function modelsAcrossWorkspaces(entries: { workspace: Workspace; rows: HomeCatalogRow[] | undefined }[]): { usable: HomeModel[]; notServing: HomeModel[] } {
-  const byId = new Map<string, HomeModel>();
-  for (const { workspace, rows } of entries) for (const r of rows ?? []) {
-    if (!addedModel(r)) continue;
-    const found = byId.get(r.model_id);
-    if (found) { if (!found.workspaces.some(w => w.id === workspace.id)) found.workspaces.push(workspace); }
-    else byId.set(r.model_id, { model: r, workspaces: [workspace] });
-  }
-  const all = [...byId.values()].sort((a, b) => b.workspaces.length - a.workspaces.length || (a.model.display_name || a.model.public_name).localeCompare(b.model.display_name || b.model.public_name));
-  return { usable: all.filter(m => !notServing(m.model)), notServing: all.filter(m => notServing(m.model)) };
-}
-/** Workspaces where a key could call something: at least one model added. Unknown (still loading) counts as yes. */
-export function addedModelCount(rows: HomeCatalogRow[] | undefined): number | undefined { return rows?.filter(addedModel).length; }
+export const notServing = (row: { routes?: number | string | null }) => row.routes != null && Number(row.routes) === 0;
 /** The keys card: active keys with the most spend in their current budget window first. */
 export function topKeys(keys: MeKey[], limit = 5): MeKey[] {
   const used = (k: MeKey) => { const v = k.usage?.used_microusd; return v && /^\d+$/.test(v) ? BigInt(v) : -1n; };
