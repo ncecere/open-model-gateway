@@ -1,12 +1,34 @@
 use super::*;
 use sha2::{Digest, Sha256};
 
-const MEMBERS_SQL: &str = "SELECT jsonb_build_object('user_id',g.user_id,'email',u.email,'display_name',u.display_name,'role',m.role,'disabled_at',u.disabled_at,'membership_source',CASE WHEN count(DISTINCT g.source)>1 THEN 'mixed' ELSE min(g.source) END,'grants',jsonb_agg(jsonb_build_object('id',g.id,'role',g.role,'source',g.source,'mapping_id',g.mapping_id) ORDER BY g.source,g.id)) FROM workspace_membership_grants g JOIN users u ON u.id=g.user_id LEFT JOIN effective_workspace_memberships m ON m.workspace_id=g.workspace_id AND m.user_id=g.user_id WHERE g.workspace_id=$1 AND g.revoked_at IS NULL GROUP BY g.user_id,u.email,u.display_name,u.disabled_at,m.role ORDER BY u.email,g.user_id LIMIT $2 OFFSET $3";
+const MEMBERS_SQL: &str = "SELECT jsonb_build_object('user_id',g.user_id,'email',u.email,'display_name',u.display_name,'role',m.role,'disabled_at',u.disabled_at,'membership_source',CASE WHEN count(DISTINCT g.source)>1 THEN 'mixed' ELSE min(g.source) END,'grants',jsonb_agg(jsonb_build_object('id',g.id,'role',g.role,'source',g.source,'mapping_id',g.mapping_id) ORDER BY g.source,g.id)) FROM workspace_membership_grants g JOIN users u ON u.id=g.user_id LEFT JOIN effective_workspace_memberships m ON m.workspace_id=g.workspace_id AND m.user_id=g.user_id WHERE g.workspace_id=$1 AND g.revoked_at IS NULL AND ($4::text IS NULL OR strpos(lower(coalesce(u.email,'')||' '||coalesce(u.display_name,'')),lower($4))>0) GROUP BY g.user_id,u.email,u.display_name,u.disabled_at,m.role ORDER BY u.email,g.user_id LIMIT $2 OFFSET $3";
+/// Member list paging plus an optional name/email search (`q`, at most 200 characters).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct MemberQuery {
+    limit: Option<i64>,
+    offset: Option<i64>,
+    q: Option<String>,
+}
+impl MemberQuery {
+    fn bounds(&self) -> Result<(i64, i64, Option<String>), ApiError> {
+        let (l, o) = Page {
+            limit: self.limit,
+            offset: self.offset,
+        }
+        .bounds()?;
+        let q = self.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
+        if q.is_some_and(|q| q.chars().count() > 200 || q.chars().any(char::is_control)) {
+            return Err(invalid());
+        }
+        Ok((l, o, q.map(str::to_owned)))
+    }
+}
 pub(super) async fn workspace_members(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
     Path(ws): Path<Uuid>,
-    Query(p): Query<Page>,
+    Query(p): Query<MemberQuery>,
 ) -> ApiResult {
     let (mut tx, a) = resources::workspace_snapshot_tx(&s, &u, ws).await?;
     if !shared(&a.kind) {
@@ -15,11 +37,12 @@ pub(super) async fn workspace_members(
     if !a.admin {
         resources::platform_read_snapshot(&mut tx, u.user_id).await?
     }
-    let (l, o) = p.bounds()?;
+    let (l, o, q) = p.bounds()?;
     let data: Vec<Value> = sqlx::query_scalar(MEMBERS_SQL)
         .bind(ws)
         .bind(l)
         .bind(o)
+        .bind(q.as_deref())
         .fetch_all(&mut *tx)
         .await?;
     tx.commit().await?;
@@ -39,7 +62,7 @@ pub(super) async fn platform_members(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
     Path(ws): Path<Uuid>,
-    Query(p): Query<Page>,
+    Query(p): Query<MemberQuery>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, false).await?;
     // Read-only: platform readers may list members of a disabled Team/Project too.
@@ -50,11 +73,12 @@ pub(super) async fn platform_members(
     .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(missing)?;
-    let (l, o) = p.bounds()?;
+    let (l, o, q) = p.bounds()?;
     let data: Vec<Value> = sqlx::query_scalar(MEMBERS_SQL)
         .bind(ws)
         .bind(l)
         .bind(o)
+        .bind(q.as_deref())
         .fetch_all(&mut *tx)
         .await?;
     tx.commit().await?;
@@ -104,17 +128,44 @@ pub(super) async fn member_candidates(
         return Err(invalid());
     }
     resources::manage(&a)?;
-    let q = p.q.trim().to_lowercase();
+    let data = candidates(&mut tx, ws, &p.q).await?;
+    tx.commit().await?;
+    Ok(Json(json!({"data":data})))
+}
+/// The same picker for Platform Admins/Auditors on any active Team or Project
+/// (`/platform/workspaces/{ws}/members`), without loading the user directory.
+pub(super) async fn platform_member_candidates(
+    State(s): State<Store>,
+    Extension(u): Extension<BrowserPrincipal>,
+    Path(ws): Path<Uuid>,
+    Query(p): Query<CandidateQuery>,
+) -> ApiResult {
+    let mut tx = resources::platform_read_tx(&s, &u).await?;
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM workspaces WHERE id=$1 AND kind IN ('team','project') AND disabled_at IS NULL",
+    )
+    .bind(ws)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(missing)?;
+    let data = candidates(&mut tx, ws, &p.q).await?;
+    tx.commit().await?;
+    Ok(Json(json!({"data":data})))
+}
+async fn candidates(
+    tx: &mut Transaction<'_, Postgres>,
+    ws: Uuid,
+    q: &str,
+) -> Result<Vec<Value>, ApiError> {
+    let q = q.trim().to_lowercase();
     if q.is_empty() || q.chars().count() > 200 || q.chars().any(char::is_control) {
         return Err(invalid());
     }
-    let data: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('user_id',u.id,'email',u.email,'display_name',u.display_name) FROM users u JOIN effective_platform_roles r ON r.user_id=u.id WHERE u.disabled_at IS NULL AND u.cleaned_at IS NULL AND u.email IS NOT NULL AND strpos(lower(u.email),$2)>0 AND NOT EXISTS(SELECT 1 FROM workspace_membership_grants g WHERE g.workspace_id=$1 AND g.user_id=u.id AND g.revoked_at IS NULL) ORDER BY strpos(lower(u.email),$2)<>1,lower(u.email),u.id LIMIT 20")
+    Ok(sqlx::query_scalar("SELECT jsonb_build_object('user_id',u.id,'email',u.email,'display_name',u.display_name) FROM users u JOIN effective_platform_roles r ON r.user_id=u.id WHERE u.disabled_at IS NULL AND u.cleaned_at IS NULL AND u.email IS NOT NULL AND strpos(lower(u.email),$2)>0 AND NOT EXISTS(SELECT 1 FROM workspace_membership_grants g WHERE g.workspace_id=$1 AND g.user_id=u.id AND g.revoked_at IS NULL) ORDER BY strpos(lower(u.email),$2)<>1,lower(u.email),u.id LIMIT 20")
         .bind(ws)
         .bind(&q)
-        .fetch_all(&mut *tx)
-        .await?;
-    tx.commit().await?;
-    Ok(Json(json!({"data":data})))
+        .fetch_all(&mut **tx)
+        .await?)
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

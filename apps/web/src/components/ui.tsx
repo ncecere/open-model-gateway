@@ -1,7 +1,8 @@
 import { createContext, Fragment, useContext, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api, type Collection, type OneTimeToken, type Session } from "../lib/api";
-import { parseCheckboxValues, validateFields, type Field, type Values } from "../lib/forms";
+import { parseCheckboxValues, validateFields, type Field, type Option, type Values } from "../lib/forms";
+import { Combobox, type ComboboxOption } from "./ui/combobox/combobox";
 import { detailTime } from "../lib/format";
 import { DataTable, type DataTableColumn } from "./ui/data-table/data-table";
 import type { Facet } from "./ui/filter-bar/filter-bar";
@@ -90,6 +91,17 @@ export function ActionProvider({ children }: { children: ReactNode }) {
   const ask = useCallback((next: Action) => setAction({ ...next, returnFocus: next.returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : undefined) }), []);
   return <ActionContext.Provider value={ask}>{children}{action && <ActionDialog action={action} onClose={success => { setAction(null); if (success) toast.success(action.successNotice ?? "Changes saved."); }} />}</ActionContext.Provider>;
 }
+/** A server typeahead for a form field: queries `path` with `q` (debounced) and at most 20 rows; never loads the full list. */
+function SearchField({ id, search, placeholder, disabled, onChange }: { id: string; search: NonNullable<Field["search"]>; placeholder?: string; disabled: boolean; onChange: (value: string) => void }) {
+  const [text, setText] = useState(""), [q, setQ] = useState(""), [picked, setPicked] = useState<ComboboxOption | null>(null);
+  useEffect(() => { const timer = setTimeout(() => setQ(text.trim()), 250); return () => clearTimeout(timer); }, [text]);
+  const searchable = q.length > 0 && q.length <= 200;
+  const found = useApi<Collection<never>>(`${search.path}${search.path.includes("?") ? "&" : "?"}q=${encodeURIComponent(q)}&limit=20`, searchable);
+  const items = (searchable ? found.data?.data ?? [] : []).map(search.option).filter((o): o is Option => !!o);
+  const options = picked && !items.some(i => i.value === picked.value) ? [picked, ...items] : items;
+  const emptyText = !q ? "Type to search." : found.isFetching ? "Searching…" : found.isError ? "Search failed. Try again." : "No one matches.";
+  return <Combobox<string> id={id} items={options} filter={null} value={picked?.value ?? null} onValueChange={(_, option) => { setPicked(option); onChange(option?.value ?? ""); }} onInputValueChange={setText} placeholder={placeholder} emptyText={emptyText} disabled={disabled} limit={20} />;
+}
 function ActionDialog({ action, onClose }: { action: Action; onClose: (success: boolean) => void }) {
   const client = useQueryClient(), fields = action.fields ?? [], id = useId();
   const [values, setValues] = useState<Values>(() => Object.fromEntries(fields.map(field => [field.name, field.value ?? (field.type === "checkboxes" ? "[]" : "")])));
@@ -153,6 +165,7 @@ function ActionDialog({ action, onClose }: { action: Action; onClose: (success: 
       const help = field.helpFor?.(values) ?? field.help;
       if (field.type === "switch") return <Switch key={field.name} id={fieldId} label={field.label} description={help} checked={values[field.name] === "true"} disabled={busy} onCheckedChange={checked => changeValue(field.name, String(checked))} />;
       if (field.type === "checkboxes") return <CheckboxesField key={field.name} field={{ ...field, help }} id={fieldId} value={values[field.name] ?? "[]"} error={errors[field.name]} disabled={busy} onChange={value => changeValue(field.name, value)} />;
+      if (field.type === "search" && field.search) return <FormField key={field.name} name={field.name} label={field.label} labelHint={field.hint ?? (!(field.required || field.requiredWhen?.(values)) ? "Optional" : undefined)} description={help} error={errors[field.name]}><SearchField id={fieldId} search={field.search} placeholder={field.placeholder} disabled={busy} onChange={value => changeValue(field.name, value)} /></FormField>;
       if (field.type === "select" && field.display === "icon-select") return <IconSelectField key={field.name} field={{ ...field, help }} id={fieldId} value={values[field.name] ?? ""} error={errors[field.name]} disabled={busy} onChange={value => changeValue(field.name, value)} />;
       if (field.type === "select" && field.display === "cards") return <CardChoiceField key={field.name} field={{ ...field, help }} id={fieldId} value={values[field.name] ?? ""} error={errors[field.name]} disabled={busy} onChange={value => changeValue(field.name, value)} />;
       return <FormField key={field.name} name={field.name} label={field.label} labelHint={field.hint ?? (!(field.required || field.requiredWhen?.(values)) ? "Optional" : undefined)} description={help} error={errors[field.name]}>{field.type === "date" ? <DateControl id={fieldId} name={field.name} value={values[field.name] ?? ""} disabled={busy} onChange={value => changeValue(field.name, value)} /> : field.type === "select" ? <NativeSelect {...common}><option value="">Choose…</option>{field.options?.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</NativeSelect> : field.type === "textarea" ? <Textarea {...common} rows={4} autoComplete="off" spellCheck={false} /> : <Input {...common} type={field.type ?? "text"} inputMode={field.inputMode} min={field.min} max={field.max} step={field.type === "number" ? 1 : undefined} maxLength={field.maxLength} placeholder={field.placeholder} autoComplete="off" spellCheck={field.type === "password" ? false : undefined} />}</FormField>;

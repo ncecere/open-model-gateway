@@ -1056,8 +1056,8 @@ async fn platform_audit(
     // already read (never keys or requests), so the dashboard doesn't load
     // every user and workspace to label a page. Routes and prices have no
     // name of their own and are labelled from their route.
-    let mut data:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',a.id,'actor_user_id',a.actor_user_id,'actor_name',(SELECT coalesce(nullif(x.display_name,''),x.email) FROM users x WHERE x.id=a.actor_user_id),'workspace_id',a.workspace_id,'workspace_name',w.name,'workspace_kind',w.kind,'action',a.action,'resource_type',a.resource_type,'resource_id',a.resource_id,'target_kind',CASE WHEN a.resource_type='workspace' THEN (SELECT x.kind FROM workspaces x WHERE x.id=a.resource_id AND x.kind<>'personal') END,'metadata',a.metadata,'created_at',a.created_at,'target_name',CASE a.resource_type
-      WHEN 'user' THEN (SELECT coalesce(nullif(x.display_name,''),x.email) FROM users x WHERE x.id=a.resource_id)
+    let mut data:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',a.id,'actor_user_id',a.actor_user_id,'actor_name',(SELECT coalesce(nullif(btrim(x.display_name),''),x.email,'Retained identity') FROM users x WHERE x.id=a.actor_user_id),'workspace_id',a.workspace_id,'workspace_name',w.name,'workspace_kind',w.kind,'action',a.action,'resource_type',a.resource_type,'resource_id',a.resource_id,'target_kind',CASE WHEN a.resource_type='workspace' THEN (SELECT x.kind FROM workspaces x WHERE x.id=a.resource_id AND x.kind<>'personal') END,'metadata',a.metadata,'created_at',a.created_at,'target_name',CASE a.resource_type
+      WHEN 'user' THEN (SELECT coalesce(nullif(btrim(x.display_name),''),x.email,'Retained identity') FROM users x WHERE x.id=a.resource_id)
       WHEN 'workspace' THEN (SELECT x.name FROM workspaces x WHERE x.id=a.resource_id AND x.kind<>'personal')
       WHEN 'cost_center' THEN (SELECT x.name FROM cost_centers x WHERE x.id=a.resource_id)
       WHEN 'group_mapping' THEN (SELECT x.group_value FROM oidc_group_mappings x WHERE x.id=a.resource_id)

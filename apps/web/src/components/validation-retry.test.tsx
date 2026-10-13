@@ -191,3 +191,22 @@ it("renders readonly settings as values, with no controls or saving", async () =
   expect(screen.queryByRole("button", { name: "Save settings" })).toBeNull();
   expect(run).not.toHaveBeenCalled(); client.clear();
 });
+
+describe("search fields (R06, #67)", () => {
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+  it("searches on the server as you type and submits the chosen id", async () => {
+    const fetched: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => { fetched.push(String(input)); return Response.json({ data: [{ id: "u-1", email: "ada@example.invalid", platform_role: "user" }, { id: "u-2", email: "nobody@example.invalid", platform_role: null }] }); }));
+    const field: Field = { name: "owner_user_id", label: "Initial owner", type: "search", required: true, search: { path: "/api/v1/platform/users?status=active", option: ((u: { id: string; email: string; platform_role: string | null }) => u.platform_role ? { value: u.id, label: u.email } : undefined) as never } };
+    const { user, run } = await mountForm("dialog", [field]);
+    expect(fetched).toEqual([]); // nothing is loaded before typing
+    await user.type(screen.getByRole("combobox", { name: /Initial owner/ }), "ada");
+    const option = await screen.findByRole("option", { name: "ada@example.invalid" });
+    expect(screen.queryByRole("option", { name: "nobody@example.invalid" })).toBeNull();
+    expect(fetched.every(url => url.startsWith("/api/v1/platform/users?status=active&q=") && url.endsWith("&limit=20"))).toBe(true);
+    await user.click(option);
+    await user.click(submitButton("dialog"));
+    await waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    expect(run.mock.calls[0]![0]).toEqual({ owner_user_id: "u-1" });
+  });
+});

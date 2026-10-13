@@ -107,7 +107,7 @@ describe("Grounded-style people pages", () => {
     expect(read).not.toContain("Authorized models"); // models only for writers or members
   });
   it("shows people as name over email, with (you) for the viewer (review #33)", () => {
-    const client = testClient(); client.setQueryData(["api", undefined, "/api/v1/workspaces/team/members", "choices"], [{ user_id: uid, email: "alex@demo.invalid", display_name: "Alex Rivera", role: "owner" }, { user_id: "other", email: "blair@demo.invalid", display_name: null, role: "member" }]);
+    const client = testClient(); client.setQueryData(["api", undefined, "/api/v1/workspaces/team/members?limit=50&offset=0"], { data: [{ user_id: uid, email: "alex@demo.invalid", display_name: "Alex Rivera", role: "owner" }, { user_id: "other", email: "blair@demo.invalid", display_name: null, role: "member" }], has_more: false });
     const visible = text(markup(<MembersTable path="/api/v1/workspaces/team/members" title="Members" canManageOwners={false} writable={false} selfId={uid} />, [], client));
     expect(visible).toContain("Alex Rivera (you) alex@demo.invalid"); expect(visible).toContain("blair@demo.invalid"); expect(visible).not.toContain("Blair");
     client.clear();
@@ -120,7 +120,7 @@ describe("Grounded-style people pages", () => {
     expect(html).not.toContain('data-wrap="anywhere"');
   });
   it("renders members as a card with avatars, role and source badges", () => {
-    const client = testClient(); client.setQueryData(["api", undefined, "/api/v1/workspaces/team/members", "choices"], [{ user_id: uid, email: "alex@demo.invalid", role: "owner", membership_source: "mixed", grants: [{ role: "admin", source: "group" }, { role: "owner", source: "manual" }] }]);
+    const client = testClient(); client.setQueryData(["api", undefined, "/api/v1/workspaces/team/members?limit=50&offset=0"], { data: [{ user_id: uid, email: "alex@demo.invalid", role: "owner", membership_source: "mixed", grants: [{ role: "admin", source: "group" }, { role: "owner", source: "manual" }] }], has_more: false });
     const html = markup(<WorkspaceMembers session={admin} workspace={team} />, [], client), visible = text(html);
     for (const label of ["Members", "Add member", "alex@demo.invalid", "Owner", "Admin · group", "Owner · manual", "Rows 1–1 of 1"]) expect(visible).toContain(label);
     expect(visible).not.toContain(uid);
