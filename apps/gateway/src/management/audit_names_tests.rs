@@ -276,3 +276,31 @@ async fn member_lists_search_on_the_server(pool: PgPool) {
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 }
+
+/// The Team/Project "Initial owner" search asks only for entitled people.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn users_can_be_filtered_to_anyone_with_a_platform_role(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let unentitled = Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,email) VALUES($1,'owner-to-be@example.invalid')")
+        .bind(unentitled)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (status, body) = call(
+        &f.s,
+        &f.admin,
+        "GET",
+        "/api/v1/platform/users?status=active&role=any&q=owner",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let ids: Vec<&str> = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| u["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, [f.owner.user_id.to_string()]);
+}

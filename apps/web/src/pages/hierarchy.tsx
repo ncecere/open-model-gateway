@@ -41,7 +41,7 @@ const removeGrant = (ask: Ask, user: DirectoryUser, grant: { role: string; sourc
 /** The initial-owner field: entitled active users by email, or an ID when the directory can't load. */
 /** Searched on the server (R06, #67): never a list of every user. */
 const ownerField: Field = { name: "owner_user_id", label: "Initial owner", type: "search", required: true, placeholder: "name@example.com", validate: uuidError, help: "An active user with a platform role. This creates an independent manual owner membership.",
-  search: { path: `${platformPath}/users?status=active`, option: ((u: DirectoryUser) => u.platform_role && u.email ? { value: u.id, label: u.email } : undefined) as never } };
+  search: { path: `${platformPath}/users?status=active&role=any`, option: ((u: DirectoryUser) => u.platform_role && u.email ? { value: u.id, label: u.email } : undefined) as never } };
 
 export function PlatformTeams({ session, kind }: { session: Session; kind: "team" | "project" }) {
   const ask = useAction(), title = kind === "project" ? "Projects" : "Teams", noun = kind === "project" ? "Project" : "Team";

@@ -284,13 +284,13 @@ struct UserQuery {
     role: Option<String>,
     status: Option<String>,
 }
-/// The platform users page: `$1` search, `$2` role (`none` = no entitlement),
+/// The platform users page: `$1` search, `$2` role (`none` = no entitlement, `any` = any role),
 /// `$3` status (suspended includes cleaned identities), `$4` limit, `$5` offset.
 /// The page's ids are selected first, so the per-row subqueries of
 /// [`USER_JSON`] run only for returned rows, never for skipped ones.
 pub(super) fn users_list_sql() -> String {
     format!(
-        "WITH page AS (SELECT u.id,u.email FROM users u LEFT JOIN effective_platform_roles r ON r.user_id=u.id WHERE ($1::text IS NULL OR strpos(lower(coalesce(u.email,'')||' '||coalesce(u.display_name,'')),lower($1))>0) AND ($2::text IS NULL OR ($2='none' AND r.role IS NULL) OR r.role=$2) AND ($3::text IS NULL OR ($3='active')=(u.disabled_at IS NULL AND u.cleaned_at IS NULL)) ORDER BY u.email,u.id LIMIT $4 OFFSET $5) SELECT {USER_JSON} JOIN page ON page.id=u.id ORDER BY page.email,page.id"
+        "WITH page AS (SELECT u.id,u.email FROM users u LEFT JOIN effective_platform_roles r ON r.user_id=u.id WHERE ($1::text IS NULL OR strpos(lower(coalesce(u.email,'')||' '||coalesce(u.display_name,'')),lower($1))>0) AND ($2::text IS NULL OR ($2='none' AND r.role IS NULL) OR ($2='any' AND r.role IS NOT NULL) OR r.role=$2) AND ($3::text IS NULL OR ($3='active')=(u.disabled_at IS NULL AND u.cleaned_at IS NULL)) ORDER BY u.email,u.id LIMIT $4 OFFSET $5) SELECT {USER_JSON} JOIN page ON page.id=u.id ORDER BY page.email,page.id"
     )
 }
 async fn users(
@@ -307,7 +307,7 @@ async fn users(
     if p.q.as_ref().is_some_and(|q| q.chars().count() > 200)
         || p.role
             .as_deref()
-            .is_some_and(|r| r != "none" && !platform_role_valid(r))
+            .is_some_and(|r| r != "none" && r != "any" && !platform_role_valid(r))
         || p.status
             .as_deref()
             .is_some_and(|v| !matches!(v, "active" | "suspended"))

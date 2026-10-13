@@ -8,13 +8,13 @@
  * accounting "Cost" state. Filters only narrow what the caller may already
  * see; the gateway authorizes every number.
  *
- * Option sources never widen visibility: a workspace's own model, key, member
- * and service-account lists (each already scoped by the server), and at
- * platform scope this period's aggregates (top keys, members and cost
- * centers), never a user or key directory. Personal workspace keys stay
+ * Option sources never widen visibility: a workspace's own model, key and
+ * service-account lists (each already scoped by the server), this period's
+ * most active members (both scopes; never a member list), and at platform
+ * scope this period's top keys and cost centers, never a user or key directory. Personal workspace keys stay
  * collapsed at platform scope.
  */
-import { wsPath, platformPath, type Grant, type Member, type Model, type ServiceAccount, type Workspace } from "../../lib/api";
+import { wsPath, platformPath, type Grant, type Model, type ServiceAccount, type Workspace } from "../../lib/api";
 import type { KeyRow } from "../../lib/keys";
 import type { DashboardSearch } from "../../lib/permissions";
 import { exploreQuery, recordStatuses, usageFilters, usageStatuses, type Dimension, type ExploreResponse, type RecordStatus, type UsageContext, type UsagePeriod } from "../../lib/usage";
@@ -41,15 +41,15 @@ export function useFilterOptions(workspace: Workspace | undefined, ctx: UsageCon
   const useList = <T,>(path: string, on: boolean) => useChoices<T>(on ? path : "", on);
   const grants = useList<Grant>(`${ws}/models`, !!workspace), models = useList<Model>(`${platformPath}/models`, platform);
   const keys = useList<KeyRow>(`${ws}/keys`, !!workspace);
-  const members = useList<Member>(`${ws}/members`, !!workspace && ctx.members);
   const accounts = useList<ServiceAccount>(`${ws}/service-accounts`, !!workspace && ctx.members && workspace.capabilities.manage_service_accounts);
-  const topKeys = useTop(base, period, "key", platform, workspaceFilter), topMembers = useTop(base, period, "member", platform, workspaceFilter);
+  const topKeys = useTop(base, period, "key", platform, workspaceFilter), topMembers = useTop(base, period, "member", platform || ctx.members, workspaceFilter);
   const centers = useTop(base, period, "cost_center", ctx.members, workspaceFilter);
   const named = (res: ExploreResponse | undefined) => res?.rows.flatMap(r => r.group.id && r.group.name ? [{ value: r.group.id, label: r.group.name }] : []) ?? [];
   return {
     models: workspace ? [...new Map((grants.data ?? []).map(g => [g.model_id, { value: g.model_id, label: label(g.display_name, g.public_name) }])).values()] : (models.data ?? []).map(m => ({ value: m.id, label: label(m.display_name, m.public_name) })),
     keys: workspace ? (keys.data ?? []).map(k => ({ value: k.id, label: k.name, group: k.service_account_id ? "Service accounts" : "People" })) : named(topKeys.data),
-    members: workspace ? (members.data ?? []).filter(m => m.email).map(m => ({ value: m.user_id, label: m.email })) : named(topMembers.data),
+    // This period's most active people in both scopes (R06, #67): never the whole member list.
+    members: named(topMembers.data),
     costCenters: centers.data?.rows.map(r => ({ value: r.group.id ?? "unallocated", label: r.group.name ?? "Unallocated" })) ?? [],
     serviceAccounts: (accounts.data ?? []).map(a => ({ value: a.id, label: a.disabled_at ? `${a.name} (disabled)` : a.name })),
   };

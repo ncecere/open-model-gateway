@@ -95,8 +95,8 @@ export function AddMemberDialog({ workspace, path, platform, canManageOwners, on
 export function MembersTable({ path, title, canManageOwners, writable, selfId }: { path: string; title: string; canManageOwners: boolean; writable: boolean; /** The viewer, shown as "(you)". */ selfId?: string }) {
   const ask = useAction();
   const columns: DataTableColumn<Member>[] = [
-    { id: "member", header: "Person", accessor: m => [m.display_name, m.email].filter(Boolean).join(" "), rowHeader: true, hideable: false, sortable: true, cell: m => <PersonIdentity person={m} self={m.user_id === selfId} /> },
-    { id: "role", header: "Role", accessor: m => m.role ?? "", sortable: true, cell: m => <RoleBadge role={m.role} /> },
+    { id: "member", header: "Person", accessor: m => [m.display_name, m.email].filter(Boolean).join(" "), rowHeader: true, hideable: false, cell: m => <PersonIdentity person={m} self={m.user_id === selfId} /> },
+    { id: "role", header: "Role", accessor: m => m.role ?? "", cell: m => <RoleBadge role={m.role} /> },
     { id: "sources", header: "Access", defaultHiddenNarrow: true, accessor: m => m.membership_source ?? "", cell: m => <GrantBadges grants={m.grants} empty="Unknown source" /> },
     { id: "status", header: "Status", accessor: m => m.disabled_at ? "suspended" : "active", cell: m => <UserStatusBadge user={{ disabled_at: m.disabled_at ?? null }} /> },
   ];
