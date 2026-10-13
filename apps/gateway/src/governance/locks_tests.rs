@@ -533,7 +533,15 @@ async fn deadlock_freedom_fuzz(pool: PgPool) {
                                     Some(rng.random_range(1..=10)),
                                 )
                             };
-                            finish(&store, &record).await.unwrap();
+                            if let Err(error) = finish(&store, &record).await {
+                                // A 1 s lease can expire on a slow runner before this
+                                // settlement: the concurrent reconciliation then wins
+                                // the race and the late settlement is a conflict. Any
+                                // other settlement failure is a real failure.
+                                let reconciled: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM inference_executions WHERE id=$1 AND error_code='lease_expired')")
+                                    .bind(s.id).fetch_one(store.pool()).await.unwrap();
+                                assert!(reconciled, "settlement failed without a reconciliation race: {error:?}");
+                            }
                         }
                     }
                     Err(
