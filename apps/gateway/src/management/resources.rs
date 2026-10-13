@@ -15,6 +15,33 @@ pub(crate) async fn catalog_lock(
     .await?;
     Ok(())
 }
+/// The lock-free read-only snapshot ([`Store::snapshot`]) for management
+/// lists: it neither waits for nor blocks the installation and catalog locks
+/// that management writes hold, and PostgreSQL cancels any statement that
+/// runs longer than its 10 s timeout. Read-only handlers only.
+pub(crate) async fn read_snapshot(s: &Store) -> Result<Transaction<'static, Postgres>, ApiError> {
+    Ok(s.snapshot().await?)
+}
+/// [`read_snapshot`] for a Platform Admin or Auditor (live role check).
+pub(crate) async fn platform_read_tx(
+    s: &Store,
+    u: &BrowserPrincipal,
+) -> Result<Transaction<'static, Postgres>, ApiError> {
+    let mut tx = read_snapshot(s).await?;
+    platform_read_snapshot(&mut tx, u.user_id).await?;
+    Ok(tx)
+}
+/// [`workspace_tx`] for read-only handlers: the same live access rules in a
+/// [`read_snapshot`], without row locks.
+pub(crate) async fn workspace_snapshot_tx(
+    s: &Store,
+    u: &BrowserPrincipal,
+    ws: Uuid,
+) -> Result<(Transaction<'static, Postgres>, WorkspaceAccess), ApiError> {
+    let mut tx = read_snapshot(s).await?;
+    let a = workspace_access_snapshot(&mut tx, u, ws).await?;
+    Ok((tx, a))
+}
 pub(crate) async fn installation_tx(s: &Store) -> Result<Transaction<'_, Postgres>, ApiError> {
     let mut tx = crate::db::begin(&s.pool).await?;
     catalog_lock(&mut tx, false).await?;

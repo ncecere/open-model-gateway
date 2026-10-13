@@ -8,12 +8,12 @@ pub(super) async fn workspace_members(
     Path(ws): Path<Uuid>,
     Query(p): Query<Page>,
 ) -> ApiResult {
-    let (mut tx, a) = resources::workspace_tx(&s, &u, ws).await?;
+    let (mut tx, a) = resources::workspace_snapshot_tx(&s, &u, ws).await?;
     if !shared(&a.kind) {
         return Err(invalid());
     }
     if !a.admin {
-        resources::platform_read(&mut tx, u.user_id).await?
+        resources::platform_read_snapshot(&mut tx, u.user_id).await?
     }
     let (l, o) = p.bounds()?;
     let data: Vec<Value> = sqlx::query_scalar(MEMBERS_SQL)
