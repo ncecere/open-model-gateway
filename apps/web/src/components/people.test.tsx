@@ -131,18 +131,18 @@ describe("Grounded-style people pages", () => {
   });
   it("names audit actors, actions and targets without showing identifiers", () => {
     const client = testClient();
-    client.setQueryData(["api", undefined, "/api/v1/platform/users", "choices"], [alex]);
-    client.setQueryData(["api", undefined, "/api/v1/platform/workspaces", "choices"], [product]);
+    // The gateway names actors, workspaces and targets (R06, #67): no user or workspace list is loaded.
+    const named = { actor_name: alex.email, workspace_name: product.name, workspace_kind: "team" };
     // Admin hides sign-in syncs by default (review #12): the first request already asks the server to.
     const html = markup(<AuditHistory />, [["/api/v1/platform/audit?limit=50&offset=0&hide_sign_ins=true", { data: [
-      { id: "e1", actor_user_id: uid, action: "workspace.updated", resource_type: "workspace", resource_id: wid, workspace_id: wid, created_at: "2026-10-07T10:00:00Z" },
+      { id: "e1", actor_user_id: uid, action: "workspace.updated", resource_type: "workspace", resource_id: wid, workspace_id: wid, created_at: "2026-10-07T10:00:00Z", ...named, target_name: product.name, target_kind: "team" },
       { id: "e2", actor_user_id: null, action: "installation.bootstrap_demo", resource_type: "installation", resource_id: "8e210000-0000-4000-8000-0000000000ff", workspace_id: null, created_at: "2026-10-07T09:00:00Z" },
-      { id: "e3", actor_user_id: uid, action: "key.created", resource_type: "key", resource_id: "d29303bb-fe48-42c3-9c27-40da48986a84", workspace_id: personalId, created_at: "2026-10-07T08:00:00Z" },
-      { id: "e4", actor_user_id: uid, action: "deployment.created", resource_type: "deployment", resource_id: "9e210000-0000-4000-8000-000000000001", workspace_id: null, created_at: "2026-10-07T07:00:00Z", target_name: "gpt-6-luna on OpenAI" },
-      { id: "e5", actor_user_id: uid, action: "price.created", resource_type: "price", resource_id: "9e210000-0000-4000-8000-000000000002", workspace_id: null, created_at: "2026-10-07T06:00:00Z", target_name: "Price v1 for gpt-6-luna on OpenAI" },
-      { id: "e6", actor_user_id: uid, action: "model.granted", resource_type: "model", resource_id: "9e210000-0000-4000-8000-000000000003", workspace_id: wid, metadata: { source: "catalog" }, created_at: "2026-10-07T05:00:00Z" },
-      { id: "e7", actor_user_id: uid, action: "model.granted", resource_type: "model", resource_id: "9e210000-0000-4000-8000-000000000003", workspace_id: wid, metadata: { source: "direct" }, created_at: "2026-10-07T04:00:00Z" },
-      { id: "e8", actor_user_id: uid, action: "key.enabled", resource_type: "key", resource_id: "9e210000-0000-4000-8000-000000000004", workspace_id: wid, created_at: "2026-10-07T03:00:00Z" },
+      { id: "e3", actor_user_id: uid, action: "key.created", resource_type: "key", resource_id: "d29303bb-fe48-42c3-9c27-40da48986a84", workspace_id: personalId, created_at: "2026-10-07T08:00:00Z", actor_name: alex.email },
+      { id: "e4", actor_user_id: uid, action: "deployment.created", resource_type: "deployment", resource_id: "9e210000-0000-4000-8000-000000000001", workspace_id: null, created_at: "2026-10-07T07:00:00Z", target_name: "gpt-6-luna on OpenAI", actor_name: alex.email },
+      { id: "e5", actor_user_id: uid, action: "price.created", resource_type: "price", resource_id: "9e210000-0000-4000-8000-000000000002", workspace_id: null, created_at: "2026-10-07T06:00:00Z", target_name: "Price v1 for gpt-6-luna on OpenAI", actor_name: alex.email },
+      { id: "e6", actor_user_id: uid, action: "model.granted", resource_type: "model", resource_id: "9e210000-0000-4000-8000-000000000003", workspace_id: wid, metadata: { source: "catalog" }, created_at: "2026-10-07T05:00:00Z", ...named },
+      { id: "e7", actor_user_id: uid, action: "model.granted", resource_type: "model", resource_id: "9e210000-0000-4000-8000-000000000003", workspace_id: wid, metadata: { source: "direct" }, created_at: "2026-10-07T04:00:00Z", ...named },
+      { id: "e8", actor_user_id: uid, action: "key.enabled", resource_type: "key", resource_id: "9e210000-0000-4000-8000-000000000004", workspace_id: wid, created_at: "2026-10-07T03:00:00Z", ...named },
     ] }]], client), visible = text(html);
     // Admin never reads keys: a shared workspace's key is named by its team.
     expect(visible).toContain("API key in Product"); expect(visible).toContain("Enabled API key");
@@ -152,6 +152,9 @@ describe("Grounded-style people pages", () => {
     expect(visible).not.toContain("workspace.updated"); expect(html).toContain('title="workspace.updated"');
     expect(html).toContain(`href="/admin/users/${uid}"`);
     expect(visible).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+    // No directory list is loaded to label the page.
+    const lists = client.getQueryCache().findAll().map(q => String(q.queryKey[2])).filter(p => /\/platform\/(users|workspaces|models|catalogs|providers|cost-centers|oidc)|\/members/.test(p));
+    expect(lists).toEqual([]);
     client.clear();
   });
   it("keeps SSO groups and cost centers free of raw identifiers", () => {

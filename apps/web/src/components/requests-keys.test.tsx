@@ -105,9 +105,11 @@ describe("API keys list", () => {
     expect(none).toContain("No active keys"); expect(none).toContain("Show all keys (1)"); expect(none).not.toContain("selected"); expect(none).not.toContain("rows match");
   });
   it("names other members' keys by email for workspace admins", () => {
-    const client = seedKeys(); client.setQueryData(["api", undefined, `${ws}/members`, "choices"], [{ user_id: "them", email: "blair@example.invalid", role: "member" }]);
-    client.setQueryData(["api", undefined, `${ws}/keys`, "choices"], [{ ...key, issued_to_user_id: "them" }]);
+    // The gateway names the holder (R06, #67): no member list is loaded.
+    const client = seedKeys();
+    client.setQueryData(["api", undefined, `${ws}/keys`, "choices"], [{ ...key, issued_to_user_id: "them", issued_to_name: "blair@example.invalid" }]);
     expect(markup(<Keys session={session} workspace={team} />, [], client)).toContain("blair@example.invalid");
+    expect(client.getQueryCache().findAll().some(q => String(q.queryKey[2]).endsWith("/members"))).toBe(false);
   });
 });
 const stats: KeyStats = { key_id: "key2", lineage_id: "key2", status: "disabled", last_used_at: null, daily: [{ date: "2026-10-08", spend_microusd: "8100", held_microusd: "0", requests: "3", unresolved_attempts: "0" }], totals: { today: { spend_microusd: "8100", held_microusd: "0", requests: "3", unresolved_attempts: "0" }, week: { spend_microusd: "8100", held_microusd: "100", requests: "3", unresolved_attempts: "1" }, month: { spend_microusd: "8100", held_microusd: "0", requests: "3", unresolved_attempts: "0" } }, budgets: [{ layer: "key", period: "day", amount_microusd: "5000000", monthly_budget_microusd: "5000000", budget_period: "day", window_start: "2026-10-08T00:00:00Z", window_end: "2026-10-09T00:00:00Z", usage_visible: true, used_microusd: "8100", unresolved_usage: false, exhausted: false }, { layer: "platform", period: "month", amount_microusd: "100000000", monthly_budget_microusd: "100000000", budget_period: "month", window_start: "2026-10-01T00:00:00Z", window_end: "2026-11-01T00:00:00Z", usage_visible: false, used_microusd: null, unresolved_usage: null }] };

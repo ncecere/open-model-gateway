@@ -14,10 +14,10 @@
  * Members see their own keys; workspace admins every key (the server decides).
  * Disabled keys can be enabled again; revoked keys never.
  */
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { KeyRound, Plus, X } from "lucide-react";
-import { api, wsPath, type Grant, type Member, type OneTimeToken, type ServiceAccount } from "../lib/api";
+import { api, wsPath, type Grant, type OneTimeToken, type ServiceAccount } from "../lib/api";
 import { permissions, type DashboardSearch } from "../lib/permissions";
 import { ownKeyHelp } from "../lib/access";
 import { expiryField } from "../lib/forms";
@@ -100,8 +100,6 @@ export function Keys({ session, workspace }: Scope) {
   const failure = keys.error ?? grants.error ?? accounts.error, retryAll = () => { void keys.refetch(); void grants.refetch(); if (p.manageServiceAccounts) void accounts.refetch(); };
   // Active by default; "All" is explicit (status=all), so revoked keys don't fill the first page.
   const status = keyListStatus(search.status);
-  // Workspace admins see every key: name the people who hold them (members see only their own keys).
-  const members = useChoices<Member>(`${wsPath(workspace.id)}/members`, workspace.kind !== "personal" && workspace.capabilities.view_all_activity);
   const safety = useKeySafety(workspace), risks = useMemo(() => findingsByKey(safety.data), [safety.data]);
   const rows = useMemo(() => { const list = filterKeys(keys.data ?? [], status, search.q); return search.risk === "attention" ? list.filter(x => risks.has(x.id)) : list; }, [keys.data, status, search.q, search.risk, risks]);
   const activeAccounts = accounts.data?.filter(a => !a.disabled_at) ?? [];
@@ -119,7 +117,7 @@ export function Keys({ session, workspace }: Scope) {
   const columns: DataTableColumn<KeyRow>[] = [
     // On a phone rows become cards (review #27): the name leads the card, the checkbox comes after the details.
     ...(selectableIds.length && !narrow ? [selectColumn] : []),
-    { id: "name", header: "Key", rowHeader: true, hideable: false, cell: key => { const st = keyStatus(key); return <span className={k.name} data-status={st}><ResourceLink search={{ ...rowSearch, page: "key-detail", ws: workspace.id, record: key.id }}>{key.name}</ResourceLink><span className={s.secondary}>{issuedTo(key, session, accounts.data, members.data)}</span></span>; } },
+    { id: "name", header: "Key", rowHeader: true, hideable: false, cell: key => { const st = keyStatus(key); return <span className={k.name} data-status={st}><ResourceLink search={{ ...rowSearch, page: "key-detail", ws: workspace.id, record: key.id }}>{key.name}</ResourceLink><span className={s.secondary}>{issuedTo(key, session, accounts.data)}</span></span>; } },
     { id: "status", header: "Status", cell: key => <span className={s.badges}><StatusPill {...keyPill(keyStatus(key))} explain /><KeyRiskBadge row={risks.get(key.id)} /></span> },
     { id: "usage", header: "Spent", label: "Spent (includes on hold)", cell: key => key.usage ? <span className={k.usage}><UsageBar label={`${key.name} budget`} size="sm" used={key.usage.used_microusd} limit={key.usage.limit_microusd} />{key.usage.limit_microusd !== null && <PeriodBadge period={key.usage.period} />}</span> : <span className={s.muted}>Unknown</span> },
     { id: "restrictions", header: "Restrictions", defaultHiddenNarrow: true, cell: key => { const m = keyModelSummary(key, options); return <CellText primary={<span title={m.models.join(", ") || undefined}>{m.label}</span>} secondary={key.usage?.limit_microusd ? "Budget limit" : "No key budget"} />; } },

@@ -11,6 +11,7 @@ Notes for changes on `main` since v0.4.0. They become the next release's notes.
 
 - Dashboard lists stay fast with tens of thousands of users (#65). The platform users list builds rows only for the requested page and per-user lookups are indexed (migration `0037_user_lookup_indexes`): page 1 took 1.1 s and deep pages minutes to hours with 50,000 users. The platform users, user detail and workspaces lists, and workspace members, keys and service accounts, read from the same lock-free snapshots as reports, so one slow list no longer queues every other admin request behind it; like those reads, a statement running over 10 s is cancelled and returns 503 "The request took too long".
 - Home loads its models with one request (`GET /api/v1/me/models`) instead of one catalog request per workspace, and its usage tiles with `GET /api/v1/me/summary?totals_only=true` (#66). For a user in 2,000 workspaces, Home took about 2 minutes and 2,000 requests, then the browser tab crashed.
+- Audit logs and API key lists no longer load every user, member and workspace to show names (#67): audit rows carry `actor_name`, `workspace_name` and `target_name` and key rows `issued_to_name`, resolved by the gateway under the same visibility rules. With 50,000 users the platform audit log couldn't load its user list at all.
 
 ## Dashboard
 

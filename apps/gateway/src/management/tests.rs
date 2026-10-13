@@ -8,6 +8,8 @@ use sqlx::PgPool;
 use tower::ServiceExt;
 #[path = "alerts/tests.rs"]
 mod alert_tests;
+#[path = "audit_names_tests.rs"]
+mod audit_names_tests;
 #[path = "batch_scheduling_tests.rs"]
 mod batch_scheduling_tests;
 #[path = "settings/branding_tests.rs"]

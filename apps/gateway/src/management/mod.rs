@@ -741,7 +741,15 @@ async fn workspace_audit(
     let (mut tx, a) = resources::workspace_tx(&s, &u, ws).await?;
     resources::detail_access(&a)?;
     let (l, o) = p.bounds()?;
-    let data:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',id,'actor_user_id',actor_user_id,'action',action,'resource_type',resource_type,'resource_id',resource_id,'metadata',metadata,'created_at',created_at) FROM audit_events WHERE workspace_id=$1 AND ($2 OR actor_user_id=$3) ORDER BY created_at DESC,id LIMIT $4 OFFSET $5").bind(ws).bind(a.view_all_activity).bind(u.user_id).bind(l).bind(o).fetch_all(&mut *tx).await?;
+    // Names only where the caller can already see them: people and service
+    // accounts for workspace admins (and themselves), keys they can list.
+    let data:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',a.id,'actor_user_id',a.actor_user_id,'actor_name',CASE WHEN $2 OR a.actor_user_id=$3 THEN (SELECT coalesce(nullif(x.display_name,''),x.email) FROM users x WHERE x.id=a.actor_user_id) END,'action',a.action,'resource_type',a.resource_type,'resource_id',a.resource_id,'metadata',a.metadata,'created_at',a.created_at,'target_name',CASE a.resource_type
+      WHEN 'key' THEN (SELECT x.name FROM api_keys x WHERE x.id=a.resource_id AND x.workspace_id=$1 AND ($2 OR x.issued_to_user_id=$3))
+      WHEN 'model' THEN (SELECT coalesce(nullif(x.display_name,''),x.public_name) FROM models x WHERE x.id=a.resource_id)
+      WHEN 'service_account' THEN CASE WHEN $2 THEN (SELECT x.name FROM service_accounts x WHERE x.id=a.resource_id AND x.workspace_id=$1) END
+      WHEN 'workspace' THEN (SELECT x.name FROM workspaces x WHERE x.id=$1 AND a.resource_id=$1)
+      WHEN 'user' THEN CASE WHEN $2 OR a.resource_id=$3 THEN (SELECT coalesce(nullif(x.display_name,''),x.email) FROM users x WHERE x.id=a.resource_id) END
+      END) FROM audit_events a WHERE a.workspace_id=$1 AND ($2 OR a.actor_user_id=$3) ORDER BY a.created_at DESC,a.id LIMIT $4 OFFSET $5").bind(ws).bind(a.view_all_activity).bind(u.user_id).bind(l).bind(o).fetch_all(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(json!({"data":data})))
 }
