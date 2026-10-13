@@ -30,6 +30,8 @@ mod member_tests;
 mod portal_tests;
 #[path = "project_tests.rs"]
 mod project_tests;
+#[path = "read_scale_tests.rs"]
+mod read_scale_tests;
 #[path = "resources/tests.rs"]
 mod resource_tests;
 #[path = "session_tests.rs"]

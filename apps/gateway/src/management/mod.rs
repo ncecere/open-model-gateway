@@ -285,6 +285,16 @@ impl From<crate::entropy::EntropyUnavailable> for ApiError {
 impl From<sqlx::Error> for ApiError {
     fn from(e: sqlx::Error) -> Self {
         if e.as_database_error()
+            .is_some_and(|e| e.code().as_deref() == Some("57014"))
+        {
+            // The management read deadline (or an operator) cancelled the statement.
+            log_storage_error(&e);
+            Self(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "The request took too long; narrow it and try again",
+            )
+        } else if e
+            .as_database_error()
             .is_some_and(|e| matches!(e.code().as_deref(), Some("23505" | "23503" | "23514")))
         {
             Self(

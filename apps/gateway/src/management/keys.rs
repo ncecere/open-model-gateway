@@ -40,7 +40,7 @@ pub(super) async fn keys(
     Path(ws): Path<Uuid>,
     Query(p): Query<Page>,
 ) -> ApiResult {
-    let (mut tx, a) = resources::workspace_tx(&s, &u, ws).await?;
+    let (mut tx, a) = resources::workspace_snapshot_tx(&s, &u, ws).await?;
     resources::detail_access(&a)?;
     let (l, o) = p.bounds()?;
     let mut data:Vec<Value>=sqlx::query_scalar(&format!("SELECT {} FROM api_keys k LEFT JOIN key_model_restrictions r ON r.workspace_id=k.workspace_id AND r.governance_key_id=k.governance_key_id WHERE k.workspace_id=$1 AND ($2 OR k.issued_to_user_id=$3) ORDER BY k.created_at DESC,k.id LIMIT $4 OFFSET $5",key_json())).bind(ws).bind(a.admin).bind(u.user_id).bind(l).bind(o).fetch_all(&mut *tx).await?;
@@ -369,7 +369,7 @@ pub(super) async fn accounts(
     Path(ws): Path<Uuid>,
     Query(p): Query<Page>,
 ) -> ApiResult {
-    let (mut tx, a) = resources::workspace_tx(&s, &u, ws).await?;
+    let (mut tx, a) = resources::workspace_snapshot_tx(&s, &u, ws).await?;
     resources::manage(&a)?;
     if !shared(&a.kind) {
         return Err(invalid());

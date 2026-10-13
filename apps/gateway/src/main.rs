@@ -350,6 +350,7 @@ async fn run(cli: Cli) -> Result<()> {
     // Reports, usage and logs only (never admission, settlement or writes).
     let store = Store::new(pool.clone())
         .with_reporting(config.connect_reporting()?, config.reporting_max_lag)
+        .with_management_read_timeout(config.management_read_timeout)
         .with_admission_mode(config.admission_mode);
     match cli.command.unwrap_or(Command::Serve) {
         Command::WaitForDatabase { .. } => unreachable!("handled before connecting"),
@@ -1085,6 +1086,7 @@ mod demo {
             database_max_connections: 10,
             reporting_database_url: None,
             reporting_max_lag: std::time::Duration::from_secs(30),
+            management_read_timeout: std::time::Duration::from_secs(15),
             admission_mode: Default::default(),
             listen_database_url: None,
             config_cache: true,
