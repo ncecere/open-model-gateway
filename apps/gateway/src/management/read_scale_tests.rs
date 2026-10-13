@@ -106,18 +106,27 @@ async fn per_user_lookups_are_indexed(pool: PgPool) {
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn slow_management_reads_are_cancelled_at_the_deadline(pool: PgPool) {
     let f = fixture(&pool).await;
-    let s = f.s.with_management_read_timeout(Duration::from_millis(300));
-    let mut tx = resources::read_snapshot(&s).await.unwrap();
-    let started = std::time::Instant::now();
+    let mut tx = resources::read_snapshot(&f.s).await.unwrap();
+    let timeout: String = sqlx::query_scalar("SHOW statement_timeout")
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(timeout, "10s");
+    // The same mechanism, shortened: PostgreSQL cancels the statement (57014),
+    // which the API reports as a clear 503.
+    sqlx::query("SET LOCAL statement_timeout='200ms'")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
     let error = sqlx::query("SELECT pg_sleep(5)")
         .execute(&mut *tx)
         .await
         .unwrap_err();
-    assert!(started.elapsed() < Duration::from_secs(3));
     assert_eq!(
         error.as_database_error().and_then(|e| e.code()).as_deref(),
         Some("57014")
     );
     let api: ApiError = error.into();
     assert_eq!(api.0, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(api.1, "The request took too long; narrow it and try again");
 }

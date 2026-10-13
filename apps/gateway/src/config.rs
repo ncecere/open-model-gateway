@@ -23,9 +23,6 @@ pub struct Config {
     /// `GATEWAY_REPORTING_MAX_LAG_SECONDS` (default 30, 1-3600): a replica
     /// replaying WAL further behind than this is skipped for the primary.
     pub reporting_max_lag: Duration,
-    /// `GATEWAY_MANAGEMENT_READ_TIMEOUT_SECONDS` (default 15, 1-300):
-    /// PostgreSQL cancels a dashboard list read that runs longer.
-    pub management_read_timeout: Duration,
     /// `GATEWAY_ADMISSION_MODE` (`scoped`, default, or `global`): scoped
     /// admission locks, or the former installation row lock as an
     /// operational rollback for one release (see `governance::locks`).
@@ -138,13 +135,6 @@ impl Config {
             .filter(|n| (1..=3600).contains(n))
             .map(Duration::from_secs)
             .context("GATEWAY_REPORTING_MAX_LAG_SECONDS must be an integer from 1 to 3600")?;
-        let management_read_timeout = std::env::var("GATEWAY_MANAGEMENT_READ_TIMEOUT_SECONDS")
-            .unwrap_or_else(|_| "15".into())
-            .parse::<u64>()
-            .ok()
-            .filter(|n| (1..=300).contains(n))
-            .map(Duration::from_secs)
-            .context("GATEWAY_MANAGEMENT_READ_TIMEOUT_SECONDS must be an integer from 1 to 300")?;
         let admission_mode = crate::governance::locks::AdmissionMode::from_env()?;
         let listen_database_url = match std::env::var("GATEWAY_LISTEN_DATABASE_URL") {
             Ok(url) if url.trim().is_empty() => {
@@ -177,7 +167,6 @@ impl Config {
             database_max_connections,
             reporting_database_url,
             reporting_max_lag,
-            management_read_timeout,
             admission_mode,
             listen_database_url,
             config_cache,

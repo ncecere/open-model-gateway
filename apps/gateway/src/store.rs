@@ -31,8 +31,6 @@ pub struct Store {
     pub(crate) reporting: Option<PgPool>,
     /// Replay lag beyond which the reporting replica is skipped.
     pub(crate) reporting_max_lag: std::time::Duration,
-    /// Statement deadline for read-only management snapshots.
-    pub(crate) management_read_timeout: std::time::Duration,
     /// Per-replica caches of pre-admission reads (`crate::cache`), shared by
     /// every clone; bypassed until change notifications are started.
     pub(crate) caches: std::sync::Arc<crate::cache::Caches>,
@@ -241,11 +239,6 @@ async fn preflight(connection: &mut PgConnection, initializing: bool) -> anyhow:
 }
 
 impl Store {
-    /// Statement deadline for read-only management snapshots.
-    pub fn with_management_read_timeout(mut self, timeout: std::time::Duration) -> Self {
-        self.management_read_timeout = timeout;
-        self
-    }
     pub fn new(pool: PgPool) -> Self {
         // Tests run under either protocol (`GATEWAY_ADMISSION_MODE`); serve
         // sets the validated configuration with `with_admission_mode`.
@@ -262,7 +255,6 @@ impl Store {
             admission_mode: mode,
             reporting: None,
             reporting_max_lag: std::time::Duration::from_secs(30),
-            management_read_timeout: std::time::Duration::from_secs(15),
             caches: std::sync::Arc::new(crate::cache::Caches::new()),
             leases: None,
             #[cfg(any(test, feature = "integration-tests"))]

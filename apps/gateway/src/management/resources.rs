@@ -15,21 +15,12 @@ pub(crate) async fn catalog_lock(
     .await?;
     Ok(())
 }
-/// A lock-free read-only snapshot for management lists ([`Store::snapshot`]):
-/// it neither waits for nor blocks the installation and catalog locks that
-/// management writes hold. PostgreSQL cancels any statement running longer
-/// than the management read deadline, so an expensive or abandoned read
-/// can't hold a connection for long. Read-only handlers only.
+/// The lock-free read-only snapshot ([`Store::snapshot`]) for management
+/// lists: it neither waits for nor blocks the installation and catalog locks
+/// that management writes hold, and PostgreSQL cancels any statement that
+/// runs longer than its 10 s timeout. Read-only handlers only.
 pub(crate) async fn read_snapshot(s: &Store) -> Result<Transaction<'static, Postgres>, ApiError> {
-    let mut tx = s.snapshot().await?;
-    sqlx::query("SELECT set_config('statement_timeout',$1,true)")
-        .bind(format!(
-            "{}ms",
-            s.management_read_timeout.as_millis().max(1)
-        ))
-        .execute(&mut *tx)
-        .await?;
-    Ok(tx)
+    Ok(s.snapshot().await?)
 }
 /// [`read_snapshot`] for a Platform Admin or Auditor (live role check).
 pub(crate) async fn platform_read_tx(
