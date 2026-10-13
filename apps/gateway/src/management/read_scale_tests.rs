@@ -5,14 +5,15 @@
 use super::*;
 use std::time::Duration;
 
-async fn get_status(s: &Store, u: &BrowserPrincipal, path: &str) -> StatusCode {
+/// `label` names the endpoint in failure messages (paths carry ids).
+async fn get_status(s: &Store, u: &BrowserPrincipal, path: &str, label: &str) -> StatusCode {
     let response = routes()
         .layer(Extension(u.clone()))
         .with_state(s.clone())
         .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap());
     tokio::time::timeout(Duration::from_secs(5), response)
         .await
-        .unwrap_or_else(|_| panic!("{path} waited on a lock"))
+        .unwrap_or_else(|_| panic!("{label} waited on a lock"))
         .unwrap()
         .status()
 }
@@ -27,22 +28,49 @@ async fn list_reads_do_not_wait_for_a_management_write(pool: PgPool) {
         .await
         .unwrap();
     let (team, owner) = (f.team, f.owner.user_id);
-    for (u, path) in [
-        (&f.auditor, "/api/v1/platform/users".to_owned()),
-        (&f.auditor, format!("/api/v1/platform/users/{owner}")),
-        (&f.auditor, "/api/v1/platform/workspaces".to_owned()),
-        (&f.owner, format!("/api/v1/workspaces/{team}/members")),
-        (&f.owner, format!("/api/v1/workspaces/{team}/keys")),
+    for (u, path, label) in [
+        (
+            &f.auditor,
+            "/api/v1/platform/users".to_owned(),
+            "platform users",
+        ),
+        (
+            &f.auditor,
+            format!("/api/v1/platform/users/{owner}"),
+            "platform user",
+        ),
+        (
+            &f.auditor,
+            "/api/v1/platform/workspaces".to_owned(),
+            "platform workspaces",
+        ),
+        (
+            &f.owner,
+            format!("/api/v1/workspaces/{team}/members"),
+            "members",
+        ),
+        (&f.owner, format!("/api/v1/workspaces/{team}/keys"), "keys"),
         (
             &f.owner,
             format!("/api/v1/workspaces/{team}/service-accounts"),
+            "service accounts",
         ),
     ] {
-        assert_eq!(get_status(&f.s, u, &path).await, StatusCode::OK, "{path}");
+        assert_eq!(
+            get_status(&f.s, u, &path, label).await,
+            StatusCode::OK,
+            "{label}"
+        );
     }
     // Authorization is still live: an outsider is refused without waiting either.
     assert_eq!(
-        get_status(&f.s, &f.outsider, "/api/v1/platform/users").await,
+        get_status(
+            &f.s,
+            &f.outsider,
+            "/api/v1/platform/users",
+            "platform users (outsider)"
+        )
+        .await,
         StatusCode::FORBIDDEN
     );
     writer.rollback().await.unwrap();
