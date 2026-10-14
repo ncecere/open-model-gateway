@@ -2091,6 +2091,7 @@ mod database {
 }
 
 /// #78: sign-in abuse controls through the real router, on PostgreSQL.
+#[cfg(feature = "integration-tests")]
 mod abuse_controls {
     use super::*;
     use axum::extract::ConnectInfo;
