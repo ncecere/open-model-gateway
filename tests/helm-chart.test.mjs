@@ -84,6 +84,14 @@ test("CNPG primary shuts down quickly so failover is not held up by pooled conne
   assert.match(tuned, /^  smartShutdownTimeout: 40$/m);
 });
 
+test("CNPG backups render the barmanObjectStore map as given, and the chart names no nonexistent settings", () => {
+  const [cluster] = docsOfKind(helmTemplate(["-f", join(chart, "ci/cnpg-values.yaml"), "--set", "cnpg.cluster.backup.enabled=true",
+    "--set", "cnpg.cluster.backup.barmanObjectStore.destinationPath=s3://bucket/omg"]), "Cluster");
+  assert.match(cluster, /barmanObjectStore:\s+destinationPath: s3:\/\/bucket\/omg/);
+  const rendered = helmTemplate(["-f", join(chart, "ci/cnpg-values.yaml")]);
+  assert.doesNotMatch(rendered, /GATEWAY_DRAIN_SECONDS/);
+});
+
 test("default values fail fast with a clear message instead of rendering an unconfigured database", () => {
   const result = spawnSync("helm", ["template", "omg-test", chart], { encoding: "utf8", timeout: 30_000 });
   assert.notEqual(result.status, 0);

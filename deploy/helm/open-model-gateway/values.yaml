@@ -311,7 +311,9 @@ cnpg:
       enabled: false
       scheduledBackup:
         schedule: "0 0 3 * * *"
-      destinationPath: ""
+      # CloudNativePG's in-tree `barmanObjectStore` spec, rendered as-is
+      # (including its destinationPath). Upstream CNPG now prefers the Barman
+      # Cloud plugin; check your CNPG version's documentation.
       barmanObjectStore: {}
   pooler:
     enabled: true
