@@ -5,7 +5,11 @@ use sqlx::FromRow;
 use uuid::Uuid;
 
 use super::types::*;
-use crate::{inference::types::Deployment, store::Store};
+use crate::{
+    inference::types::Deployment,
+    store::Store,
+    visibility::{JOB_OWNER_SQL, Viewer, visible_sql},
+};
 
 type Result<T> = std::result::Result<T, sqlx::Error>;
 
@@ -157,19 +161,23 @@ pub(crate) async fn insert_batch(store: &Store, b: &NewBatch<'_>) -> Result<JobR
         .bind(b.id).bind(b.workspace_id).bind(b.api_key_id).bind(b.deployment_id).bind(b.execution_id).bind(b.public_model).bind(b.provider).bind(b.poll_deadline_at).bind(b.endpoint.as_str()).bind(b.mode.as_str()).bind(b.user_id).bind(b.input_file_id).bind(b.work_file_id).bind(b.price_tier).bind(b.retry_limit).bind(b.requests).bind(b.window_hours)
         .fetch_one(&store.pool).await
 }
-/// A job of `kind` owned by `workspace` (anything else is not found).
+/// A job of `kind` owned by `workspace` that `viewer` may see
+/// (`crate::visibility`); anything else is not found, from the same query.
 pub(crate) async fn job(
     store: &Store,
     workspace: Uuid,
     kind: JobKind,
     id: Uuid,
+    viewer: Viewer,
 ) -> Result<Option<JobRow>> {
     sqlx::query_as(&format!(
-        "SELECT {JOB_COLUMNS} FROM async_jobs WHERE id=$1 AND workspace_id=$2 AND kind=$3"
+        "SELECT {JOB_COLUMNS} FROM async_jobs j WHERE id=$1 AND workspace_id=$2 AND kind=$3 AND {}",
+        visible_sql("$2", "$4", JOB_OWNER_SQL)
     ))
     .bind(id)
     .bind(workspace)
     .bind(kind.as_str())
+    .bind(viewer.user())
     .fetch_optional(&store.pool)
     .await
 }
@@ -179,7 +187,9 @@ pub(crate) async fn reload(store: &Store, id: Uuid) -> Result<JobRow> {
         .fetch_one(&store.pool)
         .await
 }
-/// Cursor page of the workspace's jobs of one kind (newest first by default).
+/// Cursor page of the workspace's jobs of one kind that `viewer` may see
+/// (newest first by default), filtered before the limit; a cursor at a
+/// hidden job matches nothing.
 pub(crate) async fn list(
     store: &Store,
     workspace: Uuid,
@@ -187,14 +197,16 @@ pub(crate) async fn list(
     after: Option<Uuid>,
     limit: i64,
     ascending: bool,
+    viewer: Viewer,
 ) -> Result<Vec<JobRow>> {
     let (cmp, order) = if ascending {
         (">", "ASC")
     } else {
         ("<", "DESC")
     };
-    sqlx::query_as(&format!("SELECT {JOB_COLUMNS} FROM async_jobs j WHERE workspace_id=$1 AND kind=$2 AND deleted_at IS NULL AND ($3::uuid IS NULL OR (created_at,id){cmp}(SELECT created_at,id FROM async_jobs WHERE id=$3 AND workspace_id=$1 AND kind=$2)) ORDER BY created_at {order},id {order} LIMIT $4"))
-        .bind(workspace).bind(kind.as_str()).bind(after).bind(limit)
+    let visible = visible_sql("$1", "$5", JOB_OWNER_SQL);
+    sqlx::query_as(&format!("SELECT {JOB_COLUMNS} FROM async_jobs j WHERE workspace_id=$1 AND kind=$2 AND deleted_at IS NULL AND {visible} AND ($3::uuid IS NULL OR (created_at,id){cmp}(SELECT j.created_at,j.id FROM async_jobs j WHERE j.id=$3 AND j.workspace_id=$1 AND j.kind=$2 AND {visible})) ORDER BY created_at {order},id {order} LIMIT $4"))
+        .bind(workspace).bind(kind.as_str()).bind(after).bind(limit).bind(viewer.user())
         .fetch_all(&store.pool).await
 }
 

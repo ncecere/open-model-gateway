@@ -10,6 +10,9 @@
 //!
 //! Ids are gateway ids (`file-<32 hex>`); another workspace's id is 404. Batch
 //! output files (written by the batch engine) are listed and downloadable.
+//! In a shared workspace with per-user object visibility, a regular member's
+//! key sees only that user's files (`crate::visibility`); a hidden file is the
+//! same 404 as a missing one.
 use axum::{
     Extension, Json,
     body::Body,
@@ -29,6 +32,7 @@ use crate::{
         upload::{self, UploadError, Uploader},
     },
     store::Store,
+    visibility::Viewer,
 };
 
 /// OpenAI File object.
@@ -226,11 +230,11 @@ pub async fn list(
     };
     let files = storage(store, runtime);
     let query = FileList {
+        viewer: Viewer::of(&principal),
         purpose: q.purpose,
         after,
         limit,
         ascending,
-        created_by_user_id: None,
         search: None,
     };
     match files.list(principal.workspace_id, &query).await {
@@ -249,7 +253,8 @@ pub async fn list(
     }
 }
 
-/// A Files API file of this workspace (other purposes are invisible here).
+/// A Files API file of this workspace the key may see (other purposes are
+/// invisible here).
 async fn find(
     files: &FileStorage,
     principal: &Principal,
@@ -257,7 +262,7 @@ async fn find(
 ) -> Result<StoredFile, FileError> {
     let id = parse_public_id(id).ok_or(FileError::NotFound)?;
     files
-        .get(id, Some(principal.workspace_id))
+        .get_visible(id, principal.workspace_id, Viewer::of(principal))
         .await?
         .filter(|f| f.api_purpose.is_some())
         .ok_or(FileError::NotFound)

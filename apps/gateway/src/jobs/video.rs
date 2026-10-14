@@ -171,9 +171,15 @@ impl Jobs {
 
     async fn own_video(&self, principal: &Principal, id: &str) -> JobResult<JobRow> {
         let id = parse_client_id(JobKind::Video.prefix(), id).ok_or(JobError::NotFound)?;
-        store::job(&self.store, principal.workspace_id, JobKind::Video, id)
-            .await?
-            .ok_or(JobError::NotFound)
+        store::job(
+            &self.store,
+            principal.workspace_id,
+            JobKind::Video,
+            id,
+            crate::visibility::Viewer::of(principal),
+        )
+        .await?
+        .ok_or(JobError::NotFound)
     }
 
     /// Current state, refreshed from the provider while not terminal.
@@ -209,6 +215,7 @@ impl Jobs {
             after,
             limit,
             ascending,
+            crate::visibility::Viewer::of(principal),
         )
         .await?)
     }

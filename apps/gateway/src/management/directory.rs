@@ -12,7 +12,7 @@ pub(super) fn routes() -> Router<Store> {
         )
         .route(
             "/api/v1/workspaces/{ws}",
-            get(workspace).patch(rename_workspace),
+            get(workspace).patch(update_own_workspace),
         )
         .route("/api/v1/platform/users", get(users).post(create_user))
         .route(
@@ -133,7 +133,8 @@ async fn workspace(
     Path(ws): Path<Uuid>,
 ) -> ApiResult {
     let (mut tx, a) = resources::workspace_tx(&s, &u, ws).await?;
-    let mut v:Value=sqlx::query_scalar("SELECT jsonb_build_object('id',w.id,'name',w.name,'kind',w.kind,'owner_user_id',w.owner_user_id,'cost_center_id',w.cost_center_id,'cost_center',CASE WHEN c.id IS NULL THEN NULL ELSE jsonb_build_object('id',c.id,'name',c.name,'code',c.code) END,'created_at',w.created_at) FROM workspaces w LEFT JOIN cost_centers c ON c.id=w.cost_center_id WHERE w.id=$1").bind(ws).fetch_one(&mut *tx).await?;
+    // Object visibility (0038) exists for shared workspaces only.
+    let mut v:Value=sqlx::query_scalar("SELECT jsonb_strip_nulls(jsonb_build_object('object_visibility',CASE WHEN w.kind IN ('team','project') THEN w.object_visibility END))||jsonb_build_object('id',w.id,'name',w.name,'kind',w.kind,'owner_user_id',w.owner_user_id,'cost_center_id',w.cost_center_id,'cost_center',CASE WHEN c.id IS NULL THEN NULL ELSE jsonb_build_object('id',c.id,'name',c.name,'code',c.code) END,'created_at',w.created_at) FROM workspaces w LEFT JOIN cost_centers c ON c.id=w.cost_center_id WHERE w.id=$1").bind(ws).fetch_one(&mut *tx).await?;
     let membership: Option<String> = sqlx::query_scalar(
         "SELECT role FROM effective_workspace_memberships WHERE workspace_id=$1 AND user_id=$2",
     )
@@ -239,26 +240,67 @@ async fn update_workspace(
     tx.commit().await?;
     Ok(ok())
 }
-async fn rename_workspace(
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OwnWorkspaceUpdate {
+    name: Option<String>,
+    /// `member` or `workspace` (0038); any other value is 400.
+    object_visibility: Option<Value>,
+}
+/// `PATCH /api/v1/workspaces/{ws}`: rename and/or set object visibility.
+/// Shared owners/admins only; a personal workspace's name and visibility
+/// are fixed (409). Visibility is not an admission input, so this takes no
+/// scope lock (docs/governance.md); the workspace row lock of
+/// [`resources::workspace_tx`] orders it with object reads that check access.
+async fn update_own_workspace(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
     Path(ws): Path<Uuid>,
-    Json(b): Json<Name>,
+    Json(b): Json<OwnWorkspaceUpdate>,
 ) -> ApiResult {
     let (mut tx, a) = resources::workspace_tx(&s, &u, ws).await?;
-    // The personal workspace is always named "Personal".
+    // The personal workspace is always named "Personal" and owner-private.
     if a.kind == "personal" {
-        return Err(personal_name_fixed());
+        return Err(if b.name.is_some() {
+            personal_name_fixed()
+        } else if b.object_visibility.is_some() {
+            personal_visibility_fixed()
+        } else {
+            invalid()
+        });
     }
     resources::manage(&a)?;
-    if !valid_name(&b.name) {
+    if b.name.is_none() && b.object_visibility.is_none() {
         return Err(invalid());
     }
-    sqlx::query("UPDATE workspaces SET name=$2 WHERE id=$1")
+    if b.name.as_ref().is_some_and(|n| !valid_name(n)) {
+        return Err(invalid());
+    }
+    let visibility = match b.object_visibility.as_ref() {
+        None => None,
+        Some(v) => match v.as_str() {
+            Some(v @ ("member" | "workspace")) => Some(v),
+            _ => return Err(invalid()),
+        },
+    };
+    let before: String = sqlx::query_scalar("SELECT object_visibility FROM workspaces WHERE id=$1")
         .bind(ws)
-        .bind(b.name)
+        .fetch_one(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE workspaces SET name=coalesce($2,name),object_visibility=coalesce($3,object_visibility) WHERE id=$1")
+        .bind(ws)
+        .bind(b.name.as_deref())
+        .bind(visibility)
         .execute(&mut *tx)
         .await?;
+    // Rename stays an empty-detail event; a visibility change records the
+    // new and previous value (both fixed enum strings).
+    let details = match visibility {
+        Some(after) => {
+            json!({"object_visibility": after, "previous_object_visibility": before})
+        }
+        None => json!({}),
+    };
     audit(
         &mut tx,
         &u,
@@ -266,7 +308,7 @@ async fn rename_workspace(
         "workspace.updated",
         "workspace",
         Some(ws),
-        json!({}),
+        details,
     )
     .await?;
     tx.commit().await?;

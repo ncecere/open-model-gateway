@@ -35,4 +35,5 @@ pub mod routing;
 pub mod scim;
 pub mod startup;
 pub mod store;
+pub mod visibility;
 pub mod web;

@@ -1385,3 +1385,295 @@ async fn embeddings_and_responses_batches_run_through_the_engine(pool: PgPool) {
     let _ = w.claude;
     consistent(f).await;
 }
+
+/// One HTTP call: status and raw body (JSON bodies or a multipart upload).
+async fn http(
+    app: &axum::Router,
+    method: &str,
+    path: &str,
+    bearer: &str,
+    body: Option<(&str, Vec<u8>)>,
+) -> (axum::http::StatusCode, Vec<u8>) {
+    use tower::ServiceExt;
+    let mut request = axum::http::Request::builder()
+        .method(method)
+        .uri(path)
+        .header("authorization", bearer);
+    let body = match body {
+        Some((content_type, bytes)) => {
+            request = request.header("content-type", content_type);
+            axum::body::Body::from(bytes)
+        }
+        None => axum::body::Body::empty(),
+    };
+    let response = app
+        .clone()
+        .oneshot(request.body(body).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 16 << 20)
+        .await
+        .unwrap();
+    (status, bytes.to_vec())
+}
+fn parsed(bytes: &[u8]) -> Value {
+    serde_json::from_slice(bytes).unwrap_or(Value::Null)
+}
+/// `POST /v1/files` with a one-line batch input.
+async fn upload_http(app: &axum::Router, bearer: &str) -> String {
+    let mut form = b"--m\r\nContent-Disposition: form-data; name=\"purpose\"\r\n\r\nbatch\r\n--m\r\nContent-Disposition: form-data; name=\"file\"; filename=\"in.jsonl\"\r\n\r\n".to_vec();
+    form.extend_from_slice(&serde_json::to_vec(&chat_line("a", "company/smart", "x")).unwrap());
+    form.extend_from_slice(b"\n\r\n--m--\r\n");
+    let (status, body) = http(
+        app,
+        "POST",
+        "/v1/files",
+        bearer,
+        Some(("multipart/form-data; boundary=m", form)),
+    )
+    .await;
+    assert_eq!(status, 200, "{}", parsed(&body));
+    parsed(&body)["id"].as_str().unwrap().to_owned()
+}
+fn create_body(file: &str, gateway: bool) -> Option<(&'static str, Vec<u8>)> {
+    let mut v = json!({"input_file_id": file, "endpoint": "/v1/chat/completions", "completion_window": "24h"});
+    if gateway {
+        v["metadata"] = json!({"omg_mode": "gateway"});
+    }
+    Some(("application/json", serde_json::to_vec(&v).unwrap()))
+}
+fn listed(list: &[u8], id: &str) -> bool {
+    parsed(list)["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|o| o["id"] == id)
+}
+
+/// Object visibility (#141) over HTTP: every caller type × both modes ×
+/// files (list, retrieve, content, delete, use as a batch's input_file_id)
+/// and batches (list, retrieve, cancel), objects of a member's key and of a
+/// service-account key. Hidden objects answer exactly like missing ones.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn object_visibility_matrix_for_files_and_batches(pool: PgPool) {
+    use crate::visibility::test_support::{CALLERS, Owner, expected, team};
+    let w = world(pool, true, false, 2).await;
+    let f = &w.f;
+    sqlx::query("UPDATE installation_settings SET file_user_files_enabled=true WHERE singleton")
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    let t = team(f).await;
+    let app =
+        crate::http::router_with_engine(f.store.clone(), None, w.jobs.engine.clone().unwrap())
+            .layer(axum::Extension(w.files.runtime().clone()));
+    let missing_file = "file-00000000000000000000000000000000";
+    let missing_batch = "batch_00000000000000000000000000000000";
+    let service = &t.get(crate::visibility::test_support::Who::Service).bearer;
+    let (status, file_404) = http(
+        &app,
+        "GET",
+        &format!("/v1/files/{missing_file}"),
+        service,
+        None,
+    )
+    .await;
+    assert_eq!(status, 404);
+    let (_, batch_404) = http(
+        &app,
+        "GET",
+        &format!("/v1/batches/{missing_batch}"),
+        service,
+        None,
+    )
+    .await;
+    assert_eq!(parsed(&batch_404)["error"]["code"], "not_found");
+    let (status, input_404) = http(
+        &app,
+        "POST",
+        "/v1/batches",
+        service,
+        create_body(missing_file, false),
+    )
+    .await;
+    assert_eq!(status, 404);
+
+    // Batch result files follow the batch's owner: a gateway-run batch of
+    // the member's key, run to completion before the matrix (member mode).
+    let member = t.owner(Owner::Member);
+    let input = upload_http(&app, &member.bearer).await;
+    let (status, created) = http(
+        &app,
+        "POST",
+        "/v1/batches",
+        &member.bearer,
+        create_body(&input, true),
+    )
+    .await;
+    assert_eq!(status, 200, "{}", parsed(&created));
+    assert!(Runner::new(w.jobs.clone()).run_next().await.unwrap());
+    let (_, done) = http(
+        &app,
+        "GET",
+        &format!("/v1/batches/{}", parsed(&created)["id"].as_str().unwrap()),
+        &member.bearer,
+        None,
+    )
+    .await;
+    let output = parsed(&done)["output_file_id"].as_str().unwrap().to_owned();
+    for who in CALLERS {
+        let (status, _) = http(
+            &app,
+            "GET",
+            &format!("/v1/files/{output}/content"),
+            &t.get(who).bearer,
+            None,
+        )
+        .await;
+        assert_eq!(
+            status == 200,
+            expected("member", Owner::Member, who),
+            "result file, {who:?}"
+        );
+    }
+
+    for mode in ["member", "workspace"] {
+        t.mode(f, mode).await;
+        for owner in [Owner::Member, Owner::Service] {
+            let creator = &t.owner(owner).bearer;
+            let input = upload_http(&app, creator).await;
+            let (status, created) = http(
+                &app,
+                "POST",
+                "/v1/batches",
+                creator,
+                create_body(&input, false),
+            )
+            .await;
+            assert_eq!(status, 200, "{}", parsed(&created));
+            let batch = parsed(&created)["id"].as_str().unwrap().to_owned();
+            for who in CALLERS {
+                let see = expected(mode, owner, who);
+                let case = format!("{mode}/{owner:?}/{who:?}");
+                let bearer = &t.get(who).bearer;
+                // Files: a fresh file per case (delete is destructive).
+                let file = upload_http(&app, creator).await;
+                let (_, list) = http(&app, "GET", "/v1/files?limit=10000", bearer, None).await;
+                assert_eq!(listed(&list, &file), see, "list files {case}");
+                for (method, path) in [
+                    ("GET", format!("/v1/files/{file}")),
+                    ("GET", format!("/v1/files/{file}/content")),
+                ] {
+                    let (status, body) = http(&app, method, &path, bearer, None).await;
+                    if see {
+                        assert_eq!(status, 200, "{method} {path} {case}");
+                    } else {
+                        assert_eq!(
+                            (status.as_u16(), body.as_slice()),
+                            (404, file_404.as_slice()),
+                            "{method} {path} {case}"
+                        );
+                    }
+                }
+                // A hidden file id is the same 404 as a missing one as a cursor too.
+                let (_, page) = http(
+                    &app,
+                    "GET",
+                    &format!("/v1/files?after={file}"),
+                    bearer,
+                    None,
+                )
+                .await;
+                let (_, nothing) = http(
+                    &app,
+                    "GET",
+                    &format!("/v1/files?after={missing_file}"),
+                    bearer,
+                    None,
+                )
+                .await;
+                if !see {
+                    assert_eq!(page, nothing, "cursor {case}");
+                }
+                // The file as another batch's input_file_id.
+                let (status, body) = http(
+                    &app,
+                    "POST",
+                    "/v1/batches",
+                    bearer,
+                    create_body(&file, false),
+                )
+                .await;
+                if see {
+                    assert_eq!(status, 200, "input_file_id {case}: {}", parsed(&body));
+                    let id = parsed(&body)["id"].as_str().unwrap().to_owned();
+                    let (status, _) = http(
+                        &app,
+                        "POST",
+                        &format!("/v1/batches/{id}/cancel"),
+                        bearer,
+                        None,
+                    )
+                    .await;
+                    assert_eq!(status, 200, "cancel own new batch {case}");
+                } else {
+                    assert_eq!(
+                        (status.as_u16(), body.as_slice()),
+                        (404, input_404.as_slice()),
+                        "input_file_id {case}"
+                    );
+                }
+                let (status, body) =
+                    http(&app, "DELETE", &format!("/v1/files/{file}"), bearer, None).await;
+                if see {
+                    assert_eq!(status, 200, "delete {case}");
+                } else {
+                    assert_eq!(
+                        (status.as_u16(), body.as_slice()),
+                        (404, file_404.as_slice()),
+                        "delete {case}"
+                    );
+                    let (status, _) =
+                        http(&app, "GET", &format!("/v1/files/{file}"), creator, None).await;
+                    assert_eq!(status, 200, "a refused delete keeps the file {case}");
+                }
+                // Batches.
+                let (_, list) = http(&app, "GET", "/v1/batches?limit=100", bearer, None).await;
+                assert_eq!(listed(&list, &batch), see, "list batches {case}");
+                let (status, body) =
+                    http(&app, "GET", &format!("/v1/batches/{batch}"), bearer, None).await;
+                if see {
+                    assert_eq!(status, 200, "get batch {case}");
+                } else {
+                    assert_eq!(
+                        (status.as_u16(), body.as_slice()),
+                        (404, batch_404.as_slice()),
+                        "get batch {case}"
+                    );
+                }
+                // Visible: cancelled (or already finished, 400); hidden: 404.
+                let (status, body) = http(
+                    &app,
+                    "POST",
+                    &format!("/v1/batches/{batch}/cancel"),
+                    bearer,
+                    None,
+                )
+                .await;
+                if see {
+                    assert!(
+                        matches!(status.as_u16(), 200 | 400),
+                        "cancel batch {case}: {status}"
+                    );
+                } else {
+                    assert_eq!(
+                        (status.as_u16(), body.as_slice()),
+                        (404, batch_404.as_slice()),
+                        "cancel batch {case}"
+                    );
+                }
+            }
+        }
+    }
+}
