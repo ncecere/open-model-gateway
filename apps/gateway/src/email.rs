@@ -1,7 +1,7 @@
 //! Outbound SMTP delivery for invitations (and, later, alerts).
 //!
 //! - Admin › Settings › Email holds the relay; the password is only an
-//!   allowlisted `env:NAME` reference (like provider credentials), resolved at
+//!   `env:NAME` reference on SMTP's own allowlist (never a provider credential), resolved at
 //!   send time and never stored, returned or logged.
 //! - STARTTLS (required, not opportunistic) or implicit TLS through rustls.
 //!   Plaintext (`none`) is accepted only for a loopback relay.
@@ -126,16 +126,23 @@ pub fn valid_host(host: &str) -> bool {
     })
 }
 
-/// The operator-controlled allowlist (`GATEWAY_SECRET_ENV_ALLOWLIST`), as for providers.
-fn allowlist() -> EnvSecrets {
+/// SMTP's own operator-controlled allowlist. It is separate from the provider
+/// allowlist (`GATEWAY_SECRET_ENV_ALLOWLIST`) so a Platform Admin, who chooses
+/// the SMTP host, can never point a provider credential at a mail server
+/// (#140); startup refuses a name on both lists.
+pub const SMTP_ALLOWLIST_VAR: &str = "GATEWAY_SMTP_SECRET_ENV_ALLOWLIST";
+
+fn smtp_allowlist_from(raw: &str) -> EnvSecrets {
     EnvSecrets::new(
-        std::env::var("GATEWAY_SECRET_ENV_ALLOWLIST")
-            .unwrap_or_default()
-            .split(',')
+        raw.split(',')
             .map(str::trim)
             .filter(|name| !name.is_empty())
             .map(str::to_owned),
     )
+}
+
+fn allowlist() -> EnvSecrets {
+    smtp_allowlist_from(&std::env::var(SMTP_ALLOWLIST_VAR).unwrap_or_default())
 }
 
 /// `env:NAME` syntax only (upper-case variable name).
@@ -152,7 +159,7 @@ pub fn password_ref_syntax(reference: &str) -> bool {
     })
 }
 
-/// Syntax plus the server allowlist; does not read the variable.
+/// Syntax plus the SMTP allowlist; does not read the variable.
 pub fn password_ref_allowed(reference: &str) -> bool {
     password_ref_syntax(reference) && allowlist().allows(reference)
 }
@@ -375,6 +382,17 @@ pub(crate) mod mock {
 #[cfg(test)]
 mod tests {
     use super::{mock::Behaviour, *};
+
+    /// #140: SMTP resolves only from its own allowlist, so an admin-chosen
+    /// mail server can never be handed a provider credential.
+    #[test]
+    fn smtp_references_use_their_own_allowlist() {
+        let smtp = smtp_allowlist_from("SMTP_PASSWORD");
+        assert!(smtp.allows("env:SMTP_PASSWORD"));
+        assert!(!smtp.allows("env:OPENAI_API_KEY"));
+        assert!(!smtp_allowlist_from("").allows("env:OPENAI_API_KEY"));
+        assert_eq!(SMTP_ALLOWLIST_VAR, "GATEWAY_SMTP_SECRET_ENV_ALLOWLIST");
+    }
 
     fn relay(port: u16) -> SmtpSettings {
         SmtpSettings {

@@ -71,13 +71,21 @@ impl Config {
         {
             bail!("GATEWAY_WEB_DIR must be unset or a non-empty directory path");
         }
-        let secret_env_allowlist = std::env::var("GATEWAY_SECRET_ENV_ALLOWLIST")
+        let secret_env_allowlist: Vec<String> = std::env::var("GATEWAY_SECRET_ENV_ALLOWLIST")
             .unwrap_or_default()
             .split(',')
             .map(str::trim)
             .filter(|name| !name.is_empty())
             .map(str::to_owned)
             .collect();
+        let smtp_env_allowlist: Vec<String> = std::env::var(crate::email::SMTP_ALLOWLIST_VAR)
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .collect();
+        disjoint_allowlists(&secret_env_allowlist, &smtp_env_allowlist)?;
         let max_concurrent = std::env::var("GATEWAY_MAX_CONCURRENT_REQUESTS")
             .unwrap_or_else(|_| "128".into())
             .parse::<usize>()
@@ -228,5 +236,80 @@ impl Config {
                     anyhow::anyhow!("GATEWAY_REPORTING_DATABASE_URL is not a valid PostgreSQL URL")
                 })?,
         ))
+    }
+}
+
+/// A variable is readable by provider connections or by SMTP, never both:
+/// either side's destination is chosen by a Platform Admin (#140).
+fn disjoint_allowlists(providers: &[String], smtp: &[String]) -> anyhow::Result<()> {
+    let shared: Vec<&str> = smtp
+        .iter()
+        .filter(|name| providers.contains(name))
+        .map(String::as_str)
+        .collect();
+    if !shared.is_empty() {
+        bail!(
+            "GATEWAY_SECRET_ENV_ALLOWLIST and {} both list {}: a variable may be readable by provider connections or by SMTP, not both",
+            crate::email::SMTP_ALLOWLIST_VAR,
+            shared.join(",")
+        );
+    }
+    // The gateway's own credentials, read without any allowlist: the database
+    // and OIDC secrets, the built-in provider keys, Bedrock's AWS chain and
+    // every gateway setting.
+    let reserved: Vec<&str> = smtp
+        .iter()
+        .map(String::as_str)
+        .filter(|name| {
+            crate::startup::SECRET_NAMES.contains(name)
+                || name.starts_with("AWS_")
+                || name.starts_with("GATEWAY_")
+        })
+        .collect();
+    if !reserved.is_empty() {
+        bail!(
+            "{} lists {}: SMTP may not read the gateway's own or provider credentials",
+            crate::email::SMTP_ALLOWLIST_VAR,
+            reserved.join(",")
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod allowlist_tests {
+    /// #140: one variable must never be readable by both SMTP and provider
+    /// connections, in either direction.
+    #[test]
+    fn overlapping_secret_allowlists_are_refused() {
+        let providers = vec!["OPENAI_API_KEY".to_owned(), "SHARED".to_owned()];
+        let error =
+            super::disjoint_allowlists(&providers, &["SMTP_PASSWORD".into(), "SHARED".into()])
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("SHARED"), "{error}");
+        assert!(!error.contains("OPENAI_API_KEY"));
+        super::disjoint_allowlists(&providers, &["SMTP_PASSWORD".into()]).unwrap();
+    }
+
+    /// Credentials the gateway reads outside the provider allowlist (database,
+    /// OIDC, the built-in provider keys, Bedrock's AWS chain, gateway settings)
+    /// can never be named on the SMTP list either.
+    #[test]
+    fn smtp_allowlist_refuses_the_gateways_own_credentials() {
+        for name in [
+            "DATABASE_URL",
+            "GATEWAY_OIDC_CLIENT_SECRET",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+            "GATEWAY_LISTEN_DATABASE_URL",
+        ] {
+            let error = super::disjoint_allowlists(&[], &[name.to_owned()])
+                .expect_err(name)
+                .to_string();
+            assert!(error.contains(name), "{error}");
+        }
     }
 }

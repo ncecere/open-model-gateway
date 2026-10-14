@@ -42,6 +42,9 @@ gateway:
   # (GATEWAY_SECRET_ENV_ALLOWLIST must list every name used this way).
   extraEnvFrom: []
   secretEnvAllowlist: []
+  # Names the SMTP password reference may read (GATEWAY_SMTP_SECRET_ENV_ALLOWLIST).
+  # Must not overlap secretEnvAllowlist: the gateway refuses to start if it does.
+  smtpSecretEnvAllowlist: []
 
   drainSeconds: 10
   terminationGracePeriodSeconds: 150

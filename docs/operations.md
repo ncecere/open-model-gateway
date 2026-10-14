@@ -7,6 +7,7 @@ This covers health checks, metrics and alerting, backups and restore, secret rot
 | Variable | Default | Purpose |
 |---|---|---|
 | `GATEWAY_METRICS_ADDR` | unset (disabled) | Separate Prometheus listener, for example `127.0.0.1:9464`. It must use a different port from `GATEWAY_LISTEN`. |
+| `GATEWAY_SMTP_SECRET_ENV_ALLOWLIST` | unset | Variable names the SMTP password reference (`env:NAME`) may read, comma-separated. Separate from `GATEWAY_SECRET_ENV_ALLOWLIST` (provider credentials). Startup fails if a name is on both lists or is one of the gateway's own credentials (`DATABASE_URL`, `GATEWAY_*`, `AWS_*`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). |
 | `GATEWAY_DATABASE_MAX_CONNECTIONS` | `10` | Database pool size per replica (2 to 500). Size PostgreSQL `max_connections` for every replica plus migrator and backup sessions. |
 | `GATEWAY_REPORTING_DATABASE_URL` | unset (primary) | Optional read-only reporting replica (or a pooler in front of one) for reports, usage and request logs only. See [read snapshots and the reporting replica](#read-snapshots-and-the-reporting-replica). Use the runtime role; set it directly (it has no `_FILE` form). An empty value is refused. |
 | `GATEWAY_REPORTING_MAX_LAG_SECONDS` | `30` | Reporting replica replay lag (1 to 3600 s) beyond which reads use the primary instead. |

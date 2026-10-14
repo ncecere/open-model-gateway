@@ -1,7 +1,7 @@
 /*
  * Admin › Settings › Email: the SMTP relay that sends invitations (and, later,
  * alerts). The password is never entered here: only an `env:NAME` reference
- * on the server allowlist, like provider credentials. "Send test email" goes
+ * on SMTP's own allowlist (never a provider credential). "Send test email" goes
  * to the signed-in admin's own verified address; the server rate-limits and
  * audits it. Without a relay, invitations fall back to copying the code.
  */
@@ -25,7 +25,7 @@ const statusBadge = (e: EmailSettings) => e.status === "ready" ? <Badge tone="go
 /** Server reasons that belong to one field. */
 const reasonField: Record<string, [keyof EmailDraft, string]> = {
   plaintext_requires_loopback: ["tls", "Unencrypted delivery only works with a relay on this machine. Choose STARTTLS or implicit TLS."],
-  credential_reference_not_allowed: ["password_ref", "This variable isn't on the server allowlist (GATEWAY_SECRET_ENV_ALLOWLIST). Ask whoever runs the gateway to add it."],
+  credential_reference_not_allowed: ["password_ref", "This variable isn't on the SMTP allowlist (GATEWAY_SMTP_SECRET_ENV_ALLOWLIST). Ask whoever runs the gateway to add it."],
 };
 
 export function EmailSettingsPage({ session }: { session: Session }) {
@@ -96,7 +96,7 @@ export function EmailSettingsPage({ session }: { session: Session }) {
           </div>
           <div className={st.grid} data-columns="2">
             <FormField label="Username" labelHint="Optional" description="Leave empty if the relay doesn't need sign-in." error={shown.username}><Input value={form.username} maxLength={256} autoComplete="off" disabled={busy} onChange={ev => set("username", ev.target.value)} /></FormField>
-            <FormField label="Password reference" labelHint={form.username.trim() ? undefined : "Optional"} description={<>A server variable holding the password, written <code>env:NAME</code>, on <code>GATEWAY_SECRET_ENV_ALLOWLIST</code>. The password itself is never entered or stored here.</>} error={shown.password_ref}><Input value={form.password_ref} placeholder="env:SMTP_PASSWORD" maxLength={132} autoComplete="off" spellCheck={false} disabled={busy} onChange={ev => set("password_ref", ev.target.value)} /></FormField>
+            <FormField label="Password reference" labelHint={form.username.trim() ? undefined : "Optional"} description={<>A server variable holding the password, written <code>env:NAME</code>, on <code>GATEWAY_SMTP_SECRET_ENV_ALLOWLIST</code> (SMTP's own allowlist; provider credentials can't be used here). The password itself is never entered or stored here.</>} error={shown.password_ref}><Input value={form.password_ref} placeholder="env:SMTP_PASSWORD" maxLength={132} autoComplete="off" spellCheck={false} disabled={busy} onChange={ev => set("password_ref", ev.target.value)} /></FormField>
           </div>
           <div className={st.grid} data-columns="2">
             <FormField label="From address" error={shown.from_address}><Input type="email" value={form.from_address} placeholder="gateway@example.com" maxLength={320} disabled={busy} onChange={ev => set("from_address", ev.target.value)} /></FormField>

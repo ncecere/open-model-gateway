@@ -104,7 +104,7 @@ export const KEY_DAYS = { min: 1, max: 365 } as const;
 export const tlsLabels: Record<TlsMode, string> = { starttls: "STARTTLS", implicit: "Implicit TLS", none: "None (this machine only)" };
 export const tlsPorts: Record<TlsMode, number> = { starttls: 587, implicit: 465, none: 25 };
 export const deliveryErrors: Record<DeliveryError, string> = {
-  credential: "The password reference can't be used: its variable isn't set or isn't on the server allowlist.",
+  credential: "The password reference can't be used: its variable isn't set or isn't on the SMTP allowlist.",
   address: "The From address or your email address isn't valid.",
   connection: "Couldn't connect to the relay. Check the host and port.",
   tls: "The secure connection failed. Check the TLS mode and port.",
