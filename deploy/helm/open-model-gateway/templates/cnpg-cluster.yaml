@@ -15,6 +15,7 @@ spec:
   imageName: {{ .Values.cnpg.cluster.image }}
   minSyncReplicas: {{ .Values.cnpg.cluster.minSyncReplicas }}
   maxSyncReplicas: {{ .Values.cnpg.cluster.maxSyncReplicas }}
+  smartShutdownTimeout: {{ .Values.cnpg.cluster.smartShutdownTimeout }}
   storage:
     storageClass: {{ .Values.cnpg.cluster.storageClass }}
     size: {{ .Values.cnpg.cluster.storageSize }}

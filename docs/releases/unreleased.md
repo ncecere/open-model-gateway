@@ -22,6 +22,8 @@ Notes for changes on `main` since v0.4.0. They become the next release's notes.
 
 ## Deployment
 
+- Helm: the chart-managed CloudNativePG cluster sets `smartShutdownTimeout: 15` (new value `cnpg.cluster.smartShutdownTimeout`). With CNPG's 180 s default, a primary failover kept writes down for about three minutes, because pooled and LISTEN connections never close by themselves (#25).
+
 - New `open-model-gateway grants apply` applies the reviewed runtime grants (`deploy/staging/runtime-grants.sql`, now embedded in the binary); `grants verify` runs the rollback-only privilege probes. The Helm migration Job and the staging `grant-runtime` step use it, so the chart no longer needs a PostgreSQL client image (`migrations.grants.image` is removed) or a copied SQL file (#20).
 
 - Helm: a first install with `migrations.run=true` is now one step, including the chart-managed CloudNativePG Cluster. The migration Job runs as a plain resource on install (a `pre-upgrade` hook on upgrades) and waits for the database; gateway pods wait for the schema (`wait-for-database --schema`) instead of crash-looping. New `open-model-gateway wait-for-database [--schema]` (#19).

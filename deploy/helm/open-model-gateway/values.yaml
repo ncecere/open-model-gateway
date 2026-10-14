@@ -254,6 +254,12 @@ cnpg:
     image: ghcr.io/cloudnative-pg/postgresql:17.6
     minSyncReplicas: 1
     maxSyncReplicas: 1
+    # Seconds a stopping primary waits for clients before a fast shutdown.
+    # CNPG's default is 180; the Pooler and LISTEN sessions never disconnect on
+    # their own, so with it a failover keeps writes down for about 3 minutes
+    # (measured on bitop-talos, #25). The gateway retries and reconciles
+    # interrupted attempts, so a short wait is safe.
+    smartShutdownTimeout: 15
     database: gateway
     # Connection string suffix, e.g. "disable" or "require"; empty uses the
     # driver default. CNPG does not enable TLS on the client port by default.

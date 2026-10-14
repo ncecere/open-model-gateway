@@ -116,6 +116,15 @@ Secret only (never mounted into the gateway Deployment):
 Both steps use the gateway image, so there is no second image to pin and no copy of the SQL to keep
 in sync.
 
+## Failover timing
+
+`cnpg.cluster.smartShutdownTimeout` (default 15 s) is how long a stopping primary waits for clients
+before a fast shutdown. CloudNativePG's own default is 180 s. The Pooler's server connections and
+each replica's LISTEN session never disconnect on their own, so with 180 s a failover kept writes
+down for about three minutes on bitop-talos; with 15 s the standby was promoted within a minute.
+Requests interrupted by the failover keep their holds and are reconciled as unknown; nothing is
+refunded or charged twice (#25).
+
 ## PgBouncer caveats (read before enabling the Pooler)
 
 - **Prepared statements:** `max_prepared_statements: 200` is required in `cnpg.pooler.parameters`
