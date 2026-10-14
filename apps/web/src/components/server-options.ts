@@ -15,7 +15,9 @@ export function useServerOptions<T>(path: string | undefined, toOption: (row: T)
   const on = !!path && q.length <= 200, sep = path?.includes("?") ? "&" : "?";
   const found = useApi<Collection<T>>(on ? `${path}${sep}${q ? `q=${encodeURIComponent(q)}&` : ""}limit=20` : "", on);
   const options = (found.data?.data ?? []).map(toOption).filter((o): o is FacetOption => !!o);
-  return { options, onSearch: setText };
+  // Search state, so a page can tell a failed search from an empty one.
+  const emptyText = found.isFetching ? "Searching…" : found.isError ? "Search failed. Try again." : undefined;
+  return { options, onSearch: setText, isError: found.isError, error: found.error, refetch: found.refetch, isFetching: found.isFetching, emptyText };
 }
 
 /** The name of one selected record (`path` is its detail URL), or `fallback` until it loads or when it can't. */

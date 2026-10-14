@@ -52,6 +52,10 @@ pub(super) struct ModelListQuery {
     data_policy: Option<String>,
     include_deprecated: Option<bool>,
     sort: Option<String>,
+    /// Pickers: leave out models already in this catalog.
+    not_in_catalog: Option<Uuid>,
+    /// Pickers: leave out models already directly assigned to this workspace.
+    not_direct_in: Option<Uuid>,
 }
 pub(super) async fn platform_models(
     State(s): State<Store>,
@@ -76,21 +80,11 @@ pub(super) async fn platform_models(
         .as_deref()
         .map(governance_money)
         .transpose()?;
-    let order = match p.sort.as_deref() {
-        None | Some("name") => "m.public_name,m.id",
-        Some("newest") => "m.created_at DESC,m.id",
-        Some("price") => "m.min_input::numeric NULLS LAST,m.public_name,m.id",
-        Some(_) => return Err(invalid()),
-    };
-    let min_input = min_rate("input_tokens", "input_microusd_per_million");
-    let policy = ROUTE_POLICY.replace("$cfg", "$7");
-    // Every filter except `type`; counts per workload use the same predicate.
-    let filters = format!(
-        "($1::text IS NULL OR strpos(lower(m.public_name),lower($1))>0 OR strpos(lower(m.display_name),lower($1))>0) AND ($2::boolean IS NULL OR m.enabled=$2) AND ($3::uuid IS NULL OR EXISTS(SELECT 1 FROM deployments d WHERE d.model_id=m.id AND d.provider_connection_id=$3)) AND ($4::numeric IS NULL OR ({min_input})::numeric<=$4) AND ($5::text IS NULL OR EXISTS(SELECT 1 FROM deployments d JOIN provider_connections p ON p.id=d.provider_connection_id WHERE d.model_id=m.id AND {ENABLED_ROUTE} AND {policy}=$5)) AND ($6 OR m.enabled)"
-    );
+    let sort = PlatformModelSort::parse(p.sort.as_deref())?;
+    let filters = platform_model_filters();
     let include = p.include_deprecated.unwrap_or(true);
     let cfg = DataCollection::configured().as_str();
-    let data: Vec<Value> = sqlx::query_scalar(&format!("SELECT {} || jsonb_build_object('workload',{WORKLOAD},'min_input_microusd_per_million',min_input,'created_at',m.created_at) FROM (SELECT m.*,({min_input}) min_input FROM models m) m WHERE {filters} AND ($8::text IS NULL OR {WORKLOAD}=$8) ORDER BY {order} LIMIT $9 OFFSET $10", model_json()))
+    let data: Vec<Value> = sqlx::query_scalar(&platform_models_sql(sort))
         .bind(search(p.q.as_deref())?)
         .bind(p.enabled)
         .bind(p.provider_connection_id)
@@ -101,6 +95,8 @@ pub(super) async fn platform_models(
         .bind(p.workload.as_deref())
         .bind(l)
         .bind(o)
+        .bind(p.not_in_catalog)
+        .bind(p.not_direct_in)
         .fetch_all(&mut *tx)
         .await?;
     let counts: Value = sqlx::query_scalar(&format!("SELECT coalesce(jsonb_object_agg(w,n),'{{}}'::jsonb) FROM (SELECT {WORKLOAD} w,count(*) n FROM models m WHERE {filters} GROUP BY 1) c"))
@@ -130,6 +126,50 @@ pub(super) async fn platform_models(
         all.insert(w.into(), json!(counts[w].as_i64().unwrap_or(0)));
     }
     Ok(Json(json!({"data":data,"counts":all})))
+}
+/// `sort` values accepted by the platform model list.
+#[derive(Clone, Copy)]
+pub(super) enum PlatformModelSort {
+    Name,
+    Newest,
+    Price,
+}
+impl PlatformModelSort {
+    fn parse(v: Option<&str>) -> Result<Self, ApiError> {
+        match v {
+            None | Some("name") => Ok(Self::Name),
+            Some("newest") => Ok(Self::Newest),
+            Some("price") => Ok(Self::Price),
+            Some(_) => Err(invalid()),
+        }
+    }
+}
+/// Every platform-model filter except `type` (binds $1..$7); counts per
+/// workload use the same predicate.
+fn platform_model_filters() -> String {
+    let min_input = min_rate("input_tokens", "input_microusd_per_million");
+    let policy = ROUTE_POLICY.replace("$cfg", "$7");
+    format!(
+        "($1::text IS NULL OR strpos(lower(m.public_name),lower($1))>0 OR strpos(lower(m.display_name),lower($1))>0) AND ($2::boolean IS NULL OR m.enabled=$2) AND ($3::uuid IS NULL OR EXISTS(SELECT 1 FROM deployments d WHERE d.model_id=m.id AND d.provider_connection_id=$3)) AND ($4::numeric IS NULL OR ({min_input})::numeric<=$4) AND ($5::text IS NULL OR EXISTS(SELECT 1 FROM deployments d JOIN provider_connections p ON p.id=d.provider_connection_id WHERE d.model_id=m.id AND {ENABLED_ROUTE} AND {policy}=$5)) AND ($6 OR m.enabled)"
+    )
+}
+/// Platform model page. Binds: $1 q, $2 enabled, $3 connection, $4 max input
+/// price, $5 data policy, $6 include deprecated, $7 configured OpenRouter
+/// policy, $8 type, $9 limit, $10 offset, $11 not in this catalog, $12 not
+/// directly assigned to this workspace. The page's ids are chosen first; row
+/// JSON (readiness counts, connections, prices) is built only for those rows.
+pub(super) fn platform_models_sql(sort: PlatformModelSort) -> String {
+    let min_input = min_rate("input_tokens", "input_microusd_per_million");
+    let order = match sort {
+        PlatformModelSort::Name => "m.public_name,m.id".to_owned(),
+        PlatformModelSort::Newest => "m.created_at DESC,m.id".to_owned(),
+        PlatformModelSort::Price => format!("({min_input})::numeric NULLS LAST,m.public_name,m.id"),
+    };
+    let filters = platform_model_filters();
+    format!(
+        "WITH page AS MATERIALIZED (SELECT m.id,row_number() OVER (ORDER BY {order}) n FROM models m WHERE {filters} AND ($8::text IS NULL OR {WORKLOAD}=$8) AND ($11::uuid IS NULL OR NOT EXISTS(SELECT 1 FROM catalog_models cm WHERE cm.catalog_id=$11 AND cm.model_id=m.id)) AND ($12::uuid IS NULL OR NOT EXISTS(SELECT 1 FROM workspace_model_grants g WHERE g.workspace_id=$12 AND g.model_id=m.id AND g.source='direct')) ORDER BY n LIMIT $9 OFFSET $10) SELECT {} || jsonb_build_object('workload',{WORKLOAD},'min_input_microusd_per_million',({min_input}),'created_at',m.created_at) FROM page JOIN models m ON m.id=page.id ORDER BY page.n",
+        model_json()
+    )
 }
 fn governance_money(v: &str) -> Result<i64, ApiError> {
     if v.is_empty() || v.len() > 19 || !v.bytes().all(|b| b.is_ascii_digit()) {
@@ -204,18 +244,8 @@ pub(super) async fn workspace_catalog(
     if p.workload.as_deref().is_some_and(|t| !workload_valid(t)) {
         return Err(invalid());
     }
-    let min_input = min_rate("input_tokens", "input_microusd_per_million");
-    let order = match p.sort.as_deref() {
-        None | Some("name") => "m.public_name,m.id".to_owned(),
-        Some("newest") => "m.created_at DESC,m.id".to_owned(),
-        Some("price") => format!("({min_input})::numeric NULLS LAST,m.public_name,m.id"),
-        Some(_) => return Err(invalid()),
-    };
-    let eligible = "EXISTS(SELECT 1 FROM catalog_models cm WHERE cm.model_id=m.id AND ((EXISTS(SELECT 1 FROM workspace_catalog_overrides h WHERE h.workspace_id=w.id) AND EXISTS(SELECT 1 FROM workspace_catalog_override_items i WHERE i.workspace_id=w.id AND i.catalog_id=cm.catalog_id)) OR (NOT EXISTS(SELECT 1 FROM workspace_catalog_overrides h WHERE h.workspace_id=w.id) AND EXISTS(SELECT 1 FROM workspace_type_catalogs t WHERE t.kind=w.kind AND t.catalog_id=cm.catalog_id))))";
-    // Routes that can serve: enabled, and on a connection profile that serves
-    // one of the model's protocols (members see Not serving otherwise).
-    let serving = &*resources::SERVING_ROUTE;
-    let data: Vec<Value> = sqlx::query_scalar(&format!("SELECT jsonb_build_object('model_id',m.id,'public_name',m.public_name,'display_name',m.display_name,'description',m.description,'protocols',m.supported_protocols,'workload',{WORKLOAD},'eligibility',CASE WHEN workspace_model_allowed(w.id,m.id) AND EXISTS(SELECT 1 FROM workspace_model_grants g WHERE g.workspace_id=w.id AND g.model_id=m.id AND g.source='direct') THEN 'direct' WHEN workspace_model_allowed(w.id,m.id) THEN 'selected' ELSE 'available_from_catalog' END,'reason',CASE WHEN workspace_model_allowed(w.id,m.id) AND EXISTS(SELECT 1 FROM workspace_model_grants g WHERE g.workspace_id=w.id AND g.model_id=m.id AND g.source='direct') THEN 'Assigned to this workspace by a Platform Admin' WHEN workspace_model_allowed(w.id,m.id) THEN 'Added to this workspace from an available catalog' ELSE 'In a catalog available to this workspace; not added yet' END,'min_input_microusd_per_million',{},'min_output_microusd_per_million',{},'routes',(SELECT count(*) FROM deployments d WHERE d.model_id=m.id AND {serving}),'priced_routes',(SELECT count(*) FROM deployments d WHERE d.model_id=m.id AND {serving} AND {PRICED_ROUTE}),'created_at',m.created_at) FROM models m CROSS JOIN workspaces w WHERE w.id=$1 AND m.enabled AND ({eligible} OR workspace_model_allowed(w.id,m.id)) AND ($2::text IS NULL OR strpos(lower(m.public_name),lower($2))>0 OR strpos(lower(m.display_name),lower($2))>0) AND ($3::text IS NULL OR {WORKLOAD}=$3) ORDER BY {order} LIMIT $4 OFFSET $5", min_input, min_rate("output_tokens", "output_microusd_per_million")))
+    let sort = PlatformModelSort::parse(p.sort.as_deref())?;
+    let data: Vec<Value> = sqlx::query_scalar(&workspace_catalog_sql(sort))
         .bind(ws)
         .bind(search(p.q.as_deref())?)
         .bind(p.workload.as_deref())
@@ -225,4 +255,23 @@ pub(super) async fn workspace_catalog(
         .await?;
     tx.commit().await?;
     Ok(Json(json!({"data":data})))
+}
+/// Workspace catalog page. Binds: $1 workspace, $2 q, $3 type, $4 limit, $5 offset.
+/// The page's ids are chosen first; row JSON is built only for those rows.
+pub(super) fn workspace_catalog_sql(sort: PlatformModelSort) -> String {
+    let min_input = min_rate("input_tokens", "input_microusd_per_million");
+    let order = match sort {
+        PlatformModelSort::Name => "m.public_name,m.id".to_owned(),
+        PlatformModelSort::Newest => "m.created_at DESC,m.id".to_owned(),
+        PlatformModelSort::Price => format!("({min_input})::numeric NULLS LAST,m.public_name,m.id"),
+    };
+    let eligible = "EXISTS(SELECT 1 FROM catalog_models cm WHERE cm.model_id=m.id AND ((EXISTS(SELECT 1 FROM workspace_catalog_overrides h WHERE h.workspace_id=w.id) AND EXISTS(SELECT 1 FROM workspace_catalog_override_items i WHERE i.workspace_id=w.id AND i.catalog_id=cm.catalog_id)) OR (NOT EXISTS(SELECT 1 FROM workspace_catalog_overrides h WHERE h.workspace_id=w.id) AND EXISTS(SELECT 1 FROM workspace_type_catalogs t WHERE t.kind=w.kind AND t.catalog_id=cm.catalog_id))))";
+    // Routes that can serve: enabled, and on a connection profile that serves
+    // one of the model's protocols (members see Not serving otherwise).
+    let serving = &*resources::SERVING_ROUTE;
+    format!(
+        "WITH page AS MATERIALIZED (SELECT m.id,row_number() OVER (ORDER BY {order}) n FROM models m CROSS JOIN workspaces w WHERE w.id=$1 AND m.enabled AND ({eligible} OR workspace_model_allowed(w.id,m.id)) AND ($2::text IS NULL OR strpos(lower(m.public_name),lower($2))>0 OR strpos(lower(m.display_name),lower($2))>0) AND ($3::text IS NULL OR {WORKLOAD}=$3) ORDER BY n LIMIT $4 OFFSET $5) SELECT jsonb_build_object('model_id',m.id,'public_name',m.public_name,'display_name',m.display_name,'description',m.description,'protocols',m.supported_protocols,'workload',{WORKLOAD},'eligibility',CASE WHEN workspace_model_allowed(w.id,m.id) AND EXISTS(SELECT 1 FROM workspace_model_grants g WHERE g.workspace_id=w.id AND g.model_id=m.id AND g.source='direct') THEN 'direct' WHEN workspace_model_allowed(w.id,m.id) THEN 'selected' ELSE 'available_from_catalog' END,'reason',CASE WHEN workspace_model_allowed(w.id,m.id) AND EXISTS(SELECT 1 FROM workspace_model_grants g WHERE g.workspace_id=w.id AND g.model_id=m.id AND g.source='direct') THEN 'Assigned to this workspace by a Platform Admin' WHEN workspace_model_allowed(w.id,m.id) THEN 'Added to this workspace from an available catalog' ELSE 'In a catalog available to this workspace; not added yet' END,'min_input_microusd_per_million',{},'min_output_microusd_per_million',{},'routes',(SELECT count(*) FROM deployments d WHERE d.model_id=m.id AND {serving}),'priced_routes',(SELECT count(*) FROM deployments d WHERE d.model_id=m.id AND {serving} AND {PRICED_ROUTE}),'created_at',m.created_at) FROM page JOIN models m ON m.id=page.id CROSS JOIN workspaces w WHERE w.id=$1 ORDER BY page.n",
+        min_input,
+        min_rate("output_tokens", "output_microusd_per_million")
+    )
 }

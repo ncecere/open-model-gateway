@@ -123,7 +123,7 @@ export function ModelPage({ session, model, path, tab }: ModelPageProps) {
   useResourceName(model.display_name);
   useSectionFromTab(modelSectionFor(tab));
   const edit = () => ask({ title: `Edit ${model.display_name}`, description: "Changing the API model name changes what clients must send.", fields: modelEditFields(model), submitLabel: "Save model", run: (v, signal) => api(path, { method: "PATCH", body: modelEditBody(v), signal }) });
-  const addRoute = () => { if (connections.data) ask(deploymentCreateAction({ model, models: [model], providers: connections.data })); };
+  const addRoute = () => { if (connections.data) ask(deploymentCreateAction({ model, providers: connections.data })); };
   // The lab logo is left of the title like the list rows (ui-principles 11); the lab badge keeps just its name.
   const labIds = [model.public_name, model.display_name, ...set.rows.map(row => row.route.upstream_model)];
   const r = model.readiness, serving = [...set.tiers.primary, ...set.tiers.fallback, ...set.tiers.unknown], servingPrices = serving.map(asPrice);

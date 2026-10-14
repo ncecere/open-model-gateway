@@ -323,11 +323,12 @@ describe("Models and connections lists", () => {
 
 describe("Model and connection record pages", () => {
   it("connection page lists its models and offers Add model from it", () => {
-    const client = testClient(); client.setQueryData(["api", undefined, `${platformPath}/models?provider_connection_id=${provider.id}`, "choices"], [{ ...model, readiness }]);
+    // One server page of the connection's models (R06, #68), never every model on it.
+    const client = testClient(); client.setQueryData(["api", undefined, `${platformPath}/models?provider_connection_id=${provider.id}&limit=50&offset=0`], { data: [{ ...model, readiness }] });
     const html = markup(<ProviderDetail session={admin} id={provider.id} onTabChange={() => {}} />, [[`${platformPath}/providers/${provider.id}`, { ...provider, model_count: 1 }]], client);
     for (const tab of ["Overview", "Models", "Settings"]) expect(html).toMatch(new RegExp(`role="tab"[^>]*>(?:(?!</button>).)*${tab}`)); expect(html).toContain(`href="/admin/models/new?connection=${provider.id}"`);
     const models = markup(<ProviderDetail session={admin} id={provider.id} tab="models" onTabChange={() => {}} />, [[`${platformPath}/providers/${provider.id}`, { ...provider, model_count: 1 }]], client);
-    expect(models).toContain("Models on this connection"); expect(models).toContain(`href="/admin/models/${model.id}"`);
+    expect(models).toContain("Models on this connection"); expect(models).toContain(`href="/admin/models/${model.id}"`); expect(client.getQueryCache().findAll().filter(q => q.queryKey[3] === "choices")).toEqual([]);
     const read = markup(<ProviderDetail session={auditor} id={provider.id} onTabChange={() => {}} />, [[`${platformPath}/providers/${provider.id}`, provider]], client);
     expect(read).not.toContain("Add model"); expect(read).not.toContain("Rotate credential reference"); client.clear();
   });

@@ -117,6 +117,174 @@ async fn users_list_builds_rows_only_for_the_requested_page(pool: PgPool) {
     );
 }
 
+/// Most times any correlated subquery ran while building returned rows: the
+/// page's own selection (the materialized `page` CTE, whose filters and sort
+/// key must visit every candidate) is not counted.
+fn row_subplan_loops(node: &Value) -> i64 {
+    if node["Subplan Name"] == "CTE page" {
+        return 0;
+    }
+    let own = if node["Subplan Name"].is_string() {
+        node["Actual Loops"].as_i64().unwrap_or(0)
+    } else {
+        0
+    };
+    node["Plans"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(row_subplan_loops)
+        .fold(own, i64::max)
+}
+fn names(v: &Value, field: &str) -> Vec<String> {
+    v["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r[field].as_str().unwrap().to_owned())
+        .collect()
+}
+/// 300 enabled models in a catalog offered to every team workspace.
+async fn bulk_catalog_models(pool: &PgPool) {
+    sqlx::query("INSERT INTO models(id,public_name) SELECT gen_random_uuid(),'bulk-'||lpad(i::text,3,'0') FROM generate_series(1,300) i")
+        .execute(pool)
+        .await
+        .unwrap();
+    let catalog = Uuid::now_v7();
+    sqlx::query("INSERT INTO catalogs(id,name) VALUES($1,'Bulk')")
+        .bind(catalog)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO catalog_models(catalog_id,model_id) SELECT $1,id FROM models WHERE public_name LIKE 'bulk-%'")
+        .bind(catalog)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO workspace_type_catalogs(kind,catalog_id) VALUES('team',$1)")
+        .bind(catalog)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn platform_models_list_builds_rows_only_for_the_requested_page(pool: PgPool) {
+    let f = fixture(&pool).await;
+    bulk_catalog_models(&pool).await;
+    // Same page, order and filters as before.
+    let (status, v) = call(
+        &f.s,
+        &f.auditor,
+        "GET",
+        "/api/v1/platform/models?limit=3&offset=51&q=bulk-2",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(
+        names(&v, "public_name"),
+        ["bulk-251", "bulk-252", "bulk-253"].map(String::from)
+    );
+    let (_, v) = call(
+        &f.s,
+        &f.auditor,
+        "GET",
+        "/api/v1/platform/models?limit=2&q=bulk-29&sort=newest",
+        json!({}),
+    )
+    .await;
+    assert_eq!(v["data"].as_array().unwrap().len(), 2, "{v}");
+    for sort in [
+        super::models_ux::PlatformModelSort::Name,
+        super::models_ux::PlatformModelSort::Price,
+    ] {
+        let plan: Value = sqlx::query_scalar(&format!(
+            "EXPLAIN (ANALYZE, FORMAT JSON) {}",
+            super::models_ux::platform_models_sql(sort)
+        ))
+        .bind(None::<String>)
+        .bind(None::<bool>)
+        .bind(None::<Uuid>)
+        .bind(None::<i64>)
+        .bind(None::<String>)
+        .bind(true)
+        .bind("deny")
+        .bind(None::<String>)
+        .bind(10_i64)
+        .bind(250_i64)
+        .bind(None::<Uuid>)
+        .bind(None::<Uuid>)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        // Readiness counts, connections, catalogs and prices run once per returned row.
+        let loops = row_subplan_loops(&plan[0]["Plan"]);
+        assert!(loops > 0, "expected per-row subqueries in {plan}");
+        assert!(
+            loops <= 10,
+            "subqueries ran {loops} times for a 10-row page"
+        );
+    }
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn workspace_catalog_builds_rows_only_for_the_requested_page(pool: PgPool) {
+    let f = fixture(&pool).await;
+    bulk_catalog_models(&pool).await;
+    let (status, v) = call(
+        &f.s,
+        &f.member,
+        "GET",
+        &format!(
+            "/api/v1/workspaces/{}/catalog?limit=3&offset=250&q=BULK",
+            f.team
+        ),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(
+        names(&v, "public_name"),
+        ["bulk-251", "bulk-252", "bulk-253"].map(String::from)
+    );
+    assert_eq!(v["data"][0]["eligibility"], "available_from_catalog");
+    // Authorization is unchanged: an outsider still cannot read it.
+    let (status, _) = call(
+        &f.s,
+        &f.outsider,
+        "GET",
+        &format!("/api/v1/workspaces/{}/catalog", f.team),
+        json!({}),
+    )
+    .await;
+    assert_ne!(status, StatusCode::OK);
+    for sort in [
+        super::models_ux::PlatformModelSort::Name,
+        super::models_ux::PlatformModelSort::Price,
+    ] {
+        let plan: Value = sqlx::query_scalar(&format!(
+            "EXPLAIN (ANALYZE, FORMAT JSON) {}",
+            super::models_ux::workspace_catalog_sql(sort)
+        ))
+        .bind(f.team)
+        .bind(None::<String>)
+        .bind(None::<String>)
+        .bind(10_i64)
+        .bind(250_i64)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        // Eligibility, route counts and prices run once per returned row.
+        let loops = row_subplan_loops(&plan[0]["Plan"]);
+        assert!(loops > 0, "expected per-row subqueries in {plan}");
+        assert!(
+            loops <= 10,
+            "subqueries ran {loops} times for a 10-row page"
+        );
+    }
+}
+
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn per_user_lookups_are_indexed(pool: PgPool) {
     for table in ["workspace_membership_grants", "platform_role_grants"] {

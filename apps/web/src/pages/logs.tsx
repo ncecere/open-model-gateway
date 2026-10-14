@@ -288,23 +288,25 @@ export function LogsPage({ scope }: { scope: LogsScope }) {
   const tab = logTab(search.tab), platform = scope.kind === "platform";
   const filters = requestFilters(platform ? search : { ...search, workspace_id: undefined });
   const { query, error: filterError } = requestQuery(filters);
-  // Filter options: models; the keys the caller can see (workspace only) and, on Admin, teams and projects,
-  // both searched on the server (R06, #69), with the selected one labelled by fetching just that record.
+  // Filter options: the workspace's own models (a short list); on Admin, every model searched on the server (R06, #68).
+  // The keys the caller can see (workspace only) and, on Admin, teams and projects are searched on the server
+  // too (R06, #69), with the selected one labelled by fetching just that record.
   const models = useChoices<Grant>(scope.kind === "workspace" ? `${wsPath(scope.workspace.id)}/models` : "", scope.kind === "workspace");
-  const platformModels = useChoices<Model>(`${platformPath}/models`, platform);
+  const modelLabel = (m: { display_name: string; public_name: string }) => m.display_name === m.public_name ? m.public_name : `${m.display_name} · ${m.public_name}`;
+  const platformModels = useServerOptions<Model>(platform ? `${platformPath}/models` : undefined, m => ({ value: m.public_name, label: modelLabel(m) }));
   const keyBase = scope.kind === "workspace" ? `${wsPath(scope.workspace.id)}/keys` : undefined;
   const keys = useServerOptions<KeyRow>(keyBase, k => ({ value: k.id, label: k.name, group: k.service_account_id ? "Service accounts" : "People" }));
   const keyName = useSelectedName<KeyRow>(keyBase && filters.key_id ? `${keyBase}/${encodeURIComponent(filters.key_id)}` : undefined, k => k.name, "Selected key");
   const workspaces = useServerOptions<DirectoryWorkspace>(platform ? `${platformPath}/workspaces` : undefined, w => w.kind === "personal" ? undefined : { value: w.id, label: w.name, group: w.kind === "team" ? "Teams" : "Projects" });
   const workspaceName = useSelectedName<DirectoryWorkspace>(platform && filters.workspace_id ? `${platformPath}/workspaces/${encodeURIComponent(filters.workspace_id)}` : undefined, w => w.name, "Selected workspace");
   const [tools, setTools] = useState<{ columns: { id: string; label: string; hideable?: boolean }[]; view: TableView }>();
-  const modelOptions = [...new Map([...(models.data ?? []), ...(platformModels.data ?? [])].map(g => [g.public_name, { value: g.public_name, label: g.display_name === g.public_name ? g.public_name : `${g.display_name} · ${g.public_name}` }])).values()];
-  if (filters.model && !modelOptions.some(o => o.value === filters.model)) modelOptions.unshift({ value: filters.model, label: filters.model });
+  // Requests match a model by its API name, so a selected one is labelled with that name.
+  const modelOptions = withSelected(platform ? platformModels.options : [...new Map((models.data ?? []).map(g => [g.public_name, { value: g.public_name, label: modelLabel(g) }])).values()], filters.model ? { value: filters.model, label: filters.model } : undefined);
   const keyOptions = withSelected(keys.options, filters.key_id ? { value: filters.key_id, label: keyName } : undefined);
   const workspaceOptions = withSelected(workspaces.options, filters.workspace_id ? { value: filters.workspace_id, label: workspaceName } : undefined);
   const filtered = activeFilterCount(filters) > 0;
   const facets: ToolbarFacet[] = [
-    { id: "model", label: "Model", type: "select", placeholder: "Any model", options: modelOptions },
+    platform ? { id: "model", label: "Model", type: "search", placeholder: "Any model", options: modelOptions, onSearch: platformModels.onSearch } : { id: "model", label: "Model", type: "select", placeholder: "Any model", options: modelOptions },
     ...(platform ? [{ id: "workspace_id", label: "Workspace", type: "search", placeholder: "Any team or project", options: workspaceOptions, onSearch: workspaces.onSearch } satisfies ToolbarFacet] : [{ id: "key_id", label: "Key", type: "search", placeholder: "Any key", options: keyOptions, onSearch: keys.onSearch } satisfies ToolbarFacet]),
     // A compact multi-select (five statuses as a segmented control took a row of its own).
     { id: "status", label: "Status", type: "select", multiple: true, placeholder: "Any status", options: requestStatuses },

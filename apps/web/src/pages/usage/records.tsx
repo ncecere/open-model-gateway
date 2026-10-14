@@ -6,15 +6,16 @@
  * workspace), with the platform's financial workspace actions.
  */
 import { useState } from "react";
-import { api, platformPath, platformWorkspacePath, wsPath, type Catalog, type Collection, type CostCenter, type Model, type Session, type Workspace } from "../../lib/api";
+import { api, platformPath, platformWorkspacePath, wsPath, type Catalog, type Collection, type CostCenter, type Session, type Workspace } from "../../lib/api";
 import { Money } from "../../components/templates/money";
 import { canReconcile, type Breakdown, type Cost, type CostReport } from "../../lib/governance";
 import { parseCheckboxValues } from "../../lib/forms";
+import { modelPickField } from "../../lib/model-options";
 import { formatCount, knownSpendText, reconciliationBody, reconciliationFields } from "../../lib/reports";
 import { permissions } from "../../lib/permissions";
 import { saveCsv, usageCsv, EXPORT_MAX_ROWS } from "../../lib/usage-export";
 import { filterCount, periodLabel, recordCostText, recordStatuses, recordStatusText, recordsQuery, usageFilters, usageStatuses, workloadLabels, type RecordFilters, type UsageContext, type UsagePeriod } from "../../lib/usage";
-import { Button, Stack, useAction, useApi, useChoices } from "../../components/ui";
+import { Button, ErrorNotice, Stack, useAction, useApi, useChoices } from "../../components/ui";
 import { ActionMenu } from "../../components/templates/action-menu";
 import { CopyId } from "../../components/templates/copy-id";
 import { InfoBanner } from "../../components/templates/notices";
@@ -39,19 +40,19 @@ const PAGE = 50;
  * The records filters from the URL (the bar is shared with Overview/Explore; see ./filters). Records match a model by
  * its API name, so the filtered model's name is looked up first; `unknownModel` when it can't be found.
  */
-function useRecordFilters(workspace: Workspace | undefined, ctx: UsageContext, nav: UsageNav, workspaceFilter?: string): { filters: RecordFilters; ready: boolean; unknownModel: boolean; scopeText: string } {
+function useRecordFilters(workspace: Workspace | undefined, ctx: UsageContext, nav: UsageNav, workspaceFilter?: string): { filters: RecordFilters; ready: boolean; unknownModel: boolean; modelError?: unknown; retryModel?: () => void; scopeText: string } {
   const f = usageFilters(nav.search, ctx), model = useModelName(workspace, f.model_id);
   const cost = recordStatuses.find(r => r.value === nav.search.cost_status);
-  const unknownModel = !!f.model_id && !model.pending && !model.name;
+  const unknownModel = !!f.model_id && !model.pending && !model.name && !model.error;
   const statuses = f.status.map(v => usageStatuses.find(x => x.value === v)!.label.toLowerCase());
   const scopeText = [model.name && `model ${model.name}`, f.key_id && "one key", f.member && "one member", f.service_account_id && "one service account", f.cost_center_id && "one cost center", statuses.length && `status ${statuses.join(" or ")}`, cost && `cost "${cost.label}"`].filter(Boolean).join(", ");
-  return { filters: { ...f, model: model.name, cost_status: cost?.value, workspace_id: workspaceFilter }, ready: !model.pending && !unknownModel, unknownModel, scopeText };
+  return { filters: { ...f, model: model.name, cost_status: cost?.value, workspace_id: workspaceFilter }, ready: !model.pending && !unknownModel && !model.error, unknownModel, modelError: model.error, retryModel: model.retry, scopeText };
 }
 const UnknownModel = () => <InfoBanner tone="warning" title="Model filter not applied">The filtered model isn't available any more, so records can't be matched to it. Clear the model filter to see records.</InfoBanner>;
 
 export function WorkspaceRecords({ session, workspace, ctx, period, nav }: { session: Session; workspace: Workspace; ctx: UsageContext; period: UsagePeriod; nav: UsageNav }) {
   const ask = useAction(), base = wsPath(workspace.id), offset = nav.search.offset ?? 0;
-  const { filters, ready, unknownModel, scopeText } = useRecordFilters(workspace, ctx, nav);
+  const { filters, ready, unknownModel, modelError, retryModel, scopeText } = useRecordFilters(workspace, ctx, nav);
   // One request with every filter: the server takes the key and a comma list of statuses.
   const main = useApi<Collection<Cost>>(`${base}/costs?${recordsQuery(period, filters, { platform: false, limit: PAGE, offset })}`, ready);
   const filtered = filterCount(filters) > 0 || !!filters.cost_status;
@@ -73,7 +74,7 @@ export function WorkspaceRecords({ session, workspace, ctx, period, nav }: { ses
   ];
   const canFix = permissions(session, workspace).reconcileCosts;
   return <Stack gap={4}>
-    {unknownModel && <UnknownModel />}
+    {unknownModel && <UnknownModel />}{modelError !== undefined && <ErrorNotice error={modelError} retry={retryModel} />}
     {/* Export sits with Columns on the table's one action row (not a row of its own). */}
     <DataTable<Cost> caption="Cost records" stack columns={columns} toolbar={<Button size="sm" variant="secondary" disabled={!ready} onClick={exportCsv}>Export CSV</Button>} data={ready ? main.data?.data ?? [] : []} getRowId={c => c.id} columnsMenu columnsMenuMin={4} loading={ready && main.isPending} error={main.error ?? undefined} onRetry={() => void main.refetch()}
       rowActions={canFix ? (c: Cost) => canReconcile(c) ? <Button size="sm" variant="secondary" onClick={() => reconcile(c)}>Reconcile</Button> : null : undefined}
@@ -98,10 +99,10 @@ export type PlatformRecordColumns = ReturnType<typeof usePlatformRecordColumns>;
 
 /** Admin › Usage & costs › By workspace: per-workspace totals (personal workspaces as totals only) with the same inline filters. */
 export function PlatformRecords({ session, ctx, period, nav, workspaceFilter, cols }: { session: Session; ctx: UsageContext; period: UsagePeriod; nav: UsageNav; workspaceFilter?: string; /** From `usePlatformRecordColumns`; its menu sits on the FilterToolbar row. */ cols: PlatformRecordColumns }) {
-  const { filters, ready, unknownModel } = useRecordFilters(undefined, ctx, nav, workspaceFilter);
+  const { filters, ready, unknownModel, modelError, retryModel } = useRecordFilters(undefined, ctx, nav, workspaceFilter);
   const report = useApi<CostReport>(`${platformPath}/cost-report?${recordsQuery(period, filters, { platform: true })}`, ready);
   return <Stack gap={4}>
-    {unknownModel && <UnknownModel />}
+    {unknownModel && <UnknownModel />}{modelError !== undefined && <ErrorNotice error={modelError} retry={retryModel} />}
     <DataTable<Breakdown> caption="By workspace" stack columns={platformColumns} data={ready ? report.data?.breakdowns.workspaces ?? [] : []} getRowId={r => r.id ?? r.name} hiddenColumns={cols.hidden} onHiddenColumnsChange={cols.setHidden} loading={ready && report.isPending} error={report.error ?? undefined} onRetry={() => void report.refetch()}
       rowActions={session.capabilities.platform_write ? (r: Breakdown) => r.id ? <FinancialWorkspaceActions session={session} workspaceId={r.id} name={r.name} /> : null : undefined}
       empty={<EmptyState size="compact" title="No usage matches" description={`No workspace used models in ${periodLabel(period)} with these filters.`} />} />
@@ -110,16 +111,17 @@ export function PlatformRecords({ session, ctx, period, nav, workspaceFilter, co
 }
 
 function FinancialWorkspaceActions({ session, workspaceId, name }: { session: Session; workspaceId: string; name: string }) {
-  const ask = useAction(), centers = useChoices<CostCenter>(`${platformPath}/cost-centers`, session.capabilities.platform_write), catalogs = useChoices<Catalog>(`${platformPath}/catalogs`, session.capabilities.platform_write), models = useChoices<Model>(`${platformPath}/models`, session.capabilities.platform_write), path = platformWorkspacePath(workspaceId);
+  const ask = useAction(), centers = useChoices<CostCenter>(`${platformPath}/cost-centers`, session.capabilities.platform_write), catalogs = useChoices<Catalog>(`${platformPath}/catalogs`, session.capabilities.platform_write), path = platformWorkspacePath(workspaceId);
   const [limits, setLimits] = useState(false);
-  const modelField = { name: "model_id", label: "Platform model", type: "select" as const, required: true, options: models.data?.map(m => ({ value: m.id, label: `${m.display_name} · ${m.public_name}` })) ?? [] };
+  // Searched on the server (R06, #68), never a list of every model.
+  const modelField = modelPickField("model_id", "Platform model");
   return <><ActionMenu label={`Administrative configuration for ${name}`} actions={[
     { label: "Assign future cost center…", disabled: !centers.isSuccess, disabledReason: "Loading authorized cost centers", onSelect: () => ask({ title: `Future allocation · ${name}`, description: "Applies to new requests only.", fields: [{ name: "cost_center_id", label: "Cost center", type: "select", options: centers.data?.filter(c => !c.archived_at).map(c => ({ value: c.id, label: `${c.name} · ${c.code}` })) ?? [], help: "Blank: Unallocated." }], submitLabel: "Set allocation", run: (v, signal) => api(path, { method: "PATCH", body: { cost_center_id: v.cost_center_id || null }, signal }) }) },
-    { label: "Assign direct model…", disabled: !models.isSuccess, disabledReason: "Loading platform models", onSelect: () => ask({ title: `Direct model assignment · ${name}`, description: "Independent of catalogs.", fields: [modelField], submitLabel: "Assign direct model", run: (v, signal) => api(`${path}/models`, { method: "POST", body: { model_id: v.model_id }, signal }) }) },
+    { label: "Assign direct model…", onSelect: () => ask({ title: `Direct model assignment · ${name}`, description: "Independent of catalogs.", fields: [modelField], submitLabel: "Assign direct model", run: (v, signal) => api(`${path}/models`, { method: "POST", body: { model_id: v.model_id }, signal }) }) },
     { label: "Replace catalog availability…", disabled: !catalogs.isSuccess, disabledReason: "Loading approved catalogs", onSelect: () => ask({ title: `Replace available catalogs · ${name}`, description: "Replaces the type defaults for this workspace. None checked means no catalogs; direct assignments stay.", fields: [{ name: "catalog_ids", label: "Replacement catalogs", type: "checkboxes", value: "[]", maxSelections: 200, options: catalogs.data?.map(c => ({ value: c.id, label: c.name })) ?? [] }], submitLabel: "Set replacement catalogs", run: (v, signal) => api(`${path}/catalogs`, { method: "PUT", body: { mode: "replace", catalog_ids: parseCheckboxValues(v.catalog_ids) }, signal }) }) },
     { label: "Set custom limits…", onSelect: () => setLimits(true) },
     { label: "Reset catalog inheritance…", onSelect: () => ask({ title: `Reset catalogs · ${name}?`, description: "Removes this workspace's custom catalog list. It will follow the default catalogs for its type again.", submitLabel: "Reset catalog inheritance", run: (_, signal) => api(`${path}/catalogs`, { method: "DELETE", signal }) }) },
     { label: "Reset policy inheritance…", onSelect: () => ask({ title: `Reset ceilings · ${name}?`, description: "Deletes the platform override. Spending isn't reset.", submitLabel: "Reset policy inheritance", run: (_, signal) => api(`${path}/policy`, { method: "DELETE", signal }) }) },
-    { label: "Revoke direct model…", danger: true, disabled: !models.isSuccess, disabledReason: "Loading platform models", onSelect: () => ask({ title: `Revoke direct model · ${name}`, description: "Removes only the direct assignment; catalog access stays.", fields: [modelField], danger: true, submitLabel: "Revoke direct source", run: (v, signal) => api(`${path}/models/${id(v.model_id)}`, { method: "DELETE", signal }) }) },
+    { label: "Revoke direct model…", danger: true, onSelect: () => ask({ title: `Revoke direct model · ${name}`, description: "Removes only the direct assignment; catalog access stays.", fields: [modelField], danger: true, submitLabel: "Revoke direct source", run: (v, signal) => api(`${path}/models/${id(v.model_id)}`, { method: "DELETE", signal }) }) },
   ]} />{limits && <ReplacementLimitsDialog workspaceId={workspaceId} name={name} onClose={() => setLimits(false)} />}</>;
 }
