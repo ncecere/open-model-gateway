@@ -316,7 +316,7 @@ async fn update_own_workspace(
 }
 // Shared by the user list and detail. Sign-in dates come from browser session
 // creation; the count covers Team/Project grants only, never personal workspaces.
-const USER_JSON: &str = "jsonb_build_object('id',u.id,'email',u.email,'display_name',u.display_name,'platform_role',r.role,'disabled_at',u.disabled_at,'cleanup_due_at',u.cleanup_due_at,'cleaned_at',u.cleaned_at,'disable_reason',u.disable_reason,'oidc_link_allowed',u.oidc_link_allowed,'created_at',u.created_at,'last_sign_in_at',(SELECT max(s.created_at) FROM browser_sessions s WHERE s.user_id=u.id),'shared_workspace_count',(SELECT count(DISTINCT g.workspace_id) FROM workspace_membership_grants g JOIN workspaces w ON w.id=g.workspace_id WHERE g.user_id=u.id AND g.revoked_at IS NULL AND w.kind IN ('team','project')),'role_grants',coalesce((SELECT jsonb_agg(jsonb_build_object('id',g.id,'role',g.role,'source',g.source,'mapping_id',g.mapping_id,'revoked_at',g.revoked_at) ORDER BY g.created_at,g.id) FROM platform_role_grants g WHERE g.user_id=u.id),'[]'::jsonb)) FROM users u LEFT JOIN effective_platform_roles r ON r.user_id=u.id";
+const USER_JSON: &str = "jsonb_build_object('id',u.id,'email',u.email,'display_name',u.display_name,'platform_role',r.role,'disabled_at',u.disabled_at,'cleanup_due_at',u.cleanup_due_at,'cleaned_at',u.cleaned_at,'disable_reason',u.disable_reason,'oidc_link_allowed',u.oidc_link_allowed,'created_at',u.created_at,'last_sign_in_at',u.last_signed_in_at,'shared_workspace_count',(SELECT count(DISTINCT g.workspace_id) FROM workspace_membership_grants g JOIN workspaces w ON w.id=g.workspace_id WHERE g.user_id=u.id AND g.revoked_at IS NULL AND w.kind IN ('team','project')),'role_grants',coalesce((SELECT jsonb_agg(jsonb_build_object('id',g.id,'role',g.role,'source',g.source,'mapping_id',g.mapping_id,'revoked_at',g.revoked_at) ORDER BY g.created_at,g.id) FROM platform_role_grants g WHERE g.user_id=u.id),'[]'::jsonb)) FROM users u LEFT JOIN effective_platform_roles r ON r.user_id=u.id";
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UserQuery {
@@ -381,8 +381,9 @@ async fn platform_user(
         .ok_or_else(missing)?;
     // A count only: an admin never sees another person's devices.
     data["active_sessions"] = json!(super::sessions::live_count(&mut tx, id).await?);
+    // On the user since #80: deleting ended sessions doesn't change it.
     data["first_sign_in_at"] = sqlx::query_scalar::<_, Option<Value>>(
-        "SELECT to_jsonb(min(created_at)) FROM browser_sessions WHERE user_id=$1",
+        "SELECT to_jsonb(first_signed_in_at) FROM users WHERE id=$1",
     )
     .bind(id)
     .fetch_one(&mut *tx)

@@ -42,7 +42,7 @@ GRANT EXECUTE ON FUNCTION public.lock_installation(),public.workspace_model_allo
 -- The singleton boundary/family/identity cannot be rewritten or removed.
 GRANT UPDATE(name) ON public.installation TO gateway_runtime;
 GRANT INSERT(id,email,oidc_link_allowed),
- UPDATE(email,display_name,disabled_at,cleanup_due_at,cleaned_at,disable_reason,oidc_link_allowed)
+ UPDATE(email,display_name,disabled_at,cleanup_due_at,cleaned_at,disable_reason,oidc_link_allowed,first_signed_in_at,last_signed_in_at)
  ON public.users TO gateway_runtime;
 GRANT INSERT ON public.oidc_identities,public.platform_role_grants,public.cost_centers,
  public.workspaces,public.oidc_group_mappings,public.workspace_membership_grants,
@@ -67,7 +67,9 @@ GRANT DELETE ON public.oidc_login_attempts,public.oidc_group_mappings,public.cat
 GRANT UPDATE(user_id) ON public.oidc_identities TO gateway_runtime;
 GRANT UPDATE(revoked_at) ON public.platform_role_grants,public.workspace_membership_grants TO gateway_runtime;
 -- Signature-verified email is inserted at sign-in and cleared at account cleanup.
-GRANT UPDATE(revoked_at,verified_email,last_seen_at) ON public.browser_sessions TO gateway_runtime;
+GRANT UPDATE(revoked_at,verified_email,last_seen_at,idle_expires_at) ON public.browser_sessions TO gateway_runtime;
+-- #80: maintenance deletes sessions that ended more than 30 days ago.
+GRANT DELETE ON public.browser_sessions TO gateway_runtime;
 GRANT UPDATE(name,cost_center_id,disabled_at,owner_user_id,object_visibility) ON public.workspaces TO gateway_runtime;
 -- Personal provisioning uses an owner-preserving ON CONFLICT update. Applications
 -- still enforce private scope; workspace kind is never mutable via runtime.

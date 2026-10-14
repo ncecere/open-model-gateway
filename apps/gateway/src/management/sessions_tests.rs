@@ -65,6 +65,14 @@ async fn a_user_lists_only_their_own_live_sessions(pool: PgPool) {
     let phone = session(&pool, &f.owner, Some("Safari on iOS")).await;
     let ended = session(&pool, &f.owner, None).await;
     let expired = session(&pool, &f.owner, None).await;
+    let idle = session(&pool, &f.owner, None).await;
+    sqlx::query(
+        "UPDATE browser_sessions SET idle_expires_at=now()-interval '1 second' WHERE id=$1",
+    )
+    .bind(idle)
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::query("UPDATE browser_sessions SET revoked_at=now() WHERE id=$1")
         .bind(ended)
         .execute(&pool)
@@ -86,7 +94,7 @@ async fn a_user_lists_only_their_own_live_sessions(pool: PgPool) {
     assert_eq!(
         ids,
         vec![here.to_string(), phone.to_string()],
-        "current first; no ended, expired or other user's"
+        "current first; no ended, expired, idle-expired or other user's"
     );
     assert_eq!(rows[0]["current"], true);
     assert_eq!(rows[1]["current"], false);

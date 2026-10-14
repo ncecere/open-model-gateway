@@ -459,6 +459,13 @@ async fn signed_in(pool: &PgPool, user: Uuid, days_ago: i32) {
         .execute(pool)
         .await
         .unwrap();
+    // As the callback does: sign-in times are kept on the user (#80).
+    sqlx::query("UPDATE users SET last_signed_in_at=greatest(last_signed_in_at,now()-make_interval(days=>$2)),first_signed_in_at=least(first_signed_in_at,now()-make_interval(days=>$2)) WHERE id=$1")
+        .bind(user)
+        .bind(days_ago)
+        .execute(pool)
+        .await
+        .unwrap();
 }
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn directory_display_fields_and_filters_stay_shared_only(pool: PgPool) {
