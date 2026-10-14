@@ -1,43 +1,41 @@
 # Guardrails design (issue #36)
 
-**Status:** design only, not implemented. **Date:** 2026-10-14. Decisions marked *user decision* were approved on 2026-10-14. Decisions marked **Recommendation** are proposals in this document and still need review. Today the gateway never inspects prompt or response text. Everything below describes planned behavior.
+**Status:** design only, not implemented. **Date:** 2026-10-13.
+
+*User decision* marks the user's decisions of 2026-10-13. **Recommendation** marks proposals that still need review. Today the gateway never inspects prompt or response text.
 
 ## 1. Goals and non-goals
 
 **Goals**
 
-- Protect the following, one at a time, each verified before the next (*user decision*):
+- Protect the following, built one at a time and each verified before the next (*user decision*):
   - leaked secrets;
   - personal data (mask or block);
   - content moderation;
   - output DLP;
   - prompt-injection signals.
 - Off by default. Opt-in per workspace, with optional platform defaults per workspace type, composed the way limits compose today ([governance](governance.md)).
-- Be explicit about what is inspected, which detector inspects it, and where text goes when a detector is a model.
+- State plainly what is inspected, by which detector, and where text goes when the detector is a model.
 - Actions are monitor, redact and block, configured per policy (*user decision*).
 - Store no matched text. On a match, record only policy, detector, category and count (*user decision*).
-- Keep every existing accounting invariant (AGENTS.md):
-  - every upstream attempt has its own reservation;
-  - unknown cost keeps its hold;
-  - there is no failover after a stream is returned;
-  - there is no implicit retry.
+- Keep every accounting invariant in AGENTS.md: one reservation per upstream attempt, unknown cost keeps its hold, no failover after a stream is returned, no implicit retry.
 
 **Non-goals**
 
-- Storing or replaying prompts or responses, including for "evidence" of a block.
-- Inspecting images, audio bytes or files at rest. These are listed as *uninspectable* (section 6).
+- Storing or replaying prompts or responses, including as "evidence" of a block.
+- Inspecting images, audio bytes or files at rest. These are *uninspectable* (section 6).
 - A guarantee. Pattern detectors miss things and model detectors are probabilistic. Guardrails reduce risk; they are not a compliance certificate.
 
 ## 2. Threats and use cases
 
 | Protection | Threat | Typical action | Detectors |
 | --- | --- | --- | --- |
-| **Secrets** | A user or agent pastes credentials into a prompt or tool result: cloud keys, tokens, PEM private keys, JWTs, connection strings, or the gateway's own `omg_…` keys (`apps/gateway/src/auth.rs`). These then reach a third-party provider. | block (apps), monitor (agents) | pattern |
-| **Personal data** | Email addresses, phone numbers, card numbers (Luhn), IBANs (mod-97), national IDs or IP addresses are sent to a provider whose data policy is unknown. | redact or block | pattern; names and addresses need System One or the LLM judge |
-| **Moderation** | Abusive, self-harm, sexual or violent content, in either direction. | monitor or block | System One, LLM judge (external later) |
-| **Output DLP** | The model echoes secrets or personal data from its context, or emits configured confidential terms. | monitor, stop or block | pattern, System One |
-| **Prompt-injection signals** | Instructions hidden in retrieved documents or tool results try to steer the model. | monitor (signal), optionally block | pattern heuristics (low precision), System One, LLM judge |
-| **Custom DLP** | Project code names, customer identifiers, internal hostnames. | any | pattern (admin-defined) |
+| **Secrets** | Credentials pasted into a prompt or tool result reach a third-party provider: cloud keys, tokens, PEM keys, JWTs, connection strings, the gateway's own `omg_…` keys (`apps/gateway/src/auth.rs`). | block | pattern |
+| **Personal data** | Email addresses, phones, cards (Luhn), IBANs (mod-97), national IDs or IP addresses go to a provider with an unknown data policy. | redact or block | pattern; names and addresses need System One or the judge |
+| **Moderation** | Abusive, self-harm, sexual or violent content, in either direction. | monitor or block | System One, LLM judge |
+| **Output DLP** | The model echoes secrets, personal data or configured confidential terms. | monitor, stop or block | pattern, System One |
+| **Prompt-injection signals** | Instructions hidden in retrieved documents or tool results. | monitor, optionally block | pattern heuristics, System One, judge |
+| **Custom DLP** | Code names, customer identifiers, internal hostnames. | any | pattern (admin-defined) |
 
 Output DLP is not a separate detector. It is the output side of the secrets, personal-data and custom rules.
 
@@ -45,148 +43,130 @@ Output DLP is not a separate detector. It is the output side of the secrets, per
 
 ### Input
 
-The generation path is `Engine::execute_protocol` in `apps/gateway/src/inference/mod.rs`:
+The frontends (`protocols/chat_completions.rs`, `responses.rs`, `messages.rs`) normalize requests into the canonical `ChatRequest` (`inference/types.rs`). `Engine::execute_protocol` (`apps/gateway/src/inference/mod.rs`) then: (1) acquires a capacity permit, (2) looks up `deployments`, (3) filters `candidates`, (4) builds the `route_plan`, and (5) for each attempt calls `repository.admit` (durable reservation), then the adapter, then for streams the `tracked` wrapper, which settles on `Done`.
 
-1. Acquire a capacity permit.
-2. Look up `deployments`.
-3. Filter `candidates` by protocol and adapter.
-4. Build the `route_plan`.
-5. For each attempt: `repository.admit` (durable reservation), the adapter's `execute_protocol`, then for streams the `tracked` wrapper that settles on `Done`.
+**Recommendation:** inspect input inside the engine, after step 3 and before step 4, once per root request. Reasons:
 
-Each frontend (`protocols/chat_completions.rs`, `responses.rs`, `messages.rs`) first normalizes the wire body into the canonical `ChatRequest` (`inference/types.rs`).
+- **One place.** Chat, Responses, Messages and gateway-run batch lines all pass through it; `jobs/runner.rs` calls the same `execute_protocol`.
+- **Cheap failures first.** `model_not_found` and unsupported capabilities fail before any detector is paid for.
+- **No reservation for a blocked input.** Inspection happens before the first `admit`, so a blocked input reserves nothing and is charged nothing upstream. Admission sees the request that is actually sent, including any redaction.
+- **Same input on failover.** Attempts 2–3 reuse the inspected request, since each attempt already gets `request.clone()`. Input is not inspected again.
 
-**Recommendation:** run input inspection inside the engine, after step 3 and before step 4. It runs on the canonical `ChatRequest`, once per root request. Reasons:
+`Engine::execute_workload` (`inference/workload.rs`) gets the same step at the same point, after `candidates` and before `route_plan`. A new `Workload::inspectable_text()` method defaults to "uninspectable". Embeddings, rerank, System One and speech input implement it.
 
-- **One place.** Chat, Responses, Messages and gateway-run batch lines all go through it. `jobs/runner.rs` calls the same `execute_protocol`.
-- **No wasted detector spend.** Unknown models (`model_not_found`) and unsupported capabilities fail before any detector cost is incurred.
-- **Nothing reserved for a blocked input.** Inspection happens before the first `admit`, so a block or redaction decision is made before any reservation for the client's request exists. A blocked input reserves nothing and is charged nothing for the upstream request. Admission also sees the request that is actually sent, including any redaction.
-- **Same input for every attempt.** Failover attempts 2–3 reuse the inspected (possibly redacted) request. Each attempt already receives `request.clone()`. Input is never inspected again per attempt.
+### Detector calls: admission, billing, capacity
 
-Non-generation workloads use `Engine::execute_workload` (`inference/workload.rs`). **Recommendation:** add a `Workload::inspectable_text()` method whose default is "uninspectable". Embeddings, rerank, System One and speech input implement it. The check runs at the same point, after candidates and before `route_plan`.
+Model-based detectors (*user decision*) call a model the gateway serves:
 
-### Detector calls: admission and billing
+- System One through `execute_workload` with a `SystemoneRequest`;
+- the LLM judge through `execute_protocol` with a `ChatRequest`.
 
-The System One and LLM-judge detectors (*user decision*) call a model through the gateway's own provider layer:
+Each detector call is therefore its own root request, with its own route plan, reservation, settlement and execution row. It sends text to that model's provider.
 
-- System One uses `execute_workload` with a `SystemoneRequest`.
-- The LLM judge uses `execute_protocol` with a `ChatRequest`.
+**Recommendation: detector calls are billed to the requesting key's workspace and key lineage (the same `Principal`).**
 
-Each detector call is therefore its own root request, with its own route plan, reservation, settlement and execution row. It is billed as its own attempt and sends text to that model's provider.
+- **Cost follows the cause.** Cost reports, cost-center snapshots and budgets stay accurate.
+- **No global scope.** A platform-owned "guardrail workspace" would be one scope that every admission touches. That is the global row AGENTS.md forbids ([governance](governance.md#no-installation-wide-limits)).
+- **Limits see the real work.** Budgets, tokens per minute and requests at once all include detector traffic.
 
-**Recommendation: detector calls are admitted and billed under the requesting key's workspace and key lineage, the same `Principal`.**
+**Bookkeeping.**
 
-- **Cost follows the cause.** Cost reports, cost-center snapshots and budgets stay accurate. A workspace cannot push guardrail spend onto someone else.
-- **No global scope.** The alternative, a platform-owned "guardrail workspace", would be one scope touched by every admission. That is the global row AGENTS.md forbids (no installation-wide limits; see [governance](governance.md#no-installation-wide-limits)).
-- **Limits keep their meaning.** Budgets, tokens per minute and requests at once all see the real upstream work.
+- Detector calls get a fresh `root_request_id`, because `inference_executions` enforces `UNIQUE(root_request_id, attempt_number)` with attempt numbers 1–3.
+- A new nullable `guardrail_parent_request_id` links each detector call to the client request.
+- An engine-internal flag stops detector calls from running guardrails themselves.
 
-Bookkeeping:
+**Recommendation: model authorization uses a detector variant of the lookup that skips only the key's model restriction.**
 
-- A detector attempt gets a fresh `root_request_id`. `inference_executions` keeps `UNIQUE(root_request_id, attempt_number)` with attempt numbers 1–3, so detector calls cannot share the client's root.
-- A new nullable column, `guardrail_parent_request_id`, links the detector request to the client request.
-- Detector calls never run guardrails themselves. A flag on the call prevents recursion.
+Both the candidate lookup (`live_deployments`, `inference/repository.rs` ~427) and live admission (`governance.rs` ~637) check `key_model_restrictions`/`key_model_selections`, so a detector call with the client's `Principal` would be refused for any restricted key. The engine (never the client) passes `purpose: guardrail`, and both queries then omit only that predicate. Key revalidation, `workspace_model_allowed` (catalog or direct assignment), the enabled checks and every limit stay. The candidate cache key (`cache.rs`, `(workspace, key, model)`) gains the purpose; `forget_key` still evicts by key.
 
-**Recommendation: model authorization.** A detector model must be available to the workspace (catalog or direct assignment), checked by the live query in `inference/repository.rs`. The key's own model restriction is *not* applied, because the policy chose the model, not the key holder. If the model is unavailable, that is a detector error and is handled by the rule's failure mode (section 4).
+Why not apply the restriction: it states which models the *holder* may choose, while an administrator chose the detector model. Restriction lineage is also immutable, even across rotation ([management API](management-api.md#membership-invitations-and-credentials)), so applying it would permanently break fail-closed model rules for existing restricted keys.
 
-**Recommendation: separate capacity.** `execute_workload` calls `try_acquire_owned` on the same engine semaphore that the parent request already holds a permit from. Under saturation, detectors would fail as `Busy`. Detector calls should use a separate bounded semaphore (`GATEWAY_GUARDRAIL_MAX_CONCURRENT`).
+If the model is unavailable to the workspace, the detector fails (section 4).
 
-**Known cost:** detector spend can happen even though the client's own admission is later denied, for example because the budget runs out between the two. This cannot be avoided without reserving the main attempt first, which would contradict "a blocked input reserves nothing". The order "pattern detectors first, model detectors only if still needed" limits it.
+**Recommendation: capacity is a parameter.** Both entry points take the shared engine semaphore with `try_acquire_owned`:
+- `execute_protocol` at `mod.rs` line 124;
+- `execute_workload` at `workload.rs` line 367.
+
+The parent request already holds a permit from it, so under saturation detector calls would fail as `Busy`. Both entry points should take the semaphore as a parameter. Public calls pass the engine's semaphore; detector calls pass a separate bounded guardrail semaphore (`GATEWAY_GUARDRAIL_MAX_CONCURRENT`).
+
+**Known cost.** A detector can be paid for and the client's own admission still be denied, for example when the budget runs out in between. Avoiding this would mean reserving first, which contradicts "a blocked input reserves nothing". Running pattern rules first, and model rules only when still needed, limits it.
 
 ### Output
 
-Output is inspected only for the attempt whose output is delivered. Failover happens only on `Busy`/`UpstreamUnavailable` before anything is returned (`routing::may_failover`), so this is always the last attempt.
+Only the attempt whose output is delivered is inspected. Failover happens only on `Busy`/`UpstreamUnavailable` before anything is returned (`routing::may_failover`), so that attempt is always the last one.
 
-An output block is never an error eligible for failover and never triggers a retry. Output modes are covered in section 7.
+The new guardrail errors are added to neither `may_failover` nor `affects_health` (`routing.rs`), so:
+- an output block never fails over or retries;
+- it never marks a route unhealthy.
 
 ## 4. Detector interface
 
-One internal trait. Built-in and external detectors (*user decision*) implement it:
+One internal trait, implemented by built-in and later external detectors (*user decision*):
 
 ```rust
 #[async_trait]
 trait Detector: Send + Sync {
     fn kind(&self) -> DetectorKind;      // Pattern | Systemone | LlmJudge | External(name)
     fn egress(&self) -> Egress;          // Local | Model { public_model } | Service { name }
-    fn categories(&self) -> &[Category]; // fixed families: secret, personal_data, moderation,
-                                         // prompt_injection, custom
+    fn categories(&self) -> &[Category]; // secret, personal_data, moderation, prompt_injection, custom
     async fn inspect(&self, ctx: &DetectContext, input: &Inspection<'_>)
         -> Result<Findings, DetectorError>;
 }
 ```
 
-**Inputs.** `Inspection` is a list of borrowed text segments. Each segment carries:
-
-- a position: message index, role, and part kind (`content`, `tool_arguments`, `tool_result`, `system`, `tool_description`);
-- a flag for whether it is *new*, meaning after the last assistant turn.
-
-`DetectContext` carries the principal (for billing), the parent request ID, the deadline and the rule's settings (thresholds, categories).
-
-**Outputs.** `Findings` lists `{category, segment, span, score?}`.
-
-- Spans exist only in memory, so that redaction can be applied. They are never persisted or logged.
-- Scores are compared with per-rule thresholds.
+`Inspection` is a list of borrowed text segments, each with message index, role, part (`content`, `tool_arguments`, `tool_result`, `system`, `tool_description`) and a *new* flag (after the last assistant turn). `DetectContext` carries the principal, parent request ID, deadline and rule settings. `Findings` lists `{category, segment, span, score?}`: spans exist only in memory for redaction, and scores are compared with per-rule thresholds.
 
 **Built-in detector kinds**
 
-- **Pattern.** Compiled rules plus checksums (Luhn, mod-97, key-format checks).
-  - Uses Rust's linear-time `regex` crate, so a pattern cannot backtrack catastrophically. This is a new dependency; the crate is not in `Cargo.toml` today.
+- **Pattern.** Rules plus checksums (Luhn, mod-97, key formats).
+  - Runs on Rust's `regex` crate, which is linear time, so there is no catastrophic backtracking.
+  - `regex` would be a new direct dependency. Today `regex-syntax` is in `Cargo.lock` only as a transitive dependency.
   - Free, and nothing leaves the gateway.
-- **System One.** Builds a `SystemoneRequest` (`inference/workload_types.rs`): `state` is the selected text, plus one `noul` question per category with instructions.
-  - The answers carry probabilities, and `valid_for` already validates them.
-  - Admission reserves output up to the price's `output_token_limit` (`OutputReservation::PriceCeiling`).
+- **System One.** A `SystemoneRequest` (`inference/workload_types.rs`) with the selected text as `state` and one `noul` question per category. `valid_for` validates the answer probabilities; output is reserved to the price's `output_token_limit` (`OutputReservation::PriceCeiling`).
 - **LLM judge.** A chat model with a rubric.
-  - `ChatRequest` has no structured-output field, and the frontends reject it ([protocol matrix](protocol-matrix.md#chat-completions)). Structured output therefore comes from one function tool, `report`, whose JSON schema is the verdict, called with `tool_choice: Function("report")`. Both are already supported in the canonical request.
-  - The text being judged is placed inside delimiters as data. The verdict is validated strictly, and any invalid verdict is a `DetectorError`.
-  - `max_output_tokens` is small, so the hold stays bounded.
+  - `ChatRequest` has no structured-output field ([protocol matrix](protocol-matrix.md#chat-completions)). The verdict therefore comes from one function tool, `report`, forced with `tool_choice: Function("report")`; both already exist in the canonical request.
+  - The judged text is wrapped in delimiters as data. The verdict is validated strictly.
+  - `max_output_tokens` is small, so the hold stays small.
 
-**Timeouts.** Each rule has `timeout_ms`, default 5 s and maximum 30 s, always capped by the request deadline (`EngineLimits::request_timeout`, 120 s by default). Pattern detectors are synchronous and bounded by size (section 10).
+**Timeouts.** `timeout_ms` per rule: default 5 s, maximum 30 s, and never beyond the request deadline (`EngineLimits::request_timeout`, 120 s by default).
 
-**Failure mode.** Each rule sets `on_error` to `fail_closed` or `fail_open`. These errors trigger it:
+**Failure mode.** Each rule sets `on_error` to `fail_closed` or `fail_open`.
 
-- timeout;
-- detector unavailable;
-- detector model unavailable;
-- detector admission denied;
-- invalid verdict;
-- input too large for the detector.
+**Recommendation:** default to `fail_closed` for block and redact rules, and `fail_open` for monitor rules. A monitor rule that fails records `detector_failed` and the request continues.
 
-**Recommendation for defaults:**
+Under `fail_closed`, the client sees the following. **Recommendation:** only transient failures are retryable. SDKs retry 5xx responses, and each retry pays for the detectors again.
 
-- `fail_closed` for **block** and **redact** rules. Sending unchecked text would defeat the rule.
-- `fail_open` for **monitor** rules. These record `detector_failed` and the request continues.
+| Detector failure | Client sees |
+| --- | --- |
+| Timeout, `Busy`, `UpstreamUnavailable`, guardrail pool full | 503 `guardrail_unavailable`, retryable |
+| `RouteCoolingDown` | 503 `guardrail_unavailable` with `Retry-After` |
+| Admission denied (budget, unresolved usage, token reservation) | that denial unchanged, with its existing `x-should-retry: false` |
+| Model unavailable or unsupported, configuration, `price_unbounded`, invalid verdict | 503 `guardrail_detector_failed` with `x-should-retry: false` |
+| Input above the detector's size cap | 400 `guardrail_input_too_large` with `x-should-retry: false` |
 
-Under `fail_closed`:
+Using `x-should-retry: false` on a 503 has a precedent: the existing `price_unbounded` (`protocols/mod.rs`). The comment there notes that the official OpenAI and Anthropic SDKs honor the header.
 
-- If the detector's admission was denied (for example `budget_exceeded`), the client receives *that* denial, because it is the same scope's budget.
-- Other errors return `503 guardrail_unavailable`. The request is retryable, with no `x-should-retry: false`.
-
-**External services later.** An external detector implements the same trait, with `Egress::Service`. Examples: OpenAI moderation, Bedrock Guardrails, Presidio.
-
-- It needs an approved endpoint and a credential reference, under the same rules as provider connections: HTTPS, allowlisted destinations, no redirects, no ambient proxies, no implicit retries.
-- If it is billed, it needs a price.
-- The policy model, findings, actions and frontends do not change.
+**External services later** (OpenAI moderation, Bedrock Guardrails, Presidio) implement the same trait with `Egress::Service`. They need an approved HTTPS endpoint and a credential reference under the provider-connection rules (allowlisted destinations, no redirects, proxies or implicit retries), plus a price when billed. Nothing else changes.
 
 ## 5. Policy model
 
 ### Storage and layers
 
-Guardrail policy has the same layer structure as limits (*user decision*):
+Layers mirror the limit layers (*user decision*):
+- a workspace-type default;
+- a platform per-workspace override that replaces it;
+- a workspace local layer set by shared owners and admins, tighten-only.
 
-- **Workspace-type default** (personal/team/project), set by the platform.
-- **Platform per-workspace override**, which replaces the type default, as policy overrides do today.
-- **Workspace local layer**, set by shared owners or admins, tighten-only.
+Storage is two tables: `guardrail_rule_sets` (layer, scope, revision, and `local_only` on platform layers only) and `guardrail_rules`.
 
-Tables: `guardrail_rule_sets` (layer, scope, `local_only`, revision) and `guardrail_rules` (one row per rule).
+**Recommendation: personal workspaces.** Like limits (`personal_limits_platform_controlled`), personal workspaces use only the platform layers. The user's decision said "set per workspace", so whether personal owners may tighten their own rules is open question 3.
 
-**Recommendation: personal workspaces.** As with limits (`personal_limits_platform_controlled`), personal workspaces take their guardrails from the platform layers only.
-
-**Recommendation: keys.** No per-key layer in the first build (see open questions).
-
-A rule:
+**Recommendation: keys.** No key layer at first (open question 2).
 
 ```json
 {"id":"<uuid>","name":"Secrets","protection":"secrets",
  "detector":{"kind":"pattern","categories":["secret"]},
- "input":{"action":"block","redact_scope":"latest_user_turn"},
+ "input":{"action":"block","redact_scope":"user_text"},
  "output":{"mode":"monitor"},
  "threshold":null,"on_error":"fail_closed","timeout_ms":null,
  "workloads":["generation","embeddings"],"uninspectable":"deny"}
@@ -194,224 +174,242 @@ A rule:
 
 ### Composition (tighten-only)
 
-The effective policy is the platform layer's rules plus the local layer's rules. Where both cover the same protection and stage, the stricter setting wins. Strictness orderings:
+The effective policy is the platform layer's rules plus the local layer's rules.
 
-- input action: off < monitor < redact < block;
-- output mode: off < monitor < stop-mid-stream < block-before-sending;
-- failure mode: `fail_open` < `fail_closed`;
-- detector threshold: a lower threshold is stricter;
-- egress: `local_only: true` is stricter.
+**Every rule runs independently**, with its own detector, threshold and failure mode.
 
-A local layer may add rules or strengthen rules. It may not remove or weaken a platform rule.
+**Per request, the strictest outcome wins**, in this order: block > redact > monitor.
+- When several rules redact, their spans are combined.
+- The response is handled with the strictest output mode among the rules that apply: off < monitor < stop-mid-stream < block-before-sending.
 
-**Egress rule.** Adding a model detector *loosens* privacy, because text leaves the gateway. A local layer under a platform `local_only` therefore cannot add System One, judge or external detectors.
+**Tightening.** A local layer may add rules and may tighten a platform rule (stronger action or output mode, `fail_closed`, lower threshold). It may never weaken or remove one.
+
+**Egress.** `local_only` is a platform-layer field only.
+
+When it is set, no rule whose detector sends text out (System One, judge, external) is effective. This is enforced in two places:
+- **On write:** 403 `guardrail_egress_not_allowed`.
+- **When the effective policy is composed:** a local rule written before the platform turned `local_only` on becomes inactive, and GET shows it with `inactive_reason:"egress_not_allowed"`. It is never silently dropped.
 
 ### Caching
 
-Today, limit policies are deliberately not cached ([governance](governance.md#caches-and-change-notifications)). Guardrails would be read on every request before admission.
+Limit policies are not cached ([governance](governance.md#caches-and-change-notifications)), but guardrail rules are read on every request.
 
-**Recommendation:** cache the effective rule set per replica under a new `guardrails` notification topic, added by migration. It inherits the existing behavior:
+**Recommendation:** cache the effective rule set per replica under a new `guardrails` notification topic, added by a migration. It inherits the existing invalidation behavior:
+- milliseconds through LISTEN, at most about 1 s through polling;
+- caches are bypassed when versions can't be confirmed for 3 s.
 
-- invalidation through LISTEN within milliseconds, at most about 1 s through the poll;
-- bypass when versions cannot be confirmed for 3 s.
-
-The guardrail check is not part of the admission lock order and takes no authority locks.
+The check takes no admission locks.
 
 ### Management API sketch
 
-All routes use the management error envelope `{error:{code:"<status>",message,reason?}}`.
+All routes use the management envelope `{error:{code:"<status>",message,reason?}}`.
 
 | Route | Who |
 | --- | --- |
 | `GET/PUT /platform/workspace-types/{kind}/guardrails` | Admin writes; Auditor reads |
 | `GET/PUT/DELETE /platform/workspaces/{ws}/guardrails` | Override. DELETE restores the type default. |
-| `GET/PUT /workspaces/{ws}/guardrails` | Shared owner/admin tightening. GET also returns `effective`, `provenance` and `egress`. |
-| `GET /platform/guardrails/detectors` | Built-in kinds, categories, egress |
+| `GET/PUT /workspaces/{ws}/guardrails` | Shared owner/admin. GET also returns `effective`, `provenance` and `egress`. |
+| `GET /platform/guardrails/detectors` | Built-in kinds, categories and egress |
 
 Rejection reasons:
 
-- `guardrail_loosen_not_allowed` (403, adds `rule`);
-- `guardrail_egress_not_allowed` (403);
-- `guardrail_detector_unavailable` (400, the model is not available or not a System One/chat model);
-- `personal_guardrails_platform_controlled` (403).
+| HTTP | `reason` |
+| --- | --- |
+| 403 | `guardrail_loosen_not_allowed` (adds `rule`) |
+| 403 | `guardrail_egress_not_allowed` |
+| 400 | `guardrail_detector_unavailable` |
+| 400 | `guardrail_pattern_unbounded` (section 7) |
+| 403 | `personal_guardrails_platform_controlled` |
 
-Changes are audited as `guardrail_policy.updated`. The audit metadata records the layer, rule IDs, protections, actions and output modes. For custom patterns it records the **number** of patterns, never their content.
+Changes are audited as `guardrail_policy.updated`, with layer, rule IDs, actions and modes. For custom patterns only their count is recorded, never their content.
 
 ### Dashboard
 
-- **Workspace › Guardrails:** the effective rules with provenance and a plain sentence for each rule: *what* is inspected and *where it goes*. For example: "New user messages are sent to `company/jev` (OpenRouter) for moderation."
-  - When block-before-sending is on, a warning reads "Streaming responses are held until checked".
+- **Workspace › Guardrails:** effective rules with provenance, each with one sentence on what is inspected and where it goes ("New user messages are sent to `company/jev` (OpenRouter) for moderation."), plus "Streaming responses are held until checked" when block-before-sending is on.
 - **Admin › Guardrails:** type defaults and overrides.
-- **Logs:** a badge and filter (`guardrail=monitored|redacted|blocked`); request detail shows the findings and linked detector requests with their cost.
+- **Logs:** a `guardrail=monitored|redacted|blocked` badge and filter; request detail lists findings and linked detector requests with cost.
 - **Usage & costs:** a `purpose: client|guardrail` breakdown.
 
 ## 6. Client-visible behavior
 
-**Recommendation: error shapes.** Errors follow `protocols/mod.rs`: OpenAI envelope `{error:{message,type,code,param}}`; Anthropic `{type:"error",error:{type,message}}`. Both gain one extra object, `guardrail`:
+Errors keep the shapes in `protocols/mod.rs`:
+- OpenAI: `{error:{message,type,code,param}}`;
+- Anthropic: `{type:"error",error:{type,message}}`.
+
+**Recommendation:** both shapes gain one `guardrail` object:
 
 ```json
 {"error":{"message":"Blocked by guardrail policy \"Secrets\" (category: secret).",
  "type":"invalid_request_error","code":"guardrail_input_blocked","param":null,
- "guardrail":{"policy_id":"<uuid>","rule_id":"<uuid>","stage":"input","category":"secret",
-              "detector":"pattern"}}}
+ "guardrail":{"policy_id":"<uuid>","rule_id":"<uuid>","stage":"input","category":"secret","detector":"pattern"}}}
 ```
 
-Messages name the policy and the category family. They never include matched text, offsets or detector scores. `InferenceError` stays `Copy`: the new variants carry only IDs and fixed enums.
+Block errors name the policy and the category family. They never contain matched text, offsets or scores. The new `InferenceError` variants carry only IDs and fixed enums, so the type stays `Copy`.
 
-| Case | HTTP | OpenAI `code` / Anthropic `type` | Headers |
+| Case | HTTP | OpenAI `code` / Anthropic `type` | Retry |
 | --- | --- | --- | --- |
 | Input blocked | 400 | `guardrail_input_blocked` / `invalid_request_error` | `x-should-retry: false` |
 | Output blocked (non-stream) | 400 | `guardrail_output_blocked` / `invalid_request_error` | `x-should-retry: false` |
-| Enforcing policy, uninspectable workload, `uninspectable: deny` | 400 | `guardrail_not_supported` / `invalid_request_error` | `x-should-retry: false` |
-| Detector failed, `fail_closed` | 503 | `guardrail_unavailable` / `api_error` | none |
-| Detector admission denied, `fail_closed` | that denial (e.g. 429 `budget_exceeded`) | unchanged | unchanged |
+| Enforcing rule on an uninspectable workload | 400 | `guardrail_not_supported` / `invalid_request_error` | `x-should-retry: false` |
+| Detector failures | as in section 4 | Anthropic: `api_error` (5xx) or `invalid_request_error` (400) | as in section 4 |
 
-**Recommendation:** an output block is an explicit error, not a fabricated 200 response with `finish_reason: content_filter`. The gateway did not receive that response from the provider, and AGENTS.md forbids fabricated responses.
+**Decided: output blocks are errors.** A 200 response with `finish_reason: content_filter` would be a response the provider never sent, and AGENTS.md forbids fabricated responses.
 
-**Redaction token.** `[REDACTED:<CATEGORY>_<n>]`, for example `[REDACTED:EMAIL_1]`. Within one request, the same value gets the same number (an in-memory map that is discarded when the request ends), so the model can still tell that two mentions refer to the same thing. Redaction never touches JSON structure. A match inside tool-call arguments is treated as monitor or block, never redact.
+**Redaction token.** `[REDACTED:<CATEGORY>_<n>]`, for example `[REDACTED:EMAIL_1]`.
+- Numbers are assigned by **first appearance in the conversation**, scanning messages in order.
+- The same value always gets the same number. The value-to-number map exists only in memory for the request.
+- Redaction never changes JSON structure. A match inside tool-call arguments is monitored or blocked, never redacted.
+
+**Recommendation: redaction applies to pattern detectors only.**
+- Redacting history (section 8) needs the same output on every turn.
+- Model detectors are nondeterministic and, by default, judge only new content.
+- So model detectors support monitor and block only.
 
 **Per workload**
 
-- **Chat, Responses, Messages:** everything above. Streaming errors use each frontend's existing failure path:
-  - Chat sends a `data:` error body and no `[DONE]`;
-  - Responses sends an `error` event;
-  - Messages sends an `error` event.
-- **Embeddings, rerank, System One (client calls), speech input:** input checks only, because the output is vectors, scores, answers or audio. Redacted embeddings are embeddings of the redacted text.
-- **Images, audio transcription input, realtime:** uninspectable. An enforcing rule covering these workloads refuses them with `guardrail_not_supported`:
-  - images and transcription before admission;
-  - realtime with 400 before the WebSocket upgrade.
-
-  `uninspectable: allow` lets them through and records a `skipped` finding.
-- **Batches:**
-  - Gateway-run lines pass through `execute_protocol`. A blocked line produces the same body as the interactive request in the error file (`batch_line_error`).
-  - Native batches send the whole file upstream. Their pattern rules run at create time beside the existing line validation, and a block rejects the batch with 400 `guardrail_input_blocked` plus line numbers.
-  - Rules that need model detectors or output blocking refuse native batches (`guardrail_not_supported`) rather than silently switching to gateway-run with different prices.
-  - Output monitor and block run per line when results are collected.
+- **Chat, Responses, Messages:** all of the above. Streaming errors use each frontend's existing failure path:
+  - Chat: a `data:` error body and no `[DONE]`;
+  - Responses: an `error` event;
+  - Messages: an `error` event.
+- **Embeddings, rerank, System One (client calls), speech input:** input checks only, because their outputs are vectors, scores, answers or audio.
+- **Images, transcription input, realtime:** uninspectable.
+  - An enforcing rule refuses them with `guardrail_not_supported`: images and transcription before admission, realtime with a 400 before the WebSocket upgrade.
+  - `uninspectable: allow` lets them through and records a `skipped` finding.
+- **Batches:** gateway-run lines go through `execute_protocol`, and blocked lines get the interactive body (`batch_line_error`). Native batches run pattern rules at create time beside the existing line validation; a block rejects the batch (400 `guardrail_input_blocked`, line numbers only). Native batches needing model detectors or output blocking are refused (`guardrail_not_supported`), never silently switched to gateway-run prices. Output checks run per line at collection.
 
 ## 7. Output modes and streaming
 
-Output mode is set per policy (*user decision*).
+The output mode is set per policy (*user decision*).
 
-- **Off.**
-- **Monitor.** The stream is unchanged.
-  - Pattern detectors scan the text deltas in parallel with forwarding, keeping a bounded carry-over window so that matches split across chunks are found.
-  - Model detectors run after `Done` on the accumulated text, which is bounded by the existing 4 MiB `Accumulator` limit. They run in the bounded guardrail pool. When the pool is full they are skipped and recorded as `skipped`. They are skipped if the client cancelled.
-  - The text is dropped as soon as the verdict returns.
-- **Block-before-sending.** The engine wraps `tracked`, buffers events until `Done`, inspects, then either replays the events or yields `GuardrailOutputBlocked`.
-  - The upstream attempt has already settled as `succeeded` with its usage: the provider did the work and charges for it.
-  - Frontends have already sent only content-free opening events (Chat's role chunk; `response.created`/`in_progress`; `message_start`). Their 15 s SSE keep-alives keep idle proxies from closing the connection.
-  - The client sees no tokens until the end. That is why the dashboard must show the mode.
-- **Stop-mid-stream.** The gateway forwards text with a small holdback, so a match shorter than the holdback (default 256 bytes, at least the longest pattern) is caught before any of it is sent.
-  - On a match, it drops the upstream stream (which cancels upstream work) and emits the protocol's error event.
-  - Sent tokens cannot be retracted.
-  - The attempt is recorded as `failed` with `error_code: guardrail_output_blocked`. Usage is usually not reported, so the hold is retained as unknown cost.
-  - Responses and Messages already buffer tool calls until the end ([protocol matrix](protocol-matrix.md#streaming-and-evidence-boundaries)), so tool calls are checked whole. Chat streams tool-call deltas, so the holdback applies to them too.
-  - **Recommendation:** pattern detectors only in this mode. Judging every window with a model would multiply cost.
+**Engine-side buffer cap.** Today no engine-level output bound exists:
+- `Accumulator`, with its 4 MiB `OUTPUT_LIMIT`, lives in `protocols/responses.rs` and is used only by Responses and Messages;
+- Chat streams without buffering;
+- non-stream bodies are bounded by the adapters' 4 MiB cap.
+
+**Recommendation:** the guardrail wrapper keeps its own text buffer with a cap, `GATEWAY_GUARDRAIL_MAX_OUTPUT_BYTES` (default 4 MiB). This buffer serves both block-before-sending and the post-`Done` model checks. When the cap is exceeded:
+- under `fail_open`, checks stop and the rest is forwarded unchecked;
+- under `fail_closed`, the stream is stopped as described under stop-mid-stream below, with code `guardrail_output_too_large`.
+
+**The scanner runs inside the `tracked` loop** in `mod.rs`. If the stream were stopped by dropping `tracked`, `ExecutionGuard::drop` would record the attempt as `Cancelled` (`mod.rs` around line 464), which would be wrong.
+
+The modes:
+
+- **Monitor.** The stream is not changed.
+  - Pattern rules scan deltas as they are forwarded. A carry-over window catches matches that are split across chunks.
+  - Model rules run after `Done` on the capped buffer, in the guardrail pool. They are recorded as `skipped` when the pool is full or the client cancelled.
+  - The text is dropped as soon as the verdict arrives.
+- **Block-before-sending.** Events are buffered until `Done`. At `Done`, `tracked` has already settled the attempt as `succeeded`: the provider did the work. The buffer is then inspected, and either replayed or replaced with `GuardrailOutputBlocked`.
+  - Frontends send only content-free opening events beforehand: Chat's role chunk, `response.created`/`response.in_progress`, or `message_start`.
+  - Their existing 15 s SSE keep-alives keep idle proxies from closing the connection.
+  - Clients see no tokens until the end, which is why the dashboard shows the mode.
+- **Stop-mid-stream.** Text is forwarded with a holdback (default 256 bytes, configurable up to 4 KiB).
+  - Every stop-mode pattern must have a maximum match length no larger than the holdback. It is computed at save time with `regex-syntax` (`Hir::properties().maximum_len()`).
+  - A pattern with an unbounded or longer maximum is rejected (`guardrail_pattern_unbounded`), or rewritten to trigger on a short prefix. For example, the built-in PEM rule triggers on its `-----BEGIN … PRIVATE KEY-----` line, because the full key is 1.7 KB or more.
+  - On a match the loop calls `guard.finish(Failed, Some(GuardrailOutputBlocked))`, yields the error, then drops upstream, which cancels it. The finished guard's `drop` is a no-op. Usage is usually unreported, so the hold stays unknown. Sent tokens can't be taken back.
+  - Responses and Messages already emit tool calls whole ([protocol matrix](protocol-matrix.md#streaming-and-evidence-boundaries)); Chat streams tool-call deltas, so the holdback covers them.
+  - **Recommendation:** pattern rules only in this mode.
 
 ## 8. Coding agents
 
-Coding agents and harnesses (Claude Code and all others) resend the whole conversation on every turn. They rely on byte-identical history.
+Agents and harnesses such as Claude Code resend the whole conversation on every turn. They rely on the history staying byte-identical.
 
-**Today.** `ChatRequest` carries no cache markers, thinking blocks or signatures. `/v1/messages` rejects `cache_control`, thinking and `anthropic-beta` ([protocol matrix](protocol-matrix.md#messages)). The design must still hold once those are supported.
+**Today**, `ChatRequest` carries no cache markers, thinking blocks or signatures. `/v1/messages` rejects `cache_control`, thinking and `anthropic-beta` ([protocol matrix](protocol-matrix.md#messages)). The design still has to hold once those are supported.
 
-**What redaction breaks**
+Ways redaction can break agents:
+- **Prompt caching.** Provider caches match exact prefixes. If an earlier turn changes, cache reads become cache writes, and the prefix hash that the proposed cache-aware routing would key on changes too.
+- **Thinking signatures.** Changing a signed thinking block makes the provider reject the request.
+- **Tool history.** If the model sees `[REDACTED:…]` in a file it read, it can write the placeholder back through its edit tool and corrupt the user's file.
 
-- **Prompt caching.** Provider caches match exact prefixes. Changing earlier turns changes the prefix, which turns cache reads into cache writes (more cost). It also changes the prefix hash that the proposed cache-aware routing would key on.
-- **Thinking signatures.** Signed thinking blocks become invalid if anything in them changes, and the provider rejects the request.
-- **Tool history.** The model sees `[REDACTED:…]` in a file it read. It can then write the placeholder back into source code through its edit tool, silently corrupting the user's files.
-- **Divergence.** The client's history holds the original text while the model saw something else.
+**The user's decision** recommends monitor or block for agent traffic. It also offers a redact mode that touches only new user input. Applied on its own, that mode leaks: on the next turn the agent resends the original text as history, unredacted. First-send-only redaction protects only the first send.
 
-**Policy (*user decision*).** Recommend monitor or block for agent traffic. For redaction, the default `redact_scope` is `latest_user_turn`: it touches only new user-authored text after the last assistant turn, never earlier assistant turns, tool calls, tool results or `cache_control`-marked blocks.
+**Recommendation (needs confirmation, open question 4):** the default `redact_scope` is `user_text`.
+- Every turn, the same deterministic pattern redaction runs over every user-authored text segment, earlier turns included, numbered by first appearance as in section 6.
+- Earlier turns therefore produce byte-identical redacted text, and the upstream prefix and its cache stay stable. A policy change shifts the prefix once.
+- Assistant turns, tool calls, tool results and thinking blocks are never touched, and any cache markers are preserved.
 
-- **Recommendation:** `redact_scope: all` is an explicit option, with a dashboard warning about caching and agents.
-- **Recommendation:** model detectors inspect only *new* segments by default. Re-judging the whole history on every turn would make detector cost grow quadratically with conversation length. Pattern detectors, which are free, scan everything.
-- Monitor mode is the "inspect without modifying" mode. Nothing that is forwarded upstream changes.
+Even so, a value the agent reads into a tool result is still sent, so **for secrets, block is the recommended action**, not redact. `redact_scope: all`, which includes tool results, is an explicit opt-in with a dashboard warning.
+
+- **Recommendation:** model detectors judge only *new* segments by default (open question 6). Re-judging the whole history every turn would make cost grow quadratically.
+- Pattern rules, which are free, scan everything.
+- Monitor mode is the "inspect without modifying" mode: nothing sent upstream changes.
 
 ## 9. Privacy and recorded metadata
 
-- **Never stored:** matched text, spans, offsets, surrounding context, redaction maps, detector inputs, judge rationales or raw scores.
-  - The detector request itself is an ordinary execution row: metadata only, like every request today.
-- **On each decision:** a new `guardrail_events` table, partitioned by month like the rest of history, records:
-  - `root_request_id`, workspace, key and stage;
+- **Never stored:** matched text, spans, offsets, context, redaction maps, detector inputs, judge rationales or raw scores. A detector request is an ordinary metadata-only execution row.
+- **`guardrail_events`:** a new table, partitioned by month like the rest of history. One row per decision:
+  - `root_request_id`, workspace, key, stage;
   - policy, rule and revision;
-  - detector kind;
-  - category;
+  - detector kind and category;
   - `count`;
-  - action taken (`monitored|redacted|blocked|stopped|detector_failed|skipped`).
+  - the action: `monitored|redacted|blocked|stopped|detector_failed|skipped`.
 
-  A blocked input has no upstream execution row, so this table is what lets Logs show the blocked request.
-- **Visibility** matches Logs:
-  - members see their own requests;
-  - shared admins see the whole workspace;
-  - personal workspaces are visible to the owner only;
-  - platform staff see Team/Project details only.
-- **Audit** (`audit_events`, append-only) records policy changes, not individual decisions. Per-request decisions would bloat the immutable log.
+  A blocked input has no execution row, so this table is how Logs shows blocked requests.
+- **Visibility** is the same as Logs: members see their own requests, shared admins the whole workspace, personal owners only their own, platform staff Team/Project detail only.
+- **Audit:** `audit_events`, which is append-only, records policy changes only, not individual decisions.
 - **Metrics:** `gateway_guardrail_decisions_total{stage,detector,family,action}` and `gateway_guardrail_detector_seconds{detector}`.
-  - Labels come from fixed sets only. Custom rules fold into `custom`.
-  - No workspace, key or request labels, as already required by `metrics.rs`.
-- **Logs:** request ID and decision only, never text.
+  - Label values come from fixed sets, with custom rules counted as `custom`.
+  - No workspace, key or request labels, per the rule already stated in `metrics.rs`.
+- **Logs:** request ID and decision only.
 
 ## 10. Cost, latency and capacity
 
-- **Pattern detectors** are linear in the bytes scanned, and the scanned size is already bounded:
-  - input: by the inbound body caps (2 MiB for generation; per-workload `GATEWAY_MAX_BODY_BYTES_*`);
-  - output: by the 4 MiB output accumulator;
-  - streaming: scanner state is limited to the carry window.
+- **Pattern rules** are linear in the bytes scanned. Scanned input is bounded by:
+  - the inbound body caps: 2 MiB for generation, `GATEWAY_MAX_BODY_BYTES_*` for other workloads;
+  - for output, the guardrail buffer cap (section 7) and the scanner's carry/holdback window.
 
-  An optional `max_scan_bytes` per rule can be lower. Exceeding it is a detector error and follows `on_error`. Custom patterns are bounded to 50 per layer and 512 bytes each.
-- **Model detectors** are limited per call by `max_detector_input_bytes` (**Recommendation:** 64 KiB), with one call per rule and stage. They add a full model round trip before dispatch: run them in parallel across rules, after the pattern rules.
-- **Accounting.** Each detector call is a normal attempt: reservation, settlement, unknown cost keeps its hold, and cost-center snapshot. It counts against budgets, tokens per minute and requests at once of the same scopes (open question 1 covers requests per minute).
+  An optional per-rule `max_scan_bytes` can lower this further; exceeding it follows `on_error`. Custom patterns are limited to 50 per layer and 512 bytes each.
+- **Model rules** send at most `max_detector_input_bytes` per call (**Recommendation:** 64 KiB), one call per rule and stage.
+  - They add a model round trip before dispatch, so they run in parallel after the pattern rules.
+- **Accounting.** Each detector call is a normal attempt (reservation, settlement, held unknown cost, cost-center snapshot) and counts against budgets, tokens per minute and requests at once (requests per minute: open question 1).
 
 ## 11. Testing
 
-- **Pattern corpora.**
-  - Positives: synthetic secrets assembled at test time from fragments, or vendor-documented example keys, so that GitHub push protection is never triggered; Luhn test card numbers.
+All model tests use mocks: no paid calls.
+
+- **Corpora.**
+  - Positives: synthetic secrets assembled at test time, or vendor-documented example keys, so push protection never fires; Luhn test card numbers.
   - Negatives: source code, UUIDs, hashes and base64 data, to measure false positives.
-- **Streaming.** Property tests split each positive at every byte boundary, for both monitor and stop-mid-stream modes. A test shows that no matched byte is forwarded under holdback.
-- **Model detectors.** Mock System One and chat servers (the existing provider mock tests) cover verdicts, invalid verdicts, timeouts, budget denials and both failure modes. No paid calls.
-- **Accounting** (real PostgreSQL):
-  - a blocked input creates no reservation for the client's request;
-  - detector attempts have their own reservations, linked through `guardrail_parent_request_id`;
-  - stop-mid-stream retains the hold;
-  - a block never triggers failover.
-- **Privacy.** A canary string is pushed through every action. Then the test scans every table, log line and metric for it.
-- **Contracts.** Error bodies for all three protocols and for batch lines. Browser tests for the dashboard pages.
+- **Streaming:** every positive split at every byte boundary; no byte of a stop-mode match forwarded; unbounded patterns rejected for stop mode; monitor leaves streams byte-identical.
+- **Redaction across turns:** a multi-turn transcript gives a byte-identical upstream prefix every turn; assistant and tool segments never change.
+- **Model detectors** (mock System One and chat servers): verdicts, invalid verdicts, timeouts, budget denials, the retry classes of section 4, restricted keys.
+- **Accounting** (real PostgreSQL): no reservation for a blocked input; detector attempts have their own linked reservations; a stop is `failed`, not `cancelled`, and keeps its hold; blocks never fail over or touch route health.
+- **Privacy.** A canary value goes through every action, then every table, log and metric is scanned for it.
+- **Contracts and UI.** Error bodies for the three protocols and for batch lines; browser tests for the dashboard.
 
 ## 12. Build plan
 
-Every phase ships through the usual loop: one issue, tests, review, PR.
+Each phase is one issue with tests, review and a PR.
 
-1. **Pattern secrets (input).** Rule storage, layers, management API, cache topic, `guardrail_events`, metrics, Logs badge, Workspace/Admin pages, the `Detector` trait, and the secrets pattern set with monitor and block for generation and embeddings.
-   *Accept when:*
-   - blocks return the documented bodies on Chat, Responses and Messages;
-   - nothing is reserved;
-   - the canary privacy test passes;
-   - local layers cannot loosen.
-2. **Pattern personal data.** Checksummed PII categories, redaction (`latest_user_turn`, `all`), and uninspectable handling.
-   *Accept when:*
-   - redaction is deterministic within a request;
-   - tool arguments and results are never rewritten under the default scope;
-   - the false-positive rate on the negative corpus is reported.
-3. **Output monitor.** Streaming scanner with carry-over; post-`Done` checks.
-   *Accept when:* streams are byte-identical with monitor on and findings are recorded.
-4. **System One detector.** Detector calls are separately admitted and billed, using the guardrail pool; failure modes; egress display.
-   *Accept when:*
-   - parent/child linkage and cost are visible in Logs and costs;
-   - `fail_closed` and `fail_open` are tested on mocks.
-5. **LLM-judge detector.** Rubric, `report` tool verdict, strict validation.
-   *Accept when:* invalid verdicts and judge timeouts follow `on_error`.
-6. **Output blocking modes.** Block-before-sending and stop-mid-stream.
-   *Accept when:*
-   - no blocked byte is forwarded under holdback;
-   - settlement states match section 7;
-   - batch lines carry the interactive bodies.
-7. **External-detector interface.** Approved endpoints, credential references and pricing for external services; first adapter chosen then.
-   *Accept when:* an external mock detector works through the unchanged policy model.
+**1. Pattern secrets (input).** Rule storage, layers and composition, management API, cache topic, `guardrail_events`, metrics, Logs, dashboard pages, the `Detector` trait, and secrets with monitor and block for generation and embeddings.
+- *Accept when:* documented bodies on all three protocols; nothing reserved; canary test passes; local layers cannot loosen; egress is enforced when composing.
+
+**2. Pattern personal data.** Checksummed categories, redaction (`user_text`, `latest_user_turn`, `all`) and uninspectable handling.
+- *Accept when:* the upstream prefix is byte-stable across turns; assistant and tool segments are untouched; the false-positive rate is reported.
+
+**3. Output monitor.** Scanner inside `tracked`, the engine buffer cap, post-`Done` checks.
+- *Accept when:* streams are byte-identical with monitor on; findings are recorded.
+
+**4. System One detector.** The guardrail-purpose lookup and admission variant, the semaphore parameter, failure modes and the egress display.
+- *Accept when:* linkage and cost are visible; restricted keys work; the retry classes match section 4.
+
+**5. LLM-judge detector.** The `report` verdict and strict validation.
+- *Accept when:* invalid verdicts and timeouts follow `on_error`.
+
+**6. Output blocking modes.**
+- *Accept when:*
+  - for stop-mode rules, whose maximum match length is at most the holdback, no byte of a match is forwarded;
+  - for prefix-triggered rules, nothing at or after the trigger is forwarded;
+  - outcomes match section 7;
+  - batch lines carry the interactive error bodies.
+
+**7. External-detector interface.** Approved endpoints, credential references and prices.
+- *Accept when:* an external mock works through the unchanged policy model.
 
 ## 13. Open questions
 
-1. Should detector attempts count toward **requests-per-minute** limits? They are real upstream requests, but each would inflate a client's count up to 3×. Recommended: yes, and document it.
-2. Should there be a tighten-only **per-key** layer (for example, agent keys on monitor while app keys redact)? Recommended: after phase 2, if needed.
-3. Is HTTP 400 `guardrail_output_blocked` acceptable for output blocks, rather than a 200 with `content_filter`?
-4. Should platform staff see **guardrail counts** for personal workspaces as totals, the way they see usage totals?
-5. Is it acceptable that by default, model detectors judge only *new* content and not the full history?
+1. Should detector attempts count toward **requests-per-minute** limits? Each one could inflate a client's count by up to 3×. Recommended: yes, and document it.
+2. Should there be a tighten-only **per-key** layer, for example agent keys on monitor while app keys redact? Recommended: after phase 2, if needed.
+3. Should **personal-workspace owners** be able to tighten their own guardrails, or should personal workspaces be platform-only, as limits are (section 5)?
+4. **Redacting history:** should redaction cover all earlier user-authored text on every turn (the recommended `user_text`, section 8) instead of only new user input? Only new input leaks on the next turn.
+5. Should platform staff see **guardrail counts for personal workspaces** as totals, the way they see usage totals?
+6. Should model detectors judge only **new content** by default, rather than the full history?

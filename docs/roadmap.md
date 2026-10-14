@@ -33,7 +33,7 @@ After v0.3.0 the remaining R-items were selected as one enterprise program, deli
 - **No installation-wide limits** (2026-10-09, done in migration 0026): limits only on personal/team/project workspaces and keys; total spend is watched with a non-blocking installation spend alert.
 - **Machine administration:** Platform-Admin-only admin API tokens, separate from inference keys (inference keys never authorize management), scoped, expiring and audited.
 - **Real self-hosted models:** acceptance uses the operator's own DGX Spark endpoints (chat, embeddings, rerank, System One).
-- **Guardrails** (PII redaction, moderation, DLP): **design drafted** in [guardrails design](guardrails-design.md) (#36, 2026-10-14); not implemented. The gateway never inspects prompts today.
+- **Guardrails** (PII redaction, moderation, DLP): **design drafted** in [guardrails design](guardrails-design.md) (#36, 2026-10-13); not implemented. The gateway never inspects prompts today.
 
 **Phases**
 
