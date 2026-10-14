@@ -10,6 +10,7 @@ pub mod catalog;
 pub mod config;
 pub(crate) mod db;
 pub mod demo;
+pub mod egress;
 pub mod email;
 pub mod entropy;
 pub mod filestore;

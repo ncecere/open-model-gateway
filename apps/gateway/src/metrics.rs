@@ -198,6 +198,7 @@ pub struct Metrics {
     config_changes: Family<L1, Counter>,
     config_poll_failures: Counter,
     auth_throttled: Family<L2, Counter>,
+    egress_denied: Family<L1, Counter>,
     config_listener: Gauge,
     leases_held: Family<L1, Gauge>,
     lease_terms: Family<L1, Counter>,
@@ -317,6 +318,7 @@ impl Metrics {
             config_changes: Family::default(),
             config_poll_failures: Counter::default(),
             auth_throttled: Family::default(),
+            egress_denied: Family::default(),
             config_listener: Gauge::default(),
             leases_held: Family::default(),
             lease_terms: Family::default(),
@@ -492,6 +494,11 @@ impl Metrics {
             metrics.config_changes.clone(),
         );
         registry.register(
+            "egress_denied",
+            "Outbound connections refused by the egress policy, by purpose (provider, oidc, storage, catalog, smtp)",
+            metrics.egress_denied.clone(),
+        );
+        registry.register(
             "auth_throttled",
             "Sign-in steps refused by abuse controls, by step (login, callback) and reason (client_rate, pending_cap)",
             metrics.auth_throttled.clone(),
@@ -584,6 +591,19 @@ impl Metrics {
         self.config_changes
             .get_or_create(&[("topic", topic.to_owned())])
             .inc();
+    }
+
+    pub(crate) fn egress_denied(&self, purpose: &'static str) {
+        self.egress_denied
+            .get_or_create(&[("purpose", purpose.to_owned())])
+            .inc();
+    }
+
+    /// Refusals so far for one purpose (tests).
+    pub fn egress_denied_count(&self, purpose: &str) -> u64 {
+        self.egress_denied
+            .get_or_create(&[("purpose", purpose.to_owned())])
+            .get()
     }
 
     pub(crate) fn auth_throttled(&self, endpoint: &'static str, reason: &'static str) {

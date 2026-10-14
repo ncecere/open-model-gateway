@@ -7,6 +7,7 @@ This covers health checks, metrics and alerting, backups and restore, secret rot
 | Variable | Default | Purpose |
 |---|---|---|
 | `GATEWAY_METRICS_ADDR` | unset (disabled) | Separate Prometheus listener, for example `127.0.0.1:9464`. It must use a different port from `GATEWAY_LISTEN`. |
+| `GATEWAY_EGRESS_PRIVATE_ALLOW` | unset (none) | Private networks the gateway may connect to, as comma-separated CIDRs (`10.20.0.0/16,fd00:1::/32`). See [outbound connections](#outbound-connections). |
 | `GATEWAY_SMTP_SECRET_ENV_ALLOWLIST` | unset | Variable names the SMTP password reference (`env:NAME`) may read, comma-separated. Separate from `GATEWAY_SECRET_ENV_ALLOWLIST` (provider credentials). Startup fails if a name is on both lists or is one of the gateway's own credentials (`DATABASE_URL`, `GATEWAY_*`, `AWS_*`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). |
 | `GATEWAY_DATABASE_MAX_CONNECTIONS` | `10` | Database pool size per replica (2 to 500). Size PostgreSQL `max_connections` for every replica plus migrator and backup sessions. |
 | `GATEWAY_REPORTING_DATABASE_URL` | unset (primary) | Optional read-only reporting replica (or a pooler in front of one) for reports, usage and request logs only. See [read snapshots and the reporting replica](#read-snapshots-and-the-reporting-replica). Use the runtime role; set it directly (it has no `_FILE` form). An empty value is refused. |
@@ -17,6 +18,27 @@ This covers health checks, metrics and alerting, backups and restore, secret rot
 | `GATEWAY_MAX_CONCURRENT_REQUESTS` | `128` (staging: 32) | Per-replica inference concurrency. Requests beyond it get 429 and are counted under `scope="gateway_capacity"`. |
 | `GATEWAY_REQUEST_TIMEOUT_SECONDS` | `120` | Inference deadline. Time spent waiting for admission counts toward it. |
 | `GATEWAY_FILE_STORE` | `off` | Encrypted file store: `off`, `local` or `s3`. See [file storage](file-storage.md) for the backend and encryption-key variables. |
+
+## Outbound connections
+
+The gateway's own HTTP clients (OpenAI, Anthropic, OpenRouter, Bedrock requests, S3, the OpenRouter catalog, OIDC discovery, tokens and keys) go through one address policy (#33):
+
+- **Never:** unspecified, link-local (which covers cloud metadata at `169.254.169.254`), `fd00:ec2::/32`, Alibaba Cloud's `100.100.100.200`, multicast, broadcast, and reserved, documentation and benchmarking ranges. NAT64 (`64:ff9b::/96`), 6to4 and Teredo addresses are judged by the IPv4 address they carry, so IPv6-only clusters with DNS64 still reach IPv4 upstreams.
+- **Loopback:** only with `GATEWAY_ENV=development`.
+- **Private:** RFC 1918, `100.64.0.0/10` (carrier-grade NAT, which includes Tailscale) and IPv6 unique-local addresses, only inside `GATEWAY_EGRESS_PRIVATE_ALLOW`.
+- **Public:** allowed.
+
+Names are resolved by the gateway, refused addresses are dropped, and the connection goes only to an address that passed (so a DNS answer can't change between the check and the connection). Configured IP-literal URLs are checked at startup: `GATEWAY_S3_ENDPOINT`, `GATEWAY_BEDROCK_ENDPOINT_ALLOWLIST`, the OIDC issuer and the endpoints it publishes. A refused OIDC issuer stops startup with a message naming `GATEWAY_EGRESS_PRIVATE_ALLOW`. A refused request fails like an unreachable upstream; the log names the purpose, host and reason, and `gateway_egress_denied_total{purpose}` counts it. Approved local upstreams (`GATEWAY_LOCAL_UPSTREAMS`), including their vLLM metrics, keep their own pinned approval and need no entry here.
+
+List a private network when you use one of these:
+
+- an IdP or S3-compatible store on a private address (homelab Authentik, MinIO or RustFS);
+- AWS PrivateLink or other private endpoints for Bedrock or S3 (the VPC range);
+- anything reached over Tailscale or another carrier-grade NAT network: list only those addresses (for example `100.101.102.103/32`), not all of `100.64.0.0/10`.
+
+Not covered: the AWS SDK's own credential lookups (instance metadata at `169.254.169.254`, ECS and EKS Pod Identity, STS and SSO) use its own HTTP client, because instance metadata must be reachable for credentials. Those endpoints come from the SDK and the operator's environment, never from request or tenant data. The policy is read before every command (including `healthcheck`), so a malformed `GATEWAY_EGRESS_PRIVATE_ALLOW` makes them all fail to start.
+
+SMTP and the realtime WebSocket follow in #168; Kubernetes NetworkPolicy alignment in #169.
 
 ## Health endpoints
 

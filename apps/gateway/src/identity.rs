@@ -297,7 +297,16 @@ impl OidcHttp {
     async fn send(self, request: HttpRequest) -> Result<HttpResponse, std::io::Error> {
         // Apply the transport policy BEFORE every request, including the discovered JWKS URL.
         let fail = || std::io::Error::other("OIDC HTTP request failed");
-        validate_url(&request.uri().to_string(), self.allow_loopback_http).map_err(|_| fail())?;
+        let url = request.uri().to_string();
+        validate_url(&url, self.allow_loopback_http).map_err(|_| fail())?;
+        // IP-literal hosts never reach the resolver: check them here (#33).
+        let parsed = Url::parse(&url).map_err(|_| fail())?;
+        crate::egress::check_url(
+            &crate::egress::policy().permit_loopback(self.allow_loopback_http),
+            crate::egress::Purpose::Oidc,
+            &parsed,
+        )
+        .map_err(|_| fail())?;
         let request = reqwest::Request::try_from(request).map_err(|_| fail())?;
         let mut response = self.client.execute(request).await.map_err(|_| fail())?;
         let mut builder = axum::http::Response::builder().status(response.status());
@@ -429,6 +438,14 @@ impl IdentityState {
                 // straight to the issuer, once.
                 client: reqwest::Client::builder()
                     .no_proxy()
+                    // Discovery, token and JWKS addresses pass the egress policy
+                    // (#33). `allow_loopback_http` is GATEWAY_ENV=development, as
+                    // in the global policy; passing it keeps tests (strict global
+                    // default) and production identical.
+                    .dns_resolver(crate::egress::resolver_with(
+                        crate::egress::Purpose::Oidc,
+                        crate::egress::policy().permit_loopback(config.allow_loopback_http),
+                    ))
                     .retry(reqwest::retry::never())
                     .redirect(reqwest::redirect::Policy::none())
                     .timeout(Duration::from_secs(15))
@@ -437,6 +454,24 @@ impl IdentityState {
                     .map_err(|_| anyhow::anyhow!("Cannot initialize OIDC HTTP client"))?,
                 allow_loopback_http: config.allow_loopback_http,
             };
+            // The issuer must pass the egress policy (#33); say which setting
+            // to change instead of a bare discovery failure.
+            let egress = crate::egress::policy().permit_loopback(config.allow_loopback_http);
+            let issuer = Url::parse(config.issuer.as_str())
+                .map_err(|_| anyhow::anyhow!("Invalid OIDC issuer"))?;
+            crate::egress::check_url(&egress, crate::egress::Purpose::Oidc, &issuer)?;
+            if let Some(host) = issuer
+                .host_str()
+                .filter(|h| !h.starts_with('[') && h.parse::<IpAddr>().is_err())
+            {
+                crate::egress::resolve(
+                    &egress,
+                    crate::egress::Purpose::Oidc,
+                    host,
+                    issuer.port_or_known_default().unwrap_or(443),
+                )
+                .await?;
+            }
             let transport = |request| http.clone().send(request);
             let metadata = CoreProviderMetadata::discover_async(config.issuer.clone(), &transport)
                 .await
@@ -449,6 +484,12 @@ impl IdentityState {
                 .token_endpoint()
                 .ok_or_else(|| anyhow::anyhow!("OIDC provider has no token endpoint"))?;
             validate_url(token_endpoint.as_str(), config.allow_loopback_http)?;
+            // Discovered endpoints may be IP literals, which the resolver never sees.
+            crate::egress::check_url(
+                &egress,
+                crate::egress::Purpose::Oidc,
+                &Url::parse(token_endpoint.as_str())?,
+            )?;
             let algs: Vec<CoreJwsSigningAlgorithm> = metadata
                 .id_token_signing_alg_values_supported()
                 .iter()
@@ -461,6 +502,11 @@ impl IdentityState {
             );
             let jwks_uri = metadata.jwks_uri().url().to_string();
             validate_url(&jwks_uri, config.allow_loopback_http)?;
+            crate::egress::check_url(
+                &egress,
+                crate::egress::Purpose::Oidc,
+                &Url::parse(&jwks_uri)?,
+            )?;
             let fetch_http = http.clone();
             let fetcher: jwks::Fetcher = Arc::new(move || {
                 let (http, uri) = (fetch_http.clone(), jwks_uri.clone());
