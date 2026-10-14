@@ -4,7 +4,7 @@ Notes for changes on `main` since v0.5.0. They become the next release's notes.
 
 ## Security
 
-- After a restore, `scripts/backup.py reapply-revocations` copies every revocation (keys, grants, sessions, invitations) from the old database onto the restored one, so access revoked after the backup stays revoked (#146). It's a dry run without `--yes`, applies in one transaction and refuses a different installation. The restore runbook in docs/operations.md now covers revocations, sessions and lost spend.
+- After a restore, `scripts/backup.py reapply-revocations` copies every revocation (keys, grants, sessions, invitations) and suspension (users, keys, service accounts, workspaces) from the old database onto the restored one, so access removed after the backup stays removed (#146). It's a dry run without `--yes`, applies in one transaction and refuses a different installation. The restore runbook in docs/operations.md now covers revocations, sessions and lost spend.
 
 - Revocations are final in the database: migration 0039 adds triggers that refuse clearing or changing `revoked_at` once set on API keys, membership and platform role grants, browser sessions and invitations, for every role (#145). Hand-written SQL that "un-revokes" a key or grant now fails; issue a new one instead.
 

@@ -1022,29 +1022,45 @@ REVOCABLE = [
     ("browser_sessions", "encode({a}token_hash,'hex')"),
     ("workspace_invitations", "{a}id::text"),
 ]
+# Rows the old database disabled (users are also suspended: reason and
+# cleanup date come along). Only ever tightens: something re-enabled after
+# the backup stays disabled in the restored copy until re-enabled by hand.
+DISABLEABLE = [
+    ("users", ("disabled_at", "disable_reason", "cleanup_due_at")),
+    ("api_keys", ("disabled_at",)),
+    ("service_accounts", ("disabled_at",)),
+    ("workspaces", ("disabled_at",)),
+]
 
 
 def reapply_revocations(source, target, yes=False, out=print):
-    """Copy every revocation of the old (source) database onto the restored
-    (target) one: a key, grant, session or invitation that the old database
-    revoked but the restore brought back active gets the same `revoked_at`.
-    Rows already revoked in the target keep their time; rows created after
-    the backup don't exist in the target and are skipped. Dry run unless
-    `yes`; applied in one transaction. Returns the count per table."""
+    """Copy every revocation and suspension of the old (source) database onto
+    the restored (target) one. A key, grant, session or invitation the old
+    database revoked, or a user, key, service account or workspace it
+    disabled, that the restore brought back active gets the same values.
+    Rows already revoked or disabled in the target keep theirs; rows created
+    after the backup don't exist in the target and are skipped. Dry run
+    unless `yes`; applied in one transaction. Returns the count per change."""
     installation = "SELECT id FROM installation;"
     if source.query(installation) != target.query(installation):
         raise BackupError("the source and target are a different installation; refusing to copy revocations")
     tag = "omg_" + secrets.token_hex(8)
+    changes = [(table, key, "revoked_at", ("revoked_at",)) for table, key in REVOCABLE]
+    changes += [(table, "{a}id::text", "disabled_at", columns) for table, columns in DISABLEABLE]
     counts, statements = {}, []
-    for table, key in REVOCABLE:
-        revoked = source.query(f"SELECT coalesce(json_agg(json_build_array({key.format(a='')}, revoked_at)),'[]') FROM {table} WHERE revoked_at IS NOT NULL;")
-        match = f"{key.format(a='t.')}=r.key"
-        pending = f"SELECT x->>0 AS key, (x->>1)::timestamptz AS revoked_at FROM json_array_elements(${tag}${revoked}${tag}$::json) x"
-        counts[table] = int(target.query(f"SELECT count(*) FROM {table} t JOIN ({pending}) r ON {match} WHERE t.revoked_at IS NULL;"))
-        statements.append(f"UPDATE {table} t SET revoked_at=r.revoked_at FROM ({pending}) r WHERE {match} AND t.revoked_at IS NULL;")
-    verb = "Re-revoking" if yes else "Would re-revoke"
-    for table, n in counts.items():
-        out(f"{verb} {n} {table} row(s) revoked in the old database after the backup.")
+    for table, key, marker, columns in changes:
+        values = ",".join(f"{c}" for c in columns)
+        rows = source.query(f"SELECT coalesce(json_agg(json_build_array({key.format(a='')},{values})),'[]') FROM {table} WHERE {marker} IS NOT NULL;")
+        picks = ",".join(f"x->>{i + 1} AS {c}" for i, c in enumerate(columns))
+        pending = f"SELECT x->>0 AS key,{picks} FROM json_array_elements(${tag}${rows}${tag}$::json) x"
+        match = f"{key.format(a='t.')}=r.key AND t.{marker} IS NULL"
+        label = f"{table}.{marker}"
+        counts[label] = int(target.query(f"SELECT count(*) FROM {table} t JOIN ({pending}) r ON {match};"))
+        assign = ",".join(f"{c}=r.{c}::{'timestamptz' if c.endswith('_at') else 'text'}" for c in columns)
+        statements.append(f"UPDATE {table} t SET {assign} FROM ({pending}) r WHERE {match};")
+    verb = "Re-applying" if yes else "Would re-apply"
+    for label, n in counts.items():
+        out(f"{verb} {n} {label} change(s) made in the old database after the backup.")
     if not yes:
         out("Dry run: nothing changed. Re-run with --yes to apply.")
         return counts

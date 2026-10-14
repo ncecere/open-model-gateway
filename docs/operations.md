@@ -259,7 +259,7 @@ For CNPG base backups and WAL archiving, failover behaviour and connection sizin
 
 **What a restore brings back, and what it loses.** A restore returns the database to the moment of the backup. Before serving it:
 
-1. **Revocations made after the backup are undone.** API keys, membership and platform role grants, browser sessions and invitations revoked since the backup are active again in the restored copy.
+1. **Revocations and suspensions made after the backup are undone.** API keys, membership and platform role grants, browser sessions and invitations revoked since the backup, and users, keys, service accounts and workspaces disabled since then, are active again in the restored copy.
    - If the old database can still be read (corruption, a bad change, a lost replica, not a total loss), copy its revocations onto the restored one before starting the gateway:
 
      ```sh
@@ -267,8 +267,8 @@ For CNPG base backups and WAL archiving, failover behaviour and connection sizin
      python3 scripts/backup.py reapply-revocations --source-url-file old.url --url-file restored.url --yes  # one transaction
      ```
 
-     It only adds revocations (rows active in the restored copy get the old `revoked_at`), never clears one, and refuses two databases of different installations. Run it as the migrator on both.
-   - If the old database is gone, so is its audit log. Take the revocations made since the backup from your off-host audit export (`key.revoked`, `member.removed`, `user.disabled` and similar events) and revoke those keys and users again in the dashboard. Without an export, revoke every key created before the incident that you can't vouch for, and have users sign in again.
+     It copies revocations (`revoked_at`) and suspensions (`disabled_at`, with a user's reason and cleanup date) only onto rows still active in the restored copy, never clears anything, applies in one transaction and refuses two databases of different installations. Something re-enabled after the backup stays disabled until you re-enable it. Run it as the migrator on both.
+   - If the old database is gone, so is its audit log. Take what changed since the backup from your off-host audit export and repeat it in the dashboard: `key.revoked`, `key.disabled`, `role.revoked`, `workspace.manual_membership_revoked`, `invitation.revoked`, `scim.user.deactivated`, `service_account.updated` and `workspace.updated`. An admin suspension is recorded as `user.updated` without detail (#158), so check suspended users by hand. Without an export, revoke every key created before the incident that you can't vouch for, and have users sign in again.
 2. **Sessions.** If the incident involved a compromise, revoke every session before serving, so everyone signs in again: `UPDATE browser_sessions SET revoked_at = now() WHERE revoked_at IS NULL;` as the migrator.
 3. **Spend recorded after the backup is lost.** Budgets and limits count from the restored totals, so a workspace may spend again what it already spent. Compare provider invoices for the gap, and tighten affected budgets until the period rolls over.
 
