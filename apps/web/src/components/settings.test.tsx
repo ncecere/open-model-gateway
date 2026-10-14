@@ -95,7 +95,7 @@ describe("Admin › Settings", () => {
     client.clear();
   });
   it("sets up email with a password reference and places server reasons on the field", async () => {
-    const user = userEvent.setup(), fetch = serve(admin, (path, init) => init?.method === "PUT" && path.endsWith("/settings/email") ? Response.json({ error: { code: "400", message: "The password reference is not on the server allowlist", reason: "credential_reference_not_allowed" } }, { status: 400 }) : undefined);
+    const user = userEvent.setup(), fetch = serve(admin, (path, init) => init?.method === "PUT" && path.endsWith("/settings/email") ? Response.json({ error: { code: "400", message: "The password reference is not on the SMTP allowlist", reason: "credential_reference_not_allowed" } }, { status: 400 }) : undefined);
     const { client } = await mount("/admin/settings/email");
     // Without a relay the disabled test button says why.
     expect(await screen.findByText("Turn on Send email below to test delivery.")).toBeTruthy();
@@ -106,7 +106,7 @@ describe("Admin › Settings", () => {
     await user.type(screen.getByRole("textbox", { name: "From address" }), "gateway@example.com");
     await user.click(screen.getByRole("button", { name: "Save email settings" }));
     await waitFor(() => expect(puts(fetch)).toEqual([["/api/v1/platform/settings/email", { host: "smtp.example.com", port: 587, tls: "starttls", username: "relay", password_ref: "env:SMTP_PASSWORD", from_address: "gateway@example.com", from_name: null }]]));
-    expect(await screen.findByText(/isn't on the server allowlist/)).toBeTruthy();
+    expect(await screen.findByText(/isn't on the SMTP allowlist/)).toBeTruthy();
     // The password itself is never asked for.
     expect(document.querySelector('input[type="password"]')).toBeNull();
     client.clear();

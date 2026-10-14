@@ -12,6 +12,9 @@ data:
   {{- if .Values.gateway.secretEnvAllowlist }}
   GATEWAY_SECRET_ENV_ALLOWLIST: {{ .Values.gateway.secretEnvAllowlist | join "," | quote }}
   {{- end }}
+  {{- if .Values.gateway.smtpSecretEnvAllowlist }}
+  GATEWAY_SMTP_SECRET_ENV_ALLOWLIST: {{ .Values.gateway.smtpSecretEnvAllowlist | join "," | quote }}
+  {{- end }}
   {{- if .Values.secrets.database.reporting.enabled }}
   GATEWAY_REPORTING_MAX_LAG_SECONDS: {{ .Values.secrets.database.reporting.maxLagSeconds | default 30 | quote }}
   {{- end }}

@@ -28,7 +28,7 @@ pub(super) mod storage;
 pub(super) const KEY_LIFETIME: &str = "Key lifetime exceeds the installation maximum";
 pub(super) const SETTING_LOCKED: &str = "This setting is set by the server environment";
 pub(super) const REFERENCE_NOT_ALLOWED: &str =
-    "The password reference is not on the server allowlist";
+    "The password reference is not on the SMTP allowlist";
 pub(super) const PLAINTEXT_REMOTE: &str =
     "Unencrypted delivery is only allowed to a relay on this machine";
 pub(super) const EMAIL_NOT_CONFIGURED: &str = "Email delivery is not configured";
