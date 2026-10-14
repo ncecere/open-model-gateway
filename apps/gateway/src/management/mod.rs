@@ -48,6 +48,10 @@ pub(crate) struct ApiError(pub(crate) StatusCode, pub(crate) &'static str);
 /// Stable machine-readable reasons for selected errors (additive `error.reason`).
 const REASONS: &[(&str, &str)] = &[
     (PERSONAL_NAME_FIXED, "personal_workspace_name_fixed"),
+    (
+        PERSONAL_VISIBILITY_FIXED,
+        "personal_workspace_visibility_fixed",
+    ),
     (PERSONAL_LIMITS, "personal_limits_platform_controlled"),
     (STACKED_LEGACY, "stacked_budgets_require_budgets_field"),
     (KEY_REVOKED, "key_revoked"),
@@ -91,6 +95,8 @@ pub(crate) fn installation_limits_removed(status: StatusCode) -> ApiError {
     ApiError(status, INSTALLATION_LIMITS_REMOVED)
 }
 const PERSONAL_NAME_FIXED: &str = "Personal workspace name is fixed";
+const PERSONAL_VISIBILITY_FIXED: &str =
+    "Personal workspaces are private to their owner; object visibility is fixed";
 const PERSONAL_LIMITS: &str = "Personal workspace limits are set by the platform";
 const STACKED_LEGACY: &str = "This layer has several budgets; update them with the budgets field";
 const KEY_REVOKED: &str = "Revoked keys can never be re-enabled";
@@ -98,6 +104,9 @@ const KEY_DISABLED: &str = "Disabled keys must be enabled first";
 const MEMBER_VISIBILITY: &str = "Grouping by member requires workspace-wide visibility";
 fn personal_name_fixed() -> ApiError {
     ApiError(StatusCode::CONFLICT, PERSONAL_NAME_FIXED)
+}
+fn personal_visibility_fixed() -> ApiError {
+    ApiError(StatusCode::CONFLICT, PERSONAL_VISIBILITY_FIXED)
 }
 fn personal_limits() -> ApiError {
     ApiError(StatusCode::FORBIDDEN, PERSONAL_LIMITS)

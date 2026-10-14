@@ -199,6 +199,29 @@ test("team admin Alex administers Product but has no platform Admin", async ({ b
   await context.close();
 });
 
+test("team admin chooses who sees files, batches and videos; members see it read-only (#141)", async ({ browser }) => {
+  const { product } = readFixture();
+  const alex = await signIn(browser, "alex");
+  await alex.page.goto(`/workspaces/${product}/settings?tab=overview`);
+  const panel = alex.page.getByRole("region", { name: "Files, batches and videos" }).or(alex.page.locator("section", { hasText: "Files, batches and videos" }));
+  const select = alex.page.getByLabel("Who sees them");
+  await expect(select).toHaveValue("member");
+  await expect(panel.first()).toContainText("Only the creator or a workspace admin can delete or cancel.");
+  await select.selectOption("workspace");
+  await alex.page.getByRole("button", { name: /^Save/ }).last().click();
+  await expect(alex.page.getByText("Settings saved.")).toBeVisible();
+  expect((await (await api(alex.page, "GET", `/workspaces/${product}`)).json()).object_visibility).toBe("workspace");
+  const blair = await signIn(browser, "blair");
+  await blair.page.goto(`/workspaces/${product}/settings?tab=overview`);
+  await expect(blair.page.getByText("Workspace-wide")).toBeVisible();
+  await expect(blair.page.getByLabel("Who sees them")).toHaveCount(0);
+  expect((await api(blair.page, "PATCH", `/workspaces/${product}`, { object_visibility: "member" })).status()).toBe(403);
+  // Back to the default for the journeys that follow.
+  expect((await api(alex.page, "PATCH", `/workspaces/${product}`, { object_visibility: "member" })).status()).toBe(200);
+  await blair.context.close();
+  await alex.context.close();
+});
+
 test("member creates a key, calls the mock model, sees Logs and Usage, then revokes it", async ({ browser }) => {
   const { context, page } = await signIn(browser, "blair");
   const { product } = readFixture();

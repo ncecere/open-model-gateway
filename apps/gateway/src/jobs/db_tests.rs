@@ -705,3 +705,66 @@ async fn video_without_a_supported_provider_is_refused_before_admission(pool: Pg
         .unwrap();
     assert_eq!(rows, (0, 0, 0));
 }
+
+/// Object visibility (#141) for video jobs: every caller type × both modes ×
+/// list, retrieve, content and delete, for jobs of a member's key and of a
+/// service-account key. Hidden jobs are `NotFound` (before any upstream call);
+/// visible ones reach the job's own state checks.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn object_visibility_matrix_for_video_jobs(pool: PgPool) {
+    use crate::visibility::test_support::{CALLERS, Owner, expected, may_modify, team};
+    let f = fixture(pool).await;
+    video_setup(&f).await;
+    let fake = Fake::default();
+    let j = jobs(&f, &fake, false);
+    let t = team(&f).await;
+    for mode in ["member", "workspace"] {
+        t.mode(&f, mode).await;
+        for owner in [Owner::Member, Owner::Service] {
+            fake.push_video(upstream_video(JobState::Queued, Some(8)));
+            let job = j
+                .create_video(t.owner(owner).principal, video_request(), Uuid::new_v4())
+                .await
+                .unwrap();
+            let id = client_id("video_", job.id);
+            for who in CALLERS {
+                let p = &t.get(who).principal;
+                let (see, case) = (
+                    expected(mode, owner, who),
+                    format!("{mode}/{owner:?}/{who:?}"),
+                );
+                let listed = j.list_videos(p, None, 100, false).await.unwrap();
+                assert_eq!(listed.iter().any(|r| r.id == job.id), see, "list {case}");
+                let calls = fake.calls().len();
+                let get = j.get_video(p, &id).await.err();
+                let content = j.video_content(p, &id, VideoAsset::Video).await.err();
+                let delete = j.delete_video(p, &id).await.err();
+                for (op, err) in [("get", get), ("content", content), ("delete", delete)] {
+                    assert_eq!(err != Some(JobError::NotFound), see, "{op} {case}: {err:?}");
+                }
+                assert_eq!(
+                    matches!(delete, Some(JobError::Forbidden(..))),
+                    see && !may_modify(owner, who),
+                    "delete another member's video {case}: {delete:?}"
+                );
+                if !see {
+                    assert_eq!(
+                        fake.calls().len(),
+                        calls,
+                        "no upstream call when hidden {case}"
+                    );
+                    // A hidden job as a list cursor matches nothing (as a missing one).
+                    let missing = client_id("video_", Uuid::nil());
+                    assert_eq!(
+                        j.list_videos(p, Some(&id), 100, false).await.unwrap().len(),
+                        j.list_videos(p, Some(&missing), 100, false)
+                            .await
+                            .unwrap()
+                            .len(),
+                        "cursor {case}"
+                    );
+                }
+            }
+        }
+    }
+}

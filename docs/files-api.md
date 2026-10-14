@@ -15,7 +15,7 @@ What you can use a file for **today**:
 ## Authentication and ownership
 
 - **Credential:** an inference API key (`Authorization: Bearer …`). The workspace comes from the key only, never from the request.
-- **Visibility:** a file belongs to its workspace. Every key of that workspace can list, read and delete it; another workspace's id returns `404 not_found`. Personal workspaces stay owner-private, because only the owner holds their keys.
+- **Visibility:** a file belongs to its workspace; another workspace's id returns `404 not_found`. Personal workspaces stay owner-private, because only the owner holds their keys. Team and Project workspaces choose who sees files, batches and video jobs (Workspace › Settings › General, `object_visibility`). **Per user** (the default): a service-account key or the key of a workspace owner/admin sees everything; a regular member's keys see only objects created with keys issued to that member (rotation keeps access). **Workspace-wide:** every key of the workspace sees everything. In both modes only the creating user, a workspace owner/admin or a service-account key may delete or cancel (`403 permission_error`). An object the caller can't see returns the same `404 not_found` as one that doesn't exist, in lists, by id and when used as an input (`input_file_id`).
 - **Recorded:** the creating key and its human owner (if any) are stored with the file.
 - **Contents:** never written to logs, audit or metrics. Metadata (sizes, purposes, timestamps) is all the gateway reports.
 
@@ -91,7 +91,7 @@ The maintenance task records storage in append-only hourly rows (`storage_usage_
 
 - **Workspace › Files.** A compact list (name, purpose, size, created, expires, status) with search and a purpose filter, Upload (choose the purpose, then the file), Download and Delete (with confirmation), and the storage bar. Visibility:
   - Workspace admins and personal owners see every file.
-  - Other members see files they uploaded themselves, from the dashboard or with their own keys.
+  - Other members see files they uploaded themselves, from the dashboard or with their own keys, or every file when the workspace is set to Workspace-wide. They can delete only their own.
   - Platform roles without membership see nothing.
 - **Audit.** Dashboard uploads and deletions are audited as `file.uploaded` and `file.deleted`, recording the purpose only.
 - **Elsewhere.** The Storage limit and its used/quota bar appear wherever workspace limits are edited. Admin › Settings › Data & privacy › Storage shows bytes stored per purpose group. See [management API](management-api.md#files).

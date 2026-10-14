@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from "react";
 import { BellRing, Bot, Boxes, Gauge, LayoutDashboard, Library, ScrollText, Settings2, ShieldCheck, UsersRound } from "lucide-react";
-import { api, wsPath, platformWorkspacePath, type Session, type Workspace, type CostCenter, type CatalogAvailability, type Grant } from "../lib/api";
+import { api, wsPath, platformWorkspacePath, type Session, type Workspace, type CostCenter, type CatalogAvailability, type Grant, type ObjectVisibility } from "../lib/api";
 import { ResourcePage } from "../components/resource-page";
 import { DateTime, ErrorNotice, Panel, Stack, Alert, StatCard, useApi, useChoices, Button, useAction } from "../components/ui";
 import { nameField } from "../lib/forms";
@@ -55,6 +55,9 @@ export function WorkspaceSettings({ session, workspace, tab, onTabChange }: Scop
   const current = tab === "invitations" ? "members" : tab;
   return <ResourcePage title="Settings" description={personal ? "Private to you. Admins see cost totals only." : `Members, limits and access for ${workspace.name}.`} tab={current} onTabChange={onTabChange} tabs={workspaceSettingsTabs(session, workspace).map(value => ({ value, ...content[value]! }))} />;
 }
+const visibilityLabels: Record<ObjectVisibility, string> = { member: "Per user", workspace: "Workspace-wide" };
+const visibilityOptions = (Object.keys(visibilityLabels) as ObjectVisibility[]).map(value => ({ value, label: visibilityLabels[value] }));
+const visibilityHelp = "Per user: members see only files, batches and videos created with their own keys. Workspace-wide: every member's key sees all of them. Only the creator or a workspace admin can delete or cancel.";
 function WorkspaceGeneral({ session, workspace }: Scope) {
   const rename = canRenameWorkspace(workspace);
   // /me has no cost center: read the workspace itself, and never show "None" until it is known.
@@ -68,9 +71,11 @@ function WorkspaceGeneral({ session, workspace }: Scope) {
         { label: "Cost center", value: centerText },
         ...(workspace.created_at ? [{ label: "Created", value: <DateTime value={workspace.created_at} /> }] : []),
         ...(rename ? [] : [{ label: "Name", value: workspace.name }]),
+        ...(workspace.kind !== "personal" && !rename && detail.data?.object_visibility ? [{ label: "Files, batches and videos", value: visibilityLabels[detail.data.object_visibility] }] : []),
       ]} />
     </Card>
     {rename && <Panel title="Rename"><SettingsForm fields={[{ ...nameField, value: workspace.name }]} writable onSave={(v, signal) => api(wsPath(workspace.id), { method: "PATCH", body: { name: v.name }, signal })} /></Panel>}
+    {workspace.kind !== "personal" && rename && detail.data?.object_visibility && <Panel title="Files, batches and videos"><SettingsForm fields={[{ name: "object_visibility", label: "Who sees them", type: "select", value: detail.data.object_visibility, options: visibilityOptions, help: visibilityHelp }]} writable onSave={(v, signal) => api(wsPath(workspace.id), { method: "PATCH", body: { object_visibility: v.object_visibility }, signal })} /></Panel>}
     {session.capabilities.platform_read && <p className={s.note}>You can also manage this {kindLabels[workspace.kind].toLowerCase()} from <ResourceLink search={{ page: "workspace-detail", record: workspace.id, kind: workspace.kind }}>Admin</ResourceLink>.</p>}
   </Stack>;
 }

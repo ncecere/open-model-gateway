@@ -175,6 +175,9 @@ pub enum JobError {
     Conflict(&'static str, &'static str),
     /// A client error with a specific code and fixed message (HTTP 400).
     Invalid(&'static str, &'static str),
+    /// Visible but not the caller's to change: delete or cancel needs the
+    /// creating user, a workspace owner/admin or a service-account key (HTTP 403).
+    Forbidden(&'static str, &'static str),
     Inference(InferenceError),
 }
 impl From<InferenceError> for JobError {

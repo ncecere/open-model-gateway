@@ -169,6 +169,8 @@ DO $$ DECLARE r record; t text; BEGIN
   IF has_table_privilege('gateway_runtime','public.'||t,'DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.'||t,'id','UPDATE') THEN RAISE EXCEPTION 'history parent removable or re-keyable: %',t; END IF;
  END LOOP;
  IF has_column_privilege('gateway_runtime','public.api_keys','workspace_id','UPDATE') THEN RAISE EXCEPTION 'key scope rewritable'; END IF;
+ -- Object visibility (0038): editable by the runtime; workspace kind never is.
+ IF NOT has_column_privilege('gateway_runtime','public.workspaces','object_visibility','UPDATE') OR has_column_privilege('gateway_runtime','public.workspaces','kind','UPDATE') THEN RAISE EXCEPTION 'object visibility grants'; END IF;
  IF (SELECT count(*) FROM pg_trigger WHERE tgname LIKE '%\_history\_parent%' AND tgenabled='O' AND NOT tgisinternal)<>9
   OR (SELECT count(*) FROM pg_trigger WHERE tgname IN ('inference_executions_parent_check','governance_reservations_parent_check') AND tgenabled='O' AND tgparentid=0)<>2
   OR EXISTS(SELECT FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid WHERE c.relispartition AND t.tgname LIKE '%\_parent\_check' AND t.tgenabled<>'O') THEN RAISE EXCEPTION 'history parent checks missing or disabled'; END IF;
@@ -198,6 +200,8 @@ BEGIN
  INSERT INTO workspaces(id,name,kind,owner_user_id) VALUES(personal,'Rollback personal','personal',u);
  INSERT INTO workspace_membership_grants(id,workspace_id,user_id,role,source) VALUES(gen_random_uuid(),ws,u,'owner','manual'),(gen_random_uuid(),personal,u,'owner','manual');
  IF NOT EXISTS(SELECT FROM effective_platform_roles WHERE user_id=u AND role='user') OR NOT EXISTS(SELECT FROM effective_workspace_memberships WHERE user_id=u AND workspace_id=ws AND role='owner') THEN RAISE EXCEPTION 'live grant projections failed'; END IF;
+ UPDATE workspaces SET object_visibility='workspace' WHERE id=ws;
+ IF (SELECT object_visibility FROM workspaces WHERE id=ws)<>'workspace' THEN RAISE EXCEPTION 'object visibility not maintainable'; END IF;
  -- Exact sign-in upsert needs the owner-preserving UPDATE privilege.
  INSERT INTO workspaces(id,name,kind,owner_user_id) VALUES(gen_random_uuid(),'Personal','personal',u) ON CONFLICT(owner_user_id) WHERE kind='personal' AND disabled_at IS NULL DO UPDATE SET owner_user_id=EXCLUDED.owner_user_id;
  INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash) VALUES(k,ws,u,'Never issued',decode(repeat('00',32),'hex'));

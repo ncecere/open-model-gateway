@@ -4,7 +4,12 @@ Notes for changes on `main` since v0.5.0. They become the next release's notes.
 
 ## Security
 
+- **Breaking (#141):** Teams and Projects have a new setting, **who sees files, batches and videos** (Workspace › Settings › General; `object_visibility` on `GET/PATCH /api/v1/workspaces/{ws}`, migration 0038). **Per user**, the default for new and existing shared workspaces: a regular member's API keys and dashboard see only objects created with that member's keys; service-account keys and workspace owners/admins see everything. **Workspace-wide:** every key sees everything. In both modes only the creator, an owner/admin or a service-account key may delete or cancel (`403`); an object the caller can't see returns `404`, also as a batch's `input_file_id`. Before, any key of a shared workspace could read, delete or cancel every member's objects through `/v1/files`, `/v1/batches` and `/v1/videos`.
+
+  **Upgrade:** run the migration and reapply the runtime grants (`object_visibility` is added to the runtime role's `UPDATE` on `workspaces`). Clients that read other members' objects with a member key get `404` until a workspace admin sets the workspace to Workspace-wide; use a service-account key for workspace-wide automation.
+
 - rustls 0.23.45 → 0.23.46 for RUSTSEC-2026-0346 (session `Debug` output exposed TLS secrets), -0347 (data sent to the outer server after an ECH rejection), -0348 (unbounded Brotli certificate decompression) and -0349 (an unauthenticated ServerHello could downgrade later connections to classical key exchange).
+
 - **Breaking (#140):** the SMTP password reference now resolves only from the new `GATEWAY_SMTP_SECRET_ENV_ALLOWLIST` (Helm: `gateway.smtpSecretEnvAllowlist`), never from the provider list `GATEWAY_SECRET_ENV_ALLOWLIST`. Before, a Platform Admin, who chooses the SMTP host, could set the SMTP password to a provider key reference and send that key to a mail server they control. The gateway refuses to start if a name is on both lists, or if the SMTP list names one of its own credentials (`DATABASE_URL`, `GATEWAY_*`, `AWS_*`, `GATEWAY_OIDC_CLIENT_SECRET`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`).
 
   **Upgrade:** move your SMTP password variable's name from `GATEWAY_SECRET_ENV_ALLOWLIST` to `GATEWAY_SMTP_SECRET_ENV_ALLOWLIST`. Until you do, invitations and alerts are not emailed (Settings › Email shows the reference as not allowed). If a provider key was ever used as an SMTP password, rotate it.

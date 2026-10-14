@@ -1,17 +1,22 @@
 //! Workspace › Files: the dashboard view of the gateway Files API store
 //! (docs/files-api.md). Same files as `GET /v1/files` for the workspace.
 //!
-//! Visibility follows request details: workspace admins (and the personal
-//! owner) see every file; other members see files they uploaded themselves
-//! (from the dashboard or with their own keys). Platform roles without
-//! membership see nothing. Uploads use the same pipeline as `POST /v1/files`;
-//! contents never reach audit or logs.
+//! Visibility is the Files API's (`crate::visibility`): workspace admins (and
+//! the personal owner) see every file; other members see every file when the
+//! workspace's object visibility is `workspace`, else the files they uploaded
+//! themselves (from the dashboard or with their own keys). Whoever sees a file
+//! may download it; deleting needs the creator or a workspace owner/admin
+//! (`crate::visibility::may_modify_sql`). Platform roles without membership
+//! see nothing.
+//! Uploads use the same pipeline as `POST /v1/files`; contents never reach
+//! audit or logs.
 use super::*;
 use crate::filestore::{
     FileStoreRuntime, StoredFile,
     files::{API_PURPOSES, FileList, FileStorage, parse_public_id, public_id},
     upload::{self, UploadError, Uploader},
 };
+use crate::visibility::{Viewer, sees_all};
 use axum::{body::Body, http::HeaderMap, routing::delete};
 
 pub(super) fn routes() -> Router<Store> {
@@ -93,16 +98,17 @@ async fn list(
     let usage = crate::filestore::files::workspace_storage(&mut *tx, ws)
         .await
         .map_err(|_| store_error())?;
+    let all = sees_all(&mut *tx, ws, Viewer::User(u.user_id)).await?;
     tx.commit().await?;
     let files = storage(&s, ext);
     let policy = files.policy().await.map_err(|_| store_error())?;
     let configured = files.runtime().store().is_some();
     let query = FileList {
+        viewer: Viewer::User(u.user_id),
         purpose: q.purpose,
         after,
         limit,
         ascending: false,
-        created_by_user_id: (!a.view_all_activity).then_some(u.user_id),
         search: q.search.filter(|t| !t.trim().is_empty()),
     };
     let (page, more) = files.list(ws, &query).await.map_err(|_| store_error())?;
@@ -111,7 +117,7 @@ async fn list(
     Ok(Json(json!({
         "data": data,
         "has_more": more,
-        "scope": if a.view_all_activity { "workspace" } else { "own" },
+        "scope": if all { "workspace" } else { "own" },
         "storage": {
             "quota_bytes": usage.quota_bytes,
             "used_bytes": a.view_all_activity.then_some(usage.used_bytes),
@@ -125,26 +131,25 @@ async fn list(
     })))
 }
 
-/// A file this caller may see in the workspace.
+/// A file this caller may see in the workspace (a hidden file is the same
+/// 404 as a missing one).
 async fn visible(
     s: &Store,
     u: &BrowserPrincipal,
     files: &FileStorage,
     ws: Uuid,
     id: &str,
-) -> Result<(StoredFile, resources::WorkspaceAccess), ApiError> {
+) -> Result<StoredFile, ApiError> {
     let id = parse_public_id(id).ok_or_else(missing)?;
     let (tx, a) = resources::workspace_tx(s, u, ws).await?;
     resources::detail_access(&a)?;
     tx.commit().await?;
-    let file = files
-        .get(id, Some(ws))
+    files
+        .get_visible(id, ws, Viewer::User(u.user_id))
         .await
         .map_err(|_| store_error())?
         .filter(|f| f.api_purpose.is_some())
-        .filter(|f| a.view_all_activity || f.created_by_user_id == Some(u.user_id))
-        .ok_or_else(missing)?;
-    Ok((file, a))
+        .ok_or_else(missing)
 }
 
 async fn content(
@@ -154,7 +159,7 @@ async fn content(
     Path((ws, id)): Path<(Uuid, String)>,
 ) -> Result<Response, ApiError> {
     let files = storage(&s, ext);
-    let (file, _) = visible(&s, &u, &files, ws, &id).await?;
+    let file = visible(&s, &u, &files, ws, &id).await?;
     let (file, stream) = files.open(file.id, Some(ws)).await.map_err(|e| match e {
         crate::filestore::FileError::NotFound => missing(),
         _ => store_error(),
@@ -169,10 +174,22 @@ async fn remove(
     Path((ws, id)): Path<(Uuid, String)>,
 ) -> ApiResult {
     let files = storage(&s, ext);
-    let (file, a) = visible(&s, &u, &files, ws, &id).await?;
-    // Admins delete any workspace file; members only their own.
-    if !a.admin && file.created_by_user_id != Some(u.user_id) {
-        return Err(denied());
+    // Seeing is not enough: the creator or a workspace owner/admin (the Files
+    // API's rule, `crate::visibility`).
+    let file = visible(&s, &u, &files, ws, &id).await?;
+    if !crate::visibility::may_modify(
+        &s.pool,
+        ws,
+        Viewer::User(u.user_id),
+        file.created_by_user_id,
+    )
+    .await
+    .map_err(|_| store_error())?
+    {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Only the creator or a workspace admin can delete this file",
+        ));
     }
     if !files
         .delete(file.id, Some(ws))

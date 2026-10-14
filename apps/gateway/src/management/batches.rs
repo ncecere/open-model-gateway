@@ -2,11 +2,14 @@
 //! batches as `GET /v1/batches`, with progress, mode, the price list applied
 //! and cost so far.
 //!
-//! Visibility follows request details: workspace admins (and the personal
-//! owner) see every batch of the workspace; other members see the batches
-//! they created. Platform Admins/Auditors see Team/Project batches across the
-//! installation and only totals for personal workspaces. Rows are metadata:
-//! never lines, custom ids, outputs or metadata values.
+//! Visibility is `/v1/batches`' (`crate::visibility`): workspace admins (and
+//! the personal owner) see every batch of the workspace; other members see
+//! every batch when the workspace's object visibility is `workspace`, else
+//! the batches of their own keys. Cancelling needs more than seeing: the
+//! creator or a workspace owner/admin (`crate::visibility::may_modify_sql`).
+//! Platform Admins/Auditors see Team/Project batches across the installation
+//! and only totals for personal workspaces. Rows are metadata: never lines,
+//! custom ids, outputs or metadata values.
 use super::*;
 use crate::{
     filestore::{FileStoreRuntime, files::public_id},
@@ -15,6 +18,7 @@ use crate::{
         BatchMode, JobError, JobRow, Jobs,
         types::{JobKind, client_id, parse_client_id},
     },
+    visibility::{Viewer, sees_all, visible_sql},
 };
 
 pub(super) fn routes() -> Router<Store> {
@@ -126,9 +130,11 @@ async fn list(
     let (active, limit, offset) = q.parse()?;
     let (mut tx, a) = resources::workspace_tx(&s, &u, ws).await?;
     resources::detail_access(&a)?;
-    let mut rows: Vec<Value> = sqlx::query_scalar(&format!("SELECT {ROW} WHERE j.workspace_id=$1 AND j.kind='batch' AND ($2 OR j.user_id=$3) AND ($4::boolean IS NULL OR (j.settled_at IS NULL)=$4) ORDER BY j.created_at DESC,j.id DESC LIMIT $5 OFFSET $6"))
-        .bind(ws).bind(a.view_all_activity).bind(u.user_id).bind(active).bind(limit + 1).bind(offset)
+    let visible = visible_sql("$1", "$2", "k.issued_to_user_id");
+    let mut rows: Vec<Value> = sqlx::query_scalar(&format!("SELECT {ROW} WHERE j.workspace_id=$1 AND j.kind='batch' AND {visible} AND ($3::boolean IS NULL OR (j.settled_at IS NULL)=$3) ORDER BY j.created_at DESC,j.id DESC LIMIT $4 OFFSET $5"))
+        .bind(ws).bind(u.user_id).bind(active).bind(limit + 1).bind(offset)
         .fetch_all(&mut *tx).await?;
+    let all = sees_all(&mut *tx, ws, Viewer::User(u.user_id)).await?;
     tx.commit().await?;
     let more = rows.len() > limit as usize;
     rows.truncate(limit as usize);
@@ -136,32 +142,32 @@ async fn list(
     Ok(Json(json!({
         "data": data,
         "has_more": more,
-        "scope": if a.view_all_activity { "workspace" } else { "own" },
+        "scope": if all { "workspace" } else { "own" },
     })))
 }
 
-/// A batch this caller may see (404 otherwise).
+/// A batch this caller may see (the same 404 as a missing one otherwise).
 async fn visible(
     s: &Store,
     u: &BrowserPrincipal,
     ws: Uuid,
     id: &str,
-) -> Result<(Value, Uuid, resources::WorkspaceAccess), ApiError> {
+) -> Result<(Value, Uuid), ApiError> {
     let job = parse_client_id(JobKind::Batch.prefix(), id).ok_or_else(missing)?;
     let (mut tx, a) = resources::workspace_tx(s, u, ws).await?;
     resources::detail_access(&a)?;
     let row: Value = sqlx::query_scalar(&format!(
-        "SELECT {ROW} WHERE j.id=$1 AND j.workspace_id=$2 AND j.kind='batch' AND ($3 OR j.user_id=$4)"
+        "SELECT {ROW} WHERE j.id=$1 AND j.workspace_id=$2 AND j.kind='batch' AND {}",
+        visible_sql("$2", "$3", "k.issued_to_user_id")
     ))
     .bind(job)
     .bind(ws)
-    .bind(a.view_all_activity)
     .bind(u.user_id)
     .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(missing)?;
     tx.commit().await?;
-    Ok((row, job, a))
+    Ok((row, job))
 }
 
 async fn detail(
@@ -169,7 +175,7 @@ async fn detail(
     Extension(u): Extension<BrowserPrincipal>,
     Path((ws, id)): Path<(Uuid, String)>,
 ) -> ApiResult {
-    let (row, job, _) = visible(&s, &u, ws, &id).await?;
+    let (row, job) = visible(&s, &u, ws, &id).await?;
     // Line outcomes by code (gateway-run): counts only.
     let outcomes: Vec<(String, Option<String>, i64)> = sqlx::query_as("SELECT state,error_code,count(*) FROM batch_lines WHERE job_id=$1 GROUP BY 1,2 ORDER BY 3 DESC LIMIT 20")
         .bind(job)
@@ -194,10 +200,14 @@ async fn cancel(
     ext: Option<Extension<FileStoreRuntime>>,
     Path((ws, id)): Path<(Uuid, String)>,
 ) -> ApiResult {
-    let (row, job, a) = visible(&s, &u, ws, &id).await?;
-    // Admins cancel any batch of the workspace; members only their own.
-    if !a.admin && row["user_id"].as_str() != Some(&u.user_id.to_string()) {
-        return Err(denied());
+    // Seeing is not enough: the creator or a workspace owner/admin (the
+    // `/v1/batches` rule, `crate::visibility`).
+    let (_, job) = visible(&s, &u, ws, &id).await?;
+    if !crate::visibility::may_modify_job(&s.pool, ws, Viewer::User(u.user_id), job).await? {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Only the creator or a workspace admin can cancel this batch",
+        ));
     }
     let jobs = Jobs::new(s.clone(), &engine).with_files(ext.map(|Extension(r)| r));
     let current: JobRow = sqlx::query_as(&format!(

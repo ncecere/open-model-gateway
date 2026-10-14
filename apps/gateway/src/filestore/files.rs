@@ -25,7 +25,10 @@ use super::{
     ByteStream, FileStore, FileStoreError, FileStoreRuntime, ObjectKey, Purpose, PurposeGroup,
     PutMeta, Scope,
 };
-use crate::store::Store;
+use crate::{
+    store::Store,
+    visibility::{Viewer, visible_sql},
+};
 
 /// Client-facing file id prefix (`file-<32 lowercase hex>`).
 pub const FILE_ID_PREFIX: &str = "file-";
@@ -301,8 +304,10 @@ impl NewFile {
 }
 
 /// Files API listing (one workspace, newest first unless `ascending`).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct FileList {
+    /// Who lists: only files this caller may see (`crate::visibility`).
+    pub viewer: Viewer,
     /// An OpenAI purpose (`batch`, `batch_output`, `user_data`, …).
     pub purpose: Option<String>,
     /// Cursor: list files after this one in the chosen order.
@@ -310,8 +315,6 @@ pub struct FileList {
     /// 1..=10000.
     pub limit: i64,
     pub ascending: bool,
-    /// Only files created by this user (members without workspace-wide visibility).
-    pub created_by_user_id: Option<Uuid>,
     /// Case-insensitive filename substring.
     pub search: Option<String>,
 }
@@ -834,6 +837,7 @@ impl FileStorage {
     }
 
     /// A live (committed, unexpired, undeleted) file in exactly this scope.
+    /// Internal: callers acting for a client use [`Self::get_visible`].
     pub async fn get(
         &self,
         id: Uuid,
@@ -847,6 +851,30 @@ impl FileStorage {
         let row: Option<Row> = sqlx::query_as(&sql)
             .bind(id)
             .bind(workspace_id)
+            .fetch_optional(&self.db.pool)
+            .await?;
+        row.map(Row::into_file).transpose()
+    }
+
+    /// A live file of workspace `workspace_id` that `viewer` may see
+    /// (`crate::visibility`): `None` for a hidden file exactly as for a
+    /// missing one, from the same single query.
+    pub async fn get_visible(
+        &self,
+        id: Uuid,
+        workspace_id: Uuid,
+        viewer: Viewer,
+    ) -> Result<Option<StoredFile>, FileError> {
+        let sql = format!(
+            "SELECT {cols} FROM stored_files f CROSS JOIN installation_settings s WHERE s.singleton AND f.id=$1 AND f.workspace_id=$2 AND f.deleted_at IS NULL AND f.committed_at IS NOT NULL AND coalesce({expiry},'infinity')>now() AND {visible}",
+            cols = row_columns(),
+            expiry = expiry_sql(),
+            visible = visible_sql("$2", "$3", "f.created_by_user_id"),
+        );
+        let row: Option<Row> = sqlx::query_as(&sql)
+            .bind(id)
+            .bind(workspace_id)
+            .bind(viewer.user())
             .fetch_optional(&self.db.pool)
             .await?;
         row.map(Row::into_file).transpose()
@@ -917,7 +945,9 @@ impl FileStorage {
         workspace_storage(&self.db.pool, workspace_id).await
     }
 
-    /// Files API listing of one workspace. Returns the page and whether more follow.
+    /// Files API listing of one workspace: only files `q.viewer` may see,
+    /// filtered before the limit; a cursor at a hidden file matches nothing.
+    /// Returns the page and whether more follow.
     pub async fn list(
         &self,
         workspace_id: Uuid,
@@ -932,14 +962,16 @@ impl FileStorage {
             ("<", "DESC")
         };
         let sql = format!(
-            "SELECT {cols} FROM stored_files f CROSS JOIN installation_settings s WHERE s.singleton AND f.workspace_id=$1 AND f.api_purpose IS NOT NULL AND f.deleted_at IS NULL AND f.committed_at IS NOT NULL AND coalesce({expiry},'infinity')>now() AND ($2::text IS NULL OR {API_PURPOSE_SQL}=$2) AND ($3::uuid IS NULL OR f.created_by_user_id=$3) AND ($4::text IS NULL OR strpos(lower(f.filename),lower($4))>0) AND ($5::uuid IS NULL OR (f.created_at,f.id) {cmp} (SELECT a.created_at,a.id FROM stored_files a WHERE a.id=$5 AND a.workspace_id=$1)) ORDER BY f.created_at {dir},f.id {dir} LIMIT $6",
+            "SELECT {cols} FROM stored_files f CROSS JOIN installation_settings s WHERE s.singleton AND f.workspace_id=$1 AND f.api_purpose IS NOT NULL AND f.deleted_at IS NULL AND f.committed_at IS NOT NULL AND coalesce({expiry},'infinity')>now() AND ($2::text IS NULL OR {API_PURPOSE_SQL}=$2) AND {visible} AND ($4::text IS NULL OR strpos(lower(f.filename),lower($4))>0) AND ($5::uuid IS NULL OR (f.created_at,f.id) {cmp} (SELECT a.created_at,a.id FROM stored_files a WHERE a.id=$5 AND a.workspace_id=$1 AND {cursor_visible})) ORDER BY f.created_at {dir},f.id {dir} LIMIT $6",
             cols = row_columns(),
-            expiry = expiry_sql()
+            expiry = expiry_sql(),
+            visible = visible_sql("$1", "$3", "f.created_by_user_id"),
+            cursor_visible = visible_sql("$1", "$3", "a.created_by_user_id"),
         );
         let rows: Vec<Row> = sqlx::query_as(&sql)
             .bind(workspace_id)
             .bind(q.purpose.as_deref())
-            .bind(q.created_by_user_id)
+            .bind(q.viewer.user())
             .bind(q.search.as_deref().filter(|s| !s.is_empty()))
             .bind(q.after)
             .bind(q.limit + 1)

@@ -222,3 +222,70 @@ async fn personal_workspace_name_is_fixed_and_local_limits_are_platform_controll
         StatusCode::OK
     );
 }
+
+/// #141: object visibility is set like a rename (same people, same refusals),
+/// fixed for personal workspaces, validated and audited with both values.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn object_visibility_follows_rename_authorization_and_is_audited(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let team = format!("/api/v1/workspaces/{}", f.team);
+    let (_, w) = call(&f.s, &f.owner, "GET", &team, json!({})).await;
+    assert_eq!(
+        w["object_visibility"], "member",
+        "new and existing shared workspaces are per-user"
+    );
+    for (label, actor) in [
+        ("member", &f.member),
+        ("auditor", &f.auditor),
+        ("platform admin", &f.admin),
+        ("owner", &f.owner),
+    ] {
+        let rename = call(&f.s, actor, "PATCH", &team, json!({"name":"Team"}))
+            .await
+            .0;
+        let set = call(
+            &f.s,
+            actor,
+            "PATCH",
+            &team,
+            json!({"object_visibility":"workspace"}),
+        )
+        .await
+        .0;
+        assert_eq!(set, rename, "visibility follows rename for the {label}");
+    }
+    let (_, w) = call(&f.s, &f.owner, "GET", &team, json!({})).await;
+    assert_eq!(w["object_visibility"], "workspace");
+    let details: Value = sqlx::query_scalar("SELECT metadata FROM audit_events WHERE action='workspace.updated' AND metadata ? 'object_visibility' ORDER BY created_at DESC LIMIT 1")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(
+        details,
+        json!({"object_visibility":"workspace","previous_object_visibility":"member"})
+    );
+    for bad in [
+        json!({"object_visibility":"everyone"}),
+        json!({"object_visibility":true}),
+        json!({}),
+    ] {
+        assert_eq!(
+            call(&f.s, &f.owner, "PATCH", &team, bad).await.0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let personal = format!("/api/v1/workspaces/{}", f.personal);
+    let (status, v) = call(
+        &f.s,
+        &f.owner,
+        "PATCH",
+        &personal,
+        json!({"object_visibility":"workspace"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(v["error"]["reason"], "personal_workspace_visibility_fixed");
+    let (_, w) = call(&f.s, &f.owner, "GET", &personal, json!({})).await;
+    assert!(
+        w.get("object_visibility").is_none(),
+        "personal workspaces have no setting: {w}"
+    );
+}

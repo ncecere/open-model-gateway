@@ -206,8 +206,14 @@ impl Jobs {
         }
         let id = crate::filestore::files::parse_public_id(&request.input_file_id)
             .ok_or(JobError::NotFound)?;
+        // The input file follows object visibility: a file the key may not
+        // see is the same 404 as a missing one.
         let input = files
-            .get(id, Some(principal.workspace_id))
+            .get_visible(
+                id,
+                principal.workspace_id,
+                crate::visibility::Viewer::of(&principal),
+            )
             .await
             .map_err(|_| InferenceError::Storage)?
             .ok_or(JobError::NotFound)?;
@@ -312,9 +318,15 @@ impl Jobs {
 
     async fn own_batch(&self, principal: &Principal, id: &str) -> JobResult<JobRow> {
         let id = parse_client_id(JobKind::Batch.prefix(), id).ok_or(JobError::NotFound)?;
-        store::job(&self.store, principal.workspace_id, JobKind::Batch, id)
-            .await?
-            .ok_or(JobError::NotFound)
+        store::job(
+            &self.store,
+            principal.workspace_id,
+            JobKind::Batch,
+            id,
+            crate::visibility::Viewer::of(principal),
+        )
+        .await?
+        .ok_or(JobError::NotFound)
     }
 
     /// The batch object (from gateway records; the runner and poller keep
@@ -337,6 +349,19 @@ impl Jobs {
     /// is cancelled upstream (or at once when it was never submitted).
     pub async fn cancel_batch(&self, principal: &Principal, id: &str) -> JobResult<Value> {
         let job = self.own_batch(principal, id).await?;
+        if !crate::visibility::may_modify_job(
+            &self.store.pool,
+            principal.workspace_id,
+            crate::visibility::Viewer::of(principal),
+            job.id,
+        )
+        .await?
+        {
+            return Err(JobError::Forbidden(
+                "batch_not_owned",
+                "Only the creator or a workspace admin can cancel this batch",
+            ));
+        }
         let job = self.cancel(job).await?;
         self.batch_object(&job).await
     }
@@ -402,6 +427,7 @@ impl Jobs {
             after,
             limit,
             false,
+            crate::visibility::Viewer::of(principal),
         )
         .await?;
         let mut out = Vec::with_capacity(rows.len());

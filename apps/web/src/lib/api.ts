@@ -57,7 +57,9 @@ export type PlatformRole = "user" | "auditor" | "admin";
 export type WorkspaceKind = "personal" | "team" | "project";
 export type MembershipSource = "manual" | "group" | "mixed";
 export type WorkspaceCapabilities = { issue_own_key: boolean; manage_members: boolean; manage_service_accounts: boolean; delegate_models: boolean; manage_policy: boolean; view_all_activity: boolean };
-export type Workspace = { id: string; name: string; kind: WorkspaceKind; owner_user_id: string | null; role: Role | null; membership_source: MembershipSource | null; capabilities: WorkspaceCapabilities; cost_center_id?: string | null; /** Named on GET /workspaces/{ws} (not in /me). */ cost_center?: { id: string; name: string; code: string } | null; disabled_at?: string | null; created_at?: string };
+export type Workspace = { id: string; name: string; kind: WorkspaceKind; owner_user_id: string | null; role: Role | null; membership_source: MembershipSource | null; capabilities: WorkspaceCapabilities; cost_center_id?: string | null; /** Named on GET /workspaces/{ws} (not in /me). */ cost_center?: { id: string; name: string; code: string } | null; disabled_at?: string | null; created_at?: string; /** Teams and Projects only, on GET /workspaces/{ws}: who sees files, batches and videos (#141). */ object_visibility?: ObjectVisibility };
+/** `member`: members' keys see only their own files, batches and videos; `workspace`: every member's key sees all of them. */
+export type ObjectVisibility = "member" | "workspace";
 /** The uploaded installation logo, served same-origin (`url` is `/api/v1/branding/logo?v=…`). */
 export type InstallationLogo = { url: string; updated_at: string };
 /** Public sign-in configuration (no session). `installation_name` is sent only with a logo (its alt text). */

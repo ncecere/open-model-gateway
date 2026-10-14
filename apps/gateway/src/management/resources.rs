@@ -313,6 +313,8 @@ pub(crate) async fn audit(
                     | "rotation"
                     | "budget_period"
                     | "previous_budget_period"
+                    | "object_visibility"
+                    | "previous_object_visibility"
             ) && (v.is_boolean()
                 || v.is_number()
                 || v.as_str().is_some_and(|s| {

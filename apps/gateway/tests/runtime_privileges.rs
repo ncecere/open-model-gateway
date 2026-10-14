@@ -433,6 +433,7 @@ async fn files_api_runs_as_runtime(pool: &PgPool) {
         upload::{Uploader, receive},
         usage::record_hours,
     };
+    use open_model_gateway::visibility::Viewer;
     let (ws, user, key) = (
         uuid::Uuid::new_v4(),
         uuid::Uuid::new_v4(),
@@ -501,17 +502,41 @@ async fn files_api_runs_as_runtime(pool: &PgPool) {
         )
         .await;
     assert_eq!(out.unwrap_err(), FileError::QuotaExceeded);
-    let (page, more) = files
-        .list(
-            ws,
-            &FileList {
-                limit: 10,
-                ..FileList::default()
-            },
-        )
+    let list = |viewer| FileList {
+        viewer,
+        purpose: None,
+        after: None,
+        limit: 10,
+        ascending: false,
+        search: None,
+    };
+    let (page, more) = files.list(ws, &list(Viewer::User(user))).await.unwrap();
+    assert_eq!((page.len(), more), (1, false));
+    // Object visibility (0038): per user by default; owners/admins switch it.
+    let stranger = Viewer::User(uuid::Uuid::new_v4());
+    assert!(files.list(ws, &list(stranger)).await.unwrap().0.is_empty());
+    assert!(
+        files
+            .get_visible(stored.id, ws, stranger)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    sqlx::query("UPDATE workspaces SET object_visibility='workspace' WHERE id=$1")
+        .bind(ws)
+        .execute(&runtime)
         .await
         .unwrap();
-    assert_eq!((page.len(), more), (1, false));
+    assert_eq!(files.list(ws, &list(stranger)).await.unwrap().0.len(), 1);
+    assert_eq!(
+        files
+            .list(ws, &list(Viewer::Service))
+            .await
+            .unwrap()
+            .0
+            .len(),
+        1
+    );
     // Hourly usage: backdate the progress mark and the file (as owner), record as runtime.
     sqlx::query("ALTER TABLE storage_usage_progress DISABLE TRIGGER storage_usage_progress_guard")
         .execute(pool)
