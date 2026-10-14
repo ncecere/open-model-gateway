@@ -234,7 +234,12 @@ async fn object_visibility_follows_rename_authorization_and_is_audited(pool: PgP
         w["object_visibility"], "member",
         "new and existing shared workspaces are per-user"
     );
-    for actor in [&f.member, &f.auditor, &f.admin, &f.owner] {
+    for (label, actor) in [
+        ("member", &f.member),
+        ("auditor", &f.auditor),
+        ("platform admin", &f.admin),
+        ("owner", &f.owner),
+    ] {
         let rename = call(&f.s, actor, "PATCH", &team, json!({"name":"Team"}))
             .await
             .0;
@@ -247,11 +252,7 @@ async fn object_visibility_follows_rename_authorization_and_is_audited(pool: PgP
         )
         .await
         .0;
-        assert_eq!(
-            set, rename,
-            "visibility follows rename for {}",
-            actor.user_id
-        );
+        assert_eq!(set, rename, "visibility follows rename for the {label}");
     }
     let (_, w) = call(&f.s, &f.owner, "GET", &team, json!({})).await;
     assert_eq!(w["object_visibility"], "workspace");
