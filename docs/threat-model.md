@@ -2,7 +2,7 @@
 
 This is a STRIDE-style threat model of Open Model Gateway for code reviews and the independent security review (#61). It records what the code does today, with the tests that cover it, and where it falls short. It is not a certification or a penetration test.
 
-Every mitigation names the file and function that implement it. Every test is named by file and function and was found with `grep` on `main` at commit `3d66d3a`. "No test found" means a search found none, not that the behaviour is wrong. Paths are relative to `apps/gateway/src/` unless they start with `apps/`, `deploy/`, `tests/`, `scripts/` or `.github/`.
+Every mitigation names the file and function that implement it. Every test is named by file and function and was found with `grep` on `main` at commit `527892f` (the v0.5.0 release merge). "No test found" means a search found none, not that the behaviour is wrong. Paths are relative to `apps/gateway/src/` unless they start with `apps/`, `deploy/`, `tests/`, `scripts/` or `.github/`; those start at the repository root. The gateway's integration tests are under `apps/gateway/tests/`; `tests/` holds the browser, container, Helm, demo and backup tests.
 
 The invariants in [AGENTS.md](../AGENTS.md) are the security properties this model protects. [Architecture](architecture.md) describes the boundaries.
 
@@ -91,33 +91,33 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 
 **TEN-1. An inference key acts outside its workspace.** I, E · Asset: other workspaces' models, files, jobs and usage · Attacker: inference key holder.
 - Mitigation: the workspace comes only from the `Principal` built by `auth.rs` `authenticate_live`, never from headers or bodies. Admission selects the deployment with `workspace_model_allowed($1,m.id)` and the key-restriction subqueries (`governance::admit_unobserved`). Files, batches and videos are filtered by `principal.workspace_id` (`protocols/files.rs` `list`, `retrieve`, `content`, `delete`; `jobs/store.rs` `list`). History tables check scoped parents with insert triggers (migration 0034).
-- Tests: `tests/database.rs` `http_enforces_workspace_scope_and_unregistered_protocol_errors`; `tests/inference.rs` `deployment_resolution_cannot_cross_workspaces`; `filestore/api_tests.rs` `files_are_scoped_to_the_key_workspace`; `jobs/db_tests.rs` `jobs_are_private_to_their_workspace`; `jobs/batch_tests.rs` `batches_are_private_to_their_workspace`; `history/tests.rs` `history_inserts_check_scoped_parents`.
+- Tests: `apps/gateway/tests/database.rs` `http_enforces_workspace_scope_and_unregistered_protocol_errors`; `apps/gateway/tests/inference.rs` `deployment_resolution_cannot_cross_workspaces`; `filestore/api_tests.rs` `files_are_scoped_to_the_key_workspace`; `jobs/db_tests.rs` `jobs_are_private_to_their_workspace`; `jobs/batch_tests.rs` `batches_are_private_to_their_workspace`; `history/tests.rs` `history_inserts_check_scoped_parents`.
 - Residual: isolation is in application queries, not PostgreSQL row-level security. A new query without the workspace predicate leaks.
 - Follow-up: Review: #61 (including the RLS assessment listed in the roadmap).
 
 **TEN-2. Platform staff read a personal workspace's keys or request details.** I · Asset: personal privacy · Attacker: Platform Auditor, Platform Admin.
 - Mitigation: `management/resources.rs` `access_inner` denies a personal workspace to anyone but its owner, whatever the platform role. Platform reports aggregate personal usage into totals. The key-safety platform view returns personal keys as counts only.
-- Tests: `management/tests.rs` `personal_details_are_owner_only_even_platform_admin_and_auditor`; `tests/enterprise_privacy.rs` `platform_admin_and_auditor_get_personal_totals_without_private_keys_or_details`; `management/logs_tests.rs` `platform_logs_show_shared_workspaces_only_never_personal`; `management/snapshot_tests.rs` `snapshot_reads_keep_personal_activity_owner_private`; `management/key_safety_tests.rs` `key_safety_members_see_own_keys_and_personal_keys_stay_private`.
+- Tests: `management/tests.rs` `personal_details_are_owner_only_even_platform_admin_and_auditor`; `apps/gateway/tests/enterprise_privacy.rs` `platform_admin_and_auditor_get_personal_totals_without_private_keys_or_details`; `management/logs_tests.rs` `platform_logs_show_shared_workspaces_only_never_personal`; `management/snapshot_tests.rs` `snapshot_reads_keep_personal_activity_owner_private`; `management/key_safety_tests.rs` `key_safety_members_see_own_keys_and_personal_keys_stay_private`.
 - Residual: anyone with database access sees everything. Totals by workspace still show how much a person uses, by design.
 - Follow-up: #31 and #74 (owner-private subject export).
 
 **TEN-3. A personal workspace is shared.** E · Asset: personal privacy · Attacker: workspace member, Platform Admin.
 - Mitigation: migration 0001 triggers `service_account_shared`, `invitation_shared` and `group_mapping_shared` (`require_shared_workspace()`); `auth.rs` `revalidate_admission_with` accepts a human key on a personal workspace only for its owner.
-- Tests: `tests/database.rs` `personal_workspace_cannot_be_shared_by_issuing_another_users_key`; `auth/enterprise_tests.rs` `workspace_foreign_keys_and_personal_privacy_are_enforced`.
+- Tests: `apps/gateway/tests/database.rs` `personal_workspace_cannot_be_shared_by_issuing_another_users_key`; `auth/enterprise_tests.rs` `workspace_foreign_keys_and_personal_privacy_are_enforced`.
 - Residual: none found beyond TEN-1.
 - Follow-up: none.
 
 **TEN-4. A shared-workspace member sees other members' activity in the dashboard.** I · Asset: request metadata · Attacker: workspace member.
 - Mitigation: `WorkspaceAccess.view_all_activity` is true only for owners and admins (`access_inner`); executions, usage and audit queries filter `($2 OR k.issued_to_user_id=$3)` before pagination (`management/mod.rs` `executions`, `usage`, `workspace_audit`).
-- Tests: `management/tests.rs` `shared_request_details_usage_and_audit_are_actor_filtered_before_pagination`; `tests/enterprise_privacy.rs` `shared_members_activity_predicate_precedes_totals_and_dimension_discovery`; `tests/browser/journey.spec.ts` "team admin sees the member's request workspace-wide; the member cannot see Admin logs".
+- Tests: `management/tests.rs` `shared_request_details_usage_and_audit_are_actor_filtered_before_pagination`; `apps/gateway/tests/enterprise_privacy.rs` `shared_members_activity_predicate_precedes_totals_and_dimension_discovery`; `tests/browser/journey.spec.ts` "team admin sees the member's request workspace-wide; the member cannot see Admin logs".
 - Residual: see TEN-5 for the key API.
 - Follow-up: none.
 
-**TEN-5. A member's inference key reads other members' files, batch results and jobs.** I, T · Asset: uploaded files, batch outputs (model responses), job metadata · Attacker: workspace member, or anyone holding a member's or service account's key.
-- Mitigation: none beyond workspace scope. `/v1/files` list, retrieve, content and delete, and `/v1/batches` list, retrieve and cancel, filter by `principal.workspace_id` only (`protocols/files.rs`; `jobs/batch.rs` `list_batches`; `jobs/store.rs` `list`). [Files API](files-api.md) says every key of the workspace can list, read and delete a file. The dashboard is stricter: members see only files and batches they created (`management/files.rs`; [batches](batches.md)).
-- Tests: `management/files_tests.rs` `files_follow_workspace_visibility` (dashboard only); no test found that limits the key API to the key's own files.
-- Residual: in a shared workspace, one member's key can download, delete or cancel another member's files and batches. This conflicts with "shared-workspace members see their own activity".
-- Follow-up: new issue needed: limit `/v1/files`, `/v1/batches` and `/v1/videos` for human member keys to their own objects, as the dashboard does, or record the decision.
+**TEN-5. A member's inference key acts on other members' files, batches and videos.** I, T · Asset: uploaded files, batch outputs (model responses), video jobs · Attacker: workspace member, or anyone holding a member's or service account's key.
+- Mitigation: workspace scope only, by documented design. `/v1/files` (list, retrieve, content, delete), `/v1/batches` (list, retrieve, cancel) and `/v1/videos` filter by `principal.workspace_id` only (`protocols/files.rs`; `jobs/batch.rs` `list_batches`; `jobs/store.rs` `list`). [Files API](files-api.md) says every key of the workspace can list, read and delete a file; [async jobs](async-jobs.md) scopes every lookup to the calling key's workspace.
+- Tests: `management/files_tests.rs` `files_follow_workspace_visibility` (dashboard only); no test found that limits the key API to the key's own objects.
+- Residual: this is not a coding slip but a design that conflicts with the rest of the product. The dashboard shows members only the files and batches they created and lets only admins or the creator cancel a batch (`management/files.rs`; [batches](batches.md)), and AGENTS.md says "shared-workspace members see their own activity". Through the key API, one member's key can download, delete or cancel another member's files, batches and videos. Which rule holds needs a product decision.
+- Follow-up: #141 (decide, then align the key API, the dashboard and the docs).
 
 **TEN-6. Platform authority substitutes for membership.** E · Asset: shared-workspace keys and spend · Attacker: Platform Admin, Platform Auditor.
 - Mitigation: `auth.rs` `revalidate_with` requires an actual `workspace_membership_grants` row for human keys ("Global administrative authority is deliberately NOT shared-workspace membership"). `access_inner` gives platform readers metadata access to shared workspaces only; `detail_access` still needs membership.
@@ -126,7 +126,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 - Follow-up: none.
 
 **TEN-7. A workspace admin loosens a limit.** E, T · Asset: budgets, rates, storage quota · Attacker: workspace admin.
-- Mitigation: local policies are tighten-only and compose with type defaults and platform overrides; personal limits are platform-controlled (`management/governance/policies.rs`; `personal_limits()` in `management/mod.rs`). Budget rows are replaced by DELETE and INSERT; the runtime role has no UPDATE on them (`runtime-grants.sql`). Changing limits never resets consumption.
+- Mitigation: local policies are tighten-only and compose with type defaults and platform overrides; personal limits are platform-controlled (`management/governance/policies.rs`; `personal_limits()` in `management/mod.rs`). Budget rows are replaced by DELETE and INSERT; the runtime role has no UPDATE on them (`deploy/staging/runtime-grants.sql`). Changing limits never resets consumption.
 - Tests: `governance/tests.rs` `override_header_replaces_live_type_default_and_local_tightens`; `management/governance/tests.rs` `delegated_admin_tighten_requires_live_membership_and_masked_caps_persist`; `governance/period_tests.rs` `changing_a_period_never_resets_or_rewrites_consumption`; `management/files_tests.rs` `storage_limit_stacks_and_is_tighten_only`; `management/project_tests.rs` `personal_workspace_name_is_fixed_and_local_limits_are_platform_controlled`.
 - Residual: none found.
 - Follow-up: none.
@@ -141,25 +141,25 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 
 **KEY-2. A key is guessed or forged.** S · Asset: inference keys · Attacker: unauthenticated internet client.
 - Mitigation: `auth.rs` `NewApiKey::generate` uses 256 bits from the OS CSPRNG and fails closed if it is unavailable. `token_id` rejects anything but the exact format before the database. `authenticate_live` compares SHA-256 digests in constant time (`subtle::ConstantTimeEq`). `http.rs` `credential` rejects duplicate or mixed credential headers.
-- Tests: `auth.rs` `keys_have_expected_format_and_independent_random_secrets`, `malformed_tokens_are_rejected_before_database_access`; `http.rs` `header_schemes_are_strict_and_ambiguous_credentials_are_rejected`, `all_inference_routes_require_authentication`; `tests/database.rs` `key_revocation_expiration_and_wrong_secret_deny_access`.
+- Tests: `auth.rs` `keys_have_expected_format_and_independent_random_secrets`, `malformed_tokens_are_rejected_before_database_access`; `http.rs` `header_schemes_are_strict_and_ambiguous_credentials_are_rejected`, `all_inference_routes_require_authentication`; `apps/gateway/tests/database.rs` `key_revocation_expiration_and_wrong_secret_deny_access`.
 - Residual: every well-formed but unknown token costs one database query; the key cache stores only positive results, and there is no per-client rate limit. SECURITY.md treats volumetric DoS as out of scope.
 - Follow-up: Review: #61.
 
 **KEY-3. A revoked, expired or disabled key works again.** E · Asset: inference keys · Attacker: inference key holder; compromised DB credential.
 - Mitigation: `authenticate_live` and `revalidate_admission_with` require `revoked_at IS NULL`, `disabled_at IS NULL` and an unexpired key, plus live user, role and membership or service account. Revocation takes the lineage authority lock exclusively (trigger `omg_authority_api_keys`, migration 0027), so no admission commits after it. Reactivating a user, membership or service account never clears `revoked_at` (`lifecycle.rs`, `scim.rs` `reactivate`).
 - Tests: `governance/locks_tests.rs` `revoked_key_is_never_admitted_after_revocation_commits`; `lifecycle/tests.rs` `shared_group_membership_loss_retires_keys_without_restoring_them_on_return`, `loss_reactivation_cleanup_preserves_history_and_service_credentials`; `scim/tests.rs` `deactivation_suspends_and_reactivation_never_restores_keys`; `management/keys/tests.rs` `service_account_disable_reenable_cannot_resurrect_credentials_and_is_shared_only`.
-- Residual: "revoked keys never reactivate" is enforced by the application only. The runtime role has `UPDATE(revoked_at)` on `api_keys` and the grant tables, and no trigger refuses setting it back to NULL. Work admitted before a revocation runs to completion.
-- Follow-up: new issue needed: a database trigger that refuses clearing `revoked_at` on keys, sessions and grants.
+- Residual: "revoked keys never reactivate" is enforced by the application only. The runtime role has `UPDATE(revoked_at)` on `api_keys` and the grant tables, and no trigger refuses setting it back to NULL. Such a trigger would guard against application bugs, not a stolen runtime credential: the runtime role can also INSERT keys and grants (`deploy/staging/runtime-grants.sql`), so it can mint new ones instead of un-revoking old ones (OPS-2). Work admitted before a revocation runs to completion.
+- Follow-up: #145 (database trigger refusing to clear `revoked_at` on keys, sessions and grants).
 
 **KEY-4. A plaintext key leaks from storage or logs.** I · Asset: inference keys · Attacker: compromised DB credential, operator with log access.
-- Mitigation: only the hash is stored. `NewApiKey` has no `Debug` or `Serialize`. `http.rs` `request_context` logs a generated request ID, method, status and timing, never headers, paths with queries or bodies, and sets `Cache-Control: no-store` on every response.
-- Tests: `tests/database.rs` `bootstrap_is_idempotent_and_stores_only_hashes`; `http.rs` `requests_are_counted_by_route_template_not_raw_path`, `liveness_does_not_need_database_and_overrides_request_id`.
+- Mitigation: only the hash is stored. `NewApiKey` has no `Debug` or `Serialize`. `http.rs` `request_context` logs a generated request ID, method, status and timing, never headers, paths with queries or bodies, and sets `Cache-Control: no-store` on every response except those marked `PublicCache` (the logo, `management/branding.rs`).
+- Tests: `apps/gateway/tests/database.rs` `bootstrap_is_idempotent_and_stores_only_hashes`; `http.rs` `requests_are_counted_by_route_template_not_raw_path`, `liveness_does_not_need_database_and_overrides_request_id`.
 - Residual: browser realtime clients send the key in `Sec-WebSocket-Protocol: openai-insecure-api-key.<key>` (`protocols/realtime.rs` `credential`), a header that proxies and ingress controllers may log. `bootstrap-dev` prints keys, in development only.
 - Follow-up: Review: #61.
 
 **KEY-5. A human key outlives its holder's access, or a service key dies with its creator.** E, D · Asset: shared-workspace keys · Attacker: departed workspace member.
 - Mitigation: human keys need live entitlement and actual membership (`revalidate_with`). Service-account keys need an active service account in an active Team or Project, independent of the creator (`revalidate_with`, the `None` branch). Removing a member revokes their keys in that workspace (`management/members.rs`).
-- Tests: `tests/database.rs` `service_keys_survive_human_entitlement_loss_but_not_account_or_workspace_disable`, `membership_and_account_changes_take_effect_without_cache`; `governance/tests.rs` `service_account_requires_live_account_and_workspace_grant`; `management/members/tests.rs` `manual_membership_changes_preserve_group_sources_last_owner_and_revoke_departed_human_keys`.
+- Tests: `apps/gateway/tests/database.rs` `service_keys_survive_human_entitlement_loss_but_not_account_or_workspace_disable`, `membership_and_account_changes_take_effect_without_cache`; `governance/tests.rs` `service_account_requires_live_account_and_workspace_grant`; `management/members/tests.rs` `manual_membership_changes_preserve_group_sources_last_owner_and_revoke_departed_human_keys`.
 - Residual: the maximum key lifetime applies to human keys only; service-account keys may never expire. The key-safety audit flags them (`no_expiry`) but nothing enforces a limit.
 - Follow-up: none (by design; [key safety](key-safety.md)).
 
@@ -216,8 +216,8 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 **OIDC-5. JWKS rotation, outage or key-ID flooding.** D, S · Asset: sign-in availability · Attacker: unauthenticated internet client; IdP outage.
 - Mitigation: `identity/jwks.rs` clamps the cache TTL to 5 minutes–24 hours, refetches unknown `kid`s at most once a minute with single-flight, and keeps the last good keys for 6 hours during an outage, then fails closed. Empty key sets are failures.
 - Tests: `identity/tests.rs` `jwks_rotation_refetch_is_rate_limited_single_flight_and_survives_outages`; `identity/jwks.rs` `cache_control_is_parsed_and_bounded`, `expiry_unknown_kid_rate_limit_and_grace`, `empty_key_sets_are_failures_not_replacements`, `concurrent_refreshes_are_single_flight`.
-- Residual: the OIDC HTTP client (`IdentityState::build`) disables redirects and checks HTTPS on every request (`OidcHttp::send`), but unlike the provider clients it does not call `.no_proxy()` or `.retry(never())`, so it honours `HTTP(S)_PROXY` and the client's default retry behaviour.
-- Follow-up: new issue needed: disable ambient proxies and implicit retries on the OIDC client.
+- Residual: the OIDC HTTP client (`IdentityState::build`) disables redirects and checks HTTPS on every request (`OidcHttp::send`), but unlike the provider clients it honours ambient `HTTP(S)_PROXY`/`ALL_PROXY` (no `.no_proxy()` in `identity.rs`). It also lacks `.retry(never())`, but reqwest's default retry (HTTP/2 protocol NACKs only) can't fire without its `http2` feature, which the gateway does not enable (`apps/gateway/Cargo.toml`).
+- Follow-up: #144 (OIDC ambient proxy).
 
 **OIDC-6. Login and callback abuse.** D · Asset: database, sign-in availability · Attacker: unauthenticated internet client.
 - Mitigation: none in code. Each `GET /api/v1/auth/login` inserts one `oidc_login_attempts` row. The only `DELETE` is `consume_attempt` for a matching attempt, so expired attempts are never removed. There is no rate limit on login or callback. [Identity](identity.md) asks operators to rate-limit at the edge.
@@ -255,7 +255,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 
 **ADM-1. Concurrent requests overspend a budget or rate limit.** T, E · Asset: budgets · Attacker: inference key holder.
 - Mitigation: `admit_unobserved` holds the scope's totals and counter rows (`lock_rows`) before `enforce_limits` reads them, and writes the hold in the same transaction. Different workspaces admit in parallel; one workspace serializes on its rows.
-- Tests: `governance/locks_tests.rs` `same_workspace_budget_never_overspent_under_concurrent_admission`, `deadlock_freedom_fuzz`; `governance/tests.rs` `each_limiter_independently_serializes_races`; `governance/totals_tests.rs` `concurrent_writers_keep_totals_exact`; `tests/inference.rs` `concurrent_budget_holds_are_atomic_and_price_is_pinned_before_dispatch`, `independent_engines_share_database_request_limits`.
+- Tests: `governance/locks_tests.rs` `same_workspace_budget_never_overspent_under_concurrent_admission`, `deadlock_freedom_fuzz`; `governance/tests.rs` `each_limiter_independently_serializes_races`; `governance/totals_tests.rs` `concurrent_writers_keep_totals_exact`; `apps/gateway/tests/inference.rs` `concurrent_budget_holds_are_atomic_and_price_is_pinned_before_dispatch`, `independent_engines_share_database_request_limits`.
 - Residual: none found in tests. Multi-replica load testing is still open.
 - Follow-up: none.
 
@@ -267,13 +267,13 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 
 **ADM-3. Unknown cost is treated as zero.** T, R · Asset: budget integrity · Attacker: inference key holder; malicious upstream.
 - Mitigation: missing usage settles `unknown` and keeps the hold (`finish_unobserved`); an unresolved scope denies budgeted admission (`enforce_limits`, `UnresolvedUsage`). Enabling a budget over unpriced history is blocked rather than erased.
-- Tests: `governance/tests.rs` `missing_usage_nonshrinking_floor_manual_resolution_and_evidence`, `unpriced_unknown_history_blocks_later_budget_and_token_caps`, `unknown_cache_bounds_block_every_budget_no_budget_flag_persists`; `governance/totals_tests.rs` `unknown_cost_keeps_its_hold_and_blocks_like_the_scan`; `tests/inference.rs` `enabling_budget_after_unpriced_activity_does_not_invent_zero_cost`, `dropping_http_stream_cancels_transport_and_retains_unknown_hold`.
+- Tests: `governance/tests.rs` `missing_usage_nonshrinking_floor_manual_resolution_and_evidence`, `unpriced_unknown_history_blocks_later_budget_and_token_caps`, `unknown_cache_bounds_block_every_budget_no_budget_flag_persists`; `governance/totals_tests.rs` `unknown_cost_keeps_its_hold_and_blocks_like_the_scan`; `apps/gateway/tests/inference.rs` `enabling_budget_after_unpriced_activity_does_not_invent_zero_cost`, `dropping_http_stream_cancels_transport_and_retains_unknown_hold`.
 - Residual: a workspace with no budget has no spending cap, and unpriced deployments run with unknown cost. Installation-wide spend is only a non-blocking alert.
 - Follow-up: none (by design).
 
 **ADM-4. One attempt is charged twice, or settled twice.** T · Asset: ledger · Attacker: malicious upstream; replica crash.
 - Mitigation: one execution, reservation and hold per upstream attempt (one statement in `admit_unobserved`). `finish_unobserved` updates only a `started` execution and returns `Replay` or `Conflict` for a second finish. `reconcile_batch` claims with `FOR UPDATE SKIP LOCKED`.
-- Tests: `governance/tests.rs` `pinned_price_full_finish_idempotency_and_immutable_history`; `governance/locks_tests.rs` `settlement_and_reconciliation_race_exactly_once`; `leases/tests.rs` `skip_locked_reconciliation_is_shared_without_duplicates`; `governance/rates_tests.rs` `batched_expiry_reconciliation_is_exact_and_concurrent_safe`; `tests/inference.rs` `embedding_failover_records_distinct_attempts_reservations_and_pinned_prices`.
+- Tests: `governance/tests.rs` `pinned_price_full_finish_idempotency_and_immutable_history`; `governance/locks_tests.rs` `settlement_and_reconciliation_race_exactly_once`; `leases/tests.rs` `skip_locked_reconciliation_is_shared_without_duplicates`; `governance/rates_tests.rs` `batched_expiry_reconciliation_is_exact_and_concurrent_safe`; `apps/gateway/tests/inference.rs` `embedding_failover_records_distinct_attempts_reservations_and_pinned_prices`.
 - Residual: none found.
 - Follow-up: none.
 
@@ -291,7 +291,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 
 **ADM-7. Prices, ledger or audit history are changed.** T, R · Asset: financial and audit history · Attacker: Platform Admin, compromised DB credential.
 - Mitigation: migration 0001 triggers (`immutable_history()`) refuse UPDATE, DELETE and TRUNCATE on `deployment_prices`, `monetary_ledger` and `audit_events`. The runtime role has INSERT and SELECT only on them. New prices are new versions; reservations pin their price.
-- Tests: `management/governance/tests.rs` `pricing_append_only_and_authority_rechecked`; `governance/tests.rs` `pinned_price_full_finish_idempotency_and_immutable_history`; `tests/runtime_privileges.rs` `enterprise_runtime_allowlist_and_rollback_probes`; `history/tests.rs` `history_parents_are_never_removed_or_rekeyed`.
+- Tests: `management/governance/tests.rs` `pricing_append_only_and_authority_rechecked`; `governance/tests.rs` `pinned_price_full_finish_idempotency_and_immutable_history`; `apps/gateway/tests/runtime_privileges.rs` `enterprise_runtime_allowlist_and_rollback_probes`; `history/tests.rs` `history_parents_are_never_removed_or_rekeyed`.
 - Residual: the schema owner can disable triggers or detach partitions. A compromised runtime credential can still insert false ledger or audit rows and rewrite the mutable columns of `governance_reservations`. There is no off-host, tamper-evident copy of the audit log.
 - Follow-up: #30, #106, #107, #108 (SIEM audit export).
 
@@ -303,7 +303,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 
 **ADM-9. Client-supplied fields select tenancy or attribution.** S, T · Asset: attribution · Attacker: inference key holder.
 - Mitigation: the workspace, key and user come from the `Principal`. `X-Session-Id` and `X-Title` become bounded log labels only (`inference/client.rs`). The cost center is snapshotted from the workspace at admission.
-- Tests: `tests/inference.rs` `request_telemetry_and_client_labels_are_recorded`; `governance/tests.rs` `cost_center_snapshot_and_compaction_preserve_financial_dimensions`.
+- Tests: `apps/gateway/tests/inference.rs` `request_telemetry_and_client_labels_are_recorded`; `governance/tests.rs` `cost_center_snapshot_and_compaction_preserve_financial_dimensions`.
 - Residual: labels are client-controlled text shown in Logs (rendered as text by React).
 - Follow-up: none.
 
@@ -330,8 +330,8 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 **EGR-4. Redirects, proxies or retries leak credentials or duplicate work.** I, T · Asset: provider credentials, spend · Attacker: malicious upstream.
 - Mitigation: the OpenAI, Anthropic, OpenRouter, local, Bedrock, S3 and OpenRouter-catalog clients set `redirect::Policy::none()`, `.no_proxy()` and `.retry(never())` (`providers/openai.rs` `OpenAiAdapter::new`, `providers/anthropic.rs`, `providers/openrouter.rs`, `providers/local/endpoints.rs`, `providers/bedrock/transport.rs` `client`, `filestore/s3/transport.rs` `client`, `management/governance/suggestion.rs`).
 - Tests: `providers/openai/tests.rs` `redirects_are_not_followed_or_given_credentials`; `providers/local/tests.rs` `redirects_and_eof_do_not_succeed_or_follow_credentials`; `providers/openrouter/tests.rs` `redirects_are_refused_and_never_followed`; `filestore/s3/tests.rs` `one_attempt_no_redirects_and_safe_errors`; `management/governance/suggestion.rs` `fetch_is_capped_unredirected_bounded_and_cached`.
-- Residual: the OIDC client is the exception (OIDC-5).
-- Follow-up: see OIDC-5.
+- Residual: the OIDC client is the exception: it honours ambient `HTTP(S)_PROXY`/`ALL_PROXY` (no `.no_proxy()` in `identity.rs`). It lacks `.retry(never())`, but reqwest's default retry can't fire without its `http2` feature, which is not enabled (`apps/gateway/Cargo.toml`). See OIDC-5.
+- Follow-up: #144.
 
 **EGR-5. Cloud traffic goes over plain HTTP.** I, T · Asset: credentials, prompts · Attacker: network attacker.
 - Mitigation: OpenAI, Anthropic and OpenRouter use constant `https://` base URLs (`const BASE`); OpenRouter also sets `https_only(true)`. Bedrock endpoints and profiles must be in `GATEWAY_BEDROCK_ENDPOINT_ALLOWLIST` and `GATEWAY_AWS_PROFILE_ALLOWLIST`. An explicit S3 endpoint must be allowlisted. Identity URLs must be HTTPS except development loopback (`identity.rs` `validate_url`).
@@ -348,8 +348,8 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 **EGR-7. The SMTP relay is used to exfiltrate a provider credential.** I, E · Asset: provider credentials · Attacker: Platform Admin.
 - Mitigation: SMTP needs STARTTLS or implicit TLS unless the relay is loopback (`email.rs` `send_with`); the password is an `env:` reference checked against `GATEWAY_SECRET_ENV_ALLOWLIST` (`password_ref_allowed`); test sends are audited and rate-limited.
 - Tests: `email.rs` `refuses_plaintext_to_remote_relays_and_bad_input`, `validates_hosts_and_references`; `management/settings/tests.rs` `email_settings_validate_references_and_transport_security`, `test_email_reaches_the_admin_is_audited_and_rate_limited`.
-- Residual: the SMTP host and port are chosen by the Platform Admin (`management/settings.rs`), and the password allowlist is the provider allowlist (`email.rs` `allowlist`). An admin can set the password reference to a provider key's variable and the host to a server they control; the next test email sends that key in SMTP AUTH. This breaks "provider credentials are references".
-- Follow-up: new issue needed: give the SMTP password its own allowlist (or an operator-pinned relay) so it cannot reference provider credentials; #33 for network-level egress.
+- Residual: the SMTP host and port are chosen by the Platform Admin (`management/settings.rs`), and the password allowlist is the one provider connections use (`email.rs` `allowlist`; `management/resources.rs` `credential_valid`). An admin can set the password reference to a provider key's variable and the host to a server they control; the next test email sends that key in SMTP AUTH. This breaks "provider credentials are references". Network egress does not stop it: the default Helm egress rule allows TCP 443 to any destination (EGR-8), and implicit TLS on port 443 is an accepted SMTP setting.
+- Follow-up: #140 (SMTP credential reference); #33 for network-level egress.
 
 **EGR-8. Egress is not enforced by the network.** I, E · Asset: internal network, data exfiltration · Attacker: compromised replica; any SSRF.
 - Mitigation: application allowlists only (EGR-3 to EGR-5). The Helm chart's NetworkPolicy default-denies ingress and egress, but `networkPolicy.egress.allowHttpsEgress: true` allows TCP 443 to any destination, and an external database leaves 5432 and 6432 open to any destination (`deploy/helm/open-model-gateway/templates/networkpolicy.yaml`). Staging Compose has no egress control.
@@ -359,15 +359,15 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 
 **EGR-9. A malicious upstream attacks the gateway or its clients.** D, T, I · Asset: gateway availability, clients, Logs · Attacker: malicious upstream provider.
 - Mitigation: adapters bound complete bodies and frames (4 MiB native output bound), do not read or forward error bodies, sanitize statuses, never fabricate a successful stream end, and cancel upstream work when the client drops.
-- Tests: `providers/openrouter/tests.rs` `oversize_bodies_are_rejected`, `error_statuses_are_sanitized_and_bodies_never_read`; `providers/local/native_tests.rs` `native_body_limits_and_malformed_transport_do_not_retry`; `providers/openai/images/tests.rs` `statuses_are_sanitized_and_bodies_never_forwarded`; `tests/inference.rs` `malformed_stream_yields_safe_error_without_success_marker`; `providers/bedrock/tests.rs` `dropping_stream_cancels_upstream_body`.
+- Tests: `providers/openrouter/tests.rs` `oversize_bodies_are_rejected`, `error_statuses_are_sanitized_and_bodies_never_read`; `providers/local/native_tests.rs` `native_body_limits_and_malformed_transport_do_not_retry`; `providers/openai/images/tests.rs` `statuses_are_sanitized_and_bodies_never_forwarded`; `apps/gateway/tests/inference.rs` `malformed_stream_yields_safe_error_without_success_marker`; `providers/bedrock/tests.rs` `dropping_stream_cancels_upstream_body`.
 - Residual: model output reaches the client unchanged (prompt injection is out of scope). Reported usage is trusted within bounds (ADM-6).
 - Follow-up: #36 (guardrails design).
 
 **EGR-10. Secrets live in environment variables.** I · Asset: all secrets · Attacker: compromised replica, operator.
 - Mitigation: file secrets are imported with strict checks (`startup.rs` `import_secret_files`); `Secret` has no `Debug`, `Serialize` or `Clone`.
-- Tests: `startup.rs` `rejects_invalid_file_secrets_without_disclosure`, `debug_output_is_redacted`, `follows_symlinks_like_kubernetes_secret_volumes`; `tests/startup.rs` `refuses_ambiguous_secrets_before_configuration_without_disclosure`.
+- Tests: `startup.rs` `rejects_invalid_file_secrets_without_disclosure`, `debug_output_is_redacted`, `follows_symlinks_like_kubernetes_secret_volumes`; `apps/gateway/tests/startup.rs` `refuses_ambiguous_secrets_before_configuration_without_disclosure`.
 - Residual: every replica holds every provider credential and the file-store master keys in memory. There is no secret manager (OpenBao or Vault, roadmap R17), and rotation needs a restart.
-- Follow-up: new issue needed: OpenBao/Vault secret references with refresh (roadmap R17).
+- Follow-up: deferred (roadmap R17), no issue: OpenBao/Vault secret references with refresh.
 
 ### File store encryption and keys
 
@@ -482,14 +482,14 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 **WEB-2. Cross-site scripting.** T, I, E · Asset: session, one-time secrets · Attacker: workspace member or Platform Admin storing a malicious name; malicious upstream (served model name).
 - Mitigation: React escapes text; no `dangerouslySetInnerHTML` in `apps/web/src` outside tests (grep). Support URLs must be HTTPS (`management/settings.rs` `https_url`). CSV exports neutralize formulas. The API client refuses HTML fallbacks as data.
 - Tests: `management/settings/tests.rs` `general_settings_validate_audit_and_bound_human_keys` (refuses a `javascript:` URL); `management/governance/tests.rs` `monthly_member_scope_unknown_is_not_zero_and_csv_formula_safe`; `apps/web/src/lib/api.test.ts` "does not expose proxy HTML errors as trusted markup or detailed errors".
-- Residual: the Rust server sends no `Content-Security-Policy` for the SPA or the API (only the logo has one), so an XSS bug would have no second line of defense. The staging Caddyfile adds `nosniff` and HSTS but no CSP.
-- Follow-up: new issue needed: send CSP, `frame-ancestors`, `X-Content-Type-Options` and `Referrer-Policy` from Rust for the SPA and API.
+- Residual: the Rust server sends no `Content-Security-Policy` for the SPA or the API (only the logo has one), so an XSS bug would have no second line of defense. Rust already sends `Referrer-Policy: no-referrer` on management and auth responses (`identity.rs` `private`), but the SPA and `/v1` responses carry none. The staging Caddyfile adds `nosniff` and HSTS but no CSP.
+- Follow-up: #142 (CSP and anti-framing headers for the SPA and API).
 
 **WEB-3. Clickjacking.** T · Asset: dashboard actions · Attacker: same-site page framing the dashboard.
 - Mitigation: none in code (no `X-Frame-Options` or `frame-ancestors`). `SameSite=Lax` keeps the session cookie out of cross-site frames, so a cross-site frame shows a signed-out dashboard.
 - Tests: no test found.
 - Residual: a page on the same site (another subdomain of the same registrable domain) can frame a signed-in dashboard.
-- Follow-up: same new issue as WEB-2.
+- Follow-up: #142.
 
 **WEB-4. The SPA calls a different origin or swallows API routes.** S, I · Asset: sessions, error handling · Attacker: misconfiguration, network attacker.
 - Mitigation: `api.ts` uses relative paths with `credentials: "same-origin"`, `cache: "no-store"` and `redirect: "error"`. No `VITE_*` variables are used. `web.rs` `WebAssets::serve` never returns HTML for `/api`, `/v1`, `/health` or `/scim` (including encoded prefixes), dot-segments or missing assets.
@@ -500,7 +500,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 **WEB-5. A one-time key leaks from the browser.** I · Asset: inference keys · Attacker: later user of the same browser, browser extensions.
 - Mitigation: the key is returned once with `no-store` (`http.rs` `request_context`), kept in component state (`apps/web/src/pages/keys.tsx`), not the query cache or storage, and cleared on close, unmount, navigation and protected 401.
 - Tests: `apps/web/src/lib/api.test.ts` "returns one-time secrets directly without wrapping them in a cache"; `apps/web/src/components/key-copy-lifetime.test.tsx` "copies the currently displayed secret without putting it in caches or storage"; `apps/web/src/components/session-lifecycle.test.tsx` "clears private cached rows, dialogs and transient tokens on protected 401"; `tests/browser/key-safety.spec.ts` "accepted SPA navigation retires submit and disclosure".
-- Residual: the clipboard and browser extensions are outside the gateway's control. Invitation codes are also returned once ([management API](management-api.md)); their browser handling was not reviewed here.
+- Residual: the clipboard and browser extensions are outside the gateway's control. Invitation codes are also returned once ([management API](management-api.md)); invitation-code handling, including in the browser, has not been reviewed here.
 - Follow-up: none.
 
 ### Supply chain
@@ -512,10 +512,10 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 - Follow-up: Review: #61.
 
 **SUP-2. A CI action is replaced.** T · Asset: CI, release artifacts · Attacker: compromised action repository.
-- Mitigation: `image.yml` and `branch-images.yml` pin actions by commit SHA; `ci.yml` runs with `contents: read` and no `pull_request_target`.
+- Mitigation: `image.yml` and `branch-images.yml` pin actions by commit SHA; in `ci.yml` the image (which calls `image.yml`), cargo-deny, helm and npm-audit jobs are SHA-pinned. `ci.yml` defaults to `contents: read` (only the image job, which releases `v*` tags, gets `contents: write` and `packages: write`) and has no `pull_request_target`.
 - Tests: no test found.
-- Residual: `ci.yml` uses 16 tag-pinned actions (`actions/checkout@v7`, `actions/setup-node@v7`, `actions/upload-artifact@v7`, `dtolnay/rust-toolchain@stable`, `Swatinem/rust-cache@v2`, `docker/build-push-action@v7`, `docker/setup-buildx-action@v4`). SECURITY.md says workflow actions are pinned by commit SHA, which is not true for `ci.yml`. The Dockerfile's build stages (`node:22.23.3-bookworm-slim`, `rust:1.99.0-bookworm`) are tag-pinned; only the distroless runtime is digest-pinned.
-- Follow-up: new issue needed: pin `ci.yml` actions and Dockerfile build-stage images by digest, or correct SECURITY.md.
+- Residual: `ci.yml` has 15 tag-pinned `uses:` in the gateway, web, browser and staging-image jobs (`actions/checkout@v7`, `actions/setup-node@v7`, `actions/upload-artifact@v7`, `dtolnay/rust-toolchain@stable`, `Swatinem/rust-cache@v2`, `docker/build-push-action@v7`, `docker/setup-buildx-action@v4`). SECURITY.md says workflow actions are pinned by commit SHA, which is not true for those. Separately, the Dockerfile's build stages (`node:22.23.3-bookworm-slim`, `rust:1.99.0-bookworm`) are pinned by tag; only the distroless runtime is digest-pinned. SECURITY.md does not claim digest pins for them; this is a hardening gap, not a false claim.
+- Follow-up: #143 (Actions SHA pins). Dockerfile build-stage digests: new issue needed (not filed).
 
 **SUP-3. A release image is tampered with.** T · Asset: image · Attacker: registry or build compromise.
 - Mitigation: `image.yml` builds per-architecture images with SBOM and provenance attestations, gates on Trivy (fixable HIGH and CRITICAL), signs the multi-arch index with cosign keyless, and promotes by digest. The runtime is distroless, non-root, without a shell.
@@ -533,19 +533,19 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 
 **OPS-1. A migration runs against the wrong database, or implicitly.** T, D · Asset: existing installations, schema · Attacker: operator error.
 - Mitigation: `migrate` is explicit; a read-only preflight before any DDL refuses legacy, unrelated or changed lineages (`store.rs`). `serve` and readiness require the exact lineage and never migrate.
-- Tests: `store.rs` `legacy_rejection_is_before_ddl_and_unchanged`, `unrelated_public_relations_are_rejected_without_modification`, `complete_legacy_lineage_is_rejected_without_schema_or_checksum_changes`, `upgrades_accept_only_a_recognized_nonempty_successful_prefix`; `tests/database.rs` `readiness_rejects_schema_drift`; `tests/container-image.test.mjs` "serve never migrates; explicit migrate does; serve then becomes healthy read-only".
+- Tests: `store.rs` `legacy_rejection_is_before_ddl_and_unchanged`, `unrelated_public_relations_are_rejected_without_modification`, `complete_legacy_lineage_is_rejected_without_schema_or_checksum_changes`, `upgrades_accept_only_a_recognized_nonempty_successful_prefix`; `apps/gateway/tests/database.rs` `readiness_rejects_schema_drift`; `tests/container-image.test.mjs` "serve never migrates; explicit migrate does; serve then becomes healthy read-only".
 - Residual: lineage checks are not a full attestation of indexes, functions and grants.
 - Follow-up: none.
 
 **OPS-2. The runtime role has too much privilege.** E · Asset: database · Attacker: compromised replica or DB credential.
-- Mitigation: `runtime-grants.sql` revokes everything, then grants a column allowlist; `grants verify` runs rollback-only probes. The migration Job never shares the runtime Secret.
-- Tests: `tests/runtime_privileges.rs` `enterprise_runtime_allowlist_and_rollback_probes` and the `*_runs_as_runtime` tests (`scim_provisioning_runs_as_runtime`, `files_api_runs_as_runtime`, `history_partitions_run_as_runtime` and others).
-- Residual: by design the runtime role can insert `platform_role_grants`, `api_keys` and memberships and update `revoked_at`, so a stolen runtime credential controls authorization. There is no row-level security.
-- Follow-up: new issue needed for `revoked_at` (KEY-3); Review: #61.
+- Mitigation: `deploy/staging/runtime-grants.sql` revokes everything, then grants a column allowlist; `grants verify` runs rollback-only probes. The migration Job never shares the runtime Secret.
+- Tests: `apps/gateway/tests/runtime_privileges.rs` `enterprise_runtime_allowlist_and_rollback_probes` and the `*_runs_as_runtime` tests (`scim_provisioning_runs_as_runtime`, `files_api_runs_as_runtime`, `history_partitions_run_as_runtime` and others).
+- Residual: by design the runtime role can insert `platform_role_grants`, `api_keys` and memberships and update `revoked_at`, so a stolen runtime credential controls authorization. A trigger refusing `revoked_at` → NULL (KEY-3) guards against application bugs, not this: the credential can insert new keys and grants instead. There is no row-level security.
+- Follow-up: #145 (`revoked_at` trigger, against application bugs); Review: #61.
 
 **OPS-3. The partition function is abused.** E · Asset: schema · Attacker: compromised runtime credential.
 - Mitigation: the `SECURITY DEFINER` functions (migrations 0030, 0035) pin `search_path=pg_catalog,public,pg_temp`, set `lock_timeout`, and create only canonical month partitions of registered parents; readiness accepts only those.
-- Tests: `partitions/tests.rs` `months_are_created_ahead_and_rows_route_at_the_boundary`, `preflight_accepts_partitions_of_known_parents_only`; `tests/runtime_privileges.rs` `history_partitions_run_as_runtime`.
+- Tests: `partitions/tests.rs` `months_are_created_ahead_and_rows_route_at_the_boundary`, `preflight_accepts_partitions_of_known_parents_only`; `apps/gateway/tests/runtime_privileges.rs` `history_partitions_run_as_runtime`.
 - Residual: none found.
 - Follow-up: none.
 
@@ -562,14 +562,14 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 - Follow-up: none.
 
 **OPS-6. A restore revives revoked authority or forgets spend.** E, R · Asset: keys, grants, budgets · Attacker: former key holder; operator error.
-- Mitigation: restore requires an empty target, a matching lineage and all file-store key IDs. [Operations](operations.md) tells operators to revoke restored browser sessions after a compromise.
+- Mitigation: restore requires an empty target, a matching migration lineage and all file-store key IDs. Both checks can be skipped (`scripts/backup.py`; [operations](operations.md)): `--expect-version N` replaces the lineage check with a comparison of the latest migration version only, and `--skip-file-key-check` skips the file-key check. [Operations](operations.md) tells operators to revoke restored browser sessions after a compromise.
 - Tests: `tests/backup.test.py` `test_restore_refuses_non_empty_or_existing_targets_without_touching_data`, `test_restore_requires_matching_lineage`, `test_file_store_key_ids_are_recorded_and_required_for_restore`.
 - Residual: keys, grants and users revoked after the backup become active again after a restore, and spend since the backup is lost, which gives budgets headroom the provider has already billed. The runbook covers sessions only.
-- Follow-up: new issue needed: restore runbook and tooling to re-apply revocations (keys, grants, suspensions) made after the backup, and to account for lost spend.
+- Follow-up: #146 (restore re-revocation runbook: re-apply revocations of keys, grants and suspensions made after the backup, and account for lost spend).
 
 **OPS-7. `bootstrap-demo` or the demo issuer reaches a real deployment.** S, E · Asset: Platform Admin access · Attacker: anyone who can reach the demo issuer.
 - Mitigation: `main.rs` `ensure_demo_config` runs for `bootstrap-demo` and whenever `GATEWAY_OIDC_ISSUER` is `http://127.0.0.1:18084`; it requires development mode, a loopback listener, a loopback database host and the database `gateway_enterprise_demo`. `demo.rs` `seed` requires development mode and an empty installation. `scripts/demo-oidc.mjs` needs `OMG_ENABLE_LOCAL_DEMO=1`, binds `127.0.0.1` and checks the `Host` header. `bootstrap-dev` is development-only.
-- Tests: `main.rs` `local_demo_guard_rejects_real_databases_and_nonlocal_bindings`; `demo/tests.rs` `entry_refuses_non_dedicated_database_and_production`; `tests/demo-oidc.test.mjs` "rejects rebinding hosts, arbitrary redirects, and cross-origin account selection"; `bootstrap.rs` `dev_bootstrap_is_environment_gated_and_never_rotates_existing_credentials`; `tests/database.rs` `bootstrap_refuses_production`.
+- Tests: `main.rs` `local_demo_guard_rejects_real_databases_and_nonlocal_bindings`; `demo/tests.rs` `entry_refuses_non_dedicated_database_and_production`; `tests/demo-oidc.test.mjs` "rejects rebinding hosts, arbitrary redirects, and cross-origin account selection"; `bootstrap.rs` `dev_bootstrap_is_environment_gated_and_never_rotates_existing_credentials`; `apps/gateway/tests/database.rs` `bootstrap_refuses_production`.
 - Residual: the guard matches the exact issuer string. On the homelab `dev-omg` environment, anyone allowed to port-forward in that namespace can sign in as `operator@demo.invalid` (AGENTS.md documents this).
 - Follow-up: none.
 
@@ -589,7 +589,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 
 **AUD-2. Request metadata and identities are kept indefinitely.** I · Asset: request metadata, personal data · Attacker: anyone who later gains database access.
 - Mitigation: no prompt or response columns exist; optional compaction redacts settled details without deleting money; account cleanup clears email and linking after 30 days.
-- Tests: `governance/tests.rs` `cost_center_snapshot_and_compaction_preserve_financial_dimensions`; `identity/tests.rs` `sign_in_records_the_verified_display_name_and_cleanup_clears_it`. No test found that asserts prompt or response bodies are never written, beyond the schema.
+- Tests: `governance/tests.rs` `cost_center_snapshot_and_compaction_preserve_financial_dimensions`; `identity/tests.rs` `sign_in_records_the_verified_display_name_and_cleanup_clears_it`. No test found that asserts prompt or response bodies are never written; "prompts are never stored" is backed by the schema only.
 - Residual: no subject export, anonymization, legal hold or bounded metadata retention.
 - Follow-up: #31, #74, #75, #76, #77.
 
@@ -597,18 +597,19 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 
 | Gap | Threats | Follow-up |
 | --- | --- | --- |
-| Member keys can read, delete or cancel other members' files, batch outputs and jobs in a shared workspace | TEN-5, JOB-4 | New issue needed: limit `/v1/files`, `/v1/batches`, `/v1/videos` to the key holder's own objects for human member keys, as the dashboard does |
-| SMTP password reference shares the provider allowlist; a Platform Admin can send a provider key to a relay they choose | EGR-7 | New issue needed: separate SMTP credential allowlist or operator-pinned relay; #33 |
+| Shared-workspace keys can act on other members' files, batches and videos through `/v1/files`, `/v1/batches` and `/v1/videos`; documented design ([Files API](files-api.md), [async jobs](async-jobs.md)) that conflicts with the dashboard and AGENTS.md | TEN-5, JOB-4 | #141 (needs a product decision) |
+| SMTP password reference shares the provider allowlist; a Platform Admin can send a provider key to a relay they choose, and the default Helm egress (443 anywhere) does not block it | EGR-7 | #140; #33 |
 | Egress not enforced at the network level; Helm allows 443 anywhere | EGR-3, EGR-8 | #33 |
 | No login or callback abuse controls; login attempts never cleaned up | OIDC-6 | #78, #80, #34 |
 | No session list or revoke for users; no idle expiry; session rows never deleted | KEY-8, OIDC-4 | #79, #80, #34 |
 | File-store key rotation cannot re-wrap old objects | FS-3 | #35 |
-| No CSP, `frame-ancestors` or `nosniff` on the SPA and API from Rust | WEB-2, WEB-3 | New issue needed: security headers from Rust |
-| `ci.yml` actions and Dockerfile build stages tag-pinned; SECURITY.md says SHA-pinned | SUP-2 | New issue needed: pin by SHA/digest or correct SECURITY.md |
-| OIDC HTTP client honours ambient proxies and default retries | OIDC-5, EGR-4 | New issue needed: `.no_proxy()` and `.retry(never())` on the OIDC client |
-| `revoked_at` can be cleared by the runtime role; no trigger | KEY-3, OPS-2 | New issue needed: database trigger refusing un-revocation |
-| Restore revives keys and grants revoked after the backup and loses spend | OPS-6 | New issue needed: restore runbook and tooling to re-apply later revocations and account for lost spend |
-| No secret manager; every replica holds every secret | EGR-10 | New issue needed: OpenBao/Vault secret references (roadmap R17) |
+| No CSP or `frame-ancestors` on the SPA and API from Rust; `Referrer-Policy: no-referrer` is sent on management and auth responses (`identity.rs`) but not on the SPA or `/v1` | WEB-2, WEB-3 | #142 |
+| 15 tag-pinned `uses:` in `ci.yml` (the image, cargo-deny, helm and npm-audit jobs are SHA-pinned); SECURITY.md says workflow actions are SHA-pinned | SUP-2 | #143 |
+| Dockerfile build-stage images pinned by tag, not digest (SECURITY.md makes no digest claim) | SUP-2 | New issue needed (not filed) |
+| OIDC HTTP client honours ambient `HTTP(S)_PROXY`/`ALL_PROXY` (no `.no_proxy()` in `identity.rs`); it lacks `.retry(never())`, but reqwest's default retry can't fire without its `http2` feature (`apps/gateway/Cargo.toml`) | OIDC-5, EGR-4 | #144 |
+| `revoked_at` can be cleared by the runtime role; no trigger. A trigger guards against application bugs, not a stolen runtime credential, which can insert keys and grants | KEY-3, OPS-2 | #145 |
+| Restore revives keys and grants revoked after the backup and loses spend; `--expect-version` and `--skip-file-key-check` weaken its checks | OPS-6 | #146 |
+| No secret manager; every replica holds every secret | EGR-10 | Deferred (roadmap R17), no issue |
 | SCIM token is one static secret that can effectively grant mapped admin roles | SCIM-1 | #60; Review: #61 |
 | No off-host, tamper-evident audit export | ADM-7, AUD-1 | #30, #106, #107, #108 |
 | No data export, anonymization, legal hold or metadata retention | TEN-2, OPS-4, AUD-2 | #31, #74, #75, #76, #77 |
@@ -620,3 +621,8 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 | Branch images unsigned; no signature check at deploy | SUP-3 | Review: #61 |
 | Live IdP and SCIM acceptance | OIDC-1, SCIM-3, SCIM-4 | #60 |
 | Prompt injection and output content | EGR-9 | #36 |
+
+### Still open
+
+- **Invitation codes.** Invitation-code handling (issue, storage, redemption and the one-time display in the browser) has not been reviewed for this model (WEB-5).
+- **"Prompts are never stored."** This rests on the schema alone: `inference_executions` has no prompt or response columns. No test asserts that prompt or response bodies are never written to the database or logs (AUD-2).
