@@ -24,6 +24,8 @@ Notes for changes on `main` since v0.4.0. They become the next release's notes.
 
 ## Deployment
 
+- Helm: removed the unused `cnpg.cluster.backup.destinationPath` value (set `destinationPath` inside `cnpg.cluster.backup.barmanObjectStore`, which is rendered as given) and corrected the `preStop` comment, which named a nonexistent `GATEWAY_DRAIN_SECONDS` (#134).
+
 - Helm: the chart-managed CloudNativePG cluster sets `smartShutdownTimeout: 15` (new value `cnpg.cluster.smartShutdownTimeout`). With CNPG's 180 s default, a primary failover kept writes down for about three minutes, because pooled and LISTEN connections never close by themselves (#25).
 
 - New `open-model-gateway grants apply` applies the reviewed runtime grants (`deploy/staging/runtime-grants.sql`, now embedded in the binary); `grants verify` runs the rollback-only privilege probes. The Helm migration Job and the staging `grant-runtime` step use it, so the chart no longer needs a PostgreSQL client image (`migrations.grants.image` is removed) or a copied SQL file (#20).

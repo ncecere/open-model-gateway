@@ -140,9 +140,11 @@ spec:
             {{- toYaml .Values.gateway.probes.readiness | nindent 12 }}
           lifecycle:
             preStop:
-              # Readiness already fails fast on SIGTERM (GATEWAY_DRAIN_SECONDS,
-              # scale-design.md 8.1); this sleep keeps the pod routable while
-              # the load balancer/endpoint list catches up before shutdown.
+              # Kubernetes runs this before sending SIGTERM. While it sleeps the
+              # pod is removed from the Service endpoints but still serves, so
+              # requests already routed here are not refused. SIGTERM then
+              # starts the gateway's graceful shutdown: no new connections, and
+              # in-flight requests finish within terminationGracePeriodSeconds.
               sleep:
                 seconds: {{ .Values.gateway.drainSeconds }}
           resources:
