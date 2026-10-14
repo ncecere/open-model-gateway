@@ -442,14 +442,45 @@ pub async fn record_result(
         return Ok(());
     }
     if error.is_none() {
-        let unchanged: Option<bool> = sqlx::query_scalar("SELECT consecutive_failures=0 AND open_until IS NULL AND last_observed_at>clock_timestamp()-$2*interval '1 second' FROM deployment_health WHERE deployment_id=$1")
+        let state: Option<(bool, bool)> = sqlx::query_as("SELECT consecutive_failures=0 AND open_until IS NULL, last_observed_at>clock_timestamp()-$2*interval '1 second' FROM deployment_health WHERE deployment_id=$1")
             .bind(deployment)
             .bind(OBSERVED_REFRESH_SECONDS)
             .fetch_optional(&store.pool)
             .await
             .map_err(|_| InferenceError::Storage)?;
-        if unchanged == Some(true) {
-            return Ok(());
+        match state {
+            Some((true, true)) => return Ok(()),
+            Some((true, false)) => {
+                // Healthy but stale: only the timestamp changes. One task per
+                // deployment and replica refreshes it, and never queues on a
+                // busy row (a slow commit elsewhere): the others return at
+                // once instead of each holding a pooled connection (#132).
+                let Some(_claim) = store.caches.claim_health_refresh(deployment) else {
+                    return Ok(());
+                };
+                let refreshed = sqlx::query("UPDATE deployment_health SET last_observed_at=clock_timestamp() WHERE deployment_id=(SELECT deployment_id FROM deployment_health WHERE deployment_id=$1 AND consecutive_failures=0 AND open_until IS NULL FOR UPDATE SKIP LOCKED)")
+                    .bind(deployment)
+                    .execute(&store.pool)
+                    .await
+                    .map_err(|_| InferenceError::Storage)?
+                    .rows_affected();
+                if refreshed == 1 {
+                    store.caches.forget_health(deployment);
+                    return Ok(());
+                }
+                // Busy (advisory; the next success retries), unless a failure
+                // committed meanwhile: then this success must end the streak.
+                let healthy: Option<bool> = sqlx::query_scalar("SELECT consecutive_failures=0 AND open_until IS NULL FROM deployment_health WHERE deployment_id=$1")
+                    .bind(deployment)
+                    .fetch_optional(&store.pool)
+                    .await
+                    .map_err(|_| InferenceError::Storage)?;
+                if healthy == Some(true) {
+                    return Ok(());
+                }
+            }
+            // First observation, or a recovery that must end a failure streak.
+            _ => {}
         }
     }
     let result = sqlx::query(
