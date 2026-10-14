@@ -4,6 +4,8 @@ Notes for changes on `main` since v0.5.0. They become the next release's notes.
 
 ## Security
 
+- The OIDC client (discovery, token exchange, JWKS) no longer uses ambient `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` or implicit retries, like every provider client (#144). If sign-in only worked through such a proxy, allow the gateway to reach the issuer directly.
+
 - CI pins every GitHub Action by commit SHA and the `Dockerfile` build images by digest, and `npm run test:supply-chain` fails CI on any unpinned one (#143).
 
 - Every response now carries a Content-Security-Policy, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer` (#142). The dashboard's policy allows only its own scripts, styles, fonts and API (no inline script or `eval`) and can't be framed; API and file responses get `default-src 'none'`. If you embed the dashboard in a frame or load it through a proxy that injects scripts, that no longer works.

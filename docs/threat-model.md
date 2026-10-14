@@ -216,8 +216,8 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 **OIDC-5. JWKS rotation, outage or key-ID flooding.** D, S · Asset: sign-in availability · Attacker: unauthenticated internet client; IdP outage.
 - Mitigation: `identity/jwks.rs` clamps the cache TTL to 5 minutes–24 hours, refetches unknown `kid`s at most once a minute with single-flight, and keeps the last good keys for 6 hours during an outage, then fails closed. Empty key sets are failures.
 - Tests: `identity/tests.rs` `jwks_rotation_refetch_is_rate_limited_single_flight_and_survives_outages`; `identity/jwks.rs` `cache_control_is_parsed_and_bounded`, `expiry_unknown_kid_rate_limit_and_grace`, `empty_key_sets_are_failures_not_replacements`, `concurrent_refreshes_are_single_flight`.
-- Residual: the OIDC HTTP client (`IdentityState::build`) disables redirects and checks HTTPS on every request (`OidcHttp::send`), but unlike the provider clients it honours ambient `HTTP(S)_PROXY`/`ALL_PROXY` (no `.no_proxy()` in `identity.rs`). It also lacks `.retry(never())`, but reqwest's default retry (HTTP/2 protocol NACKs only) can't fire without its `http2` feature, which the gateway does not enable (`apps/gateway/Cargo.toml`).
-- Follow-up: #144 (OIDC ambient proxy).
+- Residual: none for the transport. The OIDC HTTP client (`IdentityState::build`) disables redirects, ambient proxies and implicit retries and checks HTTPS on every request (`OidcHttp::send`), like the provider clients (#144; test `apps/gateway/tests/oidc_proxy.rs`).
+- Follow-up: none (fixed in #144).
 
 **OIDC-6. Login and callback abuse.** D · Asset: database, sign-in availability · Attacker: unauthenticated internet client.
 - Mitigation: none in code. Each `GET /api/v1/auth/login` inserts one `oidc_login_attempts` row. The only `DELETE` is `consume_attempt` for a matching attempt, so expired attempts are never removed. There is no rate limit on login or callback. [Identity](identity.md) asks operators to rate-limit at the edge.
@@ -330,8 +330,8 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 **EGR-4. Redirects, proxies or retries leak credentials or duplicate work.** I, T · Asset: provider credentials, spend · Attacker: malicious upstream.
 - Mitigation: the OpenAI, Anthropic, OpenRouter, local, Bedrock, S3 and OpenRouter-catalog clients set `redirect::Policy::none()`, `.no_proxy()` and `.retry(never())` (`providers/openai.rs` `OpenAiAdapter::new`, `providers/anthropic.rs`, `providers/openrouter.rs`, `providers/local/endpoints.rs`, `providers/bedrock/transport.rs` `client`, `filestore/s3/transport.rs` `client`, `management/governance/suggestion.rs`).
 - Tests: `providers/openai/tests.rs` `redirects_are_not_followed_or_given_credentials`; `providers/local/tests.rs` `redirects_and_eof_do_not_succeed_or_follow_credentials`; `providers/openrouter/tests.rs` `redirects_are_refused_and_never_followed`; `filestore/s3/tests.rs` `one_attempt_no_redirects_and_safe_errors`; `management/governance/suggestion.rs` `fetch_is_capped_unredirected_bounded_and_cached`.
-- Residual: the OIDC client is the exception: it honours ambient `HTTP(S)_PROXY`/`ALL_PROXY` (no `.no_proxy()` in `identity.rs`). It lacks `.retry(never())`, but reqwest's default retry can't fire without its `http2` feature, which is not enabled (`apps/gateway/Cargo.toml`). See OIDC-5.
-- Follow-up: #144.
+- Residual: none known; the OIDC client now matches the provider clients (#144).
+- Follow-up: none (fixed in #144).
 
 **EGR-5. Cloud traffic goes over plain HTTP.** I, T · Asset: credentials, prompts · Attacker: network attacker.
 - Mitigation: OpenAI, Anthropic and OpenRouter use constant `https://` base URLs (`const BASE`); OpenRouter also sets `https_only(true)`. Bedrock endpoints and profiles must be in `GATEWAY_BEDROCK_ENDPOINT_ALLOWLIST` and `GATEWAY_AWS_PROFILE_ALLOWLIST`. An explicit S3 endpoint must be allowlisted. Identity URLs must be HTTPS except development loopback (`identity.rs` `validate_url`).
@@ -606,7 +606,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 | No CSP or `frame-ancestors` on the SPA and API from Rust; `Referrer-Policy` only on management and auth responses | WEB-2, WEB-3 | Fixed in #142 |
 | 15 tag-pinned `uses:` in `ci.yml` (the image, cargo-deny, helm and npm-audit jobs are SHA-pinned); SECURITY.md says workflow actions are SHA-pinned | SUP-2 | Fixed in #143 |
 | Dockerfile build-stage images pinned by tag, not digest (SECURITY.md makes no digest claim) | SUP-2 | Fixed in #143 |
-| OIDC HTTP client honours ambient `HTTP(S)_PROXY`/`ALL_PROXY` (no `.no_proxy()` in `identity.rs`); it lacks `.retry(never())`, but reqwest's default retry can't fire without its `http2` feature (`apps/gateway/Cargo.toml`) | OIDC-5, EGR-4 | #144 |
+| OIDC HTTP client honours ambient `HTTP(S)_PROXY`/`ALL_PROXY` (no `.no_proxy()` in `identity.rs`); it lacks `.retry(never())`, but reqwest's default retry can't fire without its `http2` feature (`apps/gateway/Cargo.toml`) | OIDC-5, EGR-4 | Fixed in #144 |
 | `revoked_at` can be cleared by the runtime role; no trigger. A trigger guards against application bugs, not a stolen runtime credential, which can insert keys and grants | KEY-3, OPS-2 | #145 |
 | Restore revives keys and grants revoked after the backup and loses spend; `--expect-version` and `--skip-file-key-check` weaken its checks | OPS-6 | #146 |
 | No secret manager; every replica holds every secret | EGR-10 | Deferred (roadmap R17), no issue |

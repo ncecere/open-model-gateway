@@ -374,7 +374,12 @@ impl IdentityState {
     ) -> anyhow::Result<Self> {
         let provider = if let Some(config) = config {
             let http = OidcHttp {
+                // No ambient HTTP(S)_PROXY/ALL_PROXY and no implicit retries,
+                // like every provider client (#144): identity traffic goes
+                // straight to the issuer, once.
                 client: reqwest::Client::builder()
+                    .no_proxy()
+                    .retry(reqwest::retry::never())
                     .redirect(reqwest::redirect::Policy::none())
                     .timeout(Duration::from_secs(15))
                     .connect_timeout(Duration::from_secs(5))
