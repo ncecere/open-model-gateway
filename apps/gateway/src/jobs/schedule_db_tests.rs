@@ -45,6 +45,9 @@ struct Server {
     in_flight: AtomicUsize,
     max_in_flight: AtomicUsize,
     delay_ms: AtomicU64,
+    /// Hold each request until this many are in flight (or 5 s pass), so a
+    /// concurrency assertion does not depend on how fast lines are dispatched.
+    hold_until_in_flight: AtomicUsize,
     /// Prometheus text; `None` answers 500.
     metrics: Mutex<Option<String>>,
 }
@@ -64,6 +67,9 @@ impl Server {
     fn delay(&self, ms: u64) {
         self.delay_ms.store(ms, SeqCst);
     }
+    fn hold_until_in_flight(&self, n: usize) {
+        self.hold_until_in_flight.store(n, SeqCst);
+    }
     fn set_metrics(&self, text: Option<&str>) {
         *self.metrics.lock().unwrap() = text.map(str::to_owned);
     }
@@ -76,6 +82,11 @@ async fn chat(State(s): State<Arc<Server>>, Json(body): Json<Value>) -> Json<Val
     s.bodies.lock().unwrap().push(body);
     let now = s.in_flight.fetch_add(1, SeqCst) + 1;
     s.max_in_flight.fetch_max(now, SeqCst);
+    let hold = s.hold_until_in_flight.load(SeqCst);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while hold > 0 && s.in_flight.load(SeqCst) < hold && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
     let delay = if text.starts_with("slow") {
         3000
     } else {
@@ -335,6 +346,7 @@ async fn consistent(f: &Fixture) {
 async fn route_concurrency_cap_and_priority_hint_on_batch_lines_only(pool: PgPool) {
     let w = world(pool).await;
     w.server.delay(150);
+    w.server.hold_until_in_flight(2);
     w.settings(RouteSettings {
         max_concurrency: 2,
         priority: Some(7),
