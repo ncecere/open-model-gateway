@@ -61,6 +61,21 @@ test("loadgen Job passes the arguments `loadgen run` accepts", () => {
   for (const stale of ["--base-url", "--requests", "--concurrency"]) assert.ok(!args.includes(stale), `${stale} is not a loadgen flag`);
 });
 
+test("loadtest profile lets loadgen reach the gateway and the gateway reach the mock", () => {
+  const rendered = helmTemplate(["--namespace", "omg-loadtest", "-f", join(chart, "ci/loadtest-values.yaml"), "--set", "loadtest.loadgen.enabled=true"]);
+  const [job] = docsOfKind(rendered, "Job").filter((doc) => /component: loadtest-loadgen/.test(doc));
+  assert.match(job, /name: LOADGEN_VERIFY_DATABASE_URL\s+value: "postgres:\/\/\$\(OMG_DB_VERIFY_USERNAME\):\$\(OMG_DB_VERIFY_PASSWORD\)@omg-test[\w-]*-rw:5432\//);
+  assert.match(job, /secretKeyRef:\s+name: gateway-runtime-role/);
+  assert.doesNotMatch(job, /password=|:[^$\s]+@/i, "no literal credentials");
+  const policies = docsOfKind(rendered, "NetworkPolicy");
+  const ingress = policies.find((d) => /name: omg-test[\w-]*-ingress/.test(d));
+  assert.match(ingress, /kubernetes.io\/metadata.name: omg-loadtest[\s\S]*component: loadtest-loadgen[\s\S]*port: 8080/);
+  assert.match(ingress, /port: 9464/);
+  const egress = policies.find((d) => /name: omg-test[\w-]*-egress/.test(d));
+  assert.match(egress, /component: loadtest-mock-upstream/);
+  assert.match(egress, /port: 8000/);
+});
+
 test("default values fail fast with a clear message instead of rendering an unconfigured database", () => {
   const result = spawnSync("helm", ["template", "omg-test", chart], { encoding: "utf8", timeout: 30_000 });
   assert.notEqual(result.status, 0);

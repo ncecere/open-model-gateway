@@ -23,3 +23,26 @@ loadtest:
     clusterIP: "10.96.200.200"
 
 replicaCount: 3
+
+# The default policies admit only Traefik and allow egress to 443 and the
+# database. In the dedicated omg-loadtest namespace, admit the loadgen Job
+# (requests and per-replica metrics) and let the gateway reach the mock.
+networkPolicy:
+  ingress:
+    fromNamespace: omg-loadtest
+    fromPodLabels:
+      app.kubernetes.io/name: null  # drop the default Traefik label (Helm merges maps)
+      app.kubernetes.io/component: loadtest-loadgen
+    metrics:
+      enabled: true
+      fromNamespace: omg-loadtest
+      fromPodLabels:
+        app.kubernetes.io/component: loadtest-loadgen
+  egress:
+    extraEgress:
+      - to:
+          - podSelector:
+              matchLabels:
+                app.kubernetes.io/component: loadtest-mock-upstream
+        ports:
+          - { protocol: TCP, port: 8000 }
