@@ -315,6 +315,9 @@ pub(crate) async fn audit(
                     | "previous_budget_period"
                     | "object_visibility"
                     | "previous_object_visibility"
+                    | "reason"
+                    | "email_changed"
+                    | "oidc_link_changed"
             ) && (v.is_boolean()
                 || v.is_number()
                 || v.as_str().is_some_and(|s| {

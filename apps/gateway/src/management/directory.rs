@@ -475,8 +475,9 @@ async fn update_user(
     Json(b): Json<UserUpdate>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, true).await?;
-    sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM users WHERE id=$1 AND cleaned_at IS NULL FOR UPDATE",
+    // Prior state, so the audit records only what this request changed.
+    let (was_disabled, link_allowed) = sqlx::query_as::<_, (bool, bool)>(
+        "SELECT disabled_at IS NOT NULL,oidc_link_allowed FROM users WHERE id=$1 AND cleaned_at IS NULL FOR UPDATE",
     )
     .bind(id)
     .fetch_optional(&mut *tx)
@@ -521,16 +522,57 @@ async fn update_user(
         .execute(&mut *tx)
         .await?;
     }
-    audit(
-        &mut tx,
-        &u,
-        None,
-        "user.updated",
-        "user",
-        Some(id),
-        json!({}),
-    )
-    .await?;
+    // #158: a suspension and a re-enable are their own actions; a profile
+    // edit flags which fields it changed, never their values.
+    match b.disabled {
+        // Every suspension is recorded: even a repeat revokes credentials
+        // again and moves the cleanup date.
+        Some(true) => {
+            audit(
+                &mut tx,
+                &u,
+                None,
+                "user.suspended",
+                "user",
+                Some(id),
+                json!({"reason":"admin_suspension"}),
+            )
+            .await?;
+        }
+        Some(false) if was_disabled => {
+            audit(
+                &mut tx,
+                &u,
+                None,
+                "user.reactivated",
+                "user",
+                Some(id),
+                json!({}),
+            )
+            .await?;
+        }
+        _ => {}
+    }
+    let link_changed = b.oidc_link_allowed.is_some_and(|v| v != link_allowed);
+    if email_changed || link_changed {
+        let mut changed = serde_json::Map::new();
+        if email_changed {
+            changed.insert("email_changed".into(), true.into());
+        }
+        if link_changed {
+            changed.insert("oidc_link_changed".into(), true.into());
+        }
+        audit(
+            &mut tx,
+            &u,
+            None,
+            "user.updated",
+            "user",
+            Some(id),
+            Value::Object(changed),
+        )
+        .await?;
+    }
     tx.commit().await?;
     Ok(ok())
 }
