@@ -54,6 +54,8 @@ jobs:
         run: cargo test -p open-model-gateway --all-features --test filestore_s3
       - name: Verify enterprise runtime ACLs on disposable PostgreSQL
         run: cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored
+      - name: Install age for the encrypted backup tests
+        run: sudo apt-get update && sudo apt-get install -y age
       - name: Backup/restore drill on the disposable service database
         # PostgreSQL 17 client tools run inside the service container; the
         # lineage check uses the gateway binary built by the tests above.
@@ -75,6 +77,8 @@ jobs:
       - run: npm run typecheck:web
       - run: npm run test:web
       - run: npm run test:demo
+      - name: Install age (test:staging includes the encrypted backup tests)
+        run: sudo apt-get update && sudo apt-get install -y age
       - run: npm run test:staging
       - run: npm run build:web
 
