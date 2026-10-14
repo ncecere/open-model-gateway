@@ -160,7 +160,33 @@ async fn dashboard_sessions_run_as_runtime(pool: &PgPool) {
             .expect(statement);
     }
     tx.rollback().await.unwrap();
-    for column in ["id=gen_random_uuid()", "client_label='Edge on Windows'"] {
+    // #80: the sign-in times on the user, and both cleanups, as runtime.
+    sqlx::query("UPDATE users SET last_signed_in_at=now(),first_signed_in_at=coalesce(first_signed_in_at,now()) WHERE id=$1")
+        .bind(user).execute(&runtime).await.expect("runtime records sign-in times");
+    sqlx::query("UPDATE browser_sessions SET revoked_at=now()-interval '31 days' WHERE user_id=$1")
+        .bind(user)
+        .execute(pool)
+        .await
+        .unwrap();
+    let runtime_store = open_model_gateway::store::Store::new(runtime.clone());
+    assert_eq!(
+        open_model_gateway::identity::prune_sessions_fenced(&runtime_store, 10, None)
+            .await
+            .expect("runtime prunes ended sessions"),
+        1
+    );
+    open_model_gateway::identity::prune_login_attempts_fenced(&runtime_store, 10, None)
+        .await
+        .expect("runtime prunes expired attempts");
+    sqlx::query("INSERT INTO browser_sessions(token_hash,user_id,csrf_hash,expires_at,verified_email) VALUES(sha256('probe'::bytea),$1,sha256('c'::bytea),now()+interval '1 hour','sessions-probe@example.test')")
+        .bind(user).execute(pool).await.unwrap();
+    for column in [
+        "id=gen_random_uuid()",
+        "client_label='Edge on Windows'",
+        "expires_at=now()+interval '30 days'",
+        "created_at=now()",
+        "user_id=gen_random_uuid()",
+    ] {
         let denied = sqlx::query(&format!(
             "UPDATE browser_sessions SET {column} WHERE user_id=$1"
         ))

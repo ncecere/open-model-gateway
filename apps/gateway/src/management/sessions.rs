@@ -23,7 +23,7 @@ pub(super) fn routes() -> Router<Store> {
 }
 
 /// Live: not revoked, not expired, and still bound to a verified sign-in.
-const LIVE: &str = "revoked_at IS NULL AND expires_at>now() AND verified_email IS NOT NULL";
+const LIVE: &str = "revoked_at IS NULL AND expires_at>now() AND (idle_expires_at IS NULL OR idle_expires_at>now()) AND verified_email IS NOT NULL";
 
 async fn list(
     State(s): State<Store>,

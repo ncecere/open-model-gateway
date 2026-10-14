@@ -15,6 +15,12 @@ data:
   {{- if .Values.gateway.trustedProxies }}
   GATEWAY_TRUSTED_PROXIES: {{ .Values.gateway.trustedProxies | join "," | quote }}
   {{- end }}
+  {{- with .Values.gateway.sessionLifetime }}
+  GATEWAY_SESSION_LIFETIME: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.gateway.sessionIdleTimeout }}
+  GATEWAY_SESSION_IDLE_TIMEOUT: {{ . | quote }}
+  {{- end }}
   {{- with .Values.gateway.loginRatePerMinute }}
   GATEWAY_LOGIN_RATE_PER_MINUTE: {{ . | quote }}
   {{- end }}

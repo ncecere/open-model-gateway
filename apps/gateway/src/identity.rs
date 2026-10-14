@@ -36,6 +36,11 @@ pub(crate) mod jwks;
 use jwks::{JwksCache, JwksPolicy};
 #[path = "identity/client_label.rs"]
 mod client_label;
+#[path = "identity/session_policy.rs"]
+pub(crate) mod session_policy;
+use session_policy::SessionPolicy;
+/// Ended sessions (signed out or expired) are kept this long, then deleted (#80).
+const ENDED_SESSION_RETENTION_DAYS: i32 = 30;
 #[path = "identity/throttle.rs"]
 pub(crate) mod throttle;
 /// How often a live session's `last_seen_at` is written, at most.
@@ -44,7 +49,6 @@ const LAST_SEEN_EVERY_SECONDS: i32 = 5 * 60;
 const SESSION: &str = "omg_session";
 const CSRF: &str = "omg_csrf";
 const BROWSER: &str = "omg_oidc";
-const SESSION_SECONDS: u32 = 12 * 60 * 60;
 const LOGIN_SECONDS: u32 = 10 * 60;
 /// Unexpired sign-in attempts the installation holds at most (#78).
 const PENDING_LOGIN_CAP: i64 = 10_000;
@@ -150,6 +154,7 @@ pub struct IdentityConfig {
     login_rate_per_minute: u32,
     pending_login_cap: i64,
     pending_cap_latch: Duration,
+    session_policy: SessionPolicy,
 }
 
 impl IdentityConfig {
@@ -166,6 +171,11 @@ impl IdentityConfig {
         let issuer = read("GATEWAY_OIDC_ISSUER")?;
         let client_id = read("GATEWAY_OIDC_CLIENT_ID")?;
         let secret = read("GATEWAY_OIDC_CLIENT_SECRET")?;
+        // Checked even without OIDC, so a typo never goes unnoticed.
+        let session_policy = SessionPolicy::parse(
+            read("GATEWAY_SESSION_LIFETIME")?.as_deref(),
+            read("GATEWAY_SESSION_IDLE_TIMEOUT")?.as_deref(),
+        )?;
         if issuer.is_none() && client_id.is_none() && secret.is_none() {
             // A public URL may also be used by non-identity application features.
             if let Some(public) = public {
@@ -194,6 +204,7 @@ impl IdentityConfig {
         if let Some(value) = read("GATEWAY_TRUSTED_PROXIES")? {
             config.trusted_proxies = throttle::TrustedProxies::parse(&value)?;
         }
+        config.session_policy = session_policy;
         if let Some(value) = read("GATEWAY_LOGIN_RATE_PER_MINUTE")? {
             config.login_rate_per_minute = value
                 .parse::<u32>()
@@ -249,6 +260,7 @@ impl IdentityConfig {
             login_rate_per_minute: LOGIN_RATE_PER_MINUTE,
             pending_login_cap: PENDING_LOGIN_CAP,
             pending_cap_latch: Duration::from_secs(5),
+            session_policy: SessionPolicy::default(),
         })
     }
 }
@@ -388,6 +400,8 @@ pub struct IdentityState {
     store: Store,
     provider: Option<Arc<Provider>>,
     scim: Option<Arc<ScimRuntime>>,
+    /// Lifetime and idle timeout of new sessions and of recorded activity.
+    policy: SessionPolicy,
 }
 
 impl IdentityState {
@@ -481,10 +495,14 @@ impl IdentityState {
         } else {
             None
         };
+        let policy = provider
+            .as_ref()
+            .map_or_else(SessionPolicy::default, |p| p.config.session_policy);
         Ok(Self {
             store,
             provider,
             scim: None,
+            policy,
         })
     }
 
@@ -1002,9 +1020,14 @@ async fn callback(
             .get(header::USER_AGENT)
             .and_then(|v| v.to_str().ok()),
     );
-    let inserted = sqlx::query("INSERT INTO browser_sessions(token_hash,user_id,csrf_hash,expires_at,verified_email,client_label,last_seen_at) SELECT $1,id,$3,now()+interval '12 hours',$4,$5,now() FROM users WHERE id=$2 AND disabled_at IS NULL AND cleaned_at IS NULL AND EXISTS(SELECT 1 FROM effective_platform_roles p WHERE p.user_id=users.id)")
-        .bind(hash(&session)).bind(user_id).bind(hash(&csrf)).bind(&email).bind(label).execute(&state.store.pool).await.map_err(internal)?;
-    if inserted.rows_affected() != 1 {
+    // Both deadlines are fixed now, on the database clock (#80).
+    // Sign-in times live on the user, in the same statement, so deleting
+    // ended sessions (#80) never changes "First signed in" or "Last sign-in".
+    let inserted: i64 = sqlx::query_scalar("WITH s AS (INSERT INTO browser_sessions(token_hash,user_id,csrf_hash,expires_at,idle_expires_at,verified_email,client_label,last_seen_at) SELECT $1,id,$3,now()+make_interval(secs=>$6),now()+make_interval(secs=>$7::float8),$4,$5,now() FROM users WHERE id=$2 AND disabled_at IS NULL AND cleaned_at IS NULL AND EXISTS(SELECT 1 FROM effective_platform_roles p WHERE p.user_id=users.id) RETURNING user_id), u AS (UPDATE users SET last_signed_in_at=now(),first_signed_in_at=coalesce(first_signed_in_at,now()) WHERE id IN (SELECT user_id FROM s)) SELECT count(*) FROM s")
+        .bind(hash(&session)).bind(user_id).bind(hash(&csrf)).bind(&email).bind(label)
+        .bind(f64::from(state.policy.lifetime_seconds())).bind(state.policy.idle_seconds())
+        .fetch_one(&state.store.pool).await.map_err(internal)?;
+    if inserted != 1 {
         if wants_html(&headers) {
             return denied_browser_callback(&state, &headers, provider.config.secure_cookies).await;
         }
@@ -1020,7 +1043,7 @@ async fn callback(
         &mut response,
         SESSION,
         &session,
-        SESSION_SECONDS,
+        state.policy.lifetime_seconds(),
         provider.config.secure_cookies,
         true,
     );
@@ -1028,7 +1051,7 @@ async fn callback(
         &mut response,
         CSRF,
         &csrf,
-        SESSION_SECONDS,
+        state.policy.lifetime_seconds(),
         provider.config.secure_cookies,
         false,
     );
@@ -1211,14 +1234,16 @@ async fn verify_session(
         .map_err(|_| AuthError(StatusCode::UNAUTHORIZED))?
         .ok_or(AuthError(StatusCode::UNAUTHORIZED))?;
     let token_hash = hash(&token);
-    let row = sqlx::query_as::<_, (Uuid, String, String, Vec<u8>, Uuid, bool)>("SELECT u.id,s.verified_email,p.role,s.csrf_hash,s.id,s.last_seen_at IS NULL OR s.last_seen_at<now()-make_interval(secs=>$2) FROM browser_sessions s JOIN users u ON u.id=s.user_id JOIN effective_platform_roles p ON p.user_id=u.id WHERE s.token_hash=$1 AND s.verified_email IS NOT NULL AND s.revoked_at IS NULL AND s.expires_at>now() AND u.disabled_at IS NULL AND u.cleaned_at IS NULL")
+    let row = sqlx::query_as::<_, (Uuid, String, String, Vec<u8>, Uuid, bool)>("SELECT u.id,s.verified_email,p.role,s.csrf_hash,s.id,s.last_seen_at IS NULL OR s.last_seen_at<now()-make_interval(secs=>$2) FROM browser_sessions s JOIN users u ON u.id=s.user_id JOIN effective_platform_roles p ON p.user_id=u.id WHERE s.token_hash=$1 AND s.verified_email IS NOT NULL AND s.revoked_at IS NULL AND s.expires_at>now() AND (s.idle_expires_at IS NULL OR s.idle_expires_at>now()) AND u.disabled_at IS NULL AND u.cleaned_at IS NULL")
         .bind(&token_hash).bind(f64::from(LAST_SEEN_EVERY_SECONDS)).fetch_optional(&state.store.pool).await.map_err(internal)?.ok_or(AuthError(StatusCode::UNAUTHORIZED))?;
     if row.5 {
         // At most one write per session per interval, not one per request.
         // Best effort: a failed write (say, a primary briefly read-only during
         // failover) must not fail an otherwise valid session.
-        if let Err(error) = sqlx::query("UPDATE browser_sessions SET last_seen_at=now() WHERE token_hash=$1 AND revoked_at IS NULL AND (last_seen_at IS NULL OR last_seen_at<now()-make_interval(secs=>$2))")
-            .bind(&token_hash).bind(f64::from(LAST_SEEN_EVERY_SECONDS)).execute(&state.store.pool).await
+        // Activity also moves the idle deadline, by the policy in force now;
+        // an already idle-expired session is never extended (#80).
+        if let Err(error) = sqlx::query("UPDATE browser_sessions SET last_seen_at=now(),idle_expires_at=now()+make_interval(secs=>$3::float8) WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now() AND (idle_expires_at IS NULL OR idle_expires_at>now()) AND (last_seen_at IS NULL OR last_seen_at<now()-make_interval(secs=>$2))")
+            .bind(&token_hash).bind(f64::from(LAST_SEEN_EVERY_SECONDS)).bind(state.policy.idle_seconds()).execute(&state.store.pool).await
         {
             tracing::warn!(%error, "could not record session activity");
         }
@@ -1342,6 +1367,46 @@ async fn logout(
     set_cookie(&mut response, CSRF, "", 0, secure, false);
     set_cookie(&mut response, BROWSER, "", 0, secure, true);
     Ok(response)
+}
+
+/// Delete expired sign-in attempts, at most `limit` per call (#80). They are
+/// useless once expired: `consume_attempt` only accepts unexpired ones. No
+/// row locks: one maintenance lease runs it, and runtime has no UPDATE here.
+pub async fn prune_login_attempts_fenced(
+    store: &Store,
+    limit: i64,
+    fence: Option<&crate::leases::Fence>,
+) -> Result<u64, sqlx::Error> {
+    let mut tx = crate::db::begin(&store.pool).await?;
+    crate::leases::fence(&mut tx, fence).await?;
+    let pruned = sqlx::query("DELETE FROM oidc_login_attempts WHERE state_hash IN (SELECT state_hash FROM oidc_login_attempts WHERE expires_at<now() ORDER BY expires_at LIMIT $1)")
+        .bind(limit)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    tx.commit().await?;
+    Ok(pruned)
+}
+
+/// Delete sessions that ended (signed out, expired or idle-expired) more than
+/// 30 days ago, at most `limit` per call (#80). A live session is never
+/// deleted; an ended one can never authenticate again, so deleting it changes
+/// nothing a request can observe.
+pub async fn prune_sessions_fenced(
+    store: &Store,
+    limit: i64,
+    fence: Option<&crate::leases::Fence>,
+) -> Result<u64, sqlx::Error> {
+    let mut tx = crate::db::begin(&store.pool).await?;
+    crate::leases::fence(&mut tx, fence).await?;
+    let pruned = sqlx::query("DELETE FROM browser_sessions WHERE token_hash IN (SELECT token_hash FROM browser_sessions WHERE least(coalesce(revoked_at,'infinity'),expires_at,coalesce(idle_expires_at,'infinity'))<now()-make_interval(days=>$2) LIMIT $1)")
+        .bind(limit)
+        .bind(ENDED_SESSION_RETENTION_DAYS)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    tx.commit().await?;
+    Ok(pruned)
 }
 
 #[cfg(test)]

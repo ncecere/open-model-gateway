@@ -52,6 +52,11 @@ gateway:
   # Sign-in starts and callbacks per minute per client address
   # (GATEWAY_LOGIN_RATE_PER_MINUTE); empty means the gateway default, 60.
   loginRatePerMinute: null
+  # Dashboard session lifetime (GATEWAY_SESSION_LIFETIME, 15m to 7d) and idle
+  # timeout (GATEWAY_SESSION_IDLE_TIMEOUT, 15m up to the lifetime, or "off").
+  # Empty means the gateway defaults: 12h and 2h.
+  sessionLifetime: ""
+  sessionIdleTimeout: ""
 
   drainSeconds: 10
   terminationGracePeriodSeconds: 150

@@ -205,3 +205,11 @@ test("sign-in abuse controls (#78) reach the gateway only when set", () => {
   assert.match(set, /GATEWAY_TRUSTED_PROXIES: "10\.42\.0\.0\/16,fd00::\/8"/);
   assert.match(set, /GATEWAY_LOGIN_RATE_PER_MINUTE: "120"/);
 });
+
+test("session lifetime and idle timeout (#80) reach the gateway only when set", () => {
+  const base = ["-f", join(chart, "ci/cnpg-values.yaml")];
+  assert.doesNotMatch(helmTemplate(base), /GATEWAY_SESSION_(LIFETIME|IDLE_TIMEOUT)/);
+  const set = helmTemplate([...base, "--set", "gateway.sessionLifetime=8h", "--set", "gateway.sessionIdleTimeout=off"]);
+  assert.match(set, /GATEWAY_SESSION_LIFETIME: "8h"/);
+  assert.match(set, /GATEWAY_SESSION_IDLE_TIMEOUT: "off"/);
+});

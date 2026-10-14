@@ -250,7 +250,7 @@ fn cookie_attributes_are_host_only_and_explicit() {
             &mut response,
             SESSION,
             &random_token().unwrap(),
-            SESSION_SECONDS,
+            SessionPolicy::default().lifetime_seconds(),
             secure,
             true,
         );
@@ -258,7 +258,7 @@ fn cookie_attributes_are_host_only_and_explicit() {
             &mut response,
             CSRF,
             &random_token().unwrap(),
-            SESSION_SECONDS,
+            SessionPolicy::default().lifetime_seconds(),
             secure,
             false,
         );
@@ -1324,6 +1324,195 @@ mod database {
         let mut url = Url::parse("https://x.invalid/").unwrap();
         url.query_pairs_mut().append_pair("v", value);
         url.query().unwrap()[2..].to_owned()
+    }
+
+    /// #80: deadlines come from the policy at sign-in, are checked on every
+    /// request against the database clock, move with recorded activity, and
+    /// are never revived by a longer policy afterwards.
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn session_lifetime_and_idle_timeout(pool: sqlx::PgPool) {
+        let mock = MockProvider::start(None).await;
+        let with = |lifetime: &str, idle: &str| {
+            let mut config = mock.config();
+            config.session_policy = SessionPolicy::parse(Some(lifetime), Some(idle)).unwrap();
+            IdentityState::new(Store::new(pool.clone()), Some(config))
+        };
+        let state = with("1h", "30m").await.unwrap();
+        let app = router(state.clone())
+            .merge(crate::management::router(state.clone()))
+            .with_state(state.store.clone());
+        sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES($1,$2,'entitled','platform','user')")
+            .bind(Uuid::new_v4()).bind(&mock.issuer).execute(&pool).await.unwrap();
+        let credentials = http_sign_in(&app, &mock).await;
+        let key = hash(&credentials.0);
+        let deadlines = || async {
+            sqlx::query_as::<_, (f64, Option<f64>)>("SELECT extract(epoch FROM expires_at-now())::float8,extract(epoch FROM idle_expires_at-now())::float8 FROM browser_sessions WHERE token_hash=$1")
+                .bind(&key).fetch_one(&pool).await.unwrap()
+        };
+        let (absolute, idle) = deadlines().await;
+        assert!((3590.0..=3600.0).contains(&absolute), "{absolute}");
+        assert!((1790.0..=1800.0).contains(&idle.unwrap()), "{idle:?}");
+        let me = |state: &IdentityState| {
+            let state = state.clone();
+            let headers = cookie_header(SESSION, &credentials.0);
+            async move { verify_session(&state, &headers).await.is_ok() }
+        };
+        assert!(me(&state).await);
+        // Recorded activity moves the idle deadline by the policy in force.
+        sqlx::query("UPDATE browser_sessions SET last_seen_at=now()-interval '10 minutes',idle_expires_at=now()+interval '1 minute' WHERE token_hash=$1")
+            .bind(&key).execute(&pool).await.unwrap();
+        assert!(me(&state).await);
+        assert!(
+            deadlines().await.1.unwrap() > 1790.0,
+            "activity extends the idle deadline"
+        );
+        // Idle-expired: refused, and a longer idle timeout (or none) doesn't revive it.
+        sqlx::query("UPDATE browser_sessions SET last_seen_at=now()-interval '10 minutes',idle_expires_at=now()-interval '1 second' WHERE token_hash=$1")
+            .bind(&key).execute(&pool).await.unwrap();
+        assert!(!me(&state).await);
+        for (lifetime, idle) in [("7d", "7d"), ("7d", "off")] {
+            let longer = with(lifetime, idle).await.unwrap();
+            assert!(!me(&longer).await, "{lifetime}/{idle} must not revive it");
+        }
+        assert!(
+            deadlines().await.1.unwrap() < 0.0,
+            "an expired session's deadline is never moved"
+        );
+        let (status, _) =
+            http_management(&app, &credentials, "GET", "/api/v1/me", Value::Null).await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "the dashboard is signed out"
+        );
+        // Absolute expiry: refused whatever the idle deadline, and not revived either.
+        sqlx::query("UPDATE browser_sessions SET expires_at=now()-interval '1 second',idle_expires_at=now()+interval '1 hour' WHERE token_hash=$1")
+            .bind(&key).execute(&pool).await.unwrap();
+        assert!(!me(&state).await);
+        assert!(!me(&with("7d", "off").await.unwrap()).await);
+        sqlx::query("UPDATE browser_sessions SET last_seen_at=now()-interval '10 minutes' WHERE token_hash=$1")
+            .bind(&key).execute(&pool).await.unwrap();
+        assert!(!me(&state).await);
+        let idle_after = deadlines().await.1.unwrap();
+        assert!(
+            idle_after < 3601.0 && idle_after > 3500.0,
+            "a request on an expired session doesn't touch it: {idle_after}"
+        );
+        // Idle off: the next recorded activity clears an existing idle deadline.
+        sqlx::query("UPDATE browser_sessions SET expires_at=now()+interval '1 hour',last_seen_at=now()-interval '10 minutes' WHERE token_hash=$1")
+            .bind(&key).execute(&pool).await.unwrap();
+        assert!(me(&with("7d", "off").await.unwrap()).await);
+        assert_eq!(deadlines().await.1, None);
+        // Sign-in times are kept on the user.
+        let (first, last): (Option<chrono::DateTime<chrono::Utc>>, Option<chrono::DateTime<chrono::Utc>>) =
+            sqlx::query_as("SELECT first_signed_in_at,last_signed_in_at FROM users u JOIN browser_sessions s ON s.user_id=u.id WHERE s.token_hash=$1")
+                .bind(&key).fetch_one(&pool).await.unwrap();
+        assert!(first.is_some() && first == last);
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn the_session_cookie_lasts_as_long_as_the_session(pool: sqlx::PgPool) {
+        let mock = MockProvider::start(None).await;
+        let mut config = mock.config();
+        config.session_policy = SessionPolicy::parse(Some("90m"), Some("off")).unwrap();
+        let state = IdentityState::new(Store::new(pool.clone()), Some(config))
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES($1,$2,'entitled','platform','user')")
+            .bind(Uuid::new_v4()).bind(&mock.issuer).execute(&pool).await.unwrap();
+        let (oauth_state, browser, _) = begin_login(&state, &mock).await;
+        let response = finish_login(&state, &oauth_state, &browser, "good")
+            .await
+            .unwrap();
+        let cookies: Vec<_> = response
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().to_owned())
+            .collect();
+        for name in [SESSION, CSRF] {
+            let cookie = cookies
+                .iter()
+                .find(|c| c.starts_with(&format!("{name}=")))
+                .unwrap();
+            assert!(cookie.contains("Max-Age=5400"), "{cookie}");
+        }
+        let idle: Option<chrono::DateTime<chrono::Utc>> =
+            sqlx::query_scalar("SELECT idle_expires_at FROM browser_sessions")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(idle, None, "idle off: no idle deadline");
+    }
+
+    /// #80 cleanup: only sessions that ended more than 30 days ago, in bounded
+    /// batches, concurrently with live traffic; expired sign-in attempts.
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn cleanup_deletes_only_long_ended_sessions_and_expired_attempts(pool: sqlx::PgPool) {
+        let store = Store::new(pool.clone());
+        let (user, live, _) = seed(&pool).await;
+        let ended = [
+            ("revoked_at=now()-interval '31 days'", true),
+            ("expires_at=now()-interval '31 days'", true),
+            ("idle_expires_at=now()-interval '31 days'", true),
+            ("revoked_at=now()-interval '29 days'", false),
+            ("expires_at=now()-interval '1 day'", false),
+        ];
+        for (i, (end, _)) in ended.iter().enumerate() {
+            sqlx::query("INSERT INTO browser_sessions(token_hash,user_id,csrf_hash,expires_at,verified_email) VALUES(sha256($1::text::bytea),$2,sha256('c'::bytea),now()+interval '1 hour','x@example.test')")
+                .bind(format!("s{i}")).bind(user).execute(&pool).await.unwrap();
+            sqlx::query(&format!(
+                "UPDATE browser_sessions SET {end} WHERE token_hash=sha256($1::text::bytea)"
+            ))
+            .bind(format!("s{i}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let left = || async {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM browser_sessions")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        };
+        assert_eq!(left().await, 6);
+        // Bounded: one per call here; live traffic runs alongside.
+        let state = IdentityState::new(store.clone(), None).await.unwrap();
+        let headers = cookie_header(SESSION, &live);
+        let (pruned, still_live) = tokio::join!(
+            prune_sessions_fenced(&store, 1, None),
+            verify_session(&state, &headers)
+        );
+        assert_eq!(pruned.unwrap(), 1);
+        assert!(still_live.is_ok());
+        assert_eq!(prune_sessions_fenced(&store, 100, None).await.unwrap(), 2);
+        assert_eq!(prune_sessions_fenced(&store, 100, None).await.unwrap(), 0);
+        assert_eq!(
+            left().await,
+            3,
+            "the live session and the two recently ended ones stay"
+        );
+        assert!(verify_session(&state, &headers).await.is_ok());
+        // Sign-in attempts: only expired ones, bounded.
+        for (i, expiry) in ["-1 second", "-1 day", "+5 minutes"].iter().enumerate() {
+            sqlx::query(&format!("INSERT INTO oidc_login_attempts(state_hash,browser_hash,nonce,pkce_verifier,expires_at) VALUES(sha256($1::text::bytea),sha256('b'::bytea),'n','v',now()+interval '{expiry}')"))
+                .bind(format!("a{i}")).execute(&pool).await.unwrap();
+        }
+        assert_eq!(
+            prune_login_attempts_fenced(&store, 1, None).await.unwrap(),
+            1
+        );
+        assert_eq!(
+            prune_login_attempts_fenced(&store, 100, None)
+                .await
+                .unwrap(),
+            1
+        );
+        let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM oidc_login_attempts")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(pending, 1, "the unexpired attempt stays usable");
     }
 
     const FIREFOX_LINUX: &str =

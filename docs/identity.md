@@ -69,6 +69,17 @@ The serving process runs bounded inactive-account cleanup every minute (up to 10
 - `GET /api/v1/auth/callback` redirects to `/`; no return-to parameter.
 - `POST /api/v1/auth/logout` revokes the current session and clears cookies.
 
+### Session lifetime and idle timeout
+
+| Variable | Default | Allowed |
+| --- | --- | --- |
+| `GATEWAY_SESSION_LIFETIME` | `12h` | `15m` to `7d` (`30m`, `12h`, `7d`) |
+| `GATEWAY_SESSION_IDLE_TIMEOUT` | `2h` | `off`, or `15m` up to the lifetime |
+
+A session ends at whichever comes first: its lifetime after sign-in, or the idle timeout after its last recorded activity. Activity is recorded at most every 5 minutes, so a session can end up to 5 minutes earlier than the idle timeout after its last request. Both deadlines are stored on the session when it is created or active and compared with the database clock, so replicas agree and a changed setting never brings back a session that already ended: a longer lifetime applies to new sign-ins, a different idle timeout from a live session's next activity. The session cookie lasts as long as the lifetime. A shorter setting doesn't shorten sessions that already exist; to end them now, sign people out (Admin › Users › Sign out all sessions). Without SCIM, a removed IdP group takes effect at the next sign-in, so a longer lifetime with the idle timeout `off` keeps that access longer. Helm: `gateway.sessionLifetime`, `gateway.sessionIdleTimeout`.
+
+Maintenance deletes expired sign-in attempts every minute and sessions that ended (signed out, expired or idle) more than 30 days ago every hour, in bounded batches. "First signed in" and "Last sign-in" are kept on the user, so they don't change when old sessions are deleted. They are for display only, never used for access decisions. The hourly cleanup scans the sessions table; a large table from before this release is cleared at 10,000 rows an hour.
+
 ### Your sessions
 
 Your profile › Sessions lists where you're signed in to the dashboard: a browser and OS family ("Firefox on macOS", from a fixed list; one of them alone when only one is recognised, "Unknown browser" when neither is), when it signed in and when it was last active. Last activity is recorded at most every 5 minutes. No IP address or raw user agent is stored. You can sign one session out, or every other session at once; a signed-out session's cookie stops working on its next request, on every replica. The session you're using is marked and is signed out with the regular Sign out. Signing sessions out never touches API keys.
@@ -77,7 +88,7 @@ A Platform Admin sees how many sessions a person has (user detail, never which d
 
 Login attempts are browser-bound, one-use and ten minutes long. Callback consumes the attempt before token exchange. Signature, issuer, audience, expiry, nonce, authorized-party policy and verified email are checked. An entitlement-loss callback commits revocation before denying access. After full verification, a denied browser (`Accept: text/html`) is redirected to `/?auth_error=access_denied` with session cookies cleared; non-browser callers receive the status code. Unverified or malformed callbacks never clear an existing session.
 
-Session/CSRF secrets are independent random values; only hashes are stored. Sessions retain the normalized signature-verified email separately from the editable directory email. Invitation acceptance uses this verified session claim; sessions lacking proof cannot authenticate. Cleanup clears retained session email. Sessions expire absolutely after twelve hours. `omg_session` is HttpOnly/SameSite=Lax; readable `omg_csrf` is SameSite=Strict; `omg_oidc` is HttpOnly/SameSite=Lax. Cookies are host-only with Path `/`. Duplicate/malformed authentication cookies fail.
+Session/CSRF secrets are independent random values; only hashes are stored. Sessions retain the normalized signature-verified email separately from the editable directory email. Invitation acceptance uses this verified session claim; sessions lacking proof cannot authenticate. Cleanup clears retained session email. Sessions end at their lifetime or idle timeout (see [Session lifetime and idle timeout](#session-lifetime-and-idle-timeout)). `omg_session` is HttpOnly/SameSite=Lax; readable `omg_csrf` is SameSite=Strict; `omg_oidc` is HttpOnly/SameSite=Lax. Cookies are host-only with Path `/`. Duplicate/malformed authentication cookies fail.
 
 Every protected request reads current active entitlement. Every non-GET/HEAD request must also send:
 

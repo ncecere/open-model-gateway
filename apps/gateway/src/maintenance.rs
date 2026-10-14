@@ -158,6 +158,43 @@ pub fn start(store: Store, retention_days: Option<i32>) -> tokio::task::JoinHand
                 )
                 .await;
             }
+            // Expired sign-in attempts every minute (#80): far more than the
+            // pending-attempt cap lets anyone create in a minute.
+            if counter.is_multiple_of(12) {
+                singleton(
+                    &store,
+                    crate::leases::Lease::Maintenance,
+                    "login_attempt_prune",
+                    |fence| {
+                        let store = store.clone();
+                        async move {
+                            crate::identity::prune_login_attempts_fenced(
+                                &store,
+                                10_000,
+                                fence.as_ref(),
+                            )
+                            .await
+                        }
+                    },
+                )
+                .await;
+            }
+            // Sessions that ended more than 30 days ago, hourly (#80).
+            if counter.is_multiple_of(720) {
+                singleton(
+                    &store,
+                    crate::leases::Lease::Maintenance,
+                    "session_prune",
+                    |fence| {
+                        let store = store.clone();
+                        async move {
+                            crate::identity::prune_sessions_fenced(&store, 10_000, fence.as_ref())
+                                .await
+                        }
+                    },
+                )
+                .await;
+            }
             // Storage usage (not charged): record completed hours every 5 minutes.
             if counter.is_multiple_of(60) {
                 singleton(
