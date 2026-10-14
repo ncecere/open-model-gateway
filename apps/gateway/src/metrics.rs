@@ -673,6 +673,13 @@ impl Metrics {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn settlement_count(&self, settlement: Settlement) -> u64 {
+        self.settlements
+            .get_or_create(&[("outcome", settlement.as_str().to_owned())])
+            .get()
+    }
+
     pub fn observe_settlement(&self, settlement: Settlement) {
         self.settlements
             .get_or_create(&[("outcome", settlement.as_str().to_owned())])

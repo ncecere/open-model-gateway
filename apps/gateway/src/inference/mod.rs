@@ -433,7 +433,12 @@ impl ExecutionGuard {
                 .finish_attempt(&self.record(outcome, error), &self.telemetry_now()),
         )
         .await
-        .map_err(|_| InferenceError::Storage)
+        .map_err(|_| {
+            // A write that fails fast counts itself as held inside
+            // `finish_attempt`; one that times out never gets that far (#136).
+            crate::metrics::METRICS.observe_settlement(crate::metrics::Settlement::Held);
+            InferenceError::Storage
+        })
         .and_then(|result| result);
         if result.is_err() {
             tracing::error!(execution_id = %self.id, "inference finalization failed; reconciliation required");
@@ -466,7 +471,11 @@ impl Drop for ExecutionGuard {
         // Network work is dropped synchronously. Only best-effort accounting is detached.
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
-                if !matches!(timeout(Duration::from_secs(3), repository.finish_attempt(&record, &telemetry)).await, Ok(Ok(()))) {
+                let finished = timeout(Duration::from_secs(3), repository.finish_attempt(&record, &telemetry)).await;
+                if finished.is_err() {
+                    crate::metrics::METRICS.observe_settlement(crate::metrics::Settlement::Held);
+                }
+                if !matches!(finished, Ok(Ok(()))) {
                     tracing::error!(execution_id = %record.id, "cancelled inference finalization failed; reconciliation required");
                 }
             });
