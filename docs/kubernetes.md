@@ -203,7 +203,10 @@ present; both are disabled by default for this reason.
 
 `loadtest.enabled=true` (see `ci/loadtest-values.yaml`) adds a `mock-upstream` Deployment/Service and
 a one-shot `loadgen` Job, built from `tools/mock-upstream` and `tools/loadgen`
-(`deploy/loadtest/Dockerfile`; there is no CI job publishing this image yet — build it locally):
+(`deploy/loadtest/Dockerfile`). For a cluster, build it on request with the `loadtest-image`
+workflow (`gh workflow run loadtest-image.yml -f ref=<branch|tag|commit>`), which publishes
+`ghcr.io/ncecere/open-model-gateway-loadtest:dev-<first 12 characters of the commit>`; for kind,
+build it locally:
 
 ```sh
 docker build -f deploy/loadtest/Dockerfile -t omg-loadtest:local .
