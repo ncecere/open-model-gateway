@@ -257,7 +257,20 @@ For CNPG base backups and WAL archiving, failover behaviour and connection sizin
 5. Compare the restored ledger and execution counts (printed by `restore`) with the source. Spot-check costs, and confirm that pending and unknown reservations survived. Run `open-model-gateway budget verify` against it.
 6. Record the elapsed time (your measured RTO) and the backup age (RPO), then drop the drill database.
 
-A restore brings back every browser session that had not expired when the backup was taken. If the incident involved a compromise, revoke them before serving: `UPDATE browser_sessions SET revoked_at = now() WHERE revoked_at IS NULL;` as the migrator, so everyone signs in again.
+**What a restore brings back, and what it loses.** A restore returns the database to the moment of the backup. Before serving it:
+
+1. **Revocations and suspensions made after the backup are undone.** API keys, membership and platform role grants, browser sessions and invitations revoked since the backup, and users, keys, service accounts and workspaces disabled since then, are active again in the restored copy.
+   - If the old database can still be read (corruption, a bad change, a lost replica, not a total loss), copy its revocations onto the restored one before starting the gateway:
+
+     ```sh
+     python3 scripts/backup.py reapply-revocations --source-url-file old.url --url-file restored.url        # dry run: counts per table
+     python3 scripts/backup.py reapply-revocations --source-url-file old.url --url-file restored.url --yes  # one transaction
+     ```
+
+     It copies revocations (`revoked_at`) and suspensions (`disabled_at`, with a user's reason and cleanup date) only onto rows still active in the restored copy, never clears anything, applies in one transaction and refuses two databases of different installations. Something re-enabled after the backup stays disabled until you re-enable it. Run it as the migrator on both.
+   - If the old database is gone, so is its audit log. Take what changed since the backup from your off-host audit export and repeat it in the dashboard: `key.revoked`, `key.disabled`, `role.revoked`, `workspace.manual_membership_revoked`, `invitation.revoked`, `scim.user.deactivated`, `service_account.updated` and `workspace.updated`. An admin suspension is recorded as `user.updated` without detail (#158), so check suspended users by hand. Without an export, revoke every key created before the incident that you can't vouch for, and have users sign in again.
+2. **Sessions.** If the incident involved a compromise, revoke every session before serving, so everyone signs in again: `UPDATE browser_sessions SET revoked_at = now() WHERE revoked_at IS NULL;` as the migrator.
+3. **Spend recorded after the backup is lost.** Budgets and limits count from the restored totals, so a workspace may spend again what it already spent. Compare provider invoices for the gap, and tighten affected budgets until the period rolls over.
 
 **Clean-host drill (2026-10-14 UTC, #105)** on the homelab cluster, with two disposable `dev-omg` environments (PostgreSQL 18, release `dev-bc760061ffa5`, schema version 37):
 

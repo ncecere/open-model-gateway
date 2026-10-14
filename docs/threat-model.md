@@ -565,7 +565,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 - Mitigation: restore requires an empty target, a matching migration lineage and all file-store key IDs. Both checks can be skipped (`scripts/backup.py`; [operations](operations.md)): `--expect-version N` replaces the lineage check with a comparison of the latest migration version only, and `--skip-file-key-check` skips the file-key check. [Operations](operations.md) tells operators to revoke restored browser sessions after a compromise.
 - Tests: `tests/backup.test.py` `test_restore_refuses_non_empty_or_existing_targets_without_touching_data`, `test_restore_requires_matching_lineage`, `test_file_store_key_ids_are_recorded_and_required_for_restore`.
 - Residual: keys, grants and users revoked after the backup become active again after a restore, and spend since the backup is lost, which gives budgets headroom the provider has already billed. The runbook covers sessions only.
-- Follow-up: #146 (restore re-revocation runbook: re-apply revocations of keys, grants and suspensions made after the backup, and account for lost spend).
+- Follow-up: revocations, suspensions and lost spend are handled by #146 when the old database is readable (`scripts/backup.py reapply-revocations`; runbook in docs/operations.md). If it's gone, an off-host audit export is the only record; suspensions aren't distinguishable in it yet (#158). The weaker `--expect-version` and `--skip-file-key-check` flags remain explicit operator choices.
 
 **OPS-7. `bootstrap-demo` or the demo issuer reaches a real deployment.** S, E · Asset: Platform Admin access · Attacker: anyone who can reach the demo issuer.
 - Mitigation: `main.rs` `ensure_demo_config` runs for `bootstrap-demo` and whenever `GATEWAY_OIDC_ISSUER` is `http://127.0.0.1:18084`; it requires development mode, a loopback listener, a loopback database host and the database `gateway_enterprise_demo`. `demo.rs` `seed` requires development mode and an empty installation. `scripts/demo-oidc.mjs` needs `OMG_ENABLE_LOCAL_DEMO=1`, binds `127.0.0.1` and checks the `Host` header. `bootstrap-dev` is development-only.
@@ -608,7 +608,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 | Dockerfile build-stage images pinned by tag, not digest (SECURITY.md makes no digest claim) | SUP-2 | Fixed in #143 |
 | OIDC HTTP client honours ambient `HTTP(S)_PROXY`/`ALL_PROXY` (no `.no_proxy()` in `identity.rs`); it lacks `.retry(never())`, but reqwest's default retry can't fire without its `http2` feature (`apps/gateway/Cargo.toml`) | OIDC-5, EGR-4 | Fixed in #144 |
 | `revoked_at` can be cleared by the runtime role; no trigger. A trigger guards against application bugs, not a stolen runtime credential, which can insert keys and grants | KEY-3, OPS-2 | Fixed in #145 |
-| Restore revives keys and grants revoked after the backup and loses spend; `--expect-version` and `--skip-file-key-check` weaken its checks | OPS-6 | #146 |
+| Restore revives keys and grants revoked after the backup and loses spend; `--expect-version` and `--skip-file-key-check` weaken its checks | OPS-6 | Fixed in #146 (re-apply revocations, runbook); the weaker flags remain operator choices |
 | No secret manager; every replica holds every secret | EGR-10 | Deferred (roadmap R17), no issue |
 | SCIM token is one static secret that can effectively grant mapped admin roles | SCIM-1 | #60; Review: #61 |
 | No off-host, tamper-evident audit export | ADM-7, AUD-1 | #30, #106, #107, #108 |

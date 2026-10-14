@@ -702,6 +702,65 @@ class DisposableDatabaseTests(unittest.TestCase):
         for name in (self.source, self.target):
             self.pg.query(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE);')
 
+    def test_reapply_revocations_from_the_old_database_after_a_restore(self):
+        # #146: a restore brings back keys, grants, sessions and invitations
+        # revoked, and users, keys, service accounts and workspaces disabled,
+        # after the backup. Re-apply them from the old database.
+        revocable = ["api_keys", "workspace_membership_grants", "platform_role_grants", "workspace_invitations"]
+        schema = ["ALTER TABLE installation ADD COLUMN id uuid NOT NULL DEFAULT '11111111-1111-4111-8111-111111111111';",
+                  "CREATE TABLE browser_sessions(token_hash bytea PRIMARY KEY, revoked_at timestamptz);",
+                  "INSERT INTO browser_sessions SELECT sha256(g::text::bytea), NULL FROM generate_series(1,3) g;",
+                  "CREATE TABLE users(id uuid PRIMARY KEY, disabled_at timestamptz, disable_reason text, cleanup_due_at timestamptz);",
+                  "CREATE TABLE service_accounts(id uuid PRIMARY KEY, disabled_at timestamptz);",
+                  "CREATE TABLE workspaces(id uuid PRIMARY KEY, disabled_at timestamptz);"]
+        for table in revocable:
+            extra = ", disabled_at timestamptz" if table == "api_keys" else ""
+            schema += [f"CREATE TABLE {table}(id uuid PRIMARY KEY, revoked_at timestamptz{extra});",
+                       f"INSERT INTO {table}(id) SELECT gen_random_uuid() FROM generate_series(1,3);"]
+        for table in ["users", "service_accounts", "workspaces"]:
+            schema.append(f"INSERT INTO {table}(id) SELECT gen_random_uuid() FROM generate_series(1,3);")
+        # Revoked before the backup: the restore already carries it, and its time must not move.
+        schema.append("UPDATE api_keys SET revoked_at=now()-interval '1 day' WHERE id=(SELECT min(id::text)::uuid FROM api_keys);")
+        self.pg.query("\n".join(schema), self.source)
+        source = backup.Postgres(dict(self.env, PGDATABASE=self.source), self.pg.container)
+        target = backup.Postgres(dict(self.env, PGDATABASE=self.target), self.pg.container)
+        with tempfile.TemporaryDirectory() as folder:
+            backup.restore(self.pg, backup.backup(source, Path(folder)), self.target, create=True, expected_migrations=self.lineage)
+        # After the backup the old database revokes and disables one more row each, and suspends a user.
+        last = "(SELECT max(id::text)::uuid FROM {t})"
+        after = [f"UPDATE {t} SET revoked_at=now() WHERE id={last.format(t=t)};" for t in revocable]
+        after.append("UPDATE browser_sessions SET revoked_at=now() WHERE token_hash=(SELECT token_hash FROM browser_sessions ORDER BY token_hash DESC LIMIT 1);")
+        after += [f"UPDATE {t} SET disabled_at=now() WHERE id={last.format(t=t)};" for t in ["api_keys", "service_accounts", "workspaces"]]
+        after.append(f"UPDATE users SET disabled_at=now(), disable_reason='admin_suspension', cleanup_due_at=now()+interval '30 days' WHERE id={last.format(t='users')};")
+        self.pg.query("\n".join(after), self.source)
+        labels = [f"{t}.revoked_at" for t in revocable + ["browser_sessions"]] + [f"{t}.disabled_at" for t in ["users", "api_keys", "service_accounts", "workspaces"]]
+        def state(pg):
+            out = {}
+            for table in revocable + ["browser_sessions"]:
+                key = "encode(token_hash,'hex')" if table == "browser_sessions" else "id::text"
+                out[f"{table}.revoked_at"] = pg.query(f"SELECT coalesce(string_agg({key}||'@'||revoked_at::text, ',' ORDER BY 1),'') FROM {table} WHERE revoked_at IS NOT NULL;")
+            for table in ["users", "api_keys", "service_accounts", "workspaces"]:
+                cols = "disabled_at::text||coalesce(disable_reason,'')||coalesce(cleanup_due_at::text,'')" if table == "users" else "disabled_at::text"
+                out[f"{table}.disabled_at"] = pg.query(f"SELECT coalesce(string_agg(id::text||'@'||{cols}, ',' ORDER BY 1),'') FROM {table} WHERE disabled_at IS NOT NULL;")
+            return out
+        before, lines = state(target), []
+        self.assertEqual(backup.reapply_revocations(source, target, yes=False, out=lines.append), {label: 1 for label in labels})
+        self.assertEqual(state(target), before, "a dry run changes nothing")
+        self.assertIn("Dry run", "\n".join(lines))
+        # One transaction: a failure in any table leaves every table as it was.
+        target.query("ALTER TABLE workspaces ADD CONSTRAINT refuse_disable CHECK (disabled_at IS NULL);")
+        with self.assertRaises(backup.BackupError):
+            backup.reapply_revocations(source, target, yes=True, out=lines.append)
+        self.assertEqual(state(target), before, "a failed apply rolls back every table")
+        target.query("ALTER TABLE workspaces DROP CONSTRAINT refuse_disable;")
+        self.assertEqual(backup.reapply_revocations(source, target, yes=True, out=lines.append), {label: 1 for label in labels})
+        self.assertEqual(state(target), state(source), "the same rows, with the same times, reasons and cleanup dates")
+        self.assertEqual(backup.reapply_revocations(source, target, yes=True, out=lines.append), {label: 0 for label in labels})
+        target.query("UPDATE installation SET id='22222222-2222-4222-8222-222222222222';")
+        with self.assertRaises(backup.BackupError) as raised:
+            backup.reapply_revocations(source, target, yes=True, out=lines.append)
+        self.assertIn("different installation", str(raised.exception))
+
     def test_backup_verify_restore_and_refusals(self):
         source = backup.Postgres(dict(self.env, PGDATABASE=self.source), self.pg.container)
         with tempfile.TemporaryDirectory() as folder:
