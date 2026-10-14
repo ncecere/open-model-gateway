@@ -56,9 +56,11 @@ class FakePostgres:
         self.seen_during_dump = None
         self.restored = None
         self.calls = []
+        self.statements = []
 
     def query(self, sql, database=None):
         self.calls.append(("query", sql.split()[0:3], database))
+        self.statements.append(sql)
         if "to_regclass" in sql:
             return "t" if self.file_key_ids is not None else "f"
         if "FROM stored_files" in sql:
@@ -167,6 +169,14 @@ class UnitTests(unittest.TestCase):
         for kwargs in ({"expected_migrations": LINEAGE[:1]}, {"expected_migrations": [LINEAGE[0], dict(LINEAGE[1], checksum="cc" * 48)]}, {"expected_version": 3}, {}):
             with self.assertRaises(backup.BackupError):
                 backup.check_compatible(manifest, **kwargs)
+
+    def test_create_copies_template0_not_template1(self):
+        # template1 may carry extensions (pgvector on some clusters); a copy of it is never empty.
+        with tempfile.TemporaryDirectory() as folder:
+            manifest_path = backup.backup(FakePostgres(), Path(folder))
+            pg = FakePostgres()
+            backup.restore(pg, manifest_path, "gateway_restored", create=True, expected_migrations=LINEAGE)
+        self.assertIn('CREATE DATABASE "gateway_restored" TEMPLATE template0;', pg.statements)
 
     def test_restore_refuses_non_empty_or_existing_targets_without_touching_data(self):
         with tempfile.TemporaryDirectory() as folder:

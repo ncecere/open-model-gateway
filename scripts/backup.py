@@ -639,7 +639,7 @@ def restore(pg, manifest_path, target, create=False, expected_migrations=None, e
     if create:
         if pg.query(f"SELECT count(*) FROM pg_database WHERE datname='{target}';") != "0":
             raise BackupError(f"database {target} already exists; --create only creates a new database")
-        pg.query(f'CREATE DATABASE "{target}";')
+        pg.query(f'CREATE DATABASE "{target}" TEMPLATE template0;')
         created = True
     try:
         if created:

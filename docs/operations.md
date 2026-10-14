@@ -246,7 +246,9 @@ Never recover over the live cluster. Never run down migrations. Never delete pen
    GRANT CONNECT ON DATABASE gateway_restore_20261014 TO gateway_runtime;
    ```
 
-   Without the `REVOKE`, `grants verify` fails with "runtime can create objects" (PUBLIC's default `TEMP`). Demo database names are refused as targets; to cut a restored copy over, stop the gateway, then drop the old database and `ALTER DATABASE … RENAME` the restored one into its place.
+   Without the `REVOKE`, `grants verify` fails with "runtime can create objects" (PUBLIC's default `TEMP`). `--create` itself copies `template0`, for the same reason.
+
+   Demo database names are refused as targets. To cut a restored copy over to the name the gateway expects, stop every gateway replica, then a database administrator, connected to another database such as `postgres`, drops the old database and renames the restored one into its place (`DROP DATABASE …`, `ALTER DATABASE gateway_restore_… RENAME TO …`). Both need ownership, `RENAME` also needs `CREATEDB`, and neither runs while sessions are open on those databases.
 3. Apply the runtime grants as the migrator with `open-model-gateway grants apply`, then run `open-model-gateway grants verify` with a role that can `SET ROLE gateway_runtime` (it runs `deploy/staging/verify-privileges.sql`, rollback-only).
 4. Start the matching release against the restored database. `/health/ready` must report `schema: ok`.
 5. Compare the restored ledger and execution counts (printed by `restore`) with the source. Spot-check costs, and confirm that pending and unknown reservations survived. Run `open-model-gateway budget verify` against it.
