@@ -179,7 +179,7 @@ impl Filters {
     }
 }
 // Every filter and the own-human-key predicate precedes aggregation and dimension discovery.
-const BASE: &str = "WITH all_rows AS (SELECT e.*,k.issued_to_user_id,k.service_account_id,CASE WHEN $15 AND w.kind='personal' THEN 'Personal · '||coalesce(nullif(btrim(ow.display_name),''),ow.email,'former user') ELSE w.name END workspace_name,r.execution_id reservation_id,r.price_id,r.state accounting_state,r.actual_microusd,r.held_microusd,r.unbounded_cost,r.lease_expires_at,r.cost_components,p.pricing_version,p.price_lines FROM inference_executions e JOIN api_keys k ON k.id=e.api_key_id AND k.workspace_id=e.workspace_id JOIN workspaces w ON w.id=e.workspace_id LEFT JOIN users ow ON ow.id=w.owner_user_id LEFT JOIN governance_reservations r ON r.execution_id=e.id LEFT JOIN deployment_prices p ON p.id=r.price_id WHERE ($1::uuid IS NULL OR e.workspace_id=$1) AND ($2::uuid IS NULL OR k.issued_to_user_id=$2) AND e.started_at >= ($12::date::timestamp AT TIME ZONE 'UTC') AND e.started_at < ($4::date::timestamp AT TIME ZONE 'UTC') AND ($5::text IS NULL OR e.public_model=$5) AND ($6::text IS NULL OR e.provider=$6) AND ($7::uuid IS NULL OR e.cost_center_id=$7) AND (NOT $8 OR e.cost_center_id IS NULL) AND ($9::uuid IS NULL OR k.issued_to_user_id=$9) AND ($10::uuid IS NULL OR k.service_account_id=$10) AND ($11::text IS NULL OR coalesce(r.state,'missing')=$11) AND ($13::uuid IS NULL OR (e.api_key_id=$13 AND NOT ($15 AND w.kind='personal'))) AND ($14::text[] IS NULL OR (CASE e.state WHEN 'started' THEN 'in_progress' ELSE e.state END)=ANY($14))), rows AS (SELECT * FROM all_rows WHERE started_at>=($3::date::timestamp AT TIME ZONE 'UTC'))";
+const BASE: &str = "WITH all_rows AS (SELECT e.*,k.issued_to_user_id,k.service_account_id,CASE WHEN $15 AND w.kind='personal' THEN 'Personal · '||coalesce(nullif(btrim(ow.display_name),''),ow.email,'former user') ELSE w.name END workspace_name,w.kind workspace_kind,r.execution_id reservation_id,r.price_id,r.state accounting_state,r.actual_microusd,r.held_microusd,r.unbounded_cost,r.lease_expires_at,r.cost_components,p.pricing_version,p.price_lines FROM inference_executions e JOIN api_keys k ON k.id=e.api_key_id AND k.workspace_id=e.workspace_id JOIN workspaces w ON w.id=e.workspace_id LEFT JOIN users ow ON ow.id=w.owner_user_id LEFT JOIN governance_reservations r ON r.execution_id=e.id LEFT JOIN deployment_prices p ON p.id=r.price_id WHERE ($1::uuid IS NULL OR e.workspace_id=$1) AND ($2::uuid IS NULL OR k.issued_to_user_id=$2) AND e.started_at >= ($12::date::timestamp AT TIME ZONE 'UTC') AND e.started_at < ($4::date::timestamp AT TIME ZONE 'UTC') AND ($5::text IS NULL OR e.public_model=$5) AND ($6::text IS NULL OR e.provider=$6) AND ($7::uuid IS NULL OR e.cost_center_id=$7) AND (NOT $8 OR e.cost_center_id IS NULL) AND ($9::uuid IS NULL OR k.issued_to_user_id=$9) AND ($10::uuid IS NULL OR k.service_account_id=$10) AND ($11::text IS NULL OR coalesce(r.state,'missing')=$11) AND ($13::uuid IS NULL OR (e.api_key_id=$13 AND NOT ($15 AND w.kind='personal'))) AND ($14::text[] IS NULL OR (CASE e.state WHEN 'started' THEN 'in_progress' ELSE e.state END)=ANY($14))), rows AS (SELECT * FROM all_rows WHERE started_at>=($3::date::timestamp AT TIME ZONE 'UTC'))";
 const TOTALS: &str = "jsonb_build_object('known_cost_microusd',coalesce(sum(actual_microusd),0)::text,'held_microusd',coalesce(sum(held_microusd) FILTER(WHERE actual_microusd IS NULL AND accounting_state IN('pending','unknown')),0)::text,'attempts',count(id)::text,'root_requests',count(DISTINCT root_request_id)::text,'unresolved_attempts',count(id) FILTER(WHERE actual_microusd IS NULL)::text)";
 fn bind<'q>(
     sql: &'q str,
@@ -219,6 +219,13 @@ fn meter_workloads(key: &str) -> &'static str {
 fn breakdown(id: &str, name: &str) -> String {
     format!(
         "(SELECT coalesce(jsonb_agg(v ORDER BY v->>'name',v->>'id'),'[]'::jsonb) FROM (SELECT jsonb_build_object('id',{id},'name',{name},'totals',{TOTALS}) v FROM rows GROUP BY {id},{name} ORDER BY {name},{id} LIMIT 100) b)"
+    )
+}
+/// Workspace rows also carry their `kind`, so a page can tell Team/Project rows
+/// from (collapsed) personal ones without loading every workspace.
+fn workspaces() -> String {
+    format!(
+        "(SELECT coalesce(jsonb_agg(v ORDER BY v->>'name',v->>'id'),'[]'::jsonb) FROM (SELECT jsonb_build_object('id',workspace_id::text,'name',workspace_name,'kind',workspace_kind,'totals',{TOTALS}) v FROM rows GROUP BY workspace_id,workspace_name,workspace_kind ORDER BY workspace_name,workspace_id LIMIT 100) b)"
     )
 }
 fn cost_centers() -> String {
@@ -321,7 +328,7 @@ async fn report(
         if platform { "platform" } else { "workspace" },
         breakdown("public_model", "public_model"),
         breakdown("provider", "provider"),
-        breakdown("workspace_id::text", "workspace_name"),
+        workspaces(),
         cost_centers(),
         service,
         comparison,

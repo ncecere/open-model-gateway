@@ -33,7 +33,7 @@ Every financial amount, aggregate count and billing counter is an exact decimal 
 | `totals.attempts`, `root_requests` | Admitted upstream attempts versus distinct root requests. Fallbacks can increase attempts. |
 | `totals.unresolved_attempts` | Attempts lacking actual valuation, including missing reservation. |
 | `daily` | Every UTC day, including zero-activity days, with the same totals. |
-| `breakdowns` | Models, providers, workspaces, cost centers, workspace service-account/human-key grouping. Max 100 entries each. |
+| `breakdowns` | Models, providers, workspaces (each with its `kind`), cost centers, workspace service-account/human-key grouping. Max 100 entries each. |
 | `breakdowns_truncated` | At least one dimension exceeds its displayed bound; totals remain full aggregates. |
 | `comparison` | Null or previous period and totals; no implicit accuracy percentage. |
 

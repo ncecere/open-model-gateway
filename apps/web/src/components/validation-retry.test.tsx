@@ -209,4 +209,21 @@ describe("search fields (R06, #67)", () => {
     await waitFor(() => expect(run).toHaveBeenCalledTimes(1));
     expect(run.mock.calls[0]![0]).toEqual({ owner_user_id: "u-1" });
   });
+  it("shows the value it will submit after being hidden and shown again", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ data: [{ id: "ws-b", name: "Beta" }] })));
+    const target: Field = { name: "target_kind", label: "Grants", type: "select", required: true, value: "workspace", options: [{ value: "platform", label: "Platform role" }, { value: "workspace", label: "Workspace" }] };
+    const workspace: Field = { name: "workspace_id", label: "Shared workspace", type: "search", required: true, value: "ws-a", visibleWhen: v => v.target_kind === "workspace",
+      search: { path: "/api/v1/platform/workspaces", option: ((w: { id: string; name: string }) => ({ value: w.id, label: w.name })) as never, initialLabel: "Alpha" } };
+    const { user, run } = await mountForm("dialog", [target, workspace]);
+    const box = () => screen.getByRole("combobox", { name: /Shared workspace/ }) as HTMLInputElement;
+    expect(box().value).toBe("Alpha"); // the edit form's current choice
+    await user.clear(box()); await user.type(box(), "be");
+    await user.click(await screen.findByRole("option", { name: "Beta" }));
+    const kind = screen.getByRole("combobox", { name: /Grants/ });
+    await user.selectOptions(kind, "platform"); await user.selectOptions(kind, "workspace");
+    expect(box().value).toBe("Beta"); // not the original "Alpha": the field shows what will be sent
+    await user.click(submitButton("dialog"));
+    await waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    expect(run.mock.calls[0]![0]).toMatchObject({ target_kind: "workspace", workspace_id: "ws-b" });
+  });
 });

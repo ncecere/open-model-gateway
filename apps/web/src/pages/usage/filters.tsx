@@ -8,12 +8,14 @@
  * accounting "Cost" state. Filters only narrow what the caller may already
  * see; the gateway authorizes every number.
  *
- * Option sources never widen visibility: a workspace's own model, key and
- * service-account lists (each already scoped by the server), this period's
+ * Option sources never widen visibility: a workspace's own model and
+ * service-account lists and its keys searched on the server (each already
+ * scoped by the server), this period's
  * most active members (both scopes; never a member list), and at platform
  * scope this period's top keys and cost centers, never a user or key directory. Personal workspace keys stay
  * collapsed at platform scope.
  */
+import { useSelectedName, useServerOptions, withSelected } from "../../components/server-options";
 import { wsPath, platformPath, type Grant, type Model, type ServiceAccount, type Workspace } from "../../lib/api";
 import type { KeyRow } from "../../lib/keys";
 import type { DashboardSearch } from "../../lib/permissions";
@@ -21,10 +23,10 @@ import { exploreQuery, recordStatuses, usageFilters, usageStatuses, type Dimensi
 import { useApi, useChoices } from "../../components/ui";
 import type { ReactNode } from "react";
 import type { Facet, FacetOption, FilterValues } from "../../components/ui/filter-bar/filter-bar";
-import { FilterToolbar, type ToolbarChip } from "../../components/templates/filter-toolbar";
+import { FilterToolbar, type ToolbarChip, type ToolbarFacet } from "../../components/templates/filter-toolbar";
 import type { UsageNav } from "./shared";
 
-export type FilterOptions = { models: FacetOption[]; keys: FacetOption[]; members: FacetOption[]; costCenters: FacetOption[]; serviceAccounts: FacetOption[] };
+export type FilterOptions = { models: FacetOption[]; keys: FacetOption[]; members: FacetOption[]; costCenters: FacetOption[]; serviceAccounts: FacetOption[]; /** Workspace scope: keys are searched on the server (R06, #69). */ keySearch?: (text: string) => void };
 type Top = "key" | "member" | "cost_center";
 
 /** This period's top 25 groups of one dimension (platform options and cost centers), without the other filters. */
@@ -35,19 +37,21 @@ function useTop(base: string, period: UsagePeriod | undefined, groupBy: Top, ena
 const label = (name: string, publicName: string) => name === publicName ? publicName : `${name} · ${publicName}`;
 
 /** Filter options for this scope; see the file comment for where each list comes from. */
-export function useFilterOptions(workspace: Workspace | undefined, ctx: UsageContext, period: UsagePeriod | undefined, workspaceFilter?: string): FilterOptions {
+export function useFilterOptions(workspace: Workspace | undefined, ctx: UsageContext, period: UsagePeriod | undefined, workspaceFilter?: string, keyId?: string): FilterOptions {
   const ws = workspace ? wsPath(workspace.id) : "", base = workspace ? ws : platformPath, platform = !workspace;
   // Disabled lists get no path at all, so nothing is even addressed for callers who may not see it.
   const useList = <T,>(path: string, on: boolean) => useChoices<T>(on ? path : "", on);
   const grants = useList<Grant>(`${ws}/models`, !!workspace), models = useList<Model>(`${platformPath}/models`, platform);
-  const keys = useList<KeyRow>(`${ws}/keys`, !!workspace);
+  const keys = useServerOptions<KeyRow>(workspace ? `${ws}/keys` : undefined, k => ({ value: k.id, label: k.name, group: k.service_account_id ? "Service accounts" : "People" }));
+  const keyName = useSelectedName<KeyRow>(workspace && keyId ? `${ws}/keys/${encodeURIComponent(keyId)}` : undefined, k => k.name, "Selected key");
   const accounts = useList<ServiceAccount>(`${ws}/service-accounts`, !!workspace && ctx.members && workspace.capabilities.manage_service_accounts);
   const topKeys = useTop(base, period, "key", platform, workspaceFilter), topMembers = useTop(base, period, "member", platform || ctx.members, workspaceFilter);
   const centers = useTop(base, period, "cost_center", ctx.members, workspaceFilter);
   const named = (res: ExploreResponse | undefined) => res?.rows.flatMap(r => r.group.id && r.group.name ? [{ value: r.group.id, label: r.group.name }] : []) ?? [];
   return {
     models: workspace ? [...new Map((grants.data ?? []).map(g => [g.model_id, { value: g.model_id, label: label(g.display_name, g.public_name) }])).values()] : (models.data ?? []).map(m => ({ value: m.id, label: label(m.display_name, m.public_name) })),
-    keys: workspace ? (keys.data ?? []).map(k => ({ value: k.id, label: k.name, group: k.service_account_id ? "Service accounts" : "People" })) : named(topKeys.data),
+    keys: workspace ? withSelected(keys.options, keyId ? { value: keyId, label: keyName } : undefined) : named(topKeys.data),
+    keySearch: workspace ? keys.onSearch : undefined,
     // This period's most active people in both scopes (R06, #67): never the whole member list.
     members: named(topMembers.data),
     costCenters: centers.data?.rows.map(r => ({ value: r.group.id ?? "unallocated", label: r.group.name ?? "Unallocated" })) ?? [],
@@ -74,9 +78,9 @@ export const moreFacetIds = ["model", "key", "member", "status", "cost_center", 
 
 export function UsageFilterBar({ options, ctx, nav, records = false, start, end, extraChips, extraActive }: { options: FilterOptions; ctx: UsageContext; nav: UsageNav; records?: boolean; /** Leading controls: Period, then Admin's workspace scope. */ start?: ReactNode; /** Page actions at the right end of the row (e.g. By workspace's Columns). */ end?: ReactNode; extraChips?: ToolbarChip[]; extraActive?: number }) {
   const s = nav.search, f = usageFilters(s, ctx);
-  const facets: Facet[] = [
+  const facets: ToolbarFacet[] = [
     { id: "model", label: "Model", type: "select", placeholder: "All models", options: keep(options.models, f.model_id, "Selected model") },
-    { id: "key", label: "API key", type: "select", placeholder: "All keys", options: keep(options.keys, f.key_id, "Selected key") },
+    options.keySearch ? { id: "key", label: "API key", type: "search", placeholder: "All keys", options: options.keys, onSearch: options.keySearch } : { id: "key", label: "API key", type: "select", placeholder: "All keys", options: keep(options.keys, f.key_id, "Selected key") },
     ...(ctx.members ? [{ id: "member", label: "Member", type: "select" as const, placeholder: "Everyone", options: keep(options.members, f.member, "Selected member") }] : []),
     { id: "status", label: "Status", type: "toggle", multiple: true, allLabel: "All", options: usageStatuses },
     // Platform scope only: inside a workspace the cost center is a page fact (one per workspace), shown in the header.

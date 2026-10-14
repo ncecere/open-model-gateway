@@ -685,6 +685,8 @@ mod db {
             v["breakdowns"]["workspaces"][0]["name"],
             format!("Personal · {owner_email}")
         );
+        // Its kind lets the dashboard collapse personal rows without loading every workspace (R06, #69).
+        assert_eq!(v["breakdowns"]["workspaces"][0]["kind"], "personal");
         sqlx::query("UPDATE users SET display_name='Pat Owner' WHERE id=$1")
             .bind(f.owner)
             .execute(&f.store.pool)

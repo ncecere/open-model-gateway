@@ -13,6 +13,7 @@ Notes for changes on `main` since v0.4.0. They become the next release's notes.
 - Home loads its models with one request (`GET /api/v1/me/models`) instead of one catalog request per workspace, and its usage tiles with `GET /api/v1/me/summary?totals_only=true` (#66). For a user in 2,000 workspaces, Home took about 2 minutes and 2,000 requests, then the browser tab crashed.
 - Audit logs and API key lists no longer load every user, member and workspace to show names (#67): audit rows carry `actor_name`, `workspace_name` and `target_name` and key rows `issued_to_name`, resolved by the gateway under the same visibility rules. With 50,000 users the platform audit log couldn't load its user list at all.
 - Choosing people never loads the whole directory (#67): Add member searches on the server for Platform Admins too (`GET /api/v1/platform/workspaces/{ws}/member-candidates`), the new Team/Project form searches for its initial owner, and member tables page and search on the server (`q` on the member lists). People who are already members are no longer listed as disabled options; they simply aren't candidates.
+- Logs and Usage search their Workspace and API key filters on the server and label a selected filter by its own record, instead of loading every workspace or key (#69). The SSO group mappings and cost center assignment pick Teams and Projects by search, mapping rows carry their workspace's name, and the cost report's workspace rows carry their `kind`. Key lists take `q`.
 
 ## Dashboard
 

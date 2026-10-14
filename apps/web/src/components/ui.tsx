@@ -92,19 +92,23 @@ export function ActionProvider({ children }: { children: ReactNode }) {
   return <ActionContext.Provider value={ask}>{children}{action && <ActionDialog action={action} onClose={success => { setAction(null); if (success) toast.success(action.successNotice ?? "Changes saved."); }} />}</ActionContext.Provider>;
 }
 /** A server typeahead for a form field: queries `path` with `q` (debounced) and at most 20 rows; never loads the full list. */
-function SearchField({ id, search, placeholder, disabled, onChange }: { id: string; search: NonNullable<Field["search"]>; placeholder?: string; disabled: boolean; onChange: (value: string) => void }) {
-  const [text, setText] = useState(""), [q, setQ] = useState(""), [picked, setPicked] = useState<ComboboxOption | null>(null);
+/** Controlled by the form: it always shows the value that will be submitted (`value`, with its `label`), including after being hidden and shown again. */
+function SearchField({ id, search, value, label, placeholder, disabled, onChange }: { id: string; search: NonNullable<Field["search"]>; value: string; label?: string; placeholder?: string; disabled: boolean; onChange: (value: string, label: string | undefined) => void }) {
+  const [text, setText] = useState(""), [q, setQ] = useState("");
+  const picked: ComboboxOption | null = value ? { value, label: label ?? value } : null;
   useEffect(() => { const timer = setTimeout(() => setQ(text.trim()), 250); return () => clearTimeout(timer); }, [text]);
   const searchable = q.length > 0 && q.length <= 200;
   const found = useApi<Collection<never>>(`${search.path}${search.path.includes("?") ? "&" : "?"}q=${encodeURIComponent(q)}&limit=20`, searchable);
   const items = (searchable ? found.data?.data ?? [] : []).map(search.option).filter((o): o is Option => !!o);
   const options = picked && !items.some(i => i.value === picked.value) ? [picked, ...items] : items;
   const emptyText = !q ? "Type to search." : found.isFetching ? "Searching…" : found.isError ? "Search failed. Try again." : "No one matches.";
-  return <Combobox<string> id={id} items={options} filter={null} value={picked?.value ?? null} onValueChange={(_, option) => { setPicked(option); onChange(option?.value ?? ""); }} onInputValueChange={setText} placeholder={placeholder} emptyText={emptyText} disabled={disabled} limit={20} />;
+  return <Combobox<string> id={id} items={options} filter={null} value={picked?.value ?? null} onValueChange={(_, option) => onChange(option?.value ?? "", option?.label)} onInputValueChange={setText} placeholder={placeholder} emptyText={emptyText} disabled={disabled} limit={20} />;
 }
 function ActionDialog({ action, onClose }: { action: Action; onClose: (success: boolean) => void }) {
   const client = useQueryClient(), fields = action.fields ?? [], id = useId();
   const [values, setValues] = useState<Values>(() => Object.fromEntries(fields.map(field => [field.name, field.value ?? (field.type === "checkboxes" ? "[]" : "")])));
+  // Labels of search fields' current values (the edit form's initial choice, then each pick).
+  const [searchLabels, setSearchLabels] = useState<Record<string, string | undefined>>(() => Object.fromEntries(fields.filter(field => field.type === "search" && field.value).map(field => [field.name, field.search?.initialLabel])));
   const initial = useRef(values), dirty = JSON.stringify(values) !== JSON.stringify(initial.current);
   const [discarding, setDiscarding] = useState(false), [errors, setErrors] = useState<Record<string, string>>({}), [error, setError] = useState<unknown>(), [busy, setBusy] = useState(false), [token, setToken] = useState<string>(), [copied, setCopied] = useState(false), [copyError, setCopyError] = useState(false);
   // Closing/unmounting permanently invalidates retained Copy bindings and feedback.
@@ -165,7 +169,7 @@ function ActionDialog({ action, onClose }: { action: Action; onClose: (success: 
       const help = field.helpFor?.(values) ?? field.help;
       if (field.type === "switch") return <Switch key={field.name} id={fieldId} label={field.label} description={help} checked={values[field.name] === "true"} disabled={busy} onCheckedChange={checked => changeValue(field.name, String(checked))} />;
       if (field.type === "checkboxes") return <CheckboxesField key={field.name} field={{ ...field, help }} id={fieldId} value={values[field.name] ?? "[]"} error={errors[field.name]} disabled={busy} onChange={value => changeValue(field.name, value)} />;
-      if (field.type === "search" && field.search) return <FormField key={field.name} name={field.name} label={field.label} labelHint={field.hint ?? (!(field.required || field.requiredWhen?.(values)) ? "Optional" : undefined)} description={help} error={errors[field.name]}><SearchField id={fieldId} search={field.search} placeholder={field.placeholder} disabled={busy} onChange={value => changeValue(field.name, value)} /></FormField>;
+      if (field.type === "search" && field.search) return <FormField key={field.name} name={field.name} label={field.label} labelHint={field.hint ?? (!(field.required || field.requiredWhen?.(values)) ? "Optional" : undefined)} description={help} error={errors[field.name]}><SearchField id={fieldId} search={field.search} value={values[field.name] ?? ""} label={searchLabels[field.name]} placeholder={field.placeholder} disabled={busy} onChange={(value, label) => { setSearchLabels(previous => ({ ...previous, [field.name]: label })); changeValue(field.name, value); }} /></FormField>;
       if (field.type === "select" && field.display === "icon-select") return <IconSelectField key={field.name} field={{ ...field, help }} id={fieldId} value={values[field.name] ?? ""} error={errors[field.name]} disabled={busy} onChange={value => changeValue(field.name, value)} />;
       if (field.type === "select" && field.display === "cards") return <CardChoiceField key={field.name} field={{ ...field, help }} id={fieldId} value={values[field.name] ?? ""} error={errors[field.name]} disabled={busy} onChange={value => changeValue(field.name, value)} />;
       return <FormField key={field.name} name={field.name} label={field.label} labelHint={field.hint ?? (!(field.required || field.requiredWhen?.(values)) ? "Optional" : undefined)} description={help} error={errors[field.name]}>{field.type === "date" ? <DateControl id={fieldId} name={field.name} value={values[field.name] ?? ""} disabled={busy} onChange={value => changeValue(field.name, value)} /> : field.type === "select" ? <NativeSelect {...common}><option value="">Choose…</option>{field.options?.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</NativeSelect> : field.type === "textarea" ? <Textarea {...common} rows={4} autoComplete="off" spellCheck={false} /> : <Input {...common} type={field.type ?? "text"} inputMode={field.inputMode} min={field.min} max={field.max} step={field.type === "number" ? 1 : undefined} maxLength={field.maxLength} placeholder={field.placeholder} autoComplete="off" spellCheck={field.type === "password" ? false : undefined} />}</FormField>;
