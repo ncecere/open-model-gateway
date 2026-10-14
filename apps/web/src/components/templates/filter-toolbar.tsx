@@ -38,7 +38,8 @@ import { ArrowUpDown, ChevronDown, LayoutList, Search, SlidersHorizontal, Table2
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { Button } from "../ui/button/button";
 import { Field } from "../ui/field/field";
-import { type Facet, type FacetCounts, FilterBar, type FilterValue, type FilterValues, isFacetActive } from "../ui/filter-bar/filter-bar";
+import { type Facet, type FacetCounts, type FacetOption, FilterBar, type FilterValue, type FilterValues, isFacetActive } from "../ui/filter-bar/filter-bar";
+import { Combobox } from "../ui/combobox/combobox";
 import { Input, NativeSelect } from "../ui/input/input";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group/toggle-group";
 import { Popover } from "../ui/popover/popover";
@@ -60,7 +61,7 @@ export type RangeFacet = {
   /** Help announced with both inputs (and shown as their tooltip). */
   description?: string;
 };
-export type ToolbarFacet<T = unknown> = Facet<T> | RangeFacet;
+export type ToolbarFacet<T = unknown> = Facet<T> | RangeFacet | SearchFacet;
 export type ToolbarValues = FilterValues;
 export type ToolbarSearch = {
   /** Committed text (usually the URL's `q`). */
@@ -110,10 +111,28 @@ export type FilterToolbarProps<T = unknown> = {
   className?: string;
 };
 
+/**
+ * A single choice searched on the server (R06, #69): `onSearch` receives the
+ * typed text and `options` are the server's matches (plus the selected one),
+ * never a whole list. Value shape as a single select: `[id]`.
+ */
+export type SearchFacet = {
+  id: string;
+  label: string;
+  type: "search";
+  options: FacetOption[];
+  onSearch: (text: string) => void;
+  placeholder?: string;
+  chip?: boolean;
+};
+
 /** The toolbar's phone breakpoint (matches the CSS). */
 export const TOOLBAR_NARROW_QUERY = "(max-width: 40rem)";
 
 const isRange = <T,>(f: ToolbarFacet<T>): f is RangeFacet => f.type === "range";
+const isSearch = <T,>(f: ToolbarFacet<T>): f is SearchFacet => f.type === "search";
+/** Facets rendered by this toolbar rather than Bitop's FilterBar. */
+const isOwn = <T,>(f: ToolbarFacet<T>): f is RangeFacet | SearchFacet => isRange(f) || isSearch(f);
 const rangeActive = (v: FilterValue | undefined) => Array.isArray(v) && v.some(x => x.trim() !== "");
 
 /** Active filters: one per selected option of a multi facet, one per other active facet, plus search text. */
@@ -122,7 +141,7 @@ export function activeToolbarCount<T>(facets: ToolbarFacet<T>[], values: Toolbar
   for (const f of facets) {
     const v = values[f.id];
     if (isRange(f)) n += rangeActive(v) ? 1 : 0;
-    else if (isFacetActive(v)) n += Array.isArray(v) && f.type !== "date-range" && f.multiple ? v.length : 1;
+    else if (isFacetActive(v)) n += Array.isArray(v) && f.type !== "date-range" && !isSearch(f) && f.multiple ? v.length : 1;
   }
   return n;
 }
@@ -155,6 +174,8 @@ export function toolbarValuesFromSearch<T>(search: Record<string, unknown>, face
       if (min || max) out[f.id] = [min.slice(0, 32), max.slice(0, 32)];
       continue;
     }
+    // A searched facet's options are only the current matches: keep its one value as given.
+    if (isSearch(f)) { out[f.id] = [text.split(",")[0]!]; continue; }
     const picked = [...new Set(text.split(","))].filter(x => f.options.some(o => o.value === x));
     const list = f.multiple ? picked : picked.slice(0, 1);
     if (list.length) out[f.id] = list;
@@ -236,12 +257,13 @@ export function FilterToolbar<T>({ facets = [], values = {}, onChange, counts, s
 
   const hidden = narrow ? [] : facets.filter(f => more.includes(f.id));
   const inline = facets.filter(f => !hidden.includes(f));
-  const bitopFacets = inline.filter((f): f is Facet<T> => !isRange(f));
-  const ranges = inline.filter(isRange);
+  const bitopFacets = inline.filter((f): f is Facet<T> => !isOwn(f));
+  const ranges = inline.filter(isRange), searches = inline.filter(isSearch);
   const valuesOf = (list: Facet<T>[]): FilterValues => Object.fromEntries(list.map(f => [f.id, values[f.id]]).filter(([, v]) => v !== undefined));
   const bitopValues = valuesOf(bitopFacets);
   /** FilterBar reports only its own facets: keep every other facet's value. */
   const merge = (own: Facet<T>[], next: FilterValues) => set({ ...Object.fromEntries(Object.entries(values).filter(([k]) => !own.some(f => f.id === k))), ...next });
+  const setSearch = (s: SearchFacet, next: string | null) => { const out = { ...values }; if (next) out[s.id] = [next]; else delete out[s.id]; set(out); };
   const setRange = (r: RangeFacet, next: string[]) => { const out = { ...values }; if (next.some(x => x.trim())) out[r.id] = next; else delete out[r.id]; set(out); };
   const active = activeToolbarCount(facets, values, search?.value) + extraChips.length + extraActive;
 
@@ -276,19 +298,21 @@ export function FilterToolbar<T>({ facets = [], values = {}, onChange, counts, s
       </Field>
     </div>
   );
-  const leading = (searchBox || start || ranges.length > 0 || narrow && moreStart) && <>
+  const leading = (searchBox || start || ranges.length > 0 || searches.length > 0 || narrow && moreStart) && <>
     {searchBox}
     {start}
     {narrow && moreStart}
     {ranges.map(r => <RangeControl key={r.id} facet={r} value={(values[r.id] as string[] | undefined) ?? []} onChange={next => setRange(r, next)} />)}
+    {searches.map(s => <SearchControl key={s.id} facet={s} value={(values[s.id] as string[] | undefined)?.[0] ?? null} onChange={next => setSearch(s, next)} />)}
   </>;
-  const moreFacets = hidden.filter((f): f is Facet<T> => !isRange(f)), moreRanges = hidden.filter(isRange);
+  const moreFacets = hidden.filter((f): f is Facet<T> => !isOwn(f)), moreRanges = hidden.filter(isRange), moreSearches = hidden.filter(isSearch);
   const moreActive = activeToolbarCount(hidden, values) + (narrow ? 0 : moreStartActive);
   const moreButton = (hidden.length > 0 || !narrow && !!moreStart) && (
     <Popover title="More filters" align="start" className={styles.morePopup}
       trigger={<Button size="sm" variant="secondary" className={styles.moreButton} aria-label={moreActive > 0 ? `More filters, ${moreActive} active` : undefined}><SlidersHorizontal aria-hidden />More filters{moreActive > 0 && ` (${moreActive})`}</Button>}>
       {!narrow && moreStart}
       {moreRanges.map(r => <RangeControl key={r.id} facet={r} value={(values[r.id] as string[] | undefined) ?? []} onChange={next => setRange(r, next)} />)}
+      {moreSearches.map(s => <SearchControl key={s.id} facet={s} value={(values[s.id] as string[] | undefined)?.[0] ?? null} onChange={next => setSearch(s, next)} />)}
       {moreFacets.length > 0 && <FilterBar<T> className={styles.moreBar} facets={moreFacets} value={valuesOf(moreFacets)} onValueChange={next => merge(moreFacets, next)} counts={counts} chips={false} labels={{ group: "More filters" }} />}
     </Popover>
   );
@@ -340,6 +364,15 @@ function useSearchDraft(search: ToolbarSearch | undefined) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [text]);
   return [text, setText] as const;
+}
+
+/** A labelled single choice searched on the server as you type (Bitop's Combobox with filtering left to the server). */
+function SearchControl({ facet, value, onChange }: { facet: SearchFacet; value: string | null; onChange: (next: string | null) => void }) {
+  return (
+    <ToolbarField label={facet.label}>
+      <Combobox size="sm" clearable clearLabel={`Clear ${facet.label.toLocaleLowerCase()}`} placeholder={facet.placeholder ?? "Any"} items={facet.options} filter={null} onInputValueChange={facet.onSearch} value={value} onValueChange={next => onChange(next)} />
+    </ToolbarField>
+  );
 }
 
 /** Min and max inputs under one label; a bound commits after a pause, on blur or Enter, and only when valid. */

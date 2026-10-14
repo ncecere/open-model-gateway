@@ -159,10 +159,11 @@ describe("Grounded-style people pages", () => {
   });
   it("keeps SSO groups and cost centers free of raw identifiers", () => {
     const client = testClient();
-    client.setQueryData(["api", undefined, "/api/v1/platform/oidc/group-mappings", "choices"], [{ id: "m1", issuer: "https://idp.example", group_value: "omg/product-admin", target_kind: "workspace", platform_role: null, workspace_id: wid, workspace_role: "admin", enabled: true }]);
-    client.setQueryData(["api", undefined, "/api/v1/platform/workspaces", "choices"], [product]);
+    client.setQueryData(["api", undefined, "/api/v1/platform/oidc/group-mappings", "choices"], [{ id: "m1", issuer: "https://idp.example", group_value: "omg/product-admin", target_kind: "workspace", platform_role: null, workspace_id: wid, workspace_role: "admin", enabled: true, workspace_name: "Product", workspace_kind: "team" }]);
+    // The gateway names mapped workspaces (R06, #69): no workspace list is loaded.
     client.setQueryData(["api", undefined, "/api/v1/platform/cost-centers", "choices"], [{ id: ccid, name: "Research", code: "R-1", archived_at: null }]);
     const sso = text(markup(<OidcMappings session={admin} />, [], client));
+    expect(client.getQueryCache().findAll().some(q => String(q.queryKey[2]).startsWith("/api/v1/platform/workspaces"))).toBe(false);
     for (const label of ["omg/product-admin", "Product", "Admin", "Enabled", "Rows 1–1 of 1"]) expect(sso).toContain(label);
     expect(sso).not.toContain(wid);
     const centers = text(markup(<CostCenters session={admin} />, [], client));
@@ -215,9 +216,8 @@ describe("user role, grant removal and activity", () => {
   });
   it("shows a privacy-preserving Activity tab: own changes and aggregate usage", () => {
     const client = testClient(), path = `/api/v1/platform/users/${uid}`, range = last30Days();
-    client.setQueryData(["api", undefined, "/api/v1/platform/workspaces", "choices"], [product]);
     const totals = (n: string) => ({ known_cost_microusd: "1500000", held_microusd: "0", attempts: n, root_requests: n, unresolved_attempts: "0" });
-    const usage = { ...report, scope: "platform", breakdowns: { ...report.breakdowns, workspaces: [{ id: wid, name: "Product", totals: totals("4") }, { id: personalId, name: "Alex private sandbox", totals: totals("8") }] } };
+    const usage = { ...report, scope: "platform", breakdowns: { ...report.breakdowns, workspaces: [{ id: wid, name: "Product", kind: "team", totals: totals("4") }, { id: personalId, name: "Alex private sandbox", kind: "personal", totals: totals("8") }] } };
     const html = markup(<UserDetail session={auditor} id={uid} tab="activity" onTabChange={noop} />, [
       [path, { ...alex, first_sign_in_at: null, shared_memberships: [] }],
       [`/api/v1/platform/audit?actor_user_id=${uid}&limit=50&offset=0&hide_sign_ins=true`, { data: [{ id: "e1", actor_user_id: uid, action: "workspace.updated", resource_type: "workspace", resource_id: wid, workspace_id: wid, created_at: "2026-10-07T10:00:00Z" }], has_more: false }],

@@ -34,16 +34,38 @@ pub(super) async fn with_usage(
     }
     Ok(())
 }
+/// Key list paging plus an optional name search (`q`, at most 200 characters).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct KeyListQuery {
+    limit: Option<i64>,
+    offset: Option<i64>,
+    q: Option<String>,
+}
+impl KeyListQuery {
+    fn bounds(&self) -> Result<(i64, i64, Option<String>), ApiError> {
+        let (l, o) = Page {
+            limit: self.limit,
+            offset: self.offset,
+        }
+        .bounds()?;
+        let q = self.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
+        if q.is_some_and(|q| q.chars().count() > 200 || q.chars().any(char::is_control)) {
+            return Err(invalid());
+        }
+        Ok((l, o, q.map(str::to_owned)))
+    }
+}
 pub(super) async fn keys(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
     Path(ws): Path<Uuid>,
-    Query(p): Query<Page>,
+    Query(p): Query<KeyListQuery>,
 ) -> ApiResult {
     let (mut tx, a) = resources::workspace_snapshot_tx(&s, &u, ws).await?;
     resources::detail_access(&a)?;
-    let (l, o) = p.bounds()?;
-    let mut data:Vec<Value>=sqlx::query_scalar(&format!("SELECT {}||jsonb_build_object('issued_to_name',(SELECT coalesce(nullif(btrim(x.display_name),''),x.email) FROM users x WHERE x.id=k.issued_to_user_id AND (x.id=$3 OR EXISTS(SELECT 1 FROM effective_workspace_memberships em WHERE em.workspace_id=k.workspace_id AND em.user_id=x.id)))) FROM api_keys k LEFT JOIN key_model_restrictions r ON r.workspace_id=k.workspace_id AND r.governance_key_id=k.governance_key_id WHERE k.workspace_id=$1 AND ($2 OR k.issued_to_user_id=$3) ORDER BY k.created_at DESC,k.id LIMIT $4 OFFSET $5",key_json())).bind(ws).bind(a.admin).bind(u.user_id).bind(l).bind(o).fetch_all(&mut *tx).await?;
+    let (l, o, q) = p.bounds()?;
+    let mut data:Vec<Value>=sqlx::query_scalar(&format!("SELECT {}||jsonb_build_object('issued_to_name',(SELECT coalesce(nullif(btrim(x.display_name),''),x.email) FROM users x WHERE x.id=k.issued_to_user_id AND (x.id=$3 OR EXISTS(SELECT 1 FROM effective_workspace_memberships em WHERE em.workspace_id=k.workspace_id AND em.user_id=x.id)))) FROM api_keys k LEFT JOIN key_model_restrictions r ON r.workspace_id=k.workspace_id AND r.governance_key_id=k.governance_key_id WHERE k.workspace_id=$1 AND ($2 OR k.issued_to_user_id=$3) AND ($6::text IS NULL OR strpos(lower(k.name),lower($6))>0) ORDER BY k.created_at DESC,k.id LIMIT $4 OFFSET $5",key_json())).bind(ws).bind(a.admin).bind(u.user_id).bind(l).bind(o).bind(q.as_deref()).fetch_all(&mut *tx).await?;
     with_usage(&mut tx, &mut data, None, ws).await?;
     tx.commit().await?;
     Ok(Json(json!({"data":data})))

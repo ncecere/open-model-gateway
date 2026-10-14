@@ -13,6 +13,7 @@
  * never appear as rows (their totals stay in Usage & costs). Metadata only:
  * prompts and responses are never stored or shown.
  */
+import { useSelectedName, useServerOptions, withSelected } from "../components/server-options";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ListTree, MessagesSquare } from "lucide-react";
 import { platformPath, wsPath, type Grant, type Model, type Workspace } from "../lib/api";
@@ -30,7 +31,7 @@ import { IconCell, LabIcon, ProviderIcon } from "../components/provider-icon";
 import { CopyId } from "../components/templates/copy-id";
 import { UpstreamModel } from "../components/templates/upstream-model";
 import { InfoBanner } from "../components/templates/notices";
-import { FilterToolbar, ToolbarField, type ToolbarChip } from "../components/templates/filter-toolbar";
+import { FilterToolbar, ToolbarField, type ToolbarChip, type ToolbarFacet } from "../components/templates/filter-toolbar";
 import { StatTile, StatTileGrid } from "../components/templates/stat-tile";
 import { TypeTabs } from "../components/templates/type-tabs";
 import type { Facet, FilterValues } from "../components/ui/filter-bar/filter-bar";
@@ -287,22 +288,24 @@ export function LogsPage({ scope }: { scope: LogsScope }) {
   const tab = logTab(search.tab), platform = scope.kind === "platform";
   const filters = requestFilters(platform ? search : { ...search, workspace_id: undefined });
   const { query, error: filterError } = requestQuery(filters);
-  // Filter options: models, the keys the caller can see (workspace only) and, on Admin, team and project workspaces.
+  // Filter options: models; the keys the caller can see (workspace only) and, on Admin, teams and projects,
+  // both searched on the server (R06, #69), with the selected one labelled by fetching just that record.
   const models = useChoices<Grant>(scope.kind === "workspace" ? `${wsPath(scope.workspace.id)}/models` : "", scope.kind === "workspace");
   const platformModels = useChoices<Model>(`${platformPath}/models`, platform);
-  const keys = useChoices<KeyRow>(scope.kind === "workspace" ? `${wsPath(scope.workspace.id)}/keys` : "", scope.kind === "workspace");
-  const workspaces = useChoices<DirectoryWorkspace>(`${platformPath}/workspaces`, platform);
+  const keyBase = scope.kind === "workspace" ? `${wsPath(scope.workspace.id)}/keys` : undefined;
+  const keys = useServerOptions<KeyRow>(keyBase, k => ({ value: k.id, label: k.name, group: k.service_account_id ? "Service accounts" : "People" }));
+  const keyName = useSelectedName<KeyRow>(keyBase && filters.key_id ? `${keyBase}/${encodeURIComponent(filters.key_id)}` : undefined, k => k.name, "Selected key");
+  const workspaces = useServerOptions<DirectoryWorkspace>(platform ? `${platformPath}/workspaces` : undefined, w => w.kind === "personal" ? undefined : { value: w.id, label: w.name, group: w.kind === "team" ? "Teams" : "Projects" });
+  const workspaceName = useSelectedName<DirectoryWorkspace>(platform && filters.workspace_id ? `${platformPath}/workspaces/${encodeURIComponent(filters.workspace_id)}` : undefined, w => w.name, "Selected workspace");
   const [tools, setTools] = useState<{ columns: { id: string; label: string; hideable?: boolean }[]; view: TableView }>();
   const modelOptions = [...new Map([...(models.data ?? []), ...(platformModels.data ?? [])].map(g => [g.public_name, { value: g.public_name, label: g.display_name === g.public_name ? g.public_name : `${g.display_name} · ${g.public_name}` }])).values()];
   if (filters.model && !modelOptions.some(o => o.value === filters.model)) modelOptions.unshift({ value: filters.model, label: filters.model });
-  const keyOptions = (keys.data ?? []).map(k => ({ value: k.id, label: k.name, group: k.service_account_id ? "Service accounts" : "People" }));
-  if (filters.key_id && !keyOptions.some(o => o.value === filters.key_id)) keyOptions.unshift({ value: filters.key_id, label: "Selected key", group: "People" });
-  const workspaceOptions = (workspaces.data ?? []).filter(w => w.kind !== "personal").map(w => ({ value: w.id, label: w.name, group: w.kind === "team" ? "Teams" : "Projects" }));
-  if (filters.workspace_id && !workspaceOptions.some(o => o.value === filters.workspace_id)) workspaceOptions.unshift({ value: filters.workspace_id, label: "Selected workspace", group: "Teams" });
+  const keyOptions = withSelected(keys.options, filters.key_id ? { value: filters.key_id, label: keyName } : undefined);
+  const workspaceOptions = withSelected(workspaces.options, filters.workspace_id ? { value: filters.workspace_id, label: workspaceName } : undefined);
   const filtered = activeFilterCount(filters) > 0;
-  const facets: Facet[] = [
+  const facets: ToolbarFacet[] = [
     { id: "model", label: "Model", type: "select", placeholder: "Any model", options: modelOptions },
-    ...(platform ? [{ id: "workspace_id", label: "Workspace", type: "select", placeholder: "Any team or project", options: workspaceOptions } satisfies Facet] : [{ id: "key_id", label: "Key", type: "select", placeholder: "Any key", options: keyOptions } satisfies Facet]),
+    ...(platform ? [{ id: "workspace_id", label: "Workspace", type: "search", placeholder: "Any team or project", options: workspaceOptions, onSearch: workspaces.onSearch } satisfies ToolbarFacet] : [{ id: "key_id", label: "Key", type: "search", placeholder: "Any key", options: keyOptions, onSearch: keys.onSearch } satisfies ToolbarFacet]),
     // A compact multi-select (five statuses as a segmented control took a row of its own).
     { id: "status", label: "Status", type: "select", multiple: true, placeholder: "Any status", options: requestStatuses },
     { id: "finish_reason", label: "Finish reason", type: "select", multiple: true, placeholder: "Any", options: finishReasons },

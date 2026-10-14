@@ -1,4 +1,5 @@
 import type { Field, Values } from "./forms";
+import type { WorkspaceKind } from "./api";
 
 /** Budget window: UTC day, ISO week (Monday 00:00 UTC), UTC calendar month, or lifetime (since the scope was created). */
 export type BudgetPeriod = "day" | "week" | "month" | "lifetime";
@@ -63,7 +64,7 @@ export type Cost = { id: string; root_request_id: string; attempt_number: number
 export type Totals = { known_cost_microusd: string; held_microusd: string; attempts: string; root_requests: string; unresolved_attempts: string };
 export type Health = { pending_attempts: string; unknown_attempts: string; missing_reservation_attempts: string; unpriced_attempts: string; aged_hold_attempts: string; unbounded_attempts: string };
 export type Period = { start_date: string; end_date: string; timezone: "UTC"; includes_partial_day: boolean };
-export type Breakdown = { id: string | null; name: string; totals: Totals };
+export type Breakdown = { id: string | null; name: string; totals: Totals; /** Workspace rows only. */ kind?: WorkspaceKind };
 export type CostReport = { period: Period; scope: "platform" | "workspace"; observed_at: string; basis: "configured_rate_estimate"; currency: "USD"; totals: Totals; health: Health; daily: { date: string; totals: Totals }[]; breakdowns: { models: Breakdown[]; providers: Breakdown[]; workspaces: Breakdown[]; cost_centers: Breakdown[]; service_accounts: Breakdown[] }; comparison: null | { period: Period; totals: Totals }; coverage: { priced_attempts: string; settled_attempts: string; total_attempts: string; complete_billing_attempts: string; legacy_pricing_attempts: string; incomplete_billing_attempts: string }; cost_components: CostComponents & Partial<MeterCostComponents> & { legacy_microusd: string }; billing_usage: BillingUsage; meter_usage?: MeterUsage; /** Attempts whose workload can produce each meter (decimal strings). */ meter_relevant_attempts?: Partial<Record<UnitMeter, string>>; /** Relevant attempts where the meter was not observed: the total is then a lower bound. */ meter_unknown_attempts?: Partial<Record<UnitMeter, string>>; provider_reported_cost_microusd?: string | null; breakdowns_truncated: boolean };
 
 // Integer-string money never passes through Number, parseFloat or toFixed.

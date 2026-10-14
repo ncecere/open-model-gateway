@@ -10,7 +10,7 @@ import { dashboardHref, parseDashboardLocation } from "../lib/locations";
 import { dashboardSearch } from "../lib/permissions";
 import { navigation } from "../lib/navigation";
 import { rateText, requestFilters, requestQuery, servedModel, servedModelText, tpsText, ttftText, validSessionId, type GenerationRow, type LogMetrics, type RequestDetail, type RequestRow, type SessionRow } from "../lib/requests";
-import { admin, markup, member, session, team } from "../lib/test-fixtures";
+import { admin, markup, member, session, team, testClient } from "../lib/test-fixtures";
 
 const ws = "/api/v1/workspaces/team";
 const nav = (search: DashboardSearch, node: ReactNode) => <DashboardNavigationProvider search={search} navigate={() => {}}>{node}</DashboardNavigationProvider>;
@@ -44,6 +44,16 @@ describe("Logs page", () => {
     expect(new DOMParser().parseFromString(html, "text/html").querySelector("thead")!.textContent).toContain("Workspace");
     expect(html).toContain('href="/admin/logs/1a2b3c4d-0000-0000-0000-000000000001?workspace_id=team"');
     expect(html).not.toContain("Any key");
+  });
+  it("searches the Workspace and Key filters on the server instead of loading every workspace or key (R06, #69)", () => {
+    for (const [search, scope] of [[{ page: "platform-logs", workspace_id: "team" }, { kind: "platform" }], [{ page: "requests", ws: "team", key_id: "k1" }, { kind: "workspace", workspace: team }]] as const) {
+      const client = testClient(); markup(nav(search as never, <LogsPage scope={scope as never} />), [], client);
+      const paths = client.getQueryCache().findAll().map(q => ({ path: String(q.queryKey[2]), choices: q.queryKey[3] === "choices" }));
+      expect(paths.filter(p => p.choices && /\/(workspaces|keys)(\?|$)/.test(p.path)).map(p => p.path)).toEqual([]);
+      // The first 20 matches, plus the selected record by id for its label.
+      expect(paths.some(p => /\/(platform\/workspaces|keys)\?limit=20$/.test(p.path))).toBe(true);
+      expect(paths.some(p => /\/(platform\/workspaces\/team|keys\/k1)$/.test(p.path))).toBe(true);
+    }
   });
   it("lists generations (one per attempt) and sessions linking to the session page", () => {
     const g = markup(nav({ page: "requests", ws: "team", tab: "generations" }, <LogsPage scope={{ kind: "workspace", workspace: team }} />), [[`${ws}/generations?limit=50`, { data: [generation], next_cursor: null }]]);

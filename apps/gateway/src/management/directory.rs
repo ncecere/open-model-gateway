@@ -657,7 +657,7 @@ async fn mappings(
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, false).await?;
     let (l, o) = p.bounds()?;
-    let data:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(m) FROM oidc_group_mappings m ORDER BY issuer,group_value,id LIMIT $1 OFFSET $2").bind(l).bind(o).fetch_all(&mut *tx).await?;
+    let data:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(m)||jsonb_build_object('workspace_name',w.name,'workspace_kind',w.kind) FROM oidc_group_mappings m LEFT JOIN workspaces w ON w.id=m.workspace_id ORDER BY m.issuer,m.group_value,m.id LIMIT $1 OFFSET $2").bind(l).bind(o).fetch_all(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(json!({"data":data})))
 }

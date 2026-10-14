@@ -38,7 +38,7 @@ export function UsageCosts({ session, workspace }: { session: Session; workspace
   try { period = usagePeriod(nav.search); } catch (error) { invalid = error as Error; }
   const workspaceFilter = workspace ? undefined : nav.search.workspace_id;
   // One inline filter bar for every tab and the chart page (URL-backed; Records adds the accounting state).
-  const options = useFilterOptions(workspace, ctx, period, workspaceFilter);
+  const options = useFilterOptions(workspace, ctx, period, workspaceFilter, nav.search.key_id);
   // Workspace scope: the cost center is a fact about the page (the platform assigns it), not a filter.
   const centers = options.costCenters.filter(c => c.value !== "unallocated"), centerFact = workspace && centers.length ? centers.length === 1 ? `Cost center: ${String(centers[0]!.label)}` : `${centers.length} cost centers` : undefined;
   // One plain line that wraps like text (separate "· …" spans started wrapped lines with a dot on a phone).
