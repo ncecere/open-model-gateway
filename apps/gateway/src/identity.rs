@@ -34,12 +34,18 @@ use crate::{lifecycle, store::Store};
 #[path = "identity/jwks.rs"]
 pub(crate) mod jwks;
 use jwks::{JwksCache, JwksPolicy};
+#[path = "identity/throttle.rs"]
+pub(crate) mod throttle;
 
 const SESSION: &str = "omg_session";
 const CSRF: &str = "omg_csrf";
 const BROWSER: &str = "omg_oidc";
 const SESSION_SECONDS: u32 = 12 * 60 * 60;
 const LOGIN_SECONDS: u32 = 10 * 60;
+/// Unexpired sign-in attempts the installation holds at most (#78).
+const PENDING_LOGIN_CAP: i64 = 10_000;
+/// Default per-address rate of sign-in starts and of callbacks, each.
+const LOGIN_RATE_PER_MINUTE: u32 = 60;
 
 /// Unknown claims are captured inside the signature-verified ID token, never from userinfo.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -136,6 +142,9 @@ pub struct IdentityConfig {
     allow_loopback_http: bool,
     secure_cookies: bool,
     groups_claim: String,
+    trusted_proxies: throttle::TrustedProxies,
+    login_rate_per_minute: u32,
+    pending_login_cap: i64,
 }
 
 impl IdentityConfig {
@@ -176,6 +185,18 @@ impl IdentityConfig {
                 "Invalid OIDC groups claim path"
             );
             config.groups_claim = path;
+        }
+        if let Some(value) = read("GATEWAY_TRUSTED_PROXIES")? {
+            config.trusted_proxies = throttle::TrustedProxies::parse(&value)?;
+        }
+        if let Some(value) = read("GATEWAY_LOGIN_RATE_PER_MINUTE")? {
+            config.login_rate_per_minute = value
+                .parse::<u32>()
+                .ok()
+                .filter(|n| (1..=10_000).contains(n))
+                .ok_or_else(|| {
+                    anyhow::anyhow!("GATEWAY_LOGIN_RATE_PER_MINUTE must be 1 to 10000")
+                })?;
         }
         Ok(Some(config))
     }
@@ -219,6 +240,9 @@ impl IdentityConfig {
             allow_loopback_http: development,
             secure_cookies: public.scheme() == "https",
             groups_claim: "groups".into(),
+            trusted_proxies: throttle::TrustedProxies::default(),
+            login_rate_per_minute: LOGIN_RATE_PER_MINUTE,
+            pending_login_cap: PENDING_LOGIN_CAP,
         })
     }
 }
@@ -299,6 +323,9 @@ struct Provider {
     http: OidcHttp,
     jwks: JwksCache,
     algs: Vec<CoreJwsSigningAlgorithm>,
+    /// Per-replica sign-in start and callback buckets (#78).
+    login_limiter: throttle::Limiter,
+    callback_limiter: throttle::Limiter,
 }
 
 impl Provider {
@@ -428,7 +455,13 @@ impl IdentityState {
                 config.client_secret.clone().map(ClientSecret::new),
             )
             .set_redirect_uri(redirect);
+            let (login_limiter, callback_limiter) = (
+                throttle::Limiter::new(config.login_rate_per_minute),
+                throttle::Limiter::new(config.login_rate_per_minute),
+            );
             Some(Arc::new(Provider {
+                login_limiter,
+                callback_limiter,
                 config,
                 client,
                 http,
@@ -673,12 +706,26 @@ pub(crate) fn safe_return_path(value: &str) -> Option<String> {
 
 async fn login(
     State(state): State<IdentityState>,
+    PeerIp(peer): PeerIp,
+    headers: HeaderMap,
     query: Result<Query<LoginQuery>, QueryRejection>,
 ) -> Result<Response, AuthError> {
     let provider = state
         .provider
         .as_ref()
         .ok_or(AuthError(StatusCode::SERVICE_UNAVAILABLE))?;
+    let client = throttle::client_ip(peer, &headers, &provider.config.trusted_proxies);
+    if let Err(wait) = provider
+        .login_limiter
+        .check(client, std::time::Instant::now())
+    {
+        return Ok(throttled(
+            "login",
+            "client_rate",
+            StatusCode::TOO_MANY_REQUESTS,
+            wait,
+        ));
+    }
     // An unsafe or malformed return path is dropped (sign-in still works and lands on Home).
     let return_to = query
         .ok()
@@ -708,9 +755,19 @@ async fn login(
         .add_scope(Scope::new("profile".into()))
         .set_pkce_challenge(challenge)
         .url();
-    sqlx::query("INSERT INTO oidc_login_attempts(state_hash,browser_hash,nonce,pkce_verifier,expires_at,return_to) VALUES($1,$2,$3,$4,now()+interval '10 minutes',$5)")
-        .bind(hash(oauth_state.secret())).bind(hash(&browser)).bind(nonce.secret()).bind(verifier.secret()).bind(return_to)
+    // Installation-wide bound on pending attempts: past it nothing is stored.
+    // The count stops at the cap, so it costs at most `cap` index entries.
+    let stored = sqlx::query("INSERT INTO oidc_login_attempts(state_hash,browser_hash,nonce,pkce_verifier,expires_at,return_to) SELECT $1,$2,$3,$4,now()+interval '10 minutes',$5 WHERE (SELECT count(*) FROM (SELECT 1 FROM oidc_login_attempts WHERE expires_at>now() LIMIT $6) pending)<$6")
+        .bind(hash(oauth_state.secret())).bind(hash(&browser)).bind(nonce.secret()).bind(verifier.secret()).bind(return_to).bind(provider.config.pending_login_cap)
         .execute(&state.store.pool).await.map_err(internal)?;
+    if stored.rows_affected() == 0 {
+        return Ok(throttled(
+            "login",
+            "pending_cap",
+            StatusCode::SERVICE_UNAVAILABLE,
+            Duration::from_secs(60),
+        ));
+    }
     let mut response = private(Redirect::to(url.as_str()).into_response());
     set_cookie(
         &mut response,
@@ -721,6 +778,46 @@ async fn login(
         true,
     );
     Ok(response)
+}
+
+/// The connection's peer address, when the server records it
+/// (`into_make_service_with_connect_info`); in-process tests have none.
+struct PeerIp(Option<IpAddr>);
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for PeerIp {
+    type Rejection = std::convert::Infallible;
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _: &S,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(Self(
+            parts
+                .extensions
+                .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                .map(|info| info.0.ip()),
+        ))
+    }
+}
+
+/// A throttled sign-in step: nothing stored, no cookie, a `Retry-After`, and
+/// a counter labelled only by step and reason (never an address or identity).
+fn throttled(
+    endpoint: &'static str,
+    reason: &'static str,
+    status: StatusCode,
+    wait: Duration,
+) -> Response {
+    crate::metrics::METRICS.auth_throttled(endpoint, reason);
+    let mut response = private(
+        (
+            status,
+            Json(serde_json::json!({"error": "Too many sign-in attempts; try again shortly"})),
+        )
+            .into_response(),
+    );
+    if let Ok(value) = wait.as_secs().max(1).to_string().parse() {
+        response.headers_mut().insert(header::RETRY_AFTER, value);
+    }
+    response
 }
 
 #[derive(Deserialize)]
@@ -751,6 +848,7 @@ pub(crate) fn display_name(raw: &str) -> Option<String> {
 }
 async fn callback(
     State(state): State<IdentityState>,
+    PeerIp(peer): PeerIp,
     headers: HeaderMap,
     query: Result<Query<CallbackQuery>, QueryRejection>,
 ) -> Result<Response, AuthError> {
@@ -758,6 +856,19 @@ async fn callback(
         .provider
         .as_ref()
         .ok_or(AuthError(StatusCode::SERVICE_UNAVAILABLE))?;
+    // Before the attempt is consumed: a throttled callback leaves it usable.
+    let client = throttle::client_ip(peer, &headers, &provider.config.trusted_proxies);
+    if let Err(wait) = provider
+        .callback_limiter
+        .check(client, std::time::Instant::now())
+    {
+        return Ok(throttled(
+            "callback",
+            "client_rate",
+            StatusCode::TOO_MANY_REQUESTS,
+            wait,
+        ));
+    }
     let Query(query) = query.map_err(|_| invalid())?;
     if !is_token(&query.state) {
         return Err(invalid());

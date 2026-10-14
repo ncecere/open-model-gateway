@@ -853,7 +853,9 @@ async fn run(cli: Cli) -> Result<()> {
             let served = axum::serve(
                 listener,
                 http::router_with_identity(store, web, engine, identity)
-                    .layer(axum::Extension(files)),
+                    .layer(axum::Extension(files))
+                    // The peer address feeds sign-in abuse controls (#78).
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
             )
             .with_graceful_shutdown(shutdown_signal())
             .await;

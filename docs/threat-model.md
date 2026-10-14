@@ -220,10 +220,10 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 - Follow-up: none (fixed in #144).
 
 **OIDC-6. Login and callback abuse.** D · Asset: database, sign-in availability · Attacker: unauthenticated internet client.
-- Mitigation: none in code. Each `GET /api/v1/auth/login` inserts one `oidc_login_attempts` row. The only `DELETE` is `consume_attempt` for a matching attempt, so expired attempts are never removed. There is no rate limit on login or callback. [Identity](identity.md) asks operators to rate-limit at the edge.
-- Tests: no test found.
-- Residual: an unauthenticated client can grow `oidc_login_attempts` without limit and load the database.
-- Follow-up: #78 (login and callback abuse controls), #80 (cleanup).
+- Mitigation (#78): `identity/throttle.rs` limits sign-in starts and callbacks per client address in each replica's memory (`GATEWAY_LOGIN_RATE_PER_MINUTE`, default 60; IPv6 per /64; at most 10,000 tracked addresses, then a shared overflow bucket). `X-Forwarded-For` is believed only from `GATEWAY_TRUSTED_PROXIES`. `login` inserts an attempt only while fewer than 10,000 unexpired attempts exist (one conditional `INSERT`, index `oidc_login_attempts_expires`), else 503. Refusals store nothing and count in `gateway_auth_throttled_total`. No per-account lockout, by design.
+- Tests: `identity/throttle.rs` unit tests (trusted-proxy parsing, spoofed and chained forwarding headers, burst, recovery, IPv6 /64, bounded table); `identity/tests.rs` `abuse_controls::a_burst_from_one_address_is_refused_without_storing_anything`, `callbacks_are_limited_before_the_attempt_is_consumed`, `the_pending_attempt_cap_is_shared_by_every_replica`.
+- Residual: many addresses (a botnet) can fill the installation-wide cap and refuse sign-in for everyone for up to 10 minutes; existing sessions keep working. Without `GATEWAY_TRUSTED_PROXIES` behind a proxy, all users share one per-address budget. Expired attempts are still never deleted (the cap ignores them).
+- Follow-up: #80 (cleanup of expired attempts).
 
 ### SCIM
 
@@ -600,7 +600,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 | Shared-workspace keys can act on other members' files, batches and videos through `/v1/files`, `/v1/batches` and `/v1/videos`; documented design ([Files API](files-api.md), [async jobs](async-jobs.md)) that conflicts with the dashboard and AGENTS.md | TEN-5, JOB-4 | #141 (needs a product decision) |
 | SMTP password reference shares the provider allowlist; a Platform Admin can send a provider key to a relay they choose, and the default Helm egress (443 anywhere) does not block it | EGR-7 | #140; #33 |
 | Egress not enforced at the network level; Helm allows 443 anywhere | EGR-3, EGR-8 | #33 |
-| No login or callback abuse controls; login attempts never cleaned up | OIDC-6 | #78, #80, #34 |
+| Login and callback abuse controls; expired login attempts never cleaned up | OIDC-6 | Abuse controls fixed in #78; cleanup #80 |
 | No session list or revoke for users; no idle expiry; session rows never deleted | KEY-8, OIDC-4 | #79, #80, #34 |
 | File-store key rotation cannot re-wrap old objects | FS-3 | #35 |
 | No CSP or `frame-ancestors` on the SPA and API from Rust; `Referrer-Policy` only on management and auth responses | WEB-2, WEB-3 | Fixed in #142 |

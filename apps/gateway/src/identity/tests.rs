@@ -946,9 +946,14 @@ mod database {
     }
 
     async fn begin_login(state: &IdentityState, mock: &MockProvider) -> (String, String, String) {
-        let response = login(State(state.clone()), Ok(Query(LoginQuery::default())))
-            .await
-            .unwrap();
+        let response = login(
+            State(state.clone()),
+            PeerIp(None),
+            HeaderMap::new(),
+            Ok(Query(LoginQuery::default())),
+        )
+        .await
+        .unwrap();
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
         let url = Url::parse(response.headers()[header::LOCATION].to_str().unwrap()).unwrap();
         let params: HashMap<_, _> = url
@@ -972,6 +977,7 @@ mod database {
     ) -> Result<Response, AuthError> {
         callback(
             State(state.clone()),
+            PeerIp(None),
             cookie_header(BROWSER, browser),
             Ok(Query(CallbackQuery {
                 state: oauth_state.into(),
@@ -1563,6 +1569,7 @@ mod database {
         headers.insert(header::ACCEPT, HeaderValue::from_static("text/html"));
         let response = callback(
             State(state.clone()),
+            PeerIp(None),
             headers,
             Ok(Query(CallbackQuery {
                 state: oauth,
@@ -1619,6 +1626,7 @@ mod database {
         assert_eq!(
             callback(
                 State(state.clone()),
+                PeerIp(None),
                 headers,
                 Ok(Query(CallbackQuery {
                     state: oauth,
@@ -1650,6 +1658,7 @@ mod database {
         headers.insert(header::ACCEPT, HeaderValue::from_static("text/html"));
         let response = callback(
             State(state.clone()),
+            PeerIp(None),
             headers,
             Ok(Query(CallbackQuery {
                 state: oauth,
@@ -2078,5 +2087,250 @@ mod database {
         .await
         .unwrap();
         assert_eq!(grants(outsider).await, ["Legacy"]);
+    }
+}
+
+/// #78: sign-in abuse controls through the real router, on PostgreSQL.
+mod abuse_controls {
+    use super::*;
+    use axum::extract::ConnectInfo;
+    use std::net::SocketAddr;
+
+    fn from(peer: &str, uri: &str, forwarded: Option<&str>) -> Request<Body> {
+        let mut request = Request::builder().uri(uri);
+        if let Some(value) = forwarded {
+            request = request.header("x-forwarded-for", value);
+        }
+        let mut request = request.body(Body::empty()).unwrap();
+        let addr: SocketAddr = format!("{peer}:40000").parse().unwrap();
+        request.extensions_mut().insert(ConnectInfo(addr));
+        request
+    }
+    async fn attempts(pool: &sqlx::PgPool) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM oidc_login_attempts")
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+    async fn state(
+        mock: &MockProvider,
+        pool: &sqlx::PgPool,
+        f: impl FnOnce(&mut IdentityConfig),
+    ) -> IdentityState {
+        let mut config = mock.config();
+        f(&mut config);
+        IdentityState::new(Store::new(pool.clone()), Some(config))
+            .await
+            .unwrap()
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn a_burst_from_one_address_is_refused_without_storing_anything(pool: sqlx::PgPool) {
+        let mock = MockProvider::start(None).await;
+        let state = state(&mock, &pool, |c| {
+            c.login_rate_per_minute = 3;
+            c.trusted_proxies = throttle::TrustedProxies::parse("10.0.0.0/8").unwrap();
+        })
+        .await;
+        let app = router(state.clone()).with_state(state.store.clone());
+        let before = crate::metrics::METRICS.auth_throttled_count("login", "client_rate");
+        for _ in 0..3 {
+            let response = app
+                .clone()
+                .oneshot(from("198.51.100.7", "/api/v1/auth/login", None))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        }
+        let refused = app
+            .clone()
+            .oneshot(from("198.51.100.7", "/api/v1/auth/login", None))
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(refused.headers()[header::RETRY_AFTER], "20");
+        assert!(refused.headers().get(header::SET_COOKIE).is_none());
+        assert!(refused.headers().get(header::LOCATION).is_none());
+        assert_eq!(attempts(&pool).await, 3, "a refused start stores nothing");
+        assert!(crate::metrics::METRICS.auth_throttled_count("login", "client_rate") > before);
+        // A spoofed X-Forwarded-For from an untrusted peer doesn't buy a fresh bucket.
+        let spoofed = app
+            .clone()
+            .oneshot(from(
+                "198.51.100.7",
+                "/api/v1/auth/login",
+                Some("203.0.113.1"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(spoofed.status(), StatusCode::TOO_MANY_REQUESTS);
+        // Another client is unaffected, directly or through a trusted proxy.
+        let other = app
+            .clone()
+            .oneshot(from("198.51.100.8", "/api/v1/auth/login", None))
+            .await
+            .unwrap();
+        assert_eq!(other.status(), StatusCode::SEE_OTHER);
+        let proxied = app
+            .clone()
+            .oneshot(from("10.0.0.2", "/api/v1/auth/login", Some("198.51.100.9")))
+            .await
+            .unwrap();
+        assert_eq!(proxied.status(), StatusCode::SEE_OTHER);
+        // ...and the proxied original client is limited as itself.
+        for _ in 0..2 {
+            app.clone()
+                .oneshot(from("10.0.0.3", "/api/v1/auth/login", Some("198.51.100.9")))
+                .await
+                .unwrap();
+        }
+        let limited = app
+            .clone()
+            .oneshot(from("10.0.0.2", "/api/v1/auth/login", Some("198.51.100.9")))
+            .await
+            .unwrap();
+        assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn callbacks_are_limited_before_the_attempt_is_consumed(pool: sqlx::PgPool) {
+        let mock = MockProvider::start(None).await;
+        let state = state(&mock, &pool, |c| c.login_rate_per_minute = 2).await;
+        let app = router(state.clone()).with_state(state.store.clone());
+        sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES($1,$2,'entitled','platform','user')")
+            .bind(Uuid::new_v4()).bind(&mock.issuer).execute(&pool).await.unwrap();
+        let response = app
+            .clone()
+            .oneshot(from("198.51.100.7", "/api/v1/auth/login", None))
+            .await
+            .unwrap();
+        let url = Url::parse(response.headers()[header::LOCATION].to_str().unwrap()).unwrap();
+        let params: HashMap<_, _> = url
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        mock.claims.lock().unwrap()["nonce"] = json!(params["nonce"]);
+        let browser = response_cookie(&response, BROWSER);
+        let callback = |peer: &str, state: &str| {
+            let mut request = from(
+                peer,
+                &format!("/api/v1/auth/callback?state={state}&code=good"),
+                None,
+            );
+            request.headers_mut().insert(
+                header::COOKIE,
+                format!("{BROWSER}={browser}").parse().unwrap(),
+            );
+            request
+        };
+        // Two junk callbacks use up this address's budget (and fail as invalid).
+        for _ in 0..2 {
+            let junk = app
+                .clone()
+                .oneshot(callback("198.51.100.7", &"A".repeat(43)))
+                .await
+                .unwrap();
+            assert_ne!(junk.status(), StatusCode::TOO_MANY_REQUESTS);
+        }
+        let refused = app
+            .clone()
+            .oneshot(callback("198.51.100.7", &params["state"]))
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(refused.headers().get(header::RETRY_AFTER).is_some());
+        assert_eq!(
+            attempts(&pool).await,
+            1,
+            "the throttled callback left the attempt usable"
+        );
+        // The real callback still completes (the same browser, another address).
+        let ok = app
+            .clone()
+            .oneshot(callback("198.51.100.8", &params["state"]))
+            .await
+            .unwrap();
+        assert_eq!(ok.status(), StatusCode::SEE_OTHER);
+        assert!(!response_cookie(&ok, SESSION).is_empty());
+        // Replaying the consumed state is still refused as before.
+        let replay = app
+            .clone()
+            .oneshot(callback("198.51.100.9", &params["state"]))
+            .await
+            .unwrap();
+        assert_ne!(replay.status(), StatusCode::SEE_OTHER);
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn the_pending_attempt_cap_is_shared_by_every_replica(pool: sqlx::PgPool) {
+        let mock = MockProvider::start(None).await;
+        // Two replicas: separate in-memory limiters, one database.
+        let (a, b) = (
+            state(&mock, &pool, |c| c.pending_login_cap = 4).await,
+            state(&mock, &pool, |c| c.pending_login_cap = 4).await,
+        );
+        let (app_a, app_b) = (
+            router(a.clone()).with_state(a.store.clone()),
+            router(b.clone()).with_state(b.store.clone()),
+        );
+        let mut statuses = Vec::new();
+        let burst = (0..6).map(|i| {
+            let app = if i % 2 == 0 {
+                app_a.clone()
+            } else {
+                app_b.clone()
+            };
+            async move {
+                app.oneshot(from(
+                    &format!("198.51.100.{}", 10 + i),
+                    "/api/v1/auth/login",
+                    None,
+                ))
+                .await
+                .unwrap()
+                .status()
+            }
+        });
+        for status in futures::future::join_all(burst).await {
+            statuses.push(status);
+        }
+        let stored = attempts(&pool).await;
+        assert!(
+            stored <= 5,
+            "at most the cap, plus one per racing replica; got {stored}"
+        );
+        assert_eq!(
+            statuses
+                .iter()
+                .filter(|s| **s == StatusCode::SEE_OTHER)
+                .count() as i64,
+            stored
+        );
+        // Once full, every replica refuses with a Retry-After and stores nothing.
+        sqlx::query("INSERT INTO oidc_login_attempts(state_hash,browser_hash,nonce,pkce_verifier,expires_at) SELECT sha256(g::text::bytea),sha256(g::text::bytea),'n','v',now()+interval '10 minutes' FROM generate_series(1,4) g ON CONFLICT DO NOTHING")
+            .execute(&pool).await.unwrap();
+        let full = attempts(&pool).await;
+        for app in [&app_a, &app_b] {
+            let refused = app
+                .clone()
+                .oneshot(from("198.51.100.99", "/api/v1/auth/login", None))
+                .await
+                .unwrap();
+            assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(refused.headers()[header::RETRY_AFTER], "60");
+            assert!(refused.headers().get(header::SET_COOKIE).is_none());
+        }
+        assert_eq!(attempts(&pool).await, full);
+        // Expired attempts don't count: sign-in recovers as they age out.
+        sqlx::query("UPDATE oidc_login_attempts SET expires_at=now()-interval '1 second'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let recovered = app_a
+            .clone()
+            .oneshot(from("198.51.100.99", "/api/v1/auth/login", None))
+            .await
+            .unwrap();
+        assert_eq!(recovered.status(), StatusCode::SEE_OTHER);
     }
 }

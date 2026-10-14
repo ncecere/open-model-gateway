@@ -11,11 +11,21 @@ Browser sessions and inference keys are separate credentials. A bearer key canno
 | `GATEWAY_OIDC_CLIENT_ID` | Registered authorization-code client. |
 | `GATEWAY_OIDC_CLIENT_SECRET` | Optional confidential-client secret. |
 | `GATEWAY_OIDC_GROUPS_CLAIM` | Signed ID-token claim name/path; default `groups`. Literal names take precedence over dotted nested paths. |
+| `GATEWAY_TRUSTED_PROXIES` | Optional. Comma-separated addresses or CIDR networks of your reverse proxies, such as `10.42.0.0/16`. Only a request from one of them has its `X-Forwarded-For` believed, and then only the right-most entry that isn't itself a trusted proxy. Used for sign-in rate limits only. |
+| `GATEWAY_LOGIN_RATE_PER_MINUTE` | Optional. Sign-in starts, and separately callbacks, allowed per client address per minute; default 60, allowed 1–10000. |
 | `GATEWAY_SCIM_TOKEN_ENV` | Optional. Name of the variable holding the SCIM bearer token; enables [SCIM provisioning](scim.md). Requires OIDC. |
 
 Register `${GATEWAY_PUBLIC_URL}/api/v1/auth/callback` with the origin's trailing slash removed. Admin › Settings › Sign-in shows the active issuer, client ID, client type, groups claim and this callback URL read-only (never the secret); see [settings](settings.md#sign-in). Use authorization code and S256 PKCE. ID tokens must contain `email`, boolean `email_verified:true`, and a valid string-array group claim, including `[]` when no groups match. The gateway requests the `openid email profile` scopes; an optional `name` claim is stored as the user's display name (trimmed, at most 200 characters, replaced at every sign-in and cleared at account cleanup). It is presentation only and never used for matching or authorization. The gateway does not fetch userinfo or retain upstream access/refresh tokens.
 
 HTTPS is required for identity URLs. Only `GATEWAY_ENV=development` allows HTTP on localhost/literal loopback. Forwarded headers do not alter this policy. Cookies are Secure except on explicitly configured development-loopback HTTP. Missing all OIDC client settings disables login; partial/empty settings and configured discovery failures fail startup. Discovery/JWKS responses are bounded to 1 MiB, with redirects disabled, a 15-second timeout and five-second connection timeout. This is not provider certification.
+
+### Sign-in abuse controls
+
+- **Per address.** Each replica allows `GATEWAY_LOGIN_RATE_PER_MINUTE` sign-in starts and, separately, as many callbacks per client address per minute, as a burst of that size refilling evenly. IPv6 clients are counted per /64. Past it, the step gets 429 with `Retry-After`, stores nothing and sets no cookie. A throttled callback leaves its sign-in attempt usable. The limits are in memory, so with N replicas a client can make up to N times as many requests; the cap below bounds the total.
+- **Client address.** The connection's address, unless it is in `GATEWAY_TRUSTED_PROXIES`. Behind an ingress controller without that setting, every user counts as the controller's address and shares one budget, so set it to the controller's addresses (Helm: `gateway.trustedProxies`). A client's own `X-Forwarded-For` is ignored.
+- **Installation-wide.** At most 10,000 unexpired sign-in attempts exist at once; beyond that, sign-in returns 503 with `Retry-After: 60` until attempts expire (10 minutes) or complete.
+- **No account lockout.** The gateway never sees passwords; your IdP handles credential attacks. A per-account lockout would let anyone lock a known user out.
+- **Metrics.** `gateway_auth_throttled_total{endpoint="login|callback",reason="client_rate|pending_cap"}`, with no addresses or identities. Alert on a sustained `pending_cap` rate (sign-in is refused for everyone), for example `sum(rate(gateway_auth_throttled_total{reason="pending_cap"}[5m])) > 0` for 5 minutes.
 
 ### Signing keys (JWKS)
 

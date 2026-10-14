@@ -197,6 +197,7 @@ pub struct Metrics {
     cache_lookups: Family<L2, Counter>,
     config_changes: Family<L1, Counter>,
     config_poll_failures: Counter,
+    auth_throttled: Family<L2, Counter>,
     config_listener: Gauge,
     leases_held: Family<L1, Gauge>,
     lease_terms: Family<L1, Counter>,
@@ -315,6 +316,7 @@ impl Metrics {
             cache_lookups: Family::default(),
             config_changes: Family::default(),
             config_poll_failures: Counter::default(),
+            auth_throttled: Family::default(),
             config_listener: Gauge::default(),
             leases_held: Family::default(),
             lease_terms: Family::default(),
@@ -490,6 +492,11 @@ impl Metrics {
             metrics.config_changes.clone(),
         );
         registry.register(
+            "auth_throttled",
+            "Sign-in steps refused by abuse controls, by step (login, callback) and reason (client_rate, pending_cap)",
+            metrics.auth_throttled.clone(),
+        );
+        registry.register(
             "config_poll_failures",
             "Failed configuration version polls (caches are bypassed after 3 s without a successful poll)",
             metrics.config_poll_failures.clone(),
@@ -577,6 +584,25 @@ impl Metrics {
         self.config_changes
             .get_or_create(&[("topic", topic.to_owned())])
             .inc();
+    }
+
+    pub(crate) fn auth_throttled(&self, endpoint: &'static str, reason: &'static str) {
+        self.auth_throttled
+            .get_or_create(&[
+                ("endpoint", endpoint.to_owned()),
+                ("reason", reason.to_owned()),
+            ])
+            .inc();
+    }
+
+    /// Refusals so far of one sign-in step and reason (tests).
+    pub fn auth_throttled_count(&self, endpoint: &str, reason: &str) -> u64 {
+        self.auth_throttled
+            .get_or_create(&[
+                ("endpoint", endpoint.to_owned()),
+                ("reason", reason.to_owned()),
+            ])
+            .get()
     }
 
     pub(crate) fn observe_config_poll_failure(&self) {
