@@ -514,8 +514,8 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 **SUP-2. A CI action is replaced.** T · Asset: CI, release artifacts · Attacker: compromised action repository.
 - Mitigation: `image.yml` and `branch-images.yml` pin actions by commit SHA; in `ci.yml` the image (which calls `image.yml`), cargo-deny, helm and npm-audit jobs are SHA-pinned. `ci.yml` defaults to `contents: read` (only the image job, which releases `v*` tags, gets `contents: write` and `packages: write`) and has no `pull_request_target`.
 - Tests: no test found.
-- Residual: `ci.yml` has 15 tag-pinned `uses:` in the gateway, web, browser and staging-image jobs (`actions/checkout@v7`, `actions/setup-node@v7`, `actions/upload-artifact@v7`, `dtolnay/rust-toolchain@stable`, `Swatinem/rust-cache@v2`, `docker/build-push-action@v7`, `docker/setup-buildx-action@v4`). SECURITY.md says workflow actions are pinned by commit SHA, which is not true for those. Separately, the Dockerfile's build stages (`node:22.23.3-bookworm-slim`, `rust:1.99.0-bookworm`) are pinned by tag; only the distroless runtime is digest-pinned. SECURITY.md does not claim digest pins for them; this is a hardening gap, not a false claim.
-- Follow-up: #143 (Actions SHA pins; Dockerfile build-stage digests are tracked there as the next step).
+- Residual: none known for pinning (#143). Pins only fix *what* is fetched; a compromised upstream release still reaches us through a reviewed Dependabot update.
+- Follow-up: none (fixed in #143: every action SHA-pinned, every base image digest-pinned, enforced by `tests/supply-chain.test.mjs`).
 
 **SUP-3. A release image is tampered with.** T · Asset: image · Attacker: registry or build compromise.
 - Mitigation: `image.yml` builds per-architecture images with SBOM and provenance attestations, gates on Trivy (fixable HIGH and CRITICAL), signs the multi-arch index with cosign keyless, and promotes by digest. The runtime is distroless, non-root, without a shell.
@@ -604,8 +604,8 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 | No session list or revoke for users; no idle expiry; session rows never deleted | KEY-8, OIDC-4 | #79, #80, #34 |
 | File-store key rotation cannot re-wrap old objects | FS-3 | #35 |
 | No CSP or `frame-ancestors` on the SPA and API from Rust; `Referrer-Policy` only on management and auth responses | WEB-2, WEB-3 | Fixed in #142 |
-| 15 tag-pinned `uses:` in `ci.yml` (the image, cargo-deny, helm and npm-audit jobs are SHA-pinned); SECURITY.md says workflow actions are SHA-pinned | SUP-2 | #143 |
-| Dockerfile build-stage images pinned by tag, not digest (SECURITY.md makes no digest claim) | SUP-2 | #143 |
+| 15 tag-pinned `uses:` in `ci.yml` (the image, cargo-deny, helm and npm-audit jobs are SHA-pinned); SECURITY.md says workflow actions are SHA-pinned | SUP-2 | Fixed in #143 |
+| Dockerfile build-stage images pinned by tag, not digest (SECURITY.md makes no digest claim) | SUP-2 | Fixed in #143 |
 | OIDC HTTP client honours ambient `HTTP(S)_PROXY`/`ALL_PROXY` (no `.no_proxy()` in `identity.rs`); it lacks `.retry(never())`, but reqwest's default retry can't fire without its `http2` feature (`apps/gateway/Cargo.toml`) | OIDC-5, EGR-4 | #144 |
 | `revoked_at` can be cleared by the runtime role; no trigger. A trigger guards against application bugs, not a stolen runtime credential, which can insert keys and grants | KEY-3, OPS-2 | #145 |
 | Restore revives keys and grants revoked after the backup and loses spend; `--expect-version` and `--skip-file-key-check` weaken its checks | OPS-6 | #146 |
