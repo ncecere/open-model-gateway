@@ -30,6 +30,35 @@ describe("authoritative settings refresh", () => {
     fireEvent.click(screen.getByRole("button", { name: "Discard" }));
     await waitFor(() => expect((screen.getByLabelText("Amount") as HTMLInputElement).value).toBe("100.00"));
   });
+  it("keeps \"Settings saved.\" when the refetch echoes the saved values (#164)", async () => {
+    const c = client(), save = vi.fn().mockResolvedValue({ ok: true });
+    const view = (value: string) => <QueryClientProvider client={c}><SettingsForm fields={fields(value)} writable onSave={save} /></QueryClientProvider>;
+    const { rerender } = render(view("12.34"));
+    fireEvent.change(screen.getByLabelText("Amount"), { target: { value: "11.00" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
+    await screen.findByText("Settings saved.");
+    // The save invalidates the query; the refetch brings back what was saved.
+    rerender(view("11.00"));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(screen.getByText("Settings saved.")).toBeTruthy();
+    expect((screen.getByLabelText("Amount") as HTMLInputElement).value).toBe("11.00");
+    // A later, different server value (someone else's change) refreshes the form and clears it.
+    rerender(view("99.00"));
+    await waitFor(() => expect((screen.getByLabelText("Amount") as HTMLInputElement).value).toBe("99.00"));
+    expect(screen.queryByText("Settings saved.")).toBeNull();
+  });
+  it("keeps \"Settings saved.\" when the server normalises the saved value (#164)", async () => {
+    const c = client(), save = vi.fn().mockResolvedValue({ ok: true });
+    const view = (value: string) => <QueryClientProvider client={c}><SettingsForm fields={fields(value)} writable onSave={save} /></QueryClientProvider>;
+    const { rerender } = render(view("12.34"));
+    fireEvent.change(screen.getByLabelText("Amount"), { target: { value: "11" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
+    await screen.findByText("Settings saved.");
+    rerender(view("11.00"));
+    await waitFor(() => expect((screen.getByLabelText("Amount") as HTMLInputElement).value).toBe("11.00"));
+    expect(screen.getByText("Settings saved.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Save settings" })).toBeNull();
+  });
   it("refreshes readonly controls without exposing submission", async () => {
     const c = client();
     const view = (value: string) => <QueryClientProvider client={c}><SettingsForm fields={fields(value)} writable={false} onSave={vi.fn()} /></QueryClientProvider>;
