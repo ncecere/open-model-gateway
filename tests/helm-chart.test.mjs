@@ -45,6 +45,22 @@ for (const [name, args] of Object.entries(profiles)) {
   });
 }
 
+test("loadgen Job passes the arguments `loadgen run` accepts", () => {
+  const rendered = helmTemplate(["-f", join(chart, "ci/loadtest-values.yaml"), "--set", "loadtest.loadgen.enabled=true",
+    "--set", "loadtest.loadgen.rate=750", "--set", "loadtest.loadgen.duration=120", "--set", "loadtest.loadgen.extraArgs={--readers,4}"]);
+  const [job] = docsOfKind(rendered, "Job").filter((doc) => /name: omg-test-[\w-]*loadgen/.test(doc));
+  assert.ok(job, "no loadgen Job rendered");
+  const args = [...job.matchAll(/^\s+- "?([^"\n]*)"?$/gm)].map((m) => m[1]);
+  const at = (flag) => args[args.indexOf(flag) + 1];
+  assert.equal(args[args.indexOf("run")], "run");
+  assert.match(at("--target"), /^http:\/\/omg-test[\w-]*:8080$/);
+  assert.equal(at("--rate"), "750");
+  assert.equal(at("--duration"), "120");
+  assert.match(at("--mock-url"), /^http:\/\/omg-test[\w-]*-mock-upstream:8000$/);
+  assert.equal(at("--readers"), "4");
+  for (const stale of ["--base-url", "--requests", "--concurrency"]) assert.ok(!args.includes(stale), `${stale} is not a loadgen flag`);
+});
+
 test("default values fail fast with a clear message instead of rendering an unconfigured database", () => {
   const result = spawnSync("helm", ["template", "omg-test", chart], { encoding: "utf8", timeout: 30_000 });
   assert.notEqual(result.status, 0);

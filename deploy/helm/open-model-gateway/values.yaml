@@ -362,8 +362,15 @@ loadtest:
     # and block/fail before mock-upstream or the gateway have real traffic
     # to serve. Set true only once you are ready to trigger a run.
     enabled: false
-    requests: 1000
-    concurrency: 50
+    # `loadgen run` is open loop: requests arrive at `rate` per second for
+    # `duration` seconds; the first `warmup` seconds are left out of latency
+    # statistics. Requests spread over the first `keys` seeded keys.
+    rate: 400
+    duration: 60
+    warmup: 10
+    keys: 2000
+    # Further `loadgen run` flags, e.g. [--readers, "4", --metrics-url, http://...].
+    extraArgs: []
     resources:
       requests:
         cpu: 500m
