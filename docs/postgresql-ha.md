@@ -52,8 +52,16 @@ Singleton jobs run under fenced work leases (30 s term, renewed every 10 s), so 
 ### Measured failover
 
 - With CNPG's default `smartShutdownTimeout` of 180 s, deleting the primary under load kept writes down for about 3 minutes, because pooled and LISTEN sessions never disconnect on their own.
-- The chart now sets 15 s (`cnpg.cluster.smartShutdownTimeout`). Promotion then took under a minute, measured without load.
-- In the run under load, 109 attempts interrupted by the failover were reconciled as `unknown` with their holds retained. No reservation stayed `pending`, nothing was charged twice, and `budget verify` and `history verify` reported no findings.
+- The chart now sets 15 s (`cnpg.cluster.smartShutdownTimeout`). Under load (60 requests/s, 3 gateway replicas, 2 database instances) the standby was promoted **in 18 s**, with about 15 s of fast failures (`503 accounting_unavailable` and 500 `api_error` within milliseconds).
+- About 22 s after recovering, writes stalled again: requests took about 30 s and most failed, for at least 19 s. The likely cause is that with only 2 instances and a required synchronous standby, commits wait while the old primary rejoins as the standby (#149, not yet confirmed). Until #149 settles it, run 3 instances if you need writes to stay available through a failover.
+- In both failover runs under load, every interrupted attempt was reconciled as `unknown` with its hold retained. No reservation stayed `pending`, nothing was charged twice, and `budget verify` and `history verify` reported no findings.
+
+### Pooler restart and a dropped LISTEN connection
+
+Measured on the same setup at 60 requests/s (#25):
+
+- **Restarting the PgBouncer Pooler** (`kubectl rollout restart`) failed 2 of 5,400 requests with `503 accounting_unavailable`. Every other request succeeded, and the accounting checks were clean.
+- **Terminating every replica's LISTEN session** (`pg_terminate_backend`) failed no requests. Each replica reconnected (`gateway_config_listener_up` back to 1 within 20 s), with the 1 s version poll covering the gap.
 
 ### After a failover
 
@@ -193,8 +201,7 @@ Amazon RDS, Google Cloud SQL and Azure Database for PostgreSQL have not been tes
 
 ## Not yet measured
 
-- A PgBouncer Pooler restart under load.
-- A dropped LISTEN connection, including a connection that dies without closing.
-- Failover under load with `smartShutdownTimeout` at 15 s (only measured without load).
+- A LISTEN connection that dies without closing (a network partition rather than a terminated backend).
+- Failover with 3 database instances, and the cause of the second outage after a 2-instance failover (#149).
 - What synchronous replication costs compared with asynchronous.
-- Clean capacity after #132.
+- Certified capacity: steady load still hits 17–40 s stalls in about half the runs, sometimes without recovery (#132). Clean runs held 100–150 requests/s with p99 under 650 ms.
