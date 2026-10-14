@@ -233,6 +233,8 @@ A logical dump only gives you a recovery point at the time it was taken. For a s
 
 Never recover over the live cluster. Never run down migrations. Never delete pending or unknown reservations to make the numbers reconcile.
 
+For CNPG base backups and WAL archiving, failover behaviour and connection sizing with several replicas, see [HA PostgreSQL operations](postgresql-ha.md).
+
 ### Restore drill (quarterly and after schema changes)
 
 1. Take a fresh backup and run `verify`.
