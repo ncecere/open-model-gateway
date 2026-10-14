@@ -64,4 +64,4 @@ Admission records one execution and reservation per actual upstream attempt. Pri
 - Request bodies are limited to 2 MiB; adapters separately bound complete bodies and frames. Generated request IDs, method, status and elapsed timing are logged, not prompts, bodies, query strings or credentials.
 - No default prompt/response-body retention is introduced. Account cleanup retains financial attribution and audit history. Optional settled-detail compaction is not monetary deletion.
 
-Real identity-provider interoperability, live local/server profile certification, load/lock contention, network egress, backup/restore and release gates require separate operational validation. Source tests and isolated provider checks are not whole-stack certification.
+Real identity-provider interoperability, live local/server profile certification, load/lock contention, network egress, backup/restore and release gates require separate operational validation. Source tests and isolated provider checks are not whole-stack certification. Threats against these boundaries, their mitigations and known gaps are in the [threat model](threat-model.md).
