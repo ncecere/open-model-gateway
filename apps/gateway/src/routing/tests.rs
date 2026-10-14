@@ -474,4 +474,70 @@ mod database {
         let h = health(&f.store, deployment.id).await.unwrap();
         assert!(h.last_observed_at.unwrap() > chrono::Utc::now() - chrono::TimeDelta::seconds(5));
     }
+
+    /// When the observation goes stale while its row is busy (a slow commit
+    /// elsewhere), concurrent healthy successes must not all queue on the one
+    /// row, each holding a pooled connection (#132): one refreshes it, the
+    /// rest return at once.
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn stale_refresh_is_single_flight_and_never_queues_on_the_row(pool: PgPool) {
+        let f = fixture(pool).await;
+        let deployment = f
+            .store
+            .deployments(&f.principal, "company/smart")
+            .await
+            .unwrap()
+            .remove(0);
+        record_result(&f.store, deployment.id, None).await.unwrap();
+        sqlx::query("UPDATE deployment_health SET last_observed_at=now()-interval '31 seconds'")
+            .execute(&f.store.pool)
+            .await
+            .unwrap();
+        f.store.caches.forget_health(deployment.id);
+        // Another transaction holds the row, as a commit waiting on a slow
+        // synchronous standby would.
+        let mut blocker = f.store.pool.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM deployment_health WHERE deployment_id=$1 FOR UPDATE")
+            .bind(deployment.id)
+            .execute(&mut *blocker)
+            .await
+            .unwrap();
+        let observed = || async {
+            health(&f.store, deployment.id)
+                .await
+                .unwrap()
+                .last_observed_at
+        };
+        let before = observed().await;
+        // Two replicas: each has its own caches (and claims); only the row
+        // lock skip protects the second one.
+        let mut other = f.store.clone();
+        other.caches = std::sync::Arc::new(crate::cache::Caches::new());
+        let started = std::time::Instant::now();
+        let results = futures::future::join_all((0..40).map(|i| {
+            let store = if i % 2 == 0 { &f.store } else { &other };
+            tokio::time::timeout(
+                std::time::Duration::from_millis(500),
+                record_result(store, deployment.id, None),
+            )
+        }))
+        .await;
+        let waited = results.iter().filter(|r| r.is_err()).count();
+        assert_eq!(
+            waited, 0,
+            "{waited} of 40 healthy results queued on the busy health row"
+        );
+        assert!(results.iter().flatten().all(Result::is_ok));
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        assert_eq!(
+            observed().await,
+            before,
+            "nothing was written behind the lock"
+        );
+        blocker.rollback().await.unwrap();
+        // Released: the next success refreshes the stale observation.
+        record_result(&f.store, deployment.id, None).await.unwrap();
+        let h = health(&f.store, deployment.id).await.unwrap();
+        assert!(h.last_observed_at.unwrap() > chrono::Utc::now() - chrono::TimeDelta::seconds(5));
+    }
 }

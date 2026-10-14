@@ -182,6 +182,24 @@ pub struct Caches {
     pub(crate) candidates: VersionedCache<(Uuid, Uuid, String), Arc<Vec<Deployment>>>,
     pub(crate) routes: VersionedCache<(Uuid, String), Arc<RouteSnapshot>>,
     health: Mutex<HashMap<Uuid, HealthEntry>>,
+    /// Deployments whose success observation this replica is refreshing now.
+    health_refreshing: Arc<Mutex<std::collections::HashSet<Uuid>>>,
+}
+
+/// One in-flight success-observation refresh per deployment and replica;
+/// released when dropped (including when the caller's timeout cancels it).
+pub(crate) struct HealthRefreshClaim {
+    id: Uuid,
+    set: Arc<Mutex<std::collections::HashSet<Uuid>>>,
+}
+
+impl Drop for HealthRefreshClaim {
+    fn drop(&mut self) {
+        self.set
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.id);
+    }
 }
 
 impl Default for Caches {
@@ -198,6 +216,7 @@ impl Caches {
             candidates: VersionedCache::new("candidates", CANDIDATE_TOPICS, 100_000),
             routes: VersionedCache::new("routes", ROUTE_TOPICS, 50_000),
             health: Mutex::new(HashMap::new()),
+            health_refreshing: Arc::default(),
         }
     }
 
@@ -253,6 +272,19 @@ impl Caches {
     }
 
     /// This replica recorded a result for `id`: forget its entry.
+    /// `None` while another task on this replica refreshes `id`.
+    pub(crate) fn claim_health_refresh(&self, id: Uuid) -> Option<HealthRefreshClaim> {
+        let inserted = self
+            .health_refreshing
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id);
+        inserted.then(|| HealthRefreshClaim {
+            id,
+            set: self.health_refreshing.clone(),
+        })
+    }
+
     pub(crate) fn forget_health(&self, id: Uuid) {
         self.health
             .lock()
