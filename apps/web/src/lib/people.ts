@@ -122,7 +122,7 @@ export const auditActionLabels: Record<string, string> = {
   "settings.logo_uploaded": "Uploaded logo", "settings.logo_removed": "Removed logo",
   "service_account.created": "Created service account", "service_account.updated": "Changed service account",
   "usage.reconciled": "Reconciled usage",
-  "user.provisioned": "Provisioned user", "user.updated": "Changed user", "user.bootstrap_role": "Granted first admin role", "user.cleaned": "Cleaned up departed user",
+  "user.provisioned": "Provisioned user", "user.updated": "Changed user", "user.suspended": "Suspended user", "user.reenabled": "Re-enabled user", "user.bootstrap_role": "Granted first admin role", "user.cleaned": "Cleaned up departed user",
   "workspace.created": "Created workspace", "workspace.updated": "Changed workspace", "workspace.manual_membership_set": "Set manual membership", "workspace.manual_membership_revoked": "Removed manual membership",
 };
 export const auditActionLabel = (code: string) => auditActionLabels[code] ?? code;
