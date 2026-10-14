@@ -92,6 +92,12 @@ test("CNPG backups render the barmanObjectStore map as given, and the chart name
   assert.doesNotMatch(rendered, /GATEWAY_DRAIN_SECONDS/);
 });
 
+test("the default image tag is the release this chart belongs to (v + appVersion)", () => {
+  const appVersion = readFileSync(join(chart, "Chart.yaml"), "utf8").match(/^appVersion: "([^"]+)"$/m)[1];
+  const tag = readFileSync(join(chart, "values.yaml"), "utf8").match(/^  tag: (\S+)$/m)[1];
+  assert.equal(tag, `v${appVersion}`);
+});
+
 test("default values fail fast with a clear message instead of rendering an unconfigured database", () => {
   const result = spawnSync("helm", ["template", "omg-test", chart], { encoding: "utf8", timeout: 30_000 });
   assert.notEqual(result.status, 0);
