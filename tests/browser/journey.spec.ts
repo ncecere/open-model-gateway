@@ -52,7 +52,7 @@ test("platform admin maps SSO groups to roles and memberships", async ({ browser
     if (!role) await dialog.getByLabel("Platform role").selectOption({ label: target });
     else {
       await dialog.getByLabel("Mapping target").selectOption({ label: "Team or Project membership" });
-      await dialog.getByLabel("Shared workspace").selectOption({ label: target });
+      await pick(dialog, page, "Shared workspace", target.split(" · ")[0]!, target);
       await dialog.getByLabel("Membership role").selectOption({ label: role });
     }
     await dialog.getByRole("button", { name: "Create mapping" }).click();
