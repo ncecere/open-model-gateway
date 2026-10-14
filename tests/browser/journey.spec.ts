@@ -7,6 +7,11 @@ import { api, chat, expectNoHorizontalScroll, expectTableFits, expectTileChartsA
 test.describe.configure({ mode: "serial" });
 
 const idFrom = (page: Page) => new URL(page.url()).pathname.split("/").pop()!;
+/** A server-searched choice (R06): type part of it, then pick the matching option. */
+async function pick(scope: ReturnType<Page["getByRole"]>, page: Page, name: string, text: string, option: string) {
+  await scope.getByRole("combobox", { name, exact: true }).fill(text);
+  await page.getByRole("option", { name: option, exact: true }).click();
+}
 
 test("an authenticated but unentitled SSO user is denied", async ({ browser }) => {
   const { context, page } = await signIn(browser, "unentitled");
@@ -19,11 +24,10 @@ test("platform admin creates a team and a project", async ({ browser }) => {
   const { context, page } = await signIn(browser, "operator");
   for (const [section, kind, name] of [["teams", "team", "Product"], ["projects", "project", "Research"]] as const) {
     await page.goto(`/admin/${section}`);
-    await page.waitForLoadState("networkidle"); // owner choices load before the dialog opens
     await page.getByRole("button", { name: `Create ${kind}` }).first().click();
     const dialog = page.getByRole("dialog", { name: `Create ${kind}` });
     await dialog.getByRole("textbox", { name: "Name", exact: true }).fill(name);
-    await dialog.getByRole("combobox", { name: "Initial owner", exact: true }).selectOption({ label: "operator@demo.invalid" });
+    await pick(dialog, page, "Initial owner", "operator", "operator@demo.invalid");
     await dialog.getByRole("button", { name: `Create ${kind}` }).click();
     await expect(dialog).toBeHidden();
     await page.getByRole("link", { name, exact: true }).click();
