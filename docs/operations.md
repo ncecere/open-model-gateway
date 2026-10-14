@@ -150,11 +150,74 @@ What the script guarantees:
 
 - **Connection handling:** URLs come from `--url-env` (default `DATABASE_URL`) or `--url-file`. They are passed through `PG*` environment variables and are never printed or placed on a command line.
 - **Containers:** `--pg-container NAME` runs the PostgreSQL 17 client tools inside that container with `docker exec`. The URL is then resolved inside the container, for example `127.0.0.1:5432`.
-- **Manifest contents:** the SHA-256 and size of the dump, plus `schema_family`, `latest_version` and the full migration list (version and checksum), the server version, and the source database name.
+- **Manifest contents:** the SHA-256 and size of the dump, plus `schema_family`, `latest_version` and the full migration list (version and checksum), the server version, and the source database name. `file_encryption_key_ids` lists the distinct file-store key IDs that live `stored_files` rows use (IDs only, never key material; empty when the file store is unused). Encrypted backups also record `encryption` (see below). The manifest is plaintext JSON and holds no secrets.
 - **Backup refusals:** a backup refuses empty or dirty lineages, or a lineage that changed while the dump ran. Partial files are deleted.
 - **Restore checks:** restore verifies the checksum first. It then requires the backup lineage to equal `open-model-gateway schema-version`, which prints the binary's embedded migrations as JSON without database access. The weaker `--expect-version N` is available when no binary is at hand.
 - **Restore safety:** target names must be lowercase identifiers. System and demo databases are refused. The target must contain no relations, schemas, functions, types or extensions. Restore uses `pg_restore --single-transaction --exit-on-error`. If it fails, it drops only a database it created in that same run. It never cleans, drops or overwrites existing data. Afterwards it re-reads the restored lineage.
-- **Not encrypted:** backups contain identities and accounting data. Encrypt them with your approved system before off-host storage, restrict access, and set retention. Keep secrets, configuration, and Caddy certificate volumes in a separate encrypted recovery plan; the dump does not contain them.
+- **File-store keys:** if the manifest lists file key IDs, restore refuses unless `--file-keys-env NAME` names a variable holding the key list (`kid:base64key[,…]`, the format of the variable named by `GATEWAY_FILE_ENCRYPTION_KEYS_ENV`) that contains every listed ID. Only the IDs are parsed; values are never printed. Pass `--skip-file-key-check` only when stored files will not be recovered.
+- **Sensitive contents:** backups contain identities and accounting data. Without `--encrypt-to` the dump is plaintext on disk; use encrypted backups for anything that leaves the host. Keep secrets, configuration, and Caddy certificate volumes in a separate encrypted recovery plan; the dump does not contain them.
+
+### Encrypted backups
+
+Encryption uses [age](https://age-encryption.org) (`age` and `age-keygen` on the host that runs the script):
+
+```sh
+# Once: create the identity on a trusted machine, store it in the secrets manager
+# and keep only the public key (age1...) where backups are taken.
+age-keygen -o backup-identity.txt   # prints "Public key: age1..."
+
+# Backup: pg_dump is streamed through age into <dump>.age; the plaintext dump is never written.
+python3 scripts/backup.py backup --url-file .local/staging/secrets/migrator_database_url \
+  --out-dir /secure/backups --encrypt-to age1...    # repeatable; or --encrypt-to-file recipients.txt
+
+# Verify the ciphertext; with --identity also decrypt (in memory) and check the plaintext and pg_restore --list.
+python3 scripts/backup.py verify /secure/backups/gateway-...dump.age.manifest.json --identity /run/secrets/backup-identity.txt
+
+# Restore: two decrypt passes, no plaintext on disk.
+python3 scripts/backup.py restore /secure/backups/gateway-...dump.age.manifest.json \
+  --url-env MIGRATOR_ADMIN_URL --target-db gateway_restore_20261013 --create \
+  --gateway-binary /path/to/open-model-gateway \
+  --identity /run/secrets/backup-identity.txt --file-keys-env GATEWAY_FILE_KEYS
+```
+
+- **Backup:** while the dump streams into `age`, the script computes the plaintext SHA-256 and size and feeds the same stream to `pg_restore --list` to prove it is a readable archive. The manifest records the plaintext `sha256`/`bytes`, `file` (the `.age` name) and `encryption`: `tool`, the recipients' public keys, `ciphertext_sha256` and `ciphertext_bytes`.
+- **Verify:** always checks the ciphertext checksum and size. Only `--identity` checks the plaintext.
+- **Restore:** requires `--identity`. Pass 1 decrypts to check the plaintext SHA-256 and `pg_restore --list`. Pass 2 decrypts again straight into `pg_restore --single-transaction`. It holds back the last block until the plaintext checksum matches again, so an archive that changes between passes never completes a restore.
+- **Multiple recipients:** use one for the routine identity and one for an offline break-glass identity. Any one of them can decrypt.
+
+### Off-host copies (S3-compatible storage)
+
+`upload`, `list`, `download` and `prune` talk to S3-compatible object storage (AWS S3, RustFS, MinIO) with path-style requests signed with AWS Signature Version 4. They use only the Python standard library. `--endpoint` is the storage origin (default `https://s3.<region>.amazonaws.com`); plain `http://` is accepted only for loopback hosts. `--region` defaults to `us-east-1`. Credentials come only from `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` (and optionally `AWS_SESSION_TOKEN`). They are never accepted as arguments or printed. Requests do not follow redirects, use proxies or retry.
+
+```sh
+export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=...   # from the secrets manager; a key limited to this bucket
+S3="--endpoint https://rustfs.example.internal --region us-east-1"
+
+python3 scripts/backup.py upload /secure/backups/gateway-...dump.age.manifest.json --to s3://omg-backups/prod $S3
+python3 scripts/backup.py list --from s3://omg-backups/prod $S3          # newest first
+python3 scripts/backup.py download gateway-...dump.age --from s3://omg-backups/prod --out-dir /restore $S3
+python3 scripts/backup.py prune --from s3://omg-backups/prod --keep 30 $S3        # prints the plan
+python3 scripts/backup.py prune --from s3://omg-backups/prod --keep 30 --yes $S3  # deletes
+```
+
+- **Upload** refuses unencrypted backups unless `--allow-plaintext` is passed. It re-checks the local checksum, refuses to overwrite a generation whose manifest already exists, and uploads the archive first and the manifest last. After each PUT it checks the size with a HEAD. A manifest therefore only exists once its archive is complete; an interrupted upload leaves at most an archive without a manifest, which `list` and `prune` ignore. Archives over 5 GiB are refused: the script uses single-request PUTs and has no multipart upload.
+- **Download** writes the manifest and archive with mode 0600, refuses to overwrite existing files, and verifies the archive checksum against the manifest. It deletes what it wrote if the check fails. Then run `verify --identity` and `restore` as above.
+- **Prune** keeps the newest N generations (`--keep` ≥ 1, so never the newest one) and only prints the plan without `--yes`. It deletes each generation's manifest first, then its archive. It only deletes pairs it recognizes: a `gateway-…dump[.age].manifest.json` that parses and names its archive, with the archive present. Other objects, nested prefixes and archives without a manifest are left alone. Use bucket versioning or object lock as well if you need protection against a compromised credential deleting backups.
+
+### Key custody
+
+Keep three things apart, in a secrets manager such as OpenBao, with separate access policies:
+
+1. **The age identity** (`AGE-SECRET-KEY-…`). Only the public key lives where backups are taken. Store the identity in the secrets manager, plus an offline break-glass copy, and never in the bucket or next to the backups.
+2. **The file-store key list** (`GATEWAY_FILE_ENCRYPTION_KEYS_ENV`), every generation still referenced by stored files. The manifest's `file_encryption_key_ids` says which IDs a restore needs. Keep retired keys until no backup you retain references them. See [file store encryption keys](#file-store-encryption-keys).
+3. **The object-store credentials** for the backup bucket. They can read ciphertext and, unless restricted, delete it. They cannot decrypt anything.
+
+Anyone holding the backup bucket's credentials and the age identity can read every database backup. Stored file contents are not in these backups: each object in the file store carries its own wrapped data key, so anyone holding the file-store key list and read access to the file store's bucket (or its copies) can read stored files; the age identity plays no part there. Keep each of these pairs apart: the age identity away from the backup bucket's credentials, and the file-store keys away from the file store's storage credentials.
+
+### What this covers
+
+- **Covered:** a logical dump of the gateway database at the moment it was taken, encrypted, checksummed, copied off host and restorable into a new empty database with lineage and file-key checks.
+- **Not covered:** point-in-time recovery (see below), stored file contents (back up the file store's bucket or directory separately; it holds ciphertext only), secrets and configuration, and certificates. Retention policy, bucket replication and object lock are configured in the storage system, not by this script.
 
 `python3 scripts/staging.py backup|restore-check` remains the staging-stack shortcut. Its restore-check always uses a newly named disposable database.
 
@@ -187,7 +250,7 @@ Local evidence (2026-10-09) on a freshly migrated v14 database on the disposable
 
 Partitioned drill (2026-10-10, P6): a 0033 database with 6,000 attempts across the legacy and two month partitions (12,000 ledger rows, 600 unknown) backed up, verified and restored with `--create --gateway-binary` in 2 s; every partition's ledger count and sum, the unknown reservations and `partitions status` matched, and `budget verify` reported no mismatch on both. The drill found that restores of any populated database failed before 0033 (CHECK validators calling other validators unqualified under `pg_restore`'s empty `search_path`); 0033 fixes it.
 
-`tests/backup.test.py` covers the refusal paths with mocks. Its opt-in integration case runs in CI against the service database.
+`tests/backup.test.py` covers the refusal paths with mocks. Encryption tests run the real `age`, which they require. Object-store tests use an in-process S3 server that verifies every request's SigV4 signature. The SigV4 code is also checked against AWS's documented examples. Its opt-in integration cases, including an encrypted round trip, run in CI against the service database.
 
 ## Secret rotation
 
