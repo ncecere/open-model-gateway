@@ -4,6 +4,7 @@ Notes for changes on `main` since v0.5.0. They become the next release's notes.
 
 ## Security
 
+- Sign-in abuse controls (#78): per-address limits on sign-in starts and callbacks (`GATEWAY_LOGIN_RATE_PER_MINUTE`, default 60 a minute, per replica), and at most 10,000 pending sign-in attempts installation-wide (503 beyond). Refusals return 429 or 503 with `Retry-After` and store nothing. Behind a reverse proxy, set `GATEWAY_TRUSTED_PROXIES` (Helm `gateway.trustedProxies`) to its addresses, or every user shares the proxy's budget. New metric `gateway_auth_throttled_total`. Migration 0040 adds an index on `oidc_login_attempts(expires_at)`; it is a plain `CREATE INDEX`, so sign-in waits while it builds (the table holds only sign-in attempts, but they have never been deleted).
 - An admin suspension is audited as `user.suspended` (with the reason) and a reactivation as `user.reactivated`, instead of `user.updated` without detail. `user.updated` now flags `email_changed` or `oidc_link_changed`, never the values, and is written only when something changed (#158).
 - After a restore, `scripts/backup.py reapply-revocations` copies every revocation (keys, grants, sessions, invitations) and suspension (users, keys, service accounts, workspaces) from the old database onto the restored one, so access removed after the backup stays removed (#146). It's a dry run without `--yes`, applies in one transaction and refuses a different installation. The restore runbook in docs/operations.md now covers revocations, sessions and lost spend.
 

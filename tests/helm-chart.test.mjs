@@ -196,3 +196,12 @@ test("migration Job applies runtime grants with the gateway image itself, from n
   assert.equal(docsOf(rendered).filter((d) => /runtime-grants/.test(d) && /^kind: ConfigMap$/m.test(d)).length, 0);
   assert.equal(existsSync(join(chart, "files/runtime-grants.sql")), false, "the chart must not carry a copy of runtime-grants.sql");
 });
+
+test("sign-in abuse controls (#78) reach the gateway only when set", () => {
+  const base = ["-f", join(chart, "ci/cnpg-values.yaml")];
+  const unset = helmTemplate(base);
+  assert.doesNotMatch(unset, /GATEWAY_TRUSTED_PROXIES|GATEWAY_LOGIN_RATE_PER_MINUTE/);
+  const set = helmTemplate([...base, "--set-json", 'gateway.trustedProxies=["10.42.0.0/16","fd00::/8"]', "--set", "gateway.loginRatePerMinute=120"]);
+  assert.match(set, /GATEWAY_TRUSTED_PROXIES: "10\.42\.0\.0\/16,fd00::\/8"/);
+  assert.match(set, /GATEWAY_LOGIN_RATE_PER_MINUTE: "120"/);
+});

@@ -20,6 +20,9 @@ the acceptance in [verification](verification.md) and your own cluster hardening
   [Validation](#validation) below).
 - An ingress controller if `ingress.enabled=true` (bitop-talos uses Traefik,
   `ingressClassName: traefik-internal`; adjust `ingress.className` for yours).
+  Set `gateway.trustedProxies` to the controller's pod addresses (for example the
+  cluster pod CIDR) so sign-in rate limits count each user, not the controller
+  ([identity](identity.md#sign-in-abuse-controls)).
 - CloudNativePG 1.22+ installed cluster-wide (`cnpg-system`) if you use the chart's optional
   `Cluster`/`Pooler` (`cnpg.cluster.enabled=true`), or an external PostgreSQL 17 otherwise.
 - A StorageClass for CNPG's primary/WAL volumes (bitop-talos: `local-ssd`, Miroir, `replicas: 1`,

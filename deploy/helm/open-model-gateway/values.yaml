@@ -45,6 +45,13 @@ gateway:
   # Names the SMTP password reference may read (GATEWAY_SMTP_SECRET_ENV_ALLOWLIST).
   # Must not overlap secretEnvAllowlist: the gateway refuses to start if it does.
   smtpSecretEnvAllowlist: []
+  # Networks whose X-Forwarded-For is believed for sign-in rate limits
+  # (GATEWAY_TRUSTED_PROXIES): set to the ingress controller's pod CIDR, or
+  # every user counts as the controller's address.
+  trustedProxies: []
+  # Sign-in starts and callbacks per minute per client address
+  # (GATEWAY_LOGIN_RATE_PER_MINUTE); empty means the gateway default, 60.
+  loginRatePerMinute: null
 
   drainSeconds: 10
   terminationGracePeriodSeconds: 150
