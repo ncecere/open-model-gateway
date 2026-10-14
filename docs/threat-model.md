@@ -605,7 +605,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 | File-store key rotation cannot re-wrap old objects | FS-3 | #35 |
 | No CSP or `frame-ancestors` on the SPA and API from Rust; `Referrer-Policy: no-referrer` is sent on management and auth responses (`identity.rs`) but not on the SPA or `/v1` | WEB-2, WEB-3 | #142 |
 | 15 tag-pinned `uses:` in `ci.yml` (the image, cargo-deny, helm and npm-audit jobs are SHA-pinned); SECURITY.md says workflow actions are SHA-pinned | SUP-2 | #143 |
-| Dockerfile build-stage images pinned by tag, not digest (SECURITY.md makes no digest claim) | SUP-2 | New issue needed (not filed) |
+| Dockerfile build-stage images pinned by tag, not digest (SECURITY.md makes no digest claim) | SUP-2 | #143 |
 | OIDC HTTP client honours ambient `HTTP(S)_PROXY`/`ALL_PROXY` (no `.no_proxy()` in `identity.rs`); it lacks `.retry(never())`, but reqwest's default retry can't fire without its `http2` feature (`apps/gateway/Cargo.toml`) | OIDC-5, EGR-4 | #144 |
 | `revoked_at` can be cleared by the runtime role; no trigger. A trigger guards against application bugs, not a stolen runtime credential, which can insert keys and grants | KEY-3, OPS-2 | #145 |
 | Restore revives keys and grants revoked after the backup and loses spend; `--expect-version` and `--skip-file-key-check` weaken its checks | OPS-6 | #146 |
