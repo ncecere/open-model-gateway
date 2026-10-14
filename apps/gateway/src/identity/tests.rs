@@ -655,19 +655,23 @@ mod database {
             verify_session(&state, &headers).await,
             Err(AuthError(StatusCode::UNAUTHORIZED))
         ));
-        sqlx::query(
-            "UPDATE browser_sessions SET expires_at=now()+interval '1 hour',revoked_at=now()",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        assert!(verify_session(&state, &headers).await.is_err());
-        sqlx::query("UPDATE browser_sessions SET revoked_at=NULL")
+        // A disabled user, then a revoked session (a revocation is final, #145).
+        sqlx::query("UPDATE browser_sessions SET expires_at=now()+interval '1 hour'")
             .execute(&pool)
             .await
             .unwrap();
         sqlx::query("UPDATE users SET disabled_at=now() WHERE id=$1")
             .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(verify_session(&state, &headers).await.is_err());
+        sqlx::query("UPDATE users SET disabled_at=NULL WHERE id=$1")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE browser_sessions SET revoked_at=now()")
             .execute(&pool)
             .await
             .unwrap();

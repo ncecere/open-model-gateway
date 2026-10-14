@@ -414,3 +414,79 @@ async fn model_compare_prices_metrics_and_visibility(pool: PgPool) {
         StatusCode::FORBIDDEN
     );
 }
+
+/// #145: a revocation is final. Once `revoked_at` is set on a key, grant,
+/// session or invitation, no role (not even the schema owner) can clear it or
+/// move it; re-revoking with `coalesce` stays a no-op.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn revocations_are_final_for_every_revocable_row(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let (status, created) = key(&f, &f.member, f.team, Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let key_id = id(&created);
+    sqlx::query("INSERT INTO browser_sessions(token_hash,user_id,csrf_hash,expires_at) VALUES(sha256(gen_random_uuid()::text::bytea),$1,sha256(gen_random_uuid()::text::bytea),now()+interval '1 hour')")
+        .bind(f.member.user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let invitation = Uuid::new_v4();
+    sqlx::query("INSERT INTO workspace_invitations(id,workspace_id,email,role,token_hash,expires_at,created_by) VALUES($1,$2,'invitee@test.invalid','member',sha256(gen_random_uuid()::text::bytea),now()+interval '1 day',$3)")
+        .bind(invitation).bind(f.team).bind(f.owner.user_id).execute(&pool).await.unwrap();
+    let rows: [(&str, String); 5] = [
+        ("api_keys", format!("id='{key_id}'")),
+        (
+            "workspace_membership_grants",
+            format!(
+                "user_id='{}' AND workspace_id='{}'",
+                f.member.user_id, f.team
+            ),
+        ),
+        (
+            "platform_role_grants",
+            format!("user_id='{}'", f.member.user_id),
+        ),
+        (
+            "browser_sessions",
+            format!("user_id='{}'", f.member.user_id),
+        ),
+        ("workspace_invitations", format!("id='{invitation}'")),
+    ];
+    for (table, filter) in &rows {
+        let revoke =
+            format!("UPDATE {table} SET revoked_at=coalesce(revoked_at,now()) WHERE {filter}");
+        assert!(
+            sqlx::query(&revoke)
+                .execute(&pool)
+                .await
+                .unwrap()
+                .rows_affected()
+                >= 1,
+            "{table}"
+        );
+        // Re-revoking is a no-op, never an error.
+        sqlx::query(&revoke).execute(&pool).await.unwrap();
+        for change in [
+            "NULL",
+            "revoked_at+interval '1 hour'",
+            "revoked_at-interval '1 hour'",
+        ] {
+            let err = sqlx::query(&format!(
+                "UPDATE {table} SET revoked_at={change} WHERE {filter}"
+            ))
+            .execute(&pool)
+            .await
+            .expect_err(&format!("{table}: revoked_at={change} must be refused"));
+            assert!(
+                err.to_string().contains("revocation is final"),
+                "{table}: {err}"
+            );
+        }
+        let still: bool = sqlx::query_scalar(&format!(
+            "SELECT bool_and(revoked_at IS NOT NULL) FROM {table} WHERE {filter}"
+        ))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(still, "{table} stays revoked");
+    }
+}

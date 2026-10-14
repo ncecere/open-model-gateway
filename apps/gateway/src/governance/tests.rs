@@ -528,12 +528,9 @@ pub(crate) mod db {
             .execute(&f.store.pool)
             .await
             .unwrap();
+        // Restorable denials first; a revoked key never comes back (#145), so
+        // its revocation is checked last.
         for (deny, restore, id) in [
-            (
-                "UPDATE api_keys SET revoked_at=now() WHERE id=$1",
-                "UPDATE api_keys SET revoked_at=NULL WHERE id=$1",
-                f.principal.key_id,
-            ),
             (
                 "UPDATE workspaces SET disabled_at=now() WHERE id=$1",
                 "UPDATE workspaces SET disabled_at=NULL WHERE id=$1",
@@ -541,7 +538,7 @@ pub(crate) mod db {
             ),
             (
                 "UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1",
-                "UPDATE platform_role_grants SET revoked_at=NULL WHERE user_id=$1",
+                "INSERT INTO platform_role_grants(user_id,role,source,mapping_id,granted_by) SELECT user_id,role,source,mapping_id,granted_by FROM platform_role_grants WHERE user_id=$1 AND revoked_at IS NOT NULL ON CONFLICT DO NOTHING",
                 f.owner,
             ),
         ] {
@@ -572,6 +569,15 @@ pub(crate) mod db {
             Err(InferenceError::Unauthenticated)
         );
         admit(&f.store, &f.start(), &request(), 30).await.unwrap();
+        sqlx::query("UPDATE api_keys SET revoked_at=now() WHERE id=$1")
+            .bind(f.principal.key_id)
+            .execute(&f.store.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            admit(&f.store, &f.start(), &request(), 30).await,
+            Err(InferenceError::Unauthenticated)
+        );
     }
     #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn personal_direct_grant_never_authorizes_sibling_workspace(pool: PgPool) {

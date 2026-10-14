@@ -148,8 +148,8 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 **KEY-3. A revoked, expired or disabled key works again.** E · Asset: inference keys · Attacker: inference key holder; compromised DB credential.
 - Mitigation: `authenticate_live` and `revalidate_admission_with` require `revoked_at IS NULL`, `disabled_at IS NULL` and an unexpired key, plus live user, role and membership or service account. Revocation takes the lineage authority lock exclusively (trigger `omg_authority_api_keys`, migration 0027), so no admission commits after it. Reactivating a user, membership or service account never clears `revoked_at` (`lifecycle.rs`, `scim.rs` `reactivate`).
 - Tests: `governance/locks_tests.rs` `revoked_key_is_never_admitted_after_revocation_commits`; `lifecycle/tests.rs` `shared_group_membership_loss_retires_keys_without_restoring_them_on_return`, `loss_reactivation_cleanup_preserves_history_and_service_credentials`; `scim/tests.rs` `deactivation_suspends_and_reactivation_never_restores_keys`; `management/keys/tests.rs` `service_account_disable_reenable_cannot_resurrect_credentials_and_is_shared_only`.
-- Residual: "revoked keys never reactivate" is enforced by the application only. The runtime role has `UPDATE(revoked_at)` on `api_keys` and the grant tables, and no trigger refuses setting it back to NULL. Such a trigger would guard against application bugs, not a stolen runtime credential: the runtime role can also INSERT keys and grants (`deploy/staging/runtime-grants.sql`), so it can mint new ones instead of un-revoking old ones (OPS-2). Work admitted before a revocation runs to completion.
-- Follow-up: #145 (database trigger refusing to clear `revoked_at` on keys, sessions and grants).
+- Residual: since #145 the database also refuses clearing or moving `revoked_at` once set, on keys, grants, sessions and invitations (migration 0039 `omg_revocation_is_final`; test `management/key_safety_tests.rs` `revocations_are_final_for_every_revocable_row`), for every role including the owner. The runtime role can still insert new keys and grants, so a stolen runtime credential is not contained by this.
+- Follow-up: none (fixed in #145).
 
 **KEY-4. A plaintext key leaks from storage or logs.** I · Asset: inference keys · Attacker: compromised DB credential, operator with log access.
 - Mitigation: only the hash is stored. `NewApiKey` has no `Debug` or `Serialize`. `http.rs` `request_context` logs a generated request ID, method, status and timing, never headers, paths with queries or bodies, and sets `Cache-Control: no-store` on every response except those marked `PublicCache` (the logo, `management/branding.rs`).
@@ -541,7 +541,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 - Mitigation: `deploy/staging/runtime-grants.sql` revokes everything, then grants a column allowlist; `grants verify` runs rollback-only probes. The migration Job never shares the runtime Secret.
 - Tests: `apps/gateway/tests/runtime_privileges.rs` `enterprise_runtime_allowlist_and_rollback_probes` and the `*_runs_as_runtime` tests (`scim_provisioning_runs_as_runtime`, `files_api_runs_as_runtime`, `history_partitions_run_as_runtime` and others).
 - Residual: by design the runtime role can insert `platform_role_grants`, `api_keys` and memberships and update `revoked_at`, so a stolen runtime credential controls authorization. A trigger refusing `revoked_at` → NULL (KEY-3) guards against application bugs, not this: the credential can insert new keys and grants instead. There is no row-level security.
-- Follow-up: #145 (`revoked_at` trigger, against application bugs); Review: #61.
+- Follow-up: the `revoked_at` trigger landed in #145 (against application bugs); review: #61.
 
 **OPS-3. The partition function is abused.** E · Asset: schema · Attacker: compromised runtime credential.
 - Mitigation: the `SECURITY DEFINER` functions (migrations 0030, 0035) pin `search_path=pg_catalog,public,pg_temp`, set `lock_timeout`, and create only canonical month partitions of registered parents; readiness accepts only those.
@@ -607,7 +607,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 | 15 tag-pinned `uses:` in `ci.yml` (the image, cargo-deny, helm and npm-audit jobs are SHA-pinned); SECURITY.md says workflow actions are SHA-pinned | SUP-2 | Fixed in #143 |
 | Dockerfile build-stage images pinned by tag, not digest (SECURITY.md makes no digest claim) | SUP-2 | Fixed in #143 |
 | OIDC HTTP client honours ambient `HTTP(S)_PROXY`/`ALL_PROXY` (no `.no_proxy()` in `identity.rs`); it lacks `.retry(never())`, but reqwest's default retry can't fire without its `http2` feature (`apps/gateway/Cargo.toml`) | OIDC-5, EGR-4 | Fixed in #144 |
-| `revoked_at` can be cleared by the runtime role; no trigger. A trigger guards against application bugs, not a stolen runtime credential, which can insert keys and grants | KEY-3, OPS-2 | #145 |
+| `revoked_at` can be cleared by the runtime role; no trigger. A trigger guards against application bugs, not a stolen runtime credential, which can insert keys and grants | KEY-3, OPS-2 | Fixed in #145 |
 | Restore revives keys and grants revoked after the backup and loses spend; `--expect-version` and `--skip-file-key-check` weaken its checks | OPS-6 | #146 |
 | No secret manager; every replica holds every secret | EGR-10 | Deferred (roadmap R17), no issue |
 | SCIM token is one static secret that can effectively grant mapped admin roles | SCIM-1 | #60; Review: #61 |
