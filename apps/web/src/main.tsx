@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { CSPProvider } from "@base-ui/react/csp-provider";
 import { RouterProvider } from "@tanstack/react-router";
 import { router } from "./router";
 import { Toaster } from "./components/ui/toast/toast";
@@ -14,10 +15,14 @@ const queryClient = new QueryClient({
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <ColorModeSync />
-      <RouterProvider router={router} />
-      <Toaster />
-    </QueryClientProvider>
+    {/* The gateway serves a strict CSP (#142): no inline <style>; Base UI's
+        scrollbar rule lives in styles.css instead. */}
+    <CSPProvider disableStyleElements>
+      <QueryClientProvider client={queryClient}>
+        <ColorModeSync />
+        <RouterProvider router={router} />
+        <Toaster />
+      </QueryClientProvider>
+    </CSPProvider>
   </StrictMode>,
 );

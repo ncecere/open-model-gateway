@@ -19,3 +19,9 @@ select[data-size="sm"][data-size] {
 html[style*="--save-bar-space"] [data-position^="bottom"][aria-label="Notifications"] {
   bottom: calc(var(--save-bar-space) + var(--space-2));
 }
+
+/* Base UI's hidden-scrollbar rule (scroll areas, select popups). Base UI would
+   inject it as an inline <style>, which the gateway's CSP refuses (#142), so
+   main.tsx turns those elements off and the rule lives here. */
+.base-ui-disable-scrollbar { scrollbar-width: none; }
+.base-ui-disable-scrollbar::-webkit-scrollbar { display: none; }

@@ -1,5 +1,7 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
-import { api, readFixture, signIn } from "./helpers";
+import { api, readFixture, signIn, expectNoCspViolations } from "./helpers";
+
+test.afterEach(expectNoCspViolations);
 import { captureCallback, credentialsContained, installKeyProbe, invokeCallback, probeCounts, waitForIdle } from "./key-lifetime-probe";
 
 test.describe.configure({ mode: "serial" });

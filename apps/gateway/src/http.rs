@@ -248,6 +248,7 @@ async fn request_context(mut request: Request, next: Next) -> Response {
                 .headers_mut()
                 .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
         }
+        security_headers(&mut response);
         tracing::info!(
             status = response.status().as_u16(),
             header_latency_ms = started.elapsed().as_millis(),
@@ -257,6 +258,38 @@ async fn request_context(mut request: Request, next: Next) -> Response {
     }
     .instrument(span)
     .await
+}
+
+/// The SPA's policy: its own scripts, styles, fonts and API only (Vite emits
+/// no inline script; `color-mode.js` is a file). Images may also be `data:` or
+/// `blob:` (downloads, previews).
+pub(crate) const SPA_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+/// Everything else (JSON, files, the event stream): nothing may load from it.
+pub(crate) const API_CSP: &str = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'";
+
+/// #142: no framing (clickjacking), no MIME sniffing, no referrers, and a
+/// Content-Security-Policy on every response. A handler's own values win
+/// (the installation logo sets a stricter sandboxed policy).
+fn security_headers(response: &mut Response) {
+    let html = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("text/html"));
+    let headers = response.headers_mut();
+    for (name, value) in [
+        (header::X_FRAME_OPTIONS, "DENY"),
+        (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        (header::REFERRER_POLICY, "no-referrer"),
+        (
+            header::CONTENT_SECURITY_POLICY,
+            if html { SPA_CSP } else { API_CSP },
+        ),
+    ] {
+        headers
+            .entry(name)
+            .or_insert(HeaderValue::from_static(value));
+    }
 }
 
 fn credential(headers: &HeaderMap, protocol: Protocol) -> Option<&str> {
