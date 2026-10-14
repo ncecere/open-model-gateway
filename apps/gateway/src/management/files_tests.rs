@@ -160,6 +160,41 @@ async fn files_follow_workspace_visibility(pool: PgPool) {
         (status, bytes.as_slice()),
         (StatusCode::OK, &b"contents"[..])
     );
+    // Workspace-wide (#141): the member sees and downloads every file, but
+    // only the creator or a workspace owner/admin may delete one.
+    sqlx::query("UPDATE workspaces SET object_visibility='workspace' WHERE id=$1")
+        .bind(f.team)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (_, v) = files_json(&f.s, &f.member, &rt, "GET", &list).await;
+    assert_eq!(v["scope"], "workspace");
+    assert_eq!(v["data"].as_array().unwrap().len(), 2);
+    let (status, _) = files_json(
+        &f.s,
+        &f.member,
+        &rt,
+        "GET",
+        &format!("{list}/{owners}/content"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = files_json(&f.s, &f.member, &rt, "DELETE", &format!("{list}/{owners}")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = files_json(
+        &f.s,
+        &f.owner,
+        &rt,
+        "GET",
+        &format!("{list}/{owners}/content"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "a refused delete keeps the file");
+    sqlx::query("UPDATE workspaces SET object_visibility='member' WHERE id=$1")
+        .bind(f.team)
+        .execute(&pool)
+        .await
+        .unwrap();
     // The member deletes their own file; the admin deletes any file; both audited.
     assert_eq!(
         files_json(&f.s, &f.member, &rt, "DELETE", &format!("{list}/{members}"))
