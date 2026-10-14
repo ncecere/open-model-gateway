@@ -1,6 +1,6 @@
 //! Object visibility (0038, docs/files-api.md#who-sees-which-files): which
 //! files, batches (with their result files) and video jobs of a workspace a
-//! caller may list, read, download, delete or cancel.
+//! caller may list, read and download, and which they may delete or cancel.
 //!
 //! Shared (Team/Project) workspaces carry `object_visibility`:
 //!
@@ -16,6 +16,11 @@
 //! `stored_files.created_by_user_id`; a job's owner is the user its key was
 //! issued to (`api_keys.issued_to_user_id` of `async_jobs.api_key_id`).
 //! Objects of service-account keys have no user owner.
+//!
+//! Deleting or cancelling needs more than seeing, in either mode: the
+//! creating user, a service-account key or a current workspace owner/admin
+//! ([`may_modify_sql`]). Others who can see the object get 403; those who
+//! cannot see it get the same 404 as for a missing object.
 //!
 //! The rule is one SQL condition ([`visible_sql`]) evaluated inside the
 //! object query itself, so the setting and the caller's live membership role
@@ -58,6 +63,53 @@ pub(crate) fn visible_sql(ws: &str, viewer: &str, owner: &str) -> String {
     format!(
         "(coalesce({owner}={viewer}::uuid,false) OR coalesce((SELECT ov.kind='personal' OR ov.object_visibility='workspace' OR {viewer}::uuid IS NULL OR EXISTS(SELECT 1 FROM effective_workspace_memberships om WHERE om.workspace_id=ov.id AND om.user_id={viewer}::uuid AND om.role IN('owner','admin')) FROM workspaces ov WHERE ov.id={ws}::uuid),false))"
     )
+}
+
+/// SQL condition: `viewer` may delete or cancel an object of workspace `ws`
+/// owned by `owner`, in either mode: the creating user, a service-account key
+/// or a current workspace owner/admin. Personal workspaces are owner-private,
+/// so whoever sees an object there may change it. Check visibility first: a
+/// hidden object must stay "not found", never "forbidden".
+pub(crate) fn may_modify_sql(ws: &str, viewer: &str, owner: &str) -> String {
+    format!(
+        "(coalesce({owner}={viewer}::uuid,false) OR coalesce((SELECT mv.kind='personal' OR {viewer}::uuid IS NULL OR EXISTS(SELECT 1 FROM effective_workspace_memberships mm WHERE mm.workspace_id=mv.id AND mm.user_id={viewer}::uuid AND mm.role IN('owner','admin')) FROM workspaces mv WHERE mv.id={ws}::uuid),false))"
+    )
+}
+
+/// [`may_modify_sql`] for a known owner (a file's `created_by_user_id`).
+pub(crate) async fn may_modify<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    ws: Uuid,
+    viewer: Viewer,
+    owner: Option<Uuid>,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(&format!(
+        "SELECT {}",
+        may_modify_sql("$1", "$2", "$3::uuid")
+    ))
+    .bind(ws)
+    .bind(viewer.user())
+    .bind(owner)
+    .fetch_one(executor)
+    .await
+}
+
+/// [`may_modify_sql`] for a job of `ws` (owner: the user its key was issued to).
+pub(crate) async fn may_modify_job<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    ws: Uuid,
+    viewer: Viewer,
+    job: Uuid,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(&format!(
+        "SELECT coalesce((SELECT {} FROM async_jobs j WHERE j.id=$3 AND j.workspace_id=$1),false)",
+        may_modify_sql("$1", "$2", JOB_OWNER_SQL)
+    ))
+    .bind(ws)
+    .bind(viewer.user())
+    .bind(job)
+    .fetch_one(executor)
+    .await
 }
 
 /// The owner of `async_jobs j`: the user its key was issued to.
@@ -120,6 +172,12 @@ pub(crate) mod test_support {
     pub(crate) fn expected(mode: &str, owner: Owner, who: Who) -> bool {
         mode == "workspace"
             || matches!(who, Who::Service | Who::Owner | Who::Admin)
+            || (owner == Owner::Member && matches!(who, Who::Member | Who::Rotated))
+    }
+    /// Delete and cancel, in either mode: the creating user, a workspace
+    /// owner/admin or a service-account key.
+    pub(crate) fn may_modify(owner: Owner, who: Who) -> bool {
+        matches!(who, Who::Service | Who::Owner | Who::Admin)
             || (owner == Owner::Member && matches!(who, Who::Member | Who::Rotated))
     }
     pub(crate) struct Caller {

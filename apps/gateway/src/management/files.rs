@@ -172,8 +172,23 @@ async fn remove(
     Path((ws, id)): Path<(Uuid, String)>,
 ) -> ApiResult {
     let files = storage(&s, ext);
-    // Whoever may see the file may delete it (the Files API's rule).
+    // Seeing is not enough: the creator or a workspace owner/admin (the Files
+    // API's rule, `crate::visibility`).
     let file = visible(&s, &u, &files, ws, &id).await?;
+    if !crate::visibility::may_modify(
+        &s.pool,
+        ws,
+        Viewer::User(u.user_id),
+        file.created_by_user_id,
+    )
+    .await
+    .map_err(|_| store_error())?
+    {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Only the creator or a workspace admin can delete this file",
+        ));
+    }
     if !files
         .delete(file.id, Some(ws))
         .await

@@ -46,6 +46,11 @@ pub(crate) fn job_error(e: JobError) -> Response {
         JobError::Conflict(code, message) | JobError::Invalid(code, message) => {
             body(StatusCode::BAD_REQUEST, code, message)
         }
+        JobError::Forbidden(code, message) => (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error":{"message":message,"type":"permission_error","code":code,"param":null}})),
+        )
+            .into_response(),
         JobError::Inference(e) => super::workload_error(e, StatusCode::BAD_REQUEST),
     }
 }

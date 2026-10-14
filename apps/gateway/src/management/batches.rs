@@ -199,8 +199,15 @@ async fn cancel(
     ext: Option<Extension<FileStoreRuntime>>,
     Path((ws, id)): Path<(Uuid, String)>,
 ) -> ApiResult {
-    // Whoever may see the batch may cancel it (the `/v1/batches` rule).
+    // Seeing is not enough: the creator or a workspace owner/admin (the
+    // `/v1/batches` rule, `crate::visibility`).
     let (_, job) = visible(&s, &u, ws, &id).await?;
+    if !crate::visibility::may_modify_job(&s.pool, ws, Viewer::User(u.user_id), job).await? {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Only the creator or a workspace admin can cancel this batch",
+        ));
+    }
     let jobs = Jobs::new(s.clone(), &engine).with_files(ext.map(|Extension(r)| r));
     let current: JobRow = sqlx::query_as(&format!(
         "SELECT {} FROM async_jobs WHERE id=$1 AND workspace_id=$2",

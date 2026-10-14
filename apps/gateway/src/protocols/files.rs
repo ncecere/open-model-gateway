@@ -358,11 +358,31 @@ pub async fn delete(
     Extension(principal): Extension<Principal>,
     Path(id): Path<String>,
 ) -> Response {
-    let files = storage(store, runtime);
+    let files = storage(store.clone(), runtime);
     let file = match find(&files, &principal, &id).await {
         Ok(f) => f,
         Err(e) => return file_error(e),
     };
+    match crate::visibility::may_modify(
+        &store.pool,
+        principal.workspace_id,
+        Viewer::of(&principal),
+        file.created_by_user_id,
+    )
+    .await
+    {
+        Ok(true) => {}
+        Ok(false) => {
+            return body(
+                StatusCode::FORBIDDEN,
+                "permission_error",
+                "file_not_owned",
+                "Only the creator or a workspace admin can delete this file",
+                Some("file_id"),
+            );
+        }
+        Err(_) => return upload_error(UploadError::Unavailable),
+    }
     match files.delete(file.id, Some(principal.workspace_id)).await {
         Ok(true) => Json(json!({"id": public_id(file.id), "object": "file", "deleted": true}))
             .into_response(),

@@ -1457,7 +1457,7 @@ fn listed(list: &[u8], id: &str) -> bool {
 /// service-account key. Hidden objects answer exactly like missing ones.
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn object_visibility_matrix_for_files_and_batches(pool: PgPool) {
-    use crate::visibility::test_support::{CALLERS, Owner, expected, team};
+    use crate::visibility::test_support::{CALLERS, Owner, expected, may_modify, team};
     let w = world(pool, true, false, 2).await;
     let f = &w.f;
     sqlx::query("UPDATE installation_settings SET file_user_files_enabled=true WHERE singleton")
@@ -1624,10 +1624,16 @@ async fn object_visibility_matrix_for_files_and_batches(pool: PgPool) {
                         "input_file_id {case}"
                     );
                 }
+                let modify = see && may_modify(owner, who);
                 let (status, body) =
                     http(&app, "DELETE", &format!("/v1/files/{file}"), bearer, None).await;
-                if see {
+                if modify {
                     assert_eq!(status, 200, "delete {case}");
+                } else if see {
+                    assert_eq!(status, 403, "delete another member's file {case}");
+                    let (status, _) =
+                        http(&app, "GET", &format!("/v1/files/{file}"), creator, None).await;
+                    assert_eq!(status, 200, "a refused delete keeps the file {case}");
                 } else {
                     assert_eq!(
                         (status.as_u16(), body.as_slice()),
@@ -1661,11 +1667,13 @@ async fn object_visibility_matrix_for_files_and_batches(pool: PgPool) {
                     None,
                 )
                 .await;
-                if see {
+                if modify {
                     assert!(
                         matches!(status.as_u16(), 200 | 400),
                         "cancel batch {case}: {status}"
                     );
+                } else if see {
+                    assert_eq!(status, 403, "cancel another member's batch {case}");
                 } else {
                     assert_eq!(
                         (status.as_u16(), body.as_slice()),

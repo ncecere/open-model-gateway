@@ -712,7 +712,7 @@ async fn video_without_a_supported_provider_is_refused_before_admission(pool: Pg
 /// visible ones reach the job's own state checks.
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn object_visibility_matrix_for_video_jobs(pool: PgPool) {
-    use crate::visibility::test_support::{CALLERS, Owner, expected, team};
+    use crate::visibility::test_support::{CALLERS, Owner, expected, may_modify, team};
     let f = fixture(pool).await;
     video_setup(&f).await;
     let fake = Fake::default();
@@ -742,6 +742,11 @@ async fn object_visibility_matrix_for_video_jobs(pool: PgPool) {
                 for (op, err) in [("get", get), ("content", content), ("delete", delete)] {
                     assert_eq!(err != Some(JobError::NotFound), see, "{op} {case}: {err:?}");
                 }
+                assert_eq!(
+                    matches!(delete, Some(JobError::Forbidden(..))),
+                    see && !may_modify(owner, who),
+                    "delete another member's video {case}: {delete:?}"
+                );
                 if !see {
                     assert_eq!(
                         fake.calls().len(),

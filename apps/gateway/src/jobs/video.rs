@@ -248,6 +248,19 @@ impl Jobs {
         if job.deleted_at.is_some() {
             return Err(JobError::NotFound);
         }
+        if !crate::visibility::may_modify_job(
+            &self.store.pool,
+            principal.workspace_id,
+            crate::visibility::Viewer::of(principal),
+            job.id,
+        )
+        .await?
+        {
+            return Err(JobError::Forbidden(
+                "video_not_owned",
+                "Only the creator or a workspace admin can delete this video",
+            ));
+        }
         if !job.job_state().is_terminal() {
             return Err(JobError::Conflict(
                 "video_in_progress",

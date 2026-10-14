@@ -349,6 +349,19 @@ impl Jobs {
     /// is cancelled upstream (or at once when it was never submitted).
     pub async fn cancel_batch(&self, principal: &Principal, id: &str) -> JobResult<Value> {
         let job = self.own_batch(principal, id).await?;
+        if !crate::visibility::may_modify_job(
+            &self.store.pool,
+            principal.workspace_id,
+            crate::visibility::Viewer::of(principal),
+            job.id,
+        )
+        .await?
+        {
+            return Err(JobError::Forbidden(
+                "batch_not_owned",
+                "Only the creator or a workspace admin can cancel this batch",
+            ));
+        }
         let job = self.cancel(job).await?;
         self.batch_object(&job).await
     }
