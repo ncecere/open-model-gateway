@@ -165,9 +165,9 @@ async fn platform_audit_names_route_and_price_targets(pool: PgPool) {
     assert_eq!(name("model"), "company/luna");
 }
 #[sqlx::test(migrations = "./enterprise_migrations")]
-async fn suspension_and_reenable_are_audited_as_what_they_are(pool: PgPool) {
+async fn suspension_and_reactivation_are_audited_as_what_they_are(pool: PgPool) {
     // #158: an off-host audit export must show who was suspended and
-    // re-enabled, distinct from a profile edit, without personal data.
+    // reactivated, distinct from a profile edit, without personal data.
     let f = fixture(&pool).await;
     let path = format!("/api/v1/platform/users/{}", f.outsider.user_id);
     let events = || async {
@@ -181,7 +181,7 @@ async fn suspension_and_reenable_are_audited_as_what_they_are(pool: PgPool) {
     };
     let patch = |body: Value| call(&f.s, &f.admin, "PATCH", &path, body);
     assert_eq!(patch(json!({"disabled":true})).await.0, StatusCode::OK);
-    // Repeating it changes nothing, so it records nothing.
+    // A repeat revokes credentials again and moves the cleanup date: recorded too.
     assert_eq!(patch(json!({"disabled":true})).await.0, StatusCode::OK);
     assert_eq!(patch(json!({"disabled":false})).await.0, StatusCode::OK);
     assert_eq!(
@@ -200,6 +200,29 @@ async fn suspension_and_reenable_are_audited_as_what_they_are(pool: PgPool) {
             StatusCode::OK
         );
     }
+    // Disabled for entitlement loss, as the role-sync path does; no grants left.
+    sqlx::query("UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL; ")
+        .bind(f.outsider.user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE users SET disabled_at=now(),disable_reason='entitlement_loss',cleanup_due_at=now()+interval '30 days' WHERE id=$1")
+        .bind(f.outsider.user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    // Reactivation is refused without a live grant, and leaves no record.
+    assert_eq!(
+        patch(json!({"disabled":false})).await.0,
+        StatusCode::FORBIDDEN
+    );
+    // An admin suspension of that user, with an email change: two records.
+    assert_eq!(
+        patch(json!({"disabled":true,"email":"again@example.invalid"}))
+            .await
+            .0,
+        StatusCode::OK
+    );
     assert_eq!(
         events().await,
         vec![
@@ -207,9 +230,18 @@ async fn suspension_and_reenable_are_audited_as_what_they_are(pool: PgPool) {
                 "user.suspended".into(),
                 json!({"reason":"admin_suspension"})
             ),
-            ("user.reenabled".into(), json!({})),
+            (
+                "user.suspended".into(),
+                json!({"reason":"admin_suspension"})
+            ),
+            ("user.reactivated".into(), json!({})),
             ("user.updated".into(), json!({"email_changed":true})),
             ("user.updated".into(), json!({"oidc_link_changed":true})),
+            (
+                "user.suspended".into(),
+                json!({"reason":"admin_suspension"})
+            ),
+            ("user.updated".into(), json!({"email_changed":true})),
         ],
         "no email or other personal value in the metadata"
     );

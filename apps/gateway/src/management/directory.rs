@@ -476,8 +476,8 @@ async fn update_user(
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, true).await?;
     // Prior state, so the audit records only what this request changed.
-    let (was_disabled, admin_suspended, link_allowed) = sqlx::query_as::<_, (bool, bool, bool)>(
-        "SELECT disabled_at IS NOT NULL,disabled_at IS NOT NULL AND disable_reason IS NOT DISTINCT FROM 'admin_suspension',oidc_link_allowed FROM users WHERE id=$1 AND cleaned_at IS NULL FOR UPDATE",
+    let (was_disabled, link_allowed) = sqlx::query_as::<_, (bool, bool)>(
+        "SELECT disabled_at IS NOT NULL,oidc_link_allowed FROM users WHERE id=$1 AND cleaned_at IS NULL FOR UPDATE",
     )
     .bind(id)
     .fetch_optional(&mut *tx)
@@ -525,7 +525,9 @@ async fn update_user(
     // #158: a suspension and a re-enable are their own actions; a profile
     // edit flags which fields it changed, never their values.
     match b.disabled {
-        Some(true) if !admin_suspended => {
+        // Every suspension is recorded: even a repeat revokes credentials
+        // again and moves the cleanup date.
+        Some(true) => {
             audit(
                 &mut tx,
                 &u,
@@ -542,7 +544,7 @@ async fn update_user(
                 &mut tx,
                 &u,
                 None,
-                "user.reenabled",
+                "user.reactivated",
                 "user",
                 Some(id),
                 json!({}),
