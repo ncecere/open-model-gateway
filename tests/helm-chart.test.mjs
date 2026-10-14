@@ -76,6 +76,14 @@ test("loadtest profile lets loadgen reach the gateway and the gateway reach the 
   assert.match(egress, /port: 8000/);
 });
 
+test("CNPG primary shuts down quickly so failover is not held up by pooled connections", () => {
+  const [cluster] = docsOfKind(helmTemplate(["-f", join(chart, "ci/cnpg-values.yaml")]), "Cluster");
+  // CNPG's default smart shutdown waits 180 s for clients; pooled and LISTEN sessions never leave.
+  assert.match(cluster, /^  smartShutdownTimeout: 15$/m);
+  const [tuned] = docsOfKind(helmTemplate(["-f", join(chart, "ci/cnpg-values.yaml"), "--set", "cnpg.cluster.smartShutdownTimeout=40"]), "Cluster");
+  assert.match(tuned, /^  smartShutdownTimeout: 40$/m);
+});
+
 test("default values fail fast with a clear message instead of rendering an unconfigured database", () => {
   const result = spawnSync("helm", ["template", "omg-test", chart], { encoding: "utf8", timeout: 30_000 });
   assert.notEqual(result.status, 0);
