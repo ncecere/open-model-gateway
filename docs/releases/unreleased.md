@@ -26,7 +26,7 @@ Notes for changes on `main` since v0.4.0. They become the next release's notes.
 
 - Helm: a first install with `migrations.run=true` is now one step, including the chart-managed CloudNativePG Cluster. The migration Job runs as a plain resource on install (a `pre-upgrade` hook on upgrades) and waits for the database; gateway pods wait for the schema (`wait-for-database --schema`) instead of crash-looping. New `open-model-gateway wait-for-database [--schema]` (#19).
 
-- Helm loadtest profile: the `loadgen` Job now passes the flags `loadgen run` accepts (`--target`, `--rate`, `--duration`, `--warmup`, `--keys`, `--mock-url`). `loadtest.loadgen.requests` and `concurrency` are replaced by `rate`, `duration`, `warmup`, `keys` and `extraArgs`. The load-test image is built on request by the `loadtest-image` workflow (#25).
+- Helm loadtest profile: the `loadgen` Job now passes the flags `loadgen run` accepts (`--target`, `--rate`, `--duration`, `--warmup`, `--keys`, `--mock-url`). `loadtest.loadgen.requests` and `concurrency` are replaced by `rate`, `duration`, `warmup`, `keys` and `extraArgs`. With the chart-managed database the Job verifies settlement as the runtime role, and the profile's NetworkPolicies admit loadgen and allow the gateway to reach the mock. The load-test image is built on request by the `loadtest-image` workflow (#25).
 
 ## Operations
 

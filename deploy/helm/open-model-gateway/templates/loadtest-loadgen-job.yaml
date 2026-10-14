@@ -50,6 +50,15 @@ spec:
             {{- range .Values.loadtest.loadgen.extraArgs }}
             - {{ . | quote }}
             {{- end }}
+          {{- if .Values.cnpg.cluster.enabled }}
+          # Read-only settlement verification (nonce matching, no double charge,
+          # holds settled) as the runtime role, on the primary. The URL is built
+          # in-pod from the role Secret; no password is rendered.
+          env:
+            {{- include "omg.cnpg.roleCredEnv" (dict "role" .Values.cnpg.cluster.roles.runtime "prefix" "OMG_DB_VERIFY") | nindent 12 }}
+            - name: LOADGEN_VERIFY_DATABASE_URL
+              value: {{ include "omg.cnpg.url" (dict "prefix" "OMG_DB_VERIFY" "host" (printf "%s-rw" (include "omg.cnpg.clusterName" .)) "db" .Values.cnpg.cluster.database "sslmode" .Values.cnpg.cluster.sslMode) | quote }}
+          {{- end }}
           resources:
             {{- toYaml .Values.loadtest.loadgen.resources | nindent 12 }}
           securityContext:

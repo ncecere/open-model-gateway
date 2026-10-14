@@ -224,7 +224,11 @@ have anything to serve. Set `--set loadtest.loadgen.enabled=true` and `helm upgr
 -f-`, then unset it again) once seeded data exists to actually run a load test. The Job
 runs `loadgen run` against the gateway Service at `loadtest.loadgen.rate` requests per second
 for `duration` seconds (the first `warmup` seconds left out of latency statistics), spread over
-`keys` seeded keys; add further `loadgen run` flags with `loadtest.loadgen.extraArgs`. Also
+`keys` seeded keys; add further `loadgen run` flags with `loadtest.loadgen.extraArgs`. With the
+chart-managed CNPG cluster, the Job also gets `LOADGEN_VERIFY_DATABASE_URL` (the runtime role on the
+primary, built in-pod from the role Secret), so every run checks settlement against the database.
+The profile's NetworkPolicies admit the loadgen Job to the gateway and its metrics port and let the
+gateway reach the mock; they assume the `omg-loadtest` namespace. Also
 pin `loadtest.mockUpstream.clusterIP` (see `ci/loadtest-values.yaml`) to an address free
 in your cluster's service CIDR: the approval model in
 `apps/gateway/src/providers/local/endpoints.rs` never resolves DNS, so
