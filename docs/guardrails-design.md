@@ -155,13 +155,13 @@ Using `x-should-retry: false` on a 503 has a precedent: the existing `price_unbo
 Layers mirror the limit layers (*user decision*):
 - a workspace-type default;
 - a platform per-workspace override that replaces it;
-- a workspace local layer set by shared owners and admins, tighten-only.
+- a workspace local layer, tighten-only, set by shared-workspace owners and admins, and by the owner of a personal workspace.
 
 Storage is two tables: `guardrail_rule_sets` (layer, scope, revision, and `local_only` on platform layers only) and `guardrail_rules`.
 
-**Recommendation: personal workspaces.** Like limits (`personal_limits_platform_controlled`), personal workspaces use only the platform layers. The user's decision said "set per workspace", so whether personal owners may tighten their own rules is open question 3.
+*User decision:* personal-workspace owners may **tighten** their own guardrails through the local layer. Unlike limits (`personal_limits_platform_controlled`), this cannot loosen anything the platform layers set, so it needs no platform control.
 
-**Recommendation: keys.** No key layer at first (open question 2).
+*User decision:* no key layer at first. A tighten-only key layer (for example agent keys on monitor while app keys redact) can be added later if needed.
 
 ```json
 {"id":"<uuid>","name":"Secrets","protection":"secrets",
@@ -219,7 +219,6 @@ Rejection reasons:
 | 403 | `guardrail_egress_not_allowed` |
 | 400 | `guardrail_detector_unavailable` |
 | 400 | `guardrail_pattern_unbounded` (section 7) |
-| 403 | `personal_guardrails_platform_controlled` |
 
 Changes are audited as `guardrail_policy.updated`, with layer, rule IDs, actions and modes. For custom patterns only their count is recorded, never their content.
 
@@ -322,14 +321,14 @@ Ways redaction can break agents:
 
 **The user's decision** recommends monitor or block for agent traffic. It also offers a redact mode that touches only new user input. Applied on its own, that mode leaks: on the next turn the agent resends the original text as history, unredacted. First-send-only redaction protects only the first send.
 
-**Recommendation (needs confirmation, open question 4):** the default `redact_scope` is `user_text`.
+*User decision:* the default `redact_scope` is `user_text`.
 - Every turn, the same deterministic pattern redaction runs over every user-authored text segment, earlier turns included, numbered by first appearance as in section 6.
 - Earlier turns therefore produce byte-identical redacted text, and the upstream prefix and its cache stay stable. A policy change shifts the prefix once.
 - Assistant turns, tool calls, tool results and thinking blocks are never touched, and any cache markers are preserved.
 
 Even so, a value the agent reads into a tool result is still sent, so **for secrets, block is the recommended action**, not redact. `redact_scope: all`, which includes tool results, is an explicit opt-in with a dashboard warning.
 
-- **Recommendation:** model detectors judge only *new* segments by default (open question 6). Re-judging the whole history every turn would make cost grow quadratically.
+- *User decision:* model detectors judge only *new* segments by default, to keep cost down. Re-judging the whole history every turn would make cost grow quadratically.
 - Pattern rules, which are free, scan everything.
 - Monitor mode is the "inspect without modifying" mode: nothing sent upstream changes.
 
@@ -344,7 +343,7 @@ Even so, a value the agent reads into a tool result is still sent, so **for secr
   - the action: `monitored|redacted|blocked|stopped|detector_failed|skipped`.
 
   A blocked input has no execution row, so this table is how Logs shows blocked requests.
-- **Visibility** is the same as Logs: members see their own requests, shared admins the whole workspace, personal owners only their own, platform staff Team/Project detail only.
+- **Visibility** is the same as Logs: members see their own requests, shared admins the whole workspace, personal owners only their own, platform staff Team/Project detail only. *User decision:* platform staff also see guardrail counts for personal workspaces as totals (per action and category, no request detail), the same way they see personal usage totals.
 - **Audit:** `audit_events`, which is append-only, records policy changes only, not individual decisions.
 - **Metrics:** `gateway_guardrail_decisions_total{stage,detector,family,action}` and `gateway_guardrail_detector_seconds{detector}`.
   - Label values come from fixed sets, with custom rules counted as `custom`.
@@ -360,7 +359,7 @@ Even so, a value the agent reads into a tool result is still sent, so **for secr
   An optional per-rule `max_scan_bytes` can lower this further; exceeding it follows `on_error`. Custom patterns are limited to 50 per layer and 512 bytes each.
 - **Model rules** send at most `max_detector_input_bytes` per call (**Recommendation:** 64 KiB), one call per rule and stage.
   - They add a model round trip before dispatch, so they run in parallel after the pattern rules.
-- **Accounting.** Each detector call is a normal attempt (reservation, settlement, held unknown cost, cost-center snapshot) and counts against budgets, tokens per minute and requests at once (requests per minute: open question 1).
+- **Accounting.** Each detector call is a normal attempt (reservation, settlement, held unknown cost, cost-center snapshot) and counts against budgets, tokens per minute, requests at once and, *user decision*, requests per minute (documented: a request with detector calls can count up to three times).
 
 ## 11. Testing
 
@@ -405,11 +404,13 @@ Each phase is one issue with tests, review and a PR.
 **7. External-detector interface.** Approved endpoints, credential references and prices.
 - *Accept when:* an external mock works through the unchanged policy model.
 
-## 13. Open questions
+## 13. Decisions on the open questions (2026-10-13)
 
-1. Should detector attempts count toward **requests-per-minute** limits? Each one could inflate a client's count by up to 3×. Recommended: yes, and document it.
-2. Should there be a tighten-only **per-key** layer, for example agent keys on monitor while app keys redact? Recommended: after phase 2, if needed.
-3. Should **personal-workspace owners** be able to tighten their own guardrails, or should personal workspaces be platform-only, as limits are (section 5)?
-4. **Redacting history:** should redaction cover all earlier user-authored text on every turn (the recommended `user_text`, section 8) instead of only new user input? Only new input leaks on the next turn.
-5. Should platform staff see **guardrail counts for personal workspaces** as totals, the way they see usage totals?
-6. Should model detectors judge only **new content** by default, rather than the full history?
+1. Detector attempts **count toward requests-per-minute** limits; this is documented.
+2. **No per-key layer** at first; add a tighten-only one later if needed.
+3. **Personal-workspace owners may tighten** their own guardrails (local layer, tighten-only).
+4. Redaction covers **all user-authored text on every turn** (`user_text`), never assistant, tool or thinking blocks.
+5. Platform staff see **guardrail counts for personal workspaces as totals**, never request detail.
+6. Model detectors judge **only new content** by default, to keep cost down.
+
+No open questions remain; implementation starts with phase 1 (section 12) after phase 2 of the program.
