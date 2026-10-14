@@ -25,6 +25,7 @@ This page describes the current source (migrations `0021_batch_engine.sql` and `
   - `omg_mode`: `auto` (default) or `gateway` (always run line by line).
   - `omg_retries`: `0` (default), `1` or `2` (see [Failures and retries](#failures-and-retries)).
 - **`completion_window`:** `24h` (the OpenAI value), or `48h`, `72h` or `168h` for routes that only run batch lines in a time window. Any other value is a 400. A window other than `24h` always runs gateway-side, because provider batch APIs only offer 24 hours. The batch object echoes the window and its `expires_at`.
+- **Who sees a batch:** in a Team or Project, the workspace's object visibility decides ([files](files-api.md)). Per user (the default), a regular member's keys see and cancel only their own batches, and can't use another member's file as `input_file_id` (`404`); service-account keys and workspace owners/admins see all. Workspace-wide, every key sees every batch, but only the creator, an owner/admin or a service-account key may cancel (`403`).
 - **Not supported:** `output_expires_after` (400 `unsupported_capability`) and file purposes other than `batch` as input.
 
 ### Validation report
