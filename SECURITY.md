@@ -32,7 +32,7 @@ Every push and pull request runs, in CI:
 - **npm audit**: high and critical advisories in production npm dependencies fail the build; the full audit, dev tooling included, is reported without failing.
 - **CodeQL** (`.github/workflows/codeql.yml`): JavaScript/TypeScript and Rust, also weekly.
 
-Dependabot opens weekly grouped updates for Cargo, npm, GitHub Actions and the `Dockerfile` base images; security updates arrive individually. Release images are scanned by Trivy (fixable HIGH and CRITICAL findings block publishing), carry an SBOM and provenance, and are signed with cosign. Workflow actions are pinned by commit SHA. See [verification](docs/verification.md#supply-chain).
+Dependabot opens weekly grouped updates for Cargo, npm, GitHub Actions and the `Dockerfile` base images; security updates arrive individually. Release images are scanned by Trivy (fixable HIGH and CRITICAL findings block publishing), carry an SBOM and provenance, and are signed with cosign. Workflow actions are pinned by commit SHA and every `Dockerfile` base image by digest; `npm run test:supply-chain` (run in CI) fails on any unpinned one. See [verification](docs/verification.md#supply-chain).
 
 ## Scope
 
