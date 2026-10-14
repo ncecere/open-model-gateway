@@ -10,7 +10,7 @@
 
 use std::{
     collections::HashMap,
-    net::{IpAddr, Ipv6Addr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
     sync::Mutex,
     time::{Duration, Instant},
 };
@@ -20,6 +20,11 @@ use axum::http::HeaderMap;
 /// Distinct client buckets kept per replica. Past this, new addresses share
 /// one overflow bucket, so an attacker with many addresses cannot grow memory.
 const MAX_BUCKETS: usize = 10_000;
+
+/// How often a full table may be swept for refilled buckets. In between, a
+/// flood of new addresses goes to the overflow bucket instead of each paying
+/// for a scan under the lock.
+const SWEEP_EVERY: Duration = Duration::from_secs(1);
 
 /// Networks whose `X-Forwarded-For` is believed (`GATEWAY_TRUSTED_PROXIES`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -37,6 +42,13 @@ impl TrustedProxies {
             let addr: IpAddr = addr.parse().map_err(|_| {
                 anyhow::anyhow!("GATEWAY_TRUSTED_PROXIES: invalid address {item:?}")
             })?;
+            // Incoming addresses are compared as IPv4, so a mapped network could never match.
+            if let IpAddr::V6(v6) = addr {
+                anyhow::ensure!(
+                    v6.to_ipv4_mapped().is_none(),
+                    "GATEWAY_TRUSTED_PROXIES: write IPv4-mapped {item:?} as an IPv4 network"
+                );
+            }
             let max = if addr.is_ipv4() { 32 } else { 128 };
             let prefix = match prefix {
                 None => max,
@@ -82,11 +94,28 @@ fn masked(ip: IpAddr, prefix: u8) -> IpAddr {
     }
 }
 
+/// One `X-Forwarded-For` entry: an address, optionally with a port
+/// (`1.2.3.4:5678`, `[2001:db8::1]:443`), as some load balancers send.
+fn parse_hop(hop: &str) -> Option<IpAddr> {
+    if let Ok(ip) = hop.parse() {
+        return Some(ip);
+    }
+    if let Some(rest) = hop.strip_prefix('[') {
+        let (addr, port) = rest.split_once("]:")?;
+        port.parse::<u16>().ok()?;
+        return addr.parse::<Ipv6Addr>().ok().map(IpAddr::V6);
+    }
+    let (addr, port) = hop.split_once(':')?;
+    port.parse::<u16>().ok()?;
+    addr.parse::<Ipv4Addr>().ok().map(IpAddr::V4)
+}
+
 /// The client address to rate-limit. The connection's peer, unless the peer
 /// is a trusted proxy: then the right-most `X-Forwarded-For` entry that is not
-/// itself a trusted proxy. Entries left of an unparsable one are never used
-/// (anything there could be client-written), so such a request is counted
-/// under the last trusted hop. Without a peer (in-process tests), `None`.
+/// itself a trusted proxy. The walk ends at an unparsable entry or at a header
+/// line that isn't visible ASCII, and nothing left of it is used (the client
+/// may have written it), so such a request counts under the last trusted hop.
+/// Without a peer (in-process tests), `None`.
 pub(crate) fn client_ip(
     peer: Option<IpAddr>,
     headers: &HeaderMap,
@@ -96,20 +125,24 @@ pub(crate) fn client_ip(
     if !trusted.contains(current) {
         return Some(current);
     }
-    let hops: Vec<&str> = headers
+    // Right to left over every line, then every entry of the line.
+    let lines: Vec<Option<&str>> = headers
         .get_all("x-forwarded-for")
         .iter()
-        .filter_map(|v| v.to_str().ok())
-        .flat_map(|v| v.split(','))
-        .map(str::trim)
+        .map(|v| v.to_str().ok())
         .collect();
-    for hop in hops.into_iter().rev() {
-        let Ok(ip) = hop.parse::<IpAddr>() else {
+    for line in lines.into_iter().rev() {
+        let Some(line) = line else {
             return Some(current);
         };
-        current = canonical(ip);
-        if !trusted.contains(current) {
-            return Some(current);
+        for hop in line.rsplit(',') {
+            let Some(ip) = parse_hop(hop.trim()) else {
+                return Some(current);
+            };
+            current = canonical(ip);
+            if !trusted.contains(current) {
+                return Some(current);
+            }
         }
     }
     Some(current)
@@ -139,10 +172,16 @@ struct Bucket {
     updated: Instant,
 }
 
+#[derive(Default)]
+struct Table {
+    buckets: HashMap<Key, Bucket>,
+    swept: Option<Instant>,
+}
+
 /// A token bucket per client address: `per_minute` requests a minute, with a
 /// burst of the same size.
 pub(crate) struct Limiter {
-    buckets: Mutex<HashMap<Key, Bucket>>,
+    table: Mutex<Table>,
     per_second: f64,
     burst: f64,
     capacity: usize,
@@ -155,7 +194,7 @@ impl Limiter {
 
     fn with_capacity(per_minute: u32, capacity: usize) -> Self {
         Self {
-            buckets: Mutex::default(),
+            table: Mutex::default(),
             per_second: f64::from(per_minute) / 60.0,
             burst: f64::from(per_minute),
             capacity,
@@ -164,19 +203,26 @@ impl Limiter {
 
     /// Take one token for this client, or say how long until one is free.
     pub(crate) fn check(&self, ip: Option<IpAddr>, now: Instant) -> Result<(), Duration> {
-        let mut buckets = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
+        let mut table = self.table.lock().unwrap_or_else(|e| e.into_inner());
         let mut key = key(ip);
-        if !buckets.contains_key(&key) && buckets.len() >= self.capacity {
-            // Forget clients whose bucket has refilled: they are owed nothing.
-            let (rate, burst) = (self.per_second, self.burst);
-            buckets.retain(|_, b| {
-                b.tokens + now.saturating_duration_since(b.updated).as_secs_f64() * rate < burst
-            });
-            if buckets.len() >= self.capacity {
+        if !table.buckets.contains_key(&key) && table.buckets.len() >= self.capacity {
+            // Forget clients whose bucket has refilled (they are owed nothing),
+            // at most once per SWEEP_EVERY.
+            if table
+                .swept
+                .is_none_or(|at| now.saturating_duration_since(at) >= SWEEP_EVERY)
+            {
+                table.swept = Some(now);
+                let (rate, burst) = (self.per_second, self.burst);
+                table.buckets.retain(|_, b| {
+                    b.tokens + now.saturating_duration_since(b.updated).as_secs_f64() * rate < burst
+                });
+            }
+            if table.buckets.len() >= self.capacity {
                 key = Key::Overflow;
             }
         }
-        let bucket = buckets.entry(key).or_insert(Bucket {
+        let bucket = table.buckets.entry(key).or_insert(Bucket {
             tokens: self.burst,
             updated: now,
         });
@@ -192,11 +238,17 @@ impl Limiter {
             Err(Duration::from_secs_f64((wait - 1e-9).ceil().max(1.0)))
         }
     }
+
+    #[cfg(test)]
+    fn tracked(&self) -> usize {
+        self.table.lock().unwrap().buckets.len()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::HeaderValue;
 
     fn xff(values: &[&str]) -> HeaderMap {
         let mut headers = HeaderMap::new();
@@ -231,6 +283,7 @@ mod tests {
             "not-an-ip",
             "10.0.0.0/x",
             "::/129",
+            "::ffff:10.0.0.0/104",
         ] {
             assert!(TrustedProxies::parse(bad).is_err(), "{bad}");
         }
@@ -244,40 +297,70 @@ mod tests {
     #[test]
     fn forwarded_addresses_are_believed_only_from_trusted_proxies() {
         let trusted = TrustedProxies::parse("10.0.0.0/8").unwrap();
+        let peer = |s| Some(ip(s));
         let spoof = xff(&["203.0.113.9"]);
         // An untrusted peer's header is ignored: it cannot pick its own bucket.
         assert_eq!(
-            client_ip(Some(ip("198.51.100.1")), &spoof, &trusted),
-            Some(ip("198.51.100.1"))
+            client_ip(peer("198.51.100.1"), &spoof, &trusted),
+            peer("198.51.100.1")
         );
+        let none = TrustedProxies::default();
         assert_eq!(
-            client_ip(Some(ip("198.51.100.1")), &spoof, &TrustedProxies::default()),
-            Some(ip("198.51.100.1"))
+            client_ip(peer("198.51.100.1"), &spoof, &none),
+            peer("198.51.100.1")
         );
         // Through the proxy: the right-most entry the proxy appended.
         let chain = xff(&["1.1.1.1, 203.0.113.9"]);
         assert_eq!(
-            client_ip(Some(ip("10.0.0.5")), &chain, &trusted),
-            Some(ip("203.0.113.9"))
+            client_ip(peer("10.0.0.5"), &chain, &trusted),
+            peer("203.0.113.9")
         );
         // Two trusted hops, and a header split over two lines.
         let two = xff(&["1.1.1.1, 203.0.113.9", "10.1.1.1"]);
         assert_eq!(
-            client_ip(Some(ip("10.0.0.5")), &two, &trusted),
-            Some(ip("203.0.113.9"))
+            client_ip(peer("10.0.0.5"), &two, &trusted),
+            peer("203.0.113.9")
         );
         // Garbage stops the walk at the last trusted hop; nothing left of it is used.
         let garbage = xff(&["1.1.1.1, nonsense"]);
         assert_eq!(
-            client_ip(Some(ip("10.0.0.5")), &garbage, &trusted),
-            Some(ip("10.0.0.5"))
+            client_ip(peer("10.0.0.5"), &garbage, &trusted),
+            peer("10.0.0.5")
+        );
+        // So does a line that isn't visible ASCII, even if lines before it parse.
+        let mut opaque = xff(&["9.9.9.9"]);
+        opaque.append(
+            "x-forwarded-for",
+            HeaderValue::from_bytes(b"\xff, 203.0.113.9").unwrap(),
+        );
+        assert_eq!(
+            client_ip(peer("10.0.0.5"), &opaque, &trusted),
+            peer("10.0.0.5")
         );
         // No header: the proxy itself.
+        let empty = HeaderMap::new();
         assert_eq!(
-            client_ip(Some(ip("10.0.0.5")), &HeaderMap::new(), &trusted),
-            Some(ip("10.0.0.5"))
+            client_ip(peer("10.0.0.5"), &empty, &trusted),
+            peer("10.0.0.5")
         );
         assert_eq!(client_ip(None, &spoof, &trusted), None);
+        // Ports are ignored; an IPv4-mapped peer is its IPv4 address.
+        let ported = xff(&["9.9.9.9, 203.0.113.9:5678"]);
+        assert_eq!(
+            client_ip(peer("10.0.0.5"), &ported, &trusted),
+            peer("203.0.113.9")
+        );
+        let v6 = xff(&["[2001:db8::7]:443"]);
+        assert_eq!(
+            client_ip(peer("::ffff:10.0.0.5"), &v6, &trusted),
+            peer("2001:db8::7")
+        );
+        assert_eq!(
+            client_ip(peer("::ffff:198.51.100.1"), &spoof, &trusted),
+            peer("198.51.100.1")
+        );
+        assert_eq!(parse_hop("1.2.3.4:notaport"), None);
+        assert_eq!(parse_hop("[2001:db8::1]"), None);
     }
 
     #[test]
@@ -320,14 +403,31 @@ mod tests {
         // Table full of drained buckets: new clients share the overflow bucket.
         assert!(limiter.check(Some(ip("198.51.100.1")), now).is_ok());
         assert!(limiter.check(Some(ip("198.51.100.2")), now).is_err());
-        assert_eq!(
-            limiter.buckets.lock().unwrap().len(),
-            3,
-            "two clients plus overflow"
-        );
+        assert_eq!(limiter.tracked(), 3, "two clients plus overflow");
         // Once old buckets refill they are forgotten and new clients get their own.
         let later = now + Duration::from_secs(120);
         assert!(limiter.check(Some(ip("198.51.100.3")), later).is_ok());
-        assert!(limiter.buckets.lock().unwrap().len() <= 2);
+        assert!(limiter.tracked() <= 2);
+    }
+
+    #[test]
+    fn a_flood_of_new_addresses_sweeps_at_most_once_a_second() {
+        // Ten tokens a second, so a used bucket refills within 0.1 s.
+        let limiter = Limiter::with_capacity(600, 2);
+        let now = Instant::now();
+        for client in ["198.51.100.1", "198.51.100.2"] {
+            limiter.check(Some(ip(client)), now).unwrap();
+        }
+        // Full: this sweep finds nothing refilled, so overflow.
+        limiter.check(Some(ip("198.51.100.3")), now).unwrap();
+        assert_eq!(limiter.tracked(), 3);
+        // The first two have refilled by now, but within a second of the last
+        // sweep new clients go straight to overflow instead of scanning.
+        let soon = now + Duration::from_millis(900);
+        limiter.check(Some(ip("198.51.100.4")), soon).unwrap();
+        assert_eq!(limiter.tracked(), 3, "not swept again yet");
+        let after = now + Duration::from_secs(1);
+        limiter.check(Some(ip("198.51.100.5")), after).unwrap();
+        assert_eq!(limiter.tracked(), 1, "swept: only the new client remains");
     }
 }

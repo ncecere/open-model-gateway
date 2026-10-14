@@ -145,6 +145,7 @@ pub struct IdentityConfig {
     trusted_proxies: throttle::TrustedProxies,
     login_rate_per_minute: u32,
     pending_login_cap: i64,
+    pending_cap_latch: Duration,
 }
 
 impl IdentityConfig {
@@ -243,6 +244,7 @@ impl IdentityConfig {
             trusted_proxies: throttle::TrustedProxies::default(),
             login_rate_per_minute: LOGIN_RATE_PER_MINUTE,
             pending_login_cap: PENDING_LOGIN_CAP,
+            pending_cap_latch: Duration::from_secs(5),
         })
     }
 }
@@ -326,6 +328,9 @@ struct Provider {
     /// Per-replica sign-in start and callback buckets (#78).
     login_limiter: throttle::Limiter,
     callback_limiter: throttle::Limiter,
+    /// Until when this replica treats the pending-attempt cap as reached,
+    /// so refusals during a flood don't each count the table.
+    login_full_until: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
 impl Provider {
@@ -462,6 +467,7 @@ impl IdentityState {
             Some(Arc::new(Provider {
                 login_limiter,
                 callback_limiter,
+                login_full_until: std::sync::Mutex::default(),
                 config,
                 client,
                 http,
@@ -726,6 +732,20 @@ async fn login(
             wait,
         ));
     }
+    let full = || {
+        provider
+            .login_full_until
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    };
+    if full().is_some_and(|until| std::time::Instant::now() < until) {
+        return Ok(throttled(
+            "login",
+            "pending_cap",
+            StatusCode::SERVICE_UNAVAILABLE,
+            Duration::from_secs(60),
+        ));
+    }
     // An unsafe or malformed return path is dropped (sign-in still works and lands on Home).
     let return_to = query
         .ok()
@@ -757,10 +777,15 @@ async fn login(
         .url();
     // Installation-wide bound on pending attempts: past it nothing is stored.
     // The count stops at the cap, so it costs at most `cap` index entries.
+    // Concurrent inserts don't see each other (READ COMMITTED), so the cap can
+    // be exceeded by the inserts in flight at once (at most one per database
+    // connection); that still bounds the table. A strict cap would need a lock
+    // every sign-in waits on.
     let stored = sqlx::query("INSERT INTO oidc_login_attempts(state_hash,browser_hash,nonce,pkce_verifier,expires_at,return_to) SELECT $1,$2,$3,$4,now()+interval '10 minutes',$5 WHERE (SELECT count(*) FROM (SELECT 1 FROM oidc_login_attempts WHERE expires_at>now() LIMIT $6) pending)<$6")
         .bind(hash(oauth_state.secret())).bind(hash(&browser)).bind(nonce.secret()).bind(verifier.secret()).bind(return_to).bind(provider.config.pending_login_cap)
         .execute(&state.store.pool).await.map_err(internal)?;
     if stored.rows_affected() == 0 {
+        *full() = Some(std::time::Instant::now() + provider.config.pending_cap_latch);
         return Ok(throttled(
             "login",
             "pending_cap",

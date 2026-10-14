@@ -2266,15 +2266,23 @@ mod abuse_controls {
         let mock = MockProvider::start(None).await;
         // Two replicas: separate in-memory limiters, one database.
         let (a, b) = (
-            state(&mock, &pool, |c| c.pending_login_cap = 4).await,
-            state(&mock, &pool, |c| c.pending_login_cap = 4).await,
+            state(&mock, &pool, |c| {
+                c.pending_login_cap = 4;
+                c.pending_cap_latch = Duration::ZERO;
+            })
+            .await,
+            state(&mock, &pool, |c| {
+                c.pending_login_cap = 4;
+                c.pending_cap_latch = Duration::ZERO;
+            })
+            .await,
         );
         let (app_a, app_b) = (
             router(a.clone()).with_state(a.store.clone()),
             router(b.clone()).with_state(b.store.clone()),
         );
         let mut statuses = Vec::new();
-        let burst = (0..6).map(|i| {
+        let burst = (0..20).map(|i| {
             let app = if i % 2 == 0 {
                 app_a.clone()
             } else {
@@ -2295,9 +2303,12 @@ mod abuse_controls {
             statuses.push(status);
         }
         let stored = attempts(&pool).await;
+        // Concurrent inserts can each see the table below the cap, so it can be
+        // exceeded by the inserts in flight, at most one per connection.
+        let connections = i64::from(pool.options().get_max_connections());
         assert!(
-            stored <= 5,
-            "at most the cap, plus one per racing replica; got {stored}"
+            stored <= 4 + connections,
+            "at most the cap plus one per connection ({connections}); got {stored}"
         );
         assert_eq!(
             statuses
@@ -2332,5 +2343,36 @@ mod abuse_controls {
             .await
             .unwrap();
         assert_eq!(recovered.status(), StatusCode::SEE_OTHER);
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn a_full_cap_is_latched_without_counting_again(pool: sqlx::PgPool) {
+        let mock = MockProvider::start(None).await;
+        let state = state(&mock, &pool, |c| {
+            c.pending_login_cap = 1;
+            c.pending_cap_latch = Duration::from_secs(3600);
+        })
+        .await;
+        let app = router(state.clone()).with_state(state.store.clone());
+        let login = |peer: &str| app.clone().oneshot(from(peer, "/api/v1/auth/login", None));
+        assert_eq!(
+            login("198.51.100.1").await.unwrap().status(),
+            StatusCode::SEE_OTHER
+        );
+        assert_eq!(
+            login("198.51.100.2").await.unwrap().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        // Space frees up, but this replica keeps refusing until the latch ends,
+        // without touching the table.
+        sqlx::query("DELETE FROM oidc_login_attempts")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            login("198.51.100.3").await.unwrap().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(attempts(&pool).await, 0);
     }
 }
