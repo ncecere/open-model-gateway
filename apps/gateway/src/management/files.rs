@@ -5,7 +5,9 @@
 //! the personal owner) see every file; other members see every file when the
 //! workspace's object visibility is `workspace`, else the files they uploaded
 //! themselves (from the dashboard or with their own keys). Whoever sees a file
-//! may download or delete it. Platform roles without membership see nothing.
+//! may download it; deleting needs the creator or a workspace owner/admin
+//! (`crate::visibility::may_modify_sql`). Platform roles without membership
+//! see nothing.
 //! Uploads use the same pipeline as `POST /v1/files`; contents never reach
 //! audit or logs.
 use super::*;

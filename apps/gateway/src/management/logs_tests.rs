@@ -555,3 +555,134 @@ async fn logs_filter_and_show_async_jobs(pool: PgPool) {
     let (_, mine) = get(&f, &f.member, &format!("{ws}/requests?workload=jobs")).await;
     assert!(rows(&mine).is_empty());
 }
+
+/// #141: Workspace › Logs › Batches follows the workspace's object visibility,
+/// and cancelling needs the creator or a workspace owner/admin (403), never
+/// "whoever sees it"; a hidden batch is 404 everywhere.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn dashboard_batches_follow_object_visibility(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let r = route(&pool, "job-model", "openai").await;
+    let (_, owner_key) = key(&f, &f.owner, f.team, Value::Null).await;
+    let (_, member_key) = key(&f, &f.member, f.team, Value::Null).await;
+    // Finished (legacy native) batches: cancel answers 409 when allowed,
+    // without any upstream call.
+    let batch = |creator_key: Uuid, creator: Uuid, minutes: i64| {
+        let pool = pool.clone();
+        let r = &r;
+        async move {
+            let exec = attempt(
+                &pool,
+                r,
+                simple(
+                    f.team,
+                    creator_key,
+                    "job-model",
+                    &format!("now()-interval '{minutes} minutes'"),
+                    3,
+                ),
+            )
+            .await;
+            let job = Uuid::new_v4();
+            sqlx::query("INSERT INTO async_jobs(id,kind,workspace_id,api_key_id,deployment_id,execution_id,public_model,provider,upstream_id,state,upstream_status,poll_deadline_at,batch_endpoint,user_id,request_total,request_completed,request_failed,completed_at,settled_at) VALUES($1,'batch',$2,$3,$4,$5,'job-model','openai',$7,'completed','completed',now()+interval '1 hour','/v1/chat/completions',$6,1,1,0,now(),now())")
+                .bind(job).bind(f.team).bind(creator_key).bind(r.deployment).bind(exec).bind(creator).bind(format!("batch_up_{minutes}"))
+                .execute(&pool).await.unwrap();
+            format!("batch_{}", job.simple())
+        }
+    };
+    let owners = batch(id(&owner_key), f.owner.user_id, 30).await;
+    let members = batch(id(&member_key), f.member.user_id, 20).await;
+    let engine = crate::inference::Engine::new(
+        std::sync::Arc::new(f.s.clone()),
+        crate::providers::ProviderRegistry::default(),
+        crate::inference::EngineLimits::default(),
+    )
+    .unwrap();
+    let send = |u: &BrowserPrincipal, method: &'static str, path: String| {
+        let (u, s, engine) = (u.clone(), f.s.clone(), engine.clone());
+        async move {
+            let response = routes()
+                .layer(Extension(u))
+                .layer(Extension(engine))
+                .with_state(s)
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+            (
+                status,
+                serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null),
+            )
+        }
+    };
+    let ws = format!("/api/v1/workspaces/{}/batches", f.team);
+    let listed = |v: &Value, id: &str| {
+        v["data"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|r| r["id"] == id))
+    };
+    for mode in ["member", "workspace"] {
+        sqlx::query("UPDATE workspaces SET object_visibility=$2 WHERE id=$1")
+            .bind(f.team)
+            .bind(mode)
+            .execute(&pool)
+            .await
+            .unwrap();
+        // The owner sees and may cancel both.
+        let (status, v) = send(&f.owner, "GET", ws.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{v}");
+        assert!(listed(&v, &owners) && listed(&v, &members), "{mode}: {v}");
+        for b in [&owners, &members] {
+            assert_eq!(
+                send(&f.owner, "POST", format!("{ws}/{b}/cancel")).await.0,
+                StatusCode::CONFLICT,
+                "{mode} owner cancels {b}"
+            );
+        }
+        // The member always sees and may cancel their own.
+        let (_, v) = send(&f.member, "GET", ws.clone()).await;
+        assert!(listed(&v, &members), "{mode}: {v}");
+        assert_eq!(
+            send(&f.member, "GET", format!("{ws}/{members}")).await.0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            send(&f.member, "POST", format!("{ws}/{members}/cancel"))
+                .await
+                .0,
+            StatusCode::CONFLICT,
+            "{mode} member cancels own"
+        );
+        // The owner's batch: hidden per user (404), visible but not theirs to cancel workspace-wide (403).
+        let see = mode == "workspace";
+        assert_eq!(listed(&v, &owners), see, "{mode}: {v}");
+        assert_eq!(
+            send(&f.member, "GET", format!("{ws}/{owners}")).await.0,
+            if see {
+                StatusCode::OK
+            } else {
+                StatusCode::NOT_FOUND
+            },
+            "{mode} detail"
+        );
+        assert_eq!(
+            send(&f.member, "POST", format!("{ws}/{owners}/cancel"))
+                .await
+                .0,
+            if see {
+                StatusCode::FORBIDDEN
+            } else {
+                StatusCode::NOT_FOUND
+            },
+            "{mode} cancel"
+        );
+    }
+}

@@ -5,7 +5,8 @@
 //! Visibility is `/v1/batches`' (`crate::visibility`): workspace admins (and
 //! the personal owner) see every batch of the workspace; other members see
 //! every batch when the workspace's object visibility is `workspace`, else
-//! the batches of their own keys. Whoever sees a batch may cancel it.
+//! the batches of their own keys. Cancelling needs more than seeing: the
+//! creator or a workspace owner/admin (`crate::visibility::may_modify_sql`).
 //! Platform Admins/Auditors see Team/Project batches across the installation
 //! and only totals for personal workspaces. Rows are metadata: never lines,
 //! custom ids, outputs or metadata values.
