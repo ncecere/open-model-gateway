@@ -114,7 +114,8 @@ describe("Catalog page", () => {
     expect(screen.queryByRole("option", { name: /GPT X/ })).toBeNull();
     const keys = api.client.getQueryCache().findAll().map(q => q.queryKey);
     expect(keys.filter(k => k[3] === "choices" && String(k[2]).startsWith(`${platformPath}/models`))).toEqual([]);
-    expect(keys.some(k => k[2] === `${platformPath}/models?q=e&limit=20`)).toBe(true);
+    // Models already in the catalog are left out on the server, before the 20-row limit.
+    expect(keys.some(k => k[2] === `${platformPath}/models?not_in_catalog=approved&q=e&limit=20`)).toBe(true);
     await user.click(within(dialog).getByRole("button", { name: "Add models" }));
     await waitFor(() => expect(api.writes()).toEqual([{ url: `${platformPath}/catalogs/approved/models`, method: "PUT", body: { model_ids: ["m1", "m3"] } }]));
   });

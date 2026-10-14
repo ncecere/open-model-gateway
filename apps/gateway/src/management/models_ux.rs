@@ -52,6 +52,10 @@ pub(super) struct ModelListQuery {
     data_policy: Option<String>,
     include_deprecated: Option<bool>,
     sort: Option<String>,
+    /// Pickers: leave out models already in this catalog.
+    not_in_catalog: Option<Uuid>,
+    /// Pickers: leave out models already directly assigned to this workspace.
+    not_direct_in: Option<Uuid>,
 }
 pub(super) async fn platform_models(
     State(s): State<Store>,
@@ -91,6 +95,8 @@ pub(super) async fn platform_models(
         .bind(p.workload.as_deref())
         .bind(l)
         .bind(o)
+        .bind(p.not_in_catalog)
+        .bind(p.not_direct_in)
         .fetch_all(&mut *tx)
         .await?;
     let counts: Value = sqlx::query_scalar(&format!("SELECT coalesce(jsonb_object_agg(w,n),'{{}}'::jsonb) FROM (SELECT {WORKLOAD} w,count(*) n FROM models m WHERE {filters} GROUP BY 1) c"))
@@ -149,7 +155,8 @@ fn platform_model_filters() -> String {
 }
 /// Platform model page. Binds: $1 q, $2 enabled, $3 connection, $4 max input
 /// price, $5 data policy, $6 include deprecated, $7 configured OpenRouter
-/// policy, $8 type, $9 limit, $10 offset. The page's ids are chosen first; row
+/// policy, $8 type, $9 limit, $10 offset, $11 not in this catalog, $12 not
+/// directly assigned to this workspace. The page's ids are chosen first; row
 /// JSON (readiness counts, connections, prices) is built only for those rows.
 pub(super) fn platform_models_sql(sort: PlatformModelSort) -> String {
     let min_input = min_rate("input_tokens", "input_microusd_per_million");
@@ -160,7 +167,7 @@ pub(super) fn platform_models_sql(sort: PlatformModelSort) -> String {
     };
     let filters = platform_model_filters();
     format!(
-        "WITH page AS MATERIALIZED (SELECT m.id,row_number() OVER (ORDER BY {order}) n FROM models m WHERE {filters} AND ($8::text IS NULL OR {WORKLOAD}=$8) ORDER BY n LIMIT $9 OFFSET $10) SELECT {} || jsonb_build_object('workload',{WORKLOAD},'min_input_microusd_per_million',({min_input}),'created_at',m.created_at) FROM page JOIN models m ON m.id=page.id ORDER BY page.n",
+        "WITH page AS MATERIALIZED (SELECT m.id,row_number() OVER (ORDER BY {order}) n FROM models m WHERE {filters} AND ($8::text IS NULL OR {WORKLOAD}=$8) AND ($11::uuid IS NULL OR NOT EXISTS(SELECT 1 FROM catalog_models cm WHERE cm.catalog_id=$11 AND cm.model_id=m.id)) AND ($12::uuid IS NULL OR NOT EXISTS(SELECT 1 FROM workspace_model_grants g WHERE g.workspace_id=$12 AND g.model_id=m.id AND g.source='direct')) ORDER BY n LIMIT $9 OFFSET $10) SELECT {} || jsonb_build_object('workload',{WORKLOAD},'min_input_microusd_per_million',({min_input}),'created_at',m.created_at) FROM page JOIN models m ON m.id=page.id ORDER BY page.n",
         model_json()
     )
 }

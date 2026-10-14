@@ -213,6 +213,8 @@ async fn platform_models_list_builds_rows_only_for_the_requested_page(pool: PgPo
         .bind(None::<String>)
         .bind(10_i64)
         .bind(250_i64)
+        .bind(None::<Uuid>)
+        .bind(None::<Uuid>)
         .fetch_one(&pool)
         .await
         .unwrap();

@@ -15,7 +15,7 @@ import { formatCount, knownSpendText, reconciliationBody, reconciliationFields }
 import { permissions } from "../../lib/permissions";
 import { saveCsv, usageCsv, EXPORT_MAX_ROWS } from "../../lib/usage-export";
 import { filterCount, periodLabel, recordCostText, recordStatuses, recordStatusText, recordsQuery, usageFilters, usageStatuses, workloadLabels, type RecordFilters, type UsageContext, type UsagePeriod } from "../../lib/usage";
-import { Button, Stack, useAction, useApi, useChoices } from "../../components/ui";
+import { Button, ErrorNotice, Stack, useAction, useApi, useChoices } from "../../components/ui";
 import { ActionMenu } from "../../components/templates/action-menu";
 import { CopyId } from "../../components/templates/copy-id";
 import { InfoBanner } from "../../components/templates/notices";
@@ -40,19 +40,19 @@ const PAGE = 50;
  * The records filters from the URL (the bar is shared with Overview/Explore; see ./filters). Records match a model by
  * its API name, so the filtered model's name is looked up first; `unknownModel` when it can't be found.
  */
-function useRecordFilters(workspace: Workspace | undefined, ctx: UsageContext, nav: UsageNav, workspaceFilter?: string): { filters: RecordFilters; ready: boolean; unknownModel: boolean; scopeText: string } {
+function useRecordFilters(workspace: Workspace | undefined, ctx: UsageContext, nav: UsageNav, workspaceFilter?: string): { filters: RecordFilters; ready: boolean; unknownModel: boolean; modelError?: unknown; retryModel?: () => void; scopeText: string } {
   const f = usageFilters(nav.search, ctx), model = useModelName(workspace, f.model_id);
   const cost = recordStatuses.find(r => r.value === nav.search.cost_status);
-  const unknownModel = !!f.model_id && !model.pending && !model.name;
+  const unknownModel = !!f.model_id && !model.pending && !model.name && !model.error;
   const statuses = f.status.map(v => usageStatuses.find(x => x.value === v)!.label.toLowerCase());
   const scopeText = [model.name && `model ${model.name}`, f.key_id && "one key", f.member && "one member", f.service_account_id && "one service account", f.cost_center_id && "one cost center", statuses.length && `status ${statuses.join(" or ")}`, cost && `cost "${cost.label}"`].filter(Boolean).join(", ");
-  return { filters: { ...f, model: model.name, cost_status: cost?.value, workspace_id: workspaceFilter }, ready: !model.pending && !unknownModel, unknownModel, scopeText };
+  return { filters: { ...f, model: model.name, cost_status: cost?.value, workspace_id: workspaceFilter }, ready: !model.pending && !unknownModel && !model.error, unknownModel, modelError: model.error, retryModel: model.retry, scopeText };
 }
 const UnknownModel = () => <InfoBanner tone="warning" title="Model filter not applied">The filtered model isn't available any more, so records can't be matched to it. Clear the model filter to see records.</InfoBanner>;
 
 export function WorkspaceRecords({ session, workspace, ctx, period, nav }: { session: Session; workspace: Workspace; ctx: UsageContext; period: UsagePeriod; nav: UsageNav }) {
   const ask = useAction(), base = wsPath(workspace.id), offset = nav.search.offset ?? 0;
-  const { filters, ready, unknownModel, scopeText } = useRecordFilters(workspace, ctx, nav);
+  const { filters, ready, unknownModel, modelError, retryModel, scopeText } = useRecordFilters(workspace, ctx, nav);
   // One request with every filter: the server takes the key and a comma list of statuses.
   const main = useApi<Collection<Cost>>(`${base}/costs?${recordsQuery(period, filters, { platform: false, limit: PAGE, offset })}`, ready);
   const filtered = filterCount(filters) > 0 || !!filters.cost_status;
@@ -74,7 +74,7 @@ export function WorkspaceRecords({ session, workspace, ctx, period, nav }: { ses
   ];
   const canFix = permissions(session, workspace).reconcileCosts;
   return <Stack gap={4}>
-    {unknownModel && <UnknownModel />}
+    {unknownModel && <UnknownModel />}{modelError !== undefined && <ErrorNotice error={modelError} retry={retryModel} />}
     {/* Export sits with Columns on the table's one action row (not a row of its own). */}
     <DataTable<Cost> caption="Cost records" stack columns={columns} toolbar={<Button size="sm" variant="secondary" disabled={!ready} onClick={exportCsv}>Export CSV</Button>} data={ready ? main.data?.data ?? [] : []} getRowId={c => c.id} columnsMenu columnsMenuMin={4} loading={ready && main.isPending} error={main.error ?? undefined} onRetry={() => void main.refetch()}
       rowActions={canFix ? (c: Cost) => canReconcile(c) ? <Button size="sm" variant="secondary" onClick={() => reconcile(c)}>Reconcile</Button> : null : undefined}
@@ -99,10 +99,10 @@ export type PlatformRecordColumns = ReturnType<typeof usePlatformRecordColumns>;
 
 /** Admin › Usage & costs › By workspace: per-workspace totals (personal workspaces as totals only) with the same inline filters. */
 export function PlatformRecords({ session, ctx, period, nav, workspaceFilter, cols }: { session: Session; ctx: UsageContext; period: UsagePeriod; nav: UsageNav; workspaceFilter?: string; /** From `usePlatformRecordColumns`; its menu sits on the FilterToolbar row. */ cols: PlatformRecordColumns }) {
-  const { filters, ready, unknownModel } = useRecordFilters(undefined, ctx, nav, workspaceFilter);
+  const { filters, ready, unknownModel, modelError, retryModel } = useRecordFilters(undefined, ctx, nav, workspaceFilter);
   const report = useApi<CostReport>(`${platformPath}/cost-report?${recordsQuery(period, filters, { platform: true })}`, ready);
   return <Stack gap={4}>
-    {unknownModel && <UnknownModel />}
+    {unknownModel && <UnknownModel />}{modelError !== undefined && <ErrorNotice error={modelError} retry={retryModel} />}
     <DataTable<Breakdown> caption="By workspace" stack columns={platformColumns} data={ready ? report.data?.breakdowns.workspaces ?? [] : []} getRowId={r => r.id ?? r.name} hiddenColumns={cols.hidden} onHiddenColumnsChange={cols.setHidden} loading={ready && report.isPending} error={report.error ?? undefined} onRetry={() => void report.refetch()}
       rowActions={session.capabilities.platform_write ? (r: Breakdown) => r.id ? <FinancialWorkspaceActions session={session} workspaceId={r.id} name={r.name} /> : null : undefined}
       empty={<EmptyState size="compact" title="No usage matches" description={`No workspace used models in ${periodLabel(period)} with these filters.`} />} />

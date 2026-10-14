@@ -59,6 +59,25 @@ describe("model pickers search the server (R06, #68)", () => {
     expect(fullModelLists(client)).toEqual([]); expect(fullModelFetches(fetch)).toEqual([]);
     client.clear();
   });
+  it("a failed model search or lookup is reported as an error, never as no models or a removed model", async () => {
+    const failing = (status: number) => Promise.resolve(Response.json({ error: { code: String(status), message: status === 404 ? "Not found" : "Management storage unavailable" } }, { status }));
+    // Routing: a failed search shows the error, not "No models match."
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((path: string) => path === "/api/v1/me" ? Promise.resolve(Response.json(admin)) : path.startsWith(`${models}?`) ? failing(503) : Promise.resolve(Response.json({ data: [] }))));
+    const user = userEvent.setup(), client = mount(<Routing session={admin} />);
+    await user.type(screen.getByRole("combobox", { name: "Model" }), "sma");
+    expect(await screen.findByText("Management storage unavailable")).toBeTruthy();
+    client.clear(); cleanup();
+    // Records: a 503 looking up the filtered model is an error; only a 404 means it's gone.
+    for (const [status, gone] of [[503, false], [404, true]] as const) {
+      const none = { metric: "spend", group_by: "key", then_by: null, period: { start_date: "2026-10-01", end_date: "2026-10-09" }, total: { value: "0", held_microusd: "0", unresolved_attempts: "0" }, rows: [], series: [] };
+      vi.stubGlobal("fetch", vi.fn().mockImplementation((path: string) => path === "/api/v1/me" ? Promise.resolve(Response.json(admin)) : path === `${models}/${modelId}` ? failing(status) : Promise.resolve(Response.json(path.includes("/usage/explore?") ? none : path.startsWith("/api/v1/platform/cost-report?") ? { ...report, scope: "platform" } : { data: [], has_more: false }))));
+      const records = testClient(), router = createRouter({ routeTree: dashboardRouteTree, history: createMemoryHistory({ initialEntries: [`/admin/costs?tab=records&model_id=${modelId}`] }) });
+      await router.load(); render(<QueryClientProvider client={records}><RouterProvider router={router} /></QueryClientProvider>);
+      if (gone) expect(await screen.findByText(/isn.t available any more/)).toBeTruthy();
+      else { expect(await screen.findByText("Management storage unavailable")).toBeTruthy(); expect(screen.queryByText(/isn.t available any more/)).toBeNull(); }
+      records.clear(); cleanup();
+    }
+  });
   it("All routes › Add route: the model is searched in the dialog; only whether any model exists is read first", async () => {
     const user = userEvent.setup();
     const fetch = serve(p => p === `${models}?limit=1` ? { data: [model] } : p.startsWith("/api/v1/platform/providers?") ? { data: [provider], has_more: false } : p.startsWith(`${models}?q=sma&`) ? { data: [{ ...model, id: modelId }] } : undefined);

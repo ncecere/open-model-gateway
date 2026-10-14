@@ -17,7 +17,7 @@
  * named from its own record.
  */
 import { useSelectedName, useServerOptions, withSelected } from "../../components/server-options";
-import { wsPath, platformPath, type Grant, type Model, type ServiceAccount, type Workspace } from "../../lib/api";
+import { ApiError, wsPath, platformPath, type Grant, type Model, type ServiceAccount, type Workspace } from "../../lib/api";
 import type { KeyRow } from "../../lib/keys";
 import type { DashboardSearch } from "../../lib/permissions";
 import { exploreQuery, recordStatuses, usageFilters, usageStatuses, type Dimension, type ExploreResponse, type RecordStatus, type UsageContext, type UsagePeriod } from "../../lib/usage";
@@ -64,13 +64,15 @@ export function useFilterOptions(workspace: Workspace | undefined, ctx: UsageCon
 }
 
 /** The API name of the filtered model (records match on it), or undefined while it loads or when it's unknown. */
-export function useModelName(workspace: Workspace | undefined, modelId: string | undefined): { name?: string; pending: boolean } {
+export function useModelName(workspace: Workspace | undefined, modelId: string | undefined): { name?: string; pending: boolean; /** A failure other than "not found": not an unknown model. */ error?: unknown; retry?: () => void } {
   const grants = useChoices<Grant>(workspace && modelId ? `${wsPath(workspace.id)}/models` : "", !!workspace && !!modelId);
   // Platform scope: that one model's record (R06, #68), never the list of every model. Unknown or gone: no name.
   const model = useApi<Model>(!workspace && modelId ? `${platformPath}/models/${encodeURIComponent(modelId)}` : "", !workspace && !!modelId);
   if (!modelId) return { pending: false };
-  if (workspace) return { name: grants.data?.find(g => g.model_id === modelId)?.public_name, pending: grants.isPending };
-  return { name: model.data?.id === modelId ? model.data.public_name : undefined, pending: model.isPending };
+  if (workspace) return { name: grants.data?.find(g => g.model_id === modelId)?.public_name, pending: grants.isPending, error: grants.isError ? grants.error : undefined, retry: () => void grants.refetch() };
+  // Only 404 means the model is gone; any other failure is reported as an error, not as an unknown model.
+  const gone = model.error instanceof ApiError && model.error.status === 404;
+  return { name: model.data?.id === modelId ? model.data.public_name : undefined, pending: model.isPending, error: model.isError && !gone ? model.error : undefined, retry: () => void model.refetch() };
 }
 
 const first = (v: FilterValues[string]) => Array.isArray(v) ? v[0] : undefined;
