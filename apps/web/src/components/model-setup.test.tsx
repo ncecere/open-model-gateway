@@ -121,18 +121,18 @@ describe("Add model page", () => {
     expect(fetch).not.toHaveBeenCalled();
     expect(screen.getAllByText(/is required/).length).toBeGreaterThan(0);
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("textbox", { name: /Upstream model ID/ })));
-    await user.type(screen.getByRole("textbox", { name: /Upstream model ID/ }), "llama3");
-    await user.type(screen.getByRole("textbox", { name: /Display name/ }), "Llama 3");
+    await user.click(screen.getByRole("textbox", { name: /Upstream model ID/ })); await user.paste("llama3");
+    await user.click(screen.getByRole("textbox", { name: /Display name/ })); await user.paste("Llama 3");
     await user.click(screen.getByRole("button", { name: "Approved" }));
     expect(screen.getByRole("button", { name: "Approved" }).getAttribute("aria-pressed")).toBe("true");
     await user.click(screen.getByRole("button", { name: "Add price now (optional)" }));
     await user.selectOptions(screen.getByRole("combobox", { name: "Input tokens price" }), "priced");
-    await user.type(screen.getByRole("textbox", { name: "$ per M input tokens" }), "0.123456");
+    await user.click(screen.getByRole("textbox", { name: "$ per M input tokens" })); await user.paste("0.123456");
     await user.selectOptions(screen.getByRole("combobox", { name: "Output tokens price" }), "priced");
-    await user.type(screen.getByRole("textbox", { name: "$ per M output tokens" }), "9007199254.740993");
+    await user.click(screen.getByRole("textbox", { name: "$ per M output tokens" })); await user.paste("9007199254.740993");
     await user.selectOptions(screen.getByRole("combobox", { name: "Requests price" }), "free");
-    await user.type(screen.getByRole("textbox", { name: /input token ceiling/ }), "1000");
-    await user.type(screen.getByRole("textbox", { name: /output token ceiling/ }), "10");
+    await user.click(screen.getByRole("textbox", { name: /input token ceiling/ })); await user.paste("1000");
+    await user.click(screen.getByRole("textbox", { name: /output token ceiling/ })); await user.paste("10");
     await user.click(screen.getByRole("switch", { name: "Enabled" }));
     await user.click(screen.getByRole("button", { name: "Add model" }));
     await waitFor(() => expect(navigate).toHaveBeenCalledWith({ page: "model-detail", record: "new-model" }));
@@ -146,7 +146,8 @@ describe("Add model page", () => {
     expect(body.price.price_lines).toContainEqual({ meter: "requests", microusd_per_batch: "0", batch: 1, unit_label: "/request", sku_label: "Request" });
     expect(body.price.price_lines.filter((l: { meter: string }) => l.meter === "cache_read_tokens")).toEqual([{ meter: "cache_read_tokens", unknown: true }]); // stated unknown, never free
     expect(form().getAttribute("data-dirty")).toBeNull();
-  });
+    // A full Add-model form with many fields; see #155 (busy CI runners).
+  }, 15_000);
   it("identifies missing below-fold price ceilings near the header and focuses/scrolls only after submission", async () => {
     const fetch = vi.fn().mockImplementation(created), { user, navigate } = mountAddModel(fetch);
     await user.type(screen.getByRole("textbox", { name: /Upstream model ID/ }), "llama3");

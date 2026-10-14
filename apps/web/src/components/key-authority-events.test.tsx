@@ -132,13 +132,14 @@ async function setup(strict = false) {
   async function open(flow: Flow, service = false) {
     if (flow === "creation") {
       await user.click(screen.getByRole("button", { name: "Create key" }));
-      await user.type(await screen.findByRole("textbox", { name: /^Name/ }), "  CLI  ");
+      await user.click(await screen.findByRole("textbox", { name: /^Name/ }));
+      await user.paste("  CLI  ");
       if (service) await user.click(screen.getByRole("radio", { name: "A service account" }));
     } else {
       await user.click(screen.getByRole("button", { name: "Actions for CLI" }));
       await user.click(await screen.findByRole("menuitem", { name: "Rotate key…" }));
       const expiry = await screen.findByRole("spinbutton", { name: "Expires in (days)" });
-      await user.clear(expiry); await user.type(expiry, "45");
+      await user.clear(expiry); await user.click(expiry); await user.paste("45");
     }
     return mountedForm();
   }
@@ -256,7 +257,10 @@ for (const boundary of boundaries) for (const flow of flows) {
       await act(async () => { freshSubmit(); });
       await disclosure(view, flow, freshSecret); expect(view.writes()).toHaveLength(2); expectRequest(view, flow, 1);
       await act(async () => { submit(); }); expect(view.writes()).toHaveLength(2);
-    });
+    // Mounts the actual Home (and, for omg:unauthorized, mounts it again):
+    // about 0.5 s idle, 1.7 s on a loaded machine. #155: more than the 5 s
+    // unit-test default on busy CI runners, without any timing race.
+    }, 20_000);
 
     it("retires the live disclosure Copy in the dispatch stack, clears it on commit, and keeps fresh Copy usable", async () => {
       const view = await setup(), button = await issue(view, flow), copy = retainedClick(button);
