@@ -36,26 +36,25 @@ describe("Home", () => {
 describe("Settings", () => {
   it("shows Personal limits read-only, with no rename and a link to key caps", async () => { serve(session, path => path === "/api/v1/workspaces/personal/policy" ? { policy, effective: { ...policy, requests_per_minute: 60 }, provenance: { platform_source: "type_default", platform: { ...policy, requests_per_minute: 60 }, local: policy, key: null } } : undefined); const { client } = await mount("/workspaces/personal/settings"); await screen.findByText("Set by a Platform Admin."); expect(screen.getAllByRole("tab").map(t => t.textContent)).toEqual(["Limits", "Access", "Alerts", "Audit log"]); expect(screen.queryByText("Effective access")).toBeNull(); expect(screen.getByText("60 per minute")).toBeTruthy(); expect(document.querySelector("main input")).toBeNull(); expect(within(screen.getByRole("main")).getByRole("link", { name: "API keys" }).getAttribute("href")).toBe("/workspaces/personal/keys"); client.clear(); });
   it("adds a member by choosing a person, never by typing an ID", async () => { const user = userEvent.setup(); const fetch = serve(session, (path, init) => path.startsWith("/api/v1/workspaces/team/member-candidates?q=al") ? { data: [{ user_id: "u-alex", email: "alex@demo.invalid" }] } : init?.method === "POST" ? { ok: true } : undefined); const client = testClient(); render(<QueryClientProvider client={client}><ActionProvider><WorkspaceMembers session={session} workspace={team} /></ActionProvider></QueryClientProvider>); await user.click(screen.getByRole("button", { name: "Add member" })); const dialog = await screen.findByRole("dialog"); expect(within(dialog).queryByText(/user ID/i)).toBeNull(); await user.type(within(dialog).getByRole("combobox", { name: "Person" }), "al"); await user.click(await screen.findByRole("option", { name: "alex@demo.invalid" })); await user.click(within(dialog).getByRole("button", { name: "Add member" })); await waitFor(() => expect(fetch.mock.calls.some(c => c[1]?.method === "POST")).toBe(true)); const post = fetch.mock.calls.find(c => c[1]?.method === "POST")!; expect(post[0]).toBe("/api/v1/workspaces/team/members"); expect(JSON.parse(String(post[1].body))).toEqual({ user_id: "u-alex", role: "member" }); client.clear(); });
-  it("shows people who are already members as disabled \"Already a member\" options in the picker", async () => {
+  it("lets Platform Admins search for people to add, offering only people who aren't members yet", async () => {
+    // R06 (#67): the server searches entitled non-members (current members are never candidates); no directory or member list is loaded.
     const user = userEvent.setup();
-    const fetch = serve(admin, (path, init) => path.startsWith("/api/v1/platform/workspaces/team/members") && init?.method !== "POST" ? { data: [{ user_id: "u-owner", email: "owner@demo.invalid", display_name: null, role: "owner", membership_source: "manual", grants: [{ source: "manual", role: "owner" }], disabled_at: null }], has_more: false } : path.startsWith("/api/v1/platform/users?status=active") ? { data: [{ id: "u-owner", email: "owner@demo.invalid", platform_role: "user", disabled_at: null }, { id: "u-new", email: "new@demo.invalid", platform_role: "user", disabled_at: null }], has_more: false } : init?.method === "POST" ? { ok: true } : undefined);
+    const fetch = serve(admin, (path, init) => path.startsWith("/api/v1/platform/workspaces/team/members") && init?.method !== "POST" ? { data: [{ user_id: "u-owner", email: "owner@demo.invalid", display_name: null, role: "owner", membership_source: "manual", grants: [{ source: "manual", role: "owner" }], disabled_at: null }], has_more: false } : path.startsWith("/api/v1/platform/workspaces/team/member-candidates?q=") ? { data: [{ user_id: "u-new", email: "new@demo.invalid" }] } : init?.method === "POST" ? { ok: true } : undefined);
     const client = testClient();
     render(<QueryClientProvider client={client}><ActionProvider><WorkspaceMembers session={admin} workspace={team} platform /></ActionProvider></QueryClientProvider>);
     await screen.findByText("owner@demo.invalid");
     await user.click(screen.getByRole("button", { name: "Add member" }));
     const dialog = await screen.findByRole("dialog");
-    await user.click(within(dialog).getByRole("combobox", { name: "Person" }));
-    const existing = await screen.findByRole("option", { name: /owner@demo\.invalid/ });
-    expect(existing.textContent).toContain("Already a member");
-    expect(existing.getAttribute("aria-disabled")).toBe("true");
-    const fresh = screen.getByRole("option", { name: /new@demo\.invalid/ });
-    expect(fresh.textContent).not.toContain("Already a member");
-    await user.click(existing);
-    expect((within(dialog).getByRole("combobox", { name: "Person", hidden: true }) as HTMLInputElement).value).not.toContain("owner@");
+    await user.type(within(dialog).getByRole("combobox", { name: "Person" }), "demo");
+    const fresh = await screen.findByRole("option", { name: /new@demo\.invalid/ });
+    expect(screen.queryByRole("option", { name: /owner@demo\.invalid/ })).toBeNull();
     await user.click(fresh);
     await user.click(within(dialog).getByRole("button", { name: "Add member" }));
     await waitFor(() => expect(fetch.mock.calls.some(c => c[1]?.method === "POST")).toBe(true));
     expect(JSON.parse(String(fetch.mock.calls.find(c => c[1]?.method === "POST")![1].body))).toEqual({ user_id: "u-new", role: "member" });
+    const paths = fetch.mock.calls.map(c => String(c[0]));
+    expect(paths.some(path => path.startsWith("/api/v1/platform/users"))).toBe(false);
+    expect(paths.filter(path => path.startsWith("/api/v1/platform/workspaces/team/members?")).every(path => path.includes("limit=50"))).toBe(true);
     client.clear();
   });
   it("falls back to email invitations when people search is unavailable", async () => { const user = userEvent.setup(); serve(session, path => path.includes("member-candidates") ? new Response(JSON.stringify({ error: { code: "404", message: "Not found" } }), { status: 404, headers: { "content-type": "application/json" } }) : undefined); const client = testClient(); render(<QueryClientProvider client={client}><ActionProvider><WorkspaceMembers session={session} workspace={team} /></ActionProvider></QueryClientProvider>); expect(screen.getByRole("button", { name: "Invite by email" })).toBeTruthy(); await user.click(screen.getByRole("button", { name: "Add member" })); await user.type(await screen.findByRole("combobox", { name: "Person" }), "x"); await screen.findByText("People search isn't available yet"); client.clear(); });

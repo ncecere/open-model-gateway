@@ -12,7 +12,7 @@ import { canManageKey, canRotateKey } from "./permissions";
 export type KeyStatus = "active" | "disabled" | "revoked" | "expired";
 /** The key lineage's primary (smallest) key budget and its use in the current window; `limit_microusd` null = no key budget. */
 export type KeyUsage = { period: BudgetPeriod; used_microusd: string | null; limit_microusd: string | null; window_start: string; window_end: string | null; unresolved_usage: boolean };
-export type KeyRow = Key & { status?: KeyStatus; disabled_at?: string | null; last_used_at?: string | null; lineage_id?: string; usage?: KeyUsage };
+export type KeyRow = Key & { status?: KeyStatus; disabled_at?: string | null; last_used_at?: string | null; lineage_id?: string; usage?: KeyUsage; /** The holder's name, for those who can see the key (gateway-resolved). */ issued_to_name?: string | null };
 export type KeyTotals = { spend_microusd: string; held_microusd: string; requests: string; attempts?: string; unresolved_attempts: string };
 export type KeyStats = { key_id: string; lineage_id: string; status: KeyStatus; last_used_at: string | null; daily: (KeyTotals & { date: string })[]; totals: { today: KeyTotals; week: KeyTotals; month: KeyTotals }; budgets: BudgetWindow[] };
 
@@ -37,10 +37,10 @@ export const canRotate = (session: Session, workspace: Workspace, key: KeyRow) =
 /** Key limits: the key holder or a workspace admin may tighten them while the key can still be used again. */
 export const canEditKeyLimits = (session: Session, workspace: Workspace, key: KeyRow) => (keyStatus(key) === "active" || keyStatus(key) === "disabled") && canManageKey(session, workspace, key);
 /** Who holds a key: "You", a member's email when the viewer can see the member list (workspace admins), else "Another member". */
-export function issuedTo(key: KeyRow, session: Session, accounts?: { id: string; name: string }[], members?: { user_id: string; email: string | null }[]): string {
+export function issuedTo(key: KeyRow, session: Session, accounts?: { id: string; name: string }[]): string {
   if (key.service_account_id) return `Service account · ${accounts?.find(a => a.id === key.service_account_id)?.name ?? "unnamed"}`;
   if (key.issued_to_user_id === session.user.id) return "You";
-  return members?.find(m => m.user_id === key.issued_to_user_id)?.email ?? "Another member";
+  return key.issued_to_name?.trim() || "Another member";
 }
 const keyStatusValues = ["active", "disabled", "revoked", "expired"];
 /** The API keys list's status filter: Active by default (revoked keys don't crowd the list); `all` shows every key. */

@@ -11,7 +11,7 @@ import { toast } from "../components/ui/toast/toast";
 import { Badge, Button, CollectionTable, DateTime, ErrorNotice, FormField, Heading, Id, NativeSelect, Stack, Alert, useAction, useApi, useChoices, type Action } from "../components/ui";
 import { ActionMenu } from "../components/templates/action-menu";
 import { IconCell, LabIcon } from "../components/provider-icon";
-import { GrantBadges, LocalTable, PersonCell, PersonIdentity, RoleBadge, UserStatusBadge, copyIdAction } from "../components/people";
+import { DirectoryTable, GrantBadges, PersonCell, PersonIdentity, RoleBadge, UserStatusBadge, copyIdAction } from "../components/people";
 import { Card } from "../components/ui/card/card";
 import { CellText, type DataTableColumn } from "../components/ui/data-table/data-table";
 import { workspaceRoleLabels, type DirectoryUser } from "../lib/people";
@@ -64,33 +64,28 @@ type Candidate = { user_id: string; email: string };
 export function AddMemberDialog({ workspace, path, platform, canManageOwners, onClose }: { workspace: Workspace; path: string; platform: boolean; canManageOwners: boolean; onClose: () => void }) {
   const client = useQueryClient(), [text, setText] = useState(""), [q, setQ] = useState(""), [picked, setPicked] = useState<ComboboxOption | null>(null), [role, setRole] = useState("member"), [busy, setBusy] = useState(false), [error, setError] = useState<unknown>();
   useEffect(() => { const timer = setTimeout(() => setQ(text.trim()), 250); return () => clearTimeout(timer); }, [text]);
-  const searchable = !platform && q.length > 0 && q.length <= 200;
-  const candidates = useApi<Collection<Candidate>>(`${wsPath(workspace.id)}/member-candidates?q=${encodeURIComponent(q)}`, searchable);
-  // Platform Admins choose from the entitled directory; workspace admins never browse it.
-  const directory = useChoices<DirectoryUser>(`${platformPath}/users?status=active`, platform);
-  const unavailable = !platform && notAvailable(candidates.error);
-  // Current members (the Members table's cached list) stay visible but can't be picked again.
-  const members = useChoices<Member>(path), memberIds = new Set((members.data ?? []).map(m => m.user_id));
-  const items: ComboboxOption[] = (platform ? (directory.data ?? []).filter(u => u.platform_role && u.email && !u.disabled_at).map(u => ({ value: u.id, label: u.email! })) : searchable ? (candidates.data?.data ?? []).map(c => ({ value: c.user_id, label: c.email })) : [])
-    .map(option => memberIds.has(option.value) ? { ...option, disabled: true, hint: "Already a member" } : option);
+  const searchable = q.length > 0 && q.length <= 200;
+  // Everyone searches on the server (R06, #67): entitled people who aren't members yet. Nobody loads the directory or the member list.
+  const candidates = useApi<Collection<Candidate>>(`${platform ? `${platformPath}/workspaces/${encodeURIComponent(workspace.id)}` : wsPath(workspace.id)}/member-candidates?q=${encodeURIComponent(q)}`, searchable);
+  const unavailable = notAvailable(candidates.error);
+  const items: ComboboxOption[] = searchable ? (candidates.data?.data ?? []).map(c => ({ value: c.user_id, label: c.email })) : [];
   const options = picked && !items.some(i => i.value === picked.value) ? [picked, ...items] : items;
-  const emptyText = platform ? (directory.isPending ? "Loading people…" : "No one matches.") : !q ? "Type part of an email address." : candidates.isFetching ? "Searching…" : "No one matches. People need platform access first, and can't already be members.";
+  const emptyText = !q ? "Type part of an email address." : candidates.isFetching ? "Searching…" : "No one matches. People need platform access first, and can't already be members.";
   async function submit() {
-    if (!picked || busy || memberIds.has(picked.value)) return;
+    if (!picked || busy) return;
     setBusy(true); setError(undefined);
     try { await api(path, { method: "POST", body: { user_id: picked.value, role } }); void client.invalidateQueries({ queryKey: ["api"] }); toast.success(`${picked.label} added`); onClose(); }
     catch (caught) { setError(caught); }
     finally { setBusy(false); }
   }
   return <Dialog open title={`Add someone to ${workspace.name}`} description="Choose a person by email. They get access straight away." onOpenChange={open => { if (!open && !busy) onClose(); }} hideClose={busy}
-    footer={<><Button variant="secondary" disabled={busy} onClick={onClose}>Cancel</Button><Button loading={busy} disabled={!picked || unavailable || memberIds.has(picked.value)} onClick={() => void submit()}>Add member</Button></>}>
+    footer={<><Button variant="secondary" disabled={busy} onClick={onClose}>Cancel</Button><Button loading={busy} disabled={!picked || unavailable} onClick={() => void submit()}>Add member</Button></>}>
     <Stack gap={4}>
       {unavailable ? <Alert tone="info" title="People search isn't available yet">This gateway can't search people yet. Invite them by email from the Invitations section instead.</Alert> : <>
-        <FormField label="Person" description={platform ? "Active people with platform access." : "Search by email. Only people with platform access who aren't members yet are listed."}>
-          <Combobox<string> items={options} filter={platform ? undefined : null} value={picked?.value ?? null} onValueChange={(_, option) => setPicked(option)} onInputValueChange={setText} placeholder="name@example.com" emptyText={emptyText} disabled={busy} limit={50} />
+        <FormField label="Person" description="Search by email. Only people with platform access who aren't members yet are listed.">
+          <Combobox<string> items={options} filter={null} value={picked?.value ?? null} onValueChange={(_, option) => setPicked(option)} onInputValueChange={setText} placeholder="name@example.com" emptyText={emptyText} disabled={busy} limit={50} />
         </FormField>
         {candidates.isError && !unavailable && <ErrorNotice error={candidates.error} retry={() => void candidates.refetch()} />}
-        {directory.isError && <ErrorNotice error={directory.error} retry={() => void directory.refetch()} />}
         <FormField label="Role"><NativeSelect value={role} disabled={busy} onChange={event => setRole(event.target.value)}>{roleOptions.filter(o => o.value !== "owner" || canManageOwners).map(o => <option key={o.value} value={o.value}>{o.label}</option>)}</NativeSelect></FormField>
       </>}
       {error !== undefined && <ErrorNotice error={error} />}
@@ -100,12 +95,13 @@ export function AddMemberDialog({ workspace, path, platform, canManageOwners, on
 export function MembersTable({ path, title, canManageOwners, writable, selfId }: { path: string; title: string; canManageOwners: boolean; writable: boolean; /** The viewer, shown as "(you)". */ selfId?: string }) {
   const ask = useAction();
   const columns: DataTableColumn<Member>[] = [
-    { id: "member", header: "Person", accessor: m => [m.display_name, m.email].filter(Boolean).join(" "), rowHeader: true, hideable: false, sortable: true, cell: m => <PersonIdentity person={m} self={m.user_id === selfId} /> },
-    { id: "role", header: "Role", accessor: m => m.role ?? "", sortable: true, cell: m => <RoleBadge role={m.role} /> },
+    { id: "member", header: "Person", accessor: m => [m.display_name, m.email].filter(Boolean).join(" "), rowHeader: true, hideable: false, cell: m => <PersonIdentity person={m} self={m.user_id === selfId} /> },
+    { id: "role", header: "Role", accessor: m => m.role ?? "", cell: m => <RoleBadge role={m.role} /> },
     { id: "sources", header: "Access", defaultHiddenNarrow: true, accessor: m => m.membership_source ?? "", cell: m => <GrantBadges grants={m.grants} empty="Unknown source" /> },
     { id: "status", header: "Status", accessor: m => m.disabled_at ? "suspended" : "active", cell: m => <UserStatusBadge user={{ disabled_at: m.disabled_at ?? null }} /> },
   ];
-  return <LocalTable<Member> path={path} label={title} storageKey="workspace-members" search={{ placeholder: "Name or email" }} rowKey={m => m.user_id} rowLabel={m => m.email} columns={columns}
+  // Paged and searched on the server (R06, #67): a team can have thousands of members.
+  return <DirectoryTable<Member> path={path} label={title} storageKey="workspace-members" search={{ placeholder: "Name or email" }} rowKey={m => m.user_id} rowLabel={m => m.email} columns={columns}
     rowActions={m => [
       { label: "Set manual role…", hidden: !writable, disabled: m.role === "owner" && !canManageOwners, disabledReason: "Only a workspace owner or Platform Admin can change owners", onSelect: () => ask({ title: `Set manual role for ${m.email}`, description: "Changes the role given here; access from an SSO group stays as it is.", fields: [{ ...roleField, value: m.grants?.find(g => g.source === "manual")?.role ?? "member", options: roleField.options?.filter(o => o.value !== "owner" || canManageOwners) }], submitLabel: "Set manual role", run: (v, signal) => api(path, { method: "POST", body: { user_id: m.user_id, role: v.role }, signal }) }) },
       copyIdAction(m.user_id, "Copy user ID"),

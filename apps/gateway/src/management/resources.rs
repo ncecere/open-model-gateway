@@ -1052,9 +1052,18 @@ async fn platform_audit(
         offset: p.offset,
     }
     .bounds()?;
-    // Routes and prices have no name of their own: label them from platform
-    // metadata this Admin/Auditor endpoint can already read (never keys/requests).
-    let mut data:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',a.id,'actor_user_id',a.actor_user_id,'workspace_id',a.workspace_id,'action',a.action,'resource_type',a.resource_type,'resource_id',a.resource_id,'metadata',a.metadata,'created_at',a.created_at,'target_name',CASE a.resource_type
+    // Names come from platform metadata this Admin/Auditor endpoint can
+    // already read (never keys or requests), so the dashboard doesn't load
+    // every user and workspace to label a page. Routes and prices have no
+    // name of their own and are labelled from their route.
+    let mut data:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('id',a.id,'actor_user_id',a.actor_user_id,'actor_name',(SELECT coalesce(nullif(btrim(x.display_name),''),x.email,'Retained identity') FROM users x WHERE x.id=a.actor_user_id),'workspace_id',a.workspace_id,'workspace_name',w.name,'workspace_kind',w.kind,'action',a.action,'resource_type',a.resource_type,'resource_id',a.resource_id,'target_kind',CASE WHEN a.resource_type='workspace' THEN (SELECT x.kind FROM workspaces x WHERE x.id=a.resource_id AND x.kind<>'personal') END,'metadata',a.metadata,'created_at',a.created_at,'target_name',CASE a.resource_type
+      WHEN 'user' THEN (SELECT coalesce(nullif(btrim(x.display_name),''),x.email,'Retained identity') FROM users x WHERE x.id=a.resource_id)
+      WHEN 'workspace' THEN (SELECT x.name FROM workspaces x WHERE x.id=a.resource_id AND x.kind<>'personal')
+      WHEN 'cost_center' THEN (SELECT x.name FROM cost_centers x WHERE x.id=a.resource_id)
+      WHEN 'group_mapping' THEN (SELECT x.group_value FROM oidc_group_mappings x WHERE x.id=a.resource_id)
+      WHEN 'model' THEN (SELECT coalesce(nullif(x.display_name,''),x.public_name) FROM models x WHERE x.id=a.resource_id)
+      WHEN 'catalog' THEN (SELECT x.name FROM catalogs x WHERE x.id=a.resource_id)
+      WHEN 'provider' THEN (SELECT x.name FROM provider_connections x WHERE x.id=a.resource_id)
       WHEN 'deployment' THEN (SELECT d.upstream_model||' on '||p.name FROM deployments d JOIN provider_connections p ON p.id=d.provider_connection_id WHERE d.id=a.resource_id)
       WHEN 'price' THEN (SELECT 'Price v'||(SELECT count(*) FROM deployment_prices x WHERE x.deployment_id=dp.deployment_id AND (x.created_at,x.id)<=(dp.created_at,dp.id))||' for '||d.upstream_model||' on '||p.name FROM deployment_prices dp JOIN deployments d ON d.id=dp.deployment_id JOIN provider_connections p ON p.id=d.provider_connection_id WHERE dp.id=a.resource_id)
       END) FROM audit_events a LEFT JOIN workspaces w ON w.id=a.workspace_id WHERE (a.workspace_id IS NULL OR w.kind IN ('team','project')) AND ($3::uuid IS NULL OR a.actor_user_id=$3) AND NOT (a.action=ANY($4::text[])) ORDER BY a.created_at DESC,a.id LIMIT $1 OFFSET $2").bind(l + 1).bind(o).bind(actor).bind(&excluded).fetch_all(&mut *tx).await?;

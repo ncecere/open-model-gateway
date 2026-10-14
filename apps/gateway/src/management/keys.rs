@@ -43,7 +43,7 @@ pub(super) async fn keys(
     let (mut tx, a) = resources::workspace_snapshot_tx(&s, &u, ws).await?;
     resources::detail_access(&a)?;
     let (l, o) = p.bounds()?;
-    let mut data:Vec<Value>=sqlx::query_scalar(&format!("SELECT {} FROM api_keys k LEFT JOIN key_model_restrictions r ON r.workspace_id=k.workspace_id AND r.governance_key_id=k.governance_key_id WHERE k.workspace_id=$1 AND ($2 OR k.issued_to_user_id=$3) ORDER BY k.created_at DESC,k.id LIMIT $4 OFFSET $5",key_json())).bind(ws).bind(a.admin).bind(u.user_id).bind(l).bind(o).fetch_all(&mut *tx).await?;
+    let mut data:Vec<Value>=sqlx::query_scalar(&format!("SELECT {}||jsonb_build_object('issued_to_name',(SELECT coalesce(nullif(btrim(x.display_name),''),x.email) FROM users x WHERE x.id=k.issued_to_user_id AND (x.id=$3 OR EXISTS(SELECT 1 FROM effective_workspace_memberships em WHERE em.workspace_id=k.workspace_id AND em.user_id=x.id)))) FROM api_keys k LEFT JOIN key_model_restrictions r ON r.workspace_id=k.workspace_id AND r.governance_key_id=k.governance_key_id WHERE k.workspace_id=$1 AND ($2 OR k.issued_to_user_id=$3) ORDER BY k.created_at DESC,k.id LIMIT $4 OFFSET $5",key_json())).bind(ws).bind(a.admin).bind(u.user_id).bind(l).bind(o).fetch_all(&mut *tx).await?;
     with_usage(&mut tx, &mut data, None, ws).await?;
     tx.commit().await?;
     Ok(Json(json!({"data":data})))
@@ -57,7 +57,7 @@ pub(super) async fn key(
 ) -> ApiResult {
     let (mut tx, a) = resources::workspace_tx(&s, &u, ws).await?;
     resources::detail_access(&a)?;
-    let row: Value = sqlx::query_scalar(&format!("SELECT {} FROM api_keys k LEFT JOIN key_model_restrictions r ON r.workspace_id=k.workspace_id AND r.governance_key_id=k.governance_key_id WHERE k.workspace_id=$1 AND k.id=$4 AND ($2 OR k.issued_to_user_id=$3)",key_json())).bind(ws).bind(a.admin).bind(u.user_id).bind(id).fetch_optional(&mut *tx).await?.ok_or_else(missing)?;
+    let row: Value = sqlx::query_scalar(&format!("SELECT {}||jsonb_build_object('issued_to_name',(SELECT coalesce(nullif(btrim(x.display_name),''),x.email) FROM users x WHERE x.id=k.issued_to_user_id AND (x.id=$3 OR EXISTS(SELECT 1 FROM effective_workspace_memberships em WHERE em.workspace_id=k.workspace_id AND em.user_id=x.id)))) FROM api_keys k LEFT JOIN key_model_restrictions r ON r.workspace_id=k.workspace_id AND r.governance_key_id=k.governance_key_id WHERE k.workspace_id=$1 AND k.id=$4 AND ($2 OR k.issued_to_user_id=$3)",key_json())).bind(ws).bind(a.admin).bind(u.user_id).bind(id).fetch_optional(&mut *tx).await?.ok_or_else(missing)?;
     let mut rows = [row];
     with_usage(&mut tx, &mut rows, None, ws).await?;
     tx.commit().await?;

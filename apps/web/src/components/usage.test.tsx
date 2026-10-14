@@ -159,6 +159,9 @@ describe("Usage & costs overview", () => {
     vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(now);
     const loading = markup(<Costs session={session} workspace={team} />);
     expect(loading).toContain("Loading usage"); expect(loading).not.toContain("$0"); expect(loading).toContain("Everyone in Product"); expect(loading).toContain("Oct 1 – Oct 8, 2026 (UTC, today so far)");
+    // The member filter lists this period's most active people, never the whole member list (R06, #67).
+    const filters = testClient(); markup(<Costs session={session} workspace={team} />, [], filters);
+    expect(filters.getQueryCache().findAll().some(q => String(q.queryKey[2]).endsWith("/members"))).toBe(false);
     expect(markup(<Costs session={session} workspace={member} />)).toContain("Your usage in Product");
     expect(markup(<Costs session={session} workspace={personal} />)).toContain("Your usage");
   });

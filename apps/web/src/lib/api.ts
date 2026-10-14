@@ -92,7 +92,11 @@ export type Grant = Pick<Model, "public_name" | "display_name"> & { model_id: st
 export type CostCenter = { id: string; name: string; code: string; archived_at: string | null };
 export type Execution = { id: string; public_model: string; provider: string; state: string; streamed: boolean; input_tokens: string | number | null; output_tokens: string | number | null; elapsed_ms: number | null; started_at: string; error_code: string | null };
 export type Usage = { requests: string | number; input_tokens: string | number | null; output_tokens: string | number | null; unknown_usage_requests: string | number };
-export type Audit = { id: string; actor_user_id: string | null; action: string; resource_type?: string; resource_id?: string | null; workspace_id: string | null; created_at: string; metadata?: Record<string, unknown>; /** Platform audit only: server-derived name for unnamed targets (routes, prices). */ target_name?: string | null };
+export type Audit = { id: string; actor_user_id: string | null; action: string; resource_type?: string; resource_id?: string | null; workspace_id: string | null; created_at: string; metadata?: Record<string, unknown>;
+  /** Names resolved by the gateway under the caller's visibility; null when not visible or unknown. */
+  actor_name?: string | null; target_name?: string | null;
+  /** Platform audit only: the event's Team or Project and, for workspace targets, the target's kind. */
+  workspace_name?: string | null; workspace_kind?: WorkspaceKind | null; target_kind?: WorkspaceKind | null };
 export type Collection<T> = { data: T[]; has_more?: boolean };
 export type OneTimeToken = { id: string; token: string };
 export const platformPath = `${API}/platform`;

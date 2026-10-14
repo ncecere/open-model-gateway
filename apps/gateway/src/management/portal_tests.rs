@@ -161,5 +161,6 @@ async fn platform_audit_names_route_and_price_targets(pool: PgPool) {
     };
     assert_eq!(name("deployment"), "gpt-6-luna on OpenAI");
     assert_eq!(name("price"), "Price v2 for gpt-6-luna on OpenAI");
-    assert_eq!(name("model"), Value::Null);
+    // Named targets are named by the server too (R06, #67): the dashboard no longer loads every model.
+    assert_eq!(name("model"), "company/luna");
 }

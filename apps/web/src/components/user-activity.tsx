@@ -13,10 +13,10 @@
  */
 import { useMemo, useState, type ReactNode } from "react";
 import { Activity as ActivityIcon, FileClock } from "lucide-react";
-import { platformPath, type Audit, type Catalog, type CostCenter, type GroupMapping, type Model, type PlatformUser, type Provider, type Workspace } from "../lib/api";
-import type { DashboardSearch } from "../lib/permissions";
+import { platformPath, type Audit, type PlatformUser, type Workspace } from "../lib/api";
 import type { CostReport, Totals } from "../lib/governance";
 import { Money } from "./templates/money";
+import { auditTarget, auditWorkspace, type AuditTarget } from "../lib/audit-names";
 import { formatCount } from "../lib/reports";
 import { auditEventLabel, kindLabels, last30Days, resourceTypeLabel, splitUsage, type DirectoryWorkspace } from "../lib/people";
 import { DateTime, ErrorNotice, Stack, StatCard, useApi, useChoices } from "./ui";
@@ -30,34 +30,17 @@ import { Table, Td, Tr } from "./ui/table/table";
 import s from "../pages/shared.module.css";
 import p from "./people.module.css";
 
-type Target = { name: string; search?: DashboardSearch };
-const named = <T extends { id: string },>(rows: T[] | undefined, name: (row: T) => string, search?: (row: T) => DashboardSearch) => new Map<string, Target>((rows ?? []).map(r => [r.id, { name: name(r), search: search?.(r) }]));
 const enc = encodeURIComponent;
-const link = (t: Target) => t.search ? <ResourceLink search={t.search}>{t.name}</ResourceLink> : t.name;
-
-/** Names for audit targets from platform lists the Admin/Auditor can already read (shared with the audit log's cache). */
-function useAuditTargets() {
-  const users = useChoices<PlatformUser>(`${platformPath}/users`), shared = useChoices<DirectoryWorkspace>(`${platformPath}/workspaces`);
-  const centers = useChoices<CostCenter>(`${platformPath}/cost-centers`), mappings = useChoices<GroupMapping>(`${platformPath}/oidc/group-mappings`);
-  const models = useChoices<Model>(`${platformPath}/models`), catalogs = useChoices<Catalog>(`${platformPath}/catalogs`), providers = useChoices<Provider>(`${platformPath}/providers`);
-  const spaces = named<Workspace>(shared.data?.filter(w => w.kind !== "personal"), w => w.name, w => ({ page: "workspace-detail", record: w.id, kind: w.kind as "team" | "project" }));
-  const lookup: Record<string, Map<string, Target>> = {
-    user: named(users.data, u => u.email ?? "Retained identity", u => ({ page: "user-detail", record: u.id })), workspace: spaces,
-    cost_center: named(centers.data, c => c.name, () => ({ page: "cost-centers" })), group_mapping: named(mappings.data, m => m.group_value, () => ({ page: "oidc" })),
-    model: named(models.data, m => m.display_name || m.public_name, m => ({ page: "model-detail", record: m.id })), catalog: named(catalogs.data, c => c.name, c => ({ page: "catalog-detail", record: c.id })), provider: named(providers.data, v => v.name, v => ({ page: "provider-detail", record: v.id })),
-  };
-  const target = (e: Audit): Target | undefined => (e.resource_type && e.resource_id ? lookup[e.resource_type]?.get(e.resource_id) : undefined) ?? (e.target_name ? { name: e.target_name } : undefined);
-  return { target, spaces };
-}
+const link = (t: AuditTarget) => t.search ? <ResourceLink search={t.search}>{t.name}</ResourceLink> : t.name;
 
 /** "Recent actions": platform-audit events this person performed. */
 export function UserActions({ user, name }: { user: Pick<PlatformUser, "id">; name: string }) {
-  const [hide, setHide] = useState(true), { target, spaces } = useAuditTargets();
+  const [hide, setHide] = useState(true), target = (e: Audit) => auditTarget(e, { platform: true });
   const columns: DataTableColumn<Audit>[] = [
     { id: "when", header: "When", rowHeader: true, hideable: false, cell: e => <DateTime value={e.created_at} /> },
     { id: "action", header: "Action", cell: e => <CellText primary={auditEventLabel(e)} secondary={<span className={s.mono}>{e.action}</span>} /> },
     { id: "target", header: "Target", cell: e => { const t = target(e); return <CellText primary={t ? link(t) : <Badge size="sm" variant="outline">{resourceTypeLabel(e.resource_type)}</Badge>} secondary={t ? resourceTypeLabel(e.resource_type) : undefined} />; } },
-    { id: "workspace", header: "Team or project", cell: e => { const w = e.workspace_id ? spaces.get(e.workspace_id) : undefined; return w ? link(w) : <span className={s.muted}>—</span>; } },
+    { id: "workspace", header: "Team or project", cell: e => { const w = auditWorkspace(e); return w ? link(w) : <span className={s.muted}>—</span>; } },
   ];
 
   return <Card title="Recent actions" description={`Changes ${name} made, newest first.`}>

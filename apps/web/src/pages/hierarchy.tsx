@@ -39,15 +39,13 @@ type Ask = ReturnType<typeof useAction>;
 const removeGrant = (ask: Ask, user: DirectoryUser, grant: { role: string; source: string }) => ask({ ...grantRemoval(user, grant), danger: true, successNotice: "Grant removed.", run: (_, signal) => api(`${platformPath}/users/${enc(user.id)}/roles/${enc(grant.role)}`, { method: "DELETE", signal }) });
 
 /** The initial-owner field: entitled active users by email, or an ID when the directory can't load. */
-function ownerField(users: DirectoryUser[] | undefined): Field {
-  const options = users?.filter(u => u.platform_role && !u.disabled_at && u.email).map(u => ({ value: u.id, label: u.email! }));
-  return options ? { name: "owner_user_id", label: "Initial owner", type: "select", required: true, options, help: "An active user with a platform role. This creates an independent manual owner membership." } : { name: "owner_user_id", label: "Initial owner user ID", required: true, validate: uuidError, help: "An active user with a platform role. This creates an independent manual owner membership." };
-}
+/** Searched on the server (R06, #67): never a list of every user. */
+const ownerField: Field = { name: "owner_user_id", label: "Initial owner", type: "search", required: true, placeholder: "name@example.com", validate: uuidError, help: "An active user with a platform role. This creates an independent manual owner membership.",
+  search: { path: `${platformPath}/users?status=active&role=any`, option: ((u: DirectoryUser) => u.platform_role && u.email ? { value: u.id, label: u.email } : undefined) as never } };
 
 export function PlatformTeams({ session, kind }: { session: Session; kind: "team" | "project" }) {
   const ask = useAction(), title = kind === "project" ? "Projects" : "Teams", noun = kind === "project" ? "Project" : "Team";
-  const users = useChoices<DirectoryUser>(`${platformPath}/users?status=active`, session.capabilities.create_workspace);
-  const create = session.capabilities.create_workspace && <Button onClick={() => ask({ title: `Create ${kind}`, fields: [nameField, ownerField(users.data)], submitLabel: `Create ${kind}`, run: (v, signal) => api(`${platformPath}/workspaces`, { method: "POST", body: workspaceCreateBody(v, kind), signal }) })}><Plus aria-hidden />{`Create ${kind}`}</Button>;
+  const create = session.capabilities.create_workspace && <Button onClick={() => ask({ title: `Create ${kind}`, fields: [nameField, ownerField], submitLabel: `Create ${kind}`, run: (v, signal) => api(`${platformPath}/workspaces`, { method: "POST", body: workspaceCreateBody(v, kind), signal }) })}><Plus aria-hidden />{`Create ${kind}`}</Button>;
   const detail = (w: Workspace, tab?: string) => ({ page: "workspace-detail" as const, record: w.id, kind, tab });
   const columns: DataTableColumn<DirectoryWorkspace>[] = [
     { id: "name", header: noun, rowHeader: true, hideable: false, cell: w => <PersonCell name={w.name} shape="square"><CellText primary={<ResourceLink search={detail(w)}>{w.name}</ResourceLink>} /></PersonCell> },

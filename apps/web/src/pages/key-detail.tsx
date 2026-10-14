@@ -19,7 +19,7 @@ import { DetailTime } from "../components/templates/when";
 import type { ReactNode } from "react";
 import { FileQuestion, Gauge, LayoutDashboard, ShieldCheck } from "lucide-react";
 import { EmptyState } from "../components/ui/empty-state/empty-state";
-import { ApiError, wsPath, type Grant, type Member, type ServiceAccount } from "../lib/api";
+import { ApiError, wsPath, type Grant, type ServiceAccount } from "../lib/api";
 import { formatMicroUsd, formatUsd } from "../lib/governance";
 import { Money } from "../components/templates/money";
 import { canDisable, canEditKeyLimits, canEnable, canRevoke, canRotate, filterKeys, issuedTo, keyListStatus, keyPill, keyStatus, type KeyRow, type KeyStats, type KeyTotals } from "../lib/keys";
@@ -95,7 +95,6 @@ export function KeyDetail({ session, workspace, id }: Scope & { id: string }) {
   useResourceName(key?.name ?? "API key");
   const listSearch = { status: search.status, q: search.q, risk: search.risk };
   const back = { label: "API keys", search: { page: "keys", ws: workspace.id, ...listSearch } as DashboardSearch };
-  const members = useChoices<Member>(`${wsPath(workspace.id)}/members`, workspace.kind !== "personal" && workspace.capabilities.view_all_activity);
   // Previous/next within the list's current filters and order (every key when this one isn't in the filtered list).
   const filteredList = filterKeys(keys.data ?? [], keyListStatus(search.status), search.q), list = filteredList.some(x => x.id === id) ? filteredList : filterKeys(keys.data ?? [], undefined, search.q), index = list.findIndex(x => x.id === id);
   const target = (other?: KeyRow) => other ? { label: other.name, render: <ResourceLink search={{ page: "key-detail", ws: workspace.id, record: other.id, ...listSearch }} /> } : null;
@@ -118,7 +117,7 @@ export function KeyDetail({ session, workspace, id }: Scope & { id: string }) {
       <DescriptionList dividers items={[
         { label: "Name", value: key.name },
         { label: "Key ID", value: <CopyId value={key.id} label="key ID" /> },
-        { label: "Issued to", value: issuedTo(key, session, accounts.data, members.data) },
+        { label: "Issued to", value: issuedTo(key, session, accounts.data) },
         { label: "Created", value: <DetailTime value={key.created_at} fallback="—" /> },
         { label: "Expires", value: <><DetailTime value={key.expires_at} fallback="—" />{!final && <span className={s.secondary}>Can't be changed. Rotate the key to set a new expiry.</span>}</> },
         { label: "Last used", value: key.last_used_at ? <Time value={key.last_used_at} format="relative" /> : key.last_used_at === null ? "Never" : "Unknown" },
