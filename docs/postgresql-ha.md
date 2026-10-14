@@ -31,7 +31,7 @@ Admission must commit a durable reservation on the primary before anything is se
 An attempt admitted before the failover keeps running upstream. When it ends, the gateway settles it with a 3 s timeout (`ExecutionGuard::finish` in `apps/gateway/src/inference/mod.rs`). If the write fails:
 
 1. The client gets an error: a 503 `accounting_unavailable` for a complete response, or an error event instead of a normal end for a stream.
-2. The execution stays `started` and its reservation `pending`, with the hold in place. `gateway_settlements_total{outcome="held"}` counts it only when the write returns an error within the 3 s. A write that times out (the common case during an outage, since the pool's acquire timeout is also 3 s) is logged as `inference finalization failed; reconciliation required` and shows up later as growth in `gateway_reservations_held{state="unknown"}`.
+2. The execution stays `started` and its reservation `pending`, with the hold in place. `gateway_settlements_total{outcome="held"}` counts it, whether the write failed or timed out; the error log also records `inference finalization failed; reconciliation required`.
 3. A reservation's lease ends `GATEWAY_REQUEST_TIMEOUT_SECONDS` + 5 s after admission. Every 5 s, each replica reconciles expired leases (`reconcile_expired` in `apps/gateway/src/governance.rs`, with `FOR UPDATE SKIP LOCKED` so replicas never collide): the reservation becomes `unknown`, the execution `cancelled` with `lease_expired`, and an `unknown` ledger row is appended.
 4. The hold is kept. Unknown cost is never treated as zero and never refunded automatically ([cancellation and reconciliation](governance.md#cancellation-reconciliation-and-retention)).
 
@@ -171,13 +171,13 @@ Expect one row per standby with `state` `streaming`. The failover target should 
 **Gateway metrics that show a database problem** ([metrics](operations.md#metrics)):
 
 - `gateway_config_listener_up`, `gateway_config_poll_failures_total`: LISTEN session and version poll.
-- `gateway_settlements_total{outcome="held"}`: settlement writes that failed fast. Writes that time out are not counted here; watch the `inference finalization failed` error log and `gateway_reservations_held{state="unknown"}`.
+- `gateway_settlements_total{outcome="held"}`: settlement writes that failed or timed out.
 - `gateway_reservations_held` (`state` `pending` or `unknown`).
 - `gateway_db_pool_connections` against `gateway_db_pool_max_connections`.
 - `gateway_work_leases_held`: exactly one replica reports 1 per lease.
 - `gateway_history_verify_findings`: alert on any finding.
 
-The example rules in `deploy/monitoring/prometheus-rules.yml` include `GatewaySettlementHeld` (fast failures only, see above), `GatewayUnknownReservationsGrowing` (catches timed-out settlements too), `GatewayPendingReservationsHigh` and `GatewayDatabasePoolSaturated` ([alerting](operations.md#alerting-and-dashboards)). Also probe `/health/ready` from outside.
+The example rules in `deploy/monitoring/prometheus-rules.yml` include `GatewaySettlementHeld`, `GatewayUnknownReservationsGrowing`, `GatewayPendingReservationsHigh` and `GatewayDatabasePoolSaturated` ([alerting](operations.md#alerting-and-dashboards)). Also probe `/health/ready` from outside.
 
 ## Managed PostgreSQL
 
