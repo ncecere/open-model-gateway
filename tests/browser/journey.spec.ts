@@ -157,7 +157,7 @@ test("platform admin adds a mock connection and a priced model for Product", asy
   await page.getByRole("tab", { name: /Models/ }).click();
   await page.getByRole("button", { name: "Assign models" }).first().click();
   const assign = page.getByRole("dialog", { name: "Assign models to this team" });
-  await assign.getByRole("checkbox", { name: /Mock Chat/ }).check();
+  await pick(assign, page, "Models", "Mock", "Mock Chat · mock/chat");
   await assign.getByRole("button", { name: "Assign models" }).click();
   await expect(assign).toBeHidden();
   await expect(page.getByRole("tab", { name: /Models 1/ })).toBeVisible();

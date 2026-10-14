@@ -6,10 +6,11 @@
  * workspace), with the platform's financial workspace actions.
  */
 import { useState } from "react";
-import { api, platformPath, platformWorkspacePath, wsPath, type Catalog, type Collection, type CostCenter, type Model, type Session, type Workspace } from "../../lib/api";
+import { api, platformPath, platformWorkspacePath, wsPath, type Catalog, type Collection, type CostCenter, type Session, type Workspace } from "../../lib/api";
 import { Money } from "../../components/templates/money";
 import { canReconcile, type Breakdown, type Cost, type CostReport } from "../../lib/governance";
 import { parseCheckboxValues } from "../../lib/forms";
+import { modelPickField } from "../../lib/model-options";
 import { formatCount, knownSpendText, reconciliationBody, reconciliationFields } from "../../lib/reports";
 import { permissions } from "../../lib/permissions";
 import { saveCsv, usageCsv, EXPORT_MAX_ROWS } from "../../lib/usage-export";
@@ -110,16 +111,17 @@ export function PlatformRecords({ session, ctx, period, nav, workspaceFilter, co
 }
 
 function FinancialWorkspaceActions({ session, workspaceId, name }: { session: Session; workspaceId: string; name: string }) {
-  const ask = useAction(), centers = useChoices<CostCenter>(`${platformPath}/cost-centers`, session.capabilities.platform_write), catalogs = useChoices<Catalog>(`${platformPath}/catalogs`, session.capabilities.platform_write), models = useChoices<Model>(`${platformPath}/models`, session.capabilities.platform_write), path = platformWorkspacePath(workspaceId);
+  const ask = useAction(), centers = useChoices<CostCenter>(`${platformPath}/cost-centers`, session.capabilities.platform_write), catalogs = useChoices<Catalog>(`${platformPath}/catalogs`, session.capabilities.platform_write), path = platformWorkspacePath(workspaceId);
   const [limits, setLimits] = useState(false);
-  const modelField = { name: "model_id", label: "Platform model", type: "select" as const, required: true, options: models.data?.map(m => ({ value: m.id, label: `${m.display_name} · ${m.public_name}` })) ?? [] };
+  // Searched on the server (R06, #68), never a list of every model.
+  const modelField = modelPickField("model_id", "Platform model");
   return <><ActionMenu label={`Administrative configuration for ${name}`} actions={[
     { label: "Assign future cost center…", disabled: !centers.isSuccess, disabledReason: "Loading authorized cost centers", onSelect: () => ask({ title: `Future allocation · ${name}`, description: "Applies to new requests only.", fields: [{ name: "cost_center_id", label: "Cost center", type: "select", options: centers.data?.filter(c => !c.archived_at).map(c => ({ value: c.id, label: `${c.name} · ${c.code}` })) ?? [], help: "Blank: Unallocated." }], submitLabel: "Set allocation", run: (v, signal) => api(path, { method: "PATCH", body: { cost_center_id: v.cost_center_id || null }, signal }) }) },
-    { label: "Assign direct model…", disabled: !models.isSuccess, disabledReason: "Loading platform models", onSelect: () => ask({ title: `Direct model assignment · ${name}`, description: "Independent of catalogs.", fields: [modelField], submitLabel: "Assign direct model", run: (v, signal) => api(`${path}/models`, { method: "POST", body: { model_id: v.model_id }, signal }) }) },
+    { label: "Assign direct model…", onSelect: () => ask({ title: `Direct model assignment · ${name}`, description: "Independent of catalogs.", fields: [modelField], submitLabel: "Assign direct model", run: (v, signal) => api(`${path}/models`, { method: "POST", body: { model_id: v.model_id }, signal }) }) },
     { label: "Replace catalog availability…", disabled: !catalogs.isSuccess, disabledReason: "Loading approved catalogs", onSelect: () => ask({ title: `Replace available catalogs · ${name}`, description: "Replaces the type defaults for this workspace. None checked means no catalogs; direct assignments stay.", fields: [{ name: "catalog_ids", label: "Replacement catalogs", type: "checkboxes", value: "[]", maxSelections: 200, options: catalogs.data?.map(c => ({ value: c.id, label: c.name })) ?? [] }], submitLabel: "Set replacement catalogs", run: (v, signal) => api(`${path}/catalogs`, { method: "PUT", body: { mode: "replace", catalog_ids: parseCheckboxValues(v.catalog_ids) }, signal }) }) },
     { label: "Set custom limits…", onSelect: () => setLimits(true) },
     { label: "Reset catalog inheritance…", onSelect: () => ask({ title: `Reset catalogs · ${name}?`, description: "Removes this workspace's custom catalog list. It will follow the default catalogs for its type again.", submitLabel: "Reset catalog inheritance", run: (_, signal) => api(`${path}/catalogs`, { method: "DELETE", signal }) }) },
     { label: "Reset policy inheritance…", onSelect: () => ask({ title: `Reset ceilings · ${name}?`, description: "Deletes the platform override. Spending isn't reset.", submitLabel: "Reset policy inheritance", run: (_, signal) => api(`${path}/policy`, { method: "DELETE", signal }) }) },
-    { label: "Revoke direct model…", danger: true, disabled: !models.isSuccess, disabledReason: "Loading platform models", onSelect: () => ask({ title: `Revoke direct model · ${name}`, description: "Removes only the direct assignment; catalog access stays.", fields: [modelField], danger: true, submitLabel: "Revoke direct source", run: (v, signal) => api(`${path}/models/${id(v.model_id)}`, { method: "DELETE", signal }) }) },
+    { label: "Revoke direct model…", danger: true, onSelect: () => ask({ title: `Revoke direct model · ${name}`, description: "Removes only the direct assignment; catalog access stays.", fields: [modelField], danger: true, submitLabel: "Revoke direct source", run: (v, signal) => api(`${path}/models/${id(v.model_id)}`, { method: "DELETE", signal }) }) },
   ]} />{limits && <ReplacementLimitsDialog workspaceId={workspaceId} name={name} onClose={() => setLimits(false)} />}</>;
 }

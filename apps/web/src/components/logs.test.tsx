@@ -55,6 +55,16 @@ describe("Logs page", () => {
       expect(paths.some(p => /\/(platform\/workspaces\/team|keys\/k1)$/.test(p.path))).toBe(true);
     }
   });
+  it("searches the Admin Model filter on the server instead of loading every model (R06, #68)", () => {
+    const client = testClient(); markup(nav({ page: "platform-logs", model: "company/smart" }, <LogsPage scope={{ kind: "platform" }} />), [], client);
+    const keys = client.getQueryCache().findAll().map(q => q.queryKey);
+    expect(keys.filter(k => k[3] === "choices" && String(k[2]).startsWith("/api/v1/platform/models")).map(k => k[2])).toEqual([]);
+    expect(keys.some(k => k[2] === "/api/v1/platform/models?limit=20")).toBe(true);
+    // A workspace's Model filter keeps its own (short) model list.
+    const own = testClient(); markup(nav({ page: "requests", ws: "team" }, <LogsPage scope={{ kind: "workspace", workspace: team }} />), [], own);
+    expect(own.getQueryCache().findAll().some(q => q.queryKey[2] === `${ws}/models` && q.queryKey[3] === "choices")).toBe(true);
+    expect(own.getQueryCache().findAll().some(q => String(q.queryKey[2]).startsWith("/api/v1/platform/models"))).toBe(false);
+  });
   it("lists generations (one per attempt) and sessions linking to the session page", () => {
     const g = markup(nav({ page: "requests", ws: "team", tab: "generations" }, <LogsPage scope={{ kind: "workspace", workspace: team }} />), [[`${ws}/generations?limit=50`, { data: [generation], next_cursor: null }]]);
     expect(g).toContain("Backup OpenRouter"); expect(g).toContain("2 (fallback)"); expect(g).toContain("Error");

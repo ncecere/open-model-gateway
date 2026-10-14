@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { validateFields } from "./forms";
 import { awsAccessBody, awsAccessFields, bedrockRegions, bedrockUpstreamError, endpointError, regionValue, validExternalId, validProfileName, validRegion, validRoleArn, validSessionName } from "./bedrock";
 import { deploymentCreateAction, providerBody, providerFields } from "../pages/catalog";
-import { model, provider } from "./test-fixtures";
+import { provider } from "./test-fixtures";
 
 const ROLE = "arn:aws:iam::123456789012:role/gateway/bedrock-invoke";
 const VPCE = "https://vpce-0abc.bedrock-runtime.us-east-1.vpce.amazonaws.com";
@@ -54,8 +54,9 @@ describe("Bedrock connection form", () => {
     for (const ok of ["anthropic.claude-3-5-sonnet-20240620-v1:0", "us.anthropic.claude-3-7-sonnet-20250219-v1:0", "global.anthropic.claude-sonnet-4-20250514-v1:0", "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-3-7-sonnet-20250219-v1:0", "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0"]) expect(bedrockUpstreamError(ok, "us-east-1")).toBeUndefined();
     for (const bad of ["model with space", "arn:aws:bedrock:eu-west-1:123456789012:inference-profile/eu.x", "arn:aws:bedrock:us-east-1::inference-profile/us.x", "arn:aws:bedrock:us-east-1:123456789012:knowledge-base/kb"]) expect(bedrockUpstreamError(bad, "us-east-1")).toBeDefined();
     const bedrock = { ...provider, id: "bedrock-connection", provider: "bedrock", region: "us-east-1" };
-    const fields = deploymentCreateAction({ models: [model], providers: [provider, bedrock] }).fields!, upstream = fields.find(f => f.name === "upstream_model")!;
-    const values = { model_id: model.id, provider_connection_id: bedrock.id, upstream_model: "arn:aws:bedrock:eu-west-1:123456789012:inference-profile/eu.x", enabled: "false" };
+    const fields = deploymentCreateAction({ providers: [provider, bedrock] }).fields!, upstream = fields.find(f => f.name === "upstream_model")!;
+    // A model picked from the server search (its id is a UUID).
+    const values = { model_id: "0190a5f4-7b1e-7c3d-9a2b-4c5d6e7f8a9b", provider_connection_id: bedrock.id, upstream_model: "arn:aws:bedrock:eu-west-1:123456789012:inference-profile/eu.x", enabled: "false" };
     expect(validateFields(fields, values)).toHaveProperty("upstream_model");
     expect(upstream.helpFor!(values)).toContain("inference profile");
     expect(validateFields(fields, { ...values, upstream_model: "us.anthropic.claude-3-7-sonnet-20250219-v1:0" })).toEqual({});

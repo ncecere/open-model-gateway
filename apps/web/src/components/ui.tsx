@@ -101,12 +101,25 @@ function SearchField({ id, search, value, label, placeholder, disabled, onChange
   const found = useApi<Collection<never>>(`${search.path}${search.path.includes("?") ? "&" : "?"}q=${encodeURIComponent(q)}&limit=20`, searchable);
   const items = (searchable ? found.data?.data ?? [] : []).map(search.option).filter((o): o is Option => !!o);
   const options = picked && !items.some(i => i.value === picked.value) ? [picked, ...items] : items;
-  const emptyText = !q ? "Type to search." : found.isFetching ? "Searching…" : found.isError ? "Search failed. Try again." : "No one matches.";
+  const emptyText = !q ? "Type to search." : found.isFetching ? "Searching…" : found.isError ? "Search failed. Try again." : search.emptyText ?? "No one matches.";
   return <Combobox<string> id={id} items={options} filter={null} value={picked?.value ?? null} onValueChange={(_, option) => onChange(option?.value ?? "", option?.label)} onInputValueChange={setText} placeholder={placeholder} emptyText={emptyText} disabled={disabled} limit={20} />;
+}
+/** `search.multiple`: several picks as chips; `value` is their JSON array and `labels` names each (kept by the form, like SearchField's label). */
+function MultiSearchField({ id, search, value, labels, placeholder, disabled, onChange }: { id: string; search: NonNullable<Field["search"]>; value: string; labels: Record<string, string>; placeholder?: string; disabled: boolean; onChange: (value: string, labels: Record<string, string>) => void }) {
+  const [text, setText] = useState(""), [q, setQ] = useState("");
+  useEffect(() => { const timer = setTimeout(() => setQ(text.trim()), 250); return () => clearTimeout(timer); }, [text]);
+  let picked: string[]; try { picked = parseCheckboxValues(value || "[]"); } catch { picked = []; }
+  const searchable = q.length > 0 && q.length <= 200;
+  const found = useApi<Collection<never>>(`${search.path}${search.path.includes("?") ? "&" : "?"}q=${encodeURIComponent(q)}&limit=20`, searchable);
+  const items = (searchable ? found.data?.data ?? [] : []).map(search.option).filter((o): o is Option => !!o);
+  const options = [...picked.filter(v => !items.some(i => i.value === v)).map(v => ({ value: v, label: labels[v] ?? v })), ...items];
+  const emptyText = !q ? "Type to search." : found.isFetching ? "Searching…" : found.isError ? "Search failed. Try again." : search.emptyText ?? "No one matches.";
+  return <Combobox<string> multiple id={id} items={options} filter={null} value={picked} onValueChange={(next, chosen) => onChange(JSON.stringify(next), Object.fromEntries(chosen.map(o => [o.value, o.label])))} onInputValueChange={setText} placeholder={placeholder} emptyText={emptyText} disabled={disabled} limit={20 + picked.length} />;
 }
 function ActionDialog({ action, onClose }: { action: Action; onClose: (success: boolean) => void }) {
   const client = useQueryClient(), fields = action.fields ?? [], id = useId();
-  const [values, setValues] = useState<Values>(() => Object.fromEntries(fields.map(field => [field.name, field.value ?? (field.type === "checkboxes" ? "[]" : "")])));
+  const [values, setValues] = useState<Values>(() => Object.fromEntries(fields.map(field => [field.name, field.value ?? (field.type === "checkboxes" || field.type === "search" && field.search?.multiple ? "[]" : "")])));
+  const [multiLabels, setMultiLabels] = useState<Record<string, Record<string, string>>>({});
   // Labels of search fields' current values (the edit form's initial choice, then each pick).
   const [searchLabels, setSearchLabels] = useState<Record<string, string | undefined>>(() => Object.fromEntries(fields.filter(field => field.type === "search" && field.value).map(field => [field.name, field.search?.initialLabel])));
   const initial = useRef(values), dirty = JSON.stringify(values) !== JSON.stringify(initial.current);
@@ -169,6 +182,7 @@ function ActionDialog({ action, onClose }: { action: Action; onClose: (success: 
       const help = field.helpFor?.(values) ?? field.help;
       if (field.type === "switch") return <Switch key={field.name} id={fieldId} label={field.label} description={help} checked={values[field.name] === "true"} disabled={busy} onCheckedChange={checked => changeValue(field.name, String(checked))} />;
       if (field.type === "checkboxes") return <CheckboxesField key={field.name} field={{ ...field, help }} id={fieldId} value={values[field.name] ?? "[]"} error={errors[field.name]} disabled={busy} onChange={value => changeValue(field.name, value)} />;
+      if (field.type === "search" && field.search?.multiple) return <FormField key={field.name} name={field.name} label={field.label} labelHint={field.hint ?? (!(field.required || field.requiredWhen?.(values)) ? "Optional" : undefined)} description={help} error={errors[field.name]}><MultiSearchField id={fieldId} search={field.search} value={values[field.name] ?? "[]"} labels={multiLabels[field.name] ?? {}} placeholder={field.placeholder} disabled={busy} onChange={(value, labels) => { setMultiLabels(previous => ({ ...previous, [field.name]: labels })); changeValue(field.name, value); }} /></FormField>;
       if (field.type === "search" && field.search) return <FormField key={field.name} name={field.name} label={field.label} labelHint={field.hint ?? (!(field.required || field.requiredWhen?.(values)) ? "Optional" : undefined)} description={help} error={errors[field.name]}><SearchField id={fieldId} search={field.search} value={values[field.name] ?? ""} label={searchLabels[field.name]} placeholder={field.placeholder} disabled={busy} onChange={(value, label) => { setSearchLabels(previous => ({ ...previous, [field.name]: label })); changeValue(field.name, value); }} /></FormField>;
       if (field.type === "select" && field.display === "icon-select") return <IconSelectField key={field.name} field={{ ...field, help }} id={fieldId} value={values[field.name] ?? ""} error={errors[field.name]} disabled={busy} onChange={value => changeValue(field.name, value)} />;
       if (field.type === "select" && field.display === "cards") return <CardChoiceField key={field.name} field={{ ...field, help }} id={fieldId} value={values[field.name] ?? ""} error={errors[field.name]} disabled={busy} onChange={value => changeValue(field.name, value)} />;

@@ -98,8 +98,9 @@ describe("Catalog page", () => {
   const detail: CatalogSummary = { ...catalogs[0]!, own_choice: { workspaces: [{ id: "t1", name: "Research team", kind: "team", disabled: false }, { id: "p1", name: "Old project", kind: "project", disabled: true }], personal_count: 2 } };
   const other: Model = { ...model, id: "m3", public_name: "company/new", display_name: "New model" };
   const linked: Model[] = [{ ...model, id: "m1", public_name: "openai/gpt-x", display_name: "GPT X" }];
-  const fixtures = { [`${platformPath}/catalogs/approved`]: detail, [catalogDefaultsPath]: defaults };
-  const choices = { [`${platformPath}/catalogs/approved/models`]: linked, [`${platformPath}/models`]: [...linked, other] };
+  // Models to add are searched on the server (R06, #68): `/platform/models?q=…&limit=20`, never loaded in full.
+  const fixtures = { [`${platformPath}/catalogs/approved`]: detail, [catalogDefaultsPath]: defaults, [`${platformPath}/models`]: { data: [...linked, other] } };
+  const choices = { [`${platformPath}/catalogs/approved/models`]: linked };
   it("lists models and adds more through a picker (keeping the existing ones)", async () => {
     const user = userEvent.setup(), api = serve(fixtures, choices);
     mount(<CatalogDetail session={admin} id="approved" onTabChange={vi.fn()} />, api.client);
@@ -107,7 +108,13 @@ describe("Catalog page", () => {
     await user.click(screen.getByRole("button", { name: "Add models" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).queryByText(/GPT X/)).toBeNull();
-    await user.click(within(dialog).getByRole("checkbox", { name: /New model/ }));
+    await user.type(within(dialog).getByRole("combobox", { name: "Models" }), "e");
+    await user.click(await screen.findByRole("option", { name: "New model · company/new" }));
+    // Models already in the catalog aren't offered.
+    expect(screen.queryByRole("option", { name: /GPT X/ })).toBeNull();
+    const keys = api.client.getQueryCache().findAll().map(q => q.queryKey);
+    expect(keys.filter(k => k[3] === "choices" && String(k[2]).startsWith(`${platformPath}/models`))).toEqual([]);
+    expect(keys.some(k => k[2] === `${platformPath}/models?q=e&limit=20`)).toBe(true);
     await user.click(within(dialog).getByRole("button", { name: "Add models" }));
     await waitFor(() => expect(api.writes()).toEqual([{ url: `${platformPath}/catalogs/approved/models`, method: "PUT", body: { model_ids: ["m1", "m3"] } }]));
   });
