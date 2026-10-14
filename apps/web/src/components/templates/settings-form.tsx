@@ -33,19 +33,23 @@ export function SettingsForm({ fields, writable, onSave, description, allowPrist
   const [values, setValues] = useState<Values>(initial), [saved, setSaved] = useState<Values>(initial), [errors, setErrors] = useState<Record<string, string>>({}), [error, setError] = useState<unknown>(), [busy, setBusy] = useState(false), [notice, setNotice] = useState("");
   const [pristineSubmitted, setPristineSubmitted] = useState(false);
   const dirty = JSON.stringify(values) !== JSON.stringify(saved), creatingOverride = allowPristineSubmit && !pristineSubmitted, canSubmit = writable && (dirty || creatingOverride), id = useId(), client = useQueryClient(), nav = useDashboardNavigation(), controller = useRef<AbortController | undefined>(undefined);
-  const incoming = JSON.stringify(initial()), applied = useRef(incoming);
+  const incoming = JSON.stringify(initial()), applied = useRef(incoming), justSaved = useRef(false);
   useEffect(() => {
     // Query invalidation/reset must refresh pristine controls, not just labels.
     // Preserve a pending draft; once discarded, apply the latest server values.
     if (busy || dirty || incoming === applied.current) return;
     applied.current = incoming;
     const next = JSON.parse(incoming) as Values;
-    setValues(next); setSaved(next); setErrors({}); setError(undefined); setNotice("");
+    setValues(next); setSaved(next); setErrors({}); setError(undefined);
+    // The refetch right after a save brings back what was saved (possibly
+    // normalised by the server): refresh the controls, keep "Settings saved." (#164).
+    if (justSaved.current) justSaved.current = false; else setNotice("");
   }, [incoming, dirty, busy]);
   useEffect(() => () => controller.current?.abort(), []);
   useEffect(() => { if (!allowPristineSubmit) setPristineSubmitted(false); }, [allowPristineSubmit]);
   const changeValue = (name: string, value: string) => {
     if (!writable || busy || values[name] === value) return;
+    justSaved.current = false;
     setValues(prev => ({ ...prev, [name]: value }));
     // Validation can depend on other fields. Release controlled invalid state so
     // Base UI lets the next submit revalidate the current values.
@@ -55,7 +59,7 @@ export function SettingsForm({ fields, writable, onSave, description, allowPrist
     event.preventDefault(); if (!canSubmit || busy) return;
     const validation = validateFields(fields, values); setErrors(validation); if (Object.keys(validation).length) { document.getElementById(`${id}-${Object.keys(validation)[0]}`)?.focus(); return; }
     const request = new AbortController(); controller.current = request; setBusy(true); setError(undefined); setNotice("");
-    try { await onSave(values, request.signal); if (request.signal.aborted) return; setSaved(values); if (creatingOverride) setPristineSubmitted(true); setNotice("Settings saved."); void client.invalidateQueries({ queryKey: ["api"] }); void client.invalidateQueries({ queryKey: ["session"] }); }
+    try { await onSave(values, request.signal); if (request.signal.aborted) return; setSaved(values); if (creatingOverride) setPristineSubmitted(true); setNotice("Settings saved."); justSaved.current = true; void client.invalidateQueries({ queryKey: ["api"] }); void client.invalidateQueries({ queryKey: ["session"] }); }
     catch (error) { if (!request.signal.aborted) setError(error); } finally { if (!request.signal.aborted) setBusy(false); }
   }
   if (!writable) return <Stack gap={4}>{description && <p>{description}</p>}<ReadOnlyFields fields={fields} values={saved} /></Stack>;
