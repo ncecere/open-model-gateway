@@ -54,7 +54,7 @@ Other provider credentials not covered by the four built-in `_FILE` names use `g
 
 - **External** (default): set `cnpg.cluster.enabled=false` and point `secrets.database.*` /
   `secrets.migrator.existingSecret` at your own PostgreSQL 17 (managed HA, Patroni, or an existing
-  CNPG Cluster you manage outside this chart). See `docs/operations.md` "HA PostgreSQL".
+  CNPG Cluster you manage outside this chart). See [HA PostgreSQL](postgresql-ha.md).
 - **Chart-managed CNPG** (`cnpg.cluster.enabled=true`): the chart renders a `Cluster` (2 instances,
   `minSyncReplicas: 1`, synchronous replication, `local-ssd` storage, anti-affinity across nodes,
   the tuning starting points from `docs/operations.md` "Tuning starting points") and a `Pooler`
@@ -149,7 +149,7 @@ refunded or charged twice (#25).
   during voluntary disruption and rollout.
 - `cnpg.pooler.instances` and `cnpg.pooler.parameters.default_pool_size` size the PgBouncer tier;
   size `max_client_conn` for `replicaCount × GATEWAY_DATABASE_MAX_CONNECTIONS` plus headroom
-  (`docs/operations.md` "Connection budget").
+  ([connection sizing](postgresql-ha.md#connection-sizing)).
 - Scale the gateway with `kubectl scale` or the HPA; scale CNPG with `cnpg.cluster.instances`
   (requires a migrating upgrade is not pending) — see `docs/operations.md` for connection sizing.
 

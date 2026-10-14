@@ -35,6 +35,7 @@ Notes for changes on `main` since v0.4.0. They become the next release's notes.
 ## Operations
 
 - Encrypted, off-host backups (#104). `scripts/backup.py backup --encrypt-to age1…` streams `pg_dump` through [age](https://age-encryption.org), so the plaintext dump never reaches disk. `verify --identity` checks the decrypted plaintext; `restore --identity` decrypts in two passes without writing plaintext. Manifests record the file-store key IDs that stored files use, and restore refuses unless `--file-keys-env` holds all of them (or `--skip-file-key-check`). New `upload`, `list`, `download` and `prune` copy generations to S3-compatible storage (SigV4, standard library only; the archive is uploaded before its manifest; prune is a dry run without `--yes`). These are logical dumps, not point-in-time recovery; see [operations](../operations.md#encrypted-backups) for key custody.
+- New [HA PostgreSQL operations](../postgresql-ha.md) guide (#27): what the gateway does during a primary failover, synchronous versus asynchronous replication, connection sizing, CNPG base backups and WAL archiving next to logical backups, monitoring and managed PostgreSQL requirements, with the measurements from #25 and what is not yet measured.
 
 ## Verification
 

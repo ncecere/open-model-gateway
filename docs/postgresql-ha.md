@@ -1,0 +1,200 @@
+# HA PostgreSQL operations
+
+For operators running two or more gateway replicas on highly available PostgreSQL (a primary with at least one standby, managed by CloudNativePG (CNPG), Patroni or a cloud service). It covers what the gateway does when the primary fails over, replication, connection sizing, backups and monitoring. Details live in the [operations runbook](operations.md) and the [Kubernetes guide](kubernetes.md).
+
+Measurements come from the bitop-talos homelab on 2026-10-14 (UTC, #25): CloudNativePG 1.30.1, PostgreSQL 17.6, a primary plus one synchronous standby (`ANY 1`, quorum) on `local-ssd`, PgBouncer 1.25.2 in transaction mode through the CNPG Pooler, and 1, 3 and 6 gateway replicas. Gaps are listed in [Not yet measured](#not-yet-measured).
+
+## Checklist
+
+- Use a synchronous standby as the failover target ([replication](#synchronous-or-asynchronous-replication)).
+- With chart-managed CNPG, keep `cnpg.cluster.smartShutdownTimeout` short (chart default 15 s, [failover timing](kubernetes.md#failover-timing)).
+- Point `GATEWAY_LISTEN_DATABASE_URL` at the primary directly, never at a transaction-mode pooler ([PgBouncer caveats](kubernetes.md#pgbouncer-caveats-read-before-enabling-the-pooler)).
+- Size PgBouncer and `max_connections` for every consumer in [Connection sizing](#connection-sizing).
+- Take base backups with WAL archiving for point-in-time recovery, and encrypted logical backups with `scripts/backup.py` ([backups](#backups)).
+- Run the [restore drill](operations.md#restore-drill-quarterly-and-after-schema-changes) quarterly and after schema changes.
+
+## What happens during a primary failover
+
+The gateway has no failover logic of its own. It reaches the primary through a host name (the CNPG `-rw` service, the Pooler service, or a managed writer endpoint) and relies on that name moving to the new primary. While no primary is reachable, it refuses new work instead of serving it unaccounted.
+
+### Database connections
+
+- The main pool (`GATEWAY_DATABASE_MAX_CONNECTIONS` per replica) waits at most 3 s for a connection, then the operation fails.
+- `/health/ready` fails its `database` check when a pooled connection does not answer within 2 s, so replicas become unready while the primary is unreachable ([health endpoints](operations.md#health-endpoints)). `/health/live` does not touch the database, so Kubernetes does not restart gateway pods because the database is down.
+
+### New requests
+
+Admission must commit a durable reservation on the primary before anything is sent upstream. If no database connection is available within 3 s (the pool's acquire timeout), the request fails with 503 `accounting_unavailable`. If the primary accepts the connection but the statement or commit hangs (for example, waiting for a synchronous standby that is being promoted), admission has no statement timeout of its own: it waits until the request deadline and fails with 504 `timeout_error`. Either way, no upstream work starts. Time spent waiting for admission counts toward `GATEWAY_REQUEST_TIMEOUT_SECONDS`. The gateway does not retry a failed admission.
+
+### In-flight requests and settlement
+
+An attempt admitted before the failover keeps running upstream. When it ends, the gateway settles it with a 3 s timeout (`ExecutionGuard::finish` in `apps/gateway/src/inference/mod.rs`). If the write fails:
+
+1. The client gets an error: a 503 `accounting_unavailable` for a complete response, or an error event instead of a normal end for a stream.
+2. The execution stays `started` and its reservation `pending`, with the hold in place. `gateway_settlements_total{outcome="held"}` counts it only when the write returns an error within the 3 s. A write that times out (the common case during an outage, since the pool's acquire timeout is also 3 s) is logged as `inference finalization failed; reconciliation required` and shows up later as growth in `gateway_reservations_held{state="unknown"}`.
+3. A reservation's lease ends `GATEWAY_REQUEST_TIMEOUT_SECONDS` + 5 s after admission. Every 5 s, each replica reconciles expired leases (`reconcile_expired` in `apps/gateway/src/governance.rs`, with `FOR UPDATE SKIP LOCKED` so replicas never collide): the reservation becomes `unknown`, the execution `cancelled` with `lease_expired`, and an `unknown` ledger row is appended.
+4. The hold is kept. Unknown cost is never treated as zero and never refunded automatically ([cancellation and reconciliation](governance.md#cancellation-reconciliation-and-retention)).
+
+A cancelled request (client disconnect) is finalized in the background with the same 3 s limit and follows the same path when that write fails.
+
+### Configuration listener and caches
+
+Each replica holds one LISTEN session (`GATEWAY_LISTEN_DATABASE_URL`) and also polls configuration versions through its pool every second ([caches and change notifications](governance.md#caches-and-change-notifications)).
+
+- The LISTEN session stays open as long as the old primary keeps it. While it is open, `gateway_config_listener_up` stays 1 even though no notifications arrive from the new primary.
+- When the session ends, the replica reconnects with backoff (250 ms, doubling up to 10 s) and flushes every cache on reconnect. `gateway_config_listener_up` is 0 until then.
+- If no version poll has succeeded for 3 s, every cache is bypassed and reads go to the database live. Admission never uses the caches, so a stale cache cannot admit a revoked key.
+
+### Background work leases
+
+Singleton jobs run under fenced work leases (30 s term, renewed every 10 s), so a replica that lost contact cannot commit after its term ended; the leases are renewed or taken over once the database is back ([background work leases](governance.md#background-work-leases)). Reservation reconciliation is not leased: every replica runs it.
+
+### Measured failover
+
+- With CNPG's default `smartShutdownTimeout` of 180 s, deleting the primary under load kept writes down for about 3 minutes, because pooled and LISTEN sessions never disconnect on their own.
+- The chart now sets 15 s (`cnpg.cluster.smartShutdownTimeout`). Promotion then took under a minute, measured without load.
+- In the run under load, 109 attempts interrupted by the failover were reconciled as `unknown` with their holds retained. No reservation stayed `pending`, nothing was charged twice, and `budget verify` and `history verify` reported no findings.
+
+### After a failover
+
+1. Confirm the new primary accepts writes and `/health/ready` returns 200 on every replica.
+2. Check that `sum(gateway_config_listener_up)` equals the replica count.
+3. Watch `gateway_reservations_held{state="pending"}` return to its usual level once the leases expire. Use `max` across replicas ([metrics](operations.md#metrics)).
+4. Run `open-model-gateway budget verify` and `open-model-gateway history verify`. Both must report no mismatch or finding. Run full scans off-peak on large installations.
+5. Review the new `unknown` reservations and resolve them with evidence. They keep their holds and can block budgeted admission (`unresolved_usage`) until resolved. Never delete reservations.
+6. Confirm that a new standby is streaming and synchronous again (see [Monitoring](#monitoring)).
+
+## Gateway replica restarts
+
+Measured on bitop-talos (#25):
+
+- **Graceful pod delete:** the replica finished its in-flight work before exiting (3,600 of 3,600 requests succeeded). The chart allows `gateway.terminationGracePeriodSeconds: 150`, which is longer than the default 120 s request timeout plus the 10 s `preStop` sleep.
+- **Hard kill mid-stream:** 28 streams were cut. All 28 reservations were reconciled as `unknown` with their holds kept.
+
+## Synchronous or asynchronous replication
+
+The chart-managed CNPG cluster uses synchronous replication (`minSyncReplicas: 1`, `maxSyncReplicas: 1`, two instances). Keep `synchronous_commit=on` ([PostgreSQL settings](operations.md#postgresql-settings-for-hot-rows-and-group-commit)).
+
+**Synchronous.** PostgreSQL acknowledges a commit only after a synchronous standby has flushed it. An admission the gateway acted on therefore exists on the standby, and a failover to that standby loses no acknowledged admission, settlement or management change. The measured failover above used this setup.
+
+The cost is commit latency: every commit waits for the standby. On bitop-talos, above about 150 req/s the limit was primary CPU plus WAL writes and synchronous-replication commit waits. On slow-flush storage or with a synchronous standby, the runbook suggests trying `commit_delay` (see [group commit](operations.md#postgresql-settings-for-hot-rows-and-group-commit)). Also check what your platform does when no synchronous standby is connected. PostgreSQL itself makes commits wait; operators and managed services may relax that automatically. This guide has not tested it.
+
+**Asynchronous.** Commits do not wait for the standby, so a failover can lose the most recent committed transactions. For the gateway that means:
+
+- A lost admission: the upstream attempt was dispatched, but its reservation does not exist on the new primary. Its cost is never held or recorded, and its settlement fails.
+- A lost settlement: the reservation is `pending` again on the new primary and is reconciled as `unknown`, with its hold kept.
+- A lost management change, such as a key revocation or a budget reduction, is undone.
+
+What asynchronous replication saves in throughput or latency has not been measured. The runbook does recommend an asynchronous hot standby for the [reporting replica](operations.md#read-snapshots-and-the-reporting-replica), which never takes writes.
+
+## Connection sizing
+
+Every replica uses these connections:
+
+| Consumer | Connections | Target |
+|---|---|---|
+| Main pool | up to `GATEWAY_DATABASE_MAX_CONNECTIONS` (default 10, chart 32, range 2–500) | PgBouncer or the primary |
+| LISTEN session | 1, when `GATEWAY_CONFIG_CACHE=on` | the primary directly |
+| Reporting pool (optional) | up to `GATEWAY_DATABASE_MAX_CONNECTIONS`, opened lazily | the standby set in `GATEWAY_REPORTING_DATABASE_URL` |
+
+Inside the main pool, scoped admissions use at most half the connections and settlements three tenths. The rest is left for authentication and routing.
+
+Outside the replicas:
+
+- `migrate` and `grants apply` hold one session with a session-level advisory lock, so they must connect to the primary directly, never through PgBouncer.
+- `scripts/backup.py backup` runs one `pg_dump` session.
+- Every CLI command (`budget verify`, `history verify`, `partitions`, `archive`, `wait-for-database` and others) opens its own connections; budget at least one per running command.
+- Leave room for your platform's own sessions (the Pooler's `auth_query`, monitoring, `superuser_reserved_connections`).
+
+Worked example with the chart defaults (`replicaCount: 3`, pool 32, Pooler `instances: 2`, `max_client_conn: 200`, `default_pool_size: 25`):
+
+- **Gateway to PgBouncer:** up to 3 × 32 = 96 client connections. Each PgBouncer instance enforces its own `max_client_conn`, and the Service may not spread connections evenly, so size every instance for the total plus headroom. At 6 replicas the total is 192, close to the default 200.
+- **PgBouncer to PostgreSQL:** up to 2 × 25 = 50 server connections for the runtime role. Size `default_pool_size` for the connections that are actually busy, not the maximum ([PgBouncer](operations.md#pgbouncer)).
+- **Direct to the primary:** 3 LISTEN sessions, plus the migrator, backups and tools while they run.
+- **Standby:** 3 × 32 = 96 reporting connections if the reporting replica is enabled. PostgreSQL requires a hot standby's `max_connections` to be at least the primary's, so set both to the larger need.
+
+The chart does not set `max_connections`; check it with `SHOW max_connections`. In CNPG mode the reporting URL targets the `-ro` service, which with two instances is the synchronous standby.
+
+### Database sizing
+
+Measured on bitop-talos (#25):
+
+- The chart's default database (2 CPU and 2 GiB, `shared_buffers` 256 MB, Pooler limited to 500m CPU) collapsed at 50 req/s.
+- 6 CPU and 8 GiB with `shared_buffers` 2 GB handled 100–150 req/s cleanly, with p50 latency of 70–90 ms.
+- Above about 150 req/s, primary CPU plus WAL writes and synchronous-replication commit waits were the limit.
+- Some runs stalled for 1–5 s on row-lock queues behind slow commits. #132 tracks this. A fix for the health-row amplifier is in PR #133, and these capacity numbers will be measured again after it.
+
+Override `cnpg.cluster.resources` and `cnpg.cluster.postgresql.parameters` for production; the chart defaults are not a capacity claim.
+
+## Backups
+
+Use both kinds of backup.
+
+| | CNPG base backups and WAL archive | `scripts/backup.py` |
+|---|---|---|
+| What it holds | A physical copy of the cluster plus continuous WAL | A logical `pg_dump` of the gateway database, age-encrypted, with a checksummed manifest and the migration lineage |
+| Recovery point | Any time covered by a base backup and the WAL archived after it | The moment the dump was taken; the RPO is the backup interval |
+| Restores into | A new cluster | A new, empty database, checked against the release that will serve it |
+| Guide | [Point-in-time recovery](operations.md#point-in-time-recovery) | [Backups and restore](operations.md#backups-and-restore), [encrypted backups](operations.md#encrypted-backups) |
+
+Point-in-time recovery needs both parts: a base backup alone restores only to the end of that backup, and archived WAL is useless without a base backup to replay it onto.
+
+**CNPG.** `cnpg.cluster.backup.enabled=true` renders `backup.barmanObjectStore` on the `Cluster` from `cnpg.cluster.backup.barmanObjectStore`, plus a `ScheduledBackup` (`cnpg.cluster.backup.scheduledBackup.schedule`, default `"0 0 3 * * *"`, daily). Put the destination path and credentials inside `barmanObjectStore`. The template renders only that map, not the separate `cnpg.cluster.backup.destinationPath` value. CloudNativePG archives WAL through this setting, and its documentation marks the native `barmanObjectStore` interface as deprecated in favour of the Barman Cloud Plugin, which the chart does not configure. The chart has no recovery bootstrap: create the recovery cluster yourself, then run steps 3–5 of the [restore drill](operations.md#restore-drill-quarterly-and-after-schema-changes) against it before cutting over. See also [Kubernetes backups](kubernetes.md#backups).
+
+**Logical.** The clean-host [restore drill](operations.md#restore-drill-quarterly-and-after-schema-changes) (#105) measured an RPO of 48 s (the time since the last backup) and an RTO of 92 s on the homelab, including creating the environment. A large installation restores more slowly; time your own.
+
+**After any restore:**
+
+- Reservations still `pending` at the recovery point are reconciled as `unknown` once their leases expire and a gateway runs.
+- Requests served after the recovery point are missing from the ledger.
+- Run `budget verify`, `history verify` and `partitions status`.
+
+**Partition archival.** `archive partition` exports a closed month, then detaches its partitions into the `omg_archive` schema, or drops them with `--drop` ([archival](operations.md#history-partitions-rollups-and-archival-p6)). Detached partitions stay in both kinds of backup until dropped. After `--drop`, later backups no longer contain the month, and the export directory is the only copy. Keep exports for as long as you need the data, regardless of backup pruning (`backup.py prune --keep`). Restoring to a point before an archival brings the month back as live partitions.
+
+## Monitoring
+
+**Replication.** On the primary:
+
+```sql
+SELECT application_name, state, sync_state, write_lag, flush_lag, replay_lag
+FROM pg_stat_replication;
+```
+
+Expect one row per standby with `state` `streaming`. The failover target should show `sync_state` `quorum` (with `ANY`) or `sync`. On a standby, `now() - pg_last_xact_replay_timestamp()` is the age of the last replayed commit. The gateway uses a similar check to send reads back to the primary when the reporting replica is more than `GATEWAY_REPORTING_MAX_LAG_SECONDS` behind. It logs a warning for each fallback and exports no metric for it.
+
+**MultiXacts.** Alert on `mxid_age(datminmxid)` well before `autovacuum_multixact_freeze_max_age`, and watch `pg_stat_slru` for the `multixact_offset` and `multixact_member` caches. Queries and thresholds are in [MultiXacts](operations.md#multixacts-and-history-parent-checks).
+
+**Autovacuum.** Watch `n_dead_tup` and `last_autovacuum` in `pg_stat_user_tables` for `budget_totals`, `rate_minute_counters`, `inflight_counters` and the current month's `governance_reservations_p*` and `inference_executions_p*` partitions. Keep long transactions off the primary. Recommended server settings are in [PostgreSQL settings](operations.md#postgresql-settings-for-hot-rows-and-group-commit).
+
+**Partitions ahead.** `gateway_history_partition_months_ahead{table}` shows how many future months exist. Below 2, the built-in `partitions_missing` incident opens (critical below 1). `open-model-gateway partitions status` exits 1 in the same case.
+
+**Gateway metrics that show a database problem** ([metrics](operations.md#metrics)):
+
+- `gateway_config_listener_up`, `gateway_config_poll_failures_total`: LISTEN session and version poll.
+- `gateway_settlements_total{outcome="held"}`: settlement writes that failed fast. Writes that time out are not counted here; watch the `inference finalization failed` error log and `gateway_reservations_held{state="unknown"}`.
+- `gateway_reservations_held` (`state` `pending` or `unknown`).
+- `gateway_db_pool_connections` against `gateway_db_pool_max_connections`.
+- `gateway_work_leases_held`: exactly one replica reports 1 per lease.
+- `gateway_history_verify_findings`: alert on any finding.
+
+The example rules in `deploy/monitoring/prometheus-rules.yml` include `GatewaySettlementHeld` (fast failures only, see above), `GatewayUnknownReservationsGrowing` (catches timed-out settlements too), `GatewayPendingReservationsHigh` and `GatewayDatabasePoolSaturated` ([alerting](operations.md#alerting-and-dashboards)). Also probe `/health/ready` from outside.
+
+## Managed PostgreSQL
+
+Amazon RDS, Google Cloud SQL and Azure Database for PostgreSQL have not been tested with the gateway. Check that your service meets these requirements:
+
+- **PostgreSQL 17.** CI, staging and the chart's image use PostgreSQL 17.
+- **No extensions.** None of the migrations in `apps/gateway/enterprise_migrations` creates an extension, and backups dump only `plpgsql`. If the service adds extensions to `template1`, create the gateway database from `template0`, as the restore drill does; readiness refuses unknown relations in the gateway database's `public` schema. `pg_stat_statements` is optional and belongs in the `postgres` database ([slow queries](operations.md#finding-slow-queries-and-lock-waits)).
+- **Advisory locks.** Admission and management use transaction-scoped advisory locks, which work through transaction pooling. `migrate` and `grants apply` take a session-level advisory lock and must connect directly.
+- **LISTEN/NOTIFY on a direct connection.** Point `GATEWAY_LISTEN_DATABASE_URL` at the writer endpoint, not at a transaction-pooling proxy. `NOTIFY` from triggers works through any pool. Without LISTEN, caches still follow changes through the 1 s poll.
+- **Roles with explicit grants, no superuser.** The migrator owns the database and its `public` schema. The runtime role is named `gateway_runtime`, because `deploy/staging/runtime-grants.sql` grants to that name. Use [`deploy/staging/init-db.sql`](../deploy/staging/init-db.sql) as the template, and never run the gateway as the service's administrator user. After every `migrate`, run `open-model-gateway grants apply` as the migrator, then `grants verify` with a role that can `SET ROLE gateway_runtime` ([staging roles](staging.md#database-authority-and-releases)).
+- **TLS.** Use `sslmode=verify-full` with the provider's CA.
+- **Failover.** Use the service's writer endpoint for `DATABASE_URL` and `GATEWAY_LISTEN_DATABASE_URL`, and the service's PITR for point-in-time recovery. Keep encrypted logical backups as well. The failover timings in this guide are for CNPG only.
+
+## Not yet measured
+
+- A PgBouncer Pooler restart under load.
+- A dropped LISTEN connection, including a connection that dies without closing.
+- Failover under load with `smartShutdownTimeout` at 15 s (only measured without load).
+- What synchronous replication costs compared with asynchronous.
+- Clean capacity after #132.
