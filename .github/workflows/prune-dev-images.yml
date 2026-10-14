@@ -43,6 +43,7 @@ jobs:
       # URL-encoded package names, one per line
       PACKAGES: |
         open-model-gateway
+        open-model-gateway-loadtest
       OLDER_THAN_DAYS: ${{ inputs.older_than_days || '14' }}
       DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
     steps:
