@@ -26,6 +26,10 @@ Notes for changes on `main` since v0.4.0. They become the next release's notes.
 
 - Helm: a first install with `migrations.run=true` is now one step, including the chart-managed CloudNativePG Cluster. The migration Job runs as a plain resource on install (a `pre-upgrade` hook on upgrades) and waits for the database; gateway pods wait for the schema (`wait-for-database --schema`) instead of crash-looping. New `open-model-gateway wait-for-database [--schema]` (#19).
 
+## Operations
+
+- Encrypted, off-host backups (#104). `scripts/backup.py backup --encrypt-to age1…` streams `pg_dump` through [age](https://age-encryption.org), so the plaintext dump never reaches disk. `verify --identity` checks the decrypted plaintext; `restore --identity` decrypts in two passes without writing plaintext. Manifests record the file-store key IDs that stored files use, and restore refuses unless `--file-keys-env` holds all of them (or `--skip-file-key-check`). New `upload`, `list`, `download` and `prune` copy generations to S3-compatible storage (SigV4, standard library only; the archive is uploaded before its manifest; prune is a dry run without `--yes`). These are logical dumps, not point-in-time recovery; see [operations](../operations.md#encrypted-backups) for key custody.
+
 ## Verification
 
 - Browser regressions cover invalid and corrected Add-model submission at desktop and phone widths. The Usage & costs resize check waits for the mobile shell to render before asserting zero horizontal overflow.
