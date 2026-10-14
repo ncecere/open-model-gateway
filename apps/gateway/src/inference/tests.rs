@@ -16,6 +16,8 @@ struct MemoryRepository {
     finished: tokio::sync::Notify,
     fail_start: AtomicBool,
     fail_finish: AtomicBool,
+    /// `finish` never returns (a write stuck behind a lock or a failover).
+    hang_finish: AtomicBool,
     plan: Mutex<Option<crate::routing::RoutePlan>>,
     attempts: Mutex<Vec<(Uuid, i32)>>,
     health: Mutex<Vec<Option<InferenceError>>>,
@@ -58,6 +60,9 @@ impl InferenceRepository for MemoryRepository {
     async fn finish(&self, record: &ExecutionFinish) -> Result<(), InferenceError> {
         if self.fail_finish.load(Ordering::SeqCst) {
             return Err(InferenceError::Storage);
+        }
+        if self.hang_finish.load(Ordering::SeqCst) {
+            std::future::pending::<()>().await;
         }
         self.finishes.lock().unwrap().push(ExecutionFinish {
             id: record.id,
@@ -778,6 +783,23 @@ async fn failed_finalization_does_not_report_success_or_retry_inference() {
     assert!(matches!(events.last(), Some(Err(InferenceError::Storage))));
     assert!(!events.iter().any(|e| matches!(e, Ok(ChatEvent::Done))));
     assert_eq!(adapter.calls.load(Ordering::SeqCst), 1);
+}
+
+/// A settlement write that times out leaves the reservation pending exactly
+/// like one that fails fast, so it must count as held (#136).
+#[tokio::test]
+async fn timed_out_finalization_counts_as_held() {
+    use crate::metrics::{METRICS, Settlement};
+    let (engine, repository, _adapter) = fixture(Mode::Complete, EngineLimits::default());
+    repository.hang_finish.store(true, Ordering::SeqCst);
+    let before = METRICS.settlement_count(Settlement::Held);
+    assert!(matches!(
+        engine
+            .execute(principal(), request(false), Uuid::new_v4())
+            .await,
+        Err(InferenceError::Storage)
+    ));
+    assert!(METRICS.settlement_count(Settlement::Held) > before);
 }
 
 #[test]
