@@ -515,7 +515,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 - Mitigation: `image.yml` and `branch-images.yml` pin actions by commit SHA; in `ci.yml` the image (which calls `image.yml`), cargo-deny, helm and npm-audit jobs are SHA-pinned. `ci.yml` defaults to `contents: read` (only the image job, which releases `v*` tags, gets `contents: write` and `packages: write`) and has no `pull_request_target`.
 - Tests: no test found.
 - Residual: `ci.yml` has 15 tag-pinned `uses:` in the gateway, web, browser and staging-image jobs (`actions/checkout@v7`, `actions/setup-node@v7`, `actions/upload-artifact@v7`, `dtolnay/rust-toolchain@stable`, `Swatinem/rust-cache@v2`, `docker/build-push-action@v7`, `docker/setup-buildx-action@v4`). SECURITY.md says workflow actions are pinned by commit SHA, which is not true for those. Separately, the Dockerfile's build stages (`node:22.23.3-bookworm-slim`, `rust:1.99.0-bookworm`) are pinned by tag; only the distroless runtime is digest-pinned. SECURITY.md does not claim digest pins for them; this is a hardening gap, not a false claim.
-- Follow-up: #143 (Actions SHA pins). Dockerfile build-stage digests: new issue needed (not filed).
+- Follow-up: #143 (Actions SHA pins; Dockerfile build-stage digests are tracked there as the next step).
 
 **SUP-3. A release image is tampered with.** T · Asset: image · Attacker: registry or build compromise.
 - Mitigation: `image.yml` builds per-architecture images with SBOM and provenance attestations, gates on Trivy (fixable HIGH and CRITICAL), signs the multi-arch index with cosign keyless, and promotes by digest. The runtime is distroless, non-root, without a shell.
