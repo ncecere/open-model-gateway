@@ -155,7 +155,7 @@ class Postgres:
         return result.stdout.strip()
 
     def dump(self, output):
-        self.run(["pg_dump", "--format=custom", "--no-owner", "--no-privileges"], stdout=output)
+        self.run(["pg_dump", *PG_DUMP_OPTIONS], stdout=output)
 
     def list_archive(self, archive):
         self.run(["pg_restore", "--list"], stdin=archive, stdout=subprocess.DEVNULL)
@@ -169,6 +169,11 @@ LINEAGE_SQL = """SELECT json_build_object(
   'schema_family', (SELECT schema_family FROM installation WHERE singleton),
   'server_version', current_setting('server_version'),
   'database', current_database());"""
+
+# The gateway schema uses no extensions. `--extension=plpgsql` selects only the built-in one, so
+# extensions a cluster's template1 adds to every database (pgvector, for example) are left out:
+# the owner restoring on a clean host usually may not create them.
+PG_DUMP_OPTIONS = ["--format=custom", "--no-owner", "--no-privileges", "--extension=plpgsql"]
 
 EMPTY_SQL = """SELECT
  (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -443,7 +448,7 @@ def backup(pg, out_dir, now=None, recipients=None):
             "created_at": now.isoformat(),
             "file": dump.name,
             "file_encryption_key_ids": key_ids,
-            "pg_dump_options": ["--format=custom", "--no-owner", "--no-privileges"],
+            "pg_dump_options": PG_DUMP_OPTIONS,
             **details,
             **lineage,
         }

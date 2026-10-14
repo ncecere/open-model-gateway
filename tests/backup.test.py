@@ -771,6 +771,23 @@ class DisposableDatabaseTests(unittest.TestCase):
             self.assertIn("changed since it was verified", str(raised.exception))
             self.assertEqual(self.pg.query(f"SELECT count(*) FROM pg_database WHERE datname='{self.target}';"), "0")
 
+    def test_extensions_from_the_cluster_template_are_not_backed_up(self):
+        # A cluster whose template1 adds extensions (e.g. pgvector) puts them in every new
+        # database. The gateway schema needs none, and the owner restoring on a clean host
+        # usually cannot create them, so a backup must not carry them.
+        self.pg.query("CREATE EXTENSION pg_trgm;", self.source)
+        source = backup.Postgres(dict(self.env, PGDATABASE=self.source), self.pg.container)
+        with tempfile.TemporaryDirectory() as folder:
+            manifest_path = backup.backup(source, Path(folder))
+            archive = manifest_path.parent / json.loads(manifest_path.read_text())["file"]
+            command, env = source.command(["pg_restore", "--list"])
+            with archive.open("rb") as stdin:
+                listing = subprocess.run(command, env=env, stdin=stdin, capture_output=True, text=True, check=True).stdout
+            self.assertNotIn(" EXTENSION ", listing)
+            self.assertIn(" TABLE public monetary_ledger", listing)
+            restored, _ = backup.restore(self.pg, manifest_path, self.target, create=True, expected_migrations=self.lineage)
+            self.assertEqual(self.pg.query("SELECT count(*) FROM pg_extension WHERE extname='pg_trgm';", self.target), "0")
+
     def test_partitioned_history_with_nested_validators_restores(self):
         # P6: history tables are partitioned and CHECK validators call other
         # validators schema-qualified (pg_restore loads with an empty
