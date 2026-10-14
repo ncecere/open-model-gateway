@@ -33,7 +33,7 @@ After v0.3.0 the remaining R-items were selected as one enterprise program, deli
 - **No installation-wide limits** (2026-10-09, done in migration 0026): limits only on personal/team/project workspaces and keys; total spend is watched with a non-blocking installation spend alert.
 - **Machine administration:** Platform-Admin-only admin API tokens, separate from inference keys (inference keys never authorize management), scoped, expiring and audited.
 - **Real self-hosted models:** acceptance uses the operator's own DGX Spark endpoints (chat, embeddings, rerank, System One).
-- **Guardrails** (PII redaction, moderation, DLP): needs a design decision before any build, because the gateway never inspects prompts today.
+- **Guardrails** (PII redaction, moderation, DLP): **design drafted** in [guardrails design](guardrails-design.md) (#36, 2026-10-14); not implemented. The gateway never inspects prompts today.
 
 **Phases**
 
@@ -259,7 +259,7 @@ Effort is relative: **S** = narrow change; **M** = several components plus tests
 ## Defer unless a concrete need emerges
 
 - Cross-tenant response/semantic caching: isolation, consent, invalidation and billing semantics need their own design.
-- Persisted chat/playground histories or prompt capture: new sensitive-data processing and retention obligations; not a default gateway feature. (DLP/moderation guardrails are now a pending design decision in the [current program](#current-program-selected-2026-10-09).)
+- Persisted chat/playground histories or prompt capture: new sensitive-data processing and retention obligations; not a default gateway feature. (DLP/moderation guardrails: design drafted in [guardrails design](guardrails-design.md), not implemented; it stores no prompt or response text.)
 - Automatic “cheapest/best model” routing, shadow traffic or broad retry policies: quality evaluation, capability/residency checks and duplicate-spend controls must come first.
 - Marketplace settlement, multi-region active-active, or a database-RLS rewrite merely for completeness: justify them with deployment requirements and measured risks. (A Helm chart and multi-replica single-region deployment are selected under phase 2.)
 - General-purpose hard deletion or personal-workspace impersonation: conflicts with immutable accounting and current privacy guarantees. A future shared-workspace archival/ownership-transfer workflow should be separately scoped.
