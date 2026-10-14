@@ -121,7 +121,9 @@ in sync.
 `cnpg.cluster.smartShutdownTimeout` (default 15 s) is how long a stopping primary waits for clients
 before a fast shutdown. CloudNativePG's own default is 180 s. The Pooler's server connections and
 each replica's LISTEN session never disconnect on their own, so with 180 s a failover kept writes
-down for about three minutes on bitop-talos; with 15 s the standby was promoted within a minute.
+down for about three minutes on bitop-talos; with 15 s the standby was promoted in 18 s under load.
+With `instances: 2`, writes stalled again while the old primary rejoined as the synchronous standby
+(#149); see [HA PostgreSQL](postgresql-ha.md#measured-failover).
 Requests interrupted by the failover keep their holds and are reconciled as unknown; nothing is
 refunded or charged twice (#25).
 
