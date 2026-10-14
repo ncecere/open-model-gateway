@@ -1,7 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 import { BASE_URL, ISSUER_URL, UPSTREAM_URL } from "./stack.mjs";
 import { MOCK_REPLY } from "./mock-upstream.mjs";
-import { api, chat, expectNoHorizontalScroll, expectTableFits, expectTileChartsAligned, readFixture, saveFixture, signIn } from "./helpers";
+import { api, chat, expectNoHorizontalScroll, expectTableFits, expectTileChartsAligned, readFixture, saveFixture, signIn, expectNoCspViolations } from "./helpers";
+
+test.afterEach(expectNoCspViolations);
 
 // One ordered journey on a fresh database: each step builds on the previous one.
 test.describe.configure({ mode: "serial" });

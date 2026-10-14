@@ -4,6 +4,8 @@ Notes for changes on `main` since v0.5.0. They become the next release's notes.
 
 ## Security
 
+- Every response now carries a Content-Security-Policy, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer` (#142). The dashboard's policy allows only its own scripts, styles, fonts and API (no inline script or `eval`) and can't be framed; API and file responses get `default-src 'none'`. If you embed the dashboard in a frame or load it through a proxy that injects scripts, that no longer works.
+
 - **Breaking (#141):** Teams and Projects have a new setting, **who sees files, batches and videos** (Workspace › Settings › General; `object_visibility` on `GET/PATCH /api/v1/workspaces/{ws}`, migration 0038). **Per user**, the default for new and existing shared workspaces: a regular member's API keys and dashboard see only objects created with that member's keys; service-account keys and workspace owners/admins see everything. **Workspace-wide:** every key sees everything. In both modes only the creator, an owner/admin or a service-account key may delete or cancel (`403`); an object the caller can't see returns `404`, also as a batch's `input_file_id`. Before, any key of a shared workspace could read, delete or cancel every member's objects through `/v1/files`, `/v1/batches` and `/v1/videos`.
 
   **Upgrade:** run the migration and reapply the runtime grants (`object_visibility` is added to the runtime role's `UPDATE` on `workspaces`). Clients that read other members' objects with a member key get `404` until a workspace admin sets the workspace to Workspace-wide; use a service-account key for workspace-wide automation.

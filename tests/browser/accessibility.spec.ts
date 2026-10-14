@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
-import { expectAccessible, readFixture, storageFor, type Persona } from "./helpers";
+import { expectAccessible, expectNoCspViolations, readFixture, storageFor, watchCsp, type Persona } from "./helpers";
+
+test.afterEach(expectNoCspViolations);
 
 // axe WCAG 2.1 A/AA over the main pages per persona at desktop and phone widths.
 // Serious/critical violations fail; moderate/minor ones are recorded in docs/accessibility.md.
@@ -26,14 +28,17 @@ for (const viewport of viewports) {
   test.describe(`${viewport.name}px`, () => {
     test.use({ viewport: { width: viewport.width, height: viewport.height } });
 
-    test("signed-out sign-in page", async ({ page }) => {
+    test("signed-out sign-in page", async ({ browser }) => {
+      const context = await browser.newContext({ viewport }); await watchCsp(context);
+      const page = await context.newPage();
       await settle(page, "/");
       await expectAccessible(page, "sign-in");
+      await context.close();
     });
 
     for (const persona of ["operator", "auditor", "alex", "blair"] as const) {
       test(`${persona} main pages`, async ({ browser }) => {
-        const context = await browser.newContext({ storageState: storageFor(persona), viewport });
+        const context = await browser.newContext({ storageState: storageFor(persona), viewport }); await watchCsp(context);
         const page = await context.newPage();
         for (const path of pages(persona)) {
           await settle(page, path);
@@ -52,7 +57,7 @@ for (const viewport of viewports) {
 
     test("dialogs and menus: create key, search, account", async ({ browser }) => {
       const { product } = readFixture();
-      const context = await browser.newContext({ storageState: storageFor("blair"), viewport });
+      const context = await browser.newContext({ storageState: storageFor("blair"), viewport }); await watchCsp(context);
       const page = await context.newPage();
       await settle(page, `/workspaces/${product}/keys`);
       const opener = page.getByRole("button", { name: "Create key" }).first();
@@ -88,7 +93,7 @@ for (const viewport of viewports) {
 }
 
 test("keyboard: the first Tab reaches the skip link, which moves focus to main content", async ({ browser }) => {
-  const context = await browser.newContext({ storageState: storageFor("blair") });
+  const context = await browser.newContext({ storageState: storageFor("blair") }); await watchCsp(context);
   const page = await context.newPage();
   await settle(page, "/home");
   await page.keyboard.press("Tab");
@@ -101,7 +106,7 @@ test("keyboard: the first Tab reaches the skip link, which moves focus to main c
 });
 
 test("reduced motion collapses animations and transitions", async ({ browser }) => {
-  const context = await browser.newContext({ storageState: storageFor("blair"), reducedMotion: "reduce" });
+  const context = await browser.newContext({ storageState: storageFor("blair"), reducedMotion: "reduce" }); await watchCsp(context);
   const page = await context.newPage();
   await settle(page, "/home");
   const slowest = await page.evaluate(() => {
@@ -114,12 +119,12 @@ test("reduced motion collapses animations and transitions", async ({ browser }) 
 
 test("dark color scheme: sign-in and member pages", async ({ browser }) => {
   const { product } = readFixture();
-  const signedOut = await browser.newContext({ colorScheme: "dark" });
+  const signedOut = await browser.newContext({ colorScheme: "dark" }); await watchCsp(signedOut);
   const outPage = await signedOut.newPage();
   await settle(outPage, "/");
   await expectAccessible(outPage, "sign-in (dark)");
   await signedOut.close();
-  const context = await browser.newContext({ storageState: storageFor("blair"), colorScheme: "dark" });
+  const context = await browser.newContext({ storageState: storageFor("blair"), colorScheme: "dark" }); await watchCsp(context);
   const page = await context.newPage();
   for (const path of ["/home", `/workspaces/${product}/keys`, `/workspaces/${product}/logs`, `/workspaces/${product}/costs`]) {
     await settle(page, path);

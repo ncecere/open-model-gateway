@@ -135,6 +135,69 @@ mod tests {
         assert!(WebAssets::load(&directory.path().join("file")).is_err());
     }
 
+    /// #142: a strict Content-Security-Policy on the SPA, a locked-down one on
+    /// everything else, and no framing, sniffing or referrers anywhere.
+    #[tokio::test]
+    async fn every_response_carries_security_headers() {
+        let (_directory, app) = fixture();
+        let header_of = |response: &Response, name: &str| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default()
+                .to_owned()
+        };
+        for (path, accept) in [
+            ("/", "text/html"),
+            ("/workspaces/example", "text/html"),
+            ("/assets/app.js", "*/*"),
+            ("/api/v1/nope", "application/json"),
+            ("/health/live", "application/json"),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(request(path, Method::GET, accept))
+                .await
+                .unwrap();
+            assert_eq!(header_of(&response, "x-frame-options"), "DENY", "{path}");
+            assert_eq!(
+                header_of(&response, "x-content-type-options"),
+                "nosniff",
+                "{path}"
+            );
+            assert_eq!(
+                header_of(&response, "referrer-policy"),
+                "no-referrer",
+                "{path}"
+            );
+            let csp = header_of(&response, "content-security-policy");
+            assert!(csp.contains("frame-ancestors 'none'"), "{path}: {csp}");
+            assert!(
+                csp.contains("object-src 'none'") || csp.starts_with("default-src 'none'"),
+                "{path}: {csp}"
+            );
+            let html = header_of(&response, "content-type").starts_with("text/html");
+            if html {
+                assert_eq!(csp, crate::http::SPA_CSP, "{path}");
+                for directive in [
+                    "default-src 'self'",
+                    "script-src 'self'",
+                    "base-uri 'none'",
+                    "form-action 'self'",
+                ] {
+                    assert!(csp.contains(directive), "{path}: {csp}");
+                }
+                assert!(
+                    !csp.contains("unsafe-inline") && !csp.contains("unsafe-eval"),
+                    "{path}: {csp}"
+                );
+            } else {
+                assert_eq!(csp, crate::http::API_CSP, "{path}");
+            }
+        }
+    }
+
     #[tokio::test]
     async fn serves_root_assets_and_browser_deep_links() {
         let (_directory, app) = fixture();

@@ -6,9 +6,9 @@
 {$GATEWAY_HOST:localhost} {
 	# Caddy uses its local CA for localhost, public ACME for a real DNS name.
 	# No access log: query strings and auth callbacks may contain login codes.
+	# The gateway sets CSP, X-Frame-Options, nosniff and Referrer-Policy on every
+	# response (#142); Caddy adds only what belongs to the TLS edge.
 	header {
-		X-Content-Type-Options nosniff
-		Referrer-Policy strict-origin-when-cross-origin
 		Strict-Transport-Security "max-age=31536000"
 		-Server
 	}

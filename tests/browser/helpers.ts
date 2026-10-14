@@ -16,9 +16,25 @@ const fixtureFile = path.join(stateDir, "fixture.json");
 export const readFixture = (): Fixture => existsSync(fixtureFile) ? JSON.parse(readFileSync(fixtureFile, "utf8")) : {};
 export const saveFixture = (next: Fixture) => writeFileSync(fixtureFile, JSON.stringify({ ...readFixture(), ...next }));
 
+const cspViolations: string[] = [];
+/**
+ * #142: the gateway serves a strict Content-Security-Policy. Report every
+ * violation in this context straight to the runner (it survives the page and
+ * context closing); `expectNoCspViolations` fails the test on any.
+ */
+export async function watchCsp(context: BrowserContext) {
+  await context.exposeBinding("__omgCspViolation", (_source, report: string) => { cspViolations.push(report); });
+  await context.addInitScript(() => document.addEventListener("securitypolicyviolation", e => (window as unknown as { __omgCspViolation(report: string): void }).__omgCspViolation(`${e.violatedDirective} ${e.blockedURI} on ${location.pathname}`)));
+}
+/** Use as `test.afterEach(expectNoCspViolations)` in every spec. */
+export function expectNoCspViolations() {
+  expect(cspViolations.splice(0), "Content-Security-Policy violations during this test").toEqual([]);
+}
+
 /** Real signed-OIDC sign-in through the local issuer's account picker. */
 export async function signIn(browser: Browser, persona: Persona, viewport = { width: 1440, height: 900 }): Promise<{ context: BrowserContext; page: Page }> {
   const context = await browser.newContext({ viewport });
+  await watchCsp(context);
   const page = await context.newPage();
   await page.goto("/");
   await page.getByRole("link", { name: "Sign in with single sign-on" }).click();

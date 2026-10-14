@@ -482,14 +482,14 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 **WEB-2. Cross-site scripting.** T, I, E · Asset: session, one-time secrets · Attacker: workspace member or Platform Admin storing a malicious name; malicious upstream (served model name).
 - Mitigation: React escapes text; no `dangerouslySetInnerHTML` in `apps/web/src` outside tests (grep). Support URLs must be HTTPS (`management/settings.rs` `https_url`). CSV exports neutralize formulas. The API client refuses HTML fallbacks as data.
 - Tests: `management/settings/tests.rs` `general_settings_validate_audit_and_bound_human_keys` (refuses a `javascript:` URL); `management/governance/tests.rs` `monthly_member_scope_unknown_is_not_zero_and_csv_formula_safe`; `apps/web/src/lib/api.test.ts` "does not expose proxy HTML errors as trusted markup or detailed errors".
-- Residual: the Rust server sends no `Content-Security-Policy` for the SPA or the API (only the logo has one), so an XSS bug would have no second line of defense. Rust already sends `Referrer-Policy: no-referrer` on management and auth responses (`identity.rs` `private`), but the SPA and `/v1` responses carry none. The staging Caddyfile adds `nosniff` and HSTS but no CSP.
-- Follow-up: #142 (CSP and anti-framing headers for the SPA and API).
+- Residual: with #142 every response carries a strict Content-Security-Policy and `Referrer-Policy: no-referrer` (`http.rs` `security_headers`; test `web.rs` `every_response_carries_security_headers`; every browser spec fails on a CSP violation), so an injected inline script or cross-origin form would not run. Before #142 only the logo had a CSP.
+- Follow-up: none (fixed in #142).
 
 **WEB-3. Clickjacking.** T · Asset: dashboard actions · Attacker: same-site page framing the dashboard.
-- Mitigation: none in code (no `X-Frame-Options` or `frame-ancestors`). `SameSite=Lax` keeps the session cookie out of cross-site frames, so a cross-site frame shows a signed-out dashboard.
-- Tests: no test found.
-- Residual: a page on the same site (another subdomain of the same registrable domain) can frame a signed-in dashboard.
-- Follow-up: #142.
+- Mitigation: `X-Frame-Options: DENY` and `frame-ancestors 'none'` on every response (#142, `http.rs` `security_headers`). Also `SameSite=Lax` keeps the session cookie out of cross-site frames, so a cross-site frame shows a signed-out dashboard.
+- Tests: `web.rs` `every_response_carries_security_headers`.
+- Residual: none known; framing is refused for any origin.
+- Follow-up: none (fixed in #142).
 
 **WEB-4. The SPA calls a different origin or swallows API routes.** S, I · Asset: sessions, error handling · Attacker: misconfiguration, network attacker.
 - Mitigation: `api.ts` uses relative paths with `credentials: "same-origin"`, `cache: "no-store"` and `redirect: "error"`. No `VITE_*` variables are used. `web.rs` `WebAssets::serve` never returns HTML for `/api`, `/v1`, `/health` or `/scim` (including encoded prefixes), dot-segments or missing assets.
@@ -603,7 +603,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 | No login or callback abuse controls; login attempts never cleaned up | OIDC-6 | #78, #80, #34 |
 | No session list or revoke for users; no idle expiry; session rows never deleted | KEY-8, OIDC-4 | #79, #80, #34 |
 | File-store key rotation cannot re-wrap old objects | FS-3 | #35 |
-| No CSP or `frame-ancestors` on the SPA and API from Rust; `Referrer-Policy: no-referrer` is sent on management and auth responses (`identity.rs`) but not on the SPA or `/v1` | WEB-2, WEB-3 | #142 |
+| No CSP or `frame-ancestors` on the SPA and API from Rust; `Referrer-Policy` only on management and auth responses | WEB-2, WEB-3 | Fixed in #142 |
 | 15 tag-pinned `uses:` in `ci.yml` (the image, cargo-deny, helm and npm-audit jobs are SHA-pinned); SECURITY.md says workflow actions are SHA-pinned | SUP-2 | #143 |
 | Dockerfile build-stage images pinned by tag, not digest (SECURITY.md makes no digest claim) | SUP-2 | #143 |
 | OIDC HTTP client honours ambient `HTTP(S)_PROXY`/`ALL_PROXY` (no `.no_proxy()` in `identity.rs`); it lacks `.retry(never())`, but reqwest's default retry can't fire without its `http2` feature (`apps/gateway/Cargo.toml`) | OIDC-5, EGR-4 | #144 |
