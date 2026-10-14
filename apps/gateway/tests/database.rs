@@ -202,7 +202,8 @@ async fn membership_and_account_changes_take_effect_without_cache(pool: PgPool) 
             .unwrap()
             .is_some()
     );
-    sqlx::query("UPDATE workspace_membership_grants SET revoked_at = NULL WHERE workspace_id=$1")
+    // Re-grant with new rows, as the product does (a revocation is final, #145).
+    sqlx::query("INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source,mapping_id) SELECT workspace_id,user_id,role,source,mapping_id FROM workspace_membership_grants WHERE workspace_id=$1 AND revoked_at IS NOT NULL ON CONFLICT DO NOTHING")
         .bind(keys.team_workspace_id)
         .execute(&pool)
         .await
@@ -214,7 +215,7 @@ async fn membership_and_account_changes_take_effect_without_cache(pool: PgPool) 
     for key in [&keys.personal_key, &keys.team_key] {
         assert!(store.authenticate(&key.token).await.unwrap().is_none());
     }
-    sqlx::query("UPDATE platform_role_grants SET revoked_at=NULL")
+    sqlx::query("INSERT INTO platform_role_grants(user_id,role,source,mapping_id,granted_by) SELECT user_id,role,source,mapping_id,granted_by FROM platform_role_grants WHERE revoked_at IS NOT NULL ON CONFLICT DO NOTHING")
         .execute(&pool)
         .await
         .unwrap();

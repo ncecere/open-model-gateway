@@ -81,7 +81,8 @@ async fn global_admin_still_requires_actual_shared_membership_and_live_entitleme
         .unwrap();
     assert!(store.authenticate(&rotated.token).await.unwrap().is_none());
     assert_eq!(admission(&store, &rotated_principal).await, None);
-    sqlx::query("UPDATE platform_role_grants SET revoked_at=NULL WHERE user_id=$1")
+    // Re-grant as the product does (a new row; a revocation is final, #145).
+    sqlx::query("INSERT INTO platform_role_grants(user_id,role,source,mapping_id,granted_by) SELECT user_id,role,source,mapping_id,granted_by FROM platform_role_grants WHERE user_id=$1 AND revoked_at IS NOT NULL ON CONFLICT DO NOTHING")
         .bind(user)
         .execute(&pool)
         .await

@@ -4,6 +4,8 @@ Notes for changes on `main` since v0.5.0. They become the next release's notes.
 
 ## Security
 
+- Revocations are final in the database: migration 0039 adds triggers that refuse clearing or changing `revoked_at` once set on API keys, membership and platform role grants, browser sessions and invitations, for every role (#145). Hand-written SQL that "un-revokes" a key or grant now fails; issue a new one instead.
+
 - The OIDC client (discovery, token exchange, JWKS) no longer uses ambient `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` or implicit retries, like every provider client (#144). If sign-in only worked through such a proxy, allow the gateway to reach the issuer directly.
 
 - CI pins every GitHub Action by commit SHA and the `Dockerfile` build images by digest, and `npm run test:supply-chain` fails CI on any unpinned one (#143).
