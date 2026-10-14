@@ -345,3 +345,35 @@ test("Logs deep links filter and fit at 1440; usage tiles line up their charts a
   await expectTileChartsAligned(operator.page, "Usage summary");
   await operator.context.close();
 });
+
+test("a member sees where they're signed in and signs out their other sessions (#79)", async ({ browser }) => {
+  // A second browser, signed in without saving its state (later specs reuse
+  // the saved one, which this test keeps signed in).
+  const elsewhere = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const away = await elsewhere.newPage();
+  await away.goto("/");
+  await away.getByRole("link", { name: "Sign in with single sign-on" }).click();
+  await away.locator('button[name="account"][value="blair"]').click();
+  await expect(away.getByRole("button", { name: /^Account:/ })).toBeVisible();
+
+  const { context, page } = await signIn(browser, "blair");
+  await page.goto("/profile");
+  const sessions = page.getByRole("table", { name: "Your dashboard sessions" });
+  await expect(sessions.getByText("This browser")).toBeVisible();
+  await expect.poll(async () => (await sessions.getByRole("row").count()) - 1).toBeGreaterThanOrEqual(2);
+  await expectTableFits(page, "Your dashboard sessions");
+  await page.getByRole("button", { name: "Sign out others" }).click();
+  const dialog = page.getByRole("dialog", { name: "Sign out your other sessions?" });
+  await dialog.getByRole("button", { name: "Sign out others" }).click();
+  await expect(page.getByRole("button", { name: "Sign out others" })).toHaveCount(0);
+  await expect(sessions.getByRole("row")).toHaveCount(2);
+
+  // The other browser's cookie stops working on its next request.
+  await away.reload();
+  await expect(away.getByRole("link", { name: "Sign in with single sign-on" })).toBeVisible();
+  // This one stays signed in.
+  await page.reload();
+  await expect(page.getByRole("button", { name: /^Account:/ })).toBeVisible();
+  await elsewhere.close();
+  await context.close();
+});

@@ -67,7 +67,7 @@ GRANT DELETE ON public.oidc_login_attempts,public.oidc_group_mappings,public.cat
 GRANT UPDATE(user_id) ON public.oidc_identities TO gateway_runtime;
 GRANT UPDATE(revoked_at) ON public.platform_role_grants,public.workspace_membership_grants TO gateway_runtime;
 -- Signature-verified email is inserted at sign-in and cleared at account cleanup.
-GRANT UPDATE(revoked_at,verified_email) ON public.browser_sessions TO gateway_runtime;
+GRANT UPDATE(revoked_at,verified_email,last_seen_at) ON public.browser_sessions TO gateway_runtime;
 GRANT UPDATE(name,cost_center_id,disabled_at,owner_user_id,object_visibility) ON public.workspaces TO gateway_runtime;
 -- Personal provisioning uses an owner-preserving ON CONFLICT update. Applications
 -- still enforce private scope; workspace kind is never mutable via runtime.

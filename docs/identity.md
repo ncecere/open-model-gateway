@@ -69,6 +69,12 @@ The serving process runs bounded inactive-account cleanup every minute (up to 10
 - `GET /api/v1/auth/callback` redirects to `/`; no return-to parameter.
 - `POST /api/v1/auth/logout` revokes the current session and clears cookies.
 
+### Your sessions
+
+Your profile › Sessions lists where you're signed in to the dashboard: a browser and OS family ("Firefox on macOS", from a fixed list; one of them alone when only one is recognised, "Unknown browser" when neither is), when it signed in and when it was last active. Last activity is recorded at most every 5 minutes. No IP address or raw user agent is stored. You can sign one session out, or every other session at once; a signed-out session's cookie stops working on its next request, on every replica. The session you're using is marked and is signed out with the regular Sign out. Signing sessions out never touches API keys.
+
+A Platform Admin sees how many sessions a person has (user detail, never which devices) and can sign them all out without suspending them (audited `user.sessions_revoked` with the count). Users signing out their own sessions is audited as `session.revoked` (one) or `session.others_revoked` (all others), with the count. See [management API](management-api.md#your-sessions).
+
 Login attempts are browser-bound, one-use and ten minutes long. Callback consumes the attempt before token exchange. Signature, issuer, audience, expiry, nonce, authorized-party policy and verified email are checked. An entitlement-loss callback commits revocation before denying access. After full verification, a denied browser (`Accept: text/html`) is redirected to `/?auth_error=access_denied` with session cookies cleared; non-browser callers receive the status code. Unverified or malformed callbacks never clear an existing session.
 
 Session/CSRF secrets are independent random values; only hashes are stored. Sessions retain the normalized signature-verified email separately from the editable directory email. Invitation acceptance uses this verified session claim; sessions lacking proof cannot authenticate. Cleanup clears retained session email. Sessions expire absolutely after twelve hours. `omg_session` is HttpOnly/SameSite=Lax; readable `omg_csrf` is SameSite=Strict; `omg_oidc` is HttpOnly/SameSite=Lax. Cookies are host-only with Path `/`. Duplicate/malformed authentication cookies fail.

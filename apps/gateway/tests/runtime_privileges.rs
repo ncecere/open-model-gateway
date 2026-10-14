@@ -80,10 +80,112 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
     files_api_runs_as_runtime(&pool).await;
     history_partitions_run_as_runtime(&pool).await;
     history_verify_runs_as_runtime(&pool).await;
+    dashboard_sessions_run_as_runtime(&pool).await;
     // Last: its unknown batch hold would change the installation-wide totals above.
     async_jobs_run_as_runtime(&pool).await;
     sqlx::query("SELECT pg_advisory_unlock(72419505)")
         .execute(&mut *connection)
+        .await
+        .unwrap();
+}
+
+/// #79: "Your sessions" as the runtime role. The real session middleware
+/// (`require_session`, which now also writes `last_seen_at`) and the session
+/// list run through the management router; the sign-in INSERT and the revoke
+/// UPDATEs run as the same SQL. Runtime may write `last_seen_at` but never a
+/// session's public `id` or its device label.
+async fn dashboard_sessions_run_as_runtime(pool: &PgPool) {
+    use axum::body::Body;
+    use tower::ServiceExt;
+    let runtime = runtime_pool(pool).await;
+    let (user, token) = (uuid::Uuid::new_v4(), "5".repeat(64)); // a session token is 64 hex digits
+    sqlx::query("INSERT INTO users(id,email) VALUES($1,'sessions-probe@example.test')")
+        .bind(user)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO platform_role_grants(user_id,role,source) VALUES($1,'user','manual')")
+        .bind(user)
+        .execute(pool)
+        .await
+        .unwrap();
+    // The sign-in INSERT, as runtime (identity.rs callback).
+    sqlx::query("INSERT INTO browser_sessions(token_hash,user_id,csrf_hash,expires_at,verified_email,client_label,last_seen_at) SELECT sha256(convert_to($1,'UTF8')),id,sha256('csrf'::bytea),now()+interval '12 hours','sessions-probe@example.test','Firefox on Linux',now()-interval '1 hour' FROM users WHERE id=$2")
+        .bind(&token).bind(user).execute(&runtime).await.expect("runtime inserts a session with its device label");
+    let identity = open_model_gateway::identity::IdentityState::new(
+        open_model_gateway::store::Store::new(runtime.clone()),
+        None,
+    )
+    .await
+    .unwrap();
+    let app = open_model_gateway::management::router(identity)
+        .with_state(open_model_gateway::store::Store::new(runtime.clone()));
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/api/v1/me/sessions")
+                .header("cookie", format!("omg_session={token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200, "the session list works as runtime");
+    let body = http_body_util::BodyExt::collect(response.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let list: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(list["data"][0]["current"], true);
+    assert_eq!(list["data"][0]["client"], "Firefox on Linux");
+    let touched: bool = sqlx::query_scalar(
+        "SELECT last_seen_at>now()-interval '1 minute' FROM browser_sessions WHERE user_id=$1",
+    )
+    .bind(user)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert!(touched, "require_session writes last_seen_at as runtime");
+    // The revoke UPDATEs (management/sessions.rs), rolled back.
+    let mut tx = runtime.begin().await.unwrap();
+    for statement in [
+        "UPDATE browser_sessions SET revoked_at=now() WHERE id=(SELECT id FROM browser_sessions WHERE user_id=$1) AND user_id=$1 AND revoked_at IS NULL AND expires_at>now() AND verified_email IS NOT NULL",
+        "UPDATE browser_sessions SET revoked_at=now() WHERE user_id=$1 AND id<>gen_random_uuid() AND revoked_at IS NULL AND expires_at>now() AND verified_email IS NOT NULL",
+        "SELECT count(*) FROM browser_sessions WHERE user_id=$1 AND revoked_at IS NULL AND expires_at>now() AND verified_email IS NOT NULL",
+    ] {
+        sqlx::query(statement)
+            .bind(user)
+            .execute(&mut *tx)
+            .await
+            .expect(statement);
+    }
+    tx.rollback().await.unwrap();
+    for column in ["id=gen_random_uuid()", "client_label='Edge on Windows'"] {
+        let denied = sqlx::query(&format!(
+            "UPDATE browser_sessions SET {column} WHERE user_id=$1"
+        ))
+        .bind(user)
+        .execute(&runtime)
+        .await
+        .unwrap_err();
+        assert!(
+            denied.to_string().contains("permission denied"),
+            "{column}: {denied}"
+        );
+    }
+    sqlx::query("DELETE FROM browser_sessions WHERE user_id=$1")
+        .bind(user)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM platform_role_grants WHERE user_id=$1")
+        .bind(user)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM users WHERE id=$1")
+        .bind(user)
+        .execute(pool)
         .await
         .unwrap();
 }

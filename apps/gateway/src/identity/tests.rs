@@ -1150,6 +1150,8 @@ mod database {
                         params["state"]
                     ))
                     .header(header::COOKIE, format!("{BROWSER}={browser}"))
+                    // Recorded as the session's device label (#79).
+                    .header(header::USER_AGENT, FIREFOX_LINUX)
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1322,6 +1324,124 @@ mod database {
         let mut url = Url::parse("https://x.invalid/").unwrap();
         url.query_pairs_mut().append_pair("v", value);
         url.query().unwrap()[2..].to_owned()
+    }
+
+    const FIREFOX_LINUX: &str =
+        "Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0";
+
+    /// #79 through the real routes: the sign-in records a device label, the
+    /// session list marks the session a request came in on, last-seen is
+    /// written at most every five minutes, and a revoked session's cookie
+    /// stops working on the next request (any replica: it's the database).
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn your_sessions_end_to_end(pool: sqlx::PgPool) {
+        let mock = MockProvider::start(None).await;
+        let state = mock.state(pool.clone()).await;
+        let app = router(state.clone())
+            .merge(crate::management::router(state.clone()))
+            .with_state(state.store.clone());
+        sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES($1,$2,'entitled','platform','user')")
+            .bind(Uuid::new_v4()).bind(&mock.issuer).execute(&pool).await.unwrap();
+        let (laptop, phone) = (
+            http_sign_in(&app, &mock).await,
+            http_sign_in(&app, &mock).await,
+        );
+        let (status, list) =
+            http_management(&app, &laptop, "GET", "/api/v1/me/sessions", Value::Null).await;
+        assert_eq!(status, StatusCode::OK);
+        let rows = list["data"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            (rows[0]["current"].clone(), rows[1]["current"].clone()),
+            (json!(true), json!(false))
+        );
+        assert_eq!(rows[0]["client"], "Firefox on Linux");
+        assert!(rows[0]["last_seen_at"].is_string());
+        let (here, other) = (
+            rows[0]["id"].as_str().unwrap().to_owned(),
+            rows[1]["id"].as_str().unwrap().to_owned(),
+        );
+        // Last-seen: written when older than five minutes, not on every request.
+        let seen = || async {
+            sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
+                "SELECT last_seen_at FROM browser_sessions WHERE token_hash=$1",
+            )
+            .bind(hash(&laptop.0))
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        };
+        sqlx::query("UPDATE browser_sessions SET last_seen_at=now()-interval '1 minute' WHERE token_hash=$1").bind(hash(&laptop.0)).execute(&pool).await.unwrap();
+        let recent = seen().await;
+        http_management(&app, &laptop, "GET", "/api/v1/me", Value::Null).await;
+        assert_eq!(seen().await, recent, "seen a minute ago: no write");
+        sqlx::query("UPDATE browser_sessions SET last_seen_at=now()-interval '10 minutes' WHERE token_hash=$1").bind(hash(&laptop.0)).execute(&pool).await.unwrap();
+        http_management(&app, &laptop, "GET", "/api/v1/me", Value::Null).await;
+        assert!(
+            seen().await > chrono::Utc::now() - chrono::Duration::minutes(1),
+            "stale: touched"
+        );
+        // The phone is signed out from the laptop; its cookie stops working.
+        assert_eq!(
+            http_management(&app, &phone, "GET", "/api/v1/me", Value::Null)
+                .await
+                .0,
+            StatusCode::OK
+        );
+        let (status, _) = http_management(
+            &app,
+            &laptop,
+            "DELETE",
+            &format!("/api/v1/me/sessions/{other}"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            http_management(&app, &phone, "GET", "/api/v1/me", Value::Null)
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+        // Without the CSRF token a revoke is refused (it's a write).
+        let no_csrf = (laptop.0.clone(), "A".repeat(43));
+        assert_eq!(
+            http_management(
+                &app,
+                &no_csrf,
+                "POST",
+                "/api/v1/me/sessions/revoke-others",
+                Value::Null
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        let (status, body) = http_management(
+            &app,
+            &laptop,
+            "POST",
+            "/api/v1/me/sessions/revoke-others",
+            Value::Null,
+        )
+        .await;
+        assert_eq!((status, body), (StatusCode::OK, json!({"revoked":0})));
+        // Revoking the last session signs this browser out too.
+        let (status, _) = http_management(
+            &app,
+            &laptop,
+            "DELETE",
+            &format!("/api/v1/me/sessions/{here}"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            http_management(&app, &laptop, "GET", "/api/v1/me", Value::Null)
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
     }
 
     async fn http_management(

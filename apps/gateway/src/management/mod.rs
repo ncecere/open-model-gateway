@@ -16,6 +16,7 @@ mod members;
 mod models_ux;
 mod requests;
 pub(crate) mod resources;
+mod sessions;
 mod settings;
 mod setup;
 mod storage_usage;
@@ -540,6 +541,7 @@ fn routes() -> Router<Store> {
         .merge(governance::platform_routes())
         .merge(logs::routes())
         .merge(settings::routes())
+        .merge(sessions::routes())
         .merge(key_safety::routes())
         .merge(compare::routes())
         .merge(alerts::routes())

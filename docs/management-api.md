@@ -4,6 +4,13 @@ All paths below are under `/api/v1`. Browser sessions only; mutations require ex
 
 Most lists return `{data:[...]}`, default `limit=100`, range 1–200, `offset=0..100000`. Financial lists additionally expose `has_more`; see [governance API](governance-api.md). No list returns credential values/references or plaintext tokens. Organization routes have been removed, not retained as compatibility aliases.
 
+<a id="your-sessions"></a>**Your sessions (#79).** For the caller's own dashboard sessions:
+
+- `GET /me/sessions` returns `{data:[{id,client,created_at,last_seen_at,expires_at,current}]}`: live sessions only (not signed out, not expired), the current one first. `id` is a public handle, never the token; `client` is a browser/OS family or `null`.
+- `DELETE /me/sessions/{id}` signs one out (`{revoked:1}`), including the current one. Another user's, an unknown or an ended session is `404`.
+- `POST /me/sessions/revoke-others` signs out every other live session (`{revoked:n}`); `400` when the request's own session is unknown.
+- `POST /platform/users/{user}/sessions/revoke` (Platform Admin) signs out all of a person's sessions (`{revoked:n}`); `404` for an unknown or cleaned user. `GET /platform/users/{user}` includes `active_sessions` (a count).
+
 ## Session inventory and directories
 
 `GET /me` returns:

@@ -178,8 +178,10 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 **KEY-8. A browser session is stolen, fixed or outlives its use.** S, E · Asset: sessions · Attacker: unauthenticated internet client with a stolen cookie.
 - Mitigation: `identity.rs` `callback` issues a fresh 256-bit session and CSRF token per sign-in and stores only SHA-256 hashes. Cookies are `HttpOnly` (session), `Secure` outside development loopback, `SameSite=Lax` (session) or `Strict` (CSRF), host-only, `Path=/` (`set_cookie`). `cookie` rejects duplicate or malformed cookies. Sessions expire 12 hours after sign-in (`SESSION_SECONDS`). Logout revokes the current session; suspension, entitlement loss, SCIM deactivation and email changes revoke all of a user's sessions.
 - Tests: `identity/tests.rs` `complete_oidc_flow_uses_pkce_and_fresh_hashed_sessions`, `cookie_attributes_are_host_only_and_explicit`, `duplicate_and_malformed_cookies_are_rejected`, `expiry_revocation_and_disabled_user_are_checked_every_request`, `sessions_without_verified_email_cannot_authenticate`; `management/directory/tests.rs` `mutable_email_cannot_become_verified_invitation_evidence_in_an_existing_session`.
-- Residual: no idle timeout and no configurable lifetime. Users cannot list or revoke their other sessions; only a Platform Admin's suspension revokes them all. Expired session rows are never deleted (no `DELETE FROM browser_sessions` in the code).
-- Follow-up: #79 (list and revoke sessions), #80 (lifetime, idle expiry, cleanup), #34.
+- Mitigation (#79): users list their live sessions (`management/sessions.rs`; public `id`, fixed-vocabulary device label from `identity/client_label.rs`, no address or raw user agent) and sign one or all others out; a Platform Admin can sign out all of a person's sessions without suspending them, seeing only a count. Revocation is checked on every request (`verify_session`), so it applies on every replica at once.
+- Tests (#79): `management/sessions_tests.rs` (own sessions only, public fields only, cross-user `404`, current kept, concurrent revocations, admin revoke and count, keys untouched); `identity/tests.rs` `your_sessions_end_to_end` (device label at sign-in, current marker, last-seen at most every 5 minutes, a revoked cookie gets `401`, CSRF required); browser journey "signs out their other sessions".
+- Residual: no idle timeout and no configurable lifetime. Expired session rows are never deleted (no `DELETE FROM browser_sessions` in the code).
+- Follow-up: #80 (lifetime, idle expiry, cleanup), #34.
 
 **KEY-9. A session keeps powers its user lost.** E · Asset: platform and workspace authority · Attacker: former Platform Admin or member.
 - Mitigation: `verify_session` joins `effective_platform_roles` on every request. Workspace handlers re-read membership live (`access_inner`) or in a snapshot. `/me` capabilities come from live authority.
@@ -601,7 +603,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 | SMTP password reference shares the provider allowlist; a Platform Admin can send a provider key to a relay they choose, and the default Helm egress (443 anywhere) does not block it | EGR-7 | #140; #33 |
 | Egress not enforced at the network level; Helm allows 443 anywhere | EGR-3, EGR-8 | #33 |
 | Login and callback abuse controls; expired login attempts never cleaned up | OIDC-6 | Abuse controls fixed in #78; cleanup #80 |
-| No session list or revoke for users; no idle expiry; session rows never deleted | KEY-8, OIDC-4 | #79, #80, #34 |
+| No idle expiry; session rows never deleted (session list and revoke: fixed in #79) | KEY-8, OIDC-4 | #80, #34 |
 | File-store key rotation cannot re-wrap old objects | FS-3 | #35 |
 | No CSP or `frame-ancestors` on the SPA and API from Rust; `Referrer-Policy` only on management and auth responses | WEB-2, WEB-3 | Fixed in #142 |
 | 15 tag-pinned `uses:` in `ci.yml` (the image, cargo-deny, helm and npm-audit jobs are SHA-pinned); SECURITY.md says workflow actions are SHA-pinned | SUP-2 | Fixed in #143 |
