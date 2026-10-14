@@ -540,6 +540,7 @@ fn routes() -> Router<Store> {
         .route("/api/v1/me", get(me))
         .route("/api/v1/me/summary", get(me::summary))
         .route("/api/v1/me/keys", get(me::my_keys))
+        .route("/api/v1/me/models", get(me::models))
         .route(
             "/api/v1/workspaces/{ws}/access",
             get(access::workspace_access),

@@ -24,6 +24,8 @@ mod files_tests;
 mod key_safety_tests;
 #[path = "keys/tests.rs"]
 mod key_tests;
+#[path = "me_models_tests.rs"]
+mod me_models_tests;
 #[path = "members/tests.rs"]
 mod member_tests;
 #[path = "portal_tests.rs"]

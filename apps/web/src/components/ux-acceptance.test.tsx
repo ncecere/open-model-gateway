@@ -12,7 +12,7 @@ import { reasonText } from "../lib/effective-access";
 import { formatRateMicroUsd, resetsAt, usageContext, usagePeriod, utcBoundary, type ExploreResponse, type UsageOverview } from "../lib/usage";
 import { draftErrors, draftLimitsValid, draftOf, rateError, type Limits } from "../lib/limits";
 import { compactDateTime, tokensText, type RequestDetail, type RequestRow } from "../lib/requests";
-import { modelsAcrossWorkspaces } from "../lib/home";
+import { ME_MODELS } from "../lib/home";
 import { countLabel } from "../lib/reports";
 import { DashboardNavigationProvider } from "./navigation-link";
 import { ActionProvider } from "./ui";
@@ -126,31 +126,38 @@ describe("D-4 / D-12 models that can't serve", () => {
     const table = markup(nav({ page: "grants", ws: "team", layout: "table" }, <WorkspaceModels session={session} workspace={team} />), [], c);
     expect(table).toContain(">Not serving<"); expect(table).toContain("No route to a provider is turned on");
   });
-  it("keeps non-serving models out of Home's 'Models you can use'", () => {
-    const r = modelsAcrossWorkspaces([{ workspace: personal, rows: [catalogRow("model", 1), catalogRow("dark", 0), catalogRow("avail", 2, "available_from_catalog")] as never }, { workspace: team, rows: [catalogRow("model", 1)] as never }]);
-    expect(r.usable.map(m => m.model.model_id)).toEqual(["model"]);
-    expect(r.usable[0]!.workspaces.map(w => w.id)).toEqual(["personal", "team"]);
-    expect(r.notServing.map(m => m.model.model_id)).toEqual(["dark"]);
-  });
   it("Home flags them and offers Create key only where a workspace has a model", async () => {
+    // One request for every workspace's models (GET /me/models), never one catalog request per workspace (R06, #66).
+    const fetched: string[] = [];
     const c = testClient(), user = userEvent.setup();
-    c.setQueryData(["api", undefined, "/api/v1/workspaces/personal/catalog", "choices"], []);
+    c.setQueryData(["api", undefined, ME_MODELS], { models: [], usable_count: 0, not_serving: [], not_serving_count: 0, workspaces_without_models: ["personal"] });
     c.setQueryData(["api", undefined, "/api/v1/me/keys?status=active&limit=100"], { data: [], has_more: false });
-    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: { code: "404", message: "not here" } }, { status: 404 })));
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => { fetched.push(String(input)); return Response.json({ error: { code: "404", message: "not here" } }, { status: 404 }); }));
     render(<QueryClientProvider client={c}><ActionProvider>{nav({ page: "home" }, <HomePortal session={auditor} />)}</ActionProvider></QueryClientProvider>);
     await user.click(screen.getByRole("button", { name: "Create key" }));
     const item = await screen.findByRole("menuitem", { name: /Personal · Add a model first/ });
     expect(item.getAttribute("aria-disabled")).toBe("true");
     const shared = testClient();
-    shared.setQueryData(["api", undefined, "/api/v1/workspaces/personal/catalog", "choices"], [catalogRow("dark", 0)]);
-    shared.setQueryData(["api", undefined, "/api/v1/workspaces/team/catalog", "choices"], [catalogRow("model", 1)]);
-    shared.setQueryData(["api", undefined, "/api/v1/workspaces/project/catalog", "choices"], []);
+    shared.setQueryData(["api", undefined, ME_MODELS], {
+      models: [{ model_id: "model", public_name: "company/model", display_name: "Smart model", workspace_count: 1, workspaces: [{ id: "team", name: "Team" }] }],
+      usable_count: 1, not_serving: [{ model_id: "dark", public_name: "company/dark", display_name: "Model dark" }], not_serving_count: 1, workspaces_without_models: ["project"],
+    });
     cleanup();
     render(<QueryClientProvider client={shared}><ActionProvider>{nav({ page: "home" }, <HomePortal session={session} />)}</ActionProvider></QueryClientProvider>);
     const list = screen.getByRole("list", { name: "Models you can use" });
     expect(within(list).getByText("Smart model")).toBeTruthy(); expect(within(list).queryByText("Model dark")).toBeNull();
     expect(screen.getByText(/added, but no enabled route to a provider/)).toBeTruthy();
+    expect(fetched.filter(url => url.includes("/catalog"))).toEqual([]);
     shared.clear(); c.clear();
+  });
+  it("Home never claims there are no models when they couldn't be loaded", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: { code: "503", message: "Management storage unavailable" } }, { status: 503 })));
+    const c = testClient();
+    render(<QueryClientProvider client={c}><ActionProvider>{nav({ page: "home" }, <HomePortal session={session} />)}</ActionProvider></QueryClientProvider>);
+    await screen.findByText("Management storage unavailable");
+    expect(screen.queryByText("No models yet.")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add models" })).toBeNull();
+    c.clear();
   });
 });
 

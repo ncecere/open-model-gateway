@@ -62,6 +62,8 @@ fn reads(f: &Fixture) -> Vec<(&BrowserPrincipal, String)> {
         (&f.owner, "/api/v1/me".into()),
         (&f.owner, "/api/v1/me/summary".into()),
         (&f.owner, "/api/v1/me/keys".into()),
+        (&f.owner, "/api/v1/me/models".into()),
+        (&f.owner, "/api/v1/me/summary?totals_only=true".into()),
     ];
     for ws in [team, personal] {
         for path in [

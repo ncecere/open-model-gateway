@@ -104,7 +104,8 @@ async function setup(strict = false) {
       if (path === "/api/v1/me") return nextMe?.promise ?? Promise.resolve(Response.json(session));
       if (path === "/api/v1/auth/config") return Promise.resolve(Response.json({ enabled: true }));
       if (path === "/api/v1/me/notifications/summary") return Promise.resolve(Response.json({ unread: 0 }));
-      if (path === "/api/v1/me/summary") return Promise.resolve(Response.json({ totals: { current: null } }));
+      if (path === "/api/v1/me/summary?totals_only=true") return Promise.resolve(Response.json({ totals: { current: null } }));
+      if (path === "/api/v1/me/models") return Promise.resolve(Response.json({ models: [], usable_count: 0, not_serving: [], not_serving_count: 0, workspaces_without_models: [] }));
       if (url.pathname === "/api/v1/me/keys") return Promise.resolve(Response.json({ data: [], has_more: false }));
       if (path === "/api/v1/workspaces/team/policy") return Promise.resolve(Response.json({ policy: null, effective: null, provenance: null }));
       if (lists.has(url.pathname)) return Promise.resolve(Response.json({ data: lists.get(url.pathname), has_more: false }));
