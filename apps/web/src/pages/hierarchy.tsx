@@ -7,7 +7,7 @@
  * Identifiers are never shown as text; "Copy ID" lives in the "…" menus.
  */
 import { DetailTime } from "../components/templates/when";
-import { History, LayoutDashboard, Landmark, Network, Plus, UserCheck, UserPlus, Users, UsersRound, UserX } from "lucide-react";
+import { History, LayoutDashboard, Landmark, LogOut, Network, Plus, UserCheck, UserPlus, Users, UsersRound, UserX } from "lucide-react";
 import { api, platformPath, type Session, type Workspace, type PlatformRole, type CostCenter, type GroupMapping } from "../lib/api";
 import { nameField, enabledField, uuidError, type Field } from "../lib/forms";
 import { activeGrants, grantLabel, grantRemoval, kindLabels, platformRoleLabels, userState, type DirectoryUser, type DirectoryWorkspace, type UserRecord } from "../lib/people";
@@ -102,6 +102,7 @@ export function UserDetail({ session, id, tab, onTabChange }: { session: Session
     { label: "Change email…", hidden: !writable, onSelect: () => ask({ title: `Change email for ${name}`, description: "Changing the email revokes this user's browser sessions. Sign-in still requires the configured OIDC provider.", fields: [{ name: "email", label: "Email", type: "email", required: true, value: u.email ?? "", maxLength: 320 }], submitLabel: "Save email", run: (v, signal) => api(path, { method: "PATCH", body: { email: v.email }, signal }) }) },
     { label: "Reactivate", icon: <UserCheck aria-hidden />, hidden: !writable || !u.disabled_at, onSelect: () => ask({ title: `Reactivate ${name}?`, description: "Restores access from their remaining grants. Revoked keys and sessions do not come back; the user signs in again and issues new keys.", submitLabel: "Reactivate", run: (_, signal) => api(path, { method: "PATCH", body: { disabled: false }, signal }) }) },
     { label: "Suspend…", icon: <UserX aria-hidden />, danger: true, hidden: !writable || !!u.disabled_at, disabled: self, disabledReason: "You can't suspend yourself. Ask another Platform Admin.", onSelect: () => ask({ title: `Suspend ${name}?`, description: "Immediate: revokes sessions and user-owned keys. Group synchronization cannot undo it, and reactivation does not restore revoked credentials. Last-admin and last-owner safeguards apply.", danger: true, submitLabel: "Suspend user", run: (_, signal) => api(path, { method: "PATCH", body: { disabled: true }, signal }) }) },
+    { label: "Sign out all sessions…", icon: <LogOut aria-hidden />, hidden: !writable || !u.active_sessions, disabled: self, disabledReason: "Sign out your own sessions from Your profile.", onSelect: () => ask({ title: `Sign out ${name} everywhere?`, description: "Ends all of their dashboard sessions now. They can sign in again; their API keys keep working. To remove access, suspend them instead.", submitLabel: "Sign out everywhere", danger: true, successNotice: "Sessions signed out.", run: (_, signal) => api(`${path}/sessions/revoke`, { method: "POST", signal }) }) },
     copyIdAction(u.id),
   ];
   const signIn = (value: string | null | undefined) => value ? <DetailTime value={value} /> : value === null ? "Never" : "Unavailable";
@@ -117,6 +118,7 @@ export function UserDetail({ session, id, tab, onTabChange }: { session: Session
         { label: "Role grants", value: grants.length ? <span className={s.badges}>{current.length > 0 && <GrantBadges grants={current} groupHint="SSO group grants update at sign-in" onRemove={writable ? g => removeGrant(ask, u, g) : undefined} />}{revoked.map((g, i) => <Badge key={g.id ?? i} size="sm" variant="outline" tone="neutral"><span className={s.muted}>{grantLabel(g)} · revoked</span></Badge>)}</span> : <span className={s.muted}>No grants recorded.</span> },
         { label: "First signed in", value: signIn(u.first_sign_in_at) },
         { label: "Last sign-in", value: signIn(u.last_sign_in_at) },
+        ...(u.active_sessions === undefined ? [] : [{ label: "Active sessions", value: String(u.active_sessions) }]),
       ]} />
     </Card>
   </Stack>;

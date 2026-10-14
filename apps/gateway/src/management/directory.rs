@@ -379,6 +379,8 @@ async fn platform_user(
         .fetch_optional(&mut *tx)
         .await?
         .ok_or_else(missing)?;
+    // A count only: an admin never sees another person's devices.
+    data["active_sessions"] = json!(super::sessions::live_count(&mut tx, id).await?);
     data["first_sign_in_at"] = sqlx::query_scalar::<_, Option<Value>>(
         "SELECT to_jsonb(min(created_at)) FROM browser_sessions WHERE user_id=$1",
     )

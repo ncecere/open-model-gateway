@@ -34,8 +34,12 @@ use crate::{lifecycle, store::Store};
 #[path = "identity/jwks.rs"]
 pub(crate) mod jwks;
 use jwks::{JwksCache, JwksPolicy};
+#[path = "identity/client_label.rs"]
+mod client_label;
 #[path = "identity/throttle.rs"]
 pub(crate) mod throttle;
+/// How often a live session's `last_seen_at` is written, at most.
+const LAST_SEEN_EVERY_SECONDS: i32 = 5 * 60;
 
 const SESSION: &str = "omg_session";
 const CSRF: &str = "omg_csrf";
@@ -992,8 +996,14 @@ async fn callback(
     drop(tokens);
     let session = random_token()?;
     let csrf = random_token()?;
-    let inserted = sqlx::query("INSERT INTO browser_sessions(token_hash,user_id,csrf_hash,expires_at,verified_email) SELECT $1,id,$3,now()+interval '12 hours',$4 FROM users WHERE id=$2 AND disabled_at IS NULL AND cleaned_at IS NULL AND EXISTS(SELECT 1 FROM effective_platform_roles p WHERE p.user_id=users.id)")
-        .bind(hash(&session)).bind(user_id).bind(hash(&csrf)).bind(&email).execute(&state.store.pool).await.map_err(internal)?;
+    // Device summary for "Your sessions": a fixed-vocabulary browser/OS family only.
+    let label = client_label::client_label(
+        headers
+            .get(header::USER_AGENT)
+            .and_then(|v| v.to_str().ok()),
+    );
+    let inserted = sqlx::query("INSERT INTO browser_sessions(token_hash,user_id,csrf_hash,expires_at,verified_email,client_label,last_seen_at) SELECT $1,id,$3,now()+interval '12 hours',$4,$5,now() FROM users WHERE id=$2 AND disabled_at IS NULL AND cleaned_at IS NULL AND EXISTS(SELECT 1 FROM effective_platform_roles p WHERE p.user_id=users.id)")
+        .bind(hash(&session)).bind(user_id).bind(hash(&csrf)).bind(&email).bind(label).execute(&state.store.pool).await.map_err(internal)?;
     if inserted.rows_affected() != 1 {
         if wants_html(&headers) {
             return denied_browser_callback(&state, &headers, provider.config.secure_cookies).await;
@@ -1186,7 +1196,13 @@ struct VerifiedSession {
     principal: BrowserPrincipal,
     token_hash: Vec<u8>,
     csrf_hash: Vec<u8>,
+    id: Uuid,
 }
+
+/// The public ID of the session a management request came in on (#79):
+/// lets "Your sessions" mark it and "Sign out other sessions" keep it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CurrentSession(pub Uuid);
 async fn verify_session(
     state: &IdentityState,
     headers: &HeaderMap,
@@ -1195,8 +1211,18 @@ async fn verify_session(
         .map_err(|_| AuthError(StatusCode::UNAUTHORIZED))?
         .ok_or(AuthError(StatusCode::UNAUTHORIZED))?;
     let token_hash = hash(&token);
-    let row = sqlx::query_as::<_, (Uuid, String, String, Vec<u8>)>("SELECT u.id,s.verified_email,p.role,s.csrf_hash FROM browser_sessions s JOIN users u ON u.id=s.user_id JOIN effective_platform_roles p ON p.user_id=u.id WHERE s.token_hash=$1 AND s.verified_email IS NOT NULL AND s.revoked_at IS NULL AND s.expires_at>now() AND u.disabled_at IS NULL AND u.cleaned_at IS NULL")
-        .bind(&token_hash).fetch_optional(&state.store.pool).await.map_err(internal)?.ok_or(AuthError(StatusCode::UNAUTHORIZED))?;
+    let row = sqlx::query_as::<_, (Uuid, String, String, Vec<u8>, Uuid, bool)>("SELECT u.id,s.verified_email,p.role,s.csrf_hash,s.id,s.last_seen_at IS NULL OR s.last_seen_at<now()-make_interval(secs=>$2) FROM browser_sessions s JOIN users u ON u.id=s.user_id JOIN effective_platform_roles p ON p.user_id=u.id WHERE s.token_hash=$1 AND s.verified_email IS NOT NULL AND s.revoked_at IS NULL AND s.expires_at>now() AND u.disabled_at IS NULL AND u.cleaned_at IS NULL")
+        .bind(&token_hash).bind(f64::from(LAST_SEEN_EVERY_SECONDS)).fetch_optional(&state.store.pool).await.map_err(internal)?.ok_or(AuthError(StatusCode::UNAUTHORIZED))?;
+    if row.5 {
+        // At most one write per session per interval, not one per request.
+        // Best effort: a failed write (say, a primary briefly read-only during
+        // failover) must not fail an otherwise valid session.
+        if let Err(error) = sqlx::query("UPDATE browser_sessions SET last_seen_at=now() WHERE token_hash=$1 AND revoked_at IS NULL AND (last_seen_at IS NULL OR last_seen_at<now()-make_interval(secs=>$2))")
+            .bind(&token_hash).bind(f64::from(LAST_SEEN_EVERY_SECONDS)).execute(&state.store.pool).await
+        {
+            tracing::warn!(%error, "could not record session activity");
+        }
+    }
     Ok(VerifiedSession {
         principal: BrowserPrincipal {
             user_id: row.0,
@@ -1206,6 +1232,7 @@ async fn verify_session(
         },
         token_hash,
         csrf_hash: row.3,
+        id: row.4,
     })
 }
 fn single_header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -1256,6 +1283,7 @@ pub async fn require_session(
         return error.into_response();
     }
     request.extensions_mut().insert(session.principal);
+    request.extensions_mut().insert(CurrentSession(session.id));
     private(next.run(request).await)
 }
 

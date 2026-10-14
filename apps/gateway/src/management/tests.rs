@@ -42,6 +42,8 @@ mod read_scale_tests;
 mod resource_tests;
 #[path = "session_tests.rs"]
 mod session_tests;
+#[path = "sessions_tests.rs"]
+mod sessions_tests;
 #[path = "settings/tests.rs"]
 mod settings_tests;
 #[path = "setup/tests.rs"]
