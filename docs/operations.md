@@ -212,7 +212,7 @@ Keep three things apart, in a secrets manager such as OpenBao, with separate acc
 2. **The file-store key list** (`GATEWAY_FILE_ENCRYPTION_KEYS_ENV`), every generation still referenced by stored files. The manifest's `file_encryption_key_ids` says which IDs a restore needs. Keep retired keys until no backup you retain references them. See [file store encryption keys](#file-store-encryption-keys).
 3. **The object-store credentials** for the backup bucket. They can read ciphertext and, unless restricted, delete it. They cannot decrypt anything.
 
-Anyone holding the bucket credentials and the age identity can read every backup. Anyone holding the age identity and the file keys can read stored files from object backups. Do not store any two of them together.
+Anyone holding the backup bucket's credentials and the age identity can read every database backup. Stored file contents are not in these backups: each object in the file store carries its own wrapped data key, so anyone holding the file-store key list and read access to the file store's bucket (or its copies) can read stored files; the age identity plays no part there. Keep each of these pairs apart: the age identity away from the backup bucket's credentials, and the file-store keys away from the file store's storage credentials.
 
 ### What this covers
 

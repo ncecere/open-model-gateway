@@ -980,7 +980,9 @@ def prune(client, bucket, prefix, keep, yes=False, out=print):
         except ManifestError:
             skipped.append(generation["manifest"])
             continue
-        if manifest["file"] != generation["archive"]:
+        # Only a complete generation counts toward --keep: a truncated or replaced
+        # archive must never take the place of a restorable one.
+        if manifest["file"] != generation["archive"] or generation["archive_bytes"] != stored_digest(manifest)[1]:
             skipped.append(generation["manifest"])
             continue
         recognized.append(generation)

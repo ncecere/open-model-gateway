@@ -609,6 +609,20 @@ class ObjectStoreTests(unittest.TestCase):
         self.assertEqual(backup.prune(self.client, "backups", "gw/", 1, yes=True, out=lines.append), [])
         self.assertEqual(self.s3.problems, [])
 
+    def test_prune_never_counts_a_truncated_archive_toward_keep(self):
+        names = []
+        for minutes in (0, 60):
+            manifest_path = self.encrypted(minutes)
+            backup.upload(self.client, manifest_path, "backups", "gw/")
+            names.append(json.loads(manifest_path.read_text())["file"])
+        older, newest = names
+        self.s3.objects[("backups", "gw/" + newest)] = self.s3.objects[("backups", "gw/" + newest)][:-7]  # truncated
+        lines = []
+        self.assertEqual(backup.prune(self.client, "backups", "gw/", 1, yes=True, out=lines.append), [])
+        self.assertFalse([m for m, _ in self.s3.log if m == "DELETE"])
+        self.assertIn(("backups", f"gw/{older}"), self.s3.objects)  # the only restorable generation survives
+        self.assertIn("1 incomplete or unrecognized manifest(s)", "\n".join(lines))
+
     def test_locations_and_endpoints_are_validated_without_echoing_secrets(self):
         self.assertEqual(backup.parse_target("s3://backups"), ("backups", ""))
         self.assertEqual(backup.parse_target("s3://backups/gw/prod/"), ("backups", "gw/prod/"))
@@ -732,6 +746,30 @@ class DisposableDatabaseTests(unittest.TestCase):
             self.assertEqual(self.pg.query("SELECT sum(amount_microusd) FROM monetary_ledger;", self.target), "22")
             self.assertEqual(self.pg.query("SELECT count(*) FROM stored_files WHERE deleted_at IS NULL;", self.target), "2")
             self.assertEqual(sorted(p.name for p in out.iterdir()), sorted([manifest["file"], manifest_path.name]))
+
+    def test_encrypted_archive_swapped_between_passes_fails_in_real_pg_restore(self):
+        # The second decrypt pass holds back the last block; real pg_restore must fail
+        # at the early end of file, and the created target must be dropped.
+        self.pg.query("INSERT INTO monetary_ledger SELECT gen_random_uuid(), NULL, g FROM generate_series(1, 20000) g;", self.source)
+        source = backup.Postgres(dict(self.env, PGDATABASE=self.source), self.pg.container)
+        with tempfile.TemporaryDirectory() as folder:
+            identity, recipient = age_identity(folder)
+            first = backup.backup(source, Path(folder) / "first", recipients=[recipient])
+            self.pg.query("INSERT INTO monetary_ledger SELECT gen_random_uuid(), NULL, 1 FROM generate_series(1, 500) g;", self.source)
+            second = backup.backup(source, Path(folder) / "second", recipients=[recipient])
+            archive = first.parent / json.loads(first.read_text())["file"]
+            replacement = second.parent / json.loads(second.read_text())["file"]
+            original = backup.verify_plaintext
+
+            def verify_then_swap(*args, **kwargs):
+                result = original(*args, **kwargs)
+                archive.write_bytes(replacement.read_bytes())
+                return result
+            with mock.patch.object(backup, "verify_plaintext", verify_then_swap):
+                with self.assertRaises(backup.BackupError) as raised:
+                    backup.restore(self.pg, first, self.target, create=True, expected_migrations=self.lineage, identity=identity, skip_file_key_check=True)
+            self.assertIn("changed since it was verified", str(raised.exception))
+            self.assertEqual(self.pg.query(f"SELECT count(*) FROM pg_database WHERE datname='{self.target}';"), "0")
 
     def test_partitioned_history_with_nested_validators_restores(self):
         # P6: history tables are partitioned and CHECK validators call other
