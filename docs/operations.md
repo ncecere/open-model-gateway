@@ -150,6 +150,7 @@ What the script guarantees:
 
 - **Connection handling:** URLs come from `--url-env` (default `DATABASE_URL`) or `--url-file`. They are passed through `PG*` environment variables and are never printed or placed on a command line.
 - **Containers:** `--pg-container NAME` runs the PostgreSQL 17 client tools inside that container with `docker exec`. The URL is then resolved inside the container, for example `127.0.0.1:5432`.
+- **Extensions:** the gateway schema uses none, so backups dump only the built-in `plpgsql` (`pg_dump --extension=plpgsql`). Extensions a cluster's `template1` adds to every database, such as pgvector, are left out: the migrator restoring on a clean host usually may not create them.
 - **Manifest contents:** the SHA-256 and size of the dump, plus `schema_family`, `latest_version` and the full migration list (version and checksum), the server version, and the source database name. `file_encryption_key_ids` lists the distinct file-store key IDs that live `stored_files` rows use (IDs only, never key material; empty when the file store is unused). Encrypted backups also record `encryption` (see below). The manifest is plaintext JSON and holds no secrets.
 - **Backup refusals:** a backup refuses empty or dirty lineages, or a lineage that changed while the dump ran. Partial files are deleted.
 - **Restore checks:** restore verifies the checksum first. It then requires the backup lineage to equal `open-model-gateway schema-version`, which prints the binary's embedded migrations as JSON without database access. The weaker `--expect-version N` is available when no binary is at hand.
@@ -236,10 +237,45 @@ Never recover over the live cluster. Never run down migrations. Never delete pen
 
 1. Take a fresh backup and run `verify`.
 2. Restore with `--create` into `gateway_restore_<date>` on a non-production cluster, using `--gateway-binary` from the release you intend to run.
+
+   If the migrator may not create databases (common with operator-managed clusters), a database administrator creates the target instead, then you restore without `--create`:
+
+   ```sql
+   CREATE DATABASE gateway_restore_20261014 OWNER <migrator> TEMPLATE template0;  -- template0: no template extensions
+   REVOKE ALL ON DATABASE gateway_restore_20261014 FROM PUBLIC;                  -- what --create does
+   GRANT CONNECT ON DATABASE gateway_restore_20261014 TO gateway_runtime;
+   ```
+
+   Without the `REVOKE`, `grants verify` fails with "runtime can create objects" (PUBLIC's default `TEMP`). `--create` itself copies `template0`, for the same reason.
+
+   Demo database names are refused as targets. To cut a restored copy over to the name the gateway expects, stop every gateway replica, then a database administrator, connected to another database such as `postgres`, drops the old database and renames the restored one into its place (`DROP DATABASE …`, `ALTER DATABASE gateway_restore_… RENAME TO …`). Both need ownership, `RENAME` also needs `CREATEDB`, and neither runs while sessions are open on those databases.
 3. Apply the runtime grants as the migrator with `open-model-gateway grants apply`, then run `open-model-gateway grants verify` with a role that can `SET ROLE gateway_runtime` (it runs `deploy/staging/verify-privileges.sql`, rollback-only).
 4. Start the matching release against the restored database. `/health/ready` must report `schema: ok`.
 5. Compare the restored ledger and execution counts (printed by `restore`) with the source. Spot-check costs, and confirm that pending and unknown reservations survived. Run `open-model-gateway budget verify` against it.
 6. Record the elapsed time (your measured RTO) and the backup age (RPO), then drop the drill database.
+
+A restore brings back every browser session that had not expired when the backup was taken. If the incident involved a compromise, revoke them before serving: `UPDATE browser_sessions SET revoked_at = now() WHERE revoked_at IS NULL;` as the migrator, so everyone signs in again.
+
+**Clean-host drill (2026-10-14 UTC, #105)** on the homelab cluster, with two disposable `dev-omg` environments (PostgreSQL 18, release `dev-bc760061ffa5`, schema version 37):
+
+- **Scenario:** the source installation is lost (its gateway stopped and never used again). The newest encrypted off-host backup in RustFS is the recovery point. A fresh environment on another database cluster takes over.
+- **Acknowledged data:** a team created through the API before the backup (must survive) and one created 34 s after it (the expected loss).
+- **RPO:** the backup snapshot was taken at 02:46:11 UTC and the failure declared at 02:47:00, so 48 s of writes were at risk. Exactly the one acknowledged write in that window was lost: one workspace, its membership grant and its audit event. All 71 tables matched the pre-backup snapshot row for row. With logical dumps the RPO is the backup interval: a daily backup can lose up to a day.
+- **RTO: 92 s** from failure to a gateway serving the restored database:
+  - fresh environment (cluster, migrate, bootstrap, gateway): 73 s;
+  - target created and download verified: 2.4 s;
+  - restore with two decrypt passes and lineage checks: 7.2 s;
+  - rename into place, `grants apply`, `grants verify`, `budget verify` and `history verify`: 2.7 s;
+  - gateway restart and readiness: 6.4 s.
+
+  A fresh SSO sign-in as the platform admin then worked, and Admin › Teams showed the pre-backup team but not the lost one.
+- **Found and fixed:**
+  - The first attempt failed because the backup carried `pgvector` from the cluster's `template1`, which the migrator may not create. Backups now leave template extensions out.
+  - An administrator-created target needs the database `REVOKE` above; `grants verify` caught it.
+- **Limits:**
+  - The demo has no file store, so file-key completeness was trivially satisfied (no key IDs).
+  - Logical dump only: no point-in-time recovery.
+  - The demo database is small (a 0.5 MB compressed dump) and restores in seconds. A large installation's restore time grows with its size; time your own.
 
 Local evidence (2026-10-09) on a freshly migrated v14 database on the disposable 54339 cluster, with tools in the container:
 

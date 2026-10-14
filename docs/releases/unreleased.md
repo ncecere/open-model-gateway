@@ -34,4 +34,6 @@ Notes for changes on `main` since v0.4.0. They become the next release's notes.
 
 ## Verification
 
+- Clean-host restore drill on the homelab cluster (#105): RPO was the 48 s since the last backup, and recovery to a serving gateway took 92 s. See docs/operations.md. The drill found that backups carried extensions from the cluster's `template1` (pgvector), which blocked restore as the migrator. `backup` now dumps only `plpgsql`. The docs now cover administrator-created targets (`REVOKE ALL … FROM PUBLIC`, `GRANT CONNECT`), the rename cutover, and revoking restored sessions.
+
 - Browser regressions cover invalid and corrected Add-model submission at desktop and phone widths. The Usage & costs resize check waits for the mobile shell to render before asserting zero horizontal overflow.

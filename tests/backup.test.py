@@ -56,9 +56,11 @@ class FakePostgres:
         self.seen_during_dump = None
         self.restored = None
         self.calls = []
+        self.statements = []
 
     def query(self, sql, database=None):
         self.calls.append(("query", sql.split()[0:3], database))
+        self.statements.append(sql)
         if "to_regclass" in sql:
             return "t" if self.file_key_ids is not None else "f"
         if "FROM stored_files" in sql:
@@ -167,6 +169,14 @@ class UnitTests(unittest.TestCase):
         for kwargs in ({"expected_migrations": LINEAGE[:1]}, {"expected_migrations": [LINEAGE[0], dict(LINEAGE[1], checksum="cc" * 48)]}, {"expected_version": 3}, {}):
             with self.assertRaises(backup.BackupError):
                 backup.check_compatible(manifest, **kwargs)
+
+    def test_create_copies_template0_not_template1(self):
+        # template1 may carry extensions (pgvector on some clusters); a copy of it is never empty.
+        with tempfile.TemporaryDirectory() as folder:
+            manifest_path = backup.backup(FakePostgres(), Path(folder))
+            pg = FakePostgres()
+            backup.restore(pg, manifest_path, "gateway_restored", create=True, expected_migrations=LINEAGE)
+        self.assertIn('CREATE DATABASE "gateway_restored" TEMPLATE template0;', pg.statements)
 
     def test_restore_refuses_non_empty_or_existing_targets_without_touching_data(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -770,6 +780,23 @@ class DisposableDatabaseTests(unittest.TestCase):
                     backup.restore(self.pg, first, self.target, create=True, expected_migrations=self.lineage, identity=identity, skip_file_key_check=True)
             self.assertIn("changed since it was verified", str(raised.exception))
             self.assertEqual(self.pg.query(f"SELECT count(*) FROM pg_database WHERE datname='{self.target}';"), "0")
+
+    def test_extensions_from_the_cluster_template_are_not_backed_up(self):
+        # A cluster whose template1 adds extensions (e.g. pgvector) puts them in every new
+        # database. The gateway schema needs none, and the owner restoring on a clean host
+        # usually cannot create them, so a backup must not carry them.
+        self.pg.query("CREATE EXTENSION pg_trgm;", self.source)
+        source = backup.Postgres(dict(self.env, PGDATABASE=self.source), self.pg.container)
+        with tempfile.TemporaryDirectory() as folder:
+            manifest_path = backup.backup(source, Path(folder))
+            archive = manifest_path.parent / json.loads(manifest_path.read_text())["file"]
+            command, env = source.command(["pg_restore", "--list"])
+            with archive.open("rb") as stdin:
+                listing = subprocess.run(command, env=env, stdin=stdin, capture_output=True, text=True, check=True).stdout
+            self.assertNotIn(" EXTENSION ", listing)
+            self.assertIn(" TABLE public monetary_ledger", listing)
+            restored, _ = backup.restore(self.pg, manifest_path, self.target, create=True, expected_migrations=self.lineage)
+            self.assertEqual(self.pg.query("SELECT count(*) FROM pg_extension WHERE extname='pg_trgm';", self.target), "0")
 
     def test_partitioned_history_with_nested_validators_restores(self):
         # P6: history tables are partitioned and CHECK validators call other
