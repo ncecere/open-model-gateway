@@ -1013,6 +1013,45 @@ def prune(client, bucket, prefix, keep, yes=False, out=print):
     return doomed
 
 
+# Rows whose revocation is final (migration 0039), with their key as text;
+# `{a}` is the table alias prefix ("" or "t.").
+REVOCABLE = [
+    ("api_keys", "{a}id::text"),
+    ("workspace_membership_grants", "{a}id::text"),
+    ("platform_role_grants", "{a}id::text"),
+    ("browser_sessions", "encode({a}token_hash,'hex')"),
+    ("workspace_invitations", "{a}id::text"),
+]
+
+
+def reapply_revocations(source, target, yes=False, out=print):
+    """Copy every revocation of the old (source) database onto the restored
+    (target) one: a key, grant, session or invitation that the old database
+    revoked but the restore brought back active gets the same `revoked_at`.
+    Rows already revoked in the target keep their time; rows created after
+    the backup don't exist in the target and are skipped. Dry run unless
+    `yes`; applied in one transaction. Returns the count per table."""
+    installation = "SELECT id FROM installation;"
+    if source.query(installation) != target.query(installation):
+        raise BackupError("the source and target are a different installation; refusing to copy revocations")
+    tag = "omg_" + secrets.token_hex(8)
+    counts, statements = {}, []
+    for table, key in REVOCABLE:
+        revoked = source.query(f"SELECT coalesce(json_agg(json_build_array({key.format(a='')}, revoked_at)),'[]') FROM {table} WHERE revoked_at IS NOT NULL;")
+        match = f"{key.format(a='t.')}=r.key"
+        pending = f"SELECT x->>0 AS key, (x->>1)::timestamptz AS revoked_at FROM json_array_elements(${tag}${revoked}${tag}$::json) x"
+        counts[table] = int(target.query(f"SELECT count(*) FROM {table} t JOIN ({pending}) r ON {match} WHERE t.revoked_at IS NULL;"))
+        statements.append(f"UPDATE {table} t SET revoked_at=r.revoked_at FROM ({pending}) r WHERE {match} AND t.revoked_at IS NULL;")
+    verb = "Re-revoking" if yes else "Would re-revoke"
+    for table, n in counts.items():
+        out(f"{verb} {n} {table} row(s) revoked in the old database after the backup.")
+    if not yes:
+        out("Dry run: nothing changed. Re-run with --yes to apply.")
+        return counts
+    target.query("BEGIN;\n" + "\n".join(statements) + "\nCOMMIT;")
+    return counts
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1048,6 +1087,10 @@ def main(argv=None):
     p.add_argument("--identity", type=Path, help="age identity file (required for encrypted backups)")
     p.add_argument("--file-keys-env", metavar="NAME", help="variable holding the file-store key list (kid:base64key,...); every key id the backup references must be present")
     p.add_argument("--skip-file-key-check", action="store_true", help="restore even though file-store key ids were not checked")
+    p = sub.add_parser("reapply-revocations", help="after a restore, re-revoke what the old database revoked since the backup (dry run without --yes)")
+    connection(p)
+    p.add_argument("--source-url-file", required=True, help="file containing the OLD (pre-restore) database URL; read only")
+    p.add_argument("--yes", action="store_true", help="apply (one transaction)")
     p = sub.add_parser("upload", help="upload a backup (archive, then manifest) to S3-compatible storage")
     p.add_argument("manifest", type=Path)
     storage(p, "--to")
@@ -1096,6 +1139,10 @@ def main(argv=None):
             prune(client, bucket, prefix, args.keep, args.yes)
         return
     pg = Postgres(connection_env(read_url(args)), args.pg_container)
+    if args.command == "reapply-revocations":
+        source = Postgres(connection_env(Path(args.source_url_file).read_text().strip()), args.pg_container)
+        reapply_revocations(source, pg, args.yes)
+        return
     if args.command == "backup":
         recipients = parse_recipients(args.encrypt_to, args.encrypt_to_file)
         manifest = backup(pg, args.out_dir, recipients=recipients)

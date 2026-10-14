@@ -702,6 +702,45 @@ class DisposableDatabaseTests(unittest.TestCase):
         for name in (self.source, self.target):
             self.pg.query(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE);')
 
+    def test_reapply_revocations_from_the_old_database_after_a_restore(self):
+        # #146: a restore brings back keys, grants, sessions and invitations that
+        # were revoked after the backup. Re-apply them from the old database.
+        tables = ["api_keys", "workspace_membership_grants", "platform_role_grants", "workspace_invitations"]
+        schema = ["ALTER TABLE installation ADD COLUMN id uuid NOT NULL DEFAULT '11111111-1111-4111-8111-111111111111';",
+                  "CREATE TABLE browser_sessions(token_hash bytea PRIMARY KEY, revoked_at timestamptz);",
+                  "INSERT INTO browser_sessions SELECT sha256(g::text::bytea), NULL FROM generate_series(1,3) g;"]
+        for table in tables:
+            schema += [f"CREATE TABLE {table}(id uuid PRIMARY KEY, revoked_at timestamptz);",
+                       f"INSERT INTO {table} SELECT gen_random_uuid(), NULL FROM generate_series(1,3);"]
+        # Revoked before the backup: the restore already carries it, and its time must not move.
+        schema.append("UPDATE api_keys SET revoked_at=now()-interval '1 day' WHERE id=(SELECT min(id::text)::uuid FROM api_keys);")
+        self.pg.query("\n".join(schema), self.source)
+        source = backup.Postgres(dict(self.env, PGDATABASE=self.source), self.pg.container)
+        target = backup.Postgres(dict(self.env, PGDATABASE=self.target), self.pg.container)
+        with tempfile.TemporaryDirectory() as folder:
+            backup.restore(self.pg, backup.backup(source, Path(folder)), self.target, create=True, expected_migrations=self.lineage)
+        # After the backup the old database revokes one more row in each table.
+        revoke = [f"UPDATE {t} SET revoked_at=now() WHERE id=(SELECT max(id::text)::uuid FROM {t});" for t in tables]
+        revoke.append("UPDATE browser_sessions SET revoked_at=now() WHERE token_hash=(SELECT token_hash FROM browser_sessions ORDER BY token_hash DESC LIMIT 1);")
+        self.pg.query("\n".join(revoke), self.source)
+        everything = tables + ["browser_sessions"]
+        def revoked(pg):
+            key = lambda t: "encode(token_hash,'hex')" if t == "browser_sessions" else "id::text"
+            return {t: pg.query(f"SELECT coalesce(string_agg({key(t)}||'@'||revoked_at::text, ',' ORDER BY 1),'') FROM {t} WHERE revoked_at IS NOT NULL;") for t in everything}
+        before = revoked(target)
+        lines = []
+        plan = backup.reapply_revocations(source, target, yes=False, out=lines.append)
+        self.assertEqual(plan, {t: 1 for t in everything})
+        self.assertEqual(revoked(target), before, "a dry run changes nothing")
+        self.assertIn("Dry run", "\n".join(lines))
+        self.assertEqual(backup.reapply_revocations(source, target, yes=True, out=lines.append), {t: 1 for t in everything})
+        self.assertEqual(revoked(target), revoked(source), "the same rows, with the same revocation times")
+        self.assertEqual(backup.reapply_revocations(source, target, yes=True, out=lines.append), {t: 0 for t in everything})
+        target.query("UPDATE installation SET id='22222222-2222-4222-8222-222222222222';")
+        with self.assertRaises(backup.BackupError) as raised:
+            backup.reapply_revocations(source, target, yes=True, out=lines.append)
+        self.assertIn("different installation", str(raised.exception))
+
     def test_backup_verify_restore_and_refusals(self):
         source = backup.Postgres(dict(self.env, PGDATABASE=self.source), self.pg.container)
         with tempfile.TemporaryDirectory() as folder:
