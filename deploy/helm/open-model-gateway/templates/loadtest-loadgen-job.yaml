@@ -35,12 +35,21 @@ spec:
           command: ["/usr/local/bin/loadgen"]
           args:
             - "run"
-            - "--base-url"
+            - "--target"
             - "http://{{ include "omg.fullname" . }}:{{ .Values.service.port }}"
-            - "--requests"
-            - {{ .Values.loadtest.loadgen.requests | quote }}
-            - "--concurrency"
-            - {{ .Values.loadtest.loadgen.concurrency | quote }}
+            - "--mock-url"
+            - "http://{{ include "omg.fullname" . }}-mock-upstream:8000"
+            - "--rate"
+            - {{ .Values.loadtest.loadgen.rate | quote }}
+            - "--duration"
+            - {{ .Values.loadtest.loadgen.duration | quote }}
+            - "--warmup"
+            - {{ .Values.loadtest.loadgen.warmup | quote }}
+            - "--keys"
+            - {{ .Values.loadtest.loadgen.keys | quote }}
+            {{- range .Values.loadtest.loadgen.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
           resources:
             {{- toYaml .Values.loadtest.loadgen.resources | nindent 12 }}
           securityContext:

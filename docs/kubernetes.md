@@ -221,7 +221,10 @@ trigger, not part of the release lifecycle), so it only renders when
 --wait` would apply and block on it immediately, before mock-upstream or the gateway
 have anything to serve. Set `--set loadtest.loadgen.enabled=true` and `helm upgrade`
 (or `helm template ... --show-only templates/loadtest-loadgen-job.yaml | kubectl apply
--f-`, then unset it again) once seeded data exists to actually run a load test. Also
+-f-`, then unset it again) once seeded data exists to actually run a load test. The Job
+runs `loadgen run` against the gateway Service at `loadtest.loadgen.rate` requests per second
+for `duration` seconds (the first `warmup` seconds left out of latency statistics), spread over
+`keys` seeded keys; add further `loadgen run` flags with `loadtest.loadgen.extraArgs`. Also
 pin `loadtest.mockUpstream.clusterIP` (see `ci/loadtest-values.yaml`) to an address free
 in your cluster's service CIDR: the approval model in
 `apps/gateway/src/providers/local/endpoints.rs` never resolves DNS, so
