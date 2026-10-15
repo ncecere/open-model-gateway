@@ -45,6 +45,9 @@ gateway:
   # Names the SMTP password reference may read (GATEWAY_SMTP_SECRET_ENV_ALLOWLIST).
   # Must not overlap secretEnvAllowlist: the gateway refuses to start if it does.
   smtpSecretEnvAllowlist: []
+  # SMTP relay hosts email may go to (GATEWAY_SMTP_HOST_ALLOWLIST): the relay
+  # set in Admin > Settings > Email must be listed, or email can't be sent.
+  smtpHostAllowlist: []
   # Networks whose X-Forwarded-For is believed for sign-in rate limits
   # (GATEWAY_TRUSTED_PROXIES): set to the ingress controller's pod CIDR, or
   # every user counts as the controller's address.

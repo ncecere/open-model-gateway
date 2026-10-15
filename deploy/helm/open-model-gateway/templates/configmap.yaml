@@ -24,6 +24,9 @@ data:
   {{- with .Values.gateway.loginRatePerMinute }}
   GATEWAY_LOGIN_RATE_PER_MINUTE: {{ . | quote }}
   {{- end }}
+  {{- if .Values.gateway.smtpHostAllowlist }}
+  GATEWAY_SMTP_HOST_ALLOWLIST: {{ .Values.gateway.smtpHostAllowlist | join "," | quote }}
+  {{- end }}
   {{- if .Values.gateway.smtpSecretEnvAllowlist }}
   GATEWAY_SMTP_SECRET_ENV_ALLOWLIST: {{ .Values.gateway.smtpSecretEnvAllowlist | join "," | quote }}
   {{- end }}

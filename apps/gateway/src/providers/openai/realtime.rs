@@ -18,7 +18,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::time::{Instant, timeout_at};
 use tokio_tungstenite::{
-    Connector, connect_async_tls_with_config,
+    Connector, client_async_tls_with_config,
     tungstenite::{self, Message, client::IntoClientRequest, protocol::WebSocketConfig},
 };
 
@@ -74,6 +74,12 @@ fn endpoint(adapter: &OpenAiAdapter, target: &Deployment) -> Result<(String, boo
     Ok((url.into(), secure))
 }
 
+/// The installation's egress policy; only test builds' plain `ws://` mock may
+/// use loopback. A secure endpoint never gets an exception.
+fn egress_policy(secure: bool) -> crate::egress::Policy {
+    crate::egress::policy().permit_loopback(cfg!(test) && !secure)
+}
+
 /// Explicit ring-backed rustls with the webpki roots (certificate checks on).
 fn tls() -> Result<Arc<rustls::ClientConfig>> {
     let roots = rustls::RootCertStore {
@@ -125,6 +131,32 @@ pub(super) async fn connect(
     let deadline = Instant::now() + setup.connect_timeout;
     let auth = authorization(adapter, target)?;
     let (url, secure) = endpoint(adapter, target)?;
+    // Resolve through the egress policy and connect to a checked address
+    // (#33, #168); TLS still verifies the host name. Plain `ws://` exists only
+    // in test builds (`endpoint`), against a loopback mock.
+    let parsed = reqwest::Url::parse(&url).map_err(|_| InferenceError::Configuration)?;
+    let host = parsed
+        .host_str()
+        .map(|h| h.trim_matches(['[', ']']).to_owned())
+        .ok_or(InferenceError::Configuration)?;
+    let port = parsed
+        .port_or_known_default()
+        .ok_or(InferenceError::Configuration)?;
+    let egress = egress_policy(secure);
+    let addresses = timeout_at(
+        deadline,
+        crate::egress::resolve(&egress, crate::egress::Purpose::Provider, &host, port),
+    )
+    .await
+    .map_err(|_| InferenceError::Timeout)?
+    .map_err(|_| InferenceError::UpstreamUnavailable)?;
+    let stream = timeout_at(deadline, tokio::net::TcpStream::connect(&addresses[..]))
+        .await
+        .map_err(|_| InferenceError::Timeout)?
+        .map_err(|_| InferenceError::UpstreamUnavailable)?;
+    stream
+        .set_nodelay(true)
+        .map_err(|_| InferenceError::UpstreamUnavailable)?;
     let mut request = url
         .into_client_request()
         .map_err(|_| InferenceError::Configuration)?;
@@ -141,7 +173,7 @@ pub(super) async fn connect(
     };
     let (socket, _response) = timeout_at(
         deadline,
-        connect_async_tls_with_config(request, Some(config), true, Some(connector)),
+        client_async_tls_with_config(request, stream, Some(config), Some(connector)),
     )
     .await
     .map_err(|_| InferenceError::Timeout)?

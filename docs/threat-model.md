@@ -316,8 +316,8 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 **EGR-1. A connection reads an arbitrary environment variable.** I · Asset: host secrets · Attacker: Platform Admin.
 - Mitigation: `providers/secrets.rs` `EnvSecrets` resolves only `env:NAME` with `NAME` in `GATEWAY_SECRET_ENV_ALLOWLIST`. Management validates references without resolving them (`management/resources.rs` `credential_valid`; `ApprovedEndpoints::validate_connection`).
 - Tests: `providers/secrets.rs` `denies_non_allowlisted_and_unsupported_references`; `providers/local/tests.rs` `invalid_approval_or_auth_never_resolves_secret_or_sends_request`; `providers/openrouter/tests.rs` `connection_is_validated_before_credentials`; `providers/openai/tests.rs` `endpoint_and_region_rejected_before_credentials_or_network`.
-- Residual: one allowlist covers every provider and the SMTP password (EGR-7).
-- Follow-up: see EGR-7.
+- Residual: one allowlist covers every provider connection. The SMTP password has its own, disjoint allowlist since #140 (EGR-7).
+- Follow-up: none.
 
 **EGR-2. The management API exposes credentials.** I · Asset: provider credentials · Attacker: Platform Auditor, Platform Admin.
 - Mitigation: connections hold references, never values; reads return no secret material.
@@ -329,7 +329,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 - Mitigation: `providers/local/endpoints.rs` `ApprovedEndpoints::parse` loads approvals only from `GATEWAY_LOCAL_UPSTREAMS`: an exact canonical `/v1` URL plus fixed IP addresses, pinned with `resolve_to_addrs` (no DNS at request time). `allowed` refuses unspecified, link-local, multicast, broadcast, CGNAT, NAT64 and cloud-metadata addresses; plain HTTP is allowed only to private ranges; loopback only in development. The vLLM metrics URL must derive from an approved origin (`metrics_endpoint`).
 - Tests: `providers/local/endpoints.rs` `canonical_exact_approval_and_dangerous_destinations`, `metrics_urls_must_be_an_approved_origin`; `providers/local/tests.rs` `all_profiles_mock_chat_and_embedding_contracts_with_pinned_host`.
 - Residual: an HTTPS approval may name a public address, and the operator decides what to approve. Nothing enforces egress at the network level. Every other gateway HTTP client now resolves through `egress.rs` (#167): metadata, link-local and reserved ranges are never reached, loopback only in development, private ranges only from `GATEWAY_EGRESS_PRIVATE_ALLOW`; a source scan test (`every_http_client_uses_the_egress_resolver`) fails if a client is built without it. The AWS SDK's credential providers (IMDS, ECS/EKS Pod Identity, STS, SSO) use the SDK's own client and bypass it by design: their endpoints come from the SDK and operator environment, not tenant data.
-- Follow-up: #168 (SMTP, realtime), #169 (network policy).
+- Follow-up: #169 (network policy). The realtime WebSocket and SMTP use the same policy since #168.
 
 **EGR-4. Redirects, proxies or retries leak credentials or duplicate work.** I, T · Asset: provider credentials, spend · Attacker: malicious upstream.
 - Mitigation: the OpenAI, Anthropic, OpenRouter, local, Bedrock, S3 and OpenRouter-catalog clients set `redirect::Policy::none()`, `.no_proxy()` and `.retry(never())` (`providers/openai.rs` `OpenAiAdapter::new`, `providers/anthropic.rs`, `providers/openrouter.rs`, `providers/local/endpoints.rs`, `providers/bedrock/transport.rs` `client`, `filestore/s3/transport.rs` `client`, `management/governance/suggestion.rs`).
@@ -350,10 +350,12 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 - Follow-up: Review: #61.
 
 **EGR-7. The SMTP relay is used to exfiltrate a provider credential.** I, E · Asset: provider credentials · Attacker: Platform Admin.
-- Mitigation: SMTP needs STARTTLS or implicit TLS unless the relay is loopback (`email.rs` `send_with`); the password is an `env:` reference checked against `GATEWAY_SECRET_ENV_ALLOWLIST` (`password_ref_allowed`); test sends are audited and rate-limited.
+- Mitigation: SMTP needs STARTTLS or implicit TLS unless the relay and every address it resolves to are loopback (`email.rs` `send_with`); test sends are audited and rate-limited.
 - Tests: `email.rs` `refuses_plaintext_to_remote_relays_and_bad_input`, `validates_hosts_and_references`; `management/settings/tests.rs` `email_settings_validate_references_and_transport_security`, `test_email_reaches_the_admin_is_audited_and_rate_limited`.
-- Residual: the SMTP host and port are chosen by the Platform Admin (`management/settings.rs`), and the password allowlist is the one provider connections use (`email.rs` `allowlist`; `management/resources.rs` `credential_valid`). An admin can set the password reference to a provider key's variable and the host to a server they control; the next test email sends that key in SMTP AUTH. This breaks "provider credentials are references". Network egress does not stop it: the default Helm egress rule allows TCP 443 to any destination (EGR-8), and implicit TLS on port 443 is an accepted SMTP setting.
-- Follow-up: #140 (SMTP credential reference); #33 for network-level egress.
+- Mitigation (#140, #168): SMTP passwords come only from `GATEWAY_SMTP_SECRET_ENV_ALLOWLIST`, disjoint from provider credentials. The relay host the Platform Admin chooses must be on the operator's `GATEWAY_SMTP_HOST_ALLOWLIST` (`email.rs` `send` refuses before resolving the credential), and it is resolved through the egress policy and connected by checked address (`send_with`).
+- Tests (#168): `email.rs` `the_relay_host_must_be_on_the_operator_allowlist`, `an_unlisted_relay_never_receives_the_credential`, `the_egress_policy_decides_where_mail_goes`; `management/settings/tests.rs` `email_settings_validate_references_and_transport_security` (`host_not_allowed`).
+- Residual: an operator who lists a relay trusts it with the SMTP password and every invitation and alert email.
+- Follow-up: none (fixed in #140 and #168).
 
 **EGR-8. Egress is not enforced by the network.** I, E · Asset: internal network, data exfiltration · Attacker: compromised replica; any SSRF.
 - Mitigation: application allowlists only (EGR-3 to EGR-5). The Helm chart's NetworkPolicy default-denies ingress and egress, but `networkPolicy.egress.allowHttpsEgress: true` allows TCP 443 to any destination, and an external database leaves 5432 and 6432 open to any destination (`deploy/helm/open-model-gateway/templates/networkpolicy.yaml`). Staging Compose has no egress control.
@@ -602,7 +604,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 | Gap | Threats | Follow-up |
 | --- | --- | --- |
 | Shared-workspace keys can act on other members' files, batches and videos through `/v1/files`, `/v1/batches` and `/v1/videos`; documented design ([Files API](files-api.md), [async jobs](async-jobs.md)) that conflicts with the dashboard and AGENTS.md | TEN-5, JOB-4 | #141 (needs a product decision) |
-| SMTP password reference shares the provider allowlist; a Platform Admin can send a provider key to a relay they choose, and the default Helm egress (443 anywhere) does not block it | EGR-7 | #140; #33 |
+| SMTP password reference shares the provider allowlist; a Platform Admin can send a provider key to a relay they choose, and the default Helm egress (443 anywhere) does not block it | EGR-7 | Fixed in #140 and #168 |
 | Egress not enforced at the network level; Helm allows 443 anywhere | EGR-3, EGR-8 | #33 |
 | Login and callback abuse controls; expired login attempts never cleaned up | OIDC-6 | Fixed in #78 and #80 |
 | No idle expiry; session rows never deleted | KEY-8, OIDC-4 | Fixed in #79 and #80 |

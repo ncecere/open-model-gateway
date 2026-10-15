@@ -348,8 +348,10 @@ async fn email_json(tx: &mut Transaction<'_, Postgres>) -> Result<Value, ApiErro
     let settings = smtp_of(row.clone());
     let (host, port, tls, username, password_ref, from_address, from_name) = row;
     let reference_allowed = password_ref.as_deref().map(email::password_ref_allowed);
+    let host_allowed = host.as_deref().map(email::host_allowed);
     let status = match &settings {
         None => "not_configured",
+        Some(s) if !email::host_allowed(&s.host) => "host_not_allowed",
         Some(s) if !s.credential_available() => "credential_unavailable",
         Some(_) => "ready",
     };
@@ -362,6 +364,8 @@ async fn email_json(tx: &mut Transaction<'_, Postgres>) -> Result<Value, ApiErro
         "username": username,
         "password_ref": password_ref,
         "password_ref_allowed": reference_allowed,
+        // The operator's GATEWAY_SMTP_HOST_ALLOWLIST decides (#168).
+        "host_allowed": host_allowed,
         "from_address": from_address,
         "from_name": from_name,
         "public_url_configured": public_url().is_some(),

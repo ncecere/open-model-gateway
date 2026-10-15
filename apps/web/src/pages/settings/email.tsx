@@ -21,7 +21,7 @@ import st from "./settings.module.css";
 
 type Draft = EmailDraft & { enabled: boolean };
 const draftOf = (e: EmailSettings): Draft => ({ ...emailDraft(e), enabled: e.configured });
-const statusBadge = (e: EmailSettings) => e.status === "ready" ? <Badge tone="good">Ready</Badge> : e.status === "credential_unavailable" ? <Badge tone="bad">Password unavailable</Badge> : <Badge>Not set up</Badge>;
+const statusBadge = (e: EmailSettings) => e.status === "ready" ? <Badge tone="good">Ready</Badge> : e.status === "credential_unavailable" ? <Badge tone="bad">Password unavailable</Badge> : e.status === "host_not_allowed" ? <Badge tone="bad">Host not approved</Badge> : <Badge>Not set up</Badge>;
 /** Server reasons that belong to one field. */
 const reasonField: Record<string, [keyof EmailDraft, string]> = {
   plaintext_requires_loopback: ["tls", "Unencrypted delivery only works with a relay on this machine. Choose STARTTLS or implicit TLS."],
@@ -65,6 +65,7 @@ export function EmailSettingsPage({ session }: { session: Session }) {
         { label: "Last test", value: e.last_test ? <span className={st.locked}>{e.last_test.ok ? <Badge tone="good">Delivered</Badge> : <Badge tone="bad">Failed</Badge>}<DateTime value={e.last_test.at} />{e.last_test.error && <span className={st.note}>{deliveryErrors[e.last_test.error]}</span>}</span> : "Not tested" },
         { label: "Invitation link", value: e.public_url_configured ? "Emails point to this gateway's Accept invitation page." : "GATEWAY_PUBLIC_URL isn't set, so emails ask people to open the gateway themselves." },
       ]} />
+      {e.status === "host_not_allowed" && <Alert tone="warning" title="The relay host isn't approved">The server only sends mail to relay hosts its operator lists in <code>GATEWAY_SMTP_HOST_ALLOWLIST</code>. Email won't send until {e.host ?? "this host"} is added.</Alert>}
       {e.status === "credential_unavailable" && <Alert tone="warning" title="The password can't be read">The referenced variable isn't set on the server or isn't on its allowlist. Email won't send until it is.</Alert>}
       {writable && <div className={st.status}>
         <p className={st.note}>{e.configured ? <>Sends a short test message to {session.user.email}. At most 2 a minute.</> : "Turn on Send email below to test delivery."}</p>

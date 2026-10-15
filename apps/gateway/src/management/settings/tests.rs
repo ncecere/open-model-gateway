@@ -235,7 +235,10 @@ async fn email_settings_validate_references_and_transport_security(pool: PgPool)
     }
     let (status, v) = call(&f.s, &f.admin, "PUT", EMAIL, base.clone()).await;
     assert_eq!(status, StatusCode::OK, "{v}");
-    assert_eq!(v["status"], "ready");
+    // Saved, but the operator hasn't listed the relay host (#168): nothing
+    // sends until GATEWAY_SMTP_HOST_ALLOWLIST does.
+    assert_eq!(v["status"], "host_not_allowed");
+    assert_eq!(v["host_allowed"], false);
     assert_eq!(v["tls"], "starttls");
     assert_eq!(v["last_test"], Value::Null);
     // Turning delivery off clears everything.
@@ -296,7 +299,7 @@ async fn failed_delivery_is_reported_as_a_category(pool: PgPool) {
         &f.admin,
         "PUT",
         EMAIL,
-        json!({"host":"localhost","port":port,"tls":"none","from_address":"gateway@example.test"}),
+        json!({"host":"127.0.0.1","port":port,"tls":"none","from_address":"gateway@example.test"}),
     )
     .await;
     let (status, v) = call(&f.s, &f.admin, "POST", TEST, json!({})).await;

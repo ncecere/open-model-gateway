@@ -213,3 +213,10 @@ test("session lifetime and idle timeout (#80) reach the gateway only when set", 
   assert.match(set, /GATEWAY_SESSION_LIFETIME: "8h"/);
   assert.match(set, /GATEWAY_SESSION_IDLE_TIMEOUT: "off"/);
 });
+
+test("SMTP relay host allowlist (#168) reaches the gateway only when set", () => {
+  const base = ["-f", join(chart, "ci/cnpg-values.yaml")];
+  assert.doesNotMatch(helmTemplate(base), /GATEWAY_SMTP_HOST_ALLOWLIST/);
+  const set = helmTemplate([...base, "--set-json", 'gateway.smtpHostAllowlist=["smtp.example.org","127.0.0.1"]']);
+  assert.match(set, /GATEWAY_SMTP_HOST_ALLOWLIST: "smtp\.example\.org,127\.0\.0\.1"/);
+});
