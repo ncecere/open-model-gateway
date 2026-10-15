@@ -39,7 +39,7 @@ List a private network when you use one of these:
 
 Not covered: the AWS SDK's own credential lookups (instance metadata at `169.254.169.254`, ECS and EKS Pod Identity, STS and SSO) use its own HTTP client, because instance metadata must be reachable for credentials. Those endpoints come from the SDK and the operator's environment, never from request or tenant data. The policy is read before every command (including `healthcheck`), so a malformed `GATEWAY_EGRESS_PRIVATE_ALLOW` makes them all fail to start.
 
-SMTP also needs its relay host on `GATEWAY_SMTP_HOST_ALLOWLIST`; a listed loopback relay (a local mail sidecar) is allowed outside development. Kubernetes NetworkPolicy alignment is #169.
+SMTP also needs its relay host on `GATEWAY_SMTP_HOST_ALLOWLIST`; a listed loopback relay (a local mail sidecar) is allowed outside development. For Kubernetes NetworkPolicy alignment see [Kubernetes › Outbound traffic](kubernetes.md#outbound-traffic).
 
 ## Health endpoints
 

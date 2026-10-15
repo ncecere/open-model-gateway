@@ -220,3 +220,22 @@ test("SMTP relay host allowlist (#168) reaches the gateway only when set", () =>
   const set = helmTemplate([...base, "--set-json", 'gateway.smtpHostAllowlist=["smtp.example.org","127.0.0.1"]']);
   assert.match(set, /GATEWAY_SMTP_HOST_ALLOWLIST: "smtp\.example\.org,127\.0\.0\.1"/);
 });
+
+test("HTTPS egress can be narrowed to CIDRs or to anywhere-except; the default stays open (#169)", () => {
+  const base = ["-f", join(chart, "ci/cnpg-values.yaml")];
+  const egress = args => docsOfKind(helmTemplate([...base, ...args]), "NetworkPolicy").find(p => /name: omg-test-open-model-gateway-egress$/m.test(p));
+  const open = egress([]);
+  assert.match(open, /port: 443/);
+  assert.doesNotMatch(open, /ipBlock|^\s+to:\s*$/m, "default: 443 to any destination, unchanged");
+  const narrowed = egress(["--set-json", 'networkPolicy.egress.httpsCidrs=["203.0.113.0/24","2001:db8::/32"]']);
+  assert.match(narrowed, /cidr: "203\.0\.113\.0\/24"/);
+  assert.match(narrowed, /cidr: "2001:db8::\/32"/);
+  assert.doesNotMatch(narrowed, /except:|0\.0\.0\.0\/0/);
+  // Anywhere except the private ranges, per address family.
+  const publicOnly = egress(["--set-json", 'networkPolicy.egress.httpsExceptCidrs=["10.0.0.0/8","192.168.0.0/16","fc00::/7"]']);
+  assert.match(publicOnly, /cidr: "0\.0\.0\.0\/0"\n\s+except:\n\s+- "10\.0\.0\.0\/8"\n\s+- "192\.168\.0\.0\/16"/);
+  assert.match(publicOnly, /cidr: "::\/0"\n\s+except:\n\s+- "fc00::\/7"/);
+  // Both together could put an exception outside its CIDR, which the API server rejects.
+  assert.throws(() => egress(["--set-json", 'networkPolicy.egress.httpsCidrs=["10.0.0.0/8"]', "--set-json", 'networkPolicy.egress.httpsExceptCidrs=["169.254.169.254/32"]']), /applies only when httpsCidrs is empty/);
+  for (const doc of [open, narrowed, publicOnly]) assert.doesNotMatch(doc, /port: 587/, "SMTP is opened only through extraEgress");
+});

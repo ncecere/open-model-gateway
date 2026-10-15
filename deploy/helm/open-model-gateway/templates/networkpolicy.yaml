@@ -94,12 +94,45 @@ spec:
         - { protocol: TCP, port: 6432 }
     {{- end }}
     {{- if .Values.networkPolicy.egress.allowHttpsEgress }}
-    # OIDC issuer, provider APIs, SMTP relay and S3-compatible file stores.
-    # FQDN-scoped egress needs Cilium/Calico Enterprise; plain NetworkPolicy
-    # can only allow 443 broadly or via an explicit egress proxy
-    # (scale-design.md 8.1). Narrow with extraEgress when your CNI supports it.
+    # OIDC issuer, provider APIs and S3-compatible file stores on 443. The
+    # gateway's own egress policy (GATEWAY_EGRESS_PRIVATE_ALLOW, #33) already
+    # refuses metadata, link-local and unlisted private addresses; httpsCidrs
+    # narrows the network layer to match (FQDN rules need Cilium/Calico
+    # Enterprise). SMTP (587/465/25) is not opened here: use extraEgress.
+    {{- $cidrs := .Values.networkPolicy.egress.httpsCidrs | default list }}
+    {{- $except := .Values.networkPolicy.egress.httpsExceptCidrs | default list }}
+    {{- if and $cidrs $except }}
+    {{- fail "networkPolicy.egress.httpsExceptCidrs applies only when httpsCidrs is empty (an exception must lie inside its CIDR); leave the excluded ranges out of httpsCidrs instead" }}
+    {{- end }}
     - ports:
         - { protocol: TCP, port: 443 }
+      {{- if $cidrs }}
+      to:
+        {{- range $cidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      {{- else if $except }}
+      # Anywhere except these, per address family.
+      to:
+        {{- range (list "0.0.0.0/0" "::/0") }}
+        {{- $all := . }}
+        - ipBlock:
+            cidr: {{ $all | quote }}
+            {{- $matching := list }}
+            {{- range $except }}
+            {{- if eq (contains ":" .) (contains ":" $all) }}
+            {{- $matching = append $matching . }}
+            {{- end }}
+            {{- end }}
+            {{- with $matching }}
+            except:
+              {{- range . }}
+              - {{ . | quote }}
+              {{- end }}
+            {{- end }}
+        {{- end }}
+      {{- end }}
     {{- end }}
     {{- range .Values.networkPolicy.egress.extraEgress }}
     - {{ toYaml . | nindent 6 }}

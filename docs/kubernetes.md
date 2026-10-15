@@ -119,6 +119,32 @@ Secret only (never mounted into the gateway Deployment):
 Both steps use the gateway image, so there is no second image to pin and no copy of the SQL to keep
 in sync.
 
+## Outbound traffic
+
+Two layers decide where gateway pods may connect, and they should agree:
+
+- **The gateway** ([outbound connections](operations.md#outbound-connections)) refuses metadata, link-local and reserved addresses, allows loopback only in development and private networks only from `GATEWAY_EGRESS_PRIVATE_ALLOW`. Set it with `gateway.env`, for example `GATEWAY_EGRESS_PRIVATE_ALLOW: "10.42.0.0/16"` for an in-cluster IdP or S3 store. The SMTP relay must also be on `gateway.smtpHostAllowlist`.
+- **The NetworkPolicy** default-denies, then allows DNS, the database, TCP 443 and `networkPolicy.egress.extraEgress`. By default 443 goes anywhere, because plain NetworkPolicy can't name hosts (FQDN rules need Cilium or Calico Enterprise). Narrow it:
+
+  ```yaml
+  networkPolicy:
+    egress:
+      # Either: 443 only to these networks (your providers' ranges, an egress
+      # proxy, the in-cluster IdP) ...
+      # httpsCidrs: ["203.0.113.0/24"]
+      # ... or: 443 anywhere except these (public addresses only, as the
+      # gateway's own policy). Not both.
+      httpsExceptCidrs: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7"]
+      # SMTP isn't opened by default (587/465/25): add your relay.
+      extraEgress:
+        - to: [{ ipBlock: { cidr: 203.0.113.25/32 } }]
+          ports: [{ protocol: TCP, port: 587 }]
+  ```
+
+  Instance metadata (`169.254.169.254`, `fd00:ec2::254`) and EKS Pod Identity (`169.254.170.23`) listen on port 80, which the default-deny already blocks. That matters because the AWS SDK's credential lookup uses its own HTTP client, outside the gateway's policy: with instance-metadata or Pod Identity credentials, add an `extraEgress` rule for that address on port 80. IRSA needs STS on 443 instead (the public endpoint or an STS VPC endpoint), so keep it reachable under `httpsCidrs`.
+
+A private destination needs both: its network in `GATEWAY_EGRESS_PRIVATE_ALLOW` and, if `httpsCidrs` is set, in `httpsCidrs` (or an `extraEgress` rule). With AWS PrivateLink (interface endpoints for Bedrock, STS or S3), list the VPC range in both. Over Tailscale, list only the tailnet addresses you need, never all of `100.64.0.0/10`.
+
 ## Failover timing
 
 `cnpg.cluster.smartShutdownTimeout` (default 15 s) is how long a stopping primary waits for clients
@@ -176,9 +202,13 @@ separately; this chart does not wrap `scripts/backup.py` in a Job.
 - **Gateway pods `CrashLoopBackOff` on `_FILE` secrets:** a variable and its `_FILE` companion are
   both set (the binary refuses to start); check that only one of `GATEWAY_OIDC_CLIENT_SECRET`/`_FILE`
   etc. is present (the chart only ever sets the `_FILE` form).
-- **NetworkPolicy blocks egress to a provider:** `networkPolicy.egress.allowHttpsEgress` opens 443
-  broadly because FQDN-scoped policies need Cilium/Calico Enterprise (not assumed here); add a
-  narrower rule via `networkPolicy.egress.extraEgress` if your CNI supports `ipBlock`/FQDN selectors.
+- **NetworkPolicy blocks egress to a provider:** with `networkPolicy.egress.httpsCidrs` set, 443 reaches
+  only those networks; add the provider's range or an egress proxy (see [outbound traffic](#outbound-traffic)).
+  Email that never arrives with `connection` errors usually means SMTP isn't opened: add an
+  `extraEgress` rule for the relay's port.
+- **The gateway refuses a destination** (`gateway_egress_denied_total`, a log naming
+  `GATEWAY_EGRESS_PRIVATE_ALLOW`): the address is private or reserved; list its network in
+  `GATEWAY_EGRESS_PRIVATE_ALLOW` if it's meant to be reached.
 - **CNPG `Cluster`/`Pooler` rejected by the webhook:** usually a missing role Secret
   (`cnpg.cluster.roles.migrator`/`.runtime.existingSecret`) or a `storageClass` that doesn't exist;
   `kubectl describe cluster.postgresql.cnpg.io <release>-db` shows the CNPG-side reason.
