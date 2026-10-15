@@ -274,6 +274,12 @@ fn main() -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&manifest)?);
         return Ok(());
     }
+    // Outbound address policy (#33), before any HTTP client exists.
+    let egress = open_model_gateway::egress::Policy::from_env()?;
+    open_model_gateway::egress::check_configured_endpoints(&egress, |name| {
+        std::env::var(name).ok().filter(|v| !v.trim().is_empty())
+    })?;
+    open_model_gateway::egress::init(egress)?;
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?

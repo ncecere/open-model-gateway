@@ -117,6 +117,8 @@ impl HttpConnector for Connector {
 pub(super) fn client(ca_pem: Option<&[u8]>) -> anyhow::Result<SharedHttpClient> {
     let mut builder = reqwest::Client::builder()
         .no_proxy()
+        // Every resolved address must pass the egress policy (#33).
+        .dns_resolver(crate::egress::resolver(crate::egress::Purpose::Storage))
         .redirect(reqwest::redirect::Policy::none())
         .retry(reqwest::retry::never())
         .connect_timeout(Duration::from_secs(10))

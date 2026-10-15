@@ -184,6 +184,8 @@ impl OpenRouterAdapter {
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
             .no_proxy()
+            // Every resolved address must pass the egress policy (#33).
+            .dns_resolver(crate::egress::resolver(crate::egress::Purpose::Provider))
             .https_only(true)
             .connect_timeout(Duration::from_secs(10))
             .build()

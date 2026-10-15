@@ -611,6 +611,36 @@ fn generic_group_claim_is_strict_and_supports_custom_paths() {
     assert_eq!(claims.groups("groups"), Some(vec![]));
 }
 
+/// #33: a private or metadata issuer stops startup before any request,
+/// naming the setting that would allow a private one.
+#[tokio::test]
+async fn private_and_metadata_issuers_stop_startup() {
+    for issuer in [
+        "https://10.1.2.3/realms/omg",
+        "https://169.254.169.254/",
+        "https://[fd00:ec2::254]/",
+    ] {
+        let config = IdentityConfig::parse(
+            "https://gateway.example.org".into(),
+            issuer.into(),
+            "client".into(),
+            None,
+            false,
+        )
+        .unwrap();
+        let error = IdentityState::new(Store::new(lazy_pool()), Some(config))
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("{issuer} must be refused"))
+            .to_string();
+        assert!(error.contains("oidc URL refused"), "{issuer}: {error}");
+        assert!(
+            error.contains(crate::egress::PRIVATE_ALLOW_ENV),
+            "{issuer}: {error}"
+        );
+    }
+}
+
 #[cfg(feature = "integration-tests")]
 mod database {
     use super::*;
