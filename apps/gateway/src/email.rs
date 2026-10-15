@@ -84,6 +84,8 @@ pub enum DeliveryError {
     /// The relay refused the sender, recipient or message.
     Rejected,
     Timeout,
+    /// The relay host is not in `GATEWAY_SMTP_HOST_ALLOWLIST` (#168).
+    HostNotAllowed,
 }
 impl DeliveryError {
     pub fn as_str(self) -> &'static str {
@@ -95,6 +97,7 @@ impl DeliveryError {
             Self::Authentication => "authentication",
             Self::Rejected => "rejected",
             Self::Timeout => "timeout",
+            Self::HostNotAllowed => "host_not_allowed",
         }
     }
 }
@@ -124,6 +127,37 @@ pub fn valid_host(host: &str) -> bool {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'-')
     })
+}
+
+/// Relay hosts the operator allows (#168): the Platform Admin picks the host,
+/// the operator decides which hosts may receive mail and SMTP credentials.
+/// Exact names or IP literals, case-insensitive. Empty: no relay is allowed.
+pub const SMTP_HOST_ALLOWLIST_VAR: &str = "GATEWAY_SMTP_HOST_ALLOWLIST";
+
+/// Compare hosts by their canonical form: no brackets, no trailing dot,
+/// lower case, IP literals in their standard text form (`0:0::1` is `::1`).
+fn bare(host: &str) -> String {
+    let host = host.trim().trim_matches(['[', ']']);
+    let host = host.strip_suffix('.').unwrap_or(host);
+    host.parse::<IpAddr>()
+        .map_or_else(|_| host.to_ascii_lowercase(), |ip| ip.to_string())
+}
+
+fn host_allowed_from(raw: &str, host: &str) -> bool {
+    let host = bare(host);
+    !host.is_empty() && raw.split(',').map(bare).any(|entry| entry == host)
+}
+
+/// Whether the operator lists this relay host.
+/// Unit tests' mock relay, `127.0.0.1`, counts as listed (like realtime's
+/// test-only plain WebSocket); any other host, `localhost` included, needs
+/// the list in tests too. The matching itself is tested through
+/// `host_allowed_from`.
+pub fn host_allowed(host: &str) -> bool {
+    host_allowed_from(
+        &std::env::var(SMTP_HOST_ALLOWLIST_VAR).unwrap_or_default(),
+        host,
+    ) || (cfg!(test) && bare(host) == "127.0.0.1")
 }
 
 /// SMTP's own operator-controlled allowlist. It is separate from the provider
@@ -184,18 +218,26 @@ impl SmtpSettings {
 
     /// Resolve the credential and deliver one message.
     pub async fn send(&self, email: OutgoingEmail) -> Result<(), DeliveryError> {
+        // Before reading the credential: an unlisted host never receives it.
+        if !host_allowed(&self.host) {
+            return Err(DeliveryError::HostNotAllowed);
+        }
+        // A listed loopback relay (a local sidecar) is the operator's choice;
+        // anything else follows the installation's egress policy (#33).
+        let egress = crate::egress::policy().permit_loopback(is_loopback_host(&self.host));
         let password = self
             .password_ref
             .as_deref()
             .map(resolve_password)
             .transpose()?;
-        self.send_with(password.as_ref().map(Secret::expose), email)
+        self.send_with(&egress, password.as_ref().map(Secret::expose), email)
             .await
     }
 
     /// Deliver with an already resolved credential (tests inject one directly).
     pub(crate) async fn send_with(
         &self,
+        egress: &crate::egress::Policy,
         password: Option<&str>,
         email: OutgoingEmail,
     ) -> Result<(), DeliveryError> {
@@ -222,34 +264,65 @@ impl SmtpSettings {
             .body(email.body)
             .map_err(|_| DeliveryError::Address)?;
         let host = self.host.trim_matches(['[', ']']).to_owned();
-        let tls = match self.tls {
-            TlsMode::None => Tls::None,
-            TlsMode::StartTls => {
-                Tls::Required(TlsParameters::new(host.clone()).map_err(|_| DeliveryError::Tls)?)
-            }
-            TlsMode::Implicit => {
-                Tls::Wrapper(TlsParameters::new(host.clone()).map_err(|_| DeliveryError::Tls)?)
-            }
+        // Resolve through the egress policy and connect to a checked address;
+        // TLS still verifies the configured host name.
+        let addresses = tokio::time::timeout(
+            COMMAND_TIMEOUT,
+            crate::egress::resolve(egress, crate::egress::Purpose::Smtp, &host, self.port),
+        )
+        .await
+        .map_err(|_| DeliveryError::Timeout)?
+        .map_err(|_| DeliveryError::Connection)?;
+        // Plaintext only when every address we might connect to is loopback.
+        if self.tls == TlsMode::None && !addresses.iter().all(|a| a.ip().is_loopback()) {
+            return Err(DeliveryError::Tls);
+        }
+        let tls = || match self.tls {
+            TlsMode::None => Ok(Tls::None),
+            TlsMode::StartTls => TlsParameters::new(host.clone())
+                .map(Tls::Required)
+                .map_err(|_| DeliveryError::Tls),
+            TlsMode::Implicit => TlsParameters::new(host.clone())
+                .map(Tls::Wrapper)
+                .map_err(|_| DeliveryError::Tls),
         };
-        let mut builder = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(host)
-            .port(self.port)
-            .timeout(Some(COMMAND_TIMEOUT))
-            .tls(tls);
-        match (self.username.as_deref(), password) {
+        let credentials = match (self.username.as_deref(), password) {
             (Some(user), Some(password)) => {
-                builder = builder
-                    .credentials(Credentials::new(user.to_owned(), password.to_owned()))
-                    .authentication(vec![Mechanism::Plain, Mechanism::Login]);
+                Some(Credentials::new(user.to_owned(), password.to_owned()))
             }
-            (None, None) => {}
+            (None, None) => None,
             _ => return Err(DeliveryError::Credential),
-        }
-        let transport = builder.build();
-        match tokio::time::timeout(SEND_TIMEOUT, transport.send(message)).await {
-            Err(_) => Err(DeliveryError::Timeout),
-            Ok(Ok(_)) => Ok(()),
-            Ok(Err(error)) => Err(classify(&error)),
-        }
+        };
+        // Each checked address in turn, moving on only when the connection
+        // itself failed (never after the relay saw the message). One overall
+        // timeout covers every attempt.
+        let attempts = async {
+            let mut last = DeliveryError::Connection;
+            for address in &addresses {
+                let mut builder = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(
+                    address.ip().to_string(),
+                )
+                .port(address.port())
+                .timeout(Some(COMMAND_TIMEOUT))
+                .tls(tls()?);
+                if let Some(credentials) = credentials.clone() {
+                    builder = builder
+                        .credentials(credentials)
+                        .authentication(vec![Mechanism::Plain, Mechanism::Login]);
+                }
+                match builder.build().send(message.clone()).await {
+                    Ok(_) => return Ok(()),
+                    Err(error) => match classify(&error) {
+                        DeliveryError::Connection => last = DeliveryError::Connection,
+                        other => return Err(other),
+                    },
+                }
+            }
+            Err(last)
+        };
+        tokio::time::timeout(SEND_TIMEOUT, attempts)
+            .await
+            .unwrap_or(Err(DeliveryError::Timeout))
     }
 }
 
@@ -394,6 +467,81 @@ mod tests {
         assert_eq!(SMTP_ALLOWLIST_VAR, "GATEWAY_SMTP_SECRET_ENV_ALLOWLIST");
     }
 
+    /// Tests reach their mock relay on loopback, as development does.
+    fn dev() -> crate::egress::Policy {
+        crate::egress::Policy::new(true, crate::egress::Networks::default())
+    }
+
+    #[test]
+    fn the_relay_host_must_be_on_the_operator_allowlist() {
+        let list = " smtp.example.org, [::1],127.0.0.1 ";
+        for host in [
+            "smtp.example.org",
+            "SMTP.Example.ORG",
+            "::1",
+            "[::1]",
+            "127.0.0.1",
+        ] {
+            assert!(host_allowed_from(list, host), "{host}");
+        }
+        for host in [
+            "mail.example.org",
+            "smtp.example.org.evil",
+            "example.org",
+            "",
+        ] {
+            assert!(!host_allowed_from(list, host), "{host}");
+        }
+        assert!(
+            !host_allowed_from("", "smtp.example.org"),
+            "empty: no relay allowed"
+        );
+        // Canonical forms on both sides: trailing dots, IPv6 spellings.
+        assert!(host_allowed_from("smtp.example.org.", "SMTP.example.org"));
+        assert!(host_allowed_from("0:0::1", "::1"));
+        assert!(host_allowed_from("[::1]", "0:0:0:0:0:0:0:1"));
+        assert!(
+            !host_allowed_from("smtp.example.org:587", "smtp.example.org"),
+            "a port never matches"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unlisted_relay_never_receives_the_credential() {
+        // No GATEWAY_SMTP_HOST_ALLOWLIST in the test environment: refused
+        // before the password reference is even resolved.
+        let mut settings = relay(25);
+        settings.host = "smtp.example.org".into();
+        settings.tls = TlsMode::StartTls;
+        settings.password_ref = Some("env:NOT_ON_ANY_ALLOWLIST".into());
+        assert_eq!(
+            settings.send(message()).await,
+            Err(DeliveryError::HostNotAllowed)
+        );
+        assert_eq!(DeliveryError::HostNotAllowed.as_str(), "host_not_allowed");
+    }
+
+    #[tokio::test]
+    async fn the_egress_policy_decides_where_mail_goes() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let accepted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seen = accepted.clone();
+        tokio::spawn(async move {
+            if listener.accept().await.is_ok() {
+                seen.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+        // Loopback outside development, unless the operator listed it: refused, never connected.
+        let strict = crate::egress::Policy::default();
+        assert_eq!(
+            relay(port).send_with(&strict, None, message()).await,
+            Err(DeliveryError::Connection)
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!accepted.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
     fn relay(port: u16) -> SmtpSettings {
         SmtpSettings {
             host: "127.0.0.1".into(),
@@ -416,7 +564,10 @@ mod tests {
     #[tokio::test]
     async fn delivers_plain_text_to_a_loopback_relay() {
         let (port, mut rx) = mock::serve(Behaviour::default()).await;
-        relay(port).send_with(None, message()).await.unwrap();
+        relay(port)
+            .send_with(&dev(), None, message())
+            .await
+            .unwrap();
         let got = rx.recv().await.unwrap();
         assert!(got.mail_from.contains("gateway@example.test"));
         assert!(got.rcpt_to[0].contains("admin@example.test"));
@@ -424,6 +575,26 @@ mod tests {
         assert!(got.data.contains("Subject: Test email"));
         assert!(got.data.contains("Delivery works."));
         assert!(got.data.contains("text/plain"));
+    }
+
+    /// The production path: `send()` with the installation's policy (not
+    /// development here) to a listed loopback relay, as a mail sidecar would be.
+    #[tokio::test]
+    async fn send_delivers_to_a_listed_loopback_relay_outside_development() {
+        assert!(
+            !crate::egress::policy().allows("127.0.0.1".parse().unwrap()),
+            "strict default"
+        );
+        let (port, mut rx) = mock::serve(Behaviour::default()).await;
+        relay(port).send(message()).await.unwrap();
+        assert!(rx.recv().await.unwrap().data.contains("Delivery works."));
+        // An unlisted loopback name is refused like any other host.
+        let mut unlisted = relay(port);
+        unlisted.host = "localhost".into();
+        assert_eq!(
+            unlisted.send(message()).await,
+            Err(DeliveryError::HostNotAllowed)
+        );
     }
 
     #[tokio::test]
@@ -437,13 +608,13 @@ mod tests {
         settings.username = Some("relay-user".into());
         settings.password_ref = Some("env:UNUSED".into());
         settings
-            .send_with(Some("relay-password"), message())
+            .send_with(&dev(), Some("relay-password"), message())
             .await
             .unwrap();
         assert!(rx.recv().await.unwrap().auth.is_some());
         // A username without a resolved password is a credential problem, not a send.
         assert_eq!(
-            settings.send_with(None, message()).await,
+            settings.send_with(&dev(), None, message()).await,
             Err(DeliveryError::Credential)
         );
         let (port, _rx) = mock::serve(Behaviour {
@@ -454,7 +625,7 @@ mod tests {
         .await;
         settings.port = port;
         assert_eq!(
-            settings.send_with(Some("wrong"), message()).await,
+            settings.send_with(&dev(), Some("wrong"), message()).await,
             Err(DeliveryError::Authentication)
         );
         let (port, _rx) = mock::serve(Behaviour {
@@ -463,7 +634,7 @@ mod tests {
         })
         .await;
         assert_eq!(
-            relay(port).send_with(None, message()).await,
+            relay(port).send_with(&dev(), None, message()).await,
             Err(DeliveryError::Rejected)
         );
     }
@@ -473,13 +644,13 @@ mod tests {
         let mut remote = relay(25);
         remote.host = "smtp.example.test".into();
         assert_eq!(
-            remote.send_with(None, message()).await,
+            remote.send_with(&dev(), None, message()).await,
             Err(DeliveryError::Tls)
         );
         let mut bad = message();
         bad.to = "not an address".into();
         assert_eq!(
-            relay(25).send_with(None, bad).await,
+            relay(25).send_with(&dev(), None, bad).await,
             Err(DeliveryError::Address)
         );
         // Nothing listens on this freshly released port.
@@ -488,7 +659,7 @@ mod tests {
             listener.local_addr().unwrap().port()
         };
         assert_eq!(
-            relay(port).send_with(None, message()).await,
+            relay(port).send_with(&dev(), None, message()).await,
             Err(DeliveryError::Connection)
         );
     }

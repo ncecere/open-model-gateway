@@ -44,10 +44,12 @@ export type PrivacySettings = {
   updated_at: string;
 };
 export type TlsMode = "starttls" | "implicit" | "none";
-export type DeliveryError = "credential" | "address" | "connection" | "tls" | "authentication" | "rejected" | "timeout";
+export type DeliveryError = "credential" | "address" | "connection" | "tls" | "authentication" | "rejected" | "timeout" | "host_not_allowed";
 export type EmailSettings = {
-  configured: boolean; status: "not_configured" | "credential_unavailable" | "ready";
+  configured: boolean; status: "not_configured" | "host_not_allowed" | "credential_unavailable" | "ready";
   host: string | null; port: number | null; tls: TlsMode | null; username: string | null; password_ref: string | null; password_ref_allowed: boolean | null;
+  /** Whether the server operator lists this host in GATEWAY_SMTP_HOST_ALLOWLIST (#168). */
+  host_allowed?: boolean | null;
   from_address: string | null; from_name: string | null; public_url_configured: boolean;
   last_test: { at: string; ok: boolean; error: DeliveryError | null } | null; updated_at: string;
 };
@@ -111,6 +113,7 @@ export const deliveryErrors: Record<DeliveryError, string> = {
   authentication: "The relay rejected the username or password.",
   rejected: "The relay refused the message.",
   timeout: "The relay didn't answer in time.",
+  host_not_allowed: "This relay host isn't approved on the server. Ask the operator to add it to GATEWAY_SMTP_HOST_ALLOWLIST.",
 };
 
 const control = /[\u0000-\u001f\u007f]/;

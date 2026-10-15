@@ -306,3 +306,22 @@ impl OpenAiAdapter {
         connect(self, target, setup).await
     }
 }
+
+/// #168: the realtime WebSocket goes through the egress policy. A secure
+/// (production-shaped) endpoint gets the installation's policy unchanged:
+/// no loopback, no metadata, no unlisted private address. Only test builds'
+/// plain `ws://` mock may use loopback.
+#[test]
+fn secure_realtime_endpoints_get_no_egress_exception() {
+    let ip = |s: &str| s.parse::<std::net::IpAddr>().unwrap();
+    let secure = super::egress_policy(true);
+    for refused in ["127.0.0.1", "::1", "169.254.169.254", "10.0.0.1"] {
+        assert!(!secure.allows(ip(refused)), "{refused}");
+    }
+    assert!(secure.allows(ip("8.8.8.8")));
+    assert!(
+        super::egress_policy(false).allows(ip("127.0.0.1")),
+        "test-only plain mock"
+    );
+    assert!(!super::egress_policy(false).allows(ip("169.254.169.254")));
+}
