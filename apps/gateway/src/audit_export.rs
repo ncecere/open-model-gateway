@@ -1147,17 +1147,14 @@ mod tests {
         };
         assert_eq!((exp.host(), s.port), ("127.0.0.1", 1514));
         let debug = format!("{exp:?}");
-        assert!(
-            debug.contains("syslog") && debug.contains("127.0.0.1"),
-            "{debug}"
-        );
+        assert!(debug.contains("syslog") && debug.contains("127.0.0.1"));
         for secret in [
             &pki::CLIENT_KEY[28..60],
             &pki::CLIENT_CERT[28..60],
             &pki::CA[28..60],
             "PRIVATE",
         ] {
-            assert!(!debug.contains(secret), "no key material in {debug}");
+            assert!(!debug.contains(secret), "no key material in Debug output");
         }
         // The webhook's Debug says which transport it is, still without the secret.
         let webhook = Exporter::new("https://siem.example.org/x", vec![b's'; 32], false)
@@ -1303,9 +1300,15 @@ mod tests {
                 Ok(_) => panic!("{why}: accepted"),
                 Err(error) => format!("{error:#}"),
             };
-            assert!(!error.contains(MARK), "{why}: file contents in {error}");
-            assert!(!error.contains(&pki::CLIENT_KEY[28..60]), "{why}: {error}");
-            assert!(!error.contains(&pki::CLIENT_CERT[28..60]), "{why}: {error}");
+            assert!(!error.contains(MARK), "{why}: file contents in the error");
+            assert!(
+                !error.contains(&pki::CLIENT_KEY[28..60]),
+                "{why}: key in the error"
+            );
+            assert!(
+                !error.contains(&pki::CLIENT_CERT[28..60]),
+                "{why}: certificate in the error"
+            );
         }
     }
 
