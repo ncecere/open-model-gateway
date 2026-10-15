@@ -40,7 +40,23 @@ Without a logo, the app shows the Open Model Gateway mark ("Portal") in the side
 
 When the variable is set, the page shows the effective value as locked and the API rejects changes with `409 reason:"setting_locked_by_environment"` (resending the stored value is allowed). Without it, the stored value applies: the replica that saves it switches at once and the others within one maintenance tick (5 seconds). Until a replica has read the setting it sends `deny`.
 
-Retention compacts settled request metadata older than the window (error code and latency are cleared and `details_redacted_at` is set), hourly in batches of up to 1000. It never deletes or changes usage, prices, reservations, the monetary ledger or the audit log; pending and unknown-cost records are kept. Without a value nothing is compacted.
+Retention compacts settled request metadata older than the window (error code, latency, client session id and client app are cleared and `details_redacted_at` is set), hourly in batches of up to 1000 (each batch commits on its own, so a restart resumes where it stopped). It never deletes or changes usage, prices, reservations, the monetary ledger or the audit log; pending and unknown-cost records are kept, and so are records under [legal hold](platform-administration.md#legal-holds). Without a value nothing is compacted.
+
+### What is kept, and for how long (#77)
+
+| Data | Kept | Removed by | Legal hold |
+| --- | --- | --- | --- |
+| Request records: model, tokens, cost, times, workspace, key | As long as the database keeps the month | `archive partition` (operator), whole months past `GATEWAY_HISTORY_RETENTION_MONTHS` | Archive refuses a month with held records |
+| Request details: error code, latency, client session id and app | Until request log retention (if set) | Compaction, hourly | Kept |
+| Prices, reservations, monetary ledger | Never removed by the gateway | Only with their history month (`archive partition`) | As above |
+| Audit log | Until an operator archives its month (the gateway itself never removes it) | `archive partition` of audit months (operator only); off-host copy through [audit export](operations.md#audit-export) | Archive refuses a month with held events |
+| Stored files | Per purpose (table below) | The file sweeper; users and workspace admins can delete | Expiry waits; deliberate deletes don't |
+| A departed person's identity | 30 days after access ends | Cleanup (or **Remove personal data now**) | Kept |
+| Ended dashboard sessions, expired sign-in attempts | 30 days; until expiry | Maintenance | Still pruned: they hold a browser label and times, not activity, and sign-in times stay on the user |
+| Prompts and responses | Never stored | — | — |
+| Backups | Your schedule | `scripts/backup.py prune` ([operations](operations.md#backups-and-restore)) | Outside the gateway: hold backups yourself |
+
+Nothing in this table removes money: costs, holds and the ledger stay exact for as long as their month exists.
 
 ## Storage
 
