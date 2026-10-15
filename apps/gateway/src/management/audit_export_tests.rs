@@ -102,6 +102,20 @@ async fn status_is_platform_read_only_and_never_shows_the_url_or_secret(pool: Pg
         (v["configured"].clone(), v["transport"].clone()),
         (json!(true), json!("syslog"))
     );
+    // #108: so does an OTLP collector, without its path or headers.
+    let otlp = crate::audit_export::Exporter::otlp(
+        "https://collector.example.org:4318/v1/logs",
+        Some("Authorization=Bearer hidden-token"),
+        false,
+    )
+    .unwrap();
+    let s = f.s.clone().with_audit_export(std::sync::Arc::new(otlp));
+    let (_, v) = call(&s, &f.admin, "GET", STATUS, json!({})).await;
+    assert_eq!(
+        (v["configured"].clone(), v["transport"].clone()),
+        (json!(true), json!("otlp"))
+    );
+    assert!(!v.to_string().contains("hidden-token") && !v.to_string().contains("v1/logs"));
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]

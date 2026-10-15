@@ -737,8 +737,9 @@ async fn run(cli: Cli) -> Result<()> {
             open_model_gateway::jobs::configure(open_model_gateway::jobs::JobLimits::from_lookup(
                 |name| std::env::var(name).ok(),
             )?)?;
-            // Audit export (#106, #107: webhook or syslog over TLS; TLS files
-            // are read here): operator-configured. Only an explicit `off`
+            // Audit export (#106, #107, #108: webhook, syslog over TLS or OTLP
+            // logs; TLS files and OTLP headers are read here):
+            // operator-configured. Only an explicit `off`
             // turns it off; a replica without the setting leaves it alone and
             // never takes the export lease.
             let audit_setting = open_model_gateway::audit_export::Setting::from_env()?;

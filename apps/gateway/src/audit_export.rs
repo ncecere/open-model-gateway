@@ -1,5 +1,5 @@
-//! Audit export to a SIEM through a signed HTTPS webhook (#106) or syslog
-//! over TLS (#107).
+//! Audit export to a SIEM through a signed HTTPS webhook (#106), syslog over
+//! TLS (#107) or OTLP/HTTP JSON logs (#108).
 //!
 //! - **Operator-controlled destination.** `GATEWAY_AUDIT_WEBHOOK_URL` and
 //!   `GATEWAY_AUDIT_WEBHOOK_SECRET_ENV` (the name of the variable holding the
@@ -29,6 +29,14 @@
 //!   sent and the receiver closed the connection without a reset. Syslog has
 //!   no application-level acknowledgement: a receiver that fails after reading
 //!   can lose events, which shows as a `seq` gap.
+//! - **OTLP logs (#108).** `GATEWAY_AUDIT_OTLP_URL` (the collector's full
+//!   logs endpoint) instead: one OTLP/HTTP JSON request per batch, one
+//!   LogRecord per event whose body is the webhook's event object, with
+//!   optional headers from the variable `GATEWAY_AUDIT_OTLP_HEADERS_ENV`
+//!   names. A separate destination from any operational telemetry: `OTEL_*`
+//!   is never read. Records the collector refuses in a 2xx `partialSuccess`
+//!   are not retried (the OTLP rule): they are counted, recorded as
+//!   `otlp_rejected`, and show as a `seq` gap.
 
 use std::{net::Ipv6Addr, sync::Arc, time::Duration};
 
@@ -46,6 +54,30 @@ pub const SYSLOG_URL_ENV: &str = "GATEWAY_AUDIT_SYSLOG_URL";
 pub const SYSLOG_CA_FILE_ENV: &str = "GATEWAY_AUDIT_SYSLOG_CA_FILE";
 pub const SYSLOG_CLIENT_CERT_FILE_ENV: &str = "GATEWAY_AUDIT_SYSLOG_CLIENT_CERT_FILE";
 pub const SYSLOG_CLIENT_KEY_FILE_ENV: &str = "GATEWAY_AUDIT_SYSLOG_CLIENT_KEY_FILE";
+pub const OTLP_URL_ENV: &str = "GATEWAY_AUDIT_OTLP_URL";
+pub const OTLP_HEADERS_ENV_ENV: &str = "GATEWAY_AUDIT_OTLP_HEADERS_ENV";
+/// Headers the OTLP variable may set.
+const OTLP_MAX_HEADERS: usize = 16;
+/// Headers the request sets itself, so the variable can't.
+/// Set by the client, or hop-by-hop headers that break HTTP/1 framing or are
+/// forbidden in HTTP/2: never configurable.
+const OTLP_RESERVED_HEADERS: [&str; 9] = [
+    "content-type",
+    "host",
+    "content-length",
+    "transfer-encoding",
+    "connection",
+    "upgrade",
+    "te",
+    "keep-alive",
+    "expect",
+];
+/// The OTLP response is read up to this size; a larger one rejects nothing.
+const OTLP_ACK_LIMIT: usize = 64 * 1024;
+/// The OTLP instrumentation scope.
+const OTLP_SCOPE: &str = "omg.audit";
+/// OTLP SeverityNumber INFO.
+const OTLP_SEVERITY_INFO: u8 = 9;
 /// The syslog-over-TLS port (RFC 5425).
 pub const SYSLOG_PORT: u16 = 6514;
 const SYSLOG_SCHEME: &str = "syslog+tls://";
@@ -74,6 +106,7 @@ pub struct Exporter {
 enum Transport {
     Webhook(Webhook),
     Syslog(Syslog),
+    Otlp(Otlp),
 }
 
 struct Webhook {
@@ -89,6 +122,21 @@ struct Syslog {
     server_name: ServerName<'static>,
     tls: Arc<rustls::ClientConfig>,
     policy: crate::egress::Policy,
+}
+
+struct Otlp {
+    url: reqwest::Url,
+    /// From the operator's variable; every value is marked sensitive.
+    headers: reqwest::header::HeaderMap,
+    client: reqwest::Client,
+}
+
+/// What the receiver did with a delivered payload.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Delivery {
+    /// Records an OTLP collector refused for good (`partialSuccess`); they
+    /// are not retried.
+    rejected: u64,
 }
 
 /// What one send carries; each transport encodes it in its own format.
@@ -144,68 +192,82 @@ impl Setting {
         ]
         .into_iter()
         .find(|name| set(name).is_some());
+        let headers_name = set(OTLP_HEADERS_ENV_ENV);
         // One destination at a time; only an explicit `off` turns export off.
-        match (
-            url.as_deref().map(str::trim),
-            set(SYSLOG_URL_ENV).as_deref().map(str::trim),
-        ) {
-            (Some("off"), None | Some("off")) | (None, Some("off")) => return Ok(Self::Off),
-            (Some("off"), Some(_)) | (Some(_), Some("off")) => anyhow::bail!(
-                "one of {URL_ENV} and {SYSLOG_URL_ENV} is off and the other a destination; set only one"
+        // `OTEL_*` is operational telemetry, never the audit destination.
+        let urls = [
+            (URL_ENV, url),
+            (SYSLOG_URL_ENV, set(SYSLOG_URL_ENV)),
+            (OTLP_URL_ENV, set(OTLP_URL_ENV)),
+        ];
+        let urls: Vec<(&str, String)> = urls
+            .into_iter()
+            .filter_map(|(name, value)| Some((name, value?.trim().to_owned())))
+            .collect();
+        let (off, on): (Vec<_>, Vec<_>) = urls.iter().partition(|(_, value)| value == "off");
+        // `off` still checks for leftover settings below (they'd do nothing).
+        let destination = match (off.first(), on.as_slice()) {
+            (Some(_), []) => None,
+            (Some((off, _)), [(on, _), ..]) => {
+                anyhow::bail!("{off} is off and {on} a destination; set only one")
+            }
+            (None, [_, _, ..]) => anyhow::bail!(
+                "set only one of {URL_ENV}, {SYSLOG_URL_ENV} and {OTLP_URL_ENV}: audit export has one destination"
             ),
-            (Some(_), Some(_)) => anyhow::bail!(
-                "set {URL_ENV} or {SYSLOG_URL_ENV}, not both: audit export has one destination"
-            ),
-            (None, None) => {
-                anyhow::ensure!(
-                    secret_name.is_none(),
-                    "{SECRET_ENV_ENV} is set without {URL_ENV}"
-                );
-                if let Some(name) = syslog_file {
-                    anyhow::bail!("{name} is set without {SYSLOG_URL_ENV}");
+            (None, []) => None,
+            (None, [(name, value)]) => Some((*name, value.as_str())),
+        };
+        // Settings that belong to another transport (or to none) are errors.
+        let transport = destination.map(|(name, _)| name);
+        if transport != Some(URL_ENV) {
+            anyhow::ensure!(
+                secret_name.is_none(),
+                "{SECRET_ENV_ENV} is set without {URL_ENV}{}",
+                if transport.is_some() {
+                    " (only the webhook uses it)"
+                } else {
+                    ""
                 }
-                return Ok(Self::Unset);
-            }
-            (None, Some(syslog)) => {
-                anyhow::ensure!(
-                    secret_name.is_none(),
-                    "{SECRET_ENV_ENV} is set without {URL_ENV} (the syslog transport doesn't use it)"
-                );
-                return Self::syslog_from(syslog, &set, development);
-            }
-            (Some(_), None) => {
-                if let Some(name) = syslog_file {
-                    anyhow::bail!("{name} is set without {SYSLOG_URL_ENV}");
-                }
-            }
+            );
         }
-        let url = url.unwrap_or_default();
+        if transport != Some(SYSLOG_URL_ENV)
+            && let Some(name) = syslog_file
+        {
+            anyhow::bail!("{name} is set without {SYSLOG_URL_ENV}");
+        }
+        if transport != Some(OTLP_URL_ENV) {
+            anyhow::ensure!(
+                headers_name.is_none(),
+                "{OTLP_HEADERS_ENV_ENV} is set without {OTLP_URL_ENV}"
+            );
+        }
+        let url = match destination {
+            None if !off.is_empty() => return Ok(Self::Off),
+            None => return Ok(Self::Unset),
+            Some((SYSLOG_URL_ENV, syslog)) => return Self::syslog_from(syslog, &set, development),
+            Some((OTLP_URL_ENV, otlp)) => {
+                let headers = match headers_name {
+                    None => None,
+                    Some(name) => {
+                        check_secret_env_name(OTLP_HEADERS_ENV_ENV, &name, &get)?;
+                        Some(zeroize::Zeroizing::new(get(&name).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "{OTLP_HEADERS_ENV_ENV} names a variable that isn't set"
+                            )
+                        })?))
+                    }
+                };
+                return Ok(Self::On(Exporter::otlp(
+                    otlp,
+                    headers.as_deref().map(String::as_str),
+                    development,
+                )?));
+            }
+            Some((_, webhook)) => webhook.to_owned(),
+        };
         let name =
             secret_name.ok_or_else(|| anyhow::anyhow!("{URL_ENV} needs {SECRET_ENV_ENV}"))?;
-        anyhow::ensure!(
-            !name.is_empty()
-                && name.len() <= 128
-                && name
-                    .bytes()
-                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_'),
-            "{SECRET_ENV_ENV} must name an upper-case environment variable"
-        );
-        // A Platform Admin chooses where provider credentials and the SMTP
-        // password go: if either allowlist could read the signing secret, an
-        // admin could learn it and forge deliveries (#140's rule, here too).
-        let listed = |var: &str| {
-            get(var).is_some_and(|list| list.split(',').map(str::trim).any(|n| n == name))
-        };
-        anyhow::ensure!(
-            !listed("GATEWAY_SECRET_ENV_ALLOWLIST") && !listed(crate::email::SMTP_ALLOWLIST_VAR),
-            "{SECRET_ENV_ENV} names {name}, which a provider or SMTP allowlist can also read; use a variable only the audit export reads"
-        );
-        anyhow::ensure!(
-            !crate::startup::SECRET_NAMES.contains(&name.as_str())
-                && !name.starts_with("AWS_")
-                && !name.starts_with("GATEWAY_"),
-            "{SECRET_ENV_ENV} names a reserved variable ({name})"
-        );
+        check_secret_env_name(SECRET_ENV_ENV, &name, &get)?;
         let secret = get(&name)
             .ok_or_else(|| anyhow::anyhow!("{SECRET_ENV_ENV} names a variable that isn't set"))?;
         Ok(
@@ -264,36 +326,7 @@ impl Exporter {
             secret.len() >= MIN_SECRET_BYTES,
             "the audit webhook secret must be at least {MIN_SECRET_BYTES} bytes"
         );
-        let url =
-            reqwest::Url::parse(url).map_err(|_| anyhow::anyhow!("{URL_ENV} is not a URL"))?;
-        let loopback = url.host_str().is_some_and(|h| {
-            h == "localhost"
-                || h.trim_matches(['[', ']'])
-                    .parse::<std::net::IpAddr>()
-                    .is_ok_and(|ip| ip.is_loopback())
-        });
-        anyhow::ensure!(
-            url.scheme() == "https" || (development && loopback && url.scheme() == "http"),
-            "{URL_ENV} must be https:// (http only to loopback in development)"
-        );
-        anyhow::ensure!(
-            url.username().is_empty() && url.password().is_none() && url.fragment().is_none(),
-            "{URL_ENV} must not contain credentials or a fragment"
-        );
-        let policy = crate::egress::policy().permit_loopback(development);
-        crate::egress::check_url(&policy, crate::egress::Purpose::Audit, &url)?;
-        let client = reqwest::Client::builder()
-            .no_proxy()
-            .dns_resolver(crate::egress::resolver_with(
-                crate::egress::Purpose::Audit,
-                policy,
-            ))
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
-            .timeout(REQUEST_TIMEOUT)
-            .connect_timeout(Duration::from_secs(5))
-            .build()
-            .map_err(|_| anyhow::anyhow!("cannot build the audit export client"))?;
+        let (url, client) = https_client(URL_ENV, url, development)?;
         Ok(Some(Self {
             transport: Transport::Webhook(Webhook {
                 url,
@@ -301,6 +334,24 @@ impl Exporter {
                 client,
             }),
         }))
+    }
+
+    /// OTLP/HTTP JSON logs (#108) to the collector's full logs endpoint, with
+    /// the URL checks and client of the webhook. `headers` is the
+    /// `Key=Value,...` text of the operator's variable; errors never repeat it.
+    pub fn otlp(url: &str, headers: Option<&str>, development: bool) -> anyhow::Result<Self> {
+        let (url, client) = https_client(OTLP_URL_ENV, url.trim(), development)?;
+        let headers = match headers {
+            None => reqwest::header::HeaderMap::new(),
+            Some(text) => parse_otlp_headers(text)?,
+        };
+        Ok(Self {
+            transport: Transport::Otlp(Otlp {
+                url,
+                headers,
+                client,
+            }),
+        })
     }
 
     /// Syslog over TLS (#107) to `syslog+tls://host[:port]`. The server is
@@ -392,25 +443,155 @@ impl Exporter {
         match &self.transport {
             Transport::Webhook(webhook) => webhook.url.host_str().unwrap_or_default(),
             Transport::Syslog(syslog) => &syslog.host,
+            Transport::Otlp(otlp) => otlp.url.host_str().unwrap_or_default(),
         }
     }
 
-    /// `webhook` or `syslog`, for status.
+    /// `webhook`, `syslog` or `otlp`, for status.
     pub fn transport(&self) -> &'static str {
         match &self.transport {
             Transport::Webhook(_) => "webhook",
             Transport::Syslog(_) => "syslog",
+            Transport::Otlp(_) => "otlp",
         }
     }
 
     /// Deliver one payload. `Err(category)` unless the receiver took it: a
-    /// webhook 2xx, or a syslog stream written and closed cleanly.
-    async fn send(&self, payload: Payload) -> Result<(), &'static str> {
+    /// webhook or OTLP 2xx, or a syslog stream written and closed cleanly.
+    /// A collector's 2xx can still refuse some records ([`Delivery`]).
+    async fn send(&self, payload: Payload) -> Result<Delivery, &'static str> {
         match &self.transport {
-            Transport::Webhook(webhook) => webhook.send(&payload).await,
-            Transport::Syslog(syslog) => syslog.send(&frames(payload)).await,
+            Transport::Webhook(webhook) => {
+                webhook.send(&payload).await.map(|()| Delivery::default())
+            }
+            Transport::Syslog(syslog) => syslog
+                .send(&frames(payload))
+                .await
+                .map(|()| Delivery::default()),
+            Transport::Otlp(otlp) => otlp.send(&payload).await,
         }
     }
+}
+
+/// The rules for a variable an audit-export setting names (the webhook
+/// secret #106, the OTLP headers #108): an upper-case name, not on the
+/// provider or SMTP allowlist, and not reserved. A Platform Admin chooses
+/// where provider credentials and the SMTP password go: if either allowlist
+/// could read it, an admin could learn it (#140's rule, here too).
+fn check_secret_env_name(
+    setting: &str,
+    name: &str,
+    get: &impl Fn(&str) -> Option<String>,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !name.is_empty()
+            && name.len() <= 128
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_'),
+        "{setting} must name an upper-case environment variable"
+    );
+    let listed =
+        |var: &str| get(var).is_some_and(|list| list.split(',').map(str::trim).any(|n| n == name));
+    anyhow::ensure!(
+        !listed("GATEWAY_SECRET_ENV_ALLOWLIST") && !listed(crate::email::SMTP_ALLOWLIST_VAR),
+        "{setting} names {name}, which a provider or SMTP allowlist can also read; use a variable only the audit export reads"
+    );
+    anyhow::ensure!(
+        !crate::startup::SECRET_NAMES.contains(&name)
+            && !name.starts_with("AWS_")
+            && !name.starts_with("GATEWAY_"),
+        "{setting} names a reserved variable ({name})"
+    );
+    Ok(())
+}
+
+/// `Key=Value,Key2=Value2` from the OTLP headers variable (#108). Errors say
+/// which item is wrong, never its name or value (a misplaced `=` could put a
+/// token in the name).
+fn parse_otlp_headers(value: &str) -> anyhow::Result<reqwest::header::HeaderMap> {
+    let mut headers = reqwest::header::HeaderMap::new();
+    let items: Vec<&str> = value.split(',').collect();
+    anyhow::ensure!(
+        items.len() <= OTLP_MAX_HEADERS,
+        "{OTLP_HEADERS_ENV_ENV}: at most {OTLP_MAX_HEADERS} headers"
+    );
+    for (i, item) in items.into_iter().enumerate() {
+        let n = i + 1;
+        let (name, value) = item.split_once('=').ok_or_else(|| {
+            anyhow::anyhow!("{OTLP_HEADERS_ENV_ENV}: header {n} is not Key=Value")
+        })?;
+        // Spaces around `=` and `,` are ignored; a CR or LF never is.
+        let (name, value) = (name.trim_matches(' '), value.trim_matches(' '));
+        // An HTTP token (RFC 9110 5.6.2).
+        anyhow::ensure!(
+            !name.is_empty()
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)),
+            "{OTLP_HEADERS_ENV_ENV}: header {n} has an invalid name"
+        );
+        anyhow::ensure!(
+            !OTLP_RESERVED_HEADERS
+                .iter()
+                .any(|reserved| name.eq_ignore_ascii_case(reserved)),
+            "{OTLP_HEADERS_ENV_ENV}: header {n} is one the gateway sets itself (Content-Type, Host or Content-Length)"
+        );
+        // Visible ASCII and space: no CR, LF or other control characters.
+        anyhow::ensure!(
+            !value.is_empty() && value.bytes().all(|b| (b' '..=b'~').contains(&b)),
+            "{OTLP_HEADERS_ENV_ENV}: header {n} has an empty or invalid value (visible ASCII and spaces only)"
+        );
+        let name = reqwest::header::HeaderName::from_bytes(name.as_bytes()).map_err(|_| {
+            anyhow::anyhow!("{OTLP_HEADERS_ENV_ENV}: header {n} has an invalid name")
+        })?;
+        let mut value = reqwest::header::HeaderValue::from_str(value).map_err(|_| {
+            anyhow::anyhow!("{OTLP_HEADERS_ENV_ENV}: header {n} has an invalid value")
+        })?;
+        value.set_sensitive(true);
+        headers.append(name, value);
+    }
+    Ok(headers)
+}
+
+/// The URL checks and client shared by the webhook and the OTLP collector:
+/// HTTPS only (plain HTTP only to loopback in development), no credentials
+/// or fragment, the outbound address policy, no proxy, redirects or retries.
+fn https_client(
+    setting: &str,
+    url: &str,
+    development: bool,
+) -> anyhow::Result<(reqwest::Url, reqwest::Client)> {
+    let url = reqwest::Url::parse(url).map_err(|_| anyhow::anyhow!("{setting} is not a URL"))?;
+    let loopback = url.host_str().is_some_and(|h| {
+        h == "localhost"
+            || h.trim_matches(['[', ']'])
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
+    });
+    anyhow::ensure!(
+        url.scheme() == "https" || (development && loopback && url.scheme() == "http"),
+        "{setting} must be https:// (http only to loopback in development)"
+    );
+    anyhow::ensure!(
+        url.username().is_empty() && url.password().is_none() && url.fragment().is_none(),
+        "{setting} must not contain credentials or a fragment"
+    );
+    let policy = crate::egress::policy().permit_loopback(development);
+    crate::egress::check_url(&policy, crate::egress::Purpose::Audit, &url)?;
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .dns_resolver(crate::egress::resolver_with(
+            crate::egress::Purpose::Audit,
+            policy,
+        ))
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .timeout(REQUEST_TIMEOUT)
+        .connect_timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|_| anyhow::anyhow!("cannot build the audit export client"))?;
+    Ok((url, client))
 }
 
 /// Read a PEM file at startup. Errors name the setting, never the contents.
@@ -525,15 +706,181 @@ impl Webhook {
             .body(body)
             .send()
             .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    "timeout"
-                } else {
-                    "connection"
-                }
-            })?;
+            .map_err(|e| request_category(&e))?;
         Ok(response.status().as_u16())
     }
+}
+
+/// A request that got no HTTP answer.
+fn request_category(error: &reqwest::Error) -> &'static str {
+    if error.is_timeout() {
+        "timeout"
+    } else {
+        "connection"
+    }
+}
+
+impl Otlp {
+    /// One OTLP/HTTP JSON request. A 2xx is delivered; its body may say the
+    /// collector refused some records for good (`partialSuccess`).
+    async fn send(&self, payload: &Payload) -> Result<Delivery, &'static str> {
+        let (body, records) = otlp_body(payload, chrono::Utc::now());
+        let body = serde_json::to_vec(&body).map_err(|_| "body")?;
+        let response = self
+            .client
+            .post(self.url.clone())
+            .header(
+                reqwest::header::USER_AGENT,
+                concat!("open-model-gateway/", env!("CARGO_PKG_VERSION")),
+            )
+            .headers(self.headers.clone())
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| request_category(&e))?;
+        match response.status().as_u16() {
+            200..=299 => {}
+            status => return Err(status_category(status)),
+        }
+        let rejected = rejected_records(&read_bounded(response, OTLP_ACK_LIMIT).await);
+        Ok(Delivery {
+            rejected: rejected.min(u64::try_from(records).unwrap_or(u64::MAX)),
+        })
+    }
+}
+
+/// At most `limit` bytes of a response body; empty when it is larger (so it
+/// doesn't parse) or can't be read.
+async fn read_bounded(mut response: reqwest::Response, limit: usize) -> Vec<u8> {
+    let mut body = Vec::new();
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) if body.len() + chunk.len() <= limit => {
+                body.extend_from_slice(&chunk);
+            }
+            Ok(None) => return body,
+            Ok(Some(_)) | Err(_) => return Vec::new(),
+        }
+    }
+}
+
+/// `partialSuccess.rejectedLogRecords` of an OTLP response (an int64: a
+/// string or a number in JSON). Missing, zero, negative or unparsable is 0.
+fn rejected_records(body: &[u8]) -> u64 {
+    let Ok(ack) = serde_json::from_slice::<Value>(body) else {
+        return 0;
+    };
+    let rejected = &ack["partialSuccess"]["rejectedLogRecords"];
+    rejected
+        .as_u64()
+        .or_else(|| rejected.as_str()?.parse().ok())
+        .unwrap_or(0)
+}
+
+/// Nanoseconds since the Unix epoch as a decimal string (the protobuf JSON
+/// mapping of a 64-bit integer); `0` (unknown) outside its range.
+fn unix_nanos(at: chrono::DateTime<chrono::Utc>) -> String {
+    at.timestamp_nanos_opt().unwrap_or(0).to_string()
+}
+
+fn string_attribute(key: &str, value: &str) -> Value {
+    json!({"key": key, "value": {"stringValue": value}})
+}
+
+fn int_attribute(key: &str, value: i64) -> Value {
+    json!({"key": key, "value": {"intValue": value.to_string()}})
+}
+
+/// One INFO LogRecord.
+fn log_record(time: String, observed: &str, body: String, attributes: Vec<Value>) -> Value {
+    json!({
+        "timeUnixNano": time,
+        "observedTimeUnixNano": observed,
+        "severityNumber": OTLP_SEVERITY_INFO,
+        "severityText": "INFO",
+        "body": {"stringValue": body},
+        "attributes": attributes,
+    })
+}
+
+/// The OTLP/HTTP JSON request body for a payload and how many records it
+/// holds: one LogRecord per event, its body the event object the webhook
+/// sends; a heartbeat or test is one record.
+fn otlp_body(payload: &Payload, now: chrono::DateTime<chrono::Utc>) -> (Value, usize) {
+    let observed = unix_nanos(now);
+    let (installation, records) = match payload {
+        Payload::Events {
+            installation,
+            events,
+        } => (
+            installation,
+            events
+                .iter()
+                .map(|event| {
+                    let time = event["occurred_at"]
+                        .as_str()
+                        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                        .map_or_else(
+                            || "0".to_owned(),
+                            |t| unix_nanos(t.with_timezone(&chrono::Utc)),
+                        );
+                    log_record(
+                        time,
+                        &observed,
+                        event.to_string(),
+                        vec![
+                            string_attribute(
+                                "event.name",
+                                event["action"].as_str().unwrap_or_default(),
+                            ),
+                            string_attribute(
+                                "omg.audit.id",
+                                event["id"].as_str().unwrap_or_default(),
+                            ),
+                            int_attribute("omg.audit.seq", event["seq"].as_i64().unwrap_or(0)),
+                        ],
+                    )
+                })
+                .collect::<Vec<_>>(),
+        ),
+        Payload::Heartbeat {
+            installation,
+            next_seq,
+        } => (
+            installation,
+            vec![log_record(
+                observed.clone(),
+                &observed,
+                format!(r#"{{"schema":"{SCHEMA}","heartbeat":true,"next_seq":{next_seq}}}"#),
+                vec![
+                    string_attribute("event.name", "omg.audit.heartbeat"),
+                    int_attribute("omg.audit.next_seq", *next_seq),
+                ],
+            )],
+        ),
+        Payload::Test { installation } => (
+            installation,
+            vec![log_record(
+                observed.clone(),
+                &observed,
+                format!(r#"{{"schema":"{SCHEMA}","test":true}}"#),
+                vec![string_attribute("event.name", "omg.audit.test")],
+            )],
+        ),
+    };
+    let count = records.len();
+    let body = json!({"resourceLogs": [{
+        "resource": {"attributes": [
+            string_attribute("service.name", APP_NAME),
+            string_attribute("omg.installation_id", &installation.to_string()),
+        ]},
+        "scopeLogs": [{
+            "scope": {"name": OTLP_SCOPE, "version": SCHEMA},
+            "logRecords": records,
+        }],
+    }]});
+    (body, count)
 }
 
 impl Syslog {
@@ -848,7 +1195,7 @@ pub async fn deliver_once(
             })
             .await
     } else if events.is_empty() {
-        Ok(())
+        Ok(Delivery::default())
     } else {
         exporter
             .send(Payload::Events {
@@ -860,20 +1207,38 @@ pub async fn deliver_once(
     // 3. Record the outcome, fenced: a holder whose term ended commits nothing.
     let mut tx = crate::db::begin(&store.pool).await?;
     crate::leases::fence(&mut tx, fence).await?;
+    // Records an OTLP collector refused for good (#108) are delivered as far
+    // as the queue goes (never retried), but recorded as the last error.
+    let rejected = result.map_or(0, |delivery| delivery.rejected);
+    let error = (rejected > 0).then_some("otlp_rejected");
+    // A refused heartbeat didn't reach the receiver: a failure, backed off.
+    let result = match result {
+        Ok(_) if heartbeat && rejected > 0 => Err("otlp_rejected"),
+        other => other,
+    };
+    let all_rejected = !heartbeat && rejected > 0 && rejected >= u64::try_from(sent).unwrap_or(0);
     let outcome = match result {
-        Ok(()) if heartbeat => {
-            sqlx::query("UPDATE audit_export_state SET attempts=0,next_attempt_at='-infinity',last_success_at=now(),last_heartbeat_at=now(),last_error=NULL")
+        Ok(_) if heartbeat => {
+            sqlx::query("UPDATE audit_export_state SET attempts=0,next_attempt_at='-infinity',last_success_at=now(),last_heartbeat_at=now(),last_error=$1,last_error_at=CASE WHEN $1::text IS NULL THEN last_error_at ELSE now() END")
+                .bind(error)
                 .execute(&mut *tx)
                 .await?;
             Outcome::Heartbeat
         }
-        Ok(()) => {
+        Ok(_) => {
             sqlx::query("DELETE FROM audit_export_queue WHERE event_id=ANY($1)")
                 .bind(&ids)
                 .execute(&mut *tx)
                 .await?;
-            sqlx::query("UPDATE audit_export_state SET attempts=0,next_attempt_at='-infinity',last_success_at=now(),last_error=NULL,delivered_total=delivered_total+$1")
-                .bind(i64::try_from(sent).unwrap_or(i64::MAX))
+            let accepted = u64::try_from(sent)
+                .unwrap_or(u64::MAX)
+                .saturating_sub(rejected);
+            // A batch the collector refused entirely isn't a success: the
+            // last delivery time (and so the backlog and silence alerts) stays.
+            sqlx::query("UPDATE audit_export_state SET attempts=0,next_attempt_at='-infinity',last_success_at=CASE WHEN $3 THEN last_success_at ELSE now() END,last_error=$2,last_error_at=CASE WHEN $2::text IS NULL THEN last_error_at ELSE now() END,delivered_total=delivered_total+$1")
+                .bind(i64::try_from(accepted).unwrap_or(i64::MAX))
+                .bind(error)
+                .bind(all_rejected)
                 .execute(&mut *tx)
                 .await?;
             Outcome::Delivered(sent)
@@ -888,6 +1253,13 @@ pub async fn deliver_once(
         }
     };
     tx.commit().await?;
+    if rejected > 0 && !heartbeat {
+        crate::metrics::METRICS.audit_export_rejected(rejected);
+        tracing::warn!(
+            rejected,
+            "the OTLP collector refused audit records; they are not retried"
+        );
+    }
     // Heartbeats aren't deliveries (a failed one counts as a failure).
     if outcome != Outcome::Heartbeat {
         crate::metrics::METRICS.audit_export_delivery(match outcome {
@@ -906,15 +1278,19 @@ fn status_category(status: u16) -> &'static str {
     }
 }
 
-/// A test delivery: `"test": true` and no events (a signed webhook body, or
-/// one syslog message with MSGID `test`). Doesn't touch the queue or the
-/// status.
+/// A test delivery: `"test": true` and no events (a signed webhook body, one
+/// syslog message with MSGID `test`, or one OTLP record `omg.audit.test`).
+/// Doesn't touch the queue or the status. A collector that refuses the test
+/// record fails the test (`otlp_rejected`).
 pub async fn send_test(store: &Store, exporter: &Exporter) -> Result<(), &'static str> {
     let installation: Uuid = sqlx::query_scalar("SELECT id FROM installation")
         .fetch_one(&store.pool)
         .await
         .map_err(|_| "database")?;
-    exporter.send(Payload::Test { installation }).await
+    match exporter.send(Payload::Test { installation }).await? {
+        Delivery { rejected: 0 } => Ok(()),
+        Delivery { .. } => Err("otlp_rejected"),
+    }
 }
 
 /// Status for Admin › Settings › Audit export. Never the URL or secret.
@@ -1515,6 +1891,411 @@ mod tests {
         assert_eq!(backoff(8), 256.0);
         assert_eq!(backoff(9), 300.0);
         assert_eq!(backoff(1000), 300.0);
+    }
+
+    /// #108: OTLP/HTTP is the third destination, one at a time. Its headers
+    /// come from a variable named under the webhook secret's rules, are
+    /// checked at startup and never printed; `OTEL_*` is never read.
+    #[test]
+    fn otlp_configuration_is_one_destination_with_checked_headers_and_no_otel_variables() {
+        // A header value that must never appear in Debug output or an error.
+        const TOKEN: &str = "c2VjcmV0LWNvbGxlY3Rvci10b2tlbg";
+        let otlp = |url: &str| (OTLP_URL_ENV, url.to_owned());
+        let headers = |value: &str| {
+            vec![
+                (OTLP_HEADERS_ENV_ENV, "AUDIT_OTLP_HEADERS".to_owned()),
+                ("AUDIT_OTLP_HEADERS", value.to_owned()),
+            ]
+        };
+        let with = |mut pairs: Vec<(&'static str, String)>, extra: Vec<(&'static str, String)>| {
+            pairs.extend(extra);
+            pairs
+        };
+        let otel = || {
+            vec![
+                (
+                    "OTEL_EXPORTER_OTLP_ENDPOINT",
+                    "https://telemetry.example.org".to_owned(),
+                ),
+                (
+                    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+                    "https://telemetry.example.org/v1/logs".to_owned(),
+                ),
+                ("OTEL_EXPORTER_OTLP_HEADERS", "x-telemetry=1".to_owned()),
+            ]
+        };
+
+        // A destination with headers; the operational OTEL_* settings are
+        // never even looked up.
+        let read = std::cell::RefCell::new(Vec::<String>::new());
+        let get = lookup(with(
+            with(
+                vec![otlp("https://Collector.example.org:4318/v1/logs")],
+                headers(&format!(
+                    " Authorization = Bearer {TOKEN} ,X-Scope-OrgID=audit"
+                )),
+            ),
+            otel(),
+        ));
+        let exp = Setting::from_lookup(
+            |name| {
+                read.borrow_mut().push(name.to_owned());
+                get(name)
+            },
+            false,
+        )
+        .unwrap()
+        .exporter()
+        .unwrap();
+        assert_eq!(
+            (exp.transport(), exp.host()),
+            ("otlp", "collector.example.org")
+        );
+        let Transport::Otlp(o) = &exp.transport else {
+            panic!("otlp")
+        };
+        assert_eq!(o.url.as_str(), "https://collector.example.org:4318/v1/logs");
+        assert_eq!(o.headers.len(), 2);
+        assert_eq!(
+            o.headers["authorization"],
+            format!("Bearer {TOKEN}").as_str()
+        );
+        assert_eq!(o.headers["x-scope-orgid"], "audit");
+        assert!(o.headers.values().all(|v| v.is_sensitive()));
+        let debug = format!("{exp:?}");
+        assert!(debug.contains("otlp"));
+        assert!(
+            !debug.contains(TOKEN) && !debug.contains("audit\"") && !debug.contains("Bearer"),
+            "no header value in {debug}"
+        );
+        assert!(
+            read.borrow().iter().all(|name| !name.starts_with("OTEL_")),
+            "{:?}",
+            read.borrow()
+        );
+        // OTEL_* alone is no audit destination.
+        assert!(matches!(
+            Setting::from_lookup(lookup(otel()), false).unwrap(),
+            Setting::Unset
+        ));
+        // Headers are optional; plain HTTP only to loopback in development.
+        let exp = Setting::from_lookup(lookup(vec![otlp("http://127.0.0.1:4318/v1/logs")]), true)
+            .unwrap()
+            .exporter()
+            .unwrap();
+        let Transport::Otlp(o) = &exp.transport else {
+            panic!("otlp")
+        };
+        assert!(o.headers.is_empty());
+
+        // Only an explicit `off` turns export off, in any of the three.
+        for pairs in [
+            vec![otlp("off")],
+            vec![
+                otlp(" off "),
+                (URL_ENV, "off".into()),
+                (SYSLOG_URL_ENV, "off".into()),
+            ],
+        ] {
+            assert!(matches!(
+                Setting::from_lookup(lookup(pairs), false).unwrap(),
+                Setting::Off
+            ));
+        }
+        // `off` with a leftover transport setting is refused: it would do nothing.
+        for extra in [
+            headers("X-Token=1"),
+            vec![(SECRET_ENV_ENV, "AUDIT_SECRET".to_owned())],
+            vec![(SYSLOG_CA_FILE_ENV, "/etc/ca.pem".to_owned())],
+        ] {
+            assert!(Setting::from_lookup(lookup(with(vec![otlp("off")], extra)), false).is_err());
+        }
+        let collector = || otlp("https://collector.example.org/v1/logs");
+        let webhook = || {
+            vec![
+                (URL_ENV, "https://siem.example.org".to_owned()),
+                (SECRET_ENV_ENV, "AUDIT_SECRET".to_owned()),
+                ("AUDIT_SECRET", "s".repeat(32)),
+            ]
+        };
+        let syslog = || (SYSLOG_URL_ENV, "syslog+tls://siem.example.org".to_owned());
+        let dir = tempfile::tempdir().unwrap();
+        let ca = dir.path().join("ca.pem");
+        std::fs::write(&ca, pki::CA).unwrap();
+        let ca = (SYSLOG_CA_FILE_ENV, ca.to_string_lossy().into_owned());
+        let good = || headers(&format!("Authorization=Bearer {TOKEN}"));
+        let too_many = (0..17)
+            .map(|i| format!("X-H{i}={TOKEN}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        for (pairs, why, header_error) in [
+            (
+                with(webhook(), vec![collector()]),
+                "webhook and OTLP",
+                false,
+            ),
+            (vec![syslog(), collector()], "syslog and OTLP", false),
+            (
+                with(webhook(), vec![syslog(), collector()]),
+                "all three",
+                false,
+            ),
+            (
+                vec![(URL_ENV, "off".into()), collector()],
+                "webhook off plus OTLP",
+                false,
+            ),
+            (
+                vec![collector(), (SYSLOG_URL_ENV, "off".into())],
+                "OTLP plus syslog off",
+                false,
+            ),
+            (
+                with(webhook(), vec![otlp("off")]),
+                "webhook plus OTLP off",
+                false,
+            ),
+            (
+                with(
+                    vec![collector()],
+                    vec![
+                        (SECRET_ENV_ENV, "AUDIT_SECRET".into()),
+                        ("AUDIT_SECRET", "s".repeat(32)),
+                    ],
+                ),
+                "the webhook secret with OTLP",
+                false,
+            ),
+            (
+                vec![collector(), ca.clone()],
+                "syslog files with OTLP",
+                false,
+            ),
+            (good(), "headers without the OTLP URL", true),
+            (with(webhook(), good()), "headers with the webhook", true),
+            (with(vec![syslog()], good()), "headers with syslog", true),
+            (
+                vec![otlp("http://collector.example.org/v1/logs")],
+                "plain http",
+                false,
+            ),
+            (
+                vec![otlp("http://127.0.0.1:4318/v1/logs")],
+                "plain http to loopback outside development",
+                false,
+            ),
+            (
+                vec![otlp("https://user:pw@collector.example.org/v1/logs")],
+                "credentials",
+                false,
+            ),
+            (
+                vec![otlp("https://collector.example.org/v1/logs#x")],
+                "a fragment",
+                false,
+            ),
+            (
+                vec![otlp("https://169.254.169.254/v1/logs")],
+                "metadata address",
+                false,
+            ),
+            (vec![otlp("collector:4318")], "not a URL", false),
+            (
+                vec![
+                    collector(),
+                    (OTLP_HEADERS_ENV_ENV, "AUDIT_OTLP_HEADERS".into()),
+                ],
+                "the headers variable unset",
+                true,
+            ),
+            (
+                with(vec![collector()], headers("")),
+                "no headers in the variable",
+                true,
+            ),
+            (
+                with(
+                    vec![collector()],
+                    headers(&format!("Authorization {TOKEN}")),
+                ),
+                "not Key=Value",
+                true,
+            ),
+            (
+                with(vec![collector()], headers(&format!("X Token={TOKEN}"))),
+                "a space in the name",
+                true,
+            ),
+            (
+                with(vec![collector()], headers(&format!("X-Token:={TOKEN}"))),
+                "a colon in the name",
+                true,
+            ),
+            (
+                with(vec![collector()], headers(&format!("={TOKEN}"))),
+                "an empty name",
+                true,
+            ),
+            (
+                with(vec![collector()], headers("X-Token=")),
+                "an empty value",
+                true,
+            ),
+            (
+                with(
+                    vec![collector()],
+                    headers(&format!("X-Token={TOKEN}\r\nX-Injected: 1")),
+                ),
+                "CR/LF in a value",
+                true,
+            ),
+            (
+                with(vec![collector()], headers(&format!("X-Token={TOKEN}\n"))),
+                "LF in a value",
+                true,
+            ),
+            (
+                with(
+                    vec![collector()],
+                    headers(&format!("X-Token={TOKEN}\u{e9}")),
+                ),
+                "a non-ASCII value",
+                true,
+            ),
+            (
+                with(vec![collector()], headers(&too_many)),
+                "more than 16 headers",
+                true,
+            ),
+            (
+                with(
+                    vec![collector()],
+                    headers(&format!("Content-Type=text/plain,X-Token={TOKEN}")),
+                ),
+                "content-type",
+                true,
+            ),
+            (
+                with(vec![collector()], headers(&format!("HOST={TOKEN}"))),
+                "host",
+                true,
+            ),
+            (
+                with(
+                    vec![collector()],
+                    headers(&format!("Transfer-Encoding=chunked,X-Token={TOKEN}")),
+                ),
+                "transfer-encoding",
+                true,
+            ),
+            (
+                with(
+                    vec![collector()],
+                    headers(&format!("Connection=close,X-Token={TOKEN}")),
+                ),
+                "connection",
+                true,
+            ),
+            (
+                with(
+                    vec![collector()],
+                    headers(&format!("content-length=1,X-Token={TOKEN}")),
+                ),
+                "content-length",
+                true,
+            ),
+        ] {
+            let error = match Setting::from_lookup(lookup(pairs), false) {
+                Ok(_) => panic!("{why}: accepted"),
+                Err(error) => format!("{error:#} {error:?}"),
+            };
+            assert!(!error.contains(TOKEN), "{why}: header value in the error");
+            if header_error {
+                assert!(
+                    error.contains(OTLP_HEADERS_ENV_ENV),
+                    "{why}: names the setting"
+                );
+            }
+        }
+        // Exactly 16 headers are fine.
+        let sixteen = (0..16)
+            .map(|i| format!("X-H{i}={TOKEN}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        assert!(
+            Setting::from_lookup(lookup(with(vec![collector()], headers(&sixteen))), false).is_ok()
+        );
+
+        // The headers variable follows the webhook secret's naming rules
+        // (one shared check): a Platform Admin must not be able to read it
+        // through a provider connection or the SMTP relay.
+        let named = |name: &'static str, extra: Vec<(&'static str, String)>| {
+            with(
+                vec![
+                    collector(),
+                    (OTLP_HEADERS_ENV_ENV, name.to_owned()),
+                    (name, format!("Authorization=Bearer {TOKEN}")),
+                ],
+                extra,
+            )
+        };
+        for (pairs, why) in [
+            (
+                named(
+                    "AUDIT_OTLP_HEADERS",
+                    vec![(
+                        "GATEWAY_SECRET_ENV_ALLOWLIST",
+                        "OPENAI_API_KEY, AUDIT_OTLP_HEADERS".into(),
+                    )],
+                ),
+                "provider allowlist",
+            ),
+            (
+                named(
+                    "AUDIT_OTLP_HEADERS",
+                    vec![(
+                        crate::email::SMTP_ALLOWLIST_VAR,
+                        "AUDIT_OTLP_HEADERS".into(),
+                    )],
+                ),
+                "SMTP allowlist",
+            ),
+            (named("OPENAI_API_KEY", vec![]), "reserved key"),
+            (named("GATEWAY_SCIM_TOKEN", vec![]), "GATEWAY_ prefix"),
+            (named("AWS_SECRET_ACCESS_KEY", vec![]), "AWS_ prefix"),
+            (named("lower_case", vec![]), "lower case"),
+        ] {
+            let error = Setting::from_lookup(lookup(pairs), false)
+                .err()
+                .map(|e| format!("{e:#}"))
+                .unwrap_or_default();
+            assert!(
+                error.contains(OTLP_HEADERS_ENV_ENV),
+                "{why}: names the setting"
+            );
+            assert!(!error.contains(TOKEN), "{why}: header value in the error");
+        }
+    }
+
+    /// #108: the collector's acknowledgement. Anything but a positive
+    /// `rejectedLogRecords` (or a body that isn't JSON) rejects nothing.
+    #[test]
+    fn otlp_rejected_records_are_read_from_the_partial_success() {
+        for (body, rejected) in [
+            ("", 0),
+            ("{}", 0),
+            ("not json", 0),
+            (r#"{"partialSuccess":{}}"#, 0),
+            (r#"{"partialSuccess":{"rejectedLogRecords":"0"}}"#, 0),
+            (r#"{"partialSuccess":{"rejectedLogRecords":-3}}"#, 0),
+            (
+                r#"{"partialSuccess":{"rejectedLogRecords":"2","errorMessage":"x"}}"#,
+                2,
+            ),
+            (r#"{"partialSuccess":{"rejectedLogRecords":3}}"#, 3),
+        ] {
+            assert_eq!(rejected_records(body.as_bytes()), rejected, "{body}");
+        }
     }
 }
 
@@ -2526,5 +3307,517 @@ mod database {
         );
         assert_eq!(receiver.connections.load(Ordering::SeqCst), 0);
         assert_eq!(queued(&pool).await, vec![id]);
+    }
+
+    // ---- #108: OTLP/HTTP JSON logs ----
+
+    /// A mock OTLP/HTTP collector: records every request to `/v1/logs` and
+    /// answers with `status` and the JSON `reply`.
+    struct Collector {
+        url: String,
+        seen: Requests,
+        status: Arc<AtomicU16>,
+        reply: Arc<Mutex<String>>,
+    }
+    async fn collector() -> Collector {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let status = Arc::new(AtomicU16::new(200));
+        let reply = Arc::new(Mutex::new(String::new()));
+        let (log, answer, text) = (seen.clone(), status.clone(), reply.clone());
+        let app = Router::new().route(
+            "/v1/logs",
+            post(move |headers: HeaderMap, body: axum::body::Bytes| {
+                let (log, answer, text) = (log.clone(), answer.clone(), text.clone());
+                async move {
+                    log.lock().unwrap().push((headers, body.to_vec()));
+                    (
+                        axum::http::StatusCode::from_u16(answer.load(Ordering::SeqCst)).unwrap(),
+                        [(axum::http::header::CONTENT_TYPE, "application/json")],
+                        text.lock().unwrap().clone(),
+                    )
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1/logs", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        Collector {
+            url,
+            seen,
+            status,
+            reply,
+        }
+    }
+    fn otlp_exporter(url: &str, headers: Option<&str>) -> Exporter {
+        Exporter::otlp(url, headers, true).unwrap()
+    }
+    fn requests(collector: &Collector) -> Vec<Value> {
+        collector
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, body)| serde_json::from_slice::<Value>(body).unwrap())
+            .collect()
+    }
+    /// Every log record of every request, in order.
+    fn log_records(collector: &Collector) -> Vec<Value> {
+        requests(collector)
+            .iter()
+            .flat_map(|body| {
+                body["resourceLogs"][0]["scopeLogs"][0]["logRecords"]
+                    .as_array()
+                    .unwrap()
+                    .clone()
+            })
+            .collect()
+    }
+    /// A record's attributes as a key → value object map.
+    fn attributes(record: &Value) -> serde_json::Map<String, Value> {
+        record["attributes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| (a["key"].as_str().unwrap().to_owned(), a["value"].clone()))
+            .collect()
+    }
+    /// The record's body: a string holding a JSON object.
+    fn record_body(record: &Value) -> Value {
+        let mut keys: Vec<&String> = record["body"].as_object().unwrap().keys().collect();
+        keys.sort();
+        assert_eq!(keys, ["stringValue"]);
+        serde_json::from_str(record["body"]["stringValue"].as_str().unwrap()).unwrap()
+    }
+    fn record_seqs(collector: &Collector) -> Vec<String> {
+        log_records(collector)
+            .iter()
+            .map(|r| {
+                attributes(r)["omg.audit.seq"]["intValue"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect()
+    }
+    fn now_nanos() -> u128 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    }
+    fn nanos(value: &Value) -> u128 {
+        value
+            .as_str()
+            .expect("a 64-bit integer is a decimal string")
+            .parse()
+            .unwrap()
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn otlp_maps_each_event_to_one_log_record_with_the_webhook_event_as_body(
+        pool: sqlx::PgPool,
+    ) {
+        let store = Store::new(pool.clone());
+        let collector = collector().await;
+        let exp = otlp_exporter(&collector.url, None);
+        assert_eq!((exp.transport(), exp.host()), ("otlp", "127.0.0.1"));
+        enable_with(&pool, &store, otlp_exporter(&collector.url, None)).await;
+        let (team, personal) = (
+            workspace(&pool, "team").await,
+            workspace(&pool, "personal").await,
+        );
+        let first = event(&pool, Some(team), "key.revoked").await;
+        event(&pool, Some(personal), "key.created").await;
+        let second = event(&pool, None, "test.event").await;
+        let before = now_nanos();
+        assert_eq!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Delivered(2)
+        );
+        let after = now_nanos();
+        assert!(queued(&pool).await.is_empty());
+
+        let seen = collector.seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1, "one request per batch");
+        let headers = &seen[0].0;
+        assert_eq!(headers["content-type"], "application/json");
+        assert!(!headers.contains_key("x-omg-signature"));
+        let body = requests(&collector).remove(0);
+        let installation = installation(&pool).await;
+        assert_eq!(body.as_object().unwrap().len(), 1);
+        let resource_logs = body["resourceLogs"].as_array().unwrap();
+        assert_eq!(resource_logs.len(), 1);
+        assert_eq!(
+            resource_logs[0]["resource"],
+            json!({"attributes":[
+                {"key":"service.name","value":{"stringValue":"open-model-gateway"}},
+                {"key":"omg.installation_id","value":{"stringValue":installation.to_string()}}]})
+        );
+        let scope_logs = resource_logs[0]["scopeLogs"].as_array().unwrap();
+        assert_eq!(scope_logs.len(), 1);
+        assert_eq!(
+            scope_logs[0]["scope"],
+            json!({"name":"omg.audit","version":"omg.audit.v1"})
+        );
+        let records = log_records(&collector);
+        assert_eq!(
+            records.len(),
+            2,
+            "one record per event; never the personal-workspace event"
+        );
+        for (i, (record, id)) in records.iter().zip([first, second]).enumerate() {
+            let seq = i64::try_from(i).unwrap() + 1;
+            // The body is the event object exactly as the webhook sends it.
+            let mut expected: Value = sqlx::query_scalar(&format!("SELECT {EVENT} FROM audit_events a LEFT JOIN workspaces w ON w.id=a.workspace_id WHERE a.id=$1"))
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            expected["seq"] = json!(seq);
+            assert_eq!(record_body(record), expected);
+            // occurred_at in nanoseconds, as a decimal string.
+            let micros: i64 = sqlx::query_scalar(
+                "SELECT (extract(epoch FROM created_at)*1000000)::bigint FROM audit_events WHERE id=$1",
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                record["timeUnixNano"],
+                json!((i128::from(micros) * 1000).to_string())
+            );
+            let observed = nanos(&record["observedTimeUnixNano"]);
+            assert!((before..=after).contains(&observed), "the send time");
+            assert_eq!(record["severityNumber"], 9);
+            assert_eq!(record["severityText"], "INFO");
+            let attributes = attributes(record);
+            assert_eq!(
+                attributes,
+                json!({
+                    "event.name":{"stringValue":expected["action"]},
+                    "omg.audit.id":{"stringValue":id.to_string()},
+                    "omg.audit.seq":{"intValue":seq.to_string()},
+                })
+                .as_object()
+                .unwrap()
+                .clone()
+            );
+            let mut keys: Vec<&String> = record.as_object().unwrap().keys().collect();
+            keys.sort();
+            assert_eq!(
+                keys,
+                [
+                    "attributes",
+                    "body",
+                    "observedTimeUnixNano",
+                    "severityNumber",
+                    "severityText",
+                    "timeUnixNano"
+                ]
+            );
+        }
+        assert_eq!(record_body(&records[0])["workspace"]["kind"], "team");
+        assert_eq!(record_body(&records[0])["metadata"], json!({"count":1}));
+        assert_eq!(
+            attributes(&records[0])["event.name"],
+            json!({"stringValue":"key.revoked"})
+        );
+        let v = status(&store).await.unwrap();
+        assert_eq!(
+            (
+                v["destination_host"].clone(),
+                v["delivered_total"].clone(),
+                v["last_error"].clone()
+            ),
+            (json!("127.0.0.1"), json!("2"), Value::Null)
+        );
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn otlp_sends_the_configured_headers(pool: sqlx::PgPool) {
+        let store = Store::new(pool.clone());
+        let collector = collector().await;
+        let headers = Some("Authorization=Bearer collector-token,X-Scope-OrgID=audit");
+        let exp = otlp_exporter(&collector.url, headers);
+        enable_with(&pool, &store, otlp_exporter(&collector.url, headers)).await;
+        event(&pool, None, "test.event").await;
+        assert_eq!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Delivered(1)
+        );
+        send_test(&store, &exp).await.unwrap();
+        let seen = collector.seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 2);
+        for (headers, _) in &seen {
+            assert_eq!(headers["authorization"], "Bearer collector-token");
+            assert_eq!(headers["x-scope-orgid"], "audit");
+            assert_eq!(headers["content-type"], "application/json");
+            assert_eq!(headers.get_all("content-type").iter().count(), 1);
+        }
+    }
+
+    /// A 2xx is success whatever its body, unless `partialSuccess` says the
+    /// collector refused records: those are dequeued (OTLP says not to retry
+    /// them), counted and shown, and receivers see the gap through `seq`.
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn otlp_a_partial_rejection_is_dequeued_recorded_counted_and_not_retried(
+        pool: sqlx::PgPool,
+    ) {
+        let store = Store::new(pool.clone());
+        let collector = collector().await;
+        let exp = otlp_exporter(&collector.url, None);
+        enable_with(&pool, &store, otlp_exporter(&collector.url, None)).await;
+        let rejected_before = crate::metrics::METRICS.audit_export_rejected_count();
+        // Acknowledgements that reject nothing.
+        let oversized = format!(
+            "{{\"partialSuccess\":{{\"rejectedLogRecords\":\"1\"}},\"pad\":\"{}\"}}",
+            "x".repeat(70 * 1024)
+        );
+        for reply in [
+            "",
+            "{}",
+            "not json",
+            r#"{"partialSuccess":{}}"#,
+            r#"{"partialSuccess":{"rejectedLogRecords":"0"}}"#,
+            oversized.as_str(),
+        ] {
+            *collector.reply.lock().unwrap() = reply.to_owned();
+            event(&pool, None, "test.event").await;
+            assert_eq!(
+                deliver_once(&store, &exp, None).await.unwrap(),
+                Outcome::Delivered(1),
+                "{:.40}",
+                reply
+            );
+            assert_eq!(
+                status(&store).await.unwrap()["last_error"],
+                Value::Null,
+                "{:.40}",
+                reply
+            );
+        }
+        assert_eq!(
+            crate::metrics::METRICS.audit_export_rejected_count(),
+            rejected_before
+        );
+        // Two of three refused.
+        *collector.reply.lock().unwrap() =
+            r#"{"partialSuccess":{"rejectedLogRecords":"2","errorMessage":"invalid"}}"#.into();
+        for _ in 0..3 {
+            event(&pool, None, "test.event").await;
+        }
+        assert_eq!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Delivered(3)
+        );
+        assert!(queued(&pool).await.is_empty(), "dequeued");
+        let v = status(&store).await.unwrap();
+        assert_eq!(
+            (
+                v["last_error"].clone(),
+                v["retrying"].clone(),
+                v["last_error_at"].is_string(),
+                v["delivered_total"].clone()
+            ),
+            (json!("otlp_rejected"), json!(false), true, json!("7")),
+            "six accepted before, one of three now"
+        );
+        let attempts: i32 = sqlx::query_scalar("SELECT attempts FROM audit_export_state")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(attempts, 0);
+        assert_eq!(
+            crate::metrics::METRICS.audit_export_rejected_count(),
+            rejected_before + 2
+        );
+        // Not retried: nothing more is sent.
+        let sent = collector.seen.lock().unwrap().len();
+        assert_eq!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Idle
+        );
+        assert_eq!(collector.seen.lock().unwrap().len(), sent);
+        assert_eq!(record_seqs(&collector).len(), 9, "every record sent once");
+
+        // Everything refused: not a success, so the last delivery time (and
+        // the silence and backlog alerts) stays where it was.
+        let last = |v: &Value| v["last_success_at"].clone();
+        let before = last(&status(&store).await.unwrap());
+        sqlx::query("UPDATE audit_export_state SET last_success_at=now()-interval '10 minutes'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let ten_minutes_ago = last(&status(&store).await.unwrap());
+        assert_ne!(before, ten_minutes_ago);
+        *collector.reply.lock().unwrap() =
+            r#"{"partialSuccess":{"rejectedLogRecords":"1"}}"#.into();
+        event(&pool, None, "test.event").await;
+        assert_eq!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Delivered(1)
+        );
+        assert_eq!(last(&status(&store).await.unwrap()), ten_minutes_ago);
+        // A refused heartbeat is a failure, backed off; not a heartbeat sent.
+        assert_eq!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Failed("otlp_rejected")
+        );
+        let v = status(&store).await.unwrap();
+        assert_eq!(
+            (v["retrying"].clone(), v["last_heartbeat_at"].clone()),
+            (json!(true), Value::Null)
+        );
+        // The next clean delivery clears the error.
+        *collector.reply.lock().unwrap() = "{}".into();
+        retry_now(&pool).await;
+        event(&pool, None, "test.event").await;
+        assert_eq!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Delivered(1)
+        );
+        let v = status(&store).await.unwrap();
+        assert_eq!(
+            (v["last_error"].clone(), v["retrying"].clone()),
+            (Value::Null, json!(false))
+        );
+        assert_ne!(last(&v), ten_minutes_ago);
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn otlp_an_unavailable_collector_keeps_the_batch_and_the_retry_has_the_same_seq(
+        pool: sqlx::PgPool,
+    ) {
+        let store = Store::new(pool.clone());
+        let collector = collector().await;
+        let exp = otlp_exporter(&collector.url, None);
+        enable_with(&pool, &store, otlp_exporter(&collector.url, None)).await;
+        let ids = [
+            event(&pool, None, "test.event").await,
+            event(&pool, None, "test.event").await,
+        ];
+        collector.status.store(503, Ordering::SeqCst);
+        assert_eq!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Failed("http_5xx")
+        );
+        assert_eq!(queued(&pool).await, ids.to_vec(), "nothing lost");
+        assert_eq!(status(&store).await.unwrap()["retrying"], true);
+        collector.status.store(400, Ordering::SeqCst);
+        retry_now(&pool).await;
+        assert_eq!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Failed("http_4xx")
+        );
+        retry_now(&pool).await;
+        assert_eq!(
+            deliver_once(
+                &store,
+                &otlp_exporter("http://127.0.0.1:9/v1/logs", None),
+                None
+            )
+            .await
+            .unwrap(),
+            Outcome::Failed("connection")
+        );
+        collector.status.store(200, Ordering::SeqCst);
+        retry_now(&pool).await;
+        assert_eq!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Delivered(2)
+        );
+        assert!(queued(&pool).await.is_empty());
+        assert_eq!(
+            record_seqs(&collector),
+            ["1", "2", "1", "2", "1", "2"],
+            "every attempt, the same numbers"
+        );
+        let ids: Vec<String> = log_records(&collector)
+            .iter()
+            .map(|r| {
+                attributes(r)["omg.audit.id"]["stringValue"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect();
+        assert_eq!(ids[..2], ids[4..], "the same events again");
+        assert_eq!(status(&store).await.unwrap()["last_error"], Value::Null);
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn otlp_heartbeat_and_test_records(pool: sqlx::PgPool) {
+        let store = Store::new(pool.clone());
+        let collector = collector().await;
+        let exp = otlp_exporter(&collector.url, None);
+        enable_with(&pool, &store, otlp_exporter(&collector.url, None)).await;
+        let installation = installation(&pool).await;
+        sqlx::query("UPDATE audit_export_state SET last_success_at=now()-interval '2 minutes'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let before = now_nanos();
+        assert_eq!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Heartbeat
+        );
+        send_test(&store, &exp).await.unwrap();
+        let after = now_nanos();
+        let bodies = requests(&collector);
+        assert_eq!(bodies.len(), 2);
+        for body in &bodies {
+            assert_eq!(
+                body["resourceLogs"][0]["resource"]["attributes"][1],
+                json!({"key":"omg.installation_id","value":{"stringValue":installation.to_string()}})
+            );
+            assert_eq!(
+                body["resourceLogs"][0]["scopeLogs"][0]["scope"],
+                json!({"name":"omg.audit","version":"omg.audit.v1"})
+            );
+        }
+        let records = log_records(&collector);
+        assert_eq!(records.len(), 2, "one record each");
+        for record in &records {
+            assert!((before..=after).contains(&nanos(&record["timeUnixNano"])));
+            assert!((before..=after).contains(&nanos(&record["observedTimeUnixNano"])));
+            assert_eq!(
+                (
+                    record["severityNumber"].clone(),
+                    record["severityText"].clone()
+                ),
+                (json!(9), json!("INFO"))
+            );
+        }
+        assert_eq!(
+            attributes(&records[0]),
+            json!({
+                "event.name":{"stringValue":"omg.audit.heartbeat"},
+                "omg.audit.next_seq":{"intValue":"1"},
+            })
+            .as_object()
+            .unwrap()
+            .clone()
+        );
+        assert_eq!(
+            records[0]["body"]["stringValue"],
+            r#"{"schema":"omg.audit.v1","heartbeat":true,"next_seq":1}"#
+        );
+        assert_eq!(
+            attributes(&records[1]),
+            json!({"event.name":{"stringValue":"omg.audit.test"}})
+                .as_object()
+                .unwrap()
+                .clone()
+        );
+        assert_eq!(
+            record_body(&records[1]),
+            json!({"schema":"omg.audit.v1","test":true})
+        );
+        // A test the collector refuses says so.
+        *collector.reply.lock().unwrap() = r#"{"partialSuccess":{"rejectedLogRecords":1}}"#.into();
+        assert_eq!(send_test(&store, &exp).await, Err("otlp_rejected"));
+        collector.status.store(503, Ordering::SeqCst);
+        assert_eq!(send_test(&store, &exp).await, Err("http_5xx"));
     }
 }
