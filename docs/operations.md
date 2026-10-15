@@ -7,6 +7,8 @@ This covers health checks, metrics and alerting, backups and restore, secret rot
 | Variable | Default | Purpose |
 |---|---|---|
 | `GATEWAY_METRICS_ADDR` | unset (disabled) | Separate Prometheus listener, for example `127.0.0.1:9464`. It must use a different port from `GATEWAY_LISTEN`. |
+| `GATEWAY_AUDIT_WEBHOOK_URL` | unset (no export) | HTTPS endpoint the audit log streams to. See [audit export](#audit-export). |
+| `GATEWAY_AUDIT_WEBHOOK_SECRET_ENV` | unset | Name of the variable holding the webhook signing secret (at least 32 bytes). Required with the URL. |
 | `GATEWAY_EGRESS_PRIVATE_ALLOW` | unset (none) | Private networks the gateway may connect to, as comma-separated CIDRs (`10.20.0.0/16,fd00:1::/32`). See [outbound connections](#outbound-connections). |
 | `GATEWAY_SMTP_HOST_ALLOWLIST` | unset (none) | SMTP relay hosts the gateway may send to, comma-separated exact names or IP literals. The relay chosen in Admin › Settings › Email must be listed; empty means email can't be sent. See [settings](settings.md#email). |
 | `GATEWAY_SMTP_SECRET_ENV_ALLOWLIST` | unset | Variable names the SMTP password reference (`env:NAME`) may read, comma-separated. Separate from `GATEWAY_SECRET_ENV_ALLOWLIST` (provider credentials). Startup fails if a name is on both lists or is one of the gateway's own credentials (`DATABASE_URL`, `GATEWAY_*`, `AWS_*`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). |
@@ -40,6 +42,28 @@ List a private network when you use one of these:
 Not covered: the AWS SDK's own credential lookups (instance metadata at `169.254.169.254`, ECS and EKS Pod Identity, STS and SSO) use its own HTTP client, because instance metadata must be reachable for credentials. Those endpoints come from the SDK and the operator's environment, never from request or tenant data. The policy is read before every command (including `healthcheck`), so a malformed `GATEWAY_EGRESS_PRIVATE_ALLOW` makes them all fail to start.
 
 SMTP also needs its relay host on `GATEWAY_SMTP_HOST_ALLOWLIST`; a listed loopback relay (a local mail sidecar) is allowed outside development. For Kubernetes NetworkPolicy alignment see [Kubernetes › Outbound traffic](kubernetes.md#outbound-traffic).
+
+## Audit export
+
+With `GATEWAY_AUDIT_WEBHOOK_URL` and `GATEWAY_AUDIT_WEBHOOK_SECRET_ENV` set, the gateway streams the audit log to a SIEM (#106). The operator controls the destination; Admin › Settings › Audit export shows status and sends a test, but can't change or stop it.
+
+- **On and off:** a replica with the URL turns export on (and takes the `audit_export` lease). Only `GATEWAY_AUDIT_WEBHOOK_URL=off` turns it off; a replica with neither variable (a rolling deploy, a debug pod) changes nothing and never delivers. Turning it on and off are themselves audit events (`audit_export.enabled`, `audit_export.disabled`), queued so the SIEM sees where a gap begins and ends. The secret's variable must not be on `GATEWAY_SECRET_ENV_ALLOWLIST` or `GATEWAY_SMTP_SECRET_ENV_ALLOWLIST`, or be a reserved name: startup refuses it, because a Platform Admin could otherwise read it through a connection or the SMTP relay and forge deliveries.
+
+- **What:** the events the platform audit view shows (no workspace, or a team or project workspace); never personal-workspace events, prompts, responses or secrets. Export starts when it's enabled; earlier events stay in the dashboard and backups.
+- **How:** each event is queued in the transaction that writes it, so none is skipped. One replica (the `audit_export` work lease) posts batches of up to 100, roughly oldest first (by when each event's transaction started, so a late commit can follow a newer event; sort by `occurred_at`), and removes them only after a 2xx. Failures retry with exponential backoff up to 5 minutes, forever, without dropping anything. The one exception: an event whose month was archived before it was delivered is skipped, logged and counted (`gateway_audit_export_deliveries_total{outcome="skipped"}`). Delivery is at least once: dedup on each event's `id`.
+- **Request:** `POST` with `Content-Type: application/json`, `X-OMG-Delivery: <uuid>` and `X-OMG-Signature: t=<unix seconds>,v1=<hex>`, where `v1` is HMAC-SHA256 with the secret over `<t>.<raw body>`. Check the signature with a constant-time comparison and reject old timestamps (for example over 5 minutes) to prevent replay; each retry is signed afresh. The body:
+
+  ```json
+  {"schema":"omg.audit.v1","installation_id":"…","sent_at":"…","events":[
+    {"id":"…","occurred_at":"…","action":"key.revoked","resource":{"type":"key","id":"…"},
+     "actor":{"id":"…","label":"Alex Doe"},"workspace":{"id":"…","name":"Product","kind":"team"},
+     "metadata":{"count":1}}]}
+  ```
+
+  `actor` and `workspace` may be `null`. `actor.label` is the display name, or the email when there's none (personal data leaving the gateway), read when the event is delivered. `metadata` holds only the audit log's safe fields (flags, counts, codes). A test delivery has `"test": true` and no events.
+- **Destination:** HTTPS through the [outbound address policy](#outbound-connections); no redirects or proxies; 10-second timeout.
+- **Watch:** `gateway_audit_export_queued` and `gateway_audit_export_oldest_seconds` (alert when the oldest event is older than, say, 15 minutes), and `gateway_audit_export_deliveries_total{outcome}`. The gateway's own credentials can stop the export, so also alert on the receiver when no deliveries arrive for longer than you expect (gap detection is #174).
+- **Kubernetes:** set the URL with `gateway.env` and the secret through `gateway.extraEnvFrom` from a Secret; list the variable's name in `GATEWAY_AUDIT_WEBHOOK_SECRET_ENV`. Allow the receiver in `networkPolicy.egress.httpsCidrs` if you narrowed it.
 
 ## Health endpoints
 

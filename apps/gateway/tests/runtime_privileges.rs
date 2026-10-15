@@ -80,6 +80,7 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
     files_api_runs_as_runtime(&pool).await;
     history_partitions_run_as_runtime(&pool).await;
     history_verify_runs_as_runtime(&pool).await;
+    audit_export_runs_as_runtime(&pool).await;
     dashboard_sessions_run_as_runtime(&pool).await;
     // Last: its unknown batch hold would change the installation-wide totals above.
     async_jobs_run_as_runtime(&pool).await;
@@ -214,6 +215,77 @@ async fn dashboard_sessions_run_as_runtime(pool: &PgPool) {
         .execute(pool)
         .await
         .unwrap();
+}
+
+/// #106: the audit export as the runtime role. Enabling it, the queueing
+/// trigger on an audit insert, one delivery to a mock receiver (read, dequeue,
+/// status update) and the status read.
+async fn audit_export_runs_as_runtime(pool: &PgPool) {
+    let runtime = runtime_pool(pool).await;
+    let store = open_model_gateway::store::Store::new(runtime.clone());
+    let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = seen.clone();
+    let app = axum::Router::new().route(
+        "/ingest",
+        axum::routing::post(move || {
+            let count = count.clone();
+            async move {
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                axum::http::StatusCode::OK
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/ingest", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let exporter = open_model_gateway::audit_export::Exporter::new(&url, vec![7; 32], true)
+        .unwrap()
+        .unwrap();
+    let setting = open_model_gateway::audit_export::Setting::On(
+        open_model_gateway::audit_export::Exporter::new(&url, vec![7; 32], true)
+            .unwrap()
+            .unwrap(),
+    );
+    open_model_gateway::audit_export::sync_state(&store, &setting)
+        .await
+        .expect("runtime enables export");
+    let id = uuid::Uuid::now_v7();
+    sqlx::query("INSERT INTO audit_events(id,action,resource_type,metadata) VALUES($1,'runtime.probe','test','{}')")
+        .bind(id).execute(&runtime).await.expect("runtime audit insert queues the event");
+    assert_eq!(
+        open_model_gateway::audit_export::deliver_once(&store, &exporter, None)
+            .await
+            .expect("runtime delivers"),
+        // The `audit_export.enabled` marker, then the probe's event.
+        open_model_gateway::audit_export::Outcome::Delivered(2)
+    );
+    assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let status = open_model_gateway::audit_export::status(&store)
+        .await
+        .expect("runtime reads status");
+    assert_eq!(status["queued"], 0);
+    // Audit stays append-only for the runtime.
+    for statement in [
+        "UPDATE audit_events SET action='x' WHERE id=$1",
+        "DELETE FROM audit_events WHERE id=$1",
+    ] {
+        let denied = sqlx::query(statement)
+            .bind(id)
+            .execute(&runtime)
+            .await
+            .unwrap_err();
+        assert!(
+            denied.to_string().contains("permission denied"),
+            "{statement}: {denied}"
+        );
+    }
+    open_model_gateway::audit_export::sync_state(
+        &store,
+        &open_model_gateway::audit_export::Setting::Off,
+    )
+    .await
+    .unwrap();
+    server.abort();
 }
 
 async fn runtime_pool(pool: &PgPool) -> PgPool {

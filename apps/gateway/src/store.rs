@@ -37,6 +37,8 @@ pub struct Store {
     /// This replica's background work leases (`crate::leases`); `None`
     /// outside `serve` (CLI one-shot commands and tests are not leased).
     pub(crate) leases: Option<std::sync::Arc<crate::leases::Leases>>,
+    /// Audit export (#106), when the operator configured a destination.
+    pub(crate) audit_export: Option<std::sync::Arc<crate::audit_export::Exporter>>,
     /// Test-only pinned admission instant shared by every clone of this store.
     /// Production builds have no override: admission always reads the
     /// database clock (see [`Store::admission_now`]).
@@ -141,6 +143,9 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     // parameters only.
     // 0036 per-scope lock waits (admission_ceiling alerts)
     "admission_lock_waits",
+    // 0044 audit export (#106)
+    "audit_export_state",
+    "audit_export_queue",
 ];
 /// Partitioned parents (0030/0031). Any partition of one of these in
 /// `public` (`pg_class.relispartition`; month partitions are created ahead of
@@ -257,6 +262,7 @@ impl Store {
             reporting_max_lag: std::time::Duration::from_secs(30),
             caches: std::sync::Arc::new(crate::cache::Caches::new()),
             leases: None,
+            audit_export: None,
             #[cfg(any(test, feature = "integration-tests"))]
             admission_clock: Default::default(),
         }
@@ -295,6 +301,20 @@ impl Store {
     pub fn with_leases(mut self, leases: std::sync::Arc<crate::leases::Leases>) -> Self {
         self.leases = Some(leases);
         self
+    }
+
+    /// Attach the configured audit exporter (#106).
+    pub fn with_audit_export(
+        mut self,
+        exporter: std::sync::Arc<crate::audit_export::Exporter>,
+    ) -> Self {
+        self.audit_export = Some(exporter);
+        self
+    }
+
+    /// The configured audit exporter, if any.
+    pub fn audit_export(&self) -> Option<&std::sync::Arc<crate::audit_export::Exporter>> {
+        self.audit_export.as_ref()
     }
 
     /// This replica's work leases, if background work is leased (serve).

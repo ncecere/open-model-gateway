@@ -2,6 +2,7 @@
 #![cfg_attr(test, allow(clippy::disallowed_methods))]
 pub mod alerts;
 pub mod archive;
+pub mod audit_export;
 pub mod auth;
 pub mod billing;
 pub mod bootstrap;

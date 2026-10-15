@@ -338,3 +338,31 @@ async fn concurrent_file_sweeps_claim_disjoint_rows(pool: PgPool) {
     let claimed: u64 = reports.iter().map(|r| r.as_ref().unwrap().claimed).sum();
     assert_eq!(claimed, 40);
 }
+
+/// #106: a replica that can't do a lease's work never takes it, so the
+/// replicas that can (audit export with a destination) always do.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn an_excluded_lease_goes_to_a_replica_that_can_do_the_work(pool: PgPool) {
+    let (without, with) = (
+        Arc::new(Leases::with_ttl(SHORT).without(Lease::AuditExport)),
+        Arc::new(Leases::with_ttl(SHORT)),
+    );
+    let (a, b) = (replica(&pool).await, replica(&pool).await);
+    // The excluded replica renews first and still never takes it.
+    without.renew_once(&a.pool).await;
+    with.renew_once(&b.pool).await;
+    assert!(without.held(Lease::AuditExport).is_none());
+    assert!(with.held(Lease::AuditExport).is_some());
+    assert_eq!(
+        Lease::ALL
+            .iter()
+            .filter(|l| without.held(**l).is_some())
+            .count()
+            + Lease::ALL
+                .iter()
+                .filter(|l| with.held(**l).is_some())
+                .count(),
+        Lease::ALL.len(),
+        "every lease still has exactly one holder"
+    );
+}

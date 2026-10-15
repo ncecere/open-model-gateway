@@ -310,6 +310,14 @@ GRANT SELECT ON public.archived_partitions,public.archived_budget_contributions 
 -- api_keys.workspace_id (and triggers refuse it for every role). The leased
 -- history_verify job reads history and its parents and records the
 -- history_orphans incident through the alert grants above. No new privilege.
+-- Audit export (0044): the audit insert's trigger queues the event as the
+-- invoking runtime role; the leased exporter reads the queue and the events,
+-- deletes delivered rows and records delivery status. audit_events stays
+-- append-only.
+GRANT SELECT,INSERT,DELETE ON public.audit_export_queue TO gateway_runtime;
+GRANT SELECT ON public.audit_export_state TO gateway_runtime;
+GRANT UPDATE(enabled,enabled_at,destination_host,attempts,next_attempt_at,last_success_at,last_error,last_error_at,delivered_total)
+ ON public.audit_export_state TO gateway_runtime;
 -- No UPDATE/DELETE/TRUNCATE of immutable prices, ledger or audit; no removal of
 -- users/workspaces/keys/history and no rewrite of immutable admission snapshots.
 COMMIT;

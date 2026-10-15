@@ -1,3 +1,4 @@
+import { AuditExportSettingsPage } from "./settings/audit-export";
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "@tanstack/react-router";
@@ -96,6 +97,7 @@ export function DashboardContent({ session, search, workspace, navigate }: { ses
     case "settings-general": return <GeneralSettingsPage session={session} />;
     case "settings-privacy": return <PrivacySettingsPage session={session} />;
     case "settings-email": return <EmailSettingsPage session={session} />;
+    case "settings-audit-export": return <AuditExportSettingsPage session={session} />;
     case "settings-sign-in": return <SignInSettingsPage session={session} />;
     case "settings-alerts": return <AdminAlertsPage session={session} tab={search.tab} onTabChange={changeTab} />;
     case "alert-rule-detail": return search.record ? <AlertRulePage key={search.record} session={session} scope={{ kind: "platform" }} id={search.record} /> : <PermissionNotice title="Missing alert rule identifier" />;

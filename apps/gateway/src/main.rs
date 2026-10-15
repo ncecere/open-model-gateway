@@ -703,13 +703,27 @@ async fn run(cli: Cli) -> Result<()> {
             open_model_gateway::jobs::configure(open_model_gateway::jobs::JobLimits::from_lookup(
                 |name| std::env::var(name).ok(),
             )?)?;
+            // Audit export (#106): operator-configured. Only an explicit `off`
+            // turns it off; a replica without the setting leaves it alone and
+            // never takes the export lease.
+            let audit_setting = open_model_gateway::audit_export::Setting::from_env()?;
             // Background work leases (P5): singleton jobs run on one replica.
-            let leases = Arc::new(open_model_gateway::leases::Leases::new());
+            let leases = open_model_gateway::leases::Leases::new();
+            let leases = Arc::new(match &audit_setting {
+                open_model_gateway::audit_export::Setting::On(_) => leases,
+                _ => leases.without(open_model_gateway::leases::Lease::AuditExport),
+            });
             leases.renew_once(&pool).await;
             let lease_task = leases
                 .clone()
                 .start(pool.clone(), open_model_gateway::leases::RENEW);
             let store = store.with_leases(leases.clone());
+            open_model_gateway::audit_export::sync_state(&store, &audit_setting).await?;
+            let audit_exporter = audit_setting.exporter().map(Arc::new);
+            let store = match &audit_exporter {
+                Some(exporter) => store.with_audit_export(exporter.clone()),
+                None => store,
+            };
             // Per-replica caches (P4): version polling plus LISTEN.
             let notifications = config
                 .config_cache
@@ -750,6 +764,8 @@ async fn run(cli: Cli) -> Result<()> {
             let batch_runner = open_model_gateway::jobs::runner::start(batch_jobs);
             let alerts =
                 alert_interval.map(|every| open_model_gateway::alerts::start(store.clone(), every));
+            let audit_export = audit_exporter
+                .map(|exporter| open_model_gateway::audit_export::start(store.clone(), exporter));
             // History partitions (hourly) and usage rollups (every minute):
             // the `partitions` and `rollups` lease holders only.
             let partitions_ahead = open_model_gateway::partitions::ahead_from_env()?;
@@ -868,6 +884,10 @@ async fn run(cli: Cli) -> Result<()> {
             if let Some(alerts) = alerts {
                 alerts.abort();
                 let _ = alerts.await;
+            }
+            if let Some(audit_export) = audit_export {
+                audit_export.abort();
+                let _ = audit_export.await;
             }
             if let Some(metrics) = metrics {
                 metrics.abort();
