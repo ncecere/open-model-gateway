@@ -1917,6 +1917,49 @@ pub(crate) mod db {
         );
         assert_eq!(amounts(&f, start.id).await.0, "unknown");
     }
+    /// #75: held executions keep their details; released, they're compacted.
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn compaction_skips_executions_on_legal_hold(pool: PgPool) {
+        let f = fixture(pool).await;
+        f.price(1_000_000).await;
+        // A team key: the workspace isn't held, only the user it was issued to.
+        let mut mine = f.start();
+        mine.principal = f.team;
+        admit(&f.store, &mine, &request(), 30).await.unwrap();
+        finish(&f.store, &done(mine.id, Some(2), Some(3)))
+            .await
+            .unwrap();
+        sqlx::query("UPDATE inference_executions SET completed_at=now()-interval '90 days'")
+            .execute(&f.store.pool)
+            .await
+            .unwrap();
+        // Hold the user the key was issued to.
+        let user = f.team.user_id.expect("a human key");
+        let hold = Uuid::new_v4();
+        sqlx::query("INSERT INTO legal_holds(id,user_id,reference) VALUES($1,$2,'CASE-1')")
+            .bind(hold)
+            .bind(user)
+            .execute(&f.store.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            crate::maintenance::compact_history(&f.store, 30, 100)
+                .await
+                .unwrap(),
+            0
+        );
+        sqlx::query("UPDATE legal_holds SET released_at=now(),released_by_user_id=(SELECT id FROM users ORDER BY id LIMIT 1) WHERE id=$1")
+            .bind(hold)
+            .execute(&f.store.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            crate::maintenance::compact_history(&f.store, 30, 100)
+                .await
+                .unwrap(),
+            1
+        );
+    }
     #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn cost_center_snapshot_and_compaction_preserve_financial_dimensions(pool: PgPool) {
         let f = fixture(pool).await;

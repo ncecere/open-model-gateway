@@ -382,6 +382,8 @@ async fn platform_user(
     // A count only: an admin never sees another person's devices.
     data["active_sessions"] = json!(super::sessions::live_count(&mut tx, id).await?);
     // On the user since #80: deleting ended sessions doesn't change it.
+    // Active legal holds (#75): a count; the holds page has the details.
+    data["legal_holds"] = json!(super::legal_holds::active_for_user(&mut tx, id).await?);
     data["first_sign_in_at"] = sqlx::query_scalar::<_, Option<Value>>(
         "SELECT to_jsonb(first_signed_in_at) FROM users WHERE id=$1",
     )

@@ -1163,10 +1163,15 @@ async fn resolve_identity_with(
     let mut rebind = false;
     let existing_id = if let Some((id, cleaned, expired, reason)) = existing {
         if cleaned || expired {
-            if !cleaned {
-                lifecycle::cleanup_user(&mut tx, id)
+            // On legal hold (#75): nothing is removed and the account stays
+            // closed until the hold is released.
+            if !cleaned
+                && !lifecycle::cleanup_user(&mut tx, id)
                     .await
-                    .map_err(internal)?;
+                    .map_err(internal)?
+            {
+                tx.rollback().await.map_err(internal)?;
+                return Err(AuthError(StatusCode::FORBIDDEN));
             }
             if reason.as_deref() != Some("entitlement_loss") {
                 tx.commit().await.map_err(internal)?;

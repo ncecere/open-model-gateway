@@ -1,3 +1,4 @@
+import { LegalHolds } from "./legal-holds";
 import { AuditExportSettingsPage } from "./settings/audit-export";
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -109,6 +110,7 @@ export function DashboardContent({ session, search, workspace, navigate }: { ses
     case "cost-centers": return <CostCenters session={session} />;
     case "oidc": return <OidcMappings session={session} />;
     case "platform-audit": return <AuditHistory />;
+    case "legal-holds": return <LegalHolds session={session} />;
     case "key-safety": return <KeySafetyPage session={session} />;
     case "platform-model-compare": return <ModelComparePage scope={{ kind: "platform" }} ids={parseCompareIds(search.ids)} />;
     case "routing": return <Routing session={session} />;

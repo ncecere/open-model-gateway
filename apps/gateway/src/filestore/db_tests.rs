@@ -373,3 +373,73 @@ async fn verify_compares_metadata_with_the_store(pool: PgPool) {
     let _ = b;
     assert!(verify(&db, &FileStoreRuntime::off(), 10).await.is_err());
 }
+
+/// #75: expired files of a held workspace stay; released, they're swept.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn expiry_skips_files_on_legal_hold(pool: PgPool) {
+    let f = fixture(pool).await;
+    enable_batch(&f.pool).await;
+    let store = f.files.runtime().store().unwrap();
+    let held = f
+        .files
+        .create(NewFile::new(Purpose::BatchOutput, Some(f.ws)), body(b"out"))
+        .await
+        .unwrap();
+    sqlx::query("UPDATE stored_files SET created_at=now()-interval '30 days' WHERE id=$1")
+        .bind(held.id)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let kind: String = sqlx::query_scalar("SELECT kind FROM workspaces WHERE id=$1")
+        .bind(f.ws)
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    let hold = Uuid::new_v4();
+    if kind == "personal" {
+        sqlx::query("INSERT INTO legal_holds(id,user_id,reference) SELECT $1,owner_user_id,'CASE-9' FROM workspaces WHERE id=$2").bind(hold).bind(f.ws).execute(&f.pool).await.unwrap();
+    } else {
+        sqlx::query("INSERT INTO legal_holds(id,workspace_id,reference) VALUES($1,$2,'CASE-9')")
+            .bind(hold)
+            .bind(f.ws)
+            .execute(&f.pool)
+            .await
+            .unwrap();
+    }
+    let report = sweep_once(&Store::new(f.pool.clone()), f.files.runtime(), 100)
+        .await
+        .unwrap();
+    assert_eq!(report.deleted, 0);
+    // An unfinished upload in the held workspace holds no data: still removed.
+    let pending = ObjectKey::new(Purpose::UserFile, Scope::Workspace(f.ws)).unwrap();
+    sqlx::query("INSERT INTO stored_files(id,object_key,purpose,workspace_id,backend,encryption_key_id,created_at) VALUES($1,$2,'user_file',$3,'memory','memory',now()-interval '2 days')")
+        .bind(pending.id()).bind(pending.as_str()).bind(f.ws).execute(&f.pool).await.unwrap();
+    let report = sweep_once(&Store::new(f.pool.clone()), f.files.runtime(), 100)
+        .await
+        .unwrap();
+    let gone: bool =
+        sqlx::query_scalar("SELECT deleted_at IS NOT NULL FROM stored_files WHERE id=$1")
+            .bind(pending.id())
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert!(
+        gone && report.claimed >= 1,
+        "unfinished upload swept while held"
+    );
+    assert!(
+        store.head(&held.key).await.unwrap().is_some(),
+        "the held file is still kept"
+    );
+    assert!(store.head(&held.key).await.unwrap().is_some(), "held: kept");
+    sqlx::query("UPDATE legal_holds SET released_at=now(),released_by_user_id=(SELECT id FROM users ORDER BY id LIMIT 1) WHERE id=$1")
+        .bind(hold)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let report = sweep_once(&Store::new(f.pool.clone()), f.files.runtime(), 100)
+        .await
+        .unwrap();
+    assert_eq!(report.deleted, 1);
+    assert_eq!(store.head(&held.key).await.unwrap(), None);
+}

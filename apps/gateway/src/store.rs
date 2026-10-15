@@ -146,6 +146,8 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     // 0044 audit export (#106)
     "audit_export_state",
     "audit_export_queue",
+    // 0045 legal holds (#75)
+    "legal_holds",
 ];
 /// Partitioned parents (0030/0031). Any partition of one of these in
 /// `public` (`pg_class.relispartition`; month partitions are created ahead of

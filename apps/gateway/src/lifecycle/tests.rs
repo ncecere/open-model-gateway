@@ -231,3 +231,120 @@ async fn platform_includes_user_without_separate_grant(pool: sqlx::PgPool) {
     .unwrap();
     assert_eq!(grants, ["auditor"]);
 }
+
+/// #75: a held departed user isn't cleaned up until the hold is released.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn cleanup_waits_for_a_legal_hold(pool: sqlx::PgPool) {
+    let store = Store::new(pool.clone());
+    let user = Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,email,disabled_at,disable_reason,cleanup_due_at) VALUES($1,'held@example.test',now(),'admin_suspension',now()-interval '1 second')")
+        .bind(user).execute(&pool).await.unwrap();
+    let hold = Uuid::new_v4();
+    sqlx::query("INSERT INTO legal_holds(id,user_id,reference) VALUES($1,$2,'MATTER-7')")
+        .bind(hold)
+        .bind(user)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(cleanup_inactive_accounts(&store).await.unwrap(), 0);
+    let email: Option<String> = sqlx::query_scalar("SELECT email FROM users WHERE id=$1")
+        .bind(user)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        email.as_deref(),
+        Some("held@example.test"),
+        "nothing removed while held"
+    );
+    // The direct call refuses too (the sign-in path uses it).
+    let mut tx = crate::db::begin(&pool).await.unwrap();
+    assert!(!cleanup_user(&mut tx, user).await.unwrap());
+    tx.rollback().await.unwrap();
+    // Holds are released, never deleted or edited.
+    assert!(
+        sqlx::query("DELETE FROM legal_holds WHERE id=$1")
+            .bind(hold)
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+    assert!(
+        sqlx::query("UPDATE legal_holds SET reference='OTHER' WHERE id=$1")
+            .bind(hold)
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+    sqlx::query("UPDATE legal_holds SET released_at=now(),released_by_user_id=(SELECT id FROM users ORDER BY id LIMIT 1) WHERE id=$1")
+        .bind(hold)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        sqlx::query("UPDATE legal_holds SET released_at=now()+interval '1 day' WHERE id=$1")
+            .bind(hold)
+            .execute(&pool)
+            .await
+            .is_err(),
+        "released once"
+    );
+    // Released once, at the database's time; the record never changes again.
+    for edit in [
+        "released_at=now()+interval '1 day'",
+        "released_by_user_id=NULL",
+        "released_by_user_id=$2",
+    ] {
+        assert!(
+            sqlx::query(&format!("UPDATE legal_holds SET {edit} WHERE id=$1"))
+                .bind(hold)
+                .bind(user)
+                .execute(&pool)
+                .await
+                .is_err(),
+            "{edit}"
+        );
+    }
+    let backdated = Uuid::new_v4();
+    sqlx::query("INSERT INTO legal_holds(id,user_id,reference) VALUES($1,$2,'MATTER-8')")
+        .bind(backdated)
+        .bind(user)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE legal_holds SET released_at=now()-interval '30 days',released_by_user_id=$2 WHERE id=$1").bind(backdated).bind(user).execute(&pool).await.unwrap();
+    let recent: bool = sqlx::query_scalar(
+        "SELECT released_at>now()-interval '1 minute' FROM legal_holds WHERE id=$1",
+    )
+    .bind(backdated)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(recent, "a release can't be backdated");
+    // A personal workspace is held through its owner; the table can't be truncated.
+    let personal = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO workspaces(id,name,kind,owner_user_id) VALUES($1,'Mine','personal',$2)",
+    )
+    .bind(personal)
+    .bind(user)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(
+        sqlx::query("INSERT INTO legal_holds(id,workspace_id,reference) VALUES($1,$2,'P-1')")
+            .bind(Uuid::new_v4())
+            .bind(personal)
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+    assert!(
+        sqlx::query("TRUNCATE legal_holds")
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+    // Released holds no longer block (the backdated one was released too).
+    assert_eq!(cleanup_inactive_accounts(&store).await.unwrap(), 1);
+}

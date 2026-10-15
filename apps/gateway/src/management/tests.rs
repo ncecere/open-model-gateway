@@ -30,6 +30,8 @@ mod filter_scale_tests;
 mod key_safety_tests;
 #[path = "keys/tests.rs"]
 mod key_tests;
+#[path = "legal_holds_tests.rs"]
+mod legal_holds_tests;
 #[path = "me_models_tests.rs"]
 mod me_models_tests;
 #[path = "members/tests.rs"]

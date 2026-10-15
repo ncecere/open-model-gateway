@@ -51,6 +51,19 @@ Manual and mapped-group access are independent sources. Signed generic group cla
 
 Workspace administrators manage shared members, invitations and service accounts. Human keys require actual membership and live entitlement. Service-account disablement revokes its keys. Reactivation never restores revoked credentials. Rotation retains restrictions, policy and consumed allowance; separately created keys have separate key scopes, bounded by their workspace/installation limits.
 
+## Legal holds
+
+A Platform Admin places a legal hold from a person's page or a team's or project's page (**Place legal hold…**) and releases it in Admin › Records › Legal holds (#75). Platform Auditors can list holds. A personal workspace is held through its owner.
+
+- **What a hold stops:** while it's active the gateway removes none of that scope's data. The departed-user cleanup (30 days after suspension) waits, and a held person can't sign back in until released. Request-log compaction skips the scope's executions (by workspace, the user a key was issued to, or a personal workspace's owner). Stored files don't expire (an unfinished upload, which holds no data, is still removed). `archive partition` refuses a month that contains held executions or audit events.
+- **What it doesn't do:** it grants no access: Admins still can't see another person's personal workspace, keys or requests. It stops the gateway's own removal jobs, not deliberate deletes: a user or workspace admin can still delete files (dashboard or Files API), batch runs remove their intermediate work files, ended sessions are still pruned after 30 days, and SCIM or an admin can still change a held person's email. It doesn't lock or freeze the account.
+- **Record:** a short reference code (a case or ticket number: letters, digits and `._:/#-`, at most 64), who placed it and when, and when it was released. Never free text. Holds are released once and never deleted; placing and releasing are audited (`legal_hold.placed`, `legal_hold.released`). At most one active hold per target and reference.
+- **Timing:** placing a hold on a person waits for, and is seen by, any cleanup of that person; placing or releasing any hold waits for a running `archive partition`. File expiry checks each file again just before deleting it; compaction sees a new hold from its next run.
+- **Record:** the release time is the database's (it can't be backdated), the releaser is required, and a released hold never changes again. References compare without case.
+- A person whose data was already removed can't be held (`409`).
+
+API: `GET /api/v1/platform/legal-holds[?state=all]`, `POST /api/v1/platform/legal-holds` `{user_id | workspace_id, reference}`, `POST /api/v1/platform/legal-holds/{id}/release`. `GET /api/v1/platform/users/{id}` includes `legal_holds` (a count).
+
 ## UI and rollout
 
 Grounded-style **Workspace** contains daily models, keys, usage/costs and workspace settings. **Admin** contains users, Teams, Projects, infrastructure, catalogs, limits, cost centers, SSO mappings, costs and audit. Auditors enter Admin read-only. See [dashboard](dashboard.md) for canonical UUID URLs and actual navigation behavior.
