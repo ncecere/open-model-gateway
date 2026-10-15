@@ -30,6 +30,7 @@ import { RoleBadge } from "../components/people";
 import { StatTile, StatTileGrid } from "../components/templates/stat-tile";
 import { AccessCard } from "../components/effective-access";
 import { YourSessions } from "../components/your-sessions";
+import { YourData } from "../components/your-data";
 import { Badge, StatusBadge } from "../components/ui/badge/badge";
 import { Button } from "../components/ui/button/button";
 import { Card } from "../components/ui/card/card";
@@ -88,5 +89,6 @@ export function Profile({ session }: { session: Session }) {
     <Card title="Identity" titleAs="h2"><DescriptionList dividers items={[...(name ? [{ label: "Name", value: name }] : []), { label: "Email", value: session.user.email }, { label: "Platform role", value: <span title="Admin and Auditor include User access; workspace roles are separate.">{platformRoleLabels[session.user.platform_role] ?? "No platform role"}</span> }, { label: "Installation", value: session.installation.name }]} /></Card>
     <Card title="Your workspaces" titleAs="h2"><DescriptionList dividers items={mine.map(w => ({ key: w.id, label: <ResourceLink search={{ page: "overview", ws: w.id }}>{w.name}</ResourceLink>, value: authorityLabel(w) }))} /></Card>
     <YourSessions />
+    <YourData />
   </Stack>;
 }

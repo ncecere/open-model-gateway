@@ -6,6 +6,8 @@
  * {users,user,teams}.tsx and group-mapping/rules.tsx (read-only reference).
  * Identifiers are never shown as text; "Copy ID" lives in the "…" menus.
  */
+import { toast } from "../components/ui/toast/toast";
+import { downloadExport } from "../lib/subject-export";
 import { placeHold } from "./legal-holds";
 import { DetailTime } from "../components/templates/when";
 import { History, LayoutDashboard, Landmark, LogOut, Scale, Network, Plus, UserCheck, UserPlus, Users, UsersRound, UserX } from "lucide-react";
@@ -105,6 +107,7 @@ export function UserDetail({ session, id, tab, onTabChange }: { session: Session
     { label: "Suspend…", icon: <UserX aria-hidden />, danger: true, hidden: !writable || !!u.disabled_at, disabled: self, disabledReason: "You can't suspend yourself. Ask another Platform Admin.", onSelect: () => ask({ title: `Suspend ${name}?`, description: "Immediate: revokes sessions and user-owned keys. Group synchronization cannot undo it, and reactivation does not restore revoked credentials. Last-admin and last-owner safeguards apply.", danger: true, submitLabel: "Suspend user", run: (_, signal) => api(path, { method: "PATCH", body: { disabled: true }, signal }) }) },
     { label: "Sign out all sessions…", icon: <LogOut aria-hidden />, hidden: !writable || !u.active_sessions, disabled: self, disabledReason: "Sign out your own sessions from Your profile.", onSelect: () => ask({ title: `Sign out ${name} everywhere?`, description: "Ends all of their dashboard sessions now. They can sign in again; their API keys keep working. To remove access, suspend them instead.", submitLabel: "Sign out everywhere", danger: true, successNotice: "Sessions signed out.", run: (_, signal) => api(`${path}/sessions/revoke`, { method: "POST", signal }) }) },
     { label: "Remove personal data now…", danger: true, hidden: !writable || !u.disabled_at || !!u.cleaned_at || !!u.legal_holds, onSelect: () => ask({ title: `Remove ${name}'s personal data now?`, description: "Clears their email, name, directory attributes and other copies now instead of after the grace period. Usage and audit history stay, under a pseudonymous id. This can't be undone.", danger: true, submitLabel: "Remove personal data", successNotice: "Personal data removed.", run: (_, signal) => api(`${path}/remove-personal-data`, { method: "POST", signal }) }) },
+    { label: "Export user record", onSelect: () => void downloadExport(`${path}/export`, `omg-user-${u.id}.json`).catch(error => toast.error(error instanceof Error ? error.message : "Export failed.")) },
     { label: "Place legal hold…", icon: <Scale aria-hidden />, hidden: !session.capabilities.platform_write || !!u.cleaned_at, onSelect: () => placeHold(ask, { user_id: u.id }, name) },
     copyIdAction(u.id),
   ];

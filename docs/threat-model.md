@@ -99,7 +99,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 - Mitigation: `management/resources.rs` `access_inner` denies a personal workspace to anyone but its owner, whatever the platform role. Platform reports aggregate personal usage into totals. The key-safety platform view returns personal keys as counts only.
 - Tests: `management/tests.rs` `personal_details_are_owner_only_even_platform_admin_and_auditor`; `apps/gateway/tests/enterprise_privacy.rs` `platform_admin_and_auditor_get_personal_totals_without_private_keys_or_details`; `management/logs_tests.rs` `platform_logs_show_shared_workspaces_only_never_personal`; `management/snapshot_tests.rs` `snapshot_reads_keep_personal_activity_owner_private`; `management/key_safety_tests.rs` `key_safety_members_see_own_keys_and_personal_keys_stay_private`.
 - Residual: anyone with database access sees everything. Totals by workspace still show how much a person uses, by design.
-- Follow-up: #31 and #74 (owner-private subject export).
+- Follow-up: none. The subject export (#74) is self-service; the admin export holds only what admins see.
 
 **TEN-3. A personal workspace is shared.** E · Asset: personal privacy · Attacker: workspace member, Platform Admin.
 - Mitigation: migration 0001 triggers `service_account_shared`, `invitation_shared` and `group_mapping_shared` (`require_shared_workspace()`); `auth.rs` `revalidate_admission_with` accepts a human key on a personal workspace only for its owner.
@@ -601,8 +601,9 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 - Mitigation (#75): legal holds (`legal_holds.rs`, migration 0045) stop cleanup, compaction, file expiry and archiving for a held person or team/project; tests `lifecycle/tests.rs` `cleanup_waits_for_a_legal_hold`, `governance/tests.rs` `compaction_skips_executions_on_legal_hold`, `filestore/db_tests.rs` `expiry_skips_files_on_legal_hold`, `archive/tests.rs` (held month refused), `management/legal_holds_tests.rs`.
 - Mitigation (#76): an admin can remove a suspended person's personal data immediately; cleanup also clears invitation and alert-recipient copies and uploaded filenames (`management/personal_data_tests.rs`).
 - Mitigation (#77): the retention contract (settings.md "What is kept, and for how long") covers every surface; compaction is bounded, resumable and never touches money (`governance/tests.rs` `compaction_is_bounded_resumable_and_never_touches_money`).
-- Residual: no subject export yet. Request records themselves (model, tokens, cost) are kept until an operator archives their month; there is no automatic deletion of history or audit, by design.
-- Follow-up: #31, #74.
+- Mitigation (#74): subject export is self-service (`management/subject_export.rs`); the admin export holds only what admins see (`management/subject_export_tests.rs`).
+- Residual: request records themselves (model, tokens, cost) are kept until an operator archives their month; there is no automatic deletion of history or audit, by design.
+- Follow-up: none (#31 complete).
 
 ## Gaps and follow-ups
 
@@ -623,7 +624,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 | No secret manager; every replica holds every secret | EGR-10 | Deferred (roadmap R17), no issue |
 | SCIM token is one static secret that can effectively grant mapped admin roles | SCIM-1 | #60; Review: #61 |
 | No off-host, tamper-evident audit export | ADM-7, AUD-1 | Webhook export in #106; #107, #108 |
-| No data export, anonymization, legal hold or metadata retention | TEN-2, OPS-4, AUD-2 | #31, #74, #75, #76, #77 |
+| No data export, anonymization, legal hold or metadata retention | TEN-2, OPS-4, AUD-2 | Fixed in #74, #75, #76, #77 |
 | No row-level security; isolation depends on query predicates | TEN-1, OPS-2 | Review: #61 |
 | Native batches and video jobs keep running at the provider after revocation | JOB-1 | Review: #61 |
 | Input ceilings are trusted; provider usage is trusted; no invoice reconciliation | ADM-6 | Review: #61 (roadmap R19) |
