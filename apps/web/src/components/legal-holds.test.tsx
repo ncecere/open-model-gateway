@@ -30,3 +30,4 @@ describe("Legal holds (#75)", () => {
     expect(html).toContain("2 active");
   });
 });
+

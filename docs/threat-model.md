@@ -599,8 +599,9 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 - Mitigation: no prompt or response columns exist; optional compaction redacts settled details without deleting money; account cleanup clears email and linking after 30 days.
 - Tests: `governance/tests.rs` `cost_center_snapshot_and_compaction_preserve_financial_dimensions`; `identity/tests.rs` `sign_in_records_the_verified_display_name_and_cleanup_clears_it`. No test found that asserts prompt or response bodies are never written; "prompts are never stored" is backed by the schema only.
 - Mitigation (#75): legal holds (`legal_holds.rs`, migration 0045) stop cleanup, compaction, file expiry and archiving for a held person or team/project; tests `lifecycle/tests.rs` `cleanup_waits_for_a_legal_hold`, `governance/tests.rs` `compaction_skips_executions_on_legal_hold`, `filestore/db_tests.rs` `expiry_skips_files_on_legal_hold`, `archive/tests.rs` (held month refused), `management/legal_holds_tests.rs`.
-- Residual: no subject export, immediate anonymization or bounded metadata retention contract yet.
-- Follow-up: #31, #74, #76, #77.
+- Mitigation (#76): an admin can remove a suspended person's personal data immediately; cleanup also clears invitation and alert-recipient copies and uploaded filenames (`management/personal_data_tests.rs`).
+- Residual: no subject export or bounded metadata retention contract yet.
+- Follow-up: #31, #74, #77.
 
 ## Gaps and follow-ups
 

@@ -78,6 +78,8 @@ GRANT UPDATE(name,code,archived_at) ON public.cost_centers TO gateway_runtime;
 GRANT UPDATE(issuer,group_value,target_kind,platform_role,workspace_id,workspace_role,enabled)
  ON public.oidc_group_mappings TO gateway_runtime;
 GRANT UPDATE(revoked_at,accepted_at) ON public.workspace_invitations TO gateway_runtime;
+-- Removing a person's data (#76) replaces their address on old invitations.
+GRANT UPDATE(email) ON public.workspace_invitations TO gateway_runtime;
 GRANT UPDATE(disabled_at) ON public.service_accounts TO gateway_runtime;
 -- disabled_at (0005) is reversible; revoked_at is set once and never cleared by the application.
 GRANT UPDATE(revoked_at,disabled_at) ON public.api_keys TO gateway_runtime;

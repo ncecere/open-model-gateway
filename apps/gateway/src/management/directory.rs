@@ -21,6 +21,10 @@ pub(super) fn routes() -> Router<Store> {
         )
         .route("/api/v1/platform/users/{user}/roles", post(grant_role))
         .route(
+            "/api/v1/platform/users/{user}/remove-personal-data",
+            post(remove_personal_data),
+        )
+        .route(
             "/api/v1/platform/users/{user}/roles/{role}",
             axum::routing::delete(revoke_role),
         )
@@ -578,6 +582,53 @@ async fn update_user(
         )
         .await?;
     }
+    tx.commit().await?;
+    Ok(ok())
+}
+/// Remove a suspended person's personal data now (#76) instead of after the
+/// grace period: the same cleanup, at a Platform Admin's request. Refused
+/// while active (suspend first), already removed, or on legal hold. History,
+/// prices and the ledger are never rewritten; the user id stays as the
+/// pseudonymous reference.
+async fn remove_personal_data(
+    State(s): State<Store>,
+    Extension(u): Extension<BrowserPrincipal>,
+    Path(id): Path<Uuid>,
+) -> ApiResult {
+    let mut tx = resources::catalog_tx(&s, &u, true).await?;
+    crate::lifecycle::lock_users(&mut tx, &[id]).await?;
+    let (suspended, cleaned): (bool, bool) = sqlx::query_as(
+        "SELECT disabled_at IS NOT NULL,cleaned_at IS NOT NULL FROM users WHERE id=$1 FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(missing)?;
+    if cleaned {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "This person's data was already removed",
+        ));
+    }
+    if !suspended {
+        return Err(ApiError(StatusCode::CONFLICT, "Suspend this person first"));
+    }
+    if !crate::lifecycle::cleanup_user(&mut tx, id).await? {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "This person is on legal hold",
+        ));
+    }
+    audit(
+        &mut tx,
+        &u,
+        None,
+        "user.personal_data_removed",
+        "user",
+        Some(id),
+        json!({}),
+    )
+    .await?;
     tx.commit().await?;
     Ok(ok())
 }
