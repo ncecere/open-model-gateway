@@ -36,6 +36,8 @@ mod legal_holds_tests;
 mod me_models_tests;
 #[path = "members/tests.rs"]
 mod member_tests;
+#[path = "personal_data_tests.rs"]
+mod personal_data_tests;
 #[path = "portal_tests.rs"]
 mod portal_tests;
 #[path = "project_tests.rs"]

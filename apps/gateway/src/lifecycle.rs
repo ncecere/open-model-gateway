@@ -77,6 +77,14 @@ pub(crate) async fn cleanup_user(
     sqlx::query("UPDATE workspace_membership_grants SET revoked_at=coalesce(revoked_at,now()) WHERE user_id=$1").bind(user).execute(&mut **tx).await?;
     sqlx::query("UPDATE workspaces SET disabled_at=coalesce(disabled_at,now()) WHERE kind='personal' AND owner_user_id=$1").bind(user).execute(&mut **tx).await?;
     sqlx::query("UPDATE workspace_invitations SET revoked_at=coalesce(revoked_at,now()) WHERE accepted_at IS NULL AND lower(email)=(SELECT lower(email) FROM users WHERE id=$1)").bind(user).execute(&mut **tx).await?;
+    // Other copies of the person's email and their files' names (#76): an
+    // accepted invitation's address, alert recipients and uploaded filenames.
+    // (Before the email itself is cleared below.)
+    // Not inside a team or project on legal hold (#75): its data stays as is.
+    let ws_held = |column: &str| crate::legal_holds::workspace_held(column);
+    sqlx::query(&format!("UPDATE workspace_invitations i SET email='removed@removed.invalid' WHERE lower(i.email)=(SELECT lower(email) FROM users WHERE id=$1) AND NOT {}", ws_held("i.workspace_id"))).bind(user).execute(&mut **tx).await?;
+    sqlx::query(&format!("UPDATE alert_rules r SET notify_emails=array(SELECT e FROM unnest(r.notify_emails) e WHERE lower(e)<>(SELECT lower(email) FROM users WHERE id=$1)),updated_at=now() WHERE EXISTS(SELECT 1 FROM unnest(r.notify_emails) e WHERE lower(e)=(SELECT lower(email) FROM users WHERE id=$1)) AND NOT {}", ws_held("r.workspace_id"))).bind(user).execute(&mut **tx).await?;
+    sqlx::query(&format!("UPDATE stored_files f SET filename=NULL WHERE f.created_by_user_id=$1 AND f.filename IS NOT NULL AND NOT {}", ws_held("f.workspace_id"))).bind(user).execute(&mut **tx).await?;
     // SCIM (0014): directory attributes and group membership go with the email.
     sqlx::query("UPDATE scim_users SET user_name=NULL,external_id=NULL,given_name=NULL,family_name=NULL,active=false,updated_at=now() WHERE user_id=$1").bind(user).execute(&mut **tx).await?;
     sqlx::query("DELETE FROM scim_group_members WHERE user_id=$1")

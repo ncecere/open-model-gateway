@@ -62,6 +62,14 @@ When synchronization or explicit role removal detects loss of all entitlement, a
 
 The serving process runs bounded inactive-account cleanup every minute (up to 100 accounts per transaction). Cleanup revokes retained human grants, disables the old personal workspace, clears email/linking permission and keeps a user/identity tombstone. It does not delete immutable financial/audit records or shared service accounts. After cleaned entitlement-loss accounts regain a valid mapped platform role, authenticated callback can bind a new user UUID; old grants, personal workspace and keys are not resurrected. Administrative-suspension tombstones do not automatically rebind. Management has last-admin/last-shared-owner protections; external entitlement loss must not preserve unauthorized access merely to keep an owner active.
 
+### What cleanup removes and keeps (#76)
+
+Cleanup runs 30 days after access ends, or at once when a Platform Admin chooses **Remove personal data now…** on a suspended person's page (`POST /api/v1/platform/users/{id}/remove-personal-data`; `409` while the person is active, already cleaned or on [legal hold](platform-administration.md#legal-holds); audited as `user.personal_data_removed`, and `user.cleaned` by the cleanup).
+
+- **Removed:** email and display name; sessions' verified email (sessions revoked); SCIM user name, external id, given and family names, and group memberships; the person's address on old invitations (replaced with `removed@removed.invalid`) and in alert rule recipients; the names of files they uploaded. Keys, platform role and workspace grants, sessions and pending invitations are revoked; the personal workspace is disabled.
+- **Matched:** copies under the person's current address only; an address changed earlier (by an admin or SCIM) isn't found. Inside a team or project on legal hold, invitations, alert recipients and filenames stay.
+- **Kept:** the names they gave their API keys (revoke or ask them to rename first if that matters); the user id, as the pseudonymous reference that ledger, price, execution and audit history point to (none of that history is rewritten); the IdP binding (`issuer`, `subject`) as a tombstone, so the account can't silently relink; request metadata, which follows [request log retention](settings.md) (#77); file contents until the files expire.
+
 ## HTTP sessions
 
 - `GET /api/v1/auth/config` returns `{ "enabled": true|false, "logo": {url, updated_at}|null, "installation_name": string|null }`: the uploaded installation logo for the sign-in page and its alt text (the name only when a logo is set). See [management API](management-api.md#public-installation-logo).
