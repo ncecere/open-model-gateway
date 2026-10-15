@@ -11,6 +11,7 @@ mod files;
 mod governance;
 mod key_safety;
 mod keys;
+mod legal_holds;
 mod logs;
 mod me;
 mod members;
@@ -543,6 +544,7 @@ fn routes() -> Router<Store> {
         .merge(logs::routes())
         .merge(settings::routes())
         .merge(audit_export::routes())
+        .merge(legal_holds::routes())
         .merge(sessions::routes())
         .merge(key_safety::routes())
         .merge(compare::routes())

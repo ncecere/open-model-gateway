@@ -42,10 +42,20 @@ pub(crate) async fn lock_users(
     .await
 }
 
+/// Remove a departed user's personal data. `Ok(false)` while the user is on
+/// legal hold (#75): checked after the caller's user lock, in a statement of
+/// its own, so a hold committed meanwhile is seen.
 pub(crate) async fn cleanup_user(
     tx: &mut Transaction<'_, Postgres>,
     user: Uuid,
-) -> Result<(), sqlx::Error> {
+) -> Result<bool, sqlx::Error> {
+    let held: bool = sqlx::query_scalar(&format!("SELECT {}", crate::legal_holds::user_held("$1")))
+        .bind(user)
+        .fetch_one(&mut **tx)
+        .await?;
+    if held {
+        return Ok(false);
+    }
     sqlx::query(
         "UPDATE browser_sessions SET revoked_at=coalesce(revoked_at,now()),verified_email=NULL WHERE user_id=$1",
     )
@@ -76,7 +86,7 @@ pub(crate) async fn cleanup_user(
     sqlx::query("UPDATE users SET email=NULL,display_name=NULL,oidc_link_allowed=false,cleaned_at=now(),disabled_at=coalesce(disabled_at,now()) WHERE id=$1 AND cleaned_at IS NULL").bind(user).execute(&mut **tx).await?;
     sqlx::query("INSERT INTO audit_events(id,actor_user_id,action,resource_type,resource_id) VALUES($1,NULL,'user.cleaned','user',$2)")
         .bind(Uuid::new_v4()).bind(user).execute(&mut **tx).await?;
-    Ok(())
+    Ok(true)
 }
 
 /// Bounded maintenance entry point. Service accounts and immutable accounting are untouched.
@@ -92,7 +102,7 @@ pub async fn cleanup_inactive_accounts_fenced(
     store: &Store,
     fence: Option<&crate::leases::Fence>,
 ) -> Result<u64, sqlx::Error> {
-    let due: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE disabled_at IS NOT NULL AND cleaned_at IS NULL AND cleanup_due_at<=now())")
+    let due: bool = sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM users WHERE disabled_at IS NOT NULL AND cleaned_at IS NULL AND cleanup_due_at<=now() AND NOT {})", crate::legal_holds::user_held("users.id")))
         .fetch_one(&store.pool)
         .await?;
     if !due {
@@ -101,14 +111,17 @@ pub async fn cleanup_inactive_accounts_fenced(
     let mut tx = crate::db::begin(&store.pool).await?;
     crate::leases::fence(&mut tx, fence).await?;
     lock(&mut tx).await?;
-    let users: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM users WHERE disabled_at IS NOT NULL AND cleaned_at IS NULL AND cleanup_due_at<=now() ORDER BY cleanup_due_at,id LIMIT 100 FOR UPDATE")
+    let users: Vec<Uuid> = sqlx::query_scalar(&format!("SELECT id FROM users WHERE disabled_at IS NOT NULL AND cleaned_at IS NULL AND cleanup_due_at<=now() AND NOT {} ORDER BY cleanup_due_at,id LIMIT 100 FOR UPDATE", crate::legal_holds::user_held("users.id")))
         .fetch_all(&mut *tx).await?;
     lock_users(&mut tx, &users).await?;
+    let mut cleaned = 0;
     for user in &users {
-        cleanup_user(&mut tx, *user).await?;
+        if cleanup_user(&mut tx, *user).await? {
+            cleaned += 1;
+        }
     }
     tx.commit().await?;
-    Ok(users.len() as u64)
+    Ok(cleaned)
 }
 
 /// Group-provenance grants (`source='group'`) for one issuer; manual/bootstrap grants are

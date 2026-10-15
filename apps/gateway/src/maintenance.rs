@@ -36,7 +36,8 @@ pub async fn compact_history_fenced(
     }
     let mut tx = crate::db::begin(&store.pool).await?;
     crate::leases::fence(&mut tx, fence).await?;
-    let changed=sqlx::query("WITH old AS (SELECT e.id FROM inference_executions e JOIN governance_reservations r ON r.execution_id=e.id WHERE e.completed_at < now()-make_interval(days=>$1) AND e.details_redacted_at IS NULL AND r.state='settled' ORDER BY e.completed_at,e.id LIMIT $2 FOR UPDATE OF e SKIP LOCKED) UPDATE inference_executions e SET error_code=NULL,elapsed_ms=NULL,client_session_id=NULL,client_app=NULL,details_redacted_at=clock_timestamp() FROM old WHERE e.id=old.id")
+    // Held executions keep their details (#75).
+    let changed=sqlx::query(&"WITH old AS (SELECT e.id FROM inference_executions e JOIN governance_reservations r ON r.execution_id=e.id WHERE e.completed_at < now()-make_interval(days=>$1) AND e.details_redacted_at IS NULL AND r.state='settled' AND NOT {} ORDER BY e.completed_at,e.id LIMIT $2 FOR UPDATE OF e SKIP LOCKED) UPDATE inference_executions e SET error_code=NULL,elapsed_ms=NULL,client_session_id=NULL,client_app=NULL,details_redacted_at=clock_timestamp() FROM old WHERE e.id=old.id".replace("{}", &crate::legal_holds::execution_held("e")))
         .bind(days).bind(limit).execute(&mut *tx).await?.rows_affected();
     tx.commit().await?;
     Ok(Ok(changed))

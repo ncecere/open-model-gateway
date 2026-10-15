@@ -13,7 +13,7 @@ import type { Breakdown, Totals } from "./governance";
 export type DirectoryUser = PlatformUser & { last_sign_in_at?: string | null; shared_workspace_count?: number };
 /** One Team/Project grant group on GET /platform/users/{id}. Never personal. */
 export type SharedMembership = { workspace_id: string; name: string; kind: Exclude<WorkspaceKind, "personal">; disabled_at?: string | null; role: Role; sources: RoleGrant["source"][]; grants?: { role: Role; source: RoleGrant["source"] }[] };
-export type UserRecord = DirectoryUser & { first_sign_in_at?: string | null; /** Live dashboard sessions (a count only, #79). */ active_sessions?: number; shared_memberships?: SharedMembership[] };
+export type UserRecord = DirectoryUser & { first_sign_in_at?: string | null; /** Live dashboard sessions (a count only, #79). */ active_sessions?: number; /** Active legal holds on this person (#75), a count. */ legal_holds?: number; shared_memberships?: SharedMembership[] };
 /** GET /platform/workspaces rows: shared workspaces with display-only counts and the allocation by name. */
 export type DirectoryWorkspace = Workspace & { member_count?: number; cost_center?: { id: string; name: string; code: string } | null };
 
@@ -122,7 +122,7 @@ export const auditActionLabels: Record<string, string> = {
   "settings.logo_uploaded": "Uploaded logo", "settings.logo_removed": "Removed logo",
   "service_account.created": "Created service account", "service_account.updated": "Changed service account",
   "usage.reconciled": "Reconciled usage",
-  "user.provisioned": "Provisioned user", "user.updated": "Changed user", "user.suspended": "Suspended user", "audit_export.tested": "Sent a test audit export", "user.sessions_revoked": "Signed out all sessions of user", "session.revoked": "Signed out own session", "session.others_revoked": "Signed out own other sessions", "user.reactivated": "Reactivated user", "user.bootstrap_role": "Granted first admin role", "user.cleaned": "Cleaned up departed user",
+  "user.provisioned": "Provisioned user", "user.updated": "Changed user", "user.suspended": "Suspended user", "legal_hold.placed": "Placed legal hold", "legal_hold.released": "Released legal hold", "audit_export.tested": "Sent a test audit export", "user.sessions_revoked": "Signed out all sessions of user", "session.revoked": "Signed out own session", "session.others_revoked": "Signed out own other sessions", "user.reactivated": "Reactivated user", "user.bootstrap_role": "Granted first admin role", "user.cleaned": "Cleaned up departed user",
   "workspace.created": "Created workspace", "workspace.updated": "Changed workspace", "workspace.manual_membership_set": "Set manual membership", "workspace.manual_membership_revoked": "Removed manual membership",
 };
 export const auditActionLabel = (code: string) => auditActionLabels[code] ?? code;

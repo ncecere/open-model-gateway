@@ -23,6 +23,7 @@ pub mod identity;
 pub mod inference;
 pub mod jobs;
 pub mod leases;
+pub mod legal_holds;
 pub mod lifecycle;
 pub mod maintenance;
 pub mod management;

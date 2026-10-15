@@ -6,8 +6,9 @@
  * {users,user,teams}.tsx and group-mapping/rules.tsx (read-only reference).
  * Identifiers are never shown as text; "Copy ID" lives in the "…" menus.
  */
+import { placeHold } from "./legal-holds";
 import { DetailTime } from "../components/templates/when";
-import { History, LayoutDashboard, Landmark, LogOut, Network, Plus, UserCheck, UserPlus, Users, UsersRound, UserX } from "lucide-react";
+import { History, LayoutDashboard, Landmark, LogOut, Scale, Network, Plus, UserCheck, UserPlus, Users, UsersRound, UserX } from "lucide-react";
 import { api, platformPath, type Session, type Workspace, type PlatformRole, type CostCenter, type GroupMapping } from "../lib/api";
 import { nameField, enabledField, uuidError, type Field } from "../lib/forms";
 import { activeGrants, grantLabel, grantRemoval, kindLabels, platformRoleLabels, userState, type DirectoryUser, type DirectoryWorkspace, type UserRecord } from "../lib/people";
@@ -103,6 +104,7 @@ export function UserDetail({ session, id, tab, onTabChange }: { session: Session
     { label: "Reactivate", icon: <UserCheck aria-hidden />, hidden: !writable || !u.disabled_at, onSelect: () => ask({ title: `Reactivate ${name}?`, description: "Restores access from their remaining grants. Revoked keys and sessions do not come back; the user signs in again and issues new keys.", submitLabel: "Reactivate", run: (_, signal) => api(path, { method: "PATCH", body: { disabled: false }, signal }) }) },
     { label: "Suspend…", icon: <UserX aria-hidden />, danger: true, hidden: !writable || !!u.disabled_at, disabled: self, disabledReason: "You can't suspend yourself. Ask another Platform Admin.", onSelect: () => ask({ title: `Suspend ${name}?`, description: "Immediate: revokes sessions and user-owned keys. Group synchronization cannot undo it, and reactivation does not restore revoked credentials. Last-admin and last-owner safeguards apply.", danger: true, submitLabel: "Suspend user", run: (_, signal) => api(path, { method: "PATCH", body: { disabled: true }, signal }) }) },
     { label: "Sign out all sessions…", icon: <LogOut aria-hidden />, hidden: !writable || !u.active_sessions, disabled: self, disabledReason: "Sign out your own sessions from Your profile.", onSelect: () => ask({ title: `Sign out ${name} everywhere?`, description: "Ends all of their dashboard sessions now. They can sign in again; their API keys keep working. To remove access, suspend them instead.", submitLabel: "Sign out everywhere", danger: true, successNotice: "Sessions signed out.", run: (_, signal) => api(`${path}/sessions/revoke`, { method: "POST", signal }) }) },
+    { label: "Place legal hold…", icon: <Scale aria-hidden />, hidden: !session.capabilities.platform_write || !!u.cleaned_at, onSelect: () => placeHold(ask, { user_id: u.id }, name) },
     copyIdAction(u.id),
   ];
   const signIn = (value: string | null | undefined) => value ? <DetailTime value={value} /> : value === null ? "Never" : "Unavailable";
@@ -119,6 +121,7 @@ export function UserDetail({ session, id, tab, onTabChange }: { session: Session
         { label: "First signed in", value: signIn(u.first_sign_in_at) },
         { label: "Last sign-in", value: signIn(u.last_sign_in_at) },
         ...(u.active_sessions === undefined ? [] : [{ label: "Active sessions", value: String(u.active_sessions) }]),
+        ...(u.legal_holds ? [{ label: "Legal holds", value: <ResourceLink search={{ page: "legal-holds" }}>{u.legal_holds === 1 ? "1 active" : `${u.legal_holds} active`}</ResourceLink> }] : []),
       ]} />
     </Card>
   </Stack>;

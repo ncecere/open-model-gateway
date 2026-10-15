@@ -81,6 +81,7 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
     history_partitions_run_as_runtime(&pool).await;
     history_verify_runs_as_runtime(&pool).await;
     audit_export_runs_as_runtime(&pool).await;
+    legal_holds_run_as_runtime(&pool).await;
     dashboard_sessions_run_as_runtime(&pool).await;
     // Last: its unknown batch hold would change the installation-wide totals above.
     async_jobs_run_as_runtime(&pool).await;
@@ -286,6 +287,53 @@ async fn audit_export_runs_as_runtime(pool: &PgPool) {
     .await
     .unwrap();
     server.abort();
+}
+
+/// #75: placing and releasing a legal hold, and the removal paths that read
+/// holds (cleanup, compaction, file expiry), as the runtime role. Holds can't
+/// be deleted or edited.
+async fn legal_holds_run_as_runtime(pool: &PgPool) {
+    let runtime = runtime_pool(pool).await;
+    let store = open_model_gateway::store::Store::new(runtime.clone());
+    let user = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,email,disabled_at,disable_reason,cleanup_due_at) VALUES($1,'hold-probe@example.test',now(),'admin_suspension',now()-interval '1 second')")
+        .bind(user).execute(pool).await.unwrap();
+    let hold = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO legal_holds(id,user_id,reference,created_by_user_id) VALUES($1,$2,'PROBE-1',NULL)")
+        .bind(hold).bind(user).execute(&runtime).await.expect("runtime places a hold");
+    assert_eq!(
+        open_model_gateway::lifecycle::cleanup_inactive_accounts(&store)
+            .await
+            .expect("runtime cleanup reads holds"),
+        0
+    );
+    open_model_gateway::maintenance::compact_history(&store, 30, 10)
+        .await
+        .expect("runtime compaction reads holds");
+    for statement in [
+        "DELETE FROM legal_holds WHERE id=$1",
+        "UPDATE legal_holds SET reference='X' WHERE id=$1",
+    ] {
+        assert!(
+            sqlx::query(statement)
+                .bind(hold)
+                .execute(&runtime)
+                .await
+                .is_err(),
+            "{statement}"
+        );
+    }
+    sqlx::query("UPDATE legal_holds SET released_at=now(),released_by_user_id=(SELECT id FROM users ORDER BY id LIMIT 1) WHERE id=$1")
+        .bind(hold)
+        .execute(&runtime)
+        .await
+        .expect("runtime releases a hold");
+    assert_eq!(
+        open_model_gateway::lifecycle::cleanup_inactive_accounts(&store)
+            .await
+            .unwrap(),
+        1
+    );
 }
 
 async fn runtime_pool(pool: &PgPool) -> PgPool {

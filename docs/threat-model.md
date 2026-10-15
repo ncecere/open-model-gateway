@@ -558,8 +558,8 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 **OPS-4. Archival loses unsettled money or exposes history.** T, R, I · Asset: history · Attacker: operator error; anyone reading archive files.
 - Mitigation: `archive.rs` refuses a month with pending or unknown reservations, unfinished executions, missing rollups or within retention; exports with per-file SHA-256 and a manifest into a new `0700` directory; rolls back everything on failure.
 - Tests: `archive/tests.rs` `closed_months_archive_only_when_settled_rolled_and_past_retention`, `month_and_group_arguments_are_strict`.
-- Residual: archives are plaintext CSV (execution metadata and audit events). With `--drop`, the database copy is gone and the archive is the only record.
-- Follow-up: #31, #77 (retention); #75 (legal holds before purge).
+- Residual: archives are plaintext CSV (execution metadata and audit events). With `--drop`, the database copy is gone and the archive is the only record. Since #75 a month with data under legal hold is refused (`Refusal::Held`).
+- Follow-up: #31, #77 (retention).
 
 **OPS-5. A backup leaks or is tampered with.** I, T · Asset: database contents · Attacker: anyone with backup storage access.
 - Mitigation: `scripts/backup.py` writes `0600` files with checksummed manifests, optional `age` encryption that never writes plaintext, refuses plaintext off-host uploads, and keeps passwords out of argv.
@@ -598,8 +598,9 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 **AUD-2. Request metadata and identities are kept indefinitely.** I · Asset: request metadata, personal data · Attacker: anyone who later gains database access.
 - Mitigation: no prompt or response columns exist; optional compaction redacts settled details without deleting money; account cleanup clears email and linking after 30 days.
 - Tests: `governance/tests.rs` `cost_center_snapshot_and_compaction_preserve_financial_dimensions`; `identity/tests.rs` `sign_in_records_the_verified_display_name_and_cleanup_clears_it`. No test found that asserts prompt or response bodies are never written; "prompts are never stored" is backed by the schema only.
-- Residual: no subject export, anonymization, legal hold or bounded metadata retention.
-- Follow-up: #31, #74, #75, #76, #77.
+- Mitigation (#75): legal holds (`legal_holds.rs`, migration 0045) stop cleanup, compaction, file expiry and archiving for a held person or team/project; tests `lifecycle/tests.rs` `cleanup_waits_for_a_legal_hold`, `governance/tests.rs` `compaction_skips_executions_on_legal_hold`, `filestore/db_tests.rs` `expiry_skips_files_on_legal_hold`, `archive/tests.rs` (held month refused), `management/legal_holds_tests.rs`.
+- Residual: no subject export, immediate anonymization or bounded metadata retention contract yet.
+- Follow-up: #31, #74, #76, #77.
 
 ## Gaps and follow-ups
 

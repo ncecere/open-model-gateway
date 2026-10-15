@@ -1067,7 +1067,7 @@ mod database {
             .await
             .unwrap();
         let mut tx = pool.begin().await.unwrap();
-        crate::lifecycle::cleanup_user(&mut tx, id).await.unwrap();
+        assert!(crate::lifecycle::cleanup_user(&mut tx, id).await.unwrap());
         tx.commit().await.unwrap();
         let (email, name): (Option<String>, Option<String>) =
             sqlx::query_as("SELECT email,display_name FROM users WHERE id=$1")
@@ -2234,6 +2234,84 @@ mod database {
             .await
             .unwrap();
         assert_eq!(user_count, 2);
+    }
+
+    /// #75: an expired account on legal hold isn't cleaned at sign-in, and
+    /// the person can't sign in again until the hold is released.
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn a_held_expired_account_is_neither_cleaned_nor_reopened_at_sign_in(pool: sqlx::PgPool) {
+        let store = Store::new(pool.clone());
+        let issuer = "https://id.test";
+        sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES($1,$2,'staff','platform','user')").bind(Uuid::new_v4()).bind(issuer).execute(&pool).await.unwrap();
+        let old = resolve_identity(
+            &store,
+            issuer,
+            "subject",
+            "held@test.invalid",
+            &["staff".into()],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            resolve_identity(&store, issuer, "subject", "held@test.invalid", &[])
+                .await
+                .unwrap_err()
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        sqlx::query("UPDATE users SET cleanup_due_at=now()-interval '1 second' WHERE id=$1")
+            .bind(old)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let hold = Uuid::new_v4();
+        sqlx::query("INSERT INTO legal_holds(id,user_id,reference) VALUES($1,$2,'CASE-5')")
+            .bind(hold)
+            .bind(old)
+            .execute(&pool)
+            .await
+            .unwrap();
+        // Re-entitled groups don't help while held: refused, and nothing removed.
+        assert_eq!(
+            resolve_identity(
+                &store,
+                issuer,
+                "subject",
+                "held@test.invalid",
+                &["staff".into()]
+            )
+            .await
+            .unwrap_err()
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        let (cleaned, email): (bool, Option<String>) =
+            sqlx::query_as("SELECT cleaned_at IS NOT NULL,email FROM users WHERE id=$1")
+                .bind(old)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            (cleaned, email.as_deref()),
+            (false, Some("held@test.invalid"))
+        );
+        // Released: the normal expired-grace path resumes (cleaned, then a fresh account).
+        sqlx::query("UPDATE legal_holds SET released_at=now(),released_by_user_id=$2 WHERE id=$1")
+            .bind(hold)
+            .bind(old)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let new = resolve_identity(
+            &store,
+            issuer,
+            "subject",
+            "held@test.invalid",
+            &["staff".into()],
+        )
+        .await
+        .unwrap();
+        assert_ne!(old, new);
     }
 
     #[sqlx::test(migrations = "./enterprise_migrations")]

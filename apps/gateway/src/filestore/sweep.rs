@@ -41,8 +41,11 @@ pub async fn sweep_once_fenced(
     fence: Option<&crate::leases::Fence>,
 ) -> Result<SweepReport, sqlx::Error> {
     let limit = limit.clamp(1, 1000);
+    // Expiry and retention skip held files (#75); an unfinished upload holds
+    // no data and is still removed.
+    let held = crate::legal_holds::file_held("f");
     let sql = format!(
-        "UPDATE stored_files f SET last_delete_attempt_at=clock_timestamp() FROM (SELECT f.id FROM stored_files f CROSS JOIN installation_settings s WHERE s.singleton AND f.deleted_at IS NULL AND (f.last_delete_attempt_at IS NULL OR f.last_delete_attempt_at < now()-interval '5 minutes') AND ((f.committed_at IS NULL AND f.created_at < now()-interval '1 day') OR f.expires_at <= now() OR f.created_at + make_interval(days => {RETENTION_SQL}) <= now()) ORDER BY f.created_at,f.id LIMIT $1 FOR UPDATE OF f SKIP LOCKED) due WHERE f.id=due.id RETURNING f.id,f.object_key,f.backend"
+        "UPDATE stored_files f SET last_delete_attempt_at=clock_timestamp() FROM (SELECT f.id FROM stored_files f CROSS JOIN installation_settings s WHERE s.singleton AND f.deleted_at IS NULL AND (f.last_delete_attempt_at IS NULL OR f.last_delete_attempt_at < now()-interval '5 minutes') AND ((f.committed_at IS NULL AND f.created_at < now()-interval '1 day') OR ((f.expires_at <= now() OR f.created_at + make_interval(days => {RETENTION_SQL}) <= now()) AND NOT {held})) ORDER BY f.created_at,f.id LIMIT $1 FOR UPDATE OF f SKIP LOCKED) due WHERE f.id=due.id RETURNING f.id,f.object_key,f.backend"
     );
     let mut tx = crate::db::begin(&db.pool).await?;
     crate::leases::fence(&mut tx, fence).await?;
@@ -54,6 +57,17 @@ pub async fn sweep_once_fenced(
         ..SweepReport::default()
     };
     for (id, object_key, backend) in due {
+        // A hold placed after the claim still saves the file (#75).
+        let held: bool = sqlx::query_scalar(&format!(
+            "SELECT f.committed_at IS NOT NULL AND {} FROM stored_files f WHERE f.id=$1",
+            crate::legal_holds::file_held("f")
+        ))
+        .bind(id)
+        .fetch_one(&db.pool)
+        .await?;
+        if held {
+            continue;
+        }
         let outcome = match (runtime.store(), ObjectKey::parse(&object_key)) {
             (None, _) => Err("store_off"),
             (Some(_), _) if backend != runtime.backend_name() => Err("backend_mismatch"),

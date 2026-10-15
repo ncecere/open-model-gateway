@@ -1,3 +1,4 @@
+import { placeHold } from "./legal-holds";
 import { useEffect, type ReactNode } from "react";
 import { BellRing, Bot, Boxes, Gauge, LayoutDashboard, Library, ScrollText, Settings2, ShieldCheck, UsersRound } from "lucide-react";
 import { api, wsPath, platformWorkspacePath, type Session, type Workspace, type CostCenter, type CatalogAvailability, type Grant, type ObjectVisibility } from "../lib/api";
@@ -107,7 +108,7 @@ export function WorkspaceDetail({ session, id, kind, tab, onTabChange }: { sessi
   // workspace-mode administration. Member/private operations stay in Workspace.
   // Each fact once: kind and status in the header, members and cost center in the stat cards (tab counts repeat nothing new).
   return <ResourcePage title={workspace.name} meta={<><Badge size="sm">{noun}</Badge><WorkspaceStatusBadge disabled={!!workspace.disabled_at} /></>}
-    actions={<ActionMenu label="More actions" size="md" actions={[{ label: "Open workspace", hidden: !mine?.role || disabled, render: <ResourceLink search={{ page: "overview", ws: id }} /> }, { label: "Enable workspace…", hidden: !session.capabilities.platform_write || !disabled, onSelect: toggle }, copyIdAction(id), { label: "Disable workspace…", danger: true, hidden: !writable || !!workspace.disabled_at, onSelect: toggle }]} />}
+    actions={<ActionMenu label="More actions" size="md" actions={[{ label: "Open workspace", hidden: !mine?.role || disabled, render: <ResourceLink search={{ page: "overview", ws: id }} /> }, { label: "Enable workspace…", hidden: !session.capabilities.platform_write || !disabled, onSelect: toggle }, { label: "Place legal hold…", hidden: !session.capabilities.platform_write, onSelect: () => placeHold(ask, { workspace_id: id }, workspace.name) }, copyIdAction(id), { label: "Disable workspace…", danger: true, hidden: !writable || !!workspace.disabled_at, onSelect: toggle }]} />}
     notices={disabled && <Alert tone="warning" title="Disabled">Requests are refused and keys were revoked; enabling doesn't restore them. Read-only until enabled.</Alert>}
     tab={legacyTab ? "model-access" : tab} onTabChange={onTabChange} tabs={[
       { value: "overview", label: "Overview", icon: <LayoutDashboard aria-hidden />, content: <Stack gap={6}>

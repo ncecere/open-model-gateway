@@ -160,6 +160,8 @@ pub enum Refusal {
     OpenExecutions(i64),
     RollupsIncomplete(i64),
     AlreadyArchived(String),
+    /// Rows of the month belong to a user or workspace on legal hold (#75).
+    Held(i64),
 }
 impl std::fmt::Display for Refusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -179,6 +181,10 @@ impl std::fmt::Display for Refusal {
                 "{n} hour(s) of the month have no clean usage rollup yet; wait for the rollups job"
             ),
             Self::AlreadyArchived(m) => write!(f, "month {m} is already archived"),
+            Self::Held(n) => write!(
+                f,
+                "{n} row(s) of the month belong to a user or workspace on legal hold; release the hold first"
+            ),
         }
     }
 }
@@ -283,7 +289,9 @@ async fn archive_in(
         .collect::<Vec<_>>()
         .join(",");
     sqlx::raw_sql(&format!(
-        "BEGIN ISOLATION LEVEL REPEATABLE READ; SET LOCAL statement_timeout=0; SET LOCAL lock_timeout='10s'; LOCK TABLE {list} IN SHARE MODE"
+        // legal_holds too (#75): placing or releasing a hold waits for this
+        // archive, so the snapshot's hold check can't miss one.
+        "BEGIN ISOLATION LEVEL REPEATABLE READ; SET LOCAL statement_timeout=0; SET LOCAL lock_timeout='10s'; LOCK TABLE {list},public.legal_holds IN SHARE MODE"
     ))
     .execute(&mut *conn)
     .await?;
@@ -321,6 +329,31 @@ async fn archive_in(
     let limit = utc(current - Months::new(req.retention_months));
     if parts.iter().any(|p| p.upper > limit) {
         return Err(Refusal::WithinRetention(month, req.retention_months).into());
+    }
+    // Legal holds (#75): a month with held data stays in the database.
+    let held_sql = match req.group {
+        Group::History => Some(format!(
+            "SELECT count(*) FROM public.inference_executions_{} e WHERE {}",
+            req.month.suffix(),
+            crate::legal_holds::execution_held("e")
+        )),
+        Group::Audit => Some(format!(
+            "SELECT count(*) FROM public.audit_events_{} a WHERE {}",
+            req.month.suffix(),
+            crate::legal_holds::audit_held("a")
+        )),
+        // Storage usage hours hold no personal data.
+        Group::Storage => None,
+    };
+    let any_hold: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM legal_holds WHERE released_at IS NULL)")
+            .fetch_one(&mut *conn)
+            .await?;
+    if let Some(sql) = held_sql.filter(|_| any_hold) {
+        let held: i64 = sqlx::query_scalar(&sql).fetch_one(&mut *conn).await?;
+        if held > 0 {
+            return Err(Refusal::Held(held).into());
+        }
     }
     let mut sums = serde_json::Value::Null;
     if req.group == Group::History {

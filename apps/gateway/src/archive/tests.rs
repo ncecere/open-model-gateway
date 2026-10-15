@@ -174,6 +174,23 @@ async fn closed_months_archive_only_when_settled_rolled_and_past_retention(pool:
         drop: true,
         retention_months: 1,
     };
+    // #75: a month with a held user's audit events stays until released.
+    let hold = Uuid::new_v4();
+    sqlx::query("INSERT INTO legal_holds(id,user_id,reference) VALUES($1,$2,'CASE-77')")
+        .bind(hold)
+        .bind(f.owner)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO audit_events(id,actor_user_id,action,resource_type,metadata,created_at) VALUES($1,$2,'held.action','test','{}',$3)")
+        .bind(Uuid::new_v4()).bind(f.owner).bind(month + chrono::TimeDelta::days(2)).execute(&pool).await.unwrap();
+    let e = archive_as_of(&pool, &audit, later).await.unwrap_err();
+    assert_eq!(refusal(e), Refusal::Held(1));
+    sqlx::query("UPDATE legal_holds SET released_at=now(),released_by_user_id=(SELECT id FROM users ORDER BY id LIMIT 1) WHERE id=$1")
+        .bind(hold)
+        .execute(&pool)
+        .await
+        .unwrap();
     let dropped = archive_as_of(&pool, &audit, later).await.unwrap();
     assert_eq!(dropped.disposition, "dropped");
     let gone: bool = sqlx::query_scalar(&format!("SELECT to_regclass('public.audit_events_p{suffix}') IS NULL AND to_regclass('omg_archive.audit_events_p{suffix}') IS NULL"))
