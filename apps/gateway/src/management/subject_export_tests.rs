@@ -83,15 +83,16 @@ async fn a_person_exports_their_own_data_and_nothing_else(pool: PgPool) {
     assert_eq!(body["requests"]["truncated"], false);
     assert_eq!(body["api_keys"]["items"].as_array().unwrap().len(), 3);
     let text = String::from_utf8(bytes).unwrap();
-    for secret in [
+    // Field names and the key prefix that must never appear.
+    let absent = [
         "secret_hash",
         "csrf_hash",
         "token_hash",
         "verified_email",
         "omg_",
-    ] {
-        assert!(!text.contains(secret), "{secret} never exported");
-    }
+    ];
+    let found: Vec<&str> = absent.into_iter().filter(|f| text.contains(f)).collect();
+    assert!(found.is_empty(), "never exported: {} found", found.len());
     for token in &tokens {
         assert!(!text.contains(token.as_str()), "no key secret");
     }
