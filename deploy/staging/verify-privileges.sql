@@ -91,9 +91,12 @@ DO $$ DECLARE r record; t text; BEGIN
  END LOOP;
  -- File store (0019): metadata rows are never removed; identity/ownership fixed; guard present.
  IF has_table_privilege('gateway_runtime','public.stored_files','DELETE,TRUNCATE') THEN RAISE EXCEPTION 'stored file metadata removable'; END IF;
- FOREACH t IN ARRAY ARRAY['id','object_key','purpose','workspace_id','created_by_user_id','created_by_api_key_id','backend','encryption_key_id','created_at'] LOOP
+ FOREACH t IN ARRAY ARRAY['id','object_key','purpose','workspace_id','created_by_user_id','created_by_api_key_id','backend','created_at'] LOOP
   IF has_column_privilege('gateway_runtime','public.stored_files',t,'UPDATE') THEN RAISE EXCEPTION 'mutable stored file identity: %',t; END IF;
  END LOOP;
+ -- `files rekey` (#35) records the master key an object was re-wrapped under
+ -- (reads follow the key id in the object's own header; deleted rows stay final).
+ IF NOT has_column_privilege('gateway_runtime','public.stored_files','encryption_key_id','UPDATE') THEN RAISE EXCEPTION 'files rekey cannot record re-wrapped files'; END IF;
  IF NOT has_table_privilege('gateway_runtime','public.stored_files','SELECT,INSERT') OR NOT has_column_privilege('gateway_runtime','public.stored_files','deleted_at','UPDATE') THEN RAISE EXCEPTION 'stored files not maintainable by runtime'; END IF;
  IF (SELECT count(*) FROM pg_trigger WHERE tgname='stored_files_guard' AND tgenabled='O' AND NOT tgisinternal)<>1 THEN RAISE EXCEPTION 'stored file guard missing or disabled'; END IF;
  -- Files API (0020): api_purpose written once (trigger); reservations runtime-maintained; usage history append-only; progress forward-only.
@@ -489,7 +492,9 @@ BEGIN
   BEGIN UPDATE stored_files SET size_bytes=1,sha256=decode(repeat('cd',32),'hex'),committed_at=now() WHERE id=lid; UPDATE stored_files SET size_bytes=2 WHERE id=lid; RAISE EXCEPTION 'stored file contents rewritten'; EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'stored file contents are written once' THEN RAISE; END IF; END;
   BEGIN DELETE FROM stored_files WHERE id=lid; RAISE EXCEPTION 'stored file row removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   BEGIN UPDATE stored_files SET workspace_id=personal WHERE id=lid; RAISE EXCEPTION 'stored file re-own allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
-  BEGIN UPDATE stored_files SET encryption_key_id='other' WHERE id=lid; RAISE EXCEPTION 'stored file key id rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  -- files rekey (#35): a live file's key id is recorded after a re-wrap; a deleted row stays final.
+  UPDATE stored_files SET encryption_key_id='other' WHERE id=lid;
+  BEGIN UPDATE stored_files SET encryption_key_id='other' WHERE id=fid; RAISE EXCEPTION 'deleted file key id rewritten'; EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'deleted stored files are final' THEN RAISE; END IF; END;
   BEGIN INSERT INTO stored_files(id,object_key,purpose,workspace_id,backend,encryption_key_id) VALUES(gen_random_uuid(),'batch_input/'||ws||'/../x','batch_input',ws,'s3','k'); RAISE EXCEPTION 'non-canonical object key allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN INSERT INTO stored_files(id,object_key,purpose,backend,encryption_key_id) VALUES(x1,'batch_output/installation/'||x1,'batch_output','s3','k'); RAISE EXCEPTION 'installation-scoped customer content allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN INSERT INTO stored_files(id,object_key,purpose,workspace_id,filename,backend,encryption_key_id) VALUES(x2,'user_file/'||ws||'/'||x2,'user_file',ws,'../etc/passwd','s3','k'); RAISE EXCEPTION 'path-like filename allowed'; EXCEPTION WHEN check_violation THEN NULL; END;

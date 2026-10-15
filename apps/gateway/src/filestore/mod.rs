@@ -16,7 +16,7 @@
 //! [`files::FileStorage`]; the raw [`FileStore`] trait does not touch the database.
 use std::{fmt, sync::Arc, time::Duration};
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use uuid::Uuid;
 
 pub mod config;
@@ -27,6 +27,7 @@ mod local;
 #[cfg(any(test, feature = "integration-tests"))]
 mod memory;
 pub mod multipart;
+pub mod rekey;
 pub mod s3;
 pub mod sweep;
 pub mod upload;
@@ -64,6 +65,18 @@ pub trait FileStore: Send + Sync {
     async fn head(&self, key: &ObjectKey) -> Result<Option<ObjectInfo>, FileStoreError>;
     /// Put/get/delete probe of a small random object under the configured prefix.
     async fn health(&self) -> Result<StoreHealth, FileStoreError>;
+    /// Re-wraps the object's data key under master key `to` (#35): only the
+    /// header changes; the contents are streamed back unchanged, never
+    /// decrypted. Atomic per backend (rename, single PUT); an interrupted run
+    /// leaves the old object. `AlreadyOn` writes nothing.
+    async fn rekey(&self, key: &ObjectKey, to: &str) -> Result<Rekeyed, FileStoreError>;
+}
+
+/// Outcome of [`FileStore::rekey`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Rekeyed {
+    Rewrapped,
+    AlreadyOn,
 }
 
 /// Options for one [`FileStore::put`].
@@ -431,6 +444,11 @@ pub(crate) trait Backend: Send + Sync + 'static {
     /// Store the complete ciphertext stream; returns stored bytes. A body error
     /// is returned unchanged after cleanup.
     async fn put(&self, key: &ObjectKey, body: ByteStream) -> Result<u64, FileStoreError>;
+    /// Like `put`, but replaces an existing object atomically (`files rekey`).
+    /// A body error leaves the old object in place.
+    async fn replace(&self, key: &ObjectKey, body: ByteStream) -> Result<u64, FileStoreError> {
+        self.put(key, body).await
+    }
     async fn get(&self, key: &ObjectKey) -> Result<ByteStream, FileStoreError>;
     async fn delete(&self, key: &ObjectKey) -> Result<(), FileStoreError>;
     /// Stored (ciphertext) size.
@@ -533,6 +551,66 @@ impl<B: Backend> FileStore for Encrypted<B> {
             Err(e) => Err(e),
         };
         observe(self.backend.kind(), "head", result)
+    }
+
+    async fn rekey(&self, key: &ObjectKey, to: &str) -> Result<Rekeyed, FileStoreError> {
+        use futures::StreamExt;
+        let kind = self.backend.kind();
+        let result = async {
+            if !self.keys.contains(to) {
+                return Err(FileStoreError::KeyUnavailable);
+            }
+            let stored = self
+                .backend
+                .head(key)
+                .await?
+                .ok_or(FileStoreError::NotFound)?;
+            if crypto::plaintext_len(stored).is_none() {
+                return Err(FileStoreError::Integrity);
+            }
+            let mut source = self.backend.get(key).await?;
+            // The header may arrive split across backend pieces.
+            let mut header = BytesMut::with_capacity(crypto::HEADER_LEN);
+            let mut rest = Bytes::new();
+            while header.len() < crypto::HEADER_LEN {
+                let Some(piece) = source.next().await else {
+                    return Err(FileStoreError::Integrity);
+                };
+                let piece = piece?;
+                let take = (crypto::HEADER_LEN - header.len()).min(piece.len());
+                header.extend_from_slice(&piece[..take]);
+                rest = piece.slice(take..);
+            }
+            let Some(replaced) = crypto::rewrap(&self.keys, key, &header, to)? else {
+                return Ok(Rekeyed::AlreadyOn);
+            };
+            let mut copy = futures::stream::iter([Ok(replaced), Ok(rest)]).chain(source);
+            // The copy must be exactly the original length: a source that ends
+            // early or grows mid-copy fails the body, so the backend aborts
+            // (temp file removed, multipart aborted) and the old object stays.
+            let body: ByteStream = async_stream::try_stream! {
+                let mut sent = 0u64;
+                while let Some(piece) = copy.next().await {
+                    let piece = piece?;
+                    sent += piece.len() as u64;
+                    if sent > stored {
+                        Err(FileStoreError::Integrity)?;
+                    }
+                    yield piece;
+                }
+                if sent != stored {
+                    Err(FileStoreError::Integrity)?;
+                }
+            }
+            .boxed();
+            let written = self.backend.replace(key, body).await?;
+            if written != stored {
+                return Err(FileStoreError::Integrity);
+            }
+            Ok(Rekeyed::Rewrapped)
+        }
+        .await;
+        observe(kind, "rekey", result)
     }
 
     async fn health(&self) -> Result<StoreHealth, FileStoreError> {

@@ -36,6 +36,56 @@ fn io_error(e: &std::io::Error) -> FileStoreError {
 const NOFOLLOW: i32 = libc::O_NOFOLLOW | libc::O_CLOEXEC;
 
 impl LocalBackend {
+    /// Writes a temp file, syncs it and renames it into place.
+    async fn write(
+        &self,
+        key: &ObjectKey,
+        mut body: ByteStream,
+        replace: bool,
+    ) -> Result<u64, FileStoreError> {
+        let (dirs, name) = Self::split(key);
+        let dir = self.directory(&dirs, true).await?;
+        let suffix = crate::entropy::bytes::<8>().map_err(|_| FileStoreError::Unavailable)?;
+        let temp = dir.join(format!(".tmp-{name}-{}", hex::encode(suffix)));
+        let target = dir.join(name);
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(NOFOLLOW)
+            .open(&temp)
+            .await
+            .map_err(|e| io_error(&e))?;
+        let mut guard = TempGuard(Some(temp.clone()));
+        let mut written = 0u64;
+        while let Some(piece) = body.next().await {
+            let piece = piece?;
+            file.write_all(&piece).await.map_err(|e| io_error(&e))?;
+            written += piece.len() as u64;
+        }
+        file.flush().await.map_err(|e| io_error(&e))?;
+        file.sync_all().await.map_err(|e| io_error(&e))?;
+        drop(file);
+        // Keys are unique: a new object never replaces anything (or a symlink
+        // planted there). A replacement (`files rekey`) only replaces a regular
+        // file; rename swaps the directory entry, never following a link.
+        match tokio::fs::symlink_metadata(&target).await {
+            Ok(meta) if replace && meta.file_type().is_file() => {}
+            Ok(_) => return Err(FileStoreError::UnsafePath),
+            Err(e) if replace => return Err(io_error(&e)),
+            Err(_) => {}
+        }
+        tokio::fs::rename(&temp, &target)
+            .await
+            .map_err(|e| io_error(&e))?;
+        guard.0 = None;
+        let dir_handle = tokio::fs::File::open(&dir)
+            .await
+            .map_err(|e| io_error(&e))?;
+        dir_handle.sync_all().await.map_err(|e| io_error(&e))?;
+        Ok(written)
+    }
+
     /// Opens (creating 0700 if missing) the store directory. It must be an absolute
     /// path to a real directory (not a symlink) owned by this user and not
     /// accessible to group or others.
@@ -142,43 +192,12 @@ impl Backend for LocalBackend {
         BackendKind::Local
     }
 
-    async fn put(&self, key: &ObjectKey, mut body: ByteStream) -> Result<u64, FileStoreError> {
-        let (dirs, name) = Self::split(key);
-        let dir = self.directory(&dirs, true).await?;
-        let suffix = crate::entropy::bytes::<8>().map_err(|_| FileStoreError::Unavailable)?;
-        let temp = dir.join(format!(".tmp-{name}-{}", hex::encode(suffix)));
-        let target = dir.join(name);
-        let mut file = tokio::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(NOFOLLOW)
-            .open(&temp)
-            .await
-            .map_err(|e| io_error(&e))?;
-        let mut guard = TempGuard(Some(temp.clone()));
-        let mut written = 0u64;
-        while let Some(piece) = body.next().await {
-            let piece = piece?;
-            file.write_all(&piece).await.map_err(|e| io_error(&e))?;
-            written += piece.len() as u64;
-        }
-        file.flush().await.map_err(|e| io_error(&e))?;
-        file.sync_all().await.map_err(|e| io_error(&e))?;
-        drop(file);
-        // Keys are unique; never replace an existing object (or a symlink planted there).
-        if tokio::fs::symlink_metadata(&target).await.is_ok() {
-            return Err(FileStoreError::UnsafePath);
-        }
-        tokio::fs::rename(&temp, &target)
-            .await
-            .map_err(|e| io_error(&e))?;
-        guard.0 = None;
-        let dir_handle = tokio::fs::File::open(&dir)
-            .await
-            .map_err(|e| io_error(&e))?;
-        dir_handle.sync_all().await.map_err(|e| io_error(&e))?;
-        Ok(written)
+    async fn put(&self, key: &ObjectKey, body: ByteStream) -> Result<u64, FileStoreError> {
+        self.write(key, body, false).await
+    }
+
+    async fn replace(&self, key: &ObjectKey, body: ByteStream) -> Result<u64, FileStoreError> {
+        self.write(key, body, true).await
     }
 
     async fn get(&self, key: &ObjectKey) -> Result<ByteStream, FileStoreError> {

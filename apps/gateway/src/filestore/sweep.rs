@@ -165,6 +165,11 @@ pub struct VerifyReport {
     pub errors: Vec<(String, &'static str)>,
     /// Undeleted files per encryption key id (for rotation).
     pub by_key_id: std::collections::BTreeMap<String, u64>,
+    /// The key new objects are encrypted under.
+    pub active_key_id: Option<String>,
+    /// Configured decrypt-only keys that live files still need (#35): run
+    /// `files rekey --from <id> --to <active>` before removing one.
+    pub retired_key_ids_in_use: Vec<String>,
 }
 
 impl VerifyReport {
@@ -201,7 +206,6 @@ pub async fn verify(
         .await?;
     for (object_key, backend, key_id, size) in rows {
         report.checked += 1;
-        *report.by_key_id.entry(key_id.clone()).or_default() += 1;
         if backend != runtime.backend_name() {
             report.backend_mismatch += 1;
             continue;
@@ -222,5 +226,17 @@ pub async fn verify(
             Err(e) => report.errors.push((object_key, e.code())),
         }
     }
+    // Rotation decisions need every file, not just the first `limit`.
+    let counts: Vec<(String, i64)> = sqlx::query_as("SELECT encryption_key_id,count(*) FROM stored_files WHERE deleted_at IS NULL AND committed_at IS NOT NULL GROUP BY 1")
+        .fetch_all(&db.pool)
+        .await?;
+    report.by_key_id = counts.into_iter().map(|(id, n)| (id, n as u64)).collect();
+    report.active_key_id = runtime.active_key_id().map(str::to_owned);
+    report.retired_key_ids_in_use = report
+        .by_key_id
+        .keys()
+        .filter(|id| runtime.knows_key(id) && Some(id.as_str()) != runtime.active_key_id())
+        .cloned()
+        .collect();
     Ok(report)
 }

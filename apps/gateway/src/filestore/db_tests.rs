@@ -443,3 +443,149 @@ async fn expiry_skips_files_on_legal_hold(pool: PgPool) {
     assert_eq!(report.deleted, 1);
     assert_eq!(store.head(&held.key).await.unwrap(), None);
 }
+
+/// #35: `files rekey` moves every live file to the new key so the old one can
+/// be removed, leaves files being deleted to the sweeper, resumes after an
+/// interrupted run, and a dry run changes nothing.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn rekey_moves_live_files_to_the_new_key(pool: PgPool) {
+    use super::{memory::MemoryBackend, rekey::rekey};
+    let f = fixture(pool).await;
+    enable_batch(&f.pool).await;
+    let db = Store::new(f.pool.clone());
+    let backend = MemoryBackend::default();
+    let b64 = |byte: u8| {
+        use base64::Engine as _;
+        let key: Vec<u8> = (0..32u8).map(|i| i.wrapping_mul(37) ^ byte).collect();
+        base64::engine::general_purpose::STANDARD.encode(key)
+    };
+    let runtime = |spec: String| {
+        let ring = std::sync::Arc::new(crypto::KeyRing::parse(&spec).unwrap());
+        let ids = ring.ids().map(str::to_owned).collect();
+        FileStoreRuntime::from_store(
+            std::sync::Arc::new(Encrypted::new(backend.clone(), ring)),
+            BackendKind::Memory,
+            ids,
+        )
+    };
+    let old = FileStorage::new(db.clone(), runtime(format!("old:{}", b64(1))));
+    let both = runtime(format!("new:{},old:{}", b64(2), b64(1)));
+    let new_only = FileStorage::new(db.clone(), runtime(format!("new:{}", b64(2))));
+    let mut files = Vec::new();
+    for n in 0..5u8 {
+        let file = old
+            .create(
+                NewFile::new(Purpose::BatchInput, Some(f.ws)),
+                body(&[n; 70_000]),
+            )
+            .await
+            .unwrap();
+        files.push(file);
+    }
+    // One file is being deleted: its row is claimed, the object still there.
+    sqlx::query(
+        "UPDATE stored_files SET last_delete_attempt_at=now(),expires_at=now() WHERE id=$1",
+    )
+    .bind(files[3].id)
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    // File 4 has expired but isn't being deleted (a legal hold keeps it): it
+    // still needs the old key, so it is re-wrapped.
+    sqlx::query("UPDATE stored_files SET expires_at=now()-interval '1 hour' WHERE id=$1")
+        .bind(files[4].id)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    // An interrupted earlier run re-wrapped file 0 but never recorded it.
+    assert_eq!(
+        both.store()
+            .unwrap()
+            .rekey(&files[0].key, "new")
+            .await
+            .unwrap(),
+        Rekeyed::Rewrapped
+    );
+
+    let dry = rekey(&db, &both, "old", "new", true, 100).await.unwrap();
+    assert_eq!(
+        (dry.rewrapped, dry.remaining, dry.skipped_deleting),
+        (0, 5, 1)
+    );
+    assert!(rekey(&db, &both, "old", "old", false, 100).await.is_err());
+    assert!(rekey(&db, &both, "old", "gone", false, 100).await.is_err());
+
+    let report = rekey(&db, &both, "old", "new", false, 100).await.unwrap();
+    assert_eq!((report.rewrapped, report.recorded), (3, 1), "{report:?}");
+    assert!(
+        !report.complete,
+        "the file being deleted still uses the old key"
+    );
+    assert_eq!(
+        (report.remaining, report.skipped_deleting),
+        (1, 1),
+        "{report:?}"
+    );
+    assert!(report.failed.is_empty(), "{report:?}");
+    for (n, file) in files.iter().take(3).enumerate() {
+        let (_, stream) = new_only.open(file.id, Some(f.ws)).await.unwrap();
+        assert_eq!(read(stream).await, vec![n as u8; 70_000]);
+        let kid: String =
+            sqlx::query_scalar("SELECT encryption_key_id FROM stored_files WHERE id=$1")
+                .bind(file.id)
+                .fetch_one(&f.pool)
+                .await
+                .unwrap();
+        assert_eq!(kid, "new");
+    }
+    // The expired, held file moved too (read straight from the store).
+    let (stream, kid) = (
+        new_only
+            .runtime()
+            .store()
+            .unwrap()
+            .get(&files[4].key)
+            .await
+            .unwrap(),
+        sqlx::query_scalar::<_, String>("SELECT encryption_key_id FROM stored_files WHERE id=$1")
+            .bind(files[4].id)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(
+        (read(stream).await, kid.as_str()),
+        (vec![4u8; 70_000], "new")
+    );
+    // verify counts every file per key, not just the first --limit.
+    let before = verify(&db, &both, 1).await.unwrap();
+    assert_eq!(before.by_key_id.values().sum::<u64>(), 5);
+    assert_eq!(before.active_key_id.as_deref(), Some("new"));
+    assert_eq!(
+        before.retired_key_ids_in_use,
+        ["old"],
+        "the file being deleted still needs it"
+    );
+    let again = rekey(&db, &both, "old", "new", false, 100).await.unwrap();
+    assert_eq!(
+        (again.rewrapped, again.recorded, again.remaining),
+        (0, 0, 1)
+    );
+    // Once the sweeper has removed it, the old key is free.
+    sqlx::query(
+        "UPDATE stored_files SET deleted_at=now(),filename=NULL,content_type=NULL WHERE id=$1",
+    )
+    .bind(files[3].id)
+    .execute(&f.pool)
+    .await
+    .unwrap();
+    let done = rekey(&db, &both, "old", "new", false, 100).await.unwrap();
+    assert!(done.complete && done.remaining == 0, "{done:?}");
+    assert!(
+        verify(&db, &both, 100)
+            .await
+            .unwrap()
+            .retired_key_ids_in_use
+            .is_empty()
+    );
+}
