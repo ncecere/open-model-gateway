@@ -32,6 +32,7 @@ async fn status_is_platform_read_only_and_never_shows_the_url_or_secret(pool: Pg
         let (status, v) = call(&f.s, actor, "GET", STATUS, json!({})).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(v["configured"], false);
+        assert_eq!(v["transport"], Value::Null, "#107: no transport here");
         assert_eq!(v["enabled"], false);
         assert_eq!(v["schema"], "omg.audit.v1");
     }
@@ -89,6 +90,17 @@ async fn status_is_platform_read_only_and_never_shows_the_url_or_secret(pool: Pg
     assert!(
         !v.to_string().contains("hidden") && !v.to_string().contains("ingest"),
         "no path, query or secret"
+    );
+    assert_eq!(v["transport"], "webhook");
+    // #107: a syslog destination says so.
+    let syslog =
+        crate::audit_export::Exporter::syslog("syslog+tls://127.0.0.1:6514", None, None, true)
+            .unwrap();
+    let s = f.s.clone().with_audit_export(std::sync::Arc::new(syslog));
+    let (_, v) = call(&s, &f.admin, "GET", STATUS, json!({})).await;
+    assert_eq!(
+        (v["configured"].clone(), v["transport"].clone()),
+        (json!(true), json!("syslog"))
     );
 }
 

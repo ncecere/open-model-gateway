@@ -9,6 +9,9 @@ This covers health checks, metrics and alerting, backups and restore, secret rot
 | `GATEWAY_METRICS_ADDR` | unset (disabled) | Separate Prometheus listener, for example `127.0.0.1:9464`. It must use a different port from `GATEWAY_LISTEN`. |
 | `GATEWAY_AUDIT_WEBHOOK_URL` | unset (no export) | HTTPS endpoint the audit log streams to. See [audit export](#audit-export). |
 | `GATEWAY_AUDIT_WEBHOOK_SECRET_ENV` | unset | Name of the variable holding the webhook signing secret (at least 32 bytes). Required with the URL. |
+| `GATEWAY_AUDIT_SYSLOG_URL` | unset (no export) | `syslog+tls://host[:port]` (default port 6514): export to syslog over TLS instead of the webhook. See [syslog over TLS](#syslog-over-tls). |
+| `GATEWAY_AUDIT_SYSLOG_CA_FILE` | unset (public roots) | PEM file of the CA that signs the syslog receiver's certificate; when set, only it is trusted. |
+| `GATEWAY_AUDIT_SYSLOG_CLIENT_CERT_FILE`, `GATEWAY_AUDIT_SYSLOG_CLIENT_KEY_FILE` | unset | PEM client certificate (chain) and private key for mutual TLS; both or neither. |
 | `GATEWAY_EGRESS_PRIVATE_ALLOW` | unset (none) | Private networks the gateway may connect to, as comma-separated CIDRs (`10.20.0.0/16,fd00:1::/32`). See [outbound connections](#outbound-connections). |
 | `GATEWAY_SMTP_HOST_ALLOWLIST` | unset (none) | SMTP relay hosts the gateway may send to, comma-separated exact names or IP literals. The relay chosen in Admin › Settings › Email must be listed; empty means email can't be sent. See [settings](settings.md#email). |
 | `GATEWAY_SMTP_SECRET_ENV_ALLOWLIST` | unset | Variable names the SMTP password reference (`env:NAME`) may read, comma-separated. Separate from `GATEWAY_SECRET_ENV_ALLOWLIST` (provider credentials). Startup fails if a name is on both lists or is one of the gateway's own credentials (`DATABASE_URL`, `GATEWAY_*`, `AWS_*`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). |
@@ -24,7 +27,7 @@ This covers health checks, metrics and alerting, backups and restore, secret rot
 
 ## Outbound connections
 
-The gateway's own HTTP clients (OpenAI, Anthropic, OpenRouter, Bedrock requests, S3, the OpenRouter catalog, OIDC discovery, tokens and keys), the OpenAI realtime WebSocket and SMTP go through one address policy (#33):
+The gateway's own HTTP clients (OpenAI, Anthropic, OpenRouter, Bedrock requests, S3, the OpenRouter catalog, OIDC discovery, tokens and keys, the audit webhook), the OpenAI realtime WebSocket, SMTP and audit syslog go through one address policy (#33):
 
 - **Never:** unspecified, link-local (which covers cloud metadata at `169.254.169.254`), `fd00:ec2::/32`, Alibaba Cloud's `100.100.100.200`, multicast, broadcast, and reserved, documentation and benchmarking ranges. NAT64 (`64:ff9b::/96`), 6to4 and Teredo addresses are judged by the IPv4 address they carry, so IPv6-only clusters with DNS64 still reach IPv4 upstreams.
 - **Loopback:** only with `GATEWAY_ENV=development`.
@@ -45,9 +48,9 @@ SMTP also needs its relay host on `GATEWAY_SMTP_HOST_ALLOWLIST`; a listed loopba
 
 ## Audit export
 
-With `GATEWAY_AUDIT_WEBHOOK_URL` and `GATEWAY_AUDIT_WEBHOOK_SECRET_ENV` set, the gateway streams the audit log to a SIEM (#106). The operator controls the destination; Admin › Settings › Audit export shows status and sends a test, but can't change or stop it.
+With `GATEWAY_AUDIT_WEBHOOK_URL` and `GATEWAY_AUDIT_WEBHOOK_SECRET_ENV` set, the gateway streams the audit log to a SIEM (#106). [Syslog over TLS](#syslog-over-tls) (`GATEWAY_AUDIT_SYSLOG_URL`, #107) is the alternative; there is one destination at a time. The operator controls the destination; Admin › Settings › Audit export shows the transport and status and sends a test, but can't change or stop it.
 
-- **On and off:** a replica with the URL turns export on (and takes the `audit_export` lease). Only `GATEWAY_AUDIT_WEBHOOK_URL=off` turns it off; a replica with neither variable (a rolling deploy, a debug pod) changes nothing and never delivers. Turning it on and off are themselves audit events (`audit_export.enabled`, `audit_export.disabled`), queued so the SIEM sees where a gap begins and ends. The secret's variable must not be on `GATEWAY_SECRET_ENV_ALLOWLIST` or `GATEWAY_SMTP_SECRET_ENV_ALLOWLIST`, or be a reserved name: startup refuses it, because a Platform Admin could otherwise read it through a connection or the SMTP relay and forge deliveries.
+- **On and off:** a replica with a URL turns export on (and takes the `audit_export` lease). Only `off`, in `GATEWAY_AUDIT_WEBHOOK_URL` or `GATEWAY_AUDIT_SYSLOG_URL`, turns it off; a replica with neither variable (a rolling deploy, a debug pod) changes nothing and never delivers. Turning it on and off are themselves audit events (`audit_export.enabled`, `audit_export.disabled`), queued so the SIEM sees where a gap begins and ends. The secret's variable must not be on `GATEWAY_SECRET_ENV_ALLOWLIST` or `GATEWAY_SMTP_SECRET_ENV_ALLOWLIST`, or be a reserved name: startup refuses it, because a Platform Admin could otherwise read it through a connection or the SMTP relay and forge deliveries.
 
 - **What:** the events the platform audit view shows (no workspace, or a team or project workspace); never personal-workspace events, prompts, responses or secrets. Export starts when it's enabled; earlier events stay in the dashboard and backups.
 - **How:** each event is queued in the transaction that writes it, so none is skipped. One replica (the `audit_export` work lease) numbers queued events (`seq`, roughly oldest first: by when each event's transaction started, so a late commit can get a later number than a newer event; sort by `occurred_at` for time order) and posts them in `seq` order in batches of up to 100, removing them only after a 2xx. Failures retry with exponential backoff up to 5 minutes, forever, without dropping anything. The one exception: an event whose month was archived before it was delivered is skipped, logged and counted (`gateway_audit_export_deliveries_total{outcome="skipped"}`). Delivery is at least once: dedup on each event's `id` (a redelivered event keeps its `seq`).
@@ -65,6 +68,25 @@ With `GATEWAY_AUDIT_WEBHOOK_URL` and `GATEWAY_AUDIT_WEBHOOK_SECRET_ENV` set, the
 - **Destination:** HTTPS through the [outbound address policy](#outbound-connections); no redirects or proxies; 10-second timeout.
 - **Watch:** `gateway_audit_export_queued` and `gateway_audit_export_oldest_seconds` (alert when the oldest event is older than, say, 15 minutes), and `gateway_audit_export_deliveries_total{outcome}`. The gateway's own credentials can stop the export, so also alert on the receiver on gaps and silence (above).
 - **Kubernetes:** set the URL with `gateway.env` and the secret through `gateway.extraEnvFrom` from a Secret; list the variable's name in `GATEWAY_AUDIT_WEBHOOK_SECRET_ENV`. Allow the receiver in `networkPolicy.egress.httpsCidrs` if you narrowed it.
+
+### Syslog over TLS
+
+Set `GATEWAY_AUDIT_SYSLOG_URL=syslog+tls://host[:port]` (port 6514 by default) instead of the webhook URL (#107). Everything above applies except the request format and signature: same queue, lease, `seq` numbering, heartbeats, backoff and status.
+
+- **Settings:** setting both URLs to destinations, or `off` in one and a destination in the other, stops startup. `GATEWAY_AUDIT_WEBHOOK_SECRET_ENV` is not used and is refused with only the syslog URL. `GATEWAY_AUDIT_SYSLOG_CA_FILE` (PEM) replaces the public roots with your CA. For mutual TLS set `GATEWAY_AUDIT_SYSLOG_CLIENT_CERT_FILE` and `GATEWAY_AUDIT_SYSLOG_CLIENT_KEY_FILE` (both or neither). The files are read once at startup; a missing or unparsable file stops startup, and the message names the setting, never the contents. Restart to pick up a renewed certificate.
+- **TLS:** always; there is no plaintext TCP or UDP, also not in development. The receiver's certificate must be valid for the URL's host (SNI is the host). The address follows the [outbound address policy](#outbound-connections): loopback only with `GATEWAY_ENV=development`, private addresses only in `GATEWAY_EGRESS_PRIVATE_ALLOW`.
+- **Framing:** RFC 5425 octet counting (`<length> <message>`), one RFC 5424 message per event, without structured data or BOM:
+
+  ```text
+  <109>1 2026-10-14T01:02:03.456Z <installation id> open-model-gateway - key.revoked - {"schema":"omg.audit.v1","installation_id":"…","event":{…,"seq":42}}
+  ```
+
+  Facility 13 (log audit), severity 5 (notice); the timestamp is the send time in UTC. MSGID is the event's `action`, cut to 32 characters, with anything outside printable ASCII replaced by `_`; the JSON keeps the full action. `event` is the object the webhook sends. A heartbeat has MSGID `heartbeat` and `{"schema":…,"installation_id":…,"heartbeat":true,"next_seq":N}`; a test delivery MSGID `test` and `"test":true`.
+- **Delivery:** each run opens one connection, writes the batch (up to 100 messages), sends TLS close_notify and waits for the receiver to close; all within 10 seconds. Only then is the batch removed from the queue. Any failure keeps it and retries the whole batch on a new connection after the backoff, so a receiver can see a message twice (dedup on the event `id`). Errors are `connection` (resolution, the address policy or TCP), `tls` (handshake, certificate or client certificate) and `timeout`.
+- **Authenticity:** syslog messages aren't signed. Without a client certificate, anyone who can reach the receiver can send events or heartbeats that look like the gateway's, and fake heartbeats would hide a stopped export. Configure the receiver to require the client certificate (mutual TLS), and trust only that certificate for this source. Encrypted private keys aren't supported; protect the key file with file permissions.
+- **Message size:** RFC 5425 only requires receivers to accept 2,048 bytes; events with large metadata can be several KB. Raise the receiver's limit (rsyslog `$MaxMessageSize`, for example 64k) so messages aren't cut.
+- **Guarantee:** syslog has no application-level acknowledgement, so delivery is at least once only as far as the TLS stream. A receiver that fails after reading but before storing loses those events; receivers see that as a `seq` gap. Use the webhook when you need acknowledged delivery.
+- **Kubernetes:** mount the CA, certificate and key from a Secret as files, read-only, and point the `_FILE` settings (in `gateway.env`) at them; don't put PEM contents in environment variables. The chart has no volume option for this, so add the volume and mount with a patch (for example a Kustomize post-renderer). The chart's NetworkPolicy opens only 443: add a `networkPolicy.egress.extraEgress` rule for the receiver's port.
 
 ## Health endpoints
 
