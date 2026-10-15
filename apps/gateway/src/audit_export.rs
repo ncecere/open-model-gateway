@@ -1966,7 +1966,7 @@ mod tests {
         assert!(debug.contains("otlp"));
         assert!(
             !debug.contains(TOKEN) && !debug.contains("audit\"") && !debug.contains("Bearer"),
-            "no header value in {debug}"
+            "no header value in Debug output"
         );
         assert!(
             read.borrow().iter().all(|name| !name.starts_with("OTEL_")),
