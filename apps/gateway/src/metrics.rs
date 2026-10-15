@@ -199,6 +199,10 @@ pub struct Metrics {
     config_poll_failures: Counter,
     auth_throttled: Family<L2, Counter>,
     egress_denied: Family<L1, Counter>,
+    audit_export_deliveries: Family<L1, Counter>,
+    audit_export_queued: Gauge,
+    audit_export_oldest:
+        prometheus_client::metrics::gauge::Gauge<f64, std::sync::atomic::AtomicU64>,
     config_listener: Gauge,
     leases_held: Family<L1, Gauge>,
     lease_terms: Family<L1, Counter>,
@@ -319,6 +323,9 @@ impl Metrics {
             config_poll_failures: Counter::default(),
             auth_throttled: Family::default(),
             egress_denied: Family::default(),
+            audit_export_deliveries: Family::default(),
+            audit_export_queued: Gauge::default(),
+            audit_export_oldest: Default::default(),
             config_listener: Gauge::default(),
             leases_held: Family::default(),
             lease_terms: Family::default(),
@@ -494,8 +501,23 @@ impl Metrics {
             metrics.config_changes.clone(),
         );
         registry.register(
+            "audit_export_deliveries",
+            "Audit export webhook deliveries by outcome (delivered, failed; skipped counts events no longer exportable)",
+            metrics.audit_export_deliveries.clone(),
+        );
+        registry.register(
+            "audit_export_queued",
+            "Audit events queued for export, not yet accepted by the receiver",
+            metrics.audit_export_queued.clone(),
+        );
+        registry.register(
+            "audit_export_oldest_seconds",
+            "Age of the oldest audit event queued for export (0 when none)",
+            metrics.audit_export_oldest.clone(),
+        );
+        registry.register(
             "egress_denied",
-            "Outbound connections refused by the egress policy, by purpose (provider, oidc, storage, catalog, smtp)",
+            "Outbound connections refused by the egress policy, by purpose (provider, oidc, storage, catalog, smtp, audit)",
             metrics.egress_denied.clone(),
         );
         registry.register(
@@ -591,6 +613,23 @@ impl Metrics {
         self.config_changes
             .get_or_create(&[("topic", topic.to_owned())])
             .inc();
+    }
+
+    pub(crate) fn audit_export_delivery(&self, outcome: &'static str) {
+        self.audit_export_deliveries
+            .get_or_create(&[("outcome", outcome.to_owned())])
+            .inc();
+    }
+
+    pub(crate) fn audit_export_skipped(&self, events: u64) {
+        self.audit_export_deliveries
+            .get_or_create(&[("outcome", "skipped".to_owned())])
+            .inc_by(events);
+    }
+
+    pub(crate) fn audit_export_backlog(&self, queued: i64, oldest_seconds: f64) {
+        self.audit_export_queued.set(queued);
+        self.audit_export_oldest.set(oldest_seconds);
     }
 
     pub(crate) fn egress_denied(&self, purpose: &'static str) {

@@ -296,8 +296,8 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 **ADM-7. Prices, ledger or audit history are changed.** T, R · Asset: financial and audit history · Attacker: Platform Admin, compromised DB credential.
 - Mitigation: migration 0001 triggers (`immutable_history()`) refuse UPDATE, DELETE and TRUNCATE on `deployment_prices`, `monetary_ledger` and `audit_events`. The runtime role has INSERT and SELECT only on them. New prices are new versions; reservations pin their price.
 - Tests: `management/governance/tests.rs` `pricing_append_only_and_authority_rechecked`; `governance/tests.rs` `pinned_price_full_finish_idempotency_and_immutable_history`; `apps/gateway/tests/runtime_privileges.rs` `enterprise_runtime_allowlist_and_rollback_probes`; `history/tests.rs` `history_parents_are_never_removed_or_rekeyed`.
-- Residual: the schema owner can disable triggers or detach partitions. A compromised runtime credential can still insert false ledger or audit rows and rewrite the mutable columns of `governance_reservations`. There is no off-host, tamper-evident copy of the audit log.
-- Follow-up: #30, #106, #107, #108 (SIEM audit export).
+- Residual: the schema owner can disable triggers or detach partitions. A compromised runtime credential can still insert false ledger or audit rows and rewrite the mutable columns of `governance_reservations`. Since #106 the operator can stream the audit log off-host (`audit_export.rs`, a signed HTTPS webhook): events are queued in the transaction that writes them, so once exported a later change in the database doesn't change the SIEM's copy. Events before export was enabled are not exported.
+- Follow-up: #107 (syslog), #108 (OTLP) transports.
 
 **ADM-8. Manual usage resolution understates cost.** T, R · Asset: budgets · Attacker: Platform Admin.
 - Mitigation: `resolve_usage_once` accepts only an active Platform Admin, a shared workspace or the admin's own personal workspace, an `unknown` terminal reservation, evidence text, and usage that never lowers recorded counts or erases meters. It writes a `reconciliation` ledger row and an audit event.
@@ -590,8 +590,10 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 **AUD-1. Actions cannot be attributed.** R · Asset: audit trail · Attacker: Platform Admin, workspace admin.
 - Mitigation: mutations write sanitized `audit_events` in the same transaction; an audit failure rolls the change back. Audit rows are append-only (ADM-7).
 - Tests: `management/tests.rs` `sanitized_audit_failure_rolls_back_resource_creation`; `management/governance/tests.rs` `policy_roles_privacy_scope_and_transactional_audit`.
-- Residual: the audit log lives only in the database the actors can influence; there is no signed off-host export.
-- Follow-up: #30, #106, #107, #108.
+- Mitigation (#106): with `GATEWAY_AUDIT_WEBHOOK_URL` set by the operator, every platform-visible audit event (no workspace, or team/project; never personal) is queued in its own transaction (trigger `audit_events_export`) and delivered at least once, signed (HMAC-SHA256), by one leased exporter fenced by its term. Platform Admins see the status and can send a test; they can't change or stop the export.
+- Tests (#106): `audit_export.rs` database tests (queue scope, in-order signed batches, outage and recovery with nothing lost, stale lease commits nothing, archived events skipped), `management/audit_export_tests.rs`, `runtime_privileges` (`audit_export_runs_as_runtime`).
+- Residual: without export configured, or for events before it was enabled, the audit log lives only in the database the actors can influence. The runtime credential can switch export off (`audit_export_state`) or delete queued rows, and the gateway's backlog metrics would then look healthy: receivers should alert on silence. Turning export off with `GATEWAY_AUDIT_WEBHOOK_URL=off` is itself an exported event. Events archived before delivery are skipped and counted.
+- Follow-up: #174 (sequence numbers and heartbeat for receiver-side gap detection), #107, #108 (other transports).
 
 **AUD-2. Request metadata and identities are kept indefinitely.** I · Asset: request metadata, personal data · Attacker: anyone who later gains database access.
 - Mitigation: no prompt or response columns exist; optional compaction redacts settled details without deleting money; account cleanup clears email and linking after 30 days.
@@ -617,7 +619,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 | Restore revives keys and grants revoked after the backup and loses spend; `--expect-version` and `--skip-file-key-check` weaken its checks | OPS-6 | Fixed in #146 (re-apply revocations, runbook); the weaker flags remain operator choices |
 | No secret manager; every replica holds every secret | EGR-10 | Deferred (roadmap R17), no issue |
 | SCIM token is one static secret that can effectively grant mapped admin roles | SCIM-1 | #60; Review: #61 |
-| No off-host, tamper-evident audit export | ADM-7, AUD-1 | #30, #106, #107, #108 |
+| No off-host, tamper-evident audit export | ADM-7, AUD-1 | Webhook export in #106; #107, #108 |
 | No data export, anonymization, legal hold or metadata retention | TEN-2, OPS-4, AUD-2 | #31, #74, #75, #76, #77 |
 | No row-level security; isolation depends on query predicates | TEN-1, OPS-2 | Review: #61 |
 | Native batches and video jobs keep running at the provider after revocation | JOB-1 | Review: #61 |

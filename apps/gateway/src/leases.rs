@@ -52,10 +52,12 @@ pub enum Lease {
     Rollups,
     /// History parent consistency check and the history_orphans alert (0034, hourly).
     HistoryVerify,
+    /// Audit export deliveries (0044, #106).
+    AuditExport,
 }
 
 impl Lease {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Alerts,
         Self::Compaction,
         Self::FileSweep,
@@ -65,6 +67,7 @@ impl Lease {
         Self::Partitions,
         Self::Rollups,
         Self::HistoryVerify,
+        Self::AuditExport,
     ];
     pub fn as_str(self) -> &'static str {
         match self {
@@ -77,6 +80,7 @@ impl Lease {
             Self::Partitions => "partitions",
             Self::Rollups => "rollups",
             Self::HistoryVerify => "history_verify",
+            Self::AuditExport => "audit_export",
         }
     }
     fn index(self) -> usize {
@@ -144,7 +148,8 @@ pub struct Leases {
     holder: Uuid,
     ttl: Duration,
     margin: Duration,
-    terms: [Mutex<Option<Term>>; 9],
+    terms: [Mutex<Option<Term>>; Lease::ALL.len()],
+    excluded: Vec<Lease>,
 }
 
 impl Default for Leases {
@@ -165,7 +170,15 @@ impl Leases {
             ttl: ttl.max(Duration::from_secs(1)),
             margin: MARGIN.min(ttl / 10),
             terms: Default::default(),
+            excluded: Vec::new(),
         }
+    }
+
+    /// Never take `lease` on this replica (it can't do that work: for example
+    /// audit export without a configured destination).
+    pub fn without(mut self, lease: Lease) -> Self {
+        self.excluded.push(lease);
+        self
     }
 
     /// This replica's holder id.
@@ -188,7 +201,10 @@ impl Leases {
     /// Take or renew every lease once. Returns how many this replica holds.
     pub async fn renew_once(&self, pool: &PgPool) -> usize {
         let mut held = 0;
-        for lease in Lease::ALL {
+        for lease in Lease::ALL
+            .into_iter()
+            .filter(|l| !self.excluded.contains(l))
+        {
             let sent = Instant::now();
             let acquired: Result<Option<i64>, sqlx::Error> = tokio::time::timeout(
                 Duration::from_secs(5),

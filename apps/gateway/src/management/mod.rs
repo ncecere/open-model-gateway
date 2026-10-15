@@ -1,5 +1,6 @@
 mod access;
 mod alerts;
+mod audit_export;
 mod batch_scheduling;
 mod batches;
 pub(crate) mod branding;
@@ -541,6 +542,7 @@ fn routes() -> Router<Store> {
         .merge(governance::platform_routes())
         .merge(logs::routes())
         .merge(settings::routes())
+        .merge(audit_export::routes())
         .merge(sessions::routes())
         .merge(key_safety::routes())
         .merge(compare::routes())
