@@ -1,6 +1,7 @@
 //! Admin › Settings › Audit export (#106): read-only status and a test send.
-//! The destination is the operator's (`GATEWAY_AUDIT_WEBHOOK_URL` or
-//! `GATEWAY_AUDIT_SYSLOG_URL`); nothing here can change or disable it.
+//! The destination is the operator's (`GATEWAY_AUDIT_WEBHOOK_URL`,
+//! `GATEWAY_AUDIT_SYSLOG_URL` or `GATEWAY_AUDIT_OTLP_URL`); nothing here can
+//! change or disable it.
 
 use super::*;
 
@@ -23,7 +24,7 @@ async fn status(State(s): State<Store>, Extension(u): Extension<BrowserPrincipal
     let mut v = crate::audit_export::status(&s).await?;
     // Whether the replica answering has a destination (all should agree).
     v["configured"] = json!(s.audit_export().is_some());
-    // `webhook` or `syslog` (#107); null when this replica has no destination.
+    // `webhook`, `syslog` (#107) or `otlp` (#108); null when this replica has no destination.
     v["transport"] = json!(s.audit_export().map(|e| e.transport()));
     Ok(Json(v))
 }

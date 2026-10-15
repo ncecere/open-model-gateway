@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AuditExportSettingsPage, type AuditExportStatus } from "../pages/settings/audit-export";
+import { AuditExportSettingsPage, exportErrors, type AuditExportStatus } from "../pages/settings/audit-export";
 import { admin, auditor, markup } from "../lib/test-fixtures";
 
 const path = "/api/v1/platform/settings/audit-export";
@@ -38,15 +38,25 @@ describe("Admin › Settings › Audit export (#106)", () => {
     const webhook = markup(<AuditExportSettingsPage session={admin} />, [[path, status({})]]);
     expect(webhook).toContain("Transport");
     expect(webhook).toContain("HTTPS webhook");
-    expect(webhook).toContain("signed HTTPS deliveries or as syslog over TLS");
+    expect(webhook).toContain("signed HTTPS deliveries, syslog over TLS or OpenTelemetry (OTLP) logs");
     const syslog = markup(<AuditExportSettingsPage session={admin} />, [[path, status({ transport: "syslog", retrying: true, last_error: "tls", last_error_at: "2026-10-14T02:00:00Z" })]]);
     expect(syslog).toContain("Syslog over TLS");
     expect(syslog).toContain("TLS handshake with the receiver failed");
+  });
+  it("shows an OTLP collector and explains refused records (#108)", () => {
+    const html = markup(<AuditExportSettingsPage session={admin} />, [[path, status({ transport: "otlp", destination_host: "collector.example.org", last_error: "otlp_rejected", last_error_at: "2026-10-14T02:00:00Z" })]]);
+    expect(html).toContain("OpenTelemetry (OTLP)");
+    expect(html).toContain("The collector refused some events; they were not retried. Receivers see the gap.");
+    expect(html).toContain("Collector refusing events");
+    expect(html).not.toContain(">Delivering<");
+    expect(html).not.toContain("Deliveries are failing");
+    expect(exportErrors.otlp_rejected).toBe("The collector refused some events; they were not retried. Receivers see the gap.");
   });
   it("names the operator settings when not set up", () => {
     const html = markup(<AuditExportSettingsPage session={admin} />, [[path, status({ configured: false, transport: null, enabled: false, destination_host: null })]]);
     expect(html).toContain("GATEWAY_AUDIT_WEBHOOK_URL");
     expect(html).toContain("GATEWAY_AUDIT_SYSLOG_URL");
+    expect(html).toContain("GATEWAY_AUDIT_OTLP_URL");
     expect(html).not.toContain("Send test delivery");
   });
 });

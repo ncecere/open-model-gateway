@@ -200,6 +200,7 @@ pub struct Metrics {
     auth_throttled: Family<L2, Counter>,
     egress_denied: Family<L1, Counter>,
     audit_export_deliveries: Family<L1, Counter>,
+    audit_export_rejected_records: Counter,
     audit_export_queued: Gauge,
     audit_export_oldest:
         prometheus_client::metrics::gauge::Gauge<f64, std::sync::atomic::AtomicU64>,
@@ -324,6 +325,7 @@ impl Metrics {
             auth_throttled: Family::default(),
             egress_denied: Family::default(),
             audit_export_deliveries: Family::default(),
+            audit_export_rejected_records: Counter::default(),
             audit_export_queued: Gauge::default(),
             audit_export_oldest: Default::default(),
             config_listener: Gauge::default(),
@@ -502,8 +504,13 @@ impl Metrics {
         );
         registry.register(
             "audit_export_deliveries",
-            "Audit export webhook deliveries by outcome (delivered, failed; skipped counts events no longer exportable)",
+            "Audit export requests by outcome (delivered, failed); skipped counts events no longer exportable",
             metrics.audit_export_deliveries.clone(),
+        );
+        registry.register(
+            "audit_export_rejected_records",
+            "Audit events an OTLP collector refused for good (not retried; receivers see the seq gap)",
+            metrics.audit_export_rejected_records.clone(),
         );
         registry.register(
             "audit_export_queued",
@@ -625,6 +632,18 @@ impl Metrics {
         self.audit_export_deliveries
             .get_or_create(&[("outcome", "skipped".to_owned())])
             .inc_by(events);
+    }
+
+    /// Records an OTLP collector refused permanently (#108): delivered, not
+    /// retried, so they count here instead.
+    pub(crate) fn audit_export_rejected(&self, records: u64) {
+        self.audit_export_rejected_records.inc_by(records);
+    }
+
+    /// Refused records counted so far (tests).
+    #[cfg(test)]
+    pub(crate) fn audit_export_rejected_count(&self) -> u64 {
+        self.audit_export_rejected_records.get()
     }
 
     pub(crate) fn audit_export_backlog(&self, queued: i64, oldest_seconds: f64) {

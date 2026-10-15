@@ -12,6 +12,8 @@ This covers health checks, metrics and alerting, backups and restore, secret rot
 | `GATEWAY_AUDIT_SYSLOG_URL` | unset (no export) | `syslog+tls://host[:port]` (default port 6514): export to syslog over TLS instead of the webhook. See [syslog over TLS](#syslog-over-tls). |
 | `GATEWAY_AUDIT_SYSLOG_CA_FILE` | unset (public roots) | PEM file of the CA that signs the syslog receiver's certificate; when set, only it is trusted. |
 | `GATEWAY_AUDIT_SYSLOG_CLIENT_CERT_FILE`, `GATEWAY_AUDIT_SYSLOG_CLIENT_KEY_FILE` | unset | PEM client certificate (chain) and private key for mutual TLS; both or neither. |
+| `GATEWAY_AUDIT_OTLP_URL` | unset (no export) | An OpenTelemetry collector's full OTLP/HTTP logs endpoint, for example `https://collector:4318/v1/logs`: export as OTLP logs instead of the webhook or syslog. See [OTLP logs](#otlp-logs). |
+| `GATEWAY_AUDIT_OTLP_HEADERS_ENV` | unset | Name of the variable holding headers for the collector, `Key=Value,Key2=Value2` (for example a token). Optional; only with the OTLP URL. |
 | `GATEWAY_EGRESS_PRIVATE_ALLOW` | unset (none) | Private networks the gateway may connect to, as comma-separated CIDRs (`10.20.0.0/16,fd00:1::/32`). See [outbound connections](#outbound-connections). |
 | `GATEWAY_SMTP_HOST_ALLOWLIST` | unset (none) | SMTP relay hosts the gateway may send to, comma-separated exact names or IP literals. The relay chosen in Admin › Settings › Email must be listed; empty means email can't be sent. See [settings](settings.md#email). |
 | `GATEWAY_SMTP_SECRET_ENV_ALLOWLIST` | unset | Variable names the SMTP password reference (`env:NAME`) may read, comma-separated. Separate from `GATEWAY_SECRET_ENV_ALLOWLIST` (provider credentials). Startup fails if a name is on both lists or is one of the gateway's own credentials (`DATABASE_URL`, `GATEWAY_*`, `AWS_*`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). |
@@ -27,7 +29,7 @@ This covers health checks, metrics and alerting, backups and restore, secret rot
 
 ## Outbound connections
 
-The gateway's own HTTP clients (OpenAI, Anthropic, OpenRouter, Bedrock requests, S3, the OpenRouter catalog, OIDC discovery, tokens and keys, the audit webhook), the OpenAI realtime WebSocket, SMTP and audit syslog go through one address policy (#33):
+The gateway's own HTTP clients (OpenAI, Anthropic, OpenRouter, Bedrock requests, S3, the OpenRouter catalog, OIDC discovery, tokens and keys, the audit webhook and OTLP collector), the OpenAI realtime WebSocket, SMTP and audit syslog go through one address policy (#33):
 
 - **Never:** unspecified, link-local (which covers cloud metadata at `169.254.169.254`), `fd00:ec2::/32`, Alibaba Cloud's `100.100.100.200`, multicast, broadcast, and reserved, documentation and benchmarking ranges. NAT64 (`64:ff9b::/96`), 6to4 and Teredo addresses are judged by the IPv4 address they carry, so IPv6-only clusters with DNS64 still reach IPv4 upstreams.
 - **Loopback:** only with `GATEWAY_ENV=development`.
@@ -48,9 +50,9 @@ SMTP also needs its relay host on `GATEWAY_SMTP_HOST_ALLOWLIST`; a listed loopba
 
 ## Audit export
 
-With `GATEWAY_AUDIT_WEBHOOK_URL` and `GATEWAY_AUDIT_WEBHOOK_SECRET_ENV` set, the gateway streams the audit log to a SIEM (#106). [Syslog over TLS](#syslog-over-tls) (`GATEWAY_AUDIT_SYSLOG_URL`, #107) is the alternative; there is one destination at a time. The operator controls the destination; Admin › Settings › Audit export shows the transport and status and sends a test, but can't change or stop it.
+With `GATEWAY_AUDIT_WEBHOOK_URL` and `GATEWAY_AUDIT_WEBHOOK_SECRET_ENV` set, the gateway streams the audit log to a SIEM (#106). [Syslog over TLS](#syslog-over-tls) (`GATEWAY_AUDIT_SYSLOG_URL`, #107) and [OTLP logs](#otlp-logs) (`GATEWAY_AUDIT_OTLP_URL`, #108) are the alternatives; there is one destination at a time. The operator controls the destination; Admin › Settings › Audit export shows the transport and status and sends a test, but can't change or stop it.
 
-- **On and off:** a replica with a URL turns export on (and takes the `audit_export` lease). Only `off`, in `GATEWAY_AUDIT_WEBHOOK_URL` or `GATEWAY_AUDIT_SYSLOG_URL`, turns it off; a replica with neither variable (a rolling deploy, a debug pod) changes nothing and never delivers. Turning it on and off are themselves audit events (`audit_export.enabled`, `audit_export.disabled`), queued so the SIEM sees where a gap begins and ends. The secret's variable must not be on `GATEWAY_SECRET_ENV_ALLOWLIST` or `GATEWAY_SMTP_SECRET_ENV_ALLOWLIST`, or be a reserved name: startup refuses it, because a Platform Admin could otherwise read it through a connection or the SMTP relay and forge deliveries.
+- **On and off:** a replica with a URL turns export on (and takes the `audit_export` lease). Only `off`, in `GATEWAY_AUDIT_WEBHOOK_URL`, `GATEWAY_AUDIT_SYSLOG_URL` or `GATEWAY_AUDIT_OTLP_URL`, turns it off; a replica with none of them (a rolling deploy, a debug pod) changes nothing and never delivers. Turning it on and off are themselves audit events (`audit_export.enabled`, `audit_export.disabled`), queued so the SIEM sees where a gap begins and ends. The secret's variable must not be on `GATEWAY_SECRET_ENV_ALLOWLIST` or `GATEWAY_SMTP_SECRET_ENV_ALLOWLIST`, or be a reserved name: startup refuses it, because a Platform Admin could otherwise read it through a connection or the SMTP relay and forge deliveries.
 
 - **What:** the events the platform audit view shows (no workspace, or a team or project workspace); never personal-workspace events, prompts, responses or secrets. Export starts when it's enabled; earlier events stay in the dashboard and backups.
 - **How:** each event is queued in the transaction that writes it, so none is skipped. One replica (the `audit_export` work lease) numbers queued events (`seq`, roughly oldest first: by when each event's transaction started, so a late commit can get a later number than a newer event; sort by `occurred_at` for time order) and posts them in `seq` order in batches of up to 100, removing them only after a 2xx. Failures retry with exponential backoff up to 5 minutes, forever, without dropping anything. The one exception: an event whose month was archived before it was delivered is skipped, logged and counted (`gateway_audit_export_deliveries_total{outcome="skipped"}`). Delivery is at least once: dedup on each event's `id` (a redelivered event keeps its `seq`).
@@ -66,7 +68,7 @@ With `GATEWAY_AUDIT_WEBHOOK_URL` and `GATEWAY_AUDIT_WEBHOOK_SECRET_ENV` set, the
 
   `actor` and `workspace` may be `null`. `actor.label` is the display name, or the email when there's none (personal data leaving the gateway), read when the event is delivered. `metadata` holds only the audit log's safe fields (flags, counts, codes). A test delivery has `"test": true` and no events.
 - **Destination:** HTTPS through the [outbound address policy](#outbound-connections); no redirects or proxies; 10-second timeout.
-- **Watch:** `gateway_audit_export_queued` and `gateway_audit_export_oldest_seconds` (alert when the oldest event is older than, say, 15 minutes), and `gateway_audit_export_deliveries_total{outcome}`. The gateway's own credentials can stop the export, so also alert on the receiver on gaps and silence (above).
+- **Watch:** `gateway_audit_export_queued` and `gateway_audit_export_oldest_seconds` (alert when the oldest event is older than, say, 15 minutes), `gateway_audit_export_deliveries_total{outcome}` (requests), and for OTLP `increase(gateway_audit_export_rejected_records_total[15m]) > 0`. The gateway's own credentials can stop the export, so also alert on the receiver on gaps and silence (above).
 - **Kubernetes:** set the URL with `gateway.env` and the secret through `gateway.extraEnvFrom` from a Secret; list the variable's name in `GATEWAY_AUDIT_WEBHOOK_SECRET_ENV`. Allow the receiver in `networkPolicy.egress.httpsCidrs` if you narrowed it.
 
 ### Syslog over TLS
@@ -87,6 +89,36 @@ Set `GATEWAY_AUDIT_SYSLOG_URL=syslog+tls://host[:port]` (port 6514 by default) i
 - **Message size:** RFC 5425 only requires receivers to accept 2,048 bytes; events with large metadata can be several KB. Raise the receiver's limit (rsyslog `$MaxMessageSize`, for example 64k) so messages aren't cut.
 - **Guarantee:** syslog has no application-level acknowledgement, so delivery is at least once only as far as the TLS stream. A receiver that fails after reading but before storing loses those events; receivers see that as a `seq` gap. Use the webhook when you need acknowledged delivery.
 - **Kubernetes:** mount the CA, certificate and key from a Secret as files, read-only, and point the `_FILE` settings (in `gateway.env`) at them; don't put PEM contents in environment variables. The chart has no volume option for this, so add the volume and mount with a patch (for example a Kustomize post-renderer). The chart's NetworkPolicy opens only 443: add a `networkPolicy.egress.extraEgress` rule for the receiver's port.
+
+### OTLP logs
+
+Set `GATEWAY_AUDIT_OTLP_URL` to an OpenTelemetry collector's full OTLP/HTTP logs endpoint (`https://collector:4318/v1/logs`; the path isn't added for you) instead of the webhook or syslog URL (#108). Everything in [audit export](#audit-export) applies except the request format and signature: same queue, lease, `seq` numbering, heartbeats, backoff and status.
+
+- **A separate destination:** the audit export never reads `OTEL_*` variables (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS` and the rest). Those describe operational telemetry; the audit destination is only `GATEWAY_AUDIT_OTLP_URL`.
+- **Settings:** one destination at a time: setting two URLs, or `off` in one and a destination in another, stops startup, as do `GATEWAY_AUDIT_WEBHOOK_SECRET_ENV` or the syslog `_FILE` settings with the OTLP URL. The URL follows the webhook's rules: HTTPS (plain HTTP only to loopback with `GATEWAY_ENV=development`), no credentials or fragment, the [outbound address policy](#outbound-connections), no proxy, redirects or retries, 10-second timeout (5 to connect).
+- **Headers:** optionally, `GATEWAY_AUDIT_OTLP_HEADERS_ENV` names a variable holding `Key=Value,Key2=Value2`, for example `Authorization=Bearer …`. The name follows the webhook secret's rules: upper case, not on `GATEWAY_SECRET_ENV_ALLOWLIST` or `GATEWAY_SMTP_SECRET_ENV_ALLOWLIST`, not reserved, not `AWS_*` or `GATEWAY_*`. At most 16 headers; names are HTTP tokens other than `Content-Type`, `Host` and `Content-Length`; values are visible ASCII and spaces (no CR or LF; values can't contain commas). Startup checks them, and errors name the header's position, never its name or value. Values never appear in logs, errors or status. Setting the variable without the OTLP URL stops startup.
+- **Encoding:** OTLP/HTTP JSON (`Content-Type: application/json`, the protobuf JSON mapping), one request per batch of up to 100 events:
+
+  ```json
+  {"resourceLogs":[{"resource":{"attributes":[
+     {"key":"service.name","value":{"stringValue":"open-model-gateway"}},
+     {"key":"omg.installation_id","value":{"stringValue":"…"}}]},
+   "scopeLogs":[{"scope":{"name":"omg.audit","version":"omg.audit.v1"},
+     "logRecords":[
+       {"timeUnixNano":"1760486523456789000","observedTimeUnixNano":"1760486524000000000",
+        "severityNumber":9,"severityText":"INFO",
+        "body":{"stringValue":"{\"id\":\"…\",\"action\":\"key.revoked\",…,\"seq\":42}"},
+        "attributes":[
+          {"key":"event.name","value":{"stringValue":"key.revoked"}},
+          {"key":"omg.audit.id","value":{"stringValue":"…"}},
+          {"key":"omg.audit.seq","value":{"intValue":"42"}}]}]}]}]}
+  ```
+
+  One LogRecord per event. `timeUnixNano` is the event's `occurred_at` and `observedTimeUnixNano` the send time, both nanoseconds as decimal strings (64-bit integers are strings in the protobuf JSON mapping, as is `intValue`). The body is the event object the webhook sends, `seq` included, serialised as a string: parse it to read the event. A heartbeat is one record with `event.name` `omg.audit.heartbeat`, `omg.audit.next_seq`, and the body `{"schema":"omg.audit.v1","heartbeat":true,"next_seq":N}`; a test delivery one with `event.name` `omg.audit.test` and `{"schema":"omg.audit.v1","test":true}`.
+- **Acknowledgement:** a 2xx removes the batch from the queue. Its body (read up to 64 KiB) can carry `partialSuccess`: when `rejectedLogRecords` is above 0, the collector refused those records for good, and OTLP says not to send them again. The gateway doesn't retry them: the batch still leaves the queue, the refused records are counted in `gateway_audit_export_rejected_records_total` (per replica; it resets on restart), and Settings › Audit export shows **Collector refusing events** with the last error `otlp_rejected` (attempts reset; it isn't "retrying") until the next batch the collector fully accepts clears it. A batch refused entirely doesn't count as a delivery: the last delivery time stays, so the backlog and silence alerts still fire. A refused heartbeat is a failure, retried with backoff. Receivers see the refused events as `seq` gaps. An empty body, `{}`, `partialSuccess` without a positive count, or a body that isn't JSON (or is over 64 KiB) means everything was accepted. A test delivery the collector refuses fails with `otlp_rejected`.
+- **Errors:** any other status is `http_4xx`, `http_5xx` or `http_other`, and transport failures `connection` or `timeout`; the batch stays queued and is retried whole with the usual backoff (dedup on the event `id`, or on `omg.audit.id`).
+- **Authenticity:** OTLP requests aren't signed, and there is no client certificate option. Make the collector require a token (sent in the headers), and keep the audit pipeline separate from general telemetry so other senders can't write `omg.audit` records or fake heartbeats.
+- **Kubernetes:** set the URL with `gateway.env` and the headers variable through `gateway.extraEnvFrom` from a Secret; list its name in `GATEWAY_AUDIT_OTLP_HEADERS_ENV`. The chart's NetworkPolicy opens only 443: for port 4318, add a `networkPolicy.egress.extraEgress` rule.
 
 ## Health endpoints
 
