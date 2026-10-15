@@ -382,8 +382,8 @@ pub(crate) fn rewrap(
         return Ok(None);
     }
     let master = keys.get(to).ok_or(FileStoreError::KeyUnavailable)?;
-    let mut wrap_nonce = [0u8; 12];
-    crate::entropy::fill(&mut wrap_nonce).map_err(|_| FileStoreError::Unavailable)?;
+    // A fresh wrap nonce from the OS CSPRNG (fail closed).
+    let wrap_nonce = crate::entropy::bytes::<12>().map_err(|_| FileStoreError::Unavailable)?;
     let mut kid = [0u8; KID_MAX];
     kid[..master.id.len()].copy_from_slice(master.id.as_bytes());
     let kid_len = master.id.len() as u8;
