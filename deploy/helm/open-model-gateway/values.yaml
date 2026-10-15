@@ -165,8 +165,20 @@ networkPolicy:
       fromPodLabels: {}
   egress:
     dns: true
-    # Allowed outbound 443 (OIDC issuer, provider APIs, SMTP relay, S3).
+    # Allowed outbound 443 (OIDC issuer, provider APIs, S3).
     allowHttpsEgress: true
+    # Destinations 443 may reach. Empty: any (the default). For example the
+    # provider ranges you use, or your egress proxy.
+    httpsCidrs: []
+    # With httpsCidrs empty: 443 anywhere except these, per address family.
+    # For example the private ranges, so 443 reaches public addresses only, as
+    # the gateway's own policy does: ["10.0.0.0/8", "172.16.0.0/12",
+    # "192.168.0.0/16", "100.64.0.0/10", "fc00::/7"]. Not allowed together
+    # with httpsCidrs.
+    httpsExceptCidrs: []
+    # Further rules, for example SMTP to your relay:
+    #   - to: [{ ipBlock: { cidr: 203.0.113.25/32 } }]
+    #     ports: [{ protocol: TCP, port: 587 }]
     extraEgress: []
 
 metrics:

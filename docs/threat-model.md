@@ -358,10 +358,10 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 - Follow-up: none (fixed in #140 and #168).
 
 **EGR-8. Egress is not enforced by the network.** I, E · Asset: internal network, data exfiltration · Attacker: compromised replica; any SSRF.
-- Mitigation: application allowlists only (EGR-3 to EGR-5). The Helm chart's NetworkPolicy default-denies ingress and egress, but `networkPolicy.egress.allowHttpsEgress: true` allows TCP 443 to any destination, and an external database leaves 5432 and 6432 open to any destination (`deploy/helm/open-model-gateway/templates/networkpolicy.yaml`). Staging Compose has no egress control.
-- Tests: `tests/helm-chart.test.mjs` "NetworkPolicy default-denies and scopes ingress to the configured namespace" (ingress only); no egress-destination test found.
-- Residual: a compromised replica, or any request smuggled past the allowlists, can reach any HTTPS host.
-- Follow-up: #33.
+- Mitigation: the application policy (`egress.rs`, #167, #168) refuses metadata, link-local, reserved and unlisted private addresses for every gateway client, the realtime WebSocket and SMTP. The Helm NetworkPolicy default-denies ingress and egress and opens DNS, the database and TCP 443; `networkPolicy.egress.httpsCidrs` narrows 443 to chosen networks, or `httpsExceptCidrs` keeps it off private ranges (#169). Instance metadata and Pod Identity (port 80) and SMTP are opened only by an explicit `extraEgress` rule.
+- Tests: `tests/helm-chart.test.mjs` "HTTPS egress can be narrowed to CIDRs or to anywhere-except; the default stays open (#169)"; `egress.rs` tests (EGR-3).
+- Residual: by default 443 still reaches any address at the network layer (plain NetworkPolicy can't name hosts), so a compromised replica bypassing the application policy can reach any HTTPS host until an operator sets `httpsCidrs`. The AWS SDK's credential lookups bypass the application policy (EGR-3). An external database leaves 5432 and 6432 open to any destination unless narrowed with `extraEgress`. Staging Compose has no network egress control.
+- Follow-up: none (#33, operator configuration).
 
 **EGR-9. A malicious upstream attacks the gateway or its clients.** D, T, I · Asset: gateway availability, clients, Logs · Attacker: malicious upstream provider.
 - Mitigation: adapters bound complete bodies and frames (4 MiB native output bound), do not read or forward error bodies, sanitize statuses, never fabricate a successful stream end, and cancel upstream work when the client drops.
@@ -605,7 +605,7 @@ Each entry gives the STRIDE category (S, T, R, I, D, E), the asset and attacker,
 | --- | --- | --- |
 | Shared-workspace keys can act on other members' files, batches and videos through `/v1/files`, `/v1/batches` and `/v1/videos`; documented design ([Files API](files-api.md), [async jobs](async-jobs.md)) that conflicts with the dashboard and AGENTS.md | TEN-5, JOB-4 | #141 (needs a product decision) |
 | SMTP password reference shares the provider allowlist; a Platform Admin can send a provider key to a relay they choose, and the default Helm egress (443 anywhere) does not block it | EGR-7 | Fixed in #140 and #168 |
-| Egress not enforced at the network level; Helm allows 443 anywhere | EGR-3, EGR-8 | #33 |
+| Egress not enforced at the network level; Helm allows 443 anywhere | EGR-3, EGR-8 | Application policy in #167 and #168; network narrowing optional since #169 |
 | Login and callback abuse controls; expired login attempts never cleaned up | OIDC-6 | Fixed in #78 and #80 |
 | No idle expiry; session rows never deleted | KEY-8, OIDC-4 | Fixed in #79 and #80 |
 | File-store key rotation cannot re-wrap old objects | FS-3 | #35 |
