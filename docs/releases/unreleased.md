@@ -4,6 +4,7 @@ Notes for changes on `main` since v0.5.0. They become the next release's notes.
 
 ## Security
 
+- **Retention contract** (#77): [Settings › What is kept, and for how long](../settings.md#what-is-kept-and-for-how-long-77) lists every kind of data, how long it's kept, what removes it and how legal holds apply. Compaction also clears the client session id and app (the docs said only error code and latency) and is tested to be bounded, resumable and never to change costs or the ledger.
 - **Remove personal data now** (#76): Platform Admins can run the departed-user cleanup at once for a suspended person (refused on legal hold). Cleanup now also clears the person's address on old invitations and alert recipients and the names of files they uploaded; history keeps the user id as its pseudonymous reference. [Identity](../identity.md#what-cleanup-removes-and-keeps-76) lists what is removed and kept. The runtime role gets `UPDATE(email)` on `workspace_invitations`.
 - **Legal holds** (#75): Platform Admins place a hold on a person or a team/project (from its page, with a reference code) and release it in Admin › Records › Legal holds. While held, nothing of that scope is removed: departed-user cleanup, request-log compaction, file expiry and `archive partition` wait or refuse. Holds grant no access, are audited, and are released, never deleted. Migration 0045; the runtime role gets `SELECT`, `INSERT` and `UPDATE(released_at, released_by_user_id)` on `legal_holds`.
 

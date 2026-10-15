@@ -1917,6 +1917,40 @@ pub(crate) mod db {
         );
         assert_eq!(amounts(&f, start.id).await.0, "unknown");
     }
+    /// #77: compaction works in bounded batches that each commit, so it
+    /// resumes where it stopped, and it never touches money.
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn compaction_is_bounded_resumable_and_never_touches_money(pool: PgPool) {
+        let f = fixture(pool).await;
+        f.price(1_000_000).await;
+        for _ in 0..3 {
+            let start = f.start();
+            admit(&f.store, &start, &request(), 30).await.unwrap();
+            finish(&f.store, &done(start.id, Some(2), Some(3)))
+                .await
+                .unwrap();
+        }
+        // Only completed_at moves: started_at is part of the reservation's key.
+        sqlx::query("UPDATE inference_executions SET completed_at=now()-interval '90 days',client_app='cli',client_session_id='s-1',error_code='upstream_timeout',elapsed_ms=1200")
+            .execute(&f.store.pool).await.unwrap();
+        let money = || async {
+            sqlx::query_scalar::<_, String>("SELECT (SELECT coalesce(sum(actual_microusd),0) FROM governance_reservations)::text||'/'||(SELECT count(*) FROM monetary_ledger)::text||'/'||(SELECT coalesce(sum(input_tokens+output_tokens),0) FROM inference_executions)::text")
+                .fetch_one(&f.store.pool).await.unwrap()
+        };
+        let before = money().await;
+        for expected in [1, 1, 1, 0] {
+            assert_eq!(
+                crate::maintenance::compact_history(&f.store, 30, 1)
+                    .await
+                    .unwrap(),
+                expected
+            );
+        }
+        assert_eq!(money().await, before, "costs, ledger and tokens unchanged");
+        let left: i64 = sqlx::query_scalar("SELECT count(*) FROM inference_executions WHERE client_app IS NOT NULL OR client_session_id IS NOT NULL OR error_code IS NOT NULL OR elapsed_ms IS NOT NULL OR details_redacted_at IS NULL")
+            .fetch_one(&f.store.pool).await.unwrap();
+        assert_eq!(left, 0);
+    }
     /// #75: held executions keep their details; released, they're compacted.
     #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn compaction_skips_executions_on_legal_hold(pool: PgPool) {
