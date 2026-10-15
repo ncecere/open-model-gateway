@@ -322,6 +322,10 @@ GRANT SELECT,INSERT,DELETE ON public.audit_export_queue TO gateway_runtime;
 GRANT SELECT ON public.audit_export_state TO gateway_runtime;
 GRANT UPDATE(enabled,enabled_at,destination_host,attempts,next_attempt_at,last_success_at,last_error,last_error_at,delivered_total)
  ON public.audit_export_state TO gateway_runtime;
+-- Gap detection (0048): the exporter numbers queued events and records
+-- heartbeats; triggers keep numbers write-once and the counter growing.
+GRANT UPDATE(seq) ON public.audit_export_queue TO gateway_runtime;
+GRANT UPDATE(next_seq,last_heartbeat_at) ON public.audit_export_state TO gateway_runtime;
 -- Legal holds (0045): placed and released by Platform Admins; every removal
 -- path reads them. Never deleted (a trigger refuses it for every role).
 GRANT SELECT,INSERT ON public.legal_holds TO gateway_runtime;
