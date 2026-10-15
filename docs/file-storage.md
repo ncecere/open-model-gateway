@@ -8,7 +8,7 @@ What's implemented today:
 
 - The store itself: local disk and S3-compatible.
 - Encryption, metadata and retention (`stored_files`, migration 0019).
-- The retention sweeper, the `files verify` and `files sweep` commands, metrics, and Admin › Settings › Data & privacy › Storage.
+- The retention sweeper, the `files verify`, `files sweep` and `files rekey` commands, metrics, and Admin › Settings › Data & privacy › Storage.
 - The gateway-owned **[Files API](files-api.md)** (`/v1/files`, migration 0020), with a stacked per-workspace storage quota and storage usage tracking (GB-days, not charged).
 - The **installation logo** (Admin › Settings › General, migration 0023), purpose `branding`.
 
@@ -129,7 +129,7 @@ Overhead is 106 bytes plus 16 bytes per 64 KiB chunk.
 
 - **Key ID:** 1 to 32 characters of `A-Z a-z 0-9 . _ -`.
 - **Key:** standard base64 of exactly 32 random bytes, for example from `openssl rand -base64 32`.
-- **Order:** the first key encrypts new objects. The others are decrypt-only, which is how you rotate. At most 16 keys.
+- **Order:** the first key encrypts new objects. The others are decrypt-only, which is how you rotate; `files rekey` moves existing files to the new key so an old one can be removed. At most 16 keys.
 
 Keep the key variable in your secret manager, not in the gateway's database or backups. **Losing a key makes every object encrypted under it unreadable.** See [operations](operations.md#file-store-encryption-keys) for backup and rotation.
 
@@ -164,9 +164,10 @@ If the upload fails, the row is marked deleted. If the gateway crashes mid-uploa
 ```sh
 open-model-gateway files sweep --once [--limit 1000]   # one sweep, prints {claimed, deleted, failed}
 open-model-gateway files verify [--limit 100000]       # read-only; exits nonzero on problems
+open-model-gateway files rekey --from OLD --to NEW [--dry-run] [--limit N]   # key rotation (#35)
 ```
 
-`files verify` checks every committed, undeleted file. It reports objects that are missing, sizes that don't match, files recorded under another backend, key IDs that are no longer configured, store errors, stale pending uploads, rows with failed deletes, and a per-key-ID count (useful for rotation). It does not list the bucket, so stray objects that have no row aren't found. Use a bucket lifecycle rule or inventory for those.
+`files verify` checks every committed, undeleted file. It reports objects that are missing, sizes that don't match, files recorded under another backend, key IDs that are no longer configured, store errors, stale pending uploads, rows with failed deletes, a per-key-ID count, the active key and the decrypt-only keys live files still need (`retired_key_ids_in_use`; see [rotation](operations.md#file-store-encryption-keys)). It does not list the bucket, so stray objects that have no row aren't found. Use a bucket lifecycle rule or inventory for those.
 
 ## Network behavior
 

@@ -771,3 +771,125 @@ async fn format_v1_fixtures_from_earlier_releases_still_decrypt() {
         );
     }
 }
+
+/// #35: re-wrapping moves an object to another master key without touching its
+/// contents; afterwards the old key is not needed, and a second run is a no-op.
+#[tokio::test]
+async fn rekey_rewraps_only_the_header() {
+    let backend = MemoryBackend::default();
+    let (old, new) = (key_b64(1), key_b64(2));
+    let before = Encrypted::new(backend.clone(), ring(&format!("old:{old}")));
+    let both = Encrypted::new(backend.clone(), ring(&format!("new:{new},old:{old}")));
+    let after = Encrypted::new(backend.clone(), ring(&format!("new:{new}")));
+    let key = ObjectKey::new(Purpose::BatchInput, Scope::Workspace(Uuid::new_v4())).unwrap();
+    let plain = data(3 * CHUNK + 17, 9);
+    before
+        .put(&key, body(vec![plain.clone()]), PutMeta::default())
+        .await
+        .unwrap();
+    let stored = backend.objects().get(key.as_str()).cloned().unwrap();
+    assert!(matches!(
+        collect(after.get(&key).await.unwrap()).await,
+        Err(FileStoreError::KeyUnavailable)
+    ));
+
+    assert_eq!(both.rekey(&key, "new").await.unwrap(), Rekeyed::Rewrapped);
+    let rewritten = backend.objects().get(key.as_str()).cloned().unwrap();
+    assert_eq!(rewritten.len(), stored.len());
+    assert_eq!(
+        rewritten[HEADER_LEN..],
+        stored[HEADER_LEN..],
+        "chunks untouched"
+    );
+    assert_ne!(rewritten[..HEADER_LEN], stored[..HEADER_LEN]);
+    assert_eq!(
+        collect(after.get(&key).await.unwrap()).await.unwrap(),
+        plain
+    );
+    assert_eq!(both.rekey(&key, "new").await.unwrap(), Rekeyed::AlreadyOn);
+    // An unknown target, a missing object and a key the ring lacks all fail closed.
+    assert!(matches!(
+        both.rekey(&key, "nope").await,
+        Err(FileStoreError::KeyUnavailable)
+    ));
+    let gone = ObjectKey::new(Purpose::BatchInput, Scope::Workspace(Uuid::new_v4())).unwrap();
+    assert!(both.rekey(&gone, "new").await.is_err());
+    assert!(matches!(
+        before.rekey(&key, "old").await,
+        Err(FileStoreError::KeyUnavailable)
+    ));
+    // An object of an impossible length (shorter than one chunk's tag) is
+    // refused before anything is written.
+    let mut grown = backend
+        .objects()
+        .get(key.as_str())
+        .cloned()
+        .unwrap()
+        .to_vec();
+    grown.truncate(HEADER_LEN + 3);
+    backend
+        .objects()
+        .insert(key.as_str().to_owned(), Bytes::from(grown.clone()));
+    assert!(matches!(
+        both.rekey(&key, "old").await,
+        Err(FileStoreError::Integrity)
+    ));
+    assert_eq!(backend.objects().get(key.as_str()).unwrap().to_vec(), grown);
+}
+
+/// #35 on local disk: the rename replaces the object, leaves no temp file,
+/// and a symlink planted at the object's path is never followed or replaced.
+#[cfg(unix)]
+#[tokio::test]
+async fn rekey_on_local_disk_replaces_the_file_and_never_follows_a_link() {
+    use crate::filestore::local::LocalBackend;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("store");
+    let (old, new) = (key_b64(1), key_b64(2));
+    let disk = |spec: String| Encrypted::new(LocalBackend::open(&root).unwrap(), ring(&spec));
+    let (before, both, after) = (
+        disk(format!("old:{old}")),
+        disk(format!("new:{new},old:{old}")),
+        disk(format!("new:{new}")),
+    );
+    let key = workspace_key(Purpose::BatchInput);
+    let plain = data(2 * CHUNK + 5, 3);
+    before
+        .put(&key, body(vec![plain.clone()]), PutMeta::default())
+        .await
+        .unwrap();
+    assert_eq!(both.rekey(&key, "new").await.unwrap(), Rekeyed::Rewrapped);
+    assert_eq!(
+        collect(after.get(&key).await.unwrap()).await.unwrap(),
+        plain
+    );
+    fn files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if std::fs::symlink_metadata(&path).unwrap().is_dir() {
+                files(&path, out);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+    let mut all = Vec::new();
+    files(&root, &mut all);
+    let ours: Vec<_> = all
+        .iter()
+        .filter(|p| !p.to_string_lossy().contains("health"))
+        .collect();
+    assert_eq!(ours.len(), 1, "no temp file left: {all:?}");
+    let decoy = tmp.path().join("decoy");
+    std::fs::write(&decoy, b"x").unwrap();
+    std::fs::remove_file(ours[0]).unwrap();
+    std::os::unix::fs::symlink(&decoy, ours[0]).unwrap();
+    assert!(both.rekey(&key, "old").await.is_err());
+    assert_eq!(std::fs::read(&decoy).unwrap(), b"x");
+    assert!(
+        std::fs::symlink_metadata(ours[0])
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}

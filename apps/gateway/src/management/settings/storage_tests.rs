@@ -84,6 +84,13 @@ impl FileStore for Broken {
     async fn health(&self) -> Result<StoreHealth, FileStoreError> {
         Err(FileStoreError::Unavailable)
     }
+    async fn rekey(
+        &self,
+        _: &ObjectKey,
+        _: &str,
+    ) -> Result<crate::filestore::Rekeyed, FileStoreError> {
+        Err(FileStoreError::Unavailable)
+    }
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]

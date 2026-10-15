@@ -17,7 +17,7 @@ pub(crate) struct MemoryBackend {
 }
 
 impl MemoryBackend {
-    fn objects(&self) -> std::sync::MutexGuard<'_, HashMap<String, Bytes>> {
+    pub(crate) fn objects(&self) -> std::sync::MutexGuard<'_, HashMap<String, Bytes>> {
         self.objects.lock().unwrap_or_else(|e| e.into_inner())
     }
     /// Raw ciphertext (tests).

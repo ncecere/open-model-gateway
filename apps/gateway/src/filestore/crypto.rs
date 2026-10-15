@@ -306,9 +306,17 @@ fn begin(keys: &KeyRing, key: &ObjectKey) -> Result<(Bytes, Sealer), FileStoreEr
     ))
 }
 
-/// Parses and unwraps a header. Unknown key ids are `KeyUnavailable`; anything
-/// else that does not authenticate is `Integrity`.
-fn open_header(keys: &KeyRing, key: &ObjectKey, header: &[u8]) -> Result<Sealer, FileStoreError> {
+/// An unwrapped header: the data key, nonce prefix and master key id.
+type Unwrapped = (Zeroizing<Vec<u8>>, [u8; PREFIX], String);
+
+/// Parses and unwraps a header: the data key, nonce prefix and master key id.
+/// Unknown key ids are `KeyUnavailable`; anything else that does not
+/// authenticate is `Integrity`.
+fn unwrap_header(
+    keys: &KeyRing,
+    key: &ObjectKey,
+    header: &[u8],
+) -> Result<Unwrapped, FileStoreError> {
     if header.len() != HEADER_LEN || &header[..4] != MAGIC {
         return Err(FileStoreError::Integrity);
     }
@@ -345,6 +353,11 @@ fn open_header(keys: &KeyRing, key: &ObjectKey, header: &[u8]) -> Result<Sealer,
             )
             .map_err(|_| FileStoreError::Integrity)?,
     );
+    Ok((dek, prefix, id.to_owned()))
+}
+
+fn open_header(keys: &KeyRing, key: &ObjectKey, header: &[u8]) -> Result<Sealer, FileStoreError> {
+    let (dek, prefix, _) = unwrap_header(keys, key, header)?;
     let cipher = Aes256Gcm::new_from_slice(&dek).map_err(|_| FileStoreError::Integrity)?;
     Ok(Sealer {
         cipher,
@@ -352,6 +365,47 @@ fn open_header(keys: &KeyRing, key: &ObjectKey, header: &[u8]) -> Result<Sealer,
         prefix,
         counter: 0,
     })
+}
+
+/// Re-wrap an object's data key under master key `to` (#35). The data key,
+/// nonce prefix and every chunk stay the same (the chunk AAD excludes the key
+/// id and wrapped key), so only the header is replaced, with a fresh wrap
+/// nonce. `None` when the header (authenticated first) already names `to`.
+pub(crate) fn rewrap(
+    keys: &KeyRing,
+    key: &ObjectKey,
+    header: &[u8],
+    to: &str,
+) -> Result<Option<Bytes>, FileStoreError> {
+    let (dek, prefix, current) = unwrap_header(keys, key, header)?;
+    if current == to {
+        return Ok(None);
+    }
+    let master = keys.get(to).ok_or(FileStoreError::KeyUnavailable)?;
+    // A fresh wrap nonce from the OS CSPRNG (fail closed).
+    let wrap_nonce = crate::entropy::bytes::<12>().map_err(|_| FileStoreError::Unavailable)?;
+    let mut kid = [0u8; KID_MAX];
+    kid[..master.id.len()].copy_from_slice(master.id.as_bytes());
+    let kid_len = master.id.len() as u8;
+    let wrapped = master
+        .cipher
+        .encrypt(
+            Nonce::from_slice(&wrap_nonce),
+            Payload {
+                msg: dek.as_ref(),
+                aad: &wrap_aad(&kid, kid_len, &prefix, key),
+            },
+        )
+        .map_err(|_| FileStoreError::Integrity)?;
+    let mut out = Vec::with_capacity(HEADER_LEN);
+    out.extend_from_slice(MAGIC);
+    out.extend_from_slice(&[VERSION, CHUNK_LOG2, kid_len]);
+    out.extend_from_slice(&kid);
+    out.extend_from_slice(&prefix);
+    out.extend_from_slice(&wrap_nonce);
+    out.extend_from_slice(&wrapped);
+    debug_assert_eq!(out.len(), HEADER_LEN);
+    Ok(Some(Bytes::from(out)))
 }
 
 impl Sealer {

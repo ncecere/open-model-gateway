@@ -174,12 +174,14 @@ GRANT EXECUTE ON FUNCTION public.valid_model_protocols_base(text[]),
  public.valid_cost_components_base(jsonb),public.valid_price_lines_base(jsonb) TO gateway_runtime;
 -- File store (0019): metadata only (objects are encrypted in the configured store).
 -- Rows are inserted once and never deleted: removal sets deleted_at and clears the
--- filename/content type. Identity, ownership, purpose, backend and key id are fixed;
--- size/sha256/committed_at are written once and deleted rows are final (trigger).
+-- filename/content type. Identity, ownership, purpose and backend are fixed (the
+-- key id changes only through `files rekey`); size/sha256/committed_at are written once and deleted rows are final (trigger).
 -- Settings: per-group toggles, retention and the last storage health check.
 GRANT SELECT,INSERT ON public.stored_files TO gateway_runtime;
 GRANT UPDATE(size_bytes,sha256,committed_at,expires_at,deleted_at,filename,content_type,
  delete_attempts,last_delete_attempt_at,last_delete_error) ON public.stored_files TO gateway_runtime;
+-- `files rekey` (#35) records the master key an object was re-wrapped under.
+GRANT UPDATE(encryption_key_id) ON public.stored_files TO gateway_runtime;
 GRANT UPDATE(file_batch_enabled,file_batch_retention_days,file_video_enabled,
  file_video_retention_days,file_user_files_enabled,file_user_files_retention_days,
  file_export_retention_days,file_store_last_check_at,file_store_last_check_ok,

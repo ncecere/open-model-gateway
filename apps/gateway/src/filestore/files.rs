@@ -898,8 +898,14 @@ impl FileStorage {
     /// Deletes a file in this scope. The row is marked deleted once the object
     /// is gone; if the store fails, the file becomes unreadable at once and the
     /// sweeper retries the object. Returns false if there was no such file.
+    ///
+    /// The row is claimed first (`last_delete_attempt_at`, and it expires at
+    /// once), committed before the object is touched, like the sweeper does:
+    /// `files rekey` holds the row lock while it rewrites an object and skips
+    /// claimed rows, so a rewrite never lands after the delete. If this call
+    /// dies after the claim, the sweeper finishes the delete.
     pub async fn delete(&self, id: Uuid, workspace_id: Option<Uuid>) -> Result<bool, FileError> {
-        let row: Option<(String, String)> = sqlx::query_as("SELECT object_key,backend FROM stored_files WHERE id=$1 AND workspace_id IS NOT DISTINCT FROM $2 AND deleted_at IS NULL")
+        let row: Option<(String, String)> = sqlx::query_as("UPDATE stored_files SET last_delete_attempt_at=clock_timestamp(),expires_at=least(expires_at,clock_timestamp()) WHERE id=$1 AND workspace_id IS NOT DISTINCT FROM $2 AND deleted_at IS NULL RETURNING object_key,backend")
             .bind(id)
             .bind(workspace_id)
             .fetch_optional(&self.db.pool)

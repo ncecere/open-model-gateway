@@ -156,6 +156,23 @@ enum FilesCommand {
         #[arg(long, default_value_t = 100_000)]
         limit: i64,
     },
+    /// Re-wrap every live file's data key from one master key to another so
+    /// the old key can be removed (#35). Contents are not re-encrypted.
+    /// Resumable; exits nonzero while any file still uses the old key.
+    Rekey {
+        /// The key id to retire (still configured, decrypt-only).
+        #[arg(long)]
+        from: String,
+        /// The key id to move to (normally the active, first key).
+        #[arg(long)]
+        to: String,
+        /// Count only; change nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Most files to process in this run.
+        #[arg(long, default_value_t = 1_000_000)]
+        limit: i64,
+    },
     /// Delete expired, pending-deletion and abandoned objects once (`serve` sweeps every minute).
     Sweep {
         /// Required: run one sweep and exit.
@@ -622,6 +639,23 @@ async fn run(cli: Cli) -> Result<()> {
                     anyhow::ensure!(
                         report.consistent(),
                         "stored file metadata and the file store differ"
+                    );
+                }
+                FilesCommand::Rekey {
+                    from,
+                    to,
+                    dry_run,
+                    limit,
+                } => {
+                    let report = open_model_gateway::filestore::rekey::rekey(
+                        &store, &files, &from, &to, dry_run, limit,
+                    )
+                    .await?;
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                    anyhow::ensure!(
+                        dry_run || report.complete,
+                        "{} files still use {from}; rerun to retry them (see failed, skipped_deleting, other_backend)",
+                        report.remaining
                     );
                 }
                 FilesCommand::Sweep { once, limit } => {
