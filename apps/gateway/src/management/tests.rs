@@ -58,6 +58,8 @@ mod setup_tests;
 mod snapshot_tests;
 #[path = "settings/storage_tests.rs"]
 mod storage_tests;
+#[path = "subject_export_tests.rs"]
+mod subject_export_tests;
 #[path = "ux_tests.rs"]
 mod ux_tests;
 

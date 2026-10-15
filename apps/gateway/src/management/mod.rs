@@ -22,6 +22,7 @@ mod sessions;
 mod settings;
 mod setup;
 mod storage_usage;
+mod subject_export;
 #[cfg(all(test, feature = "integration-tests"))]
 mod tests;
 mod usage;
@@ -544,6 +545,7 @@ fn routes() -> Router<Store> {
         .merge(logs::routes())
         .merge(settings::routes())
         .merge(audit_export::routes())
+        .merge(subject_export::routes())
         .merge(legal_holds::routes())
         .merge(sessions::routes())
         .merge(key_safety::routes())

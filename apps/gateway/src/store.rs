@@ -39,6 +39,8 @@ pub struct Store {
     pub(crate) leases: Option<std::sync::Arc<crate::leases::Leases>>,
     /// Audit export (#106), when the operator configured a destination.
     pub(crate) audit_export: Option<std::sync::Arc<crate::audit_export::Exporter>>,
+    /// Subject exports building at once on this replica (#74).
+    pub(crate) export_slots: std::sync::Arc<tokio::sync::Semaphore>,
     /// Test-only pinned admission instant shared by every clone of this store.
     /// Production builds have no override: admission always reads the
     /// database clock (see [`Store::admission_now`]).
@@ -265,6 +267,7 @@ impl Store {
             caches: std::sync::Arc::new(crate::cache::Caches::new()),
             leases: None,
             audit_export: None,
+            export_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
             #[cfg(any(test, feature = "integration-tests"))]
             admission_clock: Default::default(),
         }
