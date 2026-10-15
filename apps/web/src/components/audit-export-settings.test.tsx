@@ -5,7 +5,7 @@ import { admin, auditor, markup } from "../lib/test-fixtures";
 const path = "/api/v1/platform/settings/audit-export";
 const status = (s: Partial<AuditExportStatus>): AuditExportStatus => ({
   configured: true, enabled: true, enabled_at: "2026-10-14T00:00:00Z", destination_host: "siem.example.org", schema: "omg.audit.v1",
-  queued: 0, oldest_queued_at: null, last_success_at: "2026-10-14T01:00:00Z", last_error: null, last_error_at: null, retrying: false, next_attempt_at: null, delivered_total: "1200", ...s,
+  queued: 0, oldest_queued_at: null, last_success_at: "2026-10-14T01:00:00Z", last_error: null, last_error_at: null, retrying: false, next_attempt_at: null, delivered_total: "1200", next_seq: "1201", last_heartbeat_at: null, ...s,
 });
 
 describe("Admin › Settings › Audit export (#106)", () => {
@@ -26,6 +26,13 @@ describe("Admin › Settings › Audit export (#106)", () => {
     expect(html).toContain("Retrying");
     expect(html).toContain("none are dropped");
     expect(html).toContain("42 events");
+  });
+  it("shows the sequence counter and heartbeat receivers check for gaps (#174)", () => {
+    const html = markup(<AuditExportSettingsPage session={admin} />, [[path, status({ last_heartbeat_at: "2026-10-14T03:00:00Z" })]]);
+    expect(html).toContain("Next sequence number");
+    expect(html).toContain("1,201");
+    expect(html).toContain("Last heartbeat");
+    expect(markup(<AuditExportSettingsPage session={admin} />, [[path, status({})]])).toContain("None yet");
   });
   it("names the operator settings when not set up", () => {
     const html = markup(<AuditExportSettingsPage session={admin} />, [[path, status({ configured: false, enabled: false, destination_host: null })]]);

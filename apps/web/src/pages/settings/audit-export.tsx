@@ -19,6 +19,7 @@ export type AuditExportStatus = {
   configured: boolean; enabled: boolean; enabled_at: string | null; destination_host: string | null; schema: string;
   queued: number; oldest_queued_at: string | null; last_success_at: string | null;
   last_error: string | null; last_error_at: string | null; retrying: boolean; next_attempt_at: string | null; delivered_total: string;
+  next_seq: string; last_heartbeat_at: string | null;
 };
 const path = `${API}/platform/settings/audit-export`;
 export const exportErrors: Record<string, string> = {
@@ -56,6 +57,8 @@ export function AuditExportSettingsPage({ session }: { session: Session }) {
         { label: "Last delivery", value: s.last_success_at ? <DateTime value={s.last_success_at} /> : "Never" },
         { label: "Last error", value: s.last_error_at ? <>{errorText(s.last_error)} <DateTime value={s.last_error_at} /></> : "None" },
         { label: "Delivered", value: `${Number(s.delivered_total).toLocaleString()} events` },
+        { label: "Next sequence number", value: Number(s.next_seq).toLocaleString() },
+        { label: "Last heartbeat", value: s.last_heartbeat_at ? <DateTime value={s.last_heartbeat_at} /> : "None yet (sent after a minute without events)" },
         { label: "Format", value: <code>{s.schema}</code> },
       ]} />
     </Card>

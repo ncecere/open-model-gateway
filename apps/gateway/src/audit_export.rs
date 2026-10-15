@@ -14,6 +14,11 @@
 //!   receiver dedups on each event's `id`.
 //! - **Signature.** `X-OMG-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of
 //!   "<t>.<body>">`; `X-OMG-Delivery` is a fresh id per request.
+//! - **Gap detection (#174).** Each event carries `seq`, numbered by the
+//!   exporter before its first attempt (gap-free, never reused; a database
+//!   trigger refuses rewinding or reassigning), and an idle export sends a
+//!   signed heartbeat with `next_seq` every [`HEARTBEAT`]. A receiver alerts on
+//!   a gap or on silence.
 
 use std::time::Duration;
 
@@ -237,12 +242,9 @@ pub fn sign(secret: &[u8], t: i64, body: &[u8]) -> String {
 /// queued while export is still on and `enabled` once it is, so the SIEM sees
 /// where a gap begins and ends. Turning it on starts the queue from now.
 pub async fn sync_state(store: &Store, setting: &Setting) -> Result<(), sqlx::Error> {
+    // The `audit_export.enabled`/`disabled` markers are written by triggers on
+    // `audit_export_state` (0048), for any role that changes it.
     let mut tx = crate::db::begin(&store.pool).await?;
-    let marker = |action: &'static str| {
-        sqlx::query("INSERT INTO audit_events(id,action,resource_type,metadata) VALUES($1,$2,'installation','{}')")
-            .bind(Uuid::now_v7())
-            .bind(action)
-    };
     match setting {
         Setting::Unset => {}
         Setting::On(exporter) => {
@@ -252,9 +254,7 @@ pub async fn sync_state(store: &Store, setting: &Setting) -> Result<(), sqlx::Er
                 .await?
                 .rows_affected()
                 > 0;
-            if turned_on {
-                marker("audit_export.enabled").execute(&mut *tx).await?;
-            } else {
+            if !turned_on {
                 sqlx::query("UPDATE audit_export_state SET destination_host=$1")
                     .bind(exporter.host())
                     .execute(&mut *tx)
@@ -266,7 +266,6 @@ pub async fn sync_state(store: &Store, setting: &Setting) -> Result<(), sqlx::Er
                 .fetch_one(&mut *tx)
                 .await?;
             if on {
-                marker("audit_export.disabled").execute(&mut *tx).await?;
                 sqlx::query("UPDATE audit_export_state SET enabled=false,enabled_at=NULL,destination_host=NULL")
                     .execute(&mut *tx)
                     .await?;
@@ -285,6 +284,42 @@ pub enum Outcome {
     Delivered(usize),
     /// Not accepted; retried after the backoff.
     Failed(&'static str),
+    /// Nothing to deliver for [`HEARTBEAT`]: a heartbeat was accepted.
+    Heartbeat,
+}
+
+/// An idle export sends a heartbeat this long after its last accepted request.
+pub const HEARTBEAT: Duration = Duration::from_secs(60);
+/// Queue rows numbered per run.
+const NUMBER_BATCH: i64 = 1000;
+
+/// Number queued events in order, before their first delivery attempt (#174).
+/// The counter row is locked only here, by the exporter; enqueueing never
+/// touches it. The rows are locked before numbering (a concurrent delete
+/// can't make the count and the numbers differ), and numbering starts above
+/// any number already in the queue, so a number planted with the runtime
+/// credential becomes a visible gap, never a collision that stalls export.
+async fn number_queue(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<(), sqlx::Error> {
+    let next: i64 = sqlx::query_scalar("SELECT greatest(s.next_seq,(SELECT coalesce(max(seq),0)+1 FROM audit_export_queue)) FROM audit_export_state s FOR UPDATE OF s")
+        .fetch_one(&mut **tx)
+        .await?;
+    let ids: Vec<Uuid> = sqlx::query_scalar("SELECT event_id FROM audit_export_queue WHERE seq IS NULL ORDER BY event_created_at,event_id LIMIT $1 FOR UPDATE")
+        .bind(NUMBER_BATCH)
+        .fetch_all(&mut **tx)
+        .await?;
+    if ids.is_empty() {
+        return Ok(());
+    }
+    sqlx::query("UPDATE audit_export_queue q SET seq=$1+o.k-1 FROM unnest($2::uuid[]) WITH ORDINALITY AS o(event_id,k) WHERE q.event_id=o.event_id")
+        .bind(next)
+        .bind(&ids)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query("UPDATE audit_export_state SET next_seq=$1")
+        .bind(next + i64::try_from(ids.len()).unwrap_or(i64::MAX))
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
 }
 
 const EVENT: &str = "jsonb_build_object('id',a.id,'occurred_at',a.created_at,'action',a.action,'resource',jsonb_build_object('type',a.resource_type,'id',a.resource_id),'actor',CASE WHEN a.actor_user_id IS NULL THEN NULL ELSE jsonb_build_object('id',a.actor_user_id,'label',(SELECT coalesce(nullif(btrim(u.display_name),''),u.email,'Retained identity') FROM users u WHERE u.id=a.actor_user_id)) END,'workspace',CASE WHEN w.id IS NULL THEN NULL ELSE jsonb_build_object('id',w.id,'name',w.name,'kind',w.kind) END,'metadata',a.metadata)";
@@ -300,38 +335,63 @@ pub async fn deliver_once(
     exporter: &Exporter,
     fence: Option<&crate::leases::Fence>,
 ) -> Result<Outcome, sqlx::Error> {
-    // 1. Read the batch (in order) unless backing off.
+    // 1. Number new events, then read the batch (in sequence order) unless
+    //    backing off.
     let mut tx = crate::db::begin(&store.pool).await?;
     crate::leases::fence(&mut tx, fence).await?;
-    let (due, attempts, installation): (bool, i32, Uuid) = sqlx::query_as("SELECT s.next_attempt_at<=now(),s.attempts,(SELECT id FROM installation) FROM audit_export_state s")
+    number_queue(&mut tx).await?;
+    let (due, attempts, installation, quiet, next_seq): (bool, i32, Uuid, bool, i64) = sqlx::query_as("SELECT s.next_attempt_at<=now(),s.attempts,(SELECT id FROM installation),s.enabled AND (s.last_success_at IS NULL OR s.last_success_at<=now()-make_interval(secs=>$1)),s.next_seq FROM audit_export_state s")
+        .bind(HEARTBEAT.as_secs_f64())
         .fetch_one(&mut *tx)
         .await?;
     if !due {
         tx.commit().await?;
         return Ok(Outcome::Idle);
     }
-    let rows: Vec<(Uuid, Option<Value>)> = sqlx::query_as(&format!("SELECT q.event_id,CASE WHEN a.id IS NULL OR NOT (a.workspace_id IS NULL OR w.kind IN ('team','project')) THEN NULL ELSE {EVENT} END FROM audit_export_queue q LEFT JOIN audit_events a ON a.id=q.event_id AND a.created_at=q.event_created_at LEFT JOIN workspaces w ON w.id=a.workspace_id ORDER BY q.event_created_at,q.event_id LIMIT $1"))
+    let rows: Vec<(Uuid, i64, Option<Value>)> = sqlx::query_as(&format!("SELECT q.event_id,q.seq,CASE WHEN a.id IS NULL OR NOT (a.workspace_id IS NULL OR w.kind IN ('team','project')) THEN NULL ELSE {EVENT} END FROM audit_export_queue q LEFT JOIN audit_events a ON a.id=q.event_id AND a.created_at=q.event_created_at LEFT JOIN workspaces w ON w.id=a.workspace_id WHERE q.seq IS NOT NULL ORDER BY q.seq LIMIT $1"))
         .bind(BATCH)
         .fetch_all(&mut *tx)
         .await?;
     tx.commit().await?;
-    if rows.is_empty() {
+    let heartbeat = rows.is_empty();
+    if heartbeat && !quiet {
         return Ok(Outcome::Idle);
     }
-    let ids: Vec<Uuid> = rows.iter().map(|(id, _)| *id).collect();
-    let events: Vec<Value> = rows.into_iter().filter_map(|(_, event)| event).collect();
+    let ids: Vec<Uuid> = rows.iter().map(|(id, _, _)| *id).collect();
+    let events: Vec<Value> = rows
+        .into_iter()
+        .filter_map(|(_, seq, event)| {
+            event.map(|mut event| {
+                event["seq"] = json!(seq);
+                event
+            })
+        })
+        .collect();
     let missing = ids.len() - events.len();
     if missing > 0 {
         // A partition archived before its events were exported, or a row that
-        // isn't platform-visible (re-checked above): counted, logged, skipped.
+        // isn't platform-visible (re-checked above): counted, logged, skipped;
+        // its number stays a gap the receiver sees.
         crate::metrics::METRICS.audit_export_skipped(missing as u64);
         tracing::warn!(
             missing,
             "queued audit events no longer in the database; skipped"
         );
     }
-    // 2. Deliver, outside any transaction.
-    let result = if events.is_empty() {
+    // 2. Deliver, outside any transaction. An idle export sends a heartbeat
+    //    instead: every number below `next_seq` has been delivered or skipped.
+    let result = if heartbeat {
+        let body = serde_json::to_vec(&json!({
+            "schema": SCHEMA,
+            "installation_id": installation,
+            "sent_at": chrono::Utc::now(),
+            "heartbeat": true,
+            "next_seq": next_seq,
+            "events": [],
+        }))
+        .map_err(|_| sqlx::Error::Protocol("audit export body".into()))?;
+        exporter.post(body).await
+    } else if events.is_empty() {
         Ok(200)
     } else {
         let body = serde_json::to_vec(&json!({
@@ -347,6 +407,12 @@ pub async fn deliver_once(
     let mut tx = crate::db::begin(&store.pool).await?;
     crate::leases::fence(&mut tx, fence).await?;
     let outcome = match result {
+        Ok(status) if heartbeat && (200..300).contains(&status) => {
+            sqlx::query("UPDATE audit_export_state SET attempts=0,next_attempt_at='-infinity',last_success_at=now(),last_heartbeat_at=now(),last_error=NULL")
+                .execute(&mut *tx)
+                .await?;
+            Outcome::Heartbeat
+        }
         Ok(status) if (200..300).contains(&status) => {
             sqlx::query("DELETE FROM audit_export_queue WHERE event_id=ANY($1)")
                 .bind(&ids)
@@ -372,10 +438,13 @@ pub async fn deliver_once(
         }
     };
     tx.commit().await?;
-    crate::metrics::METRICS.audit_export_delivery(match outcome {
-        Outcome::Delivered(_) => "delivered",
-        _ => "failed",
-    });
+    // Heartbeats aren't deliveries (a failed one counts as a failure).
+    if outcome != Outcome::Heartbeat {
+        crate::metrics::METRICS.audit_export_delivery(match outcome {
+            Outcome::Delivered(_) => "delivered",
+            _ => "failed",
+        });
+    }
     Ok(outcome)
 }
 
@@ -410,7 +479,7 @@ pub async fn send_test(store: &Store, exporter: &Exporter) -> Result<(), &'stati
 
 /// Status for Admin › Settings › Audit export. Never the URL or secret.
 pub async fn status(store: &Store) -> Result<Value, sqlx::Error> {
-    let mut v: Value = sqlx::query_scalar("SELECT jsonb_build_object('enabled',s.enabled,'enabled_at',s.enabled_at,'destination_host',s.destination_host,'queued',(SELECT count(*) FROM audit_export_queue),'oldest_queued_at',(SELECT min(enqueued_at) FROM audit_export_queue),'last_success_at',s.last_success_at,'last_error',s.last_error,'last_error_at',s.last_error_at,'retrying',s.attempts>0,'next_attempt_at',CASE WHEN s.attempts>0 THEN s.next_attempt_at END,'delivered_total',s.delivered_total::text) FROM audit_export_state s")
+    let mut v: Value = sqlx::query_scalar("SELECT jsonb_build_object('enabled',s.enabled,'enabled_at',s.enabled_at,'destination_host',s.destination_host,'queued',(SELECT count(*) FROM audit_export_queue),'oldest_queued_at',(SELECT min(enqueued_at) FROM audit_export_queue),'last_success_at',s.last_success_at,'last_error',s.last_error,'last_error_at',s.last_error_at,'retrying',s.attempts>0,'next_attempt_at',CASE WHEN s.attempts>0 THEN s.next_attempt_at END,'delivered_total',s.delivered_total::text,'next_seq',s.next_seq::text,'last_heartbeat_at',s.last_heartbeat_at) FROM audit_export_state s")
         .fetch_one(&store.pool)
         .await?;
     v["schema"] = json!(SCHEMA);
@@ -830,6 +899,220 @@ mod database {
                 .await
                 .unwrap();
         assert_eq!(state, (false, None));
+    }
+
+    fn seqs(receiver: &Receiver) -> Vec<i64> {
+        delivered(receiver)
+            .iter()
+            .flat_map(|b| {
+                b["events"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|e| e["seq"].as_i64().unwrap())
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// #174: every exported event carries a gap-free, never reused sequence
+    /// number, fixed before its first delivery attempt, so a receiver can see
+    /// lost events; an idle export sends a signed heartbeat.
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn sequence_numbers_reveal_lost_events_and_idle_exports_heartbeat(pool: sqlx::PgPool) {
+        let store = Store::new(pool.clone());
+        let receiver = receiver().await;
+        let exp = exporter(&receiver.url);
+        enable(&pool, &store, &receiver).await;
+        for _ in 0..3 {
+            event(&pool, None, "test.event").await;
+        }
+        assert_eq!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Delivered(3)
+        );
+        assert_eq!(seqs(&receiver), [1, 2, 3]);
+
+        // A failed attempt numbers the events; the retry sends the same numbers.
+        receiver.status.store(503, Ordering::SeqCst);
+        for _ in 0..2 {
+            event(&pool, None, "test.event").await;
+        }
+        assert!(matches!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Failed(_)
+        ));
+        let numbered: Vec<Option<i64>> =
+            sqlx::query_scalar("SELECT seq FROM audit_export_queue ORDER BY seq")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(numbered, [Some(4), Some(5)]);
+        assert_eq!(
+            seqs(&receiver),
+            [1, 2, 3, 4, 5],
+            "the failed attempt was numbered"
+        );
+        receiver.seen.lock().unwrap().clear();
+        // Removing a queued event (what a stolen runtime credential could do)
+        // leaves a gap the receiver sees.
+        sqlx::query("DELETE FROM audit_export_queue WHERE seq=4")
+            .execute(&pool)
+            .await
+            .unwrap();
+        receiver.status.store(200, Ordering::SeqCst);
+        sqlx::query("UPDATE audit_export_state SET next_attempt_at='-infinity'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Delivered(1)
+        );
+        assert_eq!(seqs(&receiver), [5], "4 is a gap");
+        // Numbers are never reused or rewritten, even by the runtime role's owner path.
+        assert!(
+            sqlx::query("UPDATE audit_export_state SET next_seq=1")
+                .execute(&pool)
+                .await
+                .is_err()
+        );
+        // Nor can a removed event's number be given to another one.
+        let spare = event(&pool, None, "test.event").await;
+        assert!(
+            sqlx::query("UPDATE audit_export_queue SET seq=4 WHERE event_id=$1")
+                .bind(spare)
+                .execute(&pool)
+                .await
+                .is_err()
+        );
+        assert!(
+            sqlx::query(
+                "INSERT INTO audit_export_queue(event_id,event_created_at,seq) VALUES($1,now(),99)"
+            )
+            .bind(Uuid::now_v7())
+            .execute(&pool)
+            .await
+            .is_err()
+        );
+        sqlx::query("DELETE FROM audit_export_queue WHERE event_id=$1")
+            .bind(spare)
+            .execute(&pool)
+            .await
+            .unwrap();
+        event(&pool, None, "test.event").await;
+        assert!(matches!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Delivered(1)
+        ));
+        assert_eq!(seqs(&receiver), [5, 6]);
+
+        // Idle: nothing for a minute sends one heartbeat with the next number.
+        assert_eq!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Idle
+        );
+        sqlx::query("UPDATE audit_export_state SET last_success_at=now()-interval '2 minutes'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Heartbeat
+        );
+        let last = delivered(&receiver).pop().unwrap();
+        assert_eq!(last["heartbeat"], true);
+        assert_eq!(last["next_seq"], 7);
+        assert_eq!(last["events"], json!([]));
+        assert_eq!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Idle
+        );
+        let (headers, body) = receiver.seen.lock().unwrap().last().cloned().unwrap();
+        let signature = headers["x-omg-signature"].to_str().unwrap().to_owned();
+        let t: i64 = signature[2..].split(',').next().unwrap().parse().unwrap();
+        assert_eq!(signature, sign(SECRET, t, &body));
+    }
+
+    /// #174 review: switching export off directly in the database (what a
+    /// stolen runtime credential could do) is itself exported and stops the
+    /// heartbeat; a number planted on a queued row becomes a gap, not a
+    /// collision that stalls export; a backlog over one numbering batch is
+    /// numbered in order across runs.
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn tampering_with_the_export_state_shows_up_at_the_receiver(pool: sqlx::PgPool) {
+        let store = Store::new(pool.clone());
+        let receiver = receiver().await;
+        let exp = exporter(&receiver.url);
+        enable(&pool, &store, &receiver).await;
+        // Planted number above the counter: the exporter numbers around it.
+        let planted = event(&pool, None, "test.event").await;
+        sqlx::query("UPDATE audit_export_queue SET seq=10 WHERE event_id=$1")
+            .bind(planted)
+            .execute(&pool)
+            .await
+            .unwrap();
+        event(&pool, None, "test.event").await;
+        assert_eq!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Delivered(2)
+        );
+        assert_eq!(seqs(&receiver), [10, 11]);
+        // Off and on again, directly: both markers reach the receiver.
+        sqlx::query("UPDATE audit_export_state SET enabled=false")
+            .execute(&pool)
+            .await
+            .unwrap();
+        event(&pool, None, "test.unexported").await;
+        sqlx::query("UPDATE audit_export_state SET last_success_at=now()-interval '2 minutes'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Delivered(1)
+        );
+        assert_eq!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Idle,
+            "no heartbeat while off"
+        );
+        sqlx::query("UPDATE audit_export_state SET enabled=true")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Delivered(1)
+        );
+        let actions: Vec<String> = delivered(&receiver)
+            .iter()
+            .flat_map(|b| {
+                b["events"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|e| e["action"].as_str().unwrap().to_owned())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(
+            actions,
+            [
+                "test.event",
+                "test.event",
+                "audit_export.disabled",
+                "audit_export.enabled"
+            ]
+        );
+        // A backlog larger than one numbering batch keeps its order.
+        receiver.seen.lock().unwrap().clear();
+        sqlx::query("INSERT INTO audit_events(id,action,resource_type,created_at) SELECT gen_random_uuid(),$1,'test',now()+make_interval(secs=>g) FROM generate_series(1,1050) g").bind("test.event")
+            .execute(&pool).await.unwrap();
+        while let Outcome::Delivered(_) = deliver_once(&store, &exp, None).await.unwrap() {}
+        let got = seqs(&receiver);
+        assert_eq!(got.len(), 1050);
+        assert!(got.windows(2).all(|w| w[1] == w[0] + 1), "consecutive");
     }
 
     #[sqlx::test(migrations = "./enterprise_migrations")]
