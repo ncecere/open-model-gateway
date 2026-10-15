@@ -1,4 +1,5 @@
-//! Audit export to a SIEM through a signed HTTPS webhook (#106).
+//! Audit export to a SIEM through a signed HTTPS webhook (#106) or syslog
+//! over TLS (#107).
 //!
 //! - **Operator-controlled destination.** `GATEWAY_AUDIT_WEBHOOK_URL` and
 //!   `GATEWAY_AUDIT_WEBHOOK_SECRET_ENV` (the name of the variable holding the
@@ -19,35 +20,96 @@
 //!   trigger refuses rewinding or reassigning), and an idle export sends a
 //!   signed heartbeat with `next_seq` every [`HEARTBEAT`]. A receiver alerts on
 //!   a gap or on silence.
+//! - **Syslog over TLS (#107).** `GATEWAY_AUDIT_SYSLOG_URL=syslog+tls://host[:port]`
+//!   instead of the webhook (one destination at a time): one RFC 5424 message
+//!   per event, RFC 5425 octet-counted, over TLS verified against the public
+//!   roots or `GATEWAY_AUDIT_SYSLOG_CA_FILE`, optionally with a client
+//!   certificate. Same queue, lease, numbering and backoff. One connection per
+//!   batch; it counts as delivered once every frame is written, close_notify
+//!   sent and the receiver closed the connection without a reset. Syslog has
+//!   no application-level acknowledgement: a receiver that fails after reading
+//!   can lose events, which shows as a `seq` gap.
 
-use std::time::Duration;
+use std::{net::Ipv6Addr, sync::Arc, time::Duration};
 
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, pem::PemObject};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
 use crate::store::Store;
 
 pub const URL_ENV: &str = "GATEWAY_AUDIT_WEBHOOK_URL";
 pub const SECRET_ENV_ENV: &str = "GATEWAY_AUDIT_WEBHOOK_SECRET_ENV";
+pub const SYSLOG_URL_ENV: &str = "GATEWAY_AUDIT_SYSLOG_URL";
+pub const SYSLOG_CA_FILE_ENV: &str = "GATEWAY_AUDIT_SYSLOG_CA_FILE";
+pub const SYSLOG_CLIENT_CERT_FILE_ENV: &str = "GATEWAY_AUDIT_SYSLOG_CLIENT_CERT_FILE";
+pub const SYSLOG_CLIENT_KEY_FILE_ENV: &str = "GATEWAY_AUDIT_SYSLOG_CLIENT_KEY_FILE";
+/// The syslog-over-TLS port (RFC 5425).
+pub const SYSLOG_PORT: u16 = 6514;
+const SYSLOG_SCHEME: &str = "syslog+tls://";
+const APP_NAME: &str = "open-model-gateway";
+/// Facility 13 (log audit) times 8, plus severity 5 (notice).
+const PRI: u8 = 109;
+const MSGID_MAX: usize = 32;
+/// PEM files are read whole at startup, up to this size.
+const PEM_FILE_LIMIT: u64 = 1024 * 1024;
 /// The versioned event format.
 pub const SCHEMA: &str = "omg.audit.v1";
 /// Events per request.
 pub const BATCH: i64 = 100;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// Per-address TCP connect limit for syslog (inside [`REQUEST_TIMEOUT`]).
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 pub const MAX_BACKOFF: Duration = Duration::from_secs(300);
 const MIN_SECRET_BYTES: usize = 32;
 
-/// A configured destination. The secret is never logged or returned.
+/// A configured destination. The secret, the TLS files and key material are
+/// never logged or returned.
 pub struct Exporter {
+    transport: Transport,
+}
+
+enum Transport {
+    Webhook(Webhook),
+    Syslog(Syslog),
+}
+
+struct Webhook {
     url: reqwest::Url,
     secret: zeroize::Zeroizing<Vec<u8>>,
     client: reqwest::Client,
 }
 
+struct Syslog {
+    /// Without brackets for IPv6; resolved through the egress policy per run.
+    host: String,
+    port: u16,
+    server_name: ServerName<'static>,
+    tls: Arc<rustls::ClientConfig>,
+    policy: crate::egress::Policy,
+}
+
+/// What one send carries; each transport encodes it in its own format.
+enum Payload {
+    Events {
+        installation: Uuid,
+        events: Vec<Value>,
+    },
+    Heartbeat {
+        installation: Uuid,
+        next_seq: i64,
+    },
+    Test {
+        installation: Uuid,
+    },
+}
+
 impl std::fmt::Debug for Exporter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Exporter")
+            .field("transport", &self.transport())
             .field("host", &self.host())
             .finish_non_exhaustive()
     }
@@ -72,18 +134,50 @@ impl Setting {
         get: impl Fn(&str) -> Option<String>,
         development: bool,
     ) -> anyhow::Result<Self> {
-        let url = get(URL_ENV).filter(|v| !v.trim().is_empty());
-        let secret_name = get(SECRET_ENV_ENV).filter(|v| !v.trim().is_empty());
-        match url.as_deref().map(str::trim) {
-            None => {
+        let set = |name: &str| get(name).filter(|v| !v.trim().is_empty());
+        let url = set(URL_ENV);
+        let secret_name = set(SECRET_ENV_ENV);
+        let syslog_file = [
+            SYSLOG_CA_FILE_ENV,
+            SYSLOG_CLIENT_CERT_FILE_ENV,
+            SYSLOG_CLIENT_KEY_FILE_ENV,
+        ]
+        .into_iter()
+        .find(|name| set(name).is_some());
+        // One destination at a time; only an explicit `off` turns export off.
+        match (
+            url.as_deref().map(str::trim),
+            set(SYSLOG_URL_ENV).as_deref().map(str::trim),
+        ) {
+            (Some("off"), None | Some("off")) | (None, Some("off")) => return Ok(Self::Off),
+            (Some("off"), Some(_)) | (Some(_), Some("off")) => anyhow::bail!(
+                "one of {URL_ENV} and {SYSLOG_URL_ENV} is off and the other a destination; set only one"
+            ),
+            (Some(_), Some(_)) => anyhow::bail!(
+                "set {URL_ENV} or {SYSLOG_URL_ENV}, not both: audit export has one destination"
+            ),
+            (None, None) => {
                 anyhow::ensure!(
                     secret_name.is_none(),
                     "{SECRET_ENV_ENV} is set without {URL_ENV}"
                 );
+                if let Some(name) = syslog_file {
+                    anyhow::bail!("{name} is set without {SYSLOG_URL_ENV}");
+                }
                 return Ok(Self::Unset);
             }
-            Some("off") => return Ok(Self::Off),
-            Some(_) => {}
+            (None, Some(syslog)) => {
+                anyhow::ensure!(
+                    secret_name.is_none(),
+                    "{SECRET_ENV_ENV} is set without {URL_ENV} (the syslog transport doesn't use it)"
+                );
+                return Self::syslog_from(syslog, &set, development);
+            }
+            (Some(_), None) => {
+                if let Some(name) = syslog_file {
+                    anyhow::bail!("{name} is set without {SYSLOG_URL_ENV}");
+                }
+            }
         }
         let url = url.unwrap_or_default();
         let name =
@@ -120,6 +214,38 @@ impl Setting {
                 None => Self::Unset,
             },
         )
+    }
+
+    /// The syslog destination with its CA and client identity, read and
+    /// parsed now so a bad file stops startup.
+    fn syslog_from(
+        url: &str,
+        set: &impl Fn(&str) -> Option<String>,
+        development: bool,
+    ) -> anyhow::Result<Self> {
+        let read = |name: &str| {
+            set(name)
+                .map(|path| read_pem_file(name, path.trim()))
+                .transpose()
+        };
+        let ca = read(SYSLOG_CA_FILE_ENV)?;
+        let (cert, key) = (
+            read(SYSLOG_CLIENT_CERT_FILE_ENV)?,
+            read(SYSLOG_CLIENT_KEY_FILE_ENV)?,
+        );
+        let identity = match (&cert, &key) {
+            (Some(cert), Some(key)) => Some((cert.as_slice(), key.as_slice())),
+            (None, None) => None,
+            _ => anyhow::bail!(
+                "{SYSLOG_CLIENT_CERT_FILE_ENV} and {SYSLOG_CLIENT_KEY_FILE_ENV} must be set together"
+            ),
+        };
+        Ok(Self::On(Exporter::syslog(
+            url,
+            ca.as_ref().map(|ca| ca.as_slice()),
+            identity,
+            development,
+        )?))
     }
 
     pub fn exporter(self) -> Option<Exporter> {
@@ -169,15 +295,217 @@ impl Exporter {
             .build()
             .map_err(|_| anyhow::anyhow!("cannot build the audit export client"))?;
         Ok(Some(Self {
-            url,
-            secret,
-            client,
+            transport: Transport::Webhook(Webhook {
+                url,
+                secret,
+                client,
+            }),
         }))
+    }
+
+    /// Syslog over TLS (#107) to `syslog+tls://host[:port]`. The server is
+    /// verified for `host` against the public roots, or only `ca_pem` when
+    /// given; `identity` is an optional PEM client certificate chain and key.
+    /// Errors name the setting, never the file contents.
+    pub fn syslog(
+        url: &str,
+        ca_pem: Option<&[u8]>,
+        identity: Option<(&[u8], &[u8])>,
+        development: bool,
+    ) -> anyhow::Result<Self> {
+        let (host, port) = parse_syslog_url(url.trim())?;
+        // An address literal is checked now, like the webhook URL, so a
+        // refused destination stops startup instead of retrying forever.
+        let policy = crate::egress::policy().permit_loopback(development);
+        if let Ok(ip) = host.trim_matches(['[', ']']).parse::<std::net::IpAddr>() {
+            anyhow::ensure!(
+                policy.allows(ip),
+                "{SYSLOG_URL_ENV} points to an address the outbound address policy refuses"
+            );
+        }
+        let server_name = ServerName::try_from(host.clone())
+            .map_err(|_| anyhow::anyhow!("{SYSLOG_URL_ENV} has an invalid host"))?;
+        let roots = match ca_pem {
+            None => rustls::RootCertStore {
+                roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+            },
+            Some(pem) => {
+                let mut roots = rustls::RootCertStore::empty();
+                for cert in CertificateDer::pem_slice_iter(pem) {
+                    let cert = cert.map_err(|_| {
+                        anyhow::anyhow!("{SYSLOG_CA_FILE_ENV} is not a valid PEM file")
+                    })?;
+                    roots.add(cert).map_err(|_| {
+                        anyhow::anyhow!(
+                            "{SYSLOG_CA_FILE_ENV} holds a certificate that can't be parsed"
+                        )
+                    })?;
+                }
+                anyhow::ensure!(
+                    !roots.is_empty(),
+                    "{SYSLOG_CA_FILE_ENV} holds no PEM certificate"
+                );
+                roots
+            }
+        };
+        let builder = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .map_err(|_| anyhow::anyhow!("cannot build the audit syslog TLS configuration"))?
+        .with_root_certificates(roots);
+        let config = match identity {
+            None => builder.with_no_client_auth(),
+            Some((cert, key)) => {
+                let chain = CertificateDer::pem_slice_iter(cert)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|_| {
+                        anyhow::anyhow!("{SYSLOG_CLIENT_CERT_FILE_ENV} is not a valid PEM file")
+                    })?;
+                anyhow::ensure!(
+                    !chain.is_empty(),
+                    "{SYSLOG_CLIENT_CERT_FILE_ENV} holds no PEM certificate"
+                );
+                let key = PrivateKeyDer::from_pem_slice(key).map_err(|_| {
+                    anyhow::anyhow!("{SYSLOG_CLIENT_KEY_FILE_ENV} holds no PEM private key")
+                })?;
+                builder.with_client_auth_cert(chain, key).map_err(|_| {
+                    anyhow::anyhow!(
+                        "{SYSLOG_CLIENT_CERT_FILE_ENV} and {SYSLOG_CLIENT_KEY_FILE_ENV} are not a usable certificate and key"
+                    )
+                })?
+            }
+        };
+        Ok(Self {
+            transport: Transport::Syslog(Syslog {
+                host,
+                port,
+                server_name,
+                tls: Arc::new(config),
+                policy,
+            }),
+        })
     }
 
     /// The destination host, for status (never the path or query).
     pub fn host(&self) -> &str {
-        self.url.host_str().unwrap_or_default()
+        match &self.transport {
+            Transport::Webhook(webhook) => webhook.url.host_str().unwrap_or_default(),
+            Transport::Syslog(syslog) => &syslog.host,
+        }
+    }
+
+    /// `webhook` or `syslog`, for status.
+    pub fn transport(&self) -> &'static str {
+        match &self.transport {
+            Transport::Webhook(_) => "webhook",
+            Transport::Syslog(_) => "syslog",
+        }
+    }
+
+    /// Deliver one payload. `Err(category)` unless the receiver took it: a
+    /// webhook 2xx, or a syslog stream written and closed cleanly.
+    async fn send(&self, payload: Payload) -> Result<(), &'static str> {
+        match &self.transport {
+            Transport::Webhook(webhook) => webhook.send(&payload).await,
+            Transport::Syslog(syslog) => syslog.send(&frames(payload)).await,
+        }
+    }
+}
+
+/// Read a PEM file at startup. Errors name the setting, never the contents.
+fn read_pem_file(name: &str, path: &str) -> anyhow::Result<zeroize::Zeroizing<Vec<u8>>> {
+    use std::io::Read;
+    let unreadable = || anyhow::anyhow!("{name} names a file that can't be read");
+    let file = std::fs::File::open(path).map_err(|_| unreadable())?;
+    let mut bytes = zeroize::Zeroizing::new(Vec::new());
+    file.take(PEM_FILE_LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| unreadable())?;
+    anyhow::ensure!(
+        u64::try_from(bytes.len()).unwrap_or(u64::MAX) <= PEM_FILE_LIMIT,
+        "{name} names a file larger than 1 MiB"
+    );
+    Ok(bytes)
+}
+
+/// `syslog+tls://host[:port]`, nothing else: no path, query, credentials or
+/// plaintext scheme. IPv6 literals in brackets.
+fn parse_syslog_url(url: &str) -> anyhow::Result<(String, u16)> {
+    let invalid =
+        || anyhow::anyhow!("{SYSLOG_URL_ENV} must be syslog+tls://host[:port] (TLS only)");
+    let rest = url
+        .get(..SYSLOG_SCHEME.len())
+        .filter(|scheme| scheme.eq_ignore_ascii_case(SYSLOG_SCHEME))
+        .and_then(|_| url.get(SYSLOG_SCHEME.len()..))
+        .ok_or_else(invalid)?;
+    let rest = rest.strip_suffix('/').unwrap_or(rest);
+    let (host, port) = match rest.strip_prefix('[') {
+        Some(bracketed) => {
+            let (host, after) = bracketed.split_once(']').ok_or_else(invalid)?;
+            host.parse::<Ipv6Addr>().map_err(|_| invalid())?;
+            match after {
+                "" => (host, None),
+                _ => (host, Some(after.strip_prefix(':').ok_or_else(invalid)?)),
+            }
+        }
+        None => match rest.split_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (rest, None),
+        },
+    };
+    let port = match port {
+        None => SYSLOG_PORT,
+        Some(port) => port
+            .bytes()
+            .all(|b| b.is_ascii_digit())
+            .then(|| port.parse::<u16>().ok())
+            .flatten()
+            .filter(|port| *port != 0)
+            .ok_or_else(invalid)?,
+    };
+    anyhow::ensure!(crate::email::valid_host(host), invalid());
+    Ok((host.to_ascii_lowercase(), port))
+}
+
+impl Webhook {
+    /// The same signed JSON bodies as before #107.
+    async fn send(&self, payload: &Payload) -> Result<(), &'static str> {
+        let sent_at = chrono::Utc::now();
+        let body = match payload {
+            Payload::Events {
+                installation,
+                events,
+            } => json!({
+                "schema": SCHEMA,
+                "installation_id": installation,
+                "sent_at": sent_at,
+                "events": events,
+            }),
+            Payload::Heartbeat {
+                installation,
+                next_seq,
+            } => json!({
+                "schema": SCHEMA,
+                "installation_id": installation,
+                "sent_at": sent_at,
+                "heartbeat": true,
+                "next_seq": next_seq,
+                "events": [],
+            }),
+            Payload::Test { installation } => json!({
+                "schema": SCHEMA,
+                "installation_id": installation,
+                "sent_at": sent_at,
+                "test": true,
+                "events": [],
+            }),
+        };
+        let body = serde_json::to_vec(&body).map_err(|_| "body")?;
+        match self.post(body).await? {
+            200..=299 => Ok(()),
+            status => Err(status_category(status)),
+        }
     }
 
     /// POST one signed body. `Ok(status)` for any HTTP answer; `Err(category)`
@@ -206,6 +534,137 @@ impl Exporter {
             })?;
         Ok(response.status().as_u16())
     }
+}
+
+impl Syslog {
+    /// One connection for the whole batch, all within [`REQUEST_TIMEOUT`].
+    async fn send(&self, frames: &[u8]) -> Result<(), &'static str> {
+        tokio::time::timeout(REQUEST_TIMEOUT, self.session(frames))
+            .await
+            .unwrap_or(Err("timeout"))
+    }
+
+    async fn session(&self, frames: &[u8]) -> Result<(), &'static str> {
+        // The egress policy picks the addresses (#33); TLS still verifies `host`.
+        let addresses = crate::egress::resolve(
+            &self.policy,
+            crate::egress::Purpose::Audit,
+            &self.host,
+            self.port,
+        )
+        .await
+        .map_err(|_| "connection")?;
+        let mut tcp = None;
+        // Each address gets its own short connect limit, so one that never
+        // answers (a dead IPv6 route) doesn't use up the whole run.
+        for address in addresses {
+            if let Ok(Ok(stream)) =
+                tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::TcpStream::connect(address)).await
+            {
+                tcp = Some(stream);
+                break;
+            }
+        }
+        let tcp = tcp.ok_or("connection")?;
+        let mut tls = tokio_rustls::TlsConnector::from(self.tls.clone())
+            .connect(self.server_name.clone(), tcp)
+            .await
+            .map_err(|_| "tls")?;
+        tls.write_all(frames).await.map_err(io_category)?;
+        tls.flush().await.map_err(io_category)?;
+        // close_notify, then the end of our side of the stream.
+        tls.shutdown().await.map_err(io_category)?;
+        // RFC 5425 4.4: the receiver answers close_notify with its own or
+        // closes. Waiting for that turns a receiver that failed mid-batch (a
+        // reset) or refused our client certificate (an alert, TLS 1.3) into a
+        // failure. Anything it sends is discarded.
+        let mut sink = [0u8; 512];
+        loop {
+            match tls.read(&mut sink).await {
+                Ok(0) => return Ok(()),
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(()),
+                Err(error) => return Err(io_category(error)),
+            }
+        }
+    }
+}
+
+/// A rustls error (an alert, a bad record) is `tls`; anything else on the
+/// socket is `connection`.
+fn io_category(error: std::io::Error) -> &'static str {
+    if error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<rustls::Error>())
+    {
+        "tls"
+    } else {
+        "connection"
+    }
+}
+
+/// The RFC 5425 frames for a payload: one RFC 5424 message per event.
+fn frames(payload: Payload) -> Vec<u8> {
+    let at = chrono::Utc::now();
+    match payload {
+        Payload::Events {
+            installation,
+            events,
+        } => events
+            .into_iter()
+            .flat_map(|event| {
+                let id = msgid(event["action"].as_str().unwrap_or_default());
+                frame(
+                    at,
+                    installation,
+                    &id,
+                    &json!({"schema": SCHEMA, "installation_id": installation, "event": event}),
+                )
+            })
+            .collect(),
+        Payload::Heartbeat {
+            installation,
+            next_seq,
+        } => frame(
+            at,
+            installation,
+            "heartbeat",
+            &json!({"schema": SCHEMA, "installation_id": installation, "heartbeat": true, "next_seq": next_seq}),
+        ),
+        Payload::Test { installation } => frame(
+            at,
+            installation,
+            "test",
+            &json!({"schema": SCHEMA, "installation_id": installation, "test": true}),
+        ),
+    }
+}
+
+/// `<len> <109>1 <time> <installation> open-model-gateway - <MSGID> - <JSON>`:
+/// RFC 5425 octet counting around an RFC 5424 message without structured
+/// data or BOM.
+fn frame(
+    at: chrono::DateTime<chrono::Utc>,
+    installation: Uuid,
+    msgid: &str,
+    json: &Value,
+) -> Vec<u8> {
+    let message = format!(
+        "<{PRI}>1 {} {installation} {APP_NAME} - {msgid} - {json}",
+        at.format("%Y-%m-%dT%H:%M:%S%.3fZ")
+    );
+    format!("{} {message}", message.len()).into_bytes()
+}
+
+/// RFC 5424 MSGID: the action, at most 32 characters, printable ASCII (33 to
+/// 126) only.
+fn msgid(action: &str) -> String {
+    let id: String = action
+        .chars()
+        .take(MSGID_MAX)
+        .map(|c| if ('!'..='~').contains(&c) { c } else { '_' })
+        .collect();
+    if id.is_empty() { "-".to_owned() } else { id }
 }
 
 /// HMAC-SHA256 (RFC 2104) over SHA-256, so no new dependency is needed.
@@ -380,55 +839,46 @@ pub async fn deliver_once(
     }
     // 2. Deliver, outside any transaction. An idle export sends a heartbeat
     //    instead: every number below `next_seq` has been delivered or skipped.
+    let sent = events.len();
     let result = if heartbeat {
-        let body = serde_json::to_vec(&json!({
-            "schema": SCHEMA,
-            "installation_id": installation,
-            "sent_at": chrono::Utc::now(),
-            "heartbeat": true,
-            "next_seq": next_seq,
-            "events": [],
-        }))
-        .map_err(|_| sqlx::Error::Protocol("audit export body".into()))?;
-        exporter.post(body).await
+        exporter
+            .send(Payload::Heartbeat {
+                installation,
+                next_seq,
+            })
+            .await
     } else if events.is_empty() {
-        Ok(200)
+        Ok(())
     } else {
-        let body = serde_json::to_vec(&json!({
-            "schema": SCHEMA,
-            "installation_id": installation,
-            "sent_at": chrono::Utc::now(),
-            "events": events,
-        }))
-        .map_err(|_| sqlx::Error::Protocol("audit export body".into()))?;
-        exporter.post(body).await
+        exporter
+            .send(Payload::Events {
+                installation,
+                events,
+            })
+            .await
     };
     // 3. Record the outcome, fenced: a holder whose term ended commits nothing.
     let mut tx = crate::db::begin(&store.pool).await?;
     crate::leases::fence(&mut tx, fence).await?;
     let outcome = match result {
-        Ok(status) if heartbeat && (200..300).contains(&status) => {
+        Ok(()) if heartbeat => {
             sqlx::query("UPDATE audit_export_state SET attempts=0,next_attempt_at='-infinity',last_success_at=now(),last_heartbeat_at=now(),last_error=NULL")
                 .execute(&mut *tx)
                 .await?;
             Outcome::Heartbeat
         }
-        Ok(status) if (200..300).contains(&status) => {
+        Ok(()) => {
             sqlx::query("DELETE FROM audit_export_queue WHERE event_id=ANY($1)")
                 .bind(&ids)
                 .execute(&mut *tx)
                 .await?;
             sqlx::query("UPDATE audit_export_state SET attempts=0,next_attempt_at='-infinity',last_success_at=now(),last_error=NULL,delivered_total=delivered_total+$1")
-                .bind(i64::try_from(events.len()).unwrap_or(i64::MAX))
+                .bind(i64::try_from(sent).unwrap_or(i64::MAX))
                 .execute(&mut *tx)
                 .await?;
-            Outcome::Delivered(events.len())
+            Outcome::Delivered(sent)
         }
-        failure => {
-            let category = match failure {
-                Ok(status) => status_category(status),
-                Err(category) => category,
-            };
+        Err(category) => {
             sqlx::query("UPDATE audit_export_state SET attempts=attempts+1,next_attempt_at=now()+make_interval(secs=>$1),last_error=$2,last_error_at=now()")
                 .bind(backoff(attempts))
                 .bind(category)
@@ -456,25 +906,15 @@ fn status_category(status: u16) -> &'static str {
     }
 }
 
-/// A test delivery: a signed body with `"test": true` and no events. Doesn't
-/// touch the queue or the status.
+/// A test delivery: `"test": true` and no events (a signed webhook body, or
+/// one syslog message with MSGID `test`). Doesn't touch the queue or the
+/// status.
 pub async fn send_test(store: &Store, exporter: &Exporter) -> Result<(), &'static str> {
     let installation: Uuid = sqlx::query_scalar("SELECT id FROM installation")
         .fetch_one(&store.pool)
         .await
         .map_err(|_| "database")?;
-    let body = serde_json::to_vec(&json!({
-        "schema": SCHEMA,
-        "installation_id": installation,
-        "sent_at": chrono::Utc::now(),
-        "test": true,
-        "events": [],
-    }))
-    .map_err(|_| "body")?;
-    match exporter.post(body).await? {
-        200..=299 => Ok(()),
-        status => Err(status_category(status)),
-    }
+    exporter.send(Payload::Test { installation }).await
 }
 
 /// Status for Admin › Settings › Audit export. Never the URL or secret.
@@ -522,6 +962,7 @@ pub fn start(store: Store, exporter: std::sync::Arc<Exporter>) -> tokio::task::J
                         tracing::warn!(
                             category,
                             host = exporter.host(),
+                            transport = exporter.transport(),
                             "audit export delivery failed; retrying with backoff"
                         );
                         break;
@@ -547,9 +988,347 @@ async fn record_backlog(store: &Store) {
     }
 }
 
+/// Test PKI for the syslog transport (#107), generated with the `openssl` CLI
+/// (P-256, valid 2026 to 2126): a CA, a receiver certificate for 127.0.0.1 and
+/// localhost and one for another name (same key), a client certificate (all
+/// signed by the CA), and an unrelated CA.
+#[cfg(test)]
+pub(crate) mod pki {
+    pub(crate) const CA: &str = "-----BEGIN CERTIFICATE-----
+MIIBkjCCATmgAwIBAgIUKahYf7QPSYFha6+yWuXhelwBAQUwCgYIKoZIzj0EAwIw
+FjEUMBIGA1UEAwwLT01HIFRlc3QgQ0EwIBcNMjYwMTAxMDAwMDAwWhgPMjEyNjAx
+MDEwMDAwMDBaMBYxFDASBgNVBAMMC09NRyBUZXN0IENBMFkwEwYHKoZIzj0CAQYI
+KoZIzj0DAQcDQgAEG91hAc1RCG5918cbTDiFUzVoZdJgviLca8E0pqf6r5R9Dp1T
+kz4ZVF2PBb2vRhQbOqtGIGGVQun2985wQGDw0KNjMGEwHwYDVR0jBBgwFoAUwVtb
+Hi8i6H6JK8MwFXQqzVrspI8wDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8EBAMC
+AQYwHQYDVR0OBBYEFMFbWx4vIuh+iSvDMBV0Ks1a7KSPMAoGCCqGSM49BAMCA0cA
+MEQCIGAcCPbBblVzsp1NwOYvXCOq+9Dd4Wm31YmIQd53Bww8AiA+fZ/bRchz1t8Q
+2uH+ATSczUV2iUeqx+wDpYWusexEDg==
+-----END CERTIFICATE-----
+";
+    pub(crate) const OTHER_CA: &str = "-----BEGIN CERTIFICATE-----
+MIIBpjCCAU2gAwIBAgIUYpUDpfHgyL62mSSc6ydAac++jfwwCgYIKoZIzj0EAwIw
+IDEeMBwGA1UEAwwVT01HIFVucmVsYXRlZCBUZXN0IENBMCAXDTI2MDEwMTAwMDAw
+MFoYDzIxMjYwMTAxMDAwMDAwWjAgMR4wHAYDVQQDDBVPTUcgVW5yZWxhdGVkIFRl
+c3QgQ0EwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARBEMpFFwk+kjwdvG7mUc5r
+hVRKbmwqQlm9uFAeSjG6jMhzJzUKQJG47JtfYkRGHYVwzdXz5d7PF5451B8tptuG
+o2MwYTAfBgNVHSMEGDAWgBSgb9BJqkH01pXp1We9UIEmvj53QTAPBgNVHRMBAf8E
+BTADAQH/MA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQUoG/QSapB9NaV6dVnvVCB
+Jr4+d0EwCgYIKoZIzj0EAwIDRwAwRAIgXe664gHxHXPaw4UkLKt5EUY9j1eQw0c6
+HKhjYeg7+SACIHwuA9H9xeQKzPdkExqAonuKAeFT7He4iJ/+UzFRG3Tf
+-----END CERTIFICATE-----
+";
+    pub(crate) const SERVER_CERT: &str = "-----BEGIN CERTIFICATE-----
+MIIByTCCAW+gAwIBAgIURx9n10MhilUEloMJ/O4DKBWnQQkwCgYIKoZIzj0EAwIw
+FjEUMBIGA1UEAwwLT01HIFRlc3QgQ0EwIBcNMjYwMTAxMDAwMDAwWhgPMjEyNjAx
+MDEwMDAwMDBaMBwxGjAYBgNVBAMMEW9tZy10ZXN0LXJlY2VpdmVyMFkwEwYHKoZI
+zj0CAQYIKoZIzj0DAQcDQgAEolRPOpACXzYb+/YEDArshWuygf8G7RmxToatT037
+/5tNv5Se3hHcP2ujRwLiIzoAisPZXURyY3OojJIeWbrPtqOBkjCBjzAMBgNVHRMB
+Af8EAjAAMA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDATAfBgNV
+HSMEGDAWgBTBW1seLyLofokrwzAVdCrNWuykjzAaBgNVHREEEzARhwR/AAABggls
+b2NhbGhvc3QwHQYDVR0OBBYEFHB8pgvbZdfrLdHF7CsxAZY9ZRUOMAoGCCqGSM49
+BAMCA0gAMEUCIG1g+Tngl4j9YNByir09OdQ1i+A8o5bTIsWFfQp8Bn1WAiEAxvNQ
+ISAhBc4rf7HIuml6NoGmuZ/wA8y+5rAFbcR61nM=
+-----END CERTIFICATE-----
+";
+    /// Signed by [`CA`] for `siem.example.test` only: a name mismatch on 127.0.0.1.
+    pub(crate) const WRONG_NAME_CERT: &str = "-----BEGIN CERTIFICATE-----
+MIIByzCCAXGgAwIBAgIURx9n10MhilUEloMJ/O4DKBWnQQowCgYIKoZIzj0EAwIw
+FjEUMBIGA1UEAwwLT01HIFRlc3QgQ0EwIBcNMjYwMTAxMDAwMDAwWhgPMjEyNjAx
+MDEwMDAwMDBaMBwxGjAYBgNVBAMMEXNpZW0uZXhhbXBsZS50ZXN0MFkwEwYHKoZI
+zj0CAQYIKoZIzj0DAQcDQgAEolRPOpACXzYb+/YEDArshWuygf8G7RmxToatT037
+/5tNv5Se3hHcP2ujRwLiIzoAisPZXURyY3OojJIeWbrPtqOBlDCBkTAMBgNVHRMB
+Af8EAjAAMA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDATAfBgNV
+HSMEGDAWgBTBW1seLyLofokrwzAVdCrNWuykjzAcBgNVHREEFTATghFzaWVtLmV4
+YW1wbGUudGVzdDAdBgNVHQ4EFgQUcHymC9tl1+st0cXsKzEBlj1lFQ4wCgYIKoZI
+zj0EAwIDSAAwRQIhAPRFQ2NvkN0cLpP+XgwqVAB2te6Pyf1TjVkYxjEmo5sFAiAi
+rSyeJxZiykjKEO8laqUBIIrRvrssu5Ma/6h9HU/DSw==
+-----END CERTIFICATE-----
+";
+    pub(crate) const SERVER_KEY: &str = "-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgNM/I9lDtGbEloYt9
+3ysQIi9VLLr5aUIHS3WiNMGDC/GhRANCAASiVE86kAJfNhv79gQMCuyFa7KB/wbt
+GbFOhq1PTfv/m02/lJ7eEdw/a6NHAuIjOgCKw9ldRHJjc6iMkh5Zus+2
+-----END PRIVATE KEY-----
+";
+    pub(crate) const CLIENT_CERT: &str = "-----BEGIN CERTIFICATE-----
+MIIBqzCCAVCgAwIBAgIURx9n10MhilUEloMJ/O4DKBWnQQswCgYIKoZIzj0EAwIw
+FjEUMBIGA1UEAwwLT01HIFRlc3QgQ0EwIBcNMjYwMTAxMDAwMDAwWhgPMjEyNjAx
+MDEwMDAwMDBaMBsxGTAXBgNVBAMMEG9tZy10ZXN0LWdhdGV3YXkwWTATBgcqhkjO
+PQIBBggqhkjOPQMBBwNCAAQaZK7/hkSw3WAqlb2FAsjOSmj64iKaPQRhI+zyaFt0
+RDFdpYeRxeNUjnyCkqAfcm7oPDyqLNrA5LrQoU1mak4Vo3UwczAMBgNVHRMBAf8E
+AjAAMA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDAjAfBgNVHSME
+GDAWgBTBW1seLyLofokrwzAVdCrNWuykjzAdBgNVHQ4EFgQUg0QvXAn0C7kAy4tX
+Kb5qA4EVU7gwCgYIKoZIzj0EAwIDSQAwRgIhAMexI2/Y6lc+K07HHYPRlB4hj6TD
+yi0x58TJ4NJ0BF69AiEA2Q7WZmmUR28o9oeAzAbaTL+MSCsy2Oh+gMiOBglncX4=
+-----END CERTIFICATE-----
+";
+    pub(crate) const CLIENT_KEY: &str = "-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgAxk2rqE1tw7NMsZd
+8dO9d4Hs6FWuIakUar1baq6OH0OhRANCAAQaZK7/hkSw3WAqlb2FAsjOSmj64iKa
+PQRhI+zyaFt0RDFdpYeRxeNUjnyCkqAfcm7oPDyqLNrA5LrQoU1mak4V
+-----END PRIVATE KEY-----
+";
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn lookup(pairs: Vec<(&'static str, String)>) -> impl Fn(&str) -> Option<String> {
+        move |name: &str| {
+            pairs
+                .iter()
+                .find(|(k, _)| *k == name)
+                .map(|(_, v)| v.clone())
+        }
+    }
+
+    /// #107: syslog over TLS is the one alternative destination, TLS only,
+    /// with its trust and client identity read from files at startup.
+    #[test]
+    fn syslog_configuration_is_one_destination_tls_only_with_files_read_at_startup() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = |name: &str, contents: &str| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, contents).unwrap();
+            path.to_string_lossy().into_owned()
+        };
+        let ca = file("ca.pem", pki::CA);
+        let cert = file("client.pem", pki::CLIENT_CERT);
+        let key = file("client.key", pki::CLIENT_KEY);
+        // Contents that must never appear in an error message.
+        const MARK: &str = "Zm9vYmFyU0VDUkVUTUFSSw";
+        let bad = file(
+            "bad.pem",
+            &format!("-----BEGIN CERTIFICATE-----\n{MARK}\n-----END CERTIFICATE-----\n"),
+        );
+        let junk = file("junk.pem", &format!("{MARK} not a PEM file"));
+        let bad_key = file(
+            "bad.key",
+            &format!("-----BEGIN PRIVATE KEY-----\n{MARK}\n-----END PRIVATE KEY-----\n"),
+        );
+        let missing = dir
+            .path()
+            .join("missing.pem")
+            .to_string_lossy()
+            .into_owned();
+        let syslog = |url: &str| (SYSLOG_URL_ENV, url.to_owned());
+
+        // A destination, default port 6514, the public roots.
+        let exp =
+            Setting::from_lookup(lookup(vec![syslog("syslog+tls://SIEM.example.org")]), false)
+                .unwrap()
+                .exporter()
+                .unwrap();
+        assert_eq!(
+            (exp.transport(), exp.host()),
+            ("syslog", "siem.example.org")
+        );
+        let Transport::Syslog(s) = &exp.transport else {
+            panic!("syslog")
+        };
+        assert_eq!(s.port, 6514);
+        // A private CA and a client identity, read from files.
+        let exp = Setting::from_lookup(
+            lookup(vec![
+                syslog("syslog+tls://127.0.0.1:1514"),
+                (SYSLOG_CA_FILE_ENV, ca.clone()),
+                (SYSLOG_CLIENT_CERT_FILE_ENV, cert.clone()),
+                (SYSLOG_CLIENT_KEY_FILE_ENV, key.clone()),
+            ]),
+            true,
+        )
+        .unwrap()
+        .exporter()
+        .unwrap();
+        let Transport::Syslog(s) = &exp.transport else {
+            panic!("syslog")
+        };
+        assert_eq!((exp.host(), s.port), ("127.0.0.1", 1514));
+        let debug = format!("{exp:?}");
+        assert!(
+            debug.contains("syslog") && debug.contains("127.0.0.1"),
+            "{debug}"
+        );
+        for secret in [
+            &pki::CLIENT_KEY[28..60],
+            &pki::CLIENT_CERT[28..60],
+            &pki::CA[28..60],
+            "PRIVATE",
+        ] {
+            assert!(!debug.contains(secret), "no key material in {debug}");
+        }
+        // The webhook's Debug says which transport it is, still without the secret.
+        let webhook = Exporter::new("https://siem.example.org/x", vec![b's'; 32], false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(webhook.transport(), "webhook");
+        assert!(format!("{webhook:?}").contains("webhook"));
+
+        // Only an explicit `off`, in either variable, turns export off.
+        for pairs in [
+            vec![syslog("off")],
+            vec![syslog(" off "), (URL_ENV, "off".into())],
+        ] {
+            assert!(matches!(
+                Setting::from_lookup(lookup(pairs), false).unwrap(),
+                Setting::Off
+            ));
+        }
+        let webhook_dest = || {
+            vec![
+                (URL_ENV, "https://siem.example.org".to_owned()),
+                (SECRET_ENV_ENV, "AUDIT_SECRET".to_owned()),
+                ("AUDIT_SECRET", "s".repeat(32)),
+            ]
+        };
+        let with = |mut pairs: Vec<(&'static str, String)>, extra: Vec<(&'static str, String)>| {
+            pairs.extend(extra);
+            pairs
+        };
+        for (pairs, why) in [
+            (
+                with(
+                    webhook_dest(),
+                    vec![syslog("syslog+tls://siem.example.org")],
+                ),
+                "both destinations",
+            ),
+            (
+                vec![
+                    (URL_ENV, "off".into()),
+                    syslog("syslog+tls://siem.example.org"),
+                ],
+                "off plus syslog",
+            ),
+            (
+                with(webhook_dest(), vec![syslog("off")]),
+                "webhook plus off",
+            ),
+            (
+                vec![
+                    syslog("syslog+tls://siem.example.org"),
+                    (SECRET_ENV_ENV, "AUDIT_SECRET".into()),
+                    ("AUDIT_SECRET", "s".repeat(32)),
+                ],
+                "the webhook secret with only syslog",
+            ),
+            (
+                with(webhook_dest(), vec![(SYSLOG_CA_FILE_ENV, ca.clone())]),
+                "syslog files with the webhook",
+            ),
+            (
+                vec![(SYSLOG_CA_FILE_ENV, ca.clone())],
+                "syslog files without a URL",
+            ),
+            (
+                vec![syslog("syslog://siem.example.org")],
+                "plaintext syslog",
+            ),
+            (vec![syslog("tcp://siem.example.org:514")], "tcp"),
+            (vec![syslog("udp://siem.example.org:514")], "udp"),
+            (vec![syslog("syslog+tls://siem.example.org/path")], "a path"),
+            (
+                vec![syslog("syslog+tls://user:pw@siem.example.org")],
+                "credentials",
+            ),
+            (vec![syslog("syslog+tls://siem.example.org:0")], "port 0"),
+            (
+                vec![syslog("syslog+tls://siem.example.org:99999")],
+                "port too large",
+            ),
+            (vec![syslog("syslog+tls://")], "no host"),
+            (
+                vec![
+                    syslog("syslog+tls://siem.example.org"),
+                    (SYSLOG_CA_FILE_ENV, missing.clone()),
+                ],
+                "missing CA file",
+            ),
+            (
+                vec![
+                    syslog("syslog+tls://siem.example.org"),
+                    (SYSLOG_CA_FILE_ENV, bad.clone()),
+                ],
+                "bad CA file",
+            ),
+            (
+                vec![
+                    syslog("syslog+tls://siem.example.org"),
+                    (SYSLOG_CA_FILE_ENV, junk.clone()),
+                ],
+                "no certificate in the CA file",
+            ),
+            (
+                vec![
+                    syslog("syslog+tls://siem.example.org"),
+                    (SYSLOG_CLIENT_CERT_FILE_ENV, cert.clone()),
+                ],
+                "certificate without key",
+            ),
+            (
+                vec![
+                    syslog("syslog+tls://siem.example.org"),
+                    (SYSLOG_CLIENT_KEY_FILE_ENV, key.clone()),
+                ],
+                "key without certificate",
+            ),
+            (
+                vec![
+                    syslog("syslog+tls://siem.example.org"),
+                    (SYSLOG_CLIENT_CERT_FILE_ENV, cert.clone()),
+                    (SYSLOG_CLIENT_KEY_FILE_ENV, bad_key.clone()),
+                ],
+                "bad key file",
+            ),
+            (
+                vec![
+                    syslog("syslog+tls://siem.example.org"),
+                    (SYSLOG_CLIENT_CERT_FILE_ENV, junk.clone()),
+                    (SYSLOG_CLIENT_KEY_FILE_ENV, key.clone()),
+                ],
+                "bad certificate file",
+            ),
+            (
+                vec![
+                    syslog("syslog+tls://siem.example.org"),
+                    (SYSLOG_CLIENT_CERT_FILE_ENV, cert.clone()),
+                    (SYSLOG_CLIENT_KEY_FILE_ENV, cert.clone()),
+                ],
+                "a certificate as the key",
+            ),
+        ] {
+            let error = match Setting::from_lookup(lookup(pairs), false) {
+                Ok(_) => panic!("{why}: accepted"),
+                Err(error) => format!("{error:#}"),
+            };
+            assert!(!error.contains(MARK), "{why}: file contents in {error}");
+            assert!(!error.contains(&pki::CLIENT_KEY[28..60]), "{why}: {error}");
+            assert!(!error.contains(&pki::CLIENT_CERT[28..60]), "{why}: {error}");
+        }
+    }
+
+    /// RFC 5424 MSGID: at most 32 printable ASCII characters (33 to 126).
+    #[test]
+    fn syslog_message_ids_and_frames_follow_rfc_5424_and_5425() {
+        assert_eq!(msgid("key.revoked"), "key.revoked");
+        assert_eq!(msgid("a b\tc\u{e9}d"), "a_b_c_d");
+        assert_eq!(msgid(&"x".repeat(40)).len(), 32);
+        assert_eq!(msgid(""), "-");
+        let at = chrono::DateTime::parse_from_rfc3339("2026-10-14T01:02:03.456789Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let installation = Uuid::nil();
+        let frame = frame(at, installation, "test", &json!({"a":"\u{e9}"}));
+        let text = String::from_utf8(frame).unwrap();
+        let message = format!(
+            "<109>1 2026-10-14T01:02:03.456Z {installation} open-model-gateway - test - {{\"a\":\"\u{e9}\"}}"
+        );
+        // The octet count is bytes, not characters.
+        assert_eq!(text, format!("{} {message}", message.len()));
+        assert_ne!(message.len(), message.chars().count());
+    }
 
     #[test]
     fn hmac_matches_rfc_4231() {
@@ -1284,5 +2063,465 @@ mod database {
         );
         assert!(queued(&pool).await.is_empty());
         assert_eq!(delivered(&receiver)[0]["events"][0]["id"], kept.to_string());
+    }
+
+    // ---- #107: syslog over TLS ----
+
+    use super::pki;
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+    use std::sync::atomic::AtomicUsize;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// A mock RFC 5425 receiver (tokio-rustls server). It records every
+    /// octet-counted frame and answers the sender's close_notify with its own;
+    /// after `drop_after` frames on one connection it resets the connection.
+    struct SyslogReceiver {
+        port: u16,
+        frames: Arc<Mutex<Vec<String>>>,
+        drop_after: Arc<AtomicUsize>,
+        connections: Arc<AtomicUsize>,
+    }
+    fn certs(pem: &str) -> Vec<CertificateDer<'static>> {
+        CertificateDer::pem_slice_iter(pem.as_bytes())
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+    /// One complete `<len> <message>` frame at the start of `buf`.
+    fn take_frame(buf: &mut Vec<u8>) -> Option<String> {
+        let space = buf.iter().position(|b| *b == b' ')?;
+        let digits = std::str::from_utf8(&buf[..space]).unwrap();
+        assert!(
+            !digits.starts_with('0') && digits.bytes().all(|b| b.is_ascii_digit()),
+            "bad octet count {digits:?}"
+        );
+        let len: usize = digits.parse().unwrap();
+        if buf.len() < space + 1 + len {
+            return None;
+        }
+        let message = String::from_utf8(buf[space + 1..space + 1 + len].to_vec()).unwrap();
+        buf.drain(..space + 1 + len);
+        Some(message)
+    }
+    async fn syslog_receiver(server_cert: &str, client_ca: Option<&str>) -> SyslogReceiver {
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let builder = rustls::ServerConfig::builder_with_provider(provider.clone())
+            .with_safe_default_protocol_versions()
+            .unwrap();
+        let builder = match client_ca {
+            None => builder.with_no_client_auth(),
+            Some(ca) => {
+                let mut roots = rustls::RootCertStore::empty();
+                for cert in certs(ca) {
+                    roots.add(cert).unwrap();
+                }
+                builder.with_client_cert_verifier(
+                    rustls::server::WebPkiClientVerifier::builder_with_provider(
+                        Arc::new(roots),
+                        provider,
+                    )
+                    .build()
+                    .unwrap(),
+                )
+            }
+        };
+        let config = builder
+            .with_single_cert(
+                certs(server_cert),
+                PrivateKeyDer::from_pem_slice(pki::SERVER_KEY.as_bytes()).unwrap(),
+            )
+            .unwrap();
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let frames = Arc::new(Mutex::new(Vec::new()));
+        let drop_after = Arc::new(AtomicUsize::new(usize::MAX));
+        let connections = Arc::new(AtomicUsize::new(0));
+        let receiver = SyslogReceiver {
+            port,
+            frames: frames.clone(),
+            drop_after: drop_after.clone(),
+            connections: connections.clone(),
+        };
+        tokio::spawn(async move {
+            while let Ok((tcp, _)) = listener.accept().await {
+                connections.fetch_add(1, Ordering::SeqCst);
+                let (acceptor, frames, drop_after) =
+                    (acceptor.clone(), frames.clone(), drop_after.clone());
+                tokio::spawn(async move {
+                    let Ok(mut tls) = acceptor.accept(tcp).await else {
+                        return;
+                    };
+                    let (mut buf, mut chunk, mut count) = (Vec::new(), [0u8; 4096], 0);
+                    loop {
+                        while let Some(frame) = take_frame(&mut buf) {
+                            frames.lock().unwrap().push(frame);
+                            count += 1;
+                            if count >= drop_after.load(Ordering::SeqCst) {
+                                // A reset, not a clean close: the receiver failed.
+                                tls.get_ref().0.set_zero_linger().unwrap();
+                                return;
+                            }
+                        }
+                        match tls.read(&mut chunk).await {
+                            Ok(0) => {
+                                let _ = tls.shutdown().await;
+                                return;
+                            }
+                            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                            Err(_) => return,
+                        }
+                    }
+                });
+            }
+        });
+        receiver
+    }
+    fn syslog_exporter(port: u16, ca: Option<&str>, identity: bool) -> Exporter {
+        Exporter::syslog(
+            &format!("syslog+tls://127.0.0.1:{port}"),
+            ca.map(str::as_bytes),
+            identity.then(|| (pki::CLIENT_CERT.as_bytes(), pki::CLIENT_KEY.as_bytes())),
+            true,
+        )
+        .unwrap()
+    }
+    /// Turn export on with `exporter` and drop the `audit_export.enabled` marker.
+    async fn enable_with(pool: &sqlx::PgPool, store: &Store, exporter: Exporter) {
+        sync_state(store, &Setting::On(exporter)).await.unwrap();
+        sqlx::query("DELETE FROM audit_export_queue")
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    async fn retry_now(pool: &sqlx::PgPool) {
+        sqlx::query("UPDATE audit_export_state SET next_attempt_at='-infinity'")
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    async fn installation(pool: &sqlx::PgPool) -> Uuid {
+        sqlx::query_scalar("SELECT id FROM installation")
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+    /// An RFC 5424 message as (MSGID, JSON), checking every other field.
+    fn rfc5424(message: &str, installation: Uuid) -> (String, Value) {
+        let parts: Vec<&str> = message.splitn(8, ' ').collect();
+        assert_eq!(parts.len(), 8, "{message}");
+        assert_eq!(
+            parts[0], "<109>1",
+            "PRI 109 (facility 13, severity 5), version 1"
+        );
+        let time = parts[1];
+        assert!(
+            time.len() == 24 && time.ends_with('Z') && time.as_bytes()[19] == b'.',
+            "UTC with milliseconds: {time}"
+        );
+        chrono::DateTime::parse_from_rfc3339(time).unwrap();
+        assert_eq!(parts[2], installation.to_string(), "HOSTNAME");
+        assert_eq!(parts[3], "open-model-gateway", "APP-NAME");
+        assert_eq!(parts[4], "-", "PROCID");
+        assert_eq!(parts[6], "-", "no structured data");
+        assert!(parts[7].starts_with('{'), "no BOM");
+        let json: Value = serde_json::from_str(parts[7]).unwrap();
+        assert_eq!(json["schema"], SCHEMA);
+        assert_eq!(json["installation_id"], installation.to_string());
+        (parts[5].to_owned(), json)
+    }
+    fn received(receiver: &SyslogReceiver) -> Vec<String> {
+        receiver.frames.lock().unwrap().clone()
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn syslog_delivers_octet_counted_rfc_5424_messages_in_sequence_order(pool: sqlx::PgPool) {
+        let store = Store::new(pool.clone());
+        let receiver = syslog_receiver(pki::SERVER_CERT, None).await;
+        let exp = syslog_exporter(receiver.port, Some(pki::CA), false);
+        assert_eq!((exp.transport(), exp.host()), ("syslog", "127.0.0.1"));
+        enable_with(
+            &pool,
+            &store,
+            syslog_exporter(receiver.port, Some(pki::CA), false),
+        )
+        .await;
+        let team = workspace(&pool, "team").await;
+        let long = "weird action with spaces and \u{fc}nicode, well over thirty-two characters";
+        let mut ids = Vec::new();
+        for i in 0..(BATCH + 5) {
+            let action = if i == 1 { long } else { "key.revoked" };
+            ids.push(event(&pool, (i % 2 == 0).then_some(team), action).await);
+        }
+        assert_eq!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Delivered(100)
+        );
+        assert_eq!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Delivered(5)
+        );
+        assert!(queued(&pool).await.is_empty());
+        assert_eq!(
+            receiver.connections.load(Ordering::SeqCst),
+            2,
+            "one connection per batch"
+        );
+        let installation = installation(&pool).await;
+        let messages: Vec<(String, Value)> = received(&receiver)
+            .iter()
+            .map(|m| rfc5424(m, installation))
+            .collect();
+        assert_eq!(messages.len(), ids.len(), "one message per event");
+        for (i, ((msgid, json), id)) in messages.iter().zip(&ids).enumerate() {
+            let event = &json["event"];
+            assert_eq!(event["id"], id.to_string());
+            assert_eq!(event["seq"], json!(i + 1), "in sequence order");
+            assert_eq!(*msgid, super::msgid(event["action"].as_str().unwrap()));
+            let mut keys: Vec<&String> = json.as_object().unwrap().keys().collect();
+            keys.sort();
+            assert_eq!(keys, ["event", "installation_id", "schema"]);
+        }
+        // MSGID is the action, truncated to 32 printable ASCII characters.
+        assert_eq!(messages[0].0, "key.revoked");
+        assert_eq!(messages[1].0, "weird_action_with_spaces_and__ni");
+        assert_eq!(
+            messages[1].1["event"]["action"], long,
+            "the JSON keeps the action"
+        );
+        // The same event object the webhook sends.
+        let first = &messages[0].1["event"];
+        assert_eq!(first["workspace"]["kind"], "team");
+        assert_eq!(first["metadata"], json!({"count":1}));
+        assert_eq!(messages[1].1["event"]["workspace"], Value::Null);
+        let v = status(&store).await.unwrap();
+        assert_eq!(
+            (v["destination_host"].clone(), v["delivered_total"].clone()),
+            (json!("127.0.0.1"), json!("105"))
+        );
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn syslog_refuses_an_untrusted_or_misnamed_certificate(pool: sqlx::PgPool) {
+        let store = Store::new(pool.clone());
+        let receiver = syslog_receiver(pki::SERVER_CERT, None).await;
+        enable_with(
+            &pool,
+            &store,
+            syslog_exporter(receiver.port, Some(pki::CA), false),
+        )
+        .await;
+        let id = event(&pool, None, "key.revoked").await;
+        // The public roots (no CA file) and an unrelated CA don't trust it.
+        for ca in [None, Some(pki::OTHER_CA)] {
+            retry_now(&pool).await;
+            assert_eq!(
+                deliver_once(&store, &syslog_exporter(receiver.port, ca, false), None)
+                    .await
+                    .unwrap(),
+                Outcome::Failed("tls")
+            );
+        }
+        // Trusted CA, wrong name: the certificate is for siem.example.test.
+        let misnamed = syslog_receiver(pki::WRONG_NAME_CERT, None).await;
+        retry_now(&pool).await;
+        assert_eq!(
+            deliver_once(
+                &store,
+                &syslog_exporter(misnamed.port, Some(pki::CA), false),
+                None
+            )
+            .await
+            .unwrap(),
+            Outcome::Failed("tls")
+        );
+        assert_eq!(queued(&pool).await, vec![id], "nothing dequeued");
+        assert!(received(&receiver).is_empty() && received(&misnamed).is_empty());
+        assert_eq!(status(&store).await.unwrap()["last_error"], "tls");
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn syslog_a_receiver_that_fails_mid_batch_gets_the_whole_batch_again(pool: sqlx::PgPool) {
+        let store = Store::new(pool.clone());
+        let receiver = syslog_receiver(pki::SERVER_CERT, None).await;
+        let exp = syslog_exporter(receiver.port, Some(pki::CA), false);
+        enable_with(
+            &pool,
+            &store,
+            syslog_exporter(receiver.port, Some(pki::CA), false),
+        )
+        .await;
+        let mut ids = Vec::new();
+        for _ in 0..10 {
+            ids.push(event(&pool, None, "key.revoked").await);
+        }
+        receiver.drop_after.store(3, Ordering::SeqCst);
+        assert_eq!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Failed("connection")
+        );
+        assert_eq!(queued(&pool).await, ids, "nothing dequeued");
+        assert_eq!(received(&receiver).len(), 3);
+        receiver.drop_after.store(usize::MAX, Ordering::SeqCst);
+        assert_eq!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Idle,
+            "backing off"
+        );
+        retry_now(&pool).await;
+        assert_eq!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Delivered(10)
+        );
+        assert!(queued(&pool).await.is_empty());
+        assert_eq!(
+            receiver.connections.load(Ordering::SeqCst),
+            2,
+            "a new connection"
+        );
+        let installation = installation(&pool).await;
+        let seqs: Vec<i64> = received(&receiver)
+            .iter()
+            .map(|m| rfc5424(m, installation).1["event"]["seq"].as_i64().unwrap())
+            .collect();
+        assert_eq!(
+            seqs,
+            [1, 2, 3, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            "the full batch, same numbers"
+        );
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn syslog_mutual_tls_presents_the_configured_client_certificate(pool: sqlx::PgPool) {
+        let store = Store::new(pool.clone());
+        let receiver = syslog_receiver(pki::SERVER_CERT, Some(pki::CA)).await;
+        enable_with(
+            &pool,
+            &store,
+            syslog_exporter(receiver.port, Some(pki::CA), true),
+        )
+        .await;
+        let id = event(&pool, None, "key.revoked").await;
+        assert!(matches!(
+            deliver_once(
+                &store,
+                &syslog_exporter(receiver.port, Some(pki::CA), false),
+                None
+            )
+            .await
+            .unwrap(),
+            Outcome::Failed("tls")
+        ));
+        assert_eq!(
+            queued(&pool).await,
+            vec![id],
+            "refused without a client certificate"
+        );
+        assert!(received(&receiver).is_empty());
+        retry_now(&pool).await;
+        assert_eq!(
+            deliver_once(
+                &store,
+                &syslog_exporter(receiver.port, Some(pki::CA), true),
+                None
+            )
+            .await
+            .unwrap(),
+            Outcome::Delivered(1)
+        );
+        assert!(queued(&pool).await.is_empty());
+        assert_eq!(received(&receiver).len(), 1);
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn syslog_heartbeat_and_test_delivery_framing(pool: sqlx::PgPool) {
+        let store = Store::new(pool.clone());
+        let receiver = syslog_receiver(pki::SERVER_CERT, None).await;
+        let exp = syslog_exporter(receiver.port, Some(pki::CA), false);
+        enable_with(
+            &pool,
+            &store,
+            syslog_exporter(receiver.port, Some(pki::CA), false),
+        )
+        .await;
+        let installation = installation(&pool).await;
+        sqlx::query("UPDATE audit_export_state SET last_success_at=now()-interval '2 minutes'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            deliver_once(&store, &exp, None).await.unwrap(),
+            Outcome::Heartbeat
+        );
+        let frames = received(&receiver);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(
+            rfc5424(&frames[0], installation),
+            (
+                "heartbeat".to_owned(),
+                json!({"schema":SCHEMA,"installation_id":installation,"heartbeat":true,"next_seq":1})
+            )
+        );
+        send_test(&store, &exp).await.unwrap();
+        let frames = received(&receiver);
+        assert_eq!(
+            rfc5424(&frames[1], installation),
+            (
+                "test".to_owned(),
+                json!({"schema":SCHEMA,"installation_id":installation,"test":true})
+            )
+        );
+        // A test that can't be delivered says why.
+        assert_eq!(
+            send_test(&store, &syslog_exporter(receiver.port, None, false)).await,
+            Err("tls")
+        );
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn syslog_connects_only_where_the_egress_policy_allows(pool: sqlx::PgPool) {
+        let store = Store::new(pool.clone());
+        let receiver = syslog_receiver(pki::SERVER_CERT, None).await;
+        // Address literals the policy refuses stop startup.
+        for refused in [
+            "syslog+tls://10.0.0.1",
+            "syslog+tls://127.0.0.1:6514",
+            "syslog+tls://[::1]",
+        ] {
+            let error = Exporter::syslog(refused, None, None, false)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("outbound address policy"),
+                "{refused}: {error}"
+            );
+        }
+        // A name that resolves to loopback, outside development: refused when
+        // connecting, never connected, nothing dequeued.
+        let strict = Exporter::syslog(
+            &format!("syslog+tls://localhost:{}", receiver.port),
+            Some(pki::CA.as_bytes()),
+            None,
+            false,
+        )
+        .unwrap();
+        enable_with(
+            &pool,
+            &store,
+            Exporter::syslog(
+                &format!("syslog+tls://localhost:{}", receiver.port),
+                Some(pki::CA.as_bytes()),
+                None,
+                false,
+            )
+            .unwrap(),
+        )
+        .await;
+        let id = event(&pool, None, "key.revoked").await;
+        assert_eq!(
+            deliver_once(&store, &strict, None).await.unwrap(),
+            Outcome::Failed("connection")
+        );
+        assert_eq!(receiver.connections.load(Ordering::SeqCst), 0);
+        assert_eq!(queued(&pool).await, vec![id]);
     }
 }
