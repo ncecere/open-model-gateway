@@ -8,9 +8,9 @@ use open_model_gateway::{
     providers::{ProviderAdapter, ProviderRegistry},
     store::Store,
 };
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-struct Fixture;
+struct Fixture(Arc<Mutex<Vec<ChatRequest>>>);
 #[async_trait]
 impl ProviderAdapter for Fixture {
     fn id(&self) -> &'static str {
@@ -33,11 +33,32 @@ impl ProviderAdapter for Fixture {
     ) -> Result<ProviderOutput, InferenceError> {
         // Omitted optional client maxima must arrive bounded at the adapter.
         assert!(request.max_output_tokens.is_some());
-        let text = match request.max_output_tokens {
+        let mut text = match request.max_output_tokens {
             Some(7) => "Hello from fixture (max 7)",
             Some(100 | 32) => "Hello from fixture",
             other => panic!("unexpected SDK dispatch cap: {other:?}"),
         };
+        let mut calls = vec![];
+        if request
+            .messages
+            .last()
+            .is_some_and(|m| m.role == Role::Tool)
+        {
+            text = "Tool result received";
+        } else if request.messages[0].content.as_deref() == Some("call weather") {
+            text = "Checking weather";
+            calls.push(ToolCall {
+                id: "semantic-call".into(),
+                name: "weather".into(),
+                arguments: "{ \"city\": \"東京\" }".into(),
+            });
+        }
+        let finish_reason = if calls.is_empty() {
+            FinishReason::Stop
+        } else {
+            FinishReason::ToolCalls
+        };
+        self.0.lock().unwrap().push(request.clone());
         let usage = Usage {
             input_tokens: Some(3),
             output_tokens: Some(4),
@@ -49,9 +70,18 @@ impl ProviderAdapter for Fixture {
                 futures_util::stream::iter(vec![
                     Ok(ChatEvent::Delta {
                         text: Some(text.into()),
-                        tool_calls: vec![],
+                        tool_calls: calls
+                            .iter()
+                            .enumerate()
+                            .map(|(index, call)| ToolCallDelta {
+                                index: index as u32,
+                                id: Some(call.id.clone()),
+                                name: Some(call.name.clone()),
+                                arguments: Some(call.arguments.clone()),
+                            })
+                            .collect(),
                     }),
-                    Ok(ChatEvent::Finish(FinishReason::Stop)),
+                    Ok(ChatEvent::Finish(finish_reason)),
                     Ok(ChatEvent::Usage(usage)),
                     Ok(ChatEvent::Done),
                 ]),
@@ -59,8 +89,8 @@ impl ProviderAdapter for Fixture {
         } else {
             Ok(ProviderOutput::Complete(ChatResponse {
                 content: Some(text.into()),
-                tool_calls: vec![],
-                finish_reason: FinishReason::Stop,
+                tool_calls: calls,
+                finish_reason,
                 usage,
             }))
         }
@@ -102,8 +132,11 @@ async fn real_client_sdks_accept_all_three_protocols(pool: sqlx::PgPool) {
         .execute(&pool)
         .await
         .unwrap();
+    let recorded = Arc::new(Mutex::new(vec![]));
     let mut registry = ProviderRegistry::default();
-    registry.register(Arc::new(Fixture)).unwrap();
+    registry
+        .register(Arc::new(Fixture(recorded.clone())))
+        .unwrap();
     let engine = Engine::new(Arc::new(store.clone()), registry, EngineLimits::default()).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -138,13 +171,46 @@ async fn real_client_sdks_accept_all_three_protocols(pool: sqlx::PgPool) {
         "SDK contracts failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    // Twelve valid generation calls; refusal cases must leave no attempts.
+    // Eighteen priced calls, including six stateless text/tool calls. All
+    // malformed/stateful followups must leave no attempts or provider dispatch.
+    let recorded = recorded.lock().unwrap().clone();
+    assert_eq!(recorded.len(), 18);
+    for index in [10, 11] {
+        let r = &recorded[index];
+        assert_eq!(r.messages.len(), 3);
+        assert!(r.messages[0].role == Role::User);
+        assert_eq!(r.messages[0].content.as_deref(), Some("hello"));
+        assert!(r.messages[1].role == Role::Assistant);
+        assert_eq!(r.messages[1].content.as_deref(), Some("Hello from fixture"));
+        assert_eq!(r.messages[2].content.as_deref(), Some("continue"));
+    }
+    for index in [13, 15] {
+        let r = &recorded[index];
+        assert_eq!(r.messages.len(), 4);
+        assert_eq!(r.messages[0].content.as_deref(), Some("call weather"));
+        assert!(r.messages[1].role == Role::Assistant);
+        assert_eq!(r.messages[1].content.as_deref(), Some("Checking weather"));
+        assert!(r.messages[2].role == Role::Assistant);
+        let call = &r.messages[2].tool_calls[0];
+        assert_eq!(call.id, "semantic-call");
+        assert_eq!(call.name, "weather");
+        assert_eq!(call.arguments, "{ \"city\": \"東京\" }");
+        assert!(r.messages[3].role == Role::Tool);
+        assert_eq!(r.messages[3].tool_call_id.as_deref(), Some("semantic-call"));
+        assert_eq!(r.messages[3].content.as_deref(), Some("sun"));
+    }
     let attempts: (i64, i64) = sqlx::query_as("SELECT count(*),count(*) FILTER(WHERE state='succeeded') FROM inference_executions WHERE workload_kind='generation'").fetch_one(&pool).await.unwrap();
-    assert_eq!(attempts, (12, 12));
+    assert_eq!(attempts, (18, 18));
     let holds: Vec<(i64, i64, i64)> = sqlx::query_as("SELECT r.reserved_tokens,l.amount_microusd,p.output_token_limit FROM governance_reservations r JOIN deployment_prices p ON p.id=r.price_id JOIN monetary_ledger l ON l.execution_id=r.execution_id JOIN inference_executions e ON e.id=r.execution_id WHERE l.kind='hold' AND e.workload_kind='generation' ORDER BY r.admitted_at").fetch_all(&pool).await.unwrap();
-    assert_eq!(holds.len(), 12);
+    assert_eq!(holds.len(), 18);
     for (i, (tokens, amount, ceiling)) in holds.into_iter().enumerate() {
-        let cap = [100, 100, 7, 7, 7, 7, 7, 100, 100, 100, 32, 32][i];
+        let cap = [
+            100, 100, 7, 7, 7, 7, 7, 100, 100, 100, 100, 100, 100, 100, 100, 100, 32, 32,
+        ][i];
         assert_eq!((tokens, amount, ceiling), (1000 + cap, 1000 + cap, 100));
     }
+    let settlements: Vec<(i64, i64, i64)> = sqlx::query_as("SELECT r.actual_microusd,r.input_tokens,r.output_tokens FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id WHERE r.state='settled' AND e.workload_kind='generation'").fetch_all(&pool).await.unwrap();
+    assert_eq!(settlements, vec![(7, 3, 4); 18]);
+    let ledger: (i64, i64) = sqlx::query_as("SELECT count(*),sum(l.amount_microusd)::bigint FROM monetary_ledger l JOIN inference_executions e ON e.id=l.execution_id WHERE l.kind='settlement' AND e.workload_kind='generation'").fetch_one(&pool).await.unwrap();
+    assert_eq!(ledger, (18, 18 * 7));
 }

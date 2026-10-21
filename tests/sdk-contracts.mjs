@@ -48,6 +48,62 @@ for await (const event of await ordinaryOpenai.responses.create({ model: "compan
   if (event.type === "response.output_text.delta") responseText += event.delta;
 }
 assert.equal(responseText, "Hello from fixture");
+// Stateless followups reuse the gateway's actual output, including read-only
+// item metadata and empty annotations. No store/max/previous_response_id workaround.
+for (const [prior, streaming] of [[response, false], [finalResponse, true]]) {
+  const args = {
+    model: "company/smart",
+    input: [{ role: "user", content: "hello" }, ...prior.output, { role: "user", content: "continue" }],
+  };
+  const followup = streaming
+    ? await ordinaryOpenai.responses.stream(args).finalResponse()
+    : await ordinaryOpenai.responses.create(args);
+  assert.equal(followup.output_text, "Hello from fixture");
+}
+for (const streaming of [false, true]) {
+  const args = { model: "company/smart", input: "call weather" };
+  const prior = streaming
+    ? await ordinaryOpenai.responses.stream(args).finalResponse()
+    : await ordinaryOpenai.responses.create(args);
+  assert.equal(prior.output[0].content[0].text, "Checking weather");
+  const call = prior.output[1];
+  assert.equal(call.type, "function_call");
+  assert.equal(call.call_id, "semantic-call");
+  assert.notEqual(call.id, call.call_id);
+  assert.equal(call.arguments, '{ "city": "東京" }');
+  const followupArgs = {
+    model: "company/smart",
+    input: [
+      { role: "user", content: "call weather" }, ...prior.output,
+      { type: "function_call_output", call_id: call.call_id, output: "sun", id: null, status: null },
+    ],
+  };
+  const followup = streaming
+    ? await ordinaryOpenai.responses.stream(followupArgs).finalResponse()
+    : await ordinaryOpenai.responses.create(followupArgs);
+  assert.equal(followup.output_text, "Tool result received");
+}
+// Negative controls still fail before any reservation or provider dispatch.
+for (const input of [
+  [{ ...response.output[0], id: null }],
+  [{ ...response.output[0], status: null }],
+  [{ ...response.output[0], status: "failed" }],
+  [{ ...response.output[0], extra: true }],
+  [{ ...response.output[0], content: null }],
+  [{ ...response.output[0], content: [{ type: "output_text", text: "hi", annotations: null }] }],
+  [{ ...response.output[0], content: [{ type: "output_text", text: "hi", annotations: [{ type: "url_citation", url: "https://example.invalid", title: "citation", start_index: 0, end_index: 1 }] }] }],
+  [{ role: "user", content: [{ type: "output_text", text: "hi", annotations: [] }] }],
+  [{ type: "function_call", id: "readonly", call_id: null, name: "weather", arguments: "{}" }],
+  [{ type: "function_call", id: "readonly", call_id: "c", name: "weather", arguments: {} }],
+  [{ type: "function_call_output", call_id: "c", output: [] }],
+  [{ type: "item_reference", id: response.output[0].id }],
+  [{ type: "reasoning", id: "readonly", summary: [] }],
+]) {
+  await assert.rejects(ordinaryOpenai.responses.create({ model: "company/smart", input }), (e) => e.status === 400 && e.code === "invalid_request_error");
+}
+for (const state of [{ previous_response_id: response.id }, { store: true }]) {
+  await assert.rejects(ordinaryOpenai.responses.create({ model: "company/smart", input: "continue", ...state }), (e) => e.status === 400 && e.code === "invalid_request_error");
+}
 // Real gateway refusal paths: no clamping and no provider dispatch.
 for (const stream of [false, true]) {
   for (const maximum of [0, 101]) {
