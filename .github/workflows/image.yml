@@ -206,6 +206,9 @@ jobs:
           [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no digest for ${PLATFORM} from the build job ('${DIGEST}')"; exit 1; }
           echo "${GITHUB_TOKEN}" | docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
           docker pull "${IMAGE}@${DIGEST}"
+          # The image under test, the staging stack and Trivy run in later steps:
+          # leave no registry credential behind for them.
+          docker logout ghcr.io
           got=$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "${IMAGE}@${DIGEST}")
           if [ "${got}" != "${PLATFORM}" ]; then
             echo "::error::the digest for ${PLATFORM} is a ${got} image"
