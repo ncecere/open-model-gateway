@@ -6,12 +6,15 @@ const base = process.env.SDK_TEST_BASE_URL;
 const key = process.env.SDK_TEST_API_KEY;
 assert.equal(new URL(base).hostname, "127.0.0.1", "SDK contracts must use loopback fixtures");
 const openai = new OpenAI({ apiKey: key, baseURL: `${base}/v1`, maxRetries: 0 });
+// Omission-positive compatibility cases use the official client's ordinary
+// retry defaults, separately from the legacy capability/refusal fixtures.
+const ordinaryOpenai = new OpenAI({ apiKey: key, baseURL: `${base}/v1` });
 const anthropic = new Anthropic({ apiKey: key, baseURL: base, maxRetries: 0 });
 const messages = [{ role: "user", content: "hello" }];
-const chat = await openai.chat.completions.create({ model: "company/smart", messages });
+const chat = await ordinaryOpenai.chat.completions.create({ model: "company/smart", messages });
 assert.equal(chat.choices[0].message.content, "Hello from fixture");
 let text = "";
-for await (const event of await openai.chat.completions.create({ model: "company/smart", messages, stream: true })) {
+for await (const event of await ordinaryOpenai.chat.completions.create({ model: "company/smart", messages, stream: true })) {
   text += event.choices[0]?.delta?.content ?? "";
 }
 assert.equal(text, "Hello from fixture");
@@ -33,15 +36,15 @@ assert.equal(legacyText, "Hello from fixture (max 7)");
 // Responses keeps its own max_output_tokens.
 const capped = await openai.responses.create({ model: "company/smart", input: "hello", store: false, max_output_tokens: 7 });
 assert.equal(capped.output_text, "Hello from fixture (max 7)");
-const response = await openai.responses.create({ model: "company/smart", input: "hello" });
+const response = await ordinaryOpenai.responses.create({ model: "company/smart", input: "hello" });
 assert.equal(response.status, "completed");
 assert.equal(response.output_text, "Hello from fixture");
-const responseStream = openai.responses.stream({ model: "company/smart", input: "hello" });
+const responseStream = ordinaryOpenai.responses.stream({ model: "company/smart", input: "hello" });
 const finalResponse = await responseStream.finalResponse();
 assert.equal(finalResponse.status, "completed");
 assert.equal(finalResponse.output_text, "Hello from fixture");
 let responseText = "";
-for await (const event of await openai.responses.create({ model: "company/smart", input: "hello", stream: true })) {
+for await (const event of await ordinaryOpenai.responses.create({ model: "company/smart", input: "hello", stream: true })) {
   if (event.type === "response.output_text.delta") responseText += event.delta;
 }
 assert.equal(responseText, "Hello from fixture");
@@ -96,7 +99,7 @@ const batchInput = await openai.files.create({
   file: await toFile(Buffer.from('{"custom_id":"one","method":"POST","url":"/v1/chat/completions","body":{"model":"company/batch","messages":[{"role":"user","content":"hi"}]}}\n'), "batch.jsonl"),
   purpose: "batch",
 });
-const batch = await openai.batches.create({ input_file_id: batchInput.id, endpoint: "/v1/chat/completions", completion_window: "24h", metadata: { omg_mode: "gateway" } });
+const batch = await ordinaryOpenai.batches.create({ input_file_id: batchInput.id, endpoint: "/v1/chat/completions", completion_window: "24h", metadata: { omg_mode: "gateway" } });
 assert.match(batch.id, /^batch_[0-9a-f]{32}$/);
 assert.equal(batch.status, "validating");
 assert.equal(batch.input_file_id, batchInput.id);

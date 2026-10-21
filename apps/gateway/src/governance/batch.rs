@@ -54,8 +54,9 @@ pub struct LineGroup {
     pub protocol: ApiProtocol,
     /// Output maximum → number of lines (0 for embeddings).
     pub outputs: BTreeMap<u32, u32>,
-    /// Omitted generation bounds pin the planning price. Explicit-bound and
-    /// embedding-only groups retain their existing admission-price behavior.
+    /// Omitted generation bounds record the planning price, which must still
+    /// be latest at initial admission. Admitted work then pins that version.
+    /// Explicit-bound/embedding-only groups retain admission-price behavior.
     pub price_id: Option<Uuid>,
 }
 impl LineGroup {
@@ -276,12 +277,15 @@ async fn admit_batch_unobserved(
         if !same_target(&current, &g.deployment) || !serves(&current, g.protocol, native) {
             return Err(InferenceError::Configuration);
         }
-        let p = match g.price_id {
-            Some(id) => price_version(&mut tx, id, g.deployment.id).await?,
-            None => latest_price(&mut tx, g.deployment.id)
-                .await?
-                .ok_or(InferenceError::Configuration)?,
-        };
+        // Planning is not admission: its default must still be based on the
+        // latest price under this catalog lock. Do not recap stale metadata;
+        // already-admitted children/native dispatch use their pinned version.
+        let p = latest_price(&mut tx, g.deployment.id)
+            .await?
+            .ok_or(InferenceError::Configuration)?;
+        if g.price_id.is_some_and(|id| id != p.id) {
+            return Err(InferenceError::Configuration);
+        }
         let tier = if native && p.has_batch_lines() {
             PriceTier::Batch
         } else {

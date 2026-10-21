@@ -653,8 +653,24 @@ async fn omitted_batch_maxima_pin_parent_child_and_native_execution_without_rewr
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
-async fn omitted_maximum_planning_price_survives_publication_before_parent_admission(pool: PgPool) {
-    let w = world(pool, true, false, 1).await;
+async fn omitted_maximum_stale_planning_price_is_refused_before_parent_admission(pool: PgPool) {
+    stale_plan_is_refused_then_replanned(pool, crate::governance::locks::AdmissionMode::Scoped)
+        .await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn omitted_maximum_stale_planning_price_is_refused_in_global_admission(pool: PgPool) {
+    stale_plan_is_refused_then_replanned(pool, crate::governance::locks::AdmissionMode::Global)
+        .await;
+}
+
+async fn stale_plan_is_refused_then_replanned(
+    pool: PgPool,
+    mode: crate::governance::locks::AdmissionMode,
+) {
+    let mut w = world(pool, true, false, 1).await;
+    w.f.store = w.f.store.clone().with_admission_mode(mode);
+    w.jobs.store = w.f.store.clone();
     let f = &w.f;
     let mut line = chat_line("a", "company/smart", "default");
     line["body"]
@@ -683,16 +699,70 @@ async fn omitted_maximum_planning_price_survives_publication_before_parent_admis
         .await
         .ok()
         .expect("valid plan");
+    let original = w.read(f.principal.workspace_id, Some(input.id)).await;
+    assert!(original[0]["body"].get("max_completion_tokens").is_none());
     let old = plan.groups[0].price_id.unwrap();
-    sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version) VALUES($1,$2,9000000,9000000,200,9,1)").bind(Uuid::new_v4()).bind(f.deployment).execute(&f.store.pool).await.unwrap();
+    let new = Uuid::new_v4();
+    sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version) VALUES($1,$2,9000000,9000000,200,9,1)").bind(new).bind(f.deployment).execute(&f.store.pool).await.unwrap();
     for native in [false, true] {
         let record = f.start();
-        crate::governance::batch::admit_batch(&f.store, &record, &plan.groups, native, 600)
-            .await
-            .unwrap();
-        let row: (Option<Uuid>,i64,i64) = sqlx::query_as("SELECT price_id,reserved_tokens,held_microusd FROM governance_reservations WHERE execution_id=$1").bind(record.id).fetch_one(&f.store.pool).await.unwrap();
-        assert_eq!(row, (native.then_some(old), 150, 150));
+        assert_eq!(
+            crate::governance::batch::admit_batch(&f.store, &record, &plan.groups, native, 600)
+                .await,
+            Err(InferenceError::Configuration)
+        );
     }
+    let rows: (i64,i64,i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM inference_executions),(SELECT count(*) FROM governance_reservations),(SELECT count(*) FROM monetary_ledger),(SELECT count(*) FROM async_jobs)").fetch_one(&f.store.pool).await.unwrap();
+    assert_eq!(rows, (0, 0, 0, 0));
+    assert!(w.openai.calls().is_empty());
+    assert!(w.openai.executed().is_empty());
+    assert_eq!(plan.groups[0].price_id, Some(old));
+    assert_eq!(
+        plan.groups[0].outputs,
+        std::collections::BTreeMap::from([(50, 1)])
+    );
+    // A separate public create replans the very same uploaded file. There is
+    // no server retry or recapping of the rejected private plan.
+    let native = w
+        .create(f.principal, &file, BatchEndpoint::ChatCompletions, None)
+        .await
+        .unwrap();
+    let gateway = w
+        .create(
+            f.principal,
+            &file,
+            BatchEndpoint::ChatCompletions,
+            Some(json!({"omg_mode":"gateway"})),
+        )
+        .await
+        .unwrap();
+    for job in [&native, &gateway] {
+        assert_eq!(job.input_file_id, Some(input.id));
+        assert_ne!(job.work_file_id, Some(plan.work_file));
+        let row: (Option<Uuid>,i64,i64) = sqlx::query_as("SELECT price_id,reserved_tokens,held_microusd FROM governance_reservations WHERE execution_id=$1").bind(job.execution_id).fetch_one(&f.store.pool).await.unwrap();
+        assert_eq!(
+            row,
+            (
+                (job.mode() == Some(BatchMode::Native)).then_some(new),
+                209,
+                1881
+            )
+        );
+        let private = w.read(f.principal.workspace_id, job.work_file_id).await;
+        assert_eq!(private[0]["_omg_plan"]["price"], json!(new));
+        assert!(private[0]["body"].get("max_completion_tokens").is_none());
+    }
+    w.poll().await;
+    assert_eq!(w.openai.script.lock().unwrap().submitted[0]["maximum"], 9);
+    assert!(Runner::new(w.jobs.clone()).run_next().await.unwrap());
+    assert_eq!(w.openai.script.lock().unwrap().maxima, [Some(9)]);
+    let child: (Uuid,i64,i64) = sqlx::query_as("SELECT r.price_id,r.reserved_tokens,l.amount_microusd FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id JOIN monetary_ledger l ON l.execution_id=e.id WHERE e.batch_job_id=$1 AND l.kind='hold'").bind(gateway.id).fetch_one(&f.store.pool).await.unwrap();
+    assert_eq!(child, (new, 209, 1881));
+    assert_eq!(
+        w.read(f.principal.workspace_id, Some(input.id)).await,
+        original
+    );
+    consistent(f).await;
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
