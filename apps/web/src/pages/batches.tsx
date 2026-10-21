@@ -17,7 +17,7 @@ import { fileContentPath } from "../lib/files";
 import { pauseLabel, type BatchRouteWait } from "../lib/batch-scheduling";
 import type { DashboardSearch } from "../lib/permissions";
 import type { LogsScope } from "../lib/requests";
-import { Button, ErrorNotice, Stack, useAction, useApi } from "../components/ui";
+import { Button, ErrorNotice, Stack, useAction, useApi, useInferenceBaseUrl } from "../components/ui";
 import { ResourceLink, useDashboardNavigation } from "../components/navigation-link";
 import { FilterToolbar } from "../components/templates/filter-toolbar";
 import { ActionMenu } from "../components/templates/action-menu";
@@ -48,6 +48,7 @@ function CostCell({ b }: { b: BatchRow }) {
 
 /** The Batches tab of Logs. */
 export function BatchesPanel({ scope }: { scope: LogsScope }) {
+  const base = useInferenceBaseUrl();
   const nav = useDashboardNavigation(), ask = useAction(), platform = scope.kind === "platform";
   const search: DashboardSearch = nav?.search ?? (platform ? { page: "platform-logs", tab: "batches" } : { page: "requests", ws: scope.workspace.id, tab: "batches" });
   const [offset, setOffset] = useState(0);
@@ -79,7 +80,7 @@ export function BatchesPanel({ scope }: { scope: LogsScope }) {
           { label: "Cancel…", danger: true, hidden: !canCancel(b), onSelect: () => cancel(b) },
         ]} />}
         cursor={{ hasPrevious: offset > 0, hasNext: !!page.data?.has_more, onPrevious: () => setOffset(Math.max(0, offset - 50)), onNext: () => setOffset(offset + 50) }}
-        empty={<EmptyState size="compact" icon={<Layers />} title={status ? "No batches match this status" : "No batches yet"} description={status ? undefined : "Create one with POST /v1/batches from a file uploaded for batch."} />} />}
+        empty={<EmptyState size="compact" icon={<Layers />} title={status ? "No batches match this status" : "No batches yet"} description={status ? undefined : `Create one with POST ${base}/batches from a file uploaded for batch.`} />} />}
     {platform && page.data?.personal && <p className={s.note} title="Personal workspaces are private: only totals are shown.">Personal workspaces: {page.data.personal.active} running, {page.data.personal.finished} finished ({page.data.personal.failed} failed).</p>}
   </Stack>;
 }

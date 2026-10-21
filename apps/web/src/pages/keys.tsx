@@ -17,6 +17,7 @@
 import { useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { KeyRound, Plus, X } from "lucide-react";
+import { InferenceBaseField } from "../components/inference-base-url";
 import { api, wsPath, type Grant, type OneTimeToken, type ServiceAccount } from "../lib/api";
 import { permissions, type DashboardSearch } from "../lib/permissions";
 import { ownKeyHelp } from "../lib/access";
@@ -236,6 +237,7 @@ export function CreateKeyDialog({ session, workspace, options, accounts, onClose
       <p className={s.note}>{result.policy ? `Key limits: ${limitsSummary(limitsOf(result.policy))}. Workspace and platform limits also apply.` : "No key limits: workspace and platform limits apply."}</p>
       <FormField label="API key"><Textarea readOnly value={result.token} rows={3} spellCheck={false} autoComplete="off" autoFocus onFocus={event => event.currentTarget.select()} /></FormField>
       <Button variant="secondary" onClick={copySecret}>{copied ? "Copied" : "Copy key"}</Button>
+      <InferenceBaseField />
     </Stack>
   </Dialog>;
   const used = new Set(budgets.map(b => b.period));

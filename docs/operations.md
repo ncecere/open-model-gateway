@@ -6,6 +6,7 @@ This covers health checks, metrics and alerting, backups and restore, secret rot
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `GATEWAY_INFERENCE_BASE_URL` | unset (dashboard origin + `/v1`) | Display-only SDK base URL, for example `https://api.bitop.dev/v1`, exposed read-only to signed-in users in `/api/v1/me`. Absolute HTTPS URL, no credentials/query/fragment, path ending in `/v1`; a trailing slash is removed. HTTP is allowed only on loopback with `GATEWAY_ENV=development`. Invalid/empty values stop startup. Does not configure ingress, routing or browser API calls; `GATEWAY_PUBLIC_URL` remains the dashboard origin for OIDC/CSRF. |
 | `GATEWAY_METRICS_ADDR` | unset (disabled) | Separate Prometheus listener, for example `127.0.0.1:9464`. It must use a different port from `GATEWAY_LISTEN`. |
 | `GATEWAY_AUDIT_WEBHOOK_URL` | unset (no export) | HTTPS endpoint the audit log streams to. See [audit export](#audit-export). |
 | `GATEWAY_AUDIT_WEBHOOK_SECRET_ENV` | unset | Name of the variable holding the webhook signing secret (at least 32 bytes). Required with the URL. |

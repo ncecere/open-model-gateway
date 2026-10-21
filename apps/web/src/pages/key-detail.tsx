@@ -16,6 +16,7 @@
  * previous/next and never blocks the page.
  */
 import { DetailTime } from "../components/templates/when";
+import { InferenceBaseField } from "../components/inference-base-url";
 import type { ReactNode } from "react";
 import { FileQuestion, Gauge, LayoutDashboard, ShieldCheck } from "lucide-react";
 import { EmptyState } from "../components/ui/empty-state/empty-state";
@@ -126,6 +127,7 @@ export function KeyDetail({ session, workspace, id }: Scope & { id: string }) {
         ...(key.revoked_at ? [{ label: "Revoked", value: <DetailTime value={key.revoked_at} /> }] : []),
       ]} />
     </Card>
+    <Card title="Calling the API" titleAs="h2"><InferenceBaseField /></Card>
     <KeyUsage workspace={workspace} keyId={key.id} />
     {!final && (canDisable(session, workspace, key) || canEnable(session, workspace, key) || canRotate(session, workspace, key) || canRevoke(session, workspace, key)) && <DangerZone>
       {status === "disabled" ? <DangerAction title="Enable key" description="Requests using this key work again straight away." action={<Button variant="secondary" disabled={!canEnable(session, workspace, key)} onClick={() => ask(keyActions.enable(workspace.id, key))}>Enable key</Button>} disabledReason={canEnable(session, workspace, key) ? undefined : "Only the key's holder or a workspace admin can enable it."} />

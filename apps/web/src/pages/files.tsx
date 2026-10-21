@@ -13,7 +13,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { api, type Session, type Workspace } from "../lib/api";
 import { fileContentPath, filePath, filePurposes, filesQuery, isFilePurpose, purposeLabel, uploadErrorText, uploadFile, uploadPurposes, type FilePurpose, type FilesResponse, type GatewayFile } from "../lib/files";
 import type { DashboardSearch } from "../lib/permissions";
-import { Alert, Badge, Button, ErrorNotice, Heading, NativeSelect, Stack, useAction, useApi } from "../components/ui";
+import { Alert, Badge, Button, ErrorNotice, Heading, NativeSelect, Stack, useAction, useApi, useInferenceBaseUrl } from "../components/ui";
 import { useDashboardNavigation } from "../components/navigation-link";
 import { FilterToolbar } from "../components/templates/filter-toolbar";
 import { ActionMenu } from "../components/templates/action-menu";
@@ -31,6 +31,7 @@ import fc from "./files.module.css";
 type Scope = { session: Session; workspace: Workspace };
 
 export function FilesPage({ workspace }: Scope) {
+  const base = useInferenceBaseUrl();
   const nav = useDashboardNavigation(), search: DashboardSearch = nav?.search ?? { page: "files", ws: workspace.id }, ask = useAction();
   const go = (patch: Partial<DashboardSearch>) => { setCursors([]); nav?.navigate({ ...search, ...patch }); };
   const [cursors, setCursors] = useState<string[]>([]), after = cursors.at(-1);
@@ -64,7 +65,7 @@ export function FilesPage({ workspace }: Scope) {
           { label: "Delete…", danger: true, hidden: !canDelete(f), onSelect: () => remove(f) },
         ]} />}
         cursor={{ hasPrevious: cursors.length > 0, hasNext: !!data?.has_more, onPrevious: () => setCursors(cursors.slice(0, -1)), onNext: () => { const last = rows.at(-1); if (last) setCursors([...cursors, last.id]); } }}
-        empty={<EmptyState size="compact" icon={<FileText />} title={filtered ? "No files match these filters" : "No files yet"} description={filtered ? undefined : "Upload a file here or with POST /v1/files."}
+        empty={<EmptyState size="compact" icon={<FileText />} title={filtered ? "No files match these filters" : "No files yet"} description={filtered ? undefined : `Upload a file here or with POST ${base}/files.`}
           action={filtered ? <Button size="sm" variant="ghost" onClick={() => go({ q: undefined, purpose: undefined })}>Clear filters</Button> : undefined} />} />
     </div>}
     {uploading && data && <UploadDialog workspace={workspace} purposes={allowed} maxBytes={data.max_bytes} onClose={() => { setUploading(false); requestAnimationFrame(() => trigger.current?.focus()); }} />}

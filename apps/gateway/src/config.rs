@@ -9,6 +9,8 @@ pub struct Config {
     pub listen: SocketAddr,
     pub environment: Environment,
     pub web_directory: Option<PathBuf>,
+    /// Display-only SDK base URL; never used for routing or browser API calls.
+    pub inference_base_url: InferenceBaseUrl,
     pub secret_env_allowlist: Vec<String>,
     pub smtp_env_allowlist: Vec<String>,
     pub inference_limits: crate::inference::EngineLimits,
@@ -38,6 +40,47 @@ pub struct Config {
     pub config_cache: bool,
 }
 
+/// Validated at startup and exposed only to authenticated dashboard users.
+#[derive(Clone, Default)]
+pub struct InferenceBaseUrl(pub Option<String>);
+
+impl InferenceBaseUrl {
+    pub fn parse(value: Option<&str>, environment: Environment) -> Result<Self> {
+        let Some(value) = value else {
+            return Ok(Self::default());
+        };
+        let invalid = || {
+            anyhow::anyhow!(
+                "GATEWAY_INFERENCE_BASE_URL must be an absolute HTTPS URL ending in /v1, without credentials, query or fragment (HTTP only on development loopback)"
+            )
+        };
+        let mut url = reqwest::Url::parse(value).map_err(|_| invalid())?;
+        let loopback = url.host_str().is_some_and(|host| {
+            host == "localhost"
+                || host
+                    .trim_matches(['[', ']'])
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback())
+        });
+        let path = url.path().strip_suffix('/').unwrap_or(url.path());
+        if url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || !(url.scheme() == "https"
+                || (environment == Environment::Development && loopback && url.scheme() == "http"))
+            || !path.ends_with("/v1")
+            || value.chars().any(|c| c.is_whitespace() || c.is_control())
+        {
+            return Err(invalid());
+        }
+        let path = path.to_owned();
+        url.set_path(&path);
+        Ok(Self(Some(url.to_string())))
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Environment {
     Development,
@@ -64,6 +107,11 @@ impl Config {
             Ok("development") => Environment::Development,
             Ok("production") | Err(std::env::VarError::NotPresent) => Environment::Production,
             _ => bail!("GATEWAY_ENV must be development or production"),
+        };
+        let inference_base_url = match std::env::var("GATEWAY_INFERENCE_BASE_URL") {
+            Ok(value) => InferenceBaseUrl::parse(Some(&value), environment)?,
+            Err(std::env::VarError::NotPresent) => InferenceBaseUrl::default(),
+            Err(_) => bail!("GATEWAY_INFERENCE_BASE_URL is not valid Unicode"),
         };
         let web_directory = std::env::var_os("GATEWAY_WEB_DIR").map(PathBuf::from);
         if web_directory
@@ -172,6 +220,7 @@ impl Config {
             listen,
             environment,
             web_directory,
+            inference_base_url,
             secret_env_allowlist,
             smtp_env_allowlist,
             inference_limits,
@@ -418,6 +467,69 @@ mod allowlist_tests {
         let resolver = crate::providers::secrets::EnvSecrets::from_lookup(names, lookup);
         assert!(resolver.allows("env:OPENAI_API_KEY"));
         assert!(resolver.allows("env:ANTHROPIC_API_KEY"));
+    }
+
+    #[test]
+    fn inference_base_url_valid_invalid_and_unset() {
+        use super::{
+            Environment::{Development, Production},
+            InferenceBaseUrl,
+        };
+        assert!(
+            InferenceBaseUrl::parse(None, Production)
+                .unwrap()
+                .0
+                .is_none()
+        );
+        for (input, expected, env) in [
+            (
+                "https://api.bitop.dev/v1",
+                "https://api.bitop.dev/v1",
+                Production,
+            ),
+            (
+                "https://API.bitop.dev:443/prefix/v1/",
+                "https://api.bitop.dev/prefix/v1",
+                Production,
+            ),
+            (
+                "http://localhost:8080/v1",
+                "http://localhost:8080/v1",
+                Development,
+            ),
+            ("http://127.0.0.1/v1/", "http://127.0.0.1/v1", Development),
+            ("http://[::1]/v1", "http://[::1]/v1", Development),
+        ] {
+            assert_eq!(
+                InferenceBaseUrl::parse(Some(input), env)
+                    .unwrap()
+                    .0
+                    .as_deref(),
+                Some(expected)
+            );
+        }
+        for input in [
+            "",
+            "/v1",
+            "//api.bitop.dev/v1",
+            "https://api.bitop.dev",
+            "https://api.bitop.dev/v10",
+            "https://api.bitop.dev/v1//",
+            "http://api.bitop.dev/v1",
+            "ftp://localhost/v1",
+            "https://user:password@api.bitop.dev/v1",
+            "https://api.bitop.dev/v1?",
+            "https://api.bitop.dev/v1#",
+            " https://api.bitop.dev/v1",
+        ] {
+            for env in [Development, Production] {
+                let error = InferenceBaseUrl::parse(Some(input), env)
+                    .err()
+                    .expect("invalid URL");
+                assert!(error.to_string().contains("GATEWAY_INFERENCE_BASE_URL"));
+            }
+        }
+        assert!(InferenceBaseUrl::parse(Some("http://localhost/v1"), Production).is_err());
     }
 
     /// #140: one variable must never be readable by both SMTP and provider

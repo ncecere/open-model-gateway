@@ -60,6 +60,9 @@ gateway:
   # Empty means the gateway defaults: 12h and 2h.
   sessionLifetime: ""
   sessionIdleTimeout: ""
+  # Display-only SDK base URL (GATEWAY_INFERENCE_BASE_URL), e.g. https://api.example.org/v1.
+  # Empty means the dashboard's origin + /v1. Does not configure ingress or routing.
+  inferenceBaseUrl: ""
 
   drainSeconds: 10
   terminationGracePeriodSeconds: 150

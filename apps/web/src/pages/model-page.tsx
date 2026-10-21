@@ -21,6 +21,8 @@ import { api, platformPath, type Catalog, type Deployment, type Model, type Mode
 import { deploymentRoutingBody, formatMicroUsd, modelRoutingBody, passiveHealth, type DeploymentRouting, type ModelRouting, type Price, type WorkloadKind } from "../lib/governance";
 import { HEADLINE_METERS, METER_SPECS, basePrice, cheapestPrice, countNoun, formatAudio, priceItems, priceTokenCeilings, unitFor, workloadLabels, workloadOf, type BasePrice } from "../lib/pricing";
 import { formatCount } from "../lib/reports";
+import { inferenceEndpoint, InferenceBaseField, InferenceEndpointField } from "../components/inference-base-url";
+import { useInferenceBaseUrl } from "../components/ui";
 import { modelReadiness, modelSectionFor, notServingReason, protocolEndpoints, protocolLabel, protocolOptions, protocolProfiles, readinessText, retiredWorkloads, routeDataPolicy, routeSectionFor, routeTiers, workloadModalities, type RouteTiers } from "../lib/model-setup";
 import { parseCheckboxValues, type Field } from "../lib/forms";
 import { ResourceLink } from "../components/navigation-link";
@@ -300,12 +302,15 @@ function ModelAvailability({ model, membership, catalogs }: { model: Model; memb
 }
 /** Client endpoints the model serves (docs/protocol-matrix.md), and which routes' adapters can carry each. */
 export function ProtocolsPanel({ protocols, routes }: { protocols: ModelProtocol[]; routes: RouteRow[] }) {
+  const base = useInferenceBaseUrl();
   const workload = workloadOf(protocols), siblings = protocolOptions.filter(o => workloadOf([o.value]) === workload && !protocols.includes(o.value));
   return <div className={m.protocols}>
+    <InferenceBaseField />
     {protocols.map(p => { const e = protocolEndpoints[p], serving = routes.filter(r => r.enabled && r.detail?.connection_enabled !== false), able = serving.filter(r => r.detail?.provider && protocolProfiles[p].includes(r.detail.provider)), unknown = serving.filter(r => !r.detail?.provider);
       return <section key={p} className={m.endpoint} aria-label={protocolLabel(p)}>
-        <h3 className={m.endpointLine}><BitopBadge size="sm" variant="outline">{e.method}</BitopBadge><code className={m.code}>{e.path}</code><span className={s.muted}>{protocolLabel(p)}</span></h3>
-        <DescriptionList items={[{ label: "Headers", value: <ul className={m.chips}>{e.headers.map(h => <li key={h.name}><code className={m.code}>{h.name}: {h.value}</code></li>)}</ul> }, { label: "Body", value: e.contentType }, { label: "Key parameters", value: <ul className={s.plainList}>{e.params.map(x => <li key={x.name}><code className={m.code}>{x.name}</code>{x.required ? " (required)" : ""} · {x.note}</li>)}</ul> }, { label: "Not supported", value: e.unsupported }, { label: "Adapters", value: e.adapters }, { label: "Serving routes", value: !routes.length ? "No routes yet" : able.length ? `${able.length} of ${serving.length} serving route${serving.length === 1 ? "" : "s"} can carry it${unknown.length ? ` · ${unknown.length} unknown` : ""}` : unknown.length ? "Unknown until route details load" : <span className={m.unknown}>No serving route's connection supports this protocol; requests fail with unsupported_capability.</span> }]} dividers />
+        <h3 className={m.endpointLine}><BitopBadge size="sm" variant="outline">{e.method}</BitopBadge><span>{protocolLabel(p)}</span></h3>
+        <InferenceEndpointField protocol={p} base={base} />
+        <DescriptionList items={[{ label: "Headers", value: <ul className={m.chips}>{e.headers.map(h => <li key={h.name}><code className={m.code}>{h.name}: {h.value}</code></li>)}</ul> }, { label: "Body", value: e.contentType }, { label: "Key parameters", value: <ul className={s.plainList}>{e.params.map(x => <li key={x.name}><code className={m.code}>{inferenceEndpoint(x.name, base)}</code>{x.required ? " (required)" : ""} · {x.note}</li>)}</ul> }, { label: "Not supported", value: e.unsupported }, { label: "Adapters", value: e.adapters }, { label: "Serving routes", value: !routes.length ? "No routes yet" : able.length ? `${able.length} of ${serving.length} serving route${serving.length === 1 ? "" : "s"} can carry it${unknown.length ? ` · ${unknown.length} unknown` : ""}` : unknown.length ? "Unknown until route details load" : <span className={m.unknown}>No serving route's connection supports this protocol; requests fail with unsupported_capability.</span> }]} dividers />
       </section>; })}
     <p className={m.note}>{siblings.length ? <>Not enabled for this model: {siblings.map(o => o.label).join(", ")}. </> : null}Other workloads need their own model. Calls to an endpoint the model doesn't serve are refused (400 unsupported_capability, or 501 for text and embeddings).</p>
   </div>;

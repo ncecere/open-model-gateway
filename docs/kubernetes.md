@@ -32,6 +32,28 @@ the acceptance in [verification](verification.md) and your own cluster hardening
 - `prometheus-operator` CRDs (`ServiceMonitor`/`PodMonitor`) only if you enable `metrics.serviceMonitor`
   or `metrics.podMonitor`; both are disabled by default and the chart renders cleanly without them.
 
+## Separate inference host
+
+If the dashboard is at `https://platform.bitop.dev` and inference is published at
+`https://api.bitop.dev/v1`, set:
+
+```yaml
+gateway:
+  inferenceBaseUrl: https://api.bitop.dev/v1
+```
+
+This writes `GATEWAY_INFERENCE_BASE_URL` to the ConfigMap. It only tells signed-in
+users which OpenAI-compatible SDK base URL to use; configure the inference ingress separately.
+Key and model pages also provide an Anthropic SDK base with only the final `/v1`
+removed, because that SDK appends `/v1/messages`. Prefixes and ports are preserved.
+Realtime endpoint copies use `wss://` (`ws://` for development HTTP); SDK bases stay
+HTTPS/HTTP.
+Keep `GATEWAY_PUBLIC_URL` set to the dashboard origin for OIDC and CSRF. Dashboard
+API calls remain same-origin relative requests. An empty chart value omits the
+setting, so the UI uses its current origin plus `/v1`. The gateway rejects invalid
+URLs at startup: HTTPS, no credentials/query/fragment, path ending in `/v1` (one
+trailing slash is removed); HTTP only on development loopback.
+
 ## Secrets this chart never generates
 
 Every credential is a reference to an operator-created Secret (chart name: `existingSecret`), per
