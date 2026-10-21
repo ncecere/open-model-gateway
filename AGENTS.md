@@ -46,6 +46,7 @@ One GitHub issue at a time per worker, one loop per issue:
 - Live workspace-type defaults and replacement platform overrides are separate from tighten-only local/key policies. All applicable limits compose; absent child limits inherit, never remove or reserve allowance. There are no installation-wide limits (no installation budget, rate, concurrency or job limit; removed in migration 0026): limits exist only on personal/team/project workspaces and keys, and installation-wide spend is visible only through a non-blocking alert. Do not reintroduce a global limit row that every admission touches. Increasing limits never resets spending.
 - Catalog availability follows live type defaults unless replaced per workspace. Catalog-sourced model selection requires current catalog eligibility; direct platform assignment is independent. Removal must not silently resurrect old selections when later reassigned.
 - Optional cost-center assignment is platform-controlled and snapshotted at admission; changes affect future usage only, never rewrite history.
+- Every route must be declared by exact method and template in `apps/gateway/src/route_policy.rs`; the source inventory and authorization matrix tests enforce this. Undeclared management routes deny by default.
 - Inference API keys are not management credentials.
 - Never store or log plaintext upstream credentials, inference tokens, or prompt/response bodies by default.
 - Provider credentials are references; validate secret access and upstream endpoints before implementing resolution/execution.

@@ -4,6 +4,8 @@ pub mod alerts;
 pub mod archive;
 pub mod audit_export;
 pub mod auth;
+#[cfg(test)]
+mod authz_matrix;
 pub mod billing;
 pub mod bootstrap;
 pub mod cache;
@@ -34,6 +36,7 @@ pub mod protocols;
 pub mod providers;
 pub mod reporting;
 pub mod rollups;
+mod route_policy;
 pub mod routing;
 pub mod scim;
 pub mod startup;

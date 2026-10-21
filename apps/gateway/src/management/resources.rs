@@ -75,11 +75,17 @@ async fn role_inner(
     user: Uuid,
     lock: bool,
 ) -> Result<String, ApiError> {
-    sqlx::query_scalar::<_, Uuid>(if lock {
-        "SELECT id FROM users WHERE id=$1 AND disabled_at IS NULL AND cleaned_at IS NULL FOR SHARE"
-    } else {
-        "SELECT id FROM users WHERE id=$1 AND disabled_at IS NULL AND cleaned_at IS NULL"
-    })
+    if !lock {
+        // This view already requires an active, non-cleaned user and live grants.
+        return sqlx::query_scalar("SELECT role FROM effective_platform_roles WHERE user_id=$1")
+            .bind(user)
+            .fetch_optional(&mut **tx)
+            .await?
+            .ok_or_else(denied);
+    }
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM users WHERE id=$1 AND disabled_at IS NULL AND cleaned_at IS NULL FOR SHARE",
+    )
     .bind(user)
     .fetch_optional(&mut **tx)
     .await?
@@ -139,7 +145,7 @@ pub(crate) async fn catalog_tx<'a>(
 /// Workspace authority comes only from actual membership (or personal
 /// ownership). Platform Admins/Auditors without membership keep read-only
 /// metadata access (`platform_reader`), never owner powers, keys or requests.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct WorkspaceAccess {
     pub(crate) kind: String,
     pub(crate) owner: bool,
@@ -147,6 +153,7 @@ pub(crate) struct WorkspaceAccess {
     pub(crate) view_all_activity: bool,
     pub(crate) member: bool,
     pub(crate) platform_reader: bool,
+    pub(crate) platform_writer: bool,
     /// Only from [`workspace_read_tx`]: a disabled shared workspace opened
     /// read-only by a Platform Admin/Auditor (no member or admin powers).
     pub(crate) disabled: bool,
@@ -210,6 +217,41 @@ pub(crate) async fn workspace_access_snapshot(
 ) -> Result<WorkspaceAccess, ApiError> {
     access_inner(tx, u, ws, false, false).await
 }
+/// Route preflight, in a primary read snapshot; handlers retain their own
+/// transaction/locking checks so a preflight cannot preserve revoked authority.
+pub(super) async fn workspace_boundary_snapshot(
+    tx: &mut Transaction<'_, Postgres>,
+    u: &BrowserPrincipal,
+    ws: Uuid,
+    allow_disabled: bool,
+) -> Result<WorkspaceAccess, ApiError> {
+    access_inner(tx, u, ws, allow_disabled, false).await
+}
+/// Administrative metadata writes require the platform role first, even for
+/// an unknown workspace. Do not perform a workspace read for a non-admin.
+pub(super) async fn workspace_platform_write_snapshot(
+    tx: &mut Transaction<'_, Postgres>,
+    u: &BrowserPrincipal,
+    ws: Uuid,
+) -> Result<(), ApiError> {
+    let role = platform_role_snapshot(tx, u.user_id).await?;
+    if role != "admin" {
+        return Err(denied());
+    }
+    let (kind, owner, disabled): (String, Option<Uuid>, bool) = sqlx::query_as(
+        "SELECT kind,owner_user_id,disabled_at IS NOT NULL FROM workspaces WHERE id=$1",
+    )
+    .bind(ws)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or_else(missing)?;
+    // Membership does not grant this platform-controlled operation. The same
+    // decision still enforces personal ownership and disabled-workspace rules.
+    let a = workspace_authority(u.user_id, &role, kind, owner, disabled, None, false)?;
+    debug_assert!(a.platform_writer);
+    a.metadata_read()
+}
+
 async fn access_inner(
     tx: &mut Transaction<'_, Postgres>,
     u: &BrowserPrincipal,
@@ -217,12 +259,69 @@ async fn access_inner(
     allow_disabled: bool,
     lock: bool,
 ) -> Result<WorkspaceAccess, ApiError> {
-    let role = role_inner(tx, u.user_id, lock).await?;
-    let platform_reader = matches!(role.as_str(), "admin" | "auditor");
-    let(kind,owner_user,disabled):(String,Option<Uuid>,bool)=sqlx::query_as(if lock {"SELECT kind,owner_user_id,disabled_at IS NOT NULL FROM workspaces WHERE id=$1 AND ($2 OR disabled_at IS NULL) FOR NO KEY UPDATE"} else {"SELECT kind,owner_user_id,disabled_at IS NOT NULL FROM workspaces WHERE id=$1 AND ($2 OR disabled_at IS NULL)"}).bind(ws).bind(allow_disabled).fetch_optional(&mut **tx).await?.ok_or_else(missing)?;
+    let (role, kind, owner_user, disabled, membership) = if lock {
+        let role = role_inner(tx, u.user_id, true).await?;
+        let (kind, owner_user, disabled): (String, Option<Uuid>, bool) = sqlx::query_as(
+            "SELECT kind,owner_user_id,disabled_at IS NOT NULL FROM workspaces WHERE id=$1 AND ($2 OR disabled_at IS NULL) FOR NO KEY UPDATE",
+        ).bind(ws).bind(allow_disabled).fetch_optional(&mut **tx).await?.ok_or_else(missing)?;
+        let membership = if !disabled && shared(&kind) {
+            sqlx::query_scalar("SELECT role FROM effective_workspace_memberships WHERE workspace_id=$1 AND user_id=$2")
+                .bind(ws).bind(u.user_id).fetch_optional(&mut **tx).await?
+        } else {
+            None
+        };
+        (role, kind, owner_user, disabled, membership)
+    } else {
+        // The same live authority views as the locked path, fetched in one
+        // statement. A LEFT JOIN preserves entitlement-before-missing-workspace
+        // semantics. Authorization decisions below are shared by both paths.
+        type AuthorityRow = (
+            String,
+            Option<String>,
+            Option<Uuid>,
+            Option<bool>,
+            Option<String>,
+        );
+        let (role,kind,owner_user,disabled,membership): AuthorityRow = sqlx::query_as(
+            "SELECT p.role,w.kind,w.owner_user_id,w.disabled_at IS NOT NULL,m.role FROM effective_platform_roles p LEFT JOIN workspaces w ON w.id=$2 LEFT JOIN effective_workspace_memberships m ON m.workspace_id=w.id AND m.user_id=p.user_id WHERE p.user_id=$1",
+        ).bind(u.user_id).bind(ws).fetch_optional(&mut **tx).await?.ok_or_else(denied)?;
+        (
+            role,
+            kind.ok_or_else(missing)?,
+            owner_user,
+            disabled.ok_or_else(missing)?,
+            membership,
+        )
+    };
+    workspace_authority(
+        u.user_id,
+        &role,
+        kind,
+        owner_user,
+        disabled,
+        membership,
+        allow_disabled,
+    )
+}
+
+#[cfg(test)]
+#[path = "workspace_authority_tests.rs"]
+mod authority_tests;
+
+// One decision implementation for transactional handlers and route preflight.
+fn workspace_authority(
+    user: Uuid,
+    role: &str,
+    kind: String,
+    owner_user: Option<Uuid>,
+    disabled: bool,
+    membership: Option<String>,
+    allow_disabled: bool,
+) -> Result<WorkspaceAccess, ApiError> {
+    let platform_reader = matches!(role, "admin" | "auditor");
+    let platform_writer = role == "admin";
     if disabled {
-        // Indistinguishable from a missing workspace unless a platform reader asks about a shared one.
-        if !(platform_reader && shared(&kind)) {
+        if !(allow_disabled && platform_reader && shared(&kind)) {
             return Err(missing());
         }
         return Ok(WorkspaceAccess {
@@ -232,11 +331,12 @@ async fn access_inner(
             view_all_activity: false,
             member: false,
             platform_reader,
+            platform_writer,
             disabled,
         });
     }
     if kind == "personal" {
-        if owner_user != Some(u.user_id) {
+        if owner_user != Some(user) {
             return Err(denied());
         }
         return Ok(WorkspaceAccess {
@@ -246,20 +346,11 @@ async fn access_inner(
             view_all_activity: true,
             member: true,
             platform_reader,
+            platform_writer,
             disabled,
         });
     }
-    if !shared(&kind) {
-        return Err(denied());
-    }
-    let membership: Option<String> = sqlx::query_scalar(
-        "SELECT role FROM effective_workspace_memberships WHERE workspace_id=$1 AND user_id=$2",
-    )
-    .bind(ws)
-    .bind(u.user_id)
-    .fetch_optional(&mut **tx)
-    .await?;
-    if membership.is_none() && !platform_reader {
+    if !shared(&kind) || (membership.is_none() && !platform_reader) {
         return Err(denied());
     }
     let owner = membership.as_deref() == Some("owner");
@@ -271,6 +362,7 @@ async fn access_inner(
         view_all_activity: admin,
         member: membership.is_some(),
         platform_reader,
+        platform_writer,
         disabled,
     })
 }

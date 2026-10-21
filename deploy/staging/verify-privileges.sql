@@ -187,6 +187,18 @@ BEGIN;
 INSERT INTO work_leases(name) VALUES('privilege_probe');
 SET LOCAL ROLE gateway_runtime;
 SELECT version,checksum,success FROM public._sqlx_migrations ORDER BY version;
+-- The combined snapshot authority read (#195); no lock or write privilege.
+SELECT p.role,w.kind,w.owner_user_id,w.disabled_at IS NOT NULL,m.role
+ FROM public.effective_platform_roles p
+ LEFT JOIN public.workspaces w ON w.id=NULL::uuid
+ LEFT JOIN public.effective_workspace_memberships m ON m.workspace_id=w.id AND m.user_id=p.user_id
+ WHERE p.user_id=NULL::uuid;
+-- Admin-first platform workspace writes read the role once, then metadata.
+SELECT role FROM public.effective_platform_roles WHERE user_id=NULL::uuid;
+SELECT kind,owner_user_id,disabled_at IS NOT NULL FROM public.workspaces WHERE id=NULL::uuid;
+-- Pre-extraction human/service key checks (#195), without any key value.
+SELECT issued_to_user_id,service_account_id FROM public.api_keys
+ WHERE workspace_id=NULL::uuid AND id=NULL::uuid;
 SELECT lock_installation();
 SELECT id FROM public.users WHERE false FOR UPDATE;
 SELECT model_id FROM public.workspace_model_grants WHERE false FOR SHARE;

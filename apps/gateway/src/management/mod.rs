@@ -1,6 +1,7 @@
 mod access;
 mod alerts;
 mod audit_export;
+mod authorization;
 mod batch_scheduling;
 mod batches;
 pub(crate) mod branding;
@@ -521,6 +522,10 @@ struct Name {
 pub fn router(identity: IdentityState) -> Router<Store> {
     let sign_in = settings::SignIn(identity.clone());
     routes()
+        .route_layer(middleware::from_fn_with_state(
+            identity.store().clone(),
+            authorization::require_route_access,
+        ))
         .layer(Extension(sign_in))
         .route_layer(middleware::from_fn_with_state(identity, require_session))
 }
@@ -532,7 +537,12 @@ pub fn public_router() -> Router<Store> {
 /// Session routes with their own (larger) body cap; mount outside the shared
 /// 2 MiB request limit.
 pub fn upload_router(identity: IdentityState) -> Router<Store> {
-    files::upload_routes().route_layer(middleware::from_fn_with_state(identity, require_session))
+    files::upload_routes()
+        .route_layer(middleware::from_fn_with_state(
+            identity.store().clone(),
+            authorization::require_route_access,
+        ))
+        .route_layer(middleware::from_fn_with_state(identity, require_session))
 }
 fn routes() -> Router<Store> {
     Router::new()
