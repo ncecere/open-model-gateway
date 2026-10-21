@@ -573,6 +573,14 @@ async fn emails_reach_recipients_and_failures_are_recorded(pool: PgPool) {
         .await,
         1
     );
+    assert_eq!(
+        count(
+            &s,
+            "SELECT recipients::bigint FROM alert_deliveries WHERE status='not_configured'"
+        )
+        .await,
+        1
+    );
     let (port, mut rx) = mock::serve(Behaviour::default()).await;
     relay(&s, port).await;
     budget(&s, "local", Some(s.team), "month", 1_000_000).await;
@@ -616,6 +624,532 @@ async fn emails_reach_recipients_and_failures_are_recorded(pool: PgPool) {
     );
     assert_eq!(deliver_pending(&s.store, 10).await, 0);
     let _ = s.owner;
+}
+
+/// A connection refusal must retain a durable, scheduled recipient attempt.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn outbox_connection_failure_waits_for_due_retry(pool: PgPool) {
+    let s = seed(pool).await;
+    let port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    relay(&s, port).await;
+    let mut tx = s.pool.begin().await.unwrap();
+    fire_scim_last_admin(&mut tx, "user").await.unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(deliver_pending(&s.store, 25).await, 1);
+    let status: String = sqlx::query_scalar("SELECT status FROM alert_deliveries")
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        status, "pending",
+        "transient failure must not become terminal"
+    );
+    let (attempts, retrying, waiting): (i32, bool, i32) =
+        sqlx::query_as("SELECT attempt_count,retrying,waiting FROM alert_deliveries")
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+    assert_eq!((attempts, retrying, waiting), (1, true, 1));
+    assert_eq!(deliver_pending(&s.store, 25).await, 0);
+}
+
+async fn outbox_incident(s: &Seed, emails: &str) -> Uuid {
+    let rule = rule(s, "scope,workspace_id,kind,budget_layers,thresholds,notify_workspace_admins,notify_emails", &format!("'workspace','{}','budget_threshold',ARRAY['local'],ARRAY[100],true,ARRAY[{emails}]::text[]",s.team)).await;
+    let event = Uuid::new_v4();
+    sqlx::query("INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary) VALUES($1,$2,'budget_threshold','outbox',100,'warning',$3,'Outbox test')").bind(event).bind(rule).bind(s.team).execute(&s.pool).await.unwrap();
+    sqlx::query("INSERT INTO alert_deliveries(id,event_id,transition) VALUES($1,$2,'fired')")
+        .bind(Uuid::new_v4())
+        .bind(event)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    rule
+}
+async fn outbox_due(s: &Seed) {
+    sqlx::query("UPDATE alert_recipient_outbox SET next_attempt_at=clock_timestamp()-interval '1 second' WHERE state='waiting'").execute(&s.pool).await.unwrap();
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn outbox_partial_success_is_durable_and_never_resent(pool: PgPool) {
+    let s = seed(pool).await;
+    let (port, mut rx) = mock::serve(Behaviour {
+        temporary_recipient: true,
+        reject_only: Some("finance@example.test"),
+        ..Default::default()
+    })
+    .await;
+    relay(&s, port).await;
+    outbox_incident(&s, "'finance@example.test'").await;
+    let (a, b) = tokio::join!(deliver_pending(&s.store, 25), deliver_pending(&s.store, 25));
+    assert!(a + b >= 1);
+    assert!(rx.recv().await.unwrap().rcpt_to[0].contains("owner@example.test"));
+    assert!(
+        rx.try_recv().is_err(),
+        "successful recipient sent once across replicas"
+    );
+    let (sent, attempts, waiting): (i32, i32, i32) =
+        sqlx::query_as("SELECT sent,attempt_count,waiting FROM alert_deliveries")
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+    assert_eq!((sent, attempts, waiting), (1, 2, 1));
+    assert_eq!(deliver_pending(&s.store, 25).await, 0);
+    let (port, mut retry) = mock::serve(Behaviour::default()).await;
+    relay(&s, port).await;
+    outbox_due(&s).await;
+    assert_eq!(deliver_pending(&s.store, 25).await, 1);
+    assert!(retry.recv().await.unwrap().rcpt_to[0].contains("finance@example.test"));
+    assert!(retry.try_recv().is_err());
+    let (status, sent, attempts): (String, i32, i32) =
+        sqlx::query_as("SELECT status,sent,attempt_count FROM alert_deliveries")
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+    assert_eq!((status.as_str(), sent, attempts), ("sent", 2, 3));
+    assert_eq!(deliver_pending(&s.store, 25).await, 0);
+    assert!(
+        sqlx::query("UPDATE alert_recipient_outbox SET state='waiting' WHERE state='sent'")
+            .execute(&s.pool)
+            .await
+            .is_err(),
+        "completed recipients cannot reopen"
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn outbox_backoff_and_five_attempt_exhaustion_use_database_clock(pool: PgPool) {
+    let s = seed(pool).await;
+    let (port, _rx) = mock::serve(Behaviour {
+        temporary_recipient: true,
+        ..Default::default()
+    })
+    .await;
+    relay(&s, port).await;
+    outbox_incident(&s, "").await;
+    for (index, seconds) in [60, 300, 1800, 7200].into_iter().enumerate() {
+        assert_eq!(deliver_pending(&s.store, 25).await, 1);
+        let (attempts, due, retrying): (i32,f64,bool) = sqlx::query_as("SELECT attempt_count,extract(epoch FROM next_attempt_at-clock_timestamp())::float8,retrying FROM alert_deliveries").fetch_one(&s.pool).await.unwrap();
+        assert_eq!(attempts, index as i32 + 1);
+        assert!(retrying && due > f64::from(seconds) - 5.0 && due <= f64::from(seconds));
+        assert_eq!(deliver_pending(&s.store, 25).await, 0);
+        outbox_due(&s).await;
+    }
+    assert_eq!(deliver_pending(&s.store, 25).await, 1);
+    let (status, attempts, exhausted, due): (String, i32, i32, Option<DateTime<Utc>>) =
+        sqlx::query_as(
+            "SELECT status,attempt_count,exhausted,next_attempt_at FROM alert_deliveries",
+        )
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!((status.as_str(), attempts, exhausted), ("failed", 5, 1));
+    assert!(due.is_none());
+    assert_eq!(deliver_pending(&s.store, 25).await, 0);
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn outbox_live_lease_excludes_replicas_and_fences_stale_completion(pool: PgPool) {
+    let s = seed(pool).await;
+    let (port, mut rx) = mock::serve(Behaviour::default()).await;
+    relay(&s, port).await;
+    outbox_incident(&s, "").await;
+    let (_, old) = outbox::claim(&s.store, Uuid::new_v4())
+        .await
+        .unwrap()
+        .unwrap();
+    let old = old.unwrap();
+    assert!(
+        outbox::claim(&s.store, Uuid::new_v4())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let attempts: i32 = sqlx::query_scalar("SELECT attempt_count FROM alert_recipient_outbox")
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(attempts, 1, "attempt committed before any network I/O");
+    let retrying: bool = sqlx::query_scalar("SELECT retrying FROM alert_deliveries")
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+    assert!(!retrying, "the first live attempt is not a retry yet");
+    sqlx::query("UPDATE alert_recipient_outbox SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE state='leased'").execute(&s.pool).await.unwrap();
+    let (_, new) = outbox::claim(&s.store, Uuid::new_v4())
+        .await
+        .unwrap()
+        .unwrap();
+    let new = new.unwrap();
+    assert!(!outbox::complete(&s.store, &old, Ok(())).await.unwrap());
+    assert!(outbox::complete(&s.store, &new, Ok(())).await.unwrap());
+    assert!(
+        !outbox::complete(&s.store, &old, Err(crate::email::DeliveryError::Connection))
+            .await
+            .unwrap()
+    );
+    assert!(rx.try_recv().is_err(), "claiming alone never sends");
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM alert_recipient_outbox WHERE state='sent' AND attempt_count=2"
+        )
+        .await,
+        1
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn outbox_revocation_intersects_snapshot_and_never_adds_recipients(pool: PgPool) {
+    let s = seed(pool).await;
+    let (port, _rx) = mock::serve(Behaviour {
+        temporary_recipient: true,
+        ..Default::default()
+    })
+    .await;
+    relay(&s, port).await;
+    let rule = outbox_incident(&s, "'finance@example.test'").await;
+    assert_eq!(deliver_pending(&s.store, 25).await, 1);
+    sqlx::query("UPDATE workspace_membership_grants SET revoked_at=now() WHERE workspace_id=$1 AND user_id=$2").bind(s.team).bind(s.owner).execute(&s.pool).await.unwrap();
+    sqlx::query("UPDATE alert_rules SET notify_emails=ARRAY['finance@example.test','new@example.test'] WHERE id=$1").bind(rule).execute(&s.pool).await.unwrap();
+    outbox_due(&s).await;
+    let (port, mut rx) = mock::serve(Behaviour::default()).await;
+    relay(&s, port).await;
+    assert_eq!(deliver_pending(&s.store, 25).await, 1);
+    assert!(rx.recv().await.unwrap().rcpt_to[0].contains("finance@example.test"));
+    assert!(rx.try_recv().is_err());
+    assert_eq!(
+        count(&s, "SELECT count(*) FROM alert_recipient_outbox").await,
+        2
+    );
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM alert_recipient_outbox WHERE state='ineligible'"
+        )
+        .await,
+        1
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn outbox_explicit_address_cannot_resurrect_disabled_internal_user(pool: PgPool) {
+    let s = seed(pool).await;
+    let (port, _rx) = mock::serve(Behaviour {
+        temporary_recipient: true,
+        ..Default::default()
+    })
+    .await;
+    relay(&s, port).await;
+    outbox_incident(&s, "'OWNER@example.test'").await;
+    assert_eq!(deliver_pending(&s.store, 25).await, 1);
+    sqlx::query("UPDATE users SET disabled_at=now(),disable_reason='admin_suspension' WHERE id=$1")
+        .bind(s.owner)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    outbox_due(&s).await;
+    let (port, mut rx) = mock::serve(Behaviour::default()).await;
+    relay(&s, port).await;
+    assert_eq!(deliver_pending(&s.store, 25).await, 1);
+    assert!(rx.try_recv().is_err());
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM alert_recipient_outbox WHERE state='ineligible'"
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM alert_deliveries WHERE status='no_recipients'"
+        )
+        .await,
+        1
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn outbox_internal_address_eligibility_survives_cleanup_and_address_change(pool: PgPool) {
+    let s = seed(pool).await;
+    let (port, _rx) = mock::serve(Behaviour {
+        temporary_recipient: true,
+        ..Default::default()
+    })
+    .await;
+    relay(&s, port).await;
+    outbox_incident(&s, "'owner@example.test'").await;
+    assert_eq!(deliver_pending(&s.store, 25).await, 1);
+    // Account cleanup erases the email; a listed old address must not become
+    // an apparently external recipient that bypasses disablement.
+    sqlx::query("UPDATE users SET email='redacted@example.test',disabled_at=now(),disable_reason='admin_suspension',cleaned_at=now() WHERE id=$1").bind(s.owner).execute(&s.pool).await.unwrap();
+    outbox_due(&s).await;
+    let (port, mut rx) = mock::serve(Behaviour::default()).await;
+    relay(&s, port).await;
+    assert_eq!(deliver_pending(&s.store, 25).await, 1);
+    assert!(rx.try_recv().is_err());
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM alert_recipient_outbox WHERE state='ineligible'"
+        )
+        .await,
+        1
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn outbox_unsetting_smtp_preserves_a_live_claim_result(pool: PgPool) {
+    let s = seed(pool).await;
+    relay(&s, 25).await;
+    outbox_incident(&s, "'finance@example.test'").await;
+    let (_, claim) = outbox::claim(&s.store, Uuid::new_v4())
+        .await
+        .unwrap()
+        .unwrap();
+    let claim = claim.unwrap();
+    sqlx::query("UPDATE installation_settings SET smtp_host=NULL,smtp_port=NULL,smtp_tls=NULL,smtp_from_address=NULL WHERE singleton").execute(&s.pool).await.unwrap();
+    assert_eq!(deliver_pending(&s.store, 25).await, 1);
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM alert_deliveries WHERE status='pending'"
+        )
+        .await,
+        1
+    );
+    assert!(outbox::complete(&s.store, &claim, Ok(())).await.unwrap());
+    assert_eq!(count(&s,"SELECT count(*) FROM alert_deliveries WHERE status='not_configured' AND sent=1 AND waiting=0").await,1);
+    assert_eq!(deliver_pending(&s.store, 25).await, 0);
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn outbox_unset_smtp_and_expired_fifth_claim_never_loop(pool: PgPool) {
+    let s = seed(pool).await;
+    let (port, _rx) = mock::serve(Behaviour {
+        temporary_recipient: true,
+        ..Default::default()
+    })
+    .await;
+    relay(&s, port).await;
+    outbox_incident(&s, "").await;
+    deliver_pending(&s.store, 25).await;
+    sqlx::query("UPDATE installation_settings SET smtp_host=NULL,smtp_port=NULL,smtp_tls=NULL,smtp_from_address=NULL WHERE singleton").execute(&s.pool).await.unwrap();
+    outbox_due(&s).await;
+    assert_eq!(deliver_pending(&s.store, 25).await, 1);
+    assert_eq!(count(&s,"SELECT count(*) FROM alert_deliveries WHERE status='not_configured' AND NOT retrying AND waiting=0").await,1);
+    assert_eq!(deliver_pending(&s.store, 25).await, 0);
+    relay(&s, port).await;
+    outbox_incident(&s, "").await;
+    for _ in 0..4 {
+        deliver_pending(&s.store, 25).await;
+        outbox_due(&s).await;
+    }
+    let (_, fifth) = outbox::claim(&s.store, Uuid::new_v4())
+        .await
+        .unwrap()
+        .unwrap();
+    let fifth = fifth.unwrap();
+    sqlx::query("UPDATE alert_recipient_outbox SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE state='leased'").execute(&s.pool).await.unwrap();
+    deliver_pending(&s.store, 25).await;
+    assert!(!outbox::complete(&s.store, &fifth, Ok(())).await.unwrap());
+    assert_eq!(count(&s,"SELECT count(*) FROM alert_recipient_outbox WHERE state='exhausted' AND attempt_count=5").await,1);
+    assert_eq!(deliver_pending(&s.store, 25).await, 0);
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn outbox_24h_cleanup_preserves_success_and_exhausts_leases(pool: PgPool) {
+    let s = seed(pool).await;
+    let (port, _rx) = mock::serve(Behaviour {
+        temporary_recipient: true,
+        reject_only: Some("finance@example.test"),
+        ..Default::default()
+    })
+    .await;
+    relay(&s, port).await;
+    outbox_incident(&s, "'finance@example.test'").await;
+    deliver_pending(&s.store, 25).await;
+    outbox_due(&s).await;
+    let (_, claim) = outbox::claim(&s.store, Uuid::new_v4())
+        .await
+        .unwrap()
+        .unwrap();
+    let claim = claim.unwrap();
+    sqlx::query("UPDATE alert_deliveries SET created_at=clock_timestamp()-interval '25 hours'")
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE alert_recipient_outbox SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE state='leased'").execute(&s.pool).await.unwrap();
+    deliver_pending(&s.store, 25).await;
+    assert!(!outbox::complete(&s.store, &claim, Ok(())).await.unwrap());
+    let (status, sent, exhausted): (String, i32, i32) =
+        sqlx::query_as("SELECT status,sent,exhausted FROM alert_deliveries")
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+    assert_eq!((status.as_str(), sent, exhausted), ("partial", 1, 1));
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn outbox_network_io_releases_connection_and_restart_reclaims(pool: PgPool) {
+    let s = seed(pool).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    relay(&s, listener.local_addr().unwrap().port()).await;
+    outbox_incident(&s, "").await;
+    let single = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with((*s.pool.connect_options()).clone())
+        .await
+        .unwrap();
+    let worker = Store::new(single.clone());
+    let job = tokio::spawn(async move { deliver_pending(&worker, 25).await });
+    // No greeting: SMTP remains in network I/O while the sole DB connection
+    // must already be available, and its attempt must be durable.
+    let (socket, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+        .await
+        .unwrap()
+        .unwrap();
+    let attempts: i32 = tokio::time::timeout(
+        Duration::from_secs(2),
+        sqlx::query_scalar("SELECT attempt_count FROM alert_recipient_outbox WHERE state='leased'")
+            .fetch_one(&single),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(attempts, 1);
+    job.abort();
+    assert!(job.await.unwrap_err().is_cancelled());
+    drop(socket);
+    drop(listener);
+    sqlx::query("UPDATE alert_recipient_outbox SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE state='leased'").execute(&s.pool).await.unwrap();
+    let (port, mut rx) = mock::serve(Behaviour::default()).await;
+    relay(&s, port).await;
+    assert_eq!(deliver_pending(&Store::new(single.clone()), 25).await, 1);
+    assert!(rx.recv().await.unwrap().rcpt_to[0].contains("owner@example.test"));
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM alert_recipient_outbox WHERE state='sent' AND attempt_count=2"
+        )
+        .await,
+        1
+    );
+    single.close().await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn outbox_personal_delivery_stays_owner_private(pool: PgPool) {
+    let s = seed(pool).await;
+    let (port, mut rx) = mock::serve(Behaviour::default()).await;
+    relay(&s, port).await;
+    let event = Uuid::new_v4();
+    sqlx::query("INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,workspace_id,summary) VALUES($1,'personal_budget','budget_threshold','private',80,'warning',$2,'Personal budget reached 80%')").bind(event).bind(s.personal).execute(&s.pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO alert_deliveries(id,event_id,transition) VALUES(gen_random_uuid(),$1,'fired')",
+    )
+    .bind(event)
+    .execute(&s.pool)
+    .await
+    .unwrap();
+    assert_eq!(deliver_pending(&s.store, 25).await, 1);
+    let got = rx.recv().await.unwrap();
+    assert!(got.rcpt_to[0].contains("owner@example.test"));
+    assert!(got.data.contains("Your personal workspace"));
+    assert!(!got.data.contains("admin@example.test"));
+    assert!(rx.try_recv().is_err());
+    assert_eq!(
+        count(&s, "SELECT count(*) FROM alert_recipient_outbox").await,
+        1
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn outbox_tick_caps_recipient_attempts_at_25(pool: PgPool) {
+    let s = seed(pool).await;
+    let (port, mut rx) = mock::serve(Behaviour::default()).await;
+    relay(&s, port).await;
+    for i in 0..3 {
+        let emails = (0..10)
+            .map(|n| format!("'recipient-{i}-{n}@example.test'"))
+            .collect::<Vec<_>>()
+            .join(",");
+        outbox_incident(&s, &emails).await;
+    }
+    deliver_pending(&s.store, 1000).await;
+    let attempts: i64 =
+        sqlx::query_scalar("SELECT sum(attempt_count)::bigint FROM alert_deliveries")
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+    assert_eq!(attempts, 25);
+    let mut received = 0;
+    while rx.try_recv().is_ok() {
+        received += 1;
+    }
+    assert_eq!(received, 25);
+    deliver_pending(&s.store, 1000).await;
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM alert_recipient_outbox WHERE state='sent'"
+        )
+        .await,
+        33
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn outbox_upgrade_never_replays_terminal_history(pool: PgPool) {
+    let previous = sqlx::migrate::Migrator {
+        migrations: std::borrow::Cow::Owned(
+            crate::store::MIGRATOR
+                .iter()
+                .filter(|m| m.version <= 48)
+                .cloned()
+                .collect(),
+        ),
+        ignore_missing: false,
+        locking: true,
+        no_tx: false,
+    };
+    previous.run(&pool).await.unwrap();
+    let s = seed(pool).await;
+    for status in [
+        "sent",
+        "partial",
+        "failed",
+        "not_configured",
+        "no_recipients",
+    ] {
+        let rule = outbox_incident(&s, "").await;
+        sqlx::query("UPDATE alert_deliveries SET status=$1,completed_at=now() WHERE event_id IN(SELECT id FROM alert_events WHERE rule_id=$2)")
+            .bind(status).bind(rule).execute(&s.pool).await.unwrap();
+    }
+    // Only this genuinely pre-upgrade pending delivery may initialize.
+    outbox_incident(&s, "").await;
+    crate::store::MIGRATOR.run(&s.pool).await.unwrap();
+    let (port, mut rx) = mock::serve(Behaviour::default()).await;
+    relay(&s, port).await;
+    assert_eq!(deliver_pending(&s.store, 25).await, 1);
+    assert!(rx.recv().await.unwrap().rcpt_to[0].contains("owner@example.test"));
+    assert!(rx.try_recv().is_err());
+    assert_eq!(
+        count(&s, "SELECT count(*) FROM alert_recipient_outbox").await,
+        1
+    );
+    assert!(
+        sqlx::query("UPDATE alert_deliveries SET status='pending',completed_at=NULL")
+            .execute(&s.pool)
+            .await
+            .is_err()
+    );
+    assert!(sqlx::query("INSERT INTO alert_recipient_outbox(delivery_id,fingerprint) SELECT id,sha256('test'::bytea) FROM alert_deliveries").execute(&s.pool).await.is_err());
+    assert_eq!(deliver_pending(&s.store, 25).await, 0);
 }
 
 /// The former budget-alert scans (before 0025), kept as the oracle.

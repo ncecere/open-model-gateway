@@ -28,8 +28,11 @@ use serde_json::{Value, json};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
+mod outbox;
+pub use outbox::deliver_pending;
+
 use crate::{
-    email::{OutgoingEmail, SmtpSettings, TlsMode},
+    email::{SmtpSettings, TlsMode},
     governance::BudgetPeriod,
     store::Store,
 };
@@ -1006,10 +1009,8 @@ pub async fn evaluate_once_fenced(
     let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut *tx)
         .await?;
-    // Deliveries a crashed process left behind are recorded, not resent forever.
-    sqlx::query("UPDATE alert_deliveries SET status='failed',error='interrupted',completed_at=clock_timestamp() WHERE status='pending' AND created_at<now()-interval '1 day'")
-        .execute(&mut *tx)
-        .await?;
+    // Outbox cleanup takes only short delivery locks, never SMTP I/O.
+    outbox::cleanup(&mut tx).await?;
     let mut report = Report {
         resolved: retire_inactive(&mut tx, None).await? as usize
             + resolve_scim_last_admin(&mut tx).await?,
@@ -1210,80 +1211,28 @@ struct Pending {
     severity: String,
     fired_at: DateTime<Utc>,
     resolved_at: Option<DateTime<Utc>>,
-    rule_id: Option<Uuid>,
     rule_name: Option<String>,
     workspace_name: Option<String>,
     workspace_kind: Option<String>,
     connection_name: Option<String>,
     personal_workspace: Option<Uuid>,
-    event_id: Uuid,
     builtin: Option<String>,
 }
 
-/// Send one pending delivery while holding its row lock (no double sends
-/// across replicas). Returns false when nothing was pending.
-async fn deliver_one(store: &Store, id: Uuid) -> anyhow::Result<bool> {
-    let mut tx = crate::db::begin(&store.pool).await?;
-    let row: Option<Pending> = sqlx::query_as("SELECT d.transition,e.summary,e.severity,e.fired_at,e.resolved_at,e.rule_id,r.name rule_name,w.name workspace_name,w.kind workspace_kind,p.name connection_name,CASE WHEN e.builtin IS NOT NULL THEN e.workspace_id END personal_workspace,e.id event_id,e.builtin FROM alert_deliveries d JOIN alert_events e ON e.id=d.event_id LEFT JOIN alert_rules r ON r.id=e.rule_id LEFT JOIN workspaces w ON w.id=e.workspace_id LEFT JOIN provider_connections p ON p.id=e.provider_connection_id WHERE d.id=$1 AND d.status='pending' FOR UPDATE OF d SKIP LOCKED")
-        .bind(id)
-        .fetch_optional(&mut *tx)
-        .await?;
-    let Some(Pending {
+fn email_message(row: Pending, installation: String) -> (String, String) {
+    let Pending {
         transition,
         summary,
         severity,
         fired_at,
         resolved_at,
-        rule_id: rule,
         rule_name,
         workspace_name: ws_name,
         workspace_kind: ws_kind,
         connection_name: connection,
         personal_workspace: personal,
-        event_id,
         builtin,
-    }) = row
-    else {
-        return Ok(false);
-    };
-    let recipients: Vec<String> = sqlx::query_scalar("SELECT DISTINCT lower(x.email) FROM (
- SELECT unnest(r.notify_emails) email FROM alert_rules r WHERE r.id=$1
- UNION ALL SELECT u.email FROM alert_rules r JOIN effective_workspace_memberships m ON m.workspace_id=r.workspace_id AND m.role IN ('owner','admin') JOIN users u ON u.id=m.user_id WHERE r.id=$1 AND r.notify_workspace_admins
- UNION ALL SELECT u.email FROM alert_rules r JOIN effective_platform_roles p ON p.role='admin' JOIN users u ON u.id=p.user_id WHERE r.id=$1 AND r.notify_platform_admins
- UNION ALL SELECT u.email FROM workspaces w JOIN users u ON u.id=w.owner_user_id JOIN effective_platform_roles p ON p.user_id=u.id WHERE w.id=$2 AND w.kind='personal' AND w.disabled_at IS NULL
- UNION ALL SELECT u.email FROM alert_events e JOIN effective_platform_roles p ON p.role='admin' JOIN users u ON u.id=p.user_id WHERE e.id=$4 AND e.builtin=ANY($5)
-) x WHERE x.email IS NOT NULL ORDER BY 1 LIMIT $3")
-        .bind(rule)
-        .bind(personal)
-        .bind(MAX_RECIPIENTS)
-        .bind(event_id)
-        .bind(&INSTALLATION_BUILTINS[..])
-        .fetch_all(&mut *tx)
-        .await?;
-    let (settings, installation) = relay(&mut tx).await?;
-    let finish = |status: &'static str, sent: i32, failed: i32, error: Option<&'static str>| {
-        sqlx::query("UPDATE alert_deliveries SET status=$2,recipients=$3,sent=$4,failed=$5,error=$6,completed_at=clock_timestamp() WHERE id=$1 AND status='pending'")
-            .bind(id)
-            .bind(status)
-            .bind(recipients.len() as i32)
-            .bind(sent)
-            .bind(failed)
-            .bind(error)
-    };
-    let Some(settings) = settings else {
-        finish("not_configured", 0, 0, None)
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        return Ok(true);
-    };
-    if recipients.is_empty() {
-        finish("no_recipients", 0, 0, None)
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        return Ok(true);
-    }
+    } = row;
     let scope = if personal.is_some() {
         "Your personal workspace".to_owned()
     } else if let Some(connection) = connection {
@@ -1301,7 +1250,7 @@ async fn deliver_one(store: &Store, id: Uuid) -> anyhow::Result<bool> {
         "Installation".to_owned()
     };
     let resolved = transition == "resolved";
-    let (subject, body) = email_text(
+    email_text(
         &EmailFacts {
             installation,
             summary,
@@ -1321,61 +1270,7 @@ async fn deliver_one(store: &Store, id: Uuid) -> anyhow::Result<bool> {
             },
         },
         public_url().as_deref(),
-    );
-    let (mut sent, mut failed, mut error) = (0, 0, None);
-    for to in &recipients {
-        match settings
-            .send(
-                &store.smtp_secrets,
-                OutgoingEmail {
-                    to: to.clone(),
-                    subject: subject.clone(),
-                    body: body.clone(),
-                },
-            )
-            .await
-        {
-            Ok(()) => sent += 1,
-            Err(e) => {
-                failed += 1;
-                error.get_or_insert(e.as_str());
-            }
-        }
-    }
-    let status = match (sent, failed) {
-        (_, 0) => "sent",
-        (0, _) => "failed",
-        _ => "partial",
-    };
-    finish(status, sent, failed, error)
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await?;
-    Ok(true)
-}
-
-/// Deliver up to `limit` pending emails (oldest first). Failures are recorded
-/// per delivery and never stop the others.
-pub async fn deliver_pending(store: &Store, limit: i64) -> usize {
-    let Ok(ids) = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM alert_deliveries WHERE status='pending' ORDER BY created_at,id LIMIT $1",
     )
-    .bind(limit.clamp(1, 1000))
-    .fetch_all(&store.pool)
-    .await
-    else {
-        tracing::warn!("alert delivery queue unavailable");
-        return 0;
-    };
-    let mut done = 0;
-    for id in ids {
-        match deliver_one(store, id).await {
-            Ok(true) => done += 1,
-            Ok(false) => {}
-            Err(_) => tracing::warn!("alert email delivery could not be recorded; retrying later"),
-        }
-    }
-    done
 }
 
 /// Background evaluator for `serve`.

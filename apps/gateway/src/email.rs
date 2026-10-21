@@ -81,13 +81,23 @@ pub enum DeliveryError {
     Connection,
     Tls,
     Authentication,
-    /// The relay refused the sender, recipient or message.
+    /// Relay refusal, malformed protocol response or an unsupported SMTP
+    /// client/relay capability. Never includes a reply or credential.
     Rejected,
+    /// Explicit SMTP 4xx (except authentication/configuration failures).
+    TemporaryRejected,
     Timeout,
     /// The relay host is not in `GATEWAY_SMTP_HOST_ALLOWLIST` (#168).
     HostNotAllowed,
 }
 impl DeliveryError {
+    pub fn retryable(self) -> bool {
+        matches!(
+            self,
+            Self::Connection | Self::Timeout | Self::TemporaryRejected
+        )
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Credential => "credential",
@@ -95,7 +105,9 @@ impl DeliveryError {
             Self::Connection => "connection",
             Self::Tls => "tls",
             Self::Authentication => "authentication",
-            Self::Rejected => "rejected",
+            // The public category stays compatible; retry metadata carries
+            // scheduling, not raw SMTP codes or relay replies.
+            Self::Rejected | Self::TemporaryRejected => "rejected",
             Self::Timeout => "timeout",
             Self::HostNotAllowed => "host_not_allowed",
         }
@@ -244,7 +256,7 @@ impl SmtpSettings {
         email: OutgoingEmail,
     ) -> Result<(), DeliveryError> {
         if !valid_host(&self.host) || self.port == 0 {
-            return Err(DeliveryError::Connection);
+            return Err(DeliveryError::HostNotAllowed);
         }
         // Never send credentials or invitation codes in clear text off the machine.
         if self.tls == TlsMode::None && !is_loopback_host(&self.host) {
@@ -270,11 +282,19 @@ impl SmtpSettings {
         // TLS still verifies the configured host name.
         let addresses = tokio::time::timeout(
             COMMAND_TIMEOUT,
-            crate::egress::resolve(egress, crate::egress::Purpose::Smtp, &host, self.port),
+            crate::egress::resolve_classified(
+                egress,
+                crate::egress::Purpose::Smtp,
+                &host,
+                self.port,
+            ),
         )
         .await
         .map_err(|_| DeliveryError::Timeout)?
-        .map_err(|_| DeliveryError::Connection)?;
+        .map_err(|e| match e {
+            crate::egress::ResolveError::Dns => DeliveryError::Connection,
+            crate::egress::ResolveError::Policy => DeliveryError::HostNotAllowed,
+        })?;
         // Plaintext only when every address we might connect to is loopback.
         if self.tls == TlsMode::None && !addresses.iter().all(|a| a.ip().is_loopback()) {
             return Err(DeliveryError::Tls);
@@ -337,12 +357,25 @@ fn classify(error: &lettre::transport::smtp::Error) -> DeliveryError {
     }
     if let Some(code) = error.status() {
         let code = u16::from(code);
-        if matches!(code, 530 | 534 | 535 | 454) {
+        if matches!(code, 432 | 454 | 530 | 534 | 535 | 538) {
             return DeliveryError::Authentication;
         }
+        return if (400..500).contains(&code) {
+            DeliveryError::TemporaryRejected
+        } else {
+            DeliveryError::Rejected
+        };
+    }
+    if error.is_transient() {
+        return DeliveryError::TemporaryRejected;
+    }
+    if error.is_permanent() {
         return DeliveryError::Rejected;
     }
-    if error.is_permanent() || error.is_transient() {
+    // Lettre also uses Client for missing required STARTTLS and incompatible
+    // AUTH mechanisms. These are configuration/protocol failures, not network
+    // outages. Do not inspect or retain its potentially sensitive source text.
+    if error.is_client() || error.is_response() || error.is_transport_shutdown() {
         return DeliveryError::Rejected;
     }
     DeliveryError::Connection
@@ -371,8 +404,14 @@ pub(crate) mod mock {
         /// Advertise AUTH and answer 235 (or 535 when `reject_auth`).
         pub(crate) auth: bool,
         pub(crate) reject_auth: bool,
+        /// Explicit authentication refusal (including temporary auth errors).
+        pub(crate) auth_failure: Option<u16>,
         /// Answer 550 to RCPT TO.
         pub(crate) reject_recipient: bool,
+        /// Answer 450 instead of accepting the recipient.
+        pub(crate) temporary_recipient: bool,
+        /// Restrict the configured refusal to this address.
+        pub(crate) reject_only: Option<&'static str>,
     }
 
     /// Start a sink accepting any number of sequential connections.
@@ -387,6 +426,10 @@ pub(crate) mod mock {
                     let (read, mut write) = stream.into_split();
                     let mut lines = BufReader::new(read);
                     let mut current = Received::default();
+                    let auth_failure = format!(
+                        "{} authentication refused\r\n",
+                        behaviour.auth_failure.unwrap_or(535)
+                    );
                     write.write_all(b"220 mock ESMTP\r\n").await.ok();
                     let mut line = String::new();
                     loop {
@@ -404,8 +447,8 @@ pub(crate) mod mock {
                             }
                         } else if upper.starts_with("AUTH") {
                             current.auth = Some(command.clone());
-                            if behaviour.reject_auth {
-                                b"535 5.7.8 rejected\r\n"
+                            if behaviour.reject_auth || behaviour.auth_failure.is_some() {
+                                auth_failure.as_bytes()
                             } else {
                                 b"235 2.7.0 ok\r\n"
                             }
@@ -414,8 +457,17 @@ pub(crate) mod mock {
                             b"250 ok\r\n"
                         } else if upper.starts_with("RCPT TO") {
                             current.rcpt_to.push(command.clone());
-                            if behaviour.reject_recipient {
-                                b"550 5.1.1 no such user\r\n"
+                            if behaviour
+                                .reject_only
+                                .is_none_or(|to| command.to_lowercase().contains(to))
+                            {
+                                if behaviour.temporary_recipient {
+                                    b"450 4.2.0 try later\r\n"
+                                } else if behaviour.reject_recipient {
+                                    b"550 5.1.1 no such user\r\n"
+                                } else {
+                                    b"250 ok\r\n"
+                                }
                             } else {
                                 b"250 ok\r\n"
                             }
@@ -538,7 +590,7 @@ mod tests {
         let strict = crate::egress::Policy::default();
         assert_eq!(
             relay(port).send_with(&strict, None, message()).await,
-            Err(DeliveryError::Connection)
+            Err(DeliveryError::HostNotAllowed)
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(!accepted.load(std::sync::atomic::Ordering::SeqCst));
@@ -641,6 +693,82 @@ mod tests {
         assert_eq!(
             relay(port).send_with(&dev(), None, message()).await,
             Err(DeliveryError::Rejected)
+        );
+    }
+
+    #[tokio::test]
+    async fn smtp_4xx_is_retryable_but_5xx_and_configuration_are_terminal() {
+        for (temporary, expected) in [
+            (true, DeliveryError::TemporaryRejected),
+            (false, DeliveryError::Rejected),
+        ] {
+            let (port, _rx) = mock::serve(Behaviour {
+                temporary_recipient: temporary,
+                reject_recipient: !temporary,
+                ..Default::default()
+            })
+            .await;
+            let error = relay(port)
+                .send_with(&dev(), None, message())
+                .await
+                .unwrap_err();
+            assert_eq!(error, expected);
+            assert_eq!(error.retryable(), temporary);
+            assert_eq!(error.as_str(), "rejected");
+        }
+        for code in [432, 454, 535] {
+            let (port, _rx) = mock::serve(Behaviour {
+                auth: true,
+                auth_failure: Some(code),
+                ..Default::default()
+            })
+            .await;
+            let mut settings = relay(port);
+            settings.username = Some("mock-user".into());
+            let error = settings
+                .send_with(&dev(), Some("mock-password"), message())
+                .await
+                .unwrap_err();
+            assert_eq!(error, DeliveryError::Authentication);
+            assert!(
+                !error.retryable(),
+                "authentication is terminal even with SMTP 4xx"
+            );
+        }
+        for error in [
+            DeliveryError::Credential,
+            DeliveryError::Address,
+            DeliveryError::Authentication,
+            DeliveryError::Tls,
+            DeliveryError::HostNotAllowed,
+            DeliveryError::Rejected,
+        ] {
+            assert!(!error.retryable());
+        }
+        for error in [DeliveryError::Connection, DeliveryError::Timeout] {
+            assert!(error.retryable());
+        }
+    }
+
+    #[tokio::test]
+    async fn unsupported_auth_or_required_starttls_is_terminal_not_a_connection_retry() {
+        let (port, _rx) = mock::serve(Behaviour::default()).await;
+        let mut auth = relay(port);
+        auth.username = Some("mock-user".into());
+        let error = auth
+            .send_with(&dev(), Some("mock-password"), message())
+            .await
+            .unwrap_err();
+        assert!(
+            !error.retryable(),
+            "a relay with no compatible AUTH mechanism is configuration, not a connection outage"
+        );
+        let mut tls = relay(port);
+        tls.tls = TlsMode::StartTls;
+        let error = tls.send_with(&dev(), None, message()).await.unwrap_err();
+        assert!(
+            !error.retryable(),
+            "a relay with no required STARTTLS is terminal configuration"
         );
     }
 

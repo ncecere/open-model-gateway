@@ -30,6 +30,16 @@ groups:
           summary: "p95 time to response headers above 10s on {{ $labels.route }}"
           description: "Admission serializes on the installation lock; compare with gateway_db_pool_connections and upstream latency."
 
+  - name: open-model-gateway.alert-email
+    rules:
+      - alert: GatewayAlertEmailPersistentFailure
+        expr: max(gateway_alert_email_deliveries{state=~"failed|exhausted"}) > 0
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: Alert email has persistent terminal delivery failures
+          description: "A delivery created in the last 24 hours failed or exhausted retries. Check incident History, relay availability and SMTP configuration. Use an independent operational channel; do not feed this back into gateway email incidents. Crash recovery can duplicate accepted mail."
+
   - name: open-model-gateway.accounting
     rules:
       - alert: GatewaySettlementHeld

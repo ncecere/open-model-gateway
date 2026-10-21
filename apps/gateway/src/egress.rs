@@ -340,6 +340,28 @@ pub async fn resolve(
     filter(policy, purpose, host, found)
 }
 
+/// SMTP must not retry an operator-policy refusal as a network failure.
+#[derive(Clone, Copy)]
+pub(crate) enum ResolveError {
+    Dns,
+    Policy,
+}
+pub(crate) async fn resolve_classified(
+    policy: &Policy,
+    purpose: Purpose,
+    host: &str,
+    port: u16,
+) -> Result<Vec<SocketAddr>, ResolveError> {
+    let found: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|_| ResolveError::Dns)?
+        .collect();
+    if found.is_empty() {
+        return Err(ResolveError::Dns);
+    }
+    filter(policy, purpose, host, found).map_err(|_| ResolveError::Policy)
+}
+
 /// Check a configured URL whose host may be an IP literal (those never reach
 /// the resolver). Hostnames pass here and are checked at resolution.
 pub fn check_url(policy: &Policy, purpose: Purpose, url: &reqwest::Url) -> anyhow::Result<()> {

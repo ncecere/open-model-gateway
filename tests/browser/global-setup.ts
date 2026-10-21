@@ -7,5 +7,8 @@ export default async function globalSetup() {
   // Fresh personas, fixture ids and axe findings for every run.
   rmSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../target/browser-tests/state"), { recursive: true, force: true });
   const state = await startStack();
+  // Server-only fixture control for outbox due-time tests; never a VITE var.
+  const databaseUrl = new URL(state.adminUrl); databaseUrl.pathname = `/${state.database}`;
+  process.env.OMG_BROWSER_DATABASE_URL = databaseUrl.href;
   return async () => { await stopStack(state); };
 }
