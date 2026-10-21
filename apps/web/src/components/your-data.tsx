@@ -8,7 +8,7 @@ import { useState } from "react";
 import { Download } from "lucide-react";
 import { API } from "../lib/api";
 import { downloadExport, MAX_EXPORT_DAYS, rangeDays } from "../lib/subject-export";
-import { Button, ErrorNotice, FormField, Input } from "./ui";
+import { Button, ErrorNotice, FormField, Inline, Input, Stack } from "./ui";
 import { Card } from "./ui/card/card";
 
 const day = (d: Date) => d.toISOString().slice(0, 10);
@@ -25,9 +25,13 @@ export function YourData() {
     catch (e) { setError(e); } finally { setBusy(false); }
   }
   return <Card title="Your data" titleAs="h2" description="Download your profile, memberships, key details, requests, file list and audit entries as JSON. Requests and audit entries cover the dates you choose (up to 93 days).">
-    <FormField label="From"><Input type="date" value={from} max={to} onChange={e => setFrom(e.target.value)} /></FormField>
-    <FormField label="To" error={invalid ? `Choose up to ${MAX_EXPORT_DAYS} days, ending today or earlier.` : undefined}><Input type="date" value={to} max={today} onChange={e => setTo(e.target.value)} /></FormField>
-    {error !== undefined && <ErrorNotice error={error} />}
-    <Button variant="secondary" loading={busy} disabled={invalid} onClick={() => void run()}><Download aria-hidden /> Download your data</Button>
+    <Stack gap={4} align="start">
+      <Inline gap={4} align="start">
+        <FormField label="From"><Input type="date" value={from} max={to} onChange={e => setFrom(e.target.value)} /></FormField>
+        <FormField label="To" error={invalid ? `Choose up to ${MAX_EXPORT_DAYS} days, ending today or earlier.` : undefined}><Input type="date" value={to} max={today} onChange={e => setTo(e.target.value)} /></FormField>
+      </Inline>
+      {error !== undefined && <ErrorNotice error={error} />}
+      <Button variant="secondary" loading={busy} disabled={invalid} onClick={() => void run()}><Download aria-hidden /> Download your data</Button>
+    </Stack>
   </Card>;
 }
