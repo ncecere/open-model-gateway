@@ -1,0 +1,40 @@
+# Node.js for the CI jobs: a pinned release from nodejs.org, fetched by
+# .github/scripts/fetch-verified.sh against a SHA-256 written in this file. Replaces
+# actions/setup-node, which downloads a floating "22" release without any checksum
+# (#194). Needs the repository checked out first (for the script). Used by read-only
+# jobs; tests/supply-chain.test.mjs opens local composite actions and checks them
+# wherever they are used.
+#
+# The version matches the Dockerfile's node image. To bump it, take the checksums from
+# https://nodejs.org/dist/v<version>/SHASUMS256.txt (linux-x64 and linux-arm64 .tar.xz)
+# and change the version in both URLs. There is no npm cache: `npm ci` fetches
+# packages, and npm verifies them against the integrity hashes in package-lock.json.
+name: Set up Node.js (pinned, checksum-verified)
+description: Installs Node.js 22.23.3 from nodejs.org after a SHA-256 check
+
+runs:
+  using: composite
+  steps:
+    - name: Install Node.js
+      shell: bash
+      run: |
+        set -euo pipefail
+        # The URL and checksum must be literals: .github/scripts/fetch-verified.sh,
+        # run from the checked-out repository, is the only download path
+        # (tests/supply-chain.test.mjs).
+        case "${RUNNER_ARCH}" in
+          X64)
+            bash .github/scripts/fetch-verified.sh https://nodejs.org/dist/v22.23.3/node-v22.23.3-linux-x64.tar.xz df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de "${RUNNER_TEMP}/node.tar.xz"
+            ;;
+          ARM64)
+            bash .github/scripts/fetch-verified.sh https://nodejs.org/dist/v22.23.3/node-v22.23.3-linux-arm64.tar.xz a44aeb94849a299b22df10b9e622ec2f605c2183501bc40590705131de7c740f "${RUNNER_TEMP}/node.tar.xz"
+            ;;
+          *)
+            echo "::error::unsupported runner architecture ${RUNNER_ARCH}"
+            exit 1
+            ;;
+        esac
+        mkdir -p "${RUNNER_TEMP}/node"
+        tar -xJf "${RUNNER_TEMP}/node.tar.xz" --strip-components=1 -C "${RUNNER_TEMP}/node"
+        "${RUNNER_TEMP}/node/bin/node" --version
+        echo "${RUNNER_TEMP}/node/bin" >> "$GITHUB_PATH"

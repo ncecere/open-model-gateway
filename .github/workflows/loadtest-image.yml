@@ -48,6 +48,12 @@ jobs:
             echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/open-model-gateway-loadtest"
           } >> "$GITHUB_OUTPUT"
 
+      # setup-buildx-action downloads the latest Buildx, unchecked, when the runner has
+      # none. This job can write, so fail here instead; the action's `version` input
+      # (which also downloads) stays unset. tests/supply-chain.test.mjs enforces both.
+      - name: Require the runner's own Buildx
+        run: docker buildx version
+
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           # BuildKit from mirror.gcr.io instead of Docker Hub.
