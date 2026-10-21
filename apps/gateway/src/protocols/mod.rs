@@ -167,6 +167,74 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn unsupported_capabilities_keep_status_and_body_but_are_not_retryable() {
+        let error = InferenceError::Unsupported;
+        for body in [openai_error_body(error), messages::batch_error_body(error)] {
+            let response = error_with_body(error, body.clone());
+            assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+            assert_eq!(response.headers()["x-should-retry"], "false");
+            assert!(response.headers().get("retry-after").is_none());
+            let bytes = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+                body
+            );
+        }
+        assert_eq!(
+            openai_error_body(error)["error"]["code"],
+            "unsupported_capability"
+        );
+        assert_eq!(
+            messages::batch_error_body(error)["error"]["type"],
+            "invalid_request_error"
+        );
+        // Non-generation protocols retain their explicit 400, too.
+        let response = workload_error(error, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.headers()["x-should-retry"], "false");
+    }
+
+    #[test]
+    fn retry_control_remains_narrow_and_authentication_unchanged() {
+        for (error, status) in [
+            (InferenceError::Busy, StatusCode::TOO_MANY_REQUESTS),
+            (
+                InferenceError::JobLimitExceeded(LimitScope::Workspace),
+                StatusCode::TOO_MANY_REQUESTS,
+            ),
+            (InferenceError::UpstreamUnavailable, StatusCode::BAD_GATEWAY),
+            (InferenceError::InvalidUpstream, StatusCode::BAD_GATEWAY),
+            (
+                InferenceError::Configuration,
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+            (InferenceError::Storage, StatusCode::SERVICE_UNAVAILABLE),
+            (InferenceError::Timeout, StatusCode::GATEWAY_TIMEOUT),
+            (InferenceError::Unauthenticated, StatusCode::UNAUTHORIZED),
+        ] {
+            let response = error_with_body(error, openai_error_body(error));
+            assert_eq!(response.status(), status);
+            assert!(response.headers().get("x-should-retry").is_none());
+            assert!(response.headers().get("retry-after").is_none());
+            if error == InferenceError::Unauthenticated {
+                assert_eq!(response.headers()["www-authenticate"], "Bearer");
+            }
+        }
+        for error in [
+            InferenceError::PriceUnbounded,
+            InferenceError::UnresolvedUsage(LimitScope::Workspace),
+            InferenceError::UnresolvedUsage(LimitScope::ApiKey),
+            InferenceError::BudgetExceeded(LimitScope::Workspace),
+            InferenceError::BudgetExceeded(LimitScope::ApiKey),
+        ] {
+            let response = error_with_body(error, openai_error_body(error));
+            assert_eq!(response.headers()["x-should-retry"], "false");
+        }
+    }
+
     #[test]
     fn cooling_down_is_a_retryable_503_not_model_not_found() {
         let error = InferenceError::RouteCoolingDown(17);
