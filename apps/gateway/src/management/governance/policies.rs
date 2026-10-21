@@ -631,20 +631,24 @@ pub(crate) async fn budget_windows(
         for (period, amount) in budgets.iter() {
             let (start, end) = period.window(now);
             let report = if *visible {
-                Some(facts.next().ok_or(ApiError(
+                facts.next().ok_or(ApiError(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "Budget report unavailable",
-                ))?)
+                ))?
             } else {
                 None
             };
             let used = report.map(|r| r.used().to_string());
             let unresolved = report.map(|r| r.unresolved);
             let remaining = report.and_then(|r| r.remaining(*amount));
-            let status = match report {
-                None => "restricted",
-                Some(r) if r.unknown_cost_requests > 0 => "unknown",
-                Some(_) => "known",
+            let status = if !*visible {
+                "restricted"
+            } else {
+                match report {
+                    None => "unknown",
+                    Some(r) if r.unknown_cost_requests > 0 => "unknown",
+                    Some(_) => "known",
+                }
             };
             let exhausted = used
                 .as_deref()

@@ -24,7 +24,7 @@ import { useId, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api, platformWorkspacePath, type WorkspaceKind } from "../lib/api";
-import { dollarsToMicroUsd, effectiveBudgetHeadroom, formatMicroUsd, windowHeadroom, type BudgetHeadroom, type BudgetPeriod, type BudgetWindow, type PolicyResponse } from "../lib/governance";
+import { dollarsToMicroUsd, effectiveBudgetHeadroom, formatMicroUsd, hasBudgetFacts, windowHeadroom, type BudgetHeadroom, type BudgetPeriod, type BudgetWindow, type PolicyResponse } from "../lib/governance";
 import { budgetFor, composeLimits, draftErrors, draftLimits, draftLimitsValid, draftOf, hasErrors, limitsBody, limitsOf, limitsSaveError, limitsSummary, lockedBudget, mergeErrors, newBudgetKey, nextPeriod, noLimits, periodName, rateRows, rateText, rejectionErrors, resetText, sameDraft, stackPeriods, storageText, type DraftErrors, type InvalidRows, type Limits, type LimitsDraft, type Parent, type RateKey } from "../lib/limits";
 import { StorageBar } from "./templates/storage-bar";
 import { resetsAt } from "../lib/usage";
@@ -126,10 +126,10 @@ const layerName = (kind: string, mode: "inherit" | "replace" | undefined): Recor
 const headroomText = (h: BudgetHeadroom) => h.status === "known" ? `Remaining: ${formatMicroUsd(h.remaining_microusd)}` : h.status === "unavailable" ? "Headroom unavailable from this gateway" : `Remaining: ${h.status === "restricted" ? "Restricted" : "Unknown"}`;
 /** Shared by workspace meters and key rings: only the supplied window facts. */
 export function BudgetHeadroomDetails({ window: w }: { window: BudgetWindow }) {
-  const h = windowHeadroom(w);
+  const h = windowHeadroom(w), facts = hasBudgetFacts(w);
   return <>
-    {h.status !== "unavailable" && h.status !== "restricted" && <p className={s.note}>Settled: {formatMicroUsd(w.settled_microusd)} · Pending holds: {formatMicroUsd(w.pending_held_microusd)} · Retained unknown-cost floors: {formatMicroUsd(w.unknown_held_microusd)} · Unknown-cost requests: {w.unknown_cost_requests}</p>}
-    {(h.status === "unknown" || w.usage_visible && w.unresolved_usage) && <p className={s.note}>Some costs aren't known yet; the amount shown is not an upper bound.</p>}
+    {h.status !== "unavailable" && h.status !== "restricted" && facts && <p className={s.note}>Settled: {formatMicroUsd(w.settled_microusd)} · Pending holds: {formatMicroUsd(w.pending_held_microusd)} · Retained unknown-cost floors: {formatMicroUsd(w.unknown_held_microusd)} · Unknown-cost requests: {w.unknown_cost_requests}</p>}
+    {h.status === "unknown" && !facts ? <p className={s.note}>Accounting facts are unavailable for this window; remaining budget is unknown.</p> : (h.status === "unknown" || w.usage_visible && w.unresolved_usage) && <p className={s.note}>Some costs aren't known yet; the amount shown is not an upper bound.</p>}
     <p className={s.note}>{headroomText(h)}</p>
   </>;
 }

@@ -21,6 +21,25 @@ describe("budget headroom", () => {
     expect(effectiveBudgetHeadroom([unknown, window({ layer: "key", headroom_status: undefined })])[0].status).toBe("unknown");
     expect(effectiveBudgetHeadroom([unknown, window({ layer: "local", usage_visible: false, headroom_status: "restricted", remaining_microusd: null })])[0]).toMatchObject({ status: "restricted", remaining_microusd: null });
   });
+  it("keeps an explicitly invalid window unknown without fabricating or hiding neighboring facts", () => {
+    const invalid = window({ period: "day", budget_period: "day", headroom_status: "unknown", used_microusd: null, settled_microusd: null, pending_held_microusd: null, unknown_held_microusd: null, unknown_cost_requests: null, remaining_microusd: null, unresolved_usage: null, exhausted: null });
+    expect(windowHeadroom(invalid)).toEqual({ status: "unknown", remaining_microusd: null });
+    expect(effectiveBudgetHeadroom([invalid, window()])).toEqual([{ period: "day", status: "unknown", remaining_microusd: null }, { period: "month", status: "known", remaining_microusd: "3" }]);
+    expect(effectiveBudgetHeadroom([invalid, window({ period: "day", budget_period: "day", layer: "key" })])[0].status).toBe("unknown");
+    const html = renderToStaticMarkup(<BudgetMeters kind="team" windows={[invalid, window()]} />);
+    expect(html).toContain("Daily · Remaining: Unknown");
+    expect(html).toContain("Monthly · Remaining: $0.000003");
+    expect(html).not.toContain("Restricted");
+    expect(html).not.toContain("Headroom unavailable");
+    expect(html).not.toContain("Settled: Unknown");
+    expect(html).not.toContain("Unknown-cost requests: </p>");
+    const invalidOnly = renderToStaticMarkup(<BudgetMeters kind="team" windows={[invalid]} />);
+    for (const untrusted of ["Settled:", "Pending holds:", "Retained unknown-cost floors:", "Unknown-cost requests:", "Remaining: $"]) expect(invalidOnly).not.toContain(untrusted);
+    const key = markup(<KeyUsage workspace={team} keyId="key" part="budgets" />, [["/api/v1/workspaces/team/keys/key/stats", { daily: [], budgets: [invalid, window()] }]]);
+    expect(key).toContain("Daily · Remaining: Unknown");
+    expect(key).toContain("Monthly · Remaining: $0.000003");
+    expect(key).not.toContain("Settled: Unknown");
+  });
   it("old or incomplete gateway facts are unavailable, never reconstructed", () => {
     expect(windowHeadroom(window({ headroom_status: undefined })).status).toBe("unavailable");
     expect(windowHeadroom(window({ pending_held_microusd: undefined })).status).toBe("unavailable");

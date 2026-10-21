@@ -28,7 +28,7 @@ async fn budget_report_exact_holds_unknown_union_and_missing_buckets(pool: PgPoo
         totals::read_budget_report(&mut tx, &windows, now)
             .await
             .unwrap(),
-        vec![totals::BudgetReport::default(); 4]
+        vec![Some(totals::BudgetReport::default()); 4]
     );
     tx.rollback().await.unwrap();
     let settled = f.start();
@@ -43,6 +43,7 @@ async fn budget_report_exact_holds_unknown_union_and_missing_buckets(pool: PgPoo
         .await
         .unwrap();
     for r in r {
+        let r = r.expect("valid window");
         assert_eq!(
             (
                 r.settled_microusd,
@@ -65,6 +66,7 @@ async fn budget_report_exact_holds_unknown_union_and_missing_buckets(pool: PgPoo
         .await
         .unwrap()
     {
+        let r = r.expect("valid unknown-cost window retains its trusted floor");
         assert_eq!(
             (
                 r.settled_microusd,
@@ -100,6 +102,7 @@ async fn budget_report_exact_holds_unknown_union_and_missing_buckets(pool: PgPoo
         .await
         .unwrap()
     {
+        let r = r.expect("valid unknown-cost union");
         assert_eq!(r.unknown_cost_requests, 3);
         assert_eq!(r.used(), 330);
         assert!(r.unresolved);
@@ -159,8 +162,9 @@ async fn budget_report_boundaries_large_amounts_and_rotation_lineage(pool: PgPoo
                 } else {
                     1
                 };
-            assert_eq!(r[0].settled_microusd, i128::from(expected));
-            assert_eq!(r[0].remaining(expected + 2).as_deref(), Some("2"));
+            let report = r[0].expect("valid exact lineage window");
+            assert_eq!(report.settled_microusd, i128::from(expected));
+            assert_eq!(report.remaining(expected + 2).as_deref(), Some("2"));
             tx.rollback().await.unwrap();
         }
     }
@@ -169,11 +173,23 @@ async fn budget_report_boundaries_large_amounts_and_rotation_lineage(pool: PgPoo
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn budget_report_rejects_corrupt_or_unrepresentable_totals(pool: PgPool) {
     let f = fixture(pool.clone()).await;
-    let windows = [(
-        Scope::Workspace(f.principal.workspace_id),
-        BudgetPeriod::Lifetime,
-    )];
-    // Missing is legitimately empty; a present but invalid bucket is not.
+    let at = Utc::now();
+    let windows = [
+        (
+            Scope::Workspace(f.principal.workspace_id),
+            BudgetPeriod::Day,
+        ),
+        (
+            Scope::Workspace(f.principal.workspace_id),
+            BudgetPeriod::Lifetime,
+        ),
+        (
+            Scope::KeyLineage(f.principal.key_id),
+            BudgetPeriod::Lifetime,
+        ),
+    ];
+    // A valid neighbor stays exact, an invalid bucket stays in its slot, and
+    // a genuinely absent neighbor remains a known zero, never conflated.
     for values in [
         "-1,0,0,0,0,0,0",
         "0,0,1,1,0,0,0", // unknown floor exceeds all holds
@@ -185,11 +201,28 @@ async fn budget_report_rejects_corrupt_or_unrepresentable_totals(pool: PgPool) {
         let mut tx = pool.begin().await.unwrap();
         sqlx::query(&format!("INSERT INTO budget_totals(scope_kind,scope_id,period,period_start,settled_microusd,held_microusd,held_unknown_microusd,unknown,unresolved,unresolved_unknown,unreserved_executions) VALUES('workspace',$1,'lifetime','epoch',{values})"))
             .bind(f.principal.workspace_id).execute(&mut *tx).await.unwrap();
-        assert!(
-            totals::read_budget_report(&mut tx, &windows, Utc::now())
-                .await
-                .is_err(),
-            "corrupt or overflowing totals must fail reporting, never promise headroom"
+        sqlx::query("INSERT INTO budget_totals(scope_kind,scope_id,period,period_start,settled_microusd) VALUES('workspace',$1,'day',$2,70)")
+            .bind(f.principal.workspace_id).bind(BudgetPeriod::Day.bucket_start(at)).execute(&mut *tx).await.unwrap();
+        let reports = totals::read_budget_report(&mut tx, &windows, at)
+            .await
+            .unwrap();
+        assert_eq!(
+            reports.len(),
+            windows.len(),
+            "invalid windows must not be skipped"
+        );
+        let valid = reports[0].expect("valid neighbor retained in request order");
+        assert_eq!(valid.settled_microusd, 70);
+        assert_eq!(valid.used(), 70);
+        assert_eq!(valid.remaining(100).as_deref(), Some("30"));
+        assert_eq!(
+            reports[1], None,
+            "corrupt or overflowing facts must be unknown, never zero"
+        );
+        assert_eq!(
+            reports[2],
+            Some(totals::BudgetReport::default()),
+            "only a missing bucket is a known zero"
         );
         tx.rollback().await.unwrap();
     }

@@ -14,12 +14,14 @@ export type Policy = { requests_per_minute: number | null; tokens_per_minute: nu
 export type BudgetWindow = { layer: "platform" | "local" | "key"; period?: BudgetPeriod; amount_microusd?: string; monthly_budget_microusd: string; budget_period: BudgetPeriod; window_start: string; window_end: string | null; usage_visible: boolean; used_microusd: string | null; unresolved_usage: boolean | null; exhausted?: boolean | null; settled_microusd?: string | null; pending_held_microusd?: string | null; unknown_held_microusd?: string | null; unknown_cost_requests?: string | null; remaining_microusd?: string | null; headroom_status?: "known" | "unknown" | "restricted" };
 export type BudgetHeadroom = { status: "known" | "unknown" | "restricted" | "unavailable"; remaining_microusd: string | null };
 const exactBudgetValue = (value: string | null | undefined): value is string => typeof value === "string" && value.length <= 128 && /^\d+$/.test(value);
+export const hasBudgetFacts = (window: BudgetWindow): boolean => [window.settled_microusd, window.pending_held_microusd, window.unknown_held_microusd, window.unknown_cost_requests].every(exactBudgetValue);
 /** Older gateways cannot prove remaining allowance from their legacy lower-bound totals. */
 export function windowHeadroom(window: BudgetWindow): BudgetHeadroom {
   const result = (status: BudgetHeadroom["status"], remaining_microusd: string | null = null): BudgetHeadroom => ({ status, remaining_microusd });
   if (!window.usage_visible || window.headroom_status === "restricted") return result("restricted");
-  if (!window.headroom_status || ![window.settled_microusd, window.pending_held_microusd, window.unknown_held_microusd, window.unknown_cost_requests].every(exactBudgetValue)) return result("unavailable");
-  if (window.headroom_status === "unknown" || BigInt(window.unknown_cost_requests!) > 0n || window.unresolved_usage) return result("unknown");
+  if (window.headroom_status === "unknown") return result("unknown");
+  if (!window.headroom_status || !hasBudgetFacts(window)) return result("unavailable");
+  if (BigInt(window.unknown_cost_requests!) > 0n || window.unresolved_usage) return result("unknown");
   return exactBudgetValue(window.remaining_microusd) ? result("known", window.remaining_microusd) : result("unavailable");
 }
 /** Same-period headroom is the minimum of layer remainders, not a sum, nor

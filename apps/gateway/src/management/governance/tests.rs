@@ -1426,6 +1426,93 @@ mod db {
     }
 
     #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn budget_headroom_invalid_window_preserves_neighbors_and_sql_errors_remain_503(
+        pool: PgPool,
+    ) {
+        let f = fixture(pool).await;
+        let admin = user(f.owner, true);
+        let ws = f.team.workspace_id;
+        let key = member_key(&f).await;
+        let platform = format!("/api/v1/platform/workspaces/{ws}/policy");
+        let paths = [
+            platform.clone(),
+            format!("/api/v1/workspaces/{ws}/keys/{key}/policy"),
+            format!("/api/v1/workspaces/{ws}/keys/{key}/stats"),
+        ];
+        let budgets = json!([{"period":"day","amount_microusd":"100"},{"period":"month","amount_microusd":"1000"}]);
+        assert_eq!(call(&f, &admin, "PUT", &platform, json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"budgets":budgets})).await.0, StatusCode::OK);
+        execution(&f, key, ws, "company/smart", "settled", Some(70), None).await;
+        for corrupt in [
+            "settled_microusd=-1,held_microusd=0",
+            "settled_microusd=99999999999999999999999999999999999999,held_microusd=99999999999999999999999999999999999999",
+        ] {
+            sqlx::query(&format!("UPDATE budget_totals SET {corrupt} WHERE scope_kind='workspace' AND scope_id=$1 AND period='day'"))
+                .bind(ws).execute(&f.store.pool).await.unwrap();
+            for path in &paths {
+                let (status, v) = call(&f, &admin, "GET", path, Value::Null).await;
+                assert_eq!(
+                    status,
+                    StatusCode::OK,
+                    "invalid accounting must not hide policy or valid windows"
+                );
+                if path.ends_with("policy") {
+                    assert_eq!(v["provenance"]["platform"]["budgets"], budgets);
+                }
+                let windows = v["budgets"].as_array().unwrap();
+                assert_eq!(windows.len(), 2);
+                let invalid = &windows[0];
+                assert_eq!(invalid["period"], "day");
+                assert_eq!(invalid["amount_microusd"], "100");
+                assert_eq!(invalid["usage_visible"], true);
+                assert_eq!(invalid["headroom_status"], "unknown");
+                assert!(invalid["window_start"].is_string());
+                assert!(invalid["window_end"].is_string());
+                for field in [
+                    "used_microusd",
+                    "settled_microusd",
+                    "pending_held_microusd",
+                    "unknown_held_microusd",
+                    "unknown_cost_requests",
+                    "remaining_microusd",
+                    "exhausted",
+                    "unresolved_usage",
+                ] {
+                    assert!(
+                        invalid[field].is_null(),
+                        "untrusted {field} must not be fabricated"
+                    );
+                }
+                let valid = &windows[1];
+                assert_eq!(valid["period"], "month");
+                assert_eq!(valid["headroom_status"], "known");
+                assert_eq!(valid["settled_microusd"], "70");
+                assert_eq!(valid["pending_held_microusd"], "0");
+                assert_eq!(valid["unknown_held_microusd"], "0");
+                assert_eq!(valid["unknown_cost_requests"], "0");
+                assert_eq!(valid["used_microusd"], "70");
+                assert_eq!(valid["remaining_microusd"], "930");
+                assert_eq!(valid["exhausted"], false);
+                assert_eq!(valid["unresolved_usage"], false);
+            }
+        }
+        sqlx::query("ALTER TABLE budget_totals RENAME TO unavailable_budget_totals")
+            .execute(&f.store.pool)
+            .await
+            .unwrap();
+        for path in &paths {
+            assert_eq!(
+                call(&f, &admin, "GET", path, Value::Null).await.0,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "SQL failures must not masquerade as individual unknown facts"
+            );
+        }
+        sqlx::query("ALTER TABLE unavailable_budget_totals RENAME TO budget_totals")
+            .execute(&f.store.pool)
+            .await
+            .unwrap();
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn budget_headroom_stacked_scopes_keep_consumption_and_periods_distinct(pool: PgPool) {
         let f = fixture(pool).await;
         let admin = user(f.owner, true);

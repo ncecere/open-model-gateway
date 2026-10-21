@@ -111,7 +111,7 @@ pub(crate) struct BudgetReport {
     pub pending_held_microusd: i128,
     pub unknown_held_microusd: i128,
     pub unknown_cost_requests: i128,
-    /// Validated once while decoding; overflowing totals fail the report.
+    /// Validated once while decoding; overflow invalidates only this window.
     used_microusd: i128,
     /// Legacy unresolved_usage excludes bounded unknown reservations.
     pub unresolved: bool,
@@ -128,13 +128,15 @@ impl BudgetReport {
 
 /// One indexed lookup per visible scope/window, in request order (at most
 /// layer × period in policy reports). A single statement gives every layer
-/// the same accounting snapshot. Only a missing bucket is zero; SQL/decode
-/// failures propagate. Hidden scopes must never be supplied by callers.
+/// the same accounting snapshot. Only a missing bucket is a known zero.
+/// Invalid or unrepresentable accounting is `None` in its original slot;
+/// SQL/transport decoding failures still propagate. Hidden scopes must never
+/// be supplied by callers.
 pub(crate) async fn read_budget_report(
     tx: &mut Transaction<'_, Postgres>,
     windows: &[(Scope, BudgetPeriod)],
     at: DateTime<Utc>,
-) -> Result<Vec<BudgetReport>, sqlx::Error> {
+) -> Result<Vec<Option<BudgetReport>>, sqlx::Error> {
     if windows.is_empty() {
         return Ok(Vec::new());
     }
@@ -168,31 +170,22 @@ pub(crate) async fn read_budget_report(
     .bind(&starts)
     .fetch_all(&mut **tx)
     .await?;
-    fn invalid() -> sqlx::Error {
-        sqlx::Error::Decode("Invalid budget reporting totals".into())
+    fn exact(value: String) -> Option<i128> {
+        value.parse().ok().filter(|n| *n >= 0)
     }
-    fn exact(value: String) -> Result<i128, sqlx::Error> {
-        let n = value
-            .parse()
-            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-        if n < 0 {
-            return Err(invalid());
-        }
-        Ok(n)
-    }
-    rows.into_iter()
+    Ok(rows
+        .into_iter()
         .map(|(settled, pending, unknown, count, unresolved, valid)| {
             if !valid {
-                return Err(invalid());
+                return None;
             }
             let settled_microusd = exact(settled)?;
             let pending_held_microusd = exact(pending)?;
             let unknown_held_microusd = exact(unknown)?;
             let used_microusd = settled_microusd
                 .checked_add(pending_held_microusd)
-                .and_then(|n| n.checked_add(unknown_held_microusd))
-                .ok_or_else(invalid)?;
-            Ok(BudgetReport {
+                .and_then(|n| n.checked_add(unknown_held_microusd))?;
+            Some(BudgetReport {
                 settled_microusd,
                 pending_held_microusd,
                 unknown_held_microusd,
@@ -201,7 +194,7 @@ pub(crate) async fn read_budget_report(
                 unresolved,
             })
         })
-        .collect()
+        .collect())
 }
 
 /// Budget consumption of one workspace (or one key lineage inside it) in the
