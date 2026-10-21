@@ -32,6 +32,14 @@ fn fingerprint(delivery: Uuid, email: &str) -> Vec<u8> {
     hash.finalize().to_vec()
 }
 
+// The address and identity must come from one eligibility statement snapshot.
+// Never Debug/Serialize recipients or holders of their plaintext addresses.
+#[derive(sqlx::FromRow)]
+struct TypedRecipient {
+    address: String,
+    internal_user_id: Option<Uuid>,
+}
+
 /// The existing live recipient rules, including enabled/entitled internal
 /// users. Explicit external addresses remain admin-chosen. A listed internal
 /// address cannot bypass disablement or loss of platform access. Only built-in
@@ -40,8 +48,8 @@ async fn recipients(
     tx: &mut Transaction<'_, Postgres>,
     delivery: Uuid,
     initial: bool,
-) -> sqlx::Result<Vec<String>> {
-    sqlx::query_scalar("SELECT DISTINCT lower(btrim(x.email)) FROM alert_deliveries d JOIN alert_events e ON e.id=d.event_id CROSS JOIN LATERAL (
+) -> sqlx::Result<Vec<TypedRecipient>> {
+    sqlx::query_as("SELECT DISTINCT lower(btrim(x.email)) address,(SELECT u.id FROM users u WHERE lower(btrim(u.email))=lower(btrim(x.email)) ORDER BY u.id LIMIT 1) internal_user_id FROM alert_deliveries d JOIN alert_events e ON e.id=d.event_id CROSS JOIN LATERAL (
  SELECT unnest(r.notify_emails) email FROM alert_rules r LEFT JOIN workspaces w ON w.id=r.workspace_id WHERE r.id=e.rule_id AND r.enabled AND r.deleted_at IS NULL AND (r.workspace_id IS NULL OR w.disabled_at IS NULL)
  UNION ALL SELECT u.email FROM alert_rules r JOIN effective_workspace_memberships m ON m.workspace_id=r.workspace_id AND m.role IN ('owner','admin') JOIN users u ON u.id=m.user_id WHERE r.id=e.rule_id AND r.enabled AND r.deleted_at IS NULL AND r.notify_workspace_admins
  UNION ALL SELECT u.email FROM alert_rules r JOIN effective_platform_roles p ON p.role='admin' JOIN users u ON u.id=p.user_id LEFT JOIN workspaces w ON w.id=r.workspace_id WHERE r.id=e.rule_id AND r.enabled AND r.deleted_at IS NULL AND r.notify_platform_admins AND (r.workspace_id IS NULL OR w.disabled_at IS NULL)
@@ -91,6 +99,15 @@ pub(super) async fn claim(
     store: &Store,
     owner: Uuid,
 ) -> sqlx::Result<Option<(Uuid, Option<Claim>)>> {
+    claim_with_hook(store, owner, std::future::ready(())).await
+}
+
+// The hook permits a deterministic READ COMMITTED interleaving in tests.
+pub(super) async fn claim_with_hook(
+    store: &Store,
+    owner: Uuid,
+    after_eligibility_read: impl std::future::Future<Output = ()>,
+) -> sqlx::Result<Option<(Uuid, Option<Claim>)>> {
     let mut tx =
         crate::db::begin_with_setup(&store.pool, "SET LOCAL statement_timeout='10s'").await?;
     let row: Option<(Uuid, bool)> = sqlx::query_as("SELECT d.id,d.initialized FROM alert_deliveries d WHERE d.status='pending' AND d.created_at>clock_timestamp()-interval '24 hours'+interval '45 seconds' AND (NOT d.initialized OR EXISTS(SELECT 1 FROM alert_recipient_outbox q WHERE q.delivery_id=d.id AND q.attempt_count<5 AND ((q.state='waiting' AND q.next_attempt_at<=clock_timestamp()) OR (q.state='leased' AND q.lease_expires_at<=clock_timestamp())))) ORDER BY d.created_at,d.id LIMIT 1 FOR UPDATE OF d SKIP LOCKED")
@@ -115,14 +132,15 @@ pub(super) async fn claim(
         return Ok(Some((id, None)));
     };
     let addresses = recipients(&mut tx, id, !initialized).await?;
+    after_eligibility_read.await;
     if !initialized {
         for to in &addresses {
             sqlx::query(
-                "INSERT INTO alert_recipient_outbox(delivery_id,fingerprint,internal_user_id) VALUES($1,$2,(SELECT id FROM users WHERE lower(btrim(email))=$3 ORDER BY id LIMIT 1))",
+                "INSERT INTO alert_recipient_outbox(delivery_id,fingerprint,internal_user_id) VALUES($1,$2,$3)",
             )
             .bind(id)
-            .bind(fingerprint(id, to))
-            .bind(to)
+            .bind(fingerprint(id, &to.address))
+            .bind(to.internal_user_id)
             .execute(&mut *tx)
             .await?;
         }
@@ -131,7 +149,10 @@ pub(super) async fn claim(
             .execute(&mut *tx)
             .await?;
     }
-    let eligible: Vec<Vec<u8>> = addresses.iter().map(|to| fingerprint(id, to)).collect();
+    let eligible: Vec<Vec<u8>> = addresses
+        .iter()
+        .map(|to| fingerprint(id, &to.address))
+        .collect();
     // Never cancel a live claim held by another worker. It already authorized
     // its send; the next claim checks live authority again.
     sqlx::query("UPDATE alert_recipient_outbox SET state='ineligible',lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL WHERE delivery_id=$1 AND NOT(fingerprint=ANY($2)) AND (state='waiting' OR (state='leased' AND lease_expires_at<=clock_timestamp()))")
@@ -150,8 +171,9 @@ pub(super) async fn claim(
     let (subject, body) = email_message(pending, installation);
     let to = addresses
         .into_iter()
-        .find(|to| fingerprint(id, to) == fp)
-        .expect("claimed eligible recipient");
+        .find(|to| fingerprint(id, &to.address) == fp)
+        .expect("claimed eligible recipient")
+        .address;
     tx.commit().await?;
     Ok(Some((
         id,

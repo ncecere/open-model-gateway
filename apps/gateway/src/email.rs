@@ -12,11 +12,14 @@
 use std::{net::IpAddr, time::Duration};
 
 use lettre::{
-    Address, AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
+    Address, Message,
     message::{Mailbox, header::ContentType},
     transport::smtp::{
         authentication::{Credentials, Mechanism},
-        client::{Tls, TlsParameters},
+        client::{AsyncSmtpConnection, TlsParameters},
+        commands::{Data, Mail, Rcpt},
+        extension::{ClientId, Extension, MailBodyParameter, MailParameter},
+        response::{Response, Severity},
     },
 };
 
@@ -299,14 +302,11 @@ impl SmtpSettings {
         if self.tls == TlsMode::None && !addresses.iter().all(|a| a.ip().is_loopback()) {
             return Err(DeliveryError::Tls);
         }
-        let tls = || match self.tls {
-            TlsMode::None => Ok(Tls::None),
-            TlsMode::StartTls => TlsParameters::new(host.clone())
-                .map(Tls::Required)
-                .map_err(|_| DeliveryError::Tls),
-            TlsMode::Implicit => TlsParameters::new(host.clone())
-                .map(Tls::Wrapper)
-                .map_err(|_| DeliveryError::Tls),
+        let tls = match self.tls {
+            TlsMode::None => None,
+            TlsMode::StartTls | TlsMode::Implicit => {
+                Some(TlsParameters::new(host.clone()).map_err(|_| DeliveryError::Tls)?)
+            }
         };
         let credentials = match (self.username.as_deref(), password) {
             (Some(user), Some(password)) => {
@@ -319,33 +319,119 @@ impl SmtpSettings {
         // itself failed (never after the relay saw the message). One overall
         // timeout covers every attempt.
         let attempts = async {
-            let mut last = DeliveryError::Connection;
+            let hello = ClientId::default();
+            let mut connection = None;
             for address in &addresses {
-                let mut builder = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(
-                    address.ip().to_string(),
+                let implicit = if self.tls == TlsMode::Implicit {
+                    tls.clone()
+                } else {
+                    None
+                };
+                match tokio::time::timeout(
+                    COMMAND_TIMEOUT,
+                    AsyncSmtpConnection::connect_tokio1(
+                        *address,
+                        Some(COMMAND_TIMEOUT),
+                        &hello,
+                        implicit,
+                        None,
+                    ),
                 )
-                .port(address.port())
-                .timeout(Some(COMMAND_TIMEOUT))
-                .tls(tls()?);
-                if let Some(credentials) = credentials.clone() {
-                    builder = builder
-                        .credentials(credentials)
-                        .authentication(vec![Mechanism::Plain, Mechanism::Login]);
-                }
-                match builder.build().send(message.clone()).await {
-                    Ok(_) => return Ok(()),
-                    Err(error) => match classify(&error) {
-                        DeliveryError::Connection => last = DeliveryError::Connection,
-                        other => return Err(other),
-                    },
+                .await
+                {
+                    Ok(Ok(conn)) => {
+                        connection = Some(conn);
+                        break;
+                    }
+                    // Only connection-setup network failures can try another
+                    // checked IP. Never fall through from a message attempt.
+                    Ok(Err(error)) if classify(&error) == DeliveryError::Connection => (),
+                    Ok(Err(error)) => return Err(classify(&error)),
+                    Err(_) => return Err(DeliveryError::Timeout),
                 }
             }
-            Err(last)
+            let mut connection = connection.ok_or(DeliveryError::Connection)?;
+            if self.tls == TlsMode::StartTls {
+                smtp_stage(connection.starttls(tls.expect("configured TLS"), &hello)).await?;
+            }
+            if let Some(credentials) = &credentials {
+                smtp_stage(connection.auth(&[Mechanism::Plain, Mechanism::Login], credentials))
+                    .await?;
+            }
+            send_message(&mut connection, &message).await
+            // Drop closes the connection: never await QUIT after DATA acceptance,
+            // or spawn cleanup that can outlive the send/lease deadline.
         };
         tokio::time::timeout(SEND_TIMEOUT, attempts)
             .await
             .unwrap_or(Err(DeliveryError::Timeout))
     }
+}
+
+/// Bound public SMTP stages without formatting relay errors or addresses.
+async fn smtp_stage<T>(
+    stage: impl std::future::Future<Output = Result<T, lettre::transport::smtp::Error>>,
+) -> Result<T, DeliveryError> {
+    tokio::time::timeout(COMMAND_TIMEOUT, stage)
+        .await
+        .map_err(|_| DeliveryError::Timeout)?
+        .map_err(|error| classify(&error))
+}
+
+fn positive_completion(response: Response) -> Result<(), DeliveryError> {
+    if response.code().severity == Severity::PositiveCompletion {
+        Ok(())
+    } else {
+        Err(DeliveryError::Rejected)
+    }
+}
+
+/// Lettre's high-level send/transport awaits abort()/QUIT on errors and after
+/// acceptance. Use its public command/message stages instead: retain MIME,
+/// envelope options and dot stuffing, but never let cleanup change DATA's
+/// outcome. EOF, 3xx and malformed replies are not successful acceptance.
+async fn send_message(
+    connection: &mut AsyncSmtpConnection,
+    message: &Message,
+) -> Result<(), DeliveryError> {
+    let envelope = message.envelope();
+    let bytes = message.formatted();
+    let mut options = Vec::new();
+    if envelope
+        .from()
+        .into_iter()
+        .chain(envelope.to().iter())
+        .any(|address| !AsRef::<str>::as_ref(address).is_ascii())
+    {
+        if !connection
+            .server_info()
+            .supports_feature(Extension::SmtpUtfEight)
+        {
+            return Err(DeliveryError::Rejected);
+        }
+        options.push(MailParameter::SmtpUtfEight);
+    }
+    if !bytes.is_ascii() {
+        if !connection
+            .server_info()
+            .supports_feature(Extension::EightBitMime)
+        {
+            return Err(DeliveryError::Rejected);
+        }
+        options.push(MailParameter::Body(MailBodyParameter::EightBitMime));
+    }
+    positive_completion(
+        smtp_stage(connection.command(Mail::new(envelope.from().cloned(), options))).await?,
+    )?;
+    for recipient in envelope.to() {
+        positive_completion(
+            smtp_stage(connection.command(Rcpt::new(recipient.clone(), vec![]))).await?,
+        )?;
+    }
+    if !smtp_stage(connection.command(Data)).await?.has_code(354) {
+        return Err(DeliveryError::Rejected);
+    }
+    positive_completion(smtp_stage(connection.message(&bytes)).await?)
 }
 
 fn classify(error: &lettre::transport::smtp::Error) -> DeliveryError {
@@ -412,6 +498,11 @@ pub(crate) mod mock {
         pub(crate) temporary_recipient: bool,
         /// Restrict the configured refusal to this address.
         pub(crate) reject_only: Option<&'static str>,
+        /// Withhold QUIT's reply until the client closes the connection.
+        pub(crate) hang_quit: bool,
+        /// Override the final DATA response, or close before acknowledging it.
+        pub(crate) data_response: Option<u16>,
+        pub(crate) drop_before_acceptance: bool,
     }
 
     /// Start a sink accepting any number of sequential connections.
@@ -430,6 +521,8 @@ pub(crate) mod mock {
                         "{} authentication refused\r\n",
                         behaviour.auth_failure.unwrap_or(535)
                     );
+                    let data_response =
+                        format!("{} DATA result\r\n", behaviour.data_response.unwrap_or(250));
                     write.write_all(b"220 mock ESMTP\r\n").await.ok();
                     let mut line = String::new();
                     loop {
@@ -486,8 +579,18 @@ pub(crate) mod mock {
                             }
                             current.data = data;
                             tx.send(std::mem::take(&mut current)).ok();
-                            b"250 queued\r\n"
+                            if behaviour.drop_before_acceptance {
+                                return;
+                            }
+                            data_response.as_bytes()
                         } else if upper == "QUIT" {
+                            if behaviour.hang_quit {
+                                // Do not answer; stop when the client drops its socket.
+                                while lines.read_line(&mut line).await.unwrap_or(0) != 0 {
+                                    line.clear();
+                                }
+                                break;
+                            }
                             write.write_all(b"221 bye\r\n").await.ok();
                             break;
                         } else if upper == "RSET" || upper == "NOOP" {
@@ -618,10 +721,9 @@ mod tests {
     #[tokio::test]
     async fn delivers_plain_text_to_a_loopback_relay() {
         let (port, mut rx) = mock::serve(Behaviour::default()).await;
-        relay(port)
-            .send_with(&dev(), None, message())
-            .await
-            .unwrap();
+        let mut email = message();
+        email.body.push_str("\r\n.first\r\n.\r\n..last\r\n");
+        relay(port).send_with(&dev(), None, email).await.unwrap();
         let got = rx.recv().await.unwrap();
         assert!(got.mail_from.contains("gateway@example.test"));
         assert!(got.rcpt_to[0].contains("admin@example.test"));
@@ -629,6 +731,10 @@ mod tests {
         assert!(got.data.contains("Subject: Test email"));
         assert!(got.data.contains("Delivery works."));
         assert!(got.data.contains("text/plain"));
+        assert!(
+            got.data.contains("\r\n..first\r\n..\r\n...last\r\n"),
+            "DATA must preserve dot stuffing"
+        );
     }
 
     /// The production path: `send()` with the installation's policy (not
@@ -705,6 +811,7 @@ mod tests {
             let (port, _rx) = mock::serve(Behaviour {
                 temporary_recipient: temporary,
                 reject_recipient: !temporary,
+                hang_quit: true,
                 ..Default::default()
             })
             .await;
@@ -747,6 +854,68 @@ mod tests {
         }
         for error in [DeliveryError::Connection, DeliveryError::Timeout] {
             assert!(error.retryable());
+        }
+    }
+
+    #[tokio::test]
+    async fn data_outcomes_do_not_depend_on_quit() {
+        for (behaviour, expected) in [
+            (
+                Behaviour {
+                    hang_quit: true,
+                    ..Default::default()
+                },
+                Ok(()),
+            ),
+            (
+                Behaviour {
+                    data_response: Some(450),
+                    hang_quit: true,
+                    ..Default::default()
+                },
+                Err(DeliveryError::TemporaryRejected),
+            ),
+            (
+                Behaviour {
+                    data_response: Some(550),
+                    hang_quit: true,
+                    ..Default::default()
+                },
+                Err(DeliveryError::Rejected),
+            ),
+            (
+                Behaviour {
+                    drop_before_acceptance: true,
+                    ..Default::default()
+                },
+                Err(DeliveryError::Rejected),
+            ),
+            (
+                Behaviour {
+                    data_response: Some(354),
+                    ..Default::default()
+                },
+                Err(DeliveryError::Rejected),
+            ),
+        ] {
+            let (port, mut rx) = mock::serve(behaviour).await;
+            let result = tokio::time::timeout(
+                Duration::from_secs(2),
+                relay(port).send_with(&dev(), None, message()),
+            )
+            .await;
+            assert_eq!(
+                result.expect("the DATA outcome cannot depend on QUIT cleanup"),
+                expected
+            );
+            assert!(
+                rx.recv().await.is_some(),
+                "relay observed DATA before the outcome"
+            );
+            assert!(
+                rx.try_recv().is_err(),
+                "never replay on an observed message"
+            );
         }
     }
 

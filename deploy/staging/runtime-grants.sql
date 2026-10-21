@@ -136,6 +136,11 @@ GRANT UPDATE(name,enabled,budget_layers,thresholds,spike_factor_percent,min_spen
 GRANT UPDATE(resolved_at,resolution) ON public.alert_events TO gateway_runtime;
 GRANT UPDATE(status,recipients,sent,failed,error,completed_at,initialized,attempt_count,retrying,next_attempt_at,waiting,exhausted) ON public.alert_deliveries TO gateway_runtime;
 -- 0049 recipient outbox: immutable identity/eligibility link, default-only initial state.
+-- Eligibility captures users.id with its normalized address in one SELECT;
+-- INSERT uses that captured identity, never a later email lookup. Existing
+-- users/role/membership SELECT grants cover this snapshot and live rechecks.
+-- Scrape-time delivery counts also read completed_at (existing SELECT above)
+-- so 24h cleanup failures retain a full terminal observation window.
 GRANT SELECT ON public.alert_recipient_outbox TO gateway_runtime;
 GRANT INSERT(delivery_id,fingerprint,internal_user_id) ON public.alert_recipient_outbox TO gateway_runtime;
 GRANT UPDATE(state,attempt_count,next_attempt_at,lease_owner,lease_token,lease_expires_at,error)

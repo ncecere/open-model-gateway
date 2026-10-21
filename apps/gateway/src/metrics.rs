@@ -43,6 +43,10 @@ const MAX_LABEL_CHARS: usize = 96;
 /// Reservation gauges are refreshed at most this often, however often scraped.
 const RESERVATION_REFRESH: Duration = Duration::from_secs(15);
 
+// Pending work is bounded by its admission window; terminal failures must
+// remain visible for a full observation window after completion/cleanup.
+const ALERT_DELIVERY_COUNTS: &str = "SELECT count(*) FILTER(WHERE retrying),count(*) FILTER(WHERE exhausted>0),count(*) FILTER(WHERE status IN ('failed','partial')) FROM alert_deliveries WHERE (status='pending' AND created_at>clock_timestamp()-interval '24 hours') OR (status<>'pending' AND completed_at>clock_timestamp()-interval '24 hours')";
+
 pub const CONTENT_TYPE: &str = "application/openmetrics-text; version=1.0.0; charset=utf-8";
 
 fn request_buckets() -> Histogram {
@@ -428,7 +432,7 @@ impl Metrics {
         );
         registry.register(
             "alert_email_deliveries",
-            "Retrying or failed deliveries created in the last 24 hours",
+            "Pending deliveries created or terminal failures completed in the last 24 hours",
             metrics.alert_delivery_queue.clone(),
         );
         registry.register(
@@ -1076,10 +1080,21 @@ impl Metrics {
             }
             *refreshed = Some(Instant::now());
         }
-        match tokio::time::timeout(Duration::from_secs(2), sqlx::query_as::<_, (i64,i64,i64)>("SELECT count(*) FILTER(WHERE retrying),count(*) FILTER(WHERE exhausted>0),count(*) FILTER(WHERE status IN ('failed','partial')) FROM alert_deliveries WHERE created_at>clock_timestamp()-interval '24 hours'").fetch_one(pool)).await {
+        match tokio::time::timeout(
+            Duration::from_secs(2),
+            sqlx::query_as::<_, (i64, i64, i64)>(ALERT_DELIVERY_COUNTS).fetch_one(pool),
+        )
+        .await
+        {
             Ok(Ok((retrying, exhausted, failed))) => {
-                for (state, count) in [("retrying",retrying),("exhausted",exhausted),("failed",failed)] {
-                    self.alert_delivery_queue.get_or_create(&[("state",state.to_owned())]).set(count);
+                for (state, count) in [
+                    ("retrying", retrying),
+                    ("exhausted", exhausted),
+                    ("failed", failed),
+                ] {
+                    self.alert_delivery_queue
+                        .get_or_create(&[("state", state.to_owned())])
+                        .set(count);
                 }
             }
             _ => self.collection_error("alert_email"),
@@ -1395,6 +1410,60 @@ mod tests {
             "# EOF",
         ] {
             assert!(out.contains(expected), "missing {expected} in\n{out}");
+        }
+    }
+
+    #[cfg(feature = "integration-tests")]
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn expired_outbox_cleanup_remains_visible_past_failure_alert_window(pool: sqlx::PgPool) {
+        let store = Store::new(pool.clone());
+        let event = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,summary) VALUES($1,'scim_last_admin','scim_last_admin','user',100,'critical','Test')")
+            .bind(event).execute(&pool).await.unwrap();
+        let initialized = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO alert_deliveries(id,event_id,transition,created_at,initialized) VALUES($1,$2,'fired',clock_timestamp()-interval '25 hours',false),(gen_random_uuid(),$2,'resolved',clock_timestamp()-interval '25 hours',false)")
+            .bind(initialized).bind(event).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO alert_recipient_outbox(delivery_id,fingerprint) VALUES($1,sha256('test'::bytea))")
+            .bind(initialized).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE alert_deliveries SET initialized=true WHERE id=$1")
+            .bind(initialized)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let before = Metrics::new().render(Some(&store)).await;
+        assert!(before.contains("gateway_alert_email_deliveries{state=\"retrying\"} 0"));
+        crate::alerts::deliver_pending(&store, 25).await;
+        let outcomes: Vec<(String, i32, i32, bool)> = sqlx::query_as("SELECT status,exhausted,attempt_count,completed_at IS NOT NULL FROM alert_deliveries ORDER BY initialized")
+            .fetch_all(&pool).await.unwrap();
+        assert_eq!(
+            outcomes,
+            vec![("failed".into(), 0, 0, true), ("failed".into(), 1, 0, true)]
+        );
+        // Cleanup made no network attempt; never inflate its attempt counter.
+        {
+            let scrape = Metrics::new().render(Some(&store)).await;
+            assert!(
+                scrape.contains("gateway_alert_email_deliveries{state=\"failed\"} 2"),
+                "recent cleanup failures must survive the 15m alert window"
+            );
+            assert!(scrape.contains("gateway_alert_email_deliveries{state=\"exhausted\"} 1"));
+            assert!(
+                !scrape.contains("gateway_alert_email_attempts_total{"),
+                "cleanup is not an SMTP attempt"
+            );
+        }
+        // Evaluate the same scrape query at later clocks without rewriting
+        // immutable terminal rows or sleeping through the alert's 15m window.
+        for (age, expected) in [
+            ("16 minutes", (0_i64, 1_i64, 2_i64)),
+            ("25 hours", (0, 0, 0)),
+        ] {
+            let later = ALERT_DELIVERY_COUNTS.replace(
+                "clock_timestamp()",
+                &format!("(clock_timestamp()+interval '{age}')"),
+            );
+            let counts: (i64, i64, i64) = sqlx::query_as(&later).fetch_one(&pool).await.unwrap();
+            assert_eq!(counts, expected);
         }
     }
 

@@ -903,6 +903,90 @@ async fn outbox_internal_address_eligibility_survives_cleanup_and_address_change
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
+async fn outbox_snapshot_race_keeps_internal_identity(pool: PgPool) {
+    let s = seed(pool).await;
+    let (port, mut rx) = mock::serve(Behaviour::default()).await;
+    relay(&s, port).await;
+    outbox_incident(&s, "'OWNER@example.test'").await;
+    let read = std::sync::Arc::new(tokio::sync::Notify::new());
+    let persist = std::sync::Arc::new(tokio::sync::Notify::new());
+    let (seen, resume, store) = (read.clone(), persist.clone(), s.store.clone());
+    let worker = tokio::spawn(async move {
+        outbox::claim_with_hook(&store, Uuid::new_v4(), async move {
+            seen.notify_one();
+            resume.notified().await;
+        })
+        .await
+        .unwrap()
+        .unwrap()
+        .1
+        .unwrap()
+    });
+    tokio::time::timeout(Duration::from_secs(5), read.notified())
+        .await
+        .unwrap();
+    // A second connection commits after eligibility was read, before INSERT.
+    let mut other = s.pool.acquire().await.unwrap();
+    sqlx::query("UPDATE users SET email='changed@example.test',disabled_at=now(),disable_reason='admin_suspension' WHERE id=$1")
+        .bind(s.owner).execute(&mut *other).await.unwrap();
+    persist.notify_one();
+    let claim = worker.await.unwrap();
+    let captured: Option<Uuid> =
+        sqlx::query_scalar("SELECT internal_user_id FROM alert_recipient_outbox")
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        captured,
+        Some(s.owner),
+        "snapshot must retain its original internal identity"
+    );
+    assert!(
+        outbox::complete(
+            &s.store,
+            &claim,
+            Err(crate::email::DeliveryError::Connection)
+        )
+        .await
+        .unwrap()
+    );
+    outbox_due(&s).await;
+    assert_eq!(deliver_pending(&s.store, 25).await, 1);
+    assert!(
+        rx.try_recv().is_err(),
+        "old address must not become an external recipient"
+    );
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM alert_recipient_outbox WHERE state='ineligible'"
+        )
+        .await,
+        1
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn outbox_accepted_data_ignores_hanging_quit_and_never_retries(pool: PgPool) {
+    let s = seed(pool).await;
+    let (port, mut rx) = mock::serve(Behaviour {
+        hang_quit: true,
+        ..Default::default()
+    })
+    .await;
+    relay(&s, port).await;
+    outbox_incident(&s, "").await;
+    tokio::time::timeout(Duration::from_secs(2), deliver_pending(&s.store, 25))
+        .await
+        .expect("DATA acceptance must not wait for QUIT");
+    assert!(rx.recv().await.is_some());
+    assert_eq!(count(&s, "SELECT count(*) FROM alert_deliveries WHERE status='sent' AND sent=1 AND attempt_count=1 AND NOT retrying AND waiting=0").await, 1);
+    outbox_due(&s).await;
+    assert_eq!(deliver_pending(&s.store, 25).await, 0);
+    assert!(rx.try_recv().is_err());
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
 async fn outbox_unsetting_smtp_preserves_a_live_claim_result(pool: PgPool) {
     let s = seed(pool).await;
     relay(&s, 25).await;

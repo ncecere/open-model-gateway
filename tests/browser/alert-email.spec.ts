@@ -26,7 +26,8 @@ test("incident history shows waiting, retrying, sent and exhausted delivery", as
         if (data) { if (line === ".") { data = false; accepted++; socket.write("250 queued\r\n"); } continue; }
         if (line.startsWith("RCPT TO") && temporary) socket.write("450 try later\r\n");
         else if (line === "DATA") { data = true; socket.write("354 go\r\n"); }
-        else if (line === "QUIT") socket.end("221 bye\r\n");
+        // Accepted DATA must succeed even when the relay never answers QUIT.
+        else if (line === "QUIT") { /* deliberately no response */ }
         else socket.write("250 mock\r\n");
       }
     });

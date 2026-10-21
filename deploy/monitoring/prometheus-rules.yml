@@ -38,7 +38,7 @@ groups:
         labels: {severity: warning}
         annotations:
           summary: Alert email has persistent terminal delivery failures
-          description: "A delivery created in the last 24 hours failed or exhausted retries. Check incident History, relay availability and SMTP configuration. Use an independent operational channel; do not feed this back into gateway email incidents. Crash recovery can duplicate accepted mail."
+          description: "A delivery failed or exhausted retries within the last 24 hours (by completion time, including expired-delivery cleanup). Check incident History, relay availability and SMTP configuration. Use an independent operational channel; do not feed this back into gateway email incidents. Crash recovery can duplicate accepted mail."
 
   - name: open-model-gateway.accounting
     rules:
