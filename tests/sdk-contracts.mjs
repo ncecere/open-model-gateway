@@ -33,13 +33,26 @@ assert.equal(legacyText, "Hello from fixture (max 7)");
 // Responses keeps its own max_output_tokens.
 const capped = await openai.responses.create({ model: "company/smart", input: "hello", store: false, max_output_tokens: 7 });
 assert.equal(capped.output_text, "Hello from fixture (max 7)");
-const response = await openai.responses.create({ model: "company/smart", input: "hello", store: false });
+const response = await openai.responses.create({ model: "company/smart", input: "hello" });
 assert.equal(response.status, "completed");
 assert.equal(response.output_text, "Hello from fixture");
-const responseStream = openai.responses.stream({ model: "company/smart", input: "hello", store: false });
+const responseStream = openai.responses.stream({ model: "company/smart", input: "hello" });
 const finalResponse = await responseStream.finalResponse();
 assert.equal(finalResponse.status, "completed");
 assert.equal(finalResponse.output_text, "Hello from fixture");
+let responseText = "";
+for await (const event of await openai.responses.create({ model: "company/smart", input: "hello", stream: true })) {
+  if (event.type === "response.output_text.delta") responseText += event.delta;
+}
+assert.equal(responseText, "Hello from fixture");
+// Real gateway refusal paths: no clamping and no provider dispatch.
+for (const stream of [false, true]) {
+  for (const maximum of [0, 101]) {
+    await assert.rejects(openai.chat.completions.create({ model: "company/smart", messages, stream, max_completion_tokens: maximum }), (e) => e.status === 400 && e.code === "invalid_request_error");
+    await assert.rejects(openai.responses.create({ model: "company/smart", input: "hello", store: false, stream, max_output_tokens: maximum }), (e) => e.status === 400 && e.code === "invalid_request_error");
+  }
+}
+await assert.rejects(anthropic.messages.create({ model: "company/smart", messages }), (e) => e.status === 400);
 const message = await anthropic.messages.create({ model: "company/smart", messages, max_tokens: 32 });
 assert.equal(message.content[0].text, "Hello from fixture");
 assert.equal(message.stop_reason, "end_turn");
@@ -80,7 +93,7 @@ assert.equal((await openai.files.delete(uploaded.id)).deleted, true);
 await assert.rejects(openai.files.retrieve(uploaded.id), (e) => e.status === 404);
 // Batch API (gateway files, any model): the official SDK creates, retrieves, lists and cancels.
 const batchInput = await openai.files.create({
-  file: await toFile(Buffer.from('{"custom_id":"one","method":"POST","url":"/v1/chat/completions","body":{"model":"company/batch","messages":[{"role":"user","content":"hi"}],"max_completion_tokens":8}}\n'), "batch.jsonl"),
+  file: await toFile(Buffer.from('{"custom_id":"one","method":"POST","url":"/v1/chat/completions","body":{"model":"company/batch","messages":[{"role":"user","content":"hi"}]}}\n'), "batch.jsonl"),
   purpose: "batch",
 });
 const batch = await openai.batches.create({ input_file_id: batchInput.id, endpoint: "/v1/chat/completions", completion_window: "24h", metadata: { omg_mode: "gateway" } });

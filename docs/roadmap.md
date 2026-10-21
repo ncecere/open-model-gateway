@@ -365,7 +365,7 @@ Deliberate limits: native Responses/Messages frontends stream text incrementally
 - [ ] Provider invoices, billing adjustments/credits, customer billing and financial archival.
 - [ ] Exclusive half-open probes, active health checks and OpenTelemetry metrics/traces.
 
-Limits count attempts, including opt-in fallbacks. Reservations require accurate configured HARD provider input ceilings and explicit output limits; prices are estimates, not invoice guarantees. Unknown unpriced history blocks newly enabled budgets rather than being erased. Cooldowns reopen by elapsed time, not a single-probe gate. Labels are operator assertions, not verified geography. See [governance](governance.md) and [routing](routing.md).
+Limits count attempts, including opt-in fallbacks. Reservations require accurate configured HARD provider input ceilings and bounded output (an explicit client maximum or the pinned price's output ceiling); prices are estimates, not invoice guarantees. Unknown unpriced history blocks newly enabled budgets rather than being erased. Cooldowns reopen by elapsed time, not a single-probe gate. Labels are operator assertions, not verified geography. See [governance](governance.md) and [routing](routing.md).
 
 ## 5. Production operations — next
 

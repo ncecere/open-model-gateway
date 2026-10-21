@@ -526,6 +526,13 @@ async fn invalid_config_and_protocol_never_reach_credentials_or_network() {
 
 #[test]
 fn validates_semantics_without_silent_loss() {
+    assert_eq!(
+        BedrockAdapter::new().unwrap().generation_output_limit(),
+        i32::MAX as u32
+    );
+    let mut boundary = request();
+    boundary.max_output_tokens = Some(i32::MAX as u32);
+    assert!(encode(&boundary).is_ok());
     let check = |request: ChatRequest| assert!(encode(&request).is_err());
     for temp in [f64::NAN, f64::INFINITY, -0.1, 1.01] {
         let mut req = request();

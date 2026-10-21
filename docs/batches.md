@@ -30,14 +30,14 @@ This page describes the current source (migrations `0021_batch_engine.sql` and `
 
 ### Validation report
 
-Creating a batch streams the input file once. Every line is checked: shape, unique `custom_id`, the endpoint's body contract, a model available to the key and serving the endpoint, a price with ceilings (the batch must be reserved for), and an output maximum within the price's output ceiling. An invalid file creates nothing:
+Creating a batch streams the input file once. Every line is checked: shape, unique `custom_id`, the endpoint's body contract, a model available to the key and serving the endpoint, a price with ceilings (the batch must be reserved for), and an output maximum within the price's output ceiling. Chat/Responses lines may omit their optional maximum: planning pins the immutable price and output ceiling in the private execution copy, and both the parent hold and the dispatched line use it even if pricing changes while queued. The uploaded file is never rewritten. Native Messages still requires `max_tokens`. An invalid file creates nothing:
 
 ```json
 {"error": {"type": "invalid_request_error", "code": "invalid_batch_input", "param": "input_file_id", "message": "…"},
  "errors": {"object": "list", "data": [{"code": "duplicate_custom_id", "message": "custom_id must be unique within the file.", "line": 3, "param": null}]}}
 ```
 
-`line` is the file's physical line number (1-based). At most 20 problems are reported. Messages are fixed strings; they never echo line content. Codes: `invalid_json`, `invalid_line`, `invalid_custom_id`, `duplicate_custom_id`, `invalid_method`, `invalid_url`, `invalid_body`, `unsupported_feature`, `missing_max_tokens`, `model_not_found`, `model_unsupported`, `model_not_priced`, `max_tokens_too_large`, `line_too_large`, `too_many_lines`, `empty_file`.
+`line` is the file's physical line number (1-based). At most 20 problems are reported. Messages are fixed strings; they never echo line content. Codes: `invalid_json`, `invalid_line`, `invalid_custom_id`, `duplicate_custom_id`, `invalid_method`, `invalid_url`, `invalid_body`, `unsupported_feature`, `model_not_found`, `model_unsupported`, `model_not_priced`, `max_tokens_too_large`, `line_too_large`, `too_many_lines`, `empty_file`.
 
 Valid lines are copied to the batch's **private copy**: an encrypted file without an API purpose, so `/v1/files` never lists it. The client may delete its input file at any time without affecting the batch. Batches need the [file store](file-storage.md) with "Batch files" allowed; otherwise creation returns 400 `batch_files_disabled`.
 
@@ -62,7 +62,7 @@ The batch runner (`serve`, one per process) claims runnable batches with a renew
 
 - **Workers:** at most `GATEWAY_BATCH_WORKERS` lines run at once per process (default 4; `0` turns the runner off) and at most `GATEWAY_BATCH_CONCURRENCY` lines of one batch (default 2).
 - **Capacity:** a line starts only when its route's gates are open and the route has room ([scheduling](#scheduling-on-self-hosted-models)). Each route runs at most 2 batch lines at once by default, across all batches and gateway processes.
-- **Routes:** the scheduler picks a line's route with the model's routing policy, then pins the line to it. A line never fails over after it starts. Lines of different models progress independently; a batch's models take turns.
+- **Routes:** the scheduler picks a line's route with the model's routing policy, then pins the line to it. Lines with an omitted optional maximum retain their planned deployment and immutable price, so later catalog changes cannot enlarge their default. A line never fails over after it starts. Lines of different models progress independently; a batch's models take turns.
 - **Exactly once:** a line is claimed by inserting its `batch_lines` row before it runs, so it can never run twice, even with several runners. Rows hold metadata only: line number, state, attempts, status and error codes, the execution id and the result segment.
 - **Restarts:** a line a stopped runner left `running` becomes `interrupted` and is never executed again. Its attempt's hold is reconciled as unknown when its lease expires. Lines that finished but whose results were not yet stored are reported as `result_unavailable`.
 - **Results:** finished lines are written to encrypted result segments (internal files) as they complete. When the batch ends they are merged into the output and error files and deleted.
