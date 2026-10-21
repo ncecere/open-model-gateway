@@ -4,21 +4,30 @@ The single-enterprise rebuild is in progress. `docs/enterprise-rebuild.md` recor
 
 ## Execution cadence
 
-Keep work moving without lowering the quality bar.
+Keep work moving, and prove each change before it lands. The bar was raised on 2026-10-21 after the LiteLLM incidents (a scanner action stealing a publish token, malicious wheels from a compromised build, a config API reachable by any logged-in user): speed never outranks verification.
 
-One GitHub issue at a time, one loop per issue:
+One GitHub issue at a time per worker, one loop per issue:
 
-1. Branch from current `main`. Write a failing test that shows the problem.
-2. Make the smallest fix that passes it.
+1. Branch from current `main`. Write a failing test that shows the problem (or, for a feature, the behaviour that doesn't exist yet).
+2. Make the smallest change that passes it.
 3. Run the checks below for the areas the change touches (browser tests for UI flows, a real PostgreSQL database for SQL/authorization changes).
-4. One code review; fix actionable findings.
-5. Open a PR. When CI is green, merge it to `main` and close the issue. That is "done".
+4. **Prove it on the real path**, not only with unit tests and mocks: run the changed flow end to end against a running gateway (the local stack, or a `dev-env` cluster environment for chart, migration and multi-replica behaviour) and check the result, including the refusal cases.
+5. **Review.** Every change gets a code review. A security-relevant change (authentication, authorization, egress, secrets and credentials, SQL and runtime grants, migrations, crypto, CI/supply chain, anything parsing untrusted input) gets two independent reviews, one of them adversarial (its job is to break the change), from different models. Fix actionable findings.
+6. **The coordinator reads every diff before it merges**, including code written by agents, and re-runs whatever it doubts.
+7. Open a PR. `main` is protected: merge only through a PR with every required check green, then close the issue.
 
-- Releases are separate: cut one only when the user asks. A "release before the next issue" line in an older issue template does not block the loop.
-- Do not add bespoke evidence files, source hashing, copied candidate trees or repeat review rounds. CI and the PR are the record.
-- Do not expand scope: no speculative hardening, extra slices or side investigations. File a new issue instead. `backup/held-issue-work-b7f1d10` is a read-only archive of unaccepted work; do not port from it.
-- Pause only for a real blocker: an unresolved failure, an ambiguous requirement, or an action outside this loop (paid provider calls, production deployment, existing installations, other namespaces/repositories). Never skip tests, weaken assertions or hide failures to keep moving.
+- Releases: the coordinator decides when a minor or patch release is ready; the user decides v1.0.0. Before tagging: the full local gates, the staging rehearsal, the release notes checked against the tag (versions, migration ranges, breaking changes) and a candidate run on `dev-env`. After tagging: deploy to the homelab, run the end-to-end journeys (sign-in, keys, inference on each configured provider, admin flows, the new features), and file UI/UX findings as issues.
+- **v1.0.0 requires an independent security review** (#61) and a clean authorization matrix (#195).
+- Do not add bespoke evidence files, source hashing or copied candidate trees. CI, the PR and the issue are the record.
+- Do not expand scope: no side investigations inside an issue. File a new issue instead. `backup/held-issue-work-b7f1d10` is a read-only archive of unaccepted work; do not port from it.
+- Pause only for a real blocker: an unresolved failure, an ambiguous requirement, or an action outside this loop (paid provider calls beyond a small capped smoke test on the homelab, production deployment, existing installations, other namespaces/repositories). Never skip tests, weaken assertions or hide failures to keep moving.
 - Updates are short: what is done, what is next, any blocker.
+
+### Supply chain
+
+- Pin every GitHub Action by commit SHA and every image by digest (`npm run test:supply-chain`). Tools downloaded at run time are pinned by version and checksum.
+- Third-party actions never run in a job whose token can write (packages, contents, id-token): scanning and checking happen in read-only jobs; publishing and signing jobs run only the minimum pinned steps they need.
+- Dependency updates are reviewed like code: read the changelog and the diff of anything with network, crypto or build-time execution.
 
 ## Layout
 
