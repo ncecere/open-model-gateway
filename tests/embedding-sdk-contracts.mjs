@@ -6,7 +6,7 @@ assert.equal(new URL(base).hostname, "127.0.0.1");
 const key = process.env.SDK_TEST_API_KEY;
 const wires = [];
 const client = new OpenAI({
-  apiKey: key, baseURL: `${base}/v1`, maxRetries: 0,
+  apiKey: key, baseURL: `${base}/v1`,
   fetch: async (url, init) => {
     const response = await fetch(url, init);
     wires.push({ request: JSON.parse(init.body), response: await response.clone().json() });
