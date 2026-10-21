@@ -567,6 +567,10 @@ impl IdentityState {
         Ok(self)
     }
 
+    pub(crate) fn store(&self) -> &Store {
+        &self.store
+    }
+
     pub(crate) fn scim(&self) -> Option<Arc<ScimRuntime>> {
         self.scim.clone()
     }
@@ -1462,4 +1466,4 @@ pub async fn prune_sessions_fenced(
 
 #[cfg(test)]
 #[path = "identity/tests.rs"]
-mod tests;
+pub(crate) mod tests;

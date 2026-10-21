@@ -22,7 +22,7 @@ fn signing_key() -> CoreEdDsaPrivateSigningKey {
 }
 
 #[cfg_attr(not(feature = "integration-tests"), allow(dead_code))]
-struct MockProvider {
+pub(crate) struct MockProvider {
     issuer: String,
     claims: Arc<Mutex<Value>>,
     exchanges: Arc<AtomicUsize>,
@@ -40,7 +40,7 @@ impl Drop for MockProvider {
     }
 }
 impl MockProvider {
-    async fn start(change: Option<(&str, Value)>) -> Self {
+    pub(crate) async fn start(change: Option<(&str, Value)>) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let issuer = format!("http://{}", listener.local_addr().unwrap());
         let mut metadata = json!({
@@ -143,7 +143,7 @@ impl MockProvider {
         )
         .unwrap()
     }
-    async fn state(&self, pool: sqlx::PgPool) -> IdentityState {
+    pub(crate) async fn state(&self, pool: sqlx::PgPool) -> IdentityState {
         IdentityState::new(Store::new(pool), Some(self.config()))
             .await
             .unwrap()

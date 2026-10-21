@@ -12,6 +12,8 @@ mod alert_tests;
 mod audit_export_tests;
 #[path = "audit_names_tests.rs"]
 mod audit_names_tests;
+#[path = "authz_matrix_tests.rs"]
+mod authz_matrix_tests;
 #[path = "batch_scheduling_tests.rs"]
 mod batch_scheduling_tests;
 #[path = "settings/branding_tests.rs"]

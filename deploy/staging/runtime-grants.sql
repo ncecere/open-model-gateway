@@ -27,6 +27,12 @@ GRANT SELECT ON public.installation,public.users,public.oidc_identities,
  public.inference_executions,public.governance_reservations,public.monetary_ledger,
  public.routing_policies,public.deployment_routing,public.deployment_health,public.audit_events
  TO gateway_runtime;
+-- Management route preflight (#195) reads live platform/workspace authority
+-- in one SELECT joining effective_platform_roles, workspaces and
+-- effective_workspace_memberships, then api_keys' scoped identity/holder/service
+-- columns for key routes. Platform-controlled workspace writes instead check
+-- the role first, then workspace metadata only. All use SELECT grants above;
+-- no new write privilege.
 -- Installation settings (0010): one seeded row; never inserted, deleted or re-keyed at runtime.
 GRANT SELECT ON public.installation_settings TO gateway_runtime;
 GRANT UPDATE(support_url,logo_url,human_key_max_lifetime_days,openrouter_data_collection,

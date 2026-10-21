@@ -453,6 +453,17 @@ When SCIM is refused, the gateway writes the audit event `scim.last_admin_protec
 
 ## Read snapshots and the reporting replica
 
+**Management route preflight (#195).** After session/CSRF verification, the declared access level is checked in a short read-only snapshot on the **primary**, before handler body extraction. Platform authority takes one SELECT through the live role view; workspace authority takes one SELECT joining the existing live role/workspace/membership views, sharing the same authorization decision code as locked handlers. Key routes add one scoped key SELECT. `WorkspacePlatformWrite` is deliberately admin-first: one platform-role SELECT refuses non-admins before any workspace lookup; admins then get a workspace-only metadata SELECT, without reading the platform role again. An explicit `rollback()` ends the preflight snapshot on success and refusal before entering the handler: it never holds a second pool connection alongside the handler's transaction. Handlers retain their own checks and were not reordered.
+
+**Measured net request cost (#195).** Local development binaries, before `origin/main` at `59c759e` (including #199) and after the route preflight/shared snapshot-query change; PostgreSQL 17, a fresh database and gateway per version, restricted runtime role, default pool 10, `GATEWAY_CONFIG_CACHE=off`. Each endpoint had 50 warm-ups followed by 500 sequential authenticated HTTP GETs over a persistent loopback connection; every response was `200`. No provider was called. Times include the retained handler, not just preflight:
+
+| Endpoint | Before median / p95 (ms) | After median / p95 (ms) |
+| --- | --- | --- |
+| `/api/v1/workspaces/{ws}/keys` | 5.817 / 8.583 | 6.769 / 9.814 |
+| `/api/v1/platform/providers` | 3.637 / 4.470 | 6.018 / 11.559 |
+
+The median increases were 0.952 ms and 2.381 ms respectively. Fewer authority SELECTs do not eliminate the extra snapshot's transaction setup/rollback round trips; workspace handlers also benefit from the shared combined SELECT. These small, shared-host development samples are not production capacity or latency guarantees. Budget primary capacity for the preflight even when report data uses a replica.
+
 Reports (`cost-report`, `cost-summary`, `costs`, `usage-export`), usage (`usage/overview`, `usage/explore`, `usage`, `executions`), request logs (`requests`, `generations`, `sessions`, `logs/metrics`, workspace and platform), `/me`, `/me/summary`, `/me/keys`, `/me/models`, `/v1/models` and the directory lists (platform users, user detail and workspaces; workspace members, keys and service accounts) take **no installation lock and no catalog lock** (scale plan P1, R06). Each runs in one `REPEATABLE READ READ ONLY` transaction with a 10 s statement timeout (plus the handlers' 10 s deadline):
 
 - **Authorization is inside the snapshot.** The live checks (user active, platform role, membership or personal ownership, workspace not disabled; for `/v1/models` the full key revalidation) run in the same snapshot as the data, without row locks. Privacy rules are unchanged: personal workspaces stay owner-private, platform readers see personal totals only, members see their own activity and workspace admins the whole workspace.

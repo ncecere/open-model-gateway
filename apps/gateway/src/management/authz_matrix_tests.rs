@@ -1,0 +1,495 @@
+//! Exercise the served router, including live cookies/entitlement/CSRF, not injected principals.
+use super::*;
+use crate::{
+    identity::tests::MockProvider,
+    route_policy::{Access, ROUTES},
+};
+use sha2::{Digest, Sha256};
+
+#[path = "authz_middleware_tests.rs"]
+mod isolated;
+#[path = "authz_matrix_fixtures.rs"]
+mod targets;
+const ORIGIN: &str = "http://127.0.0.1:3000";
+struct Session {
+    cookie: String,
+    csrf: String,
+}
+async fn session(pool: &PgPool, u: &BrowserPrincipal) -> Session {
+    let cookie = crate::entropy::hex_token().unwrap();
+    let csrf = crate::entropy::hex_token().unwrap();
+    sqlx::query("INSERT INTO browser_sessions(token_hash,user_id,csrf_hash,expires_at,verified_email,last_seen_at) VALUES($1,$2,$3,now()+interval '1 hour',$4,now())")
+        .bind(Sha256::digest(cookie.as_bytes()).as_slice()).bind(u.user_id)
+        .bind(Sha256::digest(csrf.as_bytes()).as_slice()).bind(&u.email)
+        .execute(pool).await.unwrap();
+    Session { cookie, csrf }
+}
+async fn request(
+    app: &Router,
+    method: &str,
+    path: &str,
+    session: Option<&Session>,
+    bearer: Option<&str>,
+    csrf: bool,
+    origin: &str,
+) -> StatusCode {
+    let mut req = Request::builder()
+        .method(method)
+        .uri(path)
+        .header("content-type", "application/json")
+        .header("origin", origin);
+    if let Some(s) = session {
+        req = req.header("cookie", format!("omg_session={}", s.cookie));
+        if csrf {
+            req = req.header("x-csrf-token", &s.csrf);
+        }
+    }
+    if let Some(b) = bearer {
+        req = req.header("authorization", format!("Bearer {b}"));
+    }
+    app.clone()
+        .oneshot(req.body(Body::from("{}")).unwrap())
+        .await
+        .unwrap()
+        .status()
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn every_route_refuses_lower_principals_and_unverified_mutations(pool: PgPool) {
+    let f = fixture(&pool).await;
+    // An entitled member of another workspace is not a member of this one.
+    member(&pool, f.project, f.outsider.user_id, "member").await;
+    let ws_admin = user(&pool, "workspace-admin", "user").await;
+    member(&pool, f.team, ws_admin.user_id, "admin").await;
+    let unentitled = user(&pool, "unentitled", "user").await;
+    let unentitled_session = session(&pool, &unentitled).await;
+    sqlx::query("UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1")
+        .bind(unentitled.user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let owner = session(&pool, &f.owner).await;
+    let member_session = session(&pool, &f.member).await;
+    let outsider = session(&pool, &f.outsider).await;
+    let auditor = session(&pool, &f.auditor).await;
+    let admin = session(&pool, &f.admin).await;
+    let workspace_admin = session(&pool, &ws_admin).await;
+    let (status, key_value) = key(&f, &f.owner, f.team, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    let inference = key_value["token"].as_str().unwrap();
+    let targets = targets::Targets::new(&pool, &f, id(&key_value), &owner).await;
+    let mock = MockProvider::start(None).await;
+    let identity = mock.state(pool.clone()).await;
+    let scim_value = crate::entropy::hex_token().unwrap();
+    let scim = crate::scim::ScimConfig::from_lookup(|name| match name {
+        "GATEWAY_SCIM_TOKEN_ENV" => Some("AUTHZ_MATRIX_SCIM".to_owned()),
+        "AUTHZ_MATRIX_SCIM" => Some(scim_value.clone()),
+        _ => None,
+    })
+    .unwrap();
+    let identity = identity.with_scim(scim).unwrap();
+    let engine = crate::inference::Engine::new(
+        std::sync::Arc::new(f.s.clone()),
+        crate::providers::ProviderRegistry::default(),
+        crate::inference::EngineLimits::default(),
+    )
+    .unwrap();
+    let app = crate::http::router_with_identity(f.s.clone(), None, engine, identity.clone());
+    // A newly registered management route is forbidden even for an admin until declared.
+    let undeclared = Router::new()
+        .route(
+            "/api/v1/platform/config/update",
+            post(|| async { StatusCode::OK }),
+        )
+        .route_layer(middleware::from_fn_with_state(
+            f.s.clone(),
+            authorization::require_route_access,
+        ))
+        .route_layer(middleware::from_fn_with_state(identity, require_session))
+        .with_state(f.s.clone());
+    assert_eq!(
+        request(
+            &undeclared,
+            "POST",
+            "/api/v1/platform/config/update",
+            Some(&admin),
+            None,
+            true,
+            ORIGIN
+        )
+        .await,
+        StatusCode::FORBIDDEN
+    );
+    let sessions = [
+        (&owner, "owner"),
+        (&member_session, "member"),
+        (&outsider, "other-workspace-member"),
+        (&auditor, "auditor"),
+        (&admin, "admin"),
+        (&workspace_admin, "workspace-admin"),
+    ];
+    let mut checked = 0;
+    for route in ROUTES {
+        for method in route.methods.split_whitespace().flat_map(|m| {
+            if m == "*" {
+                vec![
+                    "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT",
+                ]
+            } else if m == "GET" {
+                vec!["GET", "HEAD"]
+            } else {
+                vec![m]
+            }
+        }) {
+            let path = targets.concrete(route.path, &f);
+            let access = route.access;
+            match access {
+                Access::Anonymous | Access::Health => {
+                    let public_app = if route.path == "/metrics" {
+                        crate::metrics::router(f.s.clone())
+                    } else {
+                        app.clone()
+                    };
+                    let status =
+                        request(&public_app, method, &path, None, None, false, ORIGIN).await;
+                    assert!(
+                        !matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN),
+                        "public {method} {}: {status}",
+                        route.path
+                    );
+                    continue;
+                }
+                Access::InferenceKey => {
+                    for (s, label) in sessions {
+                        let status =
+                            request(&app, method, &path, Some(s), None, true, ORIGIN).await;
+                        assert_eq!(
+                            status,
+                            StatusCode::UNAUTHORIZED,
+                            "{method} {} browser {label}",
+                            route.path
+                        );
+                    }
+                    assert_eq!(
+                        request(&app, method, &path, None, None, false, ORIGIN).await,
+                        StatusCode::UNAUTHORIZED,
+                        "{method} {} anonymous",
+                        route.path
+                    );
+                    assert_eq!(
+                        request(&app, method, &path, None, Some(&scim_value), false, ORIGIN).await,
+                        StatusCode::UNAUTHORIZED,
+                        "{method} {} scim",
+                        route.path
+                    );
+                    continue;
+                }
+                Access::Scim => {
+                    assert_eq!(
+                        request(&app, method, &path, None, None, false, ORIGIN).await,
+                        StatusCode::UNAUTHORIZED,
+                        "{method} {} anonymous",
+                        route.path
+                    );
+                    assert_eq!(
+                        request(&app, method, &path, None, Some(inference), false, ORIGIN).await,
+                        StatusCode::UNAUTHORIZED,
+                        "{method} {} inference",
+                        route.path
+                    );
+                    for (s, label) in sessions {
+                        assert_eq!(
+                            request(&app, method, &path, Some(s), None, true, ORIGIN).await,
+                            StatusCode::UNAUTHORIZED,
+                            "{method} {} {label}",
+                            route.path
+                        );
+                    }
+                    continue;
+                }
+                _ => (),
+            }
+            for (credential, label) in [
+                (None, "anonymous"),
+                (Some(inference), "inference"),
+                (Some(scim_value.as_str()), "scim"),
+            ] {
+                assert_eq!(
+                    request(&app, method, &path, None, credential, false, ORIGIN).await,
+                    StatusCode::UNAUTHORIZED,
+                    "{method} {} {label}",
+                    route.path
+                );
+            }
+            assert_eq!(
+                request(
+                    &app,
+                    method,
+                    &path,
+                    Some(&unentitled_session),
+                    None,
+                    true,
+                    ORIGIN
+                )
+                .await,
+                StatusCode::UNAUTHORIZED,
+                "{method} {} unentitled",
+                route.path
+            );
+            for (s, label) in sessions {
+                let lower = match access {
+                    Access::PlatformRead => matches!(
+                        label,
+                        "owner" | "member" | "other-workspace-member" | "workspace-admin"
+                    ),
+                    Access::PlatformWrite | Access::WorkspacePlatformWrite => label != "admin",
+                    Access::WorkspaceMetadata => label == "other-workspace-member",
+                    Access::WorkspaceMember => {
+                        matches!(label, "other-workspace-member" | "auditor" | "admin")
+                            || (label == "member"
+                                && matches!(
+                                    route.path,
+                                    "/api/v1/workspaces/{ws}/files/{id}"
+                                        | "/api/v1/workspaces/{ws}/files/{id}/content"
+                                        | "/api/v1/workspaces/{ws}/batches/{id}"
+                                        | "/api/v1/workspaces/{ws}/batches/{id}/cancel"
+                                        | "/api/v1/workspaces/{ws}/requests/{root}"
+                                        | "/api/v1/workspaces/{ws}/sessions/{session}"
+                                ))
+                    }
+                    Access::WorkspaceKey => !matches!(label, "owner" | "workspace-admin"),
+                    Access::WorkspaceKeyRotate => label != "owner",
+                    Access::WorkspaceAdmin => !matches!(label, "owner" | "workspace-admin"),
+                    Access::WorkspaceAdminOrReader => {
+                        matches!(label, "member" | "other-workspace-member")
+                    }
+                    Access::Browser => {
+                        route.path == "/api/v1/me/sessions/{session}" && label != "owner"
+                    }
+                    Access::BrowserLogout => false,
+                    _ => unreachable!(),
+                };
+                if lower {
+                    let status = request(&app, method, &path, Some(s), None, true, ORIGIN).await;
+                    let hidden_object = (access == Access::WorkspaceKey && label == "member")
+                        || (access == Access::WorkspaceKeyRotate && label == "member")
+                        || (access == Access::WorkspaceMember && label == "member")
+                        || (access == Access::Browser
+                            && route.path == "/api/v1/me/sessions/{session}");
+                    assert_eq!(
+                        status,
+                        if hidden_object {
+                            StatusCode::NOT_FOUND
+                        } else {
+                            StatusCode::FORBIDDEN
+                        },
+                        "{method} {} {label}",
+                        route.path
+                    );
+                }
+            }
+            if matches!(
+                access,
+                Access::WorkspaceMetadata
+                    | Access::WorkspaceMember
+                    | Access::WorkspaceKey
+                    | Access::WorkspaceKeyRotate
+                    | Access::WorkspaceAdmin
+                    | Access::WorkspaceAdminOrReader
+                    | Access::WorkspacePlatformWrite
+            ) {
+                let personal_path = path.replace(&f.team.to_string(), &f.personal.to_string());
+                for (s, label) in sessions.into_iter().filter(|(_, label)| *label != "owner") {
+                    assert_eq!(
+                        request(&app, method, &personal_path, Some(s), None, true, ORIGIN).await,
+                        StatusCode::FORBIDDEN,
+                        "{method} {} foreign personal {label}",
+                        route.path
+                    );
+                }
+                // Team membership/adminship does not grant the sibling Project.
+                let project_path = path.replace(&f.team.to_string(), &f.project.to_string());
+                for s in [&member_session, &workspace_admin] {
+                    assert_eq!(
+                        request(&app, method, &project_path, Some(s), None, true, ORIGIN).await,
+                        StatusCode::FORBIDDEN,
+                        "{method} {} sibling project",
+                        route.path
+                    );
+                }
+            }
+            if !matches!(method, "GET" | "HEAD") {
+                let required = match access {
+                    Access::PlatformRead
+                    | Access::PlatformWrite
+                    | Access::WorkspacePlatformWrite => &admin,
+                    _ => &owner,
+                };
+                assert_eq!(
+                    request(&app, method, &path, Some(required), None, false, ORIGIN).await,
+                    StatusCode::FORBIDDEN,
+                    "{method} {} no CSRF",
+                    route.path
+                );
+                assert_eq!(
+                    request(
+                        &app,
+                        method,
+                        &path,
+                        Some(required),
+                        None,
+                        true,
+                        "https://wrong.example"
+                    )
+                    .await,
+                    StatusCode::FORBIDDEN,
+                    "{method} {} wrong Origin",
+                    route.path
+                );
+            }
+            checked += 1;
+        }
+    }
+    assert!(
+        checked > 200,
+        "the matrix must exercise the complete management surface"
+    );
+    // A non-owner workspace admin cannot remove the actual owner.
+    assert_eq!(
+        request(
+            &app,
+            "DELETE",
+            &format!("/api/v1/workspaces/{}/members/{}", f.team, f.owner.user_id),
+            Some(&workspace_admin),
+            None,
+            true,
+            ORIGIN
+        )
+        .await,
+        StatusCode::FORBIDDEN
+    );
+    // Positive cases for each boundary: real handler responses, never blanket denial.
+    for (method, path, s, expected) in [
+        ("GET", "/api/v1/me", &owner, StatusCode::OK),
+        (
+            "POST",
+            "/api/v1/auth/logout",
+            &outsider,
+            StatusCode::NO_CONTENT,
+        ),
+        ("GET", "/api/v1/platform/users", &auditor, StatusCode::OK),
+        (
+            "GET",
+            "/api/v1/platform/installation/policy",
+            &auditor,
+            StatusCode::GONE,
+        ),
+        (
+            "PUT",
+            "/api/v1/platform/installation/policy",
+            &admin,
+            StatusCode::GONE,
+        ),
+        (
+            "POST",
+            "/api/v1/platform/models",
+            &admin,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        ("GET", "/api/v1/workspaces/{ws}", &auditor, StatusCode::OK),
+        (
+            "POST",
+            "/api/v1/workspaces/{ws}/costs/{execution}/reconcile",
+            &admin,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            "GET",
+            "/api/v1/workspaces/{ws}/keys",
+            &member_session,
+            StatusCode::OK,
+        ),
+        (
+            "GET",
+            "/api/v1/workspaces/{ws}/keys/{key}",
+            &owner,
+            StatusCode::OK,
+        ),
+        (
+            "POST",
+            "/api/v1/workspaces/{ws}/keys/{key}/rotate",
+            &owner,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            "GET",
+            "/api/v1/workspaces/{ws}/service-accounts",
+            &workspace_admin,
+            StatusCode::OK,
+        ),
+        (
+            "GET",
+            "/api/v1/workspaces/{ws}/members",
+            &auditor,
+            StatusCode::OK,
+        ),
+    ] {
+        assert_eq!(
+            request(
+                &app,
+                method,
+                &targets.concrete(path, &f),
+                Some(s),
+                None,
+                true,
+                ORIGIN
+            )
+            .await,
+            expected,
+            "positive {method} {path}"
+        );
+    }
+    assert_eq!(
+        request(
+            &app,
+            "GET",
+            "/v1/models",
+            None,
+            Some(inference),
+            false,
+            ORIGIN
+        )
+        .await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(
+            &app,
+            "GET",
+            "/scim/v2/ServiceProviderConfig",
+            None,
+            Some(&scim_value),
+            false,
+            ORIGIN
+        )
+        .await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(&app, "GET", "/health/live", None, None, false, ORIGIN).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(
+            &app,
+            "GET",
+            "/api/v1/auth/config",
+            None,
+            None,
+            false,
+            ORIGIN
+        )
+        .await,
+        StatusCode::OK
+    );
+}

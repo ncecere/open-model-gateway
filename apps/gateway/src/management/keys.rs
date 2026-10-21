@@ -334,6 +334,44 @@ pub(super) async fn revoke_key(
     tx.commit().await?;
     Ok(ok())
 }
+/// Pre-extraction key authority. Service keys always require a workspace admin;
+/// admins may inspect/manage human keys, but only the holder may rotate one.
+/// Handlers still recheck locked authority; this snapshot grants no lease.
+pub(super) async fn key_access_snapshot(
+    tx: &mut Transaction<'_, Postgres>,
+    u: &BrowserPrincipal,
+    ws: Uuid,
+    id: Uuid,
+    admin: bool,
+    rotate: bool,
+) -> Result<(), ApiError> {
+    let (issued, service): (Option<Uuid>, Option<Uuid>) = sqlx::query_as(
+        "SELECT issued_to_user_id,service_account_id FROM api_keys WHERE workspace_id=$1 AND id=$2",
+    )
+    .bind(ws)
+    .bind(id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or_else(missing)?;
+    let allowed = if service.is_some() {
+        admin
+    } else {
+        issued == Some(u.user_id) || (admin && !rotate)
+    };
+    // As on main: rotating a service key without workspace management is 403
+    // (the handler's `manage`), while the key-policy routes (`lineage`) answer
+    // 404 for any key outside the caller's reach.
+    // A workspace admin sees every key in the workspace's list, so refusing
+    // them a rotation hides nothing: 403, as on main. Anyone else is refused
+    // without learning the key exists.
+    if allowed {
+        Ok(())
+    } else if rotate && (service.is_some() || admin) {
+        Err(denied())
+    } else {
+        Err(missing())
+    }
+}
 pub(super) async fn rotate_key(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
