@@ -1106,4 +1106,49 @@ mod profile_tests {
         }
         assert!(!credential_valid("openrouter", "none"));
     }
+
+    /// A Platform Admin chooses connection endpoints, but only inside what
+    /// the operator approved: no cloud profile takes an endpoint other than
+    /// its fixed origin, and a local profile takes none that is not approved
+    /// out of band (the unit-test environment approves none), so metadata,
+    /// loopback and private addresses cannot be saved (#196).
+    #[test]
+    fn connection_endpoints_cannot_name_internal_or_lookalike_hosts() {
+        let internal = [
+            "http://169.254.169.254/v1",
+            "http://169.254.169.254/latest/meta-data/",
+            "https://169.254.169.254/v1",
+            "http://127.0.0.1:8000/v1",
+            "http://localhost/v1",
+            "http://[::1]/v1",
+            "http://[::ffff:169.254.169.254]/v1",
+            "http://[fd00:ec2::254]/v1",
+            "http://10.0.0.5/v1",
+            "http://192.168.1.1/v1",
+            "http://2852039166/v1",
+            "http://metadata.google.internal/v1",
+            "https://api.openai.com.evil.invalid/v1",
+            "https://api.openai.com@169.254.169.254/v1",
+            "https://api.openai.com:444/v1",
+            "https://api.openai.com/v1/../../x",
+            "https://api.openai.com/v1?x=1",
+        ];
+        for provider in ["openai", "anthropic", "openrouter"] {
+            for endpoint in internal {
+                assert!(
+                    !profile_valid(&input(provider, Some(endpoint))),
+                    "{provider} {endpoint}"
+                );
+            }
+        }
+        for provider in ["openai_compatible", "vllm", "sglang", "ollama"] {
+            for endpoint in internal {
+                assert!(
+                    !profile_valid(&input(provider, Some(endpoint))),
+                    "{provider} {endpoint}"
+                );
+            }
+            assert!(!profile_valid(&input(provider, None)), "{provider}");
+        }
+    }
 }

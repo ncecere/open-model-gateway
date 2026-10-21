@@ -80,6 +80,47 @@ fn only_one_model_query_parameter() {
     }
 }
 
+/// The one thing a realtime client chooses is a model name to look up; no
+/// destination or credential parameter is read (#196).
+#[test]
+fn realtime_query_parameters_cannot_steer_the_upstream() {
+    let uri = |q: &str| format!("/v1/realtime{q}").parse::<Uri>().unwrap();
+    for param in [
+        "api_base",
+        "base_url",
+        "endpoint",
+        "url",
+        "api_key",
+        "credentials",
+        "provider",
+        "custom_llm_provider",
+        "extra_headers",
+        "extra_body",
+        "authorization",
+        "headers",
+        "host",
+        "intent",
+        "call_id",
+    ] {
+        let steered = uri(&format!(
+            "?model=company%2Fvoice&{param}=http%3A%2F%2Fattacker.invalid%2Fv1"
+        ));
+        assert_eq!(
+            model_param(&steered),
+            Err("Only the model query parameter is supported"),
+            "{param}"
+        );
+        assert!(
+            model_param(&uri(&format!("?{param}=x&model=a"))).is_err(),
+            "{param}"
+        );
+    }
+    // A model name is only ever a name: control characters never reach a lookup.
+    for bad in ["?model=a%00b", "?model=a%0Ab", "?model=%7F"] {
+        assert!(model_param(&uri(bad)).is_err(), "{bad}");
+    }
+}
+
 #[test]
 fn forwarded_events_are_measured_for_hold_sizing() {
     use crate::inference::realtime::context::EventSize;

@@ -31,7 +31,7 @@ impl AnthropicAdapter {
         })
     }
     #[cfg(test)]
-    fn for_test(resolver: Arc<dyn SecretResolver>, base: String) -> Self {
+    pub(crate) fn for_test(resolver: Arc<dyn SecretResolver>, base: String) -> Self {
         let url = reqwest::Url::parse(&base).unwrap();
         assert_eq!(url.scheme(), "http");
         assert_eq!(url.host_str(), Some("127.0.0.1"));

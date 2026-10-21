@@ -142,8 +142,10 @@ pub enum NativeOutcome {
 pub struct UpstreamId(String);
 impl UpstreamId {
     pub fn parse(s: &str) -> Option<Self> {
+        // Not `.` or `..`: the id is one segment of a URL path.
         (!s.is_empty()
             && s.len() <= 128
+            && s.bytes().any(|b| b != b'.')
             && s.bytes()
                 .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b':' | b'-')))
         .then(|| Self(s.to_owned()))
@@ -522,6 +524,23 @@ mod tests {
         assert_eq!(BatchStatus::Cancelling.state(), InProgress);
         assert_eq!(BatchStatus::Validating.state(), Queued);
     }
+    /// An id is a path segment of the provider's URL: `.` and `..` would be
+    /// resolved by the URL parser and leave the segment (#196).
+    #[test]
+    fn upstream_ids_are_never_dot_segments() {
+        for id in [
+            ".", "..", "...", "%2e%2e", "a/b", "a?b", "a#b", "a\\b", "a b", "é",
+        ] {
+            assert!(UpstreamId::parse(id).is_none(), "{id}");
+        }
+        for id in ["a.b", ".a", "a..", "file-abc:1_2"] {
+            let parsed = UpstreamId::parse(id).unwrap();
+            let url = reqwest::Url::parse(&format!("https://h.test/v1/videos/{}", parsed.as_str()))
+                .unwrap();
+            assert_eq!(url.path_segments().unwrap().count(), 3, "{id}");
+        }
+    }
+
     #[test]
     fn ids_are_strict() {
         let id = uuid::Uuid::new_v4();

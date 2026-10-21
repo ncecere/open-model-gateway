@@ -297,6 +297,20 @@ pub enum ProviderOutput {
     Stream(EventStream),
 }
 
+/// Longest text a unique index on `models.public_name` can hold (PostgreSQL's
+/// B-tree entry limit): a longer name can never have been stored.
+const MAX_STORED_MODEL_NAME_BYTES: usize = 2704;
+
+/// Whether a request's `model` is worth looking up: not empty, no control
+/// characters (PostgreSQL rejects NUL in text, which would be a 5xx) and not
+/// longer than a stored name can be. Everything else is looked up by exact
+/// equality, so names inserted by SQL with other characters keep resolving.
+pub fn model_name_is_queryable(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= MAX_STORED_MODEL_NAME_BYTES
+        && !name.chars().any(char::is_control)
+}
+
 #[derive(Clone, sqlx::FromRow)]
 pub struct Deployment {
     pub id: Uuid,

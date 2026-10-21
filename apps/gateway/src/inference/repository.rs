@@ -248,6 +248,11 @@ impl InferenceRepository for Store {
         principal: &Principal,
         model: &str,
     ) -> Result<Vec<Deployment>, InferenceError> {
+        // A name that can never match, and would break the query, is unknown
+        // without one (PostgreSQL rejects NUL in text: a 5xx for a probe).
+        if !super::types::model_name_is_queryable(model) {
+            return Ok(Vec::new());
+        }
         // Candidate planning only (admission re-checks every condition live):
         // the per-replica cache serves the eligible deployments of a key and
         // model while the catalog, access and key versions are unchanged.
