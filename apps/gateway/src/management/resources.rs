@@ -626,7 +626,11 @@ pub(crate) const OPENROUTER_BASE: &str = "https://openrouter.ai/api/v1";
 fn local(provider: &str) -> bool {
     matches!(provider, "vllm" | "sglang" | "ollama" | "openai_compatible")
 }
-fn credential_valid(provider: &str, r: &str) -> bool {
+fn credential_valid(
+    provider: &str,
+    r: &str,
+    secrets: &crate::providers::secrets::EnvSecrets,
+) -> bool {
     if local(provider) && r == "none" {
         return true;
     }
@@ -642,15 +646,7 @@ fn credential_valid(provider: &str, r: &str) -> bool {
             .is_some_and(|b| b.is_ascii_uppercase() || b == b'_')
         && n.bytes()
             .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
-        && crate::providers::secrets::EnvSecrets::new(
-            std::env::var("GATEWAY_SECRET_ENV_ALLOWLIST")
-                .unwrap_or_default()
-                .split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned),
-        )
-        .allows(r)
+        && secrets.allows(r)
 }
 /// The stored reference: Bedrock role options arrive as separate fields and are folded
 /// into the canonical `aws:role:` reference. Other profiles accept no AWS options.
@@ -670,8 +666,10 @@ fn stored_reference(
     }
     (external_id.is_none() && session_name.is_none()).then(|| reference.to_owned())
 }
-fn provider_valid(b: &ProviderInput) -> bool {
-    valid_name(&b.name) && credential_valid(&b.provider, &b.credential_ref) && profile_valid(b)
+fn provider_valid(b: &ProviderInput, secrets: &crate::providers::secrets::EnvSecrets) -> bool {
+    valid_name(&b.name)
+        && credential_valid(&b.provider, &b.credential_ref, secrets)
+        && profile_valid(b)
 }
 /// Fixed-origin cloud profiles accept only their exact HTTPS base (or none).
 fn profile_valid(b: &ProviderInput) -> bool {
@@ -720,7 +718,7 @@ async fn create_provider(
         b.aws_session_name.as_deref(),
     )
     .ok_or_else(invalid)?;
-    if !provider_valid(&b) {
+    if !provider_valid(&b, &s.provider_secrets) {
         return Err(invalid());
     }
     let id = Uuid::new_v4();
@@ -786,7 +784,7 @@ async fn update_provider(
         aws_external_id: None,
         aws_session_name: None,
     };
-    if !provider_valid(&proposed) {
+    if !provider_valid(&proposed, &s.provider_secrets) {
         return Err(invalid());
     }
     sqlx::query("UPDATE provider_connections SET enabled=$2,credential_ref=coalesce($3,credential_ref),endpoint=CASE WHEN $4 THEN $5 ELSE endpoint END WHERE id=$1").bind(id).bind(b.enabled).bind(replacement).bind(b.endpoint.is_some()).bind(b.endpoint.flatten()).execute(&mut *tx).await?;
@@ -1196,7 +1194,11 @@ mod profile_tests {
         ] {
             assert!(!profile_valid(&input("openrouter", Some(bad))), "{bad}");
         }
-        assert!(!credential_valid("openrouter", "none"));
+        assert!(!credential_valid(
+            "openrouter",
+            "none",
+            &crate::providers::secrets::EnvSecrets::default()
+        ));
     }
 
     /// A Platform Admin chooses connection endpoints, but only inside what

@@ -20,6 +20,10 @@ mod batch_scheduling_tests;
 mod branding_tests;
 #[path = "catalog_ux_tests.rs"]
 mod catalog_ux_tests;
+#[path = "configuration_matrix_tests.rs"]
+mod configuration_matrix_tests;
+#[path = "configuration_tests.rs"]
+mod configuration_tests;
 #[path = "directory/tests.rs"]
 mod directory_tests;
 #[path = "entropy_tests.rs"]

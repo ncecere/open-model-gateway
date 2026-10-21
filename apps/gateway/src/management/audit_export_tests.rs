@@ -4,7 +4,7 @@ use super::*;
 const STATUS: &str = "/api/v1/platform/settings/audit-export";
 const TEST: &str = "/api/v1/platform/settings/audit-export/test";
 
-async fn receiver() -> (String, std::sync::Arc<std::sync::Mutex<Vec<Value>>>) {
+pub(super) async fn receiver() -> (String, std::sync::Arc<std::sync::Mutex<Vec<Value>>>) {
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let log = seen.clone();
     let app = axum::Router::new().route(

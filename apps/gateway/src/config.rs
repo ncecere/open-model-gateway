@@ -10,6 +10,7 @@ pub struct Config {
     pub environment: Environment,
     pub web_directory: Option<PathBuf>,
     pub secret_env_allowlist: Vec<String>,
+    pub smtp_env_allowlist: Vec<String>,
     pub inference_limits: crate::inference::EngineLimits,
     /// Optional separate Prometheus listener (`GATEWAY_METRICS_ADDR`); `None` disables it.
     pub metrics_listen: Option<SocketAddr>,
@@ -85,7 +86,9 @@ impl Config {
             .filter(|name| !name.is_empty())
             .map(str::to_owned)
             .collect();
-        disjoint_allowlists(&secret_env_allowlist, &smtp_env_allowlist)?;
+        disjoint_allowlists(&secret_env_allowlist, &smtp_env_allowlist, &|name| {
+            std::env::var(name).ok()
+        })?;
         let max_concurrent = std::env::var("GATEWAY_MAX_CONCURRENT_REQUESTS")
             .unwrap_or_else(|_| "128".into())
             .parse::<usize>()
@@ -170,6 +173,7 @@ impl Config {
             environment,
             web_directory,
             secret_env_allowlist,
+            smtp_env_allowlist,
             inference_limits,
             metrics_listen,
             database_max_connections,
@@ -241,55 +245,196 @@ impl Config {
 
 /// A variable is readable by provider connections or by SMTP, never both:
 /// either side's destination is chosen by a Platform Admin (#140).
-fn disjoint_allowlists(providers: &[String], smtp: &[String]) -> anyhow::Result<()> {
+fn disjoint_allowlists(
+    providers: &[String],
+    smtp: &[String],
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> anyhow::Result<()> {
     let shared: Vec<&str> = smtp
         .iter()
         .filter(|name| providers.contains(name))
         .map(String::as_str)
         .collect();
+    let mut failures = Vec::new();
     if !shared.is_empty() {
-        bail!(
-            "GATEWAY_SECRET_ENV_ALLOWLIST and {} both list {}: a variable may be readable by provider connections or by SMTP, not both",
-            crate::email::SMTP_ALLOWLIST_VAR,
-            shared.join(",")
-        );
+        failures.push(format!("GATEWAY_SECRET_ENV_ALLOWLIST and {} both list {}: a variable may be readable by provider connections or by SMTP, not both", crate::email::SMTP_ALLOWLIST_VAR, shared.join(",")));
     }
-    // The gateway's own credentials, read without any allowlist: the database
-    // and OIDC secrets, the built-in provider keys, Bedrock's AWS chain and
-    // every gateway setting.
-    let reserved: Vec<&str> = smtp
+    for (setting, names) in [
+        ("GATEWAY_SECRET_ENV_ALLOWLIST", providers),
+        (crate::email::SMTP_ALLOWLIST_VAR, smtp),
+    ] {
+        let reserved: Vec<String> = names
+            .iter()
+            .map(String::as_str)
+            .filter(|name| {
+                crate::providers::secrets::reserved_env_name(name, lookup)
+                    || (setting == crate::email::SMTP_ALLOWLIST_VAR
+                        && crate::startup::SECRET_NAMES.contains(name))
+            })
+            .map(|name| {
+                let pointers = crate::providers::secrets::selecting_secret_pointers(name, lookup);
+                if pointers.is_empty() {
+                    name.to_owned()
+                } else {
+                    format!("{name} (selected by {})", pointers.join(","))
+                }
+            })
+            .collect();
+        if !reserved.is_empty() {
+            failures.push(format!(
+                "{setting} lists reserved variables: {}",
+                reserved.join(",")
+            ));
+        }
+    }
+    anyhow::ensure!(failures.is_empty(), "{}", failures.join("; "));
+    let provider_keys: Vec<&str> = providers
         .iter()
         .map(String::as_str)
-        .filter(|name| {
-            crate::startup::SECRET_NAMES.contains(name)
-                || name.starts_with("AWS_")
-                || name.starts_with("GATEWAY_")
-        })
+        .filter(|name| matches!(*name, "OPENAI_API_KEY" | "ANTHROPIC_API_KEY"))
         .collect();
-    if !reserved.is_empty() {
-        bail!(
-            "{} lists {}: SMTP may not read the gateway's own or provider credentials",
-            crate::email::SMTP_ALLOWLIST_VAR,
-            reserved.join(",")
-        );
+    if !provider_keys.is_empty() {
+        tracing::warn!(setting = "GATEWAY_SECRET_ENV_ALLOWLIST", names = %provider_keys.join(","), "built-in provider keys remain referenceable; a custom-endpoint connection using these references receives their credentials");
     }
     Ok(())
 }
 
 #[cfg(test)]
 mod allowlist_tests {
+    #[test]
+    fn database_proxy_and_telemetry_names_are_reserved_in_both_lists() {
+        for name in [
+            "PGPASSWORD",
+            "PGSSLKEY",
+            "PGPASSFILE",
+            "PGFUTURE_OPTION",
+            "HTTP_PROXY",
+            "http_proxy",
+            "HTTPS_PROXY",
+            "https_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+            "NO_PROXY",
+            "no_proxy",
+            "OTEL_EXPORTER_OTLP_HEADERS",
+        ] {
+            for (providers, smtp) in [
+                (vec![name.to_owned()], vec![]),
+                (vec![], vec![name.to_owned()]),
+            ] {
+                assert!(
+                    super::disjoint_allowlists(&providers, &smtp, &|_| None).is_err(),
+                    "operational credential name must be reserved"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn startup_reports_both_failing_lists_and_the_selecting_pointer() {
+        let error = super::disjoint_allowlists(
+            &["DATABASE_URL".into()],
+            &["PRIVATE_MATERIAL".into()],
+            &|name| (name == "GATEWAY_FILE_ENCRYPTION_KEYS_ENV").then(|| "PRIVATE_MATERIAL".into()),
+        )
+        .unwrap_err()
+        .to_string();
+        for name in [
+            "GATEWAY_SECRET_ENV_ALLOWLIST",
+            "GATEWAY_SMTP_SECRET_ENV_ALLOWLIST",
+            "DATABASE_URL",
+            "PRIVATE_MATERIAL",
+            "GATEWAY_FILE_ENCRYPTION_KEYS_ENV",
+        ] {
+            assert!(error.contains(name), "missing diagnostic name");
+        }
+    }
+
+    #[test]
+    fn provider_allowlist_refuses_reserved_names_at_startup() {
+        for name in [
+            "DATABASE_URL",
+            "DATABASE_URL_FILE",
+            "GATEWAY_OIDC_CLIENT_SECRET",
+            "AWS_SECRET_ACCESS_KEY",
+        ] {
+            let error = super::disjoint_allowlists(&[name.to_owned()], &[], &|_| None)
+                .expect_err("reserved provider allowlist must stop startup")
+                .to_string();
+            assert!(error.contains("GATEWAY_SECRET_ENV_ALLOWLIST"));
+            assert!(error.contains(name));
+        }
+    }
+
+    #[test]
+    fn both_allowlists_refuse_every_indirect_secret_name() {
+        for pointer in crate::providers::secrets::SECRET_POINTERS {
+            let lookup = |setting: &str| {
+                assert!(crate::providers::secrets::SECRET_POINTERS.contains(&setting));
+                (setting == *pointer).then(|| "PRIVATE_MATERIAL".to_owned())
+            };
+            for (providers, smtp, setting) in [
+                (
+                    vec!["PRIVATE_MATERIAL".to_owned()],
+                    vec![],
+                    "GATEWAY_SECRET_ENV_ALLOWLIST",
+                ),
+                (
+                    vec![],
+                    vec!["PRIVATE_MATERIAL".to_owned()],
+                    crate::email::SMTP_ALLOWLIST_VAR,
+                ),
+            ] {
+                let error = super::disjoint_allowlists(&providers, &smtp, &lookup)
+                    .unwrap_err()
+                    .to_string();
+                assert!(error.contains(setting));
+                assert!(error.contains("PRIVATE_MATERIAL"));
+                assert!(error.contains(pointer));
+            }
+        }
+        super::disjoint_allowlists(
+            &["OPENAI_API_KEY".into(), "ANTHROPIC_API_KEY".into()],
+            &["SMTP_PASSWORD".into()],
+            &|_| None,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn built_in_provider_keys_remain_referenceable() {
+        // Log level, names and custom-endpoint warning are asserted in the
+        // clean-process startup integration test, not a thread-local tracing
+        // subscriber racing other tests' global callsite interest caches.
+        let names = ["OPENAI_API_KEY".to_owned(), "ANTHROPIC_API_KEY".to_owned()];
+        let lookup = |name: &str| {
+            assert!(
+                crate::providers::secrets::SECRET_POINTERS.contains(&name),
+                "must not read sensitive values"
+            );
+            None
+        };
+        super::disjoint_allowlists(&names, &[], &lookup).unwrap();
+        let resolver = crate::providers::secrets::EnvSecrets::from_lookup(names, lookup);
+        assert!(resolver.allows("env:OPENAI_API_KEY"));
+        assert!(resolver.allows("env:ANTHROPIC_API_KEY"));
+    }
+
     /// #140: one variable must never be readable by both SMTP and provider
     /// connections, in either direction.
     #[test]
     fn overlapping_secret_allowlists_are_refused() {
         let providers = vec!["OPENAI_API_KEY".to_owned(), "SHARED".to_owned()];
-        let error =
-            super::disjoint_allowlists(&providers, &["SMTP_PASSWORD".into(), "SHARED".into()])
-                .unwrap_err()
-                .to_string();
+        let error = super::disjoint_allowlists(
+            &providers,
+            &["SMTP_PASSWORD".into(), "SHARED".into()],
+            &|_| None,
+        )
+        .unwrap_err()
+        .to_string();
         assert!(error.contains("SHARED"), "{error}");
         assert!(!error.contains("OPENAI_API_KEY"));
-        super::disjoint_allowlists(&providers, &["SMTP_PASSWORD".into()]).unwrap();
+        super::disjoint_allowlists(&providers, &["SMTP_PASSWORD".into()], &|_| None).unwrap();
     }
 
     /// Credentials the gateway reads outside the provider allowlist (database,
@@ -306,7 +451,7 @@ mod allowlist_tests {
             "AWS_SESSION_TOKEN",
             "GATEWAY_LISTEN_DATABASE_URL",
         ] {
-            let error = super::disjoint_allowlists(&[], &[name.to_owned()])
+            let error = super::disjoint_allowlists(&[], &[name.to_owned()], &|_| None)
                 .expect_err(name)
                 .to_string();
             assert!(error.contains(name), "{error}");

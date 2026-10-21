@@ -231,9 +231,11 @@ async fn test_storage(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
     ext: Option<Extension<FileStoreRuntime>>,
+    body: axum::body::Bytes,
 ) -> ApiResult {
     let rt = runtime(ext);
     let mut tx = write_tx(&s, &u).await?;
+    no_configuration(&body)?;
     if rt.store().is_none() {
         return Err(ApiError(StatusCode::CONFLICT, STORAGE_OFF));
     }

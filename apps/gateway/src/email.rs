@@ -166,17 +166,15 @@ pub fn host_allowed(host: &str) -> bool {
 /// (#140); startup refuses a name on both lists.
 pub const SMTP_ALLOWLIST_VAR: &str = "GATEWAY_SMTP_SECRET_ENV_ALLOWLIST";
 
+#[cfg(test)]
 fn smtp_allowlist_from(raw: &str) -> EnvSecrets {
-    EnvSecrets::new(
+    EnvSecrets::from_lookup(
         raw.split(',')
             .map(str::trim)
             .filter(|name| !name.is_empty())
             .map(str::to_owned),
+        |_| None,
     )
-}
-
-fn allowlist() -> EnvSecrets {
-    smtp_allowlist_from(&std::env::var(SMTP_ALLOWLIST_VAR).unwrap_or_default())
 }
 
 /// `env:NAME` syntax only (upper-case variable name).
@@ -194,30 +192,34 @@ pub fn password_ref_syntax(reference: &str) -> bool {
 }
 
 /// Syntax plus the SMTP allowlist; does not read the variable.
-pub fn password_ref_allowed(reference: &str) -> bool {
-    password_ref_syntax(reference) && allowlist().allows(reference)
+pub fn password_ref_allowed(reference: &str, secrets: &EnvSecrets) -> bool {
+    password_ref_syntax(reference) && secrets.allows(reference)
 }
 
 /// Resolve an allowlisted reference at send time.
-pub fn resolve_password(reference: &str) -> Result<Secret, DeliveryError> {
+pub fn resolve_password(reference: &str, secrets: &EnvSecrets) -> Result<Secret, DeliveryError> {
     if !password_ref_syntax(reference) {
         return Err(DeliveryError::Credential);
     }
-    allowlist()
+    secrets
         .resolve(reference)
         .map_err(|_| DeliveryError::Credential)
 }
 
 impl SmtpSettings {
     /// Whether the configuration can be used at all (credential resolvable).
-    pub fn credential_available(&self) -> bool {
+    pub fn credential_available(&self, secrets: &EnvSecrets) -> bool {
         self.password_ref
             .as_deref()
-            .is_none_or(|r| resolve_password(r).is_ok())
+            .is_none_or(|r| resolve_password(r, secrets).is_ok())
     }
 
     /// Resolve the credential and deliver one message.
-    pub async fn send(&self, email: OutgoingEmail) -> Result<(), DeliveryError> {
+    pub async fn send(
+        &self,
+        secrets: &EnvSecrets,
+        email: OutgoingEmail,
+    ) -> Result<(), DeliveryError> {
         // Before reading the credential: an unlisted host never receives it.
         if !host_allowed(&self.host) {
             return Err(DeliveryError::HostNotAllowed);
@@ -228,7 +230,7 @@ impl SmtpSettings {
         let password = self
             .password_ref
             .as_deref()
-            .map(resolve_password)
+            .map(|r| resolve_password(r, secrets))
             .transpose()?;
         self.send_with(&egress, password.as_ref().map(Secret::expose), email)
             .await
@@ -515,7 +517,7 @@ mod tests {
         settings.tls = TlsMode::StartTls;
         settings.password_ref = Some("env:NOT_ON_ANY_ALLOWLIST".into());
         assert_eq!(
-            settings.send(message()).await,
+            settings.send(&EnvSecrets::default(), message()).await,
             Err(DeliveryError::HostNotAllowed)
         );
         assert_eq!(DeliveryError::HostNotAllowed.as_str(), "host_not_allowed");
@@ -586,13 +588,16 @@ mod tests {
             "strict default"
         );
         let (port, mut rx) = mock::serve(Behaviour::default()).await;
-        relay(port).send(message()).await.unwrap();
+        relay(port)
+            .send(&EnvSecrets::default(), message())
+            .await
+            .unwrap();
         assert!(rx.recv().await.unwrap().data.contains("Delivery works."));
         // An unlisted loopback name is refused like any other host.
         let mut unlisted = relay(port);
         unlisted.host = "localhost".into();
         assert_eq!(
-            unlisted.send(message()).await,
+            unlisted.send(&EnvSecrets::default(), message()).await,
             Err(DeliveryError::HostNotAllowed)
         );
     }
@@ -699,7 +704,7 @@ mod tests {
         }
         // Not allowlisted in the test environment.
         assert_eq!(
-            resolve_password("env:PATH").err(),
+            resolve_password("env:PATH", &EnvSecrets::default()).err(),
             Some(DeliveryError::Credential)
         );
         assert_eq!(TlsMode::parse("implicit"), Some(TlsMode::Implicit));

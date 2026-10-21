@@ -18,6 +18,9 @@ pub struct Readiness {
 #[derive(Clone)]
 pub struct Store {
     pub(crate) pool: PgPool,
+    /// Immutable operator policy, injected once at startup; empty by default.
+    pub(crate) provider_secrets: std::sync::Arc<crate::providers::secrets::EnvSecrets>,
+    pub(crate) smtp_secrets: std::sync::Arc<crate::providers::secrets::EnvSecrets>,
     /// In-process queues in front of the installation lock (see
     /// `governance::LockGate`): waiters queue here instead of holding pooled
     /// connections, so authentication and settlement are not starved.
@@ -260,6 +263,8 @@ impl Store {
             crate::governance::LockGates::for_pool(pool.options().get_max_connections(), mode);
         Self {
             pool,
+            provider_secrets: Default::default(),
+            smtp_secrets: Default::default(),
             lock_gates: std::sync::Arc::new(gates),
             admission_mode: mode,
             reporting: None,
@@ -271,6 +276,18 @@ impl Store {
             #[cfg(any(test, feature = "integration-tests"))]
             admission_clock: Default::default(),
         }
+    }
+
+    /// Attach the startup-validated reference allowlists. The resolver keeps
+    /// its reserved-name filter even for callers that bypass startup validation.
+    pub fn with_secret_allowlists(
+        mut self,
+        providers: crate::providers::secrets::EnvSecrets,
+        smtp: crate::providers::secrets::EnvSecrets,
+    ) -> Self {
+        self.provider_secrets = std::sync::Arc::new(providers);
+        self.smtp_secrets = std::sync::Arc::new(smtp);
+        self
     }
 
     /// Select the admission protocol (`GATEWAY_ADMISSION_MODE`).

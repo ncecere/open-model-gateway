@@ -95,6 +95,135 @@ fn refuses_invalid_file_secrets_for_every_subcommand() {
 }
 
 #[test]
+fn reserved_allowlists_stop_before_database_access_without_disclosure() {
+    let f = Fixture::new();
+    let database = "postgres://gateway:private-database-marker@127.0.0.1:1/gateway";
+    // Excludes schema-version, healthcheck, --version and archive verify:
+    // those intentionally return before Config::from_env.
+    for args in [
+        &[][..],
+        &["serve"],
+        &["migrate"],
+        &["wait-for-database", "--timeout-seconds", "1"],
+        &["grants", "apply"],
+        &["grants", "verify"],
+        &["bootstrap-dev"],
+        &["bootstrap-demo"],
+        &["reconcile-executions"],
+        &["compact-history", "--older-than-days", "30"],
+        &["alerts", "evaluate", "--once"],
+        &["budget", "verify"],
+        &["history", "verify"],
+        &["partitions", "prepare"],
+        &["partitions", "ensure"],
+        &["partitions", "status"],
+        &[
+            "archive",
+            "partition",
+            "history",
+            "2026-01",
+            "--to",
+            "unused",
+        ],
+        &["rollups", "run", "--once"],
+        &["files", "verify"],
+        &["files", "rekey", "--from", "old", "--to", "new"],
+        &["files", "sweep", "--once"],
+        &["provision-user", "--email", "fixture@example.test"],
+    ] {
+        for allowlist in [
+            "GATEWAY_SECRET_ENV_ALLOWLIST",
+            "GATEWAY_SMTP_SECRET_ENV_ALLOWLIST",
+        ] {
+            let mut cases = vec![
+                ("DATABASE_URL", None),
+                ("GATEWAY_OIDC_CLIENT_SECRET", None),
+                ("AWS_SESSION_TOKEN", None),
+                ("PGPASSWORD", None),
+                ("PGSSLKEY", None),
+                ("PGPASSFILE", None),
+                ("PGFUTURE_OPTION", None),
+                ("HTTP_PROXY", None),
+                ("http_proxy", None),
+                ("HTTPS_PROXY", None),
+                ("https_proxy", None),
+                ("ALL_PROXY", None),
+                ("all_proxy", None),
+                ("NO_PROXY", None),
+                ("no_proxy", None),
+                ("OTEL_EXPORTER_OTLP_HEADERS", None),
+            ];
+            for pointer in open_model_gateway::providers::secrets::SECRET_POINTERS {
+                cases.push(("PRIVATE_MATERIAL", Some(*pointer)));
+            }
+            for (name, pointer) in cases {
+                let mut env = vec![
+                    ("DATABASE_URL", database),
+                    (allowlist, name),
+                    ("PRIVATE_MATERIAL", "private-value-marker"),
+                ];
+                if let Some(pointer) = pointer {
+                    env.push((pointer, name));
+                }
+                let output = f.run(args, env);
+                assert_eq!(output.status.code(), Some(1), "{args:?}");
+                assert!(output.stdout.is_empty());
+                let stderr = text(&output.stderr);
+                assert!(stderr.contains(allowlist));
+                assert!(stderr.contains(name), "{args:?}");
+                if let Some(pointer) = pointer {
+                    assert!(stderr.contains(pointer));
+                }
+                assert!(!stderr.contains("could not connect"));
+                assert!(!stderr.contains("private-database-marker"));
+                assert!(!stderr.contains("private-value-marker"));
+            }
+        }
+    }
+}
+
+#[test]
+fn built_in_provider_keys_warn_at_startup_without_values_or_refusal() {
+    let f = Fixture::new();
+    let output = f.run(
+        &["wait-for-database", "--timeout-seconds", "1"],
+        [
+            (
+                "DATABASE_URL",
+                "postgres://gateway:private-database-marker@127.0.0.1:1/gateway",
+            ),
+            (
+                "GATEWAY_SECRET_ENV_ALLOWLIST",
+                "OPENAI_API_KEY,ANTHROPIC_API_KEY",
+            ),
+        ],
+    );
+    let stderr = text(&output.stderr);
+    let events: Vec<serde_json::Value> = stderr
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let warning = events
+        .iter()
+        .find(|event| {
+            event["level"] == "WARN" && event["fields"]["setting"] == "GATEWAY_SECRET_ENV_ALLOWLIST"
+        })
+        .expect("startup must warn about provider keys");
+    let names = warning["fields"]["names"].as_str().unwrap();
+    assert!(names.contains("OPENAI_API_KEY"));
+    assert!(names.contains("ANTHROPIC_API_KEY"));
+    assert!(
+        warning["fields"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("custom-endpoint")
+    );
+    assert!(!events.iter().any(|event| event["level"] == "ERROR"));
+    assert!(!stderr.contains("reserved variables"));
+    assert!(!stderr.contains("private-database-marker"));
+}
+
+#[test]
 fn imports_a_file_secret_into_configuration() {
     let f = Fixture::new();
     // Without the import, configuration fails with "DATABASE_URL is required".

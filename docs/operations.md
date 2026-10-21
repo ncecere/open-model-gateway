@@ -16,6 +16,7 @@ This covers health checks, metrics and alerting, backups and restore, secret rot
 | `GATEWAY_AUDIT_OTLP_HEADERS_ENV` | unset | Name of the variable holding headers for the collector, `Key=Value,Key2=Value2` (for example a token). Optional; only with the OTLP URL. |
 | `GATEWAY_EGRESS_PRIVATE_ALLOW` | unset (none) | Private networks the gateway may connect to, as comma-separated CIDRs (`10.20.0.0/16,fd00:1::/32`). See [outbound connections](#outbound-connections). |
 | `GATEWAY_SMTP_HOST_ALLOWLIST` | unset (none) | SMTP relay hosts the gateway may send to, comma-separated exact names or IP literals. The relay chosen in Admin › Settings › Email must be listed; empty means email can't be sent. See [settings](settings.md#email). |
+| `GATEWAY_SECRET_ENV_ALLOWLIST` | unset | Variable names provider `env:NAME` references may read, comma-separated. Reserved names stop startup; see [credential allowlists](#credential-allowlists). |
 | `GATEWAY_SMTP_SECRET_ENV_ALLOWLIST` | unset | Variable names the SMTP password reference (`env:NAME`) may read, comma-separated. Separate from `GATEWAY_SECRET_ENV_ALLOWLIST` (provider credentials). Startup fails if a name is on both lists or is one of the gateway's own credentials (`DATABASE_URL`, `GATEWAY_*`, `AWS_*`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). |
 | `GATEWAY_DATABASE_MAX_CONNECTIONS` | `10` | Database pool size per replica (2 to 500). Size PostgreSQL `max_connections` for every replica plus migrator and backup sessions. |
 | `GATEWAY_REPORTING_DATABASE_URL` | unset (primary) | Optional read-only reporting replica (or a pooler in front of one) for reports, usage and request logs only. See [read snapshots and the reporting replica](#read-snapshots-and-the-reporting-replica). Use the runtime role; set it directly (it has no `_FILE` form). An empty value is refused. |
@@ -26,6 +27,19 @@ This covers health checks, metrics and alerting, backups and restore, secret rot
 | `GATEWAY_MAX_CONCURRENT_REQUESTS` | `128` (staging: 32) | Per-replica inference concurrency. Requests beyond it get 429 and are counted under `scope="gateway_capacity"`. |
 | `GATEWAY_REQUEST_TIMEOUT_SECONDS` | `120` | Inference deadline. Time spent waiting for admission counts toward it. |
 | `GATEWAY_FILE_STORE` | `off` | Encrypted file store: `off`, `local` or `s3`. See [file storage](file-storage.md) for the backend and encryption-key variables. |
+
+## Credential allowlists
+
+`GATEWAY_SECRET_ENV_ALLOWLIST` and `GATEWAY_SMTP_SECRET_ENV_ALLOWLIST` are operator-only startup settings, not management API settings. The lists must be disjoint. Both refuse `DATABASE_URL`, `DATABASE_URL_FILE`, every `GATEWAY_*` or `AWS_*` name, the entire `PG*` prefix (including `PGPASSWORD`, `PGSSLKEY` and `PGPASSFILE`), `OTEL_*`, and `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` in either case, as well as the variables selected by these pointers (not just the pointer names):
+
+- `GATEWAY_SCIM_TOKEN_ENV`
+- `GATEWAY_S3_ACCESS_KEY_ID_ENV`, `GATEWAY_S3_SECRET_ACCESS_KEY_ENV`
+- `GATEWAY_FILE_ENCRYPTION_KEYS_ENV`
+- `GATEWAY_AUDIT_WEBHOOK_SECRET_ENV`, `GATEWAY_AUDIT_OTLP_HEADERS_ENV`
+
+Other startup-owned secret names are reserved too; the two intentional exceptions are provider credentials `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`, which may appear on the provider list but never the SMTP list. Use separate variables for provider, SMTP and gateway secrets. Reserved entries stop startup with both failing allowlists, the offending names, and any pointer settings selecting those names; secret values are never printed. Remove it from the allowlist, use a dedicated provider/SMTP credential if needed, update the connection or SMTP reference, and restart. Never copy a gateway secret into a provider variable to bypass the refusal.
+
+`OPENAI_API_KEY` and `ANTHROPIC_API_KEY` remain referenceable on the provider allowlist, but each produces a startup **warning**: a custom-endpoint connection using one of these references receives that credential. Prefer dedicated provider variables and review local endpoint approvals. These keys remain forbidden on the SMTP list. `PG*`, proxy and `OTEL_*` entries are refusals, not warnings. Management validation and delivery use the immutable configured allowlists; reserved-name filtering remains a second line of defence.
 
 ## Outbound connections
 

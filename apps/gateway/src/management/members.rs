@@ -338,7 +338,7 @@ pub(super) async fn invite(
     let id = Uuid::new_v4();
     sqlx::query("INSERT INTO workspace_invitations(id,workspace_id,email,role,token_hash,expires_at,created_by) VALUES($1,$2,$3,$4,$5,now()+interval '72 hours',$6)").bind(id).bind(ws).bind(&email).bind(&b.role).bind(hash.as_slice()).bind(u.user_id).execute(&mut *tx).await?;
     // Admin > Settings > Email, when configured; the one-time code is still returned for copying.
-    let mail = super::settings::invitation_mail(&mut tx, ws).await?;
+    let mail = super::settings::invitation_mail(&mut tx, ws, s.smtp_secrets.clone()).await?;
     audit(
         &mut tx,
         &u,

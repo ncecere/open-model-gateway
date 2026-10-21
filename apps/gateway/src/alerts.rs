@@ -1325,11 +1325,14 @@ async fn deliver_one(store: &Store, id: Uuid) -> anyhow::Result<bool> {
     let (mut sent, mut failed, mut error) = (0, 0, None);
     for to in &recipients {
         match settings
-            .send(OutgoingEmail {
-                to: to.clone(),
-                subject: subject.clone(),
-                body: body.clone(),
-            })
+            .send(
+                &store.smtp_secrets,
+                OutgoingEmail {
+                    to: to.clone(),
+                    subject: subject.clone(),
+                    body: body.clone(),
+                },
+            )
             .await
         {
             Ok(()) => sent += 1,
