@@ -44,13 +44,25 @@ const finalResponse = await responseStream.finalResponse();
 assert.equal(finalResponse.status, "completed");
 assert.equal(finalResponse.output_text, "Hello from fixture");
 let responseText = "";
+let terminalTextResponse;
 for await (const event of await ordinaryOpenai.responses.create({ model: "company/smart", input: "hello", stream: true })) {
   if (event.type === "response.output_text.delta") responseText += event.delta;
+  if (event.type === "response.completed") terminalTextResponse = event.response;
 }
 assert.equal(responseText, "Hello from fixture");
+assert.equal(terminalTextResponse.status, "completed");
+async function terminalWireResponse(args) {
+  let terminal;
+  for await (const event of await ordinaryOpenai.responses.create({ ...args, stream: true })) {
+    if (event.type === "response.completed" || event.type === "response.incomplete") terminal = event.response;
+  }
+  assert.ok(terminal, "stream must provide a terminal wire response");
+  return terminal;
+}
 // Stateless followups reuse the gateway's actual output, including read-only
 // item metadata and empty annotations. No store/max/previous_response_id workaround.
-for (const [prior, streaming] of [[response, false], [finalResponse, true]]) {
+// Use the terminal event, not finalResponse()'s SDK-only parsed/parsed_arguments fields.
+for (const [prior, streaming] of [[response, false], [terminalTextResponse, true]]) {
   const args = {
     model: "company/smart",
     input: [{ role: "user", content: "hello" }, ...prior.output, { role: "user", content: "continue" }],
@@ -63,7 +75,7 @@ for (const [prior, streaming] of [[response, false], [finalResponse, true]]) {
 for (const streaming of [false, true]) {
   const args = { model: "company/smart", input: "call weather" };
   const prior = streaming
-    ? await ordinaryOpenai.responses.stream(args).finalResponse()
+    ? await terminalWireResponse(args)
     : await ordinaryOpenai.responses.create(args);
   assert.equal(prior.output[0].content[0].text, "Checking weather");
   const call = prior.output[1];
@@ -89,6 +101,8 @@ for (const input of [
   [{ ...response.output[0], status: null }],
   [{ ...response.output[0], status: "failed" }],
   [{ ...response.output[0], extra: true }],
+  [{ ...response.output[0], content: [{ type: "output_text", text: "hi", parsed: null }] }],
+  [{ type: "function_call", call_id: "c", name: "weather", arguments: "{}", parsed_arguments: null }],
   [{ ...response.output[0], content: null }],
   [{ ...response.output[0], content: [{ type: "output_text", text: "hi", annotations: null }] }],
   [{ ...response.output[0], content: [{ type: "output_text", text: "hi", annotations: [{ type: "url_citation", url: "https://example.invalid", title: "citation", start_index: 0, end_index: 1 }] }] }],

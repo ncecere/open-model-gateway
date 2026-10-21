@@ -175,6 +175,17 @@ async fn real_client_sdks_accept_all_three_protocols(pool: sqlx::PgPool) {
     // malformed/stateful followups must leave no attempts or provider dispatch.
     let recorded = recorded.lock().unwrap().clone();
     assert_eq!(recorded.len(), 18);
+    for (index, streaming) in [
+        (10, false),
+        (11, true),
+        (12, false),
+        (13, false),
+        (14, true),
+        (15, true),
+    ] {
+        assert_eq!(recorded[index].stream, streaming);
+        assert_eq!(recorded[index].max_output_tokens, Some(100));
+    }
     for index in [10, 11] {
         let r = &recorded[index];
         assert_eq!(r.messages.len(), 3);
