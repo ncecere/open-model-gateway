@@ -197,6 +197,14 @@ impl ConfigVersions {
         self.synced_at.store(self.millis(), Ordering::Release);
     }
 
+    /// Tests: treat the versions as confirmed at every later instant (no
+    /// freshness expiry, whatever the machine load) until the next poll or
+    /// [`ConfigVersions::backdate_sync`]. Learns nothing about changes.
+    #[cfg(test)]
+    pub(crate) fn pin_sync(&self) {
+        self.synced_at.store(u64::MAX, Ordering::Release);
+    }
+
     /// Tests: pretend the last successful poll happened `ago`.
     #[cfg(any(test, feature = "integration-tests"))]
     pub fn backdate_sync(&self, ago: Duration) {
@@ -299,6 +307,36 @@ mod tests {
         for topic in Topic::ALL {
             assert_eq!(Topic::parse(topic.as_str()), Some(topic));
         }
+    }
+
+    #[test]
+    fn pinned_sync_preserves_stamps_but_not_invalidation() {
+        let mut v = ConfigVersions::new();
+        v.enable();
+        v.mark_synced();
+        let keys = v.stamp(&[Topic::Keys]).unwrap();
+        v.pin_sync();
+        // Simulate elapsed wall time without a sleep: the stale replica's
+        // versions stay usable, but no new versions are learned.
+        v.origin -= FRESHNESS * 2;
+        assert_eq!(v.stamp(&[Topic::Keys]), Some(keys));
+        assert_eq!(v.version(Topic::Keys), 0);
+        v.observe(Topic::Keys, 1);
+        let newer = v.stamp(&[Topic::Keys]).unwrap();
+        assert_ne!(newer, keys);
+        v.flush();
+        assert_ne!(v.stamp(&[Topic::Keys]), Some(newer));
+        // Explicit expiry still exercises fail-closed behavior.
+        v.backdate_sync(FRESHNESS * 2);
+        assert!(!v.fresh());
+        // A real poll replaces the pin and restores ordinary expiry.
+        v.pin_sync();
+        v.mark_synced();
+        v.origin -= FRESHNESS * 2;
+        assert!(!v.fresh());
+        v.pin_sync();
+        v.disable();
+        assert!(!v.fresh());
     }
 
     #[test]

@@ -28,13 +28,18 @@ pub(super) async fn replica(pool: &PgPool) -> Store {
 }
 
 /// A replica whose versions are confirmed now and then never learn about
-/// changes (no LISTEN, no poll task): the deterministic stale case.
+/// changes (no LISTEN, no poll task): the deterministic stale case. The
+/// confirmation is pinned: otherwise it expires after `FRESHNESS` (3 s) and
+/// every cache is bypassed, so a slow (loaded) machine would turn the stale
+/// replica into one that reads live. Tests that exercise expiry call
+/// `backdate_sync` themselves.
 pub(super) async fn stale_replica(pool: &PgPool) -> Store {
     let store = replica(pool).await;
     store.caches.versions.enable();
     notify::poll_once(&store.pool, &store.caches.versions)
         .await
         .unwrap();
+    store.caches.versions.pin_sync();
     store
 }
 
@@ -301,6 +306,13 @@ async fn changes_on_one_replica_deny_admission_immediately_on_a_stale_replica(po
             .await
             .unwrap();
         // B has not learned about the change: its caches still answer...
+        assert!(
+            matches!(
+                b.caches.keys.get(&b.caches.versions, &crate::auth::token_digest(&token)),
+                Lookup::Hit(entry) if entry.principal.key_id == p.key_id
+            ),
+            "{name}: stale key entry must remain cached"
+        );
         assert_eq!(
             b.authenticate_inference(&token)
                 .await
