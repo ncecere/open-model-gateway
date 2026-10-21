@@ -12,7 +12,7 @@ One GitHub issue at a time per worker, one loop per issue:
 2. Make the smallest change that passes it.
 3. Run the checks below for the areas the change touches (browser tests for UI flows, a real PostgreSQL database for SQL/authorization changes).
 4. **Prove it on the real path**, not only with unit tests and mocks: run the changed flow end to end against a running gateway (the local stack, or a `dev-env` cluster environment for chart, migration and multi-replica behaviour) and check the result, including the refusal cases.
-5. **Review.** Every change gets a code review. A security-relevant change (authentication, authorization, egress, secrets and credentials, SQL and runtime grants, migrations, crypto, CI/supply chain, anything parsing untrusted input) gets two independent reviews, one of them adversarial (its job is to break the change), from different models. Fix actionable findings.
+5. **Review.** Every change gets a code review. A security-relevant change (authentication, authorization, egress, secrets and credentials, SQL and runtime grants, migrations, crypto, CI/supply chain, anything parsing untrusted input) gets two independent, separately briefed reviews, one of them adversarial (its job is to break the change). Use different models when available and permitted; when the operator restricts model choice, use independent contexts within the permitted model set. Neither review may substitute for the other. Fix actionable findings.
 6. **The coordinator reads every diff before it merges**, including code written by agents, and re-runs whatever it doubts.
 7. Open a PR. `main` is protected: merge only through a PR with every required check green, then close the issue.
 
