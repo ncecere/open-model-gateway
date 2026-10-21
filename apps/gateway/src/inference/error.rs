@@ -89,12 +89,12 @@ impl InferenceError {
     pub fn is_budget_denial(self) -> bool {
         matches!(self, Self::BudgetExceeded(_) | Self::UnresolvedUsage(_))
     }
-    /// Admission denials that retrying cannot fix (`x-should-retry: false`).
+    /// Permanent capability/admission refusals (`x-should-retry: false`).
     pub fn is_non_retryable_denial(self) -> bool {
         self.is_budget_denial()
             || matches!(
                 self,
-                Self::TokenReservationExceedsLimit(_) | Self::PriceUnbounded
+                Self::Unsupported | Self::TokenReservationExceedsLimit(_) | Self::PriceUnbounded
             )
     }
     /// Seconds a client should wait before retrying (`Retry-After`), if known.

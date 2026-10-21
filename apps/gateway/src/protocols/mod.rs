@@ -20,7 +20,8 @@ use axum::{
 /// Shared client-protocol error response. Budget/accounting denials keep HTTP 429
 /// (OpenAI `insufficient_quota` convention) but are not transient, so they carry
 /// `x-should-retry: false`, which the official OpenAI/Anthropic SDKs honor. A
-/// token reservation that exceeds a tokens-per-minute limit is equally permanent.
+/// token reservation that exceeds a tokens-per-minute limit is equally permanent,
+/// as are unsupported capabilities (even when their status is 501).
 /// A model whose every route is cooling down is a retryable 503 with `Retry-After`.
 fn error_with_body(error: InferenceError, body: serde_json::Value) -> Response {
     let mut response = (responses::status(error), axum::Json(body)).into_response();
