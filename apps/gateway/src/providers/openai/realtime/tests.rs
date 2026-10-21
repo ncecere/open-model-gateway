@@ -307,6 +307,39 @@ impl OpenAiAdapter {
     }
 }
 
+/// The upstream URL is the fixed OpenAI origin and path with the upstream
+/// model as one encoded query value: whatever the model says, the host, the
+/// path and the set of query keys never change (#196).
+#[test]
+fn the_realtime_url_never_leaves_the_fixed_origin() {
+    let adapter = OpenAiAdapter::new(std::sync::Arc::new(Resolver)).unwrap();
+    for model in [
+        "gpt-realtime",
+        "a&model=b",
+        "a#@attacker.invalid",
+        "a/../../x",
+        "a?api_base=http://attacker.invalid",
+        "@attacker.invalid",
+        "a b\u{e9}%2F",
+        "x\r\nHost: attacker.invalid",
+    ] {
+        let mut target = target();
+        target.upstream_model = model.into();
+        let (url, secure) = endpoint(&adapter, &target).unwrap();
+        assert!(secure, "{model}");
+        let parsed = reqwest::Url::parse(&url).unwrap();
+        assert_eq!(parsed.scheme(), "wss", "{model}");
+        assert_eq!(parsed.host_str(), Some("api.openai.com"), "{model}");
+        assert_eq!(parsed.path(), "/v1/realtime", "{model}");
+        assert!(
+            parsed.username().is_empty() && parsed.password().is_none() && parsed.port().is_none()
+        );
+        let pairs: Vec<_> = parsed.query_pairs().collect();
+        assert_eq!(pairs.len(), 1, "{model}");
+        assert_eq!((&*pairs[0].0, &*pairs[0].1), ("model", model), "{model}");
+    }
+}
+
 /// #168: the realtime WebSocket goes through the egress policy. A secure
 /// (production-shaped) endpoint gets the installation's policy unchanged:
 /// no loopback, no metadata, no unlisted private address. Only test builds'

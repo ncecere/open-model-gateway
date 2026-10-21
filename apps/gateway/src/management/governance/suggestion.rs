@@ -1216,6 +1216,38 @@ pub(crate) mod tests {
             assert!(!slug_valid(bad), "{bad}");
         }
     }
+    proptest::proptest! {
+        /// Whatever a connection's upstream model says, an accepted slug only
+        /// ever extends the path of the fixed OpenRouter origin (#196).
+        #[test]
+        fn an_accepted_slug_never_leaves_the_fixed_origin_and_path(
+            slug in "[A-Za-z0-9/._:%?#@\\\\ -]{0,60}"
+        ) {
+            if slug_valid(&slug) {
+                for path in [
+                    format!("/models/{slug}/endpoints"),
+                    format!("/images/models/{slug}/endpoints"),
+                ] {
+                    let url =
+                        reqwest::Url::parse(&format!("{}{path}", resources::OPENROUTER_BASE)).unwrap();
+                    proptest::prop_assert_eq!(url.scheme(), "https");
+                    proptest::prop_assert_eq!(url.host_str(), Some("openrouter.ai"));
+                    proptest::prop_assert_eq!(url.port(), None);
+                    proptest::prop_assert!(url.query().is_none() && url.fragment().is_none());
+                    proptest::prop_assert!(
+                        url.path().starts_with("/api/v1/") && url.path().ends_with("/endpoints"),
+                        "{}",
+                        url
+                    );
+                    proptest::prop_assert!(
+                        url.path_segments().unwrap().all(|s| s != ".." && s != "."),
+                        "{}",
+                        url
+                    );
+                }
+            }
+        }
+    }
     fn line<'a>(v: &'a Value, meter: &str, min: Option<u64>) -> &'a Value {
         v["lines"]
             .as_array()

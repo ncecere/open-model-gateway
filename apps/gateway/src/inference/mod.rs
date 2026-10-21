@@ -483,5 +483,7 @@ impl Drop for ExecutionGuard {
     }
 }
 
+#[cfg(all(test, feature = "integration-tests"))]
+mod steering_tests;
 #[cfg(test)]
 mod tests;

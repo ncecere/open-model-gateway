@@ -68,20 +68,13 @@ fn classify(ip: IpAddr) -> Class {
             if let Some(v4) = ip.to_ipv4() {
                 return classify_v4(v4);
             }
-            let s = ip.segments();
             // Translation ranges carry an IPv4 destination: judge that one, so
             // IPv6-only clusters (DNS64/NAT64) still reach IPv4-only upstreams
             // and nothing private or metadata hides behind them.
-            let low = (u32::from(s[6]) << 16) | u32::from(s[7]);
-            if s[0] == 0x64 && s[1] == 0xff9b && s[2..6] == [0, 0, 0, 0] {
-                return classify_v4(Ipv4Addr::from(low)); // NAT64 64:ff9b::/96
+            if let Some(v4) = translated_v4(ip) {
+                return classify_v4(v4);
             }
-            if s[0] == 0x2002 {
-                return classify_v4(Ipv4Addr::from((u32::from(s[1]) << 16) | u32::from(s[2]))); // 6to4
-            }
-            if s[0] == 0x2001 && s[1] == 0 {
-                return classify_v4(Ipv4Addr::from(!low)); // Teredo: the client's address, inverted
-            }
+            let s = ip.segments();
             if ip.is_unspecified()
                 || ip.is_unicast_link_local()
                 || ip.is_multicast()
@@ -106,6 +99,21 @@ fn classify(ip: IpAddr) -> Class {
             }
         }
     }
+}
+
+/// The IPv4 destination behind an IPv6 translation range: NAT64
+/// (`64:ff9b::/96`), 6to4 (`2002::/16`) or Teredo (`2001::/32`, the client's
+/// address, inverted). Mapped and compatible forms are `Ipv6Addr::to_ipv4`.
+pub(crate) fn translated_v4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
+    let s = ip.segments();
+    let low = (u32::from(s[6]) << 16) | u32::from(s[7]);
+    if s[0] == 0x64 && s[1] == 0xff9b && s[2..6] == [0, 0, 0, 0] {
+        return Some(Ipv4Addr::from(low));
+    }
+    if s[0] == 0x2002 {
+        return Some(Ipv4Addr::from((u32::from(s[1]) << 16) | u32::from(s[2])));
+    }
+    (s[0] == 0x2001 && s[1] == 0).then(|| Ipv4Addr::from(!low))
 }
 
 fn classify_v4(ip: Ipv4Addr) -> Class {
@@ -416,6 +424,14 @@ impl Resolve for Resolver {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "egress_property_tests.rs"]
+mod property_tests;
+
+#[cfg(test)]
+#[path = "egress_source_scan_tests.rs"]
+mod source_scan_tests;
 
 #[cfg(test)]
 mod tests {

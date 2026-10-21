@@ -206,7 +206,18 @@ fn allowed(ip: IpAddr, development: bool, http: bool) -> bool {
             }
             // Deny translation/special-use ranges that can obscure a forbidden
             // IPv4 destination (including NAT64); ordinary global v6 is 2000::/3.
-            ip.is_unique_local() || (!http && (ip.segments()[0] & 0xe000) == 0x2000)
+            let global = !http && (ip.segments()[0] & 0xe000) == 0x2000;
+            // 6to4 (2002::/16) and Teredo (2001::/32) are inside 2000::/3 but
+            // carry an IPv4 destination: judge it as a plain IPv4 address, so
+            // metadata, link-local and loopback (outside development) cannot
+            // hide behind them (#196). NAT64 is not in 2000::/3 and stays refused.
+            if global
+                && let Some(v4) = crate::egress::translated_v4(ip)
+                && !allowed(IpAddr::V4(v4), development, http)
+            {
+                return false;
+            }
+            ip.is_unique_local() || global
         }
     }
 }
@@ -259,6 +270,164 @@ mod tests {
             .is_err()
         );
     }
+    /// The approval check as it was before #196, kept as the reference: the
+    /// only difference now is that a 6to4 or Teredo address is also judged by
+    /// the IPv4 address it carries.
+    fn before(ip: IpAddr, development: bool, http: bool) -> bool {
+        match ip {
+            IpAddr::V4(ip) => {
+                let o = ip.octets();
+                if ip.is_unspecified()
+                    || ip.is_link_local()
+                    || ip.is_multicast()
+                    || ip.is_broadcast()
+                    || o[0] == 0
+                    || o[0] >= 240
+                    || (o[0] == 100 && (64..=127).contains(&o[1]))
+                {
+                    return false;
+                }
+                if ip.is_loopback() {
+                    return development;
+                }
+                !http || ip.is_private()
+            }
+            IpAddr::V6(ip) => {
+                if ip.is_loopback() {
+                    return development;
+                }
+                if let Some(v4) = ip.to_ipv4() {
+                    return before(IpAddr::V4(v4), development, http);
+                }
+                if ip.is_unspecified()
+                    || ip.is_unicast_link_local()
+                    || ip.is_multicast()
+                    || ip == "fd00:ec2::254".parse::<std::net::Ipv6Addr>().unwrap()
+                {
+                    return false;
+                }
+                let global = !http && (ip.segments()[0] & 0xe000) == 0x2000;
+                // 6to4 (2002::/16) and Teredo (2001::/32) are inside 2000::/3 but
+                // carry an IPv4 destination: judge it as a plain IPv4 address, so
+                // metadata, link-local and loopback (outside development) cannot
+                // hide behind them (#196). NAT64 is not in 2000::/3 and stays refused.
+                if global
+                    && let Some(v4) = crate::egress::translated_v4(ip)
+                    && !allowed(IpAddr::V4(v4), development, http)
+                {
+                    return false;
+                }
+                ip.is_unique_local() || global
+            }
+        }
+    }
+
+    /// 6to4 and Teredo carry an IPv4 destination; over HTTPS they are judged by
+    /// it (#196): metadata and loopback (outside development) are refused,
+    /// private and public addresses are accepted as they are when written
+    /// plainly. Nothing else changes.
+    #[test]
+    fn six_to_four_and_teredo_are_judged_by_their_embedded_address() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        // Metadata, link-local and other refused IPv4 destinations.
+        for address in [
+            "2002:a9fe:a9fe::1",                    // 6to4 of 169.254.169.254
+            "2001:0:4136:e378:8000:63bf:5601:5601", // Teredo of 169.254.169.254
+            "2002:6464:64c8::1",                    // 6to4 of 100.100.100.200 (CGNAT)
+            "2002:0000:0001::1",                    // 6to4 of 0.0.0.1
+            "2002:e000:1::1",                       // 6to4 of 224.0.0.1
+        ] {
+            for development in [false, true] {
+                assert!(!allowed(ip(address), development, false), "{address}");
+            }
+        }
+        // Loopback only in development, as a plain 127.0.0.1.
+        assert!(!allowed(ip("2002:7f00:1::1"), false, false));
+        assert!(allowed(ip("2002:7f00:1::1"), true, false));
+        // Private and public destinations over HTTPS, like their plain forms.
+        assert!(allowed(ip("2002:0a00:1::1"), false, false), "private");
+        assert!(
+            allowed(ip("2002:0808:0808::1"), false, false),
+            "public 6to4"
+        );
+        assert!(
+            allowed(ip("2001:0:4136:e378:8000:63bf:f7f7:f7f7"), false, false),
+            "public Teredo"
+        );
+        // Plain HTTP to these forms stays refused, as before.
+        for address in ["2002:0808:0808::1", "2002:0a00:1::1", "2002:7f00:1::1"] {
+            assert!(!allowed(ip(address), true, true), "{address}");
+        }
+        // NAT64 stays refused, public destination or not.
+        for address in ["64:ff9b::808:808", "64:ff9b::a9fe:a9fe", "64:ff9b::a00:1"] {
+            for (development, http) in [(false, false), (true, false), (true, true)] {
+                assert!(!allowed(ip(address), development, http), "{address}");
+            }
+        }
+    }
+
+    /// Existing installations may have approved these over HTTPS; refusing
+    /// them would stop startup, so they stay accepted until a migration path
+    /// exists (follow-up issue).
+    #[test]
+    fn special_use_ranges_approved_before_stay_accepted() {
+        for address in [
+            "198.18.0.1",
+            "192.0.0.1",
+            "192.88.99.1",
+            "192.0.2.1",
+            "198.51.100.1",
+            "203.0.113.1",
+            "2001:db8::1",
+            "fd00:ec2::1",
+        ] {
+            assert!(allowed(address.parse().unwrap(), false, false), "{address}");
+        }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(4096))]
+        /// Against the behaviour before #196: nothing is newly allowed, and
+        /// the only newly refused addresses are 6to4 and Teredo addresses
+        /// whose embedded IPv4 the plain rules refuse.
+        #[test]
+        fn approvals_differ_from_before_only_by_the_embedded_address(
+            bits in proptest::prelude::any::<u32>(),
+            filler in proptest::prelude::any::<[u16; 8]>(),
+            form in 0usize..6,
+            development in proptest::prelude::any::<bool>(),
+            http in proptest::prelude::any::<bool>(),
+        ) {
+            let (hi, lo) = ((bits >> 16) as u16, bits as u16);
+            let (nhi, nlo) = ((!bits >> 16) as u16, !bits as u16);
+            let f = filler;
+            let (ip, embedded): (IpAddr, Option<std::net::Ipv4Addr>) = match form {
+                0 => (std::net::Ipv4Addr::from(bits).into(), None),
+                1 => (std::net::Ipv6Addr::from([0, 0, 0, 0, 0, 0xffff, hi, lo]).into(), None),
+                2 => (std::net::Ipv6Addr::from([0x64, 0xff9b, 0, 0, 0, 0, hi, lo]).into(), None),
+                3 => (
+                    std::net::Ipv6Addr::from([0x2002, hi, lo, f[3], f[4], f[5], f[6], f[7]]).into(),
+                    Some(std::net::Ipv4Addr::from(bits)),
+                ),
+                4 => (
+                    std::net::Ipv6Addr::from([0x2001, 0, f[2], f[3], f[4], f[5], nhi, nlo]).into(),
+                    Some(std::net::Ipv4Addr::from(bits)),
+                ),
+                _ => (std::net::Ipv6Addr::from(f).into(), None),
+            };
+            let (now, was) = (allowed(ip, development, http), before(ip, development, http));
+            proptest::prop_assert!(!now || was, "newly allowed: {}", ip);
+            if was && !now {
+                let inner = embedded.expect("only translated forms may be newly refused");
+                proptest::prop_assert!(!http && !before(IpAddr::V4(inner), development, false), "{}", ip);
+            }
+            // Nothing else moved for a form with no embedded address to judge.
+            if embedded.is_none() {
+                proptest::prop_assert_eq!(now, was, "{}", ip);
+            }
+        }
+    }
+
     #[test]
     fn metrics_urls_must_be_an_approved_origin() {
         let p = ApprovedEndpoints::parse(
