@@ -83,7 +83,22 @@ jobs:
           name: sarif-${{ matrix.language }}
           path: sarif-results
 
+      # Exactly one regular .sarif file, passed by name: given a directory with
+      # several CodeQL files, upload-sarif merges them, and merging initializes
+      # (downloads) the CodeQL bundle in this write job. A compromised analyze job
+      # must not be able to trigger that.
+      - name: One SARIF file
+        id: sarif
+        run: |
+          set -euo pipefail
+          mapfile -t found < <(find sarif-results -mindepth 1)
+          if [ "${#found[@]}" -ne 1 ] || [ ! -f "${found[0]}" ] || [ -L "${found[0]}" ] || [[ "${found[0]}" != *.sarif ]]; then
+            echo "::error::expected exactly one regular .sarif file, found: ${found[*]:-none}"
+            exit 1
+          fi
+          echo "file=${found[0]}" >> "$GITHUB_OUTPUT"
+
       - uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
-          sarif_file: sarif-results
+          sarif_file: ${{ steps.sarif.outputs.file }}
           category: /language:${{ matrix.language }}

