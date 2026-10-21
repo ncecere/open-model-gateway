@@ -78,6 +78,11 @@ pub(crate) fn decode_ollama(
     value: &Value,
     request: &EmbeddingRequest,
 ) -> Result<EmbeddingResponse> {
+    crate::inference::evidence::preserve(decode_ollama_inner(value, request), || {
+        Some(super::metering::ollama_embedding(value))
+    })
+}
+fn decode_ollama_inner(value: &Value, request: &EmbeddingRequest) -> Result<EmbeddingResponse> {
     if !value.is_object() || !value["error"].is_null() {
         return Err(InferenceError::InvalidUpstream);
     }
@@ -99,6 +104,11 @@ pub(crate) fn decode_ollama(
     })
 }
 pub(crate) fn decode(value: &Value, request: &EmbeddingRequest) -> Result<EmbeddingResponse> {
+    crate::inference::evidence::preserve(decode_inner(value, request), || {
+        Some(super::metering::embedding(&value["usage"]))
+    })
+}
+fn decode_inner(value: &Value, request: &EmbeddingRequest) -> Result<EmbeddingResponse> {
     if !value.is_object() || !value["error"].is_null() || value["object"] != "list" {
         return Err(InferenceError::InvalidUpstream);
     }

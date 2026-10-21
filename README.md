@@ -74,7 +74,7 @@ Keep the binary and compiled SPA from the same verified revision. Use a separate
 | `POST /v1/chat/completions` | Bounded text/function-tool subset |
 | `POST /v1/responses` | Stateless text/function-tool subset; OpenAI |
 | `POST /v1/messages` | Text/tool subset; Anthropic and Bedrock |
-| `POST /v1/embeddings` | String/string-batch input, float vectors; declared embedding profiles |
+| `POST /v1/embeddings` | String/string-batch input, float or base64 vectors; declared embedding profiles |
 | `POST /v1/rerank` | `{model,query,documents,top_n?}` → scored indices; OpenRouter |
 | `POST /v1/systemone` | TypeSafe System One contract (TypeSafe SDK compatible); OpenRouter |
 | `/v1/videos`, `/v1/files`, `/v1/batches` | Gateway Files API; batches for any model (native OpenAI/Anthropic batch APIs or gateway-run lines, [batches](docs/batches.md)), workspace-owned gateway ids. `/v1/videos` returns `unsupported_capability`: no supported video provider since OpenAI's Videos API shutdown (2026-09-24) ([async jobs](docs/async-jobs.md)) |

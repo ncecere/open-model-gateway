@@ -579,18 +579,36 @@ impl ProviderAdapter for OpenRouterAdapter {
         let mut body = embeddings::encode(&target.upstream_model, &request);
         body["provider"] = self.provider_preferences();
         let response = self.post(target, "/embeddings", &body).await?;
-        let (value, cost) = parse(&read(response).await?)?;
-        let mut decoded = embeddings::decode(&value, &request)?;
-        if let Some(width) = fixed_dimensions(&target.upstream_model)
-            && decoded.embeddings.iter().any(|v| v.len() != width as usize)
-        {
-            return evidence::preserve(Err(InferenceError::InvalidUpstream), || {
-                Some(Ok(decoded.usage))
-            });
+        let bytes = read(response).await?;
+        let value: Value =
+            serde_json::from_slice(&bytes).map_err(|_| InferenceError::InvalidUpstream)?;
+        if !value.is_object() {
+            return Err(InferenceError::InvalidUpstream);
         }
-        decoded.usage.meters = Some(metering::text_workload_meters(Some(0)));
-        decoded.usage.provider_cost_microusd = cost;
-        Ok(decoded)
+        embedded_error(&value)?;
+        let cost = provider_cost(&bytes);
+        // Independent evidence: bad token metering must not erase a valid
+        // reported cost, nor may bad cost erase valid token observations.
+        // Output zero is semantic for embeddings; invalid input stays unknown.
+        let mut observed = metering::embedding(&value["usage"]).unwrap_or(Usage {
+            output_tokens: Some(0),
+            ..Usage::default()
+        });
+        observed.meters = Some(metering::text_workload_meters(Some(0)));
+        observed.provider_cost_microusd = cost.as_ref().ok().copied().flatten();
+        evidence::preserve(
+            cost.and_then(|_| {
+                let mut decoded = embeddings::decode(&value, &request)?;
+                decoded.usage = observed;
+                if let Some(width) = fixed_dimensions(&target.upstream_model)
+                    && decoded.embeddings.iter().any(|v| v.len() != width as usize)
+                {
+                    return Err(InferenceError::InvalidUpstream);
+                }
+                Ok(decoded)
+            }),
+            || Some(Ok(observed)),
+        )
     }
 
     async fn execute_rerank(
