@@ -7,15 +7,27 @@
 # (workflow_dispatch); other refs are refused. Nothing is tagged latest:
 # deploy by the digest printed in the job summary.
 #
-# Only a tested image gets a tag. Each architecture is built on a native
-# runner and pushed by digest only (untagged). That exact digest is pulled and
-# must report the version in Cargo.toml (and, for tags, the tag's version),
-# pass the isolated staging rehearsal (init, db, migrate, up, verify, HTTPS
-# readiness, restore-check), the distroless runtime contract test and the
-# vulnerability scan. Then the publish job
-# joins the tested digests into one multi-arch index, tags it and signs it
-# (cosign keyless). The SBOM and provenance attestations are built with each
-# image and carried into the index.
+# Only a tested image gets a tag. Jobs, in order:
+#   meta     (read)   tags, labels and annotations (docker/metadata-action).
+#   build    (write)  each architecture on a native runner, pushed by digest only
+#                     (untagged), with SBOM and provenance attestations. The digest
+#                     is the job output. Nothing else runs here.
+#   verify   (read)   per architecture, pulls that exact digest with a read-only
+#                     token and runs the version check, the isolated staging
+#                     rehearsal (init, db, migrate, up, verify, HTTPS readiness,
+#                     restore-check), the distroless runtime contract test and the
+#                     Trivy scan (a pinned, checksum-verified release binary).
+#   publish  (write)  only after verify passed: joins the tested digests into one
+#                     multi-arch index, tags it and signs it (cosign keyless).
+#   release  (write)  v* tags only: the GitHub Release.
+#
+# No third-party action runs in a job whose token can write (#194). The LiteLLM
+# compromises of 2026 (a scanner action next to a publish credential, then a
+# compromised build/publish step) are why: a scanner, a test runner or any tool that
+# downloads code at run time gets a read-only token, and a job that can push, sign or
+# release uses only the allowlist in tests/supply-chain.test.mjs (checkout and the
+# docker/* build and login actions). `npm run test:supply-chain` enforces it. The
+# cosign and Trivy binaries are pinned releases checked against a SHA-256 in this file.
 #
 # Every action is pinned by commit SHA; the comment gives the version.
 #
@@ -39,9 +51,55 @@ env:
   IMAGE: ghcr.io/ncecere/open-model-gateway
 
 jobs:
+  # Tags, labels and annotations. Read-only: docker/metadata-action only computes
+  # strings (it reads the repository's metadata through the API), so it stays out of
+  # the jobs that push and sign.
+  meta:
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      build_labels: ${{ steps.build.outputs.labels }}
+      tags: ${{ steps.publish.outputs.tags }}
+      annotations: ${{ steps.publish.outputs.annotations }}
+    steps:
+      - name: Labels of the per-architecture images
+        id: build
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+          labels: |
+            org.opencontainers.image.title=open-model-gateway
+            org.opencontainers.image.licenses=MIT
+
+      - name: Tags and annotations of the multi-arch index
+        id: publish
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: index
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: |
+            latest=false
+          # Tags keep the git tag's "v" (v0.3.0, v0.3, v0.3.0-rc.1);
+          # metadata-action's semver patterns would drop it.
+          tags: |
+            type=sha,prefix=sha-,format=short,enable=${{ github.ref_type == 'branch' }}
+            type=raw,value=${{ github.ref_name }},priority=1000,enable=${{ github.ref_type == 'tag' }}
+            type=match,pattern=^(v\d+\.\d+)\.\d+$,group=1,enable=${{ github.ref_type == 'tag' && !contains(github.ref_name, '-') }}
+            type=raw,value=latest-release,enable=${{ github.ref_type == 'tag' && !contains(github.ref_name, '-') }}
+          labels: |
+            org.opencontainers.image.title=open-model-gateway
+            org.opencontainers.image.licenses=MIT
+
+  # Builds and pushes each architecture by digest. This job can write packages, so
+  # it runs the checkout, the Docker setup, login and build actions and nothing else
+  # from outside this repository. Testing the image is the verify job's work.
   build:
     name: build (${{ matrix.platform }})
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    needs: [meta]
     strategy:
       fail-fast: true
       matrix:
@@ -55,12 +113,15 @@ jobs:
     permissions:
       contents: read
       packages: write
-    env:
-      # Staging rehearsal images (deploy/staging/compose.yaml defaults to Docker Hub).
-      STAGING_POSTGRES_IMAGE: mirror.gcr.io/library/postgres:17-bookworm
-      STAGING_CADDY_IMAGE: mirror.gcr.io/library/caddy:2-alpine
+    # One output per architecture: each matrix leg sets only its own, and GitHub
+    # merges the legs' outputs. verify and publish fail on an empty or malformed one.
+    outputs:
+      digest_linux_amd64: ${{ steps.record.outputs.digest_linux_amd64 }}
+      digest_linux_arm64: ${{ steps.record.outputs.digest_linux_arm64 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Platform name
         env:
@@ -78,15 +139,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Labels
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          images: ${{ env.IMAGE }}
-          labels: |
-            org.opencontainers.image.title=open-model-gateway
-            org.opencontainers.image.licenses=MIT
-
       # Untagged: nothing points at this digest until it has been tested.
       - name: Build and push by digest (${{ matrix.platform }})
         id: build
@@ -94,7 +146,7 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.platform }}
-          labels: ${{ steps.meta.outputs.labels }}
+          labels: ${{ needs.meta.outputs.build_labels }}
           outputs: type=image,"name=${{ env.IMAGE }}",push-by-digest=true,name-canonical=true,push=true
           # SBOM generator from mirror.gcr.io (`sbom: true` pulls it from Docker Hub).
           attests: type=sbom,generator=mirror.gcr.io/docker/buildkit-syft-scanner:stable-1@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9
@@ -102,10 +154,63 @@ jobs:
           cache-from: type=gha,scope=image-${{ env.PLATFORM_PAIR }}
           cache-to: type=gha,mode=max,scope=image-${{ env.PLATFORM_PAIR }}
 
-      - name: Pull the pushed digest
+      - name: Record the pushed digest
+        id: record
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: docker pull "${IMAGE}@${DIGEST}"
+        run: |
+          [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::the build returned no image digest ('${DIGEST}')"; exit 1; }
+          echo "digest_${PLATFORM_PAIR//-/_}=${DIGEST}" >> "$GITHUB_OUTPUT"
+
+  # Tests the pushed digest of each architecture on a native runner with a
+  # read-only token: anything that runs here (the image under test, Trivy, the
+  # staging stack, the tools they download) cannot push, sign or release.
+  verify:
+    name: verify (${{ matrix.platform }})
+    needs: [build]
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+            digest_output: digest_linux_amd64
+            trivy_asset: trivy_0.70.0_Linux-64bit.tar.gz
+            trivy_sha256: 8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            digest_output: digest_linux_arm64
+            trivy_asset: trivy_0.70.0_Linux-ARM64.tar.gz
+            trivy_sha256: 2f6bb988b553a1bbac6bdd1ce890f5e412439564e17522b88a4541b4f364fc8d
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read # pull the pushed digest
+    env:
+      DIGEST: ${{ needs.build.outputs[matrix.digest_output] }}
+      # Staging rehearsal images (deploy/staging/compose.yaml defaults to Docker Hub).
+      STAGING_POSTGRES_IMAGE: mirror.gcr.io/library/postgres:17-bookworm
+      STAGING_CADDY_IMAGE: mirror.gcr.io/library/caddy:2-alpine
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Pull the pushed digest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no digest for ${PLATFORM} from the build job ('${DIGEST}')"; exit 1; }
+          echo "${GITHUB_TOKEN}" | docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
+          docker pull "${IMAGE}@${DIGEST}"
+          got=$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "${IMAGE}@${DIGEST}")
+          if [ "${got}" != "${PLATFORM}" ]; then
+            echo "::error::the digest for ${PLATFORM} is a ${got} image"
+            exit 1
+          fi
 
       # The binary's version comes from apps/gateway/Cargo.toml. The image's
       # entrypoint is the binary itself (distroless, exec form; no shell). A tag must
@@ -113,7 +218,6 @@ jobs:
       # tags match their base version.
       - name: Check the built version
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
           REF_TYPE: ${{ github.ref_type }}
           TAG: ${{ github.ref_name }}
         run: |
@@ -132,8 +236,6 @@ jobs:
       # The same rehearsal as ci.yml's staging-image job, run on the pushed
       # digest instead of a local build. No real credentials or providers.
       - name: Staging rehearsal of the pushed digest
-        env:
-          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           python3 scripts/staging.py init
           sed -i "s|^GATEWAY_IMAGE=.*|GATEWAY_IMAGE=${IMAGE}@${DIGEST}|" .local/staging/staging.env
@@ -163,36 +265,48 @@ jobs:
       # migrates, exec-form healthcheck (tests/container-image.test.mjs).
       - name: Runtime image contract of the pushed digest
         env:
-          OMG_CONTAINER_IMAGE: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          OMG_CONTAINER_IMAGE: ${{ env.IMAGE }}@${{ env.DIGEST }}
         run: node --test tests/container-image.test.mjs
+
+      # The Trivy release binary, pinned by version and checked against the SHA-256
+      # above (from the release's trivy_0.70.0_checksums.txt; keep both in step when
+      # bumping). Not trivy-action: its setup step takes the checksum from the same
+      # release it downloads. Trivy's vulnerability database is fetched at run time
+      # (mirror.gcr.io/aquasec, then ghcr.io): it is data that must stay current,
+      # and it cannot pin down what Trivy executes.
+      - name: Install Trivy (pinned release, SHA-256 verified)
+        env:
+          TRIVY_VERSION: 0.70.0
+          TRIVY_ASSET: ${{ matrix.trivy_asset }}
+          TRIVY_SHA256: ${{ matrix.trivy_sha256 }}
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o "${RUNNER_TEMP}/${TRIVY_ASSET}" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${TRIVY_ASSET}"
+          echo "${TRIVY_SHA256}  ${RUNNER_TEMP}/${TRIVY_ASSET}" | sha256sum -c -
+          mkdir -p "${RUNNER_TEMP}/trivy-bin"
+          tar -xzf "${RUNNER_TEMP}/${TRIVY_ASSET}" -C "${RUNNER_TEMP}/trivy-bin" trivy
+          "${RUNNER_TEMP}/trivy-bin/trivy" --version
+          echo "${RUNNER_TEMP}/trivy-bin" >> "$GITHUB_PATH"
 
       # Fixable HIGH and CRITICAL findings fail the build (Grounded's policy).
       - name: Scan image (${{ matrix.platform }})
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
-          TRIVY_PLATFORM: ${{ matrix.platform }}
-        with:
-          image-ref: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
-          severity: CRITICAL,HIGH
-          exit-code: "1"
-          ignore-unfixed: true
-
-      - name: Record the tested digest
-        env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          PLATFORM: ${{ matrix.platform }}
         run: |
-          mkdir -p "${RUNNER_TEMP}/digests"
-          touch "${RUNNER_TEMP}/digests/${DIGEST#sha256:}"
+          trivy image \
+            --platform "${PLATFORM}" \
+            --severity CRITICAL,HIGH \
+            --exit-code 1 \
+            --ignore-unfixed \
+            "${IMAGE}@${DIGEST}"
 
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: digests-${{ env.PLATFORM_PAIR }}
-          path: ${{ runner.temp }}/digests/*
-          if-no-files-found: error
-          retention-days: 1
-
+  # Joins the tested digests into one index, tags and signs it. It starts only
+  # when every verify leg passed. It can push and sign (id-token), so it uses the
+  # allowlisted docker/* actions and a pinned cosign binary, and gets the tested
+  # digests from the build job's outputs.
   publish:
-    needs: [build]
+    needs: [meta, build, verify]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     outputs:
@@ -202,12 +316,6 @@ jobs:
       packages: write
       id-token: write # cosign keyless signing (Sigstore OIDC)
     steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          path: ${{ runner.temp }}/digests
-          pattern: digests-*
-          merge-multiple: true
-
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           # BuildKit from mirror.gcr.io instead of Docker Hub.
@@ -219,42 +327,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Tags and annotations
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        env:
-          DOCKER_METADATA_ANNOTATIONS_LEVELS: index
-        with:
-          images: ${{ env.IMAGE }}
-          flavor: |
-            latest=false
-          # Tags keep the git tag's "v" (v0.3.0, v0.3, v0.3.0-rc.1);
-          # metadata-action's semver patterns would drop it.
-          tags: |
-            type=sha,prefix=sha-,format=short,enable=${{ github.ref_type == 'branch' }}
-            type=raw,value=${{ github.ref_name }},priority=1000,enable=${{ github.ref_type == 'tag' }}
-            type=match,pattern=^(v\d+\.\d+)\.\d+$,group=1,enable=${{ github.ref_type == 'tag' && !contains(github.ref_name, '-') }}
-            type=raw,value=latest-release,enable=${{ github.ref_type == 'tag' && !contains(github.ref_name, '-') }}
-          labels: |
-            org.opencontainers.image.title=open-model-gateway
-            org.opencontainers.image.licenses=MIT
-
       - name: Tag the tested digests as one multi-arch image
         id: index
-        working-directory: ${{ runner.temp }}/digests
         env:
-          TAGS: ${{ steps.meta.outputs.tags }}
-          ANNOTATIONS: ${{ steps.meta.outputs.annotations }}
+          TAGS: ${{ needs.meta.outputs.tags }}
+          ANNOTATIONS: ${{ needs.meta.outputs.annotations }}
+          DIGEST_AMD64: ${{ needs.build.outputs.digest_linux_amd64 }}
+          DIGEST_ARM64: ${{ needs.build.outputs.digest_linux_arm64 }}
         run: |
+          for d in "${DIGEST_AMD64}" "${DIGEST_ARM64}"; do
+            [[ "${d}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::expected 2 tested digests (amd64, arm64); got '${DIGEST_AMD64}' and '${DIGEST_ARM64}'"; exit 1; }
+          done
           args=()
           while IFS= read -r tag; do [ -n "${tag}" ] && args+=(--tag "${tag}"); done <<<"${TAGS}"
           while IFS= read -r note; do [ -n "${note}" ] && args+=(--annotation "${note}"); done <<<"${ANNOTATIONS}"
-          sources=()
-          for digest in *; do sources+=("${IMAGE}@sha256:${digest}"); done
-          if [ "${#sources[@]}" -ne 2 ]; then
-            echo "::error::expected 2 tested digests (amd64, arm64), found ${#sources[@]}"
-            exit 1
-          fi
+          sources=("${IMAGE}@${DIGEST_AMD64}" "${IMAGE}@${DIGEST_ARM64}")
           docker buildx imagetools create "${args[@]}" "${sources[@]}"
           first=$(head -n1 <<<"${TAGS}")
           digest=$(docker buildx imagetools inspect "${first}" --format '{{json .Manifest}}' | jq -r .digest)
@@ -267,7 +354,22 @@ jobs:
           fi
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      # cosign v3.0.6, the release cosign-installer v4.1.2 installed; the SHA-256 is
+      # that release's cosign_checksums.txt entry for cosign-linux-amd64. Pinned here
+      # instead of an installer action so no third-party code runs next to the OIDC
+      # token. Keep the version and checksum in step when bumping.
+      - name: Install cosign (pinned release, SHA-256 verified)
+        env:
+          COSIGN_VERSION: v3.0.6
+          COSIGN_SHA256: c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/cosign-bin"
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o "${RUNNER_TEMP}/cosign-bin/cosign" \
+            "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64"
+          echo "${COSIGN_SHA256}  ${RUNNER_TEMP}/cosign-bin/cosign" | sha256sum -c -
+          chmod 0755 "${RUNNER_TEMP}/cosign-bin/cosign"
+          echo "${RUNNER_TEMP}/cosign-bin" >> "$GITHUB_PATH"
 
       # Signing the index digest covers every tag. Only tested, scanned
       # digests reach this job.
@@ -280,7 +382,7 @@ jobs:
         if: always() && steps.index.outputs.digest != ''
         env:
           DIGEST: ${{ steps.index.outputs.digest }}
-          TAGS: ${{ steps.meta.outputs.tags }}
+          TAGS: ${{ needs.meta.outputs.tags }}
         run: |
           {
             echo "## Image"
@@ -319,6 +421,8 @@ jobs:
       packages: read # the image's SBOM attestations
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:

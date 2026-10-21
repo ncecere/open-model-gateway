@@ -1,0 +1,36 @@
+# Node.js for the CI jobs: a pinned release from nodejs.org, checked against a SHA-256
+# in this file. Replaces actions/setup-node, which downloads a floating "22" release
+# without any checksum (#194). Read-only jobs only: tests/supply-chain.test.mjs keeps
+# local composite actions out of jobs that can write.
+#
+# The version matches the Dockerfile's node image. To bump it, take the checksums from
+# https://nodejs.org/dist/v<version>/SHASUMS256.txt (linux-x64 and linux-arm64 .tar.xz).
+# There is no npm cache: `npm ci` fetches packages, and npm verifies them against the
+# integrity hashes in package-lock.json.
+name: Set up Node.js (pinned, checksum-verified)
+description: Installs Node.js 22.23.3 from nodejs.org after a SHA-256 check
+
+runs:
+  using: composite
+  steps:
+    - name: Install Node.js
+      shell: bash
+      env:
+        NODE_VERSION: 22.23.3
+        NODE_SHA256_X64: df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de
+        NODE_SHA256_ARM64: a44aeb94849a299b22df10b9e622ec2f605c2183501bc40590705131de7c740f
+      run: |
+        set -euo pipefail
+        case "${RUNNER_ARCH}" in
+          X64) arch=x64; sha="${NODE_SHA256_X64}" ;;
+          ARM64) arch=arm64; sha="${NODE_SHA256_ARM64}" ;;
+          *) echo "::error::unsupported runner architecture ${RUNNER_ARCH}"; exit 1 ;;
+        esac
+        archive="node-v${NODE_VERSION}-linux-${arch}.tar.xz"
+        curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o "${RUNNER_TEMP}/${archive}" \
+          "https://nodejs.org/dist/v${NODE_VERSION}/${archive}"
+        echo "${sha}  ${RUNNER_TEMP}/${archive}" | sha256sum -c -
+        mkdir -p "${RUNNER_TEMP}/node"
+        tar -xJf "${RUNNER_TEMP}/${archive}" --strip-components=1 -C "${RUNNER_TEMP}/node"
+        "${RUNNER_TEMP}/node/bin/node" --version
+        echo "${RUNNER_TEMP}/node/bin" >> "$GITHUB_PATH"

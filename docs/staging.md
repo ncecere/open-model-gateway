@@ -20,10 +20,12 @@ For pull requests and branches, CI's `staging-image` job builds a Linux image, r
 
 On pushes to `main` and `v*` tags, once the tests pass, `.github/workflows/image.yml` publishes `ghcr.io/ncecere/open-model-gateway`:
 
-1. Each architecture (linux/amd64, linux/arm64) is built on a native runner, with SBOM and provenance attestations, and pushed **by digest only**, without a tag.
-2. That exact digest is pulled and must report the `Cargo.toml` version (`docker run --rm IMAGE --version`, exec form). It then runs this rehearsal (`init`, `db`, `migrate`, `up`, `verify`, HTTPS readiness through `local-ca`, `restore-check`) with `GATEWAY_IMAGE` set to the digest, and the job checks that the gateway container ran it. The runtime contract test (`tests/container-image.test.mjs`) then runs on the digest, and a Trivy scan fails on fixable HIGH or CRITICAL findings.
-3. Only then are the tested digests joined into one multi-arch index, tagged (`sha-<short>` for `main`; `vX.Y.Z`, `vX.Y` and `latest-release` for final tags; never `latest`) and signed with cosign keyless signing.
+1. The `build` job builds each architecture (linux/amd64, linux/arm64) on a native runner, with SBOM and provenance attestations, and pushes it **by digest only**, without a tag. It can write packages, so it runs nothing from outside this repository except `actions/checkout` and the `docker/*` build, login and Buildx actions. Its job outputs are the two digests.
+2. The `verify` job, one per architecture, has a read-only token (`contents: read`, `packages: read`). It pulls that exact digest, which must report the `Cargo.toml` version (`docker run --rm IMAGE --version`, exec form). It then runs this rehearsal (`init`, `db`, `migrate`, `up`, `verify`, HTTPS readiness through `local-ca`, `restore-check`) with `GATEWAY_IMAGE` set to the digest, and checks that the gateway container ran it. The runtime contract test (`tests/container-image.test.mjs`) then runs on the digest, and a Trivy scan fails on fixable HIGH or CRITICAL findings. Trivy is a pinned release binary (version and SHA-256 in `image.yml`), not an action.
+3. Only when both `verify` jobs pass does `publish` join the tested digests into one multi-arch index, tag it (`sha-<short>` for `main`; `vX.Y.Z`, `vX.Y` and `latest-release` for final tags; never `latest`) and sign it with cosign keyless signing (a pinned cosign binary, checked against its SHA-256).
 4. For a `v*` tag, a GitHub Release is created from `docs/releases/vX.Y.Z.md` with the per-platform SBOMs, the digest and checksums.
+
+No third-party action runs in a job that can write (#194); see [verification](verification.md#supply-chain).
 
 The workflow can also be run by hand on `main` or a `v*` tag; other refs are refused:
 

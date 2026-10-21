@@ -24,6 +24,21 @@ CI (`.github/workflows/ci.yml`) runs all of these; the `browser` job uses a Post
 
 CI's `cargo-deny` job runs `cargo deny --all-features check` (cargo-deny 0.20.2's release binary, installed and checksum-verified by the SHA-pinned `taiki-e/install-action`), and the `npm-audit` job gates on `npm audit --omit=dev --audit-level=high` and writes the full, non-blocking `npm audit` (dev tooling included) to the job summary. `.github/workflows/codeql.yml` runs CodeQL for `javascript-typescript` and `rust` (build mode `none`) on pushes to `main`, pull requests and weekly; results appear on the Security tab. `.github/dependabot.yml` opens weekly grouped updates for Cargo, npm (root workspace), GitHub Actions (SHA pins) and the `Dockerfile` base images. The release image is additionally scanned by Trivy in `image.yml`.
 
+**Third-party code never shares a job with a write token (#194).** A job whose `GITHUB_TOKEN` has any `write` permission, set in the job or inherited from the workflow (or from the repository default when nothing is declared), may use only these actions, all pinned by SHA: `actions/checkout`, `docker/setup-buildx-action`, `docker/login-action`, `docker/build-push-action`, and (for the code-scanning upload, which needs `security-events: write`) `github/codeql-action/init` and `analyze`. Scanners, linters and setup steps run in jobs with a read-only token. In `image.yml`, `build` pushes the per-architecture images by digest and nothing else, `verify` (`contents: read`, `packages: read`) pulls the digest and runs the version check, the staging rehearsal, the runtime contract test and the Trivy scan, and `publish` (which holds `id-token: write` for cosign) starts only after `verify` passes. Tags and annotations come from a read-only `meta` job. `tests/supply-chain.test.mjs` (`npm run test:supply-chain`) fails when a write job uses any other action, when an allowlist entry is unused, when a write job runs a local composite action, and when a workflow uses one of the installer actions that download tools without a checksum (`actions/setup-node`, `azure/setup-helm`, `aquasecurity/trivy-action`, `aquasecurity/setup-trivy`, `sigstore/cosign-installer`).
+
+**Run-time downloads are pinned by version and checked by SHA-256.** Each tool is a release binary whose checksum is written in the workflow:
+
+| Tool | Where | Pin |
+| --- | --- | --- |
+| Trivy | `image.yml` `verify` | v0.70.0 release tarball per architecture, SHA-256 from the release's `trivy_0.70.0_checksums.txt` |
+| cosign | `image.yml` `publish` | v3.0.6 `cosign-linux-amd64`, SHA-256 from `cosign_checksums.txt` |
+| helm | `ci.yml` `helm` | v3.18.4 from get.helm.sh, SHA-256 from its `.sha256sum` |
+| kubeconform | `ci.yml` `helm` | v0.7.0 release tarball, SHA-256 from the release `CHECKSUMS` |
+| Node.js | `.github/actions/setup-node` (all `ci.yml` jobs) | 22.23.3 (the `Dockerfile`'s version) from nodejs.org, SHA-256 from `SHASUMS256.txt` |
+| cargo-deny | `ci.yml` `cargo-deny` | `taiki-e/install-action` at a pinned SHA with `cargo-deny@0.20.2`; it verifies the checksum in its bundled manifest, and the test requires an exact version and the checksum left on |
+
+To bump one, change the version and the checksum together and take the checksum from the vendor's published checksum file. `tests/supply-chain.test.mjs` also fails on any `curl`/`wget` of a non-local URL in a workflow or local action step that lacks a `sha256sum -c`, or that pipes into a shell. Not pinned by a checksum of ours: the Rust toolchain (`dtolnay/rust-toolchain` runs rustup, which verifies component hashes from the channel manifest over TLS; `stable` floats), Playwright's Chromium (version fixed by `package-lock.json`, downloaded without a checksum we hold), apt packages (`age`, signed by the distribution) and Trivy's vulnerability database. They run in read-only jobs.
+
 ### No Docker Hub pulls in CI
 
 GitHub's shared runners hit Docker Hub's anonymous pull limit, and a Docker Hub outage (`auth.docker.io` 504) failed builds, so CI and the release pipeline pull nothing from Docker Hub:
@@ -37,7 +52,7 @@ GitHub's shared runners hit Docker Hub's anonymous pull limit, and a Docker Hub 
 | SBOM generator | `attests: type=sbom,generator=mirror.gcr.io/docker/buildkit-syft-scanner:stable-1@sha256:…` (replaces `sbom: true`) |
 | MinIO / RustFS file-store tests | `mirror.gcr.io/pgsty/minio@sha256:…` (pgsty publishes only to Docker Hub; the pull is retried with backoff) and `ghcr.io/rustfs/rustfs@sha256:…` (RustFS's own registry). Same digests as on Docker Hub. |
 | cargo-deny | Release binary via `taiki-e/install-action` (not the Docker-based `EmbarkStudios/cargo-deny-action`) |
-| Trivy | Its vulnerability database already defaults to `mirror.gcr.io/aquasec`, then `ghcr.io` |
+| Trivy | The pinned release binary (GitHub Releases, SHA-256-checked); its vulnerability database already defaults to `mirror.gcr.io/aquasec`, then `ghcr.io` |
 
 The mirror serves only images it has cached: popular official images are, but an image or tag nobody has pulled through it is "not found". Before changing a mirror reference, check that it resolves and matches Docker Hub, for example `docker buildx imagetools inspect mirror.gcr.io/library/rust:1.99.0-bookworm` and the same for `rust:1.99.0-bookworm`. Dependabot's `docker` updates still track the `Dockerfile`'s mirrored build stages (it queries `mirror.gcr.io`, whose tag list holds only cached tags, so a new version can appear there later than on Docker Hub; bump by hand if it lags). The mirror references in workflows, tests and the staging overrides are not tracked by Dependabot and are updated by hand. Local developer stacks (`compose.yaml`, `deploy/demo/compose.yaml`) are not used by CI and still pull from Docker Hub.
 
