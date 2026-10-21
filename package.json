@@ -17,6 +17,7 @@
     "build:web": "npm run build --workspace @omg/web",
     "typecheck:web": "npm run typecheck --workspace @omg/web",
     "test:web": "npm run test --workspace @omg/web",
+    "test:sdk-bases": "node --experimental-strip-types --test tests/inference-sdk-bases.test.mjs",
     "test:demo": "node --test tests/demo-oidc.test.mjs && python3 tests/demo-runtime.test.py",
     "test:container": "node --test tests/container-image.test.mjs",
     "test:supply-chain": "node --test tests/supply-chain.test.mjs",

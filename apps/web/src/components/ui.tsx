@@ -44,9 +44,12 @@ export function SectionHeadings({ children }: { children: ReactNode }) { return 
 export function Heading({ title, description, actions }: { title: string; description?: ReactNode; actions?: ReactNode }) { return <PageHeader title={title} titleAs={useContext(HeadingLevel)} description={description} actions={actions} />; }
 export function Panel({ title, children }: { title?: string; children: ReactNode }) { return <Card title={title}>{title ? children : <CardBody>{children}</CardBody>}</Card>; }
 const ApiScopeContext = createContext<string | undefined>(undefined);
+const InferenceBaseContext = createContext<string | null>(null);
+/** Display only: management requests must continue using relative /api/v1 paths. */
+export const useInferenceBaseUrl = () => useContext(InferenceBaseContext) ?? `${typeof window === "undefined" ? "" : window.location.origin}/v1`;
 export function ApiScopeProvider({ session, children }: { session: Session; children: ReactNode }) {
   const scope = JSON.stringify(session);
-  return <ApiScopeContext.Provider key={scope} value={scope}>{children}</ApiScopeContext.Provider>;
+  return <ApiScopeContext.Provider key={scope} value={scope}><InferenceBaseContext.Provider value={session.installation.inference_base_url ?? null}>{children}</InferenceBaseContext.Provider></ApiScopeContext.Provider>;
 }
 /** The live authorization scope that keys every API query (for pages that build several queries at once). */
 export const useApiScope = () => useContext(ApiScopeContext);

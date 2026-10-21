@@ -171,6 +171,43 @@ async fn call(
         serde_json::from_slice(&bytes).unwrap_or(Value::Null),
     )
 }
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn me_exposes_inference_base_url_to_regular_users(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let (status, unset) = call(&f.s, &f.member, "GET", "/api/v1/me", Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        unset["installation"].get("inference_base_url"),
+        Some(&Value::Null)
+    );
+    let response = routes()
+        .layer(Extension(f.member))
+        .layer(Extension(
+            crate::config::InferenceBaseUrl::parse(
+                Some("https://api.bitop.dev/v1/"),
+                crate::config::Environment::Production,
+            )
+            .unwrap(),
+        ))
+        .with_state(f.s)
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/me")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await.unwrap())
+            .unwrap();
+    assert_eq!(
+        body["installation"]["inference_base_url"],
+        "https://api.bitop.dev/v1"
+    );
+}
+
 fn id(v: &Value) -> Uuid {
     Uuid::parse_str(v["id"].as_str().unwrap()).unwrap()
 }

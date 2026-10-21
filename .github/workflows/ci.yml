@@ -76,6 +76,7 @@ jobs:
       - run: npm ci
       - run: npm run typecheck:web
       - run: npm run test:web
+      - run: npm run test:sdk-bases
       - run: npm run test:demo
       - run: npm run test:supply-chain
       - name: Install age (test:staging includes the encrypted backup tests)

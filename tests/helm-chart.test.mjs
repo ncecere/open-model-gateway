@@ -45,6 +45,20 @@ for (const [name, args] of Object.entries(profiles)) {
   });
 }
 
+test("inference base URL is optional, display-only configuration", () => {
+  const args = ["-f", join(chart, "ci/external-db-values.yaml")];
+  const [unset] = docsOfKind(helmTemplate(args), "ConfigMap");
+  assert.doesNotMatch(unset, /GATEWAY_INFERENCE_BASE_URL/);
+  const [configured] = docsOfKind(helmTemplate([...args, "--set", "gateway.inferenceBaseUrl=https://api.bitop.dev/v1"]), "ConfigMap");
+  assert.match(configured, /GATEWAY_INFERENCE_BASE_URL: "https:\/\/api.bitop.dev\/v1"/);
+  const prefix = "https://api.example:8443/prefix@blue/v1";
+  const [prefixed] = docsOfKind(helmTemplate([...args, "--set", `gateway.inferenceBaseUrl=${prefix}`]), "ConfigMap");
+  assert.ok(prefixed.includes(`GATEWAY_INFERENCE_BASE_URL: "${prefix}"`));
+  const invalid = spawnSync("helm", ["template", "omg-test", chart, ...args, "--set", "gateway.inferenceBaseUrl=/v1"], { encoding: "utf8" });
+  assert.notEqual(invalid.status, 0);
+  assert.match(invalid.stderr, /inferenceBaseUrl/);
+});
+
 test("loadgen Job passes the arguments `loadgen run` accepts", () => {
   const rendered = helmTemplate(["-f", join(chart, "ci/loadtest-values.yaml"), "--set", "loadtest.loadgen.enabled=true",
     "--set", "loadtest.loadgen.rate=750", "--set", "loadtest.loadgen.duration=120", "--set", "loadtest.loadgen.extraArgs={--readers,4}"]);

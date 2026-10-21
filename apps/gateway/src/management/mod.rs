@@ -680,6 +680,7 @@ async fn me(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
     files: Option<Extension<crate::filestore::FileStoreRuntime>>,
+    inference: Option<Extension<crate::config::InferenceBaseUrl>>,
 ) -> ApiResult {
     // Lock-free primary snapshot (`crate::reporting`): no catalog or
     // installation lock; the role and workspace list are live as of its start.
@@ -694,6 +695,7 @@ async fn me(
     .await?;
     let files = files.map(|Extension(r)| r).unwrap_or_default();
     installation["logo"] = branding::public_logo(&mut *tx, &files).await?;
+    installation["inference_base_url"] = json!(inference.and_then(|Extension(url)| url.0));
     // Presentation of the signed-in identity uses the signature-verified session
     // claim, not an editable directory/profile email.
     let email = &u.email;

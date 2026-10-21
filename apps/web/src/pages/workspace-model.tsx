@@ -7,12 +7,13 @@
  * catalog's name order; no drawer.
  */
 import { FileQuestion } from "lucide-react";
+import { inferenceEndpoint, InferenceBaseField, InferenceEndpointField } from "../components/inference-base-url";
 import { wsPath } from "../lib/api";
 import { protocolEndpoints, protocolLabel, workloadModalities, type WorkspaceCatalogModel } from "../lib/model-setup";
 import { formatDecimalMicroUsd, workloadLabels } from "../lib/pricing";
 import { notServing } from "../lib/home";
 import type { DashboardSearch } from "../lib/permissions";
-import { Button, DateTime, ErrorNotice, Stack, useChoices } from "../components/ui";
+import { Button, DateTime, ErrorNotice, Stack, useChoices, useInferenceBaseUrl } from "../components/ui";
 import { ResourceLink } from "../components/navigation-link";
 import { useResourceName } from "../components/layout/breadcrumbs";
 import { BackLink } from "../components/templates/form-page";
@@ -33,6 +34,7 @@ import m from "./models.module.css";
 const byName = (a: WorkspaceCatalogModel, b: WorkspaceCatalogModel) => a.display_name.localeCompare(b.display_name, undefined, { sensitivity: "base" }) || a.model_id.localeCompare(b.model_id);
 
 export function WorkspaceModelPage({ workspace, id }: Scope & { id: string }) {
+  const base = useInferenceBaseUrl();
   const catalog = useChoices<WorkspaceCatalogModel>(`${wsPath(workspace.id)}/catalog`);
   const rows = [...(catalog.data ?? [])].sort(byName), index = rows.findIndex(r => r.model_id === id), model = index >= 0 ? rows[index] : undefined;
   useResourceName(model?.display_name ?? "Model");
@@ -68,13 +70,15 @@ export function WorkspaceModelPage({ workspace, id }: Scope & { id: string }) {
       ...(model.created_at ? [{ label: "Created", value: <DateTime value={model.created_at} /> }] : []),
     ]} /></Card>
     <Card title="How to call it" titleAs="h2" description="Use an API key from this workspace.">
+      <InferenceBaseField />
       <Stack gap={5}>{model.protocols.map(p => { const e = protocolEndpoints[p]; if (!e) return null;
         return <section key={p} className={m.endpoint} aria-label={protocolLabel(p)}>
-          <h3 className={m.endpointLine}><Badge size="sm" variant="outline">{e.method}</Badge><code className={m.code}>{e.path}</code><span className={s.muted}>{protocolLabel(p)}</span></h3>
+          <h3 className={m.endpointLine}><Badge size="sm" variant="outline">{e.method}</Badge><span>{protocolLabel(p)}</span></h3>
+          <InferenceEndpointField protocol={p} base={base} />
           <DescriptionList dividers items={[
             { label: "Headers", value: <ul className={m.chips}>{e.headers.map(h => <li key={h.name}><code className={m.code}>{h.name}: {h.value}</code></li>)}</ul> },
             { label: "Body", value: e.contentType },
-            { label: "Key parameters", value: <ul className={s.plainList}>{e.params.map(x => <li key={x.name}><code className={m.code}>{x.name}</code>{x.required ? " (required)" : ""} · {x.name === "model" ? <code className={m.code}>{model.public_name}</code> : x.note}</li>)}</ul> },
+            { label: "Key parameters", value: <ul className={s.plainList}>{e.params.map(x => <li key={x.name}><code className={m.code}>{inferenceEndpoint(x.name, base)}</code>{x.required ? " (required)" : ""} · {x.name === "model" ? <code className={m.code}>{model.public_name}</code> : x.note}</li>)}</ul> },
             { label: "Not supported", value: <span title="Anything not listed is refused, never silently dropped.">{e.unsupported}</span> },
           ]} />
         </section>; })}</Stack>

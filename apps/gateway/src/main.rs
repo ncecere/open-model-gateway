@@ -918,6 +918,7 @@ async fn run(cli: Cli) -> Result<()> {
                 listener,
                 http::router_with_identity(store, web, engine, identity)
                     .layer(axum::Extension(files))
+                    .layer(axum::Extension(config.inference_base_url))
                     // The peer address feeds sign-in abuse controls (#78).
                     .into_make_service_with_connect_info::<std::net::SocketAddr>(),
             )
@@ -1149,6 +1150,7 @@ mod demo {
             listen: "127.0.0.1:3000".parse().unwrap(),
             environment: open_model_gateway::config::Environment::Development,
             web_directory: None,
+            inference_base_url: Default::default(),
             secret_env_allowlist: vec![],
             smtp_env_allowlist: vec![],
             inference_limits: Default::default(),
