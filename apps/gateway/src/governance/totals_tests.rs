@@ -11,6 +11,190 @@ use crate::{
 use rand::{RngExt, SeedableRng, rngs::StdRng, seq::IndexedRandom};
 use sqlx::{PgPool, migrate::Migrator};
 
+/// Reporting never changes admission's older lower-bound contract. In
+/// particular, a bounded unknown hold is NOT a known available allowance.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn budget_report_exact_holds_unknown_union_and_missing_buckets(pool: PgPool) {
+    let f = fixture(pool.clone()).await;
+    f.price(1_000_000).await;
+    let ws = f.principal.workspace_id;
+    let mut tx = pool.begin().await.unwrap();
+    let now = Utc::now();
+    let windows: Vec<_> = BudgetPeriod::ALL
+        .into_iter()
+        .map(|p| (Scope::Workspace(ws), p))
+        .collect();
+    assert_eq!(
+        totals::read_budget_report(&mut tx, &windows, now)
+            .await
+            .unwrap(),
+        vec![totals::BudgetReport::default(); 4]
+    );
+    tx.rollback().await.unwrap();
+    let settled = f.start();
+    admit(&f.store, &settled, &request(), 30).await.unwrap();
+    finish(&f.store, &done(settled.id, Some(100), Some(10)))
+        .await
+        .unwrap();
+    let pending = f.start();
+    admit(&f.store, &pending, &request(), 30).await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    let r = totals::read_budget_report(&mut tx, &windows, now)
+        .await
+        .unwrap();
+    for r in r {
+        assert_eq!(
+            (
+                r.settled_microusd,
+                r.pending_held_microusd,
+                r.unknown_held_microusd,
+                r.unknown_cost_requests
+            ),
+            (110, 110, 0, 0)
+        );
+        assert_eq!(r.remaining(300).as_deref(), Some("80"));
+        assert_eq!(r.remaining(200).as_deref(), Some("0"));
+    }
+    tx.rollback().await.unwrap();
+    // Partial usage retains a finite floor, but cannot prove remaining cost.
+    finish(&f.store, &done(pending.id, Some(100), None))
+        .await
+        .unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    for r in totals::read_budget_report(&mut tx, &windows, now)
+        .await
+        .unwrap()
+    {
+        assert_eq!(
+            (
+                r.settled_microusd,
+                r.pending_held_microusd,
+                r.unknown_held_microusd,
+                r.unknown_cost_requests
+            ),
+            (110, 0, 110, 1)
+        );
+        assert_eq!(r.remaining(300), None);
+        assert!(!r.unresolved, "legacy flag remains bounded");
+    }
+    tx.rollback().await.unwrap();
+    // Unknown AND unbounded must count once; pending unbounded and an
+    // execution without a reservation each add one separate exposure.
+    sqlx::query("UPDATE governance_reservations SET unbounded_cost=true WHERE execution_id=$1")
+        .bind(pending.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let unbounded = f.start();
+    admit(&f.store, &unbounded, &request(), 30).await.unwrap();
+    sqlx::query("UPDATE governance_reservations SET unbounded_cost=true WHERE execution_id=$1")
+        .bind(unbounded.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let orphan = Uuid::new_v4();
+    sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,root_request_id) VALUES($1,$2,$3,$4,'company/smart','openai',false,'failed',$1)")
+        .bind(orphan).bind(ws).bind(f.principal.key_id).bind(f.deployment).execute(&pool).await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    for r in totals::read_budget_report(&mut tx, &windows, now)
+        .await
+        .unwrap()
+    {
+        assert_eq!(r.unknown_cost_requests, 3);
+        assert_eq!(r.used(), 330);
+        assert!(r.unresolved);
+        assert_eq!(r.remaining(i64::MAX), None);
+    }
+    tx.rollback().await.unwrap();
+    assert_consistent(&pool, "reporting exposure union").await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn budget_report_boundaries_large_amounts_and_rotation_lineage(pool: PgPool) {
+    use chrono::TimeZone;
+    let f = fixture(pool.clone()).await;
+    let ws = f.principal.workspace_id;
+    let key = f.principal.key_id;
+    let rotated = Uuid::new_v4();
+    sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash,governance_key_id) VALUES($1,$2,$3,'rotated',decode(repeat('05',32),'hex'),$4)")
+        .bind(rotated).bind(ws).bind(f.owner).bind(key).execute(&pool).await.unwrap();
+    // Monday, first of month, and an ISO week straddling the year.
+    for at in [
+        Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
+        Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap(),
+    ] {
+        for period in BudgetPeriod::ALL {
+            let mut tx = pool.begin().await.unwrap();
+            let times = if period == BudgetPeriod::Lifetime {
+                // Lifetime never resets: both old and rotated credentials count.
+                [(at - chrono::TimeDelta::days(400), key), (at, rotated)]
+            } else {
+                let start = period.bucket_start(at);
+                [
+                    (start - chrono::TimeDelta::microseconds(1), key),
+                    (start, rotated),
+                ]
+            };
+            for (time, credential) in times {
+                let id = Uuid::new_v4();
+                sqlx::query("INSERT INTO inference_executions(id,workspace_id,api_key_id,deployment_id,public_model,provider,streamed,state,started_at,root_request_id) VALUES($1,$2,$3,$4,'company/smart','openai',false,'succeeded',$5,$1)")
+                    .bind(id).bind(ws).bind(credential).bind(f.deployment).bind(time).execute(&mut *tx).await.unwrap();
+                sqlx::query("INSERT INTO governance_reservations(execution_id,workspace_id,api_key_id,deployment_id,admitted_at,minute_start,month_start,lease_expires_at,state,actual_microusd,input_tokens,output_tokens) VALUES($1,$2,$3,$4,$5,date_trunc('minute',$5,'UTC'),date_trunc('month',$5,'UTC'),$5,'settled',9007199254740993,0,0)")
+                    .bind(id).bind(ws).bind(credential).bind(f.deployment).bind(time).execute(&mut *tx).await.unwrap();
+            }
+            let r = totals::read_budget_report(
+                &mut tx,
+                &[
+                    (Scope::Workspace(ws), period),
+                    (Scope::KeyLineage(key), period),
+                ],
+                at,
+            )
+            .await
+            .unwrap();
+            assert_eq!(r[0], r[1], "rotation shares lineage");
+            let expected = 9_007_199_254_740_993
+                * if period == BudgetPeriod::Lifetime {
+                    2
+                } else {
+                    1
+                };
+            assert_eq!(r[0].settled_microusd, i128::from(expected));
+            assert_eq!(r[0].remaining(expected + 2).as_deref(), Some("2"));
+            tx.rollback().await.unwrap();
+        }
+    }
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn budget_report_rejects_corrupt_or_unrepresentable_totals(pool: PgPool) {
+    let f = fixture(pool.clone()).await;
+    let windows = [(
+        Scope::Workspace(f.principal.workspace_id),
+        BudgetPeriod::Lifetime,
+    )];
+    // Missing is legitimately empty; a present but invalid bucket is not.
+    for values in [
+        "-1,0,0,0,0,0,0",
+        "0,0,1,1,0,0,0", // unknown floor exceeds all holds
+        "0,1,1,0,0,0,0", // retained floor without an unknown request
+        "0,0,0,0,1,1,0", // impossible unknown/unresolved overlap
+        "0,0,0,0,-1,0,0",
+        "99999999999999999999999999999999999999,99999999999999999999999999999999999999,0,0,0,0,0",
+    ] {
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query(&format!("INSERT INTO budget_totals(scope_kind,scope_id,period,period_start,settled_microusd,held_microusd,held_unknown_microusd,unknown,unresolved,unresolved_unknown,unreserved_executions) VALUES('workspace',$1,'lifetime','epoch',{values})"))
+            .bind(f.principal.workspace_id).execute(&mut *tx).await.unwrap();
+        assert!(
+            totals::read_budget_report(&mut tx, &windows, Utc::now())
+                .await
+                .is_err(),
+            "corrupt or overflowing totals must fail reporting, never promise headroom"
+        );
+        tx.rollback().await.unwrap();
+    }
+}
+
 fn start_for(f: &Fixture, principal: Principal) -> ExecutionStart {
     ExecutionStart {
         principal,

@@ -204,7 +204,7 @@ Effort is relative: **S** = narrow change; **M** = several components plus tests
 
 ### R13 — Cost trends, filters and internal allocation reports · P1 · M
 
-- [x] Selected (phase 4) — partly done: Usage & costs overview/explore/by-workspace, cost centers and CSV exports exist; scheduled reports and budget-headroom views remain
+- [x] Selected (phase 4) — partly done: Usage & costs overview/explore/by-workspace, cost centers and CSV exports exist; read-only per-period budget headroom is implemented for the next feature release (not v0.7.0); scheduled reports remain
 - **Value:** answer which authorized workloads are driving spend and how the current period compares with the previous one.
 - **Scope / done:** explicit date ranges, model/workspace/service-account breakdowns, trend charts, budget headroom and consistent exports. Optional cost-center tags should not become authorization inputs. Label any forecast as an estimate and surface incomplete usage.
 - **Guardrails:** current UTC-month costs and bounded CSV already exist. Extend them without inventing zero-cost rows, changing pinned prices or exposing private workspace details. Decide aggregate personal-use reporting separately before implementing it.

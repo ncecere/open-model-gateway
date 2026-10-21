@@ -24,7 +24,7 @@ import { useId, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api, platformWorkspacePath, type WorkspaceKind } from "../lib/api";
-import { dollarsToMicroUsd, formatMicroUsd, type BudgetPeriod, type BudgetWindow, type PolicyResponse } from "../lib/governance";
+import { dollarsToMicroUsd, effectiveBudgetHeadroom, formatMicroUsd, windowHeadroom, type BudgetHeadroom, type BudgetPeriod, type BudgetWindow, type PolicyResponse } from "../lib/governance";
 import { budgetFor, composeLimits, draftErrors, draftLimits, draftLimitsValid, draftOf, hasErrors, limitsBody, limitsOf, limitsSaveError, limitsSummary, lockedBudget, mergeErrors, newBudgetKey, nextPeriod, noLimits, periodName, rateRows, rateText, rejectionErrors, resetText, sameDraft, stackPeriods, storageText, type DraftErrors, type InvalidRows, type Limits, type LimitsDraft, type Parent, type RateKey } from "../lib/limits";
 import { StorageBar } from "./templates/storage-bar";
 import { resetsAt } from "../lib/usage";
@@ -123,15 +123,36 @@ export function LimitsTable({ caption, scopeLabel, draft, onChange, editing, bus
 function safeMicro(dollars: string): string | null { try { return dollarsToMicroUsd(dollars); } catch { return null; } }
 
 const layerName = (kind: string, mode: "inherit" | "replace" | undefined): Record<BudgetWindow["layer"], string> => ({ platform: mode === "replace" ? "Platform override" : `${kind} default`, local: "Workspace", key: "Key" });
-/** Budget meters per applicable layer and period (spent plus on hold in each current window). */
+const headroomText = (h: BudgetHeadroom) => h.status === "known" ? `Remaining: ${formatMicroUsd(h.remaining_microusd)}` : h.status === "unavailable" ? "Headroom unavailable from this gateway" : `Remaining: ${h.status === "restricted" ? "Restricted" : "Unknown"}`;
+/** Shared by workspace meters and key rings: only the supplied window facts. */
+export function BudgetHeadroomDetails({ window: w }: { window: BudgetWindow }) {
+  const h = windowHeadroom(w);
+  return <>
+    {h.status !== "unavailable" && h.status !== "restricted" && <p className={s.note}>Settled: {formatMicroUsd(w.settled_microusd)} · Pending holds: {formatMicroUsd(w.pending_held_microusd)} · Retained unknown-cost floors: {formatMicroUsd(w.unknown_held_microusd)} · Unknown-cost requests: {w.unknown_cost_requests}</p>}
+    {(h.status === "unknown" || w.usage_visible && w.unresolved_usage) && <p className={s.note}>Some costs aren't known yet; the amount shown is not an upper bound.</p>}
+    <p className={s.note}>{headroomText(h)}</p>
+  </>;
+}
+export function EffectiveBudgetHeadroom({ windows }: { windows: BudgetWindow[] }) {
+  if (!windows.length) return null;
+  return <div><h3 className={s.primary}>Effective headroom</h3>
+    <p className={s.note}>Lowest remaining across applicable layers per period, not an allocation or a guarantee that a request will fit.</p>
+    {effectiveBudgetHeadroom(windows).map(h => <p className={s.note} key={h.period}>{periodName[h.period]} · {headroomText(h)}</p>)}
+  </div>;
+}
+/** Each layer is shown independently; overlapping scopes are never added. */
 export function BudgetMeters({ windows, kind, mode, title = "Budget used this period" }: { windows: BudgetWindow[]; kind: WorkspaceKind; mode?: "inherit" | "replace"; title?: string }) {
   if (!windows.length) return null;
   const names = layerName(kindLabels[kind], mode);
-  return <Card title={title} description="Spent plus on hold.">
+  return <Card title={title} description="Settled estimates and active holds. Each UTC period applies independently.">
     <div className={l.meters}>{windows.map(w => { const period = w.period ?? w.budget_period, amount = w.amount_microusd ?? w.monthly_budget_microusd, label = `${names[w.layer]} ${periodName[period].toLowerCase()} budget`; return <div key={`${w.layer}-${period}`}>
-      {w.usage_visible ? <UsageBar label={label} showLabel used={w.used_microusd} limit={amount} period={period} description={<>{w.unresolved_usage ? "Some costs aren't known yet, so this is at least the amount shown. " : ""}{resetsAt(w.window_end)}</>} />
-        : <p className={s.note}>{label}: {formatMicroUsd(amount)}. Only workspace admins see how much of it is used.</p>}
-    </div>; })}</div>
+      {w.usage_visible ? <>
+        <UsageBar label={label} showLabel used={w.used_microusd} limit={amount} period={period} description={resetsAt(w.window_end)} />
+        <BudgetHeadroomDetails window={w} />
+      </> : <p className={s.note}>{label}: {formatMicroUsd(amount)}. Remaining: Restricted. Only workspace admins see how much of it is used.</p>}
+    </div>; })}
+      <EffectiveBudgetHeadroom windows={windows} />
+    </div>
   </Card>;
 }
 

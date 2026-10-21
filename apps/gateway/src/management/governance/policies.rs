@@ -617,22 +617,46 @@ pub(crate) async fn budget_windows(
     let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut **tx)
         .await?;
+    use crate::governance::totals::{Scope as UsageScope, read_budget_report};
+    // Never ask totals for a hidden parent's consumption, even when a visible
+    // key uses the same period. All visible layers share one SQL snapshot.
+    let windows: Vec<_> = entries
+        .iter()
+        .filter(|e| e.3)
+        .flat_map(|e| e.1.keys().map(move |p| (UsageScope::of(ws, e.2), *p)))
+        .collect();
+    let mut facts = read_budget_report(tx, &windows, now).await?.into_iter();
     let mut out = Vec::new();
-    for (layer, budgets, lineage, visible, created) in entries {
+    for (layer, budgets, _lineage, visible, created) in entries {
         for (period, amount) in budgets.iter() {
             let (start, end) = period.window(now);
-            let (used, unresolved) = if *visible {
-                let (used, unresolved) = budget_consumption(tx, ws, *lineage, *period, now).await?;
-                (Some(used), Some(unresolved))
+            let report = if *visible {
+                Some(facts.next().ok_or(ApiError(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Budget report unavailable",
+                ))?)
             } else {
-                (None, None)
+                None
+            };
+            let used = report.map(|r| r.used().to_string());
+            let unresolved = report.map(|r| r.unresolved);
+            let remaining = report.and_then(|r| r.remaining(*amount));
+            let status = match report {
+                None => "restricted",
+                Some(r) if r.unknown_cost_requests > 0 => "unknown",
+                Some(_) => "known",
             };
             let exhausted = used
                 .as_deref()
                 .and_then(|u| u.parse::<i128>().ok())
                 .map(|u| u >= i128::from(*amount));
             let lifetime = *period == BudgetPeriod::Lifetime;
-            out.push(json!({"layer":layer,"period":period.as_str(),"amount_microusd":amount.to_string(),"monthly_budget_microusd":amount.to_string(),"budget_period":period.as_str(),"window_start":if lifetime {*created} else {start},"window_end":if lifetime {None} else {Some(end)},"usage_visible":visible,"used_microusd":used,"unresolved_usage":unresolved,"exhausted":exhausted}));
+            out.push(json!({"layer":layer,"period":period.as_str(),"amount_microusd":amount.to_string(),"monthly_budget_microusd":amount.to_string(),"budget_period":period.as_str(),"window_start":if lifetime {*created} else {start},"window_end":if lifetime {None} else {Some(end)},"usage_visible":visible,"used_microusd":used,"unresolved_usage":unresolved,"exhausted":exhausted,
+                "settled_microusd":report.map(|r|r.settled_microusd.to_string()),
+                "pending_held_microusd":report.map(|r|r.pending_held_microusd.to_string()),
+                "unknown_held_microusd":report.map(|r|r.unknown_held_microusd.to_string()),
+                "unknown_cost_requests":report.map(|r|r.unknown_cost_requests.to_string()),
+                "remaining_microusd":remaining,"headroom_status":status}));
         }
     }
     Ok(out)
