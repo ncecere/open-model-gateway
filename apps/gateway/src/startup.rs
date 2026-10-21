@@ -182,6 +182,7 @@ fn read_secret_file(path: &OsStr) -> Result<Vec<u8>, &'static str> {
 /// Set the process umask to `077`.
 pub fn restrict_umask() {
     // SAFETY: umask(2) has no memory-safety preconditions and cannot fail.
+    #[allow(unsafe_code)]
     unsafe {
         libc::umask(0o077);
     }
@@ -195,6 +196,7 @@ pub fn restrict_umask() {
 /// Modifies the process environment: call only while the process is
 /// single-threaded (before any runtime or thread is started), as required by
 /// [`std::env::set_var`].
+#[allow(unsafe_code)] // The sole direct environment writer; startup-only caller contract.
 pub unsafe fn import_secret_files() -> Result<(), SecretError> {
     let imports = resolve_secrets(|name| std::env::var_os(name))?;
     for import in &imports {
@@ -419,6 +421,7 @@ mod tests {
     #[test]
     fn rejects_a_permission_denied_secret_file() {
         // SAFETY: geteuid has no preconditions.
+        #[allow(unsafe_code)]
         if unsafe { libc::geteuid() } == 0 {
             return; // root bypasses Unix read permission checks
         }

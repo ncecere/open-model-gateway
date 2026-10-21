@@ -1,3 +1,5 @@
+#![deny(unsafe_code)]
+
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -272,6 +274,7 @@ fn main() -> Result<()> {
     // `.env` file, configuration, logging or thread. Never migrates/bootstraps.
     open_model_gateway::startup::restrict_umask();
     // SAFETY: still single-threaded; no runtime or thread has been started.
+    #[allow(unsafe_code)] // Single-threaded startup, before the runtime exists.
     unsafe { open_model_gateway::startup::import_secret_files() }?;
     if let Some(path) = std::env::var_os("GATEWAY_ENV_FILE") {
         dotenvy::from_path(path)
@@ -371,7 +374,10 @@ async fn run(cli: Cli) -> Result<()> {
     }
     let pool = config.connect().await?;
     // Reports, usage and logs only (never admission, settlement or writes).
+    let provider_secrets = EnvSecrets::new(config.secret_env_allowlist.clone());
+    let smtp_secrets = EnvSecrets::new(config.smtp_env_allowlist.clone());
     let store = Store::new(pool.clone())
+        .with_secret_allowlists(provider_secrets.clone(), smtp_secrets)
         .with_reporting(config.connect_reporting()?, config.reporting_max_lag)
         .with_admission_mode(config.admission_mode);
     match cli.command.unwrap_or(Command::Serve) {
@@ -695,7 +701,7 @@ async fn run(cli: Cli) -> Result<()> {
                 .map(WebAssets::load)
                 .transpose()?;
             let mut registry = ProviderRegistry::default();
-            let secrets = Arc::new(EnvSecrets::new(config.secret_env_allowlist.clone()));
+            let secrets = Arc::new(provider_secrets);
             registry.register(Arc::new(OpenAiAdapter::new(secrets.clone())?))?;
             registry.register(Arc::new(AnthropicAdapter::new(secrets.clone())?))?;
             registry.register(Arc::new(BedrockAdapter::new()?))?;
@@ -1144,6 +1150,7 @@ mod demo {
             environment: open_model_gateway::config::Environment::Development,
             web_directory: None,
             secret_env_allowlist: vec![],
+            smtp_env_allowlist: vec![],
             inference_limits: Default::default(),
             metrics_listen: None,
             database_max_connections: 10,

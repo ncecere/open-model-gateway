@@ -662,6 +662,69 @@ mod database {
         (id, session, csrf)
     }
 
+    /// Real session/CSRF middleware and handlers against PostgreSQL; the IdP is
+    /// mocked and the verified session is seeded, not a demo/browser sign-in.
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn configuration_refusals_use_a_live_admin_session(pool: sqlx::PgPool) {
+        let mock = MockProvider::start(None).await;
+        let state = mock.state(pool.clone()).await;
+        let (user, session, csrf) = seed(&pool).await;
+        sqlx::query(
+            "INSERT INTO platform_role_grants(user_id,role,source) VALUES($1,'admin','manual')",
+        )
+        .bind(user)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let app = router(state.clone())
+            .merge(crate::management::router(state.clone()))
+            .with_state(state.store.clone());
+        for (method, path, body, expected) in [
+            (
+                "PUT",
+                "/api/v1/platform/settings/general",
+                json!({"display_name":"Acme","human_key_max_lifetime_days":30,"UI_LOGO_PATH":"/etc/passwd"}),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                "PUT",
+                "/api/v1/platform/settings/email",
+                json!({"environment_variables":{"UI_PASSWORD":"attacker"}}),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                "POST",
+                "/api/v1/platform/providers",
+                json!({"name":"Forbidden","provider":"openai","credential_ref":"env:DATABASE_URL","enabled":false}),
+                StatusCode::BAD_REQUEST,
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .header("cookie", format!("{SESSION}={session}"))
+                        .header("origin", "http://127.0.0.1:3000")
+                        .header("x-csrf-token", &csrf)
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected, "{path}");
+        }
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM provider_connections")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+    }
+
     #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn expiry_revocation_and_disabled_user_are_checked_every_request(pool: sqlx::PgPool) {
         let state = IdentityState::new(Store::new(pool.clone()), None)

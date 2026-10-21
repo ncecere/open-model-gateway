@@ -82,6 +82,18 @@ async fn read_tx<'a>(
 fn bad(message: &'static str) -> ApiError {
     ApiError(StatusCode::BAD_REQUEST, message)
 }
+
+/// Test actions accept an empty body or `{}`, never submitted configuration.
+pub(super) fn no_configuration(body: &[u8]) -> Result<(), ApiError> {
+    if !body.is_empty() {
+        let fields = serde_json::from_slice::<serde_json::Map<String, Value>>(body)
+            .map_err(|_| invalid())?;
+        if !fields.is_empty() {
+            return Err(invalid());
+        }
+    }
+    Ok(())
+}
 /// Trim; empty means absent.
 fn text(value: Option<String>) -> Option<String> {
     value.map(|v| v.trim().to_owned()).filter(|v| !v.is_empty())
@@ -342,17 +354,22 @@ fn public_url() -> Option<String> {
                 && !v.chars().any(|c| c.is_control() || c.is_whitespace())
         })
 }
-async fn email_json(tx: &mut Transaction<'_, Postgres>) -> Result<Value, ApiError> {
+async fn email_json(
+    tx: &mut Transaction<'_, Postgres>,
+    secrets: &crate::providers::secrets::EnvSecrets,
+) -> Result<Value, ApiError> {
     let row: SmtpRow = sqlx::query_as(SMTP_SQL).fetch_one(&mut **tx).await?;
     let (last_at, last_ok, last_error, updated_at): (Option<Value>, Option<bool>, Option<String>, Value) = sqlx::query_as("SELECT to_jsonb(smtp_last_test_at),smtp_last_test_ok,smtp_last_test_error,to_jsonb(updated_at) FROM installation_settings WHERE singleton").fetch_one(&mut **tx).await?;
     let settings = smtp_of(row.clone());
     let (host, port, tls, username, password_ref, from_address, from_name) = row;
-    let reference_allowed = password_ref.as_deref().map(email::password_ref_allowed);
+    let reference_allowed = password_ref
+        .as_deref()
+        .map(|r| email::password_ref_allowed(r, secrets));
     let host_allowed = host.as_deref().map(email::host_allowed);
     let status = match &settings {
         None => "not_configured",
         Some(s) if !email::host_allowed(&s.host) => "host_not_allowed",
-        Some(s) if !s.credential_available() => "credential_unavailable",
+        Some(s) if !s.credential_available(secrets) => "credential_unavailable",
         Some(_) => "ready",
     };
     Ok(json!({
@@ -378,7 +395,7 @@ async fn email_settings(
     Extension(u): Extension<BrowserPrincipal>,
 ) -> ApiResult {
     let mut tx = read_tx(&s, &u).await?;
-    let v = email_json(&mut tx).await?;
+    let v = email_json(&mut tx, &s.smtp_secrets).await?;
     tx.commit().await?;
     Ok(Json(v))
 }
@@ -394,7 +411,10 @@ struct EmailInput {
     from_name: Option<String>,
 }
 /// Validated relay, or `None` to turn delivery off (every field absent).
-fn email_input(b: EmailInput) -> Result<Option<SmtpSettings>, ApiError> {
+fn email_input(
+    b: EmailInput,
+    secrets: &crate::providers::secrets::EnvSecrets,
+) -> Result<Option<SmtpSettings>, ApiError> {
     let host = text(b.host).map(|h| h.to_ascii_lowercase());
     let tls = text(b.tls);
     let username = text(b.username);
@@ -439,7 +459,7 @@ fn email_input(b: EmailInput) -> Result<Option<SmtpSettings>, ApiError> {
         if !email::password_ref_syntax(r) {
             return Err(invalid());
         }
-        if !email::password_ref_allowed(r) {
+        if !email::password_ref_allowed(r, secrets) {
             return Err(bad(REFERENCE_NOT_ALLOWED));
         }
     }
@@ -468,7 +488,7 @@ async fn update_email(
     Json(b): Json<EmailInput>,
 ) -> ApiResult {
     let mut tx = write_tx(&s, &u).await?;
-    let settings = email_input(b)?;
+    let settings = email_input(b, &s.smtp_secrets)?;
     let c = settings.as_ref();
     // Any change invalidates the previous test result.
     sqlx::query("UPDATE installation_settings SET smtp_host=$1,smtp_port=$2,smtp_tls=$3,smtp_username=$4,smtp_password_ref=$5,smtp_from_address=$6,smtp_from_name=$7,smtp_last_test_at=NULL,smtp_last_test_ok=NULL,smtp_last_test_error=NULL,updated_at=now(),updated_by=$8 WHERE singleton")
@@ -492,7 +512,7 @@ async fn update_email(
         json!({"enabled": c.is_some(), "mode": c.map(|c| c.tls.as_str())}),
     )
     .await?;
-    let v = email_json(&mut tx).await?;
+    let v = email_json(&mut tx, &s.smtp_secrets).await?;
     tx.commit().await?;
     Ok(Json(v))
 }
@@ -500,8 +520,10 @@ async fn update_email(
 async fn test_email(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
+    body: axum::body::Bytes,
 ) -> ApiResult {
     let mut tx = write_tx(&s, &u).await?;
+    no_configuration(&body)?;
     let settings = load_smtp(&mut tx)
         .await?
         .ok_or(ApiError(StatusCode::CONFLICT, EMAIL_NOT_CONFIGURED))?;
@@ -529,7 +551,7 @@ async fn test_email(
     // Never hold the installation lock across network I/O.
     tx.commit().await?;
     let result = settings
-        .send(OutgoingEmail {
+        .send(&s.smtp_secrets, OutgoingEmail {
             to: u.email.clone(),
             subject: format!("Test email from {name}"),
             body: format!(
@@ -553,12 +575,14 @@ async fn test_email(
 /// Invitation email prepared inside the invite transaction and sent after commit.
 pub(super) struct InvitationMail {
     settings: SmtpSettings,
+    secrets: std::sync::Arc<crate::providers::secrets::EnvSecrets>,
     installation: String,
     workspace: String,
 }
 pub(super) async fn invitation_mail(
     tx: &mut Transaction<'_, Postgres>,
     ws: Uuid,
+    secrets: std::sync::Arc<crate::providers::secrets::EnvSecrets>,
 ) -> Result<Option<InvitationMail>, ApiError> {
     let Some(settings) = load_smtp(tx).await? else {
         return Ok(None);
@@ -571,6 +595,7 @@ pub(super) async fn invitation_mail(
     .await?;
     Ok(Some(InvitationMail {
         settings,
+        secrets,
         installation,
         workspace,
     }))
@@ -597,11 +622,14 @@ pub(super) async fn send_invitation(
     );
     match mail
         .settings
-        .send(OutgoingEmail {
-            to: to.to_owned(),
-            subject: format!("Invitation to {} in {}", mail.workspace, mail.installation),
-            body,
-        })
+        .send(
+            &mail.secrets,
+            OutgoingEmail {
+                to: to.to_owned(),
+                subject: format!("Invitation to {} in {}", mail.workspace, mail.installation),
+                body,
+            },
+        )
         .await
     {
         Ok(()) => "sent",
@@ -631,4 +659,29 @@ async fn sign_in(
     v["enabled_group_mappings"] = json!(mappings);
     v["scim"] = scim;
     Ok(Json(v))
+}
+
+#[cfg(test)]
+mod body_tests {
+    #[test]
+    fn test_actions_accept_only_no_body_or_an_empty_object() {
+        for body in ["", "{}", " {} "] {
+            assert!(super::no_configuration(body.as_bytes()).is_ok());
+        }
+        for body in [
+            "null",
+            "[]",
+            "true",
+            "1",
+            "\"text\"",
+            "{",
+            " ",
+            "{\"environment_variables\":{}}",
+        ] {
+            assert_eq!(
+                super::no_configuration(body.as_bytes()).unwrap_err().0,
+                super::StatusCode::BAD_REQUEST
+            );
+        }
+    }
 }

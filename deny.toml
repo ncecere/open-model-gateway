@@ -73,6 +73,15 @@ multiple-versions = "warn"
 wildcards = "deny"
 allow-wildcard-paths = true
 highlight = "all"
+# Management configuration is typed data, never evaluated templates/scripts or
+# loadable code (#197). These facilities require an explicit security redesign.
+deny = [
+    "tera", "minijinja", "handlebars", "liquid", "tinytemplate", "askama",
+    "rhai", "mlua", "rlua", "rquickjs", "quick-js", "boa_engine", "rustpython-vm",
+    "libloading", "dlopen", "dlopen2",
+    "wasmtime", "wasmer", "deno_core", "wasmi", "pyo3", "v8", "starlark", "rune",
+    "cel-interpreter", "evalexpr", "duct", "subprocess", "xshell", "async-process", "nix",
+]
 
 [sources]
 # crates.io only. There are no git or alternate-registry dependencies; add

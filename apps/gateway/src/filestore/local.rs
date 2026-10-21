@@ -112,8 +112,11 @@ impl LocalBackend {
             meta.file_type().is_dir(),
             "GATEWAY_FILE_STORE_DIR must be a directory, not a file or symlink"
         );
+        // SAFETY: geteuid has no preconditions; no request-supplied code runs.
+        #[allow(unsafe_code)]
+        let uid = unsafe { libc::geteuid() };
         anyhow::ensure!(
-            meta.uid() == unsafe { libc::geteuid() },
+            meta.uid() == uid,
             "GATEWAY_FILE_STORE_DIR must be owned by the gateway user"
         );
         anyhow::ensure!(

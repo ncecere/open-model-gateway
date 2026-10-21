@@ -31,9 +31,14 @@ async fn status(State(s): State<Store>, Extension(u): Extension<BrowserPrincipal
 
 /// Platform Admins: one signed test delivery with no events. Audited, and
 /// rate-limited from the audit log (replica-safe).
-async fn test(State(s): State<Store>, Extension(u): Extension<BrowserPrincipal>) -> ApiResult {
+async fn test(
+    State(s): State<Store>,
+    Extension(u): Extension<BrowserPrincipal>,
+    body: axum::body::Bytes,
+) -> ApiResult {
     // Authority first: only a Platform Admin learns whether export is set up.
     let mut tx = super::settings::write_tx(&s, &u).await?;
+    super::settings::no_configuration(&body)?;
     let exporter = s
         .audit_export()
         .cloned()

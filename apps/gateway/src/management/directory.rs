@@ -864,7 +864,10 @@ async fn update_mapping(
                 | "workspace_role"
                 | "enabled"
         ) {
-            return Err(invalid());
+            return Err(ApiError(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Unknown group mapping field",
+            ));
         }
         current[k] = v.clone();
     }

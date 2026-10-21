@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 // Test code may begin transactions directly; production code uses `db::begin`.
 #![cfg_attr(test, allow(clippy::disallowed_methods))]
 pub mod alerts;
@@ -11,6 +12,12 @@ pub mod bootstrap;
 pub mod cache;
 pub mod catalog;
 pub mod config;
+#[cfg(test)]
+mod configuration_source_tests;
+#[cfg(test)]
+mod configuration_surface_tests;
+#[cfg(test)]
+mod configuration_unsafe_tests;
 pub(crate) mod db;
 pub mod demo;
 pub mod egress;
