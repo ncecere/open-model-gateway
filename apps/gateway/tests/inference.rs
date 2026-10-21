@@ -926,7 +926,7 @@ async fn embedding_invalid_inputs_and_profile_model_intersection_never_dispatch(
         json!({"model":"company/smart","input":[]}),
         json!({"model":"company/smart","input":[1,2]}),
         json!({"model":"company/smart","input":"a","dimensions":0}),
-        json!({"model":"company/smart","input":"a","encoding_format":"base64"}),
+        json!({"model":"company/smart","input":"a","encoding_format":"unknown"}),
         json!({"model":"company/smart","input":"a","stream":true}),
     ] {
         assert_eq!(

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { validateFields } from "./forms";
-import { notServingReason, readinessText, apiNameFrom, chosenConnection, defaultProtocols, protocolSupported, setupIdentityFields, setupSourceFields, workloadSupported, initialSetupValues, modelReadiness, protocolLabel, protocolOptions, protocolSetError, setupBody, setupFields, setupSteps, upstreamPlaceholder, workloadDisabledReason, workloadGroups, type SetupChoices } from "./model-setup";
+import { protocolEndpoints, notServingReason, readinessText, apiNameFrom, chosenConnection, defaultProtocols, protocolSupported, setupIdentityFields, setupSourceFields, workloadSupported, initialSetupValues, modelReadiness, protocolLabel, protocolOptions, protocolSetError, setupBody, setupFields, setupSteps, upstreamPlaceholder, workloadDisabledReason, workloadGroups, type SetupChoices } from "./model-setup";
 import type { ModelReadiness, PlatformOverviewData } from "./api";
 import { draftBody, emptyDraft, validateDraft } from "./pricing";
 
@@ -42,6 +42,15 @@ describe("model readiness derivation (contract §2)", () => {
     expect(modelReadiness({ enabled: true, supported_protocols: ["batches"], readiness: counts }).state).toBe("ready");
   });
   it("never infers readiness from a missing server value", () => { expect(modelReadiness({ enabled: true })).toEqual({ state: "unknown", warnings: [] }); expect(modelReadiness({ enabled: true, readiness: null })).toEqual({ state: "unknown", warnings: [] }); });
+});
+
+describe("embedding API help", () => {
+  it("documents float and base64 without claiming token-ID or streaming support", () => {
+    const guide = protocolEndpoints.embeddings;
+    expect(guide.params.find(p => p.name === "encoding_format")?.note).toMatch(/float.*base64/);
+    expect(guide.unsupported).toMatch(/Token-ID.*streaming.*rejected/);
+    expect(guide.unsupported).not.toMatch(/base64 output.*rejected/);
+  });
 });
 
 describe("Add model form", () => {

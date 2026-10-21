@@ -4,14 +4,14 @@ Current inference routes share key authentication, global public model aliases, 
 
 | Adapter | Chat `/v1/chat/completions` | Responses `/v1/responses` | Messages `/v1/messages` | Embeddings `/v1/embeddings` | Rerank `/v1/rerank` | System One `/v1/systemone` |
 | --- | --- | --- | --- | --- | --- | --- |
-| `openai` | Native Chat | Native Responses | No | Native float/string subset | No | No |
+| `openai` | Native Chat | Native Responses | No | String input; client float/base64 | No | No |
 | `anthropic` | Representable subset via Messages | No | Native Messages | No | No | No |
 | `bedrock` | Text/tools via Converse | No | Text/tools via Converse | No | No | No |
 | `openai_compatible` | Narrow compatible profile | No | No | OpenAI-wire subset; no dimensions | Jina/Cohere `/v1/rerank` | TypeSafe `/v1/systemone` |
 | `vllm` | Profile-specific compatible subset | No | No | OpenAI-wire subset, bounded dimensions | Jina/Cohere `/rerank` | No |
 | `sglang` | Profile-specific compatible subset | No | No | OpenAI-wire subset, bounded dimensions | Native `/v1/rerank`, mapped | No |
 | `ollama` | Compatible Chat subset | No | No | Native `/api/embed`, no dimensions | No | `/v1/systemone` (v0.35.0+) |
-| `openrouter` | Compatible Chat subset (stream/non-stream) | No | No | Float/string subset; fixed native widths only | Native `/rerank` | Native `/systemone` |
+| `openrouter` | Compatible Chat subset (stream/non-stream) | No | No | String input; client float/base64; fixed native widths only | Native `/rerank` | Native `/systemone` |
 
 ### Speech routes
 
@@ -86,7 +86,9 @@ Thinking, images/audio, cache controls, other metadata fields, error-marked tool
 
 ## Embeddings
 
-Non-streaming, nonempty string or string batch; optional `encoding_format:"float"` and positive profile-supported `dimensions`. Token-ID arrays, base64, stream and unknown fields are rejected.
+Non-streaming, nonempty string or string batch; optional `encoding_format:"float"|"base64"` and positive profile-supported `dimensions`. HTTP omission or null uses float arrays. Base64 responses contain standard padded base64 of little-endian float32 vectors. The OpenAI Node SDK's ordinary `embeddings.create({model,input})` requests base64 on the wire and decodes it to numeric arrays; explicit base64 keeps strings. This does not imply universal SDK option compatibility. Token-ID arrays, unknown encodings, stream and unknown fields are rejected.
+
+Client encoding is applied to validated normalized vectors, independently of the provider profile. Upstreams still receive float requests (Ollama receives its native non-truncating request, without an encoding field). Both upstream and client responses retain the 4 MiB cap; an interactive local formatting/size failure fails the attempt before success settlement and preserves observed usage and unresolved holds. Batch embedding lines remain float-only and explicitly refuse base64 rather than dropping it.
 
 ```json
 {"model":"company/embeddings","input":["First document","Second document"],"encoding_format":"float"}
