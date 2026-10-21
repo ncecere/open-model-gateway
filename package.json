@@ -9,7 +9,8 @@
     "@axe-core/playwright": "4.13.0",
     "@playwright/test": "1.64.0",
     "openai": "^7.28.0",
-    "pg": "8.23.1"
+    "pg": "8.23.1",
+    "yaml": "2.9.1"
   },
   "scripts": {
     "dev:web": "npm run dev --workspace @omg/web",

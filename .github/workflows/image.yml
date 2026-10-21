@@ -26,8 +26,9 @@
 # compromised build/publish step) are why: a scanner, a test runner or any tool that
 # downloads code at run time gets a read-only token, and a job that can push, sign or
 # release uses only the allowlist in tests/supply-chain.test.mjs (checkout and the
-# docker/* build and login actions). `npm run test:supply-chain` enforces it. The
-# cosign and Trivy binaries are pinned releases checked against a SHA-256 in this file.
+# docker/* build and login actions, each with the runner's own Buildx checked first).
+# `npm run test:supply-chain` enforces it. The cosign and Trivy binaries are pinned
+# releases fetched by .github/scripts/fetch-verified.sh against a SHA-256 in this file.
 #
 # Every action is pinned by commit SHA; the comment gives the version.
 #
@@ -128,6 +129,12 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
         run: echo "PLATFORM_PAIR=${PLATFORM//\//-}" >> "$GITHUB_ENV"
 
+      # setup-buildx-action downloads the latest Buildx, unchecked, when the runner has
+      # none. This job can write, so fail here instead; the action's `version` input
+      # (which also downloads) stays unset. tests/supply-chain.test.mjs enforces both.
+      - name: Require the runner's own Buildx
+        run: docker buildx version
+
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           # BuildKit from mirror.gcr.io instead of Docker Hub.
@@ -175,13 +182,9 @@ jobs:
           - platform: linux/amd64
             runner: ubuntu-24.04
             digest_output: digest_linux_amd64
-            trivy_asset: trivy_0.70.0_Linux-64bit.tar.gz
-            trivy_sha256: 8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
             digest_output: digest_linux_arm64
-            trivy_asset: trivy_0.70.0_Linux-ARM64.tar.gz
-            trivy_sha256: 2f6bb988b553a1bbac6bdd1ce890f5e412439564e17522b88a4541b4f364fc8d
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     permissions:
@@ -271,24 +274,30 @@ jobs:
           OMG_CONTAINER_IMAGE: ${{ env.IMAGE }}@${{ env.DIGEST }}
         run: node --test tests/container-image.test.mjs
 
-      # The Trivy release binary, pinned by version and checked against the SHA-256
-      # above (from the release's trivy_0.70.0_checksums.txt; keep both in step when
-      # bumping). Not trivy-action: its setup step takes the checksum from the same
-      # release it downloads. Trivy's vulnerability database is fetched at run time
+      # The Trivy v0.70.0 release binary for this architecture, fetched by the
+      # checksum-verifying script; the SHA-256s are the release's
+      # trivy_0.70.0_checksums.txt entries (keep both in step when bumping). Not
+      # trivy-action: its setup step takes the checksum from the same release it
+      # downloads. Trivy's vulnerability database is fetched at run time
       # (mirror.gcr.io/aquasec, then ghcr.io): it is data that must stay current,
       # and it cannot pin down what Trivy executes.
       - name: Install Trivy (pinned release, SHA-256 verified)
-        env:
-          TRIVY_VERSION: 0.70.0
-          TRIVY_ASSET: ${{ matrix.trivy_asset }}
-          TRIVY_SHA256: ${{ matrix.trivy_sha256 }}
         run: |
           set -euo pipefail
-          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o "${RUNNER_TEMP}/${TRIVY_ASSET}" \
-            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${TRIVY_ASSET}"
-          echo "${TRIVY_SHA256}  ${RUNNER_TEMP}/${TRIVY_ASSET}" | sha256sum -c -
+          case "${RUNNER_ARCH}" in
+            X64)
+              bash .github/scripts/fetch-verified.sh https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz 8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9 "${RUNNER_TEMP}/trivy.tar.gz"
+              ;;
+            ARM64)
+              bash .github/scripts/fetch-verified.sh https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-ARM64.tar.gz 2f6bb988b553a1bbac6bdd1ce890f5e412439564e17522b88a4541b4f364fc8d "${RUNNER_TEMP}/trivy.tar.gz"
+              ;;
+            *)
+              echo "::error::unsupported runner architecture ${RUNNER_ARCH}"
+              exit 1
+              ;;
+          esac
           mkdir -p "${RUNNER_TEMP}/trivy-bin"
-          tar -xzf "${RUNNER_TEMP}/${TRIVY_ASSET}" -C "${RUNNER_TEMP}/trivy-bin" trivy
+          tar -xzf "${RUNNER_TEMP}/trivy.tar.gz" -C "${RUNNER_TEMP}/trivy-bin" trivy
           "${RUNNER_TEMP}/trivy-bin/trivy" --version
           echo "${RUNNER_TEMP}/trivy-bin" >> "$GITHUB_PATH"
 
@@ -319,6 +328,17 @@ jobs:
       packages: write
       id-token: write # cosign keyless signing (Sigstore OIDC)
     steps:
+      # The checkout is for .github/scripts/fetch-verified.sh (the cosign download).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # setup-buildx-action downloads the latest Buildx, unchecked, when the runner has
+      # none. This job can write, so fail here instead; the action's `version` input
+      # (which also downloads) stays unset. tests/supply-chain.test.mjs enforces both.
+      - name: Require the runner's own Buildx
+        run: docker buildx version
+
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           # BuildKit from mirror.gcr.io instead of Docker Hub.
@@ -358,19 +378,15 @@ jobs:
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 
       # cosign v3.0.6, the release cosign-installer v4.1.2 installed; the SHA-256 is
-      # that release's cosign_checksums.txt entry for cosign-linux-amd64. Pinned here
-      # instead of an installer action so no third-party code runs next to the OIDC
-      # token. Keep the version and checksum in step when bumping.
+      # that release's cosign_checksums.txt entry for cosign-linux-amd64. Fetched by
+      # the checksum-verifying script instead of an installer action, so no
+      # third-party code runs next to the OIDC token. Keep the version and checksum
+      # in step when bumping.
       - name: Install cosign (pinned release, SHA-256 verified)
-        env:
-          COSIGN_VERSION: v3.0.6
-          COSIGN_SHA256: c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/cosign-bin"
-          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o "${RUNNER_TEMP}/cosign-bin/cosign" \
-            "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64"
-          echo "${COSIGN_SHA256}  ${RUNNER_TEMP}/cosign-bin/cosign" | sha256sum -c -
+          bash .github/scripts/fetch-verified.sh https://github.com/sigstore/cosign/releases/download/v3.0.6/cosign-linux-amd64 c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74 "${RUNNER_TEMP}/cosign-bin/cosign"
           chmod 0755 "${RUNNER_TEMP}/cosign-bin/cosign"
           echo "${RUNNER_TEMP}/cosign-bin" >> "$GITHUB_PATH"
 

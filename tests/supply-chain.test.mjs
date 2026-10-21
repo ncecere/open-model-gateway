@@ -6,260 +6,318 @@
 // actions below. Scanners, linters and setup actions run in read-only jobs. This
 // is the lesson of the 2026 LiteLLM compromises: a scanner action that ran next to
 // a publish credential was the way the credential was stolen.
+//
+// Workflows are read with the `yaml` package in strict mode (any parse error, a
+// duplicate key or an alias bomb fails the test), aliases and merge keys are
+// resolved, and the checks walk the parsed data, including local reusable
+// workflows and local composite actions. The checks themselves are exercised
+// against adversarial in-memory workflows at the bottom of this file.
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { isMap, isScalar, parseDocument, visit } from "yaml";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const workflows = join(root, ".github/workflows");
+const workflowsDir = join(root, ".github/workflows");
+const actionsDir = join(root, ".github/actions");
+const FETCH_SCRIPT = ".github/scripts/fetch-verified.sh";
 
 // Actions allowed in a job that has any `write` permission, explicit or inherited
-// from the workflow level (or from the repository default when neither declares
-// permissions). Keep this minimal: every entry must be used by a write job (checked
-// below), and each one is either GitHub-owned or the registry/build plumbing the
-// image pipeline cannot do without. Tools that only need to read (Trivy, helm,
-// kubeconform, cargo-deny, Node, Rust, ...) never belong here.
+// from the workflow level, from the caller of a reusable workflow, or from the
+// repository default when nothing is declared. Keep this minimal: every entry must
+// be used by a write job (checked below). Each one is GitHub-owned or the
+// registry/build plumbing the image pipeline cannot do without, and none downloads
+// an executable at run time: setup-buildx-action can, so every write job that uses
+// it first asserts the runner's own Buildx and sets no `version` (checked below).
+// Tools that only need to read (Trivy, helm, kubeconform, cargo-deny, Node, Rust,
+// the CodeQL bundle, ...) never belong here.
 export const WRITE_JOB_ACTIONS = new Map([
-  // GitHub-owned. Fetches the sources to build or the release script to run.
+  // GitHub-owned. Fetches the sources to build, the script to run or the SARIF file's repository.
   ["actions/checkout", "GitHub-owned; no network access beyond the repository"],
+  // GitHub-owned. The upload job reads the SARIF file the read-only analysis job produced.
+  ["actions/download-artifact", "GitHub-owned; hands the SARIF file from the read-only analysis job to the upload job"],
   // Docker-owned. The three steps that build and push an image to ghcr.io; the
   // pipeline cannot push without them. login-action only writes the Docker config.
-  ["docker/setup-buildx-action", "Docker-owned; creates the BuildKit builder for build-push and imagetools"],
+  ["docker/setup-buildx-action", "Docker-owned; creates the BuildKit builder (pinned image) for build-push and imagetools"],
   ["docker/login-action", "Docker-owned; logs in to ghcr.io with the job token"],
   ["docker/build-push-action", "Docker-owned; builds and pushes the image with its SBOM and provenance"],
-  // GitHub-owned. Uploading code-scanning results needs `security-events: write`;
-  // the analysis itself cannot run without the same action's init step.
-  ["github/codeql-action/init", "GitHub-owned; CodeQL setup (job needs security-events: write to upload)"],
-  ["github/codeql-action/analyze", "GitHub-owned; CodeQL analysis and SARIF upload"],
+  // GitHub-owned. Uploading code-scanning results needs `security-events: write`.
+  // It sends a SARIF file and downloads no CodeQL bundle (init and analyze, which
+  // do, run in a read-only job).
+  ["github/codeql-action/upload-sarif", "GitHub-owned; uploads the SARIF file the read-only analysis job wrote"],
 ]);
 
 // Actions that download a tool at run time without a checksum that this repository
-// pins. They are not used anywhere: install the tool with a pinned version and a
-// SHA-256 check instead (the helm and kubeconform steps in ci.yml, the Trivy and
-// cosign steps in image.yml, .github/actions/setup-node).
+// pins. They are not used anywhere: install the tool with
+// .github/scripts/fetch-verified.sh (the helm, kubeconform, Trivy and cosign steps,
+// .github/actions/setup-node).
 const UNVERIFIED_INSTALLERS = new Map([
   ["actions/setup-node", "downloads a floating Node release without a checksum; use ./.github/actions/setup-node"],
-  ["azure/setup-helm", "does not verify the helm download; use the checksum-verified step in ci.yml"],
-  ["aquasecurity/trivy-action", "installs Trivy through setup-trivy, whose checksum comes from the same release; install the pinned binary"],
-  ["aquasecurity/setup-trivy", "the checksum comes from the same release; install the pinned binary"],
-  ["sigstore/cosign-installer", "install the pinned cosign release with its SHA-256 instead"],
+  ["azure/setup-helm", "does not verify the helm download; fetch it with .github/scripts/fetch-verified.sh"],
+  ["aquasecurity/trivy-action", "installs Trivy through setup-trivy, whose checksum comes from the same release; fetch the pinned binary"],
+  ["aquasecurity/setup-trivy", "the checksum comes from the same release; fetch the pinned binary"],
+  ["sigstore/cosign-installer", "fetch the pinned cosign release with .github/scripts/fetch-verified.sh"],
 ]);
 
-// ---- a small YAML reader for the workflow files (no YAML dependency in the repo) ----
+// ---- strict YAML ----
 
-function stripComment(s) {
-  let quote = null;
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-    if (quote) {
-      if (c === quote) quote = null;
-    } else if ((c === '"' || c === "'") && (i === 0 || /[\s[{,(]/.test(s[i - 1]))) {
-      quote = c;
-    } else if (c === "#" && (i === 0 || /\s/.test(s[i - 1]))) {
-      return s.slice(0, i);
-    }
-  }
-  return s;
+export function parseStrict(text, file) {
+  const doc = parseDocument(text, { version: "1.2", uniqueKeys: true, merge: true, prettyErrors: true });
+  const problems = [...doc.errors, ...doc.warnings].map(e => e.message.split("\n")[0]);
+  if (problems.length) throw new Error(`${file}: ${problems.join("; ")}`);
+  if (!isMap(doc.contents)) throw new Error(`${file}: the top level is not a mapping`);
+  return doc;
 }
 
-const isDash = content => content === "-" || content.startsWith("- ");
+// Aliases and merge keys resolved; an alias bomb throws.
+export const toData = doc => doc.toJS({ maxAliasCount: 100 });
 
-function logicalLines(text) {
-  const raw = text.split("\n").map(l => l.replace(/\r$/, ""));
+// ---- repository files ----
+
+const walk = dir => readdirSync(dir, { withFileTypes: true }).flatMap(e => (e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)]));
+
+function repoFiles() {
+  const rel = p => p.slice(root.length);
+  const workflows = readdirSync(workflowsDir).filter(f => /\.ya?ml$/.test(f)).map(f => join(workflowsDir, f));
+  const actions = existsSync(actionsDir) ? walk(actionsDir).filter(f => /(^|\/)action\.ya?ml$/.test(f)) : [];
+  return [...workflows, ...actions].map(path => ({ file: rel(path), text: readFileSync(path, "utf8") }));
+}
+
+export function readLocalFromRepo(path) {
+  const full = join(root, path);
+  return existsSync(full) ? readFileSync(full, "utf8") : null;
+}
+
+// ---- pinning ----
+
+// Every `uses:` anywhere in the file, read from the syntax tree so comments and
+// flow-style or aliased values are seen as they are.
+export function pinViolations(text, file) {
+  const doc = parseStrict(text, file);
   const out = [];
-  for (let i = 0; i < raw.length; i++) {
-    const line = raw[i];
-    if (/^\s*(#.*)?$/.test(line)) continue;
-    const indent = line.match(/^ */)[0].length;
-    const content = stripComment(line.slice(indent)).trimEnd();
-    const entry = { indent, content, no: i + 1 };
-    out.push(entry);
-    if (/(^|[:-]\s+)[|>][+-]?\d?$/.test(content)) {
-      // Block scalar: the key's column decides where the body ends.
-      let eff = indent;
-      let rest = content;
-      while (rest.startsWith("- ")) {
-        const t = rest.slice(2);
-        eff += 2 + (t.length - t.trimStart().length);
-        rest = t.trimStart();
+  visit(doc, {
+    Pair(_, pair) {
+      if (!isScalar(pair.key) || pair.key.value !== "uses") return;
+      const v = pair.value;
+      if (!isScalar(v) || typeof v.value !== "string") {
+        out.push(`${file}: a 'uses' value is not a plain string (aliases and expressions cannot be checked)`);
+        return;
       }
-      const body = [];
-      while (i + 1 < raw.length && (/^\s*$/.test(raw[i + 1]) || raw[i + 1].match(/^ */)[0].length > eff)) {
-        body.push(raw[++i]);
+      const ref = v.value;
+      if (ref.startsWith("./")) return; // local actions and reusable workflows
+      if (ref.startsWith("docker://")) {
+        if (!/@sha256:[0-9a-f]{64}$/.test(ref)) out.push(`${file}: ${ref} is not pinned by digest`);
+        return;
       }
-      while (body.length && /^\s*$/.test(body[body.length - 1])) body.pop();
-      const min = Math.min(...body.filter(l => l.trim()).map(l => l.match(/^ */)[0].length), Infinity);
-      entry.block = body.map(l => l.slice(Math.min(min, l.length))).join("\n");
-    }
-  }
+      if (!/@[0-9a-f]{40}$/.test(ref) || !(v.comment ?? "").trim()) out.push(`${file}: ${ref} needs a full commit SHA and a version comment`);
+    },
+  });
   return out;
 }
 
-function splitKey(s) {
-  const m = s.match(/^("[^"]*"|'[^']*'|[^\s:"'[{-][^:]*?)\s*:(?:\s+(.*))?$/);
-  if (!m) return null;
-  const key = m[1].replace(/^(["'])(.*)\1$/, "$2");
-  return [key, (m[2] ?? "").trim()];
-}
+// ---- permissions ----
 
-function parseScalar(v) {
-  if (/^".*"$/.test(v) || /^'.*'$/.test(v)) return v.slice(1, -1);
-  if (/^\[.*\]$/.test(v)) {
-    const inner = v.slice(1, -1).trim();
-    return inner ? inner.split(",").map(x => parseScalar(x.trim())) : [];
-  }
-  if (/^\{.*\}$/.test(v)) {
-    const obj = {};
-    const inner = v.slice(1, -1).trim();
-    for (const part of inner ? inner.split(",") : []) {
-      const kv = splitKey(part.trim());
-      if (kv) obj[kv[0]] = parseScalar(kv[1]);
-    }
-    return obj;
-  }
-  return v;
-}
-
-function parseBlock(lines, st, indent) {
-  return isDash(lines[st.i].content) ? parseList(lines, st, indent) : parseMap(lines, st, indent);
-}
-
-function parseList(lines, st, indent) {
-  const arr = [];
-  while (st.i < lines.length && lines[st.i].indent === indent && isDash(lines[st.i].content)) {
-    const ln = lines[st.i];
-    const rest = ln.content === "-" ? "" : ln.content.slice(2).trimStart();
-    const col = indent + (ln.content.length - rest.length);
-    if (rest === "") {
-      st.i++;
-      const nxt = lines[st.i];
-      arr.push(nxt && nxt.indent > indent ? parseBlock(lines, st, nxt.indent) : null);
-    } else if (ln.block !== undefined && /^[|>]/.test(rest)) {
-      arr.push(ln.block);
-      st.i++;
-    } else if (splitKey(rest) && !/^[[{]/.test(rest)) {
-      lines[st.i] = { ...ln, indent: col, content: rest };
-      arr.push(parseMap(lines, st, col));
-    } else {
-      arr.push(parseScalar(rest));
-      st.i++;
-    }
-  }
-  return arr;
-}
-
-function parseMap(lines, st, indent) {
-  const obj = {};
-  while (st.i < lines.length && lines[st.i].indent === indent && !isDash(lines[st.i].content)) {
-    const ln = lines[st.i];
-    const kv = splitKey(ln.content);
-    if (!kv) throw new Error(`workflow YAML line ${ln.no}: cannot read '${ln.content}'`);
-    const [key, val] = kv;
-    st.i++;
-    if (ln.block !== undefined && /^[|>]/.test(val)) {
-      obj[key] = ln.block;
-    } else if (val === "") {
-      const nxt = lines[st.i];
-      obj[key] = nxt && (nxt.indent > indent || (nxt.indent === indent && isDash(nxt.content)))
-        ? parseBlock(lines, st, nxt.indent)
-        : null;
-    } else {
-      obj[key] = parseScalar(val);
-    }
-  }
-  return obj;
-}
-
-export function parseYaml(text) {
-  const lines = logicalLines(text);
-  if (!lines.length) return {};
-  return parseBlock(lines, { i: 0 }, lines[0].indent);
-}
-
-// ---- analysis ----
-
-// A job's token permissions: its own block, else the workflow's, else the repository
-// default, which can be read/write, so treat it as write.
-export function effectivePermissions(doc, job) {
-  if (job.permissions !== undefined) return job.permissions;
-  if (doc.permissions !== undefined) return doc.permissions;
-  return "write-all";
-}
+// With no `permissions` anywhere the job gets the repository's default token,
+// which can be read/write.
+const DEFAULT_PERMISSIONS = "write-all";
 
 export function hasWrite(perms) {
-  if (perms === null || perms === undefined) return false;
   if (typeof perms === "string") return perms !== "read-all";
-  return Object.values(perms).some(v => v === "write");
-}
-
-const actionName = ref => ref.split("@")[0].toLowerCase();
-
-// Everything a job runs from outside its own steps: the reusable workflow it calls,
-// and each step's action.
-export function jobUses(job) {
-  const uses = [];
-  if (typeof job.uses === "string") uses.push({ ref: job.uses, where: "job" });
-  (Array.isArray(job.steps) ? job.steps : []).forEach((step, i) => {
-    if (step && typeof step.uses === "string") uses.push({ ref: step.uses, where: `step ${i + 1}` });
-  });
-  return uses;
-}
-
-const isLocalWorkflow = ref => ref.startsWith("./.github/workflows/");
-
-// Violations in one workflow document: write jobs using actions off the allowlist.
-// A local reusable workflow call is fine: its own jobs are checked on their own and
-// can only narrow the permissions the caller grants.
-export function writeJobViolations(doc, file, allowed = WRITE_JOB_ACTIONS) {
-  const violations = [];
-  for (const [name, job] of Object.entries(doc.jobs ?? {})) {
-    if (!hasWrite(effectivePermissions(doc, job))) continue;
-    for (const { ref, where } of jobUses(job)) {
-      if (where === "job" && isLocalWorkflow(ref)) continue;
-      if (allowed.has(actionName(ref))) continue;
-      violations.push(`${file}: job '${name}' has a write permission and uses ${ref} (${where})`);
-    }
+  if (perms && typeof perms === "object" && !Array.isArray(perms)) {
+    return Object.values(perms).some(v => !["read", "none"].includes(v));
   }
-  return violations;
+  return true; // null, a list or a number: cannot be shown read-only
 }
 
-function loadWorkflows() {
-  return readdirSync(workflows)
-    .filter(f => /\.ya?ml$/.test(f))
-    .map(file => ({ file, doc: parseYaml(readFileSync(join(workflows, file), "utf8")) }));
+// A job's own block replaces the workflow's. Without either, a called workflow
+// inherits the caller's permissions and a top-level one the repository default.
+export function jobPermissions(data, job, callerPerms) {
+  if (job.permissions !== undefined) return job.permissions;
+  if (data.permissions !== undefined) return data.permissions;
+  return callerPerms !== undefined ? callerPerms : DEFAULT_PERMISSIONS;
 }
 
-// Every run: script and composite action step in the repository's workflows.
-function allSteps() {
+// A caller's permissions cap the called workflow's jobs.
+export function jobCanWrite(data, job, callerPerms) {
+  if (callerPerms !== undefined && !hasWrite(callerPerms)) return false;
+  return hasWrite(jobPermissions(data, job, callerPerms));
+}
+
+const stepsOf = job => (Array.isArray(job?.steps) ? job.steps.filter(s => s && typeof s === "object") : []);
+const jobsOf = data => Object.entries(data?.jobs && typeof data.jobs === "object" ? data.jobs : {});
+export const actionName = ref => String(ref).split("@")[0].toLowerCase();
+
+const isLocal = ref => ref.startsWith("./") || ref.startsWith("../");
+const normalizeLocal = ref => ref.replace(/^\.\//, "").replace(/\/+$/, "");
+
+function loadLocalAction(dir, readLocal) {
+  for (const name of ["action.yml", "action.yaml"]) {
+    const text = readLocal(`${dir}/${name}`);
+    if (text !== null) return { file: `${dir}/${name}`, text };
+  }
+  return null;
+}
+
+// One reference used by a job that can write. Local composite actions are opened
+// and their steps checked; local reusable workflows are checked as their own jobs
+// (with the caller's permissions as the cap).
+function checkRef(ref, kind, ctx, where, out, depth) {
+  if (typeof ref !== "string") {
+    out.push(`${where}: a 'uses' value is not a string`);
+    return;
+  }
+  if (isLocal(ref)) {
+    const path = normalizeLocal(ref);
+    if (ref.startsWith("../") || path.split("/").includes("..")) {
+      out.push(`${where}: ${ref} leaves the repository`);
+    } else if (kind === "job") {
+      if (!path.startsWith(".github/workflows/")) out.push(`${where}: ${ref} is not a local reusable workflow`);
+    } else if (depth >= 5) {
+      out.push(`${where}: ${ref} nests composite actions too deeply to check`);
+    } else {
+      const action = loadLocalAction(path, ctx.readLocal);
+      if (!action) {
+        out.push(`${where}: cannot read ${ref}`);
+        return;
+      }
+      const data = toData(parseStrict(action.text, action.file));
+      if (data.runs?.using === "docker" && String(data.runs.image ?? "").startsWith("docker://")) {
+        out.push(`${where}: ${ref} runs ${data.runs.image}`);
+      }
+      for (const step of stepsOf(data.runs)) {
+        if (step.uses !== undefined) checkRef(step.uses, "step", ctx, `${where} via ${ref}`, out, depth + 1);
+      }
+    }
+    return;
+  }
+  if (kind === "step" && ctx.allowed.has(actionName(ref))) return;
+  out.push(`${where}: ${ref} is not on the write-job allowlist`);
+}
+
+// Violations for one workflow document: jobs that can write using anything off
+// the allowlist. `callerPerms` is set when the workflow is called by another one.
+export function workflowViolations(file, text, ctx, callerPerms, depth = 0) {
   const out = [];
-  for (const { file, doc } of loadWorkflows()) {
-    for (const [name, job] of Object.entries(doc.jobs ?? {})) {
-      (Array.isArray(job.steps) ? job.steps : []).forEach((step, i) => out.push({ where: `${file} job '${name}' step ${i + 1}`, step }));
+  const data = toData(parseStrict(text, file));
+  for (const [name, job] of jobsOf(data)) {
+    const canWrite = jobCanWrite(data, job, callerPerms);
+    const label = `${file}: job '${name}'${callerPerms !== undefined ? " (called)" : ""}`;
+    if (canWrite) {
+      if (job.uses !== undefined) checkRef(job.uses, "job", ctx, `${label} uses`, out, 0);
+      stepsOf(job).forEach((step, i) => {
+        if (step.uses !== undefined) checkRef(step.uses, "step", ctx, `${label} step ${i + 1} (can write) uses`, out, 0);
+      });
     }
-  }
-  const actionsDir = join(root, ".github/actions");
-  if (existsSync(actionsDir)) {
-    for (const dir of readdirSync(actionsDir)) {
-      const file = join(actionsDir, dir, "action.yml");
-      if (!existsSync(file)) continue;
-      const doc = parseYaml(readFileSync(file, "utf8"));
-      (doc.runs?.steps ?? []).forEach((step, i) => out.push({ where: `.github/actions/${dir} step ${i + 1}`, step }));
+    // A local reusable workflow's own jobs, under what this job grants it.
+    if (typeof job.uses === "string" && isLocal(job.uses)) {
+      const path = normalizeLocal(job.uses);
+      const callee = path.startsWith(".github/workflows/") && depth < 5 ? ctx.readLocal(path) : null;
+      if (callee === null) {
+        if (canWrite) out.push(`${label}: cannot read ${job.uses}`);
+      } else {
+        const granted = canWrite ? jobPermissions(data, job, callerPerms) : {};
+        out.push(...workflowViolations(path, callee, ctx, granted, depth + 1));
+      }
     }
   }
   return out;
 }
 
-test("every workflow action is pinned to a commit SHA with a version comment", () => {
-  const unpinned = [];
-  for (const file of readdirSync(workflows).filter(f => /\.ya?ml$/.test(f))) {
-    readFileSync(join(workflows, file), "utf8").split("\n").forEach((line, i) => {
-      const m = line.match(/^\s*(?:-\s*)?uses:\s*(\S+)(.*)$/);
-      if (!m || m[1].startsWith("./")) return; // local reusable workflows
-      if (!/@[0-9a-f]{40}$/.test(m[1]) || !/#\s*\S+/.test(m[2])) unpinned.push(`${file}:${i + 1} ${m[1]}`);
+export function allWriteViolations(files, readLocal, allowed = WRITE_JOB_ACTIONS) {
+  const ctx = { readLocal, allowed };
+  const out = files.filter(f => f.file.includes("workflows/")).flatMap(f => workflowViolations(f.file, f.text, ctx));
+  return [...new Set(out)];
+}
+
+// ---- Buildx ----
+
+// docker/setup-buildx-action downloads an unverified Buildx when the runner has
+// none, when `version` is set, or for the cloud driver. In a job that can write it
+// must be preceded by a step that fails unless the runner already has Buildx, and
+// it must set none of those inputs. Its BuildKit image is pinned by digest anywhere.
+export function buildxViolations(file, text, callerPerms) {
+  const out = [];
+  const data = toData(parseStrict(text, file));
+  for (const [name, job] of jobsOf(data)) {
+    const canWrite = jobCanWrite(data, job, callerPerms);
+    let guarded = false;
+    stepsOf(job).forEach((step, i) => {
+      if (typeof step.run === "string" && /^\s*docker buildx version\s*$/m.test(step.run)) guarded = true;
+      if (typeof step.uses !== "string" || actionName(step.uses) !== "docker/setup-buildx-action") return;
+      const where = `${file}: job '${name}' step ${i + 1}`;
+      const w = step.with ?? {};
+      if (w.version !== undefined) out.push(`${where}: sets 'version', which downloads Buildx`);
+      if (String(w.driver ?? "docker-container") === "cloud") out.push(`${where}: the cloud driver downloads Buildx`);
+      if (!/(^|[\s,])image=\S+@sha256:[0-9a-f]{64}(\s|,|$)/.test(String(w["driver-opts"] ?? ""))) out.push(`${where}: the BuildKit image is not pinned by digest`);
+      if (canWrite && !guarded) out.push(`${where}: no earlier 'docker buildx version' step to rule out the download (job can write)`);
     });
   }
+  return out;
+}
+
+// ---- run-time downloads ----
+
+// Every run-time download goes through one first-party script, which checks a
+// SHA-256 before the file is used. Any other mechanism in a run: block fails.
+const DOWNLOADERS = [
+  [/\bcurl\b/, "curl"],
+  [/\bwget\b/, "wget"],
+  [/\bgh\s+(release|run|extension|attestation|repo\s+clone)\b/, "gh download"],
+  [/\bgh\s+api\b/, "gh api"],
+  [/\b(Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\b/i, "PowerShell download"],
+  [/\b(urllib|urlopen|http\.client|requests\.(get|post)|fetch\s*\(|https?\.get)\b/, "inline HTTP client"],
+  [/\b(python3?|node|deno|bun|perl|ruby)\s+-[ec]\b/, "inline script"],
+  [/\b(go install|cargo install|cargo binstall|pip3? install|brew install|npm (install|i) (-g|--global)|gem install)\b/, "package-manager tool install"],
+];
+
+// The staging rehearsal's readiness probe talks to the local stack, not the internet.
+const LOCAL_PROBE = /curl --fail --silent --show-error --cacert \.local\/staging\/local-ca\.crt https:\/\/localhost:18443\/health\/ready/g;
+
+// `gh api` talks to the GitHub API with the job token (prune-dev-images deletes old
+// dev package versions); it fetches no code.
+const GH_API_FILES = new Set([".github/workflows/prune-dev-images.yml"]);
+
+export function downloadViolations(file, script) {
+  const out = [];
+  // Whole-line shell comments do not run.
+  const joined = script.replace(/^[ \t]*#.*$/gm, "").replace(/\\\n\s*/g, " ");
+  const text = joined.replace(LOCAL_PROBE, "");
+  for (const [re, label] of DOWNLOADERS) {
+    if (label === "gh api" && GH_API_FILES.has(file)) continue;
+    if (re.test(text)) out.push(`${file}: ${label} in a run step; use ${FETCH_SCRIPT} <https-url> <sha256> <dest>`);
+  }
+  // Calls of the script: literal https URL, literal 64-hex checksum.
+  const call = /(?:^|[\s;&|(])(?:bash\s+|sh\s+|\.\/)?(\S*fetch-verified\.sh)(.*)/gm;
+  for (const m of text.matchAll(call)) {
+    const where = `${file}: ${m[0].trim().slice(0, 100)}`;
+    if (m[1] !== FETCH_SCRIPT) out.push(`${where}: call the script as ${FETCH_SCRIPT}`);
+    const args = m[2].match(/^\s+"?(https:\/\/[^\s"'$`\\{}()<>;|&]+)"?\s+"?([0-9a-f]{64})"?\s+("[^"]+"|'[^']+'|[^\s;&|]+)\s*(;;)?\s*$/);
+    if (!args) out.push(`${where}: the URL and checksum must be literals (an https:// URL and 64 hex digits)`);
+  }
+  return out;
+}
+
+function runScripts(data) {
+  const scripts = [];
+  for (const [name, job] of jobsOf(data)) stepsOf(job).forEach((s, i) => typeof s.run === "string" && scripts.push([`job '${name}' step ${i + 1}`, s.run]));
+  for (const [i, s] of stepsOf(data.runs).entries()) if (typeof s.run === "string") scripts.push([`step ${i + 1}`, s.run]);
+  return scripts;
+}
+
+// ---- tests on the repository ----
+
+test("every workflow and local action parses strictly", () => {
+  const files = repoFiles();
+  assert.ok(files.some(f => f.file.endsWith("image.yml")));
+  for (const { file, text } of files) toData(parseStrict(text, file));
+});
+
+test("every workflow action is pinned to a commit SHA with a version comment", () => {
+  const unpinned = repoFiles().flatMap(({ file, text }) => pinViolations(text, file));
   assert.deepEqual(unpinned, []);
 });
 
@@ -274,152 +332,60 @@ test("every Dockerfile base image is pinned by digest", () => {
   assert.deepEqual(unpinned, []);
 });
 
-test("jobs with a write permission use only allowlisted actions (#194)", () => {
-  const violations = loadWorkflows().flatMap(({ file, doc }) => writeJobViolations(doc, file));
-  assert.deepEqual(violations, []);
+test("jobs that can write use only allowlisted actions (#194)", () => {
+  assert.deepEqual(allWriteViolations(repoFiles(), readLocalFromRepo), []);
 });
 
 test("every allowlisted write-job action is used by a write job", () => {
-  const used = new Set();
-  for (const { doc } of loadWorkflows()) {
-    for (const job of Object.values(doc.jobs ?? {})) {
-      if (!hasWrite(effectivePermissions(doc, job))) continue;
-      for (const { ref } of jobUses(job)) used.add(actionName(ref));
-    }
+  // Remove an action from the list when nothing needs it any more: take it out of
+  // the allowlist, run the check above, and see what fails.
+  const unused = [];
+  const files = repoFiles();
+  for (const name of WRITE_JOB_ACTIONS.keys()) {
+    const without = new Map([...WRITE_JOB_ACTIONS].filter(([k]) => k !== name));
+    if (allWriteViolations(files, readLocalFromRepo, without).length === 0) unused.push(name);
   }
-  const stale = [...WRITE_JOB_ACTIONS.keys()].filter(a => !used.has(a));
-  assert.deepEqual(stale, [], "remove allowlist entries no write job uses");
+  assert.deepEqual(unused, [], "remove allowlist entries no write job uses");
 });
 
-test("no write job runs a local composite action (its steps would not be checked)", () => {
-  const found = [];
-  for (const { file, doc } of loadWorkflows()) {
-    for (const [name, job] of Object.entries(doc.jobs ?? {})) {
-      if (!hasWrite(effectivePermissions(doc, job))) continue;
-      for (const { ref } of jobUses(job)) if (ref.startsWith("./") && !isLocalWorkflow(ref)) found.push(`${file}: ${name} ${ref}`);
-    }
-  }
-  assert.deepEqual(found, []);
-});
-
-test("the write-permission check reads inherited, overridden and default permissions", () => {
-  const act = "uses: example/third-party@" + "0".repeat(40);
-  const check = yaml => writeJobViolations(parseYaml(yaml), "fixture.yml");
-  const wf = (top, jobPerms) => `
-${top}
-jobs:
-  job:
-    runs-on: ubuntu-24.04
-${jobPerms}
-    steps:
-      - uses: actions/checkout@${"1".repeat(40)} # v1
-      - ${act} # v1
-`;
-  // inherited from the workflow level
-  assert.equal(check(wf("permissions:\n  contents: read\n  packages: write", "")).length, 1);
-  assert.equal(check(wf("permissions: write-all", "")).length, 1);
-  // no permissions anywhere: the repository default may write
-  assert.equal(check(wf("", "")).length, 1);
-  // a job-level block replaces the workflow's
-  assert.equal(check(wf("permissions: write-all", "    permissions:\n      contents: read")).length, 0);
-  assert.equal(check(wf("permissions:\n  contents: read", "    permissions:\n      id-token: write")).length, 1);
-  assert.equal(check(wf("permissions: read-all", "")).length, 0);
-  assert.equal(check(wf("permissions: {}", "")).length, 0);
-  assert.equal(check(wf("permissions:\n  contents: read", "    permissions: { contents: read, packages: write }")).length, 1);
-  // read-only jobs may use any pinned action; allowlisted actions pass in write jobs
-  assert.equal(check(wf("permissions:\n  contents: read", "    permissions:\n      contents: read\n      packages: read")).length, 0);
-  assert.equal(check(`
-permissions: write-all
-jobs:
-  job:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@${"1".repeat(40)} # v1
-      - uses: docker/login-action@${"2".repeat(40)} # v1
-`).length, 0);
-  // a write job may call a local reusable workflow but not a remote one
-  assert.equal(check(`
-permissions:
-  contents: read
-jobs:
-  local:
-    permissions:
-      packages: write
-    uses: ./.github/workflows/image.yml
-  remote:
-    permissions:
-      packages: write
-    uses: example/repo/.github/workflows/x.yml@${"3".repeat(40)}
-`).length, 1);
-});
-
-test("the YAML reader handles the workflow constructs the checks rely on", () => {
-  const doc = parseYaml(`
-name: x
-on:
-  push:
-    branches: ['**']
-permissions:
-  contents: read
-jobs:
-  a:
-    permissions: { contents: read, packages: write }
-    strategy:
-      matrix:
-        include:
-          - platform: linux/amd64
-            runner: ubuntu-24.04
-    steps:
-      - name: one
-        run: |
-          echo "- not: a key" # kept
-          curl https://example.org
-      - uses: foo/bar@${"4".repeat(40)} # v1.2.3
-        with:
-          x: >-
-            folded
-            text
-      - run: echo done
-`);
-  assert.deepEqual(doc.jobs.a.permissions, { contents: "read", packages: "write" });
-  assert.equal(doc.jobs.a.strategy.matrix.include[0].runner, "ubuntu-24.04");
-  assert.match(doc.jobs.a.steps[0].run, /curl https:\/\/example.org/);
-  assert.equal(doc.jobs.a.steps[1].uses, `foo/bar@${"4".repeat(40)}`);
-  assert.equal(doc.jobs.a.steps[2].run, "echo done");
+test("setup-buildx-action never downloads Buildx next to a write token", () => {
+  const files = repoFiles().filter(f => f.file.includes("workflows/"));
+  assert.ok(files.length);
+  assert.deepEqual(files.flatMap(({ file, text }) => buildxViolations(file, text)), []);
 });
 
 test("no workflow uses an installer that downloads a tool without a pinned checksum", () => {
   const found = [];
-  for (const { file, doc } of loadWorkflows()) {
-    for (const [name, job] of Object.entries(doc.jobs ?? {})) {
-      for (const { ref } of jobUses(job)) {
-        const why = UNVERIFIED_INSTALLERS.get(actionName(ref));
-        if (why) found.push(`${file}: job '${name}' uses ${ref}: ${why}`);
-      }
+  for (const { file, text } of repoFiles()) {
+    const data = toData(parseStrict(text, file));
+    const refs = [...jobsOf(data).flatMap(([, job]) => [job.uses, ...stepsOf(job).map(s => s.uses)]), ...stepsOf(data.runs).map(s => s.uses)];
+    for (const ref of refs.filter(r => typeof r === "string")) {
+      const why = UNVERIFIED_INSTALLERS.get(actionName(ref));
+      if (why) found.push(`${file}: ${ref}: ${why}`);
     }
   }
   assert.deepEqual(found, []);
 });
 
-test("every run-time download is checksum-verified and nothing is piped into a shell", () => {
+test("every run-time download goes through fetch-verified.sh with a literal URL and checksum", () => {
   const found = [];
-  for (const { where, step } of allSteps()) {
-    const script = typeof step?.run === "string" ? step.run : "";
-    if (!/\b(curl|wget)\b/.test(script)) continue;
-    if (/\|\s*(sudo\s+)?(ba|z|da)?sh\b/.test(script)) found.push(`${where}: pipes a download into a shell`);
-    const urls = script.match(/https?:\/\/[^\s"')]+/g) ?? [];
-    const external = urls.filter(u => !/^https?:\/\/(localhost|127\.0\.0\.1)[:/]/.test(u));
-    if (external.length && !/sha256sum\s+-c/.test(script)) found.push(`${where}: downloads ${external[0]} without 'sha256sum -c'`);
+  for (const { file, text } of repoFiles()) {
+    const data = toData(parseStrict(text, file));
+    for (const [where, script] of runScripts(data)) found.push(...downloadViolations(file, script).map(v => `${where}: ${v}`));
   }
   assert.deepEqual(found, []);
+  // The download steps exist (a guard against this check going vacuous).
+  const calls = repoFiles().filter(f => /fetch-verified\.sh/.test(f.text)).map(f => f.file);
+  for (const f of [".github/workflows/image.yml", ".github/workflows/ci.yml", ".github/actions/setup-node/action.yml"]) assert.ok(calls.includes(f), `${f} fetches its tools with the script`);
 });
 
 test("taiki-e/install-action installs exact versions with its checksum check on", () => {
   const found = [];
-  for (const { file, doc } of loadWorkflows()) {
-    for (const [name, job] of Object.entries(doc.jobs ?? {})) {
-      for (const step of Array.isArray(job.steps) ? job.steps : []) {
-        if (!step?.uses || actionName(step.uses) !== "taiki-e/install-action") continue;
+  for (const { file, text } of repoFiles()) {
+    const data = toData(parseStrict(text, file));
+    for (const [name, job] of jobsOf(data)) {
+      for (const step of stepsOf(job)) {
+        if (typeof step.uses !== "string" || actionName(step.uses) !== "taiki-e/install-action") continue;
         const tools = String(step.with?.tool ?? "").split(",").map(t => t.trim()).filter(Boolean);
         if (!tools.length || tools.some(t => !/^[\w.-]+@\d+\.\d+\.\d+$/.test(t))) found.push(`${file}: job '${name}' tool '${step.with?.tool}' is not name@x.y.z`);
         if (String(step.with?.checksum ?? "true") !== "true") found.push(`${file}: job '${name}' disables the checksum`);
@@ -427,4 +393,244 @@ test("taiki-e/install-action installs exact versions with its checksum check on"
     }
   }
   assert.deepEqual(found, []);
+});
+
+// ---- the fetch script ----
+
+function runFetch(args, { curlBody, curlFails = false } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "fetch-verified-"));
+  try {
+    // A stand-in curl on PATH: records its arguments and "downloads" a local file.
+    const stub = join(dir, "bin");
+    writeFileSync(join(dir, "args.log"), "");
+    const body = join(dir, "body");
+    writeFileSync(body, curlBody ?? "payload\n");
+    const script = [
+      "#!/usr/bin/env bash",
+      `printf '%s\\n' "$*" >> '${join(dir, "args.log")}'`,
+      curlFails ? "exit 22" : "",
+      'out=""; while [ $# -gt 0 ]; do [ "$1" = "--output" ] && out="$2"; shift; done',
+      `cp '${body}' "$out"`,
+    ].join("\n");
+    spawnSync("mkdir", ["-p", stub]);
+    writeFileSync(join(stub, "curl"), script);
+    chmodSync(join(stub, "curl"), 0o755);
+    const dest = join(dir, "out", "tool");
+    spawnSync("mkdir", ["-p", join(dir, "out")]);
+    const resolved = args.map(a => (a === "DEST" ? dest : a));
+    const r = spawnSync("bash", [join(root, FETCH_SCRIPT), ...resolved], { env: { ...process.env, PATH: `${stub}:${process.env.PATH}` }, encoding: "utf8" });
+    return { ...r, dest, leftovers: readdirSync(join(dir, "out")), curlArgs: readFileSync(join(dir, "args.log"), "utf8"), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  } catch (e) {
+    rmSync(dir, { recursive: true, force: true });
+    throw e;
+  }
+}
+
+const sha256 = body => spawnSync("bash", ["-c", `printf '%s' "$1" | (sha256sum 2>/dev/null || shasum -a 256) | cut -d' ' -f1`, "_", body], { encoding: "utf8" }).stdout.trim();
+const GOOD_URL = "https://example.org/releases/tool.tar.gz";
+
+test("fetch-verified.sh moves a download into place only after the checksum matches", () => {
+  const r = runFetch([GOOD_URL, sha256("payload\n"), "DEST"]);
+  try {
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(readFileSync(r.dest, "utf8"), "payload\n");
+    assert.deepEqual(r.leftovers, ["tool"], "no temporary file is left next to the destination");
+    for (const flag of ["--proto =https", "--proto-redir =https", "--fail"]) assert.ok(r.curlArgs.includes(flag), `curl gets ${flag}`);
+    assert.ok(r.curlArgs.includes(GOOD_URL));
+  } finally {
+    r.cleanup();
+  }
+});
+
+test("fetch-verified.sh fails closed on a wrong checksum and leaves nothing at the destination", () => {
+  const r = runFetch([GOOD_URL, "0".repeat(64), "DEST"]);
+  try {
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /checksum/i);
+    assert.equal(existsSync(r.dest), false);
+    assert.deepEqual(r.leftovers, [], "the temporary file is removed too");
+  } finally {
+    r.cleanup();
+  }
+});
+
+test("fetch-verified.sh fails closed when the download fails", () => {
+  const r = runFetch([GOOD_URL, sha256("payload\n"), "DEST"], { curlFails: true });
+  try {
+    assert.notEqual(r.status, 0);
+    assert.equal(existsSync(r.dest), false);
+    assert.deepEqual(r.leftovers, []);
+  } finally {
+    r.cleanup();
+  }
+});
+
+test("fetch-verified.sh accepts only an https URL, a 64-hex checksum and three arguments", () => {
+  const sum = sha256("payload\n");
+  const cases = {
+    "http URL": ["http://example.org/x", sum, "DEST"],
+    "file URL": ["file:///etc/passwd", sum, "DEST"],
+    "ftp URL": ["ftp://example.org/x", sum, "DEST"],
+    "option as URL": ["--output=/tmp/x", sum, "DEST"],
+    "URL with a space": ["https://example.org/a b", sum, "DEST"],
+    "short checksum": [GOOD_URL, sum.slice(0, 63), "DEST"],
+    "uppercase checksum": [GOOD_URL, sum.toUpperCase(), "DEST"],
+    "no destination": [GOOD_URL, sum],
+    "extra argument": [GOOD_URL, sum, "DEST", "more"],
+  };
+  for (const [name, args] of Object.entries(cases)) {
+    const r = runFetch(args);
+    try {
+      assert.notEqual(r.status, 0, name);
+      assert.equal(r.curlArgs, "", `${name}: curl was never called`);
+      assert.equal(existsSync(r.dest), false, name);
+    } finally {
+      r.cleanup();
+    }
+  }
+});
+
+test("fetch-verified.sh refuses to overwrite an existing destination", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fetch-verified-"));
+  try {
+    const dest = join(dir, "tool");
+    writeFileSync(dest, "original");
+    const r = spawnSync("bash", [join(root, FETCH_SCRIPT), GOOD_URL, sha256("payload\n"), dest], { encoding: "utf8" });
+    assert.notEqual(r.status, 0);
+    assert.equal(readFileSync(dest, "utf8"), "original");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("no workflow can switch the fetch script into a test mode", () => {
+  assert.doesNotMatch(readFileSync(join(root, FETCH_SCRIPT), "utf8"), /\b(FETCH_VERIFIED_|TEST_MODE|ALLOW_INSECURE)/);
+});
+
+// ---- adversarial fixtures: the checks must catch these ----
+
+const SHA = n => String(n).repeat(40);
+const wf = body => `name: fixture\non: push\n${body}\n`;
+const noLocal = () => null;
+const violations = (text, readLocal = noLocal) => allWriteViolations([{ file: ".github/workflows/fixture.yml", text }], readLocal);
+const localFiles = files => path => files[path] ?? null;
+
+test("fixtures: write-permission bypasses are caught", () => {
+  const evil = "aquasecurity/trivy-action@master";
+  // flow-style workflow (the reader this replaced skipped it)
+  assert.ok(violations(`name: bypass\non: push\npermissions: {packages: write}\njobs: { evil: { runs-on: ubuntu-24.04, steps: [{ uses: ${evil} }] } }\n`).length);
+  // an alias supplies the permissions
+  assert.ok(violations(wf(`x-perm: &p {packages: write}\npermissions: *p\njobs:\n  evil:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: ${evil}`)).length);
+  // an alias supplies the steps, a merge key the whole job
+  assert.ok(violations(wf(`x-steps: &s\n  - uses: ${evil}\npermissions: write-all\njobs:\n  evil:\n    runs-on: ubuntu-24.04\n    steps: *s`)).length);
+  assert.ok(violations(wf(`x-job: &j\n  runs-on: ubuntu-24.04\n  permissions: {packages: write}\n  steps: [{uses: ${evil}}]\njobs:\n  evil:\n    <<: *j`)).length);
+  // no permissions anywhere: the repository default token
+  assert.ok(violations(wf(`jobs:\n  evil:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: ${evil}`)).length);
+  // write-all, at the workflow level and the job level
+  assert.ok(violations(wf(`permissions: write-all\njobs:\n  evil:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: ${evil}`)).length);
+  assert.ok(violations(wf(`permissions: read-all\njobs:\n  evil:\n    permissions: write-all\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: ${evil}`)).length);
+  // an empty block is not proof of read-only
+  assert.ok(violations(wf(`jobs:\n  evil:\n    permissions:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: ${evil}`)).length);
+  // docker:// and an external reusable workflow
+  assert.ok(violations(wf(`permissions: {contents: read}\njobs:\n  evil:\n    permissions: {packages: write}\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: docker://alpine@sha256:${"a".repeat(64)}`)).length);
+  assert.ok(violations(wf(`permissions: {contents: read}\njobs:\n  evil:\n    permissions: {packages: write}\n    uses: other/repo/.github/workflows/x.yml@${SHA(1)}`)).length);
+  // a local action path that escapes the repository, or does not exist
+  assert.ok(violations(wf(`permissions: {packages: write}\njobs:\n  evil:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: ../outside`)).length);
+  assert.ok(violations(wf(`permissions: {packages: write}\njobs:\n  evil:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: ./.github/actions/missing`)).length);
+});
+
+test("fixtures: an action hidden in a local composite or a called workflow is caught", () => {
+  const composite = `name: c\ndescription: d\nruns:\n  using: composite\n  steps:\n    - uses: ./.github/actions/inner\n`;
+  const inner = `name: i\ndescription: d\nruns:\n  using: composite\n  steps:\n    - uses: aquasecurity/trivy-action@${SHA(2)} # v1\n`;
+  const files = { ".github/actions/outer/action.yml": composite, ".github/actions/inner/action.yml": inner };
+  const job = perms => wf(`${perms}\njobs:\n  j:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: ./.github/actions/outer`);
+  assert.equal(violations(job("permissions: {packages: write}"), localFiles(files)).length, 1);
+  // the same composite is fine where the token is read-only
+  assert.equal(violations(job("permissions: {contents: read}"), localFiles(files)).length, 0);
+  // a composite of run steps only is fine next to a write token
+  const plain = { ".github/actions/outer/action.yml": `name: c\ndescription: d\nruns:\n  using: composite\n  steps:\n    - run: echo hi\n      shell: bash\n` };
+  assert.equal(violations(job("permissions: {packages: write}"), localFiles(plain)).length, 0);
+
+  // a reusable workflow inherits what its caller grants
+  const callee = `name: callee\non: workflow_call\njobs:\n  scan:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: aquasecurity/trivy-action@${SHA(3)} # v1\n`;
+  const caller = grant => wf(`permissions: {contents: read}\njobs:\n  call:\n    permissions: ${grant}\n    uses: ./.github/workflows/callee.yml`);
+  const reusable = { ".github/workflows/callee.yml": callee };
+  assert.equal(violations(caller("{packages: write, id-token: write}"), localFiles(reusable)).length, 1);
+  assert.equal(violations(caller("{contents: read}"), localFiles(reusable)).length, 0);
+  // a callee that declares write is capped by a read-only caller
+  const greedy = { ".github/workflows/callee.yml": callee.replace("jobs:", "permissions: {packages: write}\njobs:") };
+  assert.equal(violations(caller("{contents: read}"), localFiles(greedy)).length, 0);
+  assert.equal(violations(caller("{packages: write}"), localFiles(greedy)).length, 1);
+});
+
+test("fixtures: ordinary workflows pass", () => {
+  const ok = `permissions: {contents: read}\njobs:\n  scan:\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: aquasecurity/trivy-action@${SHA(4)} # v1\n  push:\n    permissions: {contents: read, packages: write}\n    runs-on: ubuntu-24.04\n    steps:\n      - uses: actions/checkout@${SHA(5)} # v1\n      - uses: docker/login-action@${SHA(6)} # v1\n  call:\n    permissions: {packages: write}\n    uses: ./.github/workflows/other.yml\n`;
+  assert.equal(violations(wf(ok), localFiles({ ".github/workflows/other.yml": "name: o\non: workflow_call\njobs:\n  a:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo\n" })).length, 0);
+});
+
+test("fixtures: the strict reader rejects what it cannot read safely", () => {
+  assert.throws(() => parseStrict("name: x\nname: y\n", "dup.yml"), /dup\.yml/);
+  assert.throws(() => parseStrict("name: [unclosed\n", "bad.yml"), /bad\.yml/);
+  assert.throws(() => parseStrict("- a\n- b\n", "list.yml"), /mapping/);
+  const bomb = ["a: &a [x, x, x, x, x, x, x, x, x, x]", ...Array.from("bcdefghij", (c, i) => `${c}: &${c} [${Array(10).fill("*" + "abcdefghi"[i]).join(", ")}]`), "z: [*j, *j, *j, *j, *j, *j, *j, *j, *j, *j]"].join("\n");
+  assert.throws(() => toData(parseStrict(bomb, "bomb.yml")));
+});
+
+test("fixtures: unpinned references are caught wherever they are written", () => {
+  const bad = refs => pinViolations(wf(`jobs:\n  j:\n    steps:\n${refs}`), "fixture.yml").length;
+  assert.equal(bad(`      - uses: actions/checkout@v4 # v4`), 1);
+  assert.equal(bad(`      - uses: actions/checkout@${SHA(1)}`), 1, "a SHA without a version comment");
+  assert.equal(bad(`      - { uses: actions/checkout@${SHA(1)} }`), 1, "flow style cannot carry the comment");
+  assert.equal(bad(`      - uses: docker://alpine:3`), 1);
+  assert.equal(bad(`      - uses: &u actions/checkout@${SHA(1)} # v1\n      - uses: *u`), 1, "an alias cannot be checked");
+  assert.equal(bad(`      - uses: \${{ env.ACTION }}`), 1);
+  assert.equal(bad(`      - uses: actions/checkout@${SHA(1)} # v1\n      - uses: docker://alpine@sha256:${"b".repeat(64)}\n      - uses: ./.github/actions/x`), 0);
+});
+
+test("fixtures: Buildx downloads next to a write token are caught", () => {
+  const job = (perms, steps) => wf(`jobs:\n  j:\n    runs-on: ubuntu-24.04\n    permissions: ${perms}\n    steps:\n${steps}`);
+  const setup = extra => `      - uses: docker/setup-buildx-action@${SHA(1)} # v4\n        with:\n          driver-opts: image=mirror.gcr.io/moby/buildkit:v1@sha256:${"c".repeat(64)}\n${extra}`;
+  const guard = `      - run: docker buildx version\n`;
+  const check = (perms, steps) => buildxViolations("fixture.yml", job(perms, steps)).length;
+  assert.equal(check("{packages: write}", setup("")), 1, "no guard step");
+  assert.equal(check("{packages: write}", guard + setup("")), 0);
+  assert.equal(check("{packages: write}", guard + setup("          version: latest\n")), 1);
+  assert.equal(check("{packages: write}", guard + setup("          driver: cloud\n")), 1);
+  assert.equal(check("{packages: write}", setup("") + guard), 1, "the guard must come first");
+  assert.equal(check("{contents: read}", setup("")), 0, "read-only jobs need no guard");
+  assert.equal(check("{contents: read}", `      - uses: docker/setup-buildx-action@${SHA(1)} # v4\n        with:\n          driver-opts: image=moby/buildkit:master\n`), 1, "unpinned BuildKit image");
+  assert.equal(check("{contents: read}", `      - uses: docker/setup-buildx-action@${SHA(1)} # v4\n`), 1, "no BuildKit pin");
+});
+
+test("fixtures: downloads that skip the checksum script are caught", () => {
+  const sum = "a".repeat(64);
+  const bad = [
+    "curl -fsSL https://example.org/x | sh",
+    "curl -fsSL -o x https://example.org/x\necho \"$sum  x\" | sha256sum -c -",
+    "# sha256sum -c\ncurl -fsSLO https://example.org/x",
+    "wget https://example.org/x",
+    "gh release download v1 --repo a/b",
+    "gh run download 1",
+    "Invoke-WebRequest https://example.org/x -OutFile x",
+    "python3 -c 'import urllib.request as u; u.urlopen(\"https://example.org\")'",
+    "node -e 'fetch(\"https://example.org\")'",
+    "cargo install foo",
+    `bash ${FETCH_SCRIPT} "https://example.org/\${VERSION}/x" ${sum} out`,
+    `bash ${FETCH_SCRIPT} https://example.org/x "\${SUM}" out`,
+    `bash ${FETCH_SCRIPT} http://example.org/x ${sum} out`,
+    `bash ${FETCH_SCRIPT} https://example.org/x ${"A".repeat(64)} out`,
+    `bash ${FETCH_SCRIPT} https://example.org/x ${sum.slice(1)} out`,
+    `bash scripts/fetch-verified.sh https://example.org/x ${sum} out`,
+    `bash ${FETCH_SCRIPT} https://example.org/x ${sum} out && curl https://evil.example`,
+  ];
+  for (const script of bad) assert.ok(downloadViolations("w.yml", script).length, script);
+  const good = [
+    `bash ${FETCH_SCRIPT} https://example.org/x.tar.gz ${sum} "\${RUNNER_TEMP}/x.tar.gz"`,
+    `bash ${FETCH_SCRIPT} "https://example.org/x" "${sum}" out`,
+    `case "$ARCH" in\n  X64) bash ${FETCH_SCRIPT} https://example.org/a ${sum} out ;;\n  ARM64) bash ${FETCH_SCRIPT} https://example.org/b ${sum} out ;;\nesac`,
+    `bash ${FETCH_SCRIPT} \\\n  https://example.org/x \\\n  ${sum} out`,
+    "curl --fail --silent --show-error --cacert .local/staging/local-ca.crt https://localhost:18443/health/ready",
+    "docker run --rm image --version",
+  ];
+  for (const script of good) assert.deepEqual(downloadViolations("w.yml", script), [], script);
 });

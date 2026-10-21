@@ -15,7 +15,8 @@ permissions:
 # Third-party actions and run-time downloads get read-only tokens (#194): no job here
 # can write except `image`, which calls image.yml, whose write jobs use only the
 # allowlist in tests/supply-chain.test.mjs. Node, helm and kubeconform are pinned
-# releases checked against a SHA-256 (.github/actions/setup-node, the helm job).
+# releases fetched by .github/scripts/fetch-verified.sh, which checks a SHA-256
+# written in the workflow (.github/actions/setup-node, the helm job).
 
 jobs:
   gateway:
@@ -108,28 +109,24 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-node
-      # helm's own release binary, pinned and checked against the SHA-256 published
-      # beside it (get.helm.sh/helm-v3.18.4-linux-amd64.tar.gz.sha256sum).
-      # azure/setup-helm downloads it without any check.
+      # helm's own release binary and kubeconform's release binary (neither is in
+      # taiki-e/install-action's manifest), pinned by version and fetched by the
+      # checksum-verifying script. The helm SHA-256 is the one published beside it
+      # (get.helm.sh/helm-v3.18.4-linux-amd64.tar.gz.sha256sum), kubeconform's is in
+      # its release CHECKSUMS. azure/setup-helm downloads without any check.
       - name: Install helm (checksum-verified)
         run: |
           set -euo pipefail
-          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o helm.tar.gz https://get.helm.sh/helm-v3.18.4-linux-amd64.tar.gz
-          echo "f8180838c23d7c7d797b208861fecb591d9ce1690d8704ed1e4cb8e2add966c1  helm.tar.gz" | sha256sum -c -
-          tar -xzf helm.tar.gz linux-amd64/helm
-          sudo mv linux-amd64/helm /usr/local/bin/helm
-          rm -rf helm.tar.gz linux-amd64
+          bash .github/scripts/fetch-verified.sh https://get.helm.sh/helm-v3.18.4-linux-amd64.tar.gz f8180838c23d7c7d797b208861fecb591d9ce1690d8704ed1e4cb8e2add966c1 "${RUNNER_TEMP}/helm.tar.gz"
+          tar -xzf "${RUNNER_TEMP}/helm.tar.gz" -C "${RUNNER_TEMP}" linux-amd64/helm
+          sudo mv "${RUNNER_TEMP}/linux-amd64/helm" /usr/local/bin/helm
           helm version --short
-      # kubeconform isn't in taiki-e/install-action's manifest and isn't on
-      # crates.io (cargo-binstall fallback), so fetch its own GitHub Release
-      # binary directly and verify the published checksum.
       - name: Install kubeconform (checksum-verified)
         run: |
           set -euo pipefail
-          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o kubeconform.tar.gz https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz
-          echo "c31518ddd122663b3f3aa874cfe8178cb0988de944f29c74a0b9260920d115d3  kubeconform.tar.gz" | sha256sum -c -
-          tar -xzf kubeconform.tar.gz kubeconform
-          sudo mv kubeconform /usr/local/bin/kubeconform
+          bash .github/scripts/fetch-verified.sh https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz c31518ddd122663b3f3aa874cfe8178cb0988de944f29c74a0b9260920d115d3 "${RUNNER_TEMP}/kubeconform.tar.gz"
+          tar -xzf "${RUNNER_TEMP}/kubeconform.tar.gz" -C "${RUNNER_TEMP}" kubeconform
+          sudo mv "${RUNNER_TEMP}/kubeconform" /usr/local/bin/kubeconform
       - run: helm lint deploy/helm/open-model-gateway
       - run: helm lint deploy/helm/open-model-gateway -f deploy/helm/open-model-gateway/ci/external-db-values.yaml
       - run: helm lint deploy/helm/open-model-gateway -f deploy/helm/open-model-gateway/ci/cnpg-values.yaml
