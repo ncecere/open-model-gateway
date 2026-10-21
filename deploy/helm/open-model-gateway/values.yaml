@@ -16,7 +16,7 @@ image:
   # before a real rollout.
   repository: ghcr.io/ncecere/open-model-gateway
   digest: ""
-  tag: v0.6.0
+  tag: v0.6.1
   pullPolicy: IfNotPresent
   pullSecrets: []
 
