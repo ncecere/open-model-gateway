@@ -39,6 +39,18 @@ fn request(stream: bool) -> ChatRequest {
         stream,
     }
 }
+#[tokio::test]
+async fn unpriced_omission_keeps_legacy_anthropic_wire_fallback() {
+    for stream in [false, true] {
+        let mock = Mock::new(200, None).await;
+        let mut r = request(stream);
+        r.max_output_tokens = None; // Legitimate unpriced admission retains None.
+        let output = mock.adapter.execute(&target(), r).await.unwrap();
+        assert_eq!(mock.capture.lock().unwrap()[0].2["max_tokens"], 1024);
+        drop(output);
+    }
+}
+
 fn complete() -> Value {
     json!({"id":"upstream","type":"message","role":"assistant","model":"private","content":[{"type":"text","text":"世界"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":4,"output_tokens":2,"output_tokens_details":{"thinking_tokens":1}}})
 }

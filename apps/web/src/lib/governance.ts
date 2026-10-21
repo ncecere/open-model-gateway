@@ -202,7 +202,7 @@ export function priceFields(price?: Price): Field[] {
     { name: "input_usd_per_million", label: "Input rate (USD per million tokens)", type: "text", inputMode: "decimal", required: true, maxLength: MAX_MONEY_INPUT_LENGTH, validate: dollarsError, value: price?.input_microusd_per_million ? microUsdToDollars(price.input_microusd_per_million) : "", help: "Enter dollars per million tokens (up to 6 decimal places). Zero is allowed." },
     { name: "output_usd_per_million", label: "Output rate (USD per million tokens)", type: "text", inputMode: "decimal", required: true, maxLength: MAX_MONEY_INPUT_LENGTH, validate: dollarsError, value: price?.output_microusd_per_million ? microUsdToDollars(price.output_microusd_per_million) : "" },
     { ...integerField("input_token_limit", "Hard upstream input token ceiling"), value: price?.input_token_limit.toString() ?? "" },
-    { ...integerField("output_token_limit", "Hard upstream output token ceiling", 0), help: "Zero is valid for embeddings-only deployments. Generation requires a positive explicit output bound.", value: price?.output_token_limit.toString() ?? "", validate: (value, values) => {
+    { ...integerField("output_token_limit", "Hard upstream output token ceiling", 0), help: "Zero is valid for embeddings-only deployments. Generation needs a positive ceiling; omitted Chat/Responses maxima default to it.", value: price?.output_token_limit.toString() ?? "", validate: (value, values) => {
       const validInteger = integerField("", "").validate?.(value, values);
       if (validInteger) return validInteger;
       const inputTokens = values.input_token_limit?.trim() ?? "";

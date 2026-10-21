@@ -296,29 +296,20 @@ async fn database_budget_admission_and_versioned_costs_reach_real_http(pool: PgP
     .execute(&pool)
     .await
     .unwrap();
-    let missing_bound = app
+    let default_bound = app
         .clone()
         .oneshot(request(&keys.personal_key.token, chat(false)))
         .await
         .unwrap();
-    assert!(!missing_bound.status().is_success());
-    assert_eq!(adapter.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(default_bound.status(), StatusCode::OK);
+    assert_eq!(adapter.calls.load(Ordering::SeqCst), 1);
+    // The omitted maximum uses the pinned ceiling (10), including the full
+    // input reservation: 110 tokens and 100*1 + 10*2 = 120 micro-USD held.
+    let row: (Uuid, i64, String, i64, i64) = sqlx::query_as("SELECT r.price_id,r.actual_microusd,r.state,r.reserved_tokens,l.amount_microusd FROM governance_reservations r JOIN monetary_ledger l ON l.execution_id=r.execution_id WHERE l.kind='hold'")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(row, (price, 11, "settled".into(), 110, 120));
     let mut body = chat(false);
     body["max_completion_tokens"] = 10.into();
-    assert_eq!(
-        app.clone()
-            .oneshot(request(&keys.personal_key.token, body.clone()))
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::OK
-    );
-    let row: (Uuid, i64, String) =
-        sqlx::query_as("SELECT price_id,actual_microusd,state FROM governance_reservations")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(row, (price, 11, "settled".into()));
     assert_eq!(
         app.clone()
             .oneshot(request(&keys.personal_key.token, body.clone()))

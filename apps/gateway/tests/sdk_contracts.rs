@@ -31,11 +31,12 @@ impl ProviderAdapter for Fixture {
         _: &Deployment,
         request: ChatRequest,
     ) -> Result<ProviderOutput, InferenceError> {
-        // Echo an observed output maximum of 7 so the SDK contracts can prove
-        // which client field reached the adapter.
+        // Omitted optional client maxima must arrive bounded at the adapter.
+        assert!(request.max_output_tokens.is_some());
         let text = match request.max_output_tokens {
             Some(7) => "Hello from fixture (max 7)",
-            _ => "Hello from fixture",
+            Some(100 | 32) => "Hello from fixture",
+            other => panic!("unexpected SDK dispatch cap: {other:?}"),
         };
         let usage = Usage {
             input_tokens: Some(3),
@@ -92,8 +93,11 @@ async fn real_client_sdks_accept_all_three_protocols(pool: sqlx::PgPool) {
     .execute(&pool)
     .await
     .unwrap();
-    // A priced model for the Batch API contract (batches must be bounded);
-    // the chat contracts above keep using the unpriced company/smart.
+    // Exercise ordinary SDK calls against priced generation, not an unpriced
+    // route which bypasses the output reservation arithmetic.
+    sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version) SELECT gen_random_uuid(),id,1000000,1000000,1000,100,1 FROM deployments")
+        .execute(&pool).await.unwrap();
+    // A priced model for the Batch API contract (batches must be bounded).
     sqlx::raw_sql("INSERT INTO models(id,public_name,supported_protocols) SELECT gen_random_uuid(),'company/batch',ARRAY['chat_completions']; INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model,enabled) SELECT gen_random_uuid(),m.id,d.provider_connection_id,d.upstream_model,true FROM models m CROSS JOIN (SELECT provider_connection_id,upstream_model FROM deployments LIMIT 1) d WHERE m.public_name='company/batch'; INSERT INTO workspace_model_grants(workspace_id,model_id,source) SELECT w.id,m.id,'direct' FROM workspaces w CROSS JOIN models m WHERE m.public_name='company/batch'; INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version) SELECT gen_random_uuid(),d.id,1000000,1000000,1000,100,1 FROM deployments d JOIN models m ON m.id=d.model_id WHERE m.public_name='company/batch';")
         .execute(&pool)
         .await
@@ -134,4 +138,13 @@ async fn real_client_sdks_accept_all_three_protocols(pool: sqlx::PgPool) {
         "SDK contracts failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    // Twelve valid generation calls; refusal cases must leave no attempts.
+    let attempts: (i64, i64) = sqlx::query_as("SELECT count(*),count(*) FILTER(WHERE state='succeeded') FROM inference_executions WHERE workload_kind='generation'").fetch_one(&pool).await.unwrap();
+    assert_eq!(attempts, (12, 12));
+    let holds: Vec<(i64, i64, i64)> = sqlx::query_as("SELECT r.reserved_tokens,l.amount_microusd,p.output_token_limit FROM governance_reservations r JOIN deployment_prices p ON p.id=r.price_id JOIN monetary_ledger l ON l.execution_id=r.execution_id JOIN inference_executions e ON e.id=r.execution_id WHERE l.kind='hold' AND e.workload_kind='generation' ORDER BY r.admitted_at").fetch_all(&pool).await.unwrap();
+    assert_eq!(holds.len(), 12);
+    for (i, (tokens, amount, ceiling)) in holds.into_iter().enumerate() {
+        let cap = [100, 100, 7, 7, 7, 7, 7, 100, 100, 100, 32, 32][i];
+        assert_eq!((tokens, amount, ceiling), (1000 + cap, 1000 + cap, 100));
+    }
 }

@@ -37,6 +37,11 @@ pub(crate) mod text_workloads;
 pub trait ProviderAdapter: Send + Sync {
     fn id(&self) -> &'static str;
     fn capabilities(&self) -> Capabilities;
+    /// Largest generation maximum representable on this adapter's wire.
+    /// Admission checks both client bounds and priced defaults before writes.
+    fn generation_output_limit(&self) -> u32 {
+        u32::MAX
+    }
     fn supports_chat_request(&self, request: &ChatRequest) -> bool {
         self.capabilities().supports(request)
     }

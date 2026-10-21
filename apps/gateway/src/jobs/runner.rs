@@ -315,7 +315,13 @@ impl Runner {
                         (head.route, head.cooling) = match &head.request {
                             Some(request) => {
                                 match self
-                                    .plan_route(&principal, endpoint, request, head.execution)
+                                    .plan_route(
+                                        &principal,
+                                        endpoint,
+                                        request,
+                                        head.execution,
+                                        head.plan.map(|p| p.deployment),
+                                    )
                                     .await
                                 {
                                     Planned::Route(d) => (Some(d), false),
@@ -528,10 +534,9 @@ impl Runner {
                 Some(Stop::Budget) => NotRun::BudgetExceeded,
                 Some(Stop::Lost) | None => NotRun::Failed,
             };
-            let mut reader =
-                LineReader::stored(files, work, job.workspace_id, BATCH_MAX_LINE_BYTES)
-                    .await
-                    .map_err(|_| InferenceError::Storage)?;
+            let mut reader = LineReader::stored(files, work, job.workspace_id, WORK_LINE_BYTES)
+                .await
+                .map_err(|_| InferenceError::Storage)?;
             let mut n: i32 = -1;
             while let Some(raw) = reader.next_request().await? {
                 n += 1;
@@ -622,9 +627,10 @@ impl Runner {
         endpoint: BatchEndpoint,
         request: &BatchRequest,
         execution: Uuid,
+        planned_deployment: Option<Uuid>,
     ) -> Planned {
         match self
-            .plan_route_inner(principal, endpoint, request, execution)
+            .plan_route_inner(principal, endpoint, request, execution, planned_deployment)
             .await
         {
             Ok(Some(d)) => Planned::Route(d),
@@ -639,6 +645,7 @@ impl Runner {
         endpoint: BatchEndpoint,
         request: &BatchRequest,
         execution: Uuid,
+        planned_deployment: Option<Uuid>,
     ) -> Result<Option<Deployment>, InferenceError> {
         let protocol = endpoint.protocol();
         let model = request.model();
@@ -648,7 +655,8 @@ impl Runner {
             .await?
             .into_iter()
             .filter(|d| {
-                d.supported_protocols.iter().any(|p| p == protocol.as_str())
+                planned_deployment.is_none_or(|id| id == d.id)
+                    && d.supported_protocols.iter().any(|p| p == protocol.as_str())
                     && self.jobs.registry.get(&d.provider).is_some_and(|a| {
                         a.supports_protocol(protocol)
                             && match request {
@@ -695,6 +703,7 @@ struct Head {
     raw: Vec<u8>,
     execution: Uuid,
     request: Option<BatchRequest>,
+    plan: Option<lines::LinePlan>,
     route: Option<Deployment>,
     /// Planned while every route was cooling down.
     cooling: bool,
@@ -718,7 +727,7 @@ impl Lane {
         endpoint: BatchEndpoint,
         claimed: &HashSet<i32>,
     ) -> Result<Vec<Lane>, InferenceError> {
-        let mut reader = LineReader::stored(files, work, workspace, BATCH_MAX_LINE_BYTES)
+        let mut reader = LineReader::stored(files, work, workspace, WORK_LINE_BYTES)
             .await
             .map_err(|_| InferenceError::Storage)?;
         let mut lanes: Vec<Lane> = Vec::new();
@@ -729,7 +738,7 @@ impl Lane {
             if claimed.contains(&n) {
                 continue;
             }
-            let model = lines::parse_line(&raw, endpoint)
+            let model = lines::parse_work_line(&raw, endpoint)
                 .map(|l| l.request.model().to_owned())
                 .unwrap_or_default();
             let i = *index.entry(model).or_insert_with(|| {
@@ -761,7 +770,7 @@ impl Lane {
         };
         if self.reader.is_none() {
             self.reader = Some(
-                LineReader::stored(files, work, workspace, BATCH_MAX_LINE_BYTES)
+                LineReader::stored(files, work, workspace, WORK_LINE_BYTES)
                     .await
                     .map_err(|_| InferenceError::Storage)?,
             );
@@ -775,12 +784,15 @@ impl Lane {
                 .ok_or(InferenceError::Storage)?;
             self.read += 1;
             if self.read == n {
-                let request = lines::parse_line(&raw, endpoint).ok().map(|l| l.request);
+                let line = lines::parse_work_line(&raw, endpoint).ok();
+                let plan = line.as_ref().and_then(|l| l.plan);
+                let request = line.map(|l| l.request);
                 self.head = Some(Head {
                     n,
                     raw,
                     execution: Uuid::now_v7(),
                     request,
+                    plan,
                     route: None,
                     cooling: false,
                     planned: None,
@@ -962,7 +974,7 @@ impl LineRun {
         pin: Option<Pin>,
         records: mpsc::Sender<Record>,
     ) {
-        let line = match lines::parse_line(&raw, self.endpoint) {
+        let line = match lines::parse_work_line(&raw, self.endpoint) {
             Ok(l) => l,
             Err(_) => {
                 let custom_id = lines::custom_id(&raw).unwrap_or_default();
@@ -977,7 +989,9 @@ impl LineRun {
         let model = line.request.model().to_owned();
         let mut attempt: i16 = 1;
         loop {
-            let result = self.execute(line.request.clone(), execution, pin).await;
+            let result = self
+                .execute(line.request.clone(), execution, pin, line.plan)
+                .await;
             match result {
                 Ok(response) => {
                     self.state.succeeded();
@@ -1099,15 +1113,16 @@ impl LineRun {
         request: BatchRequest,
         execution: Uuid,
         pin: Option<Pin>,
+        plan: Option<lines::LinePlan>,
     ) -> Result<BatchResponse, InferenceError> {
-        let Some(pin) = pin else {
-            return self.execute_attempt(request, execution).await;
-        };
-        self.repository.pin(execution, pin.deployment);
+        if let Some(deployment) = plan.map(|p| p.deployment).or(pin.map(|p| p.deployment)) {
+            self.repository
+                .pin(execution, deployment, plan.map(|p| p.price));
+        }
         let attempt = self.execute_attempt(request, execution);
-        let result = match pin.priority {
-            Some(priority) => {
-                crate::inference::scheduling::with_priority(pin.deployment, priority, attempt).await
+        let result = match pin.and_then(|p| p.priority.map(|priority| (p.deployment, priority))) {
+            Some((deployment, priority)) => {
+                crate::inference::scheduling::with_priority(deployment, priority, attempt).await
             }
             None => attempt.await,
         };
@@ -1221,14 +1236,14 @@ struct LineRepository {
     store: Store,
     batch: LineContext,
     /// Attempt (execution id) → the route the scheduler claimed it on.
-    pins: Mutex<HashMap<Uuid, Uuid>>,
+    pins: Mutex<HashMap<Uuid, (Uuid, Option<Uuid>)>>,
 }
 impl LineRepository {
-    fn pin(&self, execution: Uuid, deployment: Uuid) {
+    fn pin(&self, execution: Uuid, deployment: Uuid, price: Option<Uuid>) {
         self.pins
             .lock()
             .expect("pins")
-            .insert(execution, deployment);
+            .insert(execution, (deployment, price));
     }
     fn unpin(&self, execution: Uuid) {
         self.pins.lock().expect("pins").remove(&execution);
@@ -1263,7 +1278,14 @@ impl InferenceRepository for LineRepository {
         request: &ChatRequest,
         lease_seconds: i64,
         deployment: &Deployment,
-    ) -> Result<(), InferenceError> {
+        output_limit: u32,
+    ) -> Result<crate::inference::repository::GenerationAdmission, InferenceError> {
+        let price = self
+            .pins
+            .lock()
+            .expect("pins")
+            .get(&record.id)
+            .and_then(|p| p.1);
         crate::governance::batch::admit_line(
             &self.store,
             self.batch,
@@ -1277,6 +1299,8 @@ impl InferenceRepository for LineRepository {
             },
             lease_seconds,
             deployment,
+            price,
+            output_limit,
         )
         .await
     }
@@ -1298,8 +1322,11 @@ impl InferenceRepository for LineRepository {
             },
             lease_seconds,
             deployment,
+            None,
+            u32::MAX,
         )
         .await
+        .map(|_| ())
     }
     async fn admit_workload(
         &self,
@@ -1315,8 +1342,11 @@ impl InferenceRepository for LineRepository {
             admission,
             lease_seconds,
             deployment,
+            None,
+            u32::MAX,
         )
         .await
+        .map(|_| ())
     }
     async fn route_plan(
         &self,
@@ -1328,7 +1358,12 @@ impl InferenceRepository for LineRepository {
         // A scheduled line runs only on the route its capacity was claimed
         // on (one attempt, no failover); if that route no longer serves it,
         // the line fails like an interactive request to a missing model.
-        let pinned = self.pins.lock().expect("pins").get(&request_id).copied();
+        let pinned = self
+            .pins
+            .lock()
+            .expect("pins")
+            .get(&request_id)
+            .map(|p| p.0);
         match pinned {
             Some(d) if candidates.iter().any(|c| c.id == d) => {
                 Ok(crate::routing::RoutePlan::single(vec![d]))

@@ -40,7 +40,8 @@ use crate::{
 pub enum OutputReservation {
     /// Input-only workload: output is semantically zero (embeddings, rerank).
     None,
-    /// Client-requested maximum; a priced admission requires it.
+    /// Client-requested maximum. Generation resolves omissions to the pinned
+    /// price's output ceiling before reservation arithmetic and dispatch.
     Requested(Option<u32>),
     /// The pinned price's trusted `output_token_limit` (e.g. System One,
     /// whose providers may report output tokens the request cannot bound).
