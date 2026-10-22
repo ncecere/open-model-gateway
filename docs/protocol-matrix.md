@@ -47,6 +47,8 @@ This table is one source of truth in the gateway (`providers::capabilities`): ev
 
 A model's protocols belong to one workload: Chat/Responses/Messages combine, while embeddings and each other kind stand alone. Images, audio, realtime, video, batch, Rerank and System One routes return **400 `unsupported_capability`** when the model exists but has no deployment that declares the protocol on an adapter supporting it. Chat/Responses/Messages/Embeddings keep 501 for unsupported capabilities.
 
+Permanent `unsupported_capability` refusals carry `x-should-retry: false`, honored by the official OpenAI and Anthropic SDKs even on HTTP 501. Statuses and protocol-specific error bodies are unchanged. Transient rate/concurrency failures, upstream 502/504 errors and cooling-down 503s are not opted out of SDK retries; cooling-down responses retain `Retry-After`. An SDK retry is a new gateway HTTP request with its own admission and durable reservation if dispatched; unknown usage retains its hold. This is separate from the gateway's [explicit failover policy](routing.md): the gateway does not implicitly retry an upstream request or fail over after returning a stream.
+
 Unsupported combinations fail explicitly. Local labels do not mean every installed server/model supports all fields. Ollama native embedding follow-up has source and mocked tests, but this documentation refresh does not claim a fresh pass or live-server certification; consult [local profile notes](../apps/gateway/src/providers/local/README.md). [Bedrock](bedrock.md) documents its separate transport.
 
 ## Client labels (Logs sessions and apps)

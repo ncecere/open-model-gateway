@@ -18,3 +18,7 @@ Native Anthropic Messages still requires `max_tokens`. Unpriced/unknown accounti
 ## Stateless Responses followups (#217)
 
 Clients can reuse supported text/function-call `output` items from JSON or terminal streaming responses as followup `input`. Optional read-only item IDs/statuses and omitted/empty output-text annotations are validated without becoming state or authority; tool correlation still uses `call_id`. Function-call-output metadata retains its nullable semantics. Nonempty annotations/citations, malformed metadata, stateful references and other unsupported content remain explicitly rejected. No schema or caller-side maximum/store workaround is required.
+
+## Permanent capability refusals (#218)
+
+`unsupported_capability` errors now carry `x-should-retry: false`, so ordinary OpenAI and Anthropic SDK clients do not repeat permanent refusals, including HTTP 501. Existing statuses and error bodies are unchanged. Transient errors remain eligible for client retries; each dispatched client retry requires a separate durable admission, and unknown usage keeps its hold. Gateway upstream retries/failover policy is unchanged. This does not expand supported capabilities or resolve the remaining compatibility gaps in #222.
