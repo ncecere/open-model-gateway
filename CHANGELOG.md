@@ -6,6 +6,12 @@ The project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). 
 
 ## [Unreleased]
 
+Changes after v0.7.1: [unreleased notes](docs/releases/unreleased.md).
+
+## [0.7.1]
+
+Compatibility fixes #215–219: optional priced generation maxima with matching holds/upstream caps and batch price freshness; embedding base64 and validation before settlement; stateless Responses wire-output replay; permanent capability refusal retry suppression; native Anthropic refusal/context terminal fidelity. No new migrations or runtime grants (schema 0048). Remaining compatibility gaps are not included. See [release and upgrade notes](docs/releases/v0.7.1.md), including the inherited v0.7.0 precautions for v0.6.1 upgrades. Publication and acceptance are separate from this scope entry.
+
 ## [0.4.0] - 2026-10-10
 
 **Helm chart** (scale phase P7, `deploy/helm/open-model-gateway/`, chart version 0.4.0). Gateway Deployment (replicas or HPA, PDB, topology spread, non-root UID 10001, read-only root filesystem, no capabilities, seccomp, no service-account token, `httpGet` startup/liveness/readiness probes, a `preStop sleep` paired with the existing drain behaviour); a pre-install/pre-upgrade migration Job that runs `open-model-gateway migrate` as a separate migrator Secret (never the runtime role, never automatic in `serve`) and then applies `deploy/staging/runtime-grants.sql` through a PostgreSQL client container (no Rust `apply-runtime-grants` subcommand yet; documented in [Kubernetes](docs/kubernetes.md#migration-job-and-runtime-grants)); an optional CloudNativePG `Cluster` (2 instances, synchronous replication, `local-ssd` storage, anti-affinity, PostgreSQL 17 from `ghcr.io/cloudnative-pg/postgresql`, tuned parameters, managed `gateway_migrator`/`gateway_runtime` roles backed by operator-created Secrets, never chart-generated) and `Pooler` (PgBouncer, transaction mode, `max_prepared_statements: 200`), with an external-database mode as the default; Secrets-by-reference for database URLs, OIDC and provider keys (file-mounted `_FILE` secrets) and file-store keys, a ConfigMap for non-secret env; default-deny NetworkPolicy with Traefik ingress and DNS/Postgres/443 egress, a configurable Ingress, Service, optional ServiceMonitor/PodMonitor; a `loadtest` values profile (`mock-upstream` + `loadgen`) for P8. Validated with `helm lint`/`helm template` across four profiles, `kubeconform` against Kubernetes 1.36 schemas, and a real `kubectl apply --dry-run=server` against a live CloudNativePG 1.30.1 operator (all resources passed its admission webhooks; nothing was created). New `npm run test:helm` (rendered-output assertions) and a CI `helm` job. Docs: [Kubernetes](docs/kubernetes.md).
@@ -48,7 +54,8 @@ Alerts, key safety, model compare, SCIM, JWKS refresh, metrics and backup toolin
 
 The single-enterprise rebuild: Team, Project and personal workspaces, OIDC platform roles, catalogs, multimodal workloads across five provider families, immutable micro-USD accounting, logs and Admin settings. Migrations `0001` to `0010`. Notes: [`docs/releases/v0.1.0.md`](docs/releases/v0.1.0.md).
 
-[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/ncecere/open-model-gateway/compare/v0.7.0...v0.7.1
 [0.4.0]: https://github.com/ncecere/open-model-gateway/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/ncecere/open-model-gateway/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/ncecere/open-model-gateway/compare/v0.3.0...v0.3.1
