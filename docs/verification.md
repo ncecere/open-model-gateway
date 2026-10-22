@@ -10,6 +10,7 @@ Run from the repository root. None of them make paid provider calls or touch the
 | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | Lints | Rust |
 | `cargo test --workspace --all-features` | Unit, mock-provider contract, SDK and real-PostgreSQL integration tests (SQLx creates disposable databases) | `DATABASE_URL` to the disposable cluster, e.g. `postgres://gateway:gateway@127.0.0.1:54339/gateway`; `npm ci` for the SDK tests |
 | `cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored` | Runtime-role ACL rollback probe | Disposable cluster only |
+| `cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact` | Anthropic terminal fidelity, ordinary SDKs, runtime-role settlement/unknown holds and cancellation | Disposable cluster only; changes maintenance-database ACLs. Run sequentially after the runtime ACL probe, never via an unrestricted ignored-test sweep; requires `npm ci` |
 | `npm run typecheck:web` / `npm run test:web` / `npm run build:web` | SPA types, Vitest unit/component tests, production build | Node 22 |
 | `npm run test:browser` | Playwright end-to-end journey and axe accessibility scans (below) | Disposable PostgreSQL, Rust, Chromium (`npx playwright install chromium`) |
 | `npm run test:demo` | Local demo issuer and runtime helper | Node, Python 3 |

@@ -15,6 +15,10 @@ Native Anthropic Messages still requires `max_tokens`. Unpriced/unknown accounti
 
 **Remaining limitation:** batch embedding lines remain float-only and explicitly reject base64. Other unsupported fields remain unsupported.
 
+## Anthropic terminal fidelity (#219)
+
+Valid native Messages `refusal` and `model_context_window_exceeded` no longer fail as invalid upstream responses. JSON/SSE preserve both stop reasons, including empty refusals, while accounting still requires valid usage evidence. Chat maps them explicitly to `content_filter`/`length`; the text-only Responses codec maps them to incomplete `content_filter`/`max_output_tokens` without typed refusal parts or relabeling streamed text. Interactive Anthropic Responses, typed refusal blocks and hosted-tool `pause_turn` remain unsupported. Logs retain their coarse labels. No schema change, implicit retry or caller maximum/store workaround is introduced.
+
 ## Stateless Responses followups (#217)
 
 Clients can reuse supported text/function-call `output` items from JSON or terminal streaming responses as followup `input`. Optional read-only item IDs/statuses and omitted/empty output-text annotations are validated without becoming state or authority; tool correlation still uses `call_id`. Function-call-output metadata retains its nullable semantics. Nonempty annotations/citations, malformed metadata, stateful references and other unsupported content remain explicitly rejected. No schema or caller-side maximum/store workaround is required.
