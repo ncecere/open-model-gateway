@@ -100,6 +100,51 @@ fn request(stream: bool) -> ChatRequest {
     }
 }
 #[tokio::test]
+async fn no_argument_tool_defaults_preserve_all_local_profile_wires() {
+    for profile in [
+        Profile::OpenAiCompatible,
+        Profile::Vllm,
+        Profile::Sglang,
+        Profile::Ollama,
+    ] {
+        let mock = Mock::new(200, false).await;
+        let adapter = mock.adapter(profile, Arc::new(Resolver(AtomicUsize::new(0))));
+        for request in super::super::contract::no_argument_tool_requests() {
+            for strict in [None, Some(false), Some(true)] {
+                let mut r = request.clone();
+                r.tools[0].strict = strict;
+                if strict == Some(true) {
+                    assert!(!adapter.supports_chat_request(&r));
+                    assert!(matches!(
+                        adapter.execute(&mock.target(profile), r).await,
+                        Err(InferenceError::Unsupported)
+                    ));
+                } else {
+                    adapter.execute(&mock.target(profile), r).await.unwrap();
+                }
+            }
+        }
+        let capture = mock.capture.lock().unwrap();
+        assert_eq!(capture.len(), 6, "strict refusals never dispatch");
+        for (i, (_, uri, body)) in capture.iter().enumerate() {
+            assert!(uri.path().ends_with("/chat/completions"));
+            let function = &body["tools"][0]["function"];
+            assert_eq!(
+                function["parameters"],
+                json!({"type":"object","properties":{},"additionalProperties":false})
+            );
+            if i % 2 == 0 {
+                assert!(function.get("strict").is_none());
+            } else {
+                assert_eq!(function["strict"], false);
+            }
+            assert_eq!(body["messages"][1]["tool_calls"][0]["id"], "ping-call");
+            assert_eq!(body["messages"][2]["tool_call_id"], "ping-call");
+            assert_eq!(body["messages"][2]["content"], "");
+        }
+    }
+}
+#[tokio::test]
 async fn all_profiles_mock_chat_and_embedding_contracts_with_pinned_host() {
     for profile in [
         Profile::OpenAiCompatible,

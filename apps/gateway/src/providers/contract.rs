@@ -93,6 +93,39 @@ pub async fn assert_systemone_contract(
     response
 }
 
+/// Normalize the public omission/default forms before testing adapter wires.
+/// Chat omits parameters; Messages requires input_schema but may omit successful
+/// tool-result content and is_error. Every result must keep the actual call ID.
+pub fn no_argument_tool_requests() -> Vec<ChatRequest> {
+    use crate::protocols::{chat_completions, messages};
+    use serde_json::json;
+    let schema = json!({"type":"object","properties":{},"additionalProperties":false});
+    let mut requests = vec![chat_completions::batch_request(json!({
+        "model":"public", "messages":[{"role":"user","content":"ping"},
+            {"role":"assistant","tool_calls":[{"id":"ping-call","type":"function","function":{"name":"ping","arguments":"{}"}}]},
+            {"role":"tool","tool_call_id":"ping-call","content":""}],
+        "tools":[{"type":"function","function":{"name":"ping"}}]
+    })).unwrap()];
+    for flag in [None, Some(false)] {
+        let mut block = json!({"type":"tool_result","tool_use_id":"ping-call"});
+        if let Some(flag) = flag {
+            block["is_error"] = json!(flag);
+        }
+        requests.push(messages::batch_request(json!({
+            "model":"public", "max_tokens":32,
+            "messages":[{"role":"user","content":"ping"},
+                {"role":"assistant","content":[{"type":"tool_use","id":"ping-call","name":"ping","input":{}}]},
+                {"role":"user","content":[block]}],
+            "tools":[{"name":"ping","input_schema":schema}]
+        })).unwrap());
+    }
+    for request in &requests {
+        assert_eq!(request.tools[0].parameters, schema);
+        assert_eq!(request.tools[0].strict, None);
+    }
+    requests
+}
+
 pub async fn assert_text_chat_contract(
     adapter: &dyn ProviderAdapter,
     target: &Deployment,

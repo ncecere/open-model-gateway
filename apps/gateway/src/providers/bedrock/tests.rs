@@ -215,6 +215,62 @@ fn wire(events: Vec<(&str, Value)>) -> Vec<u8> {
 }
 
 #[tokio::test]
+async fn no_argument_tool_defaults_preserve_converse_wire_and_correlation() {
+    let mock = Mock::serve(complete(false), wire(events(false)), 200).await;
+    let adapter = mock.adapter();
+    for request in super::super::contract::no_argument_tool_requests() {
+        for strict in [None, Some(false), Some(true)] {
+            let mut r = request.clone();
+            r.tools[0].strict = strict;
+            if strict == Some(true) {
+                assert!(!adapter.supports_chat_request(&r));
+                assert!(matches!(
+                    adapter.execute(&target(), r).await,
+                    Err(InferenceError::Unsupported)
+                ));
+            } else {
+                adapter.execute(&target(), r).await.unwrap();
+            }
+        }
+        // Empty content is not permission to detach a result from its call.
+        for id in [None, Some("wrong-call".into())] {
+            let mut r = request.clone();
+            r.messages[2].tool_call_id = id;
+            assert!(matches!(
+                adapter.execute(&target(), r).await,
+                Err(InferenceError::InvalidRequest)
+            ));
+        }
+        let mut duplicate = request.clone();
+        duplicate.messages.push(request.messages[2].clone());
+        assert!(matches!(
+            adapter.execute(&target(), duplicate).await,
+            Err(InferenceError::InvalidRequest)
+        ));
+    }
+    let capture = mock.requests.lock().unwrap();
+    assert_eq!(
+        capture.len(),
+        6,
+        "strict/correlation refusals never dispatch"
+    );
+    for captured in capture.iter() {
+        let body = &captured.body;
+        assert_eq!(
+            body["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"]["json"],
+            json!({"type":"object","properties":{},"additionalProperties":false})
+        );
+        assert_eq!(
+            body["messages"][1]["content"][0]["toolUse"],
+            json!({"toolUseId":"ping-call","name":"ping","input":{}})
+        );
+        assert_eq!(
+            body["messages"][2]["content"][0]["toolResult"],
+            json!({"toolUseId":"ping-call","content":[{"text":""}]})
+        );
+    }
+}
+#[tokio::test]
 async fn shared_text_contract_and_actual_sdk_signed_request() {
     let mock = Mock::serve(complete(false), wire(events(false)), 200).await;
     let adapter = mock.adapter();
