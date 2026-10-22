@@ -18,8 +18,8 @@ const messages = [{ role: "user", content: "synthetic retry test" }];
 const permanent = process.argv[2] === "permanent";
 const stream = permanent;
 const calls = [
-  () => openai.chat.completions.create({ model: "company/smart", messages, max_completion_tokens: 7, stream }),
-  () => openai.responses.create({ model: "company/smart", input: "synthetic retry test", store: false, max_output_tokens: 7, stream }),
+  () => openai.chat.completions.create({ model: "company/smart", messages, stream }),
+  () => openai.responses.create({ model: "company/smart", input: "synthetic retry test", stream }),
   // Native Messages requires max_tokens, even for a capability refusal.
   () => anthropic.messages.create({ model: "company/smart", messages, max_tokens: 7, stream }),
 ];

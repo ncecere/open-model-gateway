@@ -45,8 +45,10 @@ impl ProviderAdapter for RetryFixture {
         request: ChatRequest,
     ) -> Result<ProviderOutput, InferenceError> {
         assert!(!request.stream);
-        assert_eq!(request.max_output_tokens, Some(7));
         let attempt = self.dispatches.fetch_add(1, Ordering::SeqCst) + 1;
+        // OpenAI callers omit optional maxima; native Messages requires 7.
+        let cap = if attempt <= 4 { 100 } else { 7 };
+        assert_eq!(request.max_output_tokens, Some(cap));
         // A distinct, committed admission must exist BEFORE every upstream call.
         let admitted: i64 = sqlx::query_scalar("SELECT count(*) FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id JOIN monetary_ledger l ON l.execution_id=e.id AND l.kind='hold'")
             .fetch_one(&self.pool).await.unwrap();
@@ -214,12 +216,13 @@ async fn run(pool: PgPool, permanent: bool) {
             .fetch_all(&pool).await.unwrap();
         assert_eq!(settled.len(), 6);
         for (i, row) in settled.iter().enumerate() {
+            let hold = if i < 4 { 1100 } else { 1007 };
             assert_eq!(
                 row,
                 &if i.is_multiple_of(2) {
-                    ("unknown".into(), Some(1007), None)
+                    ("unknown".into(), Some(hold), None)
                 } else {
-                    ("settled".into(), Some(1007), Some(7))
+                    ("settled".into(), Some(hold), Some(7))
                 }
             );
         }
@@ -227,7 +230,7 @@ async fn run(pool: PgPool, permanent: bool) {
             .fetch_all(&pool).await.unwrap();
         assert_eq!(
             retained,
-            vec![("hold".into(), 3, 3021), ("unknown".into(), 3, 0)],
+            vec![("hold".into(), 3, 3207), ("unknown".into(), 3, 0)],
             "unknown failures keep holds and zero-valued unknown markers, never releases or settlements"
         );
     }
