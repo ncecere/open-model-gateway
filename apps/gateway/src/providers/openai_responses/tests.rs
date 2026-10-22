@@ -216,6 +216,61 @@ async fn native_json_and_byte_fragmented_sse() {
     }
 }
 #[tokio::test]
+async fn echoed_output_reconstructs_canonical_upstream_input_without_item_identity() {
+    let prior = ChatResponse {
+        content: Some("First 世界".into()),
+        tool_calls: vec![ToolCall {
+            id: "semantic-call".into(),
+            name: "weather".into(),
+            arguments: "{ \"city\": \"東京\" }".into(),
+        }],
+        finish_reason: FinishReason::ToolCalls,
+        usage: Usage::default(),
+    };
+    let snapshot =
+        crate::protocols::responses::batch_response("resp_readonly", 1, "public", &prior);
+    let mut input = vec![json!({"role":"user","content":"start"})];
+    input.extend(snapshot["output"].as_array().unwrap().clone());
+    input.push(json!({"type":"function_call_output","id":null,"status":null,"call_id":"semantic-call","output":"sun"}));
+    input.push(json!({"role":"user","content":[{"type":"input_text","text":"then "},{"type":"input_text","text":"continue"}]}));
+    let request =
+        crate::protocols::responses::batch_request(json!({"model":"public","input":input}))
+            .unwrap();
+    let mock = Mock::new(200, None).await;
+    for streaming in [false, true] {
+        let mut request = request.clone();
+        request.stream = streaming;
+        let output = mock
+            .adapter
+            .execute_protocol(&target(), request, ApiProtocol::Responses)
+            .await
+            .unwrap();
+        if let ProviderOutput::Stream(s) = output {
+            assert!(s.collect::<Vec<_>>().await.into_iter().all(|e| e.is_ok()));
+        }
+    }
+    let captured = mock.capture.lock().unwrap();
+    assert_eq!(captured.len(), 2);
+    for (headers, uri, body) in captured.iter() {
+        assert_eq!(uri.path(), "/v1/responses");
+        assert_eq!(headers["authorization"], "Bearer mock-key");
+        assert_eq!(body["model"], "private");
+        assert_eq!(body["store"], false);
+        assert!(body.get("previous_response_id").is_none());
+        assert!(body.get("max_output_tokens").is_none());
+        assert_eq!(
+            body["input"],
+            json!([
+                {"role":"user","content":"start"},
+                {"role":"assistant","content":"First 世界"},
+                {"type":"function_call","call_id":"semantic-call","name":"weather","arguments":"{ \"city\": \"東京\" }"},
+                {"type":"function_call_output","call_id":"semantic-call","output":"sun"},
+                {"role":"user","content":"then continue"},
+            ])
+        );
+    }
+}
+#[tokio::test]
 async fn eof_and_upstream_failure_never_succeed() {
     let bytes = stream()
         .iter()

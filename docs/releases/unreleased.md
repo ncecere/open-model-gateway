@@ -14,3 +14,7 @@ Native Anthropic Messages still requires `max_tokens`. Unpriced/unknown accounti
 `/v1/embeddings` honors `float` and standard padded base64 of little-endian float32 vectors, including the ordinary OpenAI SDK encoding default. Raw HTTP omission/null remains float. Validation and client response-size checks precede successful settlement; failed responses retain valid token/cost evidence and unresolved holds.
 
 **Remaining limitation:** batch embedding lines remain float-only and explicitly reject base64. Other unsupported fields remain unsupported.
+
+## Stateless Responses followups (#217)
+
+Clients can reuse supported text/function-call `output` items from JSON or terminal streaming responses as followup `input`. Optional read-only item IDs/statuses and omitted/empty output-text annotations are validated without becoming state or authority; tool correlation still uses `call_id`. Function-call-output metadata retains its nullable semantics. Nonempty annotations/citations, malformed metadata, stateful references and other unsupported content remain explicitly rejected. No schema or caller-side maximum/store workaround is required.
