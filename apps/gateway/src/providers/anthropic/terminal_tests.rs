@@ -222,6 +222,32 @@ async fn terminal_fidelity_official_sdks_and_priced_http_evidence(pool: sqlx::Pg
         settled,
         vec![("succeeded".into(), "settled".into(), 6, 4, 2, 150); 22]
     );
+    let labels: Vec<String> =
+        sqlx::query_scalar("SELECT finish_reason FROM inference_executions ORDER BY started_at")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    // Native text/empty refusal, context, text/length/tool controls, then Chat.
+    let label_pairs = [
+        "content_filter",
+        "content_filter",
+        "length",
+        "stop",
+        "length",
+        "tool_calls",
+        "content_filter",
+        "length",
+        "stop",
+        "length",
+        "tool_calls",
+    ];
+    assert_eq!(
+        labels,
+        label_pairs
+            .into_iter()
+            .flat_map(|label| [label.to_owned(), label.to_owned()])
+            .collect::<Vec<_>>()
+    );
     let charged: (i64, i64) = sqlx::query_as(
         "SELECT count(*),sum(amount_microusd)::bigint FROM monetary_ledger WHERE kind='settlement'",
     )
@@ -378,6 +404,12 @@ async fn terminal_fidelity_official_sdks_and_priced_http_evidence(pool: sqlx::Pg
         ledger,
         (49, 22),
         "unknown/failed/cancelled holds never settle or release"
+    );
+    let unknown_mutations: i64 = sqlx::query_scalar("SELECT count(*) FROM monetary_ledger l JOIN governance_reservations r ON r.execution_id=l.execution_id AND r.admitted_at=l.admitted_at WHERE r.state='unknown' AND l.kind NOT IN ('hold','unknown')")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(
+        unknown_mutations, 0,
+        "unknown holds have no release, settlement or other mutation"
     );
     runtime.close().await;
 }
