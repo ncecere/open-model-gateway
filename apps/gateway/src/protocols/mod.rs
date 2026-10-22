@@ -11,11 +11,20 @@ pub mod responses;
 pub mod systemone;
 pub mod videos;
 
+#[cfg(all(test, feature = "integration-tests"))]
+mod nullable_tests;
+
 use crate::inference::error::InferenceError;
 use axum::{
     http::{HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
+
+/// Only the nullable OpenAI stream/store defaults opt into this rule. Keep
+/// other booleans and collections strict; non-boolean values still fail serde.
+fn false_if_null<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    <Option<bool> as serde::Deserialize>::deserialize(deserializer).map(Option::unwrap_or_default)
+}
 
 /// Shared client-protocol error response. Budget/accounting denials keep HTTP 429
 /// (OpenAI `insufficient_quota` convention) but are not transient, so they carry

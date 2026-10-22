@@ -5,6 +5,52 @@ fn parse(v: Value) -> Result<ChatRequest> {
         .normalize()
 }
 #[test]
+fn nullable_stream_defaults_only_on_the_supported_field() {
+    for (extra, streaming) in [
+        (json!({}), false),
+        (json!({"stream":null}), false),
+        (json!({"stream":false}), false),
+        (json!({"stream":true}), true),
+    ] {
+        let mut value = json!({"model":"m","input":"hello"});
+        value
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        assert_eq!(parse(value.clone()).unwrap().stream, streaming);
+        assert_eq!(batch_request(value).is_err(), streaming);
+    }
+}
+#[test]
+fn nullable_store_stays_stateless_and_strict() {
+    for extra in [json!({}), json!({"store":null}), json!({"store":false})] {
+        let mut value = json!({"model":"m","input":"hello"});
+        value
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        assert!(!parse(value.clone()).unwrap().stream);
+        assert!(!batch_request(value).unwrap().stream);
+    }
+    for extra in [
+        json!({"store":true}),
+        json!({"store":"false"}),
+        json!({"store":0}),
+        json!({"stream":{}}),
+        json!({"tools":null}),
+        json!({"unknown":null}),
+        json!({"reasoning":null}),
+    ] {
+        let mut value = json!({"model":"m","input":"hello"});
+        value
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        assert!(parse(value.clone()).is_err());
+        assert!(batch_request(value).is_err());
+    }
+}
+#[test]
 fn strict_stateless_subset() {
     for extra in [
         json!({"store":true}),

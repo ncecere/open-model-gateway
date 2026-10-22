@@ -28,9 +28,9 @@ pub struct Request {
     model: String,
     input: Value,
     instructions: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::false_if_null")]
     stream: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::false_if_null")]
     store: bool,
     max_output_tokens: Option<u32>,
     temperature: Option<f64>,
