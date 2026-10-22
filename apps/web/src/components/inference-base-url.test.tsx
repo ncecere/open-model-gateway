@@ -62,6 +62,11 @@ it.each(["https://api.bitop.dev:8443/prefix@blue/v1", "http://127.0.0.1:18187/pr
   const chatSections = screen.getAllByRole("region", { name: "Chat Completions" });
   expect(chatSections).toHaveLength(2);
   for (const section of chatSections) {
+    const maximum = within(section).getByText("max_completion_tokens").closest("li");
+    expect(maximum?.textContent).toContain("Optional; defaults to the pinned price's output ceiling");
+    expect(maximum?.textContent).toMatch(/max_tokens.*accepted alias/);
+    expect(maximum?.textContent).toMatch(/if both are supplied, values must be equal.*400/);
+    expect(section.textContent).not.toContain("legacy max_tokens");
     await user.click(within(section).getByRole("button", { name: "Copy Chat Completions endpoint" }));
     expect(await navigator.clipboard.readText()).toBe(`${base}/chat/completions`);
   }
