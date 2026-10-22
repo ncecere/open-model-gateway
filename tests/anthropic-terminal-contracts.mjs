@@ -4,6 +4,9 @@ import OpenAI from 'openai';
 
 const baseURL = process.env.SDK_TEST_BASE_URL;
 const apiKey = process.env.SDK_TEST_API_KEY;
+assert.ok(baseURL, 'SDK fixture URL is required');
+assert.equal(new URL(baseURL).hostname, '127.0.0.1', 'SDK fixture must stay on loopback');
+assert.ok(apiKey, 'SDK fixture key is required');
 const anthropic = new Anthropic({ baseURL, apiKey });
 const openai = new OpenAI({ baseURL: `${baseURL}/v1`, apiKey });
 // Ordinary defaults: no retry override, custom headers, maximum/store workaround,
