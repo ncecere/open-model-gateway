@@ -151,8 +151,8 @@ const pingMessages = [{ role: "user", content: "call ping" }];
 const pingTools = [{ type: "function", function: { name: "ping" } }];
 async function pingChat(args, streaming) {
   if (!streaming) return (await ordinaryOpenai.chat.completions.create(args)).choices[0].message;
-  // Assemble only wire deltas, not the helper's SDK-only parsed/refusal fields
-  // (nullable/extra-field compatibility is a separate contract).
+  // Assemble wire deltas rather than helper-enriched parsed fields. Public
+  // nullable assistant fields such as refusal are covered separately by #221.
   const message = { role: "assistant", content: "", tool_calls: [] };
   for await (const event of await ordinaryOpenai.chat.completions.create({ ...args, stream: true })) {
     const delta = event.choices[0]?.delta;
