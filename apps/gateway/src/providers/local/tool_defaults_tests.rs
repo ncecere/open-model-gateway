@@ -114,7 +114,7 @@ async fn priced_tool_defaults_sdk_through_real_local_http(pool: sqlx::PgPool) {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(denied.status(), reqwest::StatusCode::NOT_FOUND);
-    let capture = recorded.lock().unwrap();
+    let capture = recorded.lock().unwrap().clone();
     assert_eq!(
         capture.len(),
         5,
@@ -145,7 +145,6 @@ async fn priced_tool_defaults_sdk_through_real_local_http(pool: sqlx::PgPool) {
             assert_eq!(body["messages"][2]["content"], "");
         }
     }
-    drop(capture);
     let attempts: (i64, i64) = sqlx::query_as(
         "SELECT count(*),count(*) FILTER(WHERE state='succeeded') FROM inference_executions",
     )

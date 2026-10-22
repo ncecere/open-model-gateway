@@ -26,3 +26,9 @@ Clients can reuse supported text/function-call `output` items from JSON or termi
 ## Permanent capability refusals (#218)
 
 `unsupported_capability` errors now carry `x-should-retry: false`, so ordinary OpenAI and Anthropic SDK clients do not repeat permanent refusals, including HTTP 501. Existing statuses and error bodies are unchanged. Transient errors remain eligible for client retries; each dispatched client retry requires a separate durable admission, and unknown usage keeps its hold. Gateway upstream retries/failover policy is unchanged. This does not expand supported capabilities or resolve the remaining compatibility gaps in #222.
+
+## No-argument tools and empty successful results (#220)
+
+Chat function definitions may omit `parameters`, meaning no arguments. Only omission becomes the closed empty-object schema (`type:object`, `properties:{}`, `additionalProperties:false`); explicit object schemas are unchanged and null/nonobject parameters remain invalid. Omitted `strict` stays absent, with existing per-adapter strict capability rules unchanged.
+
+Native Messages accepts omitted `tool_result.content` as empty text and explicit `is_error:false` as the default success. Call IDs and content bounds remain intact. Error-marked results (`is_error:true`) are explicitly unsupported, not silently downgraded; null content, malformed flags, missing IDs and unknown fields remain invalid. Messages still requires `max_tokens`. No database/runtime-grant changes, hosted/beta/thinking expansion or general nullable-field compatibility is included.

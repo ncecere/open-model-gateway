@@ -84,8 +84,15 @@ struct WireTool {
 struct WireFunction {
     name: String,
     description: Option<String>,
+    #[serde(default = "no_argument_parameters")]
     parameters: Value,
     strict: Option<bool>,
+}
+
+// OpenAI defines omission as an empty parameter list, not an unconstrained
+// schema. Serde calls this only for absence; explicit null is still invalid.
+fn no_argument_parameters() -> Value {
+    json!({"type":"object","properties":{},"additionalProperties":false})
 }
 
 fn function_name(name: &str) -> bool {

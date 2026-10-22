@@ -223,7 +223,7 @@ async fn no_argument_tool_defaults_preserve_converse_wire_and_correlation() {
             let mut r = request.clone();
             r.tools[0].strict = strict;
             if strict == Some(true) {
-                assert!(!adapter.supports_chat_request(&r));
+                assert!(matches!(encode(&r), Err(InferenceError::Unsupported)));
                 assert!(matches!(
                     adapter.execute(&target(), r).await,
                     Err(InferenceError::Unsupported)

@@ -193,7 +193,10 @@ async fn no_argument_tool_defaults_preserve_messages_wire() {
             let mut r = request.clone();
             r.tools[0].strict = strict;
             if strict == Some(true) {
-                assert!(!mock.adapter.supports_chat_request(&r));
+                assert!(matches!(
+                    encode("private", &r),
+                    Err(InferenceError::Unsupported)
+                ));
                 assert!(matches!(
                     mock.adapter.execute(&target(), r).await,
                     Err(InferenceError::Unsupported)
