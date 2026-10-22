@@ -293,6 +293,8 @@ fn snapshot(id: &str, model: &str, response: &ChatResponse) -> Result<Value> {
         FinishReason::Stop => "end_turn",
         FinishReason::Length => "max_tokens",
         FinishReason::ToolCalls => "tool_use",
+        FinishReason::Refusal => "refusal",
+        FinishReason::ContextWindowExceeded => "model_context_window_exceeded",
         FinishReason::ContentFilter => return Err(InferenceError::Unsupported),
     };
     Ok(

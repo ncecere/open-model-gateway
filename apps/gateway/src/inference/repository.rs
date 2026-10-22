@@ -85,7 +85,10 @@ impl From<super::types::FinishReason> for FinishLabel {
             F::Stop => Self::Stop,
             F::Length => Self::Length,
             F::ToolCalls => Self::ToolCalls,
-            F::ContentFilter => Self::ContentFilter,
+            // Persist the existing coarse telemetry vocabulary; native client
+            // codecs retain the distinct canonical outcomes (no schema change).
+            F::ContentFilter | F::Refusal => Self::ContentFilter,
+            F::ContextWindowExceeded => Self::Length,
         }
     }
 }
