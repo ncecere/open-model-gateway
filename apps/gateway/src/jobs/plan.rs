@@ -178,7 +178,8 @@ impl Jobs {
         let mut issues: Vec<Issue> = Vec::new();
         let mut ids: HashSet<String> = HashSet::new();
         let mut models: HashMap<String, Result<Resolved, LineError>> = HashMap::new();
-        let mut previews: HashMap<(Uuid, u32), LinePreview> = HashMap::new();
+        let mut previews: HashMap<(Uuid, Option<u32>), LinePreview> = HashMap::new();
+        let mut prices: HashMap<Uuid, Uuid> = HashMap::new();
         // deployment id -> (group, first line number using it)
         let mut groups: Vec<(LineGroup, u64, Arc<dyn ProviderAdapter>, bool)> = Vec::new();
         let mut requests: u32 = 0;
@@ -240,21 +241,26 @@ impl Jobs {
                     continue;
                 }
             };
-            let max = line.request.max_output();
-            let key = (resolved.deployment.id, max);
+            let requested = match &line.request {
+                BatchRequest::Chat(r) => r.max_output_tokens,
+                BatchRequest::Embeddings(_) => Some(0),
+            };
+            let key = (resolved.deployment.id, requested);
             if let std::collections::hash_map::Entry::Vacant(slot) = previews.entry(key) {
                 slot.insert(
                     crate::governance::batch::preview_line(
                         &self.store,
                         resolved.deployment.id,
                         endpoint.protocol(),
-                        max,
+                        requested,
+                        prices.get(&resolved.deployment.id).copied(),
+                        resolved.adapter.generation_output_limit(),
                     )
                     .await?,
                 );
             }
-            match previews[&key] {
-                LinePreview::Ok => {}
+            let (price_id, max) = match previews[&key] {
+                LinePreview::Ok { price_id, output } => (price_id, output),
                 LinePreview::OutputLimit => {
                     if issue(&mut issues, physical, LineError::OutputLimit) {
                         break;
@@ -267,6 +273,13 @@ impl Jobs {
                     }
                     continue;
                 }
+            };
+            prices.insert(resolved.deployment.id, price_id);
+            // Encoding checks use the same bound as the parent hold; the
+            // uploaded body and private body retain the optional omission.
+            let mut execution_request = line.request.clone();
+            if let BatchRequest::Chat(r) = &mut execution_request {
+                r.max_output_tokens = Some(max);
             }
             // Can this line run natively, and can the engine run it?
             let encodable = resolved
@@ -274,7 +287,7 @@ impl Jobs {
                 .native_batch(&resolved.deployment, endpoint)
                 && resolved
                     .adapter
-                    .encode_native_line(&resolved.deployment, endpoint, "l0", &line.request)
+                    .encode_native_line(&resolved.deployment, endpoint, "l0", &execution_request)
                     .is_ok();
             if resolved.legacy && !encodable {
                 if issue(&mut issues, physical, LineError::UnsupportedFeature) {
@@ -301,20 +314,36 @@ impl Jobs {
                 .iter_mut()
                 .find(|g| g.0.deployment.id == resolved.deployment.id)
             {
-                Some(g) => *g.0.outputs.entry(max).or_insert(0) += 1,
+                Some(g) => {
+                    *g.0.outputs.entry(max).or_insert(0) += 1;
+                    if requested.is_none() {
+                        g.0.price_id = Some(price_id);
+                    }
+                }
                 None => groups.push((
                     LineGroup {
                         deployment: resolved.deployment.clone(),
                         model: model.clone(),
                         protocol: endpoint.protocol(),
                         outputs: BTreeMap::from([(max, 1)]),
+                        price_id: requested.is_none().then_some(price_id),
                     },
                     physical,
                     resolved.adapter.clone(),
                     resolved.legacy,
                 )),
             }
-            let mut copy = raw;
+            let mut copy = if requested.is_none() {
+                lines::planned_copy(
+                    raw,
+                    lines::LinePlan {
+                        deployment: resolved.deployment.id,
+                        price: price_id,
+                    },
+                )?
+            } else {
+                raw
+            };
             copy.push(b'\n');
             work.raw(copy).await?;
         }

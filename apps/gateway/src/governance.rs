@@ -522,8 +522,10 @@ pub async fn admit(
         generation(request.max_output_tokens),
         lease_seconds,
         None,
+        u32::MAX,
     )
     .await
+    .map(|_| ())
 }
 pub async fn admit_for_deployment(
     store: &Store,
@@ -532,14 +534,59 @@ pub async fn admit_for_deployment(
     lease_seconds: i64,
     deployment: &Deployment,
 ) -> Result<(), InferenceError> {
+    admit_generation(store, record, request, lease_seconds, deployment, u32::MAX)
+        .await
+        .map(|_| ())
+}
+/// Resolve and reserve the exact output bound before any execution writes.
+pub async fn admit_generation(
+    store: &Store,
+    record: &ExecutionStart,
+    request: &ChatRequest,
+    lease_seconds: i64,
+    deployment: &Deployment,
+    output_limit: u32,
+) -> Result<crate::inference::repository::GenerationAdmission, InferenceError> {
     admit_checked(
         store,
         record,
         generation(request.max_output_tokens),
         lease_seconds,
         Some(deployment),
+        output_limit,
     )
     .await
+}
+/// Only priced omissions need a server default. Explicit invalid values are
+/// client errors; an unusable server default is a configuration error.
+pub(crate) fn generation_bound(
+    price_ceiling: Option<i64>,
+    requested: Option<u32>,
+    output_limit: u32,
+) -> Result<crate::inference::repository::GenerationAdmission, InferenceError> {
+    if price_ceiling.is_some_and(|n| n < 1) {
+        return Err(InferenceError::Configuration);
+    }
+    let max_output_tokens = match requested {
+        Some(n) => {
+            if n == 0
+                || n > output_limit
+                || price_ceiling.is_some_and(|ceiling| i64::from(n) > ceiling)
+            {
+                return Err(InferenceError::InvalidRequest);
+            }
+            Some(n)
+        }
+        None => price_ceiling
+            .map(|ceiling| {
+                u32::try_from(ceiling)
+                    .ok()
+                    .filter(|n| *n > 0 && *n <= output_limit)
+                    .ok_or(InferenceError::Configuration)
+            })
+            .transpose()?,
+    };
+    Ok(crate::inference::repository::GenerationAdmission { max_output_tokens })
 }
 pub async fn admit_embeddings_for_deployment(
     store: &Store,
@@ -558,8 +605,10 @@ pub async fn admit_embeddings_for_deployment(
         },
         lease_seconds,
         Some(deployment),
+        u32::MAX,
     )
     .await
+    .map(|_| ())
 }
 /// Generic non-generation admission: the deployment must still declare a
 /// protocol of this workload, and v3 holds include meter bounds.
@@ -573,7 +622,16 @@ pub async fn admit_workload_for_deployment(
     if admission.kind == WorkloadKind::Generation {
         return Err(InferenceError::Configuration);
     }
-    admit_checked(store, record, *admission, lease_seconds, Some(deployment)).await
+    admit_checked(
+        store,
+        record,
+        *admission,
+        lease_seconds,
+        Some(deployment),
+        u32::MAX,
+    )
+    .await
+    .map(|_| ())
 }
 async fn admit_checked(
     store: &Store,
@@ -581,25 +639,38 @@ async fn admit_checked(
     workload: WorkloadAdmission,
     lease_seconds: i64,
     expected: Option<&Deployment>,
-) -> Result<(), InferenceError> {
+    output_limit: u32,
+) -> Result<crate::inference::repository::GenerationAdmission, InferenceError> {
     let mut timer = crate::metrics::PhaseTimer::start();
     let result = locks::retry_deadlocks!(
         "admission",
-        admit_unobserved(store, record, workload, lease_seconds, expected, &mut timer).await
+        admit_unobserved(
+            store,
+            record,
+            workload,
+            lease_seconds,
+            expected,
+            output_limit,
+            &mut timer
+        )
+        .await
     );
-    crate::metrics::observe_admission(&result);
+    let observed = result.as_ref().map(|_| ()).map_err(|e| *e);
+    crate::metrics::observe_admission(&observed);
     crate::metrics::METRICS
-        .observe_admission_phases(timer, crate::metrics::admission_outcome(&result));
+        .observe_admission_phases(timer, crate::metrics::admission_outcome(&observed));
     result
 }
+#[allow(clippy::too_many_arguments)]
 async fn admit_unobserved(
     store: &Store,
     record: &ExecutionStart,
-    workload: WorkloadAdmission,
+    mut workload: WorkloadAdmission,
     lease_seconds: i64,
     expected: Option<&Deployment>,
+    output_limit: u32,
     timer: &mut crate::metrics::PhaseTimer,
-) -> Result<(), InferenceError> {
+) -> Result<crate::inference::repository::GenerationAdmission, InferenceError> {
     if !(1..=86_400).contains(&lease_seconds) {
         return Err(InferenceError::Configuration);
     }
@@ -647,7 +718,18 @@ async fn admit_unobserved(
             }
         }
     };
-    let bounds = reservation_bounds(price.as_ref(), &workload);
+    let admission = match workload.output {
+        OutputReservation::Requested(requested) if workload.kind == WorkloadKind::Generation => {
+            generation_bound(
+                price.as_ref().map(|p| p.output_token_limit),
+                requested,
+                output_limit,
+            )
+        }
+        _ => Ok(crate::inference::repository::GenerationAdmission {
+            max_output_tokens: None,
+        }),
+    };
     if current.provider != record.provider
         || expected.is_some_and(|e| {
             current.id != e.id
@@ -673,7 +755,11 @@ async fn admit_unobserved(
     let lease = now
         .checked_add_signed(chrono::TimeDelta::seconds(lease_seconds))
         .ok_or(InferenceError::Configuration)?;
-    let (tokens, held) = bounds?;
+    let admission = admission?;
+    if workload.kind == WorkloadKind::Generation {
+        workload.output = OutputReservation::Requested(admission.max_output_tokens);
+    }
+    let (tokens, held) = reservation_bounds(price.as_ref(), &workload)?;
     // A pricing-v3 price that cannot bound this attempt (a possibly-used meter
     // without a line, an explicit unknown, or no `max_units`) is refused under
     // any budget with `price_unbounded`. v1/v2 keep their legacy
@@ -741,7 +827,7 @@ async fn admit_unobserved(
     if !job && scoped(store) {
         pressure::record(now, workspace, lineage, lock_wait);
     }
-    Ok(())
+    Ok(admission)
 }
 /// The latest (immutable, append-only) price of a deployment.
 async fn latest_price(tx: &mut Tx<'_>, deployment: Uuid) -> Result<Option<Price>, InferenceError> {
@@ -1766,6 +1852,8 @@ async fn resolve_usage_once(
 }
 #[cfg(all(test, feature = "integration-tests"))]
 mod audio_tests;
+#[cfg(all(test, feature = "integration-tests"))]
+mod generation_defaults_tests;
 /// Test helper: replace one scope's whole budget set with `amount` for `period` (or none).
 #[cfg(test)]
 pub(crate) async fn set_test_budget(

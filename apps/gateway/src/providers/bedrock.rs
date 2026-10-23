@@ -116,6 +116,9 @@ impl ProviderAdapter for BedrockAdapter {
             tools: true,
         }
     }
+    fn generation_output_limit(&self) -> u32 {
+        i32::MAX as u32
+    }
     fn supports_protocol(&self, protocol: ApiProtocol) -> bool {
         super::capabilities::serves(self.id(), protocol)
     }

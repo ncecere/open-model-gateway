@@ -40,6 +40,146 @@ fn native_input_and_tools_normalize() {
     assert!(r.messages[3].role == Role::Tool);
     assert_eq!(r.tools.len(), 1);
 }
+#[test]
+fn own_snapshots_are_stateless_followup_input() {
+    for reason in [
+        FinishReason::ToolCalls,
+        FinishReason::Length,
+        FinishReason::ContentFilter,
+    ] {
+        let response = ChatResponse {
+            content: Some("First 世界, then tools".into()),
+            tool_calls: vec![ToolCall {
+                id: "semantic-call".into(),
+                name: "weather".into(),
+                arguments: "{\"city\": \"東京\"}".into(),
+            }],
+            finish_reason: reason,
+            usage: Usage::default(),
+        };
+        let output = snapshot("resp_readonly", "m", 1, &response)["output"].clone();
+        assert_ne!(output[1]["id"], output[1]["call_id"]);
+        let mut input = vec![json!({"role":"user","content":"start"})];
+        input.extend(output.as_array().unwrap().clone());
+        input.push(json!({"type":"function_call_output","call_id":"semantic-call","output":"sun"}));
+        input.push(json!({"role":"user","content":"continue"}));
+        let normalized = parse(json!({"model":"m","input":input})).unwrap();
+        assert_eq!(normalized.messages.len(), 5);
+        assert_eq!(normalized.messages[1].content, response.content);
+        assert_eq!(normalized.messages[2].tool_calls.len(), 1);
+        let call = &normalized.messages[2].tool_calls[0];
+        assert_eq!(call.id, response.tool_calls[0].id);
+        assert_eq!(call.name, response.tool_calls[0].name);
+        assert_eq!(call.arguments, response.tool_calls[0].arguments);
+        assert_eq!(
+            normalized.messages[3].tool_call_id.as_deref(),
+            Some("semantic-call")
+        );
+        assert_eq!(normalized.messages[4].content.as_deref(), Some("continue"));
+        assert_eq!(normalized.max_output_tokens, None);
+    }
+}
+#[test]
+fn supported_item_metadata_and_empty_annotations() {
+    for status in [
+        None,
+        Some("in_progress"),
+        Some("completed"),
+        Some("incomplete"),
+    ] {
+        for id in [None, Some(""), Some("arbitrary client id")] {
+            for mut item in [
+                json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":"a","annotations":[]},{"type":"output_text","text":"世界"}]}),
+                json!({"type":"function_call","call_id":"c","name":"weather","arguments":"{ \"x\": 1 }"}),
+                json!({"type":"function_call_output","call_id":"c","output":"sun"}),
+            ] {
+                if let Some(id) = id {
+                    item["id"] = json!(id);
+                }
+                if let Some(status) = status {
+                    item["status"] = json!(status);
+                }
+                let r = parse(json!({"model":"m","input":[item.clone()]})).unwrap();
+                match item["type"].as_str().unwrap() {
+                    "message" => assert_eq!(r.messages[0].content.as_deref(), Some("a世界")),
+                    "function_call" => {
+                        assert_eq!(r.messages[0].tool_calls[0].id, "c");
+                        assert_eq!(r.messages[0].tool_calls[0].arguments, "{ \"x\": 1 }");
+                    }
+                    _ => assert_eq!(r.messages[0].tool_call_id.as_deref(), Some("c")),
+                }
+            }
+        }
+    }
+    // Unlike message/call metadata, the SDK explicitly allows null on outputs.
+    for metadata in [
+        json!({"id":null}),
+        json!({"status":null}),
+        json!({"id":null,"status":null}),
+    ] {
+        let mut item = json!({"type":"function_call_output","call_id":"c","output":"sun"});
+        item.as_object_mut()
+            .unwrap()
+            .extend(metadata.as_object().unwrap().clone());
+        assert!(parse(json!({"model":"m","input":[item]})).is_ok());
+    }
+}
+#[test]
+fn echoed_metadata_does_not_widen_the_supported_subset() {
+    for base in [
+        json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}),
+        json!({"type":"function_call","call_id":"c","name":"weather","arguments":"{}"}),
+        json!({"type":"function_call_output","call_id":"c","output":"sun"}),
+    ] {
+        for field in ["id", "status"] {
+            for bad in [json!(1), json!(true), json!([]), json!({}), json!(null)] {
+                if base["type"] == "function_call_output" && bad.is_null() {
+                    continue;
+                }
+                let mut item = base.clone();
+                item[field] = bad;
+                assert!(parse(json!({"model":"m","input":[item]})).is_err());
+            }
+        }
+        for status in ["", "failed", "cancelled", "COMPLETED"] {
+            let mut item = base.clone();
+            item["status"] = json!(status);
+            assert!(parse(json!({"model":"m","input":[item]})).is_err());
+        }
+        let mut item = base;
+        item["extra"] = json!(true);
+        assert!(parse(json!({"model":"m","input":[item]})).is_err());
+    }
+    for annotations in [
+        json!(null),
+        json!({}),
+        json!(""),
+        json!([{"type":"url_citation","url":"https://example.invalid","title":"citation","start_index":0,"end_index":1}]),
+        json!([null]),
+    ] {
+        assert!(parse(json!({"model":"m","input":[{"role":"assistant","content":[{"type":"output_text","text":"hi","annotations":annotations}]}]})).is_err());
+    }
+    for item in [
+        json!({"type":"message","role":"user","content":[{"type":"output_text","text":"hi","annotations":[]}]}),
+        json!({"type":"message","role":"assistant","content":[{"type":"input_text","text":"hi","annotations":[]}]}),
+        json!({"type":"message","role":"tool","content":"hi"}),
+        json!({"type":"message","role":"assistant","content":[]}),
+        json!({"type":"message","role":"assistant","content":null}),
+        json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":null}]}),
+        json!({"type":"message","role":"assistant","content":[{"type":"refusal","refusal":"no"}]}),
+        json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi","logprobs":[]}]}),
+        json!({"type":"function_call","id":"readonly","name":"weather","arguments":"{}"}),
+        json!({"type":"function_call","id":"readonly","call_id":"","name":"weather","arguments":"{}"}),
+        json!({"type":"function_call","call_id":"c","name":"weather","arguments":{}}),
+        json!({"type":"function_call_output","id":"readonly","call_id":null,"output":"sun"}),
+        json!({"type":"function_call_output","call_id":"c","output":[]}),
+        json!({"type":"item_reference","id":"readonly"}),
+        json!({"type":"reasoning","id":"readonly","summary":[]}),
+        json!({"type":"web_search_call","id":"readonly","status":"completed"}),
+    ] {
+        assert!(parse(json!({"model":"m","input":[item]})).is_err());
+    }
+}
 fn stream(events: Vec<Result<ChatEvent>>) -> ProviderOutput {
     ProviderOutput::Stream(Box::pin(futures_util::stream::iter(events)))
 }
@@ -121,6 +261,67 @@ async fn no_completion_without_done_or_for_incomplete() {
     assert!(b.contains("event: response.incomplete"));
     assert!(!b.contains("event: response.completed"));
 }
+#[tokio::test]
+async fn native_terminal_outcomes_map_to_coarse_incomplete_json_and_sse() {
+    for (reason, wire) in [
+        (FinishReason::Refusal, "content_filter"),
+        (FinishReason::ContextWindowExceeded, "max_output_tokens"),
+    ] {
+        for empty in [false, true] {
+            let response = ChatResponse {
+                content: (!empty).then(|| "世界".into()),
+                tool_calls: vec![],
+                finish_reason: reason,
+                usage: Usage::default(),
+            };
+            let complete: Value = serde_json::from_str(
+                &body(render(
+                    ProviderOutput::Complete(response),
+                    "r".into(),
+                    "m".into(),
+                    1,
+                ))
+                .await,
+            )
+            .unwrap();
+            assert_eq!(complete["status"], "incomplete");
+            assert_eq!(complete["incomplete_details"]["reason"], wire);
+            if empty {
+                assert_eq!(complete["output"], json!([]));
+            } else {
+                assert_eq!(complete["output"][0]["status"], "incomplete");
+                assert_eq!(complete["output"][0]["content"][0]["type"], "output_text");
+            }
+            let mut events = vec![];
+            if !empty {
+                events.push(Ok(ChatEvent::Delta {
+                    text: Some("世界".into()),
+                    tool_calls: vec![],
+                }));
+            }
+            events.extend([Ok(ChatEvent::Finish(reason)), Ok(ChatEvent::Done)]);
+            let b = body(render(stream(events), "r".into(), "m".into(), 1)).await;
+            let values = frames(&b);
+            assert_eq!(values.last().unwrap()["type"], "response.incomplete");
+            assert_eq!(values.last().unwrap()["response"], complete);
+            assert!(!b.contains("event: response.completed"));
+            assert!(!b.contains("\"refusal\""));
+            assert!(!b.contains("context_window_exceeded"));
+            if !empty {
+                let text = values
+                    .iter()
+                    .find(|v| v["type"] == "response.output_text.delta")
+                    .unwrap();
+                assert_eq!(text["delta"], "世界");
+                assert!(
+                    b.find("response.output_text.delta").unwrap()
+                        < b.find("response.incomplete").unwrap()
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn unknown_usage_and_tool_argument_fragments() {
     let mut a = Accumulator::default();

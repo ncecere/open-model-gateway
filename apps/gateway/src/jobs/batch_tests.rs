@@ -29,8 +29,11 @@ use crate::{
 struct Script {
     /// Chat executions (gateway-run lines), by first message text.
     executed: Vec<String>,
+    maxima: Vec<Option<u32>>,
+    accept_tools: bool,
     /// Encoded native records of the last submission.
     submitted: Vec<Value>,
+    submissions: Vec<Vec<Value>>,
     batches: std::collections::VecDeque<UpstreamBatch>,
     /// Result lines a native batch returns (fake format).
     results: Vec<Value>,
@@ -110,7 +113,7 @@ impl ProviderAdapter for Fake {
         Capabilities {
             text_chat: true,
             streaming: false,
-            tools: false,
+            tools: self.script.lock().unwrap().accept_tools,
         }
     }
     fn supports_protocol(&self, p: ApiProtocol) -> bool {
@@ -131,7 +134,11 @@ impl ProviderAdapter for Fake {
         request: ChatRequest,
     ) -> Result<ProviderOutput, InferenceError> {
         let text = request.messages[0].content.clone().unwrap_or_default();
-        self.script.lock().unwrap().executed.push(text.clone());
+        {
+            let mut script = self.script.lock().unwrap();
+            script.executed.push(text.clone());
+            script.maxima.push(request.max_output_tokens);
+        }
         match text.as_str() {
             "fail" => Err(InferenceError::UpstreamUnavailable),
             "busy" => Err(InferenceError::Busy),
@@ -198,7 +205,7 @@ impl ProviderAdapter for Fake {
             return Err(InferenceError::Unsupported);
         }
         Ok(serde_json::to_vec(
-            &json!({"custom_id":custom_id,"model":target.upstream_model,"text":text}),
+            &json!({"custom_id":custom_id,"model":target.upstream_model,"text":text,"maximum":request.max_output()}),
         )
         .unwrap())
     }
@@ -214,6 +221,7 @@ impl ProviderAdapter for Fake {
         }
         let mut s = self.script.lock().unwrap();
         s.calls.push("submit");
+        s.submissions.push(seen.clone());
         s.submitted = seen;
         Ok(upstream(BatchStatus::Validating))
     }
@@ -561,6 +569,242 @@ async fn gateway_run_mixed_providers_end_to_end(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
+async fn omitted_batch_maxima_pin_parent_child_and_native_execution_without_rewriting_input(
+    pool: PgPool,
+) {
+    let w = world(pool, true, false, 1).await;
+    let f = &w.f;
+    // Four queued jobs in this snapshot test, rather than the type default 2.
+    sqlx::query("INSERT INTO workspace_platform_policy_overrides(workspace_id,concurrent_jobs) VALUES($1,4)").bind(f.principal.workspace_id).execute(&f.store.pool).await.unwrap();
+    let mut line = chat_line("a", "company/smart", "default");
+    line["body"]
+        .as_object_mut()
+        .unwrap()
+        .remove("max_completion_tokens");
+    let file = w.upload(&f.principal, &[line.clone()]).await;
+    let native = w
+        .create(f.principal, &file, BatchEndpoint::ChatCompletions, None)
+        .await
+        .unwrap();
+    let gateway = w
+        .create(
+            f.principal,
+            &file,
+            BatchEndpoint::ChatCompletions,
+            Some(json!({"omg_mode":"gateway"})),
+        )
+        .await
+        .unwrap();
+    let response_line = json!({"custom_id":"r","method":"POST","url":"/v1/responses","body":{"model":"company/smart","input":"default"}});
+    let response_file = w.upload(&f.principal, &[response_line]).await;
+    let native_responses = w
+        .create(f.principal, &response_file, BatchEndpoint::Responses, None)
+        .await
+        .unwrap();
+    assert_eq!(native_responses.mode(), Some(BatchMode::Native));
+    let responses = w
+        .create(
+            f.principal,
+            &response_file,
+            BatchEndpoint::Responses,
+            Some(json!({"omg_mode":"gateway"})),
+        )
+        .await
+        .unwrap();
+    let old_price: Uuid =
+        sqlx::query_scalar("SELECT price_id FROM governance_reservations WHERE execution_id=$1")
+            .bind(native.execution_id)
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+    for job in [&native, &native_responses, &gateway, &responses] {
+        assert_eq!(reservation(f, job.execution_id).await.1, Some(150));
+    }
+    let original = w.read(f.principal.workspace_id, native.input_file_id).await;
+    assert_eq!(original, [line]);
+    let private = w.read(f.principal.workspace_id, native.work_file_id).await;
+    assert!(private[0]["body"].get("max_completion_tokens").is_none());
+    assert_eq!(private[0]["_omg_plan"]["price"], json!(old_price));
+    // Publication while queued must change neither the parent's hold nor the
+    // execution cap/price of a child or a native line.
+    sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version) VALUES($1,$2,9000000,9000000,200,9,1)").bind(Uuid::new_v4()).bind(f.deployment).execute(&f.store.pool).await.unwrap();
+    w.poll().await;
+    {
+        let script = w.openai.script.lock().unwrap();
+        assert_eq!(script.submissions.len(), 2);
+        assert!(
+            script
+                .submissions
+                .iter()
+                .all(|s| s.len() == 1 && s[0]["maximum"] == 50)
+        );
+    }
+    let runner = Runner::new(w.jobs.clone());
+    assert!(runner.run_next().await.unwrap());
+    assert!(runner.run_next().await.unwrap());
+    assert_eq!(w.openai.script.lock().unwrap().maxima, [Some(50), Some(50)]);
+    let children: Vec<(Uuid,i64,i64)> = sqlx::query_as("SELECT r.price_id,r.reserved_tokens,l.amount_microusd FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id JOIN monetary_ledger l ON l.execution_id=e.id WHERE e.batch_job_id IS NOT NULL AND l.kind='hold'").fetch_all(&f.store.pool).await.unwrap();
+    assert_eq!(children, [(old_price, 150, 150), (old_price, 150, 150)]);
+    assert_eq!(
+        w.read(f.principal.workspace_id, native.input_file_id).await,
+        original
+    );
+    consistent(f).await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn omitted_maximum_stale_planning_price_is_refused_before_parent_admission(pool: PgPool) {
+    stale_plan_is_refused_then_replanned(pool, crate::governance::locks::AdmissionMode::Scoped)
+        .await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn omitted_maximum_stale_planning_price_is_refused_in_global_admission(pool: PgPool) {
+    stale_plan_is_refused_then_replanned(pool, crate::governance::locks::AdmissionMode::Global)
+        .await;
+}
+
+async fn stale_plan_is_refused_then_replanned(
+    pool: PgPool,
+    mode: crate::governance::locks::AdmissionMode,
+) {
+    let mut w = world(pool, true, false, 1).await;
+    w.f.store = w.f.store.clone().with_admission_mode(mode);
+    w.jobs.store = w.f.store.clone();
+    let f = &w.f;
+    let mut line = chat_line("a", "company/smart", "default");
+    line["body"]
+        .as_object_mut()
+        .unwrap()
+        .remove("max_completion_tokens");
+    let file = w.upload(&f.principal, &[line]).await;
+    let input = w
+        .files
+        .get(
+            crate::filestore::files::parse_public_id(&file).unwrap(),
+            Some(f.principal.workspace_id),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let plan = w
+        .jobs
+        .plan(
+            &f.principal,
+            Uuid::new_v4(),
+            &input,
+            BatchEndpoint::ChatCompletions,
+            false,
+        )
+        .await
+        .ok()
+        .expect("valid plan");
+    let original = w.read(f.principal.workspace_id, Some(input.id)).await;
+    assert!(original[0]["body"].get("max_completion_tokens").is_none());
+    let old = plan.groups[0].price_id.unwrap();
+    let new = Uuid::new_v4();
+    sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version) VALUES($1,$2,9000000,9000000,200,9,1)").bind(new).bind(f.deployment).execute(&f.store.pool).await.unwrap();
+    for native in [false, true] {
+        let record = f.start();
+        assert_eq!(
+            crate::governance::batch::admit_batch(&f.store, &record, &plan.groups, native, 600)
+                .await,
+            Err(InferenceError::Configuration)
+        );
+    }
+    let rows: (i64,i64,i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM inference_executions),(SELECT count(*) FROM governance_reservations),(SELECT count(*) FROM monetary_ledger),(SELECT count(*) FROM async_jobs)").fetch_one(&f.store.pool).await.unwrap();
+    assert_eq!(rows, (0, 0, 0, 0));
+    assert!(w.openai.calls().is_empty());
+    assert!(w.openai.executed().is_empty());
+    assert_eq!(plan.groups[0].price_id, Some(old));
+    assert_eq!(
+        plan.groups[0].outputs,
+        std::collections::BTreeMap::from([(50, 1)])
+    );
+    // A separate public create replans the very same uploaded file. There is
+    // no server retry or recapping of the rejected private plan.
+    let native = w
+        .create(f.principal, &file, BatchEndpoint::ChatCompletions, None)
+        .await
+        .unwrap();
+    let gateway = w
+        .create(
+            f.principal,
+            &file,
+            BatchEndpoint::ChatCompletions,
+            Some(json!({"omg_mode":"gateway"})),
+        )
+        .await
+        .unwrap();
+    for job in [&native, &gateway] {
+        assert_eq!(job.input_file_id, Some(input.id));
+        assert_ne!(job.work_file_id, Some(plan.work_file));
+        let row: (Option<Uuid>,i64,i64) = sqlx::query_as("SELECT price_id,reserved_tokens,held_microusd FROM governance_reservations WHERE execution_id=$1").bind(job.execution_id).fetch_one(&f.store.pool).await.unwrap();
+        assert_eq!(
+            row,
+            (
+                (job.mode() == Some(BatchMode::Native)).then_some(new),
+                209,
+                1881
+            )
+        );
+        let private = w.read(f.principal.workspace_id, job.work_file_id).await;
+        assert_eq!(private[0]["_omg_plan"]["price"], json!(new));
+        assert!(private[0]["body"].get("max_completion_tokens").is_none());
+    }
+    w.poll().await;
+    assert_eq!(w.openai.script.lock().unwrap().submitted[0]["maximum"], 9);
+    assert!(Runner::new(w.jobs.clone()).run_next().await.unwrap());
+    assert_eq!(w.openai.script.lock().unwrap().maxima, [Some(9)]);
+    let child: (Uuid,i64,i64) = sqlx::query_as("SELECT r.price_id,r.reserved_tokens,l.amount_microusd FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id JOIN monetary_ledger l ON l.execution_id=e.id WHERE e.batch_job_id=$1 AND l.kind='hold'").bind(gateway.id).fetch_one(&f.store.pool).await.unwrap();
+    assert_eq!(child, (new, 209, 1881));
+    assert_eq!(
+        w.read(f.principal.workspace_id, Some(input.id)).await,
+        original
+    );
+    consistent(f).await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn omitted_maximum_boundary_preserves_compact_numbers_in_both_batch_modes(pool: PgPool) {
+    let w = world(pool, true, false, 1).await;
+    let f = &w.f;
+    w.openai.script.lock().unwrap().accept_tools = true;
+    let numbers = std::iter::repeat_n("1e9", 200)
+        .collect::<Vec<_>>()
+        .join(",");
+    let template = format!(
+        r#"{{"custom_id":"boundary","method":"POST","url":"/v1/chat/completions","body":{{"model":"company/smart","messages":[{{"role":"user","content":"boundary"}}],"tools":[{{"type":"function","function":{{"name":"noop","parameters":{{"type":"object","default":[{numbers}],"description":"PAD"}}}}}}]}}}}"#
+    );
+    let raw = template.replace(
+        "PAD",
+        &"x".repeat(BATCH_MAX_LINE_BYTES - template.len() + 3),
+    );
+    assert_eq!(raw.len(), BATCH_MAX_LINE_BYTES);
+    assert!(lines::parse_line(raw.as_bytes(), BatchEndpoint::ChatCompletions).is_ok());
+    let file = w.upload_raw(&f.principal, raw.into_bytes()).await;
+    let native = w
+        .create(f.principal, &file, BatchEndpoint::ChatCompletions, None)
+        .await
+        .unwrap();
+    let gateway = w
+        .create(
+            f.principal,
+            &file,
+            BatchEndpoint::ChatCompletions,
+            Some(json!({"omg_mode":"gateway"})),
+        )
+        .await
+        .unwrap();
+    w.poll().await;
+    assert_eq!(w.openai.script.lock().unwrap().submitted.len(), 1);
+    assert!(w.reload(&native).await.upstream_id.is_some());
+    assert!(Runner::new(w.jobs.clone()).run_next().await.unwrap());
+    assert_eq!(w.reload(&gateway).await.request_completed, Some(1));
+    assert_eq!(w.openai.script.lock().unwrap().maxima, [Some(50)]);
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
 async fn validation_rejects_with_line_numbers_and_creates_nothing(pool: PgPool) {
     let w = world(pool, false, false, 2).await;
     let f = &w.f;
@@ -571,7 +815,7 @@ async fn validation_rejects_with_line_numbers_and_creates_nothing(pool: PgPool) 
         serde_json::to_string(&chat_line("a", "company/smart", "dup")).unwrap(),
         "   ".into(),
         serde_json::to_string(&chat_line("c", "company/unknown", "x")).unwrap(),
-        r#"{"custom_id":"d","method":"POST","url":"/v1/chat/completions","body":{"model":"company/smart","messages":[{"role":"user","content":"x"}]}}"#.into(),
+        r#"{"custom_id":"d","method":"POST","url":"/v1/chat/completions","body":{"model":"company/smart","messages":[{"role":"user","content":"x"}],"max_completion_tokens":0}}"#.into(),
         r#"{"custom_id":"e","method":"POST","url":"/v1/embeddings","body":{"model":"company/smart","input":"x"}}"#.into(),
         r#"{"custom_id":"f","method":"POST","url":"/v1/chat/completions","body":{"model":"company/smart","messages":[{"role":"user","content":"x"}],"max_completion_tokens":51}}"#.into(),
     ] {
@@ -592,7 +836,7 @@ async fn validation_rejects_with_line_numbers_and_creates_nothing(pool: PgPool) 
             (2, "invalid_json"),
             (3, "duplicate_custom_id"),
             (5, "model_not_found"),
-            (6, "missing_max_tokens"),
+            (6, "invalid_body"),
             (7, "invalid_url"),
             (8, "max_tokens_too_large"),
         ]
@@ -1000,8 +1244,8 @@ async fn native_openai_batch_charges_published_batch_prices(pool: PgPool) {
     assert_eq!(
         submitted,
         [
-            json!({"custom_id":"l0","model":"mock-model","text":"one"}),
-            json!({"custom_id":"l1","model":"mock-model","text":"two"})
+            json!({"custom_id":"l0","model":"mock-model","text":"one","maximum":10}),
+            json!({"custom_id":"l1","model":"mock-model","text":"two","maximum":10})
         ]
     );
     let job = w.reload(&job).await;

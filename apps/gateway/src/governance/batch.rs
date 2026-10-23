@@ -54,6 +54,10 @@ pub struct LineGroup {
     pub protocol: ApiProtocol,
     /// Output maximum → number of lines (0 for embeddings).
     pub outputs: BTreeMap<u32, u32>,
+    /// Omitted generation bounds record the planning price, which must still
+    /// be latest at initial admission. Admitted work then pins that version.
+    /// Explicit-bound/embedding-only groups retain admission-price behavior.
+    pub price_id: Option<Uuid>,
 }
 impl LineGroup {
     pub fn lines(&self) -> u64 {
@@ -136,7 +140,10 @@ fn serves(d: &Deployment, protocol: ApiProtocol, native: bool) -> bool {
 /// Whether one line could be reserved for (validation preview).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LinePreview {
-    Ok,
+    Ok {
+        price_id: Uuid,
+        output: u32,
+    },
     Unpriced,
     /// The output maximum exceeds the price's output ceiling.
     OutputLimit,
@@ -151,23 +158,56 @@ pub async fn preview_line(
     store: &Store,
     deployment: Uuid,
     protocol: ApiProtocol,
-    output: u32,
+    output: Option<u32>,
+    price_id: Option<Uuid>,
+    output_limit: u32,
 ) -> Result<LinePreview, InferenceError> {
     let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
-    let price = latest_price(&mut tx, deployment).await?;
+    let price = match price_id {
+        Some(id) => Some(price_version(&mut tx, id, deployment).await?),
+        None => latest_price(&mut tx, deployment).await?,
+    };
     tx.commit().await.map_err(storage)?;
     let Some(p) = price else {
         return Ok(LinePreview::Unpriced);
     };
     let generation = protocol.workload() == WorkloadKind::Generation;
-    if generation && i64::from(output) > p.output_token_limit {
-        return Ok(LinePreview::OutputLimit);
-    }
+    let output = if generation {
+        match generation_bound(Some(p.output_token_limit), output, output_limit) {
+            Ok(bound) => bound
+                .max_output_tokens
+                .ok_or(InferenceError::Configuration)?,
+            Err(InferenceError::InvalidRequest) => return Ok(LinePreview::OutputLimit),
+            Err(e) => return Err(e),
+        }
+    } else {
+        0
+    };
     match line_bound(&p, output, generation) {
-        Ok(_) => Ok(LinePreview::Ok),
+        Ok(_) => Ok(LinePreview::Ok {
+            price_id: p.id,
+            output,
+        }),
         Err(InferenceError::Configuration) => Ok(LinePreview::Unbounded),
         Err(e) => Err(e),
     }
+}
+
+/// Materialize an omitted native line maximum from its immutable plan only.
+/// The batch reservation already pinned and held this price at admission.
+pub(crate) async fn planned_output(
+    store: &Store,
+    price: Uuid,
+    deployment: Uuid,
+    output_limit: u32,
+) -> Result<u32, InferenceError> {
+    let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
+    let p = price_version(&mut tx, price, deployment).await?;
+    let output = generation_bound(Some(p.output_token_limit), None, output_limit)?
+        .max_output_tokens
+        .ok_or(InferenceError::Configuration)?;
+    tx.commit().await.map_err(storage)?;
+    Ok(output)
 }
 
 /// Whether a deployment's current price publishes a batch price list.
@@ -237,9 +277,15 @@ async fn admit_batch_unobserved(
         if !same_target(&current, &g.deployment) || !serves(&current, g.protocol, native) {
             return Err(InferenceError::Configuration);
         }
+        // Planning is not admission: its default must still be based on the
+        // latest price under this catalog lock. Do not recap stale metadata;
+        // already-admitted children/native dispatch use their pinned version.
         let p = latest_price(&mut tx, g.deployment.id)
             .await?
             .ok_or(InferenceError::Configuration)?;
+        if g.price_id.is_some_and(|id| id != p.id) {
+            return Err(InferenceError::Configuration);
+        }
         let tier = if native && p.has_batch_lines() {
             PriceTier::Batch
         } else {
@@ -314,6 +360,7 @@ pub struct LineContext {
 /// Admit one gateway-run line attempt (see the module docs). Errors: the
 /// usual admission errors; `Configuration` when the batch's envelope is no
 /// longer pending (closed or reconciled), so no line may start.
+#[allow(clippy::too_many_arguments)]
 pub async fn admit_line(
     store: &Store,
     batch: LineContext,
@@ -321,14 +368,27 @@ pub async fn admit_line(
     workload: &WorkloadAdmission,
     lease_seconds: i64,
     expected: &Deployment,
-) -> Result<(), InferenceError> {
+    planned_price: Option<Uuid>,
+    output_limit: u32,
+) -> Result<crate::inference::repository::GenerationAdmission, InferenceError> {
     let result = locks::retry_deadlocks!(
         "admission",
-        admit_line_unobserved(store, batch, record, workload, lease_seconds, expected).await
+        admit_line_unobserved(
+            store,
+            batch,
+            record,
+            workload,
+            lease_seconds,
+            expected,
+            planned_price,
+            output_limit
+        )
+        .await
     );
-    crate::metrics::observe_admission(&result);
+    crate::metrics::observe_admission(&result.as_ref().map(|_| ()).map_err(|e| *e));
     result
 }
+#[allow(clippy::too_many_arguments)]
 async fn admit_line_unobserved(
     store: &Store,
     batch: LineContext,
@@ -336,7 +396,9 @@ async fn admit_line_unobserved(
     workload: &WorkloadAdmission,
     lease_seconds: i64,
     expected: &Deployment,
-) -> Result<(), InferenceError> {
+    planned_price: Option<Uuid>,
+    output_limit: u32,
+) -> Result<crate::inference::repository::GenerationAdmission, InferenceError> {
     if !(1..=86_400).contains(&lease_seconds)
         || !matches!(
             workload.kind,
@@ -376,14 +438,22 @@ async fn admit_line_unobserved(
     {
         return Err(InferenceError::Configuration);
     }
-    let p = latest_price(&mut tx, record.deployment_id)
-        .await?
-        .ok_or(InferenceError::Configuration)?;
-    let output = match workload.output {
-        OutputReservation::None => 0,
-        OutputReservation::Requested(Some(n)) => n,
+    let p = match planned_price {
+        Some(id) => price_version(&mut tx, id, record.deployment_id).await?,
+        None => latest_price(&mut tx, record.deployment_id)
+            .await?
+            .ok_or(InferenceError::Configuration)?,
+    };
+    let admission = match workload.output {
+        OutputReservation::None => crate::inference::repository::GenerationAdmission {
+            max_output_tokens: None,
+        },
+        OutputReservation::Requested(n) => {
+            generation_bound(Some(p.output_token_limit), n, output_limit)?
+        }
         _ => return Err(InferenceError::Configuration),
     };
+    let output = admission.max_output_tokens.unwrap_or(0);
     let (tokens, held) = line_bound(&p, output, workload.kind == WorkloadKind::Generation)?;
     let transfer = held.min(available.unwrap_or(0).max(0));
     let now: DateTime<Utc> = store.admission_now(&mut tx).await.map_err(storage)?;
@@ -444,7 +514,8 @@ async fn admit_line_unobserved(
             .await
             .map_err(storage)?;
     }
-    tx.commit().await.map_err(storage)
+    tx.commit().await.map_err(storage)?;
+    Ok(admission)
 }
 
 /// Settle a batch reservation at zero: a gateway-run batch's envelope when

@@ -186,7 +186,7 @@ impl Engine {
                 Uuid::now_v7()
             };
             let attempt_started = Instant::now();
-            timeout_at(
+            let admission = timeout_at(
                 deadline,
                 self.repository.admit(
                     &ExecutionStart {
@@ -208,6 +208,7 @@ impl Engine {
                         .min(i64::MAX as u64 - 5) as i64
                         + 5,
                     deployment,
+                    adapter.generation_output_limit(),
                 ),
             )
             .await
@@ -219,9 +220,13 @@ impl Engine {
                 attempt_started,
                 permit.clone(),
             );
+            // This clone belongs only to this attempt. A failover resolves its
+            // own default from its own immutable price, never from this cap.
+            let mut attempt_request = request.clone();
+            attempt_request.max_output_tokens = admission.max_output_tokens;
             let (output, invalid_body_usage) = evidence::capture(timeout_at(
                 deadline,
-                adapter.execute_protocol(deployment, request.clone(), protocol),
+                adapter.execute_protocol(deployment, attempt_request, protocol),
             ))
             .await;
             // A body that failed validation still fails, but its valid usage

@@ -22,6 +22,13 @@ pub struct ExecutionStart {
     pub client: super::client::ClientMetadata,
 }
 
+/// Output bound resolved under the admission transaction's price/catalog lock.
+/// `None` preserves legacy unpriced requests; it never means zero usage/cost.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GenerationAdmission {
+    pub max_output_tokens: Option<u32>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
     Succeeded,
@@ -78,7 +85,10 @@ impl From<super::types::FinishReason> for FinishLabel {
             F::Stop => Self::Stop,
             F::Length => Self::Length,
             F::ToolCalls => Self::ToolCalls,
-            F::ContentFilter => Self::ContentFilter,
+            // Persist the existing coarse telemetry vocabulary; native client
+            // codecs retain the distinct canonical outcomes (no schema change).
+            F::ContentFilter | F::Refusal => Self::ContentFilter,
+            F::ContextWindowExceeded => Self::Length,
         }
     }
 }
@@ -135,11 +145,15 @@ pub trait InferenceRepository: Send + Sync {
     async fn admit(
         &self,
         record: &ExecutionStart,
-        _request: &super::types::ChatRequest,
+        request: &super::types::ChatRequest,
         _lease_seconds: i64,
         _deployment: &Deployment,
-    ) -> Result<(), InferenceError> {
-        self.start(record).await
+        output_limit: u32,
+    ) -> Result<GenerationAdmission, InferenceError> {
+        let admission =
+            crate::governance::generation_bound(None, request.max_output_tokens, output_limit)?;
+        self.start(record).await?;
+        Ok(admission)
     }
     async fn admit_embeddings(
         &self,
@@ -300,9 +314,17 @@ impl InferenceRepository for Store {
         request: &super::types::ChatRequest,
         lease_seconds: i64,
         deployment: &Deployment,
-    ) -> Result<(), InferenceError> {
-        crate::governance::admit_for_deployment(self, record, request, lease_seconds, deployment)
-            .await
+        output_limit: u32,
+    ) -> Result<GenerationAdmission, InferenceError> {
+        crate::governance::admit_generation(
+            self,
+            record,
+            request,
+            lease_seconds,
+            deployment,
+            output_limit,
+        )
+        .await
     }
     async fn admit_embeddings(
         &self,

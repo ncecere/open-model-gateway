@@ -218,6 +218,8 @@ fn finish(value: &Value) -> Result<FinishReason> {
         Some("end_turn" | "stop_sequence") => Ok(FinishReason::Stop),
         Some("max_tokens") => Ok(FinishReason::Length),
         Some("tool_use") => Ok(FinishReason::ToolCalls),
+        Some("refusal") => Ok(FinishReason::Refusal),
+        Some("model_context_window_exceeded") => Ok(FinishReason::ContextWindowExceeded),
         _ => Err(InferenceError::InvalidUpstream),
     }
 }
@@ -462,5 +464,7 @@ impl State {
 }
 /// Native Message Batches (`jobs::native`).
 mod batches;
+#[cfg(all(test, feature = "integration-tests"))]
+mod terminal_tests;
 #[cfg(test)]
 mod tests;
