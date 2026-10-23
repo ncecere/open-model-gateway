@@ -168,6 +168,13 @@ struct Gateway {
     _app: tokio::task::JoinHandle<()>,
     _metrics: tokio::task::JoinHandle<()>,
 }
+impl Drop for Gateway {
+    // Stop the served app and metrics listener with the test, like Collector.
+    fn drop(&mut self) {
+        self._app.abort();
+        self._metrics.abort();
+    }
+}
 impl Gateway {
     async fn for_trace_config(pool: &PgPool, trace_url: Option<&str>, sample_ratio: f64) -> Self {
         let store = Store::new(pool.clone());
@@ -249,6 +256,10 @@ impl Gateway {
 
     /// The value of the OpenMetrics line matching both `name` and `label`
     /// (e.g. `label = "reason=\"delivery\""`), or 0 if the line is absent.
+    ///
+    /// The registry is process-wide (`metrics::METRICS`), shared by every test
+    /// in this binary. Callers compare before/after deltas, which is sound only
+    /// while no two concurrently running tests read the same label.
     async fn metric_value(&self, name: &str, label: &str) -> f64 {
         reqwest::Client::new()
             .get(format!("http://{}/metrics", self.metrics_addr))
@@ -265,8 +276,8 @@ impl Gateway {
             .unwrap_or(0.0)
     }
 
-    async fn shutdown(self) {
-        if let Some(runtime) = self.runtime {
+    async fn shutdown(mut self) {
+        if let Some(runtime) = self.runtime.take() {
             runtime.shutdown().await;
         }
     }
