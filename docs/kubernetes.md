@@ -167,6 +167,34 @@ Two layers decide where gateway pods may connect, and they should agree:
 
 A private destination needs both: its network in `GATEWAY_EGRESS_PRIVATE_ALLOW` and, if `httpsCidrs` is set, in `httpsCidrs` (or an `extraEgress` rule). With AWS PrivateLink (interface endpoints for Bedrock, STS or S3), list the VPC range in both. Over Tailscale, list only the tailnet addresses you need, never all of `100.64.0.0/10`.
 
+### Traces (#98)
+
+`GATEWAY_TRACES_OTLP_URL`, `GATEWAY_TRACES_SAMPLE_RATIO` and `GATEWAY_TRACES_OTLP_HEADERS_ENV` (the collector URL, sample ratio, and the *name* of the variable holding its auth headers; see [operations](operations.md#traces)) are plain, non-secret settings and go in `gateway.env` like any other setting. The variable `GATEWAY_TRACES_OTLP_HEADERS_ENV` names, however, is itself secret-bearing and must come from a Secret through `gateway.extraEnvFrom`, never `gateway.env`:
+
+```yaml
+gateway:
+  env:
+    GATEWAY_TRACES_OTLP_URL: "https://otel-collector.observability.svc.cluster.local:4318/v1/traces"
+    GATEWAY_TRACES_SAMPLE_RATIO: "0.01"
+    GATEWAY_TRACES_OTLP_HEADERS_ENV: "GATEWAY_TRACES_HEADERS"
+  extraEnvFrom:
+    - secretRef:
+        name: omg-trace-headers
+networkPolicy:
+  egress:
+    extraEgress:
+      - to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: observability
+            podSelector:
+              matchLabels:
+                app: otel-collector
+        ports: [{ protocol: TCP, port: 4318 }]
+```
+
+The Secret `omg-trace-headers` needs one key named `GATEWAY_TRACES_HEADERS` (matching the name given to `GATEWAY_TRACES_OTLP_HEADERS_ENV` above), holding `Key=Value,Key2=Value2` header pairs such as `Authorization=Bearer ...`. A private collector destination also needs `GATEWAY_EGRESS_PRIVATE_ALLOW` covering its address, exactly like any other private destination above; a collector outside the cluster still needs 4318 reachable under `httpsCidrs`/`httpsExceptCidrs` if those are set and the URL uses HTTPS (plain HTTP to a collector is accepted only on development loopback). This chart's `configmap.yaml`/`deployment.yaml` route every `gateway.env` entry to the gateway container alone: the migration Job never mounts this ConfigMap, so a trace setting placed here never reaches it.
+
 ## Failover timing
 
 `cnpg.cluster.smartShutdownTimeout` (default 15 s) is how long a stopping primary waits for clients

@@ -328,3 +328,72 @@ test("HTTPS egress can be narrowed to CIDRs or to anywhere-except; the default s
   assert.throws(() => egress(["--set-json", 'networkPolicy.egress.httpsCidrs=["10.0.0.0/8"]', "--set-json", 'networkPolicy.egress.httpsExceptCidrs=["169.254.169.254/32"]']), /applies only when httpsCidrs is empty/);
   for (const doc of [open, narrowed, publicOnly]) assert.doesNotMatch(doc, /port: 587/, "SMTP is opened only through extraEgress");
 });
+
+test("trace export settings (#98 PR 3) reach the gateway container only, never the migrate Job", () => {
+  const base = ["-f", join(chart, "ci/external-db-values.yaml")];
+  const unset = helmTemplate(base);
+  assert.doesNotMatch(unset, /GATEWAY_TRACES_/);
+
+  const set = helmTemplate([
+    ...base,
+    "--set", "migrations.run=true",
+    "--set", "gateway.env.GATEWAY_TRACES_OTLP_URL=https://collector.observability.svc.cluster.local:4318/v1/traces",
+    "--set", "gateway.env.GATEWAY_TRACES_SAMPLE_RATIO=0.05",
+    "--set", "gateway.env.GATEWAY_TRACES_OTLP_HEADERS_ENV=GATEWAY_TRACES_HEADERS",
+  ]);
+  const [configMap] = docsOfKind(set, "ConfigMap");
+  assert.match(configMap, /GATEWAY_TRACES_OTLP_URL: "https:\/\/collector\.observability\.svc\.cluster\.local:4318\/v1\/traces"/);
+  assert.match(configMap, /GATEWAY_TRACES_SAMPLE_RATIO: "0\.05"/);
+  assert.match(configMap, /GATEWAY_TRACES_OTLP_HEADERS_ENV: "GATEWAY_TRACES_HEADERS"/);
+
+  const [deployment] = docsOfKind(set, "Deployment").filter((d) => /component: migrate/.test(d) === false);
+  assert.match(deployment, /configMapRef:\s+name: omg-test[\w-]*/, "the gateway container must read the ConfigMap via envFrom");
+
+  // The migrate Job never uses envFrom/configMapRef at all (AGENTS.md: the
+  // migrator Secret is separate and the Job never shares the gateway's
+  // non-secret ConfigMap), so a trace setting placed in gateway.env can
+  // never reach it - the one existing jobs/cronjob template in this chart.
+  const [job] = docsOfKind(set, "Job");
+  assert.ok(job, "no migrate Job rendered");
+  assert.doesNotMatch(job, /GATEWAY_TRACES_/, "trace settings must never leak into the migrate Job");
+  assert.doesNotMatch(job, /configMapRef/, "the migrate Job must never read the shared ConfigMap");
+});
+
+test("the actual secret header value for GATEWAY_TRACES_OTLP_HEADERS_ENV reaches the gateway only through extraEnvFrom, never the ConfigMap", () => {
+  const base = ["-f", join(chart, "ci/external-db-values.yaml")];
+  const rendered = helmTemplate([
+    ...base,
+    "--set", "gateway.env.GATEWAY_TRACES_OTLP_HEADERS_ENV=GATEWAY_TRACES_HEADERS",
+    "--set-json", 'gateway.extraEnvFrom=[{"secretRef":{"name":"omg-trace-headers"}}]',
+  ]);
+  const [configMap] = docsOfKind(rendered, "ConfigMap");
+  // The ConfigMap may name the variable (GATEWAY_TRACES_OTLP_HEADERS_ENV's
+  // value), but must never define GATEWAY_TRACES_HEADERS itself as a key:
+  // that would mean the chart put the secret-bearing value in the shared,
+  // unencrypted ConfigMap instead of a Secret.
+  assert.doesNotMatch(configMap, /^\s*GATEWAY_TRACES_HEADERS:/m, "the header value's own variable must never become a ConfigMap key");
+  assert.match(configMap, /GATEWAY_TRACES_OTLP_HEADERS_ENV: "GATEWAY_TRACES_HEADERS"/, "the ConfigMap may still name which variable carries the secret");
+  const [deployment] = docsOfKind(rendered, "Deployment");
+  assert.match(deployment, /secretRef:\s+name: omg-trace-headers/);
+});
+
+test("values.yaml documents the trace exporter settings and a 4318 collector egress example (#98 PR 3)", () => {
+  const raw = readFileSync(join(chart, "values.yaml"), "utf8");
+  assert.match(raw, /GATEWAY_TRACES_OTLP_URL/, "values.yaml must document the trace endpoint setting");
+  assert.match(raw, /GATEWAY_TRACES_SAMPLE_RATIO/, "values.yaml must document the sample ratio setting");
+  assert.match(raw, /GATEWAY_TRACES_OTLP_HEADERS_ENV/, "values.yaml must document the headers-variable-name setting");
+  assert.match(raw, /extraEnvFrom/, "values.yaml must point the headers value at extraEnvFrom/a Secret");
+  assert.match(raw, /4318/, "values.yaml must document the OTLP collector's port for extraEgress");
+});
+
+test("an extraEgress rule for the OTLP collector port renders in the egress NetworkPolicy", () => {
+  const base = ["-f", join(chart, "ci/cnpg-values.yaml")];
+  const rendered = helmTemplate([
+    ...base,
+    "--set-json", 'networkPolicy.egress.extraEgress=[{"to":[{"ipBlock":{"cidr":"10.50.0.10/32"}}],"ports":[{"protocol":"TCP","port":4318}]}]',
+  ]);
+  const policies = docsOfKind(rendered, "NetworkPolicy");
+  const egress = policies.find((p) => /name: omg-test[\w-]*-egress$/m.test(p));
+  assert.match(egress, /cidr: 10\.50\.0\.10\/32/);
+  assert.match(egress, /port: 4318/);
+});
