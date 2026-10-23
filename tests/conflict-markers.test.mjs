@@ -61,10 +61,8 @@ export function looksBinary(buffer) {
 const EXCLUDED = /(^|\/)(node_modules|target)\//;
 
 // Tracked files only: untracked/ignored build output (node_modules/, target/)
-// never needs this check, and `git ls-files` is exactly what missed the bad
-// merge last time (it does not look at unmerged/working-tree state), so this
-// test is the integrity check the merge needed, run after the fact on what
-// actually landed.
+// never needs this check. This runs in CI on what actually landed, so it does
+// not depend on the local `git grep` check that skipped unmerged paths.
 export function trackedTextFiles(cwd = root) {
   const out = execFileSync("git", ["ls-files"], { cwd, encoding: "utf8" });
   return out
@@ -83,9 +81,8 @@ export function trackedTextFiles(cwd = root) {
 }
 
 test("no tracked text file contains a merge-conflict marker", () => {
-  // This fails on `main` today: #225's merge (df01e7a) left raw markers in
-  // docs/releases/unreleased.md, and #234 repairs that file in a separate PR.
-  // Once #234 merges this check passes; see #235.
+  // #225's merge (df01e7a) left raw markers in docs/releases/unreleased.md;
+  // #234 repaired that file. This keeps it from happening again (#235).
   const found = [];
   for (const file of trackedTextFiles()) {
     const text = readFileSync(join(root, file), "utf8");
