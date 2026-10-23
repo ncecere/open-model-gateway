@@ -297,5 +297,7 @@ mod native_tests;
 mod reasoning_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(all(test, feature = "integration-tests"))]
+mod tool_defaults_tests;
 #[cfg(test)]
 mod workload_tests;
