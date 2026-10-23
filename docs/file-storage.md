@@ -111,7 +111,7 @@ Objects are stored at `<dir>/<purpose>/<workspace-id|installation>/<uuid>`. Dire
 
 ## Encryption
 
-Every object is encrypted with streaming, chunked AES-256-GCM (RustCrypto `aes-gcm` 0.10.3, a STREAM construction):
+Every object is encrypted with streaming, chunked AES-256-GCM (RustCrypto `aes-gcm` 0.11.1, a STREAM construction):
 
 - Each object gets a fresh random 256-bit data key. The active master key wraps it with AES-256-GCM.
 - The 106-byte header holds a magic value, the version, the chunk size, the master key ID, a random 7-byte nonce prefix and the wrapped data key. The wrap is authenticated together with the version, chunk size, key ID, nonce prefix and the object key, so a header can't be moved to another object.
