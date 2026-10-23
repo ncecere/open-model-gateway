@@ -222,21 +222,52 @@ fn canonical_allowlist(list: &[String]) -> Option<Vec<String>> {
     if !(1..=32).contains(&list.len()) {
         return None;
     }
-    list.iter()
+    let canonical: Vec<String> = list
+        .iter()
         .map(|entry| {
             let (addr, prefix) = crate::egress::parse_network("ip_allowlist", entry).ok()?;
+            // A zero-length prefix (`0.0.0.0/0` or `::/0`) stands for "every
+            // address": accepting it here would let a caller believe a
+            // token is IP-restricted when it is not (adversarial
+            // re-review of #37 PR1, issue 4). That's already spelled by
+            // omitting the allowlist entirely, so reject it as malformed
+            // input rather than silently accept an unrestricted entry
+            // inside what is supposed to be a restriction.
+            if prefix == 0 {
+                return None;
+            }
             Some(format!("{addr}/{prefix}"))
         })
-        .collect()
+        .collect::<Option<_>>()?;
+    // Reject duplicates (after canonicalization), rather than silently
+    // deduplicating: an operator who listed the same network twice --
+    // including two differently-represented forms of it, like
+    // `10.0.0.0/24` and `010.000.000.000/24` -- almost certainly made a
+    // mistake, and silently accepting it would hide that.
+    let mut sorted = canonical.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    if sorted.len() != canonical.len() {
+        return None;
+    }
+    Some(canonical)
 }
 
 /// A lookup-for-authorization hit: live, unrevoked, unexpired, owner active
 /// and currently effective role exactly `admin` (checked by the query
 /// itself, not cached). Route-scope enforcement is PR2's job.
+///
+/// `ip_allowlist` is the token's canonical `addr/len` allowlist entries
+/// (empty/`None` means unrestricted), exactly as stored (coordinator/
+/// adversarial re-review of #37 PR1, issue 5): **PR2 must check the
+/// request's resolved client address against it before dispatching any
+/// request authenticated by this principal.** This PR only stores and
+/// returns it; nothing here enforces it yet.
 pub struct AdminTokenPrincipal {
     pub token_id: Uuid,
     pub owner_user_id: Uuid,
     pub scopes: Vec<String>,
+    pub ip_allowlist: Option<Vec<String>>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -245,6 +276,7 @@ struct TokenRecord {
     owner_user_id: Uuid,
     secret_hash: Vec<u8>,
     scopes: Vec<String>,
+    ip_allowlist: Option<Vec<String>>,
 }
 
 /// Create a token owned by `owner_user_id` (the caller, a currently
@@ -371,7 +403,7 @@ impl Store {
             return Ok(None);
         };
         let record: Option<TokenRecord> = sqlx::query_as(
-            "SELECT t.id,t.owner_user_id,t.secret_hash,t.scopes FROM admin_api_tokens t
+            "SELECT t.id,t.owner_user_id,t.secret_hash,t.scopes,t.ip_allowlist::text[] AS ip_allowlist FROM admin_api_tokens t
              JOIN effective_platform_roles r ON r.user_id=t.owner_user_id AND r.role='admin'
              WHERE t.id=$1 AND t.revoked_at IS NULL AND t.expires_at>clock_timestamp()",
         )
@@ -388,6 +420,7 @@ impl Store {
             token_id: record.id,
             owner_user_id: record.owner_user_id,
             scopes: record.scopes,
+            ip_allowlist: record.ip_allowlist,
         }))
     }
 
@@ -486,7 +519,14 @@ mod tests {
 
     #[test]
     fn allowlist_entries_are_bounded_one_to_thirty_two() {
-        let n = |count: usize| vec!["10.0.0.0/24".to_string(); count];
+        // Distinct networks (adversarial re-review of #37 PR1, issue 4:
+        // duplicates are now rejected on their own, so the cardinality
+        // bound needs `count` genuinely different entries to isolate it).
+        let n = |count: usize| {
+            (0..count)
+                .map(|i| format!("10.0.{i}.0/24"))
+                .collect::<Vec<_>>()
+        };
         assert!(canonical_allowlist(&n(0)).is_none());
         assert!(canonical_allowlist(&n(1)).is_some());
         assert!(canonical_allowlist(&n(32)).is_some());
@@ -510,6 +550,47 @@ mod tests {
         assert_eq!(
             canonical_allowlist(&["2001:DB8::/32".to_string(), "10.0.0.0".to_string()]),
             Some(vec!["2001:db8::/32".to_string(), "10.0.0.0/32".to_string()])
+        );
+    }
+
+    /// Adversarial re-review of #37 PR1, issue 4: `0.0.0.0/0`/`::/0` would
+    /// stand for "every address", silently defeating the whole point of
+    /// supplying an allowlist (and is indistinguishable from not
+    /// restricting the token at all, which is already spelled by omitting
+    /// the field). Rejected outright, for both address families, alone or
+    /// alongside another entry.
+    #[test]
+    fn allowlist_rejects_a_zero_length_prefix_in_either_family() {
+        for bad in ["0.0.0.0/0", "::/0"] {
+            assert!(
+                canonical_allowlist(&[bad.to_string()]).is_none(),
+                "{bad:?} should be rejected"
+            );
+            assert!(
+                canonical_allowlist(&["10.0.0.0/24".to_string(), bad.to_string()]).is_none(),
+                "{bad:?} should be rejected even alongside a legitimate entry"
+            );
+        }
+        // A bare address (implicit host prefix, /32 or /128) is unaffected.
+        assert!(canonical_allowlist(&["0.0.0.0".to_string()]).is_some());
+    }
+
+    /// Adversarial re-review of #37 PR1, issue 4: a duplicate entry,
+    /// including two differently-represented forms of the same network,
+    /// is rejected rather than silently collapsed.
+    #[test]
+    fn allowlist_rejects_duplicate_entries_after_canonicalization() {
+        assert!(
+            canonical_allowlist(&["10.0.0.0/24".to_string(), "10.0.0.0/24".to_string()]).is_none()
+        );
+        // Same network, different representation (case, explicit host prefix).
+        assert!(
+            canonical_allowlist(&["2001:DB8::/32".to_string(), "2001:db8::/32".to_string()])
+                .is_none()
+        );
+        assert!(
+            canonical_allowlist(&["10.0.0.5".to_string(), "10.0.0.5/32".to_string()]).is_none(),
+            "a bare address and its explicit /32 form are the same network"
         );
     }
 

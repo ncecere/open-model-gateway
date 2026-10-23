@@ -86,12 +86,26 @@ CREATE FUNCTION valid_admin_token_scopes(scopes text[]) RETURNS boolean LANGUAGE
   AND scopes <@ ARRAY['platform:read','catalog:write','access:write','governance:write','settings:write']::text[]
   AND cardinality(scopes)=(SELECT count(DISTINCT s) FROM unnest(scopes) s)
 $$;
--- Optional allowlist: omitted means unrestricted; supplied means 1-32 entries, no nulls.
+-- Optional allowlist: omitted means unrestricted; supplied means 1-32
+-- entries, no nulls, no zero-length prefix and no duplicates (adversarial
+-- re-review of #37 PR1, issue 4: `0.0.0.0/0`/`::/0` stands for "every
+-- address", silently defeating the whole point of an allowlist, and is
+-- indistinguishable from not restricting the token at all -- which is
+-- already spelled by omitting this column; a duplicate entry, including
+-- two differently-represented forms of the same network, is rejected
+-- rather than silently collapsed, since an operator who listed one twice
+-- almost certainly made a mistake). Rust's own canonicalization
+-- (`admin_tokens::canonical_allowlist`) already applies both rules before
+-- any database round trip; this is the backstop for a direct write.
 -- Address normalization and malformed/mapped-network handling are PR2's
 -- request-handling concern (identity.rs/throttle.rs); cidr's own input
 -- parser already refuses a syntactically invalid network here.
 CREATE FUNCTION valid_admin_token_allowlist(allowlist cidr[]) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
- SELECT allowlist IS NULL OR (cardinality(allowlist) BETWEEN 1 AND 32 AND array_position(allowlist,NULL) IS NULL)
+ SELECT allowlist IS NULL OR (
+  cardinality(allowlist) BETWEEN 1 AND 32 AND array_position(allowlist,NULL) IS NULL
+  AND NOT EXISTS(SELECT 1 FROM unnest(allowlist) n WHERE masklen(n)=0)
+  AND cardinality(allowlist)=(SELECT count(DISTINCT n) FROM unnest(allowlist) n)
+ )
 $$;
 
 CREATE TABLE admin_api_tokens(
