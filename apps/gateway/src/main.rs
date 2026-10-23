@@ -713,6 +713,15 @@ async fn run(cli: Cli) -> Result<()> {
                 open_model_gateway::providers::local::endpoints::ApprovedEndpoints::from_env(
                     config.environment.as_str(),
                 )?;
+            // #203, release N: some installations approved local upstreams in
+            // ranges the egress policy already refuses for every other
+            // client; those ranges will be refused at startup from the next
+            // minor release. Named here (once, for the approvals this
+            // replica actually uses) and surfaced in /health/ready; startup
+            // still succeeds.
+            open_model_gateway::providers::local::endpoints::log_pending_refusal_warnings(
+                &approvals,
+            );
             for adapter in open_model_gateway::providers::local::adapters(secrets, approvals) {
                 registry.register(adapter)?;
             }
