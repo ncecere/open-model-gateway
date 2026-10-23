@@ -1875,7 +1875,9 @@ async fn outbox_unsetting_smtp_preserves_a_live_claim_result(pool: PgPool) {
         1
     );
     assert!(outbox::complete(&s.store, &claim, Ok(())).await.unwrap());
-    assert_eq!(count(&s,"SELECT count(*) FROM alert_deliveries WHERE status='not_configured' AND sent=1 AND waiting=0").await,1);
+    // One recipient sent, the other not_configured: a real send happened, so
+    // the overall status must report it, not mask it behind not_configured.
+    assert_eq!(count(&s,"SELECT count(*) FROM alert_deliveries WHERE status='sent' AND sent=1 AND waiting=0").await,1);
     assert_eq!(deliver_pending(&s.store, 25).await, 0);
 }
 
