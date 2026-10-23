@@ -39,7 +39,35 @@ gateway:
   extraEnv: []
   # Secret env vars sourced via envFrom/secretKeyRef from existing Secrets,
   # for provider keys not covered by the four `_FILE` names below
-  # (GATEWAY_SECRET_ENV_ALLOWLIST must list every name used this way).
+  # (GATEWAY_SECRET_ENV_ALLOWLIST must list every name used this way), and
+  # for the trace exporter's header secret below.
+  #
+  # OpenTelemetry trace export (#98; see docs/operations.md#traces) is off
+  # unless GATEWAY_TRACES_OTLP_URL is set. All three settings are plain,
+  # non-secret values and go in `env` above like any other setting, for
+  # example:
+  #   env:
+  #     GATEWAY_TRACES_OTLP_URL: "https://otel-collector.observability.svc.cluster.local:4318/v1/traces"
+  #     GATEWAY_TRACES_SAMPLE_RATIO: "0.01"
+  #     GATEWAY_TRACES_OTLP_HEADERS_ENV: "GATEWAY_TRACES_HEADERS"
+  # GATEWAY_TRACES_OTLP_HEADERS_ENV only *names* the variable holding the
+  # collector's auth header(s) (e.g. "Authorization=Bearer ..."); that named
+  # variable is itself secret-bearing and must never go in `env` above.
+  # Source it from a Secret through extraEnvFrom instead, for example:
+  #   extraEnvFrom:
+  #     - secretRef:
+  #         name: omg-trace-headers
+  # with the Secret's own key named GATEWAY_TRACES_HEADERS (matching the
+  # name given to GATEWAY_TRACES_OTLP_HEADERS_ENV above). The chart's
+  # NetworkPolicy opens only 443 egress by default: add a
+  # `networkPolicy.egress.extraEgress` rule for the collector's port
+  # (typically TCP 4318) to the destination you set in
+  # GATEWAY_TRACES_OTLP_URL, for example:
+  #   networkPolicy:
+  #     egress:
+  #       extraEgress:
+  #         - to: [{ podSelector: { matchLabels: { app: otel-collector } } }]
+  #           ports: [{ protocol: TCP, port: 4318 }]
   extraEnvFrom: []
   secretEnvAllowlist: []
   # Names the SMTP password reference may read (GATEWAY_SMTP_SECRET_ENV_ALLOWLIST).
