@@ -88,14 +88,14 @@ impl InferenceRepository for TelemetryRepository {
         ] {
             telemetry::mark_phase(phase);
         }
-        // The only two call sites of this crate's own `mark_shared`, in a
-        // test file (excluded from
-        // `telemetry::tests::mark_shared_has_one_production_call_site` by
-        // its `_tests.rs` name): simulating what a real committed
-        // shared-workspace admission does, so these engine tests can
-        // observe exported spans without a real database.
+        // telemetry::mark_shared itself now requires a
+        // governance::SharedEligibilityCommitted token only governance.rs
+        // can construct (#98 PR 2 review item 3), so these engine tests use
+        // the dedicated #[cfg(test)]-only bypass instead: simulating what a
+        // real committed shared-workspace admission does, so these engine
+        // tests can observe exported spans without a real database.
         if self.shared.load(Ordering::SeqCst) {
-            telemetry::mark_shared(record.root_request_id, &request.model);
+            telemetry::mark_shared_for_tests(record.root_request_id, &request.model);
         }
         Ok(GenerationAdmission {
             max_output_tokens: None,

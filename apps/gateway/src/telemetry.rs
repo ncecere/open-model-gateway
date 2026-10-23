@@ -143,15 +143,13 @@ pub struct SharedAdmission {
     alias: String,
 }
 impl SharedAdmission {
-    /// The only production constructor, called from exactly one place: this
-    /// module's own [`mark_shared`], itself called only from the commit
-    /// branch of `governance::admit_unobserved`, after `tx.commit()` has
-    /// succeeded for a `team`/`project` workspace: never personal, never
-    /// from client input, never before commit.
-    /// `telemetry::tests::shared_admission_has_one_production_call_site` and
-    /// `telemetry::tests::mark_shared_has_one_production_call_site` enforce
-    /// both halves of that chain.
-    pub(crate) fn new(request: Uuid, alias: String) -> Self {
+    /// The only constructor, and it is private: only code inside this
+    /// module (this file's own [`mark_shared`]/[`mark_shared_for_tests`])
+    /// can call it at all, so the compiler - not a grep check - is what
+    /// prevents any other crate module from fabricating this capability.
+    /// `telemetry::tests::shared_admission_has_one_production_call_site`
+    /// remains a secondary, informational check of the same invariant.
+    fn new(request: Uuid, alias: String) -> Self {
         Self { request, alias }
     }
 }
@@ -645,16 +643,38 @@ pub(crate) fn mark_phase(name: SpanName) {
     });
 }
 
-/// Records the [`SharedAdmission`] an admission commit resolved for the
-/// ambient request, if telemetry is active. The only call site is the
-/// commit branch of `governance::admit_unobserved`, itself gated on the
-/// workspace being `team`/`project`: never personal, never from client text.
-pub(crate) fn mark_shared(request: Uuid, alias: &str) {
+fn set_shared_eligibility(request: Uuid, alias: &str) {
     let _ = PHASES.try_with(|buffer| {
         if let Ok(mut buffer) = buffer.try_lock() {
             buffer.eligibility = Some(SharedAdmission::new(request, alias.to_owned()));
         }
     });
+}
+/// Records the [`SharedAdmission`] an admission commit resolved for the
+/// ambient request, if telemetry is active. `proof` is a
+/// [`crate::governance::SharedEligibilityCommitted`] token: its
+/// constructor is private to the `governance` module, so only code inside
+/// `governance.rs`'s own commit branch of `admit_unobserved` - gated on
+/// the workspace being `team`/`project`, after `tx.commit()` has
+/// succeeded, never personal, never from client text - can produce one to
+/// call this at all. The compiler enforces that, not just a grep check;
+/// `telemetry::tests::mark_shared_has_one_production_call_site` remains a
+/// secondary, informational check of the same invariant.
+pub(crate) fn mark_shared(
+    _proof: crate::governance::SharedEligibilityCommitted,
+    request: Uuid,
+    alias: &str,
+) {
+    set_shared_eligibility(request, alias);
+}
+/// Test-only bypass of the [`mark_shared`] capability requirement, for
+/// simulating a committed shared-workspace admission without a real
+/// database (`inference::telemetry_tests`) or exercising this module's own
+/// `PHASES`/[`with_phases`] mechanics directly (this file's own tests
+/// below). Never used by production code.
+#[cfg(test)]
+pub(crate) fn mark_shared_for_tests(request: Uuid, alias: &str) {
+    set_shared_eligibility(request, alias);
 }
 
 struct Exporter {
@@ -1614,26 +1634,35 @@ mod tests {
         task.abort();
     }
 
+    // The two tests below are now a secondary, informational check only.
+    // The real, compiler-enforced invariant (#98 PR 2 review item 3) is:
+    // `SharedAdmission::new` has default (private) visibility, so no module
+    // outside this file can construct one at all; and `mark_shared` takes
+    // a `governance::SharedEligibilityCommitted` token whose own
+    // constructor is private to the `governance` module, so no module
+    // outside `governance.rs` can call `mark_shared` at all. A bypass like
+    // `use crate::telemetry::mark_shared as m;` or a line-wrapped call no
+    // longer helps: the compiler itself rejects it from any other module.
     #[test]
     fn shared_admission_has_one_production_call_site() {
-        // SharedAdmission::new is pub(crate): it cannot be constructed from
-        // outside this crate at all. Within the crate, grep enforces the
-        // narrower, intended constraint: exactly one call site, in the
-        // admission commit path (`governance.rs`), never anywhere else.
         // Built from parts so this assertion's own source line is never a
         // match for its own needle.
         let needle = format!("{}{}", "SharedAdmission::", "new(");
         let sites = grep_sources(&needle);
         assert_eq!(sites.len(), 1, "SharedAdmission::new call sites: {sites:?}");
         assert!(sites[0].0.ends_with("telemetry.rs"), "{sites:?}");
-        assert!(sites[0].1.contains("fn mark_shared"), "{sites:?}");
+        assert!(
+            sites[0].1.contains("fn set_shared_eligibility"),
+            "{sites:?}"
+        );
     }
 
     #[test]
     fn mark_shared_has_one_production_call_site() {
         // The bridge back into governance's admission commit path: the only
         // place allowed to tell telemetry a shared-workspace admission
-        // committed.
+        // committed. `mark_shared_for_tests` (a different identifier) is
+        // deliberately excluded by this exact needle.
         let needle = format!("{}{}", "telemetry::mark_", "shared(");
         let sites = grep_sources(&needle);
         assert_eq!(sites.len(), 1, "mark_shared call sites: {sites:?}");
@@ -1721,11 +1750,11 @@ mod tests {
         let buffer = Arc::new(Mutex::new(PhaseBuffer::new(trace, parent, start)));
         // Outside with_phases, marks are a no-op: no ambient buffer.
         mark_phase(SpanName::AdmissionQueue);
-        mark_shared(Uuid::from_u128(7), "m");
+        mark_shared_for_tests(Uuid::from_u128(7), "m");
         with_phases(buffer.clone(), async {
             mark_phase(SpanName::AdmissionQueue);
             mark_phase(SpanName::AdmissionConnect);
-            mark_shared(Uuid::from_u128(7), "public-model");
+            mark_shared_for_tests(Uuid::from_u128(7), "public-model");
         })
         .await;
         let Ok(mutex) = Arc::try_unwrap(buffer) else {

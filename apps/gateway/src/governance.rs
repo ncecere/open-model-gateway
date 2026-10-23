@@ -24,6 +24,19 @@ fn storage(error: sqlx::Error) -> InferenceError {
     locks::note(&error);
     InferenceError::Storage
 }
+/// Proof, for [`crate::telemetry::mark_shared`], that this exact module's
+/// own commit branch of `admit_unobserved` resolved shared-workspace trace
+/// eligibility (#98 PR 2 review item 3). `new` has default (private)
+/// visibility, so only code inside `crate::governance` (this file and its
+/// submodules) can construct one; the struct itself is `pub(crate)` only
+/// so `telemetry::mark_shared`'s signature can name the type. This makes
+/// the single-call-site invariant a compiler fact, not just a grep check.
+pub(crate) struct SharedEligibilityCommitted(());
+impl SharedEligibilityCommitted {
+    fn new() -> Self {
+        Self(())
+    }
+}
 /// Bounded in-process queues in front of the governance transactions, one for
 /// admissions and one for settlements/reconciliation. In the global mode work
 /// under the installation lock is serialized anyway, so letting every
@@ -845,7 +858,11 @@ async fn admit_unobserved(
     // above). Never personal, never client text, never before this commit
     // has actually succeeded.
     if shared {
-        crate::telemetry::mark_shared(record.root_request_id, &record.model);
+        crate::telemetry::mark_shared(
+            SharedEligibilityCommitted::new(),
+            record.root_request_id,
+            &record.model,
+        );
     }
     // Per-scope ceiling signal (`admission_ceiling` alerts): committed
     // interactive admissions (the ones `rate_minute_counters` counts) that
