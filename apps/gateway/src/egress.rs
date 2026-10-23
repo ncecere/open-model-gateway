@@ -35,6 +35,7 @@ pub enum Purpose {
     Catalog,
     Smtp,
     Audit,
+    Telemetry,
 }
 impl Purpose {
     pub fn as_str(self) -> &'static str {
@@ -45,6 +46,7 @@ impl Purpose {
             Self::Catalog => "catalog",
             Self::Smtp => "smtp",
             Self::Audit => "audit",
+            Self::Telemetry => "telemetry",
         }
     }
 }

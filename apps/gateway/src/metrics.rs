@@ -201,6 +201,9 @@ pub struct Metrics {
     egress_denied: Family<L1, Counter>,
     audit_export_deliveries: Family<L1, Counter>,
     audit_export_rejected_records: Counter,
+    trace_dropped_spans: [Counter; 6],
+    trace_deliveries: [Counter; 5],
+    trace_rejected_spans: Counter,
     audit_export_queued: Gauge,
     audit_export_oldest:
         prometheus_client::metrics::gauge::Gauge<f64, std::sync::atomic::AtomicU64>,
@@ -288,6 +291,26 @@ pub struct AttemptObservation<'a> {
 impl Metrics {
     fn new() -> Self {
         let mut registry = Registry::with_prefix("gateway");
+        // Pre-create every trace label once. Recording increments plain atomic
+        // counters, never takes a Family's lock or allocates label strings.
+        let trace_drops = Family::<L1, Counter>::default();
+        let trace_dropped_spans = std::array::from_fn(|i| {
+            trace_drops
+                .get_or_create(&[(
+                    "reason",
+                    crate::telemetry::DropReason::ALL[i].as_str().to_owned(),
+                )])
+                .clone()
+        });
+        let trace_exchanges = Family::<L1, Counter>::default();
+        let trace_deliveries = std::array::from_fn(|i| {
+            trace_exchanges
+                .get_or_create(&[(
+                    "outcome",
+                    crate::telemetry::Delivery::ALL[i].as_str().to_owned(),
+                )])
+                .clone()
+        });
         let metrics = Self {
             http_requests: Family::default(),
             http_duration: Family::new_with_constructor(request_buckets),
@@ -326,6 +349,9 @@ impl Metrics {
             egress_denied: Family::default(),
             audit_export_deliveries: Family::default(),
             audit_export_rejected_records: Counter::default(),
+            trace_dropped_spans,
+            trace_deliveries,
+            trace_rejected_spans: Counter::default(),
             audit_export_queued: Gauge::default(),
             audit_export_oldest: Default::default(),
             config_listener: Gauge::default(),
@@ -513,6 +539,21 @@ impl Metrics {
             metrics.audit_export_rejected_records.clone(),
         );
         registry.register(
+            "trace_dropped_spans",
+            "Trace spans dropped locally, by fixed reason",
+            trace_drops,
+        );
+        registry.register(
+            "trace_deliveries",
+            "Trace export exchanges, by fixed outcome (no retries)",
+            trace_exchanges,
+        );
+        registry.register(
+            "trace_rejected_spans",
+            "Trace spans rejected by the collector partialSuccess acknowledgement",
+            metrics.trace_rejected_spans.clone(),
+        );
+        registry.register(
             "audit_export_queued",
             "Audit events queued for export, not yet accepted by the receiver",
             metrics.audit_export_queued.clone(),
@@ -620,6 +661,18 @@ impl Metrics {
         self.config_changes
             .get_or_create(&[("topic", topic.to_owned())])
             .inc();
+    }
+
+    pub(crate) fn trace_drop(&self, reason: crate::telemetry::DropReason, n: u64) {
+        self.trace_dropped_spans[reason as usize].inc_by(n);
+    }
+
+    pub(crate) fn trace_delivery(&self, outcome: crate::telemetry::Delivery) {
+        self.trace_deliveries[outcome as usize].inc();
+    }
+
+    pub(crate) fn trace_rejected(&self, n: u64) {
+        self.trace_rejected_spans.inc_by(n);
     }
 
     pub(crate) fn audit_export_delivery(&self, outcome: &'static str) {

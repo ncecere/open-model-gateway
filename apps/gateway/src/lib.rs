@@ -4,7 +4,6 @@
 pub mod alerts;
 pub mod archive;
 pub mod audit_export;
-pub mod telemetry;
 pub mod auth;
 #[cfg(test)]
 mod authz_matrix;
@@ -50,5 +49,6 @@ pub mod scim;
 pub(crate) mod special_use;
 pub mod startup;
 pub mod store;
+pub mod telemetry;
 pub mod visibility;
 pub mod web;

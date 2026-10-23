@@ -38,6 +38,101 @@ pub struct Config {
     /// `GATEWAY_CONFIG_CACHE` (`on`, default, or `off`): per-replica caches of
     /// pre-admission reads (`crate::cache`). `off` reads everything live.
     pub config_cache: bool,
+    /// Preview OTLP trace transport; no engine instrumentation yet.
+    pub traces: TraceConfig,
+}
+
+/// Operator-only trace configuration. Never Debug: headers contain secrets.
+pub struct TraceConfig {
+    pub(crate) endpoint: Option<(reqwest::Url, reqwest::Client)>,
+    pub(crate) headers: reqwest::header::HeaderMap,
+    pub(crate) sample_ratio: f64,
+    pub(crate) environment: Environment,
+}
+
+impl TraceConfig {
+    pub const URL: &'static str = "GATEWAY_TRACES_OTLP_URL";
+    pub const RATIO: &'static str = "GATEWAY_TRACES_SAMPLE_RATIO";
+    pub const HEADERS: &'static str = "GATEWAY_TRACES_OTLP_HEADERS_ENV";
+
+    pub fn from_env(environment: Environment) -> Result<Self> {
+        // Do not turn non-Unicode settings into an absent (disabled) setting.
+        let mut values = std::collections::HashMap::new();
+        for key in [Self::URL, Self::RATIO, Self::HEADERS] {
+            match std::env::var(key) {
+                Ok(value) => {
+                    values.insert(key.to_owned(), value);
+                }
+                Err(std::env::VarError::NotPresent) => {}
+                Err(_) => bail!("{key} is not valid Unicode"),
+            }
+        }
+        Self::from_lookup(
+            |key| values.get(key).cloned().or_else(|| std::env::var(key).ok()),
+            environment,
+        )
+    }
+
+    pub fn from_lookup(
+        get: impl Fn(&str) -> Option<String>,
+        environment: Environment,
+    ) -> Result<Self> {
+        let invalid = || {
+            anyhow::anyhow!(
+                "invalid trace exporter configuration (check GATEWAY_TRACES_* settings)"
+            )
+        };
+        let sample_ratio = get(Self::RATIO)
+            .map_or(Ok(0.01), |value| value.parse::<f64>())
+            .map_err(|_| invalid())?;
+        anyhow::ensure!(
+            sample_ratio.is_finite() && (0.0..=1.0).contains(&sample_ratio),
+            "invalid trace sample ratio"
+        );
+        let endpoint = get(Self::URL).map(|value| {
+            let url = reqwest::Url::parse(&value).map_err(|_| invalid())?;
+            let loopback = url.host_str().is_some_and(|host| host == "localhost" || host.trim_matches(['[', ']']).parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback()));
+            anyhow::ensure!(
+                url.host_str().is_some() && url.username().is_empty() && url.password().is_none()
+                && url.query().is_none() && url.fragment().is_none() && url.path() == "/v1/traces"
+                && !value.chars().any(|c| c.is_whitespace() || c.is_control())
+                && (url.scheme() == "https" || (environment == Environment::Development && loopback && url.scheme() == "http")),
+                "invalid trace endpoint (full /v1/traces URL required; HTTPS except development loopback)"
+            );
+            let client = crate::audit_export::export_http_client(&url, crate::egress::Purpose::Telemetry, environment == Environment::Development, Duration::from_secs(1), Duration::from_secs(2)).map_err(|_| invalid())?;
+            Ok::<_, anyhow::Error>((url, client))
+        }).transpose()?;
+        let mut headers = reqwest::header::HeaderMap::new();
+        if let Some(name) = get(Self::HEADERS) {
+            anyhow::ensure!(endpoint.is_some(), "trace headers require a trace endpoint");
+            crate::audit_export::check_secret_env_name(Self::HEADERS, &name, &get)
+                .map_err(|_| invalid())?;
+            // Never share a gateway-owned secret reference, including audit's.
+            anyhow::ensure!(
+                !crate::providers::secrets::SECRET_POINTERS
+                    .iter()
+                    .filter(|key| **key != Self::HEADERS)
+                    .any(|key| get(key).is_some_and(|v| v.trim() == name)),
+                "trace headers require a dedicated secret variable"
+            );
+            anyhow::ensure!(
+                !crate::providers::secrets::reserved_env_name(
+                    &name,
+                    &|key| if key == Self::HEADERS { None } else { get(key) }
+                ),
+                "trace headers name a reserved secret variable"
+            );
+            let value = zeroize::Zeroizing::new(get(&name).ok_or_else(invalid)?);
+            anyhow::ensure!(value.len() <= 4096, "trace headers exceed the 4 KiB limit");
+            headers = crate::audit_export::parse_otlp_headers(&value).map_err(|_| invalid())?;
+        }
+        Ok(Self {
+            endpoint,
+            headers,
+            sample_ratio,
+            environment,
+        })
+    }
 }
 
 /// Validated at startup and exposed only to authenticated dashboard users.
@@ -215,6 +310,7 @@ impl Config {
             Ok("off") => false,
             _ => bail!("GATEWAY_CONFIG_CACHE must be on or off"),
         };
+        let traces = TraceConfig::from_env(environment)?;
         Ok(Self {
             database_url,
             listen,
@@ -231,6 +327,7 @@ impl Config {
             admission_mode,
             listen_database_url,
             config_cache,
+            traces,
         })
     }
 

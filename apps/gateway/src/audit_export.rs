@@ -478,7 +478,7 @@ impl Exporter {
 /// provider or SMTP allowlist, and not reserved. A Platform Admin chooses
 /// where provider credentials and the SMTP password go: if either allowlist
 /// could read it, an admin could learn it (#140's rule, here too).
-fn check_secret_env_name(
+pub(crate) fn check_secret_env_name(
     setting: &str,
     name: &str,
     get: &impl Fn(&str) -> Option<String>,
@@ -509,7 +509,7 @@ fn check_secret_env_name(
 /// `Key=Value,Key2=Value2` from the OTLP headers variable (#108). Errors say
 /// which item is wrong, never its name or value (a misplaced `=` could put a
 /// token in the name).
-fn parse_otlp_headers(value: &str) -> anyhow::Result<reqwest::header::HeaderMap> {
+pub(crate) fn parse_otlp_headers(value: &str) -> anyhow::Result<reqwest::header::HeaderMap> {
     let mut headers = reqwest::header::HeaderMap::new();
     let items: Vec<&str> = value.split(',').collect();
     anyhow::ensure!(
@@ -577,21 +577,36 @@ fn https_client(
         url.username().is_empty() && url.password().is_none() && url.fragment().is_none(),
         "{setting} must not contain credentials or a fragment"
     );
+    let client = export_http_client(
+        &url,
+        crate::egress::Purpose::Audit,
+        development,
+        Duration::from_secs(5),
+        REQUEST_TIMEOUT,
+    )?;
+    Ok((url, client))
+}
+
+/// Shared export transport, never a durable queue or retry policy.
+pub(crate) fn export_http_client(
+    url: &reqwest::Url,
+    purpose: crate::egress::Purpose,
+    development: bool,
+    connect_timeout: Duration,
+    exchange_timeout: Duration,
+) -> anyhow::Result<reqwest::Client> {
     let policy = crate::egress::policy().permit_loopback(development);
-    crate::egress::check_url(&policy, crate::egress::Purpose::Audit, &url)?;
+    crate::egress::check_url(&policy, purpose, url)?;
     let client = reqwest::Client::builder()
         .no_proxy()
-        .dns_resolver(crate::egress::resolver_with(
-            crate::egress::Purpose::Audit,
-            policy,
-        ))
+        .dns_resolver(crate::egress::resolver_with(purpose, policy))
         .redirect(reqwest::redirect::Policy::none())
         .retry(reqwest::retry::never())
-        .timeout(REQUEST_TIMEOUT)
-        .connect_timeout(Duration::from_secs(5))
+        .timeout(exchange_timeout)
+        .connect_timeout(connect_timeout)
         .build()
-        .map_err(|_| anyhow::anyhow!("cannot build the audit export client"))?;
-    Ok((url, client))
+        .map_err(|_| anyhow::anyhow!("cannot build the export client"))?;
+    Ok(client)
 }
 
 /// Read a PEM file at startup. Errors name the setting, never the contents.
