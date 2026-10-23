@@ -1144,7 +1144,11 @@ async fn number_queue(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<
     Ok(())
 }
 
-const EVENT: &str = "jsonb_build_object('id',a.id,'occurred_at',a.created_at,'action',a.action,'resource',jsonb_build_object('type',a.resource_type,'id',a.resource_id),'actor',CASE WHEN a.actor_user_id IS NULL THEN NULL ELSE jsonb_build_object('id',a.actor_user_id,'label',(SELECT coalesce(nullif(btrim(u.display_name),''),u.email,'Retained identity') FROM users u WHERE u.id=a.actor_user_id)) END,'workspace',CASE WHEN w.id IS NULL THEN NULL ELSE jsonb_build_object('id',w.id,'name',w.name,'kind',w.kind) END,'metadata',a.metadata)";
+// #37 PR2: additive `admin_token_id` (nullable; NULL for every browser-
+// session event, exactly as before). Only the token's own id -- never a
+// digest, plaintext or anything else from `admin_api_tokens` -- so this
+// stays schema `omg.audit.v1`, additive (docs/operations.md).
+const EVENT: &str = "jsonb_build_object('id',a.id,'occurred_at',a.created_at,'action',a.action,'resource',jsonb_build_object('type',a.resource_type,'id',a.resource_id),'actor',CASE WHEN a.actor_user_id IS NULL THEN NULL ELSE jsonb_build_object('id',a.actor_user_id,'label',(SELECT coalesce(nullif(btrim(u.display_name),''),u.email,'Retained identity') FROM users u WHERE u.id=a.actor_user_id)) END,'workspace',CASE WHEN w.id IS NULL THEN NULL ELSE jsonb_build_object('id',w.id,'name',w.name,'kind',w.kind) END,'admin_token_id',a.admin_token_id,'metadata',a.metadata)";
 
 fn backoff(attempts: i32) -> f64 {
     2f64.powi(attempts.clamp(0, 16))
@@ -2478,6 +2482,125 @@ mod database {
                 .await
                 .unwrap();
         assert_eq!(state, (false, None));
+    }
+
+    /// A currently effective Platform Admin, able to own an admin API token
+    /// (migration 0051 requires it live at creation, under the owner's own
+    /// user-scope authority lock).
+    async fn admin_owner(pool: &sqlx::PgPool, email: &str) -> Uuid {
+        let id = Uuid::new_v4();
+        sqlx::query("INSERT INTO users(id,email) VALUES($1,$2)")
+            .bind(id)
+            .bind(email)
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO platform_role_grants(id,user_id,role,source) VALUES($1,$2,'admin','manual')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(id)
+        .execute(pool)
+        .await
+        .unwrap();
+        id
+    }
+
+    /// #37 PR2 item 1: the exported `EVENT` projection carries
+    /// `admin_token_id` (additive, nullable; `omg.audit.v1` stays additive
+    /// per docs/operations.md). A real admin token (migration 0051: owner
+    /// must be a currently effective Platform Admin, created under the
+    /// owner's own exclusive user-scope lock, exactly as PR2's
+    /// `admin_tokens.rs` handler does), one event attributed to it, one
+    /// plain browser-session event (`admin_token_id` stays NULL, as
+    /// before), and one event on a personal workspace attributed to the
+    /// same token (still excluded: token attribution never widens what is
+    /// exported). Delivered to a loopback HTTP receiver, not just read
+    /// back from the database.
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn delivered_events_carry_admin_token_attribution_and_personal_events_stay_excluded(
+        pool: sqlx::PgPool,
+    ) {
+        let store = Store::new(pool.clone());
+        let owner = admin_owner(&pool, "export-owner@example.test").await;
+        let mut tx = crate::db::begin(&pool).await.unwrap();
+        crate::governance::locks::exclusive(
+            &mut tx,
+            [crate::governance::locks::Scope::User(owner)],
+        )
+        .await
+        .unwrap();
+        let token = crate::admin_tokens::create_admin_token(
+            &mut tx,
+            owner,
+            "export probe",
+            &["platform:read".to_string()],
+            30,
+            None,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        let team = workspace(&pool, "team").await;
+        let personal = workspace(&pool, "personal").await;
+        let receiver = receiver().await;
+        enable(&pool, &store, &receiver).await;
+
+        let attributed = Uuid::now_v7();
+        sqlx::query("INSERT INTO audit_events(id,actor_user_id,workspace_id,action,resource_type,metadata,admin_token_id) VALUES($1,$2,$3,'token.action','test','{}',$4)")
+            .bind(attributed).bind(owner).bind(team).bind(token.id).execute(&pool).await.unwrap();
+        let browser = Uuid::now_v7();
+        sqlx::query("INSERT INTO audit_events(id,actor_user_id,workspace_id,action,resource_type,metadata) VALUES($1,$2,$3,'browser.action','test','{}')")
+            .bind(browser).bind(owner).bind(team).execute(&pool).await.unwrap();
+        let personal_attributed = Uuid::now_v7();
+        sqlx::query("INSERT INTO audit_events(id,actor_user_id,workspace_id,action,resource_type,metadata,admin_token_id) VALUES($1,$2,$3,'token.personal','test','{}',$4)")
+            .bind(personal_attributed).bind(owner).bind(personal).bind(token.id).execute(&pool).await.unwrap();
+
+        deliver_once(&store, &exporter(&receiver.url), None)
+            .await
+            .unwrap();
+        let events: Vec<Value> = delivered(&receiver)
+            .into_iter()
+            .flat_map(|body| body["events"].as_array().cloned().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            events.len(),
+            2,
+            "the personal event must never be exported, token attribution or not: {events:?}"
+        );
+        let by_id = |id: Uuid| {
+            events
+                .iter()
+                .find(|e| e["id"] == id.to_string())
+                .unwrap_or_else(|| panic!("{id} missing from {events:?}"))
+        };
+        let a = by_id(attributed);
+        assert_eq!(a["admin_token_id"], token.id.to_string());
+        assert_eq!(a["actor"]["id"], owner.to_string());
+        let b = by_id(browser);
+        assert_eq!(
+            b["admin_token_id"],
+            Value::Null,
+            "a browser-session event carries no admin_token_id, exactly as before"
+        );
+        // Never a hash or the plaintext: the id is the only admin-token
+        // field, and it is a plain UUID, not the 64-hex secret or the
+        // 32-byte digest.
+        let body = serde_json::to_string(&a).unwrap();
+        assert!(
+            !body.contains(&token.token),
+            "plaintext must never be exported"
+        );
+        assert!(
+            !body.contains(&hex::encode(token.digest)),
+            "the digest must never be exported"
+        );
+        assert_eq!(
+            token.id.to_string().len(),
+            36,
+            "admin_token_id is a UUID, not a hash"
+        );
     }
 
     fn seqs(receiver: &Receiver) -> Vec<i64> {

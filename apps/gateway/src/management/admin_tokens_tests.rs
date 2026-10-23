@@ -1,4 +1,41 @@
 use super::*;
+use axum::{body::Body, http::Request};
+use tower::ServiceExt;
+
+/// #37 PR2 item 2: the plaintext creation response carries an explicit
+/// `Cache-Control: no-store`, set by the handler itself rather than only
+/// relying on the global `request_context` middleware default (which the
+/// `call()` test helper bypasses -- it invokes the router directly, not
+/// through the full `axum::serve` stack middleware is layered on in
+/// production -- so a regression here would not otherwise be caught by
+/// this suite's other tests, which all use `call()`).
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn creation_response_sets_no_store_explicitly(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let response = routes()
+        .layer(Extension(ManagementPrincipal::Browser(f.admin.clone())))
+        .layer(Extension(f.admin.clone()))
+        .with_state(f.s.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/platform/admin-tokens")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"name":"CI bot","scopes":["platform:read"],"expires_in_days":30})
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()[axum::http::header::CACHE_CONTROL],
+        "no-store",
+        "the plaintext creation response must set no-store explicitly, not only through the global default"
+    );
+}
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn admin_lists_creates_and_revokes_tokens(pool: PgPool) {

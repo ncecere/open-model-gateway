@@ -115,7 +115,7 @@ async fn create(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
     Json(b): Json<NewAdminTokenInput>,
-) -> ApiResult {
+) -> Result<Response, ApiError> {
     let mut tx = admin_tx(&s, &u).await?;
     locks::exclusive(&mut tx, [locks::Scope::User(u.user_id)]).await?;
     let created = admin_tokens::create_admin_token(
@@ -139,16 +139,28 @@ async fn create(
     )
     .await?;
     tx.commit().await?;
-    // The plaintext is returned exactly once, here, and never again
-    // (`no-store` is also already the default for every management
-    // response: `http::request_context`).
-    Ok(Json(json!({
-        "id": created.id,
-        "token": created.token,
-        "scopes": b.scopes,
-        "created_at": created.created_at,
-        "expires_at": created.expires_at,
-    })))
+    // The plaintext is returned exactly once, here, and never again.
+    // `no-store` is also already the global default for every management
+    // response (`http::request_context`), but this response sets it
+    // explicitly too: it is the one place in this file that returns a
+    // secret, so it must not depend solely on a cross-cutting default
+    // that a future refactor of `request_context` could silently change
+    // or a direct-router test (bypassing that middleware entirely, as
+    // this module's own tests do) would never catch (#37 PR2 item 2).
+    Ok((
+        [(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-store"),
+        )],
+        Json(json!({
+            "id": created.id,
+            "token": created.token,
+            "scopes": b.scopes,
+            "created_at": created.created_at,
+            "expires_at": created.expires_at,
+        })),
+    )
+        .into_response())
 }
 
 /// Idempotent, and any currently effective Admin may revoke any token
