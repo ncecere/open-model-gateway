@@ -356,7 +356,7 @@ async fn lookup_rejects_expired_revoked_and_owner_not_admin(pool: PgPool) {
     // expires_at is immutable (by design); an expired fixture is inserted
     // directly with both created_at and expires_at in the past (satisfying
     // the 1-90 day bound measured from created_at).
-    let raw = NewAdminToken::generate().unwrap();
+    let raw = GeneratedSecret::generate().unwrap();
     sqlx::query("INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,created_at,expires_at) VALUES($1,$2,'expired',$3,ARRAY['platform:read'],now()-interval '10 days',now()-interval '1 minute')")
         .bind(raw.id)
         .bind(owner)
@@ -801,6 +801,55 @@ async fn concurrent_demotion_blocks_and_then_fails_a_pending_create(pool: PgPool
     assert_eq!(
         count, 0,
         "no active token exists for the now-demoted owner, blocked_while_demotion_open={blocked_while_demotion_open}"
+    );
+}
+
+/// Coordinator review of #37 PR1, issue 3: `created_at`/`expires_at` came
+/// from the app's `Utc::now()`, but expiry is enforced against the
+/// database's `clock_timestamp()`. A skewed app clock could let a token
+/// outlive 90 real days, or be created already expired. Both timestamps
+/// must come from one database instant.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn created_at_and_expires_at_come_from_the_database_clock_not_the_app(pool: PgPool) {
+    let store = Store::new(pool.clone());
+    let owner = admin(&pool, "clock@test.invalid").await;
+    let before: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let created = store
+        .create_admin_token(owner, "n", &scopes(&["platform:read"]), 30, None)
+        .await
+        .unwrap();
+    let after: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        created.created_at >= before - chrono::Duration::seconds(1),
+        "created_at={:?} before={before:?}",
+        created.created_at
+    );
+    assert!(
+        created.created_at <= after + chrono::Duration::seconds(1),
+        "created_at={:?} after={after:?}",
+        created.created_at
+    );
+    assert_eq!(
+        created.expires_at - created.created_at,
+        chrono::Duration::days(30)
+    );
+    // The returned timestamps are exactly what the row stores, not a
+    // separately-computed app-side echo of them.
+    let (db_created, db_expires): (DateTime<Utc>, DateTime<Utc>) =
+        sqlx::query_as("SELECT created_at,expires_at FROM admin_api_tokens WHERE id=$1")
+            .bind(created.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        (db_created, db_expires),
+        (created.created_at, created.expires_at)
     );
 }
 

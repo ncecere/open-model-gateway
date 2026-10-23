@@ -16,7 +16,7 @@
 //! permanently revokes the owner's tokens through migration 0050's
 //! triggers, in the same transaction as whatever caused the loss; regaining
 //! access never restores them (revocation is final).
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
@@ -73,16 +73,29 @@ fn token_id(token: &str) -> Option<Uuid> {
 
 /// A newly created token's plaintext is returned once, then discarded; it
 /// is never stored, logged, serialized or retained. Intentionally does not
-/// implement `Debug`.
+/// implement `Debug`. `created_at`/`expires_at` are the database's own
+/// values (see [`Store::create_admin_token`]), never the app's clock.
 pub struct NewAdminToken {
     pub id: Uuid,
     pub token: String,
     pub digest: [u8; 32],
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
 }
 
-impl NewAdminToken {
-    /// A new token with a 256-bit secret from the OS CSPRNG; fails closed
-    /// when the OS random number generator fails (no token is created).
+/// The secret-bearing part of a token, generated before any database
+/// access. `created_at`/`expires_at` are assigned only after the database
+/// accepts the insert (see [`Store::create_admin_token`]), from the
+/// database's own clock, never the app's.
+struct GeneratedSecret {
+    id: Uuid,
+    token: String,
+    digest: [u8; 32],
+}
+
+impl GeneratedSecret {
+    /// A new secret, 256 bits from the OS CSPRNG; fails closed when the OS
+    /// random number generator fails (no token is created).
     fn generate() -> Result<Self, crate::entropy::EntropyUnavailable> {
         let id = Uuid::new_v4();
         let secret = zeroize::Zeroizing::new(crate::entropy::bytes::<32>()?);
@@ -223,29 +236,34 @@ impl Store {
                 NewAdminTokenError::InvalidAllowlist,
             ));
         }
-        let new = NewAdminToken::generate().map_err(CreateAdminTokenError::Entropy)?;
-        // created_at and expires_at are computed from the same instant (not
-        // the database's DEFAULT now(), which would read fractionally
-        // later over the wire) so the 1-90 day CHECK, measured strictly
-        // between the two, is never missed by clock skew at the boundary.
-        let created_at: DateTime<Utc> = Utc::now();
-        let expires_at: DateTime<Utc> = created_at + Duration::days(i64::from(expires_in_days));
-        sqlx::query(
+        let secret = GeneratedSecret::generate().map_err(CreateAdminTokenError::Entropy)?;
+        // created_at and expires_at are computed by the database, from one
+        // instant (`now()` is fixed for the whole transaction, so the two
+        // references below are identical), never the app's clock: a
+        // skewed app clock must not be able to create an already-expired
+        // token or one that outlives 90 real days.
+        let (created_at, expires_at): (DateTime<Utc>, DateTime<Utc>) = sqlx::query_as(
             "INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,ip_allowlist,created_at,expires_at)
-             VALUES($1,$2,$3,$4,$5,$6::text[]::cidr[],$7,$8)",
+             VALUES($1,$2,$3,$4,$5,$6::text[]::cidr[],now(),now()+make_interval(days=>$7))
+             RETURNING created_at,expires_at",
         )
-        .bind(new.id)
+        .bind(secret.id)
         .bind(owner_user_id)
         .bind(name)
-        .bind(new.digest.as_slice())
+        .bind(secret.digest.as_slice())
         .bind(scopes)
         .bind(ip_allowlist)
-        .bind(created_at)
-        .bind(expires_at)
-        .execute(&self.pool)
+        .bind(expires_in_days)
+        .fetch_one(&self.pool)
         .await
         .map_err(map_create_error)?;
-        Ok(new)
+        Ok(NewAdminToken {
+            id: secret.id,
+            token: secret.token,
+            digest: secret.digest,
+            created_at,
+            expires_at,
+        })
     }
 
     /// Idempotent: revoking an already-revoked (or missing) token is not an
@@ -326,8 +344,8 @@ mod tests {
 
     #[test]
     fn tokens_have_the_expected_format_and_independent_random_secrets() {
-        let first = NewAdminToken::generate().unwrap();
-        let second = NewAdminToken::generate().unwrap();
+        let first = GeneratedSecret::generate().unwrap();
+        let second = GeneratedSecret::generate().unwrap();
         assert_eq!(first.token.len(), TOKEN_LEN);
         assert!(first.token.starts_with(PREFIX));
         assert_eq!(token_id(&first.token), Some(first.id));
@@ -338,7 +356,7 @@ mod tests {
 
     #[test]
     fn the_parser_rejects_malformed_tokens_before_any_lookup() {
-        let good = NewAdminToken::generate().unwrap();
+        let good = GeneratedSecret::generate().unwrap();
         for bad in [
             "",
             "omg_admin_",
