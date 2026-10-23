@@ -2573,12 +2573,19 @@ mod database {
         // field, and it is a plain UUID, not the 64-hex secret or the
         // 32-byte digest.
         let body = serde_json::to_string(&a).unwrap();
-        assert!(!body.contains(&token.token), "plaintext must never be exported");
+        assert!(
+            !body.contains(&token.token),
+            "plaintext must never be exported"
+        );
         assert!(
             !body.contains(&hex::encode(token.digest)),
             "the digest must never be exported"
         );
-        assert_eq!(token.id.to_string().len(), 36, "admin_token_id is a UUID, not a hash");
+        assert_eq!(
+            token.id.to_string().len(),
+            36,
+            "admin_token_id is a UUID, not a hash"
+        );
         // Repeating a setting is not another transition.
         sync_state(&store, &Setting::Off).await.unwrap();
         let markers: i64 = sqlx::query_scalar(
