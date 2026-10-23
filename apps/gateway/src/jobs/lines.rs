@@ -501,6 +501,29 @@ mod tests {
         }
     }
     #[test]
+    fn legacy_private_plans_without_an_output_bound_still_parse() {
+        // Work copies queued by a release before #245 carry no `output`: they
+        // must parse to 0 ("unknown"), which leaves the omission as-is at
+        // dispatch, exactly as before.
+        let mut raw = chat();
+        raw["body"]
+            .as_object_mut()
+            .unwrap()
+            .remove("max_completion_tokens");
+        let (deployment, price) = (Uuid::new_v4(), Uuid::new_v4());
+        raw["_omg_plan"] = json!({"deployment": deployment, "price": price});
+        let parsed = parse_work_line(&line(raw), BatchEndpoint::ChatCompletions).unwrap();
+        let plan = parsed.plan.unwrap();
+        assert_eq!(
+            (plan.deployment, plan.price, plan.output),
+            (deployment, price, 0)
+        );
+        match parsed.request {
+            BatchRequest::Chat(r) => assert_eq!(r.max_output_tokens, None),
+            _ => panic!("chat line expected"),
+        }
+    }
+    #[test]
     fn every_endpoint_uses_its_interactive_contract() {
         let messages = json!({"custom_id":"a","method":"POST","url":"/v1/messages","body":{"model":"m","max_tokens":5,"messages":[{"role":"user","content":"hi"}]}});
         assert!(parse_line(&line(messages), BatchEndpoint::Messages).is_ok());
