@@ -153,6 +153,8 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "audit_export_queue",
     // 0045 legal holds (#75)
     "legal_holds",
+    // 0050 admin API tokens, storage and lifecycle (#37 PR1)
+    "admin_api_tokens",
 ];
 /// Partitioned parents (0030/0031). Any partition of one of these in
 /// `public` (`pg_class.relispartition`; month partitions are created ahead of
