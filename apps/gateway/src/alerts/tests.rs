@@ -681,6 +681,33 @@ async fn key_expiry_rechecks_authority_between_smtp_recipients(pool: PgPool) {
     assert_eq!(outcome, ("sent".to_owned(), 1, 1));
 }
 
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn key_expiry_smtp_guard_has_catalog_prefix_before_authority_scopes(pool: PgPool) {
+    let s = seed(pool).await;
+    set_expiry(
+        &s,
+        s.key,
+        Some(expiry_now(&s).await + chrono::Duration::days(3)),
+    )
+    .await;
+    assert_eq!(evaluate(&s).await.fired, 1);
+    let event: Uuid = sqlx::query_scalar("SELECT id FROM alert_events WHERE kind='key_expiring'")
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+    let mut guard = key_expiry_send_guard(&s.store, event, "owner@example.test")
+        .await
+        .unwrap()
+        .unwrap();
+    let catalog: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=pg_backend_pid() AND locktype='advisory' AND classid=0 AND objid::bigint=$1 AND objsubid=1 AND mode='ShareLock' AND granted)")
+        .bind(crate::governance::locks::CATALOG_LOCK).fetch_one(&mut *guard).await.unwrap();
+    assert!(
+        catalog,
+        "SMTP authority locks need the shared catalog prefix to exclude exclusive-catalog management"
+    );
+    guard.rollback().await.unwrap();
+}
+
 struct Seed {
     store: Store,
     pool: PgPool,
