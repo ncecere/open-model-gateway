@@ -210,6 +210,11 @@ pub struct Jobs {
     /// tests; production builds never allocate or touch this.
     #[cfg(test)]
     pub(crate) plan_lookup_counts: Arc<plan::PlanLookupCounts>,
+    /// Test-only count of batch dispatch backoffs (`RunState::rate_limited`),
+    /// so tests assert "no backoff happened" deterministically instead of by
+    /// wall-clock time (#243). Never read outside tests.
+    #[cfg(test)]
+    pub(crate) rate_limit_pauses: Arc<std::sync::atomic::AtomicUsize>,
 }
 impl Jobs {
     pub fn new(store: Store, engine: &Engine) -> Self {
@@ -227,6 +232,8 @@ impl Jobs {
             approvals: None,
             #[cfg(test)]
             plan_lookup_counts: Arc::new(plan::PlanLookupCounts::default()),
+            #[cfg(test)]
+            rate_limit_pauses: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
     /// Attach the approved local endpoints (batch scheduling load signals).
