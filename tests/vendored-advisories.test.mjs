@@ -153,6 +153,23 @@ test("real cargo-deny misses path identity, flags projection and unchanged regis
   } finally { f.cleanup(); }
 });
 
+test("registered safe upstream version passes the actual CLI coverage guard", { skip: absent ? "cargo-deny 0.20.2 absent; install CI's pinned tool or set CARGO_DENY" : false }, () => {
+  const f = fixture();
+  try {
+    advisoryDb(f);
+    f.register();
+    for (const path of ["Cargo.toml", "vendor/smallvec/Cargo.toml"]) {
+      f.put(path, readFileSync(join(f.root, path), "utf8").replace('version = "1.10.0"', 'version = "1.11.0"'));
+    }
+    f.metadata(); // Generate the fixture lock before the --locked CLI.
+    const cli = run(process.execPath, [script, "--offline"], f.root, { ...f.env, CARGO_DENY: scanner });
+    ok(cli);
+    assert.match(output(cli), /projecting 1 explicitly registered vendored package/);
+    assert.match(output(cli), /gathered 2 crates/);
+    assert.doesNotMatch(output(cli), /RUSTSEC-2026-9999/);
+  } finally { f.cleanup(); }
+});
+
 test("registered packages pruned by the real scanner fail closed instead of claiming coverage", { skip: absent ? "cargo-deny 0.20.2 absent; install CI's pinned tool or set CARGO_DENY" : false }, async t => {
   const { projectMetadata } = await import(script);
   for (const kind of ["impossible target", "policy exclusion"]) await t.test(kind, () => {
