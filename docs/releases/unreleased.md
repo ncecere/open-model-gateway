@@ -2,6 +2,10 @@
 
 Notes for changes on `main` after [v0.7.2](v0.7.2.md). They become the next release's notes.
 
+## Added
+
+- **Budget headroom (#103).** Workspace and key budget views separate settled estimates, pending holds and retained unknown-cost floors. Remaining budget is shown only for complete accounting; hidden parent usage stays restricted, and unknown or invalid accounting never becomes available money. Effective headroom is the lowest remaining amount across applicable layers **within each independent period**, not a sum of overlapping scopes. Older gateways without the new facts show headroom unavailable. Reporting only: admission, limits, schema and runtime privileges are unchanged.
+
 ## Upgrade note: local-upstream approvals in special-use ranges will be refused next minor release (#203)
 
 `GATEWAY_LOCAL_UPSTREAMS` approvals for an HTTPS endpoint still accept, this
