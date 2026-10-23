@@ -6,6 +6,8 @@ use crate::{
 };
 use sha2::{Digest, Sha256};
 
+#[path = "authz_admin_token_tests.rs"]
+mod admin_token_tests;
 #[path = "authz_middleware_tests.rs"]
 mod isolated;
 #[path = "authz_matrix_fixtures.rs"]

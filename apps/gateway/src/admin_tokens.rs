@@ -523,6 +523,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ip_allowed_matches_exactly_and_fails_closed() {
+        let allow = vec!["10.0.0.0/24".to_string(), "2001:db8::/32".to_string()];
+        // No allowlist: unrestricted.
+        assert!(ip_allowed(None, None));
+        assert!(ip_allowed(None, Some("203.0.113.9".parse().unwrap())));
+        // Set allowlist, no resolved address: fails closed.
+        assert!(!ip_allowed(Some(&allow), None));
+        // Matching and non-matching addresses, both families.
+        assert!(ip_allowed(Some(&allow), Some("10.0.0.42".parse().unwrap())));
+        assert!(!ip_allowed(Some(&allow), Some("10.0.1.1".parse().unwrap())));
+        assert!(ip_allowed(
+            Some(&allow),
+            Some("2001:db8::1234".parse().unwrap())
+        ));
+        assert!(!ip_allowed(
+            Some(&allow),
+            Some("2001:db9::1".parse().unwrap())
+        ));
+        assert!(!ip_allowed(
+            Some(&allow),
+            Some("203.0.113.9".parse().unwrap())
+        ));
+        // An IPv4-mapped IPv6 client address is compared as its IPv4 form.
+        assert!(ip_allowed(
+            Some(&allow),
+            Some("::ffff:10.0.0.5".parse().unwrap())
+        ));
+    }
+
+    #[test]
     fn tokens_have_the_expected_format_and_independent_random_secrets() {
         let first = GeneratedSecret::generate().unwrap();
         let second = GeneratedSecret::generate().unwrap();

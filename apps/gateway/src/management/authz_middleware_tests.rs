@@ -136,7 +136,7 @@ fn methods(route: &crate::route_policy::Route) -> Vec<&str> {
         })
         .collect()
 }
-fn stub_routes() -> Router<Store> {
+pub(super) fn stub_routes() -> Router<Store> {
     let mut app = Router::new();
     for route in ROUTES {
         for method in route.methods.split_whitespace() {

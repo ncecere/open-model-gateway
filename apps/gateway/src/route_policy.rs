@@ -33,6 +33,14 @@ pub(crate) enum TokenScope {
     SettingsWrite,
 }
 impl TokenScope {
+    #[cfg(test)]
+    pub(crate) const ALL: [Self; 5] = [
+        Self::PlatformRead,
+        Self::CatalogWrite,
+        Self::AccessWrite,
+        Self::GovernanceWrite,
+        Self::SettingsWrite,
+    ];
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::PlatformRead => "platform:read",
