@@ -1145,6 +1145,89 @@ async fn multi_route_unpinned_line_is_sized_and_runs_on_the_accepting_route(pool
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
+async fn scheduler_skips_a_rejecting_route_and_claims_the_accepting_one_with_both_enabled(
+    pool: PgPool,
+) {
+    // #243: the scheduler's own dispatch-time candidate filter
+    // (`jobs::runner::Runner::plan_route_inner`) must apply the same
+    // deterministic eligibility the engine runs before admission
+    // (`ProviderAdapter::validate_chat_request`, #228), not only the coarse
+    // capability check - otherwise it can claim and pin a route that
+    // deterministically rejects an unpinned (explicit-maximum) line while
+    // another authorized route would accept it, refusing a line an
+    // interactive request would succeed on.
+    //
+    // Unlike `multi_route_unpinned_line_is_sized_and_runs_on_the_accepting_route`
+    // (which disables the rejecting route before dispatch and so does not
+    // cover this), BOTH of `company/claude`'s routes stay enabled through
+    // dispatch here. Anthropic is given the higher (numerically lower)
+    // routing priority and refuses "strict-tool"; openai is given the lower
+    // priority but is made permissive, so it accepts the same body.
+    // Priority alone would make the scheduler claim and pin anthropic.
+    let w = world(pool, false, false, 1).await;
+    let f = &w.f;
+    let openai_route = second_claude_route(&w).await;
+    w.openai.script.lock().unwrap().permissive = true;
+    for (deployment, priority) in [(w.claude_deployment, 0), (openai_route, 10)] {
+        sqlx::query("INSERT INTO deployment_routing(deployment_id,priority) VALUES($1,$2)")
+            .bind(deployment)
+            .bind(priority)
+            .execute(&f.store.pool)
+            .await
+            .unwrap();
+    }
+    let file = w
+        .upload(
+            &f.principal,
+            &[chat_line("a", "company/claude", "strict-tool")],
+        )
+        .await;
+    let job = w
+        .create(f.principal, &file, BatchEndpoint::ChatCompletions, None)
+        .await
+        .unwrap();
+    assert_eq!(job.mode(), Some(BatchMode::Gateway));
+    // Both routes remain enabled all the way through dispatch.
+    let runner = Runner::new(w.jobs.clone());
+    assert!(runner.run_next().await.unwrap());
+    let job = w.reload(&job).await;
+    assert_eq!(job.state, "completed");
+    assert_eq!(
+        (job.request_completed, job.request_failed),
+        (Some(1), Some(0))
+    );
+    let out = w.read(f.principal.workspace_id, job.output_file_id).await;
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0]["response"]["status_code"], 200);
+    assert!(job.error_file_id.is_none());
+    // The line ran on the accepting route (openai), never on the rejecting
+    // one (anthropic), even though anthropic has the higher priority.
+    assert!(w.openai.executed().contains(&"strict-tool".to_owned()));
+    assert_eq!(w.anthropic.executed(), Vec::<String>::new());
+    // Exactly one line execution, on the accepting route.
+    let executions: Vec<Uuid> =
+        sqlx::query_scalar("SELECT deployment_id FROM inference_executions WHERE batch_job_id=$1")
+            .bind(job.id)
+            .fetch_all(&f.store.pool)
+            .await
+            .unwrap();
+    assert_eq!(executions, [openai_route]);
+    // The rejecting route recorded no execution and no reservation of its
+    // own for this line (only the planning-time envelope reservation, keyed
+    // by `job.execution_id`, ever touched it).
+    let anthropic_line_reservations: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id WHERE e.batch_job_id=$1 AND r.deployment_id=$2",
+    )
+    .bind(job.id)
+    .bind(w.claude_deployment)
+    .fetch_one(&f.store.pool)
+    .await
+    .unwrap();
+    assert_eq!(anthropic_line_reservations, 0);
+    consistent(f).await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
 async fn multi_route_all_candidates_reject_with_differing_kinds_is_invalid_request_not_unsupported(
     pool: PgPool,
 ) {

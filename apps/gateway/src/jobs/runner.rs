@@ -619,7 +619,8 @@ impl Runner {
     }
 
     /// The route a line would use right now: the engine's own candidate
-    /// filter (live catalog and key access, protocol, adapter support) and
+    /// filter (live catalog and key access, protocol, adapter support,
+    /// deterministic per-adapter eligibility for an unpinned line) and
     /// route plan, first candidate.
     async fn plan_route(
         &self,
@@ -669,6 +670,50 @@ impl Runner {
         if candidates.is_empty() {
             return Ok(None);
         }
+        // An unpinned (explicit-maximum) line is not yet tied to a route:
+        // the coarse filter above can pass while an adapter's own pure
+        // encoder (`ProviderAdapter::validate_chat_request`, #228) still
+        // refuses this exact body (a strict function tool, an out-of-range
+        // sampling parameter, ...). Claiming and pinning such a route would
+        // then deterministically refuse the line even though another
+        // authorized, protocol-capable route accepts it (#243): apply the
+        // same deterministic eligibility the engine itself runs before
+        // admission (`Engine::execute_protocol`), once per adapter
+        // (provider id, not per deployment), and choose only among routes
+        // that pass. A pinned (omitted-maximum) line's candidate list is
+        // already narrowed to its one route above and is left unfiltered
+        // here: it stays judged on that pinned route alone, inside the
+        // engine at dispatch, exactly as before (#238).
+        let candidates: Vec<Deployment> = if planned_deployment.is_none() {
+            if let BatchRequest::Chat(r) = request {
+                let mut verdicts: HashMap<String, bool> = HashMap::new();
+                let eligible: Vec<Deployment> = candidates
+                    .into_iter()
+                    .filter(|d| {
+                        *verdicts.entry(d.provider.clone()).or_insert_with(|| {
+                            self.jobs
+                                .registry
+                                .get(&d.provider)
+                                .is_some_and(|a| a.validate_chat_request(r).is_ok())
+                        })
+                    })
+                    .collect();
+                if eligible.is_empty() {
+                    // Every authorized, protocol-capable route refuses this
+                    // exact body: claim nothing here. The line proceeds
+                    // ungated to the engine's normal unpinned refusal path
+                    // (`candidate_deployments` returns every deployment),
+                    // reported with the engine's own 400/501
+                    // classification, not a new error path invented here.
+                    return Ok(None);
+                }
+                eligible
+            } else {
+                candidates
+            }
+        } else {
+            candidates
+        };
         let plan = store
             .route_plan(principal, model, &candidates, execution)
             .await?;
