@@ -8,6 +8,8 @@ use sqlx::PgPool;
 use tower::ServiceExt;
 #[path = "admin_tokens_tests.rs"]
 mod admin_tokens_tests;
+#[path = "admin_token_revalidation_tests.rs"]
+mod admin_token_revalidation_tests;
 #[path = "alerts/tests.rs"]
 mod alert_tests;
 #[path = "audit_export_tests.rs"]
