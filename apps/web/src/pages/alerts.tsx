@@ -218,6 +218,9 @@ export function NotificationsPage({ session }: { session: Session }) {
     const ws = n.workspace && session.workspaces.find(w => w.id === n.workspace!.id);
     return n.rule && ws && permissions(session, ws).managePolicy ? { page: "workspace-alert-detail", ws: ws.id, record: n.rule.id } : undefined;
   };
+  // Key-expiry reminders (#100) have no rule: the action opens the workspace's
+  // keys list, never a key identifier.
+  const keysLink = (n: Notification): DashboardSearch | undefined => n.kind === "key_expiring" && n.workspace ? { page: "keys", ws: n.workspace.id } : undefined;
   const columns: DataTableColumn<Notification>[] = [
     { id: "alert", header: "Alert", accessor: n => n.summary, rowHeader: true, hideable: false, cell: n => <CellText primary={n.read ? n.summary : <strong>{n.summary}</strong>} secondary={eventSecondary(n)} title={unknownCostNote(n)} /> },
     { id: "where", header: "Where", accessor: n => whereText(n), cell: n => whereText(n) },
@@ -228,9 +231,10 @@ export function NotificationsPage({ session }: { session: Session }) {
     <Heading title="Notifications" description="Alerts for what you look after." actions={<Button variant="secondary" loading={busy} onClick={() => void markRead({ all: true })}><CheckCheck aria-hidden /> Mark all read</Button>} />
     <DirectoryTable<Notification> path={notificationsPath} label="Notifications" storageKey="notifications" columns={columns} rowKey={n => n.id} rowLabel={n => n.summary}
       facets={[{ id: "status", label: "Show", allLabel: "All", options: [{ value: "unread", label: "Unread" }] }]}
-      rowActions={n => { const link = ruleLink(n); return [
+      rowActions={n => { const link = ruleLink(n), keys = keysLink(n); return [
         { label: "Mark as read", hidden: n.read, onSelect: () => void markRead({ ids: [n.id] }) },
         { label: "Open rule", hidden: !link, render: link ? <ResourceLink search={link} /> : undefined },
+        { label: "Open keys", hidden: !keys, render: keys ? <ResourceLink search={keys} /> : undefined },
       ]; }}
       empty={{ icon: <BellRing />, title: "No notifications.", description: "Alerts for your budgets and workspaces show up here." }} />
   </Stack>;

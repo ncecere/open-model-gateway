@@ -96,6 +96,8 @@ describe("Admin › Settings › Alerts", () => {
   });
 });
 
+const keyExpiring: Notification = { id: "e2", rule: null, builtin: false, kind: "key_expiring", state: "firing", severity: "critical", level: 1, summary: "An API key expires within 1 day", details: { threshold_days: 1 }, workspace: { id: "team", name: "Product", kind: "team" }, connection: null, fired_at: "2026-10-08T00:00:00Z", resolved_at: null, resolution: null, email: null, read: false };
+
 describe("Notifications", () => {
   it("formats the bell", () => { expect(bellLabel(0)).toBe("Notifications"); expect(bellLabel(3)).toBe("Notifications, 3 unread"); expect(bellCount(120)).toBe("99+"); });
   it("shows the unread count in the top bar and a routed page with read controls", async () => {
@@ -108,6 +110,19 @@ describe("Notifications", () => {
     expect(screen.getByText(/Some cost unknown/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: /Mark all read/ }));
     await waitFor(() => expect(sent(fetch, "POST")).toEqual([["/api/v1/me/notifications/read", { all: true }]]));
+    client.clear();
+  });
+  it("offers Open keys (never a rule, never a key id) for a key-expiry reminder", async () => {
+    const user = userEvent.setup();
+    serve(session, path => path.startsWith("/api/v1/me/notifications?") ? { data: [keyExpiring], has_more: false } : undefined);
+    const { client } = await mount("/notifications");
+    await screen.findByText("An API key expires within 1 day");
+    expect(screen.getByText("Built-in key-expiry reminder")).toBeTruthy();
+    const row = screen.getByText("An API key expires within 1 day").closest("tr")!;
+    await user.click(within(row).getByRole("button", { name: /actions/i }));
+    const openKeys = await screen.findByRole("menuitem", { name: "Open keys" });
+    expect(openKeys.getAttribute("href")).toBe("/workspaces/team/keys");
+    expect(screen.queryByRole("menuitem", { name: "Open rule" })).toBeNull();
     client.clear();
   });
 });

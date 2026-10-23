@@ -8,6 +8,7 @@ Alerts tell people when budgets fill up, spend jumps, requests fail or a connect
 - **Workspace › Settings › Alerts**: Team/Project rules, for that workspace's admins (actual membership). Platform readers may read them through the API; members don't see the tab.
 - **Personal workspaces** have built-in budget alerts for their owner only (80% and 100%). Nothing is configurable and nobody else sees them, Platform Admins included.
 - **SCIM safeguard:** a built-in installation alert, "SCIM tried to remove the last Platform Admin", fires when SCIM is refused for that reason ([SCIM](scim.md#the-last-platform-admin-is-protected)). It appears in Admin › Settings › Alerts › History and in Notifications for Platform Admins and Auditors, is emailed to Platform Admins, and clears once a second active Platform Admin exists. At most one is open at a time.
+- **Authorized key-expiry reminders** (see the dedicated section below).
 - **Notifications** (`/notifications`, the bell in the top bar with the unread count): each person's alerts, with per-user read state.
 
 ## Rule kinds
@@ -25,6 +26,26 @@ All money is exact integer micro-USD. Spend is never estimated from floats, and 
 | `admission_ceiling` | **One workspace or key near its admission ceiling** (scoped admission serializes one workspace's, and one key's, admissions on that scope's totals rows, so a single scope tops out at a few hundred requests/s however many replicas run; see [operations](operations.md#per-scope-admission-ceiling)). Per workspace and per key lineage over the last `window_minutes` (5–10) complete UTC minutes: admissions stayed at or above `ceiling_requests_per_second` in **every** minute, or at least 100 admissions were made and 5 % or more of them waited at least `ceiling_lock_wait_ms` (10, 25, 50, 100, 250, 500, 1000 or 2500) for their scope locks, that is a lock-wait p95 at or above the threshold. Set either threshold or both. One incident per scope; it resolves when the condition clears. Admissions are the interactive ones the minute rate counters count (async jobs excluded); waits come from each replica's counts, flushed every 5 s (`admission_lock_waits`, kept an hour), so the last minute can miss a few seconds. | Installation only |
 | `batch_stalled` | One incident per unfinished batch whose last progress (a finished line, or new provider counts) is older than `window_minutes` (5–1440). It resolves on progress or when the batch ends. A gateway-run batch legitimately waiting for its routes (time window, live traffic, server load, concurrency, its turn) is not stalled; the clock starts when the wait ends ([scheduling](batches.md#scheduling-on-self-hosted-models)). Unreadable server metrics do not count as a wait. | Installation (Team/Project batches); workspace |
 
+## Authorized key-expiry reminders (#100)
+
+Built in (migration 0049), fixed thresholds, never a configurable rule: "An API key expires within 7 days" and "...within 1 day" for every active, authorized API key with an expiry.
+
+**Recipients follow the key, never a rule or a platform role:**
+
+| Key | Recipients |
+|---|---|
+| Personal workspace | The owner only, never another Platform Admin or Auditor. |
+| Shared human key (a Team/Project member's own key) | The holder plus that workspace's current owners and admins. Only the holder can rotate their own credential; admins can inspect or revoke it. |
+| Service-account key (no human owner; never in a personal workspace) | That workspace's current owners and admins only. Creating the service account grants its creator no lasting recipient entitlement. |
+
+Every recipient needs live platform entitlement; a shared recipient also needs effective workspace membership right now. Revoked, disabled, expired and expiry-less keys, disabled workspaces and disabled service accounts are excluded entirely (not just from recipients), as are human keys whose holder lost workspace membership. There is no listed-address or platform-role-only fallback.
+
+**Schedule and permanent deduplication.** Two bands, using database time: `1 day < expires_at − now ≤ 7 days` and `0 < expires_at − now ≤ 1 day`. `(credential id, expiry, threshold)` is permanently deduplicated, including resolved history: a credential/expiry/threshold combination is reminded at most once, ever. The first evaluation that sees a key already inside one day emits only the urgent reminder, never a missed 7-day one too. Rotation issues a new credential id, so starts a new cycle; a different expiry starts another cycle; restoring an identical expiry does not replay it; re-enabling a key never replays a reminder already sent. The 1-day reminder silently supersedes an open 7-day one (no "resolved" email, ever, for this kind); a key that becomes ineligible resolves its open reminder the same way, also silently. Each tick creates at most 500 new reminders and silently resolves at most 500 obsolete ones, in short transactions, inside the same bounded evaluation loop and fence as every other alert.
+
+**Visibility and privacy.** Appears in Notifications and in the owning workspace's History tab for its recipients (the same holder-or-current-owner/admin predicate as recipients, computed live); never in platform history. No key names, ids, prefixes, hashes or holder identities anywhere this reminder appears: events, email or logs. The email links to Notifications; the UI offers **Open keys**, linking to the workspace's keys list, never a key identifier.
+
+**Rolling-upgrade safety.** A `key_expiring` incident carries neither `rule_id` nor `builtin` (every other kind always carries exactly one); that is deliberate. Every pre-0049 gateway binary's visibility and delivery branches key off those two columns, so an old replica serving traffic during the few minutes a rolling upgrade takes can never match, display or email one of these events to anyone, intended recipient or not — not a looser check, an absent one. See 0049's migration header and `apps/gateway/src/alerts.rs` for the mechanism.
+
 Budget and installation spend is settled actual cost plus in-flight pending holds, as admission counts them. Reservations in state `unknown`, and pending holds with no bounded amount, are not added to spend: they are reported as `unknown_cost_requests`, and the UI says the spend may be higher. Spend spikes use settled cost only and flag unknown cost the same way. Zero (deny-all) budgets never alert.
 
 A budget or installation spend alert fires at the highest threshold reached. When spend later reaches a higher one, the open incident is marked `superseded` and a new one fires (one email). When the window rolls over, the budget (or reference amount) is raised or the key is revoked, the incident resolves (`cleared`).
@@ -39,6 +60,7 @@ A budget or installation spend alert fires at the highest threshold reached. Whe
 - **Admission ceiling rules read** the minute rate counters (`rate_minute_counters`, the window's rows; a few hundred thousand at most) and the flushed lock waits; at most 100 scopes per evaluation, busiest first.
 - **No admission impact.** The evaluator reads with the runtime role and never takes the installation lock.
 - Turning a rule off, deleting it (soft delete; its history stays) or disabling its workspace closes its open incidents as `rule_disabled`, without email.
+- **Key-expiry reminders** run once per tick (not per rule: there is no rule), in their own fenced, bounded transaction, immediately after the rule loop.
 
 ## Delivery
 
@@ -61,4 +83,4 @@ Migration `0026_remove_installation_limits.sql` removed the installation budget,
 
 ## Storage and grants
 
-`alert_rules` (soft-deleted; scope, workspace and kind fixed at creation; `spend_period`/`spend_amount_microusd` for installation spend rules, 0026; `ceiling_requests_per_second`/`ceiling_lock_wait_ms` for admission ceiling rules, 0036), `alert_events` (incidents; resolve once), `alert_deliveries` (counts and a category per transition) and `alert_reads` (insert-only read marks). `admission_lock_waits` (0036) holds per-minute, per-scope lock-wait counts: the runtime adds to them and maintenance deletes rows older than an hour. The runtime role has no DELETE or TRUNCATE on any of them; see `deploy/staging/runtime-grants.sql` and the probes in `verify-privileges.sql`. Migration 0011 also adds the `governance_reservations(workspace_id, admitted_at)` index used by budget alerts.
+`alert_rules` (soft-deleted; scope, workspace and kind fixed at creation; `spend_period`/`spend_amount_microusd` for installation spend rules, 0026; `ceiling_requests_per_second`/`ceiling_lock_wait_ms` for admission ceiling rules, 0036), `alert_events` (incidents; resolve once; `api_key_id`/`key_expires_at`/`threshold_days`, 0049, for key-expiry reminders only, immutable and permanently deduplicated by that triple, never granted an UPDATE), `alert_deliveries` (counts and a category per transition; the outcome CHECK gained `host_not_allowed`, 0049, closing a pre-existing gap where recording that failure rolled back) and `alert_reads` (insert-only read marks). `admission_lock_waits` (0036) holds per-minute, per-scope lock-wait counts: the runtime adds to them and maintenance deletes rows older than an hour. The runtime role has no DELETE or TRUNCATE on any of them; see `deploy/staging/runtime-grants.sql` and the probes in `verify-privileges.sql`. Migration 0011 also adds the `governance_reservations(workspace_id, admitted_at)` index used by budget alerts.

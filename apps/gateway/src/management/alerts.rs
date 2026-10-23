@@ -156,6 +156,10 @@ pub(super) fn validate(b: RuleInput, workspace: bool) -> Result<Valid, ApiError>
         return Err(invalid());
     }
     let kind = Kind::parse(&b.kind).ok_or_else(invalid)?;
+    // #100: key_expiring is a built-in event kind, never a configurable rule.
+    if kind == Kind::KeyExpiring {
+        return Err(invalid());
+    }
     if workspace && matches!(kind, Kind::Provider | Kind::Spend | Kind::AdmissionCeiling) {
         return Err(invalid());
     }
@@ -221,6 +225,8 @@ pub(super) fn validate(b: RuleInput, workspace: bool) -> Result<Valid, ApiError>
                     && b.error_rate_percent.is_none()
                     && b.min_requests.is_none()
             }
+            // Rejected above already; kept exhaustive for the compiler.
+            Kind::KeyExpiring => false,
         };
     if !allowed {
         return Err(invalid());
@@ -292,6 +298,8 @@ pub(super) fn validate(b: RuleInput, workspace: bool) -> Result<Valid, ApiError>
             }
             v.window_minutes = Some(minutes);
         }
+        // Unreachable: rejected above already.
+        Kind::KeyExpiring => return Err(invalid()),
         Kind::ErrorRate | Kind::Provider => {
             let minutes = b.window_minutes.ok_or_else(invalid)?;
             if !(5..=1440).contains(&minutes) {
@@ -729,12 +737,14 @@ impl EventQuery {
         .bounds()
     }
 }
-/// `$1..$5` are fixed: status, kind, rule, limit+1, offset; `scope` uses `$6`.
+/// `$1..$5` are fixed: status, kind, rule, limit+1, offset; `scope` uses `$6`
+/// (and, for key-specific predicates, `$7` the viewer's user id).
 async fn events(
     tx: &mut Transaction<'_, Postgres>,
     q: &EventQuery,
     scope: &str,
     ws: Option<Uuid>,
+    viewer: Uuid,
 ) -> ApiResult {
     let (l, o) = q.checked()?;
     let mut data: Vec<Value> = sqlx::query_scalar(&format!("SELECT {EVENT_JSON} {EVENT_FROM} WHERE {scope} AND ($1::text IS NULL OR ($1='firing')=(e.resolved_at IS NULL)) AND ($2::text IS NULL OR e.kind=$2) AND ($3::uuid IS NULL OR e.rule_id=$3) ORDER BY e.fired_at DESC,e.id LIMIT $4 OFFSET $5"))
@@ -744,6 +754,7 @@ async fn events(
         .bind(l + 1)
         .bind(o)
         .bind(ws)
+        .bind(viewer)
         .fetch_all(&mut **tx)
         .await?;
     let has_more = data.len() as i64 > l;
@@ -777,9 +788,15 @@ async fn platform_events(
         &mut tx,
         &q,
         // Installation rules plus the built-in installation incidents (SCIM
-        // last-admin safeguard, missing history partitions).
-        "(r.scope='installation' OR e.builtin IN ('scim_last_admin','partitions_missing','history_orphans')) AND $6::uuid IS NULL",
+        // last-admin safeguard, missing history partitions). key_expiring is
+        // never shown in platform history: it has neither `rule_id` nor
+        // `builtin` set, so it already fails to match either branch here.
+        // (`$7` is unused on this scope; the trailing clause is a no-op that
+        // only satisfies Postgres's parameter count for the shared `events`
+        // helper.)
+        "(r.scope='installation' OR e.builtin IN ('scim_last_admin','partitions_missing','history_orphans')) AND $6::uuid IS NULL AND ($7::uuid IS NOT NULL OR $7::uuid IS NULL)",
         None,
+        u.user_id,
     )
     .await?;
     tx.commit().await?;
@@ -793,12 +810,21 @@ async fn workspace_events(
     Query(q): Query<EventQuery>,
 ) -> ApiResult {
     let (mut tx, _) = workspace_read(&s, &u, ws).await?;
-    // This workspace's rules, or its built-in alerts (personal: owner only, enforced above).
+    // This workspace's rules, or its built-in alerts: personal_budget
+    // (personal: owner only, enforced above) or key_expiring, which does NOT
+    // follow the generic `e.builtin IS NOT NULL` branch (it has no builtin
+    // at all) and instead gets the same key-specific predicate as the
+    // notification feed: the holder, or a current workspace owner/admin.
+    // Without this, a platform reader who is not a workspace member (but
+    // whom `workspace_read` otherwise admits for a shared workspace) would
+    // see key-expiry reminders through this endpoint, which they are not an
+    // intended recipient of.
     let out = events(
         &mut tx,
         &q,
-        "e.workspace_id=$6 AND (r.scope='workspace' OR e.builtin IS NOT NULL)",
+        "e.workspace_id=$6 AND (r.scope='workspace' OR (e.builtin IS NOT NULL) OR (e.kind='key_expiring' AND (EXISTS(SELECT 1 FROM api_keys k WHERE k.id=e.api_key_id AND k.issued_to_user_id=$7) OR EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=e.workspace_id AND m.user_id=$7 AND m.role IN ('owner','admin')))))",
         Some(ws),
+        u.user_id,
     )
     .await?;
     tx.commit().await?;
@@ -808,7 +834,7 @@ async fn workspace_events(
 // ---------- Notifications ----------
 
 /// Incidents the caller may see, by live authority (`$1` caller, `$2` platform reader).
-const VISIBLE: &str = "e.fired_at>now()-interval '90 days' AND ((e.builtin IS NOT NULL AND w.kind='personal' AND w.owner_user_id=$1 AND w.disabled_at IS NULL) OR (r.scope='installation' AND $2) OR (e.builtin IN ('scim_last_admin','partitions_missing','history_orphans') AND $2) OR (r.scope='workspace' AND w.kind IN ('team','project') AND w.disabled_at IS NULL AND (EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=e.workspace_id AND m.user_id=$1 AND m.role IN ('owner','admin')) OR (r.notify_platform_admins AND $2))))";
+const VISIBLE: &str = "e.fired_at>now()-interval '90 days' AND ((e.builtin IS NOT NULL AND w.kind='personal' AND w.owner_user_id=$1 AND w.disabled_at IS NULL) OR (r.scope='installation' AND $2) OR (e.builtin IN ('scim_last_admin','partitions_missing','history_orphans') AND $2) OR (r.scope='workspace' AND w.kind IN ('team','project') AND w.disabled_at IS NULL AND (EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=e.workspace_id AND m.user_id=$1 AND m.role IN ('owner','admin')) OR (r.notify_platform_admins AND $2))) OR (e.kind='key_expiring' AND w.disabled_at IS NULL AND (EXISTS(SELECT 1 FROM api_keys k WHERE k.id=e.api_key_id AND k.issued_to_user_id=$1) OR EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=e.workspace_id AND m.user_id=$1 AND m.role IN ('owner','admin')))))";
 
 /// Notifications never take the installation lock (the bell polls).
 async fn viewer<'a>(

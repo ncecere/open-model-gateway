@@ -135,6 +135,13 @@ GRANT UPDATE(name,enabled,budget_layers,thresholds,spike_factor_percent,min_spen
  ON public.alert_rules TO gateway_runtime;
 GRANT UPDATE(resolved_at,resolution) ON public.alert_events TO gateway_runtime;
 GRANT UPDATE(status,recipients,sent,failed,error,completed_at) ON public.alert_deliveries TO gateway_runtime;
+-- Key-expiry reminders (0049/#100): reviewed, no new grant needed. The table-
+-- level SELECT/INSERT above already covers the new api_key_id/key_expires_at/
+-- threshold_days columns (table-level grants apply to every column, present
+-- and future); resolving a reminder (silently or not) only ever needs
+-- resolved_at/resolution, already granted above. No UPDATE is granted on
+-- api_key_id/key_expires_at/threshold_days: that attribution is immutable
+-- (also enforced by a trigger; see 0049 and verify-privileges.sql).
 -- SCIM (0014). Directory attributes are upserted per user and cleared at cleanup;
 -- the user link is never re-keyed or removed. Groups and memberships are directory
 -- state (DELETE allowed); group-derived grants keep their own revocation history.
