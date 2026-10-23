@@ -27,7 +27,7 @@ aws-smithy-async = "1"
 # Bedrock (shared smithy/runtime crates); request checksums "when_required" for MinIO/RustFS.
 aws-sdk-s3 = { version = "=1.122.0", default-features = false, features = ["rt-tokio"] }
 # Mandatory streaming AES-256-GCM encryption of every stored object.
-aes-gcm = { version = "=0.10.3", features = ["zeroize"] }
+aes-gcm = { version = "=0.11.1", features = ["zeroize"] }
 base64 = "0.23"
 bytes = "1"
 futures = "0.3"
