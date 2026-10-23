@@ -1,14 +1,14 @@
 # Operations runbook
 
-## Alert email outbox (unreleased, post-v0.7.0)
+This covers health checks, metrics and alerting, backups and restore, secret rotation, Platform Admin lockout protection, upgrades, and the load-test baseline. It assumes the [staging](staging.md) role split: `gateway_bootstrap` for cluster administration, `gateway_migrator` for schema ownership, and `gateway_runtime` for the service. None of this approves a public production launch.
 
-For #46 apply migration 0051 explicitly and run `grants apply`/`grants verify` before starting the new workers; stop older delivery workers first. Historical terminal deliveries never replay. Pending deliveries snapshot their initially eligible recipients once, then recheck live eligibility on every claim. `alert_recipient_outbox` rows are retained (append-only), like other audit tables: cleanup only changes a row's state, never removes it. See [alerts](alerts.md#delivery) for the privacy, upgrade and retry contract.
+## Alert email outbox (#46)
+
+For #46 apply migration 0050 explicitly and run `grants apply`/`grants verify` before starting the new workers; stop older delivery workers first. Historical terminal deliveries never replay. Pending deliveries snapshot their initially eligible recipients once, then recheck live eligibility on every claim. `alert_recipient_outbox` rows are retained (append-only), like other audit tables: cleanup only changes a row's state, never removes it. See [alerts](alerts.md#delivery) for the privacy, upgrade and retry contract.
 
 Use incident History's Waiting/Retrying/Exhausted, waiting count and next due time to distinguish a scheduled retry from a terminal failure. There are at most five attempts per recipient within 24 hours, with 1m/5m/30m/2h backoff; every tick handles at most 25 attempts. SMTP I/O holds no database connection. Expired 90s claims recover on another worker; fenced results from old workers are ignored. A crash after acceptance can duplicate mail: neither the queue nor the relay offers network exactly-once delivery.
 
 `gateway_alert_email_attempts_total{outcome="sent|transient_failure|permanent_failure"}` counts recorded attempt outcomes. `gateway_alert_email_deliveries{state="retrying|failed|exhausted"}` counts pending deliveries created in the last 24 hours and terminal failures/exhaustion completed in the last 24 hours (the metrics lease holder exports the installation aggregate). The completion window keeps newly expired/cleaned-up failures visible beyond the 15-minute alert window, even when they were created over 24 hours ago. Cleanup without a send does not increment the attempt counter. Failed and exhausted overlap; do not add them. The [example Prometheus rules](../deploy/monitoring/prometheus-rules.yml) include `GatewayAlertEmailPersistentFailure`. Send it through an independent operations channel, not a recursive email-failure incident inside the gateway. Missing SMTP is `not_configured`, not a retry loop. No metric labels, incident API fields or logs contain outbox fingerprints/recipient addresses. Fingerprints are pseudonymous personal data; restrict database access and backups accordingly.
-
-This covers health checks, metrics and alerting, backups and restore, secret rotation, Platform Admin lockout protection, upgrades, and the load-test baseline. It assumes the [staging](staging.md) role split: `gateway_bootstrap` for cluster administration, `gateway_migrator` for schema ownership, and `gateway_runtime` for the service. None of this approves a public production launch.
 
 ## Configuration reference
 

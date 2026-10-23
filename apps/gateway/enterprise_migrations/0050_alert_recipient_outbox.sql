@@ -54,7 +54,7 @@ BEGIN
  IF (OLD.initialized AND NOT NEW.initialized) OR (OLD.status<>'pending' AND NEW IS DISTINCT FROM OLD) THEN
   RAISE EXCEPTION 'completed alert deliveries cannot be replayed';
  END IF;
- -- Rolling-upgrade overlap: a pre-0051 binary's legacy deliver_one finalizes
+ -- Rolling-upgrade overlap: a pre-0050 binary's legacy deliver_one finalizes
  -- a delivery straight to a terminal status with one UPDATE, unaware of the
  -- outbox. Refuse that loudly while recipients are still waiting or leased,
  -- so mail is never silently lost or duplicated and complete() never

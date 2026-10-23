@@ -142,7 +142,7 @@ GRANT UPDATE(status,recipients,sent,failed,error,completed_at,initialized,attemp
 -- resolved_at/resolution, already granted above. No UPDATE is granted on
 -- api_key_id/key_expires_at/threshold_days: that attribution is immutable
 -- (also enforced by a trigger; see 0049 and verify-privileges.sql).
--- 0051 recipient outbox (#46): immutable identity/eligibility link, default-only
+-- 0050 recipient outbox (#46): immutable identity/eligibility link, default-only
 -- initial state. Used by both rule-based alerts and key-expiry reminders.
 -- Eligibility captures users.id with its normalized address in one SELECT;
 -- INSERT uses that captured identity, never a later email lookup. Existing

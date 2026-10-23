@@ -1529,7 +1529,7 @@ async fn outbox_due(s: &Seed) {
     sqlx::query("UPDATE alert_recipient_outbox SET next_attempt_at=clock_timestamp()-interval '1 second' WHERE state='waiting'").execute(&s.pool).await.unwrap();
 }
 
-/// A pre-0051 binary's legacy `deliver_one` finalizes a delivery with one
+/// A pre-0050 binary's legacy `deliver_one` finalizes a delivery with one
 /// plain `UPDATE ... SET status=... WHERE status='pending'`, oblivious to
 /// the outbox. While recipients are still waiting or leased, that overlap
 /// must be refused loudly (not silently finalize mail the outbox has not
