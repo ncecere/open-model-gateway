@@ -21,10 +21,24 @@
 -- role later never un-revokes them (the revocation-is-final trigger refuses
 -- it, and nothing here ever clears revoked_at).
 --
--- The role-loss check locks the owner's users row FOR UPDATE before its
--- EXISTS check (write-skew guard: two admin grants of different provenance
--- revoked by two otherwise-unsynchronized concurrent transactions must
--- still both be seen gone).
+-- The role-loss check and the creation guard below both take the repo's
+-- canonical user-scope authority lock (AGENTS.md: "authority advisory
+-- locks ... user ... exclusive in any management change of that scope")
+-- before their own live check (write-skew guard: two admin grants of
+-- different provenance revoked by two otherwise-unsynchronized concurrent
+-- transactions must still both be seen gone; a concurrent demotion and a
+-- concurrent creation must serialize). An earlier revision used a plain
+-- `users ... FOR UPDATE` row lock here instead, which deadlocked (40P01)
+-- against the manual-demotion path in management/directory.rs: that path
+-- locks the users row first, then updates the grant, which takes 0027's
+-- advisory lock; group-mapping deletion updates the grant first (taking
+-- the advisory lock first) and this trigger then wanted the row. The
+-- advisory lock avoids that: it is the same lock 0027's own
+-- omg_authority_platform_grants/omg_authority_users triggers already take
+-- for any platform_role_grants or users.disabled_at/cleaned_at change, and
+-- it is re-entrant within a transaction, so a transaction that already
+-- holds it (the common case: Rust callers take it up front, per
+-- AGENTS.md) pays nothing to ask for it again here.
 SET lock_timeout = '60s';
 
 -- Every admin-token scope (route assignments are PR2's route_policy.rs); no
@@ -102,15 +116,16 @@ CREATE FUNCTION omg_admin_tokens_role_lost() RETURNS trigger LANGUAGE plpgsql AS
 BEGIN
  -- Write-skew guard: two admin grants of different provenance (manual and
  -- group) can be revoked by two concurrent transactions that otherwise
- -- share no lock here. Lock the owner's row first, the same row
- -- apps/gateway/src/management/directory.rs's manual-demotion path and the
- -- creation guard below both lock FOR UPDATE. The EXISTS below then runs
- -- as a fresh statement: under READ COMMITTED every plain SQL statement
- -- (including one run from inside a PL/pgSQL function) takes a new
- -- snapshot, so once this lock is granted the EXISTS is guaranteed to see
- -- whatever the other transaction already committed, instead of each
+ -- share no lock here. Take the same user-scope authority lock 0027's
+ -- omg_authority_platform_grants/omg_authority_users triggers already
+ -- take for this exact user (re-entrant: a transaction that holds it
+ -- already, the common case, pays nothing to ask again). The EXISTS below
+ -- then runs as a fresh statement: under READ COMMITTED every plain SQL
+ -- statement (including one run from inside a PL/pgSQL function) takes a
+ -- new snapshot, so once this lock is granted the EXISTS is guaranteed to
+ -- see whatever the other transaction already committed, instead of each
  -- transaction's stale view of the sibling grant.
- PERFORM 1 FROM users WHERE id=NEW.user_id FOR UPDATE;
+ PERFORM omg_scope_lock_exclusive(72419512,omg_scope_key(NEW.user_id));
  IF NOT EXISTS(SELECT 1 FROM platform_role_grants WHERE user_id=NEW.user_id AND role='admin' AND revoked_at IS NULL) THEN
   PERFORM omg_admin_tokens_revoke_owner(NEW.user_id);
  END IF;
@@ -140,18 +155,23 @@ CREATE TRIGGER admin_api_tokens_user_cleaned AFTER UPDATE OF cleaned_at ON users
 -- Creation is bound to the owner's live Admin status at the instant of
 -- insertion, not only to a caller's earlier check (PR2's handler still
 -- enforces "create only for oneself"; this is the storage-level backstop).
--- Lock the same users row the role-loss check above locks, so a
--- concurrent demotion (platform_role_grants revocation, or
--- disabled_at/cleaned_at) and a concurrent creation serialize on it: a
--- demotion already in flight blocks the create until it commits, and the
--- create then correctly refuses; a create already in flight is evaluated
--- while the owner was still genuinely admin and blocks the demotion's own
--- row lock (taken inside its AFTER trigger) until the insert's implicit
+-- Take the same user-scope authority lock the role-loss check above takes
+-- (and 0027's omg_authority_platform_grants/omg_authority_users triggers
+-- already take for any platform_role_grants or users.disabled_at/
+-- cleaned_at change), so a concurrent demotion/suspension/cleanup and a
+-- concurrent creation serialize on it: a demotion already in flight blocks
+-- the create until it commits, and the create then correctly refuses; a
+-- create already in flight is evaluated while the owner was still
+-- genuinely admin and blocks the demotion until the insert's implicit
 -- transaction ends. effective_platform_roles already excludes disabled
 -- and cleaned-up users, so this one EXISTS also covers suspension/cleanup.
+-- An earlier revision used a plain `users ... FOR UPDATE` row lock here,
+-- which deadlocked (40P01) against the manual-demotion path's own
+-- row-then-advisory-lock order; the advisory lock does not, and is free
+-- (re-entrant) for the common case where the caller already holds it.
 CREATE FUNCTION omg_admin_tokens_owner_must_be_admin() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
- PERFORM 1 FROM users WHERE id=NEW.owner_user_id FOR UPDATE;
+ PERFORM omg_scope_lock_exclusive(72419512,omg_scope_key(NEW.owner_user_id));
  IF NOT EXISTS(SELECT 1 FROM effective_platform_roles WHERE user_id=NEW.owner_user_id AND role='admin') THEN
   RAISE EXCEPTION 'admin API token owner must be a currently effective Platform Admin' USING ERRCODE='23514';
  END IF;

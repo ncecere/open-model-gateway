@@ -204,8 +204,21 @@ struct TokenRecord {
 impl Store {
     /// Create a token owned by `owner_user_id` (the caller, a currently
     /// effective Platform Admin; enforcing that this is the *creating*
-    /// user and that they *are* an Admin is PR2's handler-level job — this
-    /// is the storage primitive). Returns the plaintext once.
+    /// user is PR2's handler-level job — this is the storage primitive).
+    ///
+    /// Migration 0050's `BEFORE INSERT` trigger takes the owner's
+    /// `governance::locks` user-scope authority lock
+    /// (`Scope::User(owner_user_id)`) before checking that the owner is
+    /// currently an effective Admin, and refuses the insert otherwise
+    /// (`CreateAdminTokenError::OwnerNotAdmin`). **PR2's handler must still
+    /// take that same lock exclusive up front**, like every other
+    /// management change of that scope (AGENTS.md's canonical lock order),
+    /// before calling this: the trigger's own re-entrant acquisition
+    /// inside the single `INSERT` statement is a correctness backstop, not
+    /// a substitute for the handler holding the lock across its own
+    /// multi-statement transaction (e.g. an earlier read of the caller's
+    /// own role, or audit insertion, that must not race a concurrent
+    /// demotion either). Returns the plaintext once.
     pub async fn create_admin_token(
         &self,
         owner_user_id: Uuid,

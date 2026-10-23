@@ -853,6 +853,167 @@ async fn created_at_and_expires_at_come_from_the_database_clock_not_the_app(pool
     );
 }
 
+fn is_deadlock(e: &sqlx::Error) -> bool {
+    matches!(e, sqlx::Error::Database(db) if db.code().as_deref() == Some("40P01"))
+}
+
+/// Coordinator review of #37 PR1, follow-up: the `users ... FOR UPDATE`
+/// fix for issue 1 introduced a new deadlock (40P01) that did not exist
+/// before migration 0050.
+///
+/// The manual demotion path (management/directory.rs) locks the owner's
+/// `users` row `FOR UPDATE` first, then updates the grant, which fires
+/// 0027's `BEFORE` trigger `omg_authority_platform_grants` and takes the
+/// user-scope advisory lock (class 72419512). Group-mapping deletion
+/// (directory.rs) updates the grant first (taking the advisory lock
+/// first), and the role-loss `AFTER` trigger then wanted the `users` row
+/// `FOR UPDATE`. T1 holds the row and waits for the advisory lock; T2
+/// holds the advisory lock and waits for the row: a circular wait Postgres
+/// resolves by aborting one side with SQLSTATE 40P01. Before migration
+/// 0050 neither trigger touched the `users` row at all, so this deadlock
+/// is new.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn concurrent_manual_and_group_revocation_does_not_deadlock(pool: PgPool) {
+    let owner = admin(&pool, "deadlock@test.invalid").await;
+    let manual_grant: Uuid = sqlx::query_scalar(
+        "SELECT id FROM platform_role_grants WHERE user_id=$1 AND role='admin' AND source='manual'",
+    )
+    .bind(owner)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let mapping = Uuid::new_v4();
+    sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES($1,'https://issuer.test','admins','platform','admin')")
+        .bind(mapping)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let group_grant = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO platform_role_grants(id,user_id,role,source,mapping_id) VALUES($1,$2,'admin','group',$3)",
+    )
+    .bind(group_grant)
+    .bind(owner)
+    .bind(mapping)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let store = Store::new(pool.clone());
+    let token = store
+        .create_admin_token(owner, "t", &scopes(&["platform:read"]), 30, None)
+        .await
+        .unwrap();
+
+    // T1: the manual demotion path's first step (directory.rs).
+    let mut tx1 = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM users WHERE id=$1 FOR UPDATE")
+        .bind(owner)
+        .fetch_one(&mut *tx1)
+        .await
+        .unwrap();
+
+    // T2: the group-mapping deletion's grant revoke (directory.rs), spawned.
+    let pool2 = pool.clone();
+    let t2 = tokio::spawn(async move {
+        let mut tx2 = pool2.begin().await.unwrap();
+        let result = sqlx::query("UPDATE platform_role_grants SET revoked_at=now() WHERE id=$1")
+            .bind(group_grant)
+            .execute(&mut *tx2)
+            .await;
+        match result {
+            Ok(_) => {
+                tx2.commit().await.unwrap();
+                Ok(())
+            }
+            Err(e) => {
+                let _ = tx2.rollback().await;
+                Err(e)
+            }
+        }
+    });
+
+    // Let T2 reach its blocking point (unfixed) or finish entirely (fixed).
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    // T1: the manual demotion's own grant revoke.
+    let result1 = sqlx::query("UPDATE platform_role_grants SET revoked_at=now() WHERE id=$1")
+        .bind(manual_grant)
+        .execute(&mut *tx1)
+        .await;
+    let outcome1 = match result1 {
+        Ok(_) => {
+            tx1.commit().await.unwrap();
+            Ok(())
+        }
+        Err(e) => {
+            let _ = tx1.rollback().await;
+            Err(e)
+        }
+    };
+    let outcome2 = t2.await.unwrap();
+
+    for (label, outcome) in [("T1 (manual)", &outcome1), ("T2 (group)", &outcome2)] {
+        if let Err(e) = outcome {
+            assert!(!is_deadlock(e), "{label} hit SQLSTATE 40P01: {e}");
+        }
+    }
+    assert!(
+        outcome1.is_ok() || outcome2.is_ok(),
+        "{outcome1:?} / {outcome2:?}"
+    );
+
+    let revoked: bool =
+        sqlx::query_scalar("SELECT revoked_at IS NOT NULL FROM admin_api_tokens WHERE id=$1")
+            .bind(token.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        revoked,
+        "losing both admin grants must revoke the token even when neither side deadlocked"
+    );
+}
+
+/// Coordinator review of #37 PR1, follow-up requirement 3: a manual
+/// demotion run the way production code runs it -- `crate::db::begin`
+/// (which sets `omg.scope_lock_audit=on` under `cfg(test)`) with the
+/// user-scope lock pre-acquired up front via `governance::locks::exclusive`
+/// -- must not trip 0027's "authority change without its scope lock taken
+/// up front" audit check when the new admin_api_tokens trigger calls the
+/// same `omg_scope_lock_exclusive` helper a second time (advisory locks are
+/// re-entrant within a transaction, and the audit check only looks at
+/// whether the lock is already held, not who is calling it).
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn manual_demotion_under_scope_lock_audit_mode_does_not_trip_the_audit_check(pool: PgPool) {
+    let owner = admin(&pool, "audit@test.invalid").await;
+    let store = Store::new(pool.clone());
+    let token = store
+        .create_admin_token(owner, "t", &scopes(&["platform:read"]), 30, None)
+        .await
+        .unwrap();
+
+    let mut tx = crate::db::begin(&pool).await.unwrap();
+    crate::governance::locks::exclusive(&mut tx, [crate::governance::locks::Scope::User(owner)])
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND role='admin'",
+    )
+    .bind(owner)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    let revoked: bool =
+        sqlx::query_scalar("SELECT revoked_at IS NOT NULL FROM admin_api_tokens WHERE id=$1")
+            .bind(token.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(revoked);
+}
+
 async fn revoked(pool: &PgPool, id: Uuid) -> bool {
     sqlx::query_scalar("SELECT revoked_at IS NOT NULL FROM admin_api_tokens WHERE id=$1")
         .bind(id)
