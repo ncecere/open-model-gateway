@@ -136,24 +136,87 @@ impl Engine {
         if deployments.is_empty() {
             return Err(InferenceError::ModelUnavailable);
         }
-        let candidates: Vec<_> = deployments
-            .into_iter()
-            .filter(|deployment| {
-                deployment
-                    .supported_protocols
-                    .iter()
-                    .any(|p| p == protocol.as_str())
-                    && self
-                        .registry
-                        .get(&deployment.provider)
-                        .is_some_and(|adapter| {
-                            adapter.supports_protocol(protocol)
-                                && adapter.supports_chat_request(&request)
-                        })
-            })
-            .collect();
+        // Coarse protocol/capability gate (unchanged), then a pure,
+        // deterministic per-candidate check (`ProviderAdapter::validate_chat_request`)
+        // against the client's own request: a route that would refuse this
+        // exact request deterministically is never durably admitted or
+        // reserved for it. This is eligibility, not failover - a refusal here
+        // consumes no attempt slot and produces no routing health
+        // observation, and another authorized route may still accept the
+        // same request.
+        //
+        // Validation depends only on the adapter and the client request, so it
+        // runs once per adapter (provider id), not once per deployment: a model
+        // with many routes on one provider must not multiply this unmetered,
+        // pre-admission work.
+        let mut candidates = Vec::new();
+        let mut refused = Vec::new();
+        let mut verdicts: std::collections::HashMap<String, Result<(), InferenceError>> =
+            std::collections::HashMap::new();
+        for deployment in deployments {
+            if !deployment
+                .supported_protocols
+                .iter()
+                .any(|p| p == protocol.as_str())
+            {
+                continue;
+            }
+            let Some(adapter) = self.registry.get(&deployment.provider) else {
+                continue;
+            };
+            if !(adapter.supports_protocol(protocol) && adapter.supports_chat_request(&request)) {
+                continue;
+            }
+            let verdict = *verdicts
+                .entry(deployment.provider.clone())
+                .or_insert_with(|| match adapter.validate_chat_request(&request) {
+                    Ok(()) => Ok(()),
+                    Err(InferenceError::InvalidRequest) => Err(InferenceError::InvalidRequest),
+                    Err(InferenceError::Unsupported) => Err(InferenceError::Unsupported),
+                    // The contract allows only InvalidRequest/Unsupported. A
+                    // nonconforming adapter is treated as a capability refusal,
+                    // never silently admitted, and reported for the operator.
+                    Err(other) => {
+                        tracing::warn!(provider = %deployment.provider, error = ?other,
+                            "adapter request validation returned an error outside its contract");
+                        Err(InferenceError::Unsupported)
+                    }
+                });
+            match verdict {
+                Ok(()) => candidates.push(deployment),
+                Err(error) => refused.push((deployment, error)),
+            }
+        }
         if candidates.is_empty() {
-            return Err(InferenceError::Unsupported);
+            if refused.is_empty() {
+                return Err(InferenceError::Unsupported);
+            }
+            // Every capable route refused the request. Report the refusal kind
+            // only from routes the routing policy would actually use (residency,
+            // operator-disabled routes and cooldown applied by the ordinary,
+            // read-only planner), so an unusable route cannot change the
+            // caller's error. Planning errors (nothing routable) surface as they
+            // would for a valid request. Nothing is admitted or recorded here.
+            let refused_deployments: Vec<_> = refused.iter().map(|(d, _)| d.clone()).collect();
+            let usable = timeout_at(
+                deadline,
+                self.repository.route_plan(
+                    &principal,
+                    &request.model,
+                    &refused_deployments,
+                    request_id,
+                ),
+            )
+            .await
+            .map_err(|_| InferenceError::Timeout)??;
+            let invalid = refused.iter().any(|(d, error)| {
+                *error == InferenceError::InvalidRequest && usable.deployment_ids.contains(&d.id)
+            });
+            return Err(if invalid {
+                InferenceError::InvalidRequest
+            } else {
+                InferenceError::Unsupported
+            });
         }
         let plan = timeout_at(
             deadline,
@@ -488,6 +551,8 @@ impl Drop for ExecutionGuard {
     }
 }
 
+#[cfg(all(test, feature = "integration-tests"))]
+mod admission_validation_tests;
 #[cfg(all(test, feature = "integration-tests"))]
 mod steering_tests;
 #[cfg(test)]
