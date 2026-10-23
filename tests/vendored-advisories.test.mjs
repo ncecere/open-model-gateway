@@ -120,6 +120,34 @@ test("registration and graph validation fail closed", async t => {
   } finally { f.cleanup(); }
 });
 
+test("explicit workspace list parsing is narrow, canonical and fail closed", async t => {
+  const { projectMetadata } = await import(script);
+  const f = fixture(false);
+  try {
+    const metadata = f.metadata();
+    const cases = [
+      '[workspace]\nresolver = "3"\nmembers = ["app"]\n',
+      '[workspace]\nmembers = ["a*"]\n',
+      '[workspace]\nmembers = ["./app"]\n',
+      '[workspace]\nmembers = ["app/../app"]\n',
+      '[workspace]\nmembers = ["app", "app"]\n',
+      '[workspace]\nmembers = ["app" "app"]\n',
+      '[workspace]\nmembers = []\n',
+      '[workspace]\nmembers = ["app"] trailing\n',
+      'description = """\n[workspace]\nmembers = ["app"]\n"""\n',
+    ];
+    for (const manifest of cases) await t.test(JSON.stringify(manifest), () => {
+      f.put("Cargo.toml", manifest);
+      assert.throws(() => projectMetadata(metadata, f.root), /vendored advisories:/);
+    });
+    f.put("Cargo.toml", "# header\n[workspace] # workspace\n# members\nmembers = [\n 'app', # literal path\n]\nresolver = '3'\n");
+    assert.equal(projectMetadata(metadata, f.root).count, 0);
+    symlinkSync(join(f.root, "app"), join(f.root, "alias"));
+    f.put("Cargo.toml", '[workspace]\nmembers = ["alias"]\n');
+    assert.throws(() => projectMetadata(metadata, f.root), /non-canonical manifest path/);
+  } finally { f.cleanup(); }
+});
+
 test("real cargo-deny misses path identity, flags projection and unchanged registry identity", { skip: absent ? "cargo-deny 0.20.2 absent; install CI's pinned tool or set CARGO_DENY" : false }, async t => {
   const { projectMetadata } = await import(script);
   const f = fixture();
@@ -144,6 +172,8 @@ test("real cargo-deny misses path identity, flags projection and unchanged regis
     t.diagnostic(`PROJECTED: exit ${flagged.status}; ${output(flagged).trim()}`);
     const unchanged = structuredClone(projected);
     unchanged.metadata.vendored = {};
+    // A real registry package's manifest is in Cargo's cache, not vendor/.
+    unchanged.packages.find(p => p.name === "smallvec").manifest_path = join(f.env.CARGO_HOME, "registry/src/smallvec/Cargo.toml");
     assert.deepEqual(projectMetadata(unchanged, f.root).metadata, unchanged);
     assert.equal(scan(unchanged).status, 1, "unchanged registry control is still scanned");
     const cli = run(process.execPath, [script, "--offline"], f.root, { ...f.env, CARGO_DENY: scanner });
@@ -151,6 +181,38 @@ test("real cargo-deny misses path identity, flags projection and unchanged regis
     assert.match(output(cli), /RUSTSEC-2026-9999/);
     assert.equal(readFileSync(join(f.root, "Cargo.lock"), "utf8"), lock);
   } finally { f.cleanup(); }
+});
+
+test("workspace membership never exempts unregistered vendor or implicit first-party paths", { skip: absent ? "cargo-deny 0.20.2 absent" : false }, async t => {
+  for (const kind of ["normal", "build", "dev", "explicit vendor", "registered member", "implicit outside vendor"]) await t.test(kind, () => {
+    const f = fixture();
+    try {
+      advisoryDb(f);
+      let root = readFileSync(join(f.root, "Cargo.toml"), "utf8").replace('exclude = ["vendor/smallvec"]\n', "");
+      if (kind === "explicit vendor") root = root.replace('members = ["app"]', 'members = ["app", "vendor/smallvec"]');
+      if (kind === "registered member") {
+        f.register();
+        root = readFileSync(join(f.root, "Cargo.toml"), "utf8").replace('exclude = ["vendor/smallvec"]\n', "");
+      }
+      f.put("Cargo.toml", root);
+      const app = readFileSync(join(f.root, "app/Cargo.toml"), "utf8");
+      if (["build", "dev"].includes(kind)) f.put("app/Cargo.toml", app.replace("[dependencies]", `[${kind}-dependencies]`));
+      if (kind === "implicit outside vendor") {
+        f.put("local/smallvec/Cargo.toml", readFileSync(join(f.root, "vendor/smallvec/Cargo.toml"), "utf8"));
+        f.put("local/smallvec/src/lib.rs", "");
+        f.put("app/Cargo.toml", app.replace("../vendor/smallvec", "../local/smallvec"));
+      }
+      const metadata = f.metadata();
+      const pkg = metadata.packages.find(p => p.name === "smallvec");
+      assert.ok(metadata.workspace_members.includes(pkg.id), "Cargo auto-includes the path dependency");
+      f.put("metadata.json", JSON.stringify(metadata));
+      ok(run(scanner, ["--offline", "--all-features", "--metadata-path", join(f.root, "metadata.json"), "check", "advisories"], f.root, f.env));
+      const cli = run(process.execPath, [script, "--offline"], f.root, { ...f.env, CARGO_DENY: scanner });
+      assert.equal(cli.status, 1, output(cli));
+      assert.match(output(cli), kind === "registered member" ? /workspace member cannot be registered/ : /unregistered path package/);
+      t.diagnostic(`${kind}: raw scanner exit 0; helper exit ${cli.status} (coverage refused)`);
+    } finally { f.cleanup(); }
+  });
 });
 
 test("registered safe upstream version passes the actual CLI coverage guard", { skip: absent ? "cargo-deny 0.20.2 absent; install CI's pinned tool or set CARGO_DENY" : false }, () => {

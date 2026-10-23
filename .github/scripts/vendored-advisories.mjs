@@ -2,7 +2,7 @@
 // The real graph remains authoritative for the normal cargo-deny checks, builds,
 // SBOMs and provenance. Never feed this projection to any other check.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -32,7 +32,41 @@ export function projectMetadata(input, directory) {
   }
 }
 
+// Deliberately accept a narrow, unambiguous TOML prefix, not a regex search
+// through arbitrary TOML (which could mistake string contents for declarations).
+// Cargo validates the rest of the document before this helper receives metadata.
+function explicitMemberDirectories(root) {
+  let text = readFileSync(join(root, "Cargo.toml"), "utf8").replace(/\r\n/g, "\n");
+  const skip = () => { text = text.replace(/^(?:[ \t\n]|#[^\n]*(?:\n|$))*/, ""); };
+  const take = pattern => {
+    const match = text.match(pattern);
+    requireThat(match, "cannot unambiguously parse explicit workspace members; root must start with [workspace] then a literal members array");
+    text = text.slice(match[0].length);
+    return match;
+  };
+  skip();
+  take(/^\[workspace\][ \t]*(?:#[^\n]*)?\n/);
+  skip();
+  take(/^members[ \t]*=[ \t]*\[/);
+  skip();
+  const directories = [];
+  while (!text.startsWith("]")) {
+    const match = take(/^(?:"([A-Za-z0-9_./-]+)"|'([A-Za-z0-9_./-]+)')/);
+    const path = match[1] ?? match[2];
+    requireThat(path === "." || path.split("/").every(p => p && p !== "." && p !== ".."), "non-canonical explicit workspace member");
+    directories.push(dirname(canonicalManifest(join(root, path, "Cargo.toml"), root)));
+    skip();
+    if (text.startsWith("]")) break;
+    take(/^,/);
+    skip();
+  }
+  take(/^\][ \t]*(?:#[^\n]*)?(?:\n|$)/);
+  requireThat(directories.length > 0 && unique(directories), "empty or duplicate explicit workspace members");
+  return new Set(directories);
+}
+
 function project(input, root) {
+  const explicitMembers = explicitMemberDirectories(root);
   requireThat(object(input) && input.version === 1 && input.workspace_root === root, "unexpected metadata format or workspace root");
   requireThat(Array.isArray(input.packages) && input.packages.length > 0, "missing packages");
   requireThat(input.metadata === null || object(input.metadata), "unexpected workspace metadata");
@@ -89,19 +123,19 @@ function project(input, root) {
   const remap = new Map();
   const used = new Set();
   for (const p of packages.values()) {
+    const directory = dirname(p.manifest_path);
+    const inVendor = directory === join(root, "vendor") || directory.startsWith(`${join(root, "vendor")}${sep}`);
     if (p.source !== null) {
-      requireThat(!members.includes(p.id) && !byManifest.has(p.manifest_path), "registration/member is not a path package");
+      requireThat(!inVendor && !members.includes(p.id) && !byManifest.has(p.manifest_path), "vendor registration/member is not a path package");
       continue;
     }
     canonicalManifest(p.manifest_path, root);
     const prefix = `path+${pathToFileURL(dirname(p.manifest_path)).href}#`;
     requireThat(p.id === `${prefix}${p.name}@${p.version}` || p.id === `${prefix}${p.version}`, "inconsistent path package ID");
     const entry = byManifest.get(p.manifest_path);
-    if (members.includes(p.id)) {
-      requireThat(!entry, "workspace member cannot be registered as vendored");
-      continue;
-    }
-    requireThat(entry, `unknown non-workspace path dependency: ${p.name} ${p.version}`);
+    requireThat(!entry || !members.includes(p.id), "workspace member cannot be registered as vendored; exclude it explicitly");
+    if (members.includes(p.id) && explicitMembers.has(directory) && !inVendor) continue;
+    requireThat(entry, `unregistered path package: ${p.name} ${p.version}; only explicit non-vendor workspace members are first-party`);
     requireThat(entry.name === p.name && entry.version === p.version, `registration name/version mismatch: ${p.manifest_path}`);
     used.add(p.manifest_path);
     const id = `${registry}#${p.name}@${p.version}`;
