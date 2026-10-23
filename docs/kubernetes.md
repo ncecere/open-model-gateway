@@ -183,7 +183,13 @@ gateway:
 networkPolicy:
   egress:
     extraEgress:
-      - to: [{ podSelector: { matchLabels: { app: otel-collector } } }]
+      - to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: observability
+            podSelector:
+              matchLabels:
+                app: otel-collector
         ports: [{ protocol: TCP, port: 4318 }]
 ```
 

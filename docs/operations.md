@@ -163,7 +163,7 @@ Recording never waits for a collector: 256 active contexts, 64 spans/request, 24
 
 **Finding a trace in Grafana Tempo:**
 
-1. Open the request in Logs (Workspace or Admin) and copy its "Trace ID" field. A `null` value means the row is personal or was never sampled/eligible: there is nothing to look up.
+1. Open the request in Logs (Workspace or Admin) and copy its "Trace ID" field. A `null` value means the row is personal: there is nothing to look up. Shared-workspace rows have a correlation ID even when the request was not sampled.
 2. In Grafana, open the Tempo data source's **Explore** view (or the "TraceQL" query type on a dashboard panel using that data source).
 3. Search by trace ID directly: paste the hex value into Explore's trace ID search box (or query `{trace:id="<hex>"}` in TraceQL) and run it. A present `trace_id` only means the correlation ID was computed from this request's own ID, not a Tempo lookup of it; it does not by itself prove the trace was sampled, exported or accepted by the collector (check `gateway_trace_dropped_spans_total{reason}`, `gateway_trace_deliveries_total{outcome}` and `gateway_trace_rejected_spans_total` above - a trace that was dropped, rejected or never sampled has a `trace_id` in Logs but nothing in Tempo).
 4. The resulting trace shows `inference.request` as the root span, with `routing`, `admission`(.*), `upstream.attempt` and `settlement`(.*) as its children (and `admission`/`settlement`'s own sub-phase spans nested under each), matching the span set and parentage described above.
