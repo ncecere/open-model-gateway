@@ -195,7 +195,11 @@ impl Runner {
             .ok_or(InferenceError::Configuration)?;
         let endpoint = job.endpoint().ok_or(InferenceError::Storage)?;
         let work = job.work_file_id.ok_or(InferenceError::Storage)?;
-        let state = Arc::new(RunState::default());
+        let state = Arc::new(RunState {
+            #[cfg(test)]
+            pauses: self.jobs.rate_limit_pauses.clone(),
+            ..RunState::default()
+        });
         // Lease renewal (and cancel observation) while the batch runs.
         let renewal = {
             let store = self.jobs.store.clone();
@@ -941,6 +945,8 @@ struct RunState {
     budget: AtomicBool,
     busy_streak: AtomicU32,
     pause_until: Mutex<Option<tokio::time::Instant>>,
+    #[cfg(test)]
+    pauses: Arc<std::sync::atomic::AtomicUsize>,
 }
 impl RunState {
     fn stop_reason(&self, job: &JobRow) -> Option<Stop> {
@@ -962,6 +968,8 @@ impl RunState {
     /// Provider rate limiting: back off this batch's dispatch (1 s doubling
     /// to 60 s); a success resets it.
     fn rate_limited(&self) {
+        #[cfg(test)]
+        self.pauses.fetch_add(1, Ordering::SeqCst);
         let streak = self.busy_streak.fetch_add(1, Ordering::SeqCst).min(6);
         let wait = Duration::from_secs(1u64 << streak).min(Duration::from_secs(60));
         *self.pause_until.lock().expect("pause") = Some(tokio::time::Instant::now() + wait);

@@ -1554,22 +1554,22 @@ async fn ungated_admission_refusal_does_not_rate_limit_batch_dispatch(pool: PgPo
     assert_eq!(job.mode(), Some(BatchMode::Gateway));
     w.openai.script.lock().unwrap().accept_after_first_check = true;
     let runner = Runner::new(w.jobs.clone());
-    let started = std::time::Instant::now();
     assert!(runner.run_next().await.unwrap());
-    let elapsed = started.elapsed();
     let job = w.reload(&job).await;
     assert_eq!(job.state, "completed");
     assert_eq!(
         (job.request_completed, job.request_failed),
         (Some(1), Some(1))
     );
-    // No artificial backoff: the batch's own provider-429 pause (>= 1 s)
-    // never engages for a refusal that never reached a provider, so the
-    // second line dispatches as soon as a worker permit frees, well under
-    // the backoff's first step.
-    assert!(
-        elapsed < Duration::from_millis(700),
-        "ungated refusal appears to have paused batch dispatch: {elapsed:?}"
+    // No artificial backoff: the batch's provider-429 pause never engages
+    // for a refusal that never reached a provider. Counted directly (not by
+    // wall-clock time, which made this flaky on slower CI runners).
+    assert_eq!(
+        w.jobs
+            .rate_limit_pauses
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "ungated refusal paused batch dispatch"
     );
     consistent(f).await;
 }
