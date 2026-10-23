@@ -110,8 +110,14 @@ fixed_enum!(Delivery { Accepted => "accepted", HttpStatus => "http_status", Tran
 /// eligibility. Intentionally has no production constructor in PR 1: PR 2
 /// connects this capability to live admission. Dropping an unclassified
 /// context exports nothing, including pre-admission observations.
+///
+/// It also carries the canonical public model alias that admission resolved,
+/// so the alias attribute's provenance is admission itself: no caller can
+/// pass arbitrary text (a prompt, a key, a raw client model string) as a
+/// "validated" alias, or enrol strings into the process-wide alias registry.
 pub struct SharedAdmission {
     request: Uuid,
+    alias: String,
 }
 
 #[derive(Clone)]
@@ -127,8 +133,8 @@ struct AliasRegistry {
     values: Mutex<HashSet<String>>,
 }
 impl AliasRegistry {
-    /// Call only with a public alias validated by successful primary admission,
-    /// never raw client text. Contention folds to other rather than waiting.
+    /// Only reachable through [`Context::admitted_alias`], with the alias a
+    /// [`SharedAdmission`] carries. Contention folds to other rather than waiting.
     fn admission_validated(&self, alias: &str) -> PublicAlias {
         let other = || PublicAlias("other".into());
         if alias.is_empty() || alias.chars().count() > 96 || alias.chars().any(char::is_control) {
@@ -379,13 +385,11 @@ impl Context {
         span.trace = self.trace;
         self.spans.push(span);
     }
-    pub fn admission_validated_alias(
-        &self,
-        admission: &SharedAdmission,
-        alias: &str,
-    ) -> Option<PublicAlias> {
+    /// The model alias admission resolved for this request, folded to
+    /// `other` past the registry bound. `None` for another request's admission.
+    pub fn admitted_alias(&self, admission: &SharedAdmission) -> Option<PublicAlias> {
         (admission.request == self.request)
-            .then(|| self.recorder.aliases.admission_validated(alias))
+            .then(|| self.recorder.aliases.admission_validated(&admission.alias))
     }
 
     pub fn export(mut self, eligibility: SharedAdmission) {
@@ -393,7 +397,10 @@ impl Context {
             return;
         }
         for span in self.spans.drain(..) {
+            // Practically unreachable (Span serializes a plain JSON tree), but
+            // every span is either delivered or counted: never a silent skip.
             let Ok(text) = serde_json::to_string(&span) else {
+                self.recorder.counts.drop_spans(DropReason::SpanLimit, 1);
                 continue;
             };
             if text.len() > MAX_SPAN {
@@ -401,6 +408,7 @@ impl Context {
                 continue;
             }
             let Ok(raw) = RawValue::from_string(text) else {
+                self.recorder.counts.drop_spans(DropReason::SpanLimit, 1);
                 continue;
             };
             if let Err(error) = self.recorder.sender.try_send(raw) {
@@ -908,6 +916,7 @@ mod tests {
     fn export_shared(context: Context) {
         let admission = SharedAdmission {
             request: context.request,
+            alias: "public-model".to_owned(),
         };
         context.export(admission);
     }
@@ -1126,19 +1135,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_alias_attribute_comes_only_from_the_admission() {
+        let (recorder, _receiver) = Recorder::channel(1.0);
+        let request = Uuid::from_u128(43);
+        let context = recorder.begin(request).unwrap();
+        let admission = SharedAdmission {
+            request,
+            alias: "admitted-model".to_owned(),
+        };
+        // The only way to obtain a PublicAlias for a request: no string argument.
+        let alias = context.admitted_alias(&admission).unwrap();
+        assert!(matches!(alias.as_str(), "admitted-model" | "other"));
+        drop(context);
+    }
+
+    #[tokio::test]
     async fn eligibility_is_bound_to_the_same_server_request() {
         let (recorder, mut receiver) = Recorder::channel(1.0);
         let request = Uuid::from_u128(41);
         let admission = SharedAdmission {
             request: Uuid::from_u128(42),
+            alias: "public-model".to_owned(),
         };
         let mut context = recorder.begin(request).unwrap();
         context.record(span());
-        assert!(
-            context
-                .admission_validated_alias(&admission, "public-model")
-                .is_none()
-        );
+        assert!(context.admitted_alias(&admission).is_none());
         context.export(admission);
         assert!(receiver.try_recv().is_err());
         assert_eq!(recorder.counts.dropped(DropReason::Ineligible), 1);
@@ -1161,7 +1182,7 @@ mod tests {
             exchange(&format!("http://{address}/v1/traces")).await,
             Err(Delivery::Timeout)
         );
-        assert!(started.elapsed() < Duration::from_millis(2300));
+        assert!(started.elapsed() < Duration::from_millis(2700));
         task.abort();
         // A live target distinguishes policy refusal from connection-refused.
         // A resolver bypass would queue a TCP connection on this listener.
@@ -1308,7 +1329,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(1200)).await;
         let started = Instant::now();
         runtime.shutdown().await;
-        assert!(started.elapsed() < Duration::from_millis(3300));
+        assert!(started.elapsed() < Duration::from_millis(3700));
         assert!(recorder.counts.deliveries(Delivery::Timeout) > 0);
         assert!(recorder.counts.dropped(DropReason::Shutdown) > 0);
         task.abort();

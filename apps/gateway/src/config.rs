@@ -124,7 +124,8 @@ impl TraceConfig {
             );
             let value = zeroize::Zeroizing::new(get(&name).ok_or_else(invalid)?);
             anyhow::ensure!(value.len() <= 4096, "trace headers exceed the 4 KiB limit");
-            headers = crate::audit_export::parse_otlp_headers(&value).map_err(|_| invalid())?;
+            headers = crate::audit_export::parse_otlp_headers(Self::HEADERS, &value)
+                .map_err(|_| invalid())?;
         }
         Ok(Self {
             endpoint,

@@ -343,7 +343,7 @@ impl Exporter {
         let (url, client) = https_client(OTLP_URL_ENV, url.trim(), development)?;
         let headers = match headers {
             None => reqwest::header::HeaderMap::new(),
-            Some(text) => parse_otlp_headers(text)?,
+            Some(text) => parse_otlp_headers(OTLP_HEADERS_ENV_ENV, text)?,
         };
         Ok(Self {
             transport: Transport::Otlp(Otlp {
@@ -509,18 +509,21 @@ pub(crate) fn check_secret_env_name(
 /// `Key=Value,Key2=Value2` from the OTLP headers variable (#108). Errors say
 /// which item is wrong, never its name or value (a misplaced `=` could put a
 /// token in the name).
-pub(crate) fn parse_otlp_headers(value: &str) -> anyhow::Result<reqwest::header::HeaderMap> {
+pub(crate) fn parse_otlp_headers(
+    setting: &str,
+    value: &str,
+) -> anyhow::Result<reqwest::header::HeaderMap> {
     let mut headers = reqwest::header::HeaderMap::new();
     let items: Vec<&str> = value.split(',').collect();
     anyhow::ensure!(
         items.len() <= OTLP_MAX_HEADERS,
-        "{OTLP_HEADERS_ENV_ENV}: at most {OTLP_MAX_HEADERS} headers"
+        "{setting}: at most {OTLP_MAX_HEADERS} headers"
     );
     for (i, item) in items.into_iter().enumerate() {
         let n = i + 1;
-        let (name, value) = item.split_once('=').ok_or_else(|| {
-            anyhow::anyhow!("{OTLP_HEADERS_ENV_ENV}: header {n} is not Key=Value")
-        })?;
+        let (name, value) = item
+            .split_once('=')
+            .ok_or_else(|| anyhow::anyhow!("{setting}: header {n} is not Key=Value"))?;
         // Spaces around `=` and `,` are ignored; a CR or LF never is.
         let (name, value) = (name.trim_matches(' '), value.trim_matches(' '));
         // An HTTP token (RFC 9110 5.6.2).
@@ -529,25 +532,23 @@ pub(crate) fn parse_otlp_headers(value: &str) -> anyhow::Result<reqwest::header:
                 && name
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)),
-            "{OTLP_HEADERS_ENV_ENV}: header {n} has an invalid name"
+            "{setting}: header {n} has an invalid name"
         );
         anyhow::ensure!(
             !OTLP_RESERVED_HEADERS
                 .iter()
                 .any(|reserved| name.eq_ignore_ascii_case(reserved)),
-            "{OTLP_HEADERS_ENV_ENV}: header {n} is one the gateway sets itself (Content-Type, Host or Content-Length)"
+            "{setting}: header {n} is one the gateway sets itself (Content-Type, Host or Content-Length)"
         );
         // Visible ASCII and space: no CR, LF or other control characters.
         anyhow::ensure!(
             !value.is_empty() && value.bytes().all(|b| (b' '..=b'~').contains(&b)),
-            "{OTLP_HEADERS_ENV_ENV}: header {n} has an empty or invalid value (visible ASCII and spaces only)"
+            "{setting}: header {n} has an empty or invalid value (visible ASCII and spaces only)"
         );
-        let name = reqwest::header::HeaderName::from_bytes(name.as_bytes()).map_err(|_| {
-            anyhow::anyhow!("{OTLP_HEADERS_ENV_ENV}: header {n} has an invalid name")
-        })?;
-        let mut value = reqwest::header::HeaderValue::from_str(value).map_err(|_| {
-            anyhow::anyhow!("{OTLP_HEADERS_ENV_ENV}: header {n} has an invalid value")
-        })?;
+        let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+            .map_err(|_| anyhow::anyhow!("{setting}: header {n} has an invalid name"))?;
+        let mut value = reqwest::header::HeaderValue::from_str(value)
+            .map_err(|_| anyhow::anyhow!("{setting}: header {n} has an invalid value"))?;
         value.set_sensitive(true);
         headers.append(name, value);
     }
