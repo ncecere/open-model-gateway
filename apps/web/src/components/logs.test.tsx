@@ -88,6 +88,15 @@ describe("Session and platform request pages", () => {
   it("says a missing session isn't visible", () => {
     expect(markup(nav({ page: "platform-log-session" }, <PlatformSessionDetailPage session={admin} />))).toContain("Session not found");
   });
+  it("shows the trace ID only for a shared request, never for a personal (null) one", () => {
+    const traced: RequestDetail = { ...row, workspace_id: "team", attempt_count: 1, attempts: [], prev_id: null, next_id: null, trace_id: "6c77e4c0e472d7dff3c61cccbe5e19b6" };
+    const html = markup(nav({ page: "platform-log-detail", record: row.root_request_id }, <PlatformRequestDetailPage session={admin} id={row.root_request_id} />), [[`/api/v1/platform/logs/requests/${row.root_request_id}`, traced]]);
+    expect(html).toContain("Trace ID");
+    expect(html).toContain("6c77e4c0e472d7dff3c61cccbe5e19b6");
+    const personal: RequestDetail = { ...row, workspace_id: "personal", attempt_count: 1, attempts: [], prev_id: null, next_id: null, trace_id: null };
+    const none = markup(nav({ page: "platform-log-detail", record: row.root_request_id }, <PlatformRequestDetailPage session={admin} id={row.root_request_id} />), [[`/api/v1/platform/logs/requests/${row.root_request_id}`, personal]]);
+    expect(none).not.toContain("Trace ID");
+  });
   it("opens a team request on Admin without linking to the key page", () => {
     const detail: RequestDetail = { ...row, workspace_id: "team", attempt_count: 1, attempts: [], prev_id: null, next_id: null };
     const html = markup(nav({ page: "platform-log-detail", record: row.root_request_id }, <PlatformRequestDetailPage session={admin} id={row.root_request_id} />), [[`/api/v1/platform/logs/requests/${row.root_request_id}`, detail]]);

@@ -1,6 +1,18 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
+  "definitions": {
+    "secretKeyRef": {
+      "type": "object",
+      "description": "A reference to a key in an existing Secret. Never an inline credential value.",
+      "required": ["name", "key"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "key": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
   "properties": {
     "gateway": {
       "type": "object",
@@ -9,6 +21,68 @@
           "type": "string",
           "description": "Display-only SDK base URL ending in /v1; empty uses the dashboard origin. Full URL validation is enforced by the gateway at startup.",
           "pattern": "^$|^https?://[^/\\s?#@]+(/[^\\s?#]*)?/v1/?$"
+        }
+      }
+    },
+    "cnpg": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "object",
+          "properties": {
+            "backup": {
+              "type": "object",
+              "description": "CNPG Cluster backups: CNPG's in-tree barmanObjectStore (default), or the Barman Cloud plugin (#261).",
+              "properties": {
+                "method": {
+                  "type": "string",
+                  "enum": ["barmanObjectStore", "plugin"],
+                  "description": "barmanObjectStore (default, CNPG's in-tree backup) or plugin (the Barman Cloud plugin)."
+                },
+                "plugin": {
+                  "type": "object",
+                  "properties": {
+                    "name": { "type": "string", "minLength": 1 },
+                    "objectStoreName": { "type": "string" },
+                    "objectStore": {
+                      "type": "object",
+                      "properties": {
+                        "destinationPath": { "type": "string" },
+                        "endpointURL": { "type": "string" },
+                        "retentionPolicy": { "type": "string" },
+                        "s3Credentials": {
+                          "type": "object",
+                          "description": "Secret references only; inline accessKeyId/secretAccessKey strings are refused.",
+                          "additionalProperties": false,
+                          "properties": {
+                            "accessKeyId": { "$ref": "#/definitions/secretKeyRef" },
+                            "secretAccessKey": { "$ref": "#/definitions/secretKeyRef" }
+                          }
+                        },
+                        "wal": {
+                          "type": "object",
+                          "properties": {
+                            "compression": { "type": "string" },
+                            "encryption": { "type": "string" },
+                            "maxParallel": { "type": "integer", "minimum": 1 }
+                          }
+                        },
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "compression": { "type": "string" },
+                            "encryption": { "type": "string" },
+                            "jobs": { "type": "integer", "minimum": 1 }
+                          }
+                        },
+                        "instanceSidecarConfiguration": { "type": "object" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     }

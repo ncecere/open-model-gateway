@@ -86,6 +86,8 @@ export type RequestRow = {
   root_request_id: string; started_at: string; completed_at: string | null; model: string; key: { id: string; name: string }; status: string; attempts: number;
   input_tokens: string | null; output_tokens: string | null; cost_microusd: string | null; held_microusd: string | null; latency_ms: number | null;
   cost_center: { id: string; name: string; code: string } | null; workload_kind: string; streamed: boolean; provider?: string | null;
+  /** Hex correlation id for a shared (team/project) request; null for personal. */
+  trace_id?: string | null;
   /** Async video/batch job of this request (gateway id, gateway state, provider status). */
   job?: JobSummary | null;
 } & LogTelemetry;

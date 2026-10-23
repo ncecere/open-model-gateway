@@ -128,6 +128,10 @@ pub fn start(store: Store, retention_days: Option<i32>) -> tokio::task::JoinHand
             }
             // Minute rate counters admission no longer reads (0024), every minute.
             if counter.is_multiple_of(12) {
+                // Independent background trace roots (#98): no workspace,
+                // user or request data, so each is its own root span,
+                // regardless of whether this tick actually held the lease.
+                let start = crate::telemetry::now_unix_nanos();
                 singleton(
                     &store,
                     crate::leases::Lease::Maintenance,
@@ -145,6 +149,14 @@ pub fn start(store: Store, retention_days: Option<i32>) -> tokio::task::JoinHand
                     },
                 )
                 .await;
+                if let Some(traces) = store.traces() {
+                    traces.record_background(
+                        crate::telemetry::BackgroundSpan::LockWaitPrune,
+                        start,
+                        crate::telemetry::now_unix_nanos(),
+                    );
+                }
+                let start = crate::telemetry::now_unix_nanos();
                 singleton(
                     &store,
                     crate::leases::Lease::Maintenance,
@@ -158,6 +170,13 @@ pub fn start(store: Store, retention_days: Option<i32>) -> tokio::task::JoinHand
                     },
                 )
                 .await;
+                if let Some(traces) = store.traces() {
+                    traces.record_background(
+                        crate::telemetry::BackgroundSpan::RatePrune,
+                        start,
+                        crate::telemetry::now_unix_nanos(),
+                    );
+                }
             }
             // Expired sign-in attempts every minute (#80): far more than the
             // pending-attempt cap lets anyone create in a minute.

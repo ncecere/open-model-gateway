@@ -43,6 +43,7 @@ pub struct Config {
 }
 
 /// Operator-only trace configuration. Never Debug: headers contain secrets.
+#[derive(Clone)]
 pub struct TraceConfig {
     pub(crate) endpoint: Option<(reqwest::Url, reqwest::Client)>,
     pub(crate) headers: reqwest::header::HeaderMap,
