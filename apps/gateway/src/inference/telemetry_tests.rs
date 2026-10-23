@@ -790,3 +790,75 @@ fn trace_id_field_is_a_bare_string_when_present_and_absent_when_none() {
         "an absent trace id must omit the field entirely, never log the literal string \"None\": {logged}"
     );
 }
+
+/// #98 PR 2 review item 4: a route plan with no deployment ids (the
+/// `for`/`enumerate` attempt loop runs zero times, its only reachable
+/// trigger: any nonzero number of iterations always returns explicitly on
+/// its last attempt) falls through to the trailing
+/// `Err(InferenceError::Busy)`. Zero iterations also means admission never
+/// ran, so telemetry eligibility is never established either - nothing
+/// exports for this trigger regardless of the fix below, which is checked
+/// structurally instead (see the next test). This is a behavioral sanity
+/// check: the fallback still returns `Busy` and nothing spuriously exports.
+#[tokio::test]
+async fn an_empty_route_plan_still_returns_busy_and_exports_nothing() {
+    let repository = Arc::new(TelemetryRepository::default());
+    repository.deployments.lock().unwrap().push(deployment());
+    repository.shared.store(true, Ordering::SeqCst);
+    *repository.plan.lock().unwrap() = Some(crate::routing::RoutePlan {
+        deployment_ids: vec![],
+        max_attempts: 1,
+        allow_ambiguous_failover: false,
+    });
+    let mut registry = ProviderRegistry::default();
+    registry
+        .register(Arc::new(Adapter {
+            mode: Mutex::new(vec![]),
+        }))
+        .unwrap();
+    let (recorder, mut rx) = telemetry::Recorder::channel(1.0);
+    let engine = Engine::new(repository, registry, EngineLimits::default())
+        .unwrap()
+        .with_telemetry(Some(recorder));
+    let error = expect_err(
+        engine
+            .execute(principal(), request(false), Uuid::new_v4())
+            .await,
+    );
+    assert_eq!(error, InferenceError::Busy);
+    assert!(drain(&mut rx).await.is_empty());
+}
+
+/// #98 PR 2 review item 4 (structural): the fallback `Err(InferenceError::Busy)`
+/// after the attempt loop (reached only when `plan.deployment_ids` is empty,
+/// so the loop runs zero iterations and no admission - and therefore no
+/// telemetry eligibility - is ever possible for this exact trigger; that is
+/// why the test above can observe the return value but never an exported
+/// span either way) must still call `telemetry.finish(...)` explicitly
+/// first, like every other return path in this function, so `Drop` is
+/// never the one deciding this outcome and a real `Busy` is never silently
+/// relabelled `Cancelled` if a future change makes eligibility reachable
+/// here. Checked structurally (the same grep-based architecture-test
+/// pattern `telemetry.rs` already uses), since nothing distinguishes
+/// "finished explicitly" from "finished by Drop" through any externally
+/// observable side effect today.
+#[test]
+fn the_empty_route_plan_fallback_finishes_telemetry_before_returning_busy() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/inference/mod.rs");
+    let source = std::fs::read_to_string(path).unwrap();
+    let marker = "\n        Err(InferenceError::Busy)\n    }\n}\n";
+    let pos = source
+        .find(marker)
+        .expect("the empty-route-plan fallback's shape moved; update this test's marker");
+    // Narrow enough to exclude the sibling match arm's own, unrelated
+    // telemetry.finish(...) call just above the loop's closing brace (about
+    // 144 bytes further back), wide enough for a one-line explicit finish
+    // call placed directly before this return.
+    let window_start = pos.saturating_sub(100);
+    let preceding = &source[window_start..pos];
+    assert!(
+        preceding.contains("telemetry.finish("),
+        "the fallback Err(InferenceError::Busy) must call telemetry.finish(...) \
+         explicitly before returning, like every other return path: {preceding:?}"
+    );
+}

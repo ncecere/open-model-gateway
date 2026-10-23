@@ -798,6 +798,7 @@ impl Engine {
                 }
             }
         }
+        telemetry.finish(telemetry::Outcome::Error, Some(InferenceError::Busy));
         Err(InferenceError::Busy)
     }
 }
