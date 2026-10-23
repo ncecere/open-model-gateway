@@ -102,8 +102,83 @@ test("CNPG backups render the barmanObjectStore map as given, and the chart name
   const [cluster] = docsOfKind(helmTemplate(["-f", join(chart, "ci/cnpg-values.yaml"), "--set", "cnpg.cluster.backup.enabled=true",
     "--set", "cnpg.cluster.backup.barmanObjectStore.destinationPath=s3://bucket/omg"]), "Cluster");
   assert.match(cluster, /barmanObjectStore:\s+destinationPath: s3:\/\/bucket\/omg/);
-  const rendered = helmTemplate(["-f", join(chart, "ci/cnpg-values.yaml")]);
+  assert.doesNotMatch(cluster, /plugins:/, "default method is barmanObjectStore, not the plugin");
+  const rendered = helmTemplate(["-f", join(chart, "ci/cnpg-values.yaml"), "--set", "cnpg.cluster.backup.enabled=true",
+    "--set", "cnpg.cluster.backup.barmanObjectStore.destinationPath=s3://bucket/omg"]);
   assert.doesNotMatch(rendered, /GATEWAY_DRAIN_SECONDS/);
+  assert.equal(docsOfKind(rendered, "ObjectStore").length, 0, "barmanObjectStore mode renders no plugin ObjectStore");
+  const [scheduled] = docsOfKind(rendered, "ScheduledBackup");
+  assert.doesNotMatch(scheduled, /method: plugin|pluginConfiguration/, "default mode's ScheduledBackup is unchanged");
+  assert.match(scheduled, /backupOwnerReference: self/);
+});
+
+function pluginBackupArgs(extra = []) {
+  return ["-f", join(chart, "ci/cnpg-values.yaml"),
+    "--set", "cnpg.cluster.backup.enabled=true",
+    "--set", "cnpg.cluster.backup.method=plugin",
+    "--set", "cnpg.cluster.backup.plugin.objectStore.destinationPath=s3://omg-backups/omg",
+    "--set", "cnpg.cluster.backup.plugin.objectStore.endpointURL=http://rustfs-svc.object-storage.svc.cluster.local:9000",
+    "--set", "cnpg.cluster.backup.plugin.objectStore.retentionPolicy=14d",
+    "--set-json", 'cnpg.cluster.backup.plugin.objectStore.s3Credentials.accessKeyId={"name":"omg-backup-s3","key":"ACCESS_KEY_ID"}',
+    "--set-json", 'cnpg.cluster.backup.plugin.objectStore.s3Credentials.secretAccessKey={"name":"omg-backup-s3","key":"ACCESS_SECRET_KEY"}',
+    "--set-json", 'cnpg.cluster.backup.plugin.objectStore.wal={"compression":"gzip","maxParallel":2}',
+    "--set-json", 'cnpg.cluster.backup.plugin.objectStore.data={"compression":"gzip","jobs":2}',
+    "--set-json", 'cnpg.cluster.backup.plugin.objectStore.instanceSidecarConfiguration={"resources":{"requests":{"cpu":"10m","memory":"64Mi"},"limits":{"memory":"256Mi"}}}',
+    ...extra];
+}
+
+test("CNPG backups in plugin mode render an ObjectStore, Cluster plugins block and ScheduledBackup method: plugin (#261)", () => {
+  const rendered = helmTemplate(pluginBackupArgs());
+
+  const [store] = docsOfKind(rendered, "ObjectStore");
+  assert.ok(store, "no ObjectStore rendered in plugin mode");
+  assert.match(store, /^apiVersion: barmancloud\.cnpg\.io\/v1$/m);
+  assert.match(store, /name: omg-test[\w-]*-db-backup-store$/m);
+  assert.match(store, /retentionPolicy: "14d"/);
+  assert.match(store, /destinationPath: s3:\/\/omg-backups\/omg/);
+  assert.match(store, /endpointURL: http:\/\/rustfs-svc\.object-storage\.svc\.cluster\.local:9000/);
+  assert.match(store, /accessKeyId:\s+name: omg-backup-s3\s+key: ACCESS_KEY_ID/);
+  assert.match(store, /secretAccessKey:\s+name: omg-backup-s3\s+key: ACCESS_SECRET_KEY/);
+  assert.match(store, /wal:\s+compression: gzip\s+maxParallel: 2/);
+  assert.match(store, /data:\s+compression: gzip\s+jobs: 2/);
+  assert.match(store, /instanceSidecarConfiguration:\s+resources:/);
+  assert.doesNotMatch(store, /ACCESS_KEY_ID_VALUE|AKIA|secretAccessKey:\s*\n\s*-/, "no literal credential value, only secret refs");
+
+  const [cluster] = docsOfKind(rendered, "Cluster");
+  assert.match(cluster, /plugins:\s+- name: barman-cloud\.cloudnative-pg\.io\s+isWALArchiver: true\s+parameters:\s+barmanObjectName: omg-test[\w-]*-db-backup-store/);
+  assert.doesNotMatch(cluster, /^\s+backup:\s*$/m, "plugin mode renders no in-tree backup: block");
+
+  const [scheduled] = docsOfKind(rendered, "ScheduledBackup");
+  assert.match(scheduled, /backupOwnerReference: self/);
+  assert.match(scheduled, /method: plugin/);
+  assert.match(scheduled, /pluginConfiguration:\s+name: barman-cloud\.cloudnative-pg\.io/);
+  assert.match(scheduled, /schedule: "0 0 3 \* \* \*"/);
+});
+
+test("CNPG backup plugin mode refuses inline S3 credential strings; only secret refs validate (#261)", () => {
+  const inline = spawnSync("helm", ["template", "omg-test", chart,
+    ...pluginBackupArgs(["--set", "cnpg.cluster.backup.plugin.objectStore.s3Credentials.accessKeyId=AKIAEXAMPLE"])],
+    { encoding: "utf8", timeout: 30_000 });
+  assert.notEqual(inline.status, 0, "an inline accessKeyId string must be refused by the schema");
+  assert.match(inline.stderr, /accessKeyId|s3Credentials|values don't meet the specifications/i);
+});
+
+test("CNPG backup plugin mode without S3 credentials fails with the required-value message, not a template panic (#261)", () => {
+  const missing = spawnSync("helm", ["template", "omg-test", chart, "-f", join(chart, "ci/cnpg-values.yaml"),
+    "--set", "cnpg.cluster.backup.enabled=true", "--set", "cnpg.cluster.backup.method=plugin",
+    "--set", "cnpg.cluster.backup.plugin.objectStore.destinationPath=s3://omg-backups/omg"],
+    { encoding: "utf8", timeout: 30_000 });
+  assert.notEqual(missing.status, 0, "missing credentials must be refused");
+  assert.doesNotMatch(missing.stderr, /nil pointer/, "must not be a raw template panic");
+  assert.match(missing.stderr, /s3Credentials\.accessKeyId\.name is required when cnpg\.cluster\.backup\.method is "plugin"/);
+});
+
+test("cnpg.cluster.backup.method is validated against its enum (#261)", () => {
+  const invalid = spawnSync("helm", ["template", "omg-test", chart, "-f", join(chart, "ci/cnpg-values.yaml"),
+    "--set", "cnpg.cluster.backup.enabled=true", "--set", "cnpg.cluster.backup.method=rsync"],
+    { encoding: "utf8", timeout: 30_000 });
+  assert.notEqual(invalid.status, 0, "an unknown backup method must be refused");
+  assert.match(invalid.stderr, /method|values don't meet the specifications/i);
 });
 
 test("the default image tag is the release this chart belongs to (v + appVersion)", () => {
