@@ -57,10 +57,9 @@ async fn key_expiry_live_visibility_shared_personal_service_and_old_binary(pool:
     let (status, h) = call(&f.s, &f.member, "GET", &history, json!({})).await;
     assert_eq!(
         status,
-        StatusCode::OK,
-        "holders can read their reminders in history: {h}"
+        StatusCode::FORBIDDEN,
+        "members use the feed, not workspace history: {h}"
     );
-    assert_eq!(h["data"].as_array().unwrap().len(), 1);
     for user in [&f.admin, &f.auditor] {
         let (status, h) = call(&f.s, user, "GET", &history, json!({})).await;
         assert_eq!(status, StatusCode::OK);

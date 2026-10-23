@@ -809,13 +809,12 @@ async fn workspace_events(
     Path(ws): Path<Uuid>,
     Query(q): Query<EventQuery>,
 ) -> ApiResult {
-    let (mut tx, access) = resources::workspace_read_tx(&s, &u, ws).await?;
-    // Members may read their own key reminders, not configurable rule history.
-    // Preserve the existing admin/platform-reader guard for every other kind.
-    let rule_reader = access.admin || (access.platform_reader && shared(&access.kind));
+    let (mut tx, _) = workspace_read(&s, &u, ws).await?;
+    // History stays admin/reader-only, matching the route boundary. A holder
+    // without that role uses Notifications; even readers need live key authority.
     let key_visible = core::key_expiry_visible("$7");
     let scope = format!(
-        "e.workspace_id=$6 AND (({rule_reader} AND (r.scope='workspace' OR e.builtin IS NOT NULL)) OR ({key_visible}))"
+        "e.workspace_id=$6 AND ((r.scope='workspace' OR e.builtin IS NOT NULL) OR ({key_visible}))"
     );
     let out = events(&mut tx, &q, &scope, Some(ws), u.user_id).await?;
     tx.commit().await?;

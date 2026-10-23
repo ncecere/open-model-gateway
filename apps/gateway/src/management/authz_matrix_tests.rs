@@ -55,6 +55,105 @@ async fn request(
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
+async fn key_expiry_history_and_feed_use_real_router_authorization(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let ws_admin = user(&pool, "expiry-workspace-admin", "user").await;
+    member(&pool, f.team, ws_admin.user_id, "admin").await;
+    for (u, ws) in [
+        (&f.member, f.team),
+        (&f.owner, f.team),
+        (&f.owner, f.personal),
+    ] {
+        let (status, body) = key(&f, u, ws, Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    sqlx::query("UPDATE api_keys SET expires_at=now()+interval '3 days'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let report = crate::alerts::evaluate_once(&f.s).await.unwrap().unwrap();
+    assert_eq!((report.fired, report.failed_rules), (3, 0));
+    let mock = MockProvider::start(None).await;
+    let identity = mock.state(pool.clone()).await;
+    let engine = crate::inference::Engine::new(
+        std::sync::Arc::new(f.s.clone()),
+        crate::providers::ProviderRegistry::default(),
+        crate::inference::EngineLimits::default(),
+    )
+    .unwrap();
+    let app = crate::http::router_with_identity(f.s.clone(), None, engine, identity);
+    async fn get(app: &Router, s: &Session, path: &str) -> (StatusCode, Value) {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .header("cookie", format!("omg_session={}", s.cookie))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+    }
+    let history = format!(
+        "/api/v1/workspaces/{}/alerts/events?kind=key_expiring",
+        f.team
+    );
+    let holder = session(&pool, &f.member).await;
+    assert_eq!(get(&app, &holder, &history).await.0, StatusCode::FORBIDDEN);
+    let (status, feed) = get(&app, &holder, "/api/v1/me/notifications").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        feed["data"].as_array().unwrap().len(),
+        1,
+        "only the holder's own reminder"
+    );
+    let holder_event: Uuid = sqlx::query_scalar("SELECT e.id FROM alert_events e JOIN api_keys k ON k.id=e.api_key_id WHERE k.issued_to_user_id=$1")
+        .bind(f.member.user_id).fetch_one(&pool).await.unwrap();
+    assert_eq!(feed["data"][0]["id"], holder_event.to_string());
+    let admin = session(&pool, &ws_admin).await;
+    let (status, history_rows) = get(&app, &admin, &history).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        history_rows["data"].as_array().unwrap().len(),
+        2,
+        "workspace admin sees both shared reminders"
+    );
+    for u in [&f.admin, &f.auditor] {
+        let s = session(&pool, u).await;
+        assert_eq!(
+            get(
+                &app,
+                &s,
+                &format!(
+                    "/api/v1/workspaces/{}/alerts/events?kind=key_expiring",
+                    f.personal
+                )
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        for path in [
+            "/api/v1/me/notifications",
+            "/api/v1/platform/alerts/events?kind=key_expiring",
+            &history,
+        ] {
+            let (status, rows) = get(&app, &s, path).await;
+            assert_eq!(status, StatusCode::OK, "{path}: {rows}");
+            assert_eq!(
+                rows["data"],
+                json!([]),
+                "platform authority never grants reminder visibility"
+            );
+        }
+    }
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
 async fn every_route_refuses_lower_principals_and_unverified_mutations(pool: PgPool) {
     let f = fixture(&pool).await;
     // An entitled member of another workspace is not a member of this one.
