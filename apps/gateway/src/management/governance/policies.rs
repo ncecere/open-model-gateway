@@ -933,7 +933,7 @@ pub(super) async fn reset_platform_workspace_policy(
 }
 pub(super) async fn workspace_policy(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
 ) -> ApiResult {
     let (mut tx, a) = resources::workspace_tx(&s, &u, ws).await?;

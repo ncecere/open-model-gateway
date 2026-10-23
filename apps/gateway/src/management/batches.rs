@@ -261,7 +261,7 @@ pub(super) struct PlatformQuery {
 /// totals (never another owner's batches).
 async fn platform_list(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Query(q): Query<PlatformQuery>,
 ) -> ApiResult {
     let (active, limit, offset) = ListQuery {
@@ -271,7 +271,7 @@ async fn platform_list(
     }
     .parse()?;
     let mut tx = resources::installation_tx(&s).await?;
-    resources::platform_read(&mut tx, u.user_id).await?;
+    resources::platform_read(&mut tx, u.user_id()).await?;
     let mut rows: Vec<Value> = sqlx::query_scalar(&format!("SELECT {ROW} WHERE j.kind='batch' AND w.kind IN('team','project') AND ($1::boolean IS NULL OR (j.settled_at IS NULL)=$1) ORDER BY j.created_at DESC,j.id DESC LIMIT $2 OFFSET $3"))
         .bind(active).bind(limit + 1).bind(offset)
         .fetch_all(&mut *tx).await?;
@@ -283,7 +283,7 @@ async fn platform_list(
     let data: Vec<Value> = rows
         .into_iter()
         .map(|r| {
-            let mut r = render(r, u.user_id);
+            let mut r = render(r, u.user_id());
             if let Some(o) = r.as_object_mut() {
                 // Platform readers see metadata, not key names.
                 o.remove("key_name");

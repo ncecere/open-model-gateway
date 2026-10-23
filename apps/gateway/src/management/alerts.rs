@@ -378,7 +378,7 @@ async fn rule_json(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<Value
 
 async fn insert_rule(
     tx: &mut Transaction<'_, Postgres>,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Option<Uuid>,
     v: &Valid,
 ) -> Result<Uuid, ApiError> {
@@ -410,7 +410,7 @@ async fn insert_rule(
         .bind(v.notify_workspace_admins)
         .bind(v.notify_platform_admins)
         .bind(&v.notify_emails)
-        .bind(u.user_id)
+        .bind(u.user_id())
         .bind(&v.spend_period)
         .bind(v.spend_amount_microusd)
         .bind(v.ceiling_requests_per_second)
@@ -432,7 +432,7 @@ async fn insert_rule(
 
 async fn update_rule(
     tx: &mut Transaction<'_, Postgres>,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Option<Uuid>,
     id: Uuid,
     v: &Valid,
@@ -463,7 +463,7 @@ async fn update_rule(
         .bind(v.notify_workspace_admins)
         .bind(v.notify_platform_admins)
         .bind(&v.notify_emails)
-        .bind(u.user_id)
+        .bind(u.user_id())
         .bind(&v.spend_period)
         .bind(v.spend_amount_microusd)
         .bind(v.ceiling_requests_per_second)
@@ -487,14 +487,14 @@ async fn update_rule(
 
 async fn delete_rule(
     tx: &mut Transaction<'_, Postgres>,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Option<Uuid>,
     id: Uuid,
 ) -> Result<(), ApiError> {
     let changed = sqlx::query("UPDATE alert_rules SET deleted_at=now(),enabled=false,updated_by=$3,updated_at=now() WHERE id=$1 AND deleted_at IS NULL AND workspace_id IS NOT DISTINCT FROM $2")
         .bind(id)
         .bind(ws)
-        .bind(u.user_id)
+        .bind(u.user_id())
         .execute(&mut **tx)
         .await?
         .rows_affected();
@@ -529,20 +529,20 @@ async fn list_rules(
 
 async fn platform_tx<'a>(
     s: &'a Store,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     write: bool,
 ) -> Result<Transaction<'a, Postgres>, ApiError> {
     let mut tx = resources::installation_tx(s).await?;
     if write {
-        resources::platform_write(&mut tx, u.user_id).await?;
+        resources::platform_write(&mut tx, u.user_id()).await?;
     } else {
-        resources::platform_read(&mut tx, u.user_id).await?;
+        resources::platform_read(&mut tx, u.user_id()).await?;
     }
     Ok(tx)
 }
 async fn platform_rules(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
 ) -> ApiResult {
     let mut tx = platform_tx(&s, &u, false).await?;
     let data = list_rules(&mut tx, None).await?;
@@ -551,7 +551,7 @@ async fn platform_rules(
 }
 async fn platform_rule(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = platform_tx(&s, &u, false).await?;
@@ -573,7 +573,7 @@ async fn scoped_rule(
 }
 async fn create_platform_rule(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Json(b): Json<RuleInput>,
 ) -> ApiResult {
     let mut tx = platform_tx(&s, &u, true).await?;
@@ -585,7 +585,7 @@ async fn create_platform_rule(
 }
 async fn update_platform_rule(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
     Json(b): Json<RuleInput>,
 ) -> ApiResult {
@@ -598,7 +598,7 @@ async fn update_platform_rule(
 }
 async fn delete_platform_rule(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = platform_tx(&s, &u, true).await?;
@@ -612,7 +612,7 @@ async fn delete_platform_rule(
 /// Read: a personal owner, a Team/Project admin, or a platform reader (shared only).
 async fn workspace_read<'a>(
     s: &'a Store,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Uuid,
 ) -> Result<(Transaction<'a, Postgres>, resources::WorkspaceAccess), ApiError> {
     let (tx, a) = resources::workspace_read_tx(s, u, ws).await?;
@@ -639,7 +639,7 @@ fn builtin_json() -> Value {
 }
 async fn workspace_rules(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
 ) -> ApiResult {
     let (mut tx, a) = workspace_read(&s, &u, ws).await?;
@@ -656,7 +656,7 @@ async fn workspace_rules(
 }
 async fn workspace_rule(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path((ws, id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult {
     let (mut tx, _) = workspace_read(&s, &u, ws).await?;
@@ -779,11 +779,11 @@ fn redact_ceiling_scope(data: &mut Value, admin: bool) {
 }
 async fn platform_events(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Query(q): Query<EventQuery>,
 ) -> ApiResult {
     let mut tx = platform_tx(&s, &u, false).await?;
-    let admin = resources::platform_role(&mut tx, u.user_id).await? == "admin";
+    let admin = resources::platform_role(&mut tx, u.user_id()).await? == "admin";
     let mut out = events(
         &mut tx,
         &q,
@@ -796,7 +796,7 @@ async fn platform_events(
         // helper.)
         "(r.scope='installation' OR e.builtin IN ('scim_last_admin','partitions_missing','history_orphans')) AND $6::uuid IS NULL AND ($7::uuid IS NOT NULL OR $7::uuid IS NULL)",
         None,
-        u.user_id,
+        u.user_id(),
     )
     .await?;
     tx.commit().await?;
@@ -805,7 +805,7 @@ async fn platform_events(
 }
 async fn workspace_events(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
     Query(q): Query<EventQuery>,
 ) -> ApiResult {
@@ -816,7 +816,7 @@ async fn workspace_events(
     let scope = format!(
         "e.workspace_id=$6 AND ((r.scope='workspace' OR e.builtin IS NOT NULL) OR ({key_visible}))"
     );
-    let out = events(&mut tx, &q, &scope, Some(ws), u.user_id).await?;
+    let out = events(&mut tx, &q, &scope, Some(ws), u.user_id()).await?;
     tx.commit().await?;
     Ok(out)
 }
