@@ -1,6 +1,194 @@
 //! Alerts API: authority per scope, strict validation, auditing, and the
 //! privacy of history and in-app notifications.
 use super::*;
+use crate::alerts as core;
+
+const EVENT_FROM: &str = "FROM alert_events e LEFT JOIN alert_rules r ON r.id=e.rule_id LEFT JOIN workspaces w ON w.id=e.workspace_id";
+
+// The pre-0049 VISIBLE predicate (origin/main at the #100 branch point).
+// Feed, summary and read-marking ALL use it; keep the actual SQL as an upgrade oracle.
+const PRE_0049_VISIBLE: &str = "e.fired_at>now()-interval '90 days' AND ((e.builtin IS NOT NULL AND w.kind='personal' AND w.owner_user_id=$1 AND w.disabled_at IS NULL) OR (r.scope='installation' AND $2) OR (e.builtin IN ('scim_last_admin','partitions_missing','history_orphans') AND $2) OR (r.scope='workspace' AND w.kind IN ('team','project') AND w.disabled_at IS NULL AND (EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=e.workspace_id AND m.user_id=$1 AND m.role IN ('owner','admin')) OR (r.notify_platform_admins AND $2))))";
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn key_expiry_live_visibility_shared_personal_service_and_old_binary(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let (status, human) = key(&f, &f.member, f.team, Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{human}");
+    let (status, personal) = key(&f, &f.owner, f.personal, Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{personal}");
+    let sa = Uuid::new_v4();
+    let service = Uuid::new_v4();
+    sqlx::query("INSERT INTO service_accounts(id,workspace_id,name) VALUES($1,$2,'automation')")
+        .bind(sa)
+        .bind(f.team)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO api_keys(id,workspace_id,service_account_id,name,secret_hash) VALUES($1,$2,$3,'Secret service key',decode(repeat('13',32),'hex'))").bind(service).bind(f.team).bind(sa).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE api_keys SET expires_at=now()+interval '3 days'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let report = core::evaluate_once(&f.s).await.unwrap().unwrap();
+    assert_eq!((report.fired, report.failed_rules), (3, 0));
+    assert_eq!(feed(&f, &f.owner).await.len(), 3);
+    assert_eq!(feed(&f, &f.member).await.len(), 1, "only their human key");
+    let human_event = feed(&f, &f.member).await[0]["id"].clone();
+    for user in [&f.admin, &f.auditor, &f.outsider] {
+        assert!(feed(&f, user).await.is_empty());
+        assert_eq!(unread(&f, user).await, 0);
+        assert_eq!(
+            call(
+                &f.s,
+                user,
+                "POST",
+                "/api/v1/me/notifications/read",
+                json!({"all":true})
+            )
+            .await
+            .1["marked"],
+            0
+        );
+    }
+    let history = format!(
+        "/api/v1/workspaces/{}/alerts/events?kind=key_expiring",
+        f.team
+    );
+    let (status, h) = call(&f.s, &f.member, "GET", &history, json!({})).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "holders can read their reminders in history: {h}"
+    );
+    assert_eq!(h["data"].as_array().unwrap().len(), 1);
+    for user in [&f.admin, &f.auditor] {
+        let (status, h) = call(&f.s, user, "GET", &history, json!({})).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(h["data"], json!([]));
+        assert_eq!(
+            call(
+                &f.s,
+                user,
+                "GET",
+                "/api/v1/platform/alerts/events?kind=key_expiring",
+                json!({})
+            )
+            .await
+            .1["data"],
+            json!([])
+        );
+        assert_eq!(
+            call(
+                &f.s,
+                user,
+                "GET",
+                &format!("/api/v1/workspaces/{}/alerts/events", f.personal),
+                json!({})
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+    }
+    let payload = serde_json::to_string(&feed(&f, &f.owner).await).unwrap();
+    for secret in [
+        id(&human).to_string(),
+        id(&personal).to_string(),
+        service.to_string(),
+        f.member.user_id.to_string(),
+        "Secret service key".to_owned(),
+        "owner@example.test".to_owned(),
+        "secret_hash".to_owned(),
+        "issued_to_user_id".to_owned(),
+    ] {
+        assert!(
+            !payload.contains(&secret),
+            "serialized private fact: {secret}"
+        );
+    }
+    // Run the old binary's actual feed/summary/read predicate for every viewer.
+    for user in [&f.owner, &f.member, &f.admin, &f.auditor] {
+        let n: i64 = sqlx::query_scalar(&format!(
+            "SELECT count(*) {EVENT_FROM} WHERE {PRE_0049_VISIBLE}"
+        ))
+        .bind(user.user_id)
+        .bind(true)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(n, 0, "pre-0049 feed/summary/read must all be invisible");
+    }
+    let n: i64 = sqlx::query_scalar(&format!("SELECT count(*) {EVENT_FROM} WHERE r.scope='installation' OR e.builtin IN ('scim_last_admin','partitions_missing','history_orphans') OR r.scope='workspace' OR e.builtin IS NOT NULL"))
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(n, 0, "pre-0049 platform AND workspace history");
+    // Old delivery selects personal_workspace only when builtin IS NOT NULL.
+    // All five UNION branches must return no recipients, even with enabled SMTP.
+    let old_recipients: i64 = sqlx::query_scalar("SELECT count(*) FROM alert_events e CROSS JOIN LATERAL (SELECT unnest(r.notify_emails) email FROM alert_rules r WHERE r.id=e.rule_id UNION ALL SELECT u.email FROM alert_rules r JOIN effective_workspace_memberships m ON m.workspace_id=r.workspace_id AND m.role IN ('owner','admin') JOIN users u ON u.id=m.user_id WHERE r.id=e.rule_id AND r.notify_workspace_admins UNION ALL SELECT u.email FROM alert_rules r JOIN effective_platform_roles p ON p.role='admin' JOIN users u ON u.id=p.user_id WHERE r.id=e.rule_id AND r.notify_platform_admins UNION ALL SELECT u.email FROM workspaces w JOIN users u ON u.id=w.owner_user_id JOIN effective_platform_roles p ON p.user_id=u.id WHERE w.id=CASE WHEN e.builtin IS NOT NULL THEN e.workspace_id END AND w.kind='personal' AND w.disabled_at IS NULL UNION ALL SELECT u.email FROM effective_platform_roles p JOIN users u ON u.id=p.user_id WHERE p.role='admin' AND e.builtin IN ('scim_last_admin','partitions_missing','history_orphans')) x WHERE e.kind='key_expiring'").fetch_one(&pool).await.unwrap();
+    assert_eq!(old_recipients, 0, "old replicas cannot email reminders");
+    assert_eq!(unread(&f, &f.member).await, 1);
+    assert_eq!(
+        call(
+            &f.s,
+            &f.member,
+            "POST",
+            "/api/v1/me/notifications/read",
+            json!({"ids":[human_event]})
+        )
+        .await
+        .1["marked"],
+        1
+    );
+    assert_eq!(unread(&f, &f.member).await, 0);
+    assert!(feed(&f, &f.member).await[0]["read"].as_bool().unwrap());
+    sqlx::query("UPDATE workspace_membership_grants SET revoked_at=now() WHERE workspace_id=$1 AND user_id=$2").bind(f.team).bind(f.member.user_id).execute(&pool).await.unwrap();
+    assert!(
+        feed(&f, &f.member).await.is_empty(),
+        "membership loss hides even previously read events"
+    );
+    // Revoked keys cannot be used as a visibility backdoor for former holders.
+    sqlx::query("UPDATE api_keys SET revoked_at=now() WHERE id=$1")
+        .bind(id(&human))
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(feed(&f, &f.owner).await.len(), 2);
+    sqlx::query("UPDATE service_accounts SET disabled_at=now() WHERE id=$1")
+        .bind(sa)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(feed(&f, &f.owner).await.len(), 1);
+    assert_eq!(core::deliver_pending(&f.s, 10).await, 3);
+    let suppressed: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM alert_deliveries WHERE status='no_recipients'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(suppressed, 2, "delivery rechecks human/service eligibility");
+    // A plain member never receives a service-key reminder; current admins do.
+    member(&pool, f.team, f.outsider.user_id, "admin").await;
+    sqlx::query("UPDATE service_accounts SET disabled_at=NULL WHERE id=$1")
+        .bind(sa)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(feed(&f, &f.outsider).await.len(), 1);
+    assert_eq!(
+        call(
+            &f.s,
+            &f.outsider,
+            "POST",
+            "/api/v1/me/notifications/read",
+            json!({"all":true})
+        )
+        .await
+        .1["marked"],
+        1
+    );
+    sqlx::query("UPDATE workspace_membership_grants SET revoked_at=now() WHERE workspace_id=$1 AND user_id=$2").bind(f.team).bind(f.outsider.user_id).execute(&pool).await.unwrap();
+    assert_eq!(unread(&f, &f.outsider).await, 0);
+    assert!(feed(&f, &f.outsider).await.is_empty());
+}
 
 const RULES: &str = "/api/v1/platform/alerts/rules";
 

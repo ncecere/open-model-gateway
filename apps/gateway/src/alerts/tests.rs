@@ -5,6 +5,312 @@ use super::*;
 use crate::email::mock::{self, Behaviour};
 use sqlx::PgPool;
 
+async fn expiry_now(s: &Seed) -> DateTime<Utc> {
+    sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&s.pool)
+        .await
+        .unwrap()
+}
+async fn expiry_tick(s: &Seed, now: DateTime<Utc>) -> Changes {
+    let mut tx = s.pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(EVALUATION_LOCK)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let changes = key_expiring_tick(&mut tx, now).await.unwrap();
+    tx.commit().await.unwrap();
+    changes
+}
+async fn expiry_key(s: &Seed, expires: Option<DateTime<Utc>>) -> Uuid {
+    let id = Uuid::new_v4();
+    sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash,expires_at) VALUES($1,$2,$3,'Never serialize this key name',decode(repeat('12',32),'hex'),$4)")
+        .bind(id).bind(s.team).bind(s.owner).bind(expires).execute(&s.pool).await.unwrap();
+    id
+}
+async fn set_expiry(s: &Seed, key: Uuid, expires: Option<DateTime<Utc>>) {
+    sqlx::query("UPDATE api_keys SET expires_at=$2 WHERE id=$1")
+        .bind(key)
+        .bind(expires)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn key_expiry_exact_bands_and_first_urgent_only(pool: PgPool) {
+    let s = seed(pool).await;
+    let now = expiry_now(&s).await;
+    let day = chrono::Duration::days(1);
+    let us = chrono::Duration::microseconds(1);
+    let mut expected = Vec::new();
+    for (delta, threshold) in [
+        (day * 7 + us, None),
+        (day * 7, Some(7)),
+        (day + us, Some(7)),
+        (day, Some(1)),
+        (us, Some(1)),
+        (chrono::Duration::zero(), None),
+        (-us, None),
+    ] {
+        let k = expiry_key(&s, Some(now + delta)).await;
+        if let Some(t) = threshold {
+            expected.push((k, t));
+        }
+    }
+    expiry_key(&s, None).await;
+    assert_eq!(expiry_tick(&s, now).await.fired, 4);
+    let mut got: Vec<(Uuid, i32)> = sqlx::query_as(
+        "SELECT api_key_id,threshold_days FROM alert_events WHERE kind='key_expiring'",
+    )
+    .fetch_all(&s.pool)
+    .await
+    .unwrap();
+    expected.sort();
+    got.sort();
+    assert_eq!(got, expected);
+    assert_eq!(expiry_tick(&s, now).await, Changes::default());
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM alert_deliveries WHERE transition='fired'"
+        )
+        .await,
+        4
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn key_expiry_cycles_rotation_expiry_changes_and_silent_retirement(pool: PgPool) {
+    let s = seed(pool).await;
+    let now = expiry_now(&s).await;
+    let expiry = now + chrono::Duration::days(3);
+    set_expiry(&s, s.key, Some(expiry)).await;
+    assert_eq!(expiry_tick(&s, now).await.fired, 1);
+    assert_eq!(
+        expiry_tick(&s, now + chrono::Duration::days(2)).await,
+        Changes {
+            fired: 1,
+            resolved: 1
+        }
+    );
+    assert_eq!(
+        expiry_tick(&s, expiry).await.resolved,
+        1,
+        "expired urgent incident clears"
+    );
+    // Extending an expiry retires the old cycle even if it is still in the warning band.
+    set_expiry(&s, s.key, Some(expiry + chrono::Duration::days(1))).await;
+    assert_eq!(expiry_tick(&s, now).await.fired, 1);
+    set_expiry(&s, s.key, Some(expiry + chrono::Duration::days(2))).await;
+    assert_eq!(
+        expiry_tick(&s, now).await,
+        Changes {
+            fired: 1,
+            resolved: 1
+        }
+    );
+    set_expiry(&s, s.key, Some(expiry)).await;
+    assert_eq!(
+        expiry_tick(&s, now).await,
+        Changes {
+            fired: 0,
+            resolved: 1
+        },
+        "restoring an old tuple never replays"
+    );
+    // Real credential rotation: same lineage, different credential id.
+    sqlx::query("UPDATE api_keys SET revoked_at=now() WHERE id=$1")
+        .bind(s.key)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    let rotated = Uuid::new_v4();
+    sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash,governance_key_id,expires_at) VALUES($1,$2,$3,'rotated',decode(repeat('22',32),'hex'),$4,$5)")
+        .bind(rotated).bind(s.team).bind(s.owner).bind(s.key).bind(expiry).execute(&s.pool).await.unwrap();
+    assert_eq!(expiry_tick(&s, now).await.fired, 1);
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM alert_deliveries WHERE transition='resolved'"
+        )
+        .await,
+        0
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn key_expiry_bounded_progress_does_not_starve_retirements(pool: PgPool) {
+    let s = seed(pool).await;
+    let now = expiry_now(&s).await;
+    sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash,expires_at) SELECT gen_random_uuid(),$1,$2,'backlog',decode(repeat('23',32),'hex'),$3 FROM generate_series(1,1001)")
+        .bind(s.team).bind(s.owner).bind(now+chrono::Duration::days(4)).execute(&s.pool).await.unwrap();
+    for n in [500, 500, 1, 0] {
+        assert_eq!(expiry_tick(&s, now).await.fired, n);
+    }
+    // Keep the oldest 500 eligible. Obsolete rows beyond them must not starve.
+    sqlx::query("UPDATE api_keys SET disabled_at=now() WHERE id IN (SELECT api_key_id FROM alert_events ORDER BY fired_at,id OFFSET 500)").execute(&s.pool).await.unwrap();
+    for n in [500, 1, 0] {
+        assert_eq!(expiry_tick(&s, now).await.resolved, n);
+    }
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM alert_events WHERE resolved_at IS NULL"
+        )
+        .await,
+        500
+    );
+    assert_eq!(
+        count(&s, "SELECT count(*) FROM alert_deliveries").await,
+        1001
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn key_expiry_exclusions_and_reenable_without_replay(pool: PgPool) {
+    let s = seed(pool).await;
+    let now = expiry_now(&s).await;
+    let expiry = now + chrono::Duration::days(3);
+    let revoked = expiry_key(&s, Some(expiry)).await;
+    let disabled = expiry_key(&s, Some(expiry)).await;
+    sqlx::query("UPDATE api_keys SET revoked_at=now() WHERE id=$1")
+        .bind(revoked)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE api_keys SET disabled_at=now() WHERE id=$1")
+        .bind(disabled)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(expiry_tick(&s, now).await.fired, 0);
+    sqlx::query("UPDATE api_keys SET disabled_at=NULL WHERE id=$1")
+        .bind(disabled)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(expiry_tick(&s, now).await.fired, 1);
+    sqlx::query("UPDATE api_keys SET disabled_at=now() WHERE id=$1")
+        .bind(disabled)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(expiry_tick(&s, now).await.resolved, 1);
+    sqlx::query("UPDATE api_keys SET disabled_at=NULL WHERE id=$1")
+        .bind(disabled)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(expiry_tick(&s, now).await.fired, 0);
+    expiry_key(&s, Some(expiry)).await;
+    sqlx::query("UPDATE workspace_membership_grants SET revoked_at=now() WHERE workspace_id=$1")
+        .bind(s.team)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        expiry_tick(&s, now).await.fired,
+        0,
+        "holder membership lost"
+    );
+    set_expiry(&s, s.personal_key, Some(expiry)).await;
+    sqlx::query("UPDATE users SET disabled_at=now() WHERE id=$1")
+        .bind(s.owner)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(expiry_tick(&s, now).await.fired, 0, "disabled holder");
+    sqlx::query("UPDATE users SET disabled_at=NULL WHERE id=$1")
+        .bind(s.owner)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE workspaces SET disabled_at=now() WHERE id=$1")
+        .bind(s.personal)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(expiry_tick(&s, now).await.fired, 0, "disabled workspace");
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn key_expiry_concurrent_evaluation_restart_and_fencing(pool: PgPool) {
+    let s = seed(pool).await;
+    set_expiry(
+        &s,
+        s.key,
+        Some(expiry_now(&s).await + chrono::Duration::hours(12)),
+    )
+    .await;
+    let stale = crate::leases::Fence {
+        lease: crate::leases::Lease::Alerts,
+        holder: Uuid::new_v4(),
+        epoch: 99,
+    };
+    let err = evaluate_once_fenced(&s.store, Some(&stale))
+        .await
+        .unwrap_err();
+    assert!(crate::leases::is_fenced(&err));
+    assert_eq!(count(&s, "SELECT count(*) FROM alert_events").await, 0);
+    let (a, b) = tokio::join!(evaluate_once(&s.store), evaluate_once(&s.store));
+    assert_eq!(
+        a.unwrap().map_or(0, |r| r.fired) + b.unwrap().map_or(0, |r| r.fired),
+        1
+    );
+    let restarted = Store::new(s.pool.clone());
+    assert_eq!(evaluate_once(&restarted).await.unwrap().unwrap().fired, 0);
+    assert_eq!(count(&s, "SELECT count(*) FROM alert_deliveries").await, 1);
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn key_expiry_live_delivery_suppresses_obsolete_and_hides_secrets(pool: PgPool) {
+    let s = seed(pool).await;
+    let now = expiry_now(&s).await;
+    set_expiry(&s, s.personal_key, Some(now + chrono::Duration::hours(12))).await;
+    let (port, mut rx) = mock::serve(Behaviour::default()).await;
+    relay(&s, port).await;
+    assert_eq!(evaluate(&s).await.fired, 1);
+    assert_eq!(deliver_pending(&s.store, 10).await, 1);
+    let mail = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(mail.rcpt_to.join(",").contains("owner@example.test"));
+    assert!(mail.data.contains("An API key expires within 1 day"));
+    assert!(mail.data.contains("/notifications"));
+    for secret in [
+        "Private key name",
+        "Secret key name",
+        &s.personal_key.to_string(),
+        &s.owner.to_string(),
+        "0101010101010101",
+        "owner@example.test",
+    ] {
+        // The address is necessarily in the SMTP envelope/To header, but never in the body.
+        let body = mail.data.split_once("\r\n\r\n").unwrap().1;
+        assert!(!body.contains(secret), "{secret}");
+    }
+    // A queued reminder becomes obsolete before send: never email it, even before the next evaluation.
+    let k = expiry_key(&s, Some(now + chrono::Duration::days(3))).await;
+    assert_eq!(evaluate(&s).await.fired, 1);
+    sqlx::query("UPDATE api_keys SET revoked_at=now() WHERE id=$1")
+        .bind(k)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(deliver_pending(&s.store, 10).await, 1);
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM alert_deliveries WHERE status='no_recipients'"
+        )
+        .await,
+        1
+    );
+    assert!(rx.try_recv().is_err());
+}
+
 struct Seed {
     store: Store,
     pool: PgPool,
