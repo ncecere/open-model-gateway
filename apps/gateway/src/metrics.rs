@@ -201,7 +201,7 @@ pub struct Metrics {
     egress_denied: Family<L1, Counter>,
     audit_export_deliveries: Family<L1, Counter>,
     audit_export_rejected_records: Counter,
-    trace_dropped_spans: [Counter; 6],
+    trace_dropped_spans: [Counter; 7],
     trace_deliveries: [Counter; 5],
     trace_rejected_spans: Counter,
     audit_export_queued: Gauge,

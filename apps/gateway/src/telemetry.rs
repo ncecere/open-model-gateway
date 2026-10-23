@@ -87,7 +87,7 @@ fixed_enum!(Provider { OpenAi => "openai", Anthropic => "anthropic", Bedrock => 
 fixed_enum!(Route { Chat => "/v1/chat/completions", Responses => "/v1/responses", Messages => "/v1/messages" });
 fixed_enum!(Outcome { Completed => "completed", Error => "error", Cancelled => "cancelled", Unknown => "unknown" });
 fixed_enum!(ErrorKind { InvalidRequest => "invalid_request", Unauthorized => "unauthorized", Forbidden => "forbidden", NotFound => "not_found", Unsupported => "unsupported", Busy => "busy", Timeout => "timeout", Upstream => "upstream", Storage => "storage", Configuration => "configuration", Cancelled => "cancelled", Unknown => "unknown" });
-fixed_enum!(DropReason { Contexts => "contexts", RequestLimit => "request_limit", SpanLimit => "span_limit", QueueFull => "queue_full", Shutdown => "shutdown", Ineligible => "ineligible" });
+fixed_enum!(DropReason { Contexts => "contexts", RequestLimit => "request_limit", SpanLimit => "span_limit", QueueFull => "queue_full", Shutdown => "shutdown", Ineligible => "ineligible", Delivery => "delivery" });
 fixed_enum!(Delivery { Accepted => "accepted", HttpStatus => "http_status", Transport => "transport", Timeout => "timeout", Acknowledgement => "acknowledgement" });
 
 /// Constructed only after primary admission has proved shared-workspace
@@ -105,13 +105,13 @@ impl PublicAlias {
 }
 
 #[derive(Default)]
-pub struct AliasRegistry {
+struct AliasRegistry {
     values: Mutex<HashSet<String>>,
 }
 impl AliasRegistry {
     /// Call only with a public alias validated by successful primary admission,
     /// never raw client text. Contention folds to other rather than waiting.
-    pub fn admission_validated(&self, alias: &str) -> PublicAlias {
+    fn admission_validated(&self, alias: &str) -> PublicAlias {
         let other = || PublicAlias("other".into());
         if alias.is_empty() || alias.chars().count() > 96 || alias.chars().any(char::is_control) {
             return other();
@@ -129,6 +129,15 @@ impl AliasRegistry {
 
 /// No arbitrary keys, strings, Debug values, URLs or exception messages.
 /// UUID variants are server-generated request/attempt IDs, never identity IDs.
+///
+/// ```compile_fail
+/// use open_model_gateway::telemetry::Attribute;
+/// let forbidden = Attribute::Prompt("private prompt".to_owned());
+/// ```
+/// ```compile_fail
+/// use open_model_gateway::telemetry::PublicAlias;
+/// let unvalidated = PublicAlias("raw client model".to_owned());
+/// ```
 pub enum Attribute {
     Operation(Operation),
     Model(PublicAlias),
@@ -252,7 +261,7 @@ impl Serialize for Span {
 
 #[derive(Default)]
 struct Counts {
-    drops: [AtomicU64; 6],
+    drops: [AtomicU64; 7],
     deliveries: [AtomicU64; 5],
     rejected: AtomicU64,
 }
@@ -283,6 +292,8 @@ impl Counts {
     }
 }
 
+static ALIASES: std::sync::LazyLock<Arc<AliasRegistry>> = std::sync::LazyLock::new(Arc::default);
+
 #[derive(Clone)]
 pub struct Recorder {
     sender: mpsc::Sender<Box<RawValue>>,
@@ -290,7 +301,7 @@ pub struct Recorder {
     counts: Arc<Counts>,
     stopping: Arc<AtomicBool>,
     ratio: f64,
-    pub aliases: Arc<AliasRegistry>,
+    aliases: Arc<AliasRegistry>,
 }
 impl Recorder {
     fn channel(ratio: f64) -> (Self, mpsc::Receiver<Box<RawValue>>) {
@@ -303,11 +314,19 @@ impl Recorder {
                 counts: Arc::default(),
                 stopping: Arc::default(),
                 ratio,
-                aliases: Arc::default(),
+                aliases: std::sync::LazyLock::force(&ALIASES).clone(),
             },
             receiver,
         )
     }
+    pub fn admission_validated_alias(
+        &self,
+        _admission: &SharedAdmission,
+        alias: &str,
+    ) -> PublicAlias {
+        self.aliases.admission_validated(alias)
+    }
+
     pub fn begin(&self, request: Uuid) -> Option<Context> {
         if self.stopping.load(Ordering::Relaxed) || !root_sampled(request, self.ratio) {
             return None;
@@ -563,7 +582,12 @@ async fn worker(exporter: Exporter, mut pending: Pending, mut stop: oneshot::Rec
                 pending.counts.delivery(Delivery::Accepted);
                 pending.counts.reject(rejected);
             }
-            Err(outcome) => pending.counts.delivery(outcome),
+            Err(outcome) => {
+                pending.counts.delivery(outcome);
+                pending
+                    .counts
+                    .drop_spans(DropReason::Delivery, batch.len() as u64);
+            }
         }
         pending.in_flight = 0;
     }
@@ -684,12 +708,23 @@ mod tests {
     }
 
     #[test]
+    fn alias_budget_is_process_wide() {
+        let (a, _) = Recorder::channel(1.0);
+        let (b, _) = Recorder::channel(1.0);
+        assert!(Arc::ptr_eq(&a.aliases, &b.aliases));
+    }
+
+    #[test]
     fn sampling_and_trace_ids_are_deterministic() {
         let id = Uuid::from_u128(42);
         assert_eq!(trace_id(id), trace_id(id));
         assert_ne!(trace_id(id), trace_id(Uuid::from_u128(43)));
         assert_ne!(trace_id(id), [0; 16]);
         assert_ne!(trace_id(id), *id.as_bytes());
+        assert_eq!(
+            hex::encode(trace_id(id)),
+            "6c77e4c0e472d7dff3c61cccbe5e19b6"
+        );
         let sampled = (1..=10000)
             .filter(|n| root_sampled(Uuid::from_u128(*n), 0.01))
             .count();
@@ -864,6 +899,168 @@ mod tests {
         assert_eq!(spans[0]["endTimeUnixNano"], "1700000000000000002");
         assert_eq!(recorder.counts.rejected(), 1);
         assert_eq!(recorder.counts.deliveries(Delivery::Accepted), 1);
+        task.abort();
+    }
+
+    #[test]
+    fn full_allowlist_obeys_wire_budget_and_invalid_values_are_dropped() {
+        let aliases = AliasRegistry::default();
+        let mut span = span();
+        // Escaping expands even an admission-validated 96-character alias.
+        let attributes = [
+            Attribute::Model(aliases.admission_validated(&"\\\"".repeat(96))),
+            Attribute::Operation(Operation::Messages),
+            Attribute::Provider(Provider::Anthropic),
+            Attribute::InputTokens(i64::MAX as u64),
+            Attribute::OutputTokens(i64::MAX as u64),
+            Attribute::Streamed(true),
+            Attribute::Attempt(3),
+            Attribute::Route(Route::Messages),
+            Attribute::Outcome(Outcome::Cancelled),
+            Attribute::Error(ErrorKind::Timeout),
+            Attribute::FirstContent(Duration::from_nanos(i64::MAX as u64)),
+            Attribute::Generation(Duration::from_nanos(i64::MAX as u64)),
+            Attribute::RequestId(Uuid::from_u128(42)),
+            Attribute::AttemptId(Uuid::from_u128(43)),
+        ];
+        let mut refused = 0;
+        for attribute in attributes {
+            if !span.attribute(attribute) {
+                refused += 1;
+            }
+        }
+        assert!(refused > 0, "exercise the actual serialized size limit");
+        assert!(serde_json::to_vec(&span).unwrap().len() <= MAX_SPAN);
+        assert!(!span.attribute(Attribute::InputTokens(u64::MAX)));
+        assert!(!span.attribute(Attribute::Attempt(4)));
+        assert!(!span.attribute(Attribute::Generation(Duration::MAX)));
+        assert!(Span::new(SpanName::Routing, [0; 16], None, 1, 2).is_none());
+        assert!(Span::new(SpanName::Routing, [1; 16], Some([0; 8]), 1, 2).is_none());
+        assert!(Span::new(SpanName::Routing, [1; 16], None, 2, 1).is_none());
+    }
+
+    async fn exchange(url: &str) -> Result<u64, Delivery> {
+        let config = config(&[("GATEWAY_TRACES_OTLP_URL", url)]).unwrap();
+        let (url, client) = config.endpoint.unwrap();
+        let exporter = Exporter {
+            url,
+            client,
+            headers: config.headers,
+            environment: config.environment,
+        };
+        let raw = RawValue::from_string(serde_json::to_string(&span()).unwrap()).unwrap();
+        let body = exporter.body(&[raw]);
+        exporter.send(body, 1).await
+    }
+
+    #[tokio::test]
+    async fn acknowledgement_is_bounded_and_rejections_are_clamped_without_retry() {
+        for (reply, expected) in [
+            ("", Ok(0)),
+            ("{}", Ok(0)),
+            (r#"{"partialSuccess":{"rejectedSpans":1}}"#, Ok(1)),
+            (
+                r#"{"partialSuccess":{"rejectedSpans":"999","errorMessage":"SECRET"}}"#,
+                Ok(1),
+            ),
+            (
+                r#"{"partialSuccess":{"rejectedSpans":-1}}"#,
+                Err(Delivery::Acknowledgement),
+            ),
+            ("not-json", Err(Delivery::Acknowledgement)),
+        ] {
+            let (url, seen, task) = collector(reply, Duration::ZERO).await;
+            assert_eq!(exchange(&url).await, expected);
+            assert_eq!(seen.lock().unwrap().len(), 1);
+            task.abort();
+        }
+        let oversized = Box::leak(
+            format!(
+                "{{\"partialSuccess\":{{\"rejectedSpans\":\"1\"}},\"padding\":\"{}\"}}",
+                "x".repeat(MAX_BODY)
+            )
+            .into_boxed_str(),
+        );
+        let (url, seen, task) = collector(oversized, Duration::ZERO).await;
+        assert_eq!(exchange(&url).await, Err(Delivery::Acknowledgement));
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn exporter_refuses_redirects_and_rejects_untrusted_tls() {
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+        let (target, seen, target_task) = collector("{}", Duration::ZERO).await;
+        let redirect = axum::Router::new().route(
+            "/v1/traces",
+            axum::routing::post(move || async move {
+                (
+                    axum::http::StatusCode::TEMPORARY_REDIRECT,
+                    [("location", target)],
+                )
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1/traces", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            axum::serve(listener, redirect).await.unwrap();
+        });
+        assert_eq!(exchange(&url).await, Err(Delivery::HttpStatus));
+        assert!(seen.lock().unwrap().is_empty());
+        task.abort();
+        target_task.abort();
+
+        let cert = CertificateDer::from_pem_slice(crate::audit_export::pki::SERVER_CERT.as_bytes())
+            .unwrap();
+        let key =
+            PrivateKeyDer::from_pem_slice(crate::audit_export::pki::SERVER_KEY.as_bytes()).unwrap();
+        let tls = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert], key)
+        .unwrap();
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("https://{}/v1/traces", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            assert!(
+                acceptor.accept(socket).await.is_err(),
+                "public roots must reject the test CA"
+            );
+        });
+        assert_eq!(exchange(&url).await, Err(Delivery::Transport));
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn batch_size_and_periodic_flush_preserve_wire_bounds() {
+        let (url, seen, task) = collector("{}", Duration::ZERO).await;
+        let runtime = runtime(&url);
+        let recorder = runtime.recorder();
+        emit(&recorder, 64);
+        emit(&recorder, 64);
+        emit(&recorder, 2);
+        // The normal path flushes after one second, even while senders live.
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        runtime.shutdown().await;
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 3);
+        let mut total = 0;
+        for batch in seen.iter() {
+            let spans = batch["resourceSpans"][0]["scopeSpans"][0]["spans"]
+                .as_array()
+                .unwrap();
+            assert!(spans.len() <= 64);
+            assert!(serde_json::to_vec(batch).unwrap().len() <= MAX_BODY);
+            total += spans.len();
+        }
+        assert_eq!(total, 130);
+        assert!(recorder.begin(Uuid::new_v4()).is_none());
         task.abort();
     }
 

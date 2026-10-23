@@ -229,6 +229,9 @@ impl Config {
             .filter(|name| !name.is_empty())
             .map(str::to_owned)
             .collect();
+        // Validate dedicated telemetry references first, so trace failures do
+        // not echo their selected variable names through legacy diagnostics.
+        let traces = TraceConfig::from_env(environment)?;
         disjoint_allowlists(&secret_env_allowlist, &smtp_env_allowlist, &|name| {
             std::env::var(name).ok()
         })?;
@@ -310,7 +313,6 @@ impl Config {
             Ok("off") => false,
             _ => bail!("GATEWAY_CONFIG_CACHE must be on or off"),
         };
-        let traces = TraceConfig::from_env(environment)?;
         Ok(Self {
             database_url,
             listen,
@@ -447,6 +449,63 @@ fn disjoint_allowlists(
 
 #[cfg(test)]
 mod allowlist_tests {
+    #[test]
+    fn trace_configuration_checks_environment_and_dedicated_sensitive_headers() {
+        use super::{Environment, TraceConfig};
+        let parse = |url: &str, environment| {
+            TraceConfig::from_lookup(
+                |key| (key == TraceConfig::URL).then(|| url.into()),
+                environment,
+            )
+        };
+        assert!(parse("http://127.0.0.1:4318/v1/traces", Environment::Production).is_err());
+        assert!(parse("http://localhost:4318/v1/traces", Environment::Production).is_err());
+        assert!(parse("https://8.8.8.8/v1/traces", Environment::Production).is_ok());
+        for ratio in ["0", "1", "0.01"] {
+            assert!(
+                TraceConfig::from_lookup(
+                    |key| (key == TraceConfig::RATIO).then(|| ratio.into()),
+                    Environment::Production
+                )
+                .is_ok()
+            );
+        }
+        for name in [
+            "",
+            "lowercase",
+            "AWS_SECRET",
+            "GATEWAY_SECRET",
+            "DATABASE_URL",
+            "OTEL_EXPORTER_OTLP_HEADERS",
+            "PGPASSWORD",
+        ] {
+            assert!(
+                TraceConfig::from_lookup(
+                    |key| match key {
+                        TraceConfig::URL => Some("https://8.8.8.8/v1/traces".into()),
+                        TraceConfig::HEADERS => Some(name.into()),
+                        key if key == name => Some("X=secret".into()),
+                        _ => None,
+                    },
+                    Environment::Production
+                )
+                .is_err()
+            );
+        }
+        let config = TraceConfig::from_lookup(
+            |key| match key {
+                TraceConfig::URL => Some("https://8.8.8.8/v1/traces".into()),
+                TraceConfig::HEADERS => Some("TRACE_MATERIAL".into()),
+                "TRACE_MATERIAL" => Some("Authorization=Bearer secret".into()),
+                _ => None,
+            },
+            Environment::Production,
+        )
+        .unwrap();
+        assert!(config.headers["authorization"].is_sensitive());
+        assert!(!format!("{:?}", config.headers).contains("secret"));
+    }
+
     #[test]
     fn database_proxy_and_telemetry_names_are_reserved_in_both_lists() {
         for name in [
