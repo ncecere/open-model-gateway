@@ -1571,9 +1571,16 @@ pub fn start(store: Store, every: Duration) -> tokio::task::JoinHandle<()> {
                     tracing::warn!("alert evaluation incomplete; retrying next interval")
                 }
             }
+            // The real per-tick send budget stays well under a minute; the
+            // outer timeout is only a backstop above the worst case
+            // (DELIVERIES_PER_TICK claims each hanging for a whole
+            // SEND_DEADLINE), which `deliver_pending_within` itself must
+            // never reach: it stops claiming before that happens.
+            const SEND_BUDGET: Duration = Duration::from_secs(60);
+            let backstop = SEND_BUDGET + outbox::SEND_DEADLINE * DELIVERIES_PER_TICK as u32;
             if tokio::time::timeout(
-                Duration::from_secs(300),
-                deliver_pending(&store, DELIVERIES_PER_TICK),
+                backstop,
+                outbox::deliver_pending_within(&store, DELIVERIES_PER_TICK, SEND_BUDGET),
             )
             .await
             .is_err()

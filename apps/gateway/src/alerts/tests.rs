@@ -1433,6 +1433,39 @@ async fn outbox_connection_failure_waits_for_due_retry(pool: PgPool) {
     assert_eq!(deliver_pending(&s.store, 25).await, 0);
 }
 
+/// A per-tick budget must stop claiming further recipients once
+/// `elapsed + SEND_DEADLINE` would exceed it, so a hanging relay can never
+/// cancel a send mid-flight and lose its result: the recipient's lease must
+/// never even be taken when there is no budget left for one full send.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn deliver_pending_respects_an_injected_budget_against_a_hanging_relay(pool: PgPool) {
+    let s = seed(pool).await;
+    // DATA is never acknowledged: a claimed send on this relay hangs until
+    // SEND_DEADLINE. The gate is kept alive but never released.
+    let (port, _rx, _gate) = mock::serve_gated().await;
+    relay(&s, port).await;
+    outbox_incident(&s, "'hanging@example.test'").await;
+    outbox_due(&s).await;
+    let touched = tokio::time::timeout(
+        Duration::from_secs(5),
+        outbox::deliver_pending_within(&s.store, 25, Duration::from_secs(1)),
+    )
+    .await
+    .expect("a budget below one SEND_DEADLINE must never block on a send");
+    assert_eq!(touched, 0);
+    assert_eq!(
+        count(&s, "SELECT count(*) FROM alert_recipient_outbox").await,
+        0,
+        "no lease may be taken when there is no budget for one full send"
+    );
+    let (status, initialized): (String, bool) =
+        sqlx::query_as("SELECT status,initialized FROM alert_deliveries")
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+    assert_eq!((status.as_str(), initialized), ("pending", false));
+}
+
 async fn outbox_incident(s: &Seed, emails: &str) -> Uuid {
     let rule = rule(s, "scope,workspace_id,kind,budget_layers,thresholds,notify_workspace_admins,notify_emails", &format!("'workspace','{}','budget_threshold',ARRAY['local'],ARRAY[100],true,ARRAY[{emails}]::text[]",s.team)).await;
     let event = Uuid::new_v4();

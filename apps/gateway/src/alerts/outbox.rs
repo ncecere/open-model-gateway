@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use super::*;
 use crate::email::{DeliveryError, OutgoingEmail};
 
-const SEND_DEADLINE: Duration = Duration::from_secs(40);
+pub(super) const SEND_DEADLINE: Duration = Duration::from_secs(40);
 // 90s lease > 40s whole send deadline. Claims leave >=45s of the 24h window.
 const LEASE_SECONDS: i32 = 90;
 const BACKOFF_SECONDS: [i32; 4] = [60, 300, 1800, 7200];
@@ -228,7 +228,25 @@ pub(super) async fn complete(
 /// Process at most 25 recipient attempts (and 25 initialization/cleanup
 /// actions), regardless of caller limit. Returns distinct deliveries touched,
 /// retaining the existing CLI/report convention. No connection spans send().
+///
+/// Unbounded by wall-clock budget: callers that must themselves stay inside a
+/// tick (the evaluator loop) use [`deliver_pending_within`] instead.
 pub async fn deliver_pending(store: &Store, limit: i64) -> usize {
+    // Effectively unlimited: preserves the historical unbounded behaviour
+    // for the CLI/report callers and the large existing test suite, while
+    // still routing through the one budget-aware implementation.
+    deliver_pending_within(store, limit, Duration::from_secs(10 * 365 * 24 * 3600)).await
+}
+
+/// Like [`deliver_pending`], but stops claiming further recipients once
+/// `elapsed + SEND_DEADLINE` would exceed `budget`. A claimed, leased
+/// recipient is never abandoned mid-send (that would burn an attempt and
+/// lose its result with no metric): the check runs strictly before the next
+/// `claim()`, never after. Callers that must stay inside a fixed window (the
+/// evaluator tick) pass a real budget and keep their own outer timeout only
+/// as a backstop above `DELIVERIES_PER_TICK * SEND_DEADLINE`.
+pub(super) async fn deliver_pending_within(store: &Store, limit: i64, budget: Duration) -> usize {
+    let started = tokio::time::Instant::now();
     let mut touched = HashSet::new();
     let owner = Uuid::new_v4();
     let outcome = async {
@@ -237,6 +255,9 @@ pub async fn deliver_pending(store: &Store, limit: i64) -> usize {
         cleanup(&mut tx).await?;
         tx.commit().await?;
         for _ in 0..limit.clamp(1, DELIVERIES_PER_TICK) {
+            if started.elapsed() + SEND_DEADLINE > budget {
+                break;
+            }
             let Some((id, claim)) = claim(store, owner).await? else {
                 break;
             };
