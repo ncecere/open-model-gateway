@@ -167,7 +167,9 @@ async fn a_mutation_holding_its_locks_finishes_before_a_concurrent_explicit_revo
     let principal = token_principal(token_id, f.admin.user_id, &["catalog:write"]);
 
     let mut tx_a = crate::db::begin(&pool).await.unwrap();
-    resources::platform_write(&mut tx_a, &principal).await.unwrap();
+    resources::platform_write(&mut tx_a, &principal)
+        .await
+        .unwrap();
     let pid_a = backend_pid(&mut tx_a).await;
     // The "write" this handler transaction performs while still holding its
     // revalidation locks: a marker any later reader can see only once A commits.
@@ -219,7 +221,9 @@ async fn a_mutation_holding_its_locks_finishes_before_a_concurrent_demotion_comm
     let principal = token_principal(token_id, f.admin.user_id, &["catalog:write"]);
 
     let mut tx_a = crate::db::begin(&pool).await.unwrap();
-    resources::platform_write(&mut tx_a, &principal).await.unwrap();
+    resources::platform_write(&mut tx_a, &principal)
+        .await
+        .unwrap();
     let pid_a = backend_pid(&mut tx_a).await;
 
     let pool_b = pool.clone();
