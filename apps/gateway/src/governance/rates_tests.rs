@@ -746,7 +746,8 @@ async fn admission_revalidation_matches_the_multi_statement_form(pool: PgPool) {
                 let old = crate::auth::revalidate(&mut tx, &p).await.unwrap();
                 let new = crate::auth::revalidate_admission(&mut tx, &p)
                     .await
-                    .unwrap();
+                    .unwrap()
+                    .map(|(lineage, _shared)| lineage);
                 assert_eq!(old, new, "{context}: {p:?}");
                 allowed += usize::from(new.is_some());
             }
