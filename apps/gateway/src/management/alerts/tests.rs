@@ -161,13 +161,23 @@ async fn key_expiry_live_visibility_shared_personal_service_and_old_binary(pool:
         .await
         .unwrap();
     assert_eq!(feed(&f, &f.owner).await.len(), 1);
+    // No SMTP relay is configured in this fixture, so every delivery becomes
+    // `not_configured` through the outbox's uniform, kind-independent rule
+    // (#46): recipients are still live-rechecked and recorded (just never
+    // dispatched), so the two now-ineligible reminders end up with zero
+    // recorded recipients while the still-eligible personal one keeps one.
     assert_eq!(core::deliver_pending(&f.s, 10).await, 3);
-    let suppressed: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM alert_deliveries WHERE status='no_recipients'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(suppressed, 2, "delivery rechecks human/service eligibility");
+    let (not_configured, zero_recipients): (i64, i64) = sqlx::query_as(
+        "SELECT count(*) FILTER(WHERE status='not_configured'),count(*) FILTER(WHERE status='not_configured' AND recipients=0) FROM alert_deliveries",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        (not_configured, zero_recipients),
+        (3, 2),
+        "delivery rechecks human/service eligibility"
+    );
     // A plain member never receives a service-key reminder; current admins do.
     member(&pool, f.team, f.outsider.user_id, "admin").await;
     sqlx::query("UPDATE service_accounts SET disabled_at=NULL WHERE id=$1")
