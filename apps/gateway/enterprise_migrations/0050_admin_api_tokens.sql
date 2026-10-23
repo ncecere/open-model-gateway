@@ -20,6 +20,11 @@
 -- the same transaction as whatever caused the loss. Regaining the Admin
 -- role later never un-revokes them (the revocation-is-final trigger refuses
 -- it, and nothing here ever clears revoked_at).
+--
+-- The role-loss check locks the owner's users row FOR UPDATE before its
+-- EXISTS check (write-skew guard: two admin grants of different provenance
+-- revoked by two otherwise-unsynchronized concurrent transactions must
+-- still both be seen gone).
 SET lock_timeout = '60s';
 
 -- Every admin-token scope (route assignments are PR2's route_policy.rs); no
@@ -95,6 +100,17 @@ $$;
 -- losing the user's last 'admin' grant revokes the same way.
 CREATE FUNCTION omg_admin_tokens_role_lost() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+ -- Write-skew guard: two admin grants of different provenance (manual and
+ -- group) can be revoked by two concurrent transactions that otherwise
+ -- share no lock here. Lock the owner's row first, the same row
+ -- apps/gateway/src/management/directory.rs's manual-demotion path and the
+ -- creation guard below both lock FOR UPDATE. The EXISTS below then runs
+ -- as a fresh statement: under READ COMMITTED every plain SQL statement
+ -- (including one run from inside a PL/pgSQL function) takes a new
+ -- snapshot, so once this lock is granted the EXISTS is guaranteed to see
+ -- whatever the other transaction already committed, instead of each
+ -- transaction's stale view of the sibling grant.
+ PERFORM 1 FROM users WHERE id=NEW.user_id FOR UPDATE;
  IF NOT EXISTS(SELECT 1 FROM platform_role_grants WHERE user_id=NEW.user_id AND role='admin' AND revoked_at IS NULL) THEN
   PERFORM omg_admin_tokens_revoke_owner(NEW.user_id);
  END IF;

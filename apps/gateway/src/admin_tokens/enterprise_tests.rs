@@ -582,6 +582,112 @@ async fn owner_transitions_revoke_tokens_and_regaining_admin_never_restores_them
     );
 }
 
+/// Coordinator review of #37 PR1: two admin grants of different
+/// provenance (manual + group) can be revoked by concurrent transactions
+/// that share no lock of their own in `omg_admin_tokens_role_lost`. Under
+/// READ COMMITTED, if T1 revokes one grant while T2 concurrently revokes
+/// the other, each trigger's `EXISTS` can still see the other's grant as
+/// active (neither has committed yet from the other's point of view), so
+/// neither revokes the token; if the user later regains admin, the token
+/// comes back to life, which violates finality.
+///
+/// Migration 0027's `omg_authority_platform_grants` trigger already takes
+/// a transaction-scoped advisory lock (class 72419512, keyed by user) on
+/// any `platform_role_grants.revoked_at` update for a user, which happens
+/// to already serialize exactly this scenario today (verified by hand with
+/// two real `psql` sessions before writing this test). That is a different
+/// migration's incidental coverage, not a property `admin_api_tokens` owns
+/// or that migration 0050 asserts anywhere. This test disables that one
+/// trigger for its duration so it exercises `omg_admin_tokens_role_lost`'s
+/// own correctness in isolation, independent of whether 0027's lock
+/// continues to cover this case.
+async fn write_skew_scenario(pool: &PgPool, first_source: &str) {
+    let second_source = if first_source == "manual" {
+        "group"
+    } else {
+        "manual"
+    };
+    let store = Store::new(pool.clone());
+    let owner = admin(pool, &format!("writeskew-{first_source}@test.invalid")).await;
+    let mapping = Uuid::new_v4();
+    sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES($1,'https://issuer.test','admins','platform','admin')")
+        .bind(mapping)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO platform_role_grants(id,user_id,role,source,mapping_id) VALUES($1,$2,'admin','group',$3)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(owner)
+    .bind(mapping)
+    .execute(pool)
+    .await
+    .unwrap();
+    let token = store
+        .create_admin_token(owner, "t", &scopes(&["platform:read"]), 30, None)
+        .await
+        .unwrap();
+
+    sqlx::query("ALTER TABLE platform_role_grants DISABLE TRIGGER omg_authority_platform_grants")
+        .execute(pool)
+        .await
+        .unwrap();
+
+    let mut tx1 = pool.begin().await.unwrap();
+    sqlx::query(&format!(
+        "UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND source='{first_source}'"
+    ))
+    .bind(owner)
+    .execute(&mut *tx1)
+    .await
+    .unwrap();
+
+    let pool2 = pool.clone();
+    let second_sql = format!(
+        "UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND source='{second_source}'"
+    );
+    let handle = tokio::spawn(async move {
+        let mut tx2 = pool2.begin().await.unwrap();
+        sqlx::query(&second_sql)
+            .bind(owner)
+            .execute(&mut *tx2)
+            .await
+            .unwrap();
+        tx2.commit().await.unwrap();
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let blocked_while_first_open = !handle.is_finished();
+    tx1.commit().await.unwrap();
+    handle.await.unwrap();
+
+    let revoked: bool =
+        sqlx::query_scalar("SELECT revoked_at IS NOT NULL FROM admin_api_tokens WHERE id=$1")
+            .bind(token.id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert!(
+        revoked,
+        "two admin grants revoked by concurrent, unsynchronized writers (second blocked while first was open={blocked_while_first_open}) must still revoke the token"
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn concurrent_revocation_of_manual_then_group_admin_grants_still_revokes_the_token(
+    pool: PgPool,
+) {
+    write_skew_scenario(&pool, "manual").await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn concurrent_revocation_of_group_then_manual_admin_grants_still_revokes_the_token(
+    pool: PgPool,
+) {
+    write_skew_scenario(&pool, "group").await;
+}
+
 async fn revoked(pool: &PgPool, id: Uuid) -> bool {
     sqlx::query_scalar("SELECT revoked_at IS NOT NULL FROM admin_api_tokens WHERE id=$1")
         .bind(id)
