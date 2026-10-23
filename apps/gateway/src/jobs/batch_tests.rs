@@ -37,6 +37,14 @@ struct Script {
     /// on both can show the difference between judging a line against one
     /// deployment and judging it against every authorized candidate.
     permissive: bool,
+    /// #243 ungated-admission race tests: when true, the next
+    /// `validate_chat_request` call is judged normally (so it can still
+    /// refuse), but as a side effect this provider becomes `permissive`
+    /// immediately afterward - simulating a route that starts accepting
+    /// the line between the runner's dispatch-time planning decision
+    /// (`Runner::plan_route_inner`) and the engine's own check at
+    /// admission, moments later.
+    accept_after_first_check: bool,
     /// Encoded native records of the last submission.
     submitted: Vec<Value>,
     submissions: Vec<Vec<Value>>,
@@ -71,6 +79,36 @@ impl Fake {
     fn push_batch(&self, status: BatchStatus) {
         let mut s = self.script.lock().unwrap();
         s.batches.push_back(upstream(status));
+    }
+    /// The deterministic verdict `validate_chat_request` returns once not
+    /// `permissive` (the matching logic itself, factored out so the #243
+    /// ungated-admission tests can flip `permissive` around a single judged
+    /// call instead of only before or after every call).
+    fn judge(&self, request: &ChatRequest) -> Result<(), InferenceError> {
+        match request.messages[0].content.as_deref().unwrap_or_default() {
+            "strict-tool" => Err(InferenceError::Unsupported),
+            "bad-tool-args" => Err(InferenceError::InvalidRequest),
+            // #238 multi-route tests: every provider refuses, but not with
+            // the same kind (anthropic 501, openai 400) - so the upload's
+            // reported kind must come from every candidate, not just the
+            // one deployment planning happened to size the line against.
+            "mixed-reject" => Err(if self.id == "openai" {
+                InferenceError::InvalidRequest
+            } else {
+                InferenceError::Unsupported
+            }),
+            // #238 clamped-request test: only the line's own resolved output
+            // bound (the fixture's 50-token ceiling) satisfies this adapter -
+            // the raw client omission (`None`) must not.
+            "ceiling-sensitive" => {
+                if request.max_output_tokens == Some(50) {
+                    Ok(())
+                } else {
+                    Err(InferenceError::Unsupported)
+                }
+            }
+            _ => Ok(()),
+        }
     }
 }
 fn usage(input: u64, output: u64) -> Usage {
@@ -139,33 +177,17 @@ impl ProviderAdapter for Fake {
     /// a model-wide incompatibility), but this exact body is deterministically
     /// refused, exactly like Anthropic/Bedrock reject a strict function tool.
     fn validate_chat_request(&self, request: &ChatRequest) -> Result<(), InferenceError> {
-        if self.script.lock().unwrap().permissive {
+        let mut script = self.script.lock().unwrap();
+        if script.permissive {
             return Ok(());
         }
-        match request.messages[0].content.as_deref().unwrap_or_default() {
-            "strict-tool" => Err(InferenceError::Unsupported),
-            "bad-tool-args" => Err(InferenceError::InvalidRequest),
-            // #238 multi-route tests: every provider refuses, but not with
-            // the same kind (anthropic 501, openai 400) - so the upload's
-            // reported kind must come from every candidate, not just the
-            // one deployment planning happened to size the line against.
-            "mixed-reject" => Err(if self.id == "openai" {
-                InferenceError::InvalidRequest
-            } else {
-                InferenceError::Unsupported
-            }),
-            // #238 clamped-request test: only the line's own resolved output
-            // bound (the fixture's 50-token ceiling) satisfies this adapter -
-            // the raw client omission (`None`) must not.
-            "ceiling-sensitive" => {
-                if request.max_output_tokens == Some(50) {
-                    Ok(())
-                } else {
-                    Err(InferenceError::Unsupported)
-                }
-            }
-            _ => Ok(()),
+        let flip = std::mem::take(&mut script.accept_after_first_check);
+        drop(script);
+        let result = self.judge(request);
+        if flip {
+            self.script.lock().unwrap().permissive = true;
         }
+        result
     }
     async fn execute(
         &self,
@@ -1212,6 +1234,17 @@ async fn scheduler_skips_a_rejecting_route_and_claims_the_accepting_one_with_bot
             .await
             .unwrap();
     assert_eq!(executions, [openai_route]);
+    // The line's own `batch_lines` row was claimed on that accepting route
+    // (a scheduler route-capacity claim, not the ungated path with no
+    // route, #243): `deployment_id` is the accepting route itself, not
+    // merely inferred from `inference_executions`.
+    let line_deployment: Option<Uuid> =
+        sqlx::query_scalar("SELECT deployment_id FROM batch_lines WHERE job_id=$1 AND line_no=0")
+            .bind(job.id)
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+    assert_eq!(line_deployment, Some(openai_route));
     // The rejecting route recorded no execution and no reservation of its
     // own for this line (only the planning-time envelope reservation, keyed
     // by `job.execution_id`, ever touched it).
@@ -1224,6 +1257,97 @@ async fn scheduler_skips_a_rejecting_route_and_claims_the_accepting_one_with_bot
     .await
     .unwrap();
     assert_eq!(anthropic_line_reservations, 0);
+    consistent(f).await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn ungated_dispatch_never_admits_when_a_route_starts_accepting_before_execution(
+    pool: PgPool,
+) {
+    // #243 review finding: an unpinned line both authorized candidates
+    // deterministically reject at dispatch-time planning
+    // (`Runner::plan_route_inner`) runs ungated - the runner claims no
+    // route capacity for it and expects only the engine's own refusal. That
+    // planning decision is cached (and the line claimed into `batch_lines`)
+    // well before the line actually executes. If a candidate starts
+    // accepting the exact body in that window - openai here, right after
+    // the planning check that found it still rejecting - the engine's own
+    // admission would otherwise select and admit it, executing the line on
+    // a route the scheduler never claimed capacity on
+    // (`batch_lines.deployment_id` stays NULL): a bypass of route windows,
+    // live-load gates, fair-share ordering and cross-runner route
+    // concurrency accounting. The fix (`LineRepository::admit`/
+    // `admit_embeddings`/`admit_workload`) must refuse that admission: an
+    // ungated line may only be refused, never admitted, no matter what a
+    // candidate decides after dispatch.
+    //
+    // A single-line "every candidate rejects" upload is refused whole at
+    // creation (no batch at all), so this is a mixed upload: an ordinary
+    // line keeps the batch real and dispatching, and the raced line is
+    // physically first so its planning is the first `validate_chat_request`
+    // call after the flip is armed (`accept_after_first_check`), not the
+    // ordinary line's.
+    let w = world(pool, false, false, 1).await;
+    let f = &w.f;
+    second_claude_route(&w).await;
+    let file = w
+        .upload(
+            &f.principal,
+            &[
+                chat_line("race", "company/claude", "strict-tool"),
+                chat_line("safe", "company/claude", "fine"),
+            ],
+        )
+        .await;
+    let job = w
+        .create(f.principal, &file, BatchEndpoint::ChatCompletions, None)
+        .await
+        .unwrap();
+    assert_eq!(job.mode(), Some(BatchMode::Gateway));
+    assert_eq!(job.request_total, Some(2));
+    // Armed only after creation: creation's own exclusion check
+    // (`every_candidate_route_refuses`) must see both routes reject
+    // "strict-tool" exactly as they will at the runner's own planning,
+    // not an openai already flipped permissive.
+    w.openai.script.lock().unwrap().accept_after_first_check = true;
+    let runner = Runner::new(w.jobs.clone());
+    assert!(runner.run_next().await.unwrap());
+    let job = w.reload(&job).await;
+    assert_eq!(job.state, "completed");
+    assert_eq!(
+        (job.request_completed, job.request_failed),
+        (Some(1), Some(1))
+    );
+    let out = w.read(f.principal.workspace_id, job.output_file_id).await;
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0]["custom_id"], "safe");
+    assert_eq!(out[0]["response"]["status_code"], 200);
+    let errs = w.read(f.principal.workspace_id, job.error_file_id).await;
+    assert_eq!(errs.len(), 1);
+    assert_eq!(errs[0]["custom_id"], "race");
+    // Refused, not admitted: the raced line never reached either provider,
+    // even though openai would have accepted it by the time the engine
+    // checked.
+    assert!(!w.openai.executed().contains(&"strict-tool".to_owned()));
+    assert!(!w.anthropic.executed().contains(&"strict-tool".to_owned()));
+    // Never gated: no route capacity was ever claimed for the raced line.
+    let race_deployment: Option<Uuid> =
+        sqlx::query_scalar("SELECT deployment_id FROM batch_lines WHERE job_id=$1 AND line_no=0")
+            .bind(job.id)
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+    assert_eq!(race_deployment, None);
+    // Never admitted either: only the ordinary line's attempt exists (an
+    // ungated admission would have durably recorded a second one, on
+    // openai, with no claim behind it).
+    let executions: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM inference_executions WHERE batch_job_id=$1")
+            .bind(job.id)
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+    assert_eq!(executions, 1);
     consistent(f).await;
 }
 

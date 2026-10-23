@@ -1277,6 +1277,15 @@ async fn write_segments(
 /// Repository of a gateway-run batch's line attempts: everything is the
 /// normal store, except that admission transfers each line's hold out of
 /// the batch's ceiling (`governance::batch::admit_line`).
+///
+/// Every attempt is either pinned (an omitted-maximum line's creation-time
+/// plan, or an explicit-maximum line the scheduler claimed route capacity
+/// for at dispatch) or ungated (dispatch found no route to claim: every
+/// candidate deterministically rejected the line, or none existed yet).
+/// `admit`/`admit_embeddings`/`admit_workload` refuse every ungated
+/// attempt outright (#243): an ungated line may only be refused, never
+/// admitted, even if the live catalog or an adapter's deterministic
+/// eligibility changes in its favour between dispatch and here.
 struct LineRepository {
     store: Store,
     batch: LineContext,
@@ -1292,6 +1301,36 @@ impl LineRepository {
     }
     fn unpin(&self, execution: Uuid) {
         self.pins.lock().expect("pins").remove(&execution);
+    }
+    /// Whether `execution` is pinned to a route: an omitted-maximum line's
+    /// creation-time plan, or a scheduler route-capacity claim at dispatch.
+    fn gated(&self, execution: Uuid) -> bool {
+        self.pins.lock().expect("pins").contains_key(&execution)
+    }
+    /// An ungated attempt reaching admission (#243): the runner's dispatch
+    /// decision (`Runner::plan_route_inner`) found no route to claim for
+    /// this line - every candidate deterministically rejected it, or none
+    /// existed - so it proceeded expecting only the engine's own refusal.
+    /// `candidate_deployments` below still returns every live deployment
+    /// for it, unfiltered, so that refusal keeps its correct classification
+    /// when truly nothing serves the line. But the live catalog and an
+    /// adapter's deterministic eligibility can change before admission: if
+    /// some candidate now accepts, admitting it here would execute the line
+    /// on a route the scheduler never claimed capacity on, bypassing route
+    /// windows, live-load gates, fair-share ordering and cross-runner route
+    /// concurrency accounting (`batch_lines.deployment_id` stays NULL for
+    /// it). An ungated line may only be refused, never admitted: refuse
+    /// with an existing, already-classified, already-retryable denial (not
+    /// a new error path) - the batch's own explicit retry policy, if any,
+    /// gets its own bounded additional attempts, each independently and
+    /// correctly refused the same way while still ungated.
+    fn refuse_ungated(&self, record: &ExecutionStart, deployment: &Deployment) -> InferenceError {
+        tracing::warn!(
+            execution_id = %record.id,
+            deployment_id = %deployment.id,
+            "batch line admission refused: ungated attempt found an admissible route after dispatch (#243)"
+        );
+        InferenceError::Busy
     }
 }
 #[async_trait]
@@ -1349,12 +1388,10 @@ impl InferenceRepository for LineRepository {
         deployment: &Deployment,
         output_limit: u32,
     ) -> Result<crate::inference::repository::GenerationAdmission, InferenceError> {
-        let price = self
-            .pins
-            .lock()
-            .expect("pins")
-            .get(&record.id)
-            .and_then(|p| p.1);
+        let Some(pin) = self.pins.lock().expect("pins").get(&record.id).copied() else {
+            return Err(self.refuse_ungated(record, deployment));
+        };
+        let price = pin.1;
         crate::governance::batch::admit_line(
             &self.store,
             self.batch,
@@ -1380,6 +1417,9 @@ impl InferenceRepository for LineRepository {
         lease_seconds: i64,
         deployment: &Deployment,
     ) -> Result<(), InferenceError> {
+        if !self.gated(record.id) {
+            return Err(self.refuse_ungated(record, deployment));
+        }
         crate::governance::batch::admit_line(
             &self.store,
             self.batch,
@@ -1404,6 +1444,9 @@ impl InferenceRepository for LineRepository {
         lease_seconds: i64,
         deployment: &Deployment,
     ) -> Result<(), InferenceError> {
+        if !self.gated(record.id) {
+            return Err(self.refuse_ungated(record, deployment));
+        }
         crate::governance::batch::admit_line(
             &self.store,
             self.batch,
