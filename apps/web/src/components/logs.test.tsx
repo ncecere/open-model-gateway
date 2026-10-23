@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { DashboardNavigationProvider } from "./navigation-link";
+import { ActionProvider } from "./ui";
 import { LogsPage } from "../pages/logs";
 import { PlatformSessionDetailPage, SessionDetailPage } from "../pages/logs-session";
 import { PlatformRequestDetailPage, attemptItem } from "../pages/request-detail";
@@ -146,5 +150,99 @@ describe("Upstream model (reported by the provider, else configured)", () => {
     const title = (a: typeof base & { reported_upstream_model?: string | null }) => new DOMParser().parseFromString(markup(<>{attemptItem(a, [a]).title}</>), "text/html").body.textContent;
     expect(title(base)).toBe("Anthropic · claude-route (configured)");
     expect(title({ ...base, reported_upstream_model: "claude-served-1" })).toBe("Anthropic · claude-served-1 · route claude-route");
+  });
+});
+
+/** #232: the Logs page never refreshed itself, and an empty Sessions tab looked like "no logs" (requests without session metadata only appear under Requests). */
+describe("Logs Refresh action (#232)", () => {
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+  function mountLogs(client: ReturnType<typeof testClient>) {
+    return render(<QueryClientProvider client={client}><ActionProvider><DashboardNavigationProvider search={{ page: "requests", ws: "team" }} navigate={() => {}}><LogsPage scope={{ kind: "workspace", workspace: team }} /></DashboardNavigationProvider></ActionProvider></QueryClientProvider>);
+  }
+  it("refetches the current tab's data and its summary for the current filters, showing a busy state and the newly returned rows", async () => {
+    const user = userEvent.setup();
+    const row2: RequestRow = { ...row, root_request_id: "2b2b2b2b-0000-0000-0000-000000000002" };
+    const metricsAfter: LogMetrics = { ...metrics, requests: "24" };
+    let requestCalls = 0, metricsCalls = 0;
+    let releaseSecondRequestsFetch: ((value: Response) => void) | undefined;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL): Promise<Response> => {
+      const path = String(input);
+      if (path.startsWith(`${ws}/logs/metrics`)) { metricsCalls += 1; return Promise.resolve(Response.json(metricsCalls <= 1 ? metrics : metricsAfter)); }
+      if (path.startsWith(`${ws}/requests`)) {
+        requestCalls += 1;
+        if (requestCalls === 1) return Promise.resolve(Response.json({ data: [row], next_cursor: null }));
+        // Held open so the test can observe the busy Refresh button before resolving newly returned rows.
+        return new Promise<Response>(resolve => { releaseSecondRequestsFetch = resolve; });
+      }
+      // Dropdown choices (model, key) the toolbar also loads: an empty page is enough.
+      return Promise.resolve(Response.json({ data: [], has_more: false }));
+    }));
+    mountLogs(testClient());
+    await screen.findByRole("link", { name: /Open request 1a2b3c4d/ });
+    expect(screen.getAllByRole("row")).toHaveLength(2); // header + the one request
+    expect(requestCalls).toBe(1);
+    const refreshButton = screen.getByRole("button", { name: "Refresh" });
+    expect(refreshButton.getAttribute("aria-busy")).not.toBe("true");
+    await user.click(refreshButton);
+    await waitFor(() => expect(refreshButton.getAttribute("aria-busy")).toBe("true"));
+    await waitFor(() => expect(requestCalls).toBe(2));
+    expect(releaseSecondRequestsFetch).toBeDefined();
+    await act(async () => { releaseSecondRequestsFetch!(Response.json({ data: [row, row2], next_cursor: null })); });
+    await waitFor(() => expect(refreshButton.getAttribute("aria-busy")).not.toBe("true"));
+    await waitFor(() => expect(screen.getAllByRole("row")).toHaveLength(3)); // header + the two rows Refresh brought back
+    expect(metricsCalls).toBe(2);
+    await screen.findByText("24"); // the summary tile also refreshed
+  });
+  it("never fetches while the filters are invalid (a manual refetch ignores `enabled`)", async () => {
+    const user = userEvent.setup();
+    const fetched: string[] = [];
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => { fetched.push(String(input)); return Promise.resolve(Response.json({ data: [], has_more: false })); }));
+    // "ab" is too short to be a request-ID search: the page shows "Filters not applied" and loads no rows or summary.
+    render(<QueryClientProvider client={testClient()}><ActionProvider><DashboardNavigationProvider search={{ page: "requests", ws: "team", q: "ab" }} navigate={() => {}}><LogsPage scope={{ kind: "workspace", workspace: team }} /></DashboardNavigationProvider></ActionProvider></QueryClientProvider>);
+    await screen.findByText("Filters not applied");
+    const refreshButton = await screen.findByRole("button", { name: "Refresh" });
+    expect(refreshButton.hasAttribute("disabled")).toBe(true);
+    await user.click(refreshButton);
+    await new Promise(r => setTimeout(r, 50));
+    expect(fetched.filter(u => u.startsWith(`${ws}/requests`) || u.startsWith(`${ws}/logs/metrics`))).toEqual([]);
+  });
+  it("has the accessible name \"Refresh\" on both Requests and Sessions tabs", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(Response.json({ data: [], has_more: false }))));
+    const client = testClient();
+    client.setQueryData(["api", undefined, `${ws}/logs/metrics`], metrics);
+    client.setQueryData(["api", undefined, `${ws}/requests?limit=50`], { data: [row], next_cursor: null });
+    client.setQueryData(["api", undefined, `${ws}/sessions?limit=50`], { data: [sessionRow], next_cursor: null });
+    mountLogs(client);
+    expect(await screen.findByRole("button", { name: "Refresh" })).toBeTruthy();
+    cleanup();
+    render(<QueryClientProvider client={client}><ActionProvider><DashboardNavigationProvider search={{ page: "requests", ws: "team", tab: "sessions" }} navigate={() => {}}><LogsPage scope={{ kind: "workspace", workspace: team }} /></DashboardNavigationProvider></ActionProvider></QueryClientProvider>);
+    expect(await screen.findByRole("button", { name: "Refresh" })).toBeTruthy();
+  });
+});
+
+describe("Sessions empty state hints at Requests (#232)", () => {
+  afterEach(() => cleanup());
+  it("keeps the session-forming explanation, adds a Requests hint, and a link that switches tabs with the same filters", async () => {
+    const user = userEvent.setup();
+    const navigate = vi.fn();
+    const client = testClient();
+    const search: DashboardSearch = { page: "requests", ws: "team", tab: "sessions", status: "failed" };
+    client.setQueryData(["api", undefined, `${ws}/logs/metrics?status=failed`], metrics);
+    client.setQueryData(["api", undefined, `${ws}/sessions?status=failed&limit=50`], { data: [], next_cursor: null });
+    client.setQueryData(["api", undefined, `${ws}/models`, "choices"], []);
+    client.setQueryData(["api", undefined, `${ws}/keys?limit=20`], { data: [], has_more: false });
+    render(<QueryClientProvider client={client}><ActionProvider><DashboardNavigationProvider search={search} navigate={navigate}><LogsPage scope={{ kind: "workspace", workspace: team }} /></DashboardNavigationProvider></ActionProvider></QueryClientProvider>);
+    await screen.findByText("No sessions match these filters.");
+    // The explanation of how sessions form stays (not replaced).
+    expect(screen.getByText(/grouped into sessions when the client sends a session ID/)).toBeTruthy();
+    // #232: an empty Sessions tab looked like "no logs"; requests without session metadata are under Requests instead.
+    expect(screen.getByText(/Requests without a session ID are listed under Requests instead\./)).toBeTruthy();
+    const link = screen.getByRole("button", { name: "View Requests" });
+    await user.click(link);
+    expect(navigate).toHaveBeenCalledWith(expect.objectContaining({ page: "requests", ws: "team", status: "failed", tab: undefined }));
+  });
+  it("has no Requests hint when sessions are found (nothing to explain away)", () => {
+    const html = markup(nav({ page: "requests", ws: "team", tab: "sessions" }, <LogsPage scope={{ kind: "workspace", workspace: team }} />), [[`${ws}/sessions?limit=50`, { data: [sessionRow], next_cursor: null }]]);
+    expect(html).not.toContain("listed under Requests");
   });
 });
