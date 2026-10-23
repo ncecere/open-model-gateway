@@ -17,8 +17,18 @@ struct Endpoint {
     client: reqwest::Client,
     base: String,
 }
+/// An approved local upstream in an address range #203 lists as pending
+/// refusal: accepted this release, refused in the next minor release.
+/// `endpoint` is the approval's canonical base URL (host and port only, no
+/// credentials: `canonical` already rejects userinfo); never a secret.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Warning {
+    pub endpoint: String,
+    pub category: &'static str,
+}
 pub struct ApprovedEndpoints {
     endpoints: BTreeMap<String, Endpoint>,
+    warnings: Vec<Warning>,
 }
 impl ApprovedEndpoints {
     pub fn from_env(environment: &str) -> anyhow::Result<Self> {
@@ -40,6 +50,7 @@ impl ApprovedEndpoints {
             return Err(invalid);
         }
         let mut endpoints = BTreeMap::new();
+        let mut warnings = Vec::new();
         for approval in approvals {
             let (base, url) = canonical(&approval.endpoint)?;
             if endpoints.contains_key(&base)
@@ -61,6 +72,18 @@ impl ApprovedEndpoints {
                     return Err(invalid);
                 }
                 destinations.push(SocketAddr::new(ip, port));
+                // #203: this address is accepted this release but is in a
+                // range the egress policy already refuses for every other
+                // client; it will be refused at startup from the next minor
+                // release. Named here (host only, no credentials) so an
+                // operator can act before that release.
+                let category = category_of(ip);
+                if category.is_pending_refusal() {
+                    warnings.push(Warning {
+                        endpoint: base.clone(),
+                        category: category.label(),
+                    });
+                }
             }
             let client = reqwest::Client::builder()
                 .no_proxy()
@@ -72,7 +95,16 @@ impl ApprovedEndpoints {
                 .map_err(|_| invalid)?;
             endpoints.insert(base.clone(), Endpoint { client, base });
         }
-        Ok(Self { endpoints })
+        Ok(Self {
+            endpoints,
+            warnings,
+        })
+    }
+    /// Approved local upstreams in a range #203 lists as pending refusal: a
+    /// startup warning should name each one (never a secret) and readiness
+    /// should flag it (see `log_pending_refusal_warnings`).
+    pub fn warnings(&self) -> &[Warning] {
+        &self.warnings
     }
     /// Management-time validation. Does not read credentials or contact upstreams.
     /// The caller must also check EnvSecrets::allows for any environment reference.
@@ -167,42 +199,73 @@ fn canonical(endpoint: &str) -> Result<(String, reqwest::Url), InferenceError> {
     }
     Ok((url.as_str().trim_end_matches('/').to_owned(), url))
 }
+/// This file's own mapping from the shared special-use category (#203) to
+/// an accept/refuse decision for an IPv4 address: carrier-grade NAT
+/// (`Category::Cgnat`, 100.64.0.0/10) is refused unconditionally, as it
+/// always was here (never even the exception `is_private()` would have
+/// given it, since Rust's `is_private()` does not cover that range).
+fn allowed_v4(category: crate::special_use::Category, development: bool, http: bool) -> bool {
+    use crate::special_use::Category;
+    match category {
+        Category::Loopback => development,
+        Category::Private => true,
+        Category::Public
+        | Category::Benchmarking
+        | Category::Documentation
+        | Category::IetfProtocolAssignments
+        | Category::Deprecated6to4Relay => !http,
+        Category::LinkLocal
+        | Category::Multicast
+        | Category::Broadcast
+        | Category::Reserved
+        | Category::Metadata
+        | Category::Cgnat
+        | Category::AwsMetadataRange => false,
+    }
+}
+/// This file's own mapping for an IPv6 address that is not loopback and does
+/// not carry a mapped/compatible IPv4 address (those recurse into
+/// `allowed_v4` before this is reached). Unlike `egress.rs`, only the exact
+/// AWS metadata address is refused; the rest of `fd00:ec2::/32` is accepted
+/// like unique-local, pending refusal in the next minor release (#203).
+fn allowed_v6(category: crate::special_use::Category, development: bool, http: bool) -> bool {
+    use crate::special_use::Category;
+    match category {
+        Category::Loopback => development,
+        Category::Private | Category::AwsMetadataRange => true,
+        Category::Public | Category::Benchmarking | Category::Documentation => !http,
+        Category::LinkLocal | Category::Multicast | Category::Reserved | Category::Metadata => {
+            false
+        }
+        // Never produced by `special_use::classify_v6` (IPv4-only categories).
+        Category::Broadcast | Category::Cgnat | Category::IetfProtocolAssignments => false,
+        Category::Deprecated6to4Relay => false,
+    }
+}
+/// The category #203's warning logic reports for a configured approval
+/// address: the same dispatch `allowed` uses for mapped/compatible IPv4
+/// forms, but it does not re-check a 6to4 or Teredo literal's embedded
+/// address (approvals are never written in those forms in practice, and
+/// `allowed` has already judged the literal address itself safe).
+fn category_of(ip: IpAddr) -> crate::special_use::Category {
+    match ip {
+        IpAddr::V4(ip) => crate::special_use::classify_v4(ip),
+        IpAddr::V6(ip) => match ip.to_ipv4() {
+            Some(v4) => crate::special_use::classify_v4(v4),
+            None => crate::special_use::classify_v6(ip),
+        },
+    }
+}
 fn allowed(ip: IpAddr, development: bool, http: bool) -> bool {
     match ip {
-        IpAddr::V4(ip) => {
-            let o = ip.octets();
-            if ip.is_unspecified()
-                || ip.is_link_local()
-                || ip.is_multicast()
-                || ip.is_broadcast()
-                || o[0] == 0
-                || o[0] >= 240
-                || (o[0] == 100 && (64..=127).contains(&o[1]))
-            {
-                return false;
-            }
-            if ip.is_loopback() {
-                return development;
-            }
-            !http || ip.is_private()
-        }
+        IpAddr::V4(ip) => allowed_v4(crate::special_use::classify_v4(ip), development, http),
         IpAddr::V6(ip) => {
             if ip.is_loopback() {
                 return development;
             }
             // Include deprecated IPv4-compatible encodings, not only mapped ones.
             if let Some(v4) = ip.to_ipv4() {
-                return allowed(IpAddr::V4(v4), development, http);
-            }
-            if ip.is_unspecified()
-                || ip.is_unicast_link_local()
-                || ip.is_multicast()
-                || ip
-                    == "fd00:ec2::254"
-                        .parse::<std::net::Ipv6Addr>()
-                        .expect("constant metadata IP")
-            {
-                return false;
+                return allowed_v4(crate::special_use::classify_v4(v4), development, http);
             }
             // Deny translation/special-use ranges that can obscure a forbidden
             // IPv4 destination (including NAT64); ordinary global v6 is 2000::/3.
@@ -213,13 +276,39 @@ fn allowed(ip: IpAddr, development: bool, http: bool) -> bool {
             // hide behind them (#196). NAT64 is not in 2000::/3 and stays refused.
             if global
                 && let Some(v4) = crate::egress::translated_v4(ip)
-                && !allowed(IpAddr::V4(v4), development, http)
+                && !allowed_v4(crate::special_use::classify_v4(v4), development, http)
             {
                 return false;
             }
-            ip.is_unique_local() || global
+            allowed_v6(crate::special_use::classify_v6(ip), development, http)
         }
     }
+}
+static PENDING_REFUSAL_WARNING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// Startup only (`main.rs`, once per process, after loading the approvals a
+/// replica will actually use): log each #203 pending-refusal warning (host
+/// and category, never a secret) and record that readiness should flag it.
+/// Never called by tests, which read `ApprovedEndpoints::warnings()` or
+/// `allowed()` directly instead of this process-wide flag.
+pub fn log_pending_refusal_warnings(approvals: &ApprovedEndpoints) {
+    for warning in approvals.warnings() {
+        tracing::warn!(
+            endpoint = %warning.endpoint,
+            category = warning.category,
+            "approved local upstream is in an address range the egress policy already refuses for every other client; the next minor release will refuse it at startup too (see docs/releases/unreleased.md)"
+        );
+    }
+    if !approvals.warnings().is_empty() {
+        PENDING_REFUSAL_WARNING.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+/// Readiness detail only (`/health/ready`, unauthenticated: no more detail
+/// than it already exposes, never an endpoint name): whether any approved
+/// local upstream is in a range a future release will refuse. Never changes
+/// the ready/not-ready decision.
+pub fn has_pending_refusal_warning() -> bool {
+    PENDING_REFUSAL_WARNING.load(std::sync::atomic::Ordering::Relaxed)
 }
 #[cfg(test)]
 mod tests {
@@ -459,5 +548,130 @@ mod tests {
         ] {
             assert!(p.metrics_endpoint(url).is_err(), "{url}");
         }
+    }
+}
+
+/// #203, release N: a test per listed range proving it is still accepted
+/// locally, still produces a startup warning naming it, and is still
+/// refused by the egress policy for every other client; plus a control
+/// proving ordinary public/RFC 1918 approvals produce no warning.
+#[cfg(test)]
+mod pending_refusal_tests {
+    use super::*;
+
+    fn ranges() -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("198.18.0.1", "benchmarking"),
+            ("192.0.0.1", "IETF protocol assignments"),
+            ("192.88.99.1", "deprecated 6to4 relay"),
+            ("192.0.2.1", "documentation"),
+            ("198.51.100.1", "documentation"),
+            ("203.0.113.1", "documentation"),
+            ("2001:db8::1", "documentation"),
+            ("3fff::1", "documentation"),
+            ("2001:2::1", "benchmarking"),
+            ("fd00:ec2::1", "AWS metadata range (fd00:ec2::/32)"),
+        ]
+    }
+
+    #[test]
+    fn each_pending_refusal_range_is_accepted_warned_and_egress_refused() {
+        for (address, category) in ranges() {
+            let scheme = if address.contains(':') {
+                format!("https://[{address}]/v1")
+            } else {
+                format!("https://{address}/v1")
+            };
+            let ip: IpAddr = address.parse().unwrap();
+
+            // (a) local approval still accepts it this release.
+            assert!(allowed(ip, false, false), "{address}");
+            let approvals = ApprovedEndpoints::parse(
+                &serde_json::json!([{"endpoint": scheme, "addresses": [address]}]).to_string(),
+                "production",
+            )
+            .unwrap_or_else(|_| panic!("{address} should still be approved this release"));
+
+            // (b) a startup warning names the approval and its category.
+            let base = scheme.trim_end_matches('/').to_owned();
+            assert!(
+                approvals
+                    .warnings()
+                    .iter()
+                    .any(|w| w.endpoint == base && w.category == category),
+                "{address}: warnings were {:?}",
+                approvals.warnings()
+            );
+
+            // (c) egress still refuses it, even for the most permissive policy.
+            let everything = crate::egress::Policy::new(
+                true,
+                crate::egress::Networks::parse(crate::egress::PRIVATE_ALLOW_ENV, "0.0.0.0/0,::/0")
+                    .unwrap(),
+            );
+            assert!(!everything.allows(ip), "{address}");
+        }
+    }
+
+    /// NAT64 approvals stay refused outright: no warning, never accepted.
+    #[test]
+    fn nat64_approvals_stay_refused_with_no_warning() {
+        for address in ["64:ff9b::808:808", "64:ff9b::a9fe:a9fe"] {
+            let ip: IpAddr = address.parse().unwrap();
+            assert!(!allowed(ip, true, false), "{address}");
+            assert!(
+                ApprovedEndpoints::parse(
+                    &serde_json::json!([{"endpoint": format!("https://[{address}]/v1"), "addresses": [address]}])
+                        .to_string(),
+                    "production",
+                )
+                .is_err(),
+                "{address}"
+            );
+        }
+    }
+
+    /// Control: an installation with only public and RFC 1918 approvals
+    /// produces no pending-refusal warning. `warnings()` is the source of
+    /// truth tests use (not the process-wide readiness flag, which other
+    /// tests in this binary may already have set: it is monotonic and
+    /// shared, so only ever asserted true, never false, below).
+    #[test]
+    fn only_public_or_rfc1918_approvals_produce_no_warning() {
+        let approvals = ApprovedEndpoints::parse(
+            r#"[
+                {"endpoint":"https://public.example/v1","addresses":["8.8.8.8"]},
+                {"endpoint":"http://private.example/v1","addresses":["10.1.2.3"]},
+                {"endpoint":"https://private6.example/v1","addresses":["fd12::1"]}
+            ]"#,
+            "production",
+        )
+        .unwrap();
+        assert!(
+            approvals.warnings().is_empty(),
+            "{:?}",
+            approvals.warnings()
+        );
+    }
+
+    /// A control in the other direction: an installation with one pending
+    /// range mixed into otherwise-ordinary approvals is still flagged.
+    /// `log_pending_refusal_warnings`/`has_pending_refusal_warning` are not
+    /// exercised here: the flag they share is process-wide (one process runs
+    /// every test in this binary), so a unit test that set it would make
+    /// every other test observing it order-dependent. They are proved at
+    /// the real startup path instead.
+    #[test]
+    fn a_single_pending_range_among_ordinary_approvals_is_flagged() {
+        let approvals = ApprovedEndpoints::parse(
+            r#"[
+                {"endpoint":"https://public.example/v1","addresses":["8.8.8.8"]},
+                {"endpoint":"https://benchmarking.example/v1","addresses":["198.18.0.1"]}
+            ]"#,
+            "production",
+        )
+        .unwrap();
+        assert_eq!(approvals.warnings().len(), 1);
+        assert_eq!(approvals.warnings()[0].category, "benchmarking");
     }
 }
