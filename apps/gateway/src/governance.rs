@@ -24,6 +24,34 @@ fn storage(error: sqlx::Error) -> InferenceError {
     locks::note(&error);
     InferenceError::Storage
 }
+/// A private submodule so [`SharedEligibilityCommitted`]'s own tuple field
+/// (and therefore `SharedEligibilityCommitted(())` construction) is scoped
+/// to this submodule alone, not to the whole `governance` module tree
+/// (#98 PR 2 review item 3). A private field on a struct defined directly
+/// in `governance.rs` would have been constructible from *every* submodule
+/// declared there (`batch`, `jobs`, `locks`, `pressure`, `rates`, `totals`,
+/// `realtime`): Rust grants a private item's defining module *and all of
+/// that module's descendants* access, and those submodules are all
+/// descendants of `governance`. Nesting one level down shrinks that
+/// descendant set to `proof` itself, which has none.
+mod proof {
+    /// Proof, for [`crate::telemetry::mark_shared`], that this exact
+    /// module's own commit branch of `admit_unobserved` resolved
+    /// shared-workspace trace eligibility. The struct's *type name* is
+    /// `pub(crate)` only so it can be re-exported from `governance` (see
+    /// below) and named in `telemetry::mark_shared`'s signature; its
+    /// unnamed tuple field has ordinary default (private) visibility,
+    /// which Rust scopes to this `proof` submodule alone (it has no
+    /// descendants), so `SharedEligibilityCommitted(())` can only ever be
+    /// written here. `committed_shared` is `pub(super)` - the narrowest
+    /// visibility that still lets `governance.rs`'s `admit_unobserved`
+    /// (this module's parent) call it - and is the one place that does.
+    pub(crate) struct SharedEligibilityCommitted(());
+    pub(super) fn committed_shared() -> SharedEligibilityCommitted {
+        SharedEligibilityCommitted(())
+    }
+}
+pub(crate) use proof::SharedEligibilityCommitted;
 /// Bounded in-process queues in front of the governance transactions, one for
 /// admissions and one for settlements/reconciliation. In the global mode work
 /// under the installation lock is serialized anyway, so letting every
@@ -99,11 +127,15 @@ async fn admission_prefix(
 /// (`ModelUnavailable`). Scoped admission reads without row locks (the
 /// shared authority locks exclude concurrent revocation); the global mode
 /// keeps its `FOR SHARE` row locks.
+/// Returns the key lineage and whether the admitting workspace is shared
+/// (`team`/`project`): the only source of trace-export eligibility
+/// (`admit_unobserved`'s commit branch), live-revalidated here under this
+/// transaction's authority locks, never cached or client-asserted.
 async fn authorize(
     store: &Store,
     tx: &mut Tx<'_>,
     principal: &crate::auth::Principal,
-) -> Result<Uuid, InferenceError> {
+) -> Result<(Uuid, bool), InferenceError> {
     match crate::auth::revalidate_admission_with(tx, principal, !scoped(store))
         .await
         .map_err(storage)?
@@ -678,8 +710,10 @@ async fn admit_unobserved(
     let key = record.principal.key_id;
     let _queued = gate(&store.lock_gates.admission).await;
     timer.phase("queue");
+    crate::telemetry::mark_phase(crate::telemetry::SpanName::AdmissionQueue);
     let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
     timer.phase("connect");
+    crate::telemetry::mark_phase(crate::telemetry::SpanName::AdmissionConnect);
     // Catalog configuration (deployments, providers, models and their
     // append-only prices) changes only under the exclusive catalog lock, so
     // once it is held shared the latest price and the reservation bounds are
@@ -693,16 +727,23 @@ async fn admit_unobserved(
     let read_price = if scoped(store) {
         lock_wait += admission_prefix(store, &mut tx, &record.principal).await?;
         timer.phase("locks");
+        // Scoped admission takes the shared catalog and authority locks
+        // together (locks::admission): one real boundary, named for its
+        // dominant role (authority locks of workspace type, workspace,
+        // user and key lineage).
+        crate::telemetry::mark_phase(crate::telemetry::SpanName::AdmissionAuthorityLocks);
         None
     } else {
         catalog_lock(&mut tx).await?;
         let price = latest_price(&mut tx, record.deployment_id).await?;
         timer.phase("price");
+        crate::telemetry::mark_phase(crate::telemetry::SpanName::AdmissionCatalogLocks);
         installation_lock(&mut tx).await?;
         timer.phase("locks");
+        crate::telemetry::mark_phase(crate::telemetry::SpanName::AdmissionAuthorityLocks);
         Some(price)
     };
-    let lineage = authorize(store, &mut tx, &record.principal).await?;
+    let (lineage, shared) = authorize(store, &mut tx, &record.principal).await?;
     // The deployment check also reads the admission clock and the latest
     // price id (one round trip).
     let row=sqlx::query(&format!("SELECT d.id,p.provider,d.upstream_model,p.credential_ref,p.endpoint,p.region,m.supported_protocols,clock_timestamp() AS admission_now,(SELECT x.id FROM deployment_prices x WHERE x.deployment_id=d.id ORDER BY x.created_at DESC,x.id DESC LIMIT 1) AS latest_price_id FROM deployments d JOIN provider_connections p ON p.id=d.provider_connection_id JOIN models m ON m.id=d.model_id WHERE d.id=$2 AND m.public_name=$3 AND workspace_model_allowed($1,m.id) AND d.enabled AND p.enabled AND (NOT EXISTS(SELECT 1 FROM key_model_restrictions WHERE workspace_id=$1 AND governance_key_id=$4) OR EXISTS(SELECT 1 FROM key_model_selections WHERE workspace_id=$1 AND governance_key_id=$4 AND model_id=m.id)){}", catalog_share(store)))
@@ -769,6 +810,7 @@ async fn admit_unobserved(
     // limits and are counted by "jobs at once"; budgets apply in full.
     let job = matches!(workload.kind, WorkloadKind::Videos | WorkloadKind::Batches);
     timer.phase("read");
+    crate::telemetry::mark_phase(crate::telemetry::SpanName::AdmissionRead);
     // Scoped: hold this workspace's and lineage's totals and counter rows
     // (the ones the write below changes) before reading them.
     lock_wait += lock_rows(
@@ -783,6 +825,7 @@ async fn admit_unobserved(
     )
     .await?;
     timer.phase("lock_rows");
+    crate::telemetry::mark_phase(crate::telemetry::SpanName::AdmissionTotalsLocks);
     enforce_limits(
         &mut tx,
         workspace,
@@ -799,6 +842,7 @@ async fn admit_unobserved(
     )
     .await?;
     timer.phase("limits");
+    crate::telemetry::mark_phase(crate::telemetry::SpanName::AdmissionLimits);
     // An async batch records its request count (0016) for settlement checks.
     let request_count = match workload.output {
         OutputReservation::Batch { requests, .. } => {
@@ -819,8 +863,22 @@ async fn admit_unobserved(
         return Err(InferenceError::Storage);
     }
     timer.phase("write");
+    crate::telemetry::mark_phase(crate::telemetry::SpanName::AdmissionWrite);
     tx.commit().await.map_err(storage)?;
     timer.phase("commit");
+    crate::telemetry::mark_phase(crate::telemetry::SpanName::AdmissionCommit);
+    // The only production trigger of trace-export eligibility: a committed
+    // admission for a shared (team/project) workspace, carrying the public
+    // alias admission itself resolved (record.model matched m.public_name
+    // above). Never personal, never client text, never before this commit
+    // has actually succeeded.
+    if shared {
+        crate::telemetry::mark_shared(
+            proof::committed_shared(),
+            record.root_request_id,
+            &record.model,
+        );
+    }
     // Per-scope ceiling signal (`admission_ceiling` alerts): committed
     // interactive admissions (the ones `rate_minute_counters` counts) that
     // waited at least 10 ms for their scope locks.
@@ -1572,11 +1630,14 @@ async fn finish_unobserved(
     let reported_model = record.usage.reported_model.map(|m| m.as_str().to_owned());
     let _queued = gate(&store.lock_gates.settlement).await;
     timer.phase("queue");
+    crate::telemetry::mark_phase(crate::telemetry::SpanName::SettlementQueue);
     let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
     timer.phase("connect");
+    crate::telemetry::mark_phase(crate::telemetry::SpanName::SettlementConnect);
     settlement_prefix(store, &mut tx).await?;
     let r = reservation(&mut tx, record.id, scoped(store)).await?;
     timer.phase("locks");
+    crate::telemetry::mark_phase(crate::telemetry::SpanName::SettlementLocks);
     let mut usage = workload_usage(&r, record.usage)?;
     // A free price's pre-processing rejection processed no tokens: record the
     // semantic zeros a settled row requires (see `free_rejection`).
@@ -1617,10 +1678,12 @@ async fn finish_unobserved(
     };
     let components = value.components.filter(|_| actual.is_some());
     timer.phase("read");
+    crate::telemetry::mark_phase(crate::telemetry::SpanName::SettlementRead);
     // Scoped: the reservation's totals rows, held from here to commit (its
     // triggers then take the counter rows in canonical order).
     lock_rows(store, &mut tx, &[r.touch()], false).await?;
     timer.phase("lock_rows");
+    crate::telemetry::mark_phase(crate::telemetry::SpanName::SettlementTotalsLocks);
     // One statement (one round trip while the totals rows are held): the
     // execution's outcome, the reservation's settlement and the ledger
     // entry. Each names the partition key (started_at = admitted_at,
@@ -1640,8 +1703,10 @@ async fn finish_unobserved(
         return Err(InferenceError::Storage);
     }
     timer.phase("write");
+    crate::telemetry::mark_phase(crate::telemetry::SpanName::SettlementWrite);
     tx.commit().await.map_err(storage)?;
     timer.phase("commit");
+    crate::telemetry::mark_phase(crate::telemetry::SpanName::SettlementCommit);
     Ok(Finished::Committed {
         provider: r.provider,
         model: r.public_model,
@@ -1884,6 +1949,8 @@ pub mod realtime;
 mod realtime_tests;
 #[cfg(all(test, feature = "integration-tests"))]
 mod safety_tests;
+#[cfg(all(test, feature = "integration-tests"))]
+mod telemetry_tests;
 #[cfg(test)]
 pub(crate) mod tests;
 #[cfg(all(test, feature = "integration-tests"))]

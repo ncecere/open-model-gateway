@@ -30,6 +30,29 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use uuid::Uuid;
 
+/// Current wall-clock time as OTLP's Unix nanoseconds. Not monotonic: two
+/// calls may regress across a system clock adjustment, which [`Span::new`]
+/// and [`Span::reserved`] already refuse (`end < start`) rather than panic.
+pub fn now_unix_nanos() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos().min(u64::MAX as u128) as u64)
+        .unwrap_or(0)
+}
+
+/// Reserves a span id usable as `parent` before the reserving span itself is
+/// known to have completed: an "admission"/"settlement"/"upstream.attempt"/
+/// "inference.request" wrapper whose own [`Span::reserved`] is only built
+/// once its real end boundary is known. `None` only on entropy exhaustion,
+/// matching [`Span::new`]'s own failure mode (dropped, never a panic).
+pub fn reserve_span_id() -> Option<[u8; 8]> {
+    let mut id = crate::entropy::bytes::<8>().ok()?;
+    if id == [0; 8] {
+        id = crate::entropy::bytes::<8>().ok()?;
+    }
+    (id != [0; 8]).then_some(id)
+}
+
 const MAX_SPAN: usize = 1024;
 const MAX_ATTRIBUTES: usize = 24;
 const MAX_REQUEST: usize = 64;
@@ -103,7 +126,14 @@ fixed_enum!(Provider { OpenAi => "openai", Anthropic => "anthropic", Bedrock => 
 fixed_enum!(Route { Chat => "/v1/chat/completions", Responses => "/v1/responses", Messages => "/v1/messages" });
 fixed_enum!(Outcome { Completed => "completed", Error => "error", Cancelled => "cancelled", Unknown => "unknown" });
 fixed_enum!(ErrorKind { InvalidRequest => "invalid_request", Unauthorized => "unauthorized", Forbidden => "forbidden", NotFound => "not_found", Unsupported => "unsupported", Busy => "busy", Timeout => "timeout", Upstream => "upstream", Storage => "storage", Configuration => "configuration", Cancelled => "cancelled", Unknown => "unknown" });
-fixed_enum!(DropReason { Contexts => "contexts", RequestLimit => "request_limit", SpanLimit => "span_limit", QueueFull => "queue_full", Shutdown => "shutdown", Ineligible => "ineligible", Delivery => "delivery" });
+// `Invalid` (#98 PR 2 review item 5): `Span::new`/`Span::reserved` return
+// `None` on a malformed shape (end < start, a zero id/trace) or entropy
+// exhaustion. No existing reason describes that: `SpanLimit` is a
+// successfully-built span too large/unserializable, not one that was
+// never built at all. Counted wherever a `Context` or `Recorder` is in
+// hand at the failed construction, so "every span is either delivered or
+// counted" also covers construction, not just export.
+fixed_enum!(DropReason { Contexts => "contexts", RequestLimit => "request_limit", SpanLimit => "span_limit", QueueFull => "queue_full", Shutdown => "shutdown", Ineligible => "ineligible", Delivery => "delivery", Invalid => "invalid" });
 fixed_enum!(Delivery { Accepted => "accepted", HttpStatus => "http_status", Transport => "transport", Timeout => "timeout", Acknowledgement => "acknowledgement" });
 
 /// Constructed only after primary admission has proved shared-workspace
@@ -118,6 +148,17 @@ fixed_enum!(Delivery { Accepted => "accepted", HttpStatus => "http_status", Tran
 pub struct SharedAdmission {
     request: Uuid,
     alias: String,
+}
+impl SharedAdmission {
+    /// The only constructor, and it is private: only code inside this
+    /// module (this file's own [`mark_shared`]/[`mark_shared_for_tests`])
+    /// can call it at all, so the compiler - not a grep check - is what
+    /// prevents any other crate module from fabricating this capability.
+    /// `telemetry::tests::shared_admission_has_one_production_call_site`
+    /// remains a secondary, informational check of the same invariant.
+    fn new(request: Uuid, alias: String) -> Self {
+        Self { request, alias }
+    }
 }
 
 #[derive(Clone)]
@@ -249,6 +290,30 @@ impl Span {
             attributes: Vec::new(),
         })
     }
+    /// [`Span::new`] with a previously [`reserve_span_id`]d, non-zero id
+    /// (rather than a freshly generated one), so a span reserved before it
+    /// completed keeps the exact id its children already carry as `parent`.
+    pub fn reserved(
+        name: SpanName,
+        trace: [u8; 16],
+        id: [u8; 8],
+        parent: Option<[u8; 8]>,
+        start: u64,
+        end: u64,
+    ) -> Option<Self> {
+        if trace == [0; 16] || id == [0; 8] || parent == Some([0; 8]) || end < start {
+            return None;
+        }
+        Some(Self {
+            name,
+            trace,
+            id,
+            parent,
+            start,
+            end,
+            attributes: Vec::new(),
+        })
+    }
     pub fn id(&self) -> [u8; 8] {
         self.id
     }
@@ -328,7 +393,10 @@ pub struct Recorder {
     aliases: Arc<AliasRegistry>,
 }
 impl Recorder {
-    fn channel(ratio: f64) -> (Self, mpsc::Receiver<Box<RawValue>>) {
+    /// A recorder with no exporter worker, backed directly by its queue
+    /// receiver: engine tests capture exactly what a real request would
+    /// export (or drop), without a collector.
+    pub(crate) fn channel(ratio: f64) -> (Self, mpsc::Receiver<Box<RawValue>>) {
         std::sync::LazyLock::force(&crate::metrics::METRICS);
         let (sender, receiver) = mpsc::channel(QUEUE);
         (
@@ -358,7 +426,76 @@ impl Recorder {
             request,
             spans: Vec::new(),
             observed: 0,
+            root_recorded: false,
         })
+    }
+}
+
+/// The fixed allowlist [`Recorder::record_background`] accepts (#98 PR 2
+/// review item 7): only the two independent maintenance-run roots, never
+/// an arbitrary [`SpanName`] - which would let a caller mis-tag a
+/// background run as a request-scoped span such as `admission`, or bypass
+/// `SharedAdmission`'s eligibility design for request spans by routing one
+/// through this ungated path instead.
+///
+/// ```compile_fail
+/// use open_model_gateway::telemetry::{BackgroundSpan, SpanName};
+/// fn needs_background_span(_: BackgroundSpan) {}
+/// needs_background_span(SpanName::Admission);
+/// ```
+#[derive(Clone, Copy)]
+pub enum BackgroundSpan {
+    RatePrune,
+    LockWaitPrune,
+}
+impl BackgroundSpan {
+    fn name(self) -> SpanName {
+        match self {
+            Self::RatePrune => SpanName::RatePrune,
+            Self::LockWaitPrune => SpanName::LockWaitPrune,
+        }
+    }
+}
+
+impl Recorder {
+    /// Records one independent background-root span (`rate_prune`,
+    /// `lock_wait_prune` maintenance runs only): no workspace, user, or
+    /// request data of any kind, so none of `SharedAdmission`'s privacy
+    /// concern applies, and this never goes through `Context`/`export`
+    /// (the only export capability for inference-request spans). Still
+    /// subject to the same sample ratio, span budget and drop-on-full
+    /// queue as every other span.
+    pub fn record_background(&self, span: BackgroundSpan, start: u64, end: u64) {
+        if self.stopping.load(Ordering::Relaxed) {
+            return;
+        }
+        let synthetic = Uuid::now_v7();
+        if !root_sampled(synthetic, self.ratio) {
+            return;
+        }
+        let Some(span) = Span::new(span.name(), trace_id(synthetic), None, start, end) else {
+            self.counts.drop_spans(DropReason::Invalid, 1);
+            return;
+        };
+        let Ok(text) = serde_json::to_string(&span) else {
+            self.counts.drop_spans(DropReason::SpanLimit, 1);
+            return;
+        };
+        if text.len() > MAX_SPAN {
+            self.counts.drop_spans(DropReason::SpanLimit, 1);
+            return;
+        }
+        let Ok(raw) = RawValue::from_string(text) else {
+            self.counts.drop_spans(DropReason::SpanLimit, 1);
+            return;
+        };
+        if let Err(error) = self.sender.try_send(raw) {
+            let reason = match error {
+                mpsc::error::TrySendError::Full(_) => DropReason::QueueFull,
+                mpsc::error::TrySendError::Closed(_) => DropReason::Shutdown,
+            };
+            self.counts.drop_spans(reason, 1);
+        }
     }
 }
 
@@ -369,6 +506,7 @@ pub struct Context {
     request: Uuid,
     spans: Vec<Span>,
     observed: usize,
+    root_recorded: bool,
 }
 impl Context {
     /// Children share this trace and root sampling decision, without reacquiring
@@ -377,13 +515,46 @@ impl Context {
         self.trace
     }
     pub fn record(&mut self, mut span: Span) {
-        if self.observed >= MAX_REQUEST {
+        // Capped one below the documented 64 spans/request bound
+        // (docs/operations.md), reserving exactly one slot for the root
+        // [`Context::record_root`] always adds, so children plus the root
+        // can never exceed 64 spans total.
+        if self.observed >= MAX_REQUEST - 1 {
             self.recorder.counts.drop_spans(DropReason::RequestLimit, 1);
             return;
         }
         self.observed += 1;
         span.trace = self.trace;
         self.spans.push(span);
+    }
+    /// Recorded outside the ordinary per-request child-span budget (#98 PR 2
+    /// review item 6), in the one slot [`Context::record`] reserves for it:
+    /// the root span (`inference.request`) is the trace's sole anchor,
+    /// recorded exactly once, last, once the terminal outcome is known.
+    /// Three failover attempts plus an admission deadlock retry can fill
+    /// the whole child budget before the root is ever recorded; routing it
+    /// through that same budget would then drop the root itself, orphaning
+    /// every child span that *did* export.
+    ///
+    /// `pub(crate)`, not `pub`: `RequestTelemetry` (inference/mod.rs) is the
+    /// only caller, and it calls this at most once per request, guarded by
+    /// its own `finished` flag - but a second call from anywhere else must
+    /// still be safe rather than growing `self.spans` without bound, so a
+    /// repeat call here is counted `DropReason::RequestLimit` and dropped,
+    /// never pushed twice (#98 PR 2 review item 1).
+    pub(crate) fn record_root(&mut self, mut span: Span) {
+        if self.root_recorded {
+            self.recorder.counts.drop_spans(DropReason::RequestLimit, 1);
+            return;
+        }
+        self.root_recorded = true;
+        span.trace = self.trace;
+        self.spans.push(span);
+    }
+    /// Counts one span that could never be built at all (#98 PR 2 review
+    /// item 5): `DropReason::Invalid`, never a silent, uncounted loss.
+    pub(crate) fn drop_invalid(&self) {
+        self.recorder.counts.drop_spans(DropReason::Invalid, 1);
     }
     /// The model alias admission resolved for this request, folded to
     /// `other` past the registry bound. `None` for another request's admission.
@@ -427,6 +598,112 @@ impl Drop for Context {
             .counts
             .drop_spans(DropReason::Ineligible, self.spans.len() as u64);
     }
+}
+
+tokio::task_local! {
+    /// Ambient per the one wrapped await, never a request-wide thread-local:
+    /// bridges a reserved "admission"/"settlement" wrapper span to the real
+    /// phase boundaries reached inside `governance.rs`'s admission/
+    /// settlement transactions, across the `InferenceRepository`
+    /// trait-object boundary (PR 2 does not change that trait). Absent for
+    /// every call that is not wrapped in [`with_phases`] (disabled
+    /// telemetry, or any admission/settlement path outside interactive
+    /// generation), so [`mark_phase`]/[`mark_shared`] are then a single
+    /// `try_with` failure: no allocation, no hashing.
+    static PHASES: Arc<Mutex<PhaseBuffer>>;
+}
+
+/// Phase boundaries of one ambient admission or settlement call, collected
+/// as real [`Span`]s with [`mark_phase`], plus the [`SharedAdmission`]
+/// capability an admission commit resolved, if any ([`mark_shared`]).
+pub struct PhaseBuffer {
+    trace: [u8; 16],
+    parent: [u8; 8],
+    mark: u64,
+    spans: Vec<Span>,
+    eligibility: Option<SharedAdmission>,
+}
+impl PhaseBuffer {
+    /// `parent` is the reserved id of the "admission"/"settlement" wrapper
+    /// span the caller will build once this ambient call returns.
+    pub fn new(trace: [u8; 16], parent: [u8; 8], start: u64) -> Self {
+        Self {
+            trace,
+            parent,
+            mark: start,
+            spans: Vec::new(),
+            eligibility: None,
+        }
+    }
+    /// Spans recorded since construction, and the eligibility capability a
+    /// commit resolved, if any. Takes `self` so a caller merges exactly once.
+    pub fn take(self) -> (Vec<Span>, Option<SharedAdmission>) {
+        (self.spans, self.eligibility)
+    }
+}
+
+/// Runs `fut` with `buffer` as the ambient phase recorder nested
+/// admission/settlement calls record real boundaries into via [`mark_phase`].
+/// The caller still owns `buffer` afterward (an `Arc` clone) to merge its
+/// spans into the request's real [`Context`].
+pub async fn with_phases<F: std::future::Future>(
+    buffer: Arc<Mutex<PhaseBuffer>>,
+    fut: F,
+) -> F::Output {
+    PHASES.scope(buffer, fut).await
+}
+
+/// Records one real phase boundary of the ambient admission/settlement call
+/// if telemetry is active for this request; otherwise a no-op. `try_lock`
+/// only: a contended buffer (never expected, since one request's admission
+/// and settlement never run concurrently with themselves) just drops this
+/// one boundary rather than waiting.
+pub(crate) fn mark_phase(name: SpanName) {
+    let _ = PHASES.try_with(|buffer| {
+        let Ok(mut buffer) = buffer.try_lock() else {
+            return;
+        };
+        let now = now_unix_nanos();
+        if let Some(span) = Span::new(name, buffer.trace, Some(buffer.parent), buffer.mark, now) {
+            buffer.spans.push(span);
+        }
+        buffer.mark = now;
+    });
+}
+
+fn set_shared_eligibility(request: Uuid, alias: &str) {
+    let _ = PHASES.try_with(|buffer| {
+        if let Ok(mut buffer) = buffer.try_lock() {
+            buffer.eligibility = Some(SharedAdmission::new(request, alias.to_owned()));
+        }
+    });
+}
+/// Records the [`SharedAdmission`] an admission commit resolved for the
+/// ambient request, if telemetry is active. `proof` is a
+/// [`crate::governance::SharedEligibilityCommitted`] token: it is only
+/// constructible inside `governance`'s own private `proof` submodule
+/// (#98 PR 2 review item 3), which `governance.rs`'s commit branch of
+/// `admit_unobserved` - gated on the workspace being `team`/`project`,
+/// after `tx.commit()` has succeeded, never personal, never from client
+/// text - calls to produce one before calling this at all. The compiler
+/// enforces that, not just a grep check;
+/// `telemetry::tests::mark_shared_has_one_production_call_site` remains a
+/// secondary, informational check of the same invariant.
+pub(crate) fn mark_shared(
+    _proof: crate::governance::SharedEligibilityCommitted,
+    request: Uuid,
+    alias: &str,
+) {
+    set_shared_eligibility(request, alias);
+}
+/// Test-only bypass of the [`mark_shared`] capability requirement, for
+/// simulating a committed shared-workspace admission without a real
+/// database (`inference::telemetry_tests`) or exercising this module's own
+/// `PHASES`/[`with_phases`] mechanics directly (this file's own tests
+/// below). Never used by production code.
+#[cfg(test)]
+pub(crate) fn mark_shared_for_tests(request: Uuid, alias: &str) {
+    set_shared_eligibility(request, alias);
 }
 
 struct Exporter {
@@ -854,15 +1131,22 @@ mod tests {
         for _ in 0..65 {
             context.record(span());
         }
-        assert_eq!(recorder.counts.dropped(DropReason::RequestLimit), 1);
+        // Children are capped one below MAX_REQUEST (#98 PR 2 review item
+        // 1), reserving the last slot for the root: 65 calls against a
+        // 63-child cap drop 2, not 1.
+        assert_eq!(recorder.counts.dropped(DropReason::RequestLimit), 2);
         // Unknown or failed eligibility never exports buffered observations.
         drop(context);
         assert!(rx.try_recv().is_err());
         for _ in 0..32 {
             let mut context = recorder.begin(Uuid::new_v4()).unwrap();
-            for _ in 0..64 {
+            for _ in 0..(MAX_REQUEST - 1) {
                 context.record(span());
             }
+            // The one slot reserved for the root fills this context to
+            // exactly MAX_REQUEST spans, so 32 of them still fill the
+            // queue to exactly its 2048 capacity below.
+            context.record_root(span());
             export_shared(context);
         }
         assert_eq!(rx.len(), 2048);
@@ -872,6 +1156,71 @@ mod tests {
         export_shared(context);
         assert!(started.elapsed() < Duration::from_millis(100));
         assert_eq!(recorder.counts.dropped(DropReason::QueueFull), 1);
+        rx.close();
+    }
+
+    /// #98 PR 2 review item 6 (revised by item 1): the root span
+    /// (`inference.request`) is recorded last, once the terminal outcome is
+    /// known, after every child span (`routing`, `admission`(.*),
+    /// `upstream.attempt`, `settlement`(.*)) a request's attempts already
+    /// recorded. Three failover attempts plus an admission deadlock retry
+    /// can fill the whole child budget before the root is ever recorded,
+    /// which would otherwise drop the root itself (an orphaned trace: every
+    /// child exports, but the trace's own anchor never does). The total
+    /// must still never exceed the documented 64 spans/request bound
+    /// (docs/operations.md): children are capped at `MAX_REQUEST - 1` so
+    /// the root always fits in the one slot reserved for it.
+    #[tokio::test]
+    async fn the_root_span_survives_the_per_request_budget_even_once_children_fill_it() {
+        let (recorder, mut rx) = Recorder::channel(1.0);
+        let mut context = recorder.begin(Uuid::new_v4()).unwrap();
+        for _ in 0..(MAX_REQUEST + 10) {
+            context.record(span());
+        }
+        let expected_drops = (MAX_REQUEST + 10) - (MAX_REQUEST - 1);
+        assert_eq!(
+            recorder.counts.dropped(DropReason::RequestLimit),
+            expected_drops as u64
+        );
+        context.record_root(span());
+        export_shared(context);
+        let mut exported = 0usize;
+        while rx.try_recv().is_ok() {
+            exported += 1;
+        }
+        assert!(
+            exported <= MAX_REQUEST,
+            "children plus the root must never exceed the documented 64 spans/request bound: exported {exported}"
+        );
+        assert_eq!(
+            exported, MAX_REQUEST,
+            "the root span must still export once children already filled their own budget"
+        );
+        rx.close();
+    }
+
+    /// #98 PR 2 review item 1: a second `record_root` call (which must never
+    /// happen in production - `RequestTelemetry::finish` guards it with its
+    /// own `finished` flag - but the API itself must stay safe if it ever
+    /// did) is counted `DropReason::RequestLimit` and not pushed again,
+    /// rather than growing `Context`'s span buffer without bound.
+    #[tokio::test]
+    async fn a_repeated_record_root_call_is_counted_instead_of_growing_the_span_buffer() {
+        let (recorder, mut rx) = Recorder::channel(1.0);
+        let mut context = recorder.begin(Uuid::new_v4()).unwrap();
+        context.record_root(span());
+        context.record_root(span());
+        context.record_root(span());
+        assert_eq!(recorder.counts.dropped(DropReason::RequestLimit), 2);
+        export_shared(context);
+        let mut exported = 0usize;
+        while rx.try_recv().is_ok() {
+            exported += 1;
+        }
+        assert_eq!(
+            exported, 1,
+            "only the first record_root call's span must ever export"
+        );
         rx.close();
     }
 
@@ -921,10 +1270,18 @@ mod tests {
         context.export(admission);
     }
 
+    /// Exports exactly `n` spans (`n <= MAX_REQUEST`) from one context,
+    /// using [`Context::record_root`]'s dedicated slot for the last one so
+    /// callers that pass `MAX_REQUEST` still get every span recorded, not
+    /// `MAX_REQUEST - 1` (#98 PR 2 review item 1 reserves one slot of the
+    /// per-request budget for the root).
     fn emit(recorder: &Recorder, n: usize) {
         let mut context = recorder.begin(Uuid::new_v4()).unwrap();
-        for _ in 0..n {
+        for _ in 0..n.saturating_sub(1) {
             context.record(span());
+        }
+        if n > 0 {
+            context.record_root(span());
         }
         export_shared(context);
     }
@@ -1353,5 +1710,156 @@ mod tests {
         assert_eq!(recorder.counts.deliveries(Delivery::Transport), 1);
         assert!(seen.lock().unwrap().is_empty());
         task.abort();
+    }
+
+    // The two tests below are now a secondary, informational check only.
+    // The real, compiler-enforced invariant (#98 PR 2 review item 3) is:
+    // `SharedAdmission::new` has default (private) visibility, so no module
+    // outside this file can construct one at all; and `mark_shared` takes
+    // a `governance::SharedEligibilityCommitted` token constructible only
+    // inside `governance`'s own private `proof` submodule (narrower than
+    // the whole `governance` module tree, which a bare private field on a
+    // struct defined directly in `governance.rs` would have exposed to
+    // every one of its submodules), so no module outside `governance.rs`'s
+    // own `admit_unobserved` can call `mark_shared` at all. A bypass like
+    // `use crate::telemetry::mark_shared as m;` or a line-wrapped call no
+    // longer helps: the compiler itself rejects it from any other module.
+    #[test]
+    fn shared_admission_has_one_production_call_site() {
+        // Built from parts so this assertion's own source line is never a
+        // match for its own needle.
+        let needle = format!("{}{}", "SharedAdmission::", "new(");
+        let sites = grep_sources(&needle);
+        assert_eq!(sites.len(), 1, "SharedAdmission::new call sites: {sites:?}");
+        assert!(sites[0].0.ends_with("telemetry.rs"), "{sites:?}");
+        assert!(
+            sites[0].1.contains("fn set_shared_eligibility"),
+            "{sites:?}"
+        );
+    }
+
+    #[test]
+    fn mark_shared_has_one_production_call_site() {
+        // The bridge back into governance's admission commit path: the only
+        // place allowed to tell telemetry a shared-workspace admission
+        // committed. `mark_shared_for_tests` (a different identifier) is
+        // deliberately excluded by this exact needle.
+        let needle = format!("{}{}", "telemetry::mark_", "shared(");
+        let sites = grep_sources(&needle);
+        assert_eq!(sites.len(), 1, "mark_shared call sites: {sites:?}");
+        assert!(sites[0].0.ends_with("governance.rs"), "{sites:?}");
+    }
+
+    /// `(file path, enclosing function name)` of every source line containing
+    /// `needle`, restricted to the function whose body the line falls in
+    /// (a coarse `fn ` scan, good enough to name the enclosing production
+    /// function for this file's own architecture tests).
+    fn grep_sources(needle: &str) -> Vec<(String, String)> {
+        let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src"));
+        let mut found = Vec::new();
+        visit(root, needle, &mut found);
+        return found;
+
+        fn visit(dir: &std::path::Path, needle: &str, found: &mut Vec<(String, String)>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    visit(&path, needle, found);
+                    continue;
+                }
+                let is_test_file = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.ends_with("tests.rs"));
+                if !is_test_file
+                    && path.extension().is_some_and(|e| e == "rs")
+                    && let Ok(text) = std::fs::read_to_string(&path)
+                {
+                    let mut enclosing = String::new();
+                    for line in text.lines() {
+                        if let Some(rest) = line.trim_start().strip_prefix("fn ").or_else(|| {
+                            line.trim_start()
+                                .strip_prefix("pub fn ")
+                                .or_else(|| line.trim_start().strip_prefix("pub(crate) fn "))
+                        }) {
+                            enclosing =
+                                format!("fn {}", rest.split(['(', '<']).next().unwrap_or(rest));
+                        }
+                        if line.contains(needle) {
+                            found.push((path.to_string_lossy().into_owned(), enclosing.clone()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn record_background_still_emits_the_two_allowed_maintenance_spans() {
+        let (recorder, mut rx) = Recorder::channel(1.0);
+        recorder.record_background(BackgroundSpan::RatePrune, 1, 2);
+        recorder.record_background(BackgroundSpan::LockWaitPrune, 1, 2);
+        let mut names = Vec::new();
+        while let Ok(raw) = rx.try_recv() {
+            let span: Value = serde_json::from_str(raw.get()).unwrap();
+            names.push(span["name"].as_str().unwrap().to_owned());
+        }
+        names.sort();
+        assert_eq!(names, ["lock_wait_prune", "rate_prune"]);
+    }
+
+    /// #98 PR 2 review item 5: `Span::new` returning `None` (here, a
+    /// malformed `end < start` shape) must be counted `DropReason::Invalid`
+    /// with a `Recorder` in hand, not silently discarded.
+    #[test]
+    fn record_background_counts_an_unbuildable_span_instead_of_silently_dropping_it() {
+        let (recorder, mut rx) = Recorder::channel(1.0);
+        recorder.record_background(BackgroundSpan::RatePrune, 2, 1); // end < start
+        assert!(rx.try_recv().is_err(), "no span should have been sent");
+        assert_eq!(recorder.counts.dropped(DropReason::Invalid), 1);
+    }
+
+    #[test]
+    fn reserved_spans_require_a_nonzero_id_and_reject_the_same_invalid_shapes_as_new() {
+        let trace = trace_id(Uuid::from_u128(42));
+        let id = reserve_span_id().unwrap();
+        assert_ne!(id, [0; 8]);
+        assert!(Span::reserved(SpanName::Admission, trace, id, None, 1, 2).is_some());
+        assert!(Span::reserved(SpanName::Admission, [0; 16], id, None, 1, 2).is_none());
+        assert!(Span::reserved(SpanName::Admission, trace, [0; 8], None, 1, 2).is_none());
+        assert!(Span::reserved(SpanName::Admission, trace, id, Some([0; 8]), 1, 2).is_none());
+        assert!(Span::reserved(SpanName::Admission, trace, id, None, 2, 1).is_none());
+    }
+
+    #[tokio::test]
+    async fn phase_buffer_collects_real_boundaries_and_eligibility_only_inside_with_phases() {
+        let trace = trace_id(Uuid::from_u128(7));
+        let parent = reserve_span_id().unwrap();
+        let start = now_unix_nanos();
+        let buffer = Arc::new(Mutex::new(PhaseBuffer::new(trace, parent, start)));
+        // Outside with_phases, marks are a no-op: no ambient buffer.
+        mark_phase(SpanName::AdmissionQueue);
+        mark_shared_for_tests(Uuid::from_u128(7), "m");
+        with_phases(buffer.clone(), async {
+            mark_phase(SpanName::AdmissionQueue);
+            mark_phase(SpanName::AdmissionConnect);
+            mark_shared_for_tests(Uuid::from_u128(7), "public-model");
+        })
+        .await;
+        let Ok(mutex) = Arc::try_unwrap(buffer) else {
+            panic!("buffer still shared")
+        };
+        let (spans, eligibility) = mutex.into_inner().expect("buffer not poisoned").take();
+        assert_eq!(spans.len(), 2);
+        for span in &spans {
+            let body = serde_json::to_value(span).unwrap();
+            assert_eq!(body["parentSpanId"], hex::encode(parent));
+        }
+        let eligibility = eligibility.unwrap();
+        assert_eq!(eligibility.request, Uuid::from_u128(7));
+        assert_eq!(eligibility.alias, "public-model");
     }
 }

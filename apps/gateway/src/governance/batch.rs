@@ -261,7 +261,7 @@ async fn admit_batch_unobserved(
     let _queued = gate(&store.lock_gates.admission).await;
     let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
     admission_prefix(store, &mut tx, &record.principal).await?;
-    let lineage = authorize(store, &mut tx, &record.principal).await?;
+    let (lineage, _shared) = authorize(store, &mut tx, &record.principal).await?;
     let (mut tokens, mut held) = (0i64, 0i64);
     let mut pinned: Option<(Uuid, PriceTier)> = None;
     for g in groups {
@@ -411,7 +411,7 @@ async fn admit_line_unobserved(
     let _queued = gate(&store.lock_gates.admission).await;
     let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
     admission_prefix(store, &mut tx, &record.principal).await?;
-    let lineage = authorize(store, &mut tx, &record.principal).await?;
+    let (lineage, _shared) = authorize(store, &mut tx, &record.principal).await?;
     let envelope: Option<(String, Option<i64>, Uuid, DateTime<Utc>)> = sqlx::query_as("SELECT r.state,r.held_microusd,r.api_key_id,r.admitted_at FROM governance_reservations r JOIN async_jobs j ON j.execution_id=r.execution_id WHERE r.execution_id=$1 AND r.workspace_id=$2 AND j.id=$3 AND j.batch_mode='gateway' FOR UPDATE OF r")
         .bind(batch.envelope).bind(workspace).bind(batch.job).fetch_optional(&mut *tx).await.map_err(storage)?;
     let Some((state, available, envelope_key, envelope_at)) = envelope else {
