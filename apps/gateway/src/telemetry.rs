@@ -30,6 +30,29 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use uuid::Uuid;
 
+/// Current wall-clock time as OTLP's Unix nanoseconds. Not monotonic: two
+/// calls may regress across a system clock adjustment, which [`Span::new`]
+/// and [`Span::reserved`] already refuse (`end < start`) rather than panic.
+pub fn now_unix_nanos() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos().min(u64::MAX as u128) as u64)
+        .unwrap_or(0)
+}
+
+/// Reserves a span id usable as `parent` before the reserving span itself is
+/// known to have completed: an "admission"/"settlement"/"upstream.attempt"/
+/// "inference.request" wrapper whose own [`Span::reserved`] is only built
+/// once its real end boundary is known. `None` only on entropy exhaustion,
+/// matching [`Span::new`]'s own failure mode (dropped, never a panic).
+pub fn reserve_span_id() -> Option<[u8; 8]> {
+    let mut id = crate::entropy::bytes::<8>().ok()?;
+    if id == [0; 8] {
+        id = crate::entropy::bytes::<8>().ok()?;
+    }
+    (id != [0; 8]).then_some(id)
+}
+
 const MAX_SPAN: usize = 1024;
 const MAX_ATTRIBUTES: usize = 24;
 const MAX_REQUEST: usize = 64;
@@ -118,6 +141,19 @@ fixed_enum!(Delivery { Accepted => "accepted", HttpStatus => "http_status", Tran
 pub struct SharedAdmission {
     request: Uuid,
     alias: String,
+}
+impl SharedAdmission {
+    /// The only production constructor, called from exactly one place: this
+    /// module's own [`mark_shared`], itself called only from the commit
+    /// branch of `governance::admit_unobserved`, after `tx.commit()` has
+    /// succeeded for a `team`/`project` workspace: never personal, never
+    /// from client input, never before commit.
+    /// `telemetry::tests::shared_admission_has_one_production_call_site` and
+    /// `telemetry::tests::mark_shared_has_one_production_call_site` enforce
+    /// both halves of that chain.
+    pub(crate) fn new(request: Uuid, alias: String) -> Self {
+        Self { request, alias }
+    }
 }
 
 #[derive(Clone)]
@@ -237,6 +273,30 @@ impl Span {
             id = crate::entropy::bytes::<8>().ok()?;
         }
         if id == [0; 8] {
+            return None;
+        }
+        Some(Self {
+            name,
+            trace,
+            id,
+            parent,
+            start,
+            end,
+            attributes: Vec::new(),
+        })
+    }
+    /// [`Span::new`] with a previously [`reserve_span_id`]d, non-zero id
+    /// (rather than a freshly generated one), so a span reserved before it
+    /// completed keeps the exact id its children already carry as `parent`.
+    pub fn reserved(
+        name: SpanName,
+        trace: [u8; 16],
+        id: [u8; 8],
+        parent: Option<[u8; 8]>,
+        start: u64,
+        end: u64,
+    ) -> Option<Self> {
+        if trace == [0; 16] || id == [0; 8] || parent == Some([0; 8]) || end < start {
             return None;
         }
         Some(Self {
@@ -427,6 +487,89 @@ impl Drop for Context {
             .counts
             .drop_spans(DropReason::Ineligible, self.spans.len() as u64);
     }
+}
+
+tokio::task_local! {
+    /// Ambient per the one wrapped await, never a request-wide thread-local:
+    /// bridges a reserved "admission"/"settlement" wrapper span to the real
+    /// phase boundaries reached inside `governance.rs`'s admission/
+    /// settlement transactions, across the `InferenceRepository`
+    /// trait-object boundary (PR 2 does not change that trait). Absent for
+    /// every call that is not wrapped in [`with_phases`] (disabled
+    /// telemetry, or any admission/settlement path outside interactive
+    /// generation), so [`mark_phase`]/[`mark_shared`] are then a single
+    /// `try_with` failure: no allocation, no hashing.
+    static PHASES: Arc<Mutex<PhaseBuffer>>;
+}
+
+/// Phase boundaries of one ambient admission or settlement call, collected
+/// as real [`Span`]s with [`mark_phase`], plus the [`SharedAdmission`]
+/// capability an admission commit resolved, if any ([`mark_shared`]).
+pub struct PhaseBuffer {
+    trace: [u8; 16],
+    parent: [u8; 8],
+    mark: u64,
+    spans: Vec<Span>,
+    eligibility: Option<SharedAdmission>,
+}
+impl PhaseBuffer {
+    /// `parent` is the reserved id of the "admission"/"settlement" wrapper
+    /// span the caller will build once this ambient call returns.
+    pub fn new(trace: [u8; 16], parent: [u8; 8], start: u64) -> Self {
+        Self {
+            trace,
+            parent,
+            mark: start,
+            spans: Vec::new(),
+            eligibility: None,
+        }
+    }
+    /// Spans recorded since construction, and the eligibility capability a
+    /// commit resolved, if any. Takes `self` so a caller merges exactly once.
+    pub fn take(self) -> (Vec<Span>, Option<SharedAdmission>) {
+        (self.spans, self.eligibility)
+    }
+}
+
+/// Runs `fut` with `buffer` as the ambient phase recorder nested
+/// admission/settlement calls record real boundaries into via [`mark_phase`].
+/// The caller still owns `buffer` afterward (an `Arc` clone) to merge its
+/// spans into the request's real [`Context`].
+pub async fn with_phases<F: std::future::Future>(
+    buffer: Arc<Mutex<PhaseBuffer>>,
+    fut: F,
+) -> F::Output {
+    PHASES.scope(buffer, fut).await
+}
+
+/// Records one real phase boundary of the ambient admission/settlement call
+/// if telemetry is active for this request; otherwise a no-op. `try_lock`
+/// only: a contended buffer (never expected, since one request's admission
+/// and settlement never run concurrently with themselves) just drops this
+/// one boundary rather than waiting.
+pub(crate) fn mark_phase(name: SpanName) {
+    let _ = PHASES.try_with(|buffer| {
+        let Ok(mut buffer) = buffer.try_lock() else {
+            return;
+        };
+        let now = now_unix_nanos();
+        if let Some(span) = Span::new(name, buffer.trace, Some(buffer.parent), buffer.mark, now) {
+            buffer.spans.push(span);
+        }
+        buffer.mark = now;
+    });
+}
+
+/// Records the [`SharedAdmission`] an admission commit resolved for the
+/// ambient request, if telemetry is active. The only call site is the
+/// commit branch of `governance::admit_unobserved`, itself gated on the
+/// workspace being `team`/`project`: never personal, never from client text.
+pub(crate) fn mark_shared(request: Uuid, alias: &str) {
+    let _ = PHASES.try_with(|buffer| {
+        if let Ok(mut buffer) = buffer.try_lock() {
+            buffer.eligibility = Some(SharedAdmission::new(request, alias.to_owned()));
+        }
+    });
 }
 
 struct Exporter {
@@ -1353,5 +1496,113 @@ mod tests {
         assert_eq!(recorder.counts.deliveries(Delivery::Transport), 1);
         assert!(seen.lock().unwrap().is_empty());
         task.abort();
+    }
+
+    #[test]
+    fn shared_admission_has_one_production_call_site() {
+        // SharedAdmission::new is pub(crate): it cannot be constructed from
+        // outside this crate at all. Within the crate, grep enforces the
+        // narrower, intended constraint: exactly one call site, in the
+        // admission commit path (`governance.rs`), never anywhere else.
+        // Built from parts so this assertion's own source line is never a
+        // match for its own needle.
+        let needle = format!("{}{}", "SharedAdmission::", "new(");
+        let sites = grep_sources(&needle);
+        assert_eq!(sites.len(), 1, "SharedAdmission::new call sites: {sites:?}");
+        assert!(sites[0].0.ends_with("telemetry.rs"), "{sites:?}");
+        assert!(sites[0].1.contains("fn mark_shared"), "{sites:?}");
+    }
+
+    #[test]
+    fn mark_shared_has_one_production_call_site() {
+        // The bridge back into governance's admission commit path: the only
+        // place allowed to tell telemetry a shared-workspace admission
+        // committed.
+        let needle = format!("{}{}", "telemetry::mark_", "shared(");
+        let sites = grep_sources(&needle);
+        assert_eq!(sites.len(), 1, "mark_shared call sites: {sites:?}");
+        assert!(sites[0].0.ends_with("governance.rs"), "{sites:?}");
+    }
+
+    /// `(file path, enclosing function name)` of every source line containing
+    /// `needle`, restricted to the function whose body the line falls in
+    /// (a coarse `fn ` scan, good enough to name the enclosing production
+    /// function for this file's own architecture tests).
+    fn grep_sources(needle: &str) -> Vec<(String, String)> {
+        let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src"));
+        let mut found = Vec::new();
+        visit(root, needle, &mut found);
+        return found;
+
+        fn visit(dir: &std::path::Path, needle: &str, found: &mut Vec<(String, String)>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    visit(&path, needle, found);
+                    continue;
+                }
+                if path.extension().is_some_and(|e| e == "rs")
+                    && let Ok(text) = std::fs::read_to_string(&path)
+                {
+                    let mut enclosing = String::new();
+                    for line in text.lines() {
+                        if let Some(rest) = line.trim_start().strip_prefix("fn ").or_else(|| {
+                            line.trim_start()
+                                .strip_prefix("pub fn ")
+                                .or_else(|| line.trim_start().strip_prefix("pub(crate) fn "))
+                        }) {
+                            enclosing = format!("fn {}", rest.split(['(', '<']).next().unwrap_or(rest));
+                        }
+                        if line.contains(needle) {
+                            found.push((path.to_string_lossy().into_owned(), enclosing.clone()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reserved_spans_require_a_nonzero_id_and_reject_the_same_invalid_shapes_as_new() {
+        let trace = trace_id(Uuid::from_u128(42));
+        let id = reserve_span_id().unwrap();
+        assert_ne!(id, [0; 8]);
+        assert!(Span::reserved(SpanName::Admission, trace, id, None, 1, 2).is_some());
+        assert!(Span::reserved(SpanName::Admission, [0; 16], id, None, 1, 2).is_none());
+        assert!(Span::reserved(SpanName::Admission, trace, [0; 8], None, 1, 2).is_none());
+        assert!(Span::reserved(SpanName::Admission, trace, id, Some([0; 8]), 1, 2).is_none());
+        assert!(Span::reserved(SpanName::Admission, trace, id, None, 2, 1).is_none());
+    }
+
+    #[tokio::test]
+    async fn phase_buffer_collects_real_boundaries_and_eligibility_only_inside_with_phases() {
+        let trace = trace_id(Uuid::from_u128(7));
+        let parent = reserve_span_id().unwrap();
+        let start = now_unix_nanos();
+        let buffer = Arc::new(Mutex::new(PhaseBuffer::new(trace, parent, start)));
+        // Outside with_phases, marks are a no-op: no ambient buffer.
+        mark_phase(SpanName::AdmissionQueue);
+        mark_shared(Uuid::from_u128(7), "m");
+        with_phases(buffer.clone(), async {
+            mark_phase(SpanName::AdmissionQueue);
+            mark_phase(SpanName::AdmissionConnect);
+            mark_shared(Uuid::from_u128(7), "public-model");
+        })
+        .await;
+        let Ok(mutex) = Arc::try_unwrap(buffer) else {
+            panic!("buffer still shared")
+        };
+        let (spans, eligibility) = mutex.into_inner().expect("buffer not poisoned").take();
+        assert_eq!(spans.len(), 2);
+        for span in &spans {
+            let body = serde_json::to_value(span).unwrap();
+            assert_eq!(body["parentSpanId"], hex::encode(parent));
+        }
+        let eligibility = eligibility.unwrap();
+        assert_eq!(eligibility.request, Uuid::from_u128(7));
+        assert_eq!(eligibility.alias, "public-model");
     }
 }
