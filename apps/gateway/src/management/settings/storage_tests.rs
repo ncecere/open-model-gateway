@@ -18,7 +18,9 @@ async fn call_rt(
     path: &str,
     body: Value,
 ) -> (StatusCode, Value) {
-    let mut router = routes().layer(Extension(u.clone()));
+    let mut router = routes()
+        .layer(Extension(crate::identity::ManagementPrincipal::Browser(u.clone())))
+        .layer(Extension(u.clone()));
     if let Some(rt) = rt {
         router = router.layer(Extension(rt.clone()));
     }

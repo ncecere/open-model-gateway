@@ -21,6 +21,7 @@ async fn call_on(
     path: &str,
 ) -> (StatusCode, Value) {
     let response = routes()
+        .layer(Extension(ManagementPrincipal::Browser(u.clone())))
         .layer(Extension(u.clone()))
         .layer(Extension(CurrentSession(current)))
         .with_state(s.clone())

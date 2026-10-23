@@ -8,6 +8,7 @@ async fn download(
     path: &str,
 ) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
     let response = routes()
+        .layer(Extension(ManagementPrincipal::Browser(u.clone())))
         .layer(Extension(u.clone()))
         .with_state(s.clone())
         .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())

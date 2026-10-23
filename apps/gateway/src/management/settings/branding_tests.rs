@@ -18,7 +18,9 @@ async fn send(
     content_type: &str,
     body: Vec<u8>,
 ) -> (StatusCode, Value) {
-    let mut router = routes().layer(Extension(u.clone()));
+    let mut router = routes()
+        .layer(Extension(crate::identity::ManagementPrincipal::Browser(u.clone())))
+        .layer(Extension(u.clone()));
     if let Some(rt) = rt {
         router = router.layer(Extension(rt.clone()));
     }

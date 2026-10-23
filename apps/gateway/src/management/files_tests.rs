@@ -18,6 +18,7 @@ async fn call_files(
 ) -> (StatusCode, Vec<u8>) {
     let router = routes()
         .merge(files::upload_routes())
+        .layer(Extension(ManagementPrincipal::Browser(u.clone())))
         .layer(Extension(u.clone()))
         .layer(Extension(rt.clone()))
         .with_state(s.clone());

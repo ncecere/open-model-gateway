@@ -8,6 +8,7 @@ use std::time::Duration;
 /// `label` names the endpoint in failure messages (paths carry ids).
 async fn get_status(s: &Store, u: &BrowserPrincipal, path: &str, label: &str) -> StatusCode {
     let response = routes()
+        .layer(Extension(ManagementPrincipal::Browser(u.clone())))
         .layer(Extension(u.clone()))
         .with_state(s.clone())
         .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap());

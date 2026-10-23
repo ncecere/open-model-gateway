@@ -286,6 +286,7 @@ async fn single_key_read_follows_list_visibility(pool: PgPool) {
 
 async fn raw_get(f: &Fixture, u: &BrowserPrincipal, path: &str) -> (StatusCode, String, String) {
     let response = routes()
+        .layer(Extension(ManagementPrincipal::Browser(u.clone())))
         .layer(Extension(u.clone()))
         .with_state(f.s.clone())
         .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
