@@ -90,7 +90,7 @@ async fn key_expiry_live_visibility_shared_personal_service_and_old_binary(pool:
         );
     }
     let payload = serde_json::to_string(&feed(&f, &f.owner).await).unwrap();
-    for secret in [
+    for (index, forbidden) in [
         id(&human).to_string(),
         id(&personal).to_string(),
         service.to_string(),
@@ -99,10 +99,14 @@ async fn key_expiry_live_visibility_shared_personal_service_and_old_binary(pool:
         "owner@example.test".to_owned(),
         "secret_hash".to_owned(),
         "issued_to_user_id".to_owned(),
-    ] {
+    ]
+    .iter()
+    .enumerate()
+    {
+        // Report which private fact leaked by position, never the value itself.
         assert!(
-            !payload.contains(&secret),
-            "serialized private fact: {secret}"
+            !payload.contains(forbidden.as_str()),
+            "serialized private fact #{index}"
         );
     }
     // Run the old binary's actual feed/summary/read predicate for every viewer.

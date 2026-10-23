@@ -349,17 +349,24 @@ async fn key_expiry_live_delivery_suppresses_obsolete_and_hides_secrets(pool: Pg
     assert!(mail.data.contains("An API key expires within 1 day"));
     assert!(mail.data.contains("Notifications"));
     assert!(mail.data.contains("Expires:"));
-    for secret in [
+    for (index, forbidden) in [
         "Private key name",
         "Secret key name",
         &s.personal_key.to_string(),
         &s.owner.to_string(),
         "0101010101010101",
         "owner@example.test",
-    ] {
+    ]
+    .iter()
+    .enumerate()
+    {
         // The address is necessarily in the SMTP envelope/To header, but never in the body.
         let body = mail.data.split_once("\r\n\r\n").unwrap().1;
-        assert!(!body.contains(secret), "{secret}");
+        // Report which forbidden value leaked by position, never the value itself.
+        assert!(
+            !body.contains(forbidden),
+            "forbidden value #{index} found in the email body"
+        );
     }
     // A queued reminder becomes obsolete before send: never email it, even before the next evaluation.
     let k = expiry_key(&s, Some(now + chrono::Duration::days(3))).await;
