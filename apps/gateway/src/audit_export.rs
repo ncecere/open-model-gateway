@@ -2467,6 +2467,21 @@ mod database {
             6,
             "disabling stops queueing; queued events wait"
         );
+        // Repeating a setting is not another transition.
+        sync_state(&store, &Setting::Off).await.unwrap();
+        let markers: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM audit_events WHERE action LIKE 'audit_export.%'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(markers, 2);
+        let state: (bool, Option<String>) =
+            sqlx::query_as("SELECT enabled,destination_host FROM audit_export_state")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(state, (false, None));
     }
 
     /// A currently effective Platform Admin, able to own an admin API token
@@ -2500,7 +2515,7 @@ mod database {
     /// plain browser-session event (`admin_token_id` stays NULL, as
     /// before), and one event on a personal workspace attributed to the
     /// same token (still excluded: token attribution never widens what is
-    /// exported). Delivered to a real mock HTTPS receiver, not just read
+    /// exported). Delivered to a loopback HTTP receiver, not just read
     /// back from the database.
     #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn delivered_events_carry_admin_token_attribution_and_personal_events_stay_excluded(
@@ -2586,21 +2601,6 @@ mod database {
             36,
             "admin_token_id is a UUID, not a hash"
         );
-        // Repeating a setting is not another transition.
-        sync_state(&store, &Setting::Off).await.unwrap();
-        let markers: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM audit_events WHERE action LIKE 'audit_export.%'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(markers, 2);
-        let state: (bool, Option<String>) =
-            sqlx::query_as("SELECT enabled,destination_host FROM audit_export_state")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(state, (false, None));
     }
 
     fn seqs(receiver: &Receiver) -> Vec<i64> {
