@@ -314,6 +314,27 @@ pub(super) fn cursor_parts(c: &str) -> Result<(DateTime<Utc>, Uuid), ApiError> {
         Uuid::parse_str(id).map_err(|_| invalid())?,
     ))
 }
+/// Adds `trace_id`: `null` for a personal-workspace row, else the hex id
+/// `telemetry::trace_id` derives from the row's own `root_request_id`
+/// (never a client-supplied id, never from inbound trace headers: this
+/// crate reads neither). An unauthorized viewer never receives the row at
+/// all (the existing visibility SQL already excludes it), so there is no
+/// separate "absent" case to implement here: it follows for free.
+pub(super) fn with_trace_id(mut row: Value, root_request_id: Uuid) -> Value {
+    let shared = matches!(row["workspace"]["kind"].as_str(), Some("team" | "project"));
+    if let Some(o) = row.as_object_mut() {
+        o.insert(
+            "trace_id".into(),
+            if shared {
+                json!(hex::encode(crate::telemetry::trace_id(root_request_id)))
+            } else {
+                Value::Null
+            },
+        );
+    }
+    row
+}
+
 fn page(rows: Vec<(Value, DateTime<Utc>, Uuid)>, limit: i64) -> Json<Value> {
     let next = (rows.len() > limit as usize).then(|| {
         let (_, t, id) = &rows[limit as usize - 1];
@@ -346,6 +367,10 @@ pub(super) async fn list_requests(
         .fetch_all(&mut *tx)
         .await?;
     tx.commit().await?;
+    let rows = rows
+        .into_iter()
+        .map(|(v, t, id)| (with_trace_id(v, id), t, id))
+        .collect();
     Ok(page(rows, limit))
 }
 
@@ -622,4 +647,60 @@ pub(super) fn routes() -> Router<Store> {
             get(platform_session),
         )
         .route("/api/v1/platform/logs/metrics", get(platform_metrics))
+}
+
+/// `with_trace_id` is a pure function, so these run without a database
+/// (unlike the rest of this module's tests, gated behind `integration-tests`
+/// via `management::tests::ux_tests::logs_tests`).
+#[cfg(test)]
+mod with_trace_id_tests {
+    use super::*;
+
+    /// #98 PR 2 review item 5: a row whose `workspace.kind` is missing
+    /// entirely (`as_str()` on a missing/null field returns `None`) must be
+    /// treated as shared's opposite - personal, never traced - not folded
+    /// into "anything that isn't literally the string personal is shared".
+    /// The old check (`!= Some("personal")`) failed open: a row shaped
+    /// unexpectedly (a missing field, a different type) would get a
+    /// non-null trace_id instead of none.
+    #[test]
+    fn a_row_missing_workspace_kind_fails_closed_as_personal_not_shared() {
+        let root = Uuid::new_v4();
+        let row = json!({"workspace": {}});
+        let result = with_trace_id(row, root);
+        assert!(
+            result["trace_id"].is_null(),
+            "a row with no workspace.kind must never be treated as shared: {result}"
+        );
+    }
+
+    #[test]
+    fn a_row_with_an_unexpected_workspace_kind_also_fails_closed() {
+        let root = Uuid::new_v4();
+        let row = json!({"workspace": {"kind": "unexpected"}});
+        let result = with_trace_id(row, root);
+        assert!(
+            result["trace_id"].is_null(),
+            "only team/project rows are traced, never an unrecognized kind: {result}"
+        );
+    }
+
+    #[test]
+    fn team_and_project_rows_still_get_the_deterministic_trace_id() {
+        let root = Uuid::new_v4();
+        let expected = json!(hex::encode(crate::telemetry::trace_id(root)));
+        for kind in ["team", "project"] {
+            let row = json!({"workspace": {"kind": kind}});
+            let result = with_trace_id(row, root);
+            assert_eq!(result["trace_id"], expected, "{kind}");
+        }
+    }
+
+    #[test]
+    fn a_personal_row_is_never_traced() {
+        let root = Uuid::new_v4();
+        let row = json!({"workspace": {"kind": "personal"}});
+        let result = with_trace_id(row, root);
+        assert!(result["trace_id"].is_null());
+    }
 }

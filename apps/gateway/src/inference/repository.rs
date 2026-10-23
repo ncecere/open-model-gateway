@@ -456,7 +456,9 @@ impl Store {
         // its locks, so the scoped mode reads without row locks (no
         // MultiXacts on authority rows in the hot path).
         let lineage = if self.admission_mode == crate::governance::locks::AdmissionMode::Scoped {
-            crate::auth::revalidate_admission_with(&mut tx, principal, false).await
+            crate::auth::revalidate_admission_with(&mut tx, principal, false)
+                .await
+                .map(|opt| opt.map(|(lineage, _shared)| lineage))
         } else {
             crate::auth::revalidate(&mut tx, principal).await
         }

@@ -82,6 +82,19 @@ CNPG-managed resource names.
 {{ include "omg.fullname" . }}-pooler
 {{- end -}}
 
+{{/*
+Name of the Barman Cloud plugin's ObjectStore (barmancloud.cnpg.io/v1),
+referenced by the Cluster's plugins[].parameters.barmanObjectName. Defaults
+to "<cluster>-backup-store"; cnpg.cluster.backup.plugin.objectStoreName overrides it.
+*/}}
+{{- define "omg.cnpg.backupObjectStoreName" -}}
+{{- with .Values.cnpg.cluster.backup.plugin.objectStoreName -}}
+{{ . }}
+{{- else -}}
+{{ include "omg.cnpg.clusterName" . }}-backup-store
+{{- end -}}
+{{- end -}}
+
 {{- define "omg.configMapName" -}}
 {{ include "omg.fullname" . }}-env
 {{- end -}}

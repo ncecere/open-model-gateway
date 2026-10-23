@@ -6,6 +6,33 @@ Notes for changes on `main` after [v0.7.2](v0.7.2.md). They become the next rele
 
 Adds an opt-in, bounded OTLP/HTTP JSON trace recorder/exporter using existing dependencies, with typed attributes, deterministic sampling/correlation primitives, dedicated secret headers and the gateway's egress protections. Disabled unless `GATEWAY_TRACES_OTLP_URL` is set; `OTEL_*` is ignored. Collector failure never blocks or retries inference. No engine instrumentation or production spans are emitted yet: those arrive in PR 2, with collector acceptance in PR 3. See [operations](../operations.md#traces-preview-transport-only-98-pr-1).
 
+## SCIM docs: Authentik acceptance recorded (#265)
+
+`docs/scim.md` adds the three non-default Authentik settings the gateway's `userName`/group matching needs: a custom user mapping so `userName` is the email, a custom group mapping using `SkipObject` to push only the groups the gateway maps (`filter_group` on the provider filters users only), and omitting `emails` for reserved test domains so one bad test account doesn't stop the whole sync; plus a note on the provider's dry-run mode. It now records that Authentik 2025.10 was run against v0.7.1 on 2026-10-23, covering matching of existing users, one pushed group, and deactivate/reactivate; Okta and Entra acceptance (#60) still hasn't been run. Docs only, no code change.
+
+## Helm: CNPG backups through the Barman Cloud plugin (#261)
+
+`deploy/helm/open-model-gateway`'s CNPG `Cluster` backup gains a `cnpg.cluster.backup.method` choice: `barmanObjectStore` (default, CNPG's in-tree backup, rendering unchanged from earlier releases) or `plugin` (the Barman Cloud plugin upstream CNPG now recommends, and the only mode the homelab cluster runs).
+
+In `plugin` mode the chart additionally renders a `barmancloud.cnpg.io/v1` `ObjectStore` (named `<cluster>-backup-store`, or `cnpg.cluster.backup.plugin.objectStoreName`) from `cnpg.cluster.backup.plugin.objectStore`; the Cluster gets `spec.plugins: [{name: barman-cloud.cloudnative-pg.io, isWALArchiver: true, parameters: {barmanObjectName: ...}}]` and no in-tree `spec.backup` block; the `ScheduledBackup` gets `method: plugin` and `pluginConfiguration.name: barman-cloud.cloudnative-pg.io`, keeping its existing `schedule` and `backupOwnerReference: self`. S3 credentials are Secret name/key references only (`s3Credentials.accessKeyId`/`secretAccessKey`); `values.schema.json` validates `method`'s enum and refuses an inline credential string. `wal`/`data` tuning and the plugin sidecar's `instanceSidecarConfiguration` resources render as given.
+
+This chart's `NetworkPolicy` templates govern only the gateway's own pods; they do not and never did select CNPG's instance pods in either backup mode, so an operator running a default-deny namespace policy must add their own egress rule for the CNPG pods to reach the object store (documented in `docs/kubernetes.md#backups`, matching the homelab's own `postgres-egress` policy). Restoring from either backup mode is a CNPG-native recovery into a fresh Cluster, not a chart operation; `docs/kubernetes.md#backups` points to #146 and `docs/operations.md`'s "Backups and restore" runbook for re-applying revocations and the spend-since-backup caveat afterward.
+
+See [kubernetes](../kubernetes.md#backups).
+
+Switching an **existing** cluster between modes is a one-way cutover: WAL archiving restarts under the new mode and the plugin doesn't adopt the old backup catalog, so take a fresh base backup right away and don't rely on point-in-time recovery across the switch ([Kubernetes › Backups](../kubernetes.md#backups)). Omitting S3 credentials in plugin mode now fails with the required-value message instead of a template error.
+
+## Instrumentation and correlation for interactive generation traces (#98, PR 2)
+
+PR 1's exporter now has a production span source, limited to one complete interactive generation path: chat completions, Responses and Messages through the shared engine. Nothing else (async jobs, batches, embeddings, images, audio, realtime) is instrumented.
+
+- **Spans:** `inference.request` (engine entry through terminal settlement, including streamed consumption), `routing`, `admission` and `settlement` per attempt (each with its own real sub-phase boundaries from `governance.rs`), `upstream.attempt` per attempt (at most 3, only under the existing explicit failover policy; first content means the first non-empty text or tool-call delta, never headers, empty deltas, usage or finish, and stays absent for non-streaming requests), and independent background roots for the existing `rate_prune`/`lock_wait_prune` runs.
+- **Eligibility is unchanged and now live:** the `SharedAdmission` export capability is constructed in exactly one place - the commit branch of `governance::admit_unobserved`, once commit has succeeded for a live-revalidated `team`/`project` workspace - never for personal workspaces, never from client input, never before commit. A personal request, or one that never reaches admission, exports nothing.
+- **Streaming is drop-safe:** the trace context is moved into the stream alongside the existing `ExecutionGuard` and finishes (export, or drop-count) exactly once on completion, error, timeout, client cancellation (including before the first poll) and settlement write failure. A cancelled attempt's settlement still runs, in a detached task outside the phase scope: its sub-phase spans are legitimately absent from a cancelled trace, not a gap.
+- **Logs correlation:** the Logs request list and detail responses add `trace_id` - the deterministic hex id for a shared-workspace row, `null` for personal, absent for an unauthorized viewer because the row itself is withheld. The dashboard's request detail page shows a "Trace ID" field when it is present. The same id is attached to the existing reconciliation log lines once eligibility is known. `x-request-id` is unchanged.
+
+See [operations](../operations.md#traces-98-pr-2-instrumentation-and-correlation). Collector acceptance and chart assertions remain PR 3's scope.
+
 ## Admin API tokens: storage and lifecycle (#37 PR1)
 
 The first of three PRs for long-lived Admin API tokens. This PR adds only the database schema and the Rust storage/lifecycle primitives; no route, request authentication or UI reads or writes an admin token yet (PR2 and PR3). Nothing here is reachable from any API.

@@ -113,6 +113,7 @@ pub(super) async fn detail(
     .fetch_optional(&mut *tx)
     .await?;
     tx.commit().await?;
+    summary = logs::with_trace_id(summary, root);
     summary["workspace_id"] = json!(ws);
     if let Some(o) = summary.as_object_mut() {
         o.insert("attempt_count".into(), o["attempts"].clone());
