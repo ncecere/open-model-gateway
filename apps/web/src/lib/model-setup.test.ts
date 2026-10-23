@@ -44,6 +44,21 @@ describe("model readiness derivation (contract §2)", () => {
   it("never infers readiness from a missing server value", () => { expect(modelReadiness({ enabled: true })).toEqual({ state: "unknown", warnings: [] }); expect(modelReadiness({ enabled: true, readiness: null })).toEqual({ state: "unknown", warnings: [] }); });
 });
 
+describe("Chat Completions API help", () => {
+  it("documents the accepted max_tokens alias and equality rule without changing the optional default", () => {
+    const guide = protocolEndpoints.chat_completions;
+    expect(guide.unsupported).not.toContain("max_tokens");
+    const maximum = guide.params.find(p => p.name === "max_completion_tokens");
+    expect(maximum?.required).toBeUndefined();
+    expect(maximum?.note).toContain("Optional; defaults to the pinned price's output ceiling");
+    expect(maximum?.note).toMatch(/max_tokens.*accepted alias/);
+    expect(maximum?.note).toMatch(/if both are supplied, values must be equal.*400/);
+  });
+  it("keeps the genuinely unsupported capabilities explicit", () => {
+    expect(protocolEndpoints.chat_completions.unsupported).toBe("n > 1, multimodal content arrays, structured output, reasoning, log probabilities and other extensions are rejected.");
+  });
+});
+
 describe("embedding API help", () => {
   it("documents float and base64 without claiming token-ID or streaming support", () => {
     const guide = protocolEndpoints.embeddings;
