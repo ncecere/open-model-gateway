@@ -4,6 +4,7 @@
 pub mod alerts;
 pub mod archive;
 pub mod audit_export;
+pub mod telemetry;
 pub mod auth;
 #[cfg(test)]
 mod authz_matrix;
