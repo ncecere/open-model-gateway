@@ -1,4 +1,19 @@
 //! Bounded, typed OTLP/HTTP JSON traces. No automatic tracing-event export.
+//!
+//! Wire mapping (opentelemetry-proto v1.9.0):
+//! - collector/trace/v1/trace_service.proto: ExportTraceServiceRequest.resource_spans
+//!   and ExportTraceServiceResponse.partial_success / ExportTracePartialSuccess.rejected_spans.
+//! - trace/v1/trace.proto: ResourceSpans.resource / scope_spans, ScopeSpans.scope / spans,
+//!   Span.trace_id / span_id / parent_span_id / name / kind / flags /
+//!   start_time_unix_nano / end_time_unix_nano / attributes.
+//! - resource/v1/resource.proto and common/v1/common.proto: Resource.attributes,
+//!   InstrumentationScope.name / version, KeyValue.key / value and
+//!   AnyValue.string_value / int_value / bool_value.
+//!
+//! JSON uses lowerCamelCase, integer enums, hexadecimal ID bytes (the OTLP
+//! exception to protobuf base64), decimal-string 64-bit integers/timestamps.
+//! Sources: <https://github.com/open-telemetry/opentelemetry-proto/tree/v1.9.0/opentelemetry/proto>
+//! and <https://opentelemetry.io/docs/specs/otlp/#json-protobuf-encoding>.
 
 use std::{
     collections::HashSet,
@@ -66,6 +81,7 @@ macro_rules! fixed_enum {
         pub enum $name { $($variant),+ }
         impl $name {
             pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+            pub const COUNT: usize = Self::ALL.len();
             pub fn as_str(self) -> &'static str { match self { $(Self::$variant => $text),+ } }
         }
     };
@@ -94,7 +110,9 @@ fixed_enum!(Delivery { Accepted => "accepted", HttpStatus => "http_status", Tran
 /// eligibility. Intentionally has no production constructor in PR 1: PR 2
 /// connects this capability to live admission. Dropping an unclassified
 /// context exports nothing, including pre-admission observations.
-pub struct SharedAdmission(());
+pub struct SharedAdmission {
+    request: Uuid,
+}
 
 #[derive(Clone)]
 pub struct PublicAlias(String);
@@ -241,7 +259,7 @@ impl Span {
         self.attributes.push(value);
         if serde_json::to_vec(self).map_or(true, |bytes| bytes.len() > MAX_SPAN) {
             self.attributes.pop();
-            crate::metrics::METRICS.trace_drop(DropReason::SpanLimit, 1);
+            // This span is retained. Attribute refusal is not a dropped span.
             return false;
         }
         true
@@ -261,8 +279,8 @@ impl Serialize for Span {
 
 #[derive(Default)]
 struct Counts {
-    drops: [AtomicU64; 7],
-    deliveries: [AtomicU64; 5],
+    drops: [AtomicU64; DropReason::COUNT],
+    deliveries: [AtomicU64; Delivery::COUNT],
     rejected: AtomicU64,
 }
 impl Counts {
@@ -319,14 +337,6 @@ impl Recorder {
             receiver,
         )
     }
-    pub fn admission_validated_alias(
-        &self,
-        _admission: &SharedAdmission,
-        alias: &str,
-    ) -> PublicAlias {
-        self.aliases.admission_validated(alias)
-    }
-
     pub fn begin(&self, request: Uuid) -> Option<Context> {
         if self.stopping.load(Ordering::Relaxed) || !root_sampled(request, self.ratio) {
             return None;
@@ -339,6 +349,7 @@ impl Recorder {
             recorder: self.clone(),
             _permit: permit,
             trace: trace_id(request),
+            request,
             spans: Vec::new(),
             observed: 0,
         })
@@ -349,6 +360,7 @@ pub struct Context {
     recorder: Recorder,
     _permit: OwnedSemaphorePermit,
     trace: [u8; 16],
+    request: Uuid,
     spans: Vec<Span>,
     observed: usize,
 }
@@ -367,7 +379,19 @@ impl Context {
         span.trace = self.trace;
         self.spans.push(span);
     }
-    pub fn export(mut self, _eligibility: SharedAdmission) {
+    pub fn admission_validated_alias(
+        &self,
+        admission: &SharedAdmission,
+        alias: &str,
+    ) -> Option<PublicAlias> {
+        (admission.request == self.request)
+            .then(|| self.recorder.aliases.admission_validated(alias))
+    }
+
+    pub fn export(mut self, eligibility: SharedAdmission) {
+        if eligibility.request != self.request {
+            return;
+        }
         for span in self.spans.drain(..) {
             let Ok(text) = serde_json::to_string(&span) else {
                 continue;
@@ -439,11 +463,13 @@ impl Exporter {
                 return Err(Delivery::HttpStatus);
             }
             let mut ack = Vec::new();
-            while let Some(chunk) = response
-                .chunk()
-                .await
-                .map_err(|_| Delivery::Acknowledgement)?
-            {
+            while let Some(chunk) = response.chunk().await.map_err(|error| {
+                if error.is_timeout() {
+                    Delivery::Timeout
+                } else {
+                    Delivery::Acknowledgement
+                }
+            })? {
                 if ack.len() + chunk.len() > MAX_BODY {
                     return Err(Delivery::Acknowledgement);
                 }
@@ -454,6 +480,11 @@ impl Exporter {
             }
             let value: Value =
                 serde_json::from_slice(&ack).map_err(|_| Delivery::Acknowledgement)?;
+            if !value.is_object()
+                || (!value["partialSuccess"].is_null() && !value["partialSuccess"].is_object())
+            {
+                return Err(Delivery::Acknowledgement);
+            }
             let rejected = &value["partialSuccess"]["rejectedSpans"];
             if rejected.is_null() {
                 return Ok(0);
@@ -548,9 +579,20 @@ async fn worker(exporter: Exporter, mut pending: Pending, mut stop: oneshot::Rec
     let mut draining = false;
     let overhead = exporter.body(&[]).len();
     loop {
-        if !draining {
+        if draining {
+            if pending.receiver.is_empty() {
+                break;
+            }
+            interval.tick().await;
+        } else {
             tokio::select! {
-                _ = &mut stop => { draining = true; pending.receiver.close(); }
+                _ = &mut stop => {
+                    draining = true;
+                    pending.receiver.close();
+                    if pending.receiver.is_empty() { break; }
+                    // Drain obeys the same cadence as ordinary delivery.
+                    interval.tick().await;
+                }
                 _ = interval.tick() => {}
             }
         }
@@ -811,13 +853,13 @@ mod tests {
             for _ in 0..64 {
                 context.record(span());
             }
-            context.export(SharedAdmission(()));
+            export_shared(context);
         }
         assert_eq!(rx.len(), 2048);
         let started = Instant::now();
         let mut context = recorder.begin(Uuid::new_v4()).unwrap();
         context.record(span());
-        context.export(SharedAdmission(()));
+        export_shared(context);
         assert!(started.elapsed() < Duration::from_millis(100));
         assert_eq!(recorder.counts.dropped(DropReason::QueueFull), 1);
         rx.close();
@@ -861,12 +903,19 @@ mod tests {
         .unwrap()
     }
 
+    fn export_shared(context: Context) {
+        let admission = SharedAdmission {
+            request: context.request,
+        };
+        context.export(admission);
+    }
+
     fn emit(recorder: &Recorder, n: usize) {
         let mut context = recorder.begin(Uuid::new_v4()).unwrap();
         for _ in 0..n {
             context.record(span());
         }
-        context.export(SharedAdmission(()));
+        export_shared(context);
     }
 
     #[tokio::test]
@@ -968,6 +1017,16 @@ mod tests {
                 Err(Delivery::Acknowledgement),
             ),
             ("not-json", Err(Delivery::Acknowledgement)),
+            ("[]", Err(Delivery::Acknowledgement)),
+            (r#"{"partialSuccess":"x"}"#, Err(Delivery::Acknowledgement)),
+            (
+                r#"{"partialSuccess":{"rejectedSpans":1.5}}"#,
+                Err(Delivery::Acknowledgement),
+            ),
+            (
+                r#"{"partialSuccess":{"rejectedSpans":"18446744073709551616"}}"#,
+                Err(Delivery::Acknowledgement),
+            ),
         ] {
             let (url, seen, task) = collector(reply, Duration::ZERO).await;
             assert_eq!(exchange(&url).await, expected);
@@ -1065,6 +1124,103 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn eligibility_is_bound_to_the_same_server_request() {
+        let (recorder, mut receiver) = Recorder::channel(1.0);
+        let request = Uuid::from_u128(41);
+        let admission = SharedAdmission {
+            request: Uuid::from_u128(42),
+        };
+        let mut context = recorder.begin(request).unwrap();
+        context.record(span());
+        assert!(
+            context
+                .admission_validated_alias(&admission, "public-model")
+                .is_none()
+        );
+        context.export(admission);
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(recorder.counts.dropped(DropReason::Ineligible), 1);
+    }
+
+    #[tokio::test]
+    async fn slow_acknowledgement_and_production_dns_refusal_use_real_transport() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 8192];
+            assert!(socket.read(&mut request).await.unwrap() > 0);
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 64\r\n\r\n{").await.unwrap();
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        });
+        let started = Instant::now();
+        assert_eq!(
+            exchange(&format!("http://{address}/v1/traces")).await,
+            Err(Delivery::Timeout)
+        );
+        assert!(started.elapsed() < Duration::from_millis(2300));
+        task.abort();
+        let config = TraceConfig::from_lookup(
+            |key| {
+                (key == TraceConfig::URL)
+                    .then(|| format!("https://localhost:{}/v1/traces", address.port()))
+            },
+            Environment::Production,
+        )
+        .unwrap();
+        let (url, client) = config.endpoint.unwrap();
+        // DNS is intentionally deferred at startup; resolution must refuse all
+        // localhost answers in production, before reaching even a TLS server.
+        let exporter = Exporter {
+            url,
+            client,
+            headers: config.headers,
+            environment: config.environment,
+        };
+        assert_eq!(
+            exporter.send(exporter.body(&[]), 0).await,
+            Err(Delivery::Transport)
+        );
+    }
+
+    #[tokio::test]
+    async fn trace_metrics_expose_only_fixed_labels() {
+        let text = crate::metrics::METRICS.render(None).await;
+        for reason in DropReason::ALL {
+            assert!(text.contains(&format!(
+                "gateway_trace_dropped_spans_total{{reason=\"{}\"}}",
+                reason.as_str()
+            )));
+        }
+        for outcome in Delivery::ALL {
+            assert!(text.contains(&format!(
+                "gateway_trace_deliveries_total{{outcome=\"{}\"}}",
+                outcome.as_str()
+            )));
+        }
+        assert!(text.contains("gateway_trace_rejected_spans_total"));
+    }
+
+    #[tokio::test]
+    async fn shutdown_preserves_batch_cadence_and_counts_unflushed_spans() {
+        let (url, seen, task) = collector("{}", Duration::ZERO).await;
+        let runtime = runtime(&url);
+        let recorder = runtime.recorder();
+        for _ in 0..32 {
+            emit(&recorder, 64);
+        }
+        runtime.shutdown().await;
+        let requests = seen.lock().unwrap().len();
+        assert!(
+            (1..=3).contains(&requests),
+            "shutdown sent {requests} batches in three seconds"
+        );
+        assert!(recorder.counts.dropped(DropReason::Shutdown) >= 2048 - 3 * 64);
+        task.abort();
+    }
+
+    #[tokio::test]
     async fn slow_collector_and_shutdown_are_bounded_and_never_block_recording() {
         let (url, _, task) = collector("{}", Duration::from_secs(30)).await;
         let runtime = runtime(&url);
@@ -1074,6 +1230,8 @@ mod tests {
             emit(&recorder, 64);
         }
         assert!(started.elapsed() < Duration::from_secs(1));
+        // Let the first scheduled exchange start before testing drain timeout.
+        tokio::time::sleep(Duration::from_millis(1200)).await;
         let started = Instant::now();
         runtime.shutdown().await;
         assert!(started.elapsed() < Duration::from_millis(3300));
