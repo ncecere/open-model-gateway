@@ -1769,6 +1769,44 @@ async fn omitted_maximum_validation_uses_the_clamped_bound_not_the_raw_omission(
         plan.groups[0].outputs,
         std::collections::BTreeMap::from([(50, 1)])
     );
+    // #245: planning validating against the clamped bound is only half the
+    // contract. The line is pinned (omitted maximum) to this one deployment
+    // and price, and the engine's own pre-admission `validate_chat_request`
+    // (`Engine::execute_protocol`, run again at dispatch, independently of
+    // planning's preview above) must see that same clamped bound too, not
+    // the raw client omission `None`, which this adapter always refuses.
+    // Before the fix, dispatch called the engine with the unmodified line
+    // (`max_output_tokens: None`): the engine's pre-admission check refused
+    // it as `Unsupported` (every capable route refuses, so 501
+    // `unsupported_capability`) even though planning above had just proven
+    // the clamped bound satisfies this exact adapter - planning and dispatch
+    // disagreed. The fix (`jobs::runner::LineRun::execute` copying the
+    // plan's resolved `output` onto the request before the engine ever sees
+    // it) makes them agree, so the line reaches the adapter's real
+    // `execute` and completes, with the adapter observing the same
+    // 50-token bound planning, pre-admission validation and the parent
+    // envelope sizing all already agreed on.
+    let job = w
+        .create(f.principal, &file, BatchEndpoint::ChatCompletions, None)
+        .await
+        .unwrap();
+    assert_eq!(job.mode(), Some(BatchMode::Gateway));
+    assert_eq!(job.request_total, Some(1));
+    assert!(Runner::new(w.jobs.clone()).run_next().await.unwrap());
+    let job = w.reload(&job).await;
+    assert_eq!(
+        (job.request_completed, job.request_failed),
+        (Some(1), Some(0)),
+        "a line whose clamped bound satisfies planning's preview must not be refused at dispatch by the engine's own pre-admission check on the raw omission"
+    );
+    let out = w.read(f.principal.workspace_id, job.output_file_id).await;
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0]["custom_id"], "a");
+    assert_eq!(
+        w.anthropic.script.lock().unwrap().maxima,
+        vec![Some(50)],
+        "the real adapter execution must receive the exact same resolved bound (50) that planning's preview and the engine's pre-admission check both validated against, not a different, unresolved value"
+    );
     consistent(f).await;
 }
 
