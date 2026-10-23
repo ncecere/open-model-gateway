@@ -151,7 +151,24 @@ function main() {
   try {
     const path = join(temporary, "metadata.json");
     writeFileSync(path, JSON.stringify(metadata), { mode: 0o600 });
-    const scan = command(binary, ["--all-features", ...offline, "--metadata-path", path, "check", "advisories"], { stdio: "inherit" });
+    // Cargo-deny rebuilds/filters Cargo's graph (targets, features, exclusions).
+    // In pinned 0.20.2 its build_with_metadata callback logs EVERY pruned package
+    // at debug level (src/cargo-deny/common.rs). Refuse a green result if any
+    // registered identity was pruned; do not invent extra roots/edges or change
+    // the real policy to force inclusion. Require the completion marker too, so
+    // a missing/changed diagnostic contract cannot silently disable this guard.
+    const scan = command(binary, ["--log-level", "debug", "--color", "never", "--all-features", ...offline, "--metadata-path", path, "check", "advisories"]);
+    process.stdout.write(scan.stdout);
+    process.stderr.write(scan.stderr);
+    if (scan.status === 0 && count > 0) {
+      requireThat(/\[INFO\] gathered \d+ crates in \d+ms/.test(scan.stderr), "scanner graph completion diagnostic missing");
+      const filtered = scan.stderr.split("\n").filter(line => line.includes("[DEBUG] filtered "));
+      for (const entry of Object.values(metadata.metadata.vendored)) {
+        const marker = `[DEBUG] filtered ${entry.name} ${entry.version}`;
+        requireThat(!filtered.some(line => line === marker || line.endsWith(marker) || line.includes(`${marker} `)),
+          `registered package filtered by cargo-deny: ${entry.name} ${entry.version}; upstream-base coverage not established`);
+      }
+    }
     process.exitCode = scan.status;
   } finally {
     rmSync(temporary, { recursive: true, force: true });

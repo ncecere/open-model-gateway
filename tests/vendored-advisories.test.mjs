@@ -1,7 +1,7 @@
 // Offline acceptance against the real pinned scanner, not a scanner stub.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -90,6 +90,9 @@ test("registration and graph validation fail closed", async t => {
       "null registration": m => { m.metadata.vendored = null; },
       "malformed packages": m => { m.packages = {}; },
       "missing source": m => { delete m.packages[0].source; },
+      "contradictory path ID": m => { m.packages.find(p => p.name === "smallvec").id = "path+file:///elsewhere#smallvec@1.10.0"; },
+      "invalid default members": m => { m.workspace_default_members.push("unknown"); },
+      "workspace member registration": m => { m.workspace_members.push(m.packages.find(p => p.name === "smallvec").id); },
       "missing resolve": m => { m.resolve = null; },
       "missing graph node": m => { m.resolve.nodes.pop(); },
       "unknown graph dependency": m => { m.resolve.nodes[0].dependencies.push("unknown"); },
@@ -103,6 +106,11 @@ test("registration and graph validation fail closed", async t => {
     for (const [name, change] of Object.entries(cases)) await t.test(name, () => {
       const m = structuredClone(base); change(m);
       assert.throws(() => projectMetadata(m, f.root), /vendored advisories:/);
+    });
+    f.put("vendor/stale/Cargo.toml", '[package]\nname = "smallvec"\nversion = "1.10.0"\n');
+    await t.test("existing but unused registration", () => {
+      const m = structuredClone(base); m.metadata.vendored.stale = { ...registration, manifest: "vendor/stale/Cargo.toml" };
+      assert.throws(() => projectMetadata(m, f.root), /stale vendored registration/);
     });
     symlinkSync(join(f.root, "vendor/smallvec"), join(f.root, "vendor/alias"));
     await t.test("symlink registration", () => {
@@ -143,6 +151,33 @@ test("real cargo-deny misses path identity, flags projection and unchanged regis
     assert.match(output(cli), /RUSTSEC-2026-9999/);
     assert.equal(readFileSync(join(f.root, "Cargo.lock"), "utf8"), lock);
   } finally { f.cleanup(); }
+});
+
+test("registered packages pruned by the real scanner fail closed instead of claiming coverage", { skip: absent ? "cargo-deny 0.20.2 absent; install CI's pinned tool or set CARGO_DENY" : false }, async t => {
+  const { projectMetadata } = await import(script);
+  for (const kind of ["impossible target", "policy exclusion"]) await t.test(kind, () => {
+    const f = fixture();
+    try {
+      advisoryDb(f);
+      f.register();
+      if (kind === "impossible target") {
+        const manifest = readFileSync(join(f.root, "app/Cargo.toml"), "utf8");
+        f.put("app/Cargo.toml", manifest.replace("[dependencies]", "[target.'cfg(any())'.dependencies]"));
+      } else {
+        f.put("deny.toml", `${readFileSync(join(f.root, "deny.toml"), "utf8")}\n[graph]\nexclude = ["smallvec"]\n`);
+      }
+      const { metadata, count } = projectMetadata(f.metadata(), f.root);
+      assert.equal(count, 1, "Cargo metadata still contains the registered package");
+      f.put("metadata.json", JSON.stringify(metadata));
+      const raw = run(scanner, ["--offline", "--all-features", "--metadata-path", join(f.root, "metadata.json"), "check", "advisories"], f.root, f.env);
+      ok(raw);
+      assert.doesNotMatch(output(raw), /RUSTSEC-2026-9999/, "scanner silently pruned projected package");
+      const cli = run(process.execPath, [script, "--offline"], f.root, { ...f.env, CARGO_DENY: scanner });
+      assert.equal(cli.status, 1, output(cli));
+      assert.match(output(cli), /registered package filtered by cargo-deny: smallvec 1.10.0; upstream-base coverage not established/);
+      t.diagnostic(`${kind}: scanner exit ${raw.status}; helper exit ${cli.status} (coverage refused)`);
+    } finally { f.cleanup(); }
+  });
 });
 
 test("no-vendor control passes unchanged, including the actual CLI", { skip: absent ? "cargo-deny 0.20.2 absent; install CI's pinned tool or set CARGO_DENY" : false }, async () => {
