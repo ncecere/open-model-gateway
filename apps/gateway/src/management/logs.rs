@@ -314,6 +314,27 @@ pub(super) fn cursor_parts(c: &str) -> Result<(DateTime<Utc>, Uuid), ApiError> {
         Uuid::parse_str(id).map_err(|_| invalid())?,
     ))
 }
+/// Adds `trace_id`: `null` for a personal-workspace row, else the hex id
+/// `telemetry::trace_id` derives from the row's own `root_request_id`
+/// (never a client-supplied id, never from inbound trace headers: this
+/// crate reads neither). An unauthorized viewer never receives the row at
+/// all (the existing visibility SQL already excludes it), so there is no
+/// separate "absent" case to implement here: it follows for free.
+pub(super) fn with_trace_id(mut row: Value, root_request_id: Uuid) -> Value {
+    let shared = row["workspace"]["kind"].as_str() != Some("personal");
+    if let Some(o) = row.as_object_mut() {
+        o.insert(
+            "trace_id".into(),
+            if shared {
+                json!(hex::encode(crate::telemetry::trace_id(root_request_id)))
+            } else {
+                Value::Null
+            },
+        );
+    }
+    row
+}
+
 fn page(rows: Vec<(Value, DateTime<Utc>, Uuid)>, limit: i64) -> Json<Value> {
     let next = (rows.len() > limit as usize).then(|| {
         let (_, t, id) = &rows[limit as usize - 1];
@@ -346,6 +367,10 @@ pub(super) async fn list_requests(
         .fetch_all(&mut *tx)
         .await?;
     tx.commit().await?;
+    let rows = rows
+        .into_iter()
+        .map(|(v, t, id)| (with_trace_id(v, id), t, id))
+        .collect();
     Ok(page(rows, limit))
 }
 
