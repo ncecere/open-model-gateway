@@ -419,6 +419,28 @@ test("taiki-e/install-action installs exact versions with its checksum check on"
   assert.deepEqual(found, []);
 });
 
+test("vendored advisory coverage supplements the unchanged real-graph scan in its read-only pinned-tool job", () => {
+  const data = toData(parseStrict(readLocalFromRepo(".github/workflows/ci.yml"), "ci.yml"));
+  const job = data.jobs["cargo-deny"];
+  assert.equal(jobCanWrite(data, job), false);
+  const steps = stepsOf(job);
+  const normal = steps.findIndex(s => s.run === "cargo deny --all-features check");
+  const fixtures = steps.findIndex(s => s.run === "node --test tests/vendored-advisories.test.mjs");
+  const extra = steps.findIndex(s => s.run === "node .github/scripts/vendored-advisories.mjs");
+  const install = steps.findIndex(s => s.with?.tool === "cargo-deny@0.20.2");
+  const node = steps.findIndex(s => s.uses === "./.github/actions/setup-node");
+  assert.ok(install >= 0 && normal > install && fixtures > normal && extra > fixtures && fixtures > node && node >= 0);
+  for (const index of [normal, fixtures, extra, install, node]) {
+    assert.equal(steps[index].if, undefined);
+    assert.equal(steps[index]["continue-on-error"], undefined);
+  }
+  for (const index of [fixtures, extra]) {
+    assert.ok(steps[index].name, "additional coverage is separately labelled");
+    assert.equal(steps[index].env?.CI, undefined, "fixture must not bypass its CI-required scanner");
+    assert.equal(steps[index].env?.CARGO_DENY, undefined, "same pinned tool on PATH");
+  }
+});
+
 // ---- the fetch script ----
 
 function runFetch(args, { curlBody, curlFails = false } = {}) {

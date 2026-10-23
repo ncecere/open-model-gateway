@@ -195,7 +195,11 @@ impl Runner {
             .ok_or(InferenceError::Configuration)?;
         let endpoint = job.endpoint().ok_or(InferenceError::Storage)?;
         let work = job.work_file_id.ok_or(InferenceError::Storage)?;
-        let state = Arc::new(RunState::default());
+        let state = Arc::new(RunState {
+            #[cfg(test)]
+            pauses: self.jobs.rate_limit_pauses.clone(),
+            ..RunState::default()
+        });
         // Lease renewal (and cancel observation) while the batch runs.
         let renewal = {
             let store = self.jobs.store.clone();
@@ -265,6 +269,7 @@ impl Runner {
                 job: job.id,
             },
             pins: Mutex::default(),
+            claimed: Mutex::default(),
         });
         let line = Arc::new(LineRun {
             store: store.clone(),
@@ -619,7 +624,8 @@ impl Runner {
     }
 
     /// The route a line would use right now: the engine's own candidate
-    /// filter (live catalog and key access, protocol, adapter support) and
+    /// filter (live catalog and key access, protocol, adapter support,
+    /// deterministic per-adapter eligibility for an unpinned line) and
     /// route plan, first candidate.
     async fn plan_route(
         &self,
@@ -635,6 +641,11 @@ impl Runner {
         {
             Ok(Some(d)) => Planned::Route(d),
             Err(InferenceError::RouteCoolingDown(_)) => Planned::CoolingDown,
+            // A transient planning failure is not "no route serves this line":
+            // wait and plan again instead of dispatching it ungated, because an
+            // ungated attempt may only be refused at admission (#243), which
+            // would fail a line that a moment later had a route.
+            Err(InferenceError::Storage | InferenceError::Timeout) => Planned::CoolingDown,
             _ => Planned::Nothing,
         }
     }
@@ -669,6 +680,50 @@ impl Runner {
         if candidates.is_empty() {
             return Ok(None);
         }
+        // An unpinned (explicit-maximum) line is not yet tied to a route:
+        // the coarse filter above can pass while an adapter's own pure
+        // encoder (`ProviderAdapter::validate_chat_request`, #228) still
+        // refuses this exact body (a strict function tool, an out-of-range
+        // sampling parameter, ...). Claiming and pinning such a route would
+        // then deterministically refuse the line even though another
+        // authorized, protocol-capable route accepts it (#243): apply the
+        // same deterministic eligibility the engine itself runs before
+        // admission (`Engine::execute_protocol`), once per adapter
+        // (provider id, not per deployment), and choose only among routes
+        // that pass. A pinned (omitted-maximum) line's candidate list is
+        // already narrowed to its one route above and is left unfiltered
+        // here: it stays judged on that pinned route alone, inside the
+        // engine at dispatch, exactly as before (#238).
+        let candidates: Vec<Deployment> = if planned_deployment.is_none() {
+            if let BatchRequest::Chat(r) = request {
+                let mut verdicts: HashMap<String, bool> = HashMap::new();
+                let eligible: Vec<Deployment> = candidates
+                    .into_iter()
+                    .filter(|d| {
+                        *verdicts.entry(d.provider.clone()).or_insert_with(|| {
+                            self.jobs
+                                .registry
+                                .get(&d.provider)
+                                .is_some_and(|a| a.validate_chat_request(r).is_ok())
+                        })
+                    })
+                    .collect();
+                if eligible.is_empty() {
+                    // Every authorized, protocol-capable route refuses this
+                    // exact body: claim nothing here. The line proceeds
+                    // ungated to the engine's normal unpinned refusal path
+                    // (`candidate_deployments` returns every deployment),
+                    // reported with the engine's own 400/501
+                    // classification, not a new error path invented here.
+                    return Ok(None);
+                }
+                eligible
+            } else {
+                candidates
+            }
+        } else {
+            candidates
+        };
         let plan = store
             .route_plan(principal, model, &candidates, execution)
             .await?;
@@ -691,7 +746,8 @@ struct Pin {
 /// Outcome of planning a waiting line's route.
 enum Planned {
     Route(Deployment),
-    /// Every route serving the line is cooling down: wait, do not fail.
+    /// Every route serving the line is cooling down, or planning hit a
+    /// transient storage/timeout failure: wait and plan again, do not fail.
     CoolingDown,
     /// Nothing serves the line (it fails like an interactive request).
     Nothing,
@@ -889,6 +945,8 @@ struct RunState {
     budget: AtomicBool,
     busy_streak: AtomicU32,
     pause_until: Mutex<Option<tokio::time::Instant>>,
+    #[cfg(test)]
+    pauses: Arc<std::sync::atomic::AtomicUsize>,
 }
 impl RunState {
     fn stop_reason(&self, job: &JobRow) -> Option<Stop> {
@@ -910,6 +968,8 @@ impl RunState {
     /// Provider rate limiting: back off this batch's dispatch (1 s doubling
     /// to 60 s); a success resets it.
     fn rate_limited(&self) {
+        #[cfg(test)]
+        self.pauses.fetch_add(1, Ordering::SeqCst);
         let streak = self.busy_streak.fetch_add(1, Ordering::SeqCst).min(6);
         let wait = Duration::from_secs(1u64 << streak).min(Duration::from_secs(60));
         *self.pause_until.lock().expect("pause") = Some(tokio::time::Instant::now() + wait);
@@ -1014,7 +1074,11 @@ impl LineRun {
                     return;
                 }
                 Err(e) => {
-                    if e == InferenceError::Busy {
+                    // Busy from an ungated refusal (`LineRepository::refuse_ungated`,
+                    // #243 review finding 2) never reached a provider: only a
+                    // claimed attempt's Busy is upstream rate limiting, worth
+                    // backing off the whole batch's dispatch for.
+                    if e == InferenceError::Busy && pin.is_some() {
                         self.state.rate_limited();
                     }
                     let retryable = matches!(
@@ -1110,14 +1174,36 @@ impl LineRun {
     /// hint (if any) scoped to this attempt.
     async fn execute(
         &self,
-        request: BatchRequest,
+        mut request: BatchRequest,
         execution: Uuid,
         pin: Option<Pin>,
         plan: Option<lines::LinePlan>,
     ) -> Result<BatchResponse, InferenceError> {
         if let Some(deployment) = plan.map(|p| p.deployment).or(pin.map(|p| p.deployment)) {
+            // `pin.is_some()` is the scheduler's own route-capacity claim
+            // for this attempt (#243 review finding 1), distinct from
+            // merely carrying a plan: a creation-time plan alone (an
+            // omitted-maximum line dispatched ungated because its pinned
+            // route was briefly ineligible) must not count as gated.
             self.repository
-                .pin(execution, deployment, plan.map(|p| p.price));
+                .pin(execution, deployment, plan.map(|p| p.price), pin.is_some());
+        }
+        // An omitted-maximum line is pinned at plan time to this one price,
+        // which already resolved and validated the line against this exact
+        // bound (`jobs::plan::scan`). Copy it onto the still-omitted request
+        // before the engine ever sees it, so its pre-admission
+        // `validate_chat_request` (and the real upstream attempt) judge the
+        // same body planning did, not the raw client omission (#245). `0`
+        // only for a plan written before this field existed; the omission
+        // is left as-is for those already-queued lines, matching the prior
+        // behavior, and admission still resolves the same price-derived
+        // bound on its own (#215: the admission-pinned cap equals the
+        // upstream cap either way).
+        if let (Some(plan), BatchRequest::Chat(r)) = (plan, &mut request)
+            && r.max_output_tokens.is_none()
+            && plan.output > 0
+        {
+            r.max_output_tokens = Some(plan.output);
         }
         let attempt = self.execute_attempt(request, execution);
         let result = match pin.and_then(|p| p.priority.map(|priority| (p.deployment, priority))) {
@@ -1232,21 +1318,84 @@ async fn write_segments(
 /// Repository of a gateway-run batch's line attempts: everything is the
 /// normal store, except that admission transfers each line's hold out of
 /// the batch's ceiling (`governance::batch::admit_line`).
+///
+/// `pins` carries each attempt's routing/pricing plan: an omitted-maximum
+/// line's creation-time plan (`lines::LinePlan`), or an explicit-maximum
+/// line's dispatch-time route, used for `candidate_deployments`/
+/// `route_plan` and (when admitted) the price, exactly as before (#215,
+/// #238) - a line that carries a plan is still judged against that one
+/// route, never every candidate.
+///
+/// `claimed` is a separate, narrower fact (#243 review finding 1): whether
+/// THIS attempt actually holds the scheduler's route-capacity claim
+/// (`Runner`'s dispatch passed it a `Pin`). A plan alone is not a claim -
+/// an omitted-maximum line whose pinned route was briefly ineligible at
+/// dispatch still spawns ungated (no `Pin`) even though `pins` still
+/// records its plan for routing/pricing. `admit`/`admit_embeddings`/
+/// `admit_workload` refuse every attempt that is not in `claimed` (#243):
+/// an ungated line may only be refused, never admitted, even if the live
+/// catalog or an adapter's deterministic eligibility changes in its favour
+/// between dispatch and here.
 struct LineRepository {
     store: Store,
     batch: LineContext,
-    /// Attempt (execution id) → the route the scheduler claimed it on.
+    /// Attempt (execution id) → its routing/pricing plan (creation-time for
+    /// an omitted maximum, dispatch-time route for an explicit maximum).
     pins: Mutex<HashMap<Uuid, (Uuid, Option<Uuid>)>>,
+    /// Attempts the scheduler actually claimed route capacity for at
+    /// dispatch (a `Pin` was passed to `LineRun::execute`), distinct from
+    /// merely carrying a plan in `pins`.
+    claimed: Mutex<HashSet<Uuid>>,
 }
 impl LineRepository {
-    fn pin(&self, execution: Uuid, deployment: Uuid, price: Option<Uuid>) {
+    /// Record `execution`'s routing/pricing plan. `claimed` is `true` only
+    /// when the scheduler itself claimed route capacity for this attempt at
+    /// dispatch (`pin.is_some()` at the `LineRun::execute` call site), never
+    /// merely because a creation-time plan exists.
+    fn pin(&self, execution: Uuid, deployment: Uuid, price: Option<Uuid>, claimed: bool) {
         self.pins
             .lock()
             .expect("pins")
             .insert(execution, (deployment, price));
+        if claimed {
+            self.claimed.lock().expect("claimed").insert(execution);
+        }
     }
     fn unpin(&self, execution: Uuid) {
         self.pins.lock().expect("pins").remove(&execution);
+        self.claimed.lock().expect("claimed").remove(&execution);
+    }
+    /// Whether the scheduler actually claimed route capacity for `execution`
+    /// at dispatch - never merely whether it carries a routing/pricing plan
+    /// (#243 review finding 1: those are different facts kept in `pins` and
+    /// `claimed`).
+    fn gated(&self, execution: Uuid) -> bool {
+        self.claimed.lock().expect("claimed").contains(&execution)
+    }
+    /// An ungated attempt reaching admission (#243): the runner's dispatch
+    /// decision (`Runner::plan_route_inner`) found no route to claim for
+    /// this line - every candidate deterministically rejected it, or none
+    /// existed - so it proceeded expecting only the engine's own refusal.
+    /// `candidate_deployments` below still returns every live deployment
+    /// for it, unfiltered, so that refusal keeps its correct classification
+    /// when truly nothing serves the line. But the live catalog and an
+    /// adapter's deterministic eligibility can change before admission: if
+    /// some candidate now accepts, admitting it here would execute the line
+    /// on a route the scheduler never claimed capacity on, bypassing route
+    /// windows, live-load gates, fair-share ordering and cross-runner route
+    /// concurrency accounting (`batch_lines.deployment_id` stays NULL for
+    /// it). An ungated line may only be refused, never admitted: refuse
+    /// with an existing, already-classified, already-retryable denial (not
+    /// a new error path) - the batch's own explicit retry policy, if any,
+    /// gets its own bounded additional attempts, each independently and
+    /// correctly refused the same way while still ungated.
+    fn refuse_ungated(&self, record: &ExecutionStart, deployment: &Deployment) -> InferenceError {
+        tracing::warn!(
+            execution_id = %record.id,
+            deployment_id = %deployment.id,
+            "batch line admission refused: ungated attempt found an admissible route after dispatch (#243)"
+        );
+        InferenceError::Busy
     }
 }
 #[async_trait]
@@ -1304,6 +1453,9 @@ impl InferenceRepository for LineRepository {
         deployment: &Deployment,
         output_limit: u32,
     ) -> Result<crate::inference::repository::GenerationAdmission, InferenceError> {
+        if !self.gated(record.id) {
+            return Err(self.refuse_ungated(record, deployment));
+        }
         let price = self
             .pins
             .lock()
@@ -1335,6 +1487,9 @@ impl InferenceRepository for LineRepository {
         lease_seconds: i64,
         deployment: &Deployment,
     ) -> Result<(), InferenceError> {
+        if !self.gated(record.id) {
+            return Err(self.refuse_ungated(record, deployment));
+        }
         crate::governance::batch::admit_line(
             &self.store,
             self.batch,
@@ -1359,6 +1514,9 @@ impl InferenceRepository for LineRepository {
         lease_seconds: i64,
         deployment: &Deployment,
     ) -> Result<(), InferenceError> {
+        if !self.gated(record.id) {
+            return Err(self.refuse_ungated(record, deployment));
+        }
         crate::governance::batch::admit_line(
             &self.store,
             self.batch,
