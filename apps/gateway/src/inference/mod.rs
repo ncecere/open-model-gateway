@@ -1008,3 +1008,5 @@ mod admission_validation_tests;
 mod steering_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod telemetry_tests;

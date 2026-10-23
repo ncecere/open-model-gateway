@@ -388,7 +388,10 @@ pub struct Recorder {
     aliases: Arc<AliasRegistry>,
 }
 impl Recorder {
-    fn channel(ratio: f64) -> (Self, mpsc::Receiver<Box<RawValue>>) {
+    /// A recorder with no exporter worker, backed directly by its queue
+    /// receiver: engine tests capture exactly what a real request would
+    /// export (or drop), without a collector.
+    pub(crate) fn channel(ratio: f64) -> (Self, mpsc::Receiver<Box<RawValue>>) {
         std::sync::LazyLock::force(&crate::metrics::METRICS);
         let (sender, receiver) = mpsc::channel(QUEUE);
         (
@@ -1544,7 +1547,12 @@ mod tests {
                     visit(&path, needle, found);
                     continue;
                 }
-                if path.extension().is_some_and(|e| e == "rs")
+                let is_test_file = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.ends_with("tests.rs"));
+                if !is_test_file
+                    && path.extension().is_some_and(|e| e == "rs")
                     && let Ok(text) = std::fs::read_to_string(&path)
                 {
                     let mut enclosing = String::new();
