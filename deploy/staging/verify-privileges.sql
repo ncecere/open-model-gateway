@@ -750,6 +750,10 @@ BEGIN
   -- otherwise-untouched token in the same transaction, as runtime.
   INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,expires_at) VALUES(at2,au,'Rollback token 2',decode(repeat('ad',32),'hex'),ARRAY['platform:read'],now()+interval '30 days');
   UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=au AND role='admin';
+  -- The role-loss trigger is deferred to commit (#37 PR1 coordinator
+  -- review issue 3); this whole script never commits (it ends in
+  -- ROLLBACK), so force it to fire now, mid-transaction, to observe it.
+  SET CONSTRAINTS admin_api_tokens_role_lost IMMEDIATE;
   IF NOT (SELECT revoked_at IS NOT NULL FROM admin_api_tokens WHERE id=at2) THEN RAISE EXCEPTION 'losing the last admin grant did not revoke owned tokens'; END IF;
   INSERT INTO platform_role_grants(id,user_id,role,source) VALUES(gen_random_uuid(),au,'admin','manual');
   IF NOT (SELECT revoked_at IS NOT NULL FROM admin_api_tokens WHERE id=at2) THEN RAISE EXCEPTION 'regaining admin restored a revoked token'; END IF;

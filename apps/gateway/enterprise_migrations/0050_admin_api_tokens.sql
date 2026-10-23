@@ -142,14 +142,33 @@ CREATE FUNCTION omg_admin_tokens_revoke_owner(target uuid) RETURNS void LANGUAGE
 $$;
 
 -- A revoked platform_role_grants row that leaves its user with no remaining
--- active 'admin' grant (checked fresh, after this row's own revocation is
--- applied) revokes every token that user owns. A multi-row UPDATE (e.g.
--- revoking a manual and a bootstrap 'admin' grant together) fires this once
--- per row; by the time the last 'admin' row of that statement has fired,
--- the EXISTS check sees every row's final state, so correctness holds even
--- though an earlier row's firing may still see a sibling row not yet
--- updated. Provenance (manual vs. group) is irrelevant: either source
--- losing the user's last 'admin' grant revokes the same way.
+-- active 'admin' grant (checked fresh, after every statement of the
+-- transaction has run; see the DEFERRABLE INITIALLY DEFERRED trigger
+-- below) revokes every token that user owns. Provenance (manual vs.
+-- group) is irrelevant: either source losing the user's last 'admin'
+-- grant revokes the same way.
+--
+-- Deferred to commit (coordinator review of #37 PR1, issue 3: a routine
+-- group re-sync, like an IdP group mapping getting recreated with a new
+-- id but the same group value/role, revokes the grant tied to the old
+-- mapping id in one statement and inserts its replacement, tied to the
+-- new mapping id, in the very next statement -- both in the same
+-- transaction, as `lifecycle::apply_group_grants` does. An immediate
+-- `AFTER ROW` trigger fires at the end of the first statement, before the
+-- replacement exists, and would revoke every token the user owns even
+-- though they never actually lost Admin. `DEFERRABLE INITIALLY DEFERRED`
+-- instead queues this trigger's firing for each affected row and runs
+-- them all at commit, against the transaction's *final* state: by then
+-- the replacement (if any) already exists, so the EXISTS check below sees
+-- it. A real loss with no replacement still revokes, just at commit
+-- instead of mid-transaction (observably identical to every caller: no
+-- code reads a token's revocation state from inside the same transaction
+-- that revoked its owner's last grant). Each row's firing is independently
+-- idempotent (coalesce in omg_admin_tokens_revoke_owner), so firing order
+-- between rows, and between this and the suspension/cleanup triggers
+-- below (left unconditional and immediate: a suspension or cleanup is
+-- always a real loss, never a same-transaction replacement), does not
+-- matter.
 CREATE FUNCTION omg_admin_tokens_role_lost() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  -- Snapshot-bound guard: refuse outright under anything but READ
@@ -173,7 +192,8 @@ BEGIN
  END IF;
  RETURN NEW;
 END $$;
-CREATE TRIGGER admin_api_tokens_role_lost AFTER UPDATE OF revoked_at ON platform_role_grants
+CREATE CONSTRAINT TRIGGER admin_api_tokens_role_lost AFTER UPDATE OF revoked_at ON platform_role_grants
+ DEFERRABLE INITIALLY DEFERRED
  FOR EACH ROW WHEN (NEW.role='admin' AND NEW.revoked_at IS NOT NULL AND OLD.revoked_at IS NULL)
  EXECUTE FUNCTION omg_admin_tokens_role_lost();
 

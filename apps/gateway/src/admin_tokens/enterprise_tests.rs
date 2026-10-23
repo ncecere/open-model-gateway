@@ -1273,13 +1273,17 @@ async fn role_loss_guard_refuses_elevated_isolation(
 ) {
     let owner = admin(pool, &format!("role-loss-stale-{label}@test.invalid")).await;
     let mut tx = crate::db::begin_with_setup(pool, setup).await.unwrap();
-    let result = sqlx::query(
+    // The role-loss trigger is deferred to commit (coordinator review
+    // issue 3), so its own refusal now surfaces at COMMIT, not at the
+    // UPDATE statement itself.
+    sqlx::query(
         "UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND role='admin'",
     )
     .bind(owner)
     .execute(&mut *tx)
-    .await;
-    let _ = tx.rollback().await;
+    .await
+    .unwrap();
+    let result = tx.commit().await;
     assert!(
         result.is_err(),
         "the role-loss guard must refuse to run under a {label} isolation level"
@@ -1373,4 +1377,116 @@ async fn revoke_runs_on_the_callers_transaction_and_rolls_back_with_it(pool: PgP
     assert!(revoke_admin_token(&mut tx, token.id).await.unwrap());
     tx.commit().await.unwrap();
     assert!(revoked(&pool, token.id).await);
+}
+
+/// Coordinator review of #37 PR1, issue 3 (MEDIUM): a routine group
+/// re-sync must not destroy tokens for an admin who never actually lost
+/// Admin. `lifecycle::apply_group_grants` revokes stale group grants in
+/// one statement, then inserts the replacements in the next -- for
+/// example, an operator recreating an IdP group mapping (delete + insert
+/// with a new id, same group value and role, the practical effect of
+/// renaming it in the UI): the old mapping row is gone, so the grant tied
+/// to its id is revoked by the first statement, and a fresh grant tied to
+/// the new mapping's id is inserted by the very next statement, in the
+/// same transaction. Before the fix, the immediate (`AFTER ROW`)
+/// role-loss trigger fires at the end of the first statement, before the
+/// replacement exists, and revokes every token the user owns, even though
+/// they never lost Admin.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn a_group_mapping_recreation_that_replaces_the_grant_does_not_destroy_the_token(
+    pool: PgPool,
+) {
+    let owner = Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,email) VALUES($1,'group-resync@test.invalid')")
+        .bind(owner)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let old_mapping = Uuid::new_v4();
+    sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES($1,'https://issuer.test','admins','platform','admin')")
+        .bind(old_mapping)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO platform_role_grants(id,user_id,role,source,mapping_id) VALUES($1,$2,'admin','group',$3)")
+        .bind(Uuid::new_v4())
+        .bind(owner)
+        .bind(old_mapping)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let token = create(&pool, owner, "n", &scopes(&["platform:read"]), 30, None)
+        .await
+        .unwrap();
+
+    // The operator recreates the mapping: same group value and role, a new id.
+    sqlx::query("DELETE FROM oidc_group_mappings WHERE id=$1")
+        .bind(old_mapping)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let new_mapping = Uuid::new_v4();
+    sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES($1,'https://issuer.test','admins','platform','admin')")
+        .bind(new_mapping)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // lifecycle.rs's exact two-statement replacement, replayed in one transaction.
+    let mut tx = crate::db::begin(&pool).await.unwrap();
+    crate::lifecycle::apply_group_grants(
+        &mut tx,
+        owner,
+        "https://issuer.test",
+        &["admins".to_string()],
+        None,
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    assert!(
+        !revoked(&pool, token.id).await,
+        "a group mapping recreation that replaces the grant in the same transaction must not revoke the owner's tokens"
+    );
+}
+
+/// Companion to the above: a real group grant loss with no replacement
+/// (the user's claimed groups no longer include the admin group at all)
+/// must still revoke the owner's tokens, once the transaction commits.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn a_real_group_grant_loss_with_no_replacement_still_revokes_at_commit(pool: PgPool) {
+    let owner = Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,email) VALUES($1,'group-loss@test.invalid')")
+        .bind(owner)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mapping = Uuid::new_v4();
+    sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES($1,'https://issuer.test','admins','platform','admin')")
+        .bind(mapping)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO platform_role_grants(id,user_id,role,source,mapping_id) VALUES($1,$2,'admin','group',$3)")
+        .bind(Uuid::new_v4())
+        .bind(owner)
+        .bind(mapping)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let token = create(&pool, owner, "n", &scopes(&["platform:read"]), 30, None)
+        .await
+        .unwrap();
+
+    let mut tx = crate::db::begin(&pool).await.unwrap();
+    crate::lifecycle::apply_group_grants(&mut tx, owner, "https://issuer.test", &[], None)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    assert!(
+        revoked(&pool, token.id).await,
+        "losing the group grant with no replacement must still revoke the owner's tokens, at commit"
+    );
 }

@@ -136,7 +136,7 @@ pub async fn cleanup_inactive_accounts_fenced(
 /// never touched. `scope=None` reconciles every mapping of the issuer (a signed sign-in
 /// claim, plus mappings that no longer exist). `scope=Some(values)` reconciles only
 /// mappings whose group value is in `values` (SCIM-managed groups).
-async fn apply_group_grants(
+pub(crate) async fn apply_group_grants(
     tx: &mut Transaction<'_, Postgres>,
     user: Uuid,
     issuer: &str,
