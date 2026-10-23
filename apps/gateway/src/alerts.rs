@@ -1132,6 +1132,12 @@ async fn key_expiry_send_guard(
     use crate::governance::locks::{self, Scope};
     let mut guard =
         crate::db::begin_with_setup(&store.pool, "SET LOCAL statement_timeout='10s'").await?;
+    // Exclusive-catalog management may acquire authority scopes lazily;
+    // exclude it before taking any scoped locks (canonical protocol prefix).
+    sqlx::query("SELECT pg_advisory_xact_lock_shared($1)")
+        .bind(locks::CATALOG_LOCK)
+        .execute(&mut *guard)
+        .await?;
     type Authority = (Uuid, Option<Uuid>, Uuid, Uuid, String);
     let authority: Option<Authority> = sqlx::query_as("SELECT u.id,k.issued_to_user_id,k.governance_key_id,k.workspace_id,w.kind FROM alert_events e JOIN api_keys k ON k.id=e.api_key_id JOIN workspaces w ON w.id=k.workspace_id JOIN users u ON lower(u.email)=$2 WHERE e.id=$1")
         .bind(event).bind(address).fetch_optional(&mut *guard).await?;
