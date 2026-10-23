@@ -1084,8 +1084,10 @@ pub(crate) async fn key_expiring_tick(
         };
         // Insert incident and fired delivery atomically; ON CONFLICT DO
         // NOTHING absorbs a concurrent/duplicate insert (same tuple, or the
-        // open-uniqueness index) without an error.
-        let inserted = sqlx::query("INSERT INTO alert_events(id,kind,subject_key,level,severity,workspace_id,summary,details,api_key_id,key_expires_at,threshold_days) VALUES($1,'key_expiring',$2,$3,$4,$5,$6,$7,$8,$9,$3) ON CONFLICT DO NOTHING")
+        // open-uniqueness index) without an error. Use the same post-lock
+        // database timestamp for the cap and fired_at, not transaction-start
+        // now(): a lock wait must not backdate events into an already-full window.
+        let inserted = sqlx::query("INSERT INTO alert_events(id,kind,subject_key,level,severity,workspace_id,summary,details,api_key_id,key_expires_at,threshold_days,fired_at) VALUES($1,'key_expiring',$2,$3,$4,$5,$6,$7,$8,$9,$3,$10) ON CONFLICT DO NOTHING")
             .bind(id)
             .bind(key_id.to_string())
             .bind(threshold)
@@ -1095,6 +1097,7 @@ pub(crate) async fn key_expiring_tick(
             .bind(json!({"expires_at": expires_at, "threshold_days": threshold}))
             .bind(key_id)
             .bind(expires_at)
+            .bind(now)
             .execute(&mut **tx)
             .await?
             .rows_affected();

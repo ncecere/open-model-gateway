@@ -82,21 +82,24 @@ async fn key_expiry_history_and_feed_use_real_router_authorization(pool: PgPool)
     )
     .unwrap();
     let app = crate::http::router_with_identity(f.s.clone(), None, engine, identity);
-    async fn get(app: &Router, s: &Session, path: &str) -> (StatusCode, Value) {
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(path)
-                    .header("cookie", format!("omg_session={}", s.cookie))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+    // Exercise a running gateway over loopback as well as its full middleware.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let app = format!("http://{address}");
+    async fn get(app: &str, s: &Session, path: &str) -> (StatusCode, Value) {
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap()
+            .get(format!("{app}{path}"))
+            .header("cookie", format!("omg_session={}", s.cookie))
+            .send()
             .await
             .unwrap();
         let status = response.status();
-        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
-        (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+        (status, response.json().await.unwrap())
     }
     let history = format!(
         "/api/v1/workspaces/{}/alerts/events?kind=key_expiring",
@@ -151,6 +154,7 @@ async fn key_expiry_history_and_feed_use_real_router_authorization(pool: PgPool)
             );
         }
     }
+    server.abort();
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]

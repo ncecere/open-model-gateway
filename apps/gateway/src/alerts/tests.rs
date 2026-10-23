@@ -169,7 +169,14 @@ async fn key_expiry_workspace_rolling_cap_defers_without_starving_other_workspac
     let mut expected = vec![(s.team, 100), (s.personal, 1)];
     expected.sort();
     assert_eq!(counts, expected);
-    let later = expiry_now(&s).await + chrono::Duration::hours(24);
+    let later = now + chrono::Duration::hours(24);
+    assert_eq!(
+        expiry_tick(&s, later - chrono::Duration::microseconds(1))
+            .await
+            .fired,
+        0,
+        "still capped just inside the rolling window"
+    );
     assert_eq!(
         expiry_tick(&s, later).await.fired,
         100,
