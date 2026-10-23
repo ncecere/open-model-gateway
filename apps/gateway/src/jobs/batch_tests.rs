@@ -2517,3 +2517,38 @@ async fn object_visibility_matrix_for_files_and_batches(pool: PgPool) {
         }
     }
 }
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn memoized_refusal_classification_stays_per_line(pool: PgPool) {
+    // Coordinator review of the #238 memoization: the cached lookups must not
+    // fix one model's refusal *kind* for every later line. Two lines of the
+    // same model, each refused by every capable route, but with different
+    // kinds: the first is unsupported everywhere, the second is invalid
+    // everywhere. Each line must be reported with its own kind.
+    let w = world(pool, false, false, 1).await;
+    let f = &w.f;
+    second_claude_route(&w).await;
+    let file = w
+        .upload(
+            &f.principal,
+            &[
+                chat_line("a", "company/claude", "strict-tool"),
+                chat_line("b", "company/claude", "bad-tool-args"),
+            ],
+        )
+        .await;
+    let Err(CreateError::Invalid(issues)) = w
+        .create(f.principal, &file, BatchEndpoint::ChatCompletions, None)
+        .await
+    else {
+        panic!("expected both lines to be refused before admission");
+    };
+    assert_eq!(
+        issues
+            .iter()
+            .map(|i| (i.line, i.error.code()))
+            .collect::<Vec<_>>(),
+        [(1, "unsupported_feature"), (2, "invalid_body")]
+    );
+    consistent(f).await;
+}

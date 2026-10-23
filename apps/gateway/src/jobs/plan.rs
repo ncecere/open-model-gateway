@@ -85,12 +85,13 @@ struct RefusalMemo {
     /// A model's candidate deployments (`Store::deployments`) never depend
     /// on a line's body: fetched at most once per model per scan.
     deployments: HashMap<String, Arc<Vec<Deployment>>>,
-    /// When every capable route of a model refuses an explicit-maximum
-    /// line, the refused set is that model's whole capable candidate set,
-    /// so the `route_plan` classification used to report the refusal kind
-    /// (400 vs 501) is a per-model constant: computed lazily on the first
-    /// such line of a model and reused for every later one in this scan.
-    classification: HashMap<String, Option<InferenceError>>,
+    /// The routes the read-only routing policy would use (`route_plan`)
+    /// for a given set of refused candidates, keyed by model and the sorted
+    /// refused deployment ids. Which routes are capable depends on the line
+    /// (coarse feature support), and the refusal *kind* depends on the
+    /// line's body, so only this usable-route set is reused; the 400/501
+    /// decision is still made per line from its own adapter verdicts.
+    usable: HashMap<(String, Vec<Uuid>), Arc<Vec<Uuid>>>,
 }
 
 impl Jobs {
@@ -147,9 +148,10 @@ impl Jobs {
     /// would actually use returned it, else 501 `unsupported_capability`).
     /// No admission, reservation or routing-health write happens here.
     ///
-    /// Both DB-backed lookups this needs - `Store::deployments` and (only
-    /// when every capable route refuses) `Store::route_plan` - are memoized
-    /// in `memo` at most once per model for the whole scan (#238 follow-up):
+    /// Both DB-backed lookups this needs are memoized in `memo` for the
+    /// whole scan (#238 follow-up): `Store::deployments` once per model, and
+    /// (only when every capable route refuses) `Store::route_plan` once per
+    /// model and refused-route set. The refusal kind stays per line:
     /// a 50,000-line upload must not run ~50k deployment reads and ~100k
     /// routing selects before `admit_batch` ever checks a budget or job
     /// limit. Per-line adapter validation (bodies differ) still runs on
@@ -215,32 +217,41 @@ impl Jobs {
         if !candidates.is_empty() || refused.is_empty() {
             return Ok(None);
         }
-        if let Some(cached) = memo.classification.get(model) {
-            return Ok(*cached);
-        }
         // Every protocol-capable candidate refused: classify it only from
         // the routes the read-only routing policy would actually use
         // (residency, operator-disabled routes and cooldown), exactly as
-        // `Engine::execute_protocol` does for an interactive request.
-        #[cfg(test)]
-        self.plan_lookup_counts
-            .route_plan
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let refused_deployments: Vec<Deployment> = refused.iter().map(|(d, _)| d.clone()).collect();
-        let usable = self
-            .store
-            .route_plan(principal, model, &refused_deployments, request_id)
-            .await?;
-        let invalid = refused.iter().any(|(d, error)| {
-            *error == InferenceError::InvalidRequest && usable.deployment_ids.contains(&d.id)
-        });
-        let result = Some(if invalid {
+        // `Engine::execute_protocol` does for an interactive request. The
+        // usable-route set is memoized per (model, refused set); the kind
+        // below is still decided from this line's own verdicts.
+        let mut key_ids: Vec<Uuid> = refused.iter().map(|(d, _)| d.id).collect();
+        key_ids.sort_unstable();
+        let key = (model.to_owned(), key_ids);
+        let usable = match memo.usable.get(&key) {
+            Some(cached) => cached.clone(),
+            None => {
+                #[cfg(test)]
+                self.plan_lookup_counts
+                    .route_plan
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let refused_deployments: Vec<Deployment> =
+                    refused.iter().map(|(d, _)| d.clone()).collect();
+                let plan = self
+                    .store
+                    .route_plan(principal, model, &refused_deployments, request_id)
+                    .await?;
+                let ids = Arc::new(plan.deployment_ids);
+                memo.usable.insert(key, ids.clone());
+                ids
+            }
+        };
+        let invalid = refused
+            .iter()
+            .any(|(d, error)| *error == InferenceError::InvalidRequest && usable.contains(&d.id));
+        Ok(Some(if invalid {
             InferenceError::InvalidRequest
         } else {
             InferenceError::Unsupported
-        });
-        memo.classification.insert(model.to_owned(), result);
-        Ok(result)
+        }))
     }
 
     /// Validate `input` (already opened) and copy it to the batch's private
