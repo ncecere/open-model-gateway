@@ -230,12 +230,13 @@ impl Config {
             .filter(|name| !name.is_empty())
             .map(str::to_owned)
             .collect();
-        // Validate dedicated telemetry references first, so trace failures do
-        // not echo their selected variable names through legacy diagnostics.
-        let traces = TraceConfig::from_env(environment)?;
         disjoint_allowlists(&secret_env_allowlist, &smtp_env_allowlist, &|name| {
             std::env::var(name).ok()
         })?;
+        // After the allowlist checks, so a trace pointer that a provider or SMTP
+        // allowlist could read is reported like every other pointer: by setting
+        // and variable name, never value. Trace errors themselves stay generic.
+        let traces = TraceConfig::from_env(environment)?;
         let max_concurrent = std::env::var("GATEWAY_MAX_CONCURRENT_REQUESTS")
             .unwrap_or_else(|_| "128".into())
             .parse::<usize>()
