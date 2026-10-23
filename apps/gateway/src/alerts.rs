@@ -1433,7 +1433,6 @@ struct Pending {
     workspace_name: Option<String>,
     workspace_kind: Option<String>,
     connection_name: Option<String>,
-    personal_workspace: Option<Uuid>,
     builtin: Option<String>,
     kind: String,
     key_expires_at: Option<DateTime<Utc>>,
@@ -1464,15 +1463,14 @@ fn email_message(row: Pending, installation: String) -> (String, String) {
         workspace_name: ws_name,
         workspace_kind: ws_kind,
         connection_name: connection,
-        personal_workspace: _personal,
         builtin,
         kind,
         key_expires_at,
     } = row;
-    // Keyed off the workspace's own kind, not the `personal_workspace`
-    // builtin-derived column: that column is only ever set for kinds that
-    // carry `builtin` (not key_expiring), and every alert tied to a personal
-    // workspace is owner-only regardless of how it was sourced.
+    // Keyed off the workspace's own kind: every alert tied to a personal
+    // workspace is owner-only regardless of how it was sourced (a builtin
+    // personal_budget incident or, for key_expiring, the key's own
+    // workspace), so there is no separate builtin-derived column to carry.
     let scope = if ws_kind.as_deref() == Some("personal") {
         "Your personal workspace".to_owned()
     } else if let Some(connection) = connection {
