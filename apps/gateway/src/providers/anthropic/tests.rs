@@ -6,7 +6,7 @@ use axum::{
     http::{HeaderMap, Response, Uri},
 };
 use std::{convert::Infallible, sync::Mutex};
-struct Resolver;
+pub(super) struct Resolver;
 impl SecretResolver for Resolver {
     fn resolve(&self, _: &str) -> Result<Secret> {
         Secret::new("mock-key".into())
@@ -23,7 +23,7 @@ fn target() -> Deployment {
         supported_protocols: vec!["chat_completions".into(), "messages".into()],
     }
 }
-fn request(stream: bool) -> ChatRequest {
+pub(super) fn request(stream: bool) -> ChatRequest {
     ChatRequest {
         model: "public".into(),
         messages: vec![Message {
@@ -51,10 +51,10 @@ async fn unpriced_omission_keeps_legacy_anthropic_wire_fallback() {
     }
 }
 
-fn complete() -> Value {
+pub(super) fn complete() -> Value {
     json!({"id":"upstream","type":"message","role":"assistant","model":"private","content":[{"type":"text","text":"世界"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":4,"output_tokens":2,"output_tokens_details":{"thinking_tokens":1}}})
 }
-fn stream() -> Vec<Value> {
+pub(super) fn stream() -> Vec<Value> {
     vec![
         json!({"type":"message_start","message":{"id":"x","type":"message","role":"assistant","model":"private","content":[],"stop_reason":null,"usage":{"input_tokens":4,"output_tokens":0}}}),
         json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
@@ -131,6 +131,60 @@ impl Mock {
         }
     }
 }
+#[tokio::test]
+async fn native_terminal_reasons_survive_real_http_json_and_sse() {
+    for reason in [
+        "refusal",
+        "model_context_window_exceeded",
+        "end_turn",
+        "max_tokens",
+    ] {
+        for streaming in [false, true] {
+            let bytes = if streaming {
+                let mut frames = stream();
+                frames[4]["delta"]["stop_reason"] = json!(reason);
+                frames
+                    .iter()
+                    .map(|v| format!("data: {v}\n\n"))
+                    .collect::<String>()
+                    .into_bytes()
+            } else {
+                let mut body = complete();
+                body["stop_reason"] = json!(reason);
+                body.to_string().into_bytes()
+            };
+            let mock = Mock::new(200, Some(bytes)).await;
+            let output = mock.adapter.execute(&target(), request(streaming)).await;
+            assert!(output.is_ok(), "{reason} streaming={streaming}");
+            let observed = match output.unwrap() {
+                ProviderOutput::Complete(r) => serde_json::to_value(r.finish_reason).unwrap(),
+                ProviderOutput::Stream(s) => {
+                    let events: Vec<_> = s.collect().await;
+                    assert!(events.iter().all(Result::is_ok), "{reason}");
+                    assert!(matches!(events.last(), Some(Ok(ChatEvent::Done))));
+                    events
+                        .into_iter()
+                        .find_map(|e| match e.unwrap() {
+                            ChatEvent::Finish(r) => Some(serde_json::to_value(r).unwrap()),
+                            _ => None,
+                        })
+                        .unwrap()
+                }
+            };
+            assert_eq!(
+                observed,
+                json!(match reason {
+                    "model_context_window_exceeded" => "context_window_exceeded",
+                    "end_turn" => "stop",
+                    "max_tokens" => "length",
+                    other => other,
+                })
+            );
+            assert_eq!(mock.capture.lock().unwrap().len(), 1);
+        }
+    }
+}
+
 #[tokio::test]
 async fn local_contract_and_native_headers() {
     let mock = Mock::new(200, None).await;
