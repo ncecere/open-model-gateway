@@ -458,6 +458,20 @@ fn classify(error: &lettre::transport::smtp::Error) -> DeliveryError {
     if error.is_permanent() {
         return DeliveryError::Rejected;
     }
+    // The relay closed the connection before sending any reply at all (EOF
+    // while awaiting a response, e.g. after accepting DATA's body but before
+    // completion): a connection failure, retryable, never the relay's
+    // fault. Lettre wraps this as a Response-kind error with its own fixed
+    // "incomplete response" message, which never contains relay-controlled
+    // content, so matching that exact literal does not inspect or retain
+    // anything sensitive. An actually malformed/garbage reply (parsed from
+    // real relay bytes) produces a different message and stays terminal below.
+    if error.is_response()
+        && std::error::Error::source(error)
+            .is_some_and(|source| source.to_string() == "incomplete response")
+    {
+        return DeliveryError::Connection;
+    }
     // Lettre also uses Client for missing required STARTTLS and incompatible
     // AUTH mechanisms. These are configuration/protocol failures, not network
     // outages. Do not inspect or retain its potentially sensitive source text.
