@@ -19,7 +19,7 @@ pub(super) fn routes() -> Router<Store> {
 /// Platform Admins and Auditors.
 async fn status(State(s): State<Store>, Extension(u): Extension<ManagementPrincipal>) -> ApiResult {
     let mut tx = crate::db::begin(&s.pool).await?;
-    resources::platform_read(&mut tx, u.user_id()).await?;
+    resources::platform_read(&mut tx, &u).await?;
     tx.commit().await?;
     let mut v = crate::audit_export::status(&s).await?;
     // Whether the replica answering has a destination (all should agree).

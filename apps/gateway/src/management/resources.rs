@@ -96,11 +96,21 @@ async fn role_inner(
         .await?
         .ok_or_else(denied)
 }
+/// Platform-reader authorization for a real (lock-capable) transaction,
+/// with #37 PR2 item 1's transaction-level admin-token/owner revalidation
+/// (see [`revalidate_admin_token`]'s own doc): middleware preflight alone
+/// cannot see a token revoked, or an owner demoted/suspended/cleaned up,
+/// after preflight but before this handler's own transaction. A no-op for
+/// a browser principal.
 pub(crate) async fn platform_read(
     tx: &mut Transaction<'_, Postgres>,
-    user: Uuid,
+    u: &impl Actor,
 ) -> Result<(), ApiError> {
-    if !matches!(platform_role(tx, user).await?.as_str(), "admin" | "auditor") {
+    revalidate_admin_token(tx, u).await?;
+    if !matches!(
+        platform_role(tx, u.user_id()).await?.as_str(),
+        "admin" | "auditor"
+    ) {
         return Err(denied());
     }
     Ok(())
@@ -118,11 +128,115 @@ pub(crate) async fn platform_read_snapshot(
     }
     Ok(())
 }
+/// [`platform_read`]'s write counterpart, with the same transaction-level
+/// admin-token/owner revalidation.
 pub(crate) async fn platform_write(
+    tx: &mut Transaction<'_, Postgres>,
+    u: &impl Actor,
+) -> Result<(), ApiError> {
+    revalidate_admin_token(tx, u).await?;
+    platform_write_role_only(tx, u.user_id()).await
+}
+/// [`platform_write`]'s role check alone, with no admin-token revalidation
+/// and no lock: for the handful of exception call sites
+/// (governance/policies.rs `lock_scope`, catalogs.rs `change_model`,
+/// members.rs `manual_member`/`unset_member`) that must instead merge
+/// [`owner_scope`] into their own later `governance::locks::exclusive` call
+/// -- taking the owner's user-scope lock here, early, would be acquired
+/// before a Type/Workspace scope those sites lock afterward (violating the
+/// canonical Type<Workspace<User<Lineage order, `docs/governance.md`), or
+/// out of ascending order against a *different* User-class key (a target
+/// user), risking a cross-admin deadlock (two admins managing each other
+/// through their own tokens, each requesting the pair of keys in the
+/// opposite order). Those sites finish with
+/// [`revalidate_admin_token_locked`] once their own merged lock is held.
+pub(crate) async fn platform_write_role_only(
     tx: &mut Transaction<'_, Postgres>,
     user: Uuid,
 ) -> Result<(), ApiError> {
     if platform_role(tx, user).await? != "admin" {
+        return Err(denied());
+    }
+    Ok(())
+}
+/// #37 PR2 item 1: transaction-level admin-token and owner revalidation.
+/// Middleware preflight (`authorization.rs`) is a lock-free snapshot taken
+/// before extraction; it cannot see a token revoked, or its owner
+/// demoted/suspended/cleaned up, after that snapshot but before this
+/// handler's own transaction. A no-op for a browser principal
+/// (`u.token_id()` is `None`).
+///
+/// Takes the owner's user-scope authority lock *shared* -- the same
+/// precedent `governance.rs::resolve_usage` already uses
+/// (`locks::shared([Scope::Workspace, Scope::User])`): every owner-loss
+/// path (role-grant revoke, suspension, cleanup; migration 0051's deferred
+/// and immediate triggers) takes this same lock *exclusive* before
+/// revoking the owner's tokens, so a transaction already holding it shared
+/// is guaranteed to finish (commit or roll back) before such a revocation
+/// can, and a transaction that only starts after it commits sees the loss.
+///
+/// Then checks the token's own row with `FOR SHARE`: the single-token
+/// explicit revoke (`admin_tokens::revoke_admin_token`, browser-only, never
+/// takes this advisory lock at all) only ever does a plain row write, so
+/// `FOR SHARE` here blocks that write from completing until this
+/// transaction ends, giving the same finish-before-or-see-it guarantee for
+/// that case too. The user-scope lock is taken *before* this row read
+/// deliberately, matching every owner-loss trigger's own order (lock
+/// first, then touch the owner's token rows): the reverse order
+/// (token-row-then-user-lock) would deadlock against the bulk
+/// revoke-on-demotion trigger, which already holds the user-scope lock
+/// exclusive by the time it writes the token rows.
+///
+/// Only for sites that take no other Type/Workspace/User(other)/Lineage
+/// scope lock later in the same transaction (see [`platform_write_role_only`]
+/// for the exceptions that do).
+pub(crate) async fn revalidate_admin_token(
+    tx: &mut Transaction<'_, Postgres>,
+    u: &impl Actor,
+) -> Result<(), ApiError> {
+    let Some(token_id) = u.token_id() else {
+        return Ok(());
+    };
+    locks::shared(tx, [locks::Scope::User(u.user_id())]).await?;
+    revalidate_token_row(tx, token_id).await
+}
+/// The owner's user-scope lock to merge into a handler's own later
+/// `governance::locks::exclusive` call, for the exception sites
+/// [`platform_write_role_only`]'s doc names. `None` for a browser
+/// principal: nothing to merge.
+pub(crate) fn owner_scope(u: &impl Actor) -> Option<locks::Scope> {
+    u.token_id().map(|_| locks::Scope::User(u.user_id()))
+}
+/// Finishes revalidation for an exception site that has already merged
+/// [`owner_scope`] into its own `governance::locks::exclusive` call: a
+/// fresh role re-check (a read from before that lock was granted could not
+/// have observed a demotion the lock now excludes) and the token's own row
+/// check, without acquiring any lock itself. A no-op for a browser
+/// principal.
+pub(crate) async fn revalidate_admin_token_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    u: &impl Actor,
+) -> Result<(), ApiError> {
+    let Some(token_id) = u.token_id() else {
+        return Ok(());
+    };
+    if platform_role(tx, u.user_id()).await? != "admin" {
+        return Err(denied());
+    }
+    revalidate_token_row(tx, token_id).await
+}
+async fn revalidate_token_row(
+    tx: &mut Transaction<'_, Postgres>,
+    token_id: Uuid,
+) -> Result<(), ApiError> {
+    let live: bool = sqlx::query_scalar(
+        "SELECT revoked_at IS NULL AND expires_at>clock_timestamp() FROM admin_api_tokens WHERE id=$1 FOR SHARE",
+    )
+    .bind(token_id)
+    .fetch_optional(&mut **tx)
+    .await?
+    .unwrap_or(false);
+    if !live {
         return Err(denied());
     }
     Ok(())
@@ -136,9 +250,9 @@ pub(crate) async fn catalog_tx<'a>(
     catalog_lock(&mut tx, write).await?;
     installation_lock(&mut tx).await?;
     if write {
-        platform_write(&mut tx, u.user_id()).await?
+        platform_write(&mut tx, u).await?
     } else {
-        platform_read(&mut tx, u.user_id()).await?
+        platform_read(&mut tx, u).await?
     }
     Ok(tx)
 }
@@ -260,6 +374,11 @@ async fn access_inner(
     lock: bool,
 ) -> Result<WorkspaceAccess, ApiError> {
     let (role, kind, owner_user, disabled, membership) = if lock {
+        // #37 PR2 item 1: transaction-level admin-token/owner revalidation
+        // (see `revalidate_admin_token`'s own doc), before the role and
+        // workspace row checks below. No other scope lock is taken later
+        // in this call chain, so this is safe at the canonical position.
+        revalidate_admin_token(tx, u).await?;
         let role = role_inner(tx, u.user_id(), true).await?;
         let (kind, owner_user, disabled): (String, Option<Uuid>, bool) = sqlx::query_as(
             "SELECT kind,owner_user_id,disabled_at IS NOT NULL FROM workspaces WHERE id=$1 AND ($2 OR disabled_at IS NULL) FOR NO KEY UPDATE",

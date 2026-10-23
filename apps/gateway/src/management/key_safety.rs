@@ -306,7 +306,7 @@ pub(super) async fn platform_key_safety(
         return Err(invalid());
     }
     let mut tx = resources::installation_tx(&s).await?;
-    resources::platform_read(&mut tx, u.user_id()).await?;
+    resources::platform_read(&mut tx, &u).await?;
     if let Some(ws) = q.workspace_id {
         // Only a live Team/Project can be filtered on; personal workspaces are never itemized.
         sqlx::query_scalar::<_, Uuid>(

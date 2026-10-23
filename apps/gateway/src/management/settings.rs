@@ -68,12 +68,12 @@ pub(super) async fn write_tx<'a>(
     u: &impl Actor,
 ) -> Result<Transaction<'a, Postgres>, ApiError> {
     let mut tx = resources::installation_tx(s).await?;
-    resources::platform_write(&mut tx, u.user_id()).await?;
+    resources::platform_write(&mut tx, u).await?;
     Ok(tx)
 }
 async fn read_tx<'a>(s: &'a Store, u: &impl Actor) -> Result<Transaction<'a, Postgres>, ApiError> {
     let mut tx = resources::installation_tx(s).await?;
-    resources::platform_read(&mut tx, u.user_id()).await?;
+    resources::platform_read(&mut tx, u).await?;
     Ok(tx)
 }
 /// The address a test email goes to: a browser session's verified claim,

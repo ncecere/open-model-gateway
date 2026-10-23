@@ -599,7 +599,7 @@ pub(super) async fn reconcile(
     Json(p): Json<Reconcile>,
 ) -> ApiResult {
     let (mut tx, _) = resources::workspace_tx(&s, &u, ws).await?;
-    resources::platform_write(&mut tx, u.user_id()).await?;
+    resources::platform_write(&mut tx, &u).await?;
     sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM inference_executions WHERE workspace_id=$1 AND id=$2",
     )

@@ -721,7 +721,10 @@ async fn change_model(
 ) -> ApiResult {
     let mut tx = resources::installation_tx(&s).await?;
     if direct {
-        resources::platform_write(&mut tx, u.user_id()).await?;
+        // #37 PR2 item 1 exception: deferred to the merged `locks::exclusive`
+        // call below (this transaction takes Workspace/Lineage scope locks
+        // later; see `resources::platform_write_role_only`'s doc).
+        resources::platform_write_role_only(&mut tx, u.user_id()).await?;
         validate_ids(&mut tx, &[ws], "workspaces").await?;
     } else {
         let a = resources::workspace_access(&mut tx, &u, ws).await?;
@@ -743,7 +746,11 @@ async fn change_model(
         locks::key_lineages(&mut tx, "governance_key_id IN (SELECT governance_key_id FROM key_model_selections WHERE workspace_id=$1)", Some(ws), None).await?
     };
     scopes.push(locks::Scope::Workspace(ws));
+    if let Some(owner) = resources::owner_scope(&u) {
+        scopes.push(owner);
+    }
     locks::exclusive(&mut tx, scopes).await?;
+    resources::revalidate_admin_token_locked(&mut tx, &u).await?;
     if add {
         sqlx::query("INSERT INTO workspace_model_grants(workspace_id,model_id,source) VALUES($1,$2,$3) ON CONFLICT DO NOTHING").bind(ws).bind(model).bind(source).execute(&mut *tx).await?;
     } else {

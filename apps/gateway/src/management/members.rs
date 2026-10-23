@@ -92,7 +92,10 @@ pub(super) async fn platform_add_member(
     Json(b): Json<MemberInput>,
 ) -> ApiResult {
     let mut tx = resources::installation_tx(&s).await?;
-    resources::platform_write(&mut tx, u.user_id()).await?;
+    // #37 PR2 item 1 exception: deferred to `set_member`/`manual_member`'s
+    // merged lock below (this transaction takes a target User scope lock
+    // later; see `manual_member`'s own doc).
+    resources::platform_write_role_only(&mut tx, u.user_id()).await?;
     platform_shared(&mut tx, ws).await?;
     set_member(&mut tx, &u, ws, &b).await?;
     tx.commit().await?;
@@ -104,7 +107,7 @@ pub(super) async fn platform_remove_member(
     Path((ws, user)): Path<(Uuid, Uuid)>,
 ) -> ApiResult {
     let mut tx = resources::installation_tx(&s).await?;
-    resources::platform_write(&mut tx, u.user_id()).await?;
+    resources::platform_write_role_only(&mut tx, u.user_id()).await?;
     platform_shared(&mut tx, ws).await?;
     unset_member(&mut tx, &u, ws, user).await?;
     tx.commit().await?;
@@ -190,13 +193,27 @@ async fn protect_owner(
 }
 async fn manual_member(
     tx: &mut Transaction<'_, Postgres>,
+    u: &impl Actor,
     ws: Uuid,
     user: Uuid,
     role: &str,
 ) -> Result<(), ApiError> {
     // Replacing the manual grant revokes the old one: the member's
     // admissions finish first (scoped lock order). Called before any write.
-    locks::exclusive(tx, [locks::Scope::User(user)]).await?;
+    //
+    // #37 PR2 item 1 exception: an admin token's owner scope is merged into
+    // this same call (ascending canonical key order against the *target*
+    // member's own User-class key) rather than taken separately and early
+    // by `resources::platform_write` -- two admins managing each other
+    // through their own tokens must request the same pair of keys in the
+    // same order, or they deadlock (`resources::platform_write_role_only`'s
+    // doc). A no-op merge/recheck for a browser principal.
+    let mut scopes = vec![locks::Scope::User(user)];
+    if let Some(owner) = resources::owner_scope(u) {
+        scopes.push(owner);
+    }
+    locks::exclusive(tx, scopes).await?;
+    resources::revalidate_admin_token_locked(tx, u).await?;
     sqlx::query("UPDATE workspace_membership_grants SET revoked_at=now() WHERE workspace_id=$1 AND user_id=$2 AND source='manual' AND revoked_at IS NULL").bind(ws).bind(user).execute(&mut **tx).await?;
     sqlx::query("INSERT INTO workspace_membership_grants(id,workspace_id,user_id,role,source) VALUES($1,$2,$3,$4,'manual')").bind(Uuid::new_v4()).bind(ws).bind(user).bind(role).execute(&mut **tx).await?;
     Ok(())
@@ -236,7 +253,7 @@ async fn set_member(
     if old.as_deref() == Some("owner") && b.role != "owner" {
         protect_owner(tx, ws, b.user_id).await?;
     }
-    manual_member(tx, ws, b.user_id, &b.role).await?;
+    manual_member(tx, u, ws, b.user_id, &b.role).await?;
     audit(
         tx,
         u,
@@ -273,10 +290,16 @@ async fn unset_member(
     user: Uuid,
 ) -> Result<(), ApiError> {
     // The member, then the lineages of their keys here (revoked below once
-    // no membership remains), before any write.
+    // no membership remains), before any write. #37 PR2 item 1 exception:
+    // an admin token's owner scope is merged into this same call; see
+    // `manual_member`'s own doc for why (opposing owner/target order).
     let mut scopes = locks::key_lineages(tx, "issued_to_user_id=$2", Some(ws), Some(user)).await?;
     scopes.push(locks::Scope::User(user));
+    if let Some(owner) = resources::owner_scope(u) {
+        scopes.push(owner);
+    }
     locks::exclusive(tx, scopes).await?;
+    resources::revalidate_admin_token_locked(tx, u).await?;
     let old:Option<String>=sqlx::query_scalar("SELECT role FROM workspace_membership_grants WHERE workspace_id=$1 AND user_id=$2 AND source='manual' AND revoked_at IS NULL").bind(ws).bind(user).fetch_optional(&mut **tx).await?;
     if old.as_deref() == Some("owner") {
         protect_owner(tx, ws, user).await?;
@@ -419,7 +442,7 @@ pub(super) async fn accept_invite(
     } else {
         &role
     };
-    manual_member(&mut tx, ws, u.user_id, resulting).await?;
+    manual_member(&mut tx, &u, ws, u.user_id, resulting).await?;
     sqlx::query("UPDATE workspace_invitations SET accepted_at=now() WHERE id=$1")
         .bind(id)
         .execute(&mut *tx)

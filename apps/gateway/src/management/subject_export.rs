@@ -228,7 +228,7 @@ async fn platform(
 ) -> Result<Response, ApiError> {
     {
         let mut tx = crate::db::begin(&s.pool).await?;
-        resources::platform_read(&mut tx, u.user_id()).await?;
+        resources::platform_read(&mut tx, &u).await?;
         let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id=$1)")
             .bind(user)
             .fetch_one(&mut *tx)

@@ -13,7 +13,7 @@ async fn admin_tx<'a>(
     u: &BrowserPrincipal,
 ) -> Result<Transaction<'a, Postgres>, ApiError> {
     let mut tx = crate::db::begin(&s.pool).await?;
-    resources::platform_write(&mut tx, u.user_id).await?;
+    resources::platform_write(&mut tx, u).await?;
     Ok(tx)
 }
 

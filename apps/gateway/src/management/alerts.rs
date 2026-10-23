@@ -534,9 +534,9 @@ async fn platform_tx<'a>(
 ) -> Result<Transaction<'a, Postgres>, ApiError> {
     let mut tx = resources::installation_tx(s).await?;
     if write {
-        resources::platform_write(&mut tx, u.user_id()).await?;
+        resources::platform_write(&mut tx, u).await?;
     } else {
-        resources::platform_read(&mut tx, u.user_id()).await?;
+        resources::platform_read(&mut tx, u).await?;
     }
     Ok(tx)
 }
