@@ -1184,6 +1184,68 @@ async fn multi_route_all_candidates_reject_with_differing_kinds_is_invalid_reque
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
+async fn batch_planning_memoizes_model_level_lookups_within_one_scan(pool: PgPool) {
+    // #238 follow-up (adversarial re-review, medium): with configuration
+    // caches bypassed (the test default - `ConfigVersions::new` starts
+    // disabled until `enable()`/`start()`), `every_candidate_route_refuses`
+    // must fetch `company/claude`'s candidate deployments and classify its
+    // universal refusal at most once per scan, not once per
+    // explicit-maximum line. Without memoization this upload of 50
+    // identical lines would run 50 `Store::deployments` reads and 50
+    // `Store::route_plan` selects before `admit_batch` ever checks a
+    // budget or job limit; repeated uploads amplify that load.
+    let w = world(pool, false, false, 1).await;
+    let f = &w.f;
+    second_claude_route(&w).await;
+    const LINES: usize = 50;
+    let lines: Vec<Value> = (0..LINES)
+        .map(|i| chat_line(&format!("l{i}"), "company/claude", "strict-tool"))
+        .collect();
+    let file = w.upload(&f.principal, &lines).await;
+    let input = w
+        .files
+        .get(
+            crate::filestore::files::parse_public_id(&file).unwrap(),
+            Some(f.principal.workspace_id),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let result = w
+        .jobs
+        .plan(
+            &f.principal,
+            Uuid::new_v4(),
+            &input,
+            BatchEndpoint::ChatCompletions,
+            false,
+        )
+        .await;
+    // Every candidate route refuses "strict-tool": the upload is invalid,
+    // but planning must still have classified it, not skipped the check.
+    assert!(
+        result.is_err(),
+        "every candidate route refusing the same body must still refuse the upload"
+    );
+    assert_eq!(
+        w.jobs
+            .plan_lookup_counts
+            .deployments
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "one candidate-deployment lookup for the whole scan, not one per line"
+    );
+    assert_eq!(
+        w.jobs
+            .plan_lookup_counts
+            .route_plan
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "at most one route-plan classification for the whole scan, not one per line"
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
 async fn pinned_line_refused_by_its_own_route_is_classified_like_interactive_not_model_unavailable(
     pool: PgPool,
 ) {

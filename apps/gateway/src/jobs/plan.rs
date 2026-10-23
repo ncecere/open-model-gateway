@@ -60,6 +60,39 @@ struct Resolved {
     legacy: bool,
 }
 
+/// Test-only counters proving [`Jobs::every_candidate_route_refuses`]'s two
+/// model-level, read-only lookups (`Store::deployments`, `Store::route_plan`)
+/// are memoized at most once per model per scan (#238 follow-up), not once
+/// per explicit-maximum line. Incremented only at those two call sites;
+/// never read outside tests.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct PlanLookupCounts {
+    pub(crate) deployments: std::sync::atomic::AtomicUsize,
+    pub(crate) route_plan: std::sync::atomic::AtomicUsize,
+}
+
+/// Per-scan memoization of [`Jobs::every_candidate_route_refuses`]'s
+/// model-level, read-only lookups. With configuration caches bypassed
+/// (`GATEWAY_CONFIG_CACHE=off`, or a version-unconfirmed cache miss), a
+/// naive per-line call ran `Store::deployments` and (when every capable
+/// route refused) `Store::route_plan` for every explicit-maximum line, so a
+/// large upload amplified database load before `admit_batch` ever checked a
+/// budget or job limit. Neither entry survives this one scan: nothing here
+/// is cached across scans or requests.
+#[derive(Default)]
+struct RefusalMemo {
+    /// A model's candidate deployments (`Store::deployments`) never depend
+    /// on a line's body: fetched at most once per model per scan.
+    deployments: HashMap<String, Arc<Vec<Deployment>>>,
+    /// When every capable route of a model refuses an explicit-maximum
+    /// line, the refused set is that model's whole capable candidate set,
+    /// so the `route_plan` classification used to report the refusal kind
+    /// (400 vs 501) is a per-model constant: computed lazily on the first
+    /// such line of a model and reused for every later one in this scan.
+    classification: HashMap<String, Option<InferenceError>>,
+}
+
 impl Jobs {
     async fn resolve(
         &self,
@@ -113,6 +146,15 @@ impl Jobs {
     /// `invalid_request_error` only when a route the live routing policy
     /// would actually use returned it, else 501 `unsupported_capability`).
     /// No admission, reservation or routing-health write happens here.
+    ///
+    /// Both DB-backed lookups this needs - `Store::deployments` and (only
+    /// when every capable route refuses) `Store::route_plan` - are memoized
+    /// in `memo` at most once per model for the whole scan (#238 follow-up):
+    /// a 50,000-line upload must not run ~50k deployment reads and ~100k
+    /// routing selects before `admit_batch` ever checks a budget or job
+    /// limit. Per-line adapter validation (bodies differ) still runs on
+    /// every line, deduplicated per provider within that line as before;
+    /// nothing here survives past this one scan.
     async fn every_candidate_route_refuses(
         &self,
         principal: &Principal,
@@ -120,12 +162,24 @@ impl Jobs {
         protocol: ApiProtocol,
         request_id: Uuid,
         request: &ChatRequest,
+        memo: &mut RefusalMemo,
     ) -> Result<Option<InferenceError>, JobError> {
-        let deployments = self.store.deployments(principal, model).await?;
+        let deployments = match memo.deployments.get(model) {
+            Some(cached) => cached.clone(),
+            None => {
+                #[cfg(test)]
+                self.plan_lookup_counts
+                    .deployments
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let fetched = Arc::new(self.store.deployments(principal, model).await?);
+                memo.deployments.insert(model.to_owned(), fetched.clone());
+                fetched
+            }
+        };
         let mut candidates: Vec<Deployment> = Vec::new();
         let mut refused: Vec<(Deployment, InferenceError)> = Vec::new();
         let mut verdicts: HashMap<String, Result<(), InferenceError>> = HashMap::new();
-        for deployment in deployments {
+        for deployment in deployments.iter() {
             if !deployment
                 .supported_protocols
                 .iter()
@@ -154,17 +208,24 @@ impl Jobs {
                     }
                 });
             match verdict {
-                Ok(()) => candidates.push(deployment),
-                Err(error) => refused.push((deployment, error)),
+                Ok(()) => candidates.push(deployment.clone()),
+                Err(error) => refused.push((deployment.clone(), error)),
             }
         }
         if !candidates.is_empty() || refused.is_empty() {
             return Ok(None);
         }
+        if let Some(cached) = memo.classification.get(model) {
+            return Ok(*cached);
+        }
         // Every protocol-capable candidate refused: classify it only from
         // the routes the read-only routing policy would actually use
         // (residency, operator-disabled routes and cooldown), exactly as
         // `Engine::execute_protocol` does for an interactive request.
+        #[cfg(test)]
+        self.plan_lookup_counts
+            .route_plan
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let refused_deployments: Vec<Deployment> = refused.iter().map(|(d, _)| d.clone()).collect();
         let usable = self
             .store
@@ -173,11 +234,13 @@ impl Jobs {
         let invalid = refused.iter().any(|(d, error)| {
             *error == InferenceError::InvalidRequest && usable.deployment_ids.contains(&d.id)
         });
-        Ok(Some(if invalid {
+        let result = Some(if invalid {
             InferenceError::InvalidRequest
         } else {
             InferenceError::Unsupported
-        }))
+        });
+        memo.classification.insert(model.to_owned(), result);
+        Ok(result)
     }
 
     /// Validate `input` (already opened) and copy it to the batch's private
@@ -275,6 +338,9 @@ impl Jobs {
         // deterministically: excluded from the parent envelope, not from the
         // batch (see the end of the scan).
         let mut deterministic_rejects: Vec<(u64, InferenceError)> = Vec::new();
+        // Model-level memoization of `every_candidate_route_refuses`'s
+        // read-only lookups, scoped to this one scan (#238 follow-up).
+        let mut refusal_memo = RefusalMemo::default();
         let issue = |issues: &mut Vec<Issue>, line: u64, error: LineError| {
             issues.push(Issue { line, error });
             issues.len() >= MAX_ISSUES
@@ -428,6 +494,7 @@ impl Jobs {
                                 endpoint.protocol(),
                                 request_id,
                                 r,
+                                &mut refusal_memo,
                             )
                             .await?
                         }

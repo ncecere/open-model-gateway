@@ -204,6 +204,12 @@ pub struct Jobs {
     /// Approved local endpoints: batch scheduling reads server load signals
     /// only from their origins (pinned addresses).
     pub(crate) approvals: Option<Arc<crate::providers::local::endpoints::ApprovedEndpoints>>,
+    /// Test-only counters proving `plan::every_candidate_route_refuses`'s
+    /// model-level lookups are memoized at most once per scan (#238
+    /// follow-up), not once per explicit-maximum line. Never read outside
+    /// tests; production builds never allocate or touch this.
+    #[cfg(test)]
+    pub(crate) plan_lookup_counts: Arc<plan::PlanLookupCounts>,
 }
 impl Jobs {
     pub fn new(store: Store, engine: &Engine) -> Self {
@@ -219,6 +225,8 @@ impl Jobs {
             files: None,
             engine: None,
             approvals: None,
+            #[cfg(test)]
+            plan_lookup_counts: Arc::new(plan::PlanLookupCounts::default()),
         }
     }
     /// Attach the approved local endpoints (batch scheduling load signals).
