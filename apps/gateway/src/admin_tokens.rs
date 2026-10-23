@@ -195,12 +195,12 @@ impl Store {
                 NewAdminTokenError::InvalidExpiry,
             ));
         }
-        if let Some(list) = ip_allowlist {
-            if !valid_allowlist(list) {
-                return Err(CreateAdminTokenError::Invalid(
-                    NewAdminTokenError::InvalidAllowlist,
-                ));
-            }
+        if let Some(list) = ip_allowlist
+            && !valid_allowlist(list)
+        {
+            return Err(CreateAdminTokenError::Invalid(
+                NewAdminTokenError::InvalidAllowlist,
+            ));
         }
         let new = NewAdminToken::generate().map_err(CreateAdminTokenError::Entropy)?;
         // created_at and expires_at are computed from the same instant (not

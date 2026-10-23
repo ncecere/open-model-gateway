@@ -1174,13 +1174,21 @@ async fn admin_tokens_run_as_runtime(pool: &PgPool) {
         .execute(pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO platform_role_grants(user_id,role,source) VALUES($1,'admin','manual')")
-        .bind(owner)
-        .execute(pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO platform_role_grants(user_id,role,source) VALUES($1,'admin','manual')",
+    )
+    .bind(owner)
+    .execute(pool)
+    .await
+    .unwrap();
     let created = store
-        .create_admin_token(owner, "Runtime probe", &["platform:read".to_string()], 30, None)
+        .create_admin_token(
+            owner,
+            "Runtime probe",
+            &["platform:read".to_string()],
+            30,
+            None,
+        )
         .await
         .expect("runtime creates an admin token");
     let found = store
@@ -1244,7 +1252,9 @@ async fn admin_tokens_run_as_runtime(pool: &PgPool) {
             .unwrap_err();
         let text = denied.to_string();
         assert!(
-            text.contains("permission denied") || text.contains("immutable") || text.contains("final"),
+            text.contains("permission denied")
+                || text.contains("immutable")
+                || text.contains("final"),
             "{statement}: {denied}"
         );
     }
@@ -1258,11 +1268,13 @@ async fn admin_tokens_run_as_runtime(pool: &PgPool) {
         .create_admin_token(owner, "Second", &["platform:read".to_string()], 30, None)
         .await
         .unwrap();
-    sqlx::query("UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND role='admin'")
-        .bind(owner)
-        .execute(&runtime)
-        .await
-        .expect("runtime revokes a platform role grant");
+    sqlx::query(
+        "UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND role='admin'",
+    )
+    .bind(owner)
+    .execute(&runtime)
+    .await
+    .expect("runtime revokes a platform role grant");
     let revoked: bool =
         sqlx::query_scalar("SELECT revoked_at IS NOT NULL FROM admin_api_tokens WHERE id=$1")
             .bind(second.id)

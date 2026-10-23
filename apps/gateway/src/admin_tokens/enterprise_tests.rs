@@ -13,12 +13,14 @@ async fn admin(pool: &PgPool, email: &str) -> Uuid {
         .execute(pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO platform_role_grants(id,user_id,role,source) VALUES($1,$2,'admin','manual')")
-        .bind(Uuid::new_v4())
-        .bind(id)
-        .execute(pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO platform_role_grants(id,user_id,role,source) VALUES($1,$2,'admin','manual')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(id)
+    .execute(pool)
+    .await
+    .unwrap();
     id
 }
 
@@ -45,11 +47,12 @@ async fn create_returns_plaintext_once_and_authenticate_round_trips(pool: PgPool
     assert_eq!(found.scopes, vec!["platform:read".to_string()]);
     // The stored row never carries the plaintext or anything derived from it
     // other than the digest.
-    let stored: Vec<u8> = sqlx::query_scalar("SELECT secret_hash FROM admin_api_tokens WHERE id=$1")
-        .bind(created.id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    let stored: Vec<u8> =
+        sqlx::query_scalar("SELECT secret_hash FROM admin_api_tokens WHERE id=$1")
+            .bind(created.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(stored, created.digest.to_vec());
     // A wrong secret with the right id does not authenticate.
     let tampered = format!("{}0", &created.token[..created.token.len() - 1]);
@@ -70,52 +73,80 @@ async fn create_rejects_invalid_input_before_touching_the_database(pool: PgPool)
         store
             .create_admin_token(owner, "", &scopes(&["platform:read"]), 30, None)
             .await,
-        Err(CreateAdminTokenError::Invalid(NewAdminTokenError::InvalidName))
+        Err(CreateAdminTokenError::Invalid(
+            NewAdminTokenError::InvalidName
+        ))
     ));
     assert!(matches!(
         store
-            .create_admin_token(owner, &"x".repeat(121), &scopes(&["platform:read"]), 30, None)
+            .create_admin_token(
+                owner,
+                &"x".repeat(121),
+                &scopes(&["platform:read"]),
+                30,
+                None
+            )
             .await,
-        Err(CreateAdminTokenError::Invalid(NewAdminTokenError::InvalidName))
+        Err(CreateAdminTokenError::Invalid(
+            NewAdminTokenError::InvalidName
+        ))
     ));
     assert!(matches!(
         store
             .create_admin_token(owner, "n", &scopes(&[]), 30, None)
             .await,
-        Err(CreateAdminTokenError::Invalid(NewAdminTokenError::InvalidScopes))
+        Err(CreateAdminTokenError::Invalid(
+            NewAdminTokenError::InvalidScopes
+        ))
     ));
     assert!(matches!(
         store
             .create_admin_token(owner, "n", &scopes(&["platform:admin"]), 30, None)
             .await,
-        Err(CreateAdminTokenError::Invalid(NewAdminTokenError::InvalidScopes))
+        Err(CreateAdminTokenError::Invalid(
+            NewAdminTokenError::InvalidScopes
+        ))
     ));
     assert!(matches!(
         store
-            .create_admin_token(owner, "n", &scopes(&["platform:read", "platform:read"]), 30, None)
+            .create_admin_token(
+                owner,
+                "n",
+                &scopes(&["platform:read", "platform:read"]),
+                30,
+                None
+            )
             .await,
-        Err(CreateAdminTokenError::Invalid(NewAdminTokenError::InvalidScopes))
+        Err(CreateAdminTokenError::Invalid(
+            NewAdminTokenError::InvalidScopes
+        ))
     ));
     for days in [0, 91, -1] {
         assert!(matches!(
             store
                 .create_admin_token(owner, "n", &scopes(&["platform:read"]), days, None)
                 .await,
-            Err(CreateAdminTokenError::Invalid(NewAdminTokenError::InvalidExpiry))
+            Err(CreateAdminTokenError::Invalid(
+                NewAdminTokenError::InvalidExpiry
+            ))
         ));
     }
     assert!(matches!(
         store
             .create_admin_token(owner, "n", &scopes(&["platform:read"]), 30, Some(&[]))
             .await,
-        Err(CreateAdminTokenError::Invalid(NewAdminTokenError::InvalidAllowlist))
+        Err(CreateAdminTokenError::Invalid(
+            NewAdminTokenError::InvalidAllowlist
+        ))
     ));
     let too_many: Vec<String> = (0..33).map(|i| format!("10.0.{i}.0/24")).collect();
     assert!(matches!(
         store
             .create_admin_token(owner, "n", &scopes(&["platform:read"]), 30, Some(&too_many))
             .await,
-        Err(CreateAdminTokenError::Invalid(NewAdminTokenError::InvalidAllowlist))
+        Err(CreateAdminTokenError::Invalid(
+            NewAdminTokenError::InvalidAllowlist
+        ))
     ));
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM admin_api_tokens")
@@ -136,13 +167,12 @@ async fn create_accepts_a_valid_cidr_allowlist(pool: PgPool) {
         .create_admin_token(owner, "n", &scopes(&["platform:read"]), 30, Some(&list))
         .await
         .unwrap();
-    let stored: Vec<String> = sqlx::query_scalar(
-        "SELECT ip_allowlist::text[] FROM admin_api_tokens WHERE id=$1",
-    )
-    .bind(created.id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let stored: Vec<String> =
+        sqlx::query_scalar("SELECT ip_allowlist::text[] FROM admin_api_tokens WHERE id=$1")
+            .bind(created.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(stored.len(), 2);
 }
 
@@ -161,8 +191,14 @@ async fn database_level_schema_constraints_hold_even_bypassing_the_rust_validato
         )
     };
     for (label, sql) in [
-        ("unknown scope", insert("ARRAY['wizard:cast']", "interval '10 days'", None)),
-        ("empty scopes", insert("ARRAY[]::text[]", "interval '10 days'", None)),
+        (
+            "unknown scope",
+            insert("ARRAY['wizard:cast']", "interval '10 days'", None),
+        ),
+        (
+            "empty scopes",
+            insert("ARRAY[]::text[]", "interval '10 days'", None),
+        ),
         (
             "duplicate scopes",
             insert(
@@ -171,8 +207,14 @@ async fn database_level_schema_constraints_hold_even_bypassing_the_rust_validato
                 None,
             ),
         ),
-        ("expiry too short", insert("ARRAY['platform:read']", "interval '12 hours'", None)),
-        ("expiry too long", insert("ARRAY['platform:read']", "interval '91 days'", None)),
+        (
+            "expiry too short",
+            insert("ARRAY['platform:read']", "interval '12 hours'", None),
+        ),
+        (
+            "expiry too long",
+            insert("ARRAY['platform:read']", "interval '91 days'", None),
+        ),
         (
             "empty allowlist",
             insert(
@@ -183,11 +225,18 @@ async fn database_level_schema_constraints_hold_even_bypassing_the_rust_validato
         ),
     ] {
         let result = sqlx::query(&sql).execute(&pool).await;
-        assert!(result.is_err(), "{label} should be rejected by the database");
+        assert!(
+            result.is_err(),
+            "{label} should be rejected by the database"
+        );
     }
     // 33 allowlist entries, built with generate_series (cardinality bound).
     let too_many = "(SELECT array_agg(('10.0.'||g||'.0/24')::cidr) FROM generate_series(1,33) g)";
-    let sql = insert("ARRAY['platform:read']", "interval '10 days'", Some(too_many));
+    let sql = insert(
+        "ARRAY['platform:read']",
+        "interval '10 days'",
+        Some(too_many),
+    );
     assert!(
         sqlx::query(&sql).execute(&pool).await.is_err(),
         "33 allowlist entries should be rejected"
@@ -210,7 +259,10 @@ async fn identity_digest_scopes_expiry_and_allowlist_are_immutable_and_rows_are_
         .await
         .unwrap();
     for (label, sql) in [
-        ("name", "UPDATE admin_api_tokens SET name='renamed' WHERE id=$1"),
+        (
+            "name",
+            "UPDATE admin_api_tokens SET name='renamed' WHERE id=$1",
+        ),
         (
             "owner",
             "UPDATE admin_api_tokens SET owner_user_id=gen_random_uuid() WHERE id=$1",
@@ -340,17 +392,21 @@ async fn lookup_rejects_expired_revoked_and_owner_not_admin(pool: PgPool) {
         .create_admin_token(owner, "demoted", &scopes(&["platform:read"]), 30, None)
         .await
         .unwrap();
-    sqlx::query("UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND role='admin'")
-        .bind(owner)
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO platform_role_grants(id,user_id,role,source) VALUES($1,$2,'user','manual')")
-        .bind(Uuid::new_v4())
-        .bind(owner)
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND role='admin'",
+    )
+    .bind(owner)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO platform_role_grants(id,user_id,role,source) VALUES($1,$2,'user','manual')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(owner)
+    .execute(&pool)
+    .await
+    .unwrap();
     // Migration 0050's trigger already revoked it on the role-loss UPDATE
     // above (owner-invalidation); the lookup refuses it either way.
     assert!(
@@ -382,18 +438,22 @@ async fn owner_transitions_revoke_tokens_and_regaining_admin_never_restores_them
         .create_admin_token(manual, "t1", &scopes(&["platform:read"]), 30, None)
         .await
         .unwrap();
-    sqlx::query("UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND role='admin'")
-        .bind(manual)
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND role='admin'",
+    )
+    .bind(manual)
+    .execute(&pool)
+    .await
+    .unwrap();
     assert!(revoked(&pool, t1.id).await);
-    sqlx::query("INSERT INTO platform_role_grants(id,user_id,role,source) VALUES($1,$2,'admin','manual')")
-        .bind(Uuid::new_v4())
-        .bind(manual)
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO platform_role_grants(id,user_id,role,source) VALUES($1,$2,'admin','manual')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(manual)
+    .execute(&pool)
+    .await
+    .unwrap();
     assert!(
         revoked(&pool, t1.id).await,
         "regaining admin after manual demotion does not restore the token"
@@ -423,11 +483,13 @@ async fn owner_transitions_revoke_tokens_and_regaining_admin_never_restores_them
         .create_admin_token(grouped, "t2", &scopes(&["platform:read"]), 30, None)
         .await
         .unwrap();
-    sqlx::query("UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND source='group'")
-        .bind(grouped)
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND source='group'",
+    )
+    .bind(grouped)
+    .execute(&pool)
+    .await
+    .unwrap();
     assert!(revoked(&pool, t2.id).await);
 
     // Suspension.
@@ -455,7 +517,13 @@ async fn owner_transitions_revoke_tokens_and_regaining_admin_never_restores_them
     // SCIM deactivation uses the same disabled_at column (scim.rs).
     let scim_deactivated = admin(&pool, "scim@test.invalid").await;
     let t4 = store
-        .create_admin_token(scim_deactivated, "t4", &scopes(&["platform:read"]), 30, None)
+        .create_admin_token(
+            scim_deactivated,
+            "t4",
+            &scopes(&["platform:read"]),
+            30,
+            None,
+        )
         .await
         .unwrap();
     sqlx::query("UPDATE users SET disabled_at=now(),disable_reason='scim_deactivated' WHERE id=$1")
@@ -490,20 +558,24 @@ async fn owner_transitions_revoke_tokens_and_regaining_admin_never_restores_them
         .create_admin_token(dual, "t6", &scopes(&["platform:read"]), 30, None)
         .await
         .unwrap();
-    sqlx::query("UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND source='manual'")
-        .bind(dual)
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND source='manual'",
+    )
+    .bind(dual)
+    .execute(&pool)
+    .await
+    .unwrap();
     assert!(
         !revoked(&pool, t6.id).await,
         "one of two remaining admin grants keeps the token active"
     );
-    sqlx::query("UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND source='bootstrap'")
-        .bind(dual)
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND source='bootstrap'",
+    )
+    .bind(dual)
+    .execute(&pool)
+    .await
+    .unwrap();
     assert!(
         revoked(&pool, t6.id).await,
         "losing the last remaining admin grant revokes the token"
@@ -550,7 +622,10 @@ async fn last_use_is_throttled_to_once_per_five_minutes(pool: PgPool) {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!((second_at, second_addr), (first_at, "203.0.113.5".to_string()));
+    assert_eq!(
+        (second_at, second_addr),
+        (first_at, "203.0.113.5".to_string())
+    );
     // Once the window has passed, the next use writes again.
     sqlx::query("UPDATE admin_api_tokens SET last_used_at=now()-interval '6 minutes' WHERE id=$1")
         .bind(created.id)
