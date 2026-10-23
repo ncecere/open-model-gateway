@@ -190,8 +190,9 @@ DO $$ DECLARE r record; t text; BEGIN
   OR NOT has_column_privilege('gateway_runtime','public.admin_api_tokens','revoked_at','UPDATE')
   OR NOT has_column_privilege('gateway_runtime','public.admin_api_tokens','last_used_at','UPDATE')
   OR NOT has_column_privilege('gateway_runtime','public.admin_api_tokens','last_used_address','UPDATE') THEN RAISE EXCEPTION 'admin API tokens not maintainable by runtime'; END IF;
- IF (SELECT count(*) FROM pg_trigger WHERE tgrelid='public.admin_api_tokens'::regclass AND tgenabled='O' AND NOT tgisinternal)<>4 THEN RAISE EXCEPTION 'admin API token guards missing or disabled'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgrelid='public.admin_api_tokens'::regclass AND tgenabled='O' AND NOT tgisinternal)<>5 THEN RAISE EXCEPTION 'admin API token guards missing or disabled'; END IF;
  IF (SELECT count(*) FROM pg_trigger WHERE tgname IN ('admin_api_tokens_role_lost','admin_api_tokens_user_disabled','admin_api_tokens_user_cleaned') AND tgenabled='O' AND NOT tgisinternal)<>3 THEN RAISE EXCEPTION 'admin API token owner-invalidation triggers missing or disabled'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname='admin_api_tokens_owner_is_admin' AND tgenabled='O' AND NOT tgisinternal)<>1 THEN RAISE EXCEPTION 'admin API token creation owner-admin guard missing or disabled'; END IF;
 END $$;
 BEGIN;
 -- A probe-only work lease (rolled back with everything else) so the election
@@ -756,6 +757,9 @@ BEGIN
   INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,expires_at) VALUES(at3,au,'Rollback token 3',decode(repeat('ae',32),'hex'),ARRAY['platform:read'],now()+interval '30 days');
   UPDATE users SET disabled_at=now(),disable_reason='admin_suspension' WHERE id=au;
   IF NOT (SELECT revoked_at IS NOT NULL FROM admin_api_tokens WHERE id=at3) THEN RAISE EXCEPTION 'suspension did not revoke owned tokens'; END IF;
+  -- Creation is bound to live Admin status: a suspended owner cannot get a
+  -- new token either, not just lose their old ones.
+  BEGIN INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,expires_at) VALUES(gen_random_uuid(),au,'y',decode(repeat('af',32),'hex'),ARRAY['platform:read'],now()+interval '30 days'); RAISE EXCEPTION 'token created for a suspended owner'; EXCEPTION WHEN check_violation THEN IF SQLERRM NOT LIKE 'admin API token owner must be a currently effective Platform Admin%' THEN RAISE; END IF; END;
   -- Runtime never has DELETE on users at all (existing grants); the FK
   -- RESTRICT itself is exercised by the owner-level test suite.
   BEGIN DELETE FROM users WHERE id=au; RAISE EXCEPTION 'admin token owner removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;

@@ -111,6 +111,10 @@ pub enum NewAdminTokenError {
 pub enum CreateAdminTokenError {
     Invalid(NewAdminTokenError),
     Entropy(crate::entropy::EntropyUnavailable),
+    /// The owner is not, at the instant of insertion, a currently
+    /// effective Platform Admin (migration 0050's `BEFORE INSERT` trigger;
+    /// never bypassed, including under a concurrent demotion).
+    OwnerNotAdmin,
     Database(sqlx::Error),
 }
 impl std::fmt::Display for CreateAdminTokenError {
@@ -118,11 +122,28 @@ impl std::fmt::Display for CreateAdminTokenError {
         match self {
             Self::Invalid(e) => write!(f, "invalid admin token input: {e:?}"),
             Self::Entropy(e) => e.fmt(f),
+            Self::OwnerNotAdmin => {
+                f.write_str("the owner is not a currently effective Platform Admin")
+            }
             Self::Database(e) => e.fmt(f),
         }
     }
 }
 impl std::error::Error for CreateAdminTokenError {}
+
+/// Map a database error from the creation `INSERT`: the owner-admin guard
+/// trigger (migration 0050) raises `check_violation` (23514) with this
+/// exact message and no named constraint; everything else is passed
+/// through as [`CreateAdminTokenError::Database`].
+fn map_create_error(error: sqlx::Error) -> CreateAdminTokenError {
+    if let sqlx::Error::Database(ref db) = error
+        && db.code().as_deref() == Some("23514")
+        && db.message().contains("currently effective Platform Admin")
+    {
+        return CreateAdminTokenError::OwnerNotAdmin;
+    }
+    CreateAdminTokenError::Database(error)
+}
 
 fn valid_name(name: &str) -> bool {
     let len = name.chars().count();
@@ -223,7 +244,7 @@ impl Store {
         .bind(expires_at)
         .execute(&self.pool)
         .await
-        .map_err(CreateAdminTokenError::Database)?;
+        .map_err(map_create_error)?;
         Ok(new)
     }
 

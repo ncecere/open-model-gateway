@@ -137,4 +137,27 @@ CREATE TRIGGER admin_api_tokens_user_cleaned AFTER UPDATE OF cleaned_at ON users
  FOR EACH ROW WHEN (NEW.cleaned_at IS NOT NULL AND OLD.cleaned_at IS NULL)
  EXECUTE FUNCTION omg_admin_tokens_owner_lost();
 
+-- Creation is bound to the owner's live Admin status at the instant of
+-- insertion, not only to a caller's earlier check (PR2's handler still
+-- enforces "create only for oneself"; this is the storage-level backstop).
+-- Lock the same users row the role-loss check above locks, so a
+-- concurrent demotion (platform_role_grants revocation, or
+-- disabled_at/cleaned_at) and a concurrent creation serialize on it: a
+-- demotion already in flight blocks the create until it commits, and the
+-- create then correctly refuses; a create already in flight is evaluated
+-- while the owner was still genuinely admin and blocks the demotion's own
+-- row lock (taken inside its AFTER trigger) until the insert's implicit
+-- transaction ends. effective_platform_roles already excludes disabled
+-- and cleaned-up users, so this one EXISTS also covers suspension/cleanup.
+CREATE FUNCTION omg_admin_tokens_owner_must_be_admin() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ PERFORM 1 FROM users WHERE id=NEW.owner_user_id FOR UPDATE;
+ IF NOT EXISTS(SELECT 1 FROM effective_platform_roles WHERE user_id=NEW.owner_user_id AND role='admin') THEN
+  RAISE EXCEPTION 'admin API token owner must be a currently effective Platform Admin' USING ERRCODE='23514';
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER admin_api_tokens_owner_is_admin BEFORE INSERT ON admin_api_tokens
+ FOR EACH ROW EXECUTE FUNCTION omg_admin_tokens_owner_must_be_admin();
+
 RESET lock_timeout;

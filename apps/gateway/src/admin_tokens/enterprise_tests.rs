@@ -688,6 +688,122 @@ async fn concurrent_revocation_of_group_then_manual_admin_grants_still_revokes_t
     write_skew_scenario(&pool, "group").await;
 }
 
+fn assert_owner_not_admin<T>(result: &Result<T, CreateAdminTokenError>) {
+    match result {
+        Err(CreateAdminTokenError::OwnerNotAdmin) => {}
+        Err(other) => panic!("expected OwnerNotAdmin, got a different error: {other:?}"),
+        Ok(_) => panic!("expected OwnerNotAdmin, got Ok"),
+    }
+}
+
+/// Coordinator review of #37 PR1, issue 2: creation was never bound to
+/// live admin status in the database itself (only PR2's future handler was
+/// expected to check it). If the owner is demoted between that check and
+/// the INSERT, the role-loss trigger has already run (nothing left to
+/// revoke), so the new token survives and would come back to life if the
+/// owner regains admin later.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn create_fails_when_the_owner_is_not_currently_an_effective_admin(pool: PgPool) {
+    let store = Store::new(pool.clone());
+
+    let non_admin = Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,email) VALUES($1,$2)")
+        .bind(non_admin)
+        .bind("plain@test.invalid")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO platform_role_grants(id,user_id,role,source) VALUES($1,$2,'user','manual')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(non_admin)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let result = store
+        .create_admin_token(non_admin, "n", &scopes(&["platform:read"]), 30, None)
+        .await;
+    assert_owner_not_admin(&result);
+
+    let disabled = admin(&pool, "disabled-create@test.invalid").await;
+    sqlx::query("UPDATE users SET disabled_at=now(),disable_reason='admin_suspension' WHERE id=$1")
+        .bind(disabled)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let result = store
+        .create_admin_token(disabled, "n", &scopes(&["platform:read"]), 30, None)
+        .await;
+    assert_owner_not_admin(&result);
+
+    let cleaned = admin(&pool, "cleaned-create@test.invalid").await;
+    sqlx::query("UPDATE users SET disabled_at=now(),cleaned_at=now(),email=NULL WHERE id=$1")
+        .bind(cleaned)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let result = store
+        .create_admin_token(cleaned, "n", &scopes(&["platform:read"]), 30, None)
+        .await;
+    assert_owner_not_admin(&result);
+
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM admin_api_tokens")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0,
+        "nothing was ever inserted for any of these refused owners"
+    );
+}
+
+/// A concurrent demotion racing a concurrent creation: the create must
+/// either see the owner still admin (and succeed, atomically with respect
+/// to the demotion) or block until the demotion commits and then fail,
+/// never insert a token for an owner who has already lost admin.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn concurrent_demotion_blocks_and_then_fails_a_pending_create(pool: PgPool) {
+    let store = Store::new(pool.clone());
+    let owner = admin(&pool, "race-create@test.invalid").await;
+
+    let mut tx1 = pool.begin().await.unwrap();
+    sqlx::query(
+        "UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND role='admin'",
+    )
+    .bind(owner)
+    .execute(&mut *tx1)
+    .await
+    .unwrap();
+    // tx1's role-loss trigger now holds the owner's users row FOR UPDATE.
+
+    let store2 = store.clone();
+    let handle = tokio::spawn(async move {
+        store2
+            .create_admin_token(owner, "race", &["platform:read".to_string()], 30, None)
+            .await
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let blocked_while_demotion_open = !handle.is_finished();
+    tx1.commit().await.unwrap();
+    let result = handle.await.unwrap();
+    if !matches!(result, Err(CreateAdminTokenError::OwnerNotAdmin)) {
+        panic!("blocked_while_demotion_open={blocked_while_demotion_open}, expected OwnerNotAdmin");
+    }
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM admin_api_tokens WHERE owner_user_id=$1 AND revoked_at IS NULL",
+    )
+    .bind(owner)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        count, 0,
+        "no active token exists for the now-demoted owner, blocked_while_demotion_open={blocked_while_demotion_open}"
+    );
+}
+
 async fn revoked(pool: &PgPool, id: Uuid) -> bool {
     sqlx::query_scalar("SELECT revoked_at IS NOT NULL FROM admin_api_tokens WHERE id=$1")
         .bind(id)
