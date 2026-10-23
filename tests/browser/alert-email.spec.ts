@@ -63,6 +63,12 @@ test("incident history shows waiting, retrying, sent and exhausted delivery", as
     expect(accepted).toBe(1);
     await tick(); expect(accepted).toBe(1);
   } finally {
+    // Shared-stack isolation: this spec's SMTP configuration is global
+    // installation state, not per-test. Clear it before closing so later
+    // specs (e.g. key-expiry) see the same unconfigured baseline they
+    // expect regardless of project run order, and never dial this test's
+    // relay after it closes.
+    await api(page, "PUT", "/platform/settings/email", {});
     await context.close(); await db.end();
     await new Promise<void>((resolve, reject) => relay.close(error => error ? reject(error) : resolve()));
   }
