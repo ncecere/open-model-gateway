@@ -105,3 +105,7 @@ For an omitted-maximum (pinned) batch line, planning (`jobs/plan.rs`) already va
 The runner now copies the line's plan-time resolved output bound onto the still-omitted request before the engine ever sees it (`jobs::runner::LineRun::execute`), so planning, the engine's pre-admission check and the real upstream attempt all judge the same body. This only affects batch lines already pinned to one deployment and price at plan time; admission still independently resolves the same bound from that same pinned price, so the admitted cap is unchanged (#215: the admission-pinned cap still equals the upstream cap).
 
 Interactive requests are unchanged. An interactive request's candidate deployment, and therefore its price, is not chosen until admission; pre-filling its pre-admission check with a resolved maximum would require reading a price before a route is picked, which would violate #228's "no prices, no network" contract for that check. An interactive omitted maximum keeps reaching `validate_chat_request` as the raw `None` the client sent, exactly as before. No schema changes beyond an internal, backward-compatible field in the batch line's own private plan metadata (never client-visible); no grant changes.
+
+## Fixes
+
+- **Key Budgets card spacing (#242).** The key detail page's Limits tab Budgets card now gives "Effective headroom" its own spaced section instead of it sitting directly under the last budget line above it. Cosmetic only; data and accessibility are unchanged.

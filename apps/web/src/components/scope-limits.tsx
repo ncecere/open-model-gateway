@@ -135,10 +135,12 @@ export function BudgetHeadroomDetails({ window: w }: { window: BudgetWindow }) {
 }
 export function EffectiveBudgetHeadroom({ windows }: { windows: BudgetWindow[] }) {
   if (!windows.length) return null;
-  return <div><h3 className={s.primary}>Effective headroom</h3>
+  // Its own section (not a trailing line under the last budget row): the heading starts a new block, spaced like the
+  // other sections in this card (issue #242).
+  return <section><h3 className={s.primary}>Effective headroom</h3>
     <p className={s.note}>Lowest remaining across applicable layers per period, not an allocation or a guarantee that a request will fit.</p>
     {effectiveBudgetHeadroom(windows).map(h => <p className={s.note} key={h.period}>{periodName[h.period]} · {headroomText(h)}</p>)}
-  </div>;
+  </section>;
 }
 /** Each layer is shown independently; overlapping scopes are never added. */
 export function BudgetMeters({ windows, kind, mode, title = "Budget used this period" }: { windows: BudgetWindow[]; kind: WorkspaceKind; mode?: "inherit" | "replace"; title?: string }) {
