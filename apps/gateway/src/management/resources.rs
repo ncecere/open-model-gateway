@@ -198,7 +198,7 @@ pub(crate) async fn revalidate_admin_token(
         return Ok(());
     };
     locks::shared(tx, [locks::Scope::User(u.user_id())]).await?;
-    revalidate_token_row(tx, token_id).await
+    revalidate_token_row(tx, token_id, u.user_id()).await
 }
 /// The owner's user-scope lock to merge into a handler's own later
 /// `governance::locks::exclusive` call, for the exception sites
@@ -223,20 +223,18 @@ pub(crate) async fn revalidate_admin_token_locked(
     if platform_role(tx, u.user_id()).await? != "admin" {
         return Err(denied());
     }
-    revalidate_token_row(tx, token_id).await
+    revalidate_token_row(tx, token_id, u.user_id()).await
 }
+/// Thin wrapper over the shared validator (`crate::admin_tokens::token_row_live`)
+/// so governance's own two-transaction reconciliation path
+/// (`governance::resolve_usage`) can reuse the identical check without
+/// depending on this management module.
 async fn revalidate_token_row(
     tx: &mut Transaction<'_, Postgres>,
     token_id: Uuid,
+    owner_user_id: Uuid,
 ) -> Result<(), ApiError> {
-    let live: bool = sqlx::query_scalar(
-        "SELECT revoked_at IS NULL AND expires_at>clock_timestamp() FROM admin_api_tokens WHERE id=$1 FOR SHARE",
-    )
-    .bind(token_id)
-    .fetch_optional(&mut **tx)
-    .await?
-    .unwrap_or(false);
-    if !live {
+    if !crate::admin_tokens::token_row_live(tx, token_id, owner_user_id).await? {
         return Err(denied());
     }
     Ok(())

@@ -623,19 +623,35 @@ pub(super) async fn reconcile(
         reasoning_tokens: None,
         reported_model: None,
     };
-    crate::governance::resolve_usage(&s, ws, execution, usage, &p.evidence, u.user_id())
-        .await
-        .map_err(|e| match e {
-            InferenceError::InvalidRequest => invalid(),
-            InferenceError::Configuration => ApiError(
-                StatusCode::CONFLICT,
-                "Execution has no complete pinned valuation",
-            ),
-            _ => ApiError(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Reconciliation unavailable",
-            ),
-        })?;
+    crate::governance::resolve_usage(
+        &s,
+        ws,
+        execution,
+        usage,
+        &p.evidence,
+        crate::governance::ReconcilingActor {
+            user_id: u.user_id(),
+            token_id: u.token_id(),
+        },
+    )
+    .await
+    .map_err(|e| match e {
+        InferenceError::InvalidRequest => invalid(),
+        InferenceError::Configuration => ApiError(
+            StatusCode::CONFLICT,
+            "Execution has no complete pinned valuation",
+        ),
+        // The caller's admin token was revoked or expired between its own
+        // authentication and this write's own transaction (#37 PR2 review):
+        // the same refusal `resources::platform_write`'s revalidation gives
+        // a browser-session handler for the identical race, not a 503 and
+        // never a ledger write.
+        InferenceError::Unauthenticated => denied(),
+        _ => ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Reconciliation unavailable",
+        ),
+    })?;
     Ok(ok())
 }
 #[cfg(test)]

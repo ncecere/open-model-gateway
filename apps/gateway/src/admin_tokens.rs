@@ -451,6 +451,35 @@ fn network_contains(net: std::net::IpAddr, prefix: u8, ip: std::net::IpAddr) -> 
     }
 }
 
+/// Live credential-row check for a caller that already resolved a token's
+/// owner and id in an earlier step (authentication, or a `ManagementPrincipal`
+/// carried across a transaction boundary, e.g. `governance::resolve_usage`'s
+/// two-transaction reconciliation path): unrevoked, unexpired by the
+/// database's own clock, and still owned by the expected user (defense in
+/// depth; the owner column is itself immutable per token). `FOR SHARE`, so a
+/// concurrent explicit revoke (a plain row `UPDATE`) blocks on this
+/// transaction until it commits -- the same guarantee
+/// `management/resources.rs::revalidate_token_row` relies on for every other
+/// management handler transaction, which calls this directly rather than
+/// duplicating the query. Callers needing the owner's advisory authority
+/// lock too must take it themselves first, in the canonical lock order,
+/// before calling this (this function takes no lock of its own beyond the
+/// row's `FOR SHARE`).
+pub(crate) async fn token_row_live(
+    tx: &mut Transaction<'_, Postgres>,
+    token_id: Uuid,
+    owner_user_id: Uuid,
+) -> Result<bool, sqlx::Error> {
+    let live: Option<bool> = sqlx::query_scalar(
+        "SELECT owner_user_id=$2 AND revoked_at IS NULL AND expires_at>clock_timestamp() FROM admin_api_tokens WHERE id=$1 FOR SHARE",
+    )
+    .bind(token_id)
+    .bind(owner_user_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(live.unwrap_or(false))
+}
+
 impl Store {
     /// Live lookup-for-authorization. A malformed token is rejected by the
     /// strict parser with no database access at all. No positive
