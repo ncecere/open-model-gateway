@@ -28,7 +28,7 @@ async fn provider(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> Result<String
 
 async fn read(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, false).await?;
@@ -43,7 +43,7 @@ async fn read(
 
 async fn write(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
     Json(settings): Json<RouteSettings>,
 ) -> ApiResult {
@@ -62,7 +62,7 @@ async fn write(
     settings
         .validate(&provider, &approvals)
         .map_err(|message| ApiError(StatusCode::BAD_REQUEST, message))?;
-    schedule::save_settings(&mut tx, id, &settings, u.user_id).await?;
+    schedule::save_settings(&mut tx, id, &settings, u.user_id()).await?;
     resources::audit(
         &mut tx,
         &u,

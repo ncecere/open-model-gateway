@@ -529,14 +529,14 @@ fn period_audit(new: &Limits, old: &Limits) -> Value {
 }
 async fn platform_tx<'a>(
     s: &'a Store,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     write: bool,
 ) -> Result<Transaction<'a, Postgres>, ApiError> {
     let mut tx = resources::installation_tx(s).await?;
     if write {
-        resources::platform_write(&mut tx, u.user_id).await?;
+        resources::platform_write(&mut tx, u.user_id()).await?;
     } else {
-        resources::platform_read(&mut tx, u.user_id).await?;
+        resources::platform_read(&mut tx, u.user_id()).await?;
     }
     Ok(tx)
 }
@@ -828,7 +828,7 @@ fn kind(k: &str) -> Result<(), ApiError> {
 }
 pub(super) async fn type_policy(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(k): Path<String>,
 ) -> ApiResult {
     kind(&k)?;
@@ -839,7 +839,7 @@ pub(super) async fn type_policy(
 }
 pub(super) async fn put_type_policy(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(k): Path<String>,
     Json(p): Json<Policy>,
 ) -> ApiResult {
@@ -866,7 +866,7 @@ pub(super) async fn put_type_policy(
 }
 pub(super) async fn platform_workspace_policy(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = platform_tx(&s, &u, false).await?;
@@ -877,7 +877,7 @@ pub(super) async fn platform_workspace_policy(
 }
 pub(super) async fn put_platform_workspace_policy(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
     Json(p): Json<Policy>,
 ) -> ApiResult {
@@ -907,7 +907,7 @@ pub(super) async fn put_platform_workspace_policy(
 }
 pub(super) async fn reset_platform_workspace_policy(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = platform_tx(&s, &u, true).await?;
@@ -975,12 +975,12 @@ pub(super) async fn put_workspace_policy(
 }
 pub(crate) async fn lineage(
     tx: &mut Transaction<'_, Postgres>,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Uuid,
     key: Uuid,
     all: bool,
 ) -> Result<Uuid, ApiError> {
-    sqlx::query_scalar("SELECT governance_key_id FROM api_keys WHERE workspace_id=$1 AND id=$2 AND ($3 OR issued_to_user_id=$4)").bind(ws).bind(key).bind(all).bind(u.user_id).fetch_optional(&mut **tx).await?.ok_or_else(missing)
+    sqlx::query_scalar("SELECT governance_key_id FROM api_keys WHERE workspace_id=$1 AND id=$2 AND ($3 OR issued_to_user_id=$4)").bind(ws).bind(key).bind(all).bind(u.user_id()).fetch_optional(&mut **tx).await?.ok_or_else(missing)
 }
 pub(super) async fn key_policy(
     State(s): State<Store>,
