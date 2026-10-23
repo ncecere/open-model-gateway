@@ -260,6 +260,7 @@ fn end_phase_group(
 fn attempt_span(
     telemetry: &RequestTelemetry,
     start: u64,
+    end: u64,
     attempt_number: usize,
     provider: &str,
     streamed: bool,
@@ -275,7 +276,7 @@ fn attempt_span(
         trace,
         telemetry.root(),
         start,
-        telemetry::now_unix_nanos(),
+        end,
     )?;
     if let Ok(n) = u8::try_from(attempt_number) {
         span.attribute(telemetry::Attribute::Attempt(n));
@@ -856,6 +857,12 @@ async fn settle_attempt(
     };
     let usage = guard.usage;
     let timings = guard.telemetry_now();
+    // Captured here, before settlement's own (possibly slow, up to its 3s
+    // timeout) write: `upstream.attempt` ends at the terminal upstream
+    // outcome, never inflated by settlement's own duration (#98 PR 2 review
+    // item 1). `settlement` is recorded separately below with its own real
+    // start/end from `begin_phase_group`/`end_phase_group`.
+    let attempt_end = telemetry::now_unix_nanos();
     let group = begin_phase_group(telemetry);
     let buffer = group.as_ref().map(|(b, _, _)| b.clone());
     let result = guard.finish(outcome, error, buffer).await;
@@ -869,6 +876,7 @@ async fn settle_attempt(
         && let Some(span) = attempt_span(
             telemetry,
             start,
+            attempt_end,
             attempt_number,
             provider,
             streamed,

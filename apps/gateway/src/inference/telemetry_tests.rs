@@ -37,6 +37,9 @@ struct TelemetryRepository {
     /// Whether `admit` simulates a committed shared-workspace admission.
     shared: AtomicBool,
     fail_finish: AtomicBool,
+    /// Settlement sleeps briefly before returning (#98 PR 2 review item 1):
+    /// proves `upstream.attempt`'s own duration never grows by settlement's.
+    slow_finish: AtomicBool,
     finishes: Mutex<Vec<ExecutionFinish>>,
 }
 #[async_trait]
@@ -103,6 +106,9 @@ impl InferenceRepository for TelemetryRepository {
         record: &ExecutionFinish,
         _telemetry: &AttemptTelemetry,
     ) -> Result<(), InferenceError> {
+        if self.slow_finish.load(Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        }
         use telemetry::SpanName::*;
         for phase in [
             SettlementQueue,
@@ -662,5 +668,59 @@ async fn a_settlement_write_failure_is_recorded_and_returned() {
             .iter()
             .any(|s| name(s) == "settlement" || name(s) == "settlement.queue"),
         "settlement's real phase boundaries are still recorded on a write failure: {spans:#?}"
+    );
+}
+
+/// #98 PR 2 review item 1: `upstream.attempt`'s own duration must end at the
+/// terminal upstream outcome, never grow by a slow settlement write's own
+/// time (settlement has its own, separate duration). A slow
+/// `finish_attempt` (150ms) makes the pre-fix bug - the attempt span's end
+/// timestamp taken only after settlement has already finished - fail this
+/// by a wide, unmistakable margin.
+#[tokio::test]
+async fn the_attempt_span_ends_before_settlement_even_when_settlement_is_slow() {
+    let repository = Arc::new(TelemetryRepository::default());
+    repository.deployments.lock().unwrap().push(deployment());
+    repository.shared.store(true, Ordering::SeqCst);
+    repository.slow_finish.store(true, Ordering::SeqCst);
+    let mut registry = ProviderRegistry::default();
+    registry
+        .register(Arc::new(Adapter {
+            mode: Mutex::new(vec![Mode::Complete(Usage {
+                input_tokens: Some(1),
+                output_tokens: Some(1),
+                ..Default::default()
+            })]),
+        }))
+        .unwrap();
+    let (recorder, mut rx) = telemetry::Recorder::channel(1.0);
+    let engine = Engine::new(repository, registry, EngineLimits::default())
+        .unwrap()
+        .with_telemetry(Some(recorder));
+    engine
+        .execute(principal(), request(false), Uuid::new_v4())
+        .await
+        .unwrap();
+    let spans = drain(&mut rx).await;
+    let attempt = spans
+        .iter()
+        .find(|s| name(s) == "upstream.attempt")
+        .unwrap();
+    let settlement = spans.iter().find(|s| name(s) == "settlement").unwrap();
+    let attempt_end: u64 = attempt["endTimeUnixNano"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let settlement_start: u64 = settlement["startTimeUnixNano"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(
+        attempt_end <= settlement_start,
+        "the upstream.attempt span must end at the terminal upstream outcome, \
+         before settlement's own (possibly slow) duration begins: \
+         attempt_end={attempt_end} settlement_start={settlement_start}"
     );
 }
