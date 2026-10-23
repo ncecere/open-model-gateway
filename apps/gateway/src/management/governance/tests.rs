@@ -59,6 +59,15 @@ mod db {
         routes()
             .merge(platform_routes())
             .merge(resources::platform_routes())
+            .merge(crate::management::logs::routes())
+            .route(
+                "/api/v1/workspaces/{ws}/keys/{key}",
+                axum::routing::get(crate::management::keys::key),
+            )
+            .route(
+                "/api/v1/workspaces/{ws}/keys/{key}/stats",
+                axum::routing::get(crate::management::keys::key_stats),
+            )
             .layer(Extension(u.clone()))
             .with_state(f.store.clone())
             .oneshot(
@@ -1383,6 +1392,345 @@ mod db {
         assert_eq!(r.status(), StatusCode::BAD_GATEWAY);
     }
     #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn budget_headroom_hidden_scopes_never_read_totals_and_failures_are_not_zero(
+        pool: PgPool,
+    ) {
+        let f = fixture(pool).await;
+        let mut tx = f.store.pool.begin().await.unwrap();
+        sqlx::query("ALTER TABLE budget_totals RENAME TO unavailable_budget_totals")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let budgets = policies::Budgets::from([(crate::governance::BudgetPeriod::Month, 100)]);
+        let ws = f.team.workspace_id;
+        let hidden = policies::budget_windows(
+            &mut tx,
+            ws,
+            &[("platform", &budgets, None, false, Utc::now())],
+        )
+        .await
+        .unwrap();
+        assert_eq!(hidden[0]["headroom_status"], "restricted");
+        assert!(hidden[0]["remaining_microusd"].is_null());
+        assert!(
+            policies::budget_windows(
+                &mut tx,
+                ws,
+                &[("platform", &budgets, None, true, Utc::now())]
+            )
+            .await
+            .is_err(),
+            "a database failure is not an unused budget"
+        );
+        tx.rollback().await.unwrap();
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn budget_headroom_invalid_window_preserves_neighbors_and_sql_errors_remain_503(
+        pool: PgPool,
+    ) {
+        let f = fixture(pool).await;
+        let admin = user(f.owner, true);
+        let ws = f.team.workspace_id;
+        let key = member_key(&f).await;
+        let platform = format!("/api/v1/platform/workspaces/{ws}/policy");
+        let paths = [
+            platform.clone(),
+            format!("/api/v1/workspaces/{ws}/keys/{key}/policy"),
+            format!("/api/v1/workspaces/{ws}/keys/{key}/stats"),
+        ];
+        let budgets = json!([{"period":"day","amount_microusd":"100"},{"period":"month","amount_microusd":"1000"}]);
+        assert_eq!(call(&f, &admin, "PUT", &platform, json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"budgets":budgets})).await.0, StatusCode::OK);
+        execution(&f, key, ws, "company/smart", "settled", Some(70), None).await;
+        for corrupt in [
+            "settled_microusd=-1,held_microusd=0",
+            "settled_microusd=99999999999999999999999999999999999999,held_microusd=99999999999999999999999999999999999999",
+        ] {
+            sqlx::query(&format!("UPDATE budget_totals SET {corrupt} WHERE scope_kind='workspace' AND scope_id=$1 AND period='day'"))
+                .bind(ws).execute(&f.store.pool).await.unwrap();
+            for path in &paths {
+                let (status, v) = call(&f, &admin, "GET", path, Value::Null).await;
+                assert_eq!(
+                    status,
+                    StatusCode::OK,
+                    "invalid accounting must not hide policy or valid windows"
+                );
+                if path.ends_with("policy") {
+                    assert_eq!(v["provenance"]["platform"]["budgets"], budgets);
+                }
+                let windows = v["budgets"].as_array().unwrap();
+                assert_eq!(windows.len(), 2);
+                let invalid = &windows[0];
+                assert_eq!(invalid["period"], "day");
+                assert_eq!(invalid["amount_microusd"], "100");
+                assert_eq!(invalid["usage_visible"], true);
+                assert_eq!(invalid["headroom_status"], "unknown");
+                assert!(invalid["window_start"].is_string());
+                assert!(invalid["window_end"].is_string());
+                for field in [
+                    "used_microusd",
+                    "settled_microusd",
+                    "pending_held_microusd",
+                    "unknown_held_microusd",
+                    "unknown_cost_requests",
+                    "remaining_microusd",
+                    "exhausted",
+                    "unresolved_usage",
+                ] {
+                    assert!(
+                        invalid[field].is_null(),
+                        "untrusted {field} must not be fabricated"
+                    );
+                }
+                let valid = &windows[1];
+                assert_eq!(valid["period"], "month");
+                assert_eq!(valid["headroom_status"], "known");
+                assert_eq!(valid["settled_microusd"], "70");
+                assert_eq!(valid["pending_held_microusd"], "0");
+                assert_eq!(valid["unknown_held_microusd"], "0");
+                assert_eq!(valid["unknown_cost_requests"], "0");
+                assert_eq!(valid["used_microusd"], "70");
+                assert_eq!(valid["remaining_microusd"], "930");
+                assert_eq!(valid["exhausted"], false);
+                assert_eq!(valid["unresolved_usage"], false);
+            }
+        }
+        sqlx::query("ALTER TABLE budget_totals RENAME TO unavailable_budget_totals")
+            .execute(&f.store.pool)
+            .await
+            .unwrap();
+        for path in &paths {
+            assert_eq!(
+                call(&f, &admin, "GET", path, Value::Null).await.0,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "SQL failures must not masquerade as individual unknown facts"
+            );
+        }
+        sqlx::query("ALTER TABLE unavailable_budget_totals RENAME TO budget_totals")
+            .execute(&f.store.pool)
+            .await
+            .unwrap();
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn budget_headroom_stacked_scopes_keep_consumption_and_periods_distinct(pool: PgPool) {
+        let f = fixture(pool).await;
+        let admin = user(f.owner, true);
+        let ws = f.team.workspace_id;
+        let key = member_key(&f).await;
+        let other_key = member_key(&f).await;
+        let body = |budgets: Value| json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"budgets":budgets});
+        for (path, budgets) in [
+            (
+                "/api/v1/platform/workspace-types/team/policy".to_owned(),
+                json!([{"period":"day","amount_microusd":"9000"}]),
+            ),
+            (
+                format!("/api/v1/platform/workspaces/{ws}/policy"),
+                json!([{"period":"month","amount_microusd":"1000"},{"period":"week","amount_microusd":"2000"}]),
+            ),
+            (
+                format!("/api/v1/workspaces/{ws}/policy"),
+                json!([{"period":"month","amount_microusd":"500"},{"period":"day","amount_microusd":"300"}]),
+            ),
+            (
+                format!("/api/v1/workspaces/{ws}/keys/{key}/policy"),
+                json!([{"period":"month","amount_microusd":"400"},{"period":"lifetime","amount_microusd":"2000"}]),
+            ),
+        ] {
+            assert_eq!(
+                call(&f, &admin, "PUT", &path, body(budgets)).await.0,
+                StatusCode::OK
+            );
+        }
+        execution(
+            &f,
+            other_key,
+            ws,
+            "company/smart",
+            "settled",
+            Some(450),
+            None,
+        )
+        .await;
+        execution(&f, key, ws, "company/smart", "settled", Some(30), None).await;
+        execution(&f, key, ws, "company/smart", "pending", None, Some(10)).await;
+        let path = format!("/api/v1/workspaces/{ws}/keys/{key}/policy");
+        let (status, v) = call(&f, &admin, "GET", &path, Value::Null).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(v["mode"], "replace");
+        let windows = v["budgets"].as_array().unwrap();
+        assert_eq!(windows.len(), 6);
+        let w = |layer: &str, period: &str| {
+            windows
+                .iter()
+                .find(|w| w["layer"] == layer && w["period"] == period)
+                .unwrap()
+        };
+        for layer in ["platform", "local"] {
+            assert_eq!(w(layer, "month")["used_microusd"], "490");
+        }
+        assert_eq!(w("key", "month")["used_microusd"], "40");
+        assert_eq!(w("platform", "month")["remaining_microusd"], "510");
+        assert_eq!(w("local", "month")["remaining_microusd"], "10");
+        assert_eq!(w("key", "month")["remaining_microusd"], "360");
+        assert_eq!(w("platform", "week")["remaining_microusd"], "1510");
+        assert_eq!(w("local", "day")["remaining_microusd"], "0");
+        assert_eq!(w("key", "lifetime")["remaining_microusd"], "1960");
+        assert!(
+            !windows
+                .iter()
+                .any(|w| w["layer"] == "platform" && w["period"] == "day"),
+            "override replaces the type default"
+        );
+        // No parent facts leak into a holder's own-lineage report.
+        let (_, v) = call(&f, &user(f.other, false), "GET", &path, Value::Null).await;
+        for w in v["budgets"].as_array().unwrap() {
+            if w["layer"] == "key" {
+                assert_eq!(w["used_microusd"], "40");
+                assert_eq!(w["headroom_status"], "known");
+            } else {
+                assert_eq!(w["headroom_status"], "restricted");
+                assert!(w["remaining_microusd"].is_null());
+            }
+        }
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn budget_headroom_unknown_floors_limit_raise_and_personal_privacy(pool: PgPool) {
+        let f = fixture(pool).await;
+        let admin = user(f.owner, true);
+        let member = user(f.other, false);
+        let ws = f.team.workspace_id;
+        let key = member_key(&f).await;
+        let path = format!("/api/v1/workspaces/{ws}/keys/{key}/policy");
+        let platform = format!("/api/v1/platform/workspaces/{ws}/policy");
+        let with = |amount: &str| json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"budgets":[{"period":"lifetime","amount_microusd":amount}]});
+        assert_eq!(
+            call(&f, &admin, "PUT", &platform, with("9007199254740993"))
+                .await
+                .0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            call(&f, &member, "PUT", &path, with("1000")).await.0,
+            StatusCode::OK
+        );
+        execution(&f, key, ws, "company/smart", "settled", Some(70), None).await;
+        execution(&f, key, ws, "company/smart", "pending", None, Some(10)).await;
+        let (_, v) = call(&f, &admin, "GET", &path, Value::Null).await;
+        assert_eq!(v["budgets"][0]["remaining_microusd"], "9007199254740913");
+        assert_eq!(v["budgets"][1]["remaining_microusd"], "920");
+        assert_eq!(v["budgets"][1]["settled_microusd"], "70");
+        assert_eq!(v["budgets"][1]["pending_held_microusd"], "10");
+        // A platform raise changes allowance, never consumption.
+        assert_eq!(
+            call(&f, &admin, "PUT", &platform, with("9007199254740995"))
+                .await
+                .0,
+            StatusCode::OK
+        );
+        let (_, v) = call(&f, &admin, "GET", &path, Value::Null).await;
+        assert_eq!(v["budgets"][0]["used_microusd"], "80");
+        assert_eq!(v["budgets"][0]["remaining_microusd"], "9007199254740915");
+        execution(&f, key, ws, "company/smart", "unknown", None, Some(20)).await;
+        let (_, v) = call(&f, &member, "GET", &path, Value::Null).await;
+        assert_eq!(v["budgets"][0]["headroom_status"], "restricted");
+        assert!(v["budgets"][0]["unknown_cost_requests"].is_null());
+        let w = &v["budgets"][1];
+        assert_eq!(w["headroom_status"], "unknown");
+        assert_eq!(w["unknown_held_microusd"], "20");
+        assert_eq!(w["unknown_cost_requests"], "1");
+        assert_eq!(w["used_microusd"], "100");
+        assert_eq!(w["unresolved_usage"], false);
+        assert!(w["remaining_microusd"].is_null());
+        // A missing hold cannot become a fabricated zero-cost request.
+        execution(&f, key, ws, "company/smart", "pending", None, None).await;
+        let (_, v) = call(&f, &member, "GET", &path, Value::Null).await;
+        assert_eq!(v["budgets"][1]["unknown_cost_requests"], "2");
+        assert_eq!(v["budgets"][1]["unresolved_usage"], true);
+        assert!(v["budgets"][1]["remaining_microusd"].is_null());
+        // Aggregate platform visibility does not confer personal key detail.
+        sqlx::query("UPDATE platform_role_grants SET role='auditor' WHERE user_id=$1")
+            .bind(f.other)
+            .execute(&f.store.pool)
+            .await
+            .unwrap();
+        let mut auditor = member;
+        auditor.platform_auditor = true;
+        let personal = f.principal.workspace_id;
+        let aggregate = format!("/api/v1/platform/workspaces/{personal}/policy");
+        assert_eq!(
+            call(&f, &admin, "PUT", &aggregate, with("1000")).await.0,
+            StatusCode::OK
+        );
+        execution(
+            &f,
+            f.principal.key_id,
+            personal,
+            "company/smart",
+            "settled",
+            Some(321),
+            None,
+        )
+        .await;
+        // Positive controls exercise the real detail/stats/request handlers,
+        // not a missing route's refusal.
+        for suffix in [
+            "requests".to_owned(),
+            format!("keys/{}", f.principal.key_id),
+            format!("keys/{}/stats", f.principal.key_id),
+        ] {
+            assert_eq!(
+                call(
+                    &f,
+                    &admin,
+                    "GET",
+                    &format!("/api/v1/workspaces/{personal}/{suffix}"),
+                    Value::Null
+                )
+                .await
+                .0,
+                StatusCode::OK
+            );
+        }
+        for role in ["auditor", "admin"] {
+            sqlx::query("UPDATE platform_role_grants SET role=$2 WHERE user_id=$1")
+                .bind(f.other)
+                .bind(role)
+                .execute(&f.store.pool)
+                .await
+                .unwrap();
+            auditor.platform_admin = role == "admin";
+            let (status, v) = call(&f, &auditor, "GET", &aggregate, Value::Null).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(v["budgets"][0]["headroom_status"], "known");
+            assert_eq!(v["budgets"][0]["settled_microusd"], "321");
+            assert_eq!(v["budgets"][0]["remaining_microusd"], "679");
+            for suffix in [
+                "policy".to_owned(),
+                "requests".to_owned(),
+                format!("keys/{}", f.principal.key_id),
+                format!("keys/{}/stats", f.principal.key_id),
+                format!("keys/{}/policy", f.principal.key_id),
+            ] {
+                assert_eq!(
+                    call(
+                        &f,
+                        &auditor,
+                        "GET",
+                        &format!("/api/v1/workspaces/{personal}/{suffix}"),
+                        Value::Null
+                    )
+                    .await
+                    .0,
+                    StatusCode::FORBIDDEN
+                );
+            }
+        }
+    }
+
+    #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn budget_periods_round_trip_tighten_audit_and_scoped_usage(pool: PgPool) {
         let f = fixture(pool).await;
         let admin = user(f.owner, true);
@@ -1534,12 +1882,32 @@ mod db {
         assert_eq!(budgets[1]["used_microusd"], "70");
         assert_eq!(budgets[1]["exhausted"], false);
         assert_eq!(budgets[1]["unresolved_usage"], false);
+        assert_eq!(budgets[1]["settled_microusd"], "70");
+        assert_eq!(budgets[1]["pending_held_microusd"], "0");
+        assert_eq!(budgets[1]["unknown_held_microusd"], "0");
+        assert_eq!(budgets[1]["unknown_cost_requests"], "0");
+        assert_eq!(budgets[1]["remaining_microusd"], "30");
+        assert_eq!(budgets[1]["headroom_status"], "known");
         assert_eq!(budgets[2]["period"], "week");
+        assert_eq!(budgets[2]["remaining_microusd"], "330");
+        assert_eq!(budgets[0]["remaining_microusd"], "930");
         // Ordinary members see the windows but not workspace-wide consumption.
         let (_, v) = call(&f, &member, "GET", &local, Value::Null).await;
         assert_eq!(v["budgets"][1]["usage_visible"], false);
         assert!(v["budgets"][1]["used_microusd"].is_null());
         assert!(v["budgets"][1]["exhausted"].is_null());
+        for w in v["budgets"].as_array().unwrap() {
+            assert_eq!(w["headroom_status"], "restricted");
+            for field in [
+                "settled_microusd",
+                "pending_held_microusd",
+                "unknown_held_microusd",
+                "unknown_cost_requests",
+                "remaining_microusd",
+            ] {
+                assert!(w[field].is_null(), "hidden {field}");
+            }
+        }
         assert!(!v.to_string().contains("6000"));
         // Platform readers see the type default behind an override.
         let platform = format!("/api/v1/platform/workspaces/{ws}/policy");
@@ -1557,6 +1925,14 @@ mod db {
         );
         assert_eq!(v["budgets"][0]["budget_period"], "day");
         assert_eq!(v["budgets"][0]["used_microusd"], "70");
+        assert_eq!(v["budgets"][0]["remaining_microusd"], "230");
+        assert!(
+            !v["budgets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|w| w["period"] == "month")
+        );
         // A period change rewrites no consumption.
         let held: i64 = sqlx::query_scalar("SELECT count(*) FROM governance_reservations")
             .fetch_one(&f.store.pool)

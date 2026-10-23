@@ -150,6 +150,9 @@ GRANT SELECT,UPDATE(last_write_at) ON public.scim_state TO gateway_runtime;
 -- which run as the invoking runtime role inside reservation/execution writes
 -- (upsert: INSERT + UPDATE of the counters). Bucket keys are never re-keyed and
 -- rows are never deleted or truncated. Admission/report reads need SELECT.
+-- Budget headroom reporting (103) reads settled, held, held_unknown, unknown,
+-- unresolved, unresolved_unknown and unreserved_executions using the same
+-- indexed scope/period buckets. Existing SELECT covers it; no new write ACL.
 GRANT SELECT,INSERT ON public.budget_totals TO gateway_runtime;
 GRANT UPDATE(settled_microusd,held_microusd,reservations,pending,unknown,unresolved,
  unreserved_executions) ON public.budget_totals TO gateway_runtime;
