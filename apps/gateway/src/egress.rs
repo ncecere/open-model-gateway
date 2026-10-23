@@ -35,6 +35,7 @@ pub enum Purpose {
     Catalog,
     Smtp,
     Audit,
+    Telemetry,
 }
 impl Purpose {
     pub fn as_str(self) -> &'static str {
@@ -45,6 +46,7 @@ impl Purpose {
             Self::Catalog => "catalog",
             Self::Smtp => "smtp",
             Self::Audit => "audit",
+            Self::Telemetry => "telemetry",
         }
     }
 }
@@ -572,6 +574,61 @@ mod tests {
         for bad in ["10.0.0.1/8", "10.0.0.0/33", "nope", "::ffff:10.0.0.0/104"] {
             assert!(Networks::parse(PRIVATE_ALLOW_ENV, bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn telemetry_literal_and_dns_policies_cannot_bypass_metadata_or_private_approval() {
+        let strict = Policy::default();
+        let allowed = Policy::new(
+            false,
+            Networks::parse(PRIVATE_ALLOW_ENV, "10.20.0.0/16").unwrap(),
+        );
+        let url = reqwest::Url::parse("https://10.20.1.1:4318/v1/traces").unwrap();
+        assert!(check_url(&strict, Purpose::Telemetry, &url).is_err());
+        assert!(check_url(&allowed, Purpose::Telemetry, &url).is_ok());
+        let sockets = |addresses: &[&str]| {
+            addresses
+                .iter()
+                .map(|address| SocketAddr::new(ip(address), 4318))
+                .collect()
+        };
+        assert_eq!(
+            filter(
+                &allowed,
+                Purpose::Telemetry,
+                "collector.invalid",
+                sockets(&["10.20.1.1", "169.254.169.254", "10.21.1.1"])
+            )
+            .unwrap(),
+            sockets(&["10.20.1.1"])
+        );
+        let all = Policy::new(
+            true,
+            Networks::parse(PRIVATE_ALLOW_ENV, "0.0.0.0/0,::/0").unwrap(),
+        );
+        assert!(
+            filter(
+                &all,
+                Purpose::Telemetry,
+                "collector.invalid",
+                sockets(&[
+                    "169.254.169.254",
+                    "fd00:ec2::254",
+                    "::ffff:169.254.169.254",
+                    "64:ff9b::a9fe:a9fe"
+                ])
+            )
+            .is_err()
+        );
+        assert!(
+            filter(
+                &strict,
+                Purpose::Telemetry,
+                "collector.invalid",
+                sockets(&["127.0.0.1"])
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -343,7 +343,7 @@ impl Exporter {
         let (url, client) = https_client(OTLP_URL_ENV, url.trim(), development)?;
         let headers = match headers {
             None => reqwest::header::HeaderMap::new(),
-            Some(text) => parse_otlp_headers(text)?,
+            Some(text) => parse_otlp_headers(OTLP_HEADERS_ENV_ENV, text)?,
         };
         Ok(Self {
             transport: Transport::Otlp(Otlp {
@@ -478,7 +478,7 @@ impl Exporter {
 /// provider or SMTP allowlist, and not reserved. A Platform Admin chooses
 /// where provider credentials and the SMTP password go: if either allowlist
 /// could read it, an admin could learn it (#140's rule, here too).
-fn check_secret_env_name(
+pub(crate) fn check_secret_env_name(
     setting: &str,
     name: &str,
     get: &impl Fn(&str) -> Option<String>,
@@ -509,18 +509,21 @@ fn check_secret_env_name(
 /// `Key=Value,Key2=Value2` from the OTLP headers variable (#108). Errors say
 /// which item is wrong, never its name or value (a misplaced `=` could put a
 /// token in the name).
-fn parse_otlp_headers(value: &str) -> anyhow::Result<reqwest::header::HeaderMap> {
+pub(crate) fn parse_otlp_headers(
+    setting: &str,
+    value: &str,
+) -> anyhow::Result<reqwest::header::HeaderMap> {
     let mut headers = reqwest::header::HeaderMap::new();
     let items: Vec<&str> = value.split(',').collect();
     anyhow::ensure!(
         items.len() <= OTLP_MAX_HEADERS,
-        "{OTLP_HEADERS_ENV_ENV}: at most {OTLP_MAX_HEADERS} headers"
+        "{setting}: at most {OTLP_MAX_HEADERS} headers"
     );
     for (i, item) in items.into_iter().enumerate() {
         let n = i + 1;
-        let (name, value) = item.split_once('=').ok_or_else(|| {
-            anyhow::anyhow!("{OTLP_HEADERS_ENV_ENV}: header {n} is not Key=Value")
-        })?;
+        let (name, value) = item
+            .split_once('=')
+            .ok_or_else(|| anyhow::anyhow!("{setting}: header {n} is not Key=Value"))?;
         // Spaces around `=` and `,` are ignored; a CR or LF never is.
         let (name, value) = (name.trim_matches(' '), value.trim_matches(' '));
         // An HTTP token (RFC 9110 5.6.2).
@@ -529,25 +532,23 @@ fn parse_otlp_headers(value: &str) -> anyhow::Result<reqwest::header::HeaderMap>
                 && name
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)),
-            "{OTLP_HEADERS_ENV_ENV}: header {n} has an invalid name"
+            "{setting}: header {n} has an invalid name"
         );
         anyhow::ensure!(
             !OTLP_RESERVED_HEADERS
                 .iter()
                 .any(|reserved| name.eq_ignore_ascii_case(reserved)),
-            "{OTLP_HEADERS_ENV_ENV}: header {n} is one the gateway sets itself (Content-Type, Host or Content-Length)"
+            "{setting}: header {n} is one the gateway sets itself (Content-Type, Host or Content-Length)"
         );
         // Visible ASCII and space: no CR, LF or other control characters.
         anyhow::ensure!(
             !value.is_empty() && value.bytes().all(|b| (b' '..=b'~').contains(&b)),
-            "{OTLP_HEADERS_ENV_ENV}: header {n} has an empty or invalid value (visible ASCII and spaces only)"
+            "{setting}: header {n} has an empty or invalid value (visible ASCII and spaces only)"
         );
-        let name = reqwest::header::HeaderName::from_bytes(name.as_bytes()).map_err(|_| {
-            anyhow::anyhow!("{OTLP_HEADERS_ENV_ENV}: header {n} has an invalid name")
-        })?;
-        let mut value = reqwest::header::HeaderValue::from_str(value).map_err(|_| {
-            anyhow::anyhow!("{OTLP_HEADERS_ENV_ENV}: header {n} has an invalid value")
-        })?;
+        let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+            .map_err(|_| anyhow::anyhow!("{setting}: header {n} has an invalid name"))?;
+        let mut value = reqwest::header::HeaderValue::from_str(value)
+            .map_err(|_| anyhow::anyhow!("{setting}: header {n} has an invalid value"))?;
         value.set_sensitive(true);
         headers.append(name, value);
     }
@@ -577,21 +578,36 @@ fn https_client(
         url.username().is_empty() && url.password().is_none() && url.fragment().is_none(),
         "{setting} must not contain credentials or a fragment"
     );
+    let client = export_http_client(
+        &url,
+        crate::egress::Purpose::Audit,
+        development,
+        Duration::from_secs(5),
+        REQUEST_TIMEOUT,
+    )?;
+    Ok((url, client))
+}
+
+/// Shared export transport, never a durable queue or retry policy.
+pub(crate) fn export_http_client(
+    url: &reqwest::Url,
+    purpose: crate::egress::Purpose,
+    development: bool,
+    connect_timeout: Duration,
+    exchange_timeout: Duration,
+) -> anyhow::Result<reqwest::Client> {
     let policy = crate::egress::policy().permit_loopback(development);
-    crate::egress::check_url(&policy, crate::egress::Purpose::Audit, &url)?;
+    crate::egress::check_url(&policy, purpose, url)?;
     let client = reqwest::Client::builder()
         .no_proxy()
-        .dns_resolver(crate::egress::resolver_with(
-            crate::egress::Purpose::Audit,
-            policy,
-        ))
+        .dns_resolver(crate::egress::resolver_with(purpose, policy))
         .redirect(reqwest::redirect::Policy::none())
         .retry(reqwest::retry::never())
-        .timeout(REQUEST_TIMEOUT)
-        .connect_timeout(Duration::from_secs(5))
+        .timeout(exchange_timeout)
+        .connect_timeout(connect_timeout)
         .build()
-        .map_err(|_| anyhow::anyhow!("cannot build the audit export client"))?;
-    Ok((url, client))
+        .map_err(|_| anyhow::anyhow!("cannot build the export client"))?;
+    Ok(client)
 }
 
 /// Read a PEM file at startup. Errors name the setting, never the contents.

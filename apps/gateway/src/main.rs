@@ -933,6 +933,8 @@ async fn run(cli: Cli) -> Result<()> {
                     .await;
                 }
             });
+            // Preview transport only (#98 PR 1). No engine/HTTP spans yet.
+            let traces = open_model_gateway::telemetry::Runtime::start(config.traces);
             let served = axum::serve(
                 listener,
                 http::router_with_identity(store, web, engine, identity)
@@ -943,6 +945,9 @@ async fn run(cli: Cli) -> Result<()> {
             )
             .with_graceful_shutdown(shutdown_signal())
             .await;
+            if let Some(traces) = traces {
+                traces.shutdown().await;
+            }
             if let Some(alerts) = alerts {
                 alerts.abort();
                 let _ = alerts.await;
@@ -1180,6 +1185,11 @@ mod demo {
             admission_mode: Default::default(),
             listen_database_url: None,
             config_cache: true,
+            traces: open_model_gateway::config::TraceConfig::from_lookup(
+                |_| None,
+                open_model_gateway::config::Environment::Development,
+            )
+            .unwrap(),
         };
         assert!(ensure_demo_config(&config).is_ok());
         for url in [

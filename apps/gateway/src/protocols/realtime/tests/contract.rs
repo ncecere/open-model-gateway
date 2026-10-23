@@ -416,8 +416,15 @@ async fn responses_settle_individually_and_the_session_sums_them(pool: PgPool) {
     // Privacy: nothing of the conversation is stored.
     let stored: String = sqlx::query_scalar("SELECT concat((SELECT string_agg(row_to_json(e)::text,'') FROM inference_executions e),(SELECT string_agg(row_to_json(r)::text,'') FROM governance_reservations r),(SELECT string_agg(row_to_json(l)::text,'') FROM monetary_ledger l),(SELECT string_agg(row_to_json(x)::text,'') FROM realtime_responses x),(SELECT string_agg(row_to_json(a)::text,'') FROM audit_events a))")
         .fetch_one(&g.pool).await.unwrap();
-    for secret in [AUDIO, INSTRUCTIONS, "resp_1", "sess_private", SERVER_SECRET] {
-        assert!(!stored.contains(secret), "{secret} stored");
+    for (index, forbidden) in [AUDIO, INSTRUCTIONS, "resp_1", "sess_private", SERVER_SECRET]
+        .iter()
+        .enumerate()
+    {
+        // Report which fixture leaked by position, never the value itself.
+        assert!(
+            !stored.contains(forbidden),
+            "forbidden value #{index} stored"
+        );
     }
 }
 
