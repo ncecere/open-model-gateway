@@ -423,6 +423,13 @@ async fn workspace_rules_belong_to_shared_admins_and_personal_is_built_in(pool: 
 async fn spend(f: &Fixture, pool: &PgPool, ws: Uuid, user: &BrowserPrincipal, amount: i64) {
     let (status, k) = key(f, user, ws, Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{k}");
+    // This fixture exercises budget alerts, not expiry. Keep its key outside
+    // both reminder bands; key-expiry fixtures above deliberately use 1/3 days.
+    sqlx::query("UPDATE api_keys SET expires_at=now()+interval '30 days' WHERE id=$1")
+        .bind(id(&k))
+        .execute(pool)
+        .await
+        .unwrap();
     let (m, p, d, e) = (
         Uuid::new_v4(),
         Uuid::new_v4(),
