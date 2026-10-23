@@ -26,6 +26,7 @@ export default defineConfig({
   projects: [
     { name: "journey", testMatch: /journey\.spec\.ts/ },
     { name: "key-safety", testMatch: /key-safety\.spec\.ts/, dependencies: ["journey"] },
+    { name: "key-expiry", testMatch: /key-expiry\.spec\.ts/, dependencies: ["journey"] },
     { name: "budget-headroom", testMatch: /budget-headroom\.spec\.ts/, dependencies: ["journey"] },
     { name: "accessibility", testMatch: /accessibility\.spec\.ts/, dependencies: ["journey"] },
   ],
