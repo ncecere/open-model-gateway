@@ -809,24 +809,15 @@ async fn workspace_events(
     Path(ws): Path<Uuid>,
     Query(q): Query<EventQuery>,
 ) -> ApiResult {
-    let (mut tx, _) = workspace_read(&s, &u, ws).await?;
-    // This workspace's rules, or its built-in alerts: personal_budget
-    // (personal: owner only, enforced above) or key_expiring, which does NOT
-    // follow the generic `e.builtin IS NOT NULL` branch (it has no builtin
-    // at all) and instead gets the same key-specific predicate as the
-    // notification feed: the holder, or a current workspace owner/admin.
-    // Without this, a platform reader who is not a workspace member (but
-    // whom `workspace_read` otherwise admits for a shared workspace) would
-    // see key-expiry reminders through this endpoint, which they are not an
-    // intended recipient of.
-    let out = events(
-        &mut tx,
-        &q,
-        "e.workspace_id=$6 AND (r.scope='workspace' OR (e.builtin IS NOT NULL) OR (e.kind='key_expiring' AND (EXISTS(SELECT 1 FROM api_keys k WHERE k.id=e.api_key_id AND k.issued_to_user_id=$7) OR EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=e.workspace_id AND m.user_id=$7 AND m.role IN ('owner','admin')))))",
-        Some(ws),
-        u.user_id,
-    )
-    .await?;
+    let (mut tx, access) = resources::workspace_read_tx(&s, &u, ws).await?;
+    // Members may read their own key reminders, not configurable rule history.
+    // Preserve the existing admin/platform-reader guard for every other kind.
+    let rule_reader = access.admin || (access.platform_reader && shared(&access.kind));
+    let key_visible = core::key_expiry_visible("$7");
+    let scope = format!(
+        "e.workspace_id=$6 AND (({rule_reader} AND (r.scope='workspace' OR e.builtin IS NOT NULL)) OR ({key_visible}))"
+    );
+    let out = events(&mut tx, &q, &scope, Some(ws), u.user_id).await?;
     tx.commit().await?;
     Ok(out)
 }
@@ -834,7 +825,12 @@ async fn workspace_events(
 // ---------- Notifications ----------
 
 /// Incidents the caller may see, by live authority (`$1` caller, `$2` platform reader).
-const VISIBLE: &str = "e.fired_at>now()-interval '90 days' AND ((e.builtin IS NOT NULL AND w.kind='personal' AND w.owner_user_id=$1 AND w.disabled_at IS NULL) OR (r.scope='installation' AND $2) OR (e.builtin IN ('scim_last_admin','partitions_missing','history_orphans') AND $2) OR (r.scope='workspace' AND w.kind IN ('team','project') AND w.disabled_at IS NULL AND (EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=e.workspace_id AND m.user_id=$1 AND m.role IN ('owner','admin')) OR (r.notify_platform_admins AND $2))) OR (e.kind='key_expiring' AND w.disabled_at IS NULL AND (EXISTS(SELECT 1 FROM api_keys k WHERE k.id=e.api_key_id AND k.issued_to_user_id=$1) OR EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=e.workspace_id AND m.user_id=$1 AND m.role IN ('owner','admin')))))";
+fn visible() -> String {
+    let key_visible = core::key_expiry_visible("$1");
+    format!(
+        "e.fired_at>now()-interval '90 days' AND ((e.builtin IS NOT NULL AND w.kind='personal' AND w.owner_user_id=$1 AND w.disabled_at IS NULL) OR (r.scope='installation' AND $2) OR (e.builtin IN ('scim_last_admin','partitions_missing','history_orphans') AND $2) OR (r.scope='workspace' AND w.kind IN ('team','project') AND w.disabled_at IS NULL AND (EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=e.workspace_id AND m.user_id=$1 AND m.role IN ('owner','admin')) OR (r.notify_platform_admins AND $2))) OR ({key_visible}))"
+    )
+}
 
 /// Notifications never take the installation lock (the bell polls).
 async fn viewer<'a>(
@@ -873,7 +869,8 @@ async fn notifications(
         Some(_) => return Err(invalid()),
     };
     let (mut tx, reader, admin) = viewer(&s, &u).await?;
-    let mut data: Vec<Value> = sqlx::query_scalar(&format!("SELECT {EVENT_JSON}||jsonb_build_object('read',x.event_id IS NOT NULL) {EVENT_FROM} LEFT JOIN alert_reads x ON x.event_id=e.id AND x.user_id=$1 WHERE {VISIBLE} AND (NOT $3 OR x.event_id IS NULL) ORDER BY e.fired_at DESC,e.id LIMIT $4 OFFSET $5"))
+    let visible = visible();
+    let mut data: Vec<Value> = sqlx::query_scalar(&format!("SELECT {EVENT_JSON}||jsonb_build_object('read',x.event_id IS NOT NULL) {EVENT_FROM} LEFT JOIN alert_reads x ON x.event_id=e.id AND x.user_id=$1 WHERE {visible} AND (NOT $3 OR x.event_id IS NULL) ORDER BY e.fired_at DESC,e.id LIMIT $4 OFFSET $5"))
         .bind(u.user_id)
         .bind(reader)
         .bind(unread)
@@ -893,7 +890,8 @@ async fn notification_summary(
     Extension(u): Extension<BrowserPrincipal>,
 ) -> ApiResult {
     let (mut tx, reader, _) = viewer(&s, &u).await?;
-    let (unread, firing): (i64, i64) = sqlx::query_as(&format!("SELECT count(*) FILTER(WHERE NOT EXISTS(SELECT 1 FROM alert_reads x WHERE x.event_id=e.id AND x.user_id=$1)),count(*) FILTER(WHERE e.resolved_at IS NULL) {EVENT_FROM} WHERE {VISIBLE}"))
+    let visible = visible();
+    let (unread, firing): (i64, i64) = sqlx::query_as(&format!("SELECT count(*) FILTER(WHERE NOT EXISTS(SELECT 1 FROM alert_reads x WHERE x.event_id=e.id AND x.user_id=$1)),count(*) FILTER(WHERE e.resolved_at IS NULL) {EVENT_FROM} WHERE {visible}"))
         .bind(u.user_id)
         .bind(reader)
         .fetch_one(&mut *tx)
@@ -922,7 +920,8 @@ async fn mark_read(
     }
     let (mut tx, reader, _) = viewer(&s, &u).await?;
     // Only incidents the caller can see; others are ignored, not disclosed.
-    let marked = sqlx::query(&format!("INSERT INTO alert_reads(user_id,event_id) SELECT $1,e.id {EVENT_FROM} WHERE {VISIBLE} AND ($3::uuid[] IS NULL OR e.id=ANY($3)) AND NOT EXISTS(SELECT 1 FROM alert_reads x WHERE x.event_id=e.id AND x.user_id=$1) ORDER BY e.fired_at DESC LIMIT 1000 ON CONFLICT DO NOTHING"))
+    let visible = visible();
+    let marked = sqlx::query(&format!("INSERT INTO alert_reads(user_id,event_id) SELECT $1,e.id {EVENT_FROM} WHERE {visible} AND ($3::uuid[] IS NULL OR e.id=ANY($3)) AND NOT EXISTS(SELECT 1 FROM alert_reads x WHERE x.event_id=e.id AND x.user_id=$1) ORDER BY e.fired_at DESC LIMIT 1000 ON CONFLICT DO NOTHING"))
         .bind(u.user_id)
         .bind(reader)
         .bind(&b.ids)

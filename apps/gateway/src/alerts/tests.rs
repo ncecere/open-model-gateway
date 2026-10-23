@@ -278,7 +278,8 @@ async fn key_expiry_live_delivery_suppresses_obsolete_and_hides_secrets(pool: Pg
         .unwrap();
     assert!(mail.rcpt_to.join(",").contains("owner@example.test"));
     assert!(mail.data.contains("An API key expires within 1 day"));
-    assert!(mail.data.contains("/notifications"));
+    assert!(mail.data.contains("Notifications"));
+    assert!(mail.data.contains("Expires:"));
     for secret in [
         "Private key name",
         "Secret key name",

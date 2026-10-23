@@ -12,7 +12,9 @@
 -- read path returns nothing for them and the old delivery worker's
 -- recipient query (keyed off `alert_rules.id=$1` or
 -- `alert_events.builtin=ANY(installation_builtins)`) resolves zero
--- recipients and records `no_recipients` instead of guessing. A new binary
+-- recipients and records `no_recipients` (or `not_configured` without
+-- SMTP) instead of guessing. An old worker can consume a pending email;
+-- email remains best effort during overlap, never replayed. A new binary
 -- recognizes `kind='key_expiring'` directly and applies the key-specific
 -- visibility/recipient logic documented in docs/alerts.md. Old replicas
 -- serving traffic for the few minutes a rolling upgrade takes therefore
@@ -33,12 +35,13 @@ ALTER TABLE alert_events ADD CONSTRAINT alert_events_kind_check CHECK(kind IN ('
 -- mechanism above); every other kind keeps the original either/or shape.
 ALTER TABLE alert_events DROP CONSTRAINT alert_events_check;
 ALTER TABLE alert_events ADD CONSTRAINT alert_events_check
- CHECK((kind='key_expiring' AND rule_id IS NULL AND builtin IS NULL) OR (rule_id IS NULL) <> (builtin IS NULL));
+ CHECK((kind='key_expiring' AND rule_id IS NULL AND builtin IS NULL) OR (kind<>'key_expiring' AND (rule_id IS NULL) <> (builtin IS NULL)));
 
 -- Kind-specific shape: the three new columns travel together and only with
 -- `key_expiring`; thresholds are fixed at 7 and 1 days.
 ALTER TABLE alert_events ADD CONSTRAINT alert_events_key_expiring_shape
- CHECK((kind='key_expiring') = (api_key_id IS NOT NULL AND key_expires_at IS NOT NULL AND threshold_days IS NOT NULL));
+ CHECK((kind='key_expiring' AND api_key_id IS NOT NULL AND key_expires_at IS NOT NULL AND threshold_days IS NOT NULL AND level=threshold_days AND provider_connection_id IS NULL)
+    OR (kind<>'key_expiring' AND api_key_id IS NULL AND key_expires_at IS NULL AND threshold_days IS NULL));
 ALTER TABLE alert_events ADD CONSTRAINT alert_events_key_expiring_threshold
  CHECK(threshold_days IS NULL OR threshold_days IN (1,7));
 
@@ -61,6 +64,8 @@ CREATE OR REPLACE FUNCTION alert_event_resolve_once() RETURNS trigger LANGUAGE p
 BEGIN
  IF OLD.resolved_at IS NOT NULL OR NEW.resolved_at IS NULL OR NEW.id<>OLD.id OR NEW.rule_id IS DISTINCT FROM OLD.rule_id
   OR NEW.builtin IS DISTINCT FROM OLD.builtin OR NEW.subject_key<>OLD.subject_key OR NEW.level<>OLD.level
+  OR NEW.kind<>OLD.kind OR NEW.severity<>OLD.severity OR NEW.workspace_id IS DISTINCT FROM OLD.workspace_id
+  OR NEW.provider_connection_id IS DISTINCT FROM OLD.provider_connection_id
   OR NEW.summary<>OLD.summary OR NEW.details<>OLD.details OR NEW.fired_at<>OLD.fired_at
   OR NEW.api_key_id IS DISTINCT FROM OLD.api_key_id OR NEW.key_expires_at IS DISTINCT FROM OLD.key_expires_at
   OR NEW.threshold_days IS DISTINCT FROM OLD.threshold_days THEN
@@ -78,7 +83,7 @@ BEGIN
  IF NEW.kind='key_expiring' THEN
   SELECT workspace_id INTO v_ws FROM api_keys WHERE id=NEW.api_key_id;
   IF v_ws IS NULL OR NEW.workspace_id IS DISTINCT FROM v_ws THEN
-   RAISE EXCEPTION 'key-expiring incident workspace must match the credential''s own workspace';
+   RAISE EXCEPTION 'key-expiring incident workspace must match the credential''s own workspace' USING ERRCODE='23514';
   END IF;
  END IF;
  RETURN NEW;

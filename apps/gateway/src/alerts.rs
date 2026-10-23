@@ -1019,20 +1019,18 @@ const KEY_EXPIRY_CANDIDATES: &str = "SELECT k.id,k.expires_at,k.workspace_id,CAS
 /// longer an eligible candidate at all, `superseded` when it is still
 /// eligible but the 1-day band now applies to an incident fired at the
 /// 7-day one.
-const KEY_EXPIRY_RETIRE: &str = "WITH open AS ( \
- SELECT e.id,e.threshold_days,k.id key_ok,k.revoked_at,k.disabled_at kdisabled,k.expires_at,w.disabled_at wdisabled, \
-  (k.issued_to_user_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=k.workspace_id AND m.user_id=k.issued_to_user_id)) holder_lost, \
-  (k.service_account_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM service_accounts sa WHERE sa.id=k.service_account_id AND sa.disabled_at IS NULL)) sa_disabled \
+const KEY_EXPIRY_RETIRE: &str = "WITH decided AS ( \
+ SELECT e.id,e.fired_at,CASE \
+  WHEN k.id IS NULL OR k.revoked_at IS NOT NULL OR k.disabled_at IS NOT NULL OR w.disabled_at IS NOT NULL \
+   OR k.expires_at IS DISTINCT FROM e.key_expires_at OR k.expires_at<=$1 OR k.expires_at>$1+interval '7 days' \
+   OR (k.issued_to_user_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=k.workspace_id AND m.user_id=k.issued_to_user_id)) \
+   OR (k.service_account_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM service_accounts sa WHERE sa.id=k.service_account_id AND sa.disabled_at IS NULL)) THEN 'cleared' \
+  WHEN e.threshold_days=7 AND k.expires_at<=$1+interval '1 day' THEN 'superseded' \
+  ELSE NULL END resolution \
  FROM alert_events e LEFT JOIN api_keys k ON k.id=e.api_key_id LEFT JOIN workspaces w ON w.id=k.workspace_id \
- WHERE e.kind='key_expiring' AND e.resolved_at IS NULL ORDER BY e.fired_at LIMIT $2 \
-), decided AS ( \
- SELECT id, CASE \
-   WHEN key_ok IS NULL OR revoked_at IS NOT NULL OR kdisabled IS NOT NULL OR expires_at IS NULL OR wdisabled IS NOT NULL OR holder_lost OR sa_disabled THEN 'cleared' \
-   WHEN threshold_days=7 AND expires_at<=$1+interval '1 day' THEN 'superseded' \
-   ELSE NULL END resolution \
- FROM open \
-) \
- UPDATE alert_events e SET resolved_at=clock_timestamp(),resolution=d.resolution FROM decided d WHERE e.id=d.id AND d.resolution IS NOT NULL";
+ WHERE e.kind='key_expiring' AND e.resolved_at IS NULL \
+), obsolete AS (SELECT id,resolution FROM decided WHERE resolution IS NOT NULL ORDER BY fired_at,id LIMIT $2) \
+ UPDATE alert_events e SET resolved_at=clock_timestamp(),resolution=d.resolution FROM obsolete d WHERE e.id=d.id";
 
 type KeyExpiryCandidate = (Uuid, DateTime<Utc>, Uuid, i32);
 
@@ -1102,15 +1100,22 @@ pub(crate) async fn key_expiring_tick(
 /// Every recipient needs live platform entitlement; shared recipients also
 /// need effective workspace membership. No platform-role-only fallback and
 /// no listed addresses.
-const KEY_EXPIRY_RECIPIENTS: &str = "WITH key AS (SELECT k.workspace_id,k.issued_to_user_id,w.kind wkind,w.disabled_at wdis FROM api_keys k JOIN workspaces w ON w.id=k.workspace_id WHERE k.id=$1) \
- SELECT DISTINCT lower(u.email) FROM ( \
- SELECT key.issued_to_user_id user_id FROM key WHERE key.wdis IS NULL AND key.issued_to_user_id IS NOT NULL \
-  AND EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=key.workspace_id AND m.user_id=key.issued_to_user_id) \
- UNION \
- SELECT m.user_id FROM key JOIN effective_workspace_memberships m ON m.workspace_id=key.workspace_id AND m.role IN ('owner','admin') \
-  WHERE key.wdis IS NULL AND key.wkind IN ('team','project') \
- ) x JOIN users u ON u.id=x.user_id JOIN effective_platform_roles p ON p.user_id=u.id \
- ORDER BY 1 LIMIT $2";
+/// Shared by delivery and all management read paths. The caller is a SQL
+/// parameter/expression, never client-provided SQL. `e` is the incident.
+/// Authority is live even for resolved history; old attribution cannot grant
+/// a former holder access. Personal ownership is checked explicitly.
+pub(crate) fn key_expiry_visible(viewer: &str) -> String {
+    format!(
+        "e.kind='key_expiring' AND EXISTS(SELECT 1 FROM api_keys k JOIN workspaces kw ON kw.id=k.workspace_id WHERE k.id=e.api_key_id AND k.workspace_id=e.workspace_id AND k.revoked_at IS NULL AND k.disabled_at IS NULL AND kw.disabled_at IS NULL AND k.expires_at=e.key_expires_at AND k.expires_at>now() AND (k.issued_to_user_id IS NULL OR EXISTS(SELECT 1 FROM effective_workspace_memberships holder WHERE holder.workspace_id=k.workspace_id AND holder.user_id=k.issued_to_user_id)) AND (k.service_account_id IS NULL OR EXISTS(SELECT 1 FROM service_accounts sa WHERE sa.id=k.service_account_id AND sa.disabled_at IS NULL)) AND EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=k.workspace_id AND m.user_id={viewer} AND ((kw.kind='personal' AND kw.owner_user_id=m.user_id) OR (kw.kind IN ('team','project') AND (k.issued_to_user_id=m.user_id OR m.role IN ('owner','admin'))))))"
+    )
+}
+
+fn key_expiry_recipients() -> String {
+    let visible = key_expiry_visible("u.id");
+    format!(
+        "SELECT DISTINCT lower(u.email) FROM alert_events e CROSS JOIN users u JOIN effective_platform_roles p ON p.user_id=u.id WHERE e.id=$1 AND ({visible}) AND e.resolved_at IS NULL AND e.key_expires_at<=now()+interval '7 days' AND e.threshold_days=CASE WHEN e.key_expires_at<=now()+interval '1 day' THEN 1 ELSE 7 END AND u.email IS NOT NULL ORDER BY 1 LIMIT $2"
+    )
+}
 
 /// What one evaluation did. `None` from [`evaluate_once`] means another replica
 /// is evaluating right now.
@@ -1400,14 +1405,14 @@ struct Pending {
     event_id: Uuid,
     builtin: Option<String>,
     kind: String,
-    api_key_id: Option<Uuid>,
+    key_expires_at: Option<DateTime<Utc>>,
 }
 
 /// Send one pending delivery while holding its row lock (no double sends
 /// across replicas). Returns false when nothing was pending.
 async fn deliver_one(store: &Store, id: Uuid) -> anyhow::Result<bool> {
     let mut tx = crate::db::begin(&store.pool).await?;
-    let row: Option<Pending> = sqlx::query_as("SELECT d.transition,e.summary,e.severity,e.fired_at,e.resolved_at,e.rule_id,r.name rule_name,w.name workspace_name,w.kind workspace_kind,p.name connection_name,CASE WHEN e.builtin IS NOT NULL THEN e.workspace_id END personal_workspace,e.id event_id,e.builtin,e.kind,e.api_key_id FROM alert_deliveries d JOIN alert_events e ON e.id=d.event_id LEFT JOIN alert_rules r ON r.id=e.rule_id LEFT JOIN workspaces w ON w.id=e.workspace_id LEFT JOIN provider_connections p ON p.id=e.provider_connection_id WHERE d.id=$1 AND d.status='pending' FOR UPDATE OF d SKIP LOCKED")
+    let row: Option<Pending> = sqlx::query_as("SELECT d.transition,e.summary,e.severity,e.fired_at,e.resolved_at,e.rule_id,r.name rule_name,w.name workspace_name,w.kind workspace_kind,p.name connection_name,CASE WHEN e.builtin IS NOT NULL THEN e.workspace_id END personal_workspace,e.id event_id,e.builtin,e.kind,e.key_expires_at FROM alert_deliveries d JOIN alert_events e ON e.id=d.event_id LEFT JOIN alert_rules r ON r.id=e.rule_id LEFT JOIN workspaces w ON w.id=e.workspace_id LEFT JOIN provider_connections p ON p.id=e.provider_connection_id WHERE d.id=$1 AND d.status='pending' FOR UPDATE OF d SKIP LOCKED")
         .bind(id)
         .fetch_optional(&mut *tx)
         .await?;
@@ -1426,7 +1431,7 @@ async fn deliver_one(store: &Store, id: Uuid) -> anyhow::Result<bool> {
         event_id,
         builtin,
         kind,
-        api_key_id,
+        key_expires_at,
     }) = row
     else {
         return Ok(false);
@@ -1436,8 +1441,8 @@ async fn deliver_one(store: &Store, id: Uuid) -> anyhow::Result<bool> {
     // below (which is also exactly why an old binary resolves no recipients
     // for it); it gets its own live recipient resolution instead.
     let recipients: Vec<String> = if kind == "key_expiring" {
-        sqlx::query_scalar(KEY_EXPIRY_RECIPIENTS)
-            .bind(api_key_id)
+        sqlx::query_scalar(&key_expiry_recipients())
+            .bind(event_id)
             .bind(MAX_RECIPIENTS)
             .fetch_all(&mut *tx)
             .await?
@@ -1467,13 +1472,6 @@ async fn deliver_one(store: &Store, id: Uuid) -> anyhow::Result<bool> {
             .bind(failed)
             .bind(error)
     };
-    let Some(settings) = settings else {
-        finish("not_configured", 0, 0, None)
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        return Ok(true);
-    };
     if recipients.is_empty() {
         finish("no_recipients", 0, 0, None)
             .execute(&mut *tx)
@@ -1481,6 +1479,13 @@ async fn deliver_one(store: &Store, id: Uuid) -> anyhow::Result<bool> {
         tx.commit().await?;
         return Ok(true);
     }
+    let Some(settings) = settings else {
+        finish("not_configured", 0, 0, None)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        return Ok(true);
+    };
     // Keyed off the workspace's own kind, not the `personal_workspace`
     // builtin-derived column: that column is only ever set for kinds that
     // carry `builtin` (not key_expiring), and every alert tied to a personal
@@ -1502,7 +1507,7 @@ async fn deliver_one(store: &Store, id: Uuid) -> anyhow::Result<bool> {
         "Installation".to_owned()
     };
     let resolved = transition == "resolved";
-    let (subject, body) = email_text(
+    let (subject, mut body) = email_text(
         &EmailFacts {
             installation,
             summary,
@@ -1528,6 +1533,14 @@ async fn deliver_one(store: &Store, id: Uuid) -> anyhow::Result<bool> {
         },
         public_url().as_deref(),
     );
+    if kind == "key_expiring"
+        && let Some(expiry) = key_expires_at
+    {
+        body.push_str(&format!(
+            "\r\nExpires: {} UTC\r\n",
+            expiry.format("%Y-%m-%d %H:%M:%S")
+        ));
+    }
     let (mut sent, mut failed, mut error) = (0, 0, None);
     for to in &recipients {
         match settings
