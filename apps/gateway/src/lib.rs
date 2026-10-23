@@ -46,6 +46,7 @@ pub mod rollups;
 mod route_policy;
 pub mod routing;
 pub mod scim;
+pub(crate) mod special_use;
 pub mod startup;
 pub mod store;
 pub mod visibility;

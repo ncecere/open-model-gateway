@@ -78,11 +78,14 @@ async fn readiness_checks_database_schema_and_web_build(pool: PgPool) {
     std::fs::write(web.path().join("index.html"), "<!doctype html>").unwrap();
     let assets = WebAssets::load(web.path()).unwrap();
     let app = http::router_with_web(store.clone(), Some(assets));
+    // #203: a non-failing readiness field naming whether any approved local
+    // upstream is in a range pending refusal next minor release; "ok" here
+    // since this test configures none.
     assert_eq!(
         ready(app.clone()).await,
         (
             StatusCode::OK,
-            json!({"status":"ready","checks":{"database":"ok","schema":"ok","web":"ok"}})
+            json!({"status":"ready","checks":{"database":"ok","schema":"ok","web":"ok","local_upstream_approvals":"ok"}})
         )
     );
     assert_eq!(
@@ -95,7 +98,7 @@ async fn readiness_checks_database_schema_and_web_build(pool: PgPool) {
         ready(app.clone()).await,
         (
             StatusCode::SERVICE_UNAVAILABLE,
-            json!({"status":"not_ready","checks":{"database":"ok","schema":"ok","web":"fail"}})
+            json!({"status":"not_ready","checks":{"database":"ok","schema":"ok","web":"fail","local_upstream_approvals":"ok"}})
         )
     );
     // Lineage that no longer matches this binary is not ready.
@@ -109,7 +112,7 @@ async fn readiness_checks_database_schema_and_web_build(pool: PgPool) {
         ready(http::router(store)).await,
         (
             StatusCode::SERVICE_UNAVAILABLE,
-            json!({"status":"not_ready","checks":{"database":"ok","schema":"fail","web":"disabled"}})
+            json!({"status":"not_ready","checks":{"database":"ok","schema":"fail","web":"disabled","local_upstream_approvals":"ok"}})
         )
     );
 }
