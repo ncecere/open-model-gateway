@@ -1186,8 +1186,14 @@ pub async fn evaluate_once_fenced(
     let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut *tx)
         .await?;
-    // Outbox cleanup takes only short delivery locks, never SMTP I/O.
-    outbox::cleanup(&mut tx).await?;
+    // Outbox cleanup deliberately does not run here. The delivery worker
+    // already runs it in its own short transaction on every tick (and the
+    // CLI's one-shot `deliver_pending` call does too), so running it again
+    // in this longer transaction (which also fetches the rule list before
+    // committing) would only risk blocking a concurrent complete()'s
+    // `FOR UPDATE` on the same delivery row until this transaction commits,
+    // for no benefit: dropping the call is simpler than giving cleanup its
+    // own committed transaction here, and just as correct.
     let mut report = Report {
         resolved: retire_inactive(&mut tx, None).await? as usize
             + resolve_scim_last_admin(&mut tx).await?,

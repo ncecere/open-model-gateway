@@ -1433,6 +1433,53 @@ async fn outbox_connection_failure_waits_for_due_retry(pool: PgPool) {
     assert_eq!(deliver_pending(&s.store, 25).await, 0);
 }
 
+/// The evaluator must never run outbox cleanup itself: it already runs
+/// inside the delivery worker's own short transaction on every tick (and
+/// via the CLI's `deliver_pending` call). Running it again inside the
+/// evaluator's longer first fenced transaction (which also fetches the rule
+/// list before committing) risks blocking a concurrent `complete()`'s
+/// `FOR UPDATE` on the same delivery row until that transaction commits.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn evaluation_alone_never_runs_outbox_cleanup(pool: PgPool) {
+    let s = seed(pool).await;
+    let (port, _rx) = mock::serve(Behaviour {
+        temporary_recipient: true,
+        ..Default::default()
+    })
+    .await;
+    relay(&s, port).await;
+    let mut tx = s.pool.begin().await.unwrap();
+    fire_scim_last_admin(&mut tx, "user").await.unwrap();
+    tx.commit().await.unwrap();
+    // Hold a live lease on the sole recipient, as a concurrent delivery
+    // worker would: the first claim initializes and leases it in one pass.
+    let (_, claim) = outbox::claim(&s.store, Uuid::new_v4())
+        .await
+        .unwrap()
+        .unwrap();
+    let claim = claim.unwrap();
+    sqlx::query("UPDATE alert_deliveries SET created_at=clock_timestamp()-interval '25 hours'")
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE alert_recipient_outbox SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE state='leased'").execute(&s.pool).await.unwrap();
+    assert!(evaluate_once(&s.store).await.unwrap().is_some());
+    let (status, state): (String, String) = sqlx::query_as(
+        "SELECT d.status,q.state FROM alert_deliveries d JOIN alert_recipient_outbox q ON q.delivery_id=d.id",
+    )
+    .fetch_one(&s.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        (status.as_str(), state.as_str()),
+        ("pending", "leased"),
+        "evaluation alone must never run outbox cleanup; only the delivery worker does"
+    );
+    // The lease was deliberately expired above to make this a cleanup
+    // candidate; completing it now is only to avoid leaking an unused claim.
+    let _ = outbox::complete(&s.store, &claim, Ok(())).await;
+}
+
 /// A per-tick budget must stop claiming further recipients once
 /// `elapsed + SEND_DEADLINE` would exceed it, so a hanging relay can never
 /// cancel a send mid-flight and lose its result: the recipient's lease must
