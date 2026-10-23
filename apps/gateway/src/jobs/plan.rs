@@ -556,6 +556,7 @@ impl Jobs {
                     lines::LinePlan {
                         deployment: resolved.deployment.id,
                         price: price_id,
+                        output: max,
                     },
                 )?
             } else {

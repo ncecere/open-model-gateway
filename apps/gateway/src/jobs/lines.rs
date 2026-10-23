@@ -129,6 +129,18 @@ impl LineError {
 pub(crate) struct LinePlan {
     pub deployment: Uuid,
     pub price: Uuid,
+    /// The line's resolved output maximum, computed once at plan time from
+    /// this same pinned price (`governance::batch::preview_line`). Before
+    /// dispatch (`jobs::runner`), this is copied onto the still-omitted
+    /// request so the engine's pre-admission `validate_chat_request` and
+    /// the real upstream attempt see the same bound planning already
+    /// validated against (#245), instead of the raw client omission.
+    /// `0` for plans written before this field existed
+    /// (`#[serde(default)]`): a resolved maximum is always greater than
+    /// zero, so `0` safely means "unknown" and the runner leaves the
+    /// omission as-is for those already-queued lines.
+    #[serde(default)]
+    pub output: u32,
 }
 
 /// Attach fixed-size plan metadata to an already-validated object without
@@ -454,6 +466,7 @@ mod tests {
         let plan = LinePlan {
             deployment: Uuid::new_v4(),
             price: Uuid::new_v4(),
+            output: 50,
         };
         let copy = planned_copy(raw.to_vec(), plan).unwrap();
         let end = raw.iter().rposition(|b| !b.is_ascii_whitespace()).unwrap();
@@ -473,6 +486,7 @@ mod tests {
         let plan = LinePlan {
             deployment: Uuid::new_v4(),
             price: Uuid::new_v4(),
+            output: 50,
         };
         raw["_omg_plan"] = serde_json::to_value(plan).unwrap();
         assert_eq!(
@@ -481,6 +495,29 @@ mod tests {
         );
         let parsed = parse_work_line(&line(raw), BatchEndpoint::ChatCompletions).unwrap();
         assert_eq!(parsed.plan.unwrap().price, plan.price);
+        match parsed.request {
+            BatchRequest::Chat(r) => assert_eq!(r.max_output_tokens, None),
+            _ => panic!("chat line expected"),
+        }
+    }
+    #[test]
+    fn legacy_private_plans_without_an_output_bound_still_parse() {
+        // Work copies queued by a release before #245 carry no `output`: they
+        // must parse to 0 ("unknown"), which leaves the omission as-is at
+        // dispatch, exactly as before.
+        let mut raw = chat();
+        raw["body"]
+            .as_object_mut()
+            .unwrap()
+            .remove("max_completion_tokens");
+        let (deployment, price) = (Uuid::new_v4(), Uuid::new_v4());
+        raw["_omg_plan"] = json!({"deployment": deployment, "price": price});
+        let parsed = parse_work_line(&line(raw), BatchEndpoint::ChatCompletions).unwrap();
+        let plan = parsed.plan.unwrap();
+        assert_eq!(
+            (plan.deployment, plan.price, plan.output),
+            (deployment, price, 0)
+        );
         match parsed.request {
             BatchRequest::Chat(r) => assert_eq!(r.max_output_tokens, None),
             _ => panic!("chat line expected"),
