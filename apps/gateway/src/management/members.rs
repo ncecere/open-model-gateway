@@ -26,7 +26,7 @@ impl MemberQuery {
 }
 pub(super) async fn workspace_members(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
     Query(p): Query<MemberQuery>,
 ) -> ApiResult {
@@ -35,7 +35,7 @@ pub(super) async fn workspace_members(
         return Err(invalid());
     }
     if !a.admin {
-        resources::platform_read_snapshot(&mut tx, u.user_id).await?
+        resources::platform_read_snapshot(&mut tx, u.user_id()).await?
     }
     let (l, o, q) = p.bounds()?;
     let data: Vec<Value> = sqlx::query_scalar(MEMBERS_SQL)
@@ -60,7 +60,7 @@ async fn platform_shared(tx: &mut Transaction<'_, Postgres>, ws: Uuid) -> Result
 /// Admin › Teams/Projects: membership rows for Platform Admins/Auditors.
 pub(super) async fn platform_members(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
     Query(p): Query<MemberQuery>,
 ) -> ApiResult {
@@ -87,12 +87,12 @@ pub(super) async fn platform_members(
 /// Platform Admin sets a manual grant (including owners) in a shared workspace.
 pub(super) async fn platform_add_member(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
     Json(b): Json<MemberInput>,
 ) -> ApiResult {
     let mut tx = resources::installation_tx(&s).await?;
-    resources::platform_write(&mut tx, u.user_id).await?;
+    resources::platform_write(&mut tx, u.user_id()).await?;
     platform_shared(&mut tx, ws).await?;
     set_member(&mut tx, &u, ws, &b).await?;
     tx.commit().await?;
@@ -100,11 +100,11 @@ pub(super) async fn platform_add_member(
 }
 pub(super) async fn platform_remove_member(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path((ws, user)): Path<(Uuid, Uuid)>,
 ) -> ApiResult {
     let mut tx = resources::installation_tx(&s).await?;
-    resources::platform_write(&mut tx, u.user_id).await?;
+    resources::platform_write(&mut tx, u.user_id()).await?;
     platform_shared(&mut tx, ws).await?;
     unset_member(&mut tx, &u, ws, user).await?;
     tx.commit().await?;
@@ -136,7 +136,7 @@ pub(super) async fn member_candidates(
 /// (`/platform/workspaces/{ws}/members`), without loading the user directory.
 pub(super) async fn platform_member_candidates(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
     Query(p): Query<CandidateQuery>,
 ) -> ApiResult {
@@ -224,7 +224,7 @@ pub(super) async fn add_workspace_member(
 }
 async fn set_member(
     tx: &mut Transaction<'_, Postgres>,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Uuid,
     b: &MemberInput,
 ) -> Result<(), ApiError> {
@@ -268,7 +268,7 @@ pub(super) async fn remove_workspace_member(
 }
 async fn unset_member(
     tx: &mut Transaction<'_, Postgres>,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Uuid,
     user: Uuid,
 ) -> Result<(), ApiError> {

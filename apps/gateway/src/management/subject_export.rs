@@ -67,7 +67,7 @@ fn range(q: &Range) -> Result<(NaiveDate, NaiveDate), ApiError> {
 /// Rate-limit and audit an export (its own transaction, before reading).
 async fn record(
     s: &Store,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     action: &'static str,
     target: Uuid,
 ) -> Result<(), ApiError> {
@@ -79,11 +79,11 @@ async fn record(
     // pass the limit.
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1||':'||$2::text,0))")
         .bind(action)
-        .bind(u.user_id)
+        .bind(u.user_id())
         .execute(&mut *tx)
         .await?;
     let recent: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE actor_user_id=$1 AND action=$2 AND created_at>now()-interval '1 hour'")
-        .bind(u.user_id)
+        .bind(u.user_id())
         .bind(action)
         .fetch_one(&mut *tx)
         .await?;
@@ -223,12 +223,12 @@ async fn export_mine(
 /// Platform Admins and Auditors: what admins already see about a person.
 async fn platform(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(user): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     {
         let mut tx = crate::db::begin(&s.pool).await?;
-        resources::platform_read(&mut tx, u.user_id).await?;
+        resources::platform_read(&mut tx, u.user_id()).await?;
         let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id=$1)")
             .bind(user)
             .fetch_one(&mut *tx)
@@ -252,7 +252,7 @@ async fn platform(
 
 async fn export_platform(
     s: &Store,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     user: Uuid,
 ) -> Result<Response, ApiError> {
     record(s, u, "user.exported", user).await?;

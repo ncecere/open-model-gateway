@@ -207,6 +207,22 @@ pub(super) const TOKEN_READY_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/v1/workspaces/{ws}/models"),
     ("POST", "/api/v1/platform/workspaces/{ws}/models"),
     ("DELETE", "/api/v1/platform/workspaces/{ws}/models/{model}"),
+    ("GET", "/api/v1/platform/models/compare"),
+    ("GET", "/api/v1/platform/usage/overview"),
+    ("GET", "/api/v1/platform/usage/storage"),
+    ("GET", "/api/v1/platform/usage/explore"),
+    ("GET", "/api/v1/platform/workspaces/{ws}/member-candidates"),
+    ("GET", "/api/v1/platform/workspaces/{ws}/members"),
+    ("POST", "/api/v1/platform/workspaces/{ws}/members"),
+    ("DELETE", "/api/v1/platform/workspaces/{ws}/members/{user}"),
+    ("GET", "/api/v1/platform/users/{user}/export"),
+    ("GET", "/api/v1/platform/key-safety"),
+    ("GET", "/api/v1/platform/logs/requests"),
+    ("GET", "/api/v1/platform/logs/requests/{root}"),
+    ("GET", "/api/v1/platform/logs/generations"),
+    ("GET", "/api/v1/platform/logs/sessions"),
+    ("GET", "/api/v1/platform/logs/sessions/{ws}/{session}"),
+    ("GET", "/api/v1/platform/logs/metrics"),
 ];
 fn token_ready(method: &str, path: &str) -> bool {
     TOKEN_READY_ROUTES
