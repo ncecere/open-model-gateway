@@ -134,7 +134,7 @@ GRANT UPDATE(name,enabled,budget_layers,thresholds,spike_factor_percent,min_spen
  spend_period,spend_amount_microusd,ceiling_requests_per_second,ceiling_lock_wait_ms)
  ON public.alert_rules TO gateway_runtime;
 GRANT UPDATE(resolved_at,resolution) ON public.alert_events TO gateway_runtime;
-GRANT UPDATE(status,recipients,sent,failed,error,completed_at) ON public.alert_deliveries TO gateway_runtime;
+GRANT UPDATE(status,recipients,sent,failed,error,completed_at,initialized,attempt_count,retrying,next_attempt_at,waiting,exhausted) ON public.alert_deliveries TO gateway_runtime;
 -- Key-expiry reminders (0049/#100): reviewed, no new grant needed. The table-
 -- level SELECT/INSERT above already covers the new api_key_id/key_expires_at/
 -- threshold_days columns (table-level grants apply to every column, present
@@ -142,6 +142,17 @@ GRANT UPDATE(status,recipients,sent,failed,error,completed_at) ON public.alert_d
 -- resolved_at/resolution, already granted above. No UPDATE is granted on
 -- api_key_id/key_expires_at/threshold_days: that attribution is immutable
 -- (also enforced by a trigger; see 0049 and verify-privileges.sql).
+-- 0050 recipient outbox (#46): immutable identity/eligibility link, default-only
+-- initial state. Used by both rule-based alerts and key-expiry reminders.
+-- Eligibility captures users.id with its normalized address in one SELECT;
+-- INSERT uses that captured identity, never a later email lookup. Existing
+-- users/role/membership SELECT grants cover this snapshot and live rechecks.
+-- Scrape-time delivery counts also read completed_at (existing SELECT above)
+-- so 24h cleanup failures retain a full terminal observation window.
+GRANT SELECT ON public.alert_recipient_outbox TO gateway_runtime;
+GRANT INSERT(delivery_id,fingerprint,internal_user_id) ON public.alert_recipient_outbox TO gateway_runtime;
+GRANT UPDATE(state,attempt_count,next_attempt_at,lease_owner,lease_token,lease_expires_at,error)
+ ON public.alert_recipient_outbox TO gateway_runtime;
 -- SCIM (0014). Directory attributes are upserted per user and cleared at cleanup;
 -- the user link is never re-keyed or removed. Groups and memberships are directory
 -- state (DELETE allowed); group-derived grants keep their own revocation history.

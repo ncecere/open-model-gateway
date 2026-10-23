@@ -9,7 +9,7 @@ import { useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { BellRing, CheckCheck, History, Plus } from "lucide-react";
 import { api, platformPath, type Provider, type Session, type Workspace } from "../lib/api";
-import { conditionText, draftOf, emailLabels, eventsPath, kindHints, kindLabels, kindsFor, layerLabels, layersFor, lockWaitChoices, newDraft, notificationsPath, recipientsText, resolutionLabels, ruleBody, sourceText, ruleErrors, rulePath, rulesPath, spendPeriodLabels, unknownCostNote, whereText, type AlertEvent, type AlertKind, type AlertRule, type AlertScope, type BudgetLayer, type Notification, type RuleDraft, type RuleList, type SpendPeriod } from "../lib/alerts";
+import { conditionText, draftOf, emailStatusText, eventsPath, kindHints, kindLabels, kindsFor, layerLabels, layersFor, lockWaitChoices, newDraft, notificationsPath, recipientsText, resolutionLabels, ruleBody, sourceText, ruleErrors, rulePath, rulesPath, spendPeriodLabels, unknownCostNote, whereText, type AlertEvent, type AlertKind, type AlertRule, type AlertScope, type BudgetLayer, type Notification, type RuleDraft, type RuleList, type SpendPeriod } from "../lib/alerts";
 import { permissions, type DashboardSearch } from "../lib/permissions";
 import { Button, ErrorNotice, FormField, Heading, Input, NativeSelect, Stack, Textarea, useAction, useApi, useChoices } from "../components/ui";
 import { ResourcePage } from "../components/resource-page";
@@ -39,7 +39,7 @@ function EventState({ event }: { event: AlertEvent }) {
   return <StatusBadge tone="neutral" title={event.resolution ? resolutionLabels[event.resolution] : undefined}>Resolved</StatusBadge>;
 }
 const eventSecondary = (e: AlertEvent) => e.kind === "key_expiring"
-  ? <>{sourceText(e)} · Expires <TableTime value={typeof e.details.expires_at === "string" ? e.details.expires_at : null} />{e.email && <> · Email: {emailLabels[e.email.status]}</>}</>
+  ? <>{sourceText(e)} · Expires <TableTime value={typeof e.details.expires_at === "string" ? e.details.expires_at : null} />{e.email && <> · Email: {emailStatusText(e.email)}</>}</>
   : [sourceText(e), unknownCostNote(e) ? "Some cost unknown" : ""].filter(Boolean).join(" · ");
 
 export function NewRuleButton({ scope }: { scope: AlertScope }) {
@@ -73,7 +73,7 @@ export function AlertHistory({ scope }: { scope: AlertScope }) {
     { id: "state", header: "State", accessor: e => e.state, cell: e => <EventState event={e} /> },
     { id: "fired", header: "Fired", accessor: e => e.fired_at, cell: e => <TableTime value={e.fired_at} /> },
     { id: "resolved", header: "Resolved", accessor: e => e.resolved_at ?? "", cell: e => <TableTime value={e.resolved_at} /> },
-    { id: "email", header: "Email", accessor: e => e.email?.status ?? "", cell: e => e.email ? <span title={e.email.error ?? undefined}>{emailLabels[e.email.status]}</span> : "—" },
+    { id: "email", header: "Email", accessor: e => e.email?.status ?? "", cell: e => e.email ? <span title={e.email.error ?? undefined}>{emailStatusText(e.email)}{e.email.next_attempt_at && <span className="text-muted-foreground"> · next <TableTime value={e.email.next_attempt_at} /></span>}</span> : "—" },
   ];
   return <DirectoryTable<AlertEvent> path={eventsPath(scope)} label="Alert history" storageKey={`alert-history-${scope.kind}`} columns={columns} rowKey={e => e.id} rowLabel={e => e.summary}
     facets={[{ id: "status", label: "State", options: [{ value: "firing", label: "Firing" }, { value: "resolved", label: "Resolved" }] }]}

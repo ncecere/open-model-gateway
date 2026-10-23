@@ -161,13 +161,23 @@ async fn key_expiry_live_visibility_shared_personal_service_and_old_binary(pool:
         .await
         .unwrap();
     assert_eq!(feed(&f, &f.owner).await.len(), 1);
+    // No SMTP relay is configured in this fixture, so every delivery becomes
+    // `not_configured` through the outbox's uniform, kind-independent rule
+    // (#46): recipients are still live-rechecked and recorded (just never
+    // dispatched), so the two now-ineligible reminders end up with zero
+    // recorded recipients while the still-eligible personal one keeps one.
     assert_eq!(core::deliver_pending(&f.s, 10).await, 3);
-    let suppressed: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM alert_deliveries WHERE status='no_recipients'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(suppressed, 2, "delivery rechecks human/service eligibility");
+    let (not_configured, zero_recipients): (i64, i64) = sqlx::query_as(
+        "SELECT count(*) FILTER(WHERE status='not_configured'),count(*) FILTER(WHERE status='not_configured' AND recipients=0) FROM alert_deliveries",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        (not_configured, zero_recipients),
+        (3, 2),
+        "delivery rechecks human/service eligibility"
+    );
     // A plain member never receives a service-key reminder; current admins do.
     member(&pool, f.team, f.outsider.user_id, "admin").await;
     sqlx::query("UPDATE service_accounts SET disabled_at=NULL WHERE id=$1")
@@ -481,13 +491,29 @@ async fn notifications_follow_live_authority_and_never_leak_private_details(pool
     spend(&f, &pool, f.personal, &f.owner, 2_000_000).await;
     // Installation rule (platform readers), team rule (team admins only).
     assert_eq!(call(&f.s, &f.admin, "POST", RULES, json!({"name":"Shared budgets","kind":"budget_threshold","budget_layers":["local"],"thresholds":[100]})).await.0, StatusCode::OK);
-    let (status, team_rule) = call(&f.s, &f.owner, "POST", &ws_rules(f.team), json!({"name":"Team budget","kind":"budget_threshold","budget_layers":["local"],"thresholds":[80]})).await;
+    let (status, team_rule) = call(&f.s, &f.owner, "POST", &ws_rules(f.team), json!({"name":"Team budget","kind":"budget_threshold","budget_layers":["local"],"thresholds":[80],"notify_workspace_admins":true})).await;
     assert_eq!(status, StatusCode::OK);
     let report = crate::alerts::evaluate_once(&f.s).await.unwrap().unwrap();
     assert_eq!(report.fired, 3, "{report:?}");
+    // Local connection refusal schedules retries; aggregate serialization must
+    // not grant platform readers any access to foreign personal incidents.
+    let port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    sqlx::query("UPDATE installation_settings SET smtp_host='127.0.0.1',smtp_port=$1,smtp_tls='none',smtp_from_address='gateway@example.test' WHERE singleton").bind(i32::from(port)).execute(&pool).await.unwrap();
+    assert_eq!(crate::alerts::deliver_pending(&f.s, 25).await, 3);
     // Owner: own team rule incident + own personal built-in (not the installation rule).
     let mine = feed(&f, &f.owner).await;
     assert_eq!(mine.len(), 2, "{mine:?}");
+    for event in &mine {
+        let email = event["email"].as_object().unwrap();
+        assert_eq!(email.len(), 10, "aggregate allowlist only");
+        assert_eq!(email["retrying"], true);
+        assert_eq!(email["waiting"], 1);
+        assert!(email["next_attempt_at"].is_string());
+        assert!(!event.to_string().contains("fingerprint"));
+    }
     assert!(
         mine.iter()
             .any(|n| n["builtin"] == true && n["workspace"]["id"] == f.personal.to_string())

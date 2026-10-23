@@ -17,6 +17,22 @@ The normal `cargo deny --all-features check` is unchanged. No dependency is vend
 - **Logs Refresh, and a Sessions-to-Requests hint (#232).** Workspace and Admin Logs gained an explicit **Refresh** action (next to Columns/density) that re-fetches the current tab's rows and its summary tiles for the current filters; Logs never polled and still doesn't. The empty **Sessions** tab keeps its explanation of how sessions form and now also says that requests without session metadata are listed under **Requests**, with a button that switches to that tab keeping the same filters. No backend change: #232's diagnosis found the data correct; only the Logs page didn't refresh itself, and an empty Sessions tab read like "no logs." Admin Logs still excludes personal workspaces; no new data is exposed.
 - **Budget headroom (#103).** Workspace and key budget views separate settled estimates, pending holds and retained unknown-cost floors. Remaining budget is shown only for complete accounting; hidden parent usage stays restricted, and unknown or invalid accounting never becomes available money. Effective headroom is the lowest remaining amount across applicable layers **within each independent period**, not a sum of overlapping scopes. Older gateways without the new facts show headroom unavailable. Reporting only: admission, limits, schema and runtime privileges are unchanged.
 
+## Alert email retries: a durable per-recipient outbox (#46)
+
+Alert emails, including the new key-expiry reminders (#100), now go through a durable outbox. Before, each email was sent once and a failure was only recorded.
+
+- **Retries:** each recipient is retried on transient SMTP failures, up to five attempts within 24 hours, with 1 m/5 m/30 m/2 h backoff. A refusal from the relay is permanent. EOF before the relay accepts the message counts as a retryable connection failure; it's never recorded as success, and it may duplicate a message the relay had in fact accepted.
+- **Replicas:** claims are leased across replicas and fenced, so a result from an expired claim is ignored. SMTP I/O never holds a database connection, and each tick has a bounded send budget.
+- **Status:** incident History shows Waiting, Retrying, Sent, Exhausted or Failed per delivery, plus the waiting count and the next attempt time.
+- **Monitoring:** new metrics `gateway_alert_email_attempts_total{outcome}` and `gateway_alert_email_deliveries{state}`, and an example Prometheus rule `GatewayAlertEmailPersistentFailure`.
+- **Key-expiry reminders:** live eligibility is rechecked just before each send, instead of #100's authority locks held across SMTP. A revocation that lands during the send itself (bounded by the 40 s send deadline) can still receive that one reminder. The reminder never contains a key name or ID.
+- **Privacy:** recipient addresses aren't stored in the outbox, only delivery-scoped fingerprints. These are pseudonymous personal data and never appear in the API, metrics or logs.
+
+### Upgrade
+- Apply migration `0050_alert_recipient_outbox.sql` explicitly, then reapply and verify runtime grants (new table and column grants).
+- **Stop every older delivery worker before applying 0050**: scale the old pods to zero, or unset `GATEWAY_ALERT_INTERVAL_SECONDS` on them, then start the new ones. Old binaries don't understand the outbox. The database refuses an old binary's attempt to finalize a delivery whose recipients are still queued (SQLSTATE 55006), so outbox state is never lost. But an old worker sends before it writes, and retries every interval, so an old worker left running repeatedly **re-sends** that delivery's mail to every recipient.
+- Historical terminal deliveries are not replayed. Outbox rows are append-only and retained like other audit tables.
+
 ## Authorized key-expiry reminders (#100)
 
 Two built-in in-app and email reminders, fixed thresholds, no new configuration surface: "An API key expires within 7 days" and "...within 1 day" for every active, authorized API key that has an expiry.
