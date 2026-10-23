@@ -1258,6 +1258,30 @@ impl InferenceRepository for LineRepository {
     ) -> Result<Vec<Deployment>, InferenceError> {
         self.store.deployments(principal, model).await
     }
+    /// Every deployment of the model, unless this attempt is pinned to one
+    /// route (an omitted-maximum line pinned at plan time, or an explicit-
+    /// maximum line the scheduler already claimed capacity on): then only
+    /// that route, so the engine's deterministic pre-admission check and
+    /// its refusal classification judge the pin on its own route, matching
+    /// `route_plan`'s existing pin enforcement below (#238).
+    async fn candidate_deployments(
+        &self,
+        principal: &Principal,
+        model: &str,
+        request_id: Uuid,
+    ) -> Result<Vec<Deployment>, InferenceError> {
+        let deployments = self.store.deployments(principal, model).await?;
+        let pinned = self
+            .pins
+            .lock()
+            .expect("pins")
+            .get(&request_id)
+            .map(|p| p.0);
+        Ok(match pinned {
+            Some(d) => deployments.into_iter().filter(|dep| dep.id == d).collect(),
+            None => deployments,
+        })
+    }
     async fn start(&self, _record: &ExecutionStart) -> Result<(), InferenceError> {
         // Every line attempt is admitted (never started unreserved).
         Err(InferenceError::Configuration)
