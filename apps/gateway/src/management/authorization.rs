@@ -260,30 +260,36 @@ fn token_ready(method: &str, path: &str) -> bool {
         .any(|(m, p)| *m == method && *p == path)
 }
 
-async fn record_attempt(
-    pool: &sqlx::PgPool,
-    phase: &'static str,
+/// Everything an `admin_token_attempts` row (start or completion) needs,
+/// bundled so [`record_attempt`] takes one argument per *kind* of fact
+/// rather than one per column.
+struct Attempt<'a> {
     request_id: Uuid,
     token_id: Uuid,
     owner_user_id: Uuid,
-    method: &str,
-    template: &str,
+    method: &'a str,
+    template: &'a str,
     required_scope: Option<&'static str>,
     outcome: &'static str,
+}
+async fn record_attempt(
+    pool: &sqlx::PgPool,
+    phase: &'static str,
+    attempt: &Attempt<'_>,
     status: Option<u16>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO admin_token_attempts(id,request_id,phase,token_id,owner_user_id,route_method,route_template,required_scope,outcome,status_code) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
     )
     .bind(Uuid::new_v4())
-    .bind(request_id)
+    .bind(attempt.request_id)
     .bind(phase)
-    .bind(token_id)
-    .bind(owner_user_id)
-    .bind(method)
-    .bind(template)
-    .bind(required_scope)
-    .bind(outcome)
+    .bind(attempt.token_id)
+    .bind(attempt.owner_user_id)
+    .bind(attempt.method)
+    .bind(attempt.template)
+    .bind(attempt.required_scope)
+    .bind(attempt.outcome)
     .bind(status.map(|s| s as i16))
     .execute(pool)
     .await?;
@@ -342,20 +348,16 @@ async fn handle_admin_token(
     }
     let required_scope_str = required_scope.map(TokenScope::as_str);
     let outcome = if allowed { "allowed" } else { "denied" };
-    if let Err(error) = record_attempt(
-        &s.pool,
-        "start",
+    let attempt = Attempt {
         request_id,
-        context.token_id,
-        context.owner_user_id,
-        method.as_str(),
-        &template,
-        required_scope_str,
+        token_id: context.token_id,
+        owner_user_id: context.owner_user_id,
+        method: method.as_str(),
+        template: &template,
+        required_scope: required_scope_str,
         outcome,
-        None,
-    )
-    .await
-    {
+    };
+    if let Err(error) = record_attempt(&s.pool, "start", &attempt, None).await {
         crate::management::log_storage_error(&error);
         return audit_unavailable().into_response();
     }
@@ -381,20 +383,7 @@ async fn handle_admin_token(
         next.run(Request::from_parts(parts, body)).await
     };
     let status = response.status().as_u16();
-    if let Err(error) = record_attempt(
-        &s.pool,
-        "completion",
-        request_id,
-        context.token_id,
-        context.owner_user_id,
-        method.as_str(),
-        &template,
-        required_scope_str,
-        outcome,
-        Some(status),
-    )
-    .await
-    {
+    if let Err(error) = record_attempt(&s.pool, "completion", &attempt, Some(status)).await {
         crate::management::log_storage_error(&error);
         response = audit_unavailable().into_response();
     }

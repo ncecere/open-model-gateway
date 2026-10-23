@@ -92,7 +92,7 @@ async fn test_recipient(
         .fetch_optional(&mut **tx)
         .await?
         .flatten()
-        .ok_or_else(|| ApiError(StatusCode::CONFLICT, EMAIL_NOT_CONFIGURED))
+        .ok_or(ApiError(StatusCode::CONFLICT, EMAIL_NOT_CONFIGURED))
 }
 fn bad(message: &'static str) -> ApiError {
     ApiError(StatusCode::BAD_REQUEST, message)
