@@ -1206,7 +1206,7 @@ async fn admin_tokens_run_as_runtime(pool: &PgPool) {
         .expect("the token is live");
     assert_eq!(found.owner_user_id, owner);
     store
-        .touch_admin_token_use(created.id, Some("203.0.113.9"))
+        .touch_admin_token_use(created.id, Some("203.0.113.9".parse().unwrap()))
         .await
         .expect("runtime records successful use");
     let (touched, address): (bool, String) = sqlx::query_as(
@@ -1219,7 +1219,7 @@ async fn admin_tokens_run_as_runtime(pool: &PgPool) {
     assert!(touched);
     assert_eq!(address, "203.0.113.9");
     store
-        .touch_admin_token_use(created.id, Some("198.51.100.1"))
+        .touch_admin_token_use(created.id, Some("198.51.100.1".parse().unwrap()))
         .await
         .unwrap();
     let address: String =

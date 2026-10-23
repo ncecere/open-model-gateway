@@ -135,36 +135,47 @@ fn classify_v4(ip: Ipv4Addr) -> Class {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Networks(Vec<(IpAddr, u8)>);
 
+/// One `addr/len` (or bare address) network: a parseable IP, `len` within
+/// bounds (32 for IPv4, 128 for IPv6, defaulting to the host prefix when
+/// omitted), no set host bits, and no IPv4-mapped IPv6 form (write it as
+/// plain IPv4 instead). Shared by [`Networks::parse`] and
+/// `admin_tokens`'s own allowlist validator (#37 PR1 coordinator review
+/// issue 5b), so both apply exactly the same rules PostgreSQL's `cidr`
+/// type would otherwise be the only thing enforcing.
+pub(crate) fn parse_network(name: &str, item: &str) -> anyhow::Result<(IpAddr, u8)> {
+    let (addr, prefix) = item
+        .split_once('/')
+        .map_or((item, None), |(a, p)| (a, Some(p)));
+    let addr: IpAddr = addr
+        .parse()
+        .map_err(|_| anyhow::anyhow!("{name}: invalid address {item:?}"))?;
+    if let IpAddr::V6(v6) = addr {
+        anyhow::ensure!(
+            v6.to_ipv4_mapped().is_none(),
+            "{name}: write IPv4-mapped {item:?} as an IPv4 network"
+        );
+    }
+    let max = if addr.is_ipv4() { 32 } else { 128 };
+    let prefix = match prefix {
+        None => max,
+        Some(p) => p
+            .parse::<u8>()
+            .ok()
+            .filter(|p| *p <= max)
+            .ok_or_else(|| anyhow::anyhow!("{name}: invalid prefix in {item:?}"))?,
+    };
+    anyhow::ensure!(
+        masked(addr, prefix) == addr,
+        "{name}: {item:?} has host bits set"
+    );
+    Ok((addr, prefix))
+}
+
 impl Networks {
     pub fn parse(name: &str, value: &str) -> anyhow::Result<Self> {
         let mut networks = Vec::new();
         for item in value.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-            let (addr, prefix) = item
-                .split_once('/')
-                .map_or((item, None), |(a, p)| (a, Some(p)));
-            let addr: IpAddr = addr
-                .parse()
-                .map_err(|_| anyhow::anyhow!("{name}: invalid address {item:?}"))?;
-            if let IpAddr::V6(v6) = addr {
-                anyhow::ensure!(
-                    v6.to_ipv4_mapped().is_none(),
-                    "{name}: write IPv4-mapped {item:?} as an IPv4 network"
-                );
-            }
-            let max = if addr.is_ipv4() { 32 } else { 128 };
-            let prefix = match prefix {
-                None => max,
-                Some(p) => p
-                    .parse::<u8>()
-                    .ok()
-                    .filter(|p| *p <= max)
-                    .ok_or_else(|| anyhow::anyhow!("{name}: invalid prefix in {item:?}"))?,
-            };
-            anyhow::ensure!(
-                masked(addr, prefix) == addr,
-                "{name}: {item:?} has host bits set"
-            );
-            networks.push((addr, prefix));
+            networks.push(parse_network(name, item)?);
         }
         Ok(Self(networks))
     }

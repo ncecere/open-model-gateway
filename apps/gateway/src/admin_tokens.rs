@@ -123,7 +123,9 @@ pub enum NewAdminTokenError {
     InvalidScopes,
     /// Outside 1-90 days.
     InvalidExpiry,
-    /// Supplied but empty, or more than 32 entries.
+    /// Supplied but empty or more than 32 entries, or any entry is not a
+    /// valid `addr/len` network (unparseable address, `len` out of
+    /// bounds, set host bits, or an IPv4-mapped IPv6 network).
     InvalidAllowlist,
 }
 
@@ -204,8 +206,28 @@ fn valid_expires_in_days(days: i32) -> bool {
     (MIN_EXPIRES_IN_DAYS..=MAX_EXPIRES_IN_DAYS).contains(&days)
 }
 
-fn valid_allowlist(list: &[String]) -> bool {
-    (1..=32).contains(&list.len())
+/// Validate and canonicalize an allowlist before any database round trip
+/// (coordinator review issue 5b): 1-32 entries, each `addr/len` (or a bare
+/// address), a parseable IP, `len<=32` (IPv4) or `len<=128` (IPv6), no
+/// host bits set and no IPv4-mapped IPv6 network (write it as plain IPv4
+/// instead) -- the same rules `egress::parse_network` already enforces
+/// for `GATEWAY_EGRESS_PRIVATE_ALLOW`, reused here so both apply exactly
+/// the same checks. PostgreSQL's own `cidr` type would reject most of
+/// these too, but as a raw, untyped `22P02` error; checking here first
+/// turns a bad entry into `NewAdminTokenError::InvalidAllowlist` with no
+/// database access at all, and normalizes every entry to its canonical
+/// `addr/len` string (e.g. uppercase hex, or a bare address without a
+/// prefix) before it is ever stored.
+fn canonical_allowlist(list: &[String]) -> Option<Vec<String>> {
+    if !(1..=32).contains(&list.len()) {
+        return None;
+    }
+    list.iter()
+        .map(|entry| {
+            let (addr, prefix) = crate::egress::parse_network("ip_allowlist", entry).ok()?;
+            Some(format!("{addr}/{prefix}"))
+        })
+        .collect()
 }
 
 /// A lookup-for-authorization hit: live, unrevoked, unexpired, owner active
@@ -273,13 +295,14 @@ pub async fn create_admin_token(
             NewAdminTokenError::InvalidExpiry,
         ));
     }
-    if let Some(list) = ip_allowlist
-        && !valid_allowlist(list)
-    {
-        return Err(CreateAdminTokenError::Invalid(
-            NewAdminTokenError::InvalidAllowlist,
-        ));
-    }
+    let canonical_allowlist = match ip_allowlist {
+        None => None,
+        Some(list) => Some(
+            canonical_allowlist(list).ok_or(CreateAdminTokenError::Invalid(
+                NewAdminTokenError::InvalidAllowlist,
+            ))?,
+        ),
+    };
     let secret = GeneratedSecret::generate().map_err(CreateAdminTokenError::Entropy)?;
     // created_at and expires_at are computed by the database, from one
     // instant (`now()` is fixed for the whole transaction, so the two
@@ -296,7 +319,7 @@ pub async fn create_admin_token(
     .bind(name)
     .bind(secret.digest.as_slice())
     .bind(scopes)
-    .bind(ip_allowlist)
+    .bind(canonical_allowlist.as_deref())
     .bind(expires_in_days)
     .fetch_one(&mut **tx)
     .await
@@ -373,17 +396,24 @@ impl Store {
     /// second call inside the window changes nothing. `address` is the
     /// resolved client address (PR2's job to resolve it); absent here, it
     /// is stored as `NULL`.
+    ///
+    /// Takes a parsed [`std::net::IpAddr`], not a string (coordinator
+    /// review issue 5c): the caller has necessarily already resolved and
+    /// validated an address object (identity.rs/throttle.rs's job, per
+    /// this module's own doc comment) by the time it gets here, so this
+    /// signature cannot accept an arbitrary unparsed string and defer
+    /// that validation to PostgreSQL's `inet` cast.
     pub async fn touch_admin_token_use(
         &self,
         id: Uuid,
-        address: Option<&str>,
+        address: Option<std::net::IpAddr>,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
             "UPDATE admin_api_tokens SET last_used_at=clock_timestamp(),last_used_address=$2::text::inet
              WHERE id=$1 AND (last_used_at IS NULL OR last_used_at<clock_timestamp()-make_interval(secs=>$3))",
         )
         .bind(id)
-        .bind(address)
+        .bind(address.map(|a| a.to_string()))
         .bind(LAST_USE_EVERY_SECONDS as f64)
         .execute(&self.pool)
         .await?;
@@ -457,10 +487,30 @@ mod tests {
     #[test]
     fn allowlist_entries_are_bounded_one_to_thirty_two() {
         let n = |count: usize| vec!["10.0.0.0/24".to_string(); count];
-        assert!(!valid_allowlist(&n(0)));
-        assert!(valid_allowlist(&n(1)));
-        assert!(valid_allowlist(&n(32)));
-        assert!(!valid_allowlist(&n(33)));
+        assert!(canonical_allowlist(&n(0)).is_none());
+        assert!(canonical_allowlist(&n(1)).is_some());
+        assert!(canonical_allowlist(&n(32)).is_some());
+        assert!(canonical_allowlist(&n(33)).is_none());
+    }
+
+    #[test]
+    fn allowlist_entries_are_validated_and_canonicalized() {
+        for bad in [
+            "not-an-ip",
+            "10.0.0.1/33",
+            "10.0.0.5/24",
+            "2001:db8::/129",
+            "::ffff:10.0.0.0/120",
+        ] {
+            assert!(
+                canonical_allowlist(&[bad.to_string()]).is_none(),
+                "{bad:?} should be rejected"
+            );
+        }
+        assert_eq!(
+            canonical_allowlist(&["2001:DB8::/32".to_string(), "10.0.0.0".to_string()]),
+            Some(vec!["2001:db8::/32".to_string(), "10.0.0.0/32".to_string()])
+        );
     }
 
     #[test]

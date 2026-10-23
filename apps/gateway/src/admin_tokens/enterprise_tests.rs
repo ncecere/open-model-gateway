@@ -223,6 +223,82 @@ async fn create_accepts_a_valid_cidr_allowlist(pool: PgPool) {
     assert_eq!(stored.len(), 2);
 }
 
+/// Coordinator review of #37 PR1, issue 5b: each allowlist entry must be
+/// `addr/len`, a parseable IP, `len<=32` (v4) or `len<=128` (v6), with no
+/// host bits set and no IPv4-mapped IPv6 network, checked in Rust before
+/// any database round trip. PostgreSQL's own `cidr` type would reject
+/// most of these too, but as a raw `22P02` `Database` error, not the
+/// typed `InvalidAllowlist` a caller can match on.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn create_rejects_malformed_allowlist_entries_before_touching_the_database(pool: PgPool) {
+    let owner = admin(&pool, "cidr@test.invalid").await;
+    for bad in [
+        "not-an-ip",
+        "10.0.0.1/33",
+        "10.0.0.5/24",
+        "2001:db8::/129",
+        "::ffff:10.0.0.0/120",
+    ] {
+        let result = create(
+            &pool,
+            owner,
+            "n",
+            &scopes(&["platform:read"]),
+            30,
+            Some(&[bad.to_string()]),
+        )
+        .await;
+        // NewAdminToken deliberately carries no Debug (it holds the
+        // plaintext token), so match on the error shape only.
+        assert!(
+            matches!(
+                result,
+                Err(CreateAdminTokenError::Invalid(
+                    NewAdminTokenError::InvalidAllowlist
+                ))
+            ),
+            "{bad:?} should be InvalidAllowlist"
+        );
+    }
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM admin_api_tokens")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0,
+        "nothing was ever inserted for any of these malformed entries"
+    );
+}
+
+/// Every stored entry is the canonical `addr/len` form, not whatever
+/// capitalization/representation the caller happened to send.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn create_canonicalizes_allowlist_entries(pool: PgPool) {
+    let owner = admin(&pool, "cidr-canon@test.invalid").await;
+    let list = vec!["10.0.0.0/24".to_string(), "2001:DB8::/32".to_string()];
+    let created = create(
+        &pool,
+        owner,
+        "n",
+        &scopes(&["platform:read"]),
+        30,
+        Some(&list),
+    )
+    .await
+    .unwrap();
+    let mut stored: Vec<String> =
+        sqlx::query_scalar("SELECT ip_allowlist::text[] FROM admin_api_tokens WHERE id=$1")
+            .bind(created.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    stored.sort();
+    assert_eq!(
+        stored,
+        vec!["10.0.0.0/24".to_string(), "2001:db8::/32".to_string()]
+    );
+}
+
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn database_level_schema_constraints_hold_even_bypassing_the_rust_validator(pool: PgPool) {
     // These exercise migration 0050's CHECK constraints directly: the Rust
@@ -1096,7 +1172,7 @@ async fn last_use_is_throttled_to_once_per_five_minutes(pool: PgPool) {
         .await
         .unwrap();
     store
-        .touch_admin_token_use(created.id, Some("203.0.113.5"))
+        .touch_admin_token_use(created.id, Some("203.0.113.5".parse().unwrap()))
         .await
         .unwrap();
     let (first_at, first_addr): (DateTime<Utc>, String) = sqlx::query_as(
@@ -1109,7 +1185,7 @@ async fn last_use_is_throttled_to_once_per_five_minutes(pool: PgPool) {
     assert_eq!(first_addr, "203.0.113.5");
     // A second use moments later, with a different address, does not write.
     store
-        .touch_admin_token_use(created.id, Some("198.51.100.9"))
+        .touch_admin_token_use(created.id, Some("198.51.100.9".parse().unwrap()))
         .await
         .unwrap();
     let (second_at, second_addr): (DateTime<Utc>, String) = sqlx::query_as(
@@ -1130,7 +1206,7 @@ async fn last_use_is_throttled_to_once_per_five_minutes(pool: PgPool) {
         .await
         .unwrap();
     store
-        .touch_admin_token_use(created.id, Some("198.51.100.9"))
+        .touch_admin_token_use(created.id, Some("198.51.100.9".parse().unwrap()))
         .await
         .unwrap();
     let third_addr: String =
