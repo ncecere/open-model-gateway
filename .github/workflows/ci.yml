@@ -82,6 +82,7 @@ jobs:
       - run: npm run test:sdk-bases
       - run: npm run test:demo
       - run: npm run test:supply-chain
+      - run: npm run test:conflict-markers
       - name: Install age (test:staging includes the encrypted backup tests)
         run: sudo apt-get update && sudo apt-get install -y age
       - run: npm run test:staging

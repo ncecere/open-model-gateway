@@ -55,6 +55,14 @@ impl ProviderAdapter for AnthropicAdapter {
     fn supports_protocol(&self, protocol: ApiProtocol) -> bool {
         super::capabilities::serves(self.id(), protocol)
     }
+    /// Reuses the real, pure request-encoding conversion (`encode`) so
+    /// pre-admission validation can never drift from what `execute` would
+    /// actually reject: the model id is irrelevant to validation (it is only
+    /// ever copied verbatim into the payload), so a placeholder is safe and
+    /// the encoded payload itself is discarded.
+    fn validate_chat_request(&self, request: &ChatRequest) -> Result<()> {
+        encode("", request).map(|_| ())
+    }
     fn native_batch(&self, target: &Deployment, endpoint: BatchEndpoint) -> bool {
         batches::native_batch(target, endpoint)
     }
