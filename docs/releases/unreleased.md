@@ -2,6 +2,12 @@
 
 Notes for changes on `main` after [v0.7.2](v0.7.2.md). They become the next release's notes.
 
+## Vendored upstream-base advisory coverage (#214)
+
+The existing read-only cargo-deny job now runs a separately labelled advisory-only check for explicitly registered vendored dependencies. It validates root workspace metadata registrations and the complete graph, then projects only the reviewed crates.io base name/version/source identity and graph references in temporary scanner input. Unknown path dependencies, stale or mismatched registrations, non-canonical/escaping paths and malformed/incomplete graphs fail closed. There are no vendored dependencies today; the check passes and says so.
+
+The normal `cargo deny --all-features check` is unchanged. No dependency is vendored here; `Cargo.lock`, builds, license/ban/source checks, SBOMs and provenance are unchanged. This is upstream-base advisory coverage, not certification of patched code. Offline tests with the real pinned scanner and a synthetic local advisory database prove the path-package miss and projected detection, plus positive and refusal controls. See [verification](../verification.md#supply-chain).
+
 ## Added
 
 - **Logs Refresh, and a Sessions-to-Requests hint (#232).** Workspace and Admin Logs gained an explicit **Refresh** action (next to Columns/density) that re-fetches the current tab's rows and its summary tiles for the current filters; Logs never polled and still doesn't. The empty **Sessions** tab keeps its explanation of how sessions form and now also says that requests without session metadata are listed under **Requests**, with a button that switches to that tab keeping the same filters. No backend change: #232's diagnosis found the data correct; only the Logs page didn't refresh itself, and an empty Sessions tab read like "no logs." Admin Logs still excludes personal workspaces; no new data is exposed.
