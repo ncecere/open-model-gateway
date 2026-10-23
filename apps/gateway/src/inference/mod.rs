@@ -37,8 +37,16 @@ fn operation_of(protocol: ApiProtocol) -> telemetry::Operation {
         ApiProtocol::Responses => telemetry::Operation::Responses,
         ApiProtocol::Messages => telemetry::Operation::Messages,
         // Every other protocol is a non-generation workload, never routed
-        // through `execute_protocol`.
-        _ => telemetry::Operation::Chat,
+        // through `execute_protocol`. Caught here only as a safety net:
+        // debug builds and tests fail loudly instead of silently mislabeling
+        // the operation if that assumption is ever violated.
+        other => {
+            debug_assert!(
+                false,
+                "operation_of called for non-generation protocol {other:?}"
+            );
+            telemetry::Operation::Chat
+        }
     }
 }
 /// `http.route` of a protocol routed through the shared engine.
@@ -47,7 +55,13 @@ fn route_of(protocol: ApiProtocol) -> telemetry::Route {
         ApiProtocol::ChatCompletions => telemetry::Route::Chat,
         ApiProtocol::Responses => telemetry::Route::Responses,
         ApiProtocol::Messages => telemetry::Route::Messages,
-        _ => telemetry::Route::Chat,
+        other => {
+            debug_assert!(
+                false,
+                "route_of called for non-generation protocol {other:?}"
+            );
+            telemetry::Route::Chat
+        }
     }
 }
 /// `gen_ai.provider.name`, or `None` for a provider kind outside the fixed
