@@ -168,6 +168,16 @@ Recording never waits for a collector: 256 active contexts, 64 spans/request, 24
 3. Search by trace ID directly: paste the hex value into Explore's trace ID search box (or query `{trace:id="<hex>"}` in TraceQL) and run it. A present `trace_id` only means the correlation ID was computed from this request's own ID, not a Tempo lookup of it; it does not by itself prove the trace was sampled, exported or accepted by the collector (check `gateway_trace_dropped_spans_total{reason}`, `gateway_trace_deliveries_total{outcome}` and `gateway_trace_rejected_spans_total` above - a trace that was dropped, rejected or never sampled has a `trace_id` in Logs but nothing in Tempo).
 4. The resulting trace shows `inference.request` as the root span, with `routing`, `admission`(.*), `upstream.attempt` and `settlement`(.*) as its children (and `admission`/`settlement`'s own sub-phase spans nested under each), matching the span set and parentage described above.
 
+**Live check against Tempo:** `apps/gateway/tests/telemetry_acceptance.rs`'s `shared_workspace_trace_reaches_an_external_collector` is an opt-in, `#[ignore]`d acceptance test that sends one real shared-workspace chat request through a real gateway with its exporter pointed at an actual collector, instead of the in-process mock collector the rest of that file uses. To run it against a real Tempo: port-forward Tempo's OTLP ingest (4318) and query API (3200) to loopback, then run the test with `OMG_TRACE_LIVE_COLLECTOR_URL` set to the loopback OTLP URL (development mode only allows plain HTTP on loopback; any other URL is refused with a clear error). It prints one `LIVE trace_id=<32 hex>` line; look that id up directly:
+
+  ```sh
+  kubectl port-forward -n <tempo-namespace> svc/tempo 4318:4318 3200:3200 &
+  OMG_TRACE_LIVE_COLLECTOR_URL=http://127.0.0.1:4318/v1/traces \
+    cargo test -p open-model-gateway --test telemetry_acceptance --features integration-tests \
+    shared_workspace_trace_reaches_an_external_collector -- --ignored --nocapture
+  curl http://127.0.0.1:3200/api/traces/<trace_id>
+  ```
+
 **Not supported (by design, #98's approved scope):**
 
 - **No `OTEL_*` environment variables.** The standard OpenTelemetry SDK variables (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME`, `OTEL_TRACES_SAMPLER`, and the rest) are never read; only the `GATEWAY_TRACES_*` settings above configure this exporter.
