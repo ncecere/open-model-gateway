@@ -128,7 +128,7 @@ DO $$ DECLARE r record; t text; BEGIN
   IF has_column_privilege('gateway_runtime','public.batch_route_waits',t,'UPDATE') THEN RAISE EXCEPTION 'mutable batch demand identity: %',t; END IF;
  END LOOP;
  IF has_table_privilege('gateway_runtime','public.batch_route_waits','TRUNCATE') THEN RAISE EXCEPTION 'batch demand truncatable'; END IF;
- IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units','valid_model_protocols_base','valid_cost_components_base','valid_price_lines_base','valid_upstream_job_id','rate_reserved_tokens','rate_contribution','omg_scope_key','omg_type_key','omg_scope_lock_audit_order','omg_lock_scopes','omg_admission_locks','omg_lock_scope_rows','omg_catalog_lock_mode','omg_scope_lock_exclusive','omg_config_bump','omg_lease_acquire','omg_lease_fence','omg_lease_complete','omg_lease_release','omg_ensure_partitions','omg_partition_coverage','omg_partition_bounds','omg_month_start','omg_next_month','omg_usage_aggregate','omg_usage_rows','omg_admin_tokens_revoke_owner','omg_admin_tokens_require_read_committed','valid_admin_token_scopes','valid_admin_token_allowlist')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
+ IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units','valid_model_protocols_base','valid_cost_components_base','valid_price_lines_base','valid_upstream_job_id','rate_reserved_tokens','rate_contribution','omg_scope_key','omg_type_key','omg_scope_lock_audit_order','omg_lock_scopes','omg_admission_locks','omg_lock_scope_rows','omg_catalog_lock_mode','omg_scope_lock_exclusive','omg_config_bump','omg_lease_acquire','omg_lease_fence','omg_lease_complete','omg_lease_release','omg_ensure_partitions','omg_partition_coverage','omg_partition_bounds','omg_month_start','omg_next_month','omg_usage_aggregate','omg_usage_rows','omg_admin_tokens_revoke_owner','omg_admin_tokens_require_read_committed','omg_admin_tokens_require_owner_lock','valid_admin_token_scopes','valid_admin_token_allowlist')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
  -- Change notifications (0028): seeded topics, forward-only versions, triggers present.
  IF has_table_privilege('gateway_runtime','public.config_versions','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.config_versions','topic','UPDATE') THEN RAISE EXCEPTION 'configuration topics mutable'; END IF;
  IF NOT has_table_privilege('gateway_runtime','public.config_versions','SELECT') OR NOT has_column_privilege('gateway_runtime','public.config_versions','version','UPDATE') THEN RAISE EXCEPTION 'configuration versions not maintainable by runtime'; END IF;
@@ -193,11 +193,46 @@ DO $$ DECLARE r record; t text; BEGIN
  IF (SELECT count(*) FROM pg_trigger WHERE tgrelid='public.admin_api_tokens'::regclass AND tgenabled='O' AND NOT tgisinternal)<>5 THEN RAISE EXCEPTION 'admin API token guards missing or disabled'; END IF;
  IF (SELECT count(*) FROM pg_trigger WHERE tgname IN ('admin_api_tokens_role_lost','admin_api_tokens_user_disabled','admin_api_tokens_user_cleaned') AND tgenabled='O' AND NOT tgisinternal)<>3 THEN RAISE EXCEPTION 'admin API token owner-invalidation triggers missing or disabled'; END IF;
  IF (SELECT count(*) FROM pg_trigger WHERE tgname='admin_api_tokens_owner_is_admin' AND tgenabled='O' AND NOT tgisinternal)<>1 THEN RAISE EXCEPTION 'admin API token creation owner-admin guard missing or disabled'; END IF;
+ -- Adversarial re-review of #37 PR1, issue 1: a lifetime bypass needs both
+ -- a forged created_at (or a pre-revoked/pre-used row) on a whole-row
+ -- INSERT; the runtime role must be unable to supply any of these four
+ -- columns at INSERT time, leaving the creation guard's own unconditional
+ -- `NEW.created_at:=now()` (and friends) as a second, independent gate.
+ FOREACH t IN ARRAY ARRAY['created_at','revoked_at','last_used_at','last_used_address'] LOOP
+  IF has_column_privilege('gateway_runtime','public.admin_api_tokens',t,'INSERT') THEN RAISE EXCEPTION 'runtime can forge admin API token % on INSERT',t; END IF;
+ END LOOP;
+ -- Adversarial re-review of #37 PR1, issue 3: a regression of the
+ -- DEFERRABLE INITIALLY DEFERRED attribute would reinstate the group
+ -- re-sync token loss this trigger exists to prevent, even though the
+ -- gateway never issues SET CONSTRAINTS on it (see the migration's own
+ -- comment); assert the attribute directly instead of only ever forcing
+ -- it with SET CONSTRAINTS below.
+ IF NOT (SELECT tgdeferrable AND tginitdeferred FROM pg_trigger WHERE tgname='admin_api_tokens_role_lost') THEN RAISE EXCEPTION 'admin API token role-loss trigger is not DEFERRABLE INITIALLY DEFERRED'; END IF;
 END $$;
 BEGIN;
 -- A probe-only work lease (rolled back with everything else) so the election
 -- checks never contend with leases held by a running gateway.
 INSERT INTO work_leases(name) VALUES('privilege_probe');
+-- Adversarial re-review of #37 PR1, issue 1: before switching to the
+-- runtime role below (which cannot supply created_at at all -- see the
+-- ACL assertions above), prove the creation guard's own unconditional
+-- override independently: even this script's own connecting role, which
+-- owns every column privilege on admin_api_tokens, cannot stretch a
+-- token's lifetime by forging created_at ten years into the future. The
+-- guard forces created_at to the real now() regardless of what the
+-- INSERT supplied, so the caller's absurdly distant expires_at then
+-- fails the ordinary 1-90-day CHECK once measured against it.
+DO $$ DECLARE fu uuid:=gen_random_uuid(); BEGIN
+ INSERT INTO users(id,email) VALUES(fu,'forged-created-at-'||fu||'@example.invalid');
+ INSERT INTO platform_role_grants(id,user_id,role,source) VALUES(gen_random_uuid(),fu,'admin','manual');
+ PERFORM pg_advisory_xact_lock(72419512,omg_scope_key(fu));
+ BEGIN
+  INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,created_at,expires_at)
+   VALUES(gen_random_uuid(),fu,'forged',decode(repeat('aa',32),'hex'),ARRAY['platform:read'],now()+interval '10 years',now()+interval '10 years'+interval '89 days');
+  RAISE EXCEPTION 'a forged future created_at let a token outlive the real 90-day bound';
+ EXCEPTION WHEN check_violation THEN NULL;
+ END;
+END $$;
 SET LOCAL ROLE gateway_runtime;
 SELECT version,checksum,success FROM public._sqlx_migrations ORDER BY version;
 -- The combined snapshot authority read (#195); no lock or write privilege.
@@ -747,8 +782,19 @@ BEGIN
  DECLARE au uuid:=gen_random_uuid(); ag uuid:=gen_random_uuid(); at1 uuid:=gen_random_uuid(); at2 uuid:=gen_random_uuid(); at3 uuid:=gen_random_uuid(); BEGIN
   INSERT INTO users(id,email) VALUES(au,'rollback-admin-'||au||'@example.invalid');
   INSERT INTO platform_role_grants(id,user_id,role,source) VALUES(gen_random_uuid(),au,'admin','manual');
+  -- PR2's documented contract (the creation guard now REQUIRES this,
+  -- rather than acquiring it lazily: adversarial re-review of #37 PR1,
+  -- issue 6). One acquisition covers every admin_api_tokens INSERT below,
+  -- for the rest of this transaction.
+  PERFORM pg_advisory_xact_lock(72419512,omg_scope_key(au));
   INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,expires_at) VALUES(at1,au,'Rollback token',decode(repeat('ab',32),'hex'),ARRAY['platform:read'],now()+interval '30 days');
   BEGIN INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,expires_at) VALUES(gen_random_uuid(),au,'x',decode(repeat('ac',32),'hex'),ARRAY['wizard:cast'],now()+interval '30 days'); RAISE EXCEPTION 'unknown admin token scope allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  -- Adversarial re-review of #37 PR1, issue 1: the lifetime-bypass attack
+  -- (a caller-chosen created_at ten years out, with expires_at measured
+  -- from it) is refused for the runtime role at the column-grant level
+  -- alone, before the creation guard or the CHECK constraint ever run --
+  -- runtime has no INSERT privilege on created_at at all.
+  BEGIN INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,created_at,expires_at) VALUES(gen_random_uuid(),au,'attack',decode(repeat('b0',32),'hex'),ARRAY['platform:read'],now()+interval '10 years',now()+interval '10 years'+interval '30 days'); RAISE EXCEPTION 'runtime forged created_at on an admin token INSERT'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   -- name/scopes have no runtime UPDATE grant at all (grants, not only the
   -- trigger, refuse this); the owner-level test suite exercises the
   -- trigger itself with a role that does have the column grant.
@@ -766,6 +812,11 @@ BEGIN
   -- The role-loss trigger is deferred to commit (#37 PR1 coordinator
   -- review issue 3); this whole script never commits (it ends in
   -- ROLLBACK), so force it to fire now, mid-transaction, to observe it.
+  -- This is the one explicitly-permitted use of SET CONSTRAINTS on this
+  -- trigger (migration 0050's own comment): the gateway itself must never
+  -- issue it, and the static assertion above already confirms the
+  -- trigger really is DEFERRABLE INITIALLY DEFERRED independent of this
+  -- forced-firing probe.
   SET CONSTRAINTS admin_api_tokens_role_lost IMMEDIATE;
   IF NOT (SELECT revoked_at IS NOT NULL FROM admin_api_tokens WHERE id=at2) THEN RAISE EXCEPTION 'losing the last admin grant did not revoke owned tokens'; END IF;
   INSERT INTO platform_role_grants(id,user_id,role,source) VALUES(gen_random_uuid(),au,'admin','manual');

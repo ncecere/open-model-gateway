@@ -148,6 +148,15 @@ pub enum CreateAdminTokenError {
     /// COMMITTED (`crate::db::begin`), so this should never occur on a
     /// production path; it exists as a hard backstop.
     UnsupportedIsolation,
+    /// The caller does not already hold the owner's user-scope authority
+    /// lock exclusive (`governance::locks::exclusive(Scope::User(owner))`,
+    /// taken up front, before the first write -- AGENTS.md's canonical
+    /// lock order). Migration 0050's creation guard checks this directly
+    /// instead of acquiring the lock lazily (adversarial re-review of #37
+    /// PR1, issue 6); a real PR2 handler that forgets this gets an
+    /// unambiguous refusal instead of a lock-holding contract that was
+    /// only ever documentation. Mapped from SQLSTATE `OM003` alone.
+    OwnerLockNotHeld,
     Database(sqlx::Error),
 }
 impl std::fmt::Display for CreateAdminTokenError {
@@ -161,6 +170,9 @@ impl std::fmt::Display for CreateAdminTokenError {
             Self::UnsupportedIsolation => {
                 f.write_str("admin token authority checks require a READ COMMITTED transaction")
             }
+            Self::OwnerLockNotHeld => f.write_str(
+                "the caller must already hold the owner's user-scope authority lock exclusive",
+            ),
             Self::Database(e) => e.fmt(f),
         }
     }
@@ -168,16 +180,18 @@ impl std::fmt::Display for CreateAdminTokenError {
 impl std::error::Error for CreateAdminTokenError {}
 
 /// Map a database error from the creation `INSERT`. The owner-admin guard
-/// trigger (migration 0050) raises its own dedicated SQLSTATE (`OM001`),
-/// as does the isolation-level guard (`OM002`); both are mapped on the
-/// code alone, with no message-text matching, so a translated or reworded
-/// `RAISE EXCEPTION` message can never silently stop being recognized.
-/// Everything else is passed through as [`CreateAdminTokenError::Database`].
+/// trigger (migration 0050) raises its own dedicated SQLSTATE (`OM001`), as
+/// do the isolation-level guard (`OM002`) and the lock-holding guard
+/// (`OM003`); all three are mapped on the code alone, with no message-text
+/// matching, so a translated or reworded `RAISE EXCEPTION` message can
+/// never silently stop being recognized. Everything else is passed
+/// through as [`CreateAdminTokenError::Database`].
 fn map_create_error(error: sqlx::Error) -> CreateAdminTokenError {
     if let sqlx::Error::Database(ref db) = error {
         match db.code().as_deref() {
             Some("OM001") => return CreateAdminTokenError::OwnerNotAdmin,
             Some("OM002") => return CreateAdminTokenError::UnsupportedIsolation,
+            Some("OM003") => return CreateAdminTokenError::OwnerLockNotHeld,
             _ => {}
         }
     }
@@ -336,14 +350,20 @@ pub async fn create_admin_token(
         ),
     };
     let secret = GeneratedSecret::generate().map_err(CreateAdminTokenError::Entropy)?;
-    // created_at and expires_at are computed by the database, from one
-    // instant (`now()` is fixed for the whole transaction, so the two
-    // references below are identical), never the app's clock: a
-    // skewed app clock must not be able to create an already-expired
-    // token or one that outlives 90 real days.
+    // created_at is never supplied here (adversarial re-review of #37
+    // PR1, issue 1): migration 0050's creation guard forces it to the
+    // database's own now() unconditionally, and the runtime role's own
+    // column grant does not extend to created_at at all
+    // (`runtime-grants.sql`), so a caller-chosen creation instant can
+    // never be used to stretch the 1-90 day expiry CHECK past what it
+    // actually measures. expires_at is still computed from the same
+    // statement's `now()` (fixed for the whole transaction, so it is the
+    // same instant the trigger assigns to created_at), never the app's
+    // clock: a skewed app clock must not be able to create an
+    // already-expired token or one that outlives 90 real days.
     let (created_at, expires_at): (DateTime<Utc>, DateTime<Utc>) = sqlx::query_as(
-        "INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,ip_allowlist,created_at,expires_at)
-         VALUES($1,$2,$3,$4,$5,$6::text[]::cidr[],now(),now()+make_interval(days=>$7))
+        "INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,ip_allowlist,expires_at)
+         VALUES($1,$2,$3,$4,$5,$6::text[]::cidr[],now()+make_interval(days=>$7))
          RETURNING created_at,expires_at",
     )
     .bind(secret.id)

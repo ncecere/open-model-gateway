@@ -1280,6 +1280,36 @@ async fn admin_tokens_run_as_runtime(pool: &PgPool) {
             .await
             .is_err()
     );
+    // Adversarial re-review of #37 PR1, issue 1 (MEDIUM, BLOCKING): the
+    // runtime had a whole-row INSERT and the Rust insert supplied
+    // `created_at`, so the 1-90 day CHECK was measured against a
+    // caller-chosen `created_at` -- `now()+10 years` with `expires_at`
+    // only 90 days past it passed the CHECK as written and left the
+    // token with roughly 3,700 days left on `authenticate_admin_token`'s
+    // own predicate. The runtime role's INSERT grant now excludes
+    // created_at (and revoked_at/last_used_at/last_used_address)
+    // entirely, so the identical attack is refused at the column-grant
+    // level, before migration 0050's creation guard (which forces
+    // created_at to now() regardless) is ever reached.
+    {
+        let mut tx = runtime.begin().await.unwrap();
+        locks::exclusive(&mut tx, [Scope::User(owner)])
+            .await
+            .unwrap();
+        let denied = sqlx::query(
+            "INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,created_at,expires_at)
+             VALUES(gen_random_uuid(),$1,'attack',decode(repeat('c1',32),'hex'),ARRAY['platform:read'],now()+interval '10 years',now()+interval '10 years'+interval '90 days')",
+        )
+        .bind(owner)
+        .execute(&mut *tx)
+        .await
+        .unwrap_err();
+        assert!(
+            denied.to_string().contains("permission denied"),
+            "runtime must not be able to INSERT a forged created_at: {denied}"
+        );
+        let _ = tx.rollback().await;
+    }
     let mut tx = runtime.begin().await.unwrap();
     locks::exclusive(&mut tx, [Scope::User(owner)])
         .await

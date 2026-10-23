@@ -12,6 +12,20 @@
 -- omg_revocation_is_final(), migration 0039), last_used_at and
 -- last_used_address ever change. No DELETE or TRUNCATE.
 --
+-- created_at itself is never caller-controlled, even on a whole-row
+-- INSERT: the creation guard below forces it to the database's own now()
+-- unconditionally, before the 1-90 day expiry CHECK ever evaluates the row
+-- (adversarial re-review of #37 PR1, issue 1: a caller able to supply
+-- created_at could otherwise insert `created_at => now()+10 years,
+-- expires_at => created_at+90 days`, which satisfies the CHECK as written
+-- but leaves the token practically unexpiring -- `authenticate_admin_token`
+-- only ever compares `expires_at` against the current instant). Forcing it
+-- also makes a restored-from-the-future clock, or any other forged value,
+-- harmless the same way: the row that is actually stored is always bound
+-- by the database's real clock, and runtime's own column grant does not
+-- extend to `created_at` at all (`runtime-grants.sql`), so this is
+-- defense in depth, not the only gate.
+--
 -- Owner-invalidation (final, never restored when access returns):
 -- revoking a user's last active 'admin' platform_role_grants row (manual or
 -- group-derived; whichever row loses it last, by the time every row of that
@@ -21,19 +35,43 @@
 -- role later never un-revokes them (the revocation-is-final trigger refuses
 -- it, and nothing here ever clears revoked_at).
 --
--- The role-loss check and the creation guard below both take the repo's
--- canonical user-scope authority lock (AGENTS.md: "authority advisory
--- locks ... user ... exclusive in any management change of that scope")
--- before their own live check (write-skew guard: two admin grants of
--- different provenance revoked by two otherwise-unsynchronized concurrent
--- transactions must still both be seen gone; a concurrent demotion and a
--- concurrent creation must serialize). An earlier revision used a plain
--- `users ... FOR UPDATE` row lock here instead, which deadlocked (40P01)
--- against the manual-demotion path in management/directory.rs: that path
--- locks the users row first, then updates the grant, which takes 0027's
--- advisory lock; group-mapping deletion updates the grant first (taking
--- the advisory lock first) and this trigger then wanted the row. The
--- advisory lock avoids that: it is the same lock 0027's own
+-- Suspension and cleanup stay immediate and unconditional on purpose,
+-- never deferred the way the role-loss trigger below is: a suspension or
+-- cleanup is always an explicit, intentional loss of access, never a
+-- same-transaction replacement the way a group re-sync's revoke-then-
+-- insert pair can be. No gateway code path suspends and re-enables a user,
+-- or cleans up and un-cleans them, inside one transaction, so there is no
+-- equivalent false-positive here to guard against; deferring these two
+-- would only delay a genuine revocation for no benefit.
+--
+-- The role-loss check below takes the repo's canonical user-scope
+-- authority lock (AGENTS.md: "authority advisory locks ... user ...
+-- exclusive in any management change of that scope") lazily, before its
+-- own live check (write-skew guard: two admin grants of different
+-- provenance revoked by two otherwise-unsynchronized concurrent
+-- transactions must still both be seen gone). The creation guard further
+-- down instead *requires* the caller to already hold that same lock,
+-- raising a dedicated SQLSTATE (OM003) if it does not, rather than
+-- acquiring it lazily itself (adversarial re-review of #37 PR1, issue 6:
+-- "the caller must take this lock up front" was documentation only --
+-- nothing stopped a caller, including a future PR2 handler, from simply
+-- not doing it and still getting a working INSERT, since the lazy
+-- acquisition made the lock-holding contract unobservable). PR2's handler
+-- is documented to take `governance::locks::exclusive(Scope::User(owner))`
+-- up front regardless, before its own reads of the caller's role or audit
+-- insertion (AGENTS.md's canonical lock order) -- those reads must not
+-- race a concurrent demotion either, which a trigger that only locks at
+-- the INSERT itself cannot guarantee -- so requiring it costs a correctly
+-- written caller nothing and catches an incorrect one immediately instead
+-- of only in a race it happens not to lose.
+--
+-- An earlier revision of both guards used a plain `users ... FOR UPDATE`
+-- row lock here instead, which deadlocked (40P01) against the manual-
+-- demotion path in management/directory.rs: that path locks the users row
+-- first, then updates the grant, which takes 0027's advisory lock;
+-- group-mapping deletion updates the grant first (taking the advisory
+-- lock first) and this trigger then wanted the row. The advisory lock
+-- avoids that: it is the same lock 0027's own
 -- omg_authority_platform_grants/omg_authority_users triggers already take
 -- for any platform_role_grants or users.disabled_at/cleaned_at change, and
 -- it is re-entrant within a transaction, so a transaction that already
@@ -49,9 +87,13 @@ SET lock_timeout = '60s';
 --           instant of insertion, a currently effective Platform Admin.
 --   OM002 - an admin-token authority guard (creation or role-loss) was
 --           run under an isolation level other than READ COMMITTED.
+--   OM003 - admin API token creation refused: the caller does not already
+--           hold the owner's user-scope authority lock exclusive (the
+--           creation guard checks this instead of acquiring it lazily;
+--           see its own comment below).
 -- Every other RAISE in this file reuses an existing standard SQLSTATE
 -- (23514 check_violation and friends), matching the rest of this
--- repository's migrations; these two are deliberately distinct so Rust
+-- repository's migrations; these three are deliberately distinct so Rust
 -- can map on the code alone, with no message-text matching (#37 PR1,
 -- coordinator review issue 5a).
 
@@ -200,6 +242,19 @@ $$;
 -- which costs nothing extra (the destination user cannot have *lost*
 -- anything from gaining a row, so this can only ever find nothing to do)
 -- and keeps the set of users this statement might affect explicit.
+--
+-- The gateway itself must never issue `SET CONSTRAINTS
+-- admin_api_tokens_role_lost IMMEDIATE` (or `SET CONSTRAINTS ALL
+-- IMMEDIATE`) on any connection: doing so would force this trigger to
+-- fire mid-transaction again, exactly the group-re-sync false positive
+-- this `DEFERRABLE INITIALLY DEFERRED` attribute exists to prevent
+-- (adversarial re-review of #37 PR1, issue 3). Verified by grep: no
+-- production code path issues `SET CONSTRAINTS`. `deploy/staging/
+-- verify-privileges.sql` is the only caller, and only inside its own
+-- rollback-only probe transaction, to force the deferred trigger to fire
+-- early enough to observe it before that transaction's own `ROLLBACK`
+-- (which a database-level deferred trigger has no other way to surface,
+-- short of actually committing).
 CREATE FUNCTION omg_admin_tokens_role_lost() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE lost uuid;
 BEGIN
@@ -262,29 +317,52 @@ CREATE TRIGGER admin_api_tokens_user_cleaned AFTER UPDATE OF cleaned_at ON users
  FOR EACH ROW WHEN (NEW.cleaned_at IS NOT NULL AND OLD.cleaned_at IS NULL)
  EXECUTE FUNCTION omg_admin_tokens_owner_lost();
 
+-- Unlike the role-loss trigger above (re-entrant, lazy acquisition: 0027
+-- already holds this lock for any platform_role_grants or
+-- users.disabled_at/cleaned_at write, so asking again costs nothing),
+-- creation REQUIRES the caller to already hold the owner's user-scope
+-- authority lock exclusive, probing pg_locks directly the same way
+-- 0027's own omg_scope_lock_exclusive audit-mode check does (advisory
+-- lock class 72419512, keyed by the owner, objsubid 2, ExclusiveLock,
+-- granted, this backend's own pid) -- unconditionally, not only when
+-- `omg.scope_lock_audit='on'` (adversarial re-review of #37 PR1, issue
+-- 6). A caller that does not already hold it gets a dedicated SQLSTATE
+-- (OM003), never a silent lazy grant of a property it never actually
+-- arranged for the rest of its own transaction.
+--
 -- Creation is bound to the owner's live Admin status at the instant of
 -- insertion, not only to a caller's earlier check (PR2's handler still
--- enforces "create only for oneself"; this is the storage-level backstop).
--- Take the same user-scope authority lock the role-loss check above takes
--- (and 0027's omg_authority_platform_grants/omg_authority_users triggers
--- already take for any platform_role_grants or users.disabled_at/
--- cleaned_at change), so a concurrent demotion/suspension/cleanup and a
--- concurrent creation serialize on it: a demotion already in flight blocks
--- the create until it commits, and the create then correctly refuses; a
--- create already in flight is evaluated while the owner was still
--- genuinely admin and blocks the demotion until the insert's implicit
+-- enforces "create only for oneself"; this is the storage-level
+-- backstop): the lock above (already held) still serializes a concurrent
+-- demotion/suspension/cleanup against a concurrent creation exactly as
+-- before -- a demotion already in flight blocks the create's own EXISTS
+-- check until it commits, and the create then correctly refuses; a
+-- create already in flight blocks the demotion until the create's
 -- transaction ends. effective_platform_roles already excludes disabled
--- and cleaned-up users, so this one EXISTS also covers suspension/cleanup.
--- An earlier revision used a plain `users ... FOR UPDATE` row lock here,
--- which deadlocked (40P01) against the manual-demotion path's own
--- row-then-advisory-lock order; the advisory lock does not, and is free
--- (re-entrant) for the common case where the caller already holds it.
+-- and cleaned-up users, so this one EXISTS also covers suspension/
+-- cleanup.
+CREATE FUNCTION omg_admin_tokens_require_owner_lock(owner uuid) RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+ IF NOT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND pid=pg_backend_pid() AND objsubid=2
+   AND classid=72419512::oid AND objid=omg_scope_key(owner)::oid AND mode='ExclusiveLock' AND granted) THEN
+  RAISE EXCEPTION 'admin API token creation requires the caller to already hold the owner''s user-scope authority lock exclusive (governance::locks::exclusive(Scope::User(owner)), taken up front, before the first write)' USING ERRCODE='OM003';
+ END IF;
+END $$;
 CREATE FUNCTION omg_admin_tokens_owner_must_be_admin() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  -- Snapshot-bound guard: see omg_admin_tokens_require_read_committed's
  -- own comment above for why this refuses anything but READ COMMITTED.
  PERFORM omg_admin_tokens_require_read_committed();
- PERFORM omg_scope_lock_exclusive(72419512,omg_scope_key(NEW.owner_user_id));
+ PERFORM omg_admin_tokens_require_owner_lock(NEW.owner_user_id);
+ -- Creation time, and the three columns only later successful use or
+ -- revocation may ever change, are never caller-controlled -- forced
+ -- here, unconditionally, before the CHECK constraints below ever see
+ -- this row (adversarial re-review of #37 PR1, issue 1; see the table's
+ -- own comment above).
+ NEW.created_at:=now();
+ NEW.revoked_at:=NULL;
+ NEW.last_used_at:=NULL;
+ NEW.last_used_address:=NULL;
  IF NOT EXISTS(SELECT 1 FROM effective_platform_roles WHERE user_id=NEW.owner_user_id AND role='admin') THEN
   RAISE EXCEPTION 'admin API token owner must be a currently effective Platform Admin' USING ERRCODE='OM001';
  END IF;

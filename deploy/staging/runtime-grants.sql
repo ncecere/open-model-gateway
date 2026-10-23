@@ -352,7 +352,16 @@ GRANT UPDATE(released_at,released_by_user_id) ON public.legal_holds TO gateway_r
 -- successful-use tracking are runtime-writable. No DELETE/TRUNCATE. The
 -- owner-invalidation triggers on platform_role_grants/users run as the
 -- invoking runtime role, which already holds the grants below.
-GRANT SELECT,INSERT ON public.admin_api_tokens TO gateway_runtime;
+--
+-- INSERT is granted only on the columns a creation actually supplies
+-- (adversarial re-review of #37 PR1, issue 1): created_at, revoked_at,
+-- last_used_at and last_used_address are deliberately absent, so the
+-- runtime role cannot even attempt to supply a forged creation instant
+-- (or a pre-revoked/pre-used row) on a whole-row INSERT -- it gets a
+-- column-level permission-denied error before the row ever reaches
+-- migration 0050's own creation guard, which forces created_at itself
+-- regardless, as a second, independent backstop.
+GRANT SELECT,INSERT(id,owner_user_id,name,secret_hash,scopes,ip_allowlist,expires_at) ON public.admin_api_tokens TO gateway_runtime;
 GRANT UPDATE(revoked_at,last_used_at,last_used_address) ON public.admin_api_tokens TO gateway_runtime;
 -- The owner-invalidation trigger functions on platform_role_grants/users call
 -- this helper directly (not only through the trigger mechanism, which needs
@@ -361,6 +370,9 @@ GRANT EXECUTE ON FUNCTION public.omg_admin_tokens_revoke_owner(uuid) TO gateway_
 -- Both authority guards (role-loss and creation) call this isolation check
 -- directly for the same reason.
 GRANT EXECUTE ON FUNCTION public.omg_admin_tokens_require_read_committed() TO gateway_runtime;
+-- The creation guard calls this lock-holding check directly for the same
+-- reason (adversarial re-review of #37 PR1, issue 6).
+GRANT EXECUTE ON FUNCTION public.omg_admin_tokens_require_owner_lock(uuid) TO gateway_runtime;
 -- The scopes/allowlist CHECK constraints call these at every INSERT/UPDATE,
 -- like valid_model_protocols and friends above.
 GRANT EXECUTE ON FUNCTION public.valid_admin_token_scopes(text[]),
