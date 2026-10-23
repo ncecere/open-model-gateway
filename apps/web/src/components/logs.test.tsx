@@ -193,6 +193,19 @@ describe("Logs Refresh action (#232)", () => {
     expect(metricsCalls).toBe(2);
     await screen.findByText("24"); // the summary tile also refreshed
   });
+  it("never fetches while the filters are invalid (a manual refetch ignores `enabled`)", async () => {
+    const user = userEvent.setup();
+    const fetched: string[] = [];
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => { fetched.push(String(input)); return Promise.resolve(Response.json({ data: [], has_more: false })); }));
+    // "ab" is too short to be a request-ID search: the page shows "Filters not applied" and loads no rows or summary.
+    render(<QueryClientProvider client={testClient()}><ActionProvider><DashboardNavigationProvider search={{ page: "requests", ws: "team", q: "ab" }} navigate={() => {}}><LogsPage scope={{ kind: "workspace", workspace: team }} /></DashboardNavigationProvider></ActionProvider></QueryClientProvider>);
+    await screen.findByText("Filters not applied");
+    const refreshButton = await screen.findByRole("button", { name: "Refresh" });
+    expect(refreshButton.hasAttribute("disabled")).toBe(true);
+    await user.click(refreshButton);
+    await new Promise(r => setTimeout(r, 50));
+    expect(fetched.filter(u => u.startsWith(`${ws}/requests`) || u.startsWith(`${ws}/logs/metrics`))).toEqual([]);
+  });
   it("has the accessible name \"Refresh\" on both Requests and Sessions tabs", async () => {
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(Response.json({ data: [], has_more: false }))));
     const client = testClient();

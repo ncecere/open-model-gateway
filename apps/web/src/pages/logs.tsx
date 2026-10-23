@@ -14,7 +14,7 @@
  * prompts and responses are never stored or shown.
  */
 import { useSelectedName, useServerOptions, withSelected } from "../components/server-options";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ListTree, MessagesSquare, RefreshCw } from "lucide-react";
 import { platformPath, wsPath, type Grant, type Model, type Workspace } from "../lib/api";
 import type { DashboardSearch, RangePreset } from "../lib/permissions";
@@ -311,6 +311,7 @@ export function LogsPage({ scope }: { scope: LogsScope }) {
   const [tools, setTools] = useState<{ columns: { id: string; label: string; hideable?: boolean }[]; view: TableView; refetch: () => Promise<unknown> }>();
   // A ref, not state: registering it is a side effect of every LogMetricsTiles render and must never itself trigger one.
   const metricsRefetchRef = useRef<() => Promise<unknown>>(undefined);
+  const registerMetricsRefetch = useCallback((refetch: () => Promise<unknown>) => { metricsRefetchRef.current = refetch; }, []);
   const [refreshing, setRefreshing] = useState(false);
   // Requests match a model by its API name, so a selected one is labelled with that name.
   const modelOptions = withSelected(platform ? platformModels.options : [...new Map((models.data ?? []).map(g => [g.public_name, { value: g.public_name, label: modelLabel(g) }])).values()], filters.model ? { value: filters.model, label: filters.model } : undefined);
@@ -338,6 +339,9 @@ export function LogsPage({ scope }: { scope: LogsScope }) {
   const viewRequests = () => nav?.navigate(logsSearch(scope, filters, "requests", viewSearch));
   // Refresh: refetch the current tab's data and its summary tiles together, for the current filters; no polling.
   const refresh = async () => {
+    // A manual refetch ignores `enabled`: never fetch while the filters are invalid,
+    // or rows would appear without the displayed filters applied.
+    if (filterError) return;
     setRefreshing(true);
     try { await Promise.all([tools?.refetch, metricsRefetchRef.current].filter((fn): fn is () => Promise<unknown> => typeof fn === "function").map(fn => fn())); }
     finally { setRefreshing(false); }
@@ -346,7 +350,7 @@ export function LogsPage({ scope }: { scope: LogsScope }) {
   const defaults = defaultHiddenFor(tab, narrow, platform);
   return <Stack gap={6} className={s.page}>
     <Heading title="Logs" description={scope.kind === "platform" ? platformDescription : requestsDescription(scope.workspace)} />
-    {tab !== "batches" && <LogMetricsTiles scope={scope} query={query} enabled={!filterError} onRefetch={refetch => { metricsRefetchRef.current = refetch; }} />}
+    {tab !== "batches" && <LogMetricsTiles scope={scope} query={query} enabled={!filterError} onRefetch={registerMetricsRefetch} />}
     <TypeTabs label="Log view" value={tab} onChange={next => nav?.navigate(next === "batches" ? { ...(scope.kind === "platform" ? { page: "platform-logs" } : { page: "requests", ws: scope.workspace.id }), tab: "batches" } : logsSearch(scope, filters, next as LogTab))}
       items={[{ value: "requests", label: "Requests" }, { value: "generations", label: "Generations" }, { value: "sessions", label: "Sessions" }, { value: "batches", label: "Batches" }]}>
       {tab === "batches" ? <BatchesPanel scope={scope} /> : <div className={s.list}>
@@ -355,7 +359,7 @@ export function LogsPage({ scope }: { scope: LogsScope }) {
           start={<PeriodControl filters={filters} onChange={patch => go({ ...patch, cursor: undefined })} />} extraActive={periodActive} extraChips={chips}
           moreStart={<SessionField value={filters.session_id} onChange={session_id => go({ session_id, cursor: undefined })} />} moreStartActive={filters.session_id ? 1 : 0}
           facets={facets} values={facetValues} onChange={onFacets} more={["key_id", "workspace_id", "finish_reason", "streamed"]}
-          end={tools && <><IconButton icon={<RefreshCw aria-hidden />} label="Refresh" loading={refreshing} onClick={() => void refresh()} /><ColumnChooser columns={tools.columns} hidden={tools.view.hidden} onHiddenChange={hidden => go(logViewSearch({ ...tools.view, hidden }, tab, narrow, platform))} defaultHidden={defaults} /><DensityToggle value={tools.view.density} onChange={density => go(logViewSearch({ ...tools.view, density }, tab, narrow))} /></>} />
+          end={tools && <><IconButton icon={<RefreshCw aria-hidden />} label="Refresh" loading={refreshing} disabled={!!filterError} onClick={() => void refresh()} /><ColumnChooser columns={tools.columns} hidden={tools.view.hidden} onHiddenChange={hidden => go(logViewSearch({ ...tools.view, hidden }, tab, narrow, platform))} defaultHidden={defaults} /><DensityToggle value={tools.view.density} onChange={density => go(logViewSearch({ ...tools.view, density }, tab, narrow))} /></>} />
         {filterError && <InfoBanner tone="warning" title="Filters not applied">{filterError}</InfoBanner>}
         {tab === "requests" ? <RequestsTable {...props} /> : tab === "generations" ? <GenerationsTable {...props} /> : <SessionsTable {...props} />}
       </div>}
