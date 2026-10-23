@@ -6,7 +6,11 @@ The project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). 
 
 ## [Unreleased]
 
-Changes after v0.7.1: [unreleased notes](docs/releases/unreleased.md).
+Changes after v0.7.2: [unreleased notes](docs/releases/unreleased.md).
+
+## [0.7.2]
+
+Compatibility fixes #220, #221 and #228, plus the #225 Chat Completions guide fix: optional no-argument function schemas and native Messages empty/successful tool-result defaults; omitted/null OpenAI `stream`/`store` and public `refusal:null` treated as omission; deterministic Anthropic/Bedrock request-encoding refusals now refused before budget admission instead of leaving an unknown-cost hold. Also a CI guard against committed merge-conflict markers (#235). No new migrations or runtime grants (schema 0048). Remaining compatibility gaps (#222, #238) are not included. See [release and upgrade notes](docs/releases/v0.7.2.md), including the inherited v0.7.0 precautions for v0.6.1 upgrades.
 
 ## [0.7.1]
 
@@ -54,7 +58,8 @@ Alerts, key safety, model compare, SCIM, JWKS refresh, metrics and backup toolin
 
 The single-enterprise rebuild: Team, Project and personal workspaces, OIDC platform roles, catalogs, multimodal workloads across five provider families, immutable micro-USD accounting, logs and Admin settings. Migrations `0001` to `0010`. Notes: [`docs/releases/v0.1.0.md`](docs/releases/v0.1.0.md).
 
-[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/ncecere/open-model-gateway/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/ncecere/open-model-gateway/compare/v0.7.0...v0.7.1
 [0.4.0]: https://github.com/ncecere/open-model-gateway/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/ncecere/open-model-gateway/compare/v0.3.1...v0.3.2
