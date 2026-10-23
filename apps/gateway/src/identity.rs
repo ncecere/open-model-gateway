@@ -422,6 +422,19 @@ pub struct IdentityState {
     /// aggregated and rate-limited, so a flood of garbage bearer tokens
     /// cannot grow the audit log or the key-lookup load without bound.
     admin_token_limiter: Arc<throttle::Limiter>,
+    /// #37 PR2 finding 3: a second, independent admission bound on top of
+    /// the per-IP limiter above, checked *after* a token has successfully
+    /// authenticated and before the attempt is started or dispatched --
+    /// bounds how much one compromised or misbehaving token can do even
+    /// from many different client addresses (which the per-IP limiter
+    /// alone cannot see).
+    admin_token_per_token_limiter: Arc<throttle::TokenLimiter>,
+    /// #37 PR2 finding 3: one shared, replica-wide admission bound, checked
+    /// *before* the expensive (one database round trip) authentication
+    /// lookup -- bounds distributed floods of invalid-shape or unknown-id
+    /// credentials spread across many client addresses, each individually
+    /// under the per-IP limit, before any of that database work happens.
+    admin_token_replica_limiter: Arc<throttle::ReplicaLimiter>,
 }
 /// Default rate of admin-token authentication attempts believed per client
 /// address, per replica (same shape as [`LOGIN_RATE_PER_MINUTE`]). Higher
@@ -430,6 +443,18 @@ pub struct IdentityState {
 /// requests that at least look like an admin token (not merely bearing some
 /// Authorization header) ever consume this budget.
 const ADMIN_TOKEN_AUTH_RATE_PER_MINUTE: u32 = 1_000;
+/// #37 PR2 finding 3: per admitted (authenticated) admin token, per minute,
+/// per replica. Same shape and magnitude as the per-IP rate above, but keyed
+/// on the token's own id instead of a client address, so it still bounds a
+/// single token's admission load even when spread across many addresses.
+const ADMIN_TOKEN_PER_TOKEN_RATE_PER_MINUTE: u32 = 1_000;
+/// #37 PR2 finding 3: every admin-token authentication attempt on one
+/// replica, successful or not, aggregated into a single shared bound. Ten
+/// times the per-IP/per-token rate: generous for one legitimate caller, but
+/// still a hard ceiling on the database work a distributed flood (many
+/// addresses, each individually under the per-IP limit) can cause on this
+/// replica before a single request is even authenticated.
+const ADMIN_TOKEN_REPLICA_RATE_PER_MINUTE: u32 = 10_000;
 
 impl IdentityState {
     /// Discovery/issuer/JWKS validation is fail-closed: configured OIDC failure prevents startup.
@@ -581,6 +606,12 @@ impl IdentityState {
             policy,
             trusted_proxies,
             admin_token_limiter: Arc::new(throttle::Limiter::new(ADMIN_TOKEN_AUTH_RATE_PER_MINUTE)),
+            admin_token_per_token_limiter: Arc::new(throttle::TokenLimiter::new(
+                ADMIN_TOKEN_PER_TOKEN_RATE_PER_MINUTE,
+            )),
+            admin_token_replica_limiter: Arc::new(throttle::ReplicaLimiter::new(
+                ADMIN_TOKEN_REPLICA_RATE_PER_MINUTE,
+            )),
         })
     }
 
@@ -609,6 +640,29 @@ impl IdentityState {
     #[cfg(test)]
     pub(crate) fn with_trusted_proxies(mut self, proxies: throttle::TrustedProxies) -> Self {
         self.trusted_proxies = proxies;
+        self
+    }
+
+    /// Replace the per-token and replica admin-token limiters with tiny,
+    /// test-chosen rates (#37 PR2 finding 3): deterministic small-limit
+    /// tests exhaust a limiter of 1-2 requests a minute within a handful of
+    /// in-process requests, with no real-minute wait and no injected clock
+    /// (the limiters still read the wall clock, but a burst this small is
+    /// exhausted well inside one test's execution). Independent `Arc`s, so
+    /// a clone of this state still shares its own limiters correctly
+    /// (`management::authz_admin_token_tests` clones `IdentityState`
+    /// freely); this only ever replaces the limiter this value points at
+    /// before any clone is made, never a production default.
+    #[cfg(test)]
+    pub(crate) fn with_admin_token_limits(
+        mut self,
+        per_token_per_minute: u32,
+        replica_per_minute: u32,
+    ) -> Self {
+        self.admin_token_per_token_limiter =
+            Arc::new(throttle::TokenLimiter::new(per_token_per_minute));
+        self.admin_token_replica_limiter =
+            Arc::new(throttle::ReplicaLimiter::new(replica_per_minute));
         self
     }
 
@@ -1572,8 +1626,44 @@ async fn authenticate_admin_token_request(
             wait,
         );
     }
+    // Aggregate, replica-wide gate, before the expensive (one database
+    // round trip) authentication lookup below (#37 PR2 finding 3): bounds
+    // a distributed flood of invalid-shape or unknown-id credentials spread
+    // across many client addresses, each individually under the per-IP
+    // limit above, before any of that database work happens.
+    if let Err(wait) = state
+        .admin_token_replica_limiter
+        .check(std::time::Instant::now())
+    {
+        return throttled(
+            "admin_token",
+            "replica_rate",
+            StatusCode::TOO_MANY_REQUESTS,
+            wait,
+        );
+    }
     match state.store.authenticate_admin_token(token).await {
         Ok(Some(principal)) => {
+            // Per-token gate, only now that the token has successfully
+            // authenticated, and before this attempt is started (audited)
+            // or dispatched (#37 PR2 finding 3): the key here is the
+            // token's own id, never allocated for an arbitrary
+            // unauthenticated credential pre-authentication. A rejection
+            // here is counted only in the fixed, low-cardinality
+            // `auth_throttled` metric, never as an individual audit row --
+            // the request never reaches `management::authorization`, which
+            // is where that row would be written.
+            if let Err(wait) = state
+                .admin_token_per_token_limiter
+                .check(principal.token_id, std::time::Instant::now())
+            {
+                return throttled(
+                    "admin_token",
+                    "token_rate",
+                    StatusCode::TOO_MANY_REQUESTS,
+                    wait,
+                );
+            }
             let context = AdminTokenContext {
                 token_id: principal.token_id,
                 owner_user_id: principal.owner_user_id,

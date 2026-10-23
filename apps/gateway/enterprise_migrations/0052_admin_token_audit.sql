@@ -55,7 +55,10 @@ CREATE TABLE admin_token_attempts(
  -- The admission decision: made (and immutable) at the `start` row,
  -- repeated verbatim on the matching `completion` row so a reader never
  -- needs to join the pair to know whether the attempt was let through.
- outcome text NOT NULL CHECK(outcome IN ('allowed','denied')),
+ -- 'error' is distinct from 'denied': an infrastructure failure (a
+ -- pool/view/storage error) during the live authorization recheck, never
+ -- reported as if it were an ordinary refusal (finding 4).
+ outcome text NOT NULL CHECK(outcome IN ('allowed','denied','error')),
  -- The response status actually returned. NULL on every `start` row
  -- (nothing has returned yet); required on every `completion` row.
  status_code smallint CHECK(status_code IS NULL OR status_code BETWEEN 100 AND 599),
