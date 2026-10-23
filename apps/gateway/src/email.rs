@@ -377,12 +377,32 @@ pub(crate) mod mock {
 
     /// Start a sink accepting any number of sequential connections.
     pub(crate) async fn serve(behaviour: Behaviour) -> (u16, mpsc::UnboundedReceiver<Received>) {
+        serve_inner(behaviour, None).await
+    }
+
+    /// Report DATA immediately but gate its SMTP acknowledgement, so tests
+    /// can commit authority changes between two sequential recipients.
+    pub(crate) async fn serve_gated() -> (
+        u16,
+        mpsc::UnboundedReceiver<Received>,
+        std::sync::Arc<tokio::sync::Semaphore>,
+    ) {
+        let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
+        let (port, rx) = serve_inner(Behaviour::default(), Some(gate.clone())).await;
+        (port, rx, gate)
+    }
+
+    async fn serve_inner(
+        behaviour: Behaviour,
+        gate: Option<std::sync::Arc<tokio::sync::Semaphore>>,
+    ) -> (u16, mpsc::UnboundedReceiver<Received>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let (tx, rx) = mpsc::unbounded_channel();
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
                 let tx = tx.clone();
+                let gate = gate.clone();
                 tokio::spawn(async move {
                     let (read, mut write) = stream.into_split();
                     let mut lines = BufReader::new(read);
@@ -434,6 +454,12 @@ pub(crate) mod mock {
                             }
                             current.data = data;
                             tx.send(std::mem::take(&mut current)).ok();
+                            if let Some(gate) = &gate {
+                                let Ok(permit) = gate.acquire().await else {
+                                    return;
+                                };
+                                permit.forget();
+                            }
                             b"250 queued\r\n"
                         } else if upper == "QUIT" {
                             write.write_all(b"221 bye\r\n").await.ok();

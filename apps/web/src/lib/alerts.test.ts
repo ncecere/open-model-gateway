@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { conditionText, draftOf, factorToPercent, kindsFor, layersFor, newDraft, parseEmails, parseThresholds, percentToFactor, recipientsText, ruleBody, ruleErrors, unknownCostNote, whereText, type AlertRule, type AlertScope } from "./alerts";
+import { conditionText, draftOf, factorToPercent, kindsFor, layersFor, newDraft, parseEmails, parseThresholds, percentToFactor, recipientsText, ruleBody, ruleErrors, sourceText, unknownCostNote, whereText, type AlertRule, type AlertScope } from "./alerts";
 import { dashboardHref, parseDashboardLocation } from "./locations";
 import { canView, dashboardSearch, type DashboardSearch } from "./permissions";
 import { admin, auditor, member, personal, session, team } from "./test-fixtures";
@@ -57,6 +57,10 @@ describe("alert rule form", () => {
     expect(whereText({ builtin: false, connection: null, workspace: null })).toBe("Installation");
     expect(unknownCostNote({ details: { unknown_cost_requests: 2 } })).toMatch(/2 requests have unknown cost/);
     expect(unknownCostNote({ details: { unknown_cost_requests: 0 } })).toBeUndefined();
+  });
+  it("labels the key-expiry reminder as a built-in, never a rule, and never shows a key id", () => {
+    expect(sourceText({ rule: null, kind: "key_expiring" })).toBe("Built-in key-expiry reminder");
+    expect(whereText({ builtin: false, connection: null, workspace: { id: "team", name: "Product", kind: "team" } })).toBe("Product");
   });
   it("admission ceiling rules are installation-only, 5–10 min, Platform admins only", () => {
     expect(kindsFor(platform)).toContain("admission_ceiling"); expect(kindsFor(workspace)).not.toContain("admission_ceiling");
