@@ -14,6 +14,7 @@ use super::{
 use crate::{
     filestore::StoredFile,
     governance::batch::{LineGroup, LinePreview},
+    inference::types::ChatRequest,
 };
 
 /// At most this many problems are reported (scanning stops there).
@@ -95,6 +96,88 @@ impl Jobs {
             Err(InferenceError::Unsupported) => Err(LineError::ModelUnsupported),
             Err(e) => return Err(e.into()),
         })
+    }
+
+    /// Whether *every* authorized, protocol-capable candidate deployment of
+    /// `model` would deterministically refuse `request` on `protocol`: the
+    /// same per-adapter/provider enumeration `Engine::execute_protocol` runs
+    /// before interactive admission (#228), reused here read-only so an
+    /// unpinned batch line's exclusion from the parent envelope matches what
+    /// the runner's own dispatch would actually do (#238) - not just what
+    /// the one deployment planning happened to size the line against.
+    ///
+    /// `Ok(None)`: at least one capable candidate accepts, or none was even
+    /// protocol-capable for this request (the coarse whole-batch check
+    /// already reports that case). `Ok(Some(error))`: every capable
+    /// candidate refuses, classified like the engine would (400
+    /// `invalid_request_error` only when a route the live routing policy
+    /// would actually use returned it, else 501 `unsupported_capability`).
+    /// No admission, reservation or routing-health write happens here.
+    async fn every_candidate_route_refuses(
+        &self,
+        principal: &Principal,
+        model: &str,
+        protocol: ApiProtocol,
+        request_id: Uuid,
+        request: &ChatRequest,
+    ) -> Result<Option<InferenceError>, JobError> {
+        let deployments = self.store.deployments(principal, model).await?;
+        let mut candidates: Vec<Deployment> = Vec::new();
+        let mut refused: Vec<(Deployment, InferenceError)> = Vec::new();
+        let mut verdicts: HashMap<String, Result<(), InferenceError>> = HashMap::new();
+        for deployment in deployments {
+            if !deployment
+                .supported_protocols
+                .iter()
+                .any(|p| p == protocol.as_str())
+            {
+                continue;
+            }
+            let Some(adapter) = self.registry.get(&deployment.provider) else {
+                continue;
+            };
+            if !(adapter.supports_protocol(protocol) && adapter.supports_chat_request(request)) {
+                continue;
+            }
+            let verdict = *verdicts
+                .entry(deployment.provider.clone())
+                .or_insert_with(|| match adapter.validate_chat_request(request) {
+                    Ok(()) => Ok(()),
+                    Err(InferenceError::InvalidRequest) => Err(InferenceError::InvalidRequest),
+                    Err(InferenceError::Unsupported) => Err(InferenceError::Unsupported),
+                    // Outside the adapter's contract (#228): never silently
+                    // admitted, logged for the operator, same as the engine.
+                    Err(other) => {
+                        tracing::warn!(provider = %deployment.provider, error = ?other,
+                            "adapter request validation returned an error outside its contract");
+                        Err(InferenceError::Unsupported)
+                    }
+                });
+            match verdict {
+                Ok(()) => candidates.push(deployment),
+                Err(error) => refused.push((deployment, error)),
+            }
+        }
+        if !candidates.is_empty() || refused.is_empty() {
+            return Ok(None);
+        }
+        // Every protocol-capable candidate refused: classify it only from
+        // the routes the read-only routing policy would actually use
+        // (residency, operator-disabled routes and cooldown), exactly as
+        // `Engine::execute_protocol` does for an interactive request.
+        let refused_deployments: Vec<Deployment> = refused.iter().map(|(d, _)| d.clone()).collect();
+        let usable = self
+            .store
+            .route_plan(principal, model, &refused_deployments, request_id)
+            .await?;
+        let invalid = refused.iter().any(|(d, error)| {
+            *error == InferenceError::InvalidRequest && usable.deployment_ids.contains(&d.id)
+        });
+        Ok(Some(if invalid {
+            InferenceError::InvalidRequest
+        } else {
+            InferenceError::Unsupported
+        }))
     }
 
     /// Validate `input` (already opened) and copy it to the batch's private
@@ -311,19 +394,47 @@ impl Jobs {
             if !coarse_ok && gateway_unsupported.is_none() {
                 gateway_unsupported = Some(physical);
             }
-            // The coarse bool can pass while the adapter's own pure encoder
+            // The coarse bool can pass while an adapter's own pure encoder
             // still refuses this exact body (a strict function tool, an
             // out-of-range sampling parameter, a tool result with no
             // matching call, ...): the same deterministic check
             // `Engine::execute_protocol` runs before admission (#228). A
             // model set up only for native batches (`resolved.legacy`) never
             // reaches the generic engine, so it is exempt.
-            let deterministic_reject = (coarse_ok && !resolved.legacy)
-                .then(|| match &line.request {
-                    BatchRequest::Chat(r) => resolved.adapter.validate_chat_request(r).err(),
+            //
+            // An omitted maximum pins this line to `resolved.deployment` for
+            // both sizing and dispatch (`lines::LinePlan`, below): judge it
+            // on that route alone. An explicit maximum is copied with no pin;
+            // the runner may schedule it onto any authorized,
+            // protocol-capable candidate route for the model at dispatch
+            // (`jobs::runner::Runner::plan_route_inner`), so excluding it
+            // from the envelope here is correct only when *every* such
+            // candidate would refuse it too - the same per-adapter/provider
+            // enumeration `Engine::execute_protocol` runs, reused here
+            // read-only (no admission, no routing-health writes).
+            let deterministic_reject = if resolved.legacy {
+                None
+            } else {
+                match &execution_request {
+                    BatchRequest::Chat(r) => {
+                        if requested.is_none() {
+                            coarse_ok
+                                .then(|| resolved.adapter.validate_chat_request(r).err())
+                                .flatten()
+                        } else {
+                            self.every_candidate_route_refuses(
+                                principal,
+                                &model,
+                                endpoint.protocol(),
+                                request_id,
+                                r,
+                            )
+                            .await?
+                        }
+                    }
                     BatchRequest::Embeddings(_) => None,
-                })
-                .flatten();
+                }
+            };
             if !issues.is_empty() {
                 // Keep scanning for problems, but stop copying.
                 continue;
@@ -383,6 +494,7 @@ impl Jobs {
         }
         let native = !force_gateway
             && native_ok
+            && deterministic_rejects.is_empty()
             && groups.len() == 1
             && groups[0].2.native_batch(&groups[0].0.deployment, endpoint);
         if issues.is_empty() && !native {
