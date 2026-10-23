@@ -2,6 +2,16 @@
 
 Notes for changes on `main` after [v0.7.2](v0.7.2.md). They become the next release's notes.
 
+## Admin API tokens: storage and lifecycle (#37 PR1)
+
+The first of three PRs for long-lived Admin API tokens. This PR adds only the database schema and the Rust storage/lifecycle primitives; no route, request authentication or UI reads or writes an admin token yet (PR2 and PR3). Nothing here is reachable from any API.
+
+- Migration `0050_admin_api_tokens.sql` adds `admin_api_tokens`: owner (FK `RESTRICT` to `users`), a bounded name, the SHA-256 digest of the whole token (never the token itself), a non-empty enumerated scope list (`platform:read`, `catalog:write`, `access:write`, `governance:write`, `settings:write`; no wildcard, no duplicates), an optional 1-32 entry CIDR allowlist, creation/expiry/revocation timestamps and last-use tracking. Expiry is enforced at 1-90 days after creation. Identity, the digest, scopes, expiry and the allowlist are immutable (no rename, no renewal); only revocation and successful-use tracking ever change, and revocation reuses the existing `omg_revocation_is_final()` trigger (migration 0039), so it is final like every other revocation. No row is ever deleted.
+- **Owner-invalidation triggers**: when a user loses their last active platform `admin` grant (manual or group-derived), is suspended, is SCIM-deactivated, or is cleaned up, every token they own is revoked in the same transaction as whatever caused the loss, and regaining Admin access later never restores them.
+- `apps/gateway/src/admin_tokens.rs`: the token format is `omg_admin_<32-hex uuid>.<64-hex secret>`, 256 secret bits from the same fallible OS CSPRNG inference keys use (`entropy.rs`), with a strict parser that rejects malformed input before any database access. Create (returns the plaintext once), idempotent revoke, a lookup-for-authorization that checks unrevoked, unexpired, owner active and currently effective role exactly `admin` (no positive authorization cache, so every check re-reads the primary database), and a last-use update throttled to once per 5 minutes via a conditional `UPDATE`.
+- `deploy/staging/runtime-grants.sql`/`verify-privileges.sql`: the runtime role gets `SELECT`/`INSERT` on the table and `UPDATE` only on `revoked_at`, `last_used_at` and `last_used_address`; everything else is enforced by column grants and triggers, with ACL assertions and rollback-only probes covering creation, immutability, revocation finality, idempotent revocation, no-delete and owner-invalidation.
+- `scripts/backup.py`'s `reapply-revocations` (#146) now also covers `admin_api_tokens`, so restoring an older backup cannot resurrect a token the old database had already revoked.
+
 ## Vendored upstream-base advisory coverage (#214)
 
 The existing read-only cargo-deny job now runs a separately labelled advisory-only check for explicitly registered vendored dependencies. It validates root workspace metadata registrations and the complete graph, then projects only the reviewed crates.io base name/version/source identity and graph references in temporary scanner input. Unknown path dependencies, stale or mismatched registrations, non-canonical/escaping paths and malformed/incomplete graphs fail closed. There are no vendored dependencies today; the check passes and says so.
