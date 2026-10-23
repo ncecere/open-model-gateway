@@ -128,6 +128,17 @@ impl ProviderAdapter for Fake {
             ),
         }
     }
+    /// Simulates a real adapter's pure dry-run encoder (#228): the coarse
+    /// `capabilities()`/`supports_chat_request` bool stays true (this is not
+    /// a model-wide incompatibility), but this exact body is deterministically
+    /// refused, exactly like Anthropic/Bedrock reject a strict function tool.
+    fn validate_chat_request(&self, request: &ChatRequest) -> Result<(), InferenceError> {
+        match request.messages[0].content.as_deref().unwrap_or_default() {
+            "strict-tool" => Err(InferenceError::Unsupported),
+            "bad-tool-args" => Err(InferenceError::InvalidRequest),
+            _ => Ok(()),
+        }
+    }
     async fn execute(
         &self,
         _: &Deployment,
@@ -880,6 +891,134 @@ async fn validation_rejects_with_line_numbers_and_creates_nothing(pool: PgPool) 
         .await,
         Err(CreateError::Job(JobError::Invalid("invalid_metadata", _)))
     ));
+}
+
+/// Counts of rows a batch's admission could have created, workspace-wide:
+/// jobs, reservations, inference executions and ledger entries.
+async fn admission_rowcounts(f: &Fixture) -> (i64, i64, i64, i64) {
+    sqlx::query_as("SELECT (SELECT count(*) FROM async_jobs),(SELECT count(*) FROM governance_reservations),(SELECT count(*) FROM inference_executions),(SELECT count(*) FROM monetary_ledger)")
+        .fetch_one(&f.store.pool)
+        .await
+        .unwrap()
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn strict_tool_lines_against_an_anthropic_model_reserve_and_dispatch_nothing(pool: PgPool) {
+    // #238: every line is a deterministic adapter rejection (coarse
+    // `supports_chat_request` passes; `validate_chat_request`, #228's
+    // pure dry-run encoder, refuses this exact body). Planning must refuse
+    // the whole upload, per line, before the parent envelope is ever sized
+    // or reserved - not admit an empty batch.
+    let w = world(pool, false, false, 2).await;
+    let f = &w.f;
+    let before = admission_rowcounts(f).await;
+    let file = w
+        .upload(
+            &f.principal,
+            &[
+                chat_line("a", "company/claude", "strict-tool"),
+                chat_line("b", "company/claude", "strict-tool"),
+            ],
+        )
+        .await;
+    let Err(CreateError::Invalid(issues)) = w
+        .create(f.principal, &file, BatchEndpoint::ChatCompletions, None)
+        .await
+    else {
+        panic!("expected every line to be refused before admission");
+    };
+    let got: Vec<(u64, &str)> = issues.iter().map(|i| (i.line, i.error.code())).collect();
+    assert_eq!(
+        got,
+        [(1, "unsupported_feature"), (2, "unsupported_feature")]
+    );
+    assert_eq!(before, admission_rowcounts(f).await);
+    // Nothing exists to dispatch.
+    assert!(!Runner::new(w.jobs.clone()).run_next().await.unwrap());
+    assert_eq!(w.anthropic.executed(), Vec::<String>::new());
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn mixed_batch_reserves_only_for_the_valid_lines(pool: PgPool) {
+    // #238: one line of two is a deterministic adapter rejection. Planning
+    // must reserve the parent envelope as if that line did not exist, and
+    // the batch still runs: the valid line completes, the rejected line is
+    // refused per line, at the same classification an interactive request
+    // would get, with no execution or reservation of its own (#228).
+    let w = world(pool, false, false, 1).await;
+    let f = &w.f;
+    let solo_file = w
+        .upload(&f.principal, &[chat_line("x", "company/claude", "two")])
+        .await;
+    let solo = w
+        .create(
+            f.principal,
+            &solo_file,
+            BatchEndpoint::ChatCompletions,
+            None,
+        )
+        .await
+        .unwrap();
+    let solo_held = reservation(f, solo.execution_id).await.1;
+    let mixed_file = w
+        .upload(
+            &f.principal,
+            &[
+                chat_line("a", "company/claude", "two"),
+                chat_line("b", "company/claude", "strict-tool"),
+            ],
+        )
+        .await;
+    let before = admission_rowcounts(f).await;
+    let job = w
+        .create(
+            f.principal,
+            &mixed_file,
+            BatchEndpoint::ChatCompletions,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(job.mode(), Some(BatchMode::Gateway));
+    assert_eq!(job.request_total, Some(2));
+    // Sized as if the rejected line were never in the file.
+    assert_eq!(reservation(f, job.execution_id).await.1, solo_held);
+    // One new job, one new envelope reservation; the rejected line reserved
+    // nothing of its own yet (it has not run).
+    let after = admission_rowcounts(f).await;
+    assert_eq!((after.0, after.1), (before.0 + 1, before.1 + 1));
+    // Two gateway batches are queued (`solo` and `job`): run both.
+    let runner = Runner::new(w.jobs.clone());
+    assert!(runner.run_next().await.unwrap());
+    assert!(runner.run_next().await.unwrap());
+    let job = w.reload(&job).await;
+    assert_eq!(job.state, "completed");
+    assert_eq!(
+        (job.request_completed, job.request_failed),
+        (Some(1), Some(1))
+    );
+    let out = w.read(f.principal.workspace_id, job.output_file_id).await;
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0]["custom_id"], "a");
+    assert_eq!(out[0]["response"]["status_code"], 200);
+    let errs = w.read(f.principal.workspace_id, job.error_file_id).await;
+    assert_eq!(errs.len(), 1);
+    assert_eq!(errs[0]["custom_id"], "b");
+    assert_eq!(errs[0]["response"]["status_code"], 501);
+    assert_eq!(
+        errs[0]["response"]["body"]["error"]["code"],
+        "unsupported_capability"
+    );
+    // The rejected line never got its own execution or reservation: only the
+    // valid line's attempt exists.
+    let lines: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM inference_executions WHERE batch_job_id=$1")
+            .bind(job.id)
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+    assert_eq!(lines, 1);
+    consistent(f).await;
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]

@@ -187,6 +187,11 @@ impl Jobs {
         // Lines a native submission could not encode / the engine cannot run.
         let mut native_ok = true;
         let mut gateway_unsupported: Option<u64> = None;
+        // Lines the coarse check passed but the adapter's own pure encoder
+        // (`ProviderAdapter::validate_chat_request`, #228) refuses
+        // deterministically: excluded from the parent envelope, not from the
+        // batch (see the end of the scan).
+        let mut deterministic_rejects: Vec<(u64, InferenceError)> = Vec::new();
         let issue = |issues: &mut Vec<Issue>, line: u64, error: LineError| {
             issues.push(Issue { line, error });
             issues.len() >= MAX_ISSUES
@@ -296,42 +301,65 @@ impl Jobs {
                 continue;
             }
             native_ok &= encodable;
-            let runnable = resolved.legacy
+            let coarse_ok = resolved.legacy
                 || match &line.request {
                     BatchRequest::Chat(r) => resolved.adapter.supports_chat_request(r),
                     BatchRequest::Embeddings(r) => resolved
                         .adapter
                         .supports_embedding_target(&resolved.deployment, r),
                 };
-            if !runnable && gateway_unsupported.is_none() {
+            if !coarse_ok && gateway_unsupported.is_none() {
                 gateway_unsupported = Some(physical);
             }
+            // The coarse bool can pass while the adapter's own pure encoder
+            // still refuses this exact body (a strict function tool, an
+            // out-of-range sampling parameter, a tool result with no
+            // matching call, ...): the same deterministic check
+            // `Engine::execute_protocol` runs before admission (#228). A
+            // model set up only for native batches (`resolved.legacy`) never
+            // reaches the generic engine, so it is exempt.
+            let deterministic_reject = (coarse_ok && !resolved.legacy)
+                .then(|| match &line.request {
+                    BatchRequest::Chat(r) => resolved.adapter.validate_chat_request(r).err(),
+                    BatchRequest::Embeddings(_) => None,
+                })
+                .flatten();
             if !issues.is_empty() {
                 // Keep scanning for problems, but stop copying.
                 continue;
             }
-            match groups
-                .iter_mut()
-                .find(|g| g.0.deployment.id == resolved.deployment.id)
-            {
-                Some(g) => {
-                    *g.0.outputs.entry(max).or_insert(0) += 1;
-                    if requested.is_none() {
-                        g.0.price_id = Some(price_id);
+            if let Some(error) = deterministic_reject {
+                // The engine refuses this line before it ever admits or
+                // reserves anything for it (zero cost, #228): it must not
+                // size or reserve the parent envelope either. It is still
+                // copied below, so it still runs and is refused per line, at
+                // the same classification as an interactive request, when
+                // the batch dispatches (`jobs::runner`).
+                deterministic_rejects.push((physical, error));
+            } else {
+                match groups
+                    .iter_mut()
+                    .find(|g| g.0.deployment.id == resolved.deployment.id)
+                {
+                    Some(g) => {
+                        *g.0.outputs.entry(max).or_insert(0) += 1;
+                        if requested.is_none() {
+                            g.0.price_id = Some(price_id);
+                        }
                     }
+                    None => groups.push((
+                        LineGroup {
+                            deployment: resolved.deployment.clone(),
+                            model: model.clone(),
+                            protocol: endpoint.protocol(),
+                            outputs: BTreeMap::from([(max, 1)]),
+                            price_id: requested.is_none().then_some(price_id),
+                        },
+                        physical,
+                        resolved.adapter.clone(),
+                        resolved.legacy,
+                    )),
                 }
-                None => groups.push((
-                    LineGroup {
-                        deployment: resolved.deployment.clone(),
-                        model: model.clone(),
-                        protocol: endpoint.protocol(),
-                        outputs: BTreeMap::from([(max, 1)]),
-                        price_id: requested.is_none().then_some(price_id),
-                    },
-                    physical,
-                    resolved.adapter.clone(),
-                    resolved.legacy,
-                )),
             }
             let mut copy = if requested.is_none() {
                 lines::planned_copy(
@@ -368,6 +396,31 @@ impl Jobs {
                 issues.push(Issue {
                     line,
                     error: LineError::UnsupportedFeature,
+                });
+            }
+        }
+        if issues.is_empty() && groups.is_empty() {
+            // Every candidate line was a deterministic adapter rejection:
+            // there is nothing to reserve or dispatch. Refuse the upload
+            // with a line-numbered report, like any other invalid line,
+            // instead of admitting an empty batch.
+            for (line, error) in deterministic_rejects.iter().copied() {
+                let error = match error {
+                    InferenceError::InvalidRequest => LineError::InvalidBody,
+                    InferenceError::Unsupported => LineError::UnsupportedFeature,
+                    other => {
+                        tracing::warn!(error = ?other, "adapter request validation returned an error outside its contract");
+                        LineError::UnsupportedFeature
+                    }
+                };
+                if issue(&mut issues, line, error) {
+                    break;
+                }
+            }
+            if issues.is_empty() {
+                issues.push(Issue {
+                    line: 1,
+                    error: LineError::EmptyFile,
                 });
             }
         }

@@ -18,6 +18,10 @@ A Chat or Messages request that an Anthropic or Bedrock route would always rejec
 
 Validation reuses each adapter's own request encoder, runs once per adapter per request, and checks every authorized route: another route that can serve the request still does. When every route refuses, the error kind (400 invalid request or 501 unsupported) comes only from routes the routing policy would use, so residency, disabled routes and cooldown apply first. Existing unknown holds are untouched; credential, endpoint and network failures after admission still retain their holds as before. No schema or grant changes.
 
+## Batch planning no longer sizes the parent envelope for deterministic adapter rejections (#238)
+
+Creating a gateway-run batch (`POST /v1/batches`) now runs every chat line through the planned adapter's `validate_chat_request` (#228) in addition to the existing coarse capability check, once per adapter, before the parent envelope is sized or reserved. A line a route would always reject (a `strict` function tool or an out-of-range sampling parameter against Anthropic or Bedrock, for example) no longer inflates the envelope: a batch whose lines are all such rejections is refused per line at creation (no batch, no reservation, nothing dispatched), and a mixed batch reserves only for its valid lines. An excluded line is still copied into the batch and still dispatches; the runner's existing engine call refuses it with the same 400/501 classification an interactive request would get, with no execution or reservation of its own. Native-batch submission (already preflighted through `encode_native_line`), unknown-hold retention and envelope release on close are unchanged. No schema or grant changes.
+
 ## Fixes
 
 - **Chat Completions API guide (#225).** The model-page guide now correctly lists `max_tokens` as an accepted alias of `max_completion_tokens`; when both are supplied, values must be equal (otherwise 400). Optional maxima and existing unsupported-capability disclosures are unchanged; no runtime behavior changes.
