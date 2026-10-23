@@ -18,6 +18,30 @@ Creating a gateway-run batch (`POST /v1/batches`) now runs every chat line throu
 
 A batch whose lines are all such rejections is refused per line at creation (no batch, no reservation, nothing dispatched); a mixed batch reserves only for its valid lines. An excluded line is still copied into the batch and still dispatches; it is refused per line with no execution or reservation of its own. Unknown-hold retention and envelope release on close are unchanged. No schema or grant changes.
 
+## Egress no longer over-refuses the IPv6 documentation range's neighbors (#244)
+
+The outbound address policy (`egress.rs`) classified the IPv6 documentation
+range `3fff::/20` (RFC 9637) with `(s[0] & 0xfff0) == 0x3ff0`. That mask only
+checks the top 12 bits of the first hextet, so it matched the much wider
+`3ff0::/12`: every address whose first hextet was `0x3ff0`-`0x3fff` was
+refused as "documentation", not only the `3fff::/20` IANA and RFC 9637
+actually reserve.
+
+**Egress now allows** connections to `3ff0::/12` addresses outside the exact
+`3fff::/20` block (for example `3ff0::1`, `3ffe:ffff::1` or `3ff1:dead::1`):
+they are ordinary, unallocated global unicast space, like the rest of
+`2000::/3`, not documentation. `3fff::/20` itself (for example `3fff::1`) is
+still refused, as it always was.
+
+This is an availability-only fix: before #244 the gateway refused outbound
+connections to addresses nothing allocates and no installation could
+plausibly need to reach; now it classifies them like the rest of the public
+IPv6 space. Nothing was ever wrongly *allowed* by the bug, and no other
+classification, local-upstream approval decision, or pending-refusal warning
+changes: `providers/local/endpoints.rs`'s own accept/refuse rule already maps
+its `Public` and `Documentation` categories to the same decision, so that
+module's behavior for these addresses is unaffected.
+
 ## Upgrade note: local-upstream approvals in special-use ranges will be refused next minor release (#203)
 
 `GATEWAY_LOCAL_UPSTREAMS` approvals for an HTTPS endpoint still accept, this

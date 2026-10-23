@@ -174,8 +174,13 @@ pub(crate) fn classify_v6(ip: Ipv6Addr) -> Category {
     if s[0] == 0x2001 && s[1] == 0xdb8 {
         return Category::Documentation;
     }
-    // 3fff::/20, IETF-reserved, grouped with documentation.
-    if (s[0] & 0xfff0) == 0x3ff0 {
+    // 3fff::/20, IETF-reserved, grouped with documentation. #244 fix: this
+    // used to use the wider `(s[0] & 0xfff0) == 0x3ff0` mask, i.e.
+    // 3ff0::/12, which incorrectly classified all of 3ff0::/12 as
+    // documentation (every address whose first hextet is 0x3ff0..=0x3fff).
+    // Only the top 12 bits of `s[1]` are also reserved in the /20, so both
+    // `s[0]` and the top nibble of `s[1]` must match.
+    if s[0] == 0x3fff && (s[1] & 0xf000) == 0 {
         return Category::Documentation;
     }
     if s[0] == 0x2001 && s[1] == 2 && s[2] == 0 {
@@ -190,13 +195,16 @@ pub(crate) fn classify_v6(ip: Ipv6Addr) -> Category {
 /// The exact ranges #203 lists as approved today but already refused by
 /// `egress.rs` for every other client, pending refusal in the next minor
 /// release. Deliberately independent of [`Category`]/[`classify_v4`]/
-/// [`classify_v6`]: those three exist to preserve `egress.rs`'s pre-#203
-/// outcomes exactly, including the `3ff0::/12` mask `classify_v6` inherited
-/// unchanged from the old egress code for `Category::Documentation` (wider
-/// than the `3fff::/20` RFC 9637 block #203 and IANA actually name), so
-/// reusing `Category::Documentation` for this warning would also fire for
-/// `3ff0::/12` addresses the issue never lists. Callers pass the address
-/// they have already decided to judge (each caller's own translation step:
+/// [`classify_v6`]: this keeps its own exact-range check rather than
+/// matching on [`Category::Documentation`] (or any other category), so a
+/// future change to what a category groups together can't silently widen
+/// or narrow which approvals get this warning. (Historical note: before
+/// #244, `classify_v6` used a `3ff0::/12` mask for `Category::Documentation`
+/// that was wider than the `3fff::/20` RFC 9637 block named here; #244
+/// narrowed `classify_v6` to the exact `/20`, so the two now agree for this
+/// range too, but this function's independence from `Category` is kept on
+/// principle.) Callers pass the address they have already decided to judge
+/// (each caller's own translation step:
 /// mapped/compatible/6to4/Teredo embedded IPv4, under its own rules for
 /// when to do so).
 pub(crate) fn is_pending_refusal_v4(ip: Ipv4Addr) -> bool {
@@ -279,7 +287,11 @@ mod tests {
             ("fd00:ec2::ffff", Category::AwsMetadataRange),
             ("2001:db8::1", Category::Documentation),
             ("3fff::1", Category::Documentation),
-            ("3fff:ffff::1", Category::Documentation),
+            ("3fff:0fff:ffff::1", Category::Documentation),
+            // #244: only `3fff::/20` is documentation; `3fff:ffff::1` has a
+            // non-zero top nibble in its second hextet, outside the /20, so
+            // it is ordinary global unicast.
+            ("3fff:ffff::1", Category::Public),
             ("2001:2::1", Category::Benchmarking),
         ];
         for (ip, expected) in cases {
@@ -288,11 +300,12 @@ mod tests {
     }
 
     /// #203 review finding: the warning's pending-refusal membership must be
-    /// exactly the issue's ranges, not `classify_v6`'s wider legacy
-    /// `3ff0::/12` mask for `Category::Documentation`. `3fff::1` and the last
-    /// address of `3fff::/20` warn; `3fff:1000::1` (just outside `/20`),
-    /// `3ff0::1` and `3ffe:ffff::1` (inside the legacy `/12` mask but outside
-    /// the issue's `/20`) do not.
+    /// exactly the issue's ranges, exercised here independently of
+    /// `classify_v6` (which, since #244, also uses the exact `/20`).
+    /// `3fff::1` and the last address of `3fff::/20` warn; `3fff:1000::1`
+    /// (just outside `/20`), `3ff0::1` and `3ffe:ffff::1` (outside the
+    /// `/20`, and since #244 also outside `classify_v6`'s `Documentation`)
+    /// do not.
     #[test]
     fn pending_refusal_v6_3fff_boundary_is_exactly_the_20_not_the_legacy_12() {
         for (addr, expected) in [
@@ -306,15 +319,14 @@ mod tests {
         }
     }
 
-    /// The address just outside the boundary of every /20 and /12 check
-    /// above keeps `classify_v6`'s legacy outcome (egress's behaviour here is
-    /// unchanged by this fix): `3ff0::1` and `3ffe:ffff::1` are still
-    /// `Category::Documentation` even though they no longer trigger the
-    /// pending-refusal warning.
+    /// #244: the address just outside `3fff::/20` is `Category::Public`
+    /// (ordinary global unicast, like the rest of `2000::/3`), not
+    /// `Category::Documentation` as the pre-#244 `3ff0::/12` mask gave it;
+    /// and it never triggered the pending-refusal warning, before or after.
     #[test]
-    fn legacy_classification_for_3ff0_12_is_unchanged_by_the_narrower_warning() {
+    fn classification_outside_3fff_20_is_public_and_never_warned_244() {
         for addr in ["3ff0::1", "3ffe:ffff::1"] {
-            assert_eq!(classify_v6(v6(addr)), Category::Documentation, "{addr}");
+            assert_eq!(classify_v6(v6(addr)), Category::Public, "{addr}");
             assert!(!is_pending_refusal_v6(v6(addr)), "{addr}");
         }
     }
@@ -351,6 +363,30 @@ mod tests {
         ];
         for (addr, expected) in cases {
             assert_eq!(is_pending_refusal_v4(v4(addr)), *expected, "{addr}");
+        }
+    }
+
+    /// #244: `classify_v6`'s documentation check must match exactly
+    /// `3fff::/20` (RFC 9637), not the wider `3ff0::/12` the buggy
+    /// `(s[0] & 0xfff0) == 0x3ff0` mask matched. `3fff::1` and the last
+    /// address of `3fff::/20` stay `Documentation`; `3fff:1000::1` (just
+    /// outside the `/20`), `3ff0::1`, `3ffe:ffff::1` and `3ff1:dead::1`
+    /// (inside the old buggy `/12` mask but outside the `/20`) become
+    /// `Public`, ordinary global unicast, like the rest of `2000::/3`.
+    #[test]
+    fn issue_244_documentation_is_exactly_3fff_20_not_3ff0_12() {
+        for (addr, expected) in [
+            ("3fff::1", Category::Documentation),
+            (
+                "3fff:0fff:ffff:ffff:ffff:ffff:ffff:ffff",
+                Category::Documentation,
+            ),
+            ("3fff:1000::1", Category::Public),
+            ("3ff0::1", Category::Public),
+            ("3ffe:ffff::1", Category::Public),
+            ("3ff1:dead::1", Category::Public),
+        ] {
+            assert_eq!(classify_v6(v6(addr)), expected, "{addr}");
         }
     }
 

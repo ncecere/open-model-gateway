@@ -211,6 +211,34 @@ proptest! {
     fn network_lists_never_panic(text in "\\PC{0,80}") {
         let _ = Networks::parse(PRIVATE_ALLOW_ENV, &text);
     }
+
+    /// #244: an independent IANA/RFC 9637 oracle for IPv6 `3ff0::/12`.
+    /// `oracle_v4` above only covers IPv4; this is the IPv6 counterpart for
+    /// the one range the issue is about, computed directly from the RFC
+    /// bits (never calling `classify` or `special_use::classify_v6`), so a
+    /// drift in either production function is caught independently. Only
+    /// `3fff::/20` (`s[0] == 0x3fff` and the top nibble of `s[1]` zero) is
+    /// documentation and refused; every other address with a first hextet
+    /// in `0x3ff0..=0x3fff` is ordinary global unicast and allowed.
+    #[test]
+    fn the_shared_table_matches_the_registries_for_ipv6_3ff0_slash_12(
+        first in 0x3ff0u16..=0x3fff,
+        rest in any::<[u16; 7]>(),
+    ) {
+        let mut s = [0u16; 8];
+        s[0] = first;
+        s[1..8].copy_from_slice(&rest);
+        let ip = v6(s);
+        let is_documentation_3fff_20 = first == 0x3fff && (s[1] & 0xf000) == 0;
+        let expected = if is_documentation_3fff_20 { Class::Refused } else { Class::Public };
+        prop_assert_eq!(classify(IpAddr::V6(ip)), expected, "{}", ip);
+        prop_assert_eq!(
+            class_for(crate::special_use::classify_v6(ip)),
+            expected,
+            "{}",
+            ip
+        );
+    }
 }
 
 /// Alternative spellings of loopback, private and metadata hosts in a URL are
