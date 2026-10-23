@@ -888,7 +888,7 @@ mod tests {
                     drop_before_acceptance: true,
                     ..Default::default()
                 },
-                Err(DeliveryError::Rejected),
+                Err(DeliveryError::Connection),
             ),
             (
                 Behaviour {
