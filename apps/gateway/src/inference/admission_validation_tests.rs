@@ -382,7 +382,7 @@ async fn mixed_routes_refused_and_valid_with(pool: PgPool, anthropic_first: bool
         .await
         .unwrap();
     let (anthropic_order, openai_order) = if anthropic_first { (0, 1) } else { (1, 0) };
-    add_deployment(
+    let refused_deployment = add_deployment(
         &f,
         "anthropic",
         "env:ANTHROPIC_NOT_RESOLVED",
@@ -391,7 +391,7 @@ async fn mixed_routes_refused_and_valid_with(pool: PgPool, anthropic_first: bool
         anthropic_order,
     )
     .await;
-    add_deployment(
+    let served_deployment = add_deployment(
         &f,
         "openai",
         "env:OPENAI_NOT_RESOLVED",
@@ -439,6 +439,28 @@ async fn mixed_routes_refused_and_valid_with(pool: PgPool, anthropic_first: bool
         before.1 + 1,
         "exactly one reservation for the one dispatched attempt"
     );
+    // Every durable write is attributable to the dispatched route only: the
+    // refused candidate has no reservation and no routing-health observation.
+    let refused_rows: (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM governance_reservations WHERE deployment_id=$1),
+                (SELECT count(*) FROM deployment_health WHERE deployment_id=$1)",
+    )
+    .bind(refused_deployment)
+    .fetch_one(&f.store.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        refused_rows,
+        (0, 0),
+        "refused route must have no reservation or health row"
+    );
+    let served_reservations: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM governance_reservations WHERE deployment_id=$1")
+            .bind(served_deployment)
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+    assert_eq!(served_reservations, 1);
 }
 
 /// Both candidates refuse the same request, with different error kinds
@@ -642,4 +664,264 @@ async fn positive_control_bedrock_creates_one_reservation_before_dispatch(pool: 
             .await
             .unwrap();
     assert_eq!(reservations, 1);
+}
+
+/// Review finding (adversarial, #228): validation is unmetered pre-admission
+/// work, so it must run once per adapter for a request, not once per route.
+/// A spy wraps the real Anthropic adapter and counts validations across
+/// several Anthropic routes of one model.
+struct CountingAnthropic {
+    inner: AnthropicAdapter,
+    validations: Arc<AtomicUsize>,
+}
+#[async_trait::async_trait]
+impl crate::providers::ProviderAdapter for CountingAnthropic {
+    fn id(&self) -> &'static str {
+        self.inner.id()
+    }
+    fn capabilities(&self) -> crate::inference::types::Capabilities {
+        self.inner.capabilities()
+    }
+    fn supports_protocol(&self, protocol: crate::inference::types::ApiProtocol) -> bool {
+        self.inner.supports_protocol(protocol)
+    }
+    fn validate_chat_request(
+        &self,
+        request: &crate::inference::types::ChatRequest,
+    ) -> Result<(), InferenceError> {
+        self.validations.fetch_add(1, Ordering::SeqCst);
+        self.inner.validate_chat_request(request)
+    }
+    async fn execute(
+        &self,
+        target: &crate::inference::types::Deployment,
+        request: crate::inference::types::ChatRequest,
+    ) -> Result<crate::inference::types::ProviderOutput, InferenceError> {
+        self.inner.execute(target, request).await
+    }
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn validation_runs_once_per_adapter_not_once_per_route(pool: PgPool) {
+    let mut f = fixture(pool).await;
+    let token = issue_key(&mut f).await;
+    for order in 0..5 {
+        add_deployment(
+            &f,
+            "anthropic",
+            "env:ANTHROPIC_NOT_RESOLVED",
+            None,
+            "claude-test",
+            order,
+        )
+        .await;
+    }
+    let hits = Arc::new(AtomicUsize::new(0));
+    let (upstream, _upstream) = serve(counting_mock(hits.clone())).await;
+    let validations = Arc::new(AtomicUsize::new(0));
+    let mut registry = ProviderRegistry::default();
+    registry
+        .register(Arc::new(CountingAnthropic {
+            inner: AnthropicAdapter::for_test(Arc::new(Resolver), format!("{upstream}/v1")),
+            validations: validations.clone(),
+        }))
+        .unwrap();
+    let (base, _gateway) = start_gateway(&f, registry).await;
+    let before = snapshot(&f.store.pool).await;
+    let (status, payload) = post(&base, &token, &strict_tool_body("company/smart", false)).await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{payload}");
+    assert_eq!(
+        validations.load(Ordering::SeqCst),
+        1,
+        "one validation for five routes"
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+    assert_eq!(snapshot(&f.store.pool).await, before);
+}
+
+/// Review finding (adversarial, #228): when every route refuses, the refusal
+/// kind must come only from routes the routing policy would use. Here the
+/// model requires residency `us`; the Bedrock route (which would report
+/// InvalidRequest for temperature 1.5) is tagged `eu` and is never usable, so
+/// the caller gets the usable Anthropic route's Unsupported (501), exactly as
+/// if the excluded route did not exist. The mixed-kind tests above cover the
+/// case where both routes are usable (400).
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn residency_excluded_route_cannot_change_the_refusal(pool: PgPool) {
+    let mut f = fixture(pool).await;
+    let token = issue_key(&mut f).await;
+    let anthropic = add_deployment(
+        &f,
+        "anthropic",
+        "env:ANTHROPIC_NOT_RESOLVED",
+        None,
+        "claude-test",
+        0,
+    )
+    .await;
+    let bedrock = add_deployment(
+        &f,
+        "bedrock",
+        "aws:default",
+        Some("us-east-1"),
+        "anthropic.claude-test",
+        1,
+    )
+    .await;
+    for (deployment, residency) in [(anthropic, "us"), (bedrock, "eu")] {
+        sqlx::query("INSERT INTO deployment_routing(deployment_id,residency) VALUES($1,$2)")
+            .bind(deployment)
+            .bind(residency)
+            .execute(&f.store.pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query("INSERT INTO routing_policies(model_id,required_residency) VALUES($1,'us')")
+        .bind(f.model)
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    let anthropic_hits = Arc::new(AtomicUsize::new(0));
+    let bedrock_hits = Arc::new(AtomicUsize::new(0));
+    let (anthropic_base, _a) = serve(counting_mock(anthropic_hits.clone())).await;
+    let (bedrock_base, _b) = serve(counting_mock(bedrock_hits.clone())).await;
+    let mut registry = ProviderRegistry::default();
+    registry
+        .register(Arc::new(AnthropicAdapter::for_test(
+            Arc::new(Resolver),
+            format!("{anthropic_base}/v1"),
+        )))
+        .unwrap();
+    registry
+        .register(Arc::new(BedrockAdapter::for_test(&bedrock_base)))
+        .unwrap();
+    let (base, _gateway) = start_gateway(&f, registry).await;
+    let before = snapshot(&f.store.pool).await;
+    let (status, payload) = post(
+        &base,
+        &token,
+        &high_temperature_body("company/smart", false),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{payload}");
+    assert_eq!(anthropic_hits.load(Ordering::SeqCst), 0);
+    assert_eq!(bedrock_hits.load(Ordering::SeqCst), 0);
+    assert_eq!(snapshot(&f.store.pool).await, before);
+}
+
+/// Contract review (#228): Anthropic's own InvalidRequest path, through the
+/// real router. A prior assistant tool call whose arguments are valid JSON
+/// but not an object is malformed on Anthropic's wire (tool `input` must be an
+/// object): 400, zero writes, zero upstream calls, streaming or not.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn anthropic_non_object_tool_arguments_refusal_is_zero_write_and_zero_upstream_call(
+    pool: PgPool,
+) {
+    let mut f = fixture(pool).await;
+    let token = issue_key(&mut f).await;
+    add_deployment(
+        &f,
+        "anthropic",
+        "env:ANTHROPIC_NOT_RESOLVED",
+        None,
+        "claude-test",
+        0,
+    )
+    .await;
+    let hits = Arc::new(AtomicUsize::new(0));
+    let (upstream, _upstream) = serve(counting_mock(hits.clone())).await;
+    let mut registry = ProviderRegistry::default();
+    registry
+        .register(Arc::new(AnthropicAdapter::for_test(
+            Arc::new(Resolver),
+            format!("{upstream}/v1"),
+        )))
+        .unwrap();
+    let (base, _gateway) = start_gateway(&f, registry).await;
+    let body = |stream: bool| {
+        json!({
+            "model": "company/smart",
+            "messages": [
+                {"role":"user","content":"hi"},
+                {"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"ping","arguments":"[1]"}}]},
+                {"role":"tool","tool_call_id":"call_1","content":"done"},
+            ],
+            "tools": [{"type":"function","function":{"name":"ping","parameters":{"type":"object","properties":{}}}}],
+            "stream": stream,
+        })
+    };
+    for stream in [false, true] {
+        let before = snapshot(&f.store.pool).await;
+        let (status, payload) = post(&base, &token, &body(stream)).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "stream={stream}: {payload}"
+        );
+        assert_eq!(
+            payload["error"]["code"], "invalid_request_error",
+            "{payload}"
+        );
+        assert_eq!(snapshot(&f.store.pool).await, before, "stream={stream}");
+    }
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+}
+
+/// Contract review (#228): a route excluded by circuit-breaker cooldown, like
+/// one excluded by residency, cannot change the caller's refusal. The cooling
+/// Bedrock route would report InvalidRequest; the only usable route
+/// (Anthropic) reports Unsupported, so the caller gets 501.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn cooling_route_cannot_change_the_refusal(pool: PgPool) {
+    let mut f = fixture(pool).await;
+    let token = issue_key(&mut f).await;
+    add_deployment(
+        &f,
+        "anthropic",
+        "env:ANTHROPIC_NOT_RESOLVED",
+        None,
+        "claude-test",
+        0,
+    )
+    .await;
+    let bedrock = add_deployment(
+        &f,
+        "bedrock",
+        "aws:default",
+        Some("us-east-1"),
+        "anthropic.claude-test",
+        1,
+    )
+    .await;
+    sqlx::query("INSERT INTO deployment_health(deployment_id,consecutive_failures,open_until) VALUES($1,3,now()+interval '1 hour')")
+        .bind(bedrock)
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    let anthropic_hits = Arc::new(AtomicUsize::new(0));
+    let bedrock_hits = Arc::new(AtomicUsize::new(0));
+    let (anthropic_base, _a) = serve(counting_mock(anthropic_hits.clone())).await;
+    let (bedrock_base, _b) = serve(counting_mock(bedrock_hits.clone())).await;
+    let mut registry = ProviderRegistry::default();
+    registry
+        .register(Arc::new(AnthropicAdapter::for_test(
+            Arc::new(Resolver),
+            format!("{anthropic_base}/v1"),
+        )))
+        .unwrap();
+    registry
+        .register(Arc::new(BedrockAdapter::for_test(&bedrock_base)))
+        .unwrap();
+    let (base, _gateway) = start_gateway(&f, registry).await;
+    let before = snapshot(&f.store.pool).await;
+    let (status, payload) = post(
+        &base,
+        &token,
+        &high_temperature_body("company/smart", false),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{payload}");
+    assert_eq!(anthropic_hits.load(Ordering::SeqCst), 0);
+    assert_eq!(bedrock_hits.load(Ordering::SeqCst), 0);
+    assert_eq!(snapshot(&f.store.pool).await, before);
 }
