@@ -30,7 +30,7 @@ mod usage;
 
 use crate::{
     governance::locks,
-    identity::{BrowserPrincipal, IdentityState, require_session},
+    identity::{BrowserPrincipal, IdentityState, authenticate_management},
     store::Store,
 };
 use axum::{
@@ -527,7 +527,7 @@ pub fn router(identity: IdentityState) -> Router<Store> {
             authorization::require_route_access,
         ))
         .layer(Extension(sign_in))
-        .route_layer(middleware::from_fn_with_state(identity, require_session))
+        .route_layer(middleware::from_fn_with_state(identity, authenticate_management))
 }
 /// Public, sessionless routes: the installation logo (the sign-in page shows
 /// it before login).
@@ -542,7 +542,7 @@ pub fn upload_router(identity: IdentityState) -> Router<Store> {
             identity.store().clone(),
             authorization::require_route_access,
         ))
-        .route_layer(middleware::from_fn_with_state(identity, require_session))
+        .route_layer(middleware::from_fn_with_state(identity, authenticate_management))
 }
 fn routes() -> Router<Store> {
     Router::new()

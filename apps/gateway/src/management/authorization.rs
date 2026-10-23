@@ -16,7 +16,7 @@ async fn database_access(
 ) -> Result<(), ApiError> {
     if access == Access::Browser {
         return Ok(());
-    } // require_session checked entitlement.
+    } // authenticate_management checked entitlement.
     if matches!(
         access,
         Access::Anonymous

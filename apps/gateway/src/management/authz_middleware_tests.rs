@@ -163,7 +163,7 @@ async fn platform_writer_checks_admin_before_missing_workspace(pool: PgPool) {
             f.s.clone(),
             authorization::require_route_access,
         ))
-        .route_layer(middleware::from_fn_with_state(identity, require_session))
+        .route_layer(middleware::from_fn_with_state(identity, authenticate_management))
         .with_state(f.s.clone());
     let path = format!(
         "/api/v1/workspaces/{}/costs/{}/reconcile",
@@ -215,7 +215,7 @@ async fn service_keys_require_admin_in_middleware(pool: PgPool) {
             f.s.clone(),
             authorization::require_route_access,
         ))
-        .route_layer(middleware::from_fn_with_state(identity, require_session))
+        .route_layer(middleware::from_fn_with_state(identity, authenticate_management))
         .with_state(f.s.clone());
     for route in ROUTES
         .iter()
@@ -334,7 +334,7 @@ async fn every_route_middleware_has_exact_positive_and_negative_outcomes(pool: P
             f.s.clone(),
             authorization::require_route_access,
         ))
-        .route_layer(middleware::from_fn_with_state(identity, require_session))
+        .route_layer(middleware::from_fn_with_state(identity, authenticate_management))
         .with_state(f.s.clone());
     for route in ROUTES {
         for method in methods(route) {

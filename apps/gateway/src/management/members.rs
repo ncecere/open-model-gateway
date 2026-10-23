@@ -395,7 +395,7 @@ pub(super) async fn accept_invite(
     }
     let mut tx = resources::installation_tx(&s).await?;
     resources::platform_role(&mut tx, u.user_id).await?;
-    // require_session supplies the signature-verified email persisted at OIDC callback.
+    // authenticate_management supplies the signature-verified email persisted at OIDC callback.
     // Mutable profile email is not invitation evidence, even after a fresh sign-in.
     let hash = Sha256::digest(b.token.as_bytes());
     let(id,ws,role,inviter):(Uuid,Uuid,String,Uuid)=sqlx::query_as("SELECT id,workspace_id,role,created_by FROM workspace_invitations WHERE token_hash=$1 AND lower(email)=lower($2) AND revoked_at IS NULL AND accepted_at IS NULL AND expires_at>now() FOR UPDATE").bind(hash.as_slice()).bind(&u.email).fetch_optional(&mut *tx).await?.ok_or_else(missing)?;
