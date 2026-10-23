@@ -6,6 +6,8 @@ use axum::{
 };
 use sqlx::PgPool;
 use tower::ServiceExt;
+#[path = "admin_tokens_tests.rs"]
+mod admin_tokens_tests;
 #[path = "alerts/tests.rs"]
 mod alert_tests;
 #[path = "audit_export_tests.rs"]

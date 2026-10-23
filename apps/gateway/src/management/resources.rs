@@ -25,17 +25,17 @@ pub(crate) async fn read_snapshot(s: &Store) -> Result<Transaction<'static, Post
 /// [`read_snapshot`] for a Platform Admin or Auditor (live role check).
 pub(crate) async fn platform_read_tx(
     s: &Store,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
 ) -> Result<Transaction<'static, Postgres>, ApiError> {
     let mut tx = read_snapshot(s).await?;
-    platform_read_snapshot(&mut tx, u.user_id).await?;
+    platform_read_snapshot(&mut tx, u.user_id()).await?;
     Ok(tx)
 }
 /// [`workspace_tx`] for read-only handlers: the same live access rules in a
 /// [`read_snapshot`], without row locks.
 pub(crate) async fn workspace_snapshot_tx(
     s: &Store,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Uuid,
 ) -> Result<(Transaction<'static, Postgres>, WorkspaceAccess), ApiError> {
     let mut tx = read_snapshot(s).await?;
@@ -129,16 +129,16 @@ pub(crate) async fn platform_write(
 }
 pub(crate) async fn catalog_tx<'a>(
     s: &'a Store,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     write: bool,
 ) -> Result<Transaction<'a, Postgres>, ApiError> {
     let mut tx = crate::db::begin(&s.pool).await?;
     catalog_lock(&mut tx, write).await?;
     installation_lock(&mut tx).await?;
     if write {
-        platform_write(&mut tx, u.user_id).await?
+        platform_write(&mut tx, u.user_id()).await?
     } else {
-        platform_read(&mut tx, u.user_id).await?
+        platform_read(&mut tx, u.user_id()).await?
     }
     Ok(tx)
 }
@@ -178,7 +178,7 @@ impl WorkspaceAccess {
 }
 pub(crate) async fn workspace_tx<'a>(
     s: &'a Store,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Uuid,
 ) -> Result<(Transaction<'a, Postgres>, WorkspaceAccess), ApiError> {
     let mut tx = installation_tx(s).await?;
@@ -192,7 +192,7 @@ pub(crate) async fn workspace_tx<'a>(
 /// Handlers using it must not mutate.
 pub(crate) async fn workspace_read_tx<'a>(
     s: &'a Store,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Uuid,
 ) -> Result<(Transaction<'a, Postgres>, WorkspaceAccess), ApiError> {
     let mut tx = installation_tx(s).await?;
@@ -201,7 +201,7 @@ pub(crate) async fn workspace_read_tx<'a>(
 }
 pub(crate) async fn workspace_access(
     tx: &mut Transaction<'_, Postgres>,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Uuid,
 ) -> Result<WorkspaceAccess, ApiError> {
     access_inner(tx, u, ws, false, true).await
@@ -212,7 +212,7 @@ pub(crate) async fn workspace_access(
 /// [`workspace_access`].
 pub(crate) async fn workspace_access_snapshot(
     tx: &mut Transaction<'_, Postgres>,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Uuid,
 ) -> Result<WorkspaceAccess, ApiError> {
     access_inner(tx, u, ws, false, false).await
@@ -221,7 +221,7 @@ pub(crate) async fn workspace_access_snapshot(
 /// transaction/locking checks so a preflight cannot preserve revoked authority.
 pub(super) async fn workspace_boundary_snapshot(
     tx: &mut Transaction<'_, Postgres>,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Uuid,
     allow_disabled: bool,
 ) -> Result<WorkspaceAccess, ApiError> {
@@ -231,10 +231,10 @@ pub(super) async fn workspace_boundary_snapshot(
 /// an unknown workspace. Do not perform a workspace read for a non-admin.
 pub(super) async fn workspace_platform_write_snapshot(
     tx: &mut Transaction<'_, Postgres>,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Uuid,
 ) -> Result<(), ApiError> {
-    let role = platform_role_snapshot(tx, u.user_id).await?;
+    let role = platform_role_snapshot(tx, u.user_id()).await?;
     if role != "admin" {
         return Err(denied());
     }
@@ -247,26 +247,26 @@ pub(super) async fn workspace_platform_write_snapshot(
     .ok_or_else(missing)?;
     // Membership does not grant this platform-controlled operation. The same
     // decision still enforces personal ownership and disabled-workspace rules.
-    let a = workspace_authority(u.user_id, &role, kind, owner, disabled, None, false)?;
+    let a = workspace_authority(u.user_id(), &role, kind, owner, disabled, None, false)?;
     debug_assert!(a.platform_writer);
     a.metadata_read()
 }
 
 async fn access_inner(
     tx: &mut Transaction<'_, Postgres>,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Uuid,
     allow_disabled: bool,
     lock: bool,
 ) -> Result<WorkspaceAccess, ApiError> {
     let (role, kind, owner_user, disabled, membership) = if lock {
-        let role = role_inner(tx, u.user_id, true).await?;
+        let role = role_inner(tx, u.user_id(), true).await?;
         let (kind, owner_user, disabled): (String, Option<Uuid>, bool) = sqlx::query_as(
             "SELECT kind,owner_user_id,disabled_at IS NOT NULL FROM workspaces WHERE id=$1 AND ($2 OR disabled_at IS NULL) FOR NO KEY UPDATE",
         ).bind(ws).bind(allow_disabled).fetch_optional(&mut **tx).await?.ok_or_else(missing)?;
         let membership = if !disabled && shared(&kind) {
             sqlx::query_scalar("SELECT role FROM effective_workspace_memberships WHERE workspace_id=$1 AND user_id=$2")
-                .bind(ws).bind(u.user_id).fetch_optional(&mut **tx).await?
+                .bind(ws).bind(u.user_id()).fetch_optional(&mut **tx).await?
         } else {
             None
         };
@@ -284,7 +284,7 @@ async fn access_inner(
         );
         let (role,kind,owner_user,disabled,membership): AuthorityRow = sqlx::query_as(
             "SELECT p.role,w.kind,w.owner_user_id,w.disabled_at IS NOT NULL,m.role FROM effective_platform_roles p LEFT JOIN workspaces w ON w.id=$2 LEFT JOIN effective_workspace_memberships m ON m.workspace_id=w.id AND m.user_id=p.user_id WHERE p.user_id=$1",
-        ).bind(u.user_id).bind(ws).fetch_optional(&mut **tx).await?.ok_or_else(denied)?;
+        ).bind(u.user_id()).bind(ws).fetch_optional(&mut **tx).await?.ok_or_else(denied)?;
         (
             role,
             kind.ok_or_else(missing)?,
@@ -294,7 +294,7 @@ async fn access_inner(
         )
     };
     workspace_authority(
-        u.user_id,
+        u.user_id(),
         &role,
         kind,
         owner_user,
@@ -380,9 +380,12 @@ pub(crate) fn manage(a: &WorkspaceAccess) -> Result<(), ApiError> {
 }
 /// Audit is inside the resource transaction; no plaintext, identity claims or arbitrary strings.
 /// Only typed safe flags/counts/provenance are retained, not untrusted metadata fields.
+/// Carries admin-token attribution (`u.token_id()`) when the acting
+/// principal is a token (#37 PR2: "Business-action audit events carry
+/// token attribution"); `NULL` for a browser session, exactly as before.
 pub(crate) async fn audit(
     tx: &mut Transaction<'_, Postgres>,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Option<Uuid>,
     action: &str,
     resource_type: &str,
@@ -420,7 +423,7 @@ pub(crate) async fn audit(
             }
         }
     }
-    sqlx::query("INSERT INTO audit_events(id,actor_user_id,workspace_id,action,resource_type,resource_id,metadata) VALUES($1,$2,$3,$4,$5,$6,$7)").bind(Uuid::now_v7()).bind(u.user_id).bind(ws).bind(action).bind(resource_type).bind(resource_id).bind(Value::Object(safe)).execute(&mut **tx).await?;
+    sqlx::query("INSERT INTO audit_events(id,actor_user_id,workspace_id,action,resource_type,resource_id,metadata,admin_token_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8)").bind(Uuid::now_v7()).bind(u.user_id()).bind(ws).bind(action).bind(resource_type).bind(resource_id).bind(Value::Object(safe)).bind(u.token_id()).execute(&mut **tx).await?;
     Ok(())
 }
 pub(super) fn platform_routes() -> Router<Store> {

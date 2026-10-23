@@ -1,4 +1,5 @@
 mod access;
+mod admin_tokens;
 mod alerts;
 mod audit_export;
 mod authorization;
@@ -30,9 +31,39 @@ mod usage;
 
 use crate::{
     governance::locks,
-    identity::{BrowserPrincipal, IdentityState, authenticate_management},
+    identity::{BrowserPrincipal, IdentityState, ManagementPrincipal, authenticate_management},
     store::Store,
 };
+
+/// The acting identity of a management request: whose authority governs it
+/// (`user_id`), and which admin token, if any, made the call (`token_id`,
+/// for audit attribution). Implemented by both principal types so every
+/// shared preflight/transaction helper below (`resources::audit`,
+/// `catalog_tx`, `workspace_access` and friends) accepts either without the
+/// ~180 existing `Extension<BrowserPrincipal>` handlers needing to change at
+/// all (#37 PR2): `BrowserPrincipal` already implements this trait, so every
+/// call site that still passes one keeps compiling unchanged, and
+/// `route_policy::TokenPolicy::Denied`/`BrowserAdminOnly` refuse an admin
+/// token before any handler using a generic helper is ever reached by one.
+pub(crate) trait Actor {
+    fn user_id(&self) -> Uuid;
+    fn token_id(&self) -> Option<Uuid> {
+        None
+    }
+}
+impl Actor for BrowserPrincipal {
+    fn user_id(&self) -> Uuid {
+        self.user_id
+    }
+}
+impl Actor for ManagementPrincipal {
+    fn user_id(&self) -> Uuid {
+        ManagementPrincipal::user_id(self)
+    }
+    fn token_id(&self) -> Option<Uuid> {
+        ManagementPrincipal::token_id(self)
+    }
+}
 use axum::{
     Extension, Json, Router,
     extract::{Path, Query, State},
@@ -546,6 +577,7 @@ pub fn upload_router(identity: IdentityState) -> Router<Store> {
 }
 fn routes() -> Router<Store> {
     Router::new()
+        .merge(admin_tokens::routes())
         .merge(directory::routes())
         .merge(resources::platform_routes())
         .merge(catalogs::routes())

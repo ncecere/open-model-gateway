@@ -424,8 +424,12 @@ pub struct IdentityState {
     admin_token_limiter: Arc<throttle::Limiter>,
 }
 /// Default rate of admin-token authentication attempts believed per client
-/// address, per replica (same shape as [`LOGIN_RATE_PER_MINUTE`]).
-const ADMIN_TOKEN_AUTH_RATE_PER_MINUTE: u32 = 60;
+/// address, per replica (same shape as [`LOGIN_RATE_PER_MINUTE`]). Higher
+/// than the human sign-in rate: a legitimate automation caller using a
+/// single admin token can reasonably issue many requests a minute, and only
+/// requests that at least look like an admin token (not merely bearing some
+/// Authorization header) ever consume this budget.
+const ADMIN_TOKEN_AUTH_RATE_PER_MINUTE: u32 = 1_000;
 
 impl IdentityState {
     /// Discovery/issuer/JWKS validation is fail-closed: configured OIDC failure prevents startup.
@@ -1531,6 +1535,22 @@ async fn authenticate_admin_token_request(
     mut request: Request,
     next: Next,
 ) -> Response {
+    let pre_auth_fail = |reason: &'static str| {
+        crate::metrics::METRICS.auth_throttled("admin_token", reason);
+        AuthError(StatusCode::UNAUTHORIZED).into_response()
+    };
+    // Free, format-only rejections (not even shaped like `omg_admin_...`)
+    // never consume the rate limiter below: there is nothing here for a
+    // flood of these to protect (no database access, no admin-token
+    // parsing), and reserving the limiter's budget for credentials that at
+    // least look like an admin token keeps a mixed flood (garbage plus
+    // real-looking attempts) from starving genuine admin-token traffic.
+    let Some(token) = bearer_credential(headers) else {
+        return pre_auth_fail("malformed_credential");
+    };
+    if looks_like_inference_key(token) {
+        return pre_auth_fail("inference_key_shape");
+    }
     let client = throttle::client_ip(peer, headers, &state.trusted_proxies);
     if let Err(wait) = state
         .admin_token_limiter
@@ -1542,16 +1562,6 @@ async fn authenticate_admin_token_request(
             StatusCode::TOO_MANY_REQUESTS,
             wait,
         );
-    }
-    let pre_auth_fail = |reason: &'static str| {
-        crate::metrics::METRICS.auth_throttled("admin_token", reason);
-        AuthError(StatusCode::UNAUTHORIZED).into_response()
-    };
-    let Some(token) = bearer_credential(headers) else {
-        return pre_auth_fail("malformed_credential");
-    };
-    if looks_like_inference_key(token) {
-        return pre_auth_fail("inference_key_shape");
     }
     match state.store.authenticate_admin_token(token).await {
         Ok(Some(principal)) => {
