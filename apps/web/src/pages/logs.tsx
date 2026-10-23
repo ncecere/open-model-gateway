@@ -14,8 +14,8 @@
  * prompts and responses are never stored or shown.
  */
 import { useSelectedName, useServerOptions, withSelected } from "../components/server-options";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { ListTree, MessagesSquare } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ListTree, MessagesSquare, RefreshCw } from "lucide-react";
 import { platformPath, wsPath, type Grant, type Model, type Workspace } from "../lib/api";
 import type { DashboardSearch, RangePreset } from "../lib/permissions";
 import { activeFilterCount, compactDateTime, countText, finishReasonLabel, finishReasonTone, finishReasons, jobStateTone, jobText, latencyText, logPaths, logTab, logsSearch, rangeLabels, rateText, requestFilters, requestQuery, requestStatuses, requestStatusLabel, requestStatusTone, requestTarget, servedModel, servedModelText, sessionTarget, tokensText, tpsText, ttftText, utcDate, validSessionId, workloadText, type GenerationPage, type GenerationRow, type LogMetrics, type LogTab, type LogsScope, type RequestFilters, type RequestPage, type RequestRow, type SessionPage, type SessionRow } from "../lib/requests";
@@ -24,7 +24,7 @@ import { Money } from "../components/templates/money";
 import { NARROW_QUERY, useMediaQuery } from "../lib/bitop-utils";
 import type { KeyRow } from "../lib/keys";
 import type { DirectoryWorkspace } from "../lib/people";
-import { Heading, Stack, useApi, useChoices } from "../components/ui";
+import { Button, Heading, Stack, useApi, useChoices } from "../components/ui";
 import { ResourceLink, useDashboardNavigation } from "../components/navigation-link";
 import { DateControl } from "../components/date-control";
 import { IconCell, LabIcon, ProviderIcon } from "../components/provider-icon";
@@ -37,6 +37,7 @@ import { TypeTabs } from "../components/templates/type-tabs";
 import type { Facet, FilterValues } from "../components/ui/filter-bar/filter-bar";
 import { ColumnChooser, DensityToggle, ViewDataTable, chooserColumns, tableViewFromSearch, tableViewToSearch, type TableView } from "../components/templates/table-view";
 import { StatusBadge } from "../components/ui/badge/badge";
+import { IconButton } from "../components/ui/button/button";
 import type { DataTableColumn } from "../components/ui/data-table/data-table";
 import { EmptyState } from "../components/ui/empty-state/empty-state";
 import { Input, NativeSelect } from "../components/ui/input/input";
@@ -194,7 +195,7 @@ function useCursorPaging(search: DashboardSearch, filterKey: string, go: (patch:
   };
 }
 
-type TableProps = { scope: LogsScope; search: DashboardSearch; filters: RequestFilters; query: URLSearchParams; enabled: boolean; narrow: boolean; go: (patch: Partial<DashboardSearch>) => void; filtered: boolean; tools: (columns: { id: string; label: string; hideable?: boolean }[], view: TableView) => void };
+type TableProps = { scope: LogsScope; search: DashboardSearch; filters: RequestFilters; query: URLSearchParams; enabled: boolean; narrow: boolean; go: (patch: Partial<DashboardSearch>) => void; filtered: boolean; tools: (columns: { id: string; label: string; hideable?: boolean }[], view: TableView, refetch: () => Promise<unknown>) => void; /** Sessions' empty state: switch to Requests with the same filters. */ onViewRequests?: () => void };
 function emptyText(scope: LogsScope, what: string, filtered: boolean) {
   if (filtered) return { title: `No ${what} match these filters.`, description: "Change the period or clear filters to see more." };
   if (scope.kind === "platform") return { title: `No ${what} yet.`, description: `${what[0]!.toUpperCase()}${what.slice(1)} from team and project workspaces appear here.` };
@@ -207,9 +208,10 @@ export function RequestsTable({ scope, search, filters, query, enabled, narrow, 
   const view = logView(search, "requests", narrow, scope.kind === "platform"), viewSearch = { cols: search.cols, density: search.density }, filterKey = JSON.stringify(filters);
   const q = new URLSearchParams(query); q.set("limit", "50"); if (search.cursor) q.set("cursor", search.cursor);
   const page = useApi<RequestPage>(`${logPaths(scope).requests}?${q}`, enabled);
+  const latestPage = useRef(page); latestPage.current = page;
   const columns = useMemo(() => requestColumns(scope, filters, viewSearch), [scope.kind, filterKey, search.cols, search.density]); // eslint-disable-line react-hooks/exhaustive-deps
   const rows = page.data?.data ?? [], cursor = useCursorPaging(search, filterKey, go, page.data?.next_cursor, rows.length);
-  useEffect(() => tools(chooserColumns(columns), view), [columns, JSON.stringify(view)]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => tools(chooserColumns(columns), view, () => latestPage.current.refetch()), [columns, JSON.stringify(view)]); // eslint-disable-line react-hooks/exhaustive-deps
   const empty = emptyText(scope, "requests", filtered);
   return <ViewDataTable<RequestRow> caption={caption} className={rq.requests} stack columns={columns} data={rows} getRowId={r => r.root_request_id} manual
     view={view} onViewChange={next => go(logViewSearch(next, "requests", narrow, scope.kind === "platform"))} hideViewControls
@@ -220,31 +222,38 @@ function GenerationsTable({ scope, search, filters, query, enabled, narrow, go, 
   const view = logView(search, "generations", narrow), viewSearch = { cols: search.cols, density: search.density }, filterKey = JSON.stringify(filters);
   const q = new URLSearchParams(query); q.set("limit", "50"); if (search.cursor) q.set("cursor", search.cursor);
   const page = useApi<GenerationPage>(`${logPaths(scope).generations}?${q}`, enabled);
+  const latestPage = useRef(page); latestPage.current = page;
   const columns = useMemo(() => generationColumns(scope, filters, viewSearch), [scope.kind, filterKey, search.cols, search.density]); // eslint-disable-line react-hooks/exhaustive-deps
   const rows = page.data?.data ?? [], cursor = useCursorPaging(search, filterKey, go, page.data?.next_cursor, rows.length);
-  useEffect(() => tools(chooserColumns(columns), view), [columns, JSON.stringify(view)]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => tools(chooserColumns(columns), view, () => latestPage.current.refetch()), [columns, JSON.stringify(view)]); // eslint-disable-line react-hooks/exhaustive-deps
   const empty = emptyText(scope, "generations", filtered);
   return <ViewDataTable<GenerationRow> caption="Generations (upstream attempts)" className={rq.requests} stack columns={columns} data={rows} getRowId={g => g.execution_id} manual
     view={view} onViewChange={next => go(logViewSearch(next, "generations", narrow))} hideViewControls
     loading={page.isFetching} error={page.error} onRetry={() => void page.refetch()}
     empty={<EmptyState size="compact" icon={<ListTree />} title={empty.title} description={empty.description} />} cursor={cursor} />;
 }
-function SessionsTable({ scope, search, filters, query, enabled, narrow, go, filtered, tools }: TableProps) {
+function SessionsTable({ scope, search, filters, query, enabled, narrow, go, filtered, tools, onViewRequests }: TableProps) {
   const view = logView(search, "sessions", narrow), filterKey = JSON.stringify(filters);
   const q = new URLSearchParams(query); q.set("limit", "50"); if (search.cursor) q.set("cursor", search.cursor);
   const page = useApi<SessionPage>(`${logPaths(scope).sessions}?${q}`, enabled);
+  const latestPage = useRef(page); latestPage.current = page;
   const columns = useMemo(() => sessionColumns(scope, filters), [scope.kind, filterKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const rows = page.data?.data ?? [], cursor = useCursorPaging(search, filterKey, go, page.data?.next_cursor, rows.length);
-  useEffect(() => tools(chooserColumns(columns), view), [columns, JSON.stringify(view)]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => tools(chooserColumns(columns), view, () => latestPage.current.refetch()), [columns, JSON.stringify(view)]); // eslint-disable-line react-hooks/exhaustive-deps
   return <ViewDataTable<SessionRow> caption="Sessions" className={rq.requests} stack columns={columns} data={rows} getRowId={r => `${r.workspace.id}:${r.session_id}`} manual
     view={view} onViewChange={next => go(logViewSearch(next, "sessions", narrow))} hideViewControls
     loading={page.isFetching} error={page.error} onRetry={() => void page.refetch()}
-    empty={<EmptyState size="compact" icon={<MessagesSquare />} title={filtered ? "No sessions match these filters." : "No sessions yet."} description={<>Requests are grouped into sessions when the client sends a session ID: an <code className={s.mono}>X-Session-Id</code> header, or OpenAI <code className={s.mono}>metadata.session_id</code> / <code className={s.mono}>user</code>, or Anthropic <code className={s.mono}>metadata.user_id</code>. An <code className={s.mono}>X-Title</code> header names the app.</>} />} cursor={cursor} />;
+    empty={<EmptyState size="compact" icon={<MessagesSquare />} title={filtered ? "No sessions match these filters." : "No sessions yet."}
+      description={<>Requests are grouped into sessions when the client sends a session ID: an <code className={s.mono}>X-Session-Id</code> header, or OpenAI <code className={s.mono}>metadata.session_id</code> / <code className={s.mono}>user</code>, or Anthropic <code className={s.mono}>metadata.user_id</code>. An <code className={s.mono}>X-Title</code> header names the app. Requests without a session ID are listed under Requests instead.</>}
+      action={onViewRequests && <Button size="sm" variant="ghost" onClick={onViewRequests}>View Requests</Button>} />} cursor={cursor} />;
 }
 
 /** Summary tiles for the current filters (requests, error rate, latency, time to first token, speed). */
-export function LogMetricsTiles({ scope, query, enabled }: { scope: LogsScope; query: URLSearchParams; enabled: boolean }) {
+export function LogMetricsTiles({ scope, query, enabled, onRefetch }: { scope: LogsScope; query: URLSearchParams; enabled: boolean; /** Lets Logs' Refresh action refetch the summary alongside the current tab's data. */ onRefetch?: (refetch: () => Promise<unknown>) => void }) {
   const m = useApi<LogMetrics>(`${logPaths(scope).metrics}${query.size ? `?${query}` : ""}`, enabled), d = m.data;
+  // A ref (not a dependency) always calls the latest query's refetch without re-registering on every render.
+  const latest = useRef(m); latest.current = m;
+  useEffect(() => onRefetch?.(() => latest.current.refetch()), [onRefetch]);
   // Loading shows an ellipsis; a failed summary is unknown (never zero).
   const value = (v: ReactNode | null | undefined) => m.isError ? null : !enabled || m.isPending ? "…" : v;
   // Nothing to measure (no requests, or none streamed) is "—", not "Unknown": unknown means a value exists but wasn't reported.
@@ -299,7 +308,10 @@ export function LogsPage({ scope }: { scope: LogsScope }) {
   const keyName = useSelectedName<KeyRow>(keyBase && filters.key_id ? `${keyBase}/${encodeURIComponent(filters.key_id)}` : undefined, k => k.name, "Selected key");
   const workspaces = useServerOptions<DirectoryWorkspace>(platform ? `${platformPath}/workspaces` : undefined, w => w.kind === "personal" ? undefined : { value: w.id, label: w.name, group: w.kind === "team" ? "Teams" : "Projects" });
   const workspaceName = useSelectedName<DirectoryWorkspace>(platform && filters.workspace_id ? `${platformPath}/workspaces/${encodeURIComponent(filters.workspace_id)}` : undefined, w => w.name, "Selected workspace");
-  const [tools, setTools] = useState<{ columns: { id: string; label: string; hideable?: boolean }[]; view: TableView }>();
+  const [tools, setTools] = useState<{ columns: { id: string; label: string; hideable?: boolean }[]; view: TableView; refetch: () => Promise<unknown> }>();
+  // A ref, not state: registering it is a side effect of every LogMetricsTiles render and must never itself trigger one.
+  const metricsRefetchRef = useRef<() => Promise<unknown>>(undefined);
+  const [refreshing, setRefreshing] = useState(false);
   // Requests match a model by its API name, so a selected one is labelled with that name.
   const modelOptions = withSelected(platform ? platformModels.options : [...new Map((models.data ?? []).map(g => [g.public_name, { value: g.public_name, label: modelLabel(g) }])).values()], filters.model ? { value: filters.model, label: filters.model } : undefined);
   const keyOptions = withSelected(keys.options, filters.key_id ? { value: filters.key_id, label: keyName } : undefined);
@@ -322,11 +334,19 @@ export function LogsPage({ scope }: { scope: LogsScope }) {
   };
   const chips: ToolbarChip[] = filters.session_id ? [{ key: "session", label: "Session", text: filters.session_id, onRemove: () => go({ session_id: undefined, cursor: undefined }) }] : [];
   const periodActive = filters.range && filters.range !== "30d" ? 1 : 0;
-  const props: TableProps = { scope, search, filters, query, enabled: !filterError, narrow, go, filtered: filtered || !!filterError, tools: (columns, view) => setTools({ columns, view }) };
+  const viewSearch: View = { cols: search.cols, density: search.density };
+  const viewRequests = () => nav?.navigate(logsSearch(scope, filters, "requests", viewSearch));
+  // Refresh: refetch the current tab's data and its summary tiles together, for the current filters; no polling.
+  const refresh = async () => {
+    setRefreshing(true);
+    try { await Promise.all([tools?.refetch, metricsRefetchRef.current].filter((fn): fn is () => Promise<unknown> => typeof fn === "function").map(fn => fn())); }
+    finally { setRefreshing(false); }
+  };
+  const props: TableProps = { scope, search, filters, query, enabled: !filterError, narrow, go, filtered: filtered || !!filterError, tools: (columns, view, refetch) => setTools({ columns, view, refetch }), onViewRequests: viewRequests };
   const defaults = defaultHiddenFor(tab, narrow, platform);
   return <Stack gap={6} className={s.page}>
     <Heading title="Logs" description={scope.kind === "platform" ? platformDescription : requestsDescription(scope.workspace)} />
-    {tab !== "batches" && <LogMetricsTiles scope={scope} query={query} enabled={!filterError} />}
+    {tab !== "batches" && <LogMetricsTiles scope={scope} query={query} enabled={!filterError} onRefetch={refetch => { metricsRefetchRef.current = refetch; }} />}
     <TypeTabs label="Log view" value={tab} onChange={next => nav?.navigate(next === "batches" ? { ...(scope.kind === "platform" ? { page: "platform-logs" } : { page: "requests", ws: scope.workspace.id }), tab: "batches" } : logsSearch(scope, filters, next as LogTab))}
       items={[{ value: "requests", label: "Requests" }, { value: "generations", label: "Generations" }, { value: "sessions", label: "Sessions" }, { value: "batches", label: "Batches" }]}>
       {tab === "batches" ? <BatchesPanel scope={scope} /> : <div className={s.list}>
@@ -335,7 +355,7 @@ export function LogsPage({ scope }: { scope: LogsScope }) {
           start={<PeriodControl filters={filters} onChange={patch => go({ ...patch, cursor: undefined })} />} extraActive={periodActive} extraChips={chips}
           moreStart={<SessionField value={filters.session_id} onChange={session_id => go({ session_id, cursor: undefined })} />} moreStartActive={filters.session_id ? 1 : 0}
           facets={facets} values={facetValues} onChange={onFacets} more={["key_id", "workspace_id", "finish_reason", "streamed"]}
-          end={tools && <><ColumnChooser columns={tools.columns} hidden={tools.view.hidden} onHiddenChange={hidden => go(logViewSearch({ ...tools.view, hidden }, tab, narrow, platform))} defaultHidden={defaults} /><DensityToggle value={tools.view.density} onChange={density => go(logViewSearch({ ...tools.view, density }, tab, narrow))} /></>} />
+          end={tools && <><IconButton icon={<RefreshCw aria-hidden />} label="Refresh" loading={refreshing} onClick={() => void refresh()} /><ColumnChooser columns={tools.columns} hidden={tools.view.hidden} onHiddenChange={hidden => go(logViewSearch({ ...tools.view, hidden }, tab, narrow, platform))} defaultHidden={defaults} /><DensityToggle value={tools.view.density} onChange={density => go(logViewSearch({ ...tools.view, density }, tab, narrow))} /></>} />
         {filterError && <InfoBanner tone="warning" title="Filters not applied">{filterError}</InfoBanner>}
         {tab === "requests" ? <RequestsTable {...props} /> : tab === "generations" ? <GenerationsTable {...props} /> : <SessionsTable {...props} />}
       </div>}
