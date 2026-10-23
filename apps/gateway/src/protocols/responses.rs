@@ -345,18 +345,22 @@ fn snapshot(id: &str, model: &str, created: u64, response: &ChatResponse) -> Val
     for (i, call) in response.tool_calls.iter().enumerate() {
         output.push(json!({"id":format!("fc_{id}_{i}"),"type":"function_call","status":"completed","call_id":call.id,"name":call.name,"arguments":call.arguments}));
     }
-    let incomplete = matches!(
-        response.finish_reason,
-        FinishReason::Length | FinishReason::ContentFilter
-    );
+    // Text has already streamed as output_text. These are coarse terminal
+    // mappings, not typed refusal parts or retrospective content relabeling.
+    let incomplete_reason = match response.finish_reason {
+        FinishReason::Length | FinishReason::ContextWindowExceeded => Some("max_output_tokens"),
+        FinishReason::ContentFilter | FinishReason::Refusal => Some("content_filter"),
+        FinishReason::Stop | FinishReason::ToolCalls => None,
+    };
+    let incomplete = incomplete_reason.is_some();
     if incomplete {
         for item in &mut output {
             item["status"] = "incomplete".into();
         }
     }
     let mut v = json!({"id":id,"object":"response","created_at":created,"model":model,"status":if incomplete { "incomplete" } else { "completed" },"error":null,"incomplete_details":null,"output":output,"store":false,"usage":null});
-    if incomplete {
-        v["incomplete_details"] = json!({"reason":if response.finish_reason == FinishReason::Length { "max_output_tokens" } else { "content_filter" }});
+    if let Some(reason) = incomplete_reason {
+        v["incomplete_details"] = json!({"reason":reason});
     }
     let input = match response.usage.billing {
         Some(b) => b.total_input_tokens,

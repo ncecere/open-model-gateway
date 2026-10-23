@@ -307,6 +307,67 @@ async fn no_completion_without_done_or_for_incomplete() {
     assert!(b.contains("event: response.incomplete"));
     assert!(!b.contains("event: response.completed"));
 }
+#[tokio::test]
+async fn native_terminal_outcomes_map_to_coarse_incomplete_json_and_sse() {
+    for (reason, wire) in [
+        (FinishReason::Refusal, "content_filter"),
+        (FinishReason::ContextWindowExceeded, "max_output_tokens"),
+    ] {
+        for empty in [false, true] {
+            let response = ChatResponse {
+                content: (!empty).then(|| "世界".into()),
+                tool_calls: vec![],
+                finish_reason: reason,
+                usage: Usage::default(),
+            };
+            let complete: Value = serde_json::from_str(
+                &body(render(
+                    ProviderOutput::Complete(response),
+                    "r".into(),
+                    "m".into(),
+                    1,
+                ))
+                .await,
+            )
+            .unwrap();
+            assert_eq!(complete["status"], "incomplete");
+            assert_eq!(complete["incomplete_details"]["reason"], wire);
+            if empty {
+                assert_eq!(complete["output"], json!([]));
+            } else {
+                assert_eq!(complete["output"][0]["status"], "incomplete");
+                assert_eq!(complete["output"][0]["content"][0]["type"], "output_text");
+            }
+            let mut events = vec![];
+            if !empty {
+                events.push(Ok(ChatEvent::Delta {
+                    text: Some("世界".into()),
+                    tool_calls: vec![],
+                }));
+            }
+            events.extend([Ok(ChatEvent::Finish(reason)), Ok(ChatEvent::Done)]);
+            let b = body(render(stream(events), "r".into(), "m".into(), 1)).await;
+            let values = frames(&b);
+            assert_eq!(values.last().unwrap()["type"], "response.incomplete");
+            assert_eq!(values.last().unwrap()["response"], complete);
+            assert!(!b.contains("event: response.completed"));
+            assert!(!b.contains("\"refusal\""));
+            assert!(!b.contains("context_window_exceeded"));
+            if !empty {
+                let text = values
+                    .iter()
+                    .find(|v| v["type"] == "response.output_text.delta")
+                    .unwrap();
+                assert_eq!(text["delta"], "世界");
+                assert!(
+                    b.find("response.output_text.delta").unwrap()
+                        < b.find("response.incomplete").unwrap()
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn unknown_usage_and_tool_argument_fragments() {
     let mut a = Accumulator::default();

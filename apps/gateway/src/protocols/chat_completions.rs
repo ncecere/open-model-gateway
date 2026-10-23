@@ -316,7 +316,7 @@ pub async fn handle(
                             }
                             chunk(delta, Value::Null)
                         }
-                        Ok(ChatEvent::Finish(reason)) => chunk(json!({}), json!(reason)),
+                        Ok(ChatEvent::Finish(reason)) => chunk(json!({}), json!(finish_reason(reason))),
                         Ok(ChatEvent::Usage(usage)) => {
                             if !include_usage { continue; }
                             let Some(usage) = usage_json(usage) else { continue; };
@@ -335,6 +335,17 @@ pub async fn handle(
     }
 }
 
+/// Chat has no native refusal/context-window stop reasons. Never serialize the
+/// canonical enum directly into either JSON or a terminal stream chunk.
+fn finish_reason(reason: FinishReason) -> &'static str {
+    match reason {
+        FinishReason::Stop => "stop",
+        FinishReason::Length | FinishReason::ContextWindowExceeded => "length",
+        FinishReason::ToolCalls => "tool_calls",
+        FinishReason::ContentFilter | FinishReason::Refusal => "content_filter",
+    }
+}
+
 /// A non-streaming `chat.completion` object.
 fn complete_body(id: &str, created: u64, model: &str, response: ChatResponse) -> Value {
     let mut message = json!({"role":"assistant", "content": response.content});
@@ -342,7 +353,7 @@ fn complete_body(id: &str, created: u64, model: &str, response: ChatResponse) ->
         message["tool_calls"] = Value::Array(response.tool_calls.into_iter().map(|call| json!({"id":call.id,"type":"function","function":{"name":call.name,"arguments":call.arguments}})).collect());
     }
     let mut body = json!({"id":id,"object":"chat.completion","created":created,"model":model,
-        "choices":[{"index":0,"message":message,"finish_reason":response.finish_reason}]});
+        "choices":[{"index":0,"message":message,"finish_reason":finish_reason(response.finish_reason)}]});
     if let Some(usage) = usage_json(response.usage) {
         body["usage"] = usage;
     }
