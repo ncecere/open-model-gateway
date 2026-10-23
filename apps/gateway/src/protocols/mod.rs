@@ -11,16 +11,26 @@ pub mod responses;
 pub mod systemone;
 pub mod videos;
 
+#[cfg(all(test, feature = "integration-tests"))]
+mod nullable_tests;
+
 use crate::inference::error::InferenceError;
 use axum::{
     http::{HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
 
+/// Only the nullable OpenAI stream/store defaults opt into this rule. Keep
+/// other booleans and collections strict; non-boolean values still fail serde.
+fn false_if_null<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    <Option<bool> as serde::Deserialize>::deserialize(deserializer).map(Option::unwrap_or_default)
+}
+
 /// Shared client-protocol error response. Budget/accounting denials keep HTTP 429
 /// (OpenAI `insufficient_quota` convention) but are not transient, so they carry
 /// `x-should-retry: false`, which the official OpenAI/Anthropic SDKs honor. A
-/// token reservation that exceeds a tokens-per-minute limit is equally permanent.
+/// token reservation that exceeds a tokens-per-minute limit is equally permanent,
+/// as are unsupported capabilities (even when their status is 501).
 /// A model whose every route is cooling down is a retryable 503 with `Retry-After`.
 fn error_with_body(error: InferenceError, body: serde_json::Value) -> Response {
     let mut response = (responses::status(error), axum::Json(body)).into_response();
@@ -164,6 +174,74 @@ mod tests {
             assert!(message.contains("lower the price ceilings"));
             assert!(!message.contains("concurrency"));
             assert!(!message.chars().any(|c| c.is_ascii_digit()));
+        }
+    }
+
+    #[tokio::test]
+    async fn unsupported_capabilities_keep_status_and_body_but_are_not_retryable() {
+        let error = InferenceError::Unsupported;
+        for body in [openai_error_body(error), messages::batch_error_body(error)] {
+            let response = error_with_body(error, body.clone());
+            assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+            assert_eq!(response.headers()["x-should-retry"], "false");
+            assert!(response.headers().get("retry-after").is_none());
+            let bytes = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+                body
+            );
+        }
+        assert_eq!(
+            openai_error_body(error)["error"]["code"],
+            "unsupported_capability"
+        );
+        assert_eq!(
+            messages::batch_error_body(error)["error"]["type"],
+            "invalid_request_error"
+        );
+        // Non-generation protocols retain their explicit 400, too.
+        let response = workload_error(error, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.headers()["x-should-retry"], "false");
+    }
+
+    #[test]
+    fn retry_control_remains_narrow_and_authentication_unchanged() {
+        for (error, status) in [
+            (InferenceError::Busy, StatusCode::TOO_MANY_REQUESTS),
+            (
+                InferenceError::JobLimitExceeded(LimitScope::Workspace),
+                StatusCode::TOO_MANY_REQUESTS,
+            ),
+            (InferenceError::UpstreamUnavailable, StatusCode::BAD_GATEWAY),
+            (InferenceError::InvalidUpstream, StatusCode::BAD_GATEWAY),
+            (
+                InferenceError::Configuration,
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+            (InferenceError::Storage, StatusCode::SERVICE_UNAVAILABLE),
+            (InferenceError::Timeout, StatusCode::GATEWAY_TIMEOUT),
+            (InferenceError::Unauthenticated, StatusCode::UNAUTHORIZED),
+        ] {
+            let response = error_with_body(error, openai_error_body(error));
+            assert_eq!(response.status(), status);
+            assert!(response.headers().get("x-should-retry").is_none());
+            assert!(response.headers().get("retry-after").is_none());
+            if error == InferenceError::Unauthenticated {
+                assert_eq!(response.headers()["www-authenticate"], "Bearer");
+            }
+        }
+        for error in [
+            InferenceError::PriceUnbounded,
+            InferenceError::UnresolvedUsage(LimitScope::Workspace),
+            InferenceError::UnresolvedUsage(LimitScope::ApiKey),
+            InferenceError::BudgetExceeded(LimitScope::Workspace),
+            InferenceError::BudgetExceeded(LimitScope::ApiKey),
+        ] {
+            let response = error_with_body(error, openai_error_body(error));
+            assert_eq!(response.headers()["x-should-retry"], "false");
         }
     }
 

@@ -27,7 +27,7 @@ use crate::{
 pub struct Request {
     model: String,
     messages: Vec<WireMessage>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::false_if_null")]
     stream: bool,
     stream_options: Option<StreamOptions>,
     temperature: Option<f64>,
@@ -57,6 +57,21 @@ struct WireMessage {
     #[serde(default)]
     tool_calls: Vec<WireToolCall>,
     tool_call_id: Option<String>,
+    #[serde(default)]
+    refusal: NoRefusal,
+}
+/// Public assistant metadata: null means no refusal. Non-null refusal content
+/// is outside this text/function subset; do not silently discard it.
+#[derive(Default)]
+enum NoRefusal {
+    #[default]
+    Absent,
+    Null,
+}
+impl<'de> Deserialize<'de> for NoRefusal {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        <()>::deserialize(deserializer).map(|()| Self::Null)
+    }
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -84,8 +99,15 @@ struct WireTool {
 struct WireFunction {
     name: String,
     description: Option<String>,
+    #[serde(default = "no_argument_parameters")]
     parameters: Value,
     strict: Option<bool>,
+}
+
+// OpenAI defines omission as an empty parameter list, not an unconstrained
+// schema. Serde calls this only for absence; explicit null is still invalid.
+fn no_argument_parameters() -> Value {
+    json!({"type":"object","properties":{},"additionalProperties":false})
 }
 
 fn function_name(name: &str) -> bool {
@@ -120,6 +142,9 @@ impl Request {
         let max_output_tokens = self.max_completion_tokens.or(self.max_tokens);
         let mut messages = Vec::with_capacity(self.messages.len());
         for message in self.messages {
+            if message.role != Role::Assistant && matches!(message.refusal, NoRefusal::Null) {
+                return Err(invalid);
+            }
             if message.role == Role::Tool {
                 if message.tool_call_id.as_ref().is_none_or(|id| id.is_empty())
                     || message.content.is_none()
@@ -298,7 +323,7 @@ pub async fn handle(
                             }
                             chunk(delta, Value::Null)
                         }
-                        Ok(ChatEvent::Finish(reason)) => chunk(json!({}), json!(reason)),
+                        Ok(ChatEvent::Finish(reason)) => chunk(json!({}), json!(finish_reason(reason))),
                         Ok(ChatEvent::Usage(usage)) => {
                             if !include_usage { continue; }
                             let Some(usage) = usage_json(usage) else { continue; };
@@ -317,6 +342,17 @@ pub async fn handle(
     }
 }
 
+/// Chat has no native refusal/context-window stop reasons. Never serialize the
+/// canonical enum directly into either JSON or a terminal stream chunk.
+fn finish_reason(reason: FinishReason) -> &'static str {
+    match reason {
+        FinishReason::Stop => "stop",
+        FinishReason::Length | FinishReason::ContextWindowExceeded => "length",
+        FinishReason::ToolCalls => "tool_calls",
+        FinishReason::ContentFilter | FinishReason::Refusal => "content_filter",
+    }
+}
+
 /// A non-streaming `chat.completion` object.
 fn complete_body(id: &str, created: u64, model: &str, response: ChatResponse) -> Value {
     let mut message = json!({"role":"assistant", "content": response.content});
@@ -324,7 +360,7 @@ fn complete_body(id: &str, created: u64, model: &str, response: ChatResponse) ->
         message["tool_calls"] = Value::Array(response.tool_calls.into_iter().map(|call| json!({"id":call.id,"type":"function","function":{"name":call.name,"arguments":call.arguments}})).collect());
     }
     let mut body = json!({"id":id,"object":"chat.completion","created":created,"model":model,
-        "choices":[{"index":0,"message":message,"finish_reason":response.finish_reason}]});
+        "choices":[{"index":0,"message":message,"finish_reason":finish_reason(response.finish_reason)}]});
     if let Some(usage) = usage_json(response.usage) {
         body["usage"] = usage;
     }
@@ -384,12 +420,123 @@ mod tests {
             .normalize()
     }
     #[test]
+    fn nullable_stream_defaults_only_on_the_supported_field() {
+        for (extra, streaming) in [
+            (json!({}), false),
+            (json!({"stream":null}), false),
+            (json!({"stream":false}), false),
+            (json!({"stream":true}), true),
+        ] {
+            let mut value = json!({"model":"m","messages":[{"role":"user","content":"hello"}]});
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let request = parse(value.clone()).unwrap();
+            assert_eq!(request.stream, streaming);
+            assert_eq!(batch_request(value).is_err(), streaming);
+        }
+        for extra in [
+            json!({"stream":0}),
+            json!({"stream":"false"}),
+            json!({"tools":null}),
+            json!({"unknown":null}),
+            json!({"response_format":null}),
+            json!({"stream":true,"stream_options":{"include_usage":null}}),
+        ] {
+            let mut value = json!({"model":"m","messages":[{"role":"user","content":"hello"}]});
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            assert!(parse(value).is_err());
+        }
+    }
+    #[test]
+    fn nullable_assistant_refusal_is_no_refusal_not_an_extension() {
+        let base = json!({"model":"m","messages":[{"role":"assistant","content":"hello"}]});
+        let mut value = base.clone();
+        value["messages"][0]["refusal"] = Value::Null;
+        assert_eq!(
+            parse(value.clone()).unwrap().messages[0].content.as_deref(),
+            Some("hello")
+        );
+        assert!(batch_request(value).is_ok());
+        for refusal in [
+            json!("no"),
+            json!(""),
+            json!(false),
+            json!(0),
+            json!([]),
+            json!({}),
+        ] {
+            let mut value = base.clone();
+            value["messages"][0]["refusal"] = refusal;
+            assert!(parse(value.clone()).is_err());
+            assert!(batch_request(value).is_err());
+        }
+        for message in [
+            json!({"role":"user","content":"hello","refusal":null}),
+            json!({"role":"system","content":"hello","refusal":null}),
+            json!({"role":"assistant","refusal":null}),
+            json!({"role":"assistant","content":null,"refusal":null}),
+            json!({"role":"assistant","content":"hello","parsed":null}),
+            json!({"role":"assistant","content":"hello","unknown":null}),
+        ] {
+            assert!(parse(json!({"model":"m","messages":[message]})).is_err());
+        }
+    }
+    #[test]
     fn accepts_text_and_tools_without_provider_types_in_engine() {
         let request = parse(json!({"model":"company/smart","messages":[{"role":"user","content":"hi"}],
             "tools":[{"type":"function","function":{"name":"weather","parameters":{"type":"object"}}}],
             "tool_choice":{"type":"function","function":{"name":"weather"}},"max_completion_tokens":32})).unwrap();
         assert_eq!(request.tools.len(), 1);
         assert_eq!(request.max_output_tokens, Some(32));
+    }
+    #[test]
+    fn omitted_function_parameters_mean_no_arguments_without_implying_strict() {
+        let request = |function| {
+            json!({"model":"m","messages":[{"role":"user","content":"ping"}],
+                "tools":[{"type":"function","function":function}]})
+        };
+        for strict in [None, Some(false), Some(true)] {
+            let mut function = json!({"name":"ping"});
+            if let Some(strict) = strict {
+                function["strict"] = json!(strict);
+            }
+            let r = parse(request(function.clone())).unwrap();
+            // A closed object with no properties accepts only {}, not arbitrary
+            // arguments (unlike {} or {"type":"object"}).
+            assert_eq!(
+                r.tools[0].parameters,
+                json!({"type":"object","properties":{},"additionalProperties":false})
+            );
+            assert_eq!(r.tools[0].strict, strict);
+            for schema in [
+                json!({}),
+                json!({"type":"object"}),
+                json!({"type":"object","properties":{"city":{"type":"string"}},"required":["city"],"additionalProperties":false}),
+            ] {
+                function["parameters"] = schema.clone();
+                let r = parse(request(function.clone())).unwrap();
+                assert_eq!(r.tools[0].parameters, schema);
+                assert_eq!(r.tools[0].strict, strict);
+            }
+        }
+        for parameters in [
+            Value::Null,
+            json!(false),
+            json!(0),
+            json!("object"),
+            json!([]),
+        ] {
+            assert!(parse(request(json!({"name":"ping","parameters":parameters}))).is_err());
+        }
+        assert!(parse(request(json!({"name":"ping","extra":true}))).is_err());
+        for strict in [json!("false"), json!(0), json!({})] {
+            assert!(parse(request(json!({"name":"ping","strict":strict}))).is_err());
+        }
     }
     #[test]
     fn legacy_max_tokens_is_an_alias_of_max_completion_tokens() {

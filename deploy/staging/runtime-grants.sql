@@ -135,7 +135,15 @@ GRANT UPDATE(name,enabled,budget_layers,thresholds,spike_factor_percent,min_spen
  ON public.alert_rules TO gateway_runtime;
 GRANT UPDATE(resolved_at,resolution) ON public.alert_events TO gateway_runtime;
 GRANT UPDATE(status,recipients,sent,failed,error,completed_at,initialized,attempt_count,retrying,next_attempt_at,waiting,exhausted) ON public.alert_deliveries TO gateway_runtime;
--- 0049 recipient outbox: immutable identity/eligibility link, default-only initial state.
+-- Key-expiry reminders (0049/#100): reviewed, no new grant needed. The table-
+-- level SELECT/INSERT above already covers the new api_key_id/key_expires_at/
+-- threshold_days columns (table-level grants apply to every column, present
+-- and future); resolving a reminder (silently or not) only ever needs
+-- resolved_at/resolution, already granted above. No UPDATE is granted on
+-- api_key_id/key_expires_at/threshold_days: that attribution is immutable
+-- (also enforced by a trigger; see 0049 and verify-privileges.sql).
+-- 0051 recipient outbox (#46): immutable identity/eligibility link, default-only
+-- initial state. Used by both rule-based alerts and key-expiry reminders.
 -- Eligibility captures users.id with its normalized address in one SELECT;
 -- INSERT uses that captured identity, never a later email lookup. Existing
 -- users/role/membership SELECT grants cover this snapshot and live rechecks.
@@ -160,6 +168,9 @@ GRANT SELECT,UPDATE(last_write_at) ON public.scim_state TO gateway_runtime;
 -- which run as the invoking runtime role inside reservation/execution writes
 -- (upsert: INSERT + UPDATE of the counters). Bucket keys are never re-keyed and
 -- rows are never deleted or truncated. Admission/report reads need SELECT.
+-- Budget headroom reporting (103) reads settled, held, held_unknown, unknown,
+-- unresolved, unresolved_unknown and unreserved_executions using the same
+-- indexed scope/period buckets. Existing SELECT covers it; no new write ACL.
 GRANT SELECT,INSERT ON public.budget_totals TO gateway_runtime;
 GRANT UPDATE(settled_microusd,held_microusd,reservations,pending,unknown,unresolved,
  unreserved_executions) ON public.budget_totals TO gateway_runtime;

@@ -70,7 +70,6 @@ pub enum LineError {
     WrongUrl,
     InvalidBody,
     UnsupportedFeature,
-    Unbounded,
     ModelNotFound,
     ModelUnsupported,
     Unpriced,
@@ -90,7 +89,6 @@ impl LineError {
             Self::WrongUrl => "invalid_url",
             Self::InvalidBody => "invalid_body",
             Self::UnsupportedFeature => "unsupported_feature",
-            Self::Unbounded => "missing_max_tokens",
             Self::ModelNotFound => "model_not_found",
             Self::ModelUnsupported => "model_unsupported",
             Self::Unpriced => "model_not_priced",
@@ -112,9 +110,6 @@ impl LineError {
             Self::WrongUrl => "url must equal the batch endpoint.",
             Self::InvalidBody => "The request body is not valid for this endpoint.",
             Self::UnsupportedFeature => "The request uses a feature batches do not support.",
-            Self::Unbounded => {
-                "The request must set its output maximum (max_completion_tokens, max_output_tokens or max_tokens)."
-            }
             Self::ModelNotFound => "The model is not available to this API key.",
             Self::ModelUnsupported => "The model does not serve this batch endpoint.",
             Self::Unpriced => {
@@ -128,14 +123,67 @@ impl LineError {
     }
 }
 
+/// Immutable plan stored only in the private execution copy, never accepted
+/// from an uploaded input. Omitted maxima must use this price even after queuing.
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub(crate) struct LinePlan {
+    pub deployment: Uuid,
+    pub price: Uuid,
+    /// The line's resolved output maximum, computed once at plan time from
+    /// this same pinned price (`governance::batch::preview_line`). Before
+    /// dispatch (`jobs::runner`), this is copied onto the still-omitted
+    /// request so the engine's pre-admission `validate_chat_request` and
+    /// the real upstream attempt see the same bound planning already
+    /// validated against (#245), instead of the raw client omission.
+    /// `0` for plans written before this field existed
+    /// (`#[serde(default)]`): a resolved maximum is always greater than
+    /// zero, so `0` safely means "unknown" and the runner leaves the
+    /// omission as-is for those already-queued lines.
+    #[serde(default)]
+    pub output: u32,
+}
+
+/// Attach fixed-size plan metadata to an already-validated object without
+/// reserializing its body: numeric tool-schema values can expand on encoding.
+pub(crate) fn planned_copy(mut raw: Vec<u8>, plan: LinePlan) -> Result<Vec<u8>, InferenceError> {
+    let end = raw
+        .iter()
+        .rposition(|b| !b.is_ascii_whitespace())
+        .filter(|i| raw[*i] == b'}')
+        .ok_or(InferenceError::InvalidRequest)?;
+    let closing = raw.split_off(end);
+    raw.extend_from_slice(b",\"_omg_plan\":");
+    serde_json::to_writer(&mut raw, &plan).map_err(|_| InferenceError::Storage)?;
+    raw.extend_from_slice(&closing);
+    Ok(raw)
+}
+
 /// A parsed input line. No `Debug`: it is content.
 pub(crate) struct InputLine {
     pub custom_id: String,
     pub request: BatchRequest,
+    pub plan: Option<LinePlan>,
+}
+
+/// Read an internal work line; old private copies without a plan still work.
+pub(crate) fn parse_work_line(raw: &[u8], endpoint: BatchEndpoint) -> Result<InputLine, LineError> {
+    let mut value: Value = serde_json::from_slice(raw).map_err(|_| LineError::InvalidJson)?;
+    let plan = value
+        .as_object_mut()
+        .and_then(|v| v.remove("_omg_plan"))
+        .map(serde_json::from_value::<LinePlan>)
+        .transpose()
+        .map_err(|_| LineError::InvalidShape)?;
+    let mut line = parse_line(
+        &serde_json::to_vec(&value).map_err(|_| LineError::InvalidJson)?,
+        endpoint,
+    )?;
+    line.plan = plan;
+    Ok(line)
 }
 
 /// Parse and validate one input line against `endpoint`'s contract. Lines
-/// must be bounded: generation lines need an explicit output maximum.
+/// use the endpoint's optional/required maximum rules.
 pub(crate) fn parse_line(raw: &[u8], endpoint: BatchEndpoint) -> Result<InputLine, LineError> {
     let raw = raw.strip_suffix(b"\r").unwrap_or(raw);
     let Value::Object(mut top) =
@@ -181,12 +229,11 @@ pub(crate) fn parse_line(raw: &[u8], endpoint: BatchEndpoint) -> Result<InputLin
             crate::protocols::embeddings::batch_request(body).map_err(map)?,
         ),
     };
-    if let BatchRequest::Chat(r) = &request
-        && r.max_output_tokens.is_none_or(|n| n == 0)
-    {
-        return Err(LineError::Unbounded);
-    }
-    Ok(InputLine { custom_id, request })
+    Ok(InputLine {
+        custom_id,
+        request,
+        plan: None,
+    })
 }
 
 /// Only the `custom_id` of an already-validated line (result mapping).
@@ -350,7 +397,7 @@ mod tests {
         json!({"custom_id":"r1","method":"POST","url":"/v1/chat/completions","body":{"model":"m","messages":[{"role":"user","content":"hi"}],"max_completion_tokens":64}})
     }
     #[test]
-    fn lines_are_strict_and_bounded() {
+    fn lines_are_strict_and_follow_optional_maximum_contracts() {
         let l = parse_line(&line(chat()), BatchEndpoint::ChatCompletions).unwrap();
         assert_eq!(l.custom_id, "r1");
         assert_eq!(l.request.model(), "m");
@@ -383,7 +430,7 @@ mod tests {
                     .unwrap()
                     .remove("max_completion_tokens");
             }),
-            Some(LineError::Unbounded)
+            None
         );
         assert_eq!(
             bad(&|v| v["body"]["stream"] = json!(true)),
@@ -414,6 +461,69 @@ mod tests {
         );
     }
     #[test]
+    fn planned_copy_keeps_raw_body_and_fixed_overhead() {
+        let raw = b" {\"number\":1e9,\"nested\":{\"brace\":\"}\"}} \r\t";
+        let plan = LinePlan {
+            deployment: Uuid::new_v4(),
+            price: Uuid::new_v4(),
+            output: 50,
+        };
+        let copy = planned_copy(raw.to_vec(), plan).unwrap();
+        let end = raw.iter().rposition(|b| !b.is_ascii_whitespace()).unwrap();
+        assert!(copy.starts_with(&raw[..end]));
+        assert!(copy.ends_with(&raw[end..]));
+        assert!(copy.len() <= raw.len() + 256);
+        let value: Value = serde_json::from_slice(&copy).unwrap();
+        assert_eq!(value["_omg_plan"]["price"], json!(plan.price));
+    }
+    #[test]
+    fn private_plans_are_not_client_fields_or_payload_rewrites() {
+        let mut raw = chat();
+        raw["body"]
+            .as_object_mut()
+            .unwrap()
+            .remove("max_completion_tokens");
+        let plan = LinePlan {
+            deployment: Uuid::new_v4(),
+            price: Uuid::new_v4(),
+            output: 50,
+        };
+        raw["_omg_plan"] = serde_json::to_value(plan).unwrap();
+        assert_eq!(
+            parse_line(&line(raw.clone()), BatchEndpoint::ChatCompletions).err(),
+            Some(LineError::InvalidShape)
+        );
+        let parsed = parse_work_line(&line(raw), BatchEndpoint::ChatCompletions).unwrap();
+        assert_eq!(parsed.plan.unwrap().price, plan.price);
+        match parsed.request {
+            BatchRequest::Chat(r) => assert_eq!(r.max_output_tokens, None),
+            _ => panic!("chat line expected"),
+        }
+    }
+    #[test]
+    fn legacy_private_plans_without_an_output_bound_still_parse() {
+        // Work copies queued by a release before #245 carry no `output`: they
+        // must parse to 0 ("unknown"), which leaves the omission as-is at
+        // dispatch, exactly as before.
+        let mut raw = chat();
+        raw["body"]
+            .as_object_mut()
+            .unwrap()
+            .remove("max_completion_tokens");
+        let (deployment, price) = (Uuid::new_v4(), Uuid::new_v4());
+        raw["_omg_plan"] = json!({"deployment": deployment, "price": price});
+        let parsed = parse_work_line(&line(raw), BatchEndpoint::ChatCompletions).unwrap();
+        let plan = parsed.plan.unwrap();
+        assert_eq!(
+            (plan.deployment, plan.price, plan.output),
+            (deployment, price, 0)
+        );
+        match parsed.request {
+            BatchRequest::Chat(r) => assert_eq!(r.max_output_tokens, None),
+            _ => panic!("chat line expected"),
+        }
+    }
+    #[test]
     fn every_endpoint_uses_its_interactive_contract() {
         let messages = json!({"custom_id":"a","method":"POST","url":"/v1/messages","body":{"model":"m","max_tokens":5,"messages":[{"role":"user","content":"hi"}]}});
         assert!(parse_line(&line(messages), BatchEndpoint::Messages).is_ok());
@@ -426,7 +536,7 @@ mod tests {
             .remove("max_output_tokens");
         assert_eq!(
             parse_line(&line(unbounded), BatchEndpoint::Responses).err(),
-            Some(LineError::Unbounded)
+            None
         );
         let embeddings = json!({"custom_id":"a","method":"POST","url":"/v1/embeddings","body":{"model":"e","input":["x","y"]}});
         let l = parse_line(&line(embeddings), BatchEndpoint::Embeddings).unwrap();

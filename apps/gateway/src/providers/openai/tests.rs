@@ -178,6 +178,36 @@ fn assert_error<T>(result: Result<T>, expected: InferenceError) {
 }
 
 #[tokio::test]
+async fn no_argument_tool_defaults_preserve_openai_wire_and_explicit_strict() {
+    let mock = Mock::json(complete()).await;
+    for request in super::super::contract::no_argument_tool_requests() {
+        for strict in [None, Some(false), Some(true)] {
+            let mut r = request.clone();
+            r.tools[0].strict = strict;
+            mock.adapter().execute(&target(), r).await.unwrap();
+        }
+    }
+    let capture = mock.requests.lock().unwrap();
+    assert_eq!(capture.len(), 9);
+    for (i, captured) in capture.iter().enumerate() {
+        assert_eq!(captured.uri.path(), "/v1/chat/completions");
+        let body = &captured.body;
+        let function = &body["tools"][0]["function"];
+        assert_eq!(
+            function["parameters"],
+            json!({"type":"object","properties":{},"additionalProperties":false})
+        );
+        match i % 3 {
+            0 => assert!(function.get("strict").is_none()),
+            1 => assert_eq!(function["strict"], false),
+            _ => assert_eq!(function["strict"], true),
+        }
+        assert_eq!(body["messages"][1]["tool_calls"][0]["id"], "ping-call");
+        assert_eq!(body["messages"][2]["tool_call_id"], "ping-call");
+        assert_eq!(body["messages"][2]["content"], "");
+    }
+}
+#[tokio::test]
 async fn satisfies_shared_adapter_contract_against_local_http() {
     let usage = json!({"prompt_tokens":1,"completion_tokens":2,"completion_tokens_details":{"reasoning_tokens":1}});
     let app = Router::new().fallback(move |axum::Json(body): axum::Json<Value>| {

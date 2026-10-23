@@ -71,6 +71,17 @@ const MAX_CONDITIONS: usize = 5000;
 const MAX_RULES: i64 = 2000;
 const DELIVERIES_PER_TICK: i64 = 25;
 const MAX_RECIPIENTS: i64 = 50;
+/// #100: fixed 7-day and 1-day key-expiry reminders. No new rule/configuration
+/// surface; not a user-selectable value anywhere.
+pub const KEY_EXPIRY_URGENT_DAYS: i32 = 1;
+pub const KEY_EXPIRY_WARNING_DAYS: i32 = 7;
+/// Per-tick bound on new key-expiry reminders, and separately on retired
+/// (superseded/cleared) ones: at most 500 of each, indexed and
+/// expiry/fired-ordered, so already-processed rows never starve later
+/// candidates.
+const KEY_EXPIRY_PROGRESS: i64 = 500;
+/// New incidents only; deferred tuples remain eligible on a later tick/band.
+const KEY_EXPIRY_WORKSPACE_24H: i64 = 100;
 
 /// `GATEWAY_ALERT_INTERVAL_SECONDS`: default 60, `0` disables, at most 86400.
 pub fn interval_from_env() -> anyhow::Result<Option<Duration>> {
@@ -158,6 +169,10 @@ pub enum Kind {
     /// One workspace or key lineage near its scoped-admission ceiling:
     /// sustained admission rate or lock-wait p95 (0036; installation only).
     AdmissionCeiling,
+    /// #100: an authorized API key expires within 7 or 1 days. Built-in
+    /// (no `alert_rules` row, like `Source::Builtin`'s personal budget
+    /// alerts): never a rule kind, never accepted by rule validation.
+    KeyExpiring,
 }
 impl Kind {
     pub fn parse(value: &str) -> Option<Self> {
@@ -170,6 +185,7 @@ impl Kind {
             "batch_stalled" => Some(Self::BatchStalled),
             "spend_threshold" => Some(Self::Spend),
             "admission_ceiling" => Some(Self::AdmissionCeiling),
+            "key_expiring" => Some(Self::KeyExpiring),
             _ => None,
         }
     }
@@ -183,6 +199,7 @@ impl Kind {
             Self::BatchStalled => "batch_stalled",
             Self::Spend => "spend_threshold",
             Self::AdmissionCeiling => "admission_ceiling",
+            Self::KeyExpiring => "key_expiring",
         }
     }
 }
@@ -860,6 +877,9 @@ async fn evaluate_rule(
         Some(Kind::BatchStalled) => batch_stalled_conditions(tx, rule, now).await,
         Some(Kind::Spend) => spend_conditions(tx, rule, now).await,
         Some(Kind::AdmissionCeiling) => ceiling_conditions(tx, rule, now).await,
+        // Never a rule kind (no `alert_rules` row can have it); evaluated by
+        // `key_expiring_tick` instead, outside the rule/builtin job loop.
+        Some(Kind::KeyExpiring) => Ok(vec![]),
         None => Ok(vec![]),
     }
 }
@@ -964,6 +984,163 @@ pub(crate) async fn retire_inactive(
         .rows_affected())
 }
 
+// ---------- Key-expiry reminders (#100) ----------
+//
+// Built in, not a rule: no alert_rules row, evaluated once per tick. Events
+// carry neither rule_id nor builtin (the shape check is relaxed for this
+// kind only, migration 0049): that shape is invisible and undeliverable to
+// every pre-0049 read path (see 0049's header and docs/alerts.md), which is
+// the chosen rolling-upgrade safety mechanism. Permanent, not open-incident,
+// deduplication: (api_key_id, key_expires_at, threshold_days) is never
+// recorded twice, including after resolution (alert_events_key_expiry_dedup,
+// not partial on resolved_at). At most one reminder is ever open per key at
+// a time (the existing partial alert_events_open index, keyed by
+// subject_key = the key id, since rule_id/builtin collapse to the same
+// sentinel for every row of this kind): the 1-day reminder supersedes an
+// open 7-day one silently. Resolution here never means "fixed, worth an
+// email": it means superseded by the more urgent threshold, or no longer an
+// eligible candidate; neither ever enqueues a delivery row.
+
+/// (key id, its expiry, its workspace, the band it currently matches: 1 or
+/// 7 days). A key matches at most one band at any instant, so the first
+/// evaluation that ever sees a key already inside one day emits only the
+/// 1-day reminder: there is no 7-day row to also backfill. Ordered by
+/// expiry so a bounded tick makes progress on the most urgent keys first.
+/// Excludes keys already recorded for their current band (permanent dedup)
+/// and keys that are not eligible at all: revoked, disabled, expired or
+/// expiry-less, in a disabled workspace, a disabled service account, or a
+/// human key whose holder lost workspace membership.
+const KEY_EXPIRY_CANDIDATES: &str = "WITH eligible AS MATERIALIZED (SELECT k.id,k.expires_at,k.workspace_id,CASE WHEN k.expires_at<=$1+interval '1 day' THEN 1 ELSE 7 END threshold \
+ FROM api_keys k JOIN workspaces w ON w.id=k.workspace_id \
+ WHERE k.revoked_at IS NULL AND k.disabled_at IS NULL AND k.expires_at IS NOT NULL AND w.disabled_at IS NULL \
+ AND k.expires_at>$1 AND k.expires_at<=$1+interval '7 days' \
+ AND (k.issued_to_user_id IS NULL OR EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=k.workspace_id AND m.user_id=k.issued_to_user_id)) \
+ AND (k.service_account_id IS NULL OR EXISTS(SELECT 1 FROM service_accounts sa WHERE sa.id=k.service_account_id AND sa.disabled_at IS NULL)) \
+ AND NOT EXISTS(SELECT 1 FROM alert_events e WHERE e.kind='key_expiring' AND e.api_key_id=k.id AND e.key_expires_at=k.expires_at AND e.threshold_days=CASE WHEN k.expires_at<=$1+interval '1 day' THEN 1 ELSE 7 END) \
+ ), allowances AS MATERIALIZED (SELECT w.workspace_id, \
+ (SELECT count(*) FROM alert_events e WHERE e.kind='key_expiring' AND e.workspace_id=w.workspace_id AND e.fired_at>$1-interval '24 hours') recent \
+ FROM (SELECT DISTINCT workspace_id FROM eligible) w), ranked AS ( \
+ SELECT k.*,a.recent,row_number() OVER(PARTITION BY k.workspace_id ORDER BY k.expires_at,k.id) ordinal \
+ FROM eligible k JOIN allowances a USING(workspace_id))";
+
+/// Silently resolves (no delivery row, ever) at most [`KEY_EXPIRY_PROGRESS`]
+/// open key-expiry incidents, oldest first: `cleared` when the key is no
+/// longer an eligible candidate at all, `superseded` when it is still
+/// eligible but the 1-day band now applies to an incident fired at the
+/// 7-day one.
+const KEY_EXPIRY_RETIRE: &str = "WITH decided AS ( \
+ SELECT e.id,e.fired_at,CASE \
+  WHEN k.id IS NULL OR k.revoked_at IS NOT NULL OR k.disabled_at IS NOT NULL OR w.disabled_at IS NOT NULL \
+   OR k.expires_at IS DISTINCT FROM e.key_expires_at OR k.expires_at<=$1 OR k.expires_at>$1+interval '7 days' \
+   OR (k.issued_to_user_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=k.workspace_id AND m.user_id=k.issued_to_user_id)) \
+   OR (k.service_account_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM service_accounts sa WHERE sa.id=k.service_account_id AND sa.disabled_at IS NULL)) THEN 'cleared' \
+  WHEN e.threshold_days=7 AND k.expires_at<=$1+interval '1 day' THEN 'superseded' \
+  ELSE NULL END resolution \
+ FROM alert_events e LEFT JOIN api_keys k ON k.id=e.api_key_id LEFT JOIN workspaces w ON w.id=k.workspace_id \
+ WHERE e.kind='key_expiring' AND e.resolved_at IS NULL \
+), obsolete AS (SELECT id,resolution FROM decided WHERE resolution IS NOT NULL ORDER BY fired_at,id LIMIT $2) \
+ UPDATE alert_events e SET resolved_at=clock_timestamp(),resolution=d.resolution FROM obsolete d WHERE e.id=d.id";
+
+type KeyExpiryCandidate = (Uuid, DateTime<Utc>, Uuid, i32);
+
+/// One bounded tick: retire obsolete open reminders, then create new ones
+/// for current candidates. Retiring first means a key that just crossed
+/// from the 7-day band into the 1-day band frees its `subject_key` slot in
+/// the open-uniqueness index before the new 1-day row tries to claim it.
+pub(crate) async fn key_expiring_tick(
+    tx: &mut Transaction<'_, Postgres>,
+    now: DateTime<Utc>,
+) -> Result<Changes, sqlx::Error> {
+    let mut changes = Changes::default();
+    changes.resolved += sqlx::query(KEY_EXPIRY_RETIRE)
+        .bind(now)
+        .bind(KEY_EXPIRY_PROGRESS)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected() as usize;
+    // Apply each workspace's remaining allowance BEFORE the global LIMIT:
+    // even an earlier-expiring backlog cannot fill the tick with skipped rows.
+    // Resolved incidents still count, and no dedup row is written for excess keys.
+    let capped: Vec<(Uuid, i64, i64)> = sqlx::query_as(&format!("{KEY_EXPIRY_CANDIDATES} SELECT workspace_id,max(recent),count(*) FROM ranked GROUP BY workspace_id HAVING max(recent)+count(*)>$2"))
+        .bind(now)
+        .bind(KEY_EXPIRY_WORKSPACE_24H)
+        .fetch_all(&mut **tx)
+        .await?;
+    for (workspace_id, count, eligible_candidates) in capped {
+        tracing::warn!(%workspace_id, count, eligible_candidates, cap = KEY_EXPIRY_WORKSPACE_24H,
+            "workspace key-expiry reminder cap applies; excess candidates deferred");
+    }
+    let candidates: Vec<KeyExpiryCandidate> = sqlx::query_as(&format!("{KEY_EXPIRY_CANDIDATES} SELECT id,expires_at,workspace_id,threshold FROM ranked WHERE ordinal+recent<=$2 ORDER BY expires_at,id LIMIT $3"))
+        .bind(now)
+        .bind(KEY_EXPIRY_WORKSPACE_24H)
+        .bind(KEY_EXPIRY_PROGRESS)
+        .fetch_all(&mut **tx)
+        .await?;
+    for (key_id, expires_at, workspace_id, threshold) in candidates {
+        let id = Uuid::new_v4();
+        let plural = if threshold == 1 { "" } else { "s" };
+        let summary = format!("An API key expires within {threshold} day{plural}");
+        let severity = if threshold <= KEY_EXPIRY_URGENT_DAYS {
+            "critical"
+        } else {
+            "warning"
+        };
+        // Insert incident and fired delivery atomically; ON CONFLICT DO
+        // NOTHING absorbs a concurrent/duplicate insert (same tuple, or the
+        // open-uniqueness index) without an error. Use the same post-lock
+        // database timestamp for the cap and fired_at, not transaction-start
+        // now(): a lock wait must not backdate events into an already-full window.
+        let inserted = sqlx::query("INSERT INTO alert_events(id,kind,subject_key,level,severity,workspace_id,summary,details,api_key_id,key_expires_at,threshold_days,fired_at) VALUES($1,'key_expiring',$2,$3,$4,$5,$6,$7,$8,$9,$3,$10) ON CONFLICT DO NOTHING")
+            .bind(id)
+            .bind(key_id.to_string())
+            .bind(threshold)
+            .bind(severity)
+            .bind(workspace_id)
+            .bind(&summary)
+            .bind(json!({"expires_at": expires_at, "threshold_days": threshold}))
+            .bind(key_id)
+            .bind(expires_at)
+            .bind(now)
+            .execute(&mut **tx)
+            .await?
+            .rows_affected();
+        if inserted == 1 {
+            sqlx::query(
+                "INSERT INTO alert_deliveries(id,event_id,transition) VALUES($1,$2,'fired')",
+            )
+            .bind(Uuid::new_v4())
+            .bind(id)
+            .execute(&mut **tx)
+            .await?;
+            changes.fired += 1;
+        }
+    }
+    Ok(changes)
+}
+
+/// Live recipients of one key's expiry reminder, recomputed at send time
+/// (never stored): personal workspace -> the owner only; shared human key ->
+/// the holder plus the workspace's current owners/admins; service-account
+/// key (no human owner) -> the workspace's current owners/admins only.
+/// Every recipient needs live platform entitlement; shared recipients also
+/// need effective workspace membership. No platform-role-only fallback and
+/// no listed addresses.
+/// Shared by delivery and all management read paths. The caller is a SQL
+/// parameter/expression, never client-provided SQL. `e` is the incident.
+/// Authority is live even for resolved history; old attribution cannot grant
+/// a former holder access. Personal ownership is checked explicitly.
+pub(crate) fn key_expiry_visible(viewer: &str) -> String {
+    format!(
+        "e.kind='key_expiring' AND EXISTS(SELECT 1 FROM api_keys k JOIN workspaces kw ON kw.id=k.workspace_id WHERE k.id=e.api_key_id AND k.workspace_id=e.workspace_id AND k.revoked_at IS NULL AND k.disabled_at IS NULL AND kw.disabled_at IS NULL AND k.expires_at=e.key_expires_at AND k.expires_at>clock_timestamp() AND (k.issued_to_user_id IS NULL OR EXISTS(SELECT 1 FROM effective_workspace_memberships holder WHERE holder.workspace_id=k.workspace_id AND holder.user_id=k.issued_to_user_id)) AND (k.service_account_id IS NULL OR EXISTS(SELECT 1 FROM service_accounts sa WHERE sa.id=k.service_account_id AND sa.disabled_at IS NULL)) AND EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=k.workspace_id AND m.user_id={viewer} AND ((kw.kind='personal' AND kw.owner_user_id=m.user_id) OR (kw.kind IN ('team','project') AND (k.issued_to_user_id=m.user_id OR m.role IN ('owner','admin'))))))"
+    )
+}
+
+// Shared with `outbox::recipients`: the outbox's per-claim live-eligibility
+// recheck (never a held authority lock spanning SMTP I/O) is what makes a
+// key-expiry reminder that becomes obsolete before send (revoked, disabled,
+// expired, lost membership, etc.) unsendable; see docs/alerts.md.
+const KEY_EXPIRY_DELIVERABLE: &str = "e.resolved_at IS NULL AND e.key_expires_at<=clock_timestamp()+interval '7 days' AND e.threshold_days=CASE WHEN e.key_expires_at<=clock_timestamp()+interval '1 day' THEN 1 ELSE 7 END";
+
 /// What one evaluation did. `None` from [`evaluate_once`] means another replica
 /// is evaluating right now.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -1053,6 +1230,41 @@ pub async fn evaluate_once_fenced(
                 }
             };
             reconcile(&mut tx, source, kind, conditions).await
+        }
+        .await;
+        match outcome {
+            Ok(changes) => {
+                tx.commit().await?;
+                report.fired += changes.fired;
+                report.resolved += changes.resolved;
+            }
+            Err(_) => {
+                tx.rollback().await?;
+                report.failed_rules += 1;
+            }
+        }
+    }
+    // Key-expiry reminders (#100): built in, evaluated once per tick, in its
+    // own fenced transaction that waits for the same lock, exactly like
+    // every other job above.
+    {
+        report.rules += 1;
+        let mut tx = crate::db::begin(&store.pool).await?;
+        crate::leases::fence(&mut tx, fence).await?;
+        let outcome = async {
+            sqlx::query("SET LOCAL statement_timeout='10s'")
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("SELECT pg_advisory_xact_lock($1)")
+                .bind(EVALUATION_LOCK)
+                .execute(&mut *tx)
+                .await?;
+            // Earlier rules may have crossed an expiry/band boundary or
+            // waited on locks. Use database time in this job, after its lock.
+            let now = sqlx::query_scalar("SELECT clock_timestamp()")
+                .fetch_one(&mut *tx)
+                .await?;
+            key_expiring_tick(&mut tx, now).await
         }
         .await;
         match outcome {
@@ -1217,8 +1429,24 @@ struct Pending {
     connection_name: Option<String>,
     personal_workspace: Option<Uuid>,
     builtin: Option<String>,
+    kind: String,
+    key_expires_at: Option<DateTime<Utc>>,
 }
 
+// Pure: constructs one email's subject/body from its stored facts. Called
+// only from `outbox::claim` (the durable per-recipient queue, #46), which
+// resolves recipients (generic rule recipients, or, for `key_expiring`,
+// the live key-following recipients) and performs the SMTP handoff outside
+// any open transaction. There is no `deliver_one`/legacy `deliver_pending`
+// here any more: #100's whole-delivery loop (and the `key_expiry_send_guard`
+// lock-holding-during-SMTP mechanism it used) is superseded by the outbox's
+// own live-eligibility recheck, performed in a short claim transaction
+// immediately before leasing a recipient and strictly before any SMTP I/O
+// (see docs/alerts.md's "Recipient outbox" and "Authorized key-expiry
+// reminders" sections). That recheck already excludes a key that became
+// ineligible (revoked, disabled, expired, lost membership, etc.) before its
+// claim is leased, with the same narrow claimed-then-authority-changes race
+// window the outbox documents for every other rule kind.
 fn email_message(row: Pending, installation: String) -> (String, String) {
     let Pending {
         transition,
@@ -1230,10 +1458,16 @@ fn email_message(row: Pending, installation: String) -> (String, String) {
         workspace_name: ws_name,
         workspace_kind: ws_kind,
         connection_name: connection,
-        personal_workspace: personal,
+        personal_workspace: _personal,
         builtin,
+        kind,
+        key_expires_at,
     } = row;
-    let scope = if personal.is_some() {
+    // Keyed off the workspace's own kind, not the `personal_workspace`
+    // builtin-derived column: that column is only ever set for kinds that
+    // carry `builtin` (not key_expiring), and every alert tied to a personal
+    // workspace is owner-only regardless of how it was sourced.
+    let scope = if ws_kind.as_deref() == Some("personal") {
         "Your personal workspace".to_owned()
     } else if let Some(connection) = connection {
         format!("Connection {connection}")
@@ -1250,18 +1484,23 @@ fn email_message(row: Pending, installation: String) -> (String, String) {
         "Installation".to_owned()
     };
     let resolved = transition == "resolved";
-    email_text(
+    let (subject, mut body) = email_text(
         &EmailFacts {
             installation,
             summary,
             resolved,
             critical: severity == "critical",
             scope,
-            rule: rule_name.or_else(|| match builtin.as_deref() {
-                Some(SCIM_LAST_ADMIN) => Some("Built-in SCIM safeguard".to_owned()),
-                Some(PARTITIONS_MISSING) => Some("Built-in partition check".to_owned()),
-                Some(HISTORY_ORPHANS) => Some("Built-in history check".to_owned()),
-                _ => None,
+            rule: rule_name.or_else(|| {
+                if kind == "key_expiring" {
+                    return Some("Built-in key-expiry reminder".to_owned());
+                }
+                match builtin.as_deref() {
+                    Some(SCIM_LAST_ADMIN) => Some("Built-in SCIM safeguard".to_owned()),
+                    Some(PARTITIONS_MISSING) => Some("Built-in partition check".to_owned()),
+                    Some(HISTORY_ORPHANS) => Some("Built-in history check".to_owned()),
+                    _ => None,
+                }
             }),
             at: if resolved {
                 resolved_at.unwrap_or(fired_at)
@@ -1270,7 +1509,16 @@ fn email_message(row: Pending, installation: String) -> (String, String) {
             },
         },
         public_url().as_deref(),
-    )
+    );
+    if kind == "key_expiring"
+        && let Some(expiry) = key_expires_at
+    {
+        body.push_str(&format!(
+            "\r\nExpires: {} UTC\r\n",
+            expiry.format("%Y-%m-%d %H:%M:%S")
+        ));
+    }
+    (subject, body)
 }
 
 /// Background evaluator for `serve`.

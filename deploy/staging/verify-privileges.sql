@@ -85,7 +85,7 @@ DO $$ DECLARE r record; t text; BEGIN
  FOREACH t IN ARRAY ARRAY['id','scope','workspace_id','kind','created_by','created_at'] LOOP
   IF has_column_privilege('gateway_runtime','public.alert_rules',t,'UPDATE') THEN RAISE EXCEPTION 'mutable alert rule identity: %',t; END IF;
  END LOOP;
- FOREACH t IN ARRAY ARRAY['id','rule_id','builtin','kind','subject_key','level','severity','workspace_id','provider_connection_id','summary','details','fired_at'] LOOP
+ FOREACH t IN ARRAY ARRAY['id','rule_id','builtin','kind','subject_key','level','severity','workspace_id','provider_connection_id','summary','details','fired_at','api_key_id','key_expires_at','threshold_days'] LOOP
   IF has_column_privilege('gateway_runtime','public.alert_events',t,'UPDATE') THEN RAISE EXCEPTION 'mutable alert incident: %',t; END IF;
  END LOOP;
  IF has_column_privilege('gateway_runtime','public.alert_deliveries','event_id','UPDATE') OR has_column_privilege('gateway_runtime','public.alert_deliveries','transition','UPDATE') THEN RAISE EXCEPTION 'mutable alert delivery identity'; END IF;
@@ -299,6 +299,18 @@ BEGIN
  INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd,meter_usage,output_image_variant,provider_cost_microusd,admitted_at) SELECT gen_random_uuid(),e,'unknown',1,meter_usage,output_image_variant,provider_cost_microusd,started_at FROM inference_executions WHERE id=e;
  -- Budget totals (0015): the runtime's reservation writes maintained them; unknown keeps its hold.
  IF (SELECT (held_microusd,settled_microusd,reservations,pending,unknown,held_unknown_microusd)::text FROM budget_totals WHERE scope_kind='key' AND scope_id=k AND period='lifetime')<>'(1,0,1,0,1,1)' THEN RAISE EXCEPTION 'budget totals not maintained'; END IF;
+ -- Headroom (103): the reporting-only indexed lookup needs SELECT alone.
+ IF (SELECT (coalesce(t.settled_microusd,0)::text,
+   coalesce(t.held_microusd-t.held_unknown_microusd,0)::text,
+   coalesce(t.held_unknown_microusd,0)::text,
+   coalesce(t.unknown::numeric+t.unresolved-t.unresolved_unknown+t.unreserved_executions,0)::text,
+   coalesce(t.unresolved::numeric+t.unreserved_executions,0)>0,
+   coalesce(t.unknown>=0 AND t.unresolved>=0 AND t.unreserved_executions>=0
+    AND t.unresolved_unknown BETWEEN 0 AND least(t.unknown,t.unresolved)
+    AND (t.unknown>0 OR t.held_unknown_microusd=0),true))::text
+   FROM unnest(ARRAY['key']::text[],ARRAY[k]::uuid[],ARRAY['lifetime']::text[],ARRAY['epoch'::timestamptz]) WITH ORDINALITY q(kind,id,period,start,i)
+   LEFT JOIN budget_totals t ON t.scope_kind=q.kind AND t.scope_id=q.id AND t.period=q.period AND t.period_start=q.start
+   ORDER BY q.i)<>'(0,0,1,1,f,t)' THEN RAISE EXCEPTION 'budget headroom reporting unavailable'; END IF;
  -- No installation scope (0026): no request writes a global totals row; installation spend sums workspace rows.
  IF EXISTS(SELECT FROM budget_totals WHERE scope_kind NOT IN ('workspace','key')) THEN RAISE EXCEPTION 'installation totals scope maintained'; END IF;
  PERFORM coalesce(sum(t.settled_microusd+t.held_microusd-t.held_unknown_microusd),0),coalesce(sum(t.unknown+t.unresolved-t.unresolved_unknown),0) FROM budget_totals t WHERE t.scope_kind='workspace' AND t.period='month' AND t.period_start=date_trunc('month',now(),'UTC');
@@ -471,6 +483,26 @@ BEGIN
   BEGIN INSERT INTO alert_rules(id,scope,workspace_id,kind,name,spike_factor_percent,min_spend_microusd) VALUES(gen_random_uuid(),'workspace',personal,'spend_spike','Personal rule',300,1); RAISE EXCEPTION 'personal alert rule allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN INSERT INTO alert_rules(id,scope,workspace_id,kind,name,window_minutes,consecutive_failures) VALUES(gen_random_uuid(),'workspace',ws,'provider_failing','Workspace upstream',15,3); RAISE EXCEPTION 'workspace connection rule allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN INSERT INTO alert_events(id,rule_id,builtin,kind,subject_key,level,severity,summary) VALUES(gen_random_uuid(),ar,'personal_budget','budget_threshold','x',1,'warning','x'); RAISE EXCEPTION 'ambiguous alert source allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  -- Key-expiry reminders (0049/#100): built in (no rule, no builtin label),
+  -- permanent dedup, resolution never re-enables attribution UPDATE, and the
+  -- scope trigger refuses a mismatched workspace.
+  DECLARE kev uuid:=gen_random_uuid(); exp timestamptz:=now()+interval '3 days'; BEGIN
+   INSERT INTO alert_events(id,kind,subject_key,level,severity,workspace_id,summary,details,api_key_id,key_expires_at,threshold_days) VALUES(kev,'key_expiring',k::text,7,'warning',ws,'An API key expires within 7 days',jsonb_build_object('expires_at',exp,'threshold_days',7),k,exp,7);
+   BEGIN INSERT INTO alert_events(id,kind,subject_key,level,severity,workspace_id,summary,api_key_id,key_expires_at,threshold_days) VALUES(gen_random_uuid(),'key_expiring','y',7,'warning',ws,'x',k,exp,7); RAISE EXCEPTION 'permanent key-expiry dedup absent'; EXCEPTION WHEN unique_violation THEN NULL; END;
+   BEGIN INSERT INTO alert_events(id,kind,subject_key,level,severity,workspace_id,summary,api_key_id,key_expires_at,threshold_days) VALUES(gen_random_uuid(),'key_expiring','z',5,'warning',ws,'x',k,exp,5); RAISE EXCEPTION 'off-list threshold accepted'; EXCEPTION WHEN check_violation THEN NULL; END;
+   BEGIN INSERT INTO alert_events(id,kind,subject_key,level,severity,workspace_id,summary,api_key_id,key_expires_at,threshold_days) VALUES(gen_random_uuid(),'key_expiring','z',1,'critical',personal,'x',k,exp,1); RAISE EXCEPTION 'cross-workspace key-expiry incident allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+   BEGIN INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary,api_key_id,key_expires_at,threshold_days) VALUES(gen_random_uuid(),ar,'key_expiring','z',1,'critical',ws,'x',k,exp,1); RAISE EXCEPTION 'key-expiry incident with a rule allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+   INSERT INTO alert_deliveries(id,event_id,transition) VALUES(gen_random_uuid(),kev,'fired');
+   UPDATE alert_deliveries SET status='failed',error='host_not_allowed',completed_at=now() WHERE event_id=kev;
+   PERFORM id FROM alert_events WHERE id=kev FOR UPDATE;
+   UPDATE alert_events SET resolved_at=now(),resolution='cleared' WHERE id=kev;
+   BEGIN UPDATE alert_events SET api_key_id=NULL WHERE id=kev; RAISE EXCEPTION 'key-expiry attribution rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+   IF has_column_privilege('gateway_runtime','public.alert_events','api_key_id','UPDATE') OR has_column_privilege('gateway_runtime','public.alert_events','key_expires_at','UPDATE') OR has_column_privilege('gateway_runtime','public.alert_events','threshold_days','UPDATE') THEN RAISE EXCEPTION 'key-expiry attribution columns grant UPDATE'; END IF;
+   -- Runtime may read the live holder membership needed by key_expiry_visible;
+   -- the management regressions exercise that full predicate through every API.
+   PERFORM 1 FROM alert_events e JOIN api_keys kk ON kk.id=e.api_key_id JOIN effective_workspace_memberships m ON m.workspace_id=e.workspace_id AND m.user_id=kk.issued_to_user_id WHERE e.id=kev AND m.user_id=u;
+   IF NOT FOUND THEN RAISE EXCEPTION 'key-expiry visibility predicate did not admit the holder'; END IF;
+  END;
  END;
  -- SCIM (0014): provisioning upserts, group-provenance sync, deactivation, cleanup.
  DECLARE g uuid:=gen_random_uuid(); mp uuid:=gen_random_uuid(); BEGIN

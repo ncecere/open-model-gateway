@@ -89,6 +89,15 @@ proptest! {
         prop_assert_eq!(classify(IpAddr::V4(v4(bits))), oracle_v4(bits));
     }
 
+    /// The shared special-use table (#203) agrees with the independent
+    /// oracle too, not only `classify`'s use of it: a drift inside
+    /// `special_use` itself, or in how `egress.rs` maps its categories to a
+    /// `Class`, is caught here independently of `providers/local/endpoints.rs`.
+    #[test]
+    fn the_shared_table_matches_the_registries_for_ipv4(bits in any::<u32>()) {
+        prop_assert_eq!(class_for(crate::special_use::classify_v4(v4(bits))), oracle_v4(bits));
+    }
+
     /// An IPv6 form that carries an IPv4 destination is judged as that IPv4
     /// address, for every IPv4 address and every filler bit.
     #[test]
@@ -201,6 +210,39 @@ proptest! {
     #[test]
     fn network_lists_never_panic(text in "\\PC{0,80}") {
         let _ = Networks::parse(PRIVATE_ALLOW_ENV, &text);
+    }
+
+    /// #244: an independent IANA/RFC 9637 oracle for IPv6 `3ff0::/12`.
+    /// `oracle_v4` above only covers IPv4; this is the IPv6 counterpart for
+    /// the one range the issue is about, computed directly from the RFC
+    /// prefix as a masked 128-bit value (never calling `classify` or
+    /// `special_use::classify_v6`, and not restating their hextet masks), so a
+    /// drift in either production function is caught independently. Only
+    /// `3fff::/20` is
+    /// documentation and refused; every other address with a first hextet
+    /// in `0x3ff0..=0x3fff` is ordinary global unicast and allowed.
+    #[test]
+    fn the_shared_table_matches_the_registries_for_ipv6_3ff0_slash_12(
+        first in 0x3ff0u16..=0x3fff,
+        rest in any::<[u16; 7]>(),
+    ) {
+        let mut s = [0u16; 8];
+        s[0] = first;
+        s[1..8].copy_from_slice(&rest);
+        let ip = v6(s);
+        // Written structurally differently from production: the RFC 9637
+        // prefix as a 128-bit value under a 20-bit mask, not hextet masks.
+        let prefix: u128 = "3fff::".parse::<std::net::Ipv6Addr>().unwrap().into();
+        let mask: u128 = u128::MAX << (128 - 20);
+        let is_documentation_3fff_20 = (u128::from(ip) & mask) == prefix;
+        let expected = if is_documentation_3fff_20 { Class::Refused } else { Class::Public };
+        prop_assert_eq!(classify(IpAddr::V6(ip)), expected, "{}", ip);
+        prop_assert_eq!(
+            class_for(crate::special_use::classify_v6(ip)),
+            expected,
+            "{}",
+            ip
+        );
     }
 }
 

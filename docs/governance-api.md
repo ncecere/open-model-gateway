@@ -33,6 +33,19 @@ Every GET policy object (`policy`, `effective`, `provenance.*`) includes `budget
 
 `layer` is `platform`, `local` or `key`. Lifetime windows report the scope's creation time as `window_start` and `window_end:null`. `used_microusd` is settled actual plus active holds admitted in that window (a lower bound when `unresolved_usage`); `exhausted` is `used >= amount`. They are present only where the caller may see that scope's activity: workspace-wide layers for platform readers and workspace administrators, the key layer to anyone who may read that key's policy; otherwise `usage_visible:false` and usage fields are null. There are no installation-wide limits: the layers listed here are every limit that can deny admission.
 
+Budget windows also include the read-only fields below (including on key stats). Amounts and counts are exact decimal strings; every field below except `headroom_status` is null for hidden usage. Hidden parent consumption is not queried.
+
+- `settled_microusd`: settled estimated cost admitted in the window.
+- `pending_held_microusd`: active holds excluding unknown-cost reservations.
+- `unknown_held_microusd`: retained known floors for unknown-cost reservations, **not upper bounds**.
+- `unknown_cost_requests`: the union of unknown-cost reservations, unbounded/missing-hold reservations and executions without reservations (each counted once).
+- `remaining_microusd`: `max(amount - settled - all active holds, 0)` only when that entire window has no unknown-cost, unbounded or unreserved exposure; otherwise null.
+- `headroom_status`: `known`, `unknown` or `restricted`. The legacy `used_microusd` and `unresolved_usage` retain their prior semantics: a bounded unknown reservation retains its hold without setting the legacy unresolved flag, but makes new headroom unknown.
+
+An invalid or unrepresentable accounting tally affects only its own window: `usage_visible` stays true and `headroom_status` is `unknown`, with all usage amounts, counts, `remaining_microusd`, `exhausted` and `unresolved_usage` null. Its configured limit and window metadata, and other valid windows, remain available. This is distinct from hidden usage (`restricted`) and from trusted unknown-cost exposure, which still includes its known floor facts. A database/query failure still fails the request with 503; it is not converted into an empty or individually unknown tally.
+
+The dashboard computes effective headroom **per period** as the minimum remaining across applicable windows, not the minimum configured budget minus key usage and not a sum of overlapping workspace/key usage. Any hidden layer makes that period restricted; otherwise any unknown exposure makes it unknown. Replaced type defaults do not apply. No budgets means no headroom summary, not unlimited funds. Older gateways missing these fields show headroom unavailable. This is a read-only estimate, not a capacity reservation or a guarantee that an inference request will fit; changing limits never resets consumption.
+
 Local/key PUTs (and key creation with an initial policy) are tighten-only per period: see [budget periods](governance.md#budget-periods). A rate cap above a parent's, or a budget for period P above a parent's budget for the same P, returns 400; other period combinations are independent. Removing or raising a stored cap or a stored budget for any period returns 403.
 
 ### Policy rejection reasons

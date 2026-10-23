@@ -11,7 +11,32 @@ export type PolicyBudget = { period: BudgetPeriod; amount_microusd: string };
  */
 export type Policy = { requests_per_minute: number | null; tokens_per_minute: number | null; concurrent_requests: number | null; /** "Jobs at once" (video and batch jobs); absent from older gateways. */ concurrent_jobs?: number | null; /** "Storage" quota in bytes (workspace layers only; absent from older gateways and on installation/key layers). */ storage_bytes?: number | null; monthly_budget_microusd: string | null; budget_period?: BudgetPeriod; budgets?: PolicyBudget[] };
 /** One applicable budget (layer and period) and its current UTC window; usage only where the caller may see that scope's activity. */
-export type BudgetWindow = { layer: "platform" | "local" | "key"; period?: BudgetPeriod; amount_microusd?: string; monthly_budget_microusd: string; budget_period: BudgetPeriod; window_start: string; window_end: string | null; usage_visible: boolean; used_microusd: string | null; unresolved_usage: boolean | null; exhausted?: boolean | null };
+export type BudgetWindow = { layer: "platform" | "local" | "key"; period?: BudgetPeriod; amount_microusd?: string; monthly_budget_microusd: string; budget_period: BudgetPeriod; window_start: string; window_end: string | null; usage_visible: boolean; used_microusd: string | null; unresolved_usage: boolean | null; exhausted?: boolean | null; settled_microusd?: string | null; pending_held_microusd?: string | null; unknown_held_microusd?: string | null; unknown_cost_requests?: string | null; remaining_microusd?: string | null; headroom_status?: "known" | "unknown" | "restricted" };
+export type BudgetHeadroom = { status: "known" | "unknown" | "restricted" | "unavailable"; remaining_microusd: string | null };
+const exactBudgetValue = (value: string | null | undefined): value is string => typeof value === "string" && value.length <= 128 && /^\d+$/.test(value);
+export const hasBudgetFacts = (window: BudgetWindow): boolean => [window.settled_microusd, window.pending_held_microusd, window.unknown_held_microusd, window.unknown_cost_requests].every(exactBudgetValue);
+/** Older gateways cannot prove remaining allowance from their legacy lower-bound totals. */
+export function windowHeadroom(window: BudgetWindow): BudgetHeadroom {
+  const result = (status: BudgetHeadroom["status"], remaining_microusd: string | null = null): BudgetHeadroom => ({ status, remaining_microusd });
+  if (!window.usage_visible || window.headroom_status === "restricted") return result("restricted");
+  if (window.headroom_status === "unknown") return result("unknown");
+  if (!window.headroom_status || !hasBudgetFacts(window)) return result("unavailable");
+  if (BigInt(window.unknown_cost_requests!) > 0n || window.unresolved_usage) return result("unknown");
+  return exactBudgetValue(window.remaining_microusd) ? result("known", window.remaining_microusd) : result("unavailable");
+}
+/** Same-period headroom is the minimum of layer remainders, not a sum, nor
+ * min(amounts) minus key usage. Independent periods are never collapsed.
+ * These are only the applicable windows returned by the gateway: replaced
+ * defaults are absent. Empty means no configured budget, not free capacity. */
+export function effectiveBudgetHeadroom(windows: BudgetWindow[]): (BudgetHeadroom & { period: BudgetPeriod })[] {
+  return budgetPeriods.flatMap(({ value: period }) => {
+    const facts = windows.filter(w => (w.period ?? w.budget_period) === period).map(windowHeadroom);
+    if (!facts.length) return [];
+    const status = (["restricted", "unknown", "unavailable"] as const).find(s => facts.some(f => f.status === s)) ?? "known";
+    const remaining_microusd = status === "known" ? facts.map(f => BigInt(f.remaining_microusd!)).reduce((a, b) => a < b ? a : b).toString() : null;
+    return [{ period, status, remaining_microusd }];
+  });
+}
 export const budgetPeriods: { value: BudgetPeriod; label: string; unit: string; window: string }[] = [
   { value: "day", label: "Daily", unit: "USD / day", window: "UTC day" },
   { value: "week", label: "Weekly", unit: "USD / week", window: "ISO week from Monday 00:00 UTC" },
@@ -202,7 +227,7 @@ export function priceFields(price?: Price): Field[] {
     { name: "input_usd_per_million", label: "Input rate (USD per million tokens)", type: "text", inputMode: "decimal", required: true, maxLength: MAX_MONEY_INPUT_LENGTH, validate: dollarsError, value: price?.input_microusd_per_million ? microUsdToDollars(price.input_microusd_per_million) : "", help: "Enter dollars per million tokens (up to 6 decimal places). Zero is allowed." },
     { name: "output_usd_per_million", label: "Output rate (USD per million tokens)", type: "text", inputMode: "decimal", required: true, maxLength: MAX_MONEY_INPUT_LENGTH, validate: dollarsError, value: price?.output_microusd_per_million ? microUsdToDollars(price.output_microusd_per_million) : "" },
     { ...integerField("input_token_limit", "Hard upstream input token ceiling"), value: price?.input_token_limit.toString() ?? "" },
-    { ...integerField("output_token_limit", "Hard upstream output token ceiling", 0), help: "Zero is valid for embeddings-only deployments. Generation requires a positive explicit output bound.", value: price?.output_token_limit.toString() ?? "", validate: (value, values) => {
+    { ...integerField("output_token_limit", "Hard upstream output token ceiling", 0), help: "Zero is valid for embeddings-only deployments. Generation needs a positive ceiling; omitted Chat/Responses maxima default to it.", value: price?.output_token_limit.toString() ?? "", validate: (value, values) => {
       const validInteger = integerField("", "").validate?.(value, values);
       if (validInteger) return validInteger;
       const inputTokens = values.input_token_limit?.trim() ?? "";

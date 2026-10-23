@@ -1096,9 +1096,11 @@ pub(crate) mod db {
             Err(InferenceError::Configuration)
         );
         f.price(1_000_000).await;
+        // Omission now has a priced bound, but must not erase or bypass the
+        // earlier unpriced unknown history when budgets are enabled.
         assert_eq!(
             admit(&f.store, &f.start(), &req, 30).await,
-            Err(InferenceError::Configuration)
+            Err(InferenceError::UnresolvedUsage(LimitScope::Workspace))
         );
         assert_eq!(
             admit(&f.store, &f.start(), &request(), 30).await,

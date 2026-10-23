@@ -28,9 +28,9 @@ pub struct Request {
     model: String,
     input: Value,
     instructions: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::false_if_null")]
     stream: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::false_if_null")]
     store: bool,
     max_output_tokens: Option<u32>,
     temperature: Option<f64>,
@@ -123,6 +123,22 @@ pub(super) fn validate(request: ChatRequest) -> Result<ChatRequest> {
     }
     Ok(request)
 }
+/// Echoed item IDs/statuses are read-only wire metadata, not conversation
+/// references or tool correlation IDs. Validate before discarding them; only
+/// function-call outputs permit explicit null (matching the public SDK types).
+fn item_metadata(item: &Value, nullable: bool) -> Result<()> {
+    if item
+        .get("id")
+        .is_some_and(|v| !v.is_string() && !(nullable && v.is_null()))
+        || item.get("status").is_some_and(|v| {
+            !matches!(v.as_str(), Some("in_progress" | "completed" | "incomplete"))
+                && !(nullable && v.is_null())
+        })
+    {
+        return Err(InferenceError::InvalidRequest);
+    }
+    Ok(())
+}
 impl Request {
     fn normalize(self) -> Result<ChatRequest> {
         if self.store || self.text.is_some_and(|t| t.format.kind != "text") {
@@ -138,7 +154,8 @@ impl Request {
                 for item in items {
                     match item["type"].as_str() {
                         None | Some("message") => {
-                            fields(&item, &["type", "role", "content"])?;
+                            fields(&item, &["type", "role", "content", "id", "status"])?;
+                            item_metadata(&item, false)?;
                             if item
                                 .get("type")
                                 .is_some_and(|v| v.as_str() != Some("message"))
@@ -157,7 +174,17 @@ impl Request {
                                 Value::Array(parts) if !parts.is_empty() => {
                                     let mut text = String::new();
                                     for part in parts {
-                                        fields(part, &["type", "text"])?;
+                                        if role == Role::Assistant && part["type"] == "output_text"
+                                        {
+                                            fields(part, &["type", "text", "annotations"])?;
+                                            if part.get("annotations").is_some_and(|v| {
+                                                v.as_array().is_none_or(|a| !a.is_empty())
+                                            }) {
+                                                return Err(InferenceError::InvalidRequest);
+                                            }
+                                        } else {
+                                            fields(part, &["type", "text"])?;
+                                        }
                                         if part["type"] != "input_text"
                                             && !(role == Role::Assistant
                                                 && part["type"] == "output_text")
@@ -173,7 +200,11 @@ impl Request {
                             messages.push(message(role, text));
                         }
                         Some("function_call") => {
-                            fields(&item, &["type", "call_id", "name", "arguments"])?;
+                            fields(
+                                &item,
+                                &["type", "call_id", "name", "arguments", "id", "status"],
+                            )?;
+                            item_metadata(&item, false)?;
                             let id = string(&item["call_id"])?;
                             let n = string(&item["name"])?;
                             if id.is_empty() || !name(&n) {
@@ -191,7 +222,8 @@ impl Request {
                             });
                         }
                         Some("function_call_output") => {
-                            fields(&item, &["type", "call_id", "output"])?;
+                            fields(&item, &["type", "call_id", "output", "id", "status"])?;
+                            item_metadata(&item, true)?;
                             let id = string(&item["call_id"])?;
                             if id.is_empty() {
                                 return Err(InferenceError::InvalidRequest);
@@ -313,18 +345,22 @@ fn snapshot(id: &str, model: &str, created: u64, response: &ChatResponse) -> Val
     for (i, call) in response.tool_calls.iter().enumerate() {
         output.push(json!({"id":format!("fc_{id}_{i}"),"type":"function_call","status":"completed","call_id":call.id,"name":call.name,"arguments":call.arguments}));
     }
-    let incomplete = matches!(
-        response.finish_reason,
-        FinishReason::Length | FinishReason::ContentFilter
-    );
+    // Text has already streamed as output_text. These are coarse terminal
+    // mappings, not typed refusal parts or retrospective content relabeling.
+    let incomplete_reason = match response.finish_reason {
+        FinishReason::Length | FinishReason::ContextWindowExceeded => Some("max_output_tokens"),
+        FinishReason::ContentFilter | FinishReason::Refusal => Some("content_filter"),
+        FinishReason::Stop | FinishReason::ToolCalls => None,
+    };
+    let incomplete = incomplete_reason.is_some();
     if incomplete {
         for item in &mut output {
             item["status"] = "incomplete".into();
         }
     }
     let mut v = json!({"id":id,"object":"response","created_at":created,"model":model,"status":if incomplete { "incomplete" } else { "completed" },"error":null,"incomplete_details":null,"output":output,"store":false,"usage":null});
-    if incomplete {
-        v["incomplete_details"] = json!({"reason":if response.finish_reason == FinishReason::Length { "max_output_tokens" } else { "content_filter" }});
+    if let Some(reason) = incomplete_reason {
+        v["incomplete_details"] = json!({"reason":reason});
     }
     let input = match response.usage.billing {
         Some(b) => b.total_input_tokens,

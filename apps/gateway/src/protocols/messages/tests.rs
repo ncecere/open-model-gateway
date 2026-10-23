@@ -56,6 +56,62 @@ fn strict_text_tool_subset() {
         );
     }
 }
+#[test]
+fn empty_successful_tool_result_defaults_are_absent_only() {
+    let request = |block| {
+        json!({"model":"m","max_tokens":32,"messages":[
+        {"role":"assistant","content":[{"type":"tool_use","id":"call-ping","name":"ping","input":{}}]},
+        {"role":"user","content":[block]}]})
+    };
+    for content in [
+        None,
+        Some(json!("")),
+        Some(json!([])),
+        Some(json!([{"type":"text","text":""}])),
+    ] {
+        for flag in [None, Some(false)] {
+            let mut block = json!({"type":"tool_result","tool_use_id":"call-ping"});
+            if let Some(content) = &content {
+                block["content"] = content.clone();
+            }
+            if let Some(flag) = flag {
+                block["is_error"] = json!(flag);
+            }
+            let r = parse(request(block)).unwrap();
+            assert_eq!(r.messages[0].tool_calls[0].id, "call-ping");
+            assert_eq!(r.messages[1].tool_call_id.as_deref(), Some("call-ping"));
+            assert_eq!(r.messages[1].content.as_deref(), Some(""));
+            assert!(r.messages[1].role == Role::Tool);
+        }
+    }
+    assert!(matches!(
+        parse(request(
+            json!({"type":"tool_result","tool_use_id":"call-ping","is_error":true})
+        )),
+        Err(InferenceError::Unsupported)
+    ));
+    for block in [
+        json!({"type":"tool_result","tool_use_id":"call-ping","content":null}),
+        json!({"type":"tool_result","tool_use_id":"call-ping","content":{}}),
+        json!({"type":"tool_result","tool_use_id":"call-ping","content":[{"type":"text","text":"x","extra":true}]}),
+        json!({"type":"tool_result","tool_use_id":"call-ping","extra":true}),
+        json!({"type":"tool_result"}),
+        json!({"type":"tool_result","tool_use_id":null}),
+        json!({"type":"tool_result","tool_use_id":""}),
+    ] {
+        assert!(parse(request(block.clone())).is_err(), "{block}");
+    }
+    for flag in [Value::Null, json!("false"), json!(0), json!([]), json!({})] {
+        assert!(
+            parse(request(
+                json!({"type":"tool_result","tool_use_id":"call-ping","is_error":flag})
+            ))
+            .is_err()
+        );
+    }
+    // The default must not remove the existing block bound.
+    assert!(parse(json!({"model":"m","max_tokens":32,"messages":[{"role":"user","content":vec![json!({"type":"tool_result","tool_use_id":"call-ping"});257]}]})).is_err());
+}
 fn stream(events: Vec<Result<ChatEvent>>) -> ProviderOutput {
     ProviderOutput::Stream(Box::pin(futures_util::stream::iter(events)))
 }

@@ -74,30 +74,41 @@ fn classify(ip: IpAddr) -> Class {
             if let Some(v4) = translated_v4(ip) {
                 return classify_v4(v4);
             }
-            let s = ip.segments();
-            if ip.is_unspecified()
-                || ip.is_unicast_link_local()
-                || ip.is_multicast()
-                // AWS metadata lives at fd00:ec2::254; refuse its whole /32.
-                || (s[0] == 0xfd00 && s[1] == 0x0ec2)
-                // Deprecated site-local fec0::/10.
-                || (s[0] & 0xffc0) == 0xfec0
-            {
-                return Class::Refused;
-            }
-            if ip.is_unique_local() {
-                return Class::Private;
-            }
-            // Public unicast is 2000::/3, minus documentation (2001:db8::/32,
-            // 3fff::/20), benchmarking (2001:2::/48) and other translation ranges.
-            let documentation = (s[0] == 0x2001 && s[1] == 0xdb8) || (s[0] & 0xfff0) == 0x3ff0;
-            let benchmarking = s[0] == 0x2001 && s[1] == 2 && s[2] == 0;
-            if (s[0] & 0xe000) == 0x2000 && !documentation && !benchmarking {
-                Class::Public
-            } else {
-                Class::Refused
-            }
+            // The shared special-use table (#203): AWS metadata lives at
+            // fd00:ec2::254, but egress refuses its whole /32 as defense in
+            // depth (`Category::AwsMetadataRange` and `Category::Metadata`
+            // both land in the catch-all `Class::Refused` arm below).
+            class_for(crate::special_use::classify_v6(ip))
         }
+    }
+}
+
+/// `Category` has no notion of a private allowlist or a development flag:
+/// this is egress's own mapping from "what kind of range" to "what the
+/// policy does with it" (`Policy::allows`, gated separately).
+fn class_for(category: crate::special_use::Category) -> Class {
+    use crate::special_use::Category;
+    match category {
+        Category::Public => Class::Public,
+        // RFC1918 and carrier-grade NAT (IPv4), unique-local (IPv6): the same
+        // gate, `GATEWAY_EGRESS_PRIVATE_ALLOW`.
+        Category::Private | Category::Cgnat => Class::Private,
+        Category::Loopback => Class::Loopback,
+        // Everything else is never allowed, regardless of policy: link-local
+        // (cloud metadata lives here for IPv4), multicast, broadcast,
+        // reserved, the exact metadata address and the rest of its /32,
+        // benchmarking, documentation, IETF protocol assignments and the
+        // deprecated 6to4 relay.
+        Category::LinkLocal
+        | Category::Multicast
+        | Category::Broadcast
+        | Category::Reserved
+        | Category::Metadata
+        | Category::AwsMetadataRange
+        | Category::Benchmarking
+        | Category::Documentation
+        | Category::IetfProtocolAssignments
+        | Category::Deprecated6to4Relay => Class::Refused,
     }
 }
 
@@ -117,32 +128,7 @@ pub(crate) fn translated_v4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
 }
 
 fn classify_v4(ip: Ipv4Addr) -> Class {
-    let o = ip.octets();
-    if ip.is_unspecified()
-        || ip.is_link_local()
-        || ip.is_multicast()
-        || ip.is_broadcast()
-        || ip.is_documentation()
-        || o[0] == 0
-        || o[0] >= 240
-        // 192.0.0.0/24 (IETF protocol assignments), 198.18.0.0/15
-        // (benchmarking), 192.88.99.0/24 (deprecated 6to4 relays).
-        || (o[0] == 192 && o[1] == 0 && o[2] == 0)
-        || (o[0] == 198 && (o[1] == 18 || o[1] == 19))
-        || (o[0] == 192 && o[1] == 88 && o[2] == 99)
-        // Alibaba Cloud metadata, inside 100.64.0.0/10: never, even when that
-        // range is listed for Tailscale.
-        || ip == Ipv4Addr::new(100, 100, 100, 200)
-    {
-        return Class::Refused;
-    }
-    if ip.is_loopback() {
-        return Class::Loopback;
-    }
-    if ip.is_private() || (o[0] == 100 && (64..=127).contains(&o[1])) {
-        return Class::Private;
-    }
-    Class::Public
+    class_for(crate::special_use::classify_v4(ip))
 }
 
 /// Comma-separated CIDR networks (or single addresses).
@@ -522,6 +508,24 @@ mod tests {
         ] {
             assert_eq!(classify(ip(public)), Class::Public, "{public}");
             assert!(strict.allows(ip(public)));
+        }
+    }
+
+    /// #244: the IPv6 documentation range `3fff::/20` (RFC 9637) is refused,
+    /// but the rest of `3ff0::/12` (which the old `(s[0] & 0xfff0) ==
+    /// 0x3ff0` mask wrongly matched too) is ordinary global unicast and is
+    /// allowed. This intentionally changes egress's outcome for those
+    /// addresses: they were refused before #244 and are allowed after.
+    #[test]
+    fn issue_244_3fff_20_documentation_boundary() {
+        let strict = Policy::default();
+        for refused in ["3fff::1", "3fff:0fff:ffff:ffff:ffff:ffff:ffff:ffff"] {
+            assert_eq!(classify(ip(refused)), Class::Refused, "{refused}");
+            assert!(!strict.allows(ip(refused)), "{refused}");
+        }
+        for allowed in ["3fff:1000::1", "3ff0::1", "3ffe:ffff::1", "3ff1:dead::1"] {
+            assert_eq!(classify(ip(allowed)), Class::Public, "{allowed}");
+            assert!(strict.allows(ip(allowed)), "{allowed}");
         }
     }
 

@@ -577,6 +577,7 @@ async fn alert_evaluation_runs_as_runtime(pool: &PgPool) {
  INSERT INTO workspaces(id,name,kind,owner_user_id) VALUES(personal,'Personal','personal',u);
  INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source) VALUES(ws,u,'owner','manual'),(personal,u,'owner','manual');
  INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash) VALUES(k,ws,u,'Alerts',decode(repeat('02',32),'hex')),(pk,personal,u,'Mine',decode(repeat('03',32),'hex'));
+ UPDATE api_keys SET expires_at=now()+interval '3 days' WHERE id IN(k,pk);
  INSERT INTO models(id,public_name) VALUES(m,'alerts-'||m);
  INSERT INTO provider_connections(id,name,provider,credential_ref,endpoint,enabled) VALUES(pc,'Alerts local','openai_compatible','none','http://127.0.0.1:19091/v1',true);
  INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model,enabled) VALUES(d,m,pc,'x',true);
@@ -633,8 +634,8 @@ async fn alert_evaluation_runs_as_runtime(pool: &PgPool) {
         .unwrap()
         .unwrap();
     assert_eq!(report.failed_rules, 0, "{report:?}");
-    // Installation spend day 80%, project local 120%, spike, error rate, connection, project rule, personal built-in, admission ceiling.
-    assert_eq!(report.fired, 8, "{report:?}");
+    // Existing eight incidents plus shared/personal key-expiry reminders.
+    assert_eq!(report.fired, 10, "{report:?}");
     assert_eq!(
         open_model_gateway::alerts::evaluate_once(&store)
             .await
@@ -646,9 +647,21 @@ async fn alert_evaluation_runs_as_runtime(pool: &PgPool) {
     // No relay configured: deliveries are recorded as such, as runtime.
     assert_eq!(
         open_model_gateway::alerts::deliver_pending(&store, 100).await,
-        8
+        10
     );
-    // 0049: the real outbox claim/completion path, as runtime. An unlisted
+    sqlx::query("UPDATE api_keys SET expires_at=now() WHERE id IN (SELECT api_key_id FROM alert_events WHERE kind='key_expiring')")
+        .execute(pool).await.unwrap();
+    let retired = open_model_gateway::alerts::evaluate_once(&store)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((retired.resolved, retired.failed_rules), (2, 0));
+    assert_eq!(
+        open_model_gateway::alerts::deliver_pending(&store, 100).await,
+        0,
+        "key reminder retirements never enqueue resolution mail"
+    );
+    // 0051: the real outbox claim/completion path, as runtime. An unlisted
     // host is refused before DNS/SMTP, with terminal outcomes (no real mail).
     sqlx::query("UPDATE installation_settings SET smtp_host='outbox-runtime.example.invalid',smtp_port=587,smtp_tls='starttls',smtp_from_address='gateway@example.invalid' WHERE singleton").execute(pool).await.unwrap();
     sqlx::query("INSERT INTO alert_deliveries(id,event_id,transition) SELECT gen_random_uuid(),e.id,'resolved' FROM alert_events e JOIN alert_rules r ON r.id=e.rule_id WHERE r.name='Project budgets'").execute(&runtime).await.unwrap();

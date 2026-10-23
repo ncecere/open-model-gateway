@@ -242,7 +242,7 @@ separately; this chart does not wrap `scripts/backup.py` in a Job.
   single-platform archive:
 
   ```sh
-  IMAGE=ghcr.io/ncecere/open-model-gateway:v0.7.0
+  IMAGE=ghcr.io/ncecere/open-model-gateway:v0.7.2
   docker pull "$IMAGE"
   docker save --platform "linux/$(docker version --format '{{.Server.Arch}}')" "$IMAGE" -o omg.tar
   kind load image-archive omg.tar --name <your-kind-cluster>

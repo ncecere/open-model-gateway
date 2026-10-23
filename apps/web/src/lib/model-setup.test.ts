@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { validateFields } from "./forms";
-import { notServingReason, readinessText, apiNameFrom, chosenConnection, defaultProtocols, protocolSupported, setupIdentityFields, setupSourceFields, workloadSupported, initialSetupValues, modelReadiness, protocolLabel, protocolOptions, protocolSetError, setupBody, setupFields, setupSteps, upstreamPlaceholder, workloadDisabledReason, workloadGroups, type SetupChoices } from "./model-setup";
+import { protocolEndpoints, notServingReason, readinessText, apiNameFrom, chosenConnection, defaultProtocols, protocolSupported, setupIdentityFields, setupSourceFields, workloadSupported, initialSetupValues, modelReadiness, protocolLabel, protocolOptions, protocolSetError, setupBody, setupFields, setupSteps, upstreamPlaceholder, workloadDisabledReason, workloadGroups, type SetupChoices } from "./model-setup";
 import type { ModelReadiness, PlatformOverviewData } from "./api";
 import { draftBody, emptyDraft, validateDraft } from "./pricing";
 
@@ -42,6 +42,30 @@ describe("model readiness derivation (contract §2)", () => {
     expect(modelReadiness({ enabled: true, supported_protocols: ["batches"], readiness: counts }).state).toBe("ready");
   });
   it("never infers readiness from a missing server value", () => { expect(modelReadiness({ enabled: true })).toEqual({ state: "unknown", warnings: [] }); expect(modelReadiness({ enabled: true, readiness: null })).toEqual({ state: "unknown", warnings: [] }); });
+});
+
+describe("Chat Completions API help", () => {
+  it("documents the accepted max_tokens alias and equality rule without changing the optional default", () => {
+    const guide = protocolEndpoints.chat_completions;
+    expect(guide.unsupported).not.toContain("max_tokens");
+    const maximum = guide.params.find(p => p.name === "max_completion_tokens");
+    expect(maximum?.required).toBeUndefined();
+    expect(maximum?.note).toContain("Optional; defaults to the pinned price's output ceiling");
+    expect(maximum?.note).toMatch(/max_tokens.*accepted alias/);
+    expect(maximum?.note).toMatch(/if both are supplied, values must be equal.*400/);
+  });
+  it("keeps the genuinely unsupported capabilities explicit", () => {
+    expect(protocolEndpoints.chat_completions.unsupported).toBe("n > 1, multimodal content arrays, structured output, reasoning, log probabilities and other extensions are rejected.");
+  });
+});
+
+describe("embedding API help", () => {
+  it("documents float and base64 without claiming token-ID or streaming support", () => {
+    const guide = protocolEndpoints.embeddings;
+    expect(guide.params.find(p => p.name === "encoding_format")?.note).toMatch(/float.*base64/);
+    expect(guide.unsupported).toMatch(/Token-ID.*streaming.*rejected/);
+    expect(guide.unsupported).not.toMatch(/base64 output.*rejected/);
+  });
 });
 
 describe("Add model form", () => {

@@ -41,22 +41,26 @@ struct TypedRecipient {
 }
 
 /// The existing live recipient rules, including enabled/entitled internal
-/// users. Explicit external addresses remain admin-chosen. A listed internal
-/// address cannot bypass disablement or loss of platform access. Only built-in
-/// personal incidents may notify their owner; never platform/other recipients.
+/// users, plus (for `key_expiring`, #100) the key's own live-authority
+/// recipients: never a rule, a listed address or a platform role. Explicit
+/// external addresses remain admin-chosen. A listed internal address cannot
+/// bypass disablement or loss of platform access. Only built-in personal
+/// incidents may notify their owner; never platform/other recipients.
 async fn recipients(
     tx: &mut Transaction<'_, Postgres>,
     delivery: Uuid,
     initial: bool,
 ) -> sqlx::Result<Vec<TypedRecipient>> {
-    sqlx::query_as("SELECT DISTINCT lower(btrim(x.email)) address,(SELECT u.id FROM users u WHERE lower(btrim(u.email))=lower(btrim(x.email)) ORDER BY u.id LIMIT 1) internal_user_id FROM alert_deliveries d JOIN alert_events e ON e.id=d.event_id CROSS JOIN LATERAL (
+    let key_visible = key_expiry_visible("u.id");
+    sqlx::query_as(&format!("SELECT DISTINCT lower(btrim(x.email)) address,(SELECT u.id FROM users u WHERE lower(btrim(u.email))=lower(btrim(x.email)) ORDER BY u.id LIMIT 1) internal_user_id FROM alert_deliveries d JOIN alert_events e ON e.id=d.event_id CROSS JOIN LATERAL (
  SELECT unnest(r.notify_emails) email FROM alert_rules r LEFT JOIN workspaces w ON w.id=r.workspace_id WHERE r.id=e.rule_id AND r.enabled AND r.deleted_at IS NULL AND (r.workspace_id IS NULL OR w.disabled_at IS NULL)
  UNION ALL SELECT u.email FROM alert_rules r JOIN effective_workspace_memberships m ON m.workspace_id=r.workspace_id AND m.role IN ('owner','admin') JOIN users u ON u.id=m.user_id WHERE r.id=e.rule_id AND r.enabled AND r.deleted_at IS NULL AND r.notify_workspace_admins
  UNION ALL SELECT u.email FROM alert_rules r JOIN effective_platform_roles p ON p.role='admin' JOIN users u ON u.id=p.user_id LEFT JOIN workspaces w ON w.id=r.workspace_id WHERE r.id=e.rule_id AND r.enabled AND r.deleted_at IS NULL AND r.notify_platform_admins AND (r.workspace_id IS NULL OR w.disabled_at IS NULL)
  UNION ALL SELECT u.email FROM workspaces w JOIN users u ON u.id=w.owner_user_id JOIN effective_platform_roles p ON p.user_id=u.id WHERE w.id=e.workspace_id AND e.builtin='personal_budget' AND w.kind='personal' AND w.disabled_at IS NULL
  UNION ALL SELECT u.email FROM effective_platform_roles p JOIN users u ON u.id=p.user_id WHERE p.role='admin' AND e.builtin=ANY($3)
+ UNION ALL SELECT u.email FROM effective_workspace_memberships members JOIN users u ON u.id=members.user_id WHERE e.kind='key_expiring' AND members.workspace_id=e.workspace_id AND ({key_visible}) AND ({KEY_EXPIRY_DELIVERABLE})
  ) x WHERE d.id=$1 AND x.email IS NOT NULL AND NOT EXISTS(SELECT 1 FROM users u WHERE lower(btrim(u.email))=lower(btrim(x.email)) AND (u.disabled_at IS NOT NULL OR u.cleaned_at IS NOT NULL OR NOT EXISTS(SELECT 1 FROM effective_platform_roles p WHERE p.user_id=u.id)))
- AND ($2 OR EXISTS(SELECT 1 FROM alert_recipient_outbox q WHERE q.delivery_id=d.id AND q.fingerprint=sha256(uuid_send(d.id)||convert_to(':omg.alert.recipient.v1:','UTF8')||convert_to(lower(btrim(x.email)),'UTF8')) AND (q.internal_user_id IS NULL OR EXISTS(SELECT 1 FROM users u JOIN effective_platform_roles p ON p.user_id=u.id WHERE u.id=q.internal_user_id AND lower(btrim(u.email))=lower(btrim(x.email)))))) ORDER BY 1 LIMIT $4")
+ AND ($2 OR EXISTS(SELECT 1 FROM alert_recipient_outbox q WHERE q.delivery_id=d.id AND q.fingerprint=sha256(uuid_send(d.id)||convert_to(':omg.alert.recipient.v1:','UTF8')||convert_to(lower(btrim(x.email)),'UTF8')) AND (q.internal_user_id IS NULL OR EXISTS(SELECT 1 FROM users u JOIN effective_platform_roles p ON p.user_id=u.id WHERE u.id=q.internal_user_id AND lower(btrim(u.email))=lower(btrim(x.email)))))) ORDER BY 1 LIMIT $4"))
         .bind(delivery).bind(initial).bind(&INSTALLATION_BUILTINS[..]).bind(MAX_RECIPIENTS)
         .fetch_all(&mut **tx).await
 }
@@ -166,7 +170,7 @@ pub(super) async fn claim_with_hook(
         tx.commit().await?;
         return Ok(Some((id, None)));
     };
-    let pending: Pending = sqlx::query_as("SELECT d.transition,e.summary,e.severity,e.fired_at,e.resolved_at,e.rule_id,r.name rule_name,w.name workspace_name,w.kind workspace_kind,p.name connection_name,CASE WHEN e.builtin='personal_budget' THEN e.workspace_id END personal_workspace,e.id event_id,e.builtin FROM alert_deliveries d JOIN alert_events e ON e.id=d.event_id LEFT JOIN alert_rules r ON r.id=e.rule_id LEFT JOIN workspaces w ON w.id=e.workspace_id LEFT JOIN provider_connections p ON p.id=e.provider_connection_id WHERE d.id=$1")
+    let pending: Pending = sqlx::query_as("SELECT d.transition,e.summary,e.severity,e.fired_at,e.resolved_at,e.rule_id,r.name rule_name,w.name workspace_name,w.kind workspace_kind,p.name connection_name,CASE WHEN e.builtin='personal_budget' THEN e.workspace_id END personal_workspace,e.id event_id,e.builtin,e.kind,e.key_expires_at FROM alert_deliveries d JOIN alert_events e ON e.id=d.event_id LEFT JOIN alert_rules r ON r.id=e.rule_id LEFT JOIN workspaces w ON w.id=e.workspace_id LEFT JOIN provider_connections p ON p.id=e.provider_connection_id WHERE d.id=$1")
         .bind(id).fetch_one(&mut *tx).await?;
     let (subject, body) = email_message(pending, installation);
     let to = addresses

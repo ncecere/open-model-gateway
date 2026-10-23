@@ -57,6 +57,9 @@ jobs:
         run: cargo test -p open-model-gateway --all-features --test filestore_s3
       - name: Verify enterprise runtime ACLs on disposable PostgreSQL
         run: cargo test -p open-model-gateway --all-features --test runtime_privileges -- --ignored
+      - name: Verify Anthropic terminal SDK and accounting contract on disposable PostgreSQL
+        # Changes maintenance-database ACLs: run sequentially, never as a generic ignored-test sweep.
+        run: cargo test -p open-model-gateway --all-features --lib providers::anthropic::terminal_tests::terminal_fidelity_official_sdks_and_priced_http_evidence -- --ignored --exact
       - name: Install age for the encrypted backup tests
         run: sudo apt-get update && sudo apt-get install -y age
       - name: Backup/restore drill on the disposable service database
@@ -79,6 +82,7 @@ jobs:
       - run: npm run test:sdk-bases
       - run: npm run test:demo
       - run: npm run test:supply-chain
+      - run: npm run test:conflict-markers
       - name: Install age (test:staging includes the encrypted backup tests)
         run: sudo apt-get update && sudo apt-get install -y age
       - run: npm run test:staging
@@ -98,6 +102,11 @@ jobs:
         with:
           tool: cargo-deny@0.20.2
       - run: cargo deny --all-features check
+      - uses: ./.github/actions/setup-node
+      - name: Verify vendored advisory coverage (offline synthetic database)
+        run: node --test tests/vendored-advisories.test.mjs
+      - name: Vendored upstream-base advisories only (temporary metadata projection)
+        run: node .github/scripts/vendored-advisories.mjs
 
   # Helm chart (deploy/helm/open-model-gateway, scale plan P7): lint and
   # render every values profile, kubeconform-validate the rendered output,

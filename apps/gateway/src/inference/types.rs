@@ -200,6 +200,10 @@ pub enum FinishReason {
     Length,
     ToolCalls,
     ContentFilter,
+    /// Native refusal, distinct from generic filtering.
+    Refusal,
+    /// The model context window, not the requested output maximum, was reached.
+    ContextWindowExceeded,
 }
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]

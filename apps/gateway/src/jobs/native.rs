@@ -81,16 +81,39 @@ impl Jobs {
             let adapter = adapter.clone();
             let target = target.clone();
             let workspace = job.workspace_id;
+            let store = self.store.clone();
             async move {
                 let produced = async {
-                    let mut reader =
-                        LineReader::stored(&files, work, workspace, BATCH_MAX_LINE_BYTES)
-                            .await
-                            .map_err(|_| InferenceError::Storage)?;
+                    let mut reader = LineReader::stored(&files, work, workspace, WORK_LINE_BYTES)
+                        .await
+                        .map_err(|_| InferenceError::Storage)?;
                     let mut n = 0u32;
+                    let mut bounds = std::collections::HashMap::new();
                     while let Some(raw) = reader.next_request().await? {
-                        let line = lines::parse_line(&raw, endpoint)
+                        let mut line = lines::parse_work_line(&raw, endpoint)
                             .map_err(|_| InferenceError::InvalidRequest)?;
+                        if let Some(plan) = line.plan {
+                            if plan.deployment != target.id {
+                                return Err(InferenceError::Configuration);
+                            }
+                            if let BatchRequest::Chat(r) = &mut line.request {
+                                let cap = match bounds.get(&plan.price) {
+                                    Some(cap) => *cap,
+                                    None => {
+                                        let cap = crate::governance::batch::planned_output(
+                                            &store,
+                                            plan.price,
+                                            target.id,
+                                            adapter.generation_output_limit(),
+                                        )
+                                        .await?;
+                                        bounds.insert(plan.price, cap);
+                                        cap
+                                    }
+                                };
+                                r.max_output_tokens = Some(cap);
+                            }
+                        }
                         let record = adapter.encode_native_line(
                             &target,
                             endpoint,
@@ -195,7 +218,7 @@ impl Jobs {
     async fn custom_ids(&self, job: &JobRow) -> JobResult<Vec<String>> {
         let files = self.files()?;
         let work = job.work_file_id.ok_or(InferenceError::Storage)?;
-        let mut reader = LineReader::stored(files, work, job.workspace_id, BATCH_MAX_LINE_BYTES)
+        let mut reader = LineReader::stored(files, work, job.workspace_id, WORK_LINE_BYTES)
             .await
             .map_err(|_| InferenceError::Storage)?;
         let mut ids = Vec::new();

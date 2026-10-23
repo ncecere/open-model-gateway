@@ -15,7 +15,7 @@ export function createMockUpstream() {
     try { request = JSON.parse(body); } catch { return json({ error: { message: "invalid json" } }, 400); }
     stats.chat += 1;
     // Complete usage (including the zero cache split) so the attempt settles at a known cost.
-    const usage = { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16, prompt_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } };
+    const usage = request.messages?.some(m => m.content === "budget-headroom-unknown") ? undefined : { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16, prompt_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } };
     if (request.stream) {
       res.writeHead(200, { "content-type": "text/event-stream" });
       res.write(`data: ${JSON.stringify({ id: "mock", object: "chat.completion.chunk", model: request.model, choices: [{ index: 0, delta: { role: "assistant", content: MOCK_REPLY }, finish_reason: null }] })}\n\n`);

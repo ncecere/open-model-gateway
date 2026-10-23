@@ -145,6 +145,36 @@ fn chat(stream: bool) -> ChatRequest {
         stream,
     }
 }
+#[tokio::test]
+async fn no_argument_tool_defaults_preserve_openrouter_wire_and_explicit_strict() {
+    let mock = Mock::json(glm_complete()).await;
+    for request in super::super::contract::no_argument_tool_requests() {
+        for strict in [None, Some(false), Some(true)] {
+            let mut r = request.clone();
+            r.tools[0].strict = strict;
+            mock.adapter().execute(&target("private"), r).await.unwrap();
+        }
+    }
+    let capture = mock.requests.lock().unwrap();
+    assert_eq!(capture.len(), 9);
+    for (i, captured) in capture.iter().enumerate() {
+        assert_eq!(captured.uri.path(), "/api/v1/chat/completions");
+        let body = &captured.body;
+        let function = &body["tools"][0]["function"];
+        assert_eq!(
+            function["parameters"],
+            json!({"type":"object","properties":{},"additionalProperties":false})
+        );
+        match i % 3 {
+            0 => assert!(function.get("strict").is_none()),
+            1 => assert_eq!(function["strict"], false),
+            _ => assert_eq!(function["strict"], true),
+        }
+        assert_eq!(body["messages"][1]["tool_calls"][0]["id"], "ping-call");
+        assert_eq!(body["messages"][2]["tool_call_id"], "ping-call");
+        assert_eq!(body["messages"][2]["content"], "");
+    }
+}
 fn glm_usage() -> Value {
     json!({"prompt_tokens":14,"completion_tokens":16,"total_tokens":30,"cost":1.01e-05,"is_byok":false,
         "prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":0,"audio_tokens":0,"video_tokens":0},
