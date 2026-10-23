@@ -419,6 +419,7 @@ impl Recorder {
             request,
             spans: Vec::new(),
             observed: 0,
+            root_recorded: false,
         })
     }
 }
@@ -497,6 +498,7 @@ pub struct Context {
     request: Uuid,
     spans: Vec<Span>,
     observed: usize,
+    root_recorded: bool,
 }
 impl Context {
     /// Children share this trace and root sampling decision, without reacquiring
@@ -505,7 +507,11 @@ impl Context {
         self.trace
     }
     pub fn record(&mut self, mut span: Span) {
-        if self.observed >= MAX_REQUEST {
+        // Capped one below the documented 64 spans/request bound
+        // (docs/operations.md), reserving exactly one slot for the root
+        // [`Context::record_root`] always adds, so children plus the root
+        // can never exceed 64 spans total.
+        if self.observed >= MAX_REQUEST - 1 {
             self.recorder.counts.drop_spans(DropReason::RequestLimit, 1);
             return;
         }
@@ -513,18 +519,27 @@ impl Context {
         span.trace = self.trace;
         self.spans.push(span);
     }
-    /// Always recorded, outside the ordinary per-request child-span budget
-    /// (#98 PR 2 review item 6): the root span (`inference.request`) is the
-    /// trace's sole anchor, recorded exactly once, last, once the terminal
-    /// outcome is known. Three failover attempts plus an admission deadlock
-    /// retry can fill the whole `MAX_REQUEST` budget with child spans
-    /// before the root is ever recorded; routing it through the same
-    /// budget as [`Context::record`] would then drop the root itself,
-    /// orphaning every child span that *did* export. `RequestTelemetry`
-    /// (inference/mod.rs) calls this at most once per request, guarded by
-    /// its own `finished` flag, so this never grows `self.spans` by more
-    /// than one extra span beyond the ordinary budget.
-    pub fn record_root(&mut self, mut span: Span) {
+    /// Recorded outside the ordinary per-request child-span budget (#98 PR 2
+    /// review item 6), in the one slot [`Context::record`] reserves for it:
+    /// the root span (`inference.request`) is the trace's sole anchor,
+    /// recorded exactly once, last, once the terminal outcome is known.
+    /// Three failover attempts plus an admission deadlock retry can fill
+    /// the whole child budget before the root is ever recorded; routing it
+    /// through that same budget would then drop the root itself, orphaning
+    /// every child span that *did* export.
+    ///
+    /// `pub(crate)`, not `pub`: `RequestTelemetry` (inference/mod.rs) is the
+    /// only caller, and it calls this at most once per request, guarded by
+    /// its own `finished` flag - but a second call from anywhere else must
+    /// still be safe rather than growing `self.spans` without bound, so a
+    /// repeat call here is counted `DropReason::RequestLimit` and dropped,
+    /// never pushed twice (#98 PR 2 review item 1).
+    pub(crate) fn record_root(&mut self, mut span: Span) {
+        if self.root_recorded {
+            self.recorder.counts.drop_spans(DropReason::RequestLimit, 1);
+            return;
+        }
+        self.root_recorded = true;
         span.trace = self.trace;
         self.spans.push(span);
     }
@@ -1102,15 +1117,22 @@ mod tests {
         for _ in 0..65 {
             context.record(span());
         }
-        assert_eq!(recorder.counts.dropped(DropReason::RequestLimit), 1);
+        // Children are capped one below MAX_REQUEST (#98 PR 2 review item
+        // 1), reserving the last slot for the root: 65 calls against a
+        // 63-child cap drop 2, not 1.
+        assert_eq!(recorder.counts.dropped(DropReason::RequestLimit), 2);
         // Unknown or failed eligibility never exports buffered observations.
         drop(context);
         assert!(rx.try_recv().is_err());
         for _ in 0..32 {
             let mut context = recorder.begin(Uuid::new_v4()).unwrap();
-            for _ in 0..64 {
+            for _ in 0..(MAX_REQUEST - 1) {
                 context.record(span());
             }
+            // The one slot reserved for the root fills this context to
+            // exactly MAX_REQUEST spans, so 32 of them still fill the
+            // queue to exactly its 2048 capacity below.
+            context.record_root(span());
             export_shared(context);
         }
         assert_eq!(rx.len(), 2048);
@@ -1123,15 +1145,17 @@ mod tests {
         rx.close();
     }
 
-    /// #98 PR 2 review item 6: the root span (`inference.request`) is
-    /// recorded last, once the terminal outcome is known, after every child
-    /// span (`routing`, `admission`(.*), `upstream.attempt`, `settlement`(.*))
-    /// a request's attempts already recorded. Three failover attempts plus
-    /// an admission deadlock retry can fill the whole per-request span
-    /// budget before the root is ever recorded, which would otherwise drop
-    /// the root itself (an orphaned trace: every child exports, but the
-    /// trace's own anchor never does) through the exact same budget check
-    /// as any other span.
+    /// #98 PR 2 review item 6 (revised by item 1): the root span
+    /// (`inference.request`) is recorded last, once the terminal outcome is
+    /// known, after every child span (`routing`, `admission`(.*),
+    /// `upstream.attempt`, `settlement`(.*)) a request's attempts already
+    /// recorded. Three failover attempts plus an admission deadlock retry
+    /// can fill the whole child budget before the root is ever recorded,
+    /// which would otherwise drop the root itself (an orphaned trace: every
+    /// child exports, but the trace's own anchor never does). The total
+    /// must still never exceed the documented 64 spans/request bound
+    /// (docs/operations.md): children are capped at `MAX_REQUEST - 1` so
+    /// the root always fits in the one slot reserved for it.
     #[tokio::test]
     async fn the_root_span_survives_the_per_request_budget_even_once_children_fill_it() {
         let (recorder, mut rx) = Recorder::channel(1.0);
@@ -1139,17 +1163,49 @@ mod tests {
         for _ in 0..(MAX_REQUEST + 10) {
             context.record(span());
         }
-        assert_eq!(recorder.counts.dropped(DropReason::RequestLimit), 10);
+        let expected_drops = (MAX_REQUEST + 10) - (MAX_REQUEST - 1);
+        assert_eq!(
+            recorder.counts.dropped(DropReason::RequestLimit),
+            expected_drops as u64
+        );
         context.record_root(span());
         export_shared(context);
         let mut exported = 0usize;
         while rx.try_recv().is_ok() {
             exported += 1;
         }
+        assert!(
+            exported <= MAX_REQUEST,
+            "children plus the root must never exceed the documented 64 spans/request bound: exported {exported}"
+        );
         assert_eq!(
-            exported,
-            MAX_REQUEST + 1,
-            "the root span must still export once children already filled the whole per-request budget"
+            exported, MAX_REQUEST,
+            "the root span must still export once children already filled their own budget"
+        );
+        rx.close();
+    }
+
+    /// #98 PR 2 review item 1: a second `record_root` call (which must never
+    /// happen in production - `RequestTelemetry::finish` guards it with its
+    /// own `finished` flag - but the API itself must stay safe if it ever
+    /// did) is counted `DropReason::RequestLimit` and not pushed again,
+    /// rather than growing `Context`'s span buffer without bound.
+    #[tokio::test]
+    async fn a_repeated_record_root_call_is_counted_instead_of_growing_the_span_buffer() {
+        let (recorder, mut rx) = Recorder::channel(1.0);
+        let mut context = recorder.begin(Uuid::new_v4()).unwrap();
+        context.record_root(span());
+        context.record_root(span());
+        context.record_root(span());
+        assert_eq!(recorder.counts.dropped(DropReason::RequestLimit), 2);
+        export_shared(context);
+        let mut exported = 0usize;
+        while rx.try_recv().is_ok() {
+            exported += 1;
+        }
+        assert_eq!(
+            exported, 1,
+            "only the first record_root call's span must ever export"
         );
         rx.close();
     }
@@ -1200,10 +1256,18 @@ mod tests {
         context.export(admission);
     }
 
+    /// Exports exactly `n` spans (`n <= MAX_REQUEST`) from one context,
+    /// using [`Context::record_root`]'s dedicated slot for the last one so
+    /// callers that pass `MAX_REQUEST` still get every span recorded, not
+    /// `MAX_REQUEST - 1` (#98 PR 2 review item 1 reserves one slot of the
+    /// per-request budget for the root).
     fn emit(recorder: &Recorder, n: usize) {
         let mut context = recorder.begin(Uuid::new_v4()).unwrap();
-        for _ in 0..n {
+        for _ in 0..n.saturating_sub(1) {
             context.record(span());
+        }
+        if n > 0 {
+            context.record_root(span());
         }
         export_shared(context);
     }
