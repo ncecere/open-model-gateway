@@ -587,6 +587,100 @@ async fn key_expiry_job_transaction_itself_holds_fence_and_advisory_lock(pool: P
     assert_eq!((report.fired, report.failed_rules), (1, 0), "{report:?}");
 }
 
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn key_expiry_uses_database_time_in_its_own_job_not_before_rules(pool: PgPool) {
+    let s = seed(pool).await;
+    set_expiry(
+        &s,
+        s.key,
+        Some(expiry_now(&s).await + chrono::Duration::days(3)),
+    )
+    .await;
+    budget(&s, "local", Some(s.team), "month", 100).await;
+    spend(&s, 100).await;
+    rule(
+        &s,
+        "scope,kind,budget_layers,thresholds",
+        "'installation','budget_threshold',ARRAY['local'],ARRAY[100]",
+    )
+    .await;
+    // Deterministically cross expiry after claim time, while an earlier rule
+    // runs. No clock sleeps: expiry is set to DB time by the earlier rule.
+    sqlx::raw_sql(&format!("CREATE FUNCTION expire_during_rule() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN UPDATE api_keys SET expires_at=clock_timestamp() WHERE id='{}'; RETURN NEW; END $$; CREATE TRIGGER expire_during_rule BEFORE INSERT ON alert_events FOR EACH ROW WHEN (NEW.kind='budget_threshold') EXECUTE FUNCTION expire_during_rule();",s.key)).execute(&s.pool).await.unwrap();
+    let report = evaluate(&s).await;
+    assert_eq!((report.fired, report.failed_rules), (1, 0), "{report:?}");
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM alert_events WHERE kind='key_expiring'"
+        )
+        .await,
+        0,
+        "expired during an earlier rule, before key evaluation"
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn key_expiry_rechecks_authority_between_smtp_recipients(pool: PgPool) {
+    let s = seed(pool).await;
+    let delegate = Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,email) VALUES($1,'zzz-delegate@example.test')")
+        .bind(delegate)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO platform_role_grants(user_id,role,source) VALUES($1,'user','manual')")
+        .bind(delegate)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source) VALUES($1,$2,'admin','manual')").bind(s.team).bind(delegate).execute(&s.pool).await.unwrap();
+    set_expiry(
+        &s,
+        s.key,
+        Some(expiry_now(&s).await + chrono::Duration::days(3)),
+    )
+    .await;
+    let (port, mut rx, gate) = mock::serve_gated().await;
+    relay(&s, port).await;
+    assert_eq!(evaluate(&s).await.fired, 1);
+    let store = s.store.clone();
+    let sending = tokio::spawn(async move { deliver_pending(&store, 10).await });
+    let first = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(first.rcpt_to.join(",").contains("owner@example.test"));
+    // The first email is at the relay; the second handoff has NOT started.
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        sqlx::query("UPDATE workspace_membership_grants SET revoked_at=now() WHERE user_id=$1")
+            .bind(delegate)
+            .execute(&s.pool),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    gate.add_permits(2);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), sending)
+            .await
+            .unwrap()
+            .unwrap(),
+        1
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "a removed second recipient must never reach SMTP"
+    );
+    let outcome: (String, i32, i32) =
+        sqlx::query_as("SELECT status,recipients,sent FROM alert_deliveries")
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+    assert_eq!(outcome, ("sent".to_owned(), 1, 1));
+}
+
 struct Seed {
     store: Store,
     pool: PgPool,
