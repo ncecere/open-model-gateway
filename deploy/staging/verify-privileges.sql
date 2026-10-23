@@ -128,7 +128,7 @@ DO $$ DECLARE r record; t text; BEGIN
   IF has_column_privilege('gateway_runtime','public.batch_route_waits',t,'UPDATE') THEN RAISE EXCEPTION 'mutable batch demand identity: %',t; END IF;
  END LOOP;
  IF has_table_privilege('gateway_runtime','public.batch_route_waits','TRUNCATE') THEN RAISE EXCEPTION 'batch demand truncatable'; END IF;
- IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units','valid_model_protocols_base','valid_cost_components_base','valid_price_lines_base','valid_upstream_job_id','rate_reserved_tokens','rate_contribution','omg_scope_key','omg_type_key','omg_scope_lock_audit_order','omg_lock_scopes','omg_admission_locks','omg_lock_scope_rows','omg_catalog_lock_mode','omg_scope_lock_exclusive','omg_config_bump','omg_lease_acquire','omg_lease_fence','omg_lease_complete','omg_lease_release','omg_ensure_partitions','omg_partition_coverage','omg_partition_bounds','omg_month_start','omg_next_month','omg_usage_aggregate','omg_usage_rows')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
+ IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units','valid_model_protocols_base','valid_cost_components_base','valid_price_lines_base','valid_upstream_job_id','rate_reserved_tokens','rate_contribution','omg_scope_key','omg_type_key','omg_scope_lock_audit_order','omg_lock_scopes','omg_admission_locks','omg_lock_scope_rows','omg_catalog_lock_mode','omg_scope_lock_exclusive','omg_config_bump','omg_lease_acquire','omg_lease_fence','omg_lease_complete','omg_lease_release','omg_ensure_partitions','omg_partition_coverage','omg_partition_bounds','omg_month_start','omg_next_month','omg_usage_aggregate','omg_usage_rows','omg_admin_tokens_revoke_owner','valid_admin_token_scopes','valid_admin_token_allowlist')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
  -- Change notifications (0028): seeded topics, forward-only versions, triggers present.
  IF has_table_privilege('gateway_runtime','public.config_versions','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.config_versions','topic','UPDATE') THEN RAISE EXCEPTION 'configuration topics mutable'; END IF;
  IF NOT has_table_privilege('gateway_runtime','public.config_versions','SELECT') OR NOT has_column_privilege('gateway_runtime','public.config_versions','version','UPDATE') THEN RAISE EXCEPTION 'configuration versions not maintainable by runtime'; END IF;
@@ -180,6 +180,18 @@ DO $$ DECLARE r record; t text; BEGIN
  IF EXISTS(SELECT FROM pg_constraint WHERE contype='f' AND conparentid=0 AND conrelid IN ('public.inference_executions'::regclass,'public.governance_reservations'::regclass)
    AND confrelid NOT IN ('public.inference_executions'::regclass)) THEN RAISE EXCEPTION 'hot history foreign keys present (MultiXacts)'; END IF;
  IF NOT EXISTS(SELECT FROM work_leases WHERE name='history_verify') THEN RAISE EXCEPTION 'history_verify lease missing'; END IF;
+ -- Admin API tokens (0050/#37 PR1): no removal, no rename/renewal; only
+ -- revocation and successful-use tracking are runtime-writable.
+ IF has_table_privilege('gateway_runtime','public.admin_api_tokens','DELETE,TRUNCATE') THEN RAISE EXCEPTION 'admin API tokens removable'; END IF;
+ FOREACH t IN ARRAY ARRAY['id','owner_user_id','name','secret_hash','scopes','ip_allowlist','created_at','expires_at'] LOOP
+  IF has_column_privilege('gateway_runtime','public.admin_api_tokens',t,'UPDATE') THEN RAISE EXCEPTION 'mutable admin API token identity: %',t; END IF;
+ END LOOP;
+ IF NOT has_table_privilege('gateway_runtime','public.admin_api_tokens','SELECT,INSERT')
+  OR NOT has_column_privilege('gateway_runtime','public.admin_api_tokens','revoked_at','UPDATE')
+  OR NOT has_column_privilege('gateway_runtime','public.admin_api_tokens','last_used_at','UPDATE')
+  OR NOT has_column_privilege('gateway_runtime','public.admin_api_tokens','last_used_address','UPDATE') THEN RAISE EXCEPTION 'admin API tokens not maintainable by runtime'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgrelid='public.admin_api_tokens'::regclass AND tgenabled='O' AND NOT tgisinternal)<>4 THEN RAISE EXCEPTION 'admin API token guards missing or disabled'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname IN ('admin_api_tokens_role_lost','admin_api_tokens_user_disabled','admin_api_tokens_user_cleaned') AND tgenabled='O' AND NOT tgisinternal)<>3 THEN RAISE EXCEPTION 'admin API token owner-invalidation triggers missing or disabled'; END IF;
 END $$;
 BEGIN;
 -- A probe-only work lease (rolled back with everything else) so the election
@@ -715,6 +727,39 @@ BEGIN
  BEGIN INSERT INTO config_versions(topic) VALUES('other'); RAISE EXCEPTION 'configuration topic insert allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  BEGIN DELETE FROM config_versions; RAISE EXCEPTION 'configuration topic removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  BEGIN TRUNCATE TABLE config_versions; RAISE EXCEPTION 'configuration topic truncate allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ -- Admin API tokens (0050/#37 PR1): create, idempotent revoke, finality,
+ -- immutability and the owner-invalidation triggers (role loss, suspension,
+ -- cleanup), as runtime.
+ DECLARE au uuid:=gen_random_uuid(); ag uuid:=gen_random_uuid(); at1 uuid:=gen_random_uuid(); at2 uuid:=gen_random_uuid(); at3 uuid:=gen_random_uuid(); BEGIN
+  INSERT INTO users(id,email) VALUES(au,'rollback-admin-'||au||'@example.invalid');
+  INSERT INTO platform_role_grants(id,user_id,role,source) VALUES(gen_random_uuid(),au,'admin','manual');
+  INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,expires_at) VALUES(at1,au,'Rollback token',decode(repeat('ab',32),'hex'),ARRAY['platform:read'],now()+interval '30 days');
+  BEGIN INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,expires_at) VALUES(gen_random_uuid(),au,'x',decode(repeat('ac',32),'hex'),ARRAY['wizard:cast'],now()+interval '30 days'); RAISE EXCEPTION 'unknown admin token scope allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  -- name/scopes have no runtime UPDATE grant at all (grants, not only the
+  -- trigger, refuse this); the owner-level test suite exercises the
+  -- trigger itself with a role that does have the column grant.
+  BEGIN UPDATE admin_api_tokens SET name='renamed' WHERE id=at1; RAISE EXCEPTION 'admin token name rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE admin_api_tokens SET scopes=ARRAY['settings:write'] WHERE id=at1; RAISE EXCEPTION 'admin token scope rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  UPDATE admin_api_tokens SET revoked_at=coalesce(revoked_at,now()),last_used_at=now(),last_used_address='203.0.113.5'::inet WHERE id=at1;
+  UPDATE admin_api_tokens SET revoked_at=coalesce(revoked_at,now()) WHERE id=at1;
+  -- omg_revocation_is_final (0039) raises with ERRCODE check_violation.
+  BEGIN UPDATE admin_api_tokens SET revoked_at=NULL WHERE id=at1; RAISE EXCEPTION 'admin token un-revoke allowed'; EXCEPTION WHEN check_violation THEN IF SQLERRM NOT LIKE 'revocation is final%' THEN RAISE; END IF; END;
+  BEGIN DELETE FROM admin_api_tokens WHERE id=at1; RAISE EXCEPTION 'admin token removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  -- Owner-invalidation: losing the last active 'admin' grant revokes an
+  -- otherwise-untouched token in the same transaction, as runtime.
+  INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,expires_at) VALUES(at2,au,'Rollback token 2',decode(repeat('ad',32),'hex'),ARRAY['platform:read'],now()+interval '30 days');
+  UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=au AND role='admin';
+  IF NOT (SELECT revoked_at IS NOT NULL FROM admin_api_tokens WHERE id=at2) THEN RAISE EXCEPTION 'losing the last admin grant did not revoke owned tokens'; END IF;
+  INSERT INTO platform_role_grants(id,user_id,role,source) VALUES(gen_random_uuid(),au,'admin','manual');
+  IF NOT (SELECT revoked_at IS NOT NULL FROM admin_api_tokens WHERE id=at2) THEN RAISE EXCEPTION 'regaining admin restored a revoked token'; END IF;
+  -- Suspension revokes outright, regardless of remaining grants.
+  INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,expires_at) VALUES(at3,au,'Rollback token 3',decode(repeat('ae',32),'hex'),ARRAY['platform:read'],now()+interval '30 days');
+  UPDATE users SET disabled_at=now(),disable_reason='admin_suspension' WHERE id=au;
+  IF NOT (SELECT revoked_at IS NOT NULL FROM admin_api_tokens WHERE id=at3) THEN RAISE EXCEPTION 'suspension did not revoke owned tokens'; END IF;
+  -- Runtime never has DELETE on users at all (existing grants); the FK
+  -- RESTRICT itself is exercised by the owner-level test suite.
+  BEGIN DELETE FROM users WHERE id=au; RAISE EXCEPTION 'admin token owner removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ END;
  -- Work leases (0029): election, renewal, fencing, release and takeover as runtime.
  DECLARE me uuid:=gen_random_uuid(); other uuid:=gen_random_uuid(); term bigint; BEGIN
   term:=omg_lease_acquire('privilege_probe',me,30);

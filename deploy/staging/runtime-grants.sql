@@ -346,6 +346,22 @@ GRANT UPDATE(next_seq,last_heartbeat_at) ON public.audit_export_state TO gateway
 -- path reads them. Never deleted (a trigger refuses it for every role).
 GRANT SELECT,INSERT ON public.legal_holds TO gateway_runtime;
 GRANT UPDATE(released_at,released_by_user_id) ON public.legal_holds TO gateway_runtime;
+-- Admin API tokens (0050/#37 PR1: storage and lifecycle only). Identity,
+-- digest, scopes, expiry and the allowlist are immutable (a trigger refuses
+-- every role); only revocation (final, like every other revocation) and
+-- successful-use tracking are runtime-writable. No DELETE/TRUNCATE. The
+-- owner-invalidation triggers on platform_role_grants/users run as the
+-- invoking runtime role, which already holds the grants below.
+GRANT SELECT,INSERT ON public.admin_api_tokens TO gateway_runtime;
+GRANT UPDATE(revoked_at,last_used_at,last_used_address) ON public.admin_api_tokens TO gateway_runtime;
+-- The owner-invalidation trigger functions on platform_role_grants/users call
+-- this helper directly (not only through the trigger mechanism, which needs
+-- no grant of its own); it needs EXECUTE like the other PL/pgSQL helpers above.
+GRANT EXECUTE ON FUNCTION public.omg_admin_tokens_revoke_owner(uuid) TO gateway_runtime;
+-- The scopes/allowlist CHECK constraints call these at every INSERT/UPDATE,
+-- like valid_model_protocols and friends above.
+GRANT EXECUTE ON FUNCTION public.valid_admin_token_scopes(text[]),
+ public.valid_admin_token_allowlist(cidr[]) TO gateway_runtime;
 -- No UPDATE/DELETE/TRUNCATE of immutable prices, ledger or audit; no removal of
 -- users/workspaces/keys/history and no rewrite of immutable admission snapshots.
 COMMIT;
