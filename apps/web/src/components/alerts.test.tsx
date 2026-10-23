@@ -47,6 +47,16 @@ describe("Admin › Settings › Alerts", () => {
     expect(screen.getAllByRole("link", { name: /New rule/ })[0]!.getAttribute("href")).toBe("/admin/alerts/new");
     client.clear();
   });
+  it("shows aggregate retry and exhaustion facts without recipient details", async () => {
+    const email = { status: "pending", recipients: 2, sent: 1, failed: 0, error: "connection", attempt_count: 2, retrying: true, waiting: 1, exhausted: 0, next_attempt_at: "2026-10-22T10:00:00Z" };
+    serve(admin, path => path.startsWith("/api/v1/platform/alerts/events") ? { data: [{ ...notification, email }, { ...notification, id: "e2", summary: "Exhausted delivery", email: { ...email, status: "failed", sent: 0, waiting: 0, retrying: false, exhausted: 1, next_attempt_at: null } }], has_more: false } : undefined);
+    const { client } = await mount("/admin/settings/alerts?tab=history");
+    expect(await screen.findByText("Retrying · 1 waiting")).toBeTruthy();
+    expect(screen.getByText("Exhausted · 1")).toBeTruthy();
+    expect(document.body.textContent).toContain("next");
+    expect(document.body.textContent).not.toContain("fingerprint");
+    client.clear();
+  });
   it("creates a rule from the header actions with exact values, validating first", async () => {
     const user = userEvent.setup(), fetch = serve(admin, (path, init) => init?.method === "POST" && path === "/api/v1/platform/alerts/rules" ? { ...rule, id: "r2" } : undefined);
     const { client, router } = await mount("/admin/alerts/new");
@@ -96,6 +106,8 @@ describe("Admin › Settings › Alerts", () => {
   });
 });
 
+const keyExpiring: Notification = { id: "e2", rule: null, builtin: false, kind: "key_expiring", state: "firing", severity: "critical", level: 1, summary: "An API key expires within 1 day", details: { expires_at: "2026-10-09T00:00:00Z", threshold_days: 1 }, workspace: { id: "team", name: "Product", kind: "team" }, connection: null, fired_at: "2026-10-08T00:00:00Z", resolved_at: null, resolution: null, email: { status: "not_configured", recipients: 1, sent: 0, failed: 0, error: null }, read: false };
+
 describe("Notifications", () => {
   it("formats the bell", () => { expect(bellLabel(0)).toBe("Notifications"); expect(bellLabel(3)).toBe("Notifications, 3 unread"); expect(bellCount(120)).toBe("99+"); });
   it("shows the unread count in the top bar and a routed page with read controls", async () => {
@@ -108,6 +120,21 @@ describe("Notifications", () => {
     expect(screen.getByText(/Some cost unknown/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: /Mark all read/ }));
     await waitFor(() => expect(sent(fetch, "POST")).toEqual([["/api/v1/me/notifications/read", { all: true }]]));
+    client.clear();
+  });
+  it("offers Open keys (never a rule, never a key id) for a key-expiry reminder", async () => {
+    const user = userEvent.setup();
+    serve(session, path => path.startsWith("/api/v1/me/notifications?") ? { data: [keyExpiring], has_more: false } : undefined);
+    const { client } = await mount("/notifications");
+    await screen.findByText("An API key expires within 1 day");
+    expect(screen.getByText(/Built-in key-expiry reminder/)).toBeTruthy();
+    expect(document.querySelector('time[datetime="2026-10-09T00:00:00.000Z"]')).toBeTruthy();
+    expect(screen.getByText(/Email: Email not set up/)).toBeTruthy();
+    const row = screen.getByText("An API key expires within 1 day").closest("tr")!;
+    await user.click(within(row).getByRole("button", { name: /actions/i }));
+    const openKeys = await screen.findByRole("menuitem", { name: "Open keys" });
+    expect(openKeys.getAttribute("href")).toBe("/workspaces/team/keys");
+    expect(screen.queryByRole("menuitem", { name: "Open rule" })).toBeNull();
     client.clear();
   });
 });

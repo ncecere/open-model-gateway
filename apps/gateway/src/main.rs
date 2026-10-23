@@ -477,15 +477,25 @@ async fn run(cli: Cli) -> Result<()> {
                 "pass --once; `serve` evaluates alerts every GATEWAY_ALERT_INTERVAL_SECONDS"
             );
             store.preflight_enterprise().await?;
-            match open_model_gateway::alerts::evaluate_once(&store).await? {
-                Some(report) => {
-                    let emails = open_model_gateway::alerts::deliver_pending(&store, 1000).await;
-                    println!(
-                        "Evaluated {} alert rules: {} fired, {} resolved, {} failed; {} email deliveries processed.",
-                        report.rules, report.fired, report.resolved, report.failed_rules, emails
-                    );
-                }
-                None => println!("Another replica is evaluating alerts right now; nothing done."),
+            let report = open_model_gateway::alerts::evaluate_once(&store).await?;
+            // Delivery is fenced per recipient claim, not by the evaluation
+            // lease, so draining is safe (and useful) even when another
+            // replica is evaluating. Bounded so a hanging relay cannot hang
+            // the command.
+            let emails = tokio::time::timeout(
+                std::time::Duration::from_secs(25 * 40 + 60),
+                open_model_gateway::alerts::deliver_pending(&store, 1000),
+            )
+            .await
+            .unwrap_or(0);
+            match report {
+                Some(report) => println!(
+                    "Evaluated {} alert rules: {} fired, {} resolved, {} failed; {} email deliveries processed.",
+                    report.rules, report.fired, report.resolved, report.failed_rules, emails
+                ),
+                None => println!(
+                    "Another replica is evaluating alerts right now; {emails} email deliveries processed."
+                ),
             }
         }
         Command::Budget {

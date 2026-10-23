@@ -200,7 +200,7 @@ Effort is relative: **S** = narrow change; **M** = several components plus tests
 - **Value:** warn users before spending limits or expired credentials interrupt work.
 - **Scope / done:** configurable estimated-budget thresholds, upcoming key expiry and unresolved-hold age notifications; choose an initial channel (in-app, email or signed webhook). Use durable delivery, deduplication, retries, recipient authorization and delivery status.
 - **Guardrails:** separate settled estimates, holds and unpriced unknowns; thresholds must not replace enforcement. Prevent alert storms and disclosure of personal activity to org-wide recipients. Webhook destinations need egress controls.
-- **Status:** budget-threshold, spend-spike, error-rate and failing-connection alerts are implemented ([alerts](alerts.md), 2026-10-08): in-app notifications plus email through the SMTP relay, idempotent incidents and recorded delivery outcomes. Key-expiry and hold-age notifications, webhooks and email retries are not implemented.
+- **Status:** budget-threshold, spend-spike, error-rate and failing-connection alerts are implemented ([alerts](alerts.md), 2026-10-08): in-app notifications plus email through the SMTP relay, idempotent incidents and recorded delivery outcomes. **Unreleased, post-v0.7.0 (#46):** a durable per-recipient email outbox adds bounded retries, fenced replica leases, live recipient rechecks and aggregate incident status ([delivery contract](alerts.md#recipient-outbox-unreleased-post-v070-46)); crash duplicates remain possible. This is a separate feature, not part of the v0.7.0 assurance release. Key-expiry and hold-age notifications and webhooks remain unimplemented.
 
 ### R13 — Cost trends, filters and internal allocation reports · P1 · M
 

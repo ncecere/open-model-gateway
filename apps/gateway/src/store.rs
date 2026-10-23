@@ -105,6 +105,7 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "alert_events",
     "alert_deliveries",
     "alert_reads",
+    "alert_recipient_outbox",
     // 0014 SCIM
     "scim_users",
     "scim_groups",

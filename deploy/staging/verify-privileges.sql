@@ -71,14 +71,21 @@ DO $$ DECLARE r record; t text; BEGIN
  IF has_column_privilege('gateway_runtime','public.scim_groups','id','UPDATE') OR has_any_column_privilege('gateway_runtime','public.scim_group_members','UPDATE') OR has_table_privilege('gateway_runtime','public.scim_groups','TRUNCATE') OR has_table_privilege('gateway_runtime','public.scim_group_members','TRUNCATE') THEN RAISE EXCEPTION 'scim group identity rewritable'; END IF;
  IF has_table_privilege('gateway_runtime','public.scim_state','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.scim_state','singleton','UPDATE') THEN RAISE EXCEPTION 'scim state row replaceable'; END IF;
  -- Alerts (0011): no removal; incidents resolve once; rule identity/scope fixed.
- FOREACH t IN ARRAY ARRAY['alert_rules','alert_events','alert_deliveries','alert_reads'] LOOP
+ FOREACH t IN ARRAY ARRAY['alert_rules','alert_events','alert_deliveries','alert_reads','alert_recipient_outbox'] LOOP
   IF has_table_privilege('gateway_runtime','public.'||t,'DELETE,TRUNCATE') THEN RAISE EXCEPTION 'alert history removable: %',t; END IF;
+ END LOOP;
+ FOREACH t IN ARRAY ARRAY['delivery_id','fingerprint','internal_user_id'] LOOP
+  IF has_column_privilege('gateway_runtime','public.alert_recipient_outbox',t,'UPDATE') THEN RAISE EXCEPTION 'mutable outbox identity'; END IF;
+ END LOOP;
+ FOREACH t IN ARRAY ARRAY['state','attempt_count','next_attempt_at','lease_owner','lease_token','lease_expires_at','error'] LOOP
+  IF has_column_privilege('gateway_runtime','public.alert_recipient_outbox',t,'INSERT') THEN RAISE EXCEPTION 'outbox initial state bypass'; END IF;
+  IF NOT has_column_privilege('gateway_runtime','public.alert_recipient_outbox',t,'UPDATE') THEN RAISE EXCEPTION 'outbox not maintainable'; END IF;
  END LOOP;
  IF has_any_column_privilege('gateway_runtime','public.alert_reads','UPDATE') THEN RAISE EXCEPTION 'read marks rewritable'; END IF;
  FOREACH t IN ARRAY ARRAY['id','scope','workspace_id','kind','created_by','created_at'] LOOP
   IF has_column_privilege('gateway_runtime','public.alert_rules',t,'UPDATE') THEN RAISE EXCEPTION 'mutable alert rule identity: %',t; END IF;
  END LOOP;
- FOREACH t IN ARRAY ARRAY['id','rule_id','builtin','kind','subject_key','level','severity','workspace_id','provider_connection_id','summary','details','fired_at'] LOOP
+ FOREACH t IN ARRAY ARRAY['id','rule_id','builtin','kind','subject_key','level','severity','workspace_id','provider_connection_id','summary','details','fired_at','api_key_id','key_expires_at','threshold_days'] LOOP
   IF has_column_privilege('gateway_runtime','public.alert_events',t,'UPDATE') THEN RAISE EXCEPTION 'mutable alert incident: %',t; END IF;
  END LOOP;
  IF has_column_privilege('gateway_runtime','public.alert_deliveries','event_id','UPDATE') OR has_column_privilege('gateway_runtime','public.alert_deliveries','transition','UPDATE') THEN RAISE EXCEPTION 'mutable alert delivery identity'; END IF;
@@ -454,6 +461,13 @@ BEGIN
   BEGIN INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,summary) VALUES(gen_random_uuid(),ar,'scim_last_admin','y',1,'critical','x'); RAISE EXCEPTION 'rule scim alert allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
   PERFORM id FROM alert_events WHERE id=ev FOR UPDATE;
   INSERT INTO alert_deliveries(id,event_id,transition) VALUES(gen_random_uuid(),ev,'fired');
+  INSERT INTO alert_recipient_outbox(delivery_id,fingerprint) SELECT id,sha256('probe'::bytea) FROM alert_deliveries WHERE event_id=ev;
+  UPDATE alert_deliveries SET initialized=true WHERE event_id=ev;
+  UPDATE alert_recipient_outbox SET state='leased',attempt_count=1,lease_owner=gen_random_uuid(),lease_token=gen_random_uuid(),lease_expires_at=now()+interval '90 seconds' WHERE delivery_id IN(SELECT id FROM alert_deliveries WHERE event_id=ev);
+  UPDATE alert_recipient_outbox SET state='sent',lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL WHERE delivery_id IN(SELECT id FROM alert_deliveries WHERE event_id=ev);
+  BEGIN UPDATE alert_recipient_outbox SET fingerprint=sha256('rewrite'::bytea); RAISE EXCEPTION 'outbox rekey allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN DELETE FROM alert_recipient_outbox; RAISE EXCEPTION 'outbox deletion allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN INSERT INTO alert_recipient_outbox(delivery_id,fingerprint,state) SELECT id,sha256('bypass'::bytea),'sent' FROM alert_deliveries WHERE event_id=ev; RAISE EXCEPTION 'outbox initial state bypass allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   UPDATE alert_deliveries SET status='partial',recipients=2,sent=1,failed=1,error='rejected',completed_at=now() WHERE event_id=ev;
   UPDATE alert_events SET resolved_at=now(),resolution='cleared' WHERE id=ev;
   INSERT INTO alert_reads(user_id,event_id) VALUES(u,ev);
@@ -469,6 +483,26 @@ BEGIN
   BEGIN INSERT INTO alert_rules(id,scope,workspace_id,kind,name,spike_factor_percent,min_spend_microusd) VALUES(gen_random_uuid(),'workspace',personal,'spend_spike','Personal rule',300,1); RAISE EXCEPTION 'personal alert rule allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN INSERT INTO alert_rules(id,scope,workspace_id,kind,name,window_minutes,consecutive_failures) VALUES(gen_random_uuid(),'workspace',ws,'provider_failing','Workspace upstream',15,3); RAISE EXCEPTION 'workspace connection rule allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN INSERT INTO alert_events(id,rule_id,builtin,kind,subject_key,level,severity,summary) VALUES(gen_random_uuid(),ar,'personal_budget','budget_threshold','x',1,'warning','x'); RAISE EXCEPTION 'ambiguous alert source allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  -- Key-expiry reminders (0049/#100): built in (no rule, no builtin label),
+  -- permanent dedup, resolution never re-enables attribution UPDATE, and the
+  -- scope trigger refuses a mismatched workspace.
+  DECLARE kev uuid:=gen_random_uuid(); exp timestamptz:=now()+interval '3 days'; BEGIN
+   INSERT INTO alert_events(id,kind,subject_key,level,severity,workspace_id,summary,details,api_key_id,key_expires_at,threshold_days) VALUES(kev,'key_expiring',k::text,7,'warning',ws,'An API key expires within 7 days',jsonb_build_object('expires_at',exp,'threshold_days',7),k,exp,7);
+   BEGIN INSERT INTO alert_events(id,kind,subject_key,level,severity,workspace_id,summary,api_key_id,key_expires_at,threshold_days) VALUES(gen_random_uuid(),'key_expiring','y',7,'warning',ws,'x',k,exp,7); RAISE EXCEPTION 'permanent key-expiry dedup absent'; EXCEPTION WHEN unique_violation THEN NULL; END;
+   BEGIN INSERT INTO alert_events(id,kind,subject_key,level,severity,workspace_id,summary,api_key_id,key_expires_at,threshold_days) VALUES(gen_random_uuid(),'key_expiring','z',5,'warning',ws,'x',k,exp,5); RAISE EXCEPTION 'off-list threshold accepted'; EXCEPTION WHEN check_violation THEN NULL; END;
+   BEGIN INSERT INTO alert_events(id,kind,subject_key,level,severity,workspace_id,summary,api_key_id,key_expires_at,threshold_days) VALUES(gen_random_uuid(),'key_expiring','z',1,'critical',personal,'x',k,exp,1); RAISE EXCEPTION 'cross-workspace key-expiry incident allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+   BEGIN INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary,api_key_id,key_expires_at,threshold_days) VALUES(gen_random_uuid(),ar,'key_expiring','z',1,'critical',ws,'x',k,exp,1); RAISE EXCEPTION 'key-expiry incident with a rule allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+   INSERT INTO alert_deliveries(id,event_id,transition) VALUES(gen_random_uuid(),kev,'fired');
+   UPDATE alert_deliveries SET status='failed',error='host_not_allowed',completed_at=now() WHERE event_id=kev;
+   PERFORM id FROM alert_events WHERE id=kev FOR UPDATE;
+   UPDATE alert_events SET resolved_at=now(),resolution='cleared' WHERE id=kev;
+   BEGIN UPDATE alert_events SET api_key_id=NULL WHERE id=kev; RAISE EXCEPTION 'key-expiry attribution rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+   IF has_column_privilege('gateway_runtime','public.alert_events','api_key_id','UPDATE') OR has_column_privilege('gateway_runtime','public.alert_events','key_expires_at','UPDATE') OR has_column_privilege('gateway_runtime','public.alert_events','threshold_days','UPDATE') THEN RAISE EXCEPTION 'key-expiry attribution columns grant UPDATE'; END IF;
+   -- Runtime may read the live holder membership needed by key_expiry_visible;
+   -- the management regressions exercise that full predicate through every API.
+   PERFORM 1 FROM alert_events e JOIN api_keys kk ON kk.id=e.api_key_id JOIN effective_workspace_memberships m ON m.workspace_id=e.workspace_id AND m.user_id=kk.issued_to_user_id WHERE e.id=kev AND m.user_id=u;
+   IF NOT FOUND THEN RAISE EXCEPTION 'key-expiry visibility predicate did not admit the holder'; END IF;
+  END;
  END;
  -- SCIM (0014): provisioning upserts, group-provenance sync, deactivation, cleanup.
  DECLARE g uuid:=gen_random_uuid(); mp uuid:=gen_random_uuid(); BEGIN
