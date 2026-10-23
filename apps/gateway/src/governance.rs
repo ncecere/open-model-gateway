@@ -1917,10 +1917,10 @@ pub mod realtime;
 mod realtime_tests;
 #[cfg(all(test, feature = "integration-tests"))]
 mod safety_tests;
-#[cfg(test)]
-pub(crate) mod tests;
 #[cfg(all(test, feature = "integration-tests"))]
 mod telemetry_tests;
+#[cfg(test)]
+pub(crate) mod tests;
 #[cfg(all(test, feature = "integration-tests"))]
 mod totals_tests;
 #[cfg(all(test, feature = "integration-tests"))]

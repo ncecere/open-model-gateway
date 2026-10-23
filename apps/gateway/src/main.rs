@@ -695,6 +695,13 @@ async fn run(cli: Cli) -> Result<()> {
                 store.is_ready().await,
                 "database schema is not ready; run `open-model-gateway migrate` with the matching release"
             );
+            // Started early so both Store (background-root spans,
+            // maintenance.rs) and Engine (interactive-generation spans) can
+            // carry the same recorder. A collector failure never fails
+            // inference.
+            let traces = open_model_gateway::telemetry::Runtime::start(config.traces.clone());
+            let recorder = traces.as_ref().map(|t| t.recorder());
+            let store = store.with_traces(recorder.clone());
             let web = config
                 .web_directory
                 .as_deref()
@@ -727,10 +734,11 @@ async fn run(cli: Cli) -> Result<()> {
             }
             let engine = Engine::new(Arc::new(store.clone()), registry, config.inference_limits)?
                 .with_realtime_limits(
-                open_model_gateway::inference::realtime::RealtimeLimits::from_lookup(|name| {
-                    std::env::var(name).ok()
-                })?,
-            )?;
+                    open_model_gateway::inference::realtime::RealtimeLimits::from_lookup(|name| {
+                        std::env::var(name).ok()
+                    })?,
+                )?
+                .with_telemetry(recorder.clone());
             let identity = IdentityState::new(store.clone(), IdentityConfig::from_env()?)
                 .await?
                 .with_scim(open_model_gateway::scim::ScimConfig::from_env()?)?;
@@ -923,8 +931,6 @@ async fn run(cli: Cli) -> Result<()> {
                     .await;
                 }
             });
-            // Preview transport only (#98 PR 1). No engine/HTTP spans yet.
-            let traces = open_model_gateway::telemetry::Runtime::start(config.traces);
             let served = axum::serve(
                 listener,
                 http::router_with_identity(store, web, engine, identity)

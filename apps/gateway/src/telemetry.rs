@@ -425,6 +425,47 @@ impl Recorder {
     }
 }
 
+impl Recorder {
+    /// Records one independent background-root span (`rate_prune`,
+    /// `lock_wait_prune` maintenance runs only): no workspace, user, or
+    /// request data of any kind, so none of `SharedAdmission`'s privacy
+    /// concern applies, and this never goes through `Context`/`export`
+    /// (the only export capability for inference-request spans). Still
+    /// subject to the same sample ratio, span budget and drop-on-full
+    /// queue as every other span.
+    pub fn record_background(&self, name: SpanName, start: u64, end: u64) {
+        if self.stopping.load(Ordering::Relaxed) {
+            return;
+        }
+        let synthetic = Uuid::now_v7();
+        if !root_sampled(synthetic, self.ratio) {
+            return;
+        }
+        let Some(span) = Span::new(name, trace_id(synthetic), None, start, end) else {
+            return;
+        };
+        let Ok(text) = serde_json::to_string(&span) else {
+            self.counts.drop_spans(DropReason::SpanLimit, 1);
+            return;
+        };
+        if text.len() > MAX_SPAN {
+            self.counts.drop_spans(DropReason::SpanLimit, 1);
+            return;
+        }
+        let Ok(raw) = RawValue::from_string(text) else {
+            self.counts.drop_spans(DropReason::SpanLimit, 1);
+            return;
+        };
+        if let Err(error) = self.sender.try_send(raw) {
+            let reason = match error {
+                mpsc::error::TrySendError::Full(_) => DropReason::QueueFull,
+                mpsc::error::TrySendError::Closed(_) => DropReason::Shutdown,
+            };
+            self.counts.drop_spans(reason, 1);
+        }
+    }
+}
+
 pub struct Context {
     recorder: Recorder,
     _permit: OwnedSemaphorePermit,
@@ -1562,7 +1603,8 @@ mod tests {
                                 .strip_prefix("pub fn ")
                                 .or_else(|| line.trim_start().strip_prefix("pub(crate) fn "))
                         }) {
-                            enclosing = format!("fn {}", rest.split(['(', '<']).next().unwrap_or(rest));
+                            enclosing =
+                                format!("fn {}", rest.split(['(', '<']).next().unwrap_or(rest));
                         }
                         if line.contains(needle) {
                             found.push((path.to_string_lossy().into_owned(), enclosing.clone()));

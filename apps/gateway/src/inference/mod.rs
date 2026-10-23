@@ -67,9 +67,7 @@ fn error_kind_of(error: InferenceError) -> telemetry::ErrorKind {
         InferenceError::Unauthenticated => ErrorKind::Unauthorized,
         InferenceError::ModelUnavailable => ErrorKind::NotFound,
         InferenceError::Unsupported => ErrorKind::Unsupported,
-        InferenceError::Configuration | InferenceError::PriceUnbounded => {
-            ErrorKind::Configuration
-        }
+        InferenceError::Configuration | InferenceError::PriceUnbounded => ErrorKind::Configuration,
         InferenceError::Busy | InferenceError::RouteCoolingDown(_) => ErrorKind::Busy,
         InferenceError::BudgetExceeded(_)
         | InferenceError::UnresolvedUsage(_)
@@ -293,7 +291,9 @@ fn attempt_span(
         span.attribute(telemetry::Attribute::OutputTokens(n));
     }
     if let Some(ms) = timings.time_to_first_token_ms {
-        span.attribute(telemetry::Attribute::FirstContent(Duration::from_millis(ms)));
+        span.attribute(telemetry::Attribute::FirstContent(Duration::from_millis(
+            ms,
+        )));
     }
     if let Some(ms) = timings.generation_ms {
         span.attribute(telemetry::Attribute::Generation(Duration::from_millis(ms)));
@@ -418,8 +418,12 @@ impl Engine {
         // Reserved before anything else: routing/admission/attempt/
         // settlement spans all name this as `parent`. Export never happens
         // without a later shared-workspace admission commit (#98).
-        let mut telemetry =
-            RequestTelemetry::new(self.recorder.as_ref(), request_id, operation_of(protocol), request.stream);
+        let mut telemetry = RequestTelemetry::new(
+            self.recorder.as_ref(),
+            request_id,
+            operation_of(protocol),
+            request.stream,
+        );
         let routing_start = telemetry.active().then(telemetry::now_unix_nanos);
         let deployments = timeout_at(
             deadline,
@@ -1007,6 +1011,6 @@ mod admission_validation_tests;
 #[cfg(all(test, feature = "integration-tests"))]
 mod steering_tests;
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod telemetry_tests;
+#[cfg(test)]
+mod tests;

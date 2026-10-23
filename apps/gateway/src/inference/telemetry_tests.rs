@@ -129,6 +129,7 @@ impl InferenceRepository for TelemetryRepository {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 enum Mode {
     Complete(Usage),
     Stream(Vec<ChatEvent>),
@@ -150,7 +151,11 @@ impl ProviderAdapter for Adapter {
             tools: false,
         }
     }
-    async fn execute(&self, _: &Deployment, _: ChatRequest) -> Result<ProviderOutput, InferenceError> {
+    async fn execute(
+        &self,
+        _: &Deployment,
+        _: ChatRequest,
+    ) -> Result<ProviderOutput, InferenceError> {
         let mode = self.mode.lock().unwrap().pop();
         match mode.unwrap_or(Mode::Error(InferenceError::Storage)) {
             Mode::Complete(usage) => Ok(ProviderOutput::Complete(ChatResponse {
@@ -248,7 +253,9 @@ fn harness(
 /// Drains every span currently queued. `export` is a synchronous
 /// `try_send`, so this needs no real wait on the happy path; the short,
 /// generous sleep only covers `ExecutionGuard`'s async drop path.
-async fn drain(receiver: &mut tokio::sync::mpsc::Receiver<Box<serde_json::value::RawValue>>) -> Vec<Value> {
+async fn drain(
+    receiver: &mut tokio::sync::mpsc::Receiver<Box<serde_json::value::RawValue>>,
+) -> Vec<Value> {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let mut spans = Vec::new();
     while let Ok(raw) = receiver.try_recv() {
@@ -409,7 +416,10 @@ async fn missing_usage_never_becomes_a_zero_token_attribute() {
         .await
         .unwrap();
     let spans = drain(&mut rx).await;
-    let attempt = spans.iter().find(|s| name(s) == "upstream.attempt").unwrap();
+    let attempt = spans
+        .iter()
+        .find(|s| name(s) == "upstream.attempt")
+        .unwrap();
     assert_eq!(attr(attempt, "gen_ai.usage.input_tokens"), None);
     assert_eq!(attr(attempt, "gen_ai.usage.output_tokens"), None);
 }
@@ -439,13 +449,19 @@ async fn empty_and_tool_call_deltas_set_first_content_correctly() {
         ChatEvent::Done,
     ];
     let (engine, _repo, mut rx) = harness(vec![Mode::Stream(events)], true, 1.0);
-    let mut stream =
-        expect_stream(engine.execute(principal(), request(true), Uuid::new_v4()).await);
+    let mut stream = expect_stream(
+        engine
+            .execute(principal(), request(true), Uuid::new_v4())
+            .await,
+    );
     // Drive the stream to Done: settlement, and the upstream.attempt span,
     // only happen once the stream's consumer actually reaches it.
     while stream.next().await.transpose().unwrap().is_some() {}
     let spans = drain(&mut rx).await;
-    let attempt = spans.iter().find(|s| name(s) == "upstream.attempt").unwrap();
+    let attempt = spans
+        .iter()
+        .find(|s| name(s) == "upstream.attempt")
+        .unwrap();
     assert!(
         attr(attempt, "gateway.first_content_ns").is_some(),
         "a tool-call delta sets first content, even after an earlier empty text delta: {attempt:#?}"
@@ -471,15 +487,25 @@ async fn an_attempt_that_times_out_is_recorded_as_a_timeout_error() {
     let engine = Engine::new(repository, registry, limits)
         .unwrap()
         .with_telemetry(Some(recorder));
-    let error = expect_err(engine.execute(principal(), request(false), Uuid::new_v4()).await);
+    let error = expect_err(
+        engine
+            .execute(principal(), request(false), Uuid::new_v4())
+            .await,
+    );
     assert_eq!(error, InferenceError::Timeout);
     let spans = drain(&mut rx).await;
-    let attempt = spans.iter().find(|s| name(s) == "upstream.attempt").unwrap();
+    let attempt = spans
+        .iter()
+        .find(|s| name(s) == "upstream.attempt")
+        .unwrap();
     assert_eq!(
         attr(attempt, "error.type"),
         Some(json!({"stringValue": "timeout"}))
     );
-    let root = spans.iter().find(|s| name(s) == "inference.request").unwrap();
+    let root = spans
+        .iter()
+        .find(|s| name(s) == "inference.request")
+        .unwrap();
     assert_eq!(
         attr(root, "gateway.outcome"),
         Some(json!({"stringValue": "error"}))
@@ -497,8 +523,11 @@ async fn cancellation_before_the_first_poll_still_exports_a_cancelled_trace() {
         tool_calls: vec![],
     }];
     let (engine, _repo, mut rx) = harness(vec![Mode::Stream(events)], true, 1.0);
-    let stream =
-        expect_stream(engine.execute(principal(), request(true), Uuid::new_v4()).await);
+    let stream = expect_stream(
+        engine
+            .execute(principal(), request(true), Uuid::new_v4())
+            .await,
+    );
     drop(stream); // never polled
     let spans = drain(&mut rx).await;
     let root = spans
@@ -553,7 +582,10 @@ async fn explicit_failover_produces_two_upstream_attempt_spans() {
         .await
         .unwrap();
     let spans = drain(&mut rx).await;
-    let attempts: Vec<_> = spans.iter().filter(|s| name(s) == "upstream.attempt").collect();
+    let attempts: Vec<_> = spans
+        .iter()
+        .filter(|s| name(s) == "upstream.attempt")
+        .collect();
     assert_eq!(attempts.len(), 2, "{spans:#?}");
     let mut numbers: Vec<String> = attempts
         .iter()
@@ -576,7 +608,10 @@ async fn explicit_failover_produces_two_upstream_attempt_spans() {
         2,
         "one settlement per attempt"
     );
-    let root = spans.iter().find(|s| name(s) == "inference.request").unwrap();
+    let root = spans
+        .iter()
+        .find(|s| name(s) == "inference.request")
+        .unwrap();
     assert_eq!(
         attr(root, "gateway.outcome"),
         Some(json!({"stringValue": "completed"}))
@@ -603,10 +638,17 @@ async fn a_settlement_write_failure_is_recorded_and_returned() {
     let engine = Engine::new(repository, registry, EngineLimits::default())
         .unwrap()
         .with_telemetry(Some(recorder));
-    let error = expect_err(engine.execute(principal(), request(false), Uuid::new_v4()).await);
+    let error = expect_err(
+        engine
+            .execute(principal(), request(false), Uuid::new_v4())
+            .await,
+    );
     assert_eq!(error, InferenceError::Storage);
     let spans = drain(&mut rx).await;
-    let root = spans.iter().find(|s| name(s) == "inference.request").unwrap();
+    let root = spans
+        .iter()
+        .find(|s| name(s) == "inference.request")
+        .unwrap();
     assert_eq!(
         attr(root, "gateway.outcome"),
         Some(json!({"stringValue": "error"}))

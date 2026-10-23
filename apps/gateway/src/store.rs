@@ -44,6 +44,10 @@ pub struct Store {
     pub(crate) audit_export: Option<std::sync::Arc<crate::audit_export::Exporter>>,
     /// Subject exports building at once on this replica (#74).
     pub(crate) export_slots: std::sync::Arc<tokio::sync::Semaphore>,
+    /// Bounded trace recorder (`Store::with_traces`, #98); `None` disables
+    /// tracing, including the independent background roots this store's own
+    /// maintenance jobs (`rate_prune`, `lock_wait_prune`) record.
+    pub(crate) traces: Option<crate::telemetry::Recorder>,
     /// Test-only pinned admission instant shared by every clone of this store.
     /// Production builds have no override: admission always reads the
     /// database clock (see [`Store::admission_now`]).
@@ -273,6 +277,7 @@ impl Store {
             leases: None,
             audit_export: None,
             export_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
+            traces: None,
             #[cfg(any(test, feature = "integration-tests"))]
             admission_clock: Default::default(),
         }
@@ -337,6 +342,18 @@ impl Store {
     /// The configured audit exporter, if any.
     pub fn audit_export(&self) -> Option<&std::sync::Arc<crate::audit_export::Exporter>> {
         self.audit_export.as_ref()
+    }
+
+    /// Attach the bounded trace recorder (#98). `None` disables tracing,
+    /// including this store's own background-root spans.
+    pub fn with_traces(mut self, traces: Option<crate::telemetry::Recorder>) -> Self {
+        self.traces = traces;
+        self
+    }
+
+    /// The configured trace recorder, if any.
+    pub fn traces(&self) -> Option<&crate::telemetry::Recorder> {
+        self.traces.as_ref()
     }
 
     /// This replica's work leases, if background work is leased (serve).
