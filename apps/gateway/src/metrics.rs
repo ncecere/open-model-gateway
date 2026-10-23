@@ -1245,7 +1245,7 @@ pub fn listen_from(value: Option<&str>, public: SocketAddr) -> anyhow::Result<Op
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::body::{Body, to_bytes};
+    use axum::body::{Body, HttpBody, to_bytes};
     use tower::ServiceExt;
 
     #[test]
@@ -1539,7 +1539,14 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers()[header::CONTENT_TYPE], CONTENT_TYPE);
-        let body = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        // The process-wide registry includes every route exercised by parallel
+        // tests. A complete route matrix can legitimately exceed 1 MiB; that
+        // is not an endpoint limit. Bound the read by this locally generated
+        // String body's exact length instead, retaining the full-content checks.
+        let length = usize::try_from(response.body().size_hint().exact().unwrap()).unwrap();
+        assert!(length > 0);
+        let body = to_bytes(response.into_body(), length).await.unwrap();
+        assert_eq!(body.len(), length);
         let text = String::from_utf8(body.to_vec()).unwrap();
         assert!(text.contains("gateway_db_pool_max_connections"));
         assert!(text.ends_with("# EOF\n"));
