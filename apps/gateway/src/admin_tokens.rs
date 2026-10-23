@@ -411,6 +411,46 @@ pub async fn revoke_admin_token(
     Ok(result.rows_affected() > 0)
 }
 
+/// Whether `client` satisfies `allowlist` (the token's canonical `addr/len`
+/// entries, exactly as returned by [`Store::authenticate_admin_token`]).
+/// `None` means unrestricted. Fails closed (#37 PR2 approved spec, section
+/// 3): a restricted token with no resolved client address never matches,
+/// regardless of the allowlist's contents.
+pub fn ip_allowed(allowlist: Option<&[String]>, client: Option<std::net::IpAddr>) -> bool {
+    let Some(allowlist) = allowlist else {
+        return true;
+    };
+    let Some(client) = client else {
+        return false;
+    };
+    allowlist.iter().any(|entry| {
+        crate::egress::parse_network("ip_allowlist", entry)
+            .is_ok_and(|(net, prefix)| network_contains(net, prefix, client))
+    })
+}
+
+/// `ip` matches `net/prefix`, after normalizing an IPv4-mapped IPv6 client
+/// address to plain IPv4 (`canonical_allowlist` never stores a mapped
+/// network itself, so the comparison must agree on family).
+fn network_contains(net: std::net::IpAddr, prefix: u8, ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    let ip = match ip {
+        IpAddr::V6(v6) => v6.to_ipv4().map_or(IpAddr::V6(v6), IpAddr::V4),
+        v4 => v4,
+    };
+    match (net, ip) {
+        (IpAddr::V4(n), IpAddr::V4(i)) => {
+            let mask = u32::MAX.checked_shl(32 - u32::from(prefix)).unwrap_or(0);
+            (u32::from(n) & mask) == (u32::from(i) & mask)
+        }
+        (IpAddr::V6(n), IpAddr::V6(i)) => {
+            let mask = u128::MAX.checked_shl(128 - u32::from(prefix)).unwrap_or(0);
+            (u128::from(n) & mask) == (u128::from(i) & mask)
+        }
+        _ => false,
+    }
+}
+
 impl Store {
     /// Live lookup-for-authorization. A malformed token is rejected by the
     /// strict parser with no database access at all. No positive

@@ -1,7 +1,17 @@
 //! Preflight for the declared access level, before extraction. Handlers retain
 //! object checks and live authority rechecks under their own transaction locks.
+//!
+//! #37 PR2 adds the admin-token half: scope and IP-allowlist enforcement, and
+//! a per-attempt audit record (start before dispatch, completion before
+//! returning) for every admitted token attempt -- including a denial, which
+//! is still an admitted *attempt* by an authenticated token, just not one
+//! the route let through.
 use super::*;
-use crate::route_policy::{self, Access};
+use crate::{
+    http::RequestId,
+    identity::{AdminTokenContext, ManagementPrincipal},
+    route_policy::{self, Access, TokenPolicy, TokenScope},
+};
 use axum::{
     extract::{FromRequestParts, MatchedPath, RawPathParams, Request},
     middleware::Next,
@@ -9,7 +19,7 @@ use axum::{
 
 async fn database_access(
     s: &Store,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     access: Access,
     ws: Option<Uuid>,
     key: Option<Uuid>,
@@ -32,7 +42,7 @@ async fn database_access(
     let result = async {
         match access {
             Access::PlatformRead | Access::PlatformWrite => {
-                let role = resources::platform_role_snapshot(&mut tx, u.user_id).await?;
+                let role = resources::platform_role_snapshot(&mut tx, u.user_id()).await?;
                 if role == "admin" || (access == Access::PlatformRead && role == "auditor") {
                     Ok(())
                 } else {
@@ -89,58 +99,255 @@ async fn database_access(
     result
 }
 
+/// Admin tokens never reach this far for a workspace-member/key/admin/
+/// inference/SCIM route (`TokenPolicy::Denied`), so only the Scope-bearing
+/// `Access` variants above are ever evaluated for one; this set is just the
+/// routes among those whose *handler* has actually been converted to accept
+/// either principal (#37 PR2). A Scope-declared route not yet listed here
+/// answers 501 for a token instead of reaching a handler that still expects
+/// only a browser session -- an explicit, audited "not implemented yet",
+/// never a crash and never a silent bypass. Exact method + router template.
+pub(super) const TOKEN_READY_ROUTES: &[(&str, &str)] = &[
+    ("GET", "/api/v1/platform/providers"),
+    ("POST", "/api/v1/platform/providers"),
+    ("GET", "/api/v1/platform/providers/{id}"),
+    ("PATCH", "/api/v1/platform/providers/{id}"),
+    ("DELETE", "/api/v1/platform/providers/{id}"),
+    ("GET", "/api/v1/platform/models"),
+    ("POST", "/api/v1/platform/models"),
+    ("GET", "/api/v1/platform/models/{id}"),
+    ("PATCH", "/api/v1/platform/models/{id}"),
+    ("DELETE", "/api/v1/platform/models/{id}"),
+    ("GET", "/api/v1/platform/deployments"),
+    ("POST", "/api/v1/platform/deployments"),
+    ("GET", "/api/v1/platform/deployments/{id}"),
+    ("PATCH", "/api/v1/platform/deployments/{id}"),
+    ("DELETE", "/api/v1/platform/deployments/{id}"),
+    ("GET", "/api/v1/platform/audit"),
+    ("GET", "/api/v1/platform/server-policy"),
+];
+fn token_ready(method: &str, path: &str) -> bool {
+    TOKEN_READY_ROUTES
+        .iter()
+        .any(|(m, p)| *m == method && *p == path)
+}
+
+async fn record_attempt(
+    pool: &sqlx::PgPool,
+    phase: &'static str,
+    request_id: Uuid,
+    token_id: Uuid,
+    owner_user_id: Uuid,
+    method: &str,
+    template: &str,
+    required_scope: Option<&'static str>,
+    outcome: &'static str,
+    status: Option<u16>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO admin_token_attempts(id,request_id,phase,token_id,owner_user_id,route_method,route_template,required_scope,outcome,status_code) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(request_id)
+    .bind(phase)
+    .bind(token_id)
+    .bind(owner_user_id)
+    .bind(method)
+    .bind(template)
+    .bind(required_scope)
+    .bind(outcome)
+    .bind(status.map(|s| s as i16))
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+fn audit_unavailable() -> ApiError {
+    ApiError(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Audit storage unavailable; the request was not processed",
+    )
+}
+
+/// The admin-token half of [`require_route_access`]: scope, IP allowlist and
+/// every admitted attempt audited individually, start before dispatch and
+/// completion before returning. Audit failure prevents dispatch (a failed
+/// start insert never calls `next`) or, for a failed completion insert,
+/// replaces an otherwise-successful response with 503 rather than let an
+/// unaudited attempt go out silently. A `BrowserPrincipal` is never
+/// manufactured: the handler extension inserted below (only when the route
+/// is admitted and token-ready) is `ManagementPrincipal::AdminToken`.
+async fn handle_admin_token(
+    s: Store,
+    context: AdminTokenContext,
+    request_id: Uuid,
+    mut parts: axum::http::request::Parts,
+    body: axum::body::Body,
+    next: Next,
+) -> Response {
+    let method = parts.method.clone();
+    let template = parts
+        .extensions
+        .get::<MatchedPath>()
+        .map_or_else(String::new, |p| p.as_str().to_owned());
+    let decision = route_policy::token_policy(method.as_str(), &template);
+    let access = route_policy::lookup(method.as_str(), &template);
+    let required_scope = match decision {
+        Some(TokenPolicy::Scope(scope)) => Some(scope),
+        _ => None,
+    };
+    let mut allowed = false;
+    if let (Some(scope), Some(access)) = (required_scope, access) {
+        let scope_ok = context.scopes.iter().any(|s| s.as_str() == scope.as_str());
+        let ip_ok =
+            crate::admin_tokens::ip_allowed(context.ip_allowlist.as_deref(), context.client_address);
+        if scope_ok && ip_ok {
+            let ws = workspace_param(&mut parts, &s, access).await;
+            let key = key_param(&mut parts, &s, access).await;
+            let principal = ManagementPrincipal::AdminToken(context.clone());
+            allowed = database_access(&s, &principal, access, ws, key).await.is_ok();
+        }
+    }
+    let required_scope_str = required_scope.map(TokenScope::as_str);
+    let outcome = if allowed { "allowed" } else { "denied" };
+    if let Err(error) = record_attempt(
+        &s.pool,
+        "start",
+        request_id,
+        context.token_id,
+        context.owner_user_id,
+        method.as_str(),
+        &template,
+        required_scope_str,
+        outcome,
+        None,
+    )
+    .await
+    {
+        crate::management::log_storage_error(&error);
+        return audit_unavailable().into_response();
+    }
+    let ready = allowed && token_ready(method.as_str(), &template);
+    let mut response = if !allowed {
+        denied().into_response()
+    } else if !ready {
+        ApiError(
+            StatusCode::NOT_IMPLEMENTED,
+            "This route does not yet accept admin API tokens",
+        )
+        .into_response()
+    } else {
+        if let Err(error) = s
+            .touch_admin_token_use(context.token_id, context.client_address)
+            .await
+        {
+            tracing::warn!(%error, "could not record admin token use");
+        }
+        parts
+            .extensions
+            .insert(ManagementPrincipal::AdminToken(context.clone()));
+        next.run(Request::from_parts(parts, body)).await
+    };
+    let status = response.status().as_u16();
+    if let Err(error) = record_attempt(
+        &s.pool,
+        "completion",
+        request_id,
+        context.token_id,
+        context.owner_user_id,
+        method.as_str(),
+        &template,
+        required_scope_str,
+        outcome,
+        Some(status),
+    )
+    .await
+    {
+        crate::management::log_storage_error(&error);
+        response = audit_unavailable().into_response();
+    }
+    response
+}
+
 pub(super) async fn require_route_access(
     State(s): State<Store>,
     request: Request,
     next: Next,
 ) -> Response {
     let (mut parts, body) = request.into_parts();
-    let result = async {
-        let u = parts
-            .extensions
-            .get::<BrowserPrincipal>()
-            .ok_or_else(denied)?
-            .clone();
-        let path = parts.extensions.get::<MatchedPath>().ok_or_else(denied)?;
-        // Exact router template and method, never an untrusted URL prefix.
-        let access =
-            route_policy::lookup(parts.method.as_str(), path.as_str()).ok_or_else(denied)?;
-        let workspace_scoped = matches!(
-            access,
-            Access::WorkspaceMetadata
-                | Access::WorkspaceMember
-                | Access::WorkspaceKey
-                | Access::WorkspaceKeyRotate
-                | Access::WorkspaceAdmin
-                | Access::WorkspaceAdminOrReader
-                | Access::WorkspacePlatformWrite
-        );
-        let (ws, key) = if workspace_scoped {
-            let params = RawPathParams::from_request_parts(&mut parts, &s)
-                .await
-                .map_err(|_| missing())?;
-            let parse = |name| {
-                params
-                    .iter()
-                    .find(|(n, _)| *n == name)
-                    .and_then(|(_, value)| Uuid::parse_str(value).ok())
-                    .ok_or_else(missing)
-            };
-            let ws = parse("ws")?;
-            let key = if matches!(access, Access::WorkspaceKey | Access::WorkspaceKeyRotate) {
-                Some(parse("key")?)
-            } else {
-                None
-            };
-            (Some(ws), key)
-        } else {
-            (None, None)
-        };
-        database_access(&s, &u, access, ws, key).await
+    let Some(principal) = parts.extensions.get::<ManagementPrincipal>().cloned() else {
+        return denied().into_response();
+    };
+    if parts.extensions.get::<MatchedPath>().is_none() {
+        return denied().into_response();
     }
-    .await;
-    match result {
-        Ok(()) => next.run(Request::from_parts(parts, body)).await,
-        Err(error) => error.into_response(),
+    match principal {
+        ManagementPrincipal::AdminToken(context) => {
+            let request_id = parts
+                .extensions
+                .get::<RequestId>()
+                .map_or_else(Uuid::new_v4, |id| id.0);
+            handle_admin_token(s, context, request_id, parts, body, next).await
+        }
+        ManagementPrincipal::Browser(u) => {
+            let method = parts.method.clone();
+            let path = parts
+                .extensions
+                .get::<MatchedPath>()
+                .expect("checked above")
+                .as_str()
+                .to_owned();
+            let result = async {
+                // Exact router template and method, never an untrusted URL prefix.
+                let access = route_policy::lookup(method.as_str(), &path).ok_or_else(denied)?;
+                let ws = workspace_param(&mut parts, &s, access).await;
+                let key = key_param(&mut parts, &s, access).await;
+                database_access(&s, &u, access, ws, key).await
+            }
+            .await;
+            match result {
+                Ok(()) => next.run(Request::from_parts(parts, body)).await,
+                Err(error) => error.into_response(),
+            }
+        }
     }
+}
+
+fn workspace_scoped(access: Access) -> bool {
+    matches!(
+        access,
+        Access::WorkspaceMetadata
+            | Access::WorkspaceMember
+            | Access::WorkspaceKey
+            | Access::WorkspaceKeyRotate
+            | Access::WorkspaceAdmin
+            | Access::WorkspaceAdminOrReader
+            | Access::WorkspacePlatformWrite
+    )
+}
+
+async fn workspace_param(
+    parts: &mut axum::http::request::Parts,
+    s: &Store,
+    access: Access,
+) -> Option<Uuid> {
+    if !workspace_scoped(access) {
+        return None;
+    }
+    let params = RawPathParams::from_request_parts(parts, s).await.ok()?;
+    params
+        .iter()
+        .find(|(n, _)| *n == "ws")
+        .and_then(|(_, value)| Uuid::parse_str(value).ok())
+}
+
+async fn key_param(parts: &mut axum::http::request::Parts, s: &Store, access: Access) -> Option<Uuid> {
+    if !matches!(access, Access::WorkspaceKey | Access::WorkspaceKeyRotate) {
+        return None;
+    }
+    let params = RawPathParams::from_request_parts(parts, s).await.ok()?;
+    params
+        .iter()
+        .find(|(n, _)| *n == "key")
+        .and_then(|(_, value)| Uuid::parse_str(value).ok())
 }
