@@ -215,9 +215,10 @@ proptest! {
     /// #244: an independent IANA/RFC 9637 oracle for IPv6 `3ff0::/12`.
     /// `oracle_v4` above only covers IPv4; this is the IPv6 counterpart for
     /// the one range the issue is about, computed directly from the RFC
-    /// bits (never calling `classify` or `special_use::classify_v6`), so a
+    /// prefix as a masked 128-bit value (never calling `classify` or
+    /// `special_use::classify_v6`, and not restating their hextet masks), so a
     /// drift in either production function is caught independently. Only
-    /// `3fff::/20` (`s[0] == 0x3fff` and the top nibble of `s[1]` zero) is
+    /// `3fff::/20` is
     /// documentation and refused; every other address with a first hextet
     /// in `0x3ff0..=0x3fff` is ordinary global unicast and allowed.
     #[test]
@@ -229,7 +230,11 @@ proptest! {
         s[0] = first;
         s[1..8].copy_from_slice(&rest);
         let ip = v6(s);
-        let is_documentation_3fff_20 = first == 0x3fff && (s[1] & 0xf000) == 0;
+        // Written structurally differently from production: the RFC 9637
+        // prefix as a 128-bit value under a 20-bit mask, not hextet masks.
+        let prefix: u128 = "3fff::".parse::<std::net::Ipv6Addr>().unwrap().into();
+        let mask: u128 = u128::MAX << (128 - 20);
+        let is_documentation_3fff_20 = (u128::from(ip) & mask) == prefix;
         let expected = if is_documentation_3fff_20 { Class::Refused } else { Class::Public };
         prop_assert_eq!(classify(IpAddr::V6(ip)), expected, "{}", ip);
         prop_assert_eq!(

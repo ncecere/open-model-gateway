@@ -178,8 +178,8 @@ pub(crate) fn classify_v6(ip: Ipv6Addr) -> Category {
     // used to use the wider `(s[0] & 0xfff0) == 0x3ff0` mask, i.e.
     // 3ff0::/12, which incorrectly classified all of 3ff0::/12 as
     // documentation (every address whose first hextet is 0x3ff0..=0x3fff).
-    // Only the top 12 bits of `s[1]` are also reserved in the /20, so both
-    // `s[0]` and the top nibble of `s[1]` must match.
+    // `s[0]` supplies 16 of the 20 prefix bits; the remaining 4 are the top
+    // nibble of `s[1]`, so both must match.
     if s[0] == 0x3fff && (s[1] & 0xf000) == 0 {
         return Category::Documentation;
     }
@@ -310,7 +310,7 @@ mod tests {
     fn pending_refusal_v6_3fff_boundary_is_exactly_the_20_not_the_legacy_12() {
         for (addr, expected) in [
             ("3fff::1", true),
-            ("3fff:0fff:ffff::", true),
+            ("3fff:0fff:ffff:ffff:ffff:ffff:ffff:ffff", true),
             ("3fff:1000::1", false),
             ("3ff0::1", false),
             ("3ffe:ffff::1", false),
