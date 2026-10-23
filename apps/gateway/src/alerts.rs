@@ -1106,15 +1106,54 @@ pub(crate) async fn key_expiring_tick(
 /// a former holder access. Personal ownership is checked explicitly.
 pub(crate) fn key_expiry_visible(viewer: &str) -> String {
     format!(
-        "e.kind='key_expiring' AND EXISTS(SELECT 1 FROM api_keys k JOIN workspaces kw ON kw.id=k.workspace_id WHERE k.id=e.api_key_id AND k.workspace_id=e.workspace_id AND k.revoked_at IS NULL AND k.disabled_at IS NULL AND kw.disabled_at IS NULL AND k.expires_at=e.key_expires_at AND k.expires_at>now() AND (k.issued_to_user_id IS NULL OR EXISTS(SELECT 1 FROM effective_workspace_memberships holder WHERE holder.workspace_id=k.workspace_id AND holder.user_id=k.issued_to_user_id)) AND (k.service_account_id IS NULL OR EXISTS(SELECT 1 FROM service_accounts sa WHERE sa.id=k.service_account_id AND sa.disabled_at IS NULL)) AND EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=k.workspace_id AND m.user_id={viewer} AND ((kw.kind='personal' AND kw.owner_user_id=m.user_id) OR (kw.kind IN ('team','project') AND (k.issued_to_user_id=m.user_id OR m.role IN ('owner','admin'))))))"
+        "e.kind='key_expiring' AND EXISTS(SELECT 1 FROM api_keys k JOIN workspaces kw ON kw.id=k.workspace_id WHERE k.id=e.api_key_id AND k.workspace_id=e.workspace_id AND k.revoked_at IS NULL AND k.disabled_at IS NULL AND kw.disabled_at IS NULL AND k.expires_at=e.key_expires_at AND k.expires_at>clock_timestamp() AND (k.issued_to_user_id IS NULL OR EXISTS(SELECT 1 FROM effective_workspace_memberships holder WHERE holder.workspace_id=k.workspace_id AND holder.user_id=k.issued_to_user_id)) AND (k.service_account_id IS NULL OR EXISTS(SELECT 1 FROM service_accounts sa WHERE sa.id=k.service_account_id AND sa.disabled_at IS NULL)) AND EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=k.workspace_id AND m.user_id={viewer} AND ((kw.kind='personal' AND kw.owner_user_id=m.user_id) OR (kw.kind IN ('team','project') AND (k.issued_to_user_id=m.user_id OR m.role IN ('owner','admin'))))))"
     )
 }
+
+const KEY_EXPIRY_DELIVERABLE: &str = "e.resolved_at IS NULL AND e.key_expires_at<=clock_timestamp()+interval '7 days' AND e.threshold_days=CASE WHEN e.key_expires_at<=clock_timestamp()+interval '1 day' THEN 1 ELSE 7 END";
 
 fn key_expiry_recipients() -> String {
     let visible = key_expiry_visible("u.id");
     format!(
-        "SELECT DISTINCT lower(u.email) FROM alert_events e CROSS JOIN users u JOIN effective_platform_roles p ON p.user_id=u.id WHERE e.id=$1 AND ({visible}) AND e.resolved_at IS NULL AND e.key_expires_at<=now()+interval '7 days' AND e.threshold_days=CASE WHEN e.key_expires_at<=now()+interval '1 day' THEN 1 ELSE 7 END AND u.email IS NOT NULL ORDER BY 1 LIMIT $2"
+        "SELECT DISTINCT lower(u.email) FROM alert_events e JOIN effective_workspace_memberships members ON members.workspace_id=e.workspace_id JOIN users u ON u.id=members.user_id WHERE e.id=$1 AND ({visible}) AND ({KEY_EXPIRY_DELIVERABLE}) AND u.email IS NOT NULL ORDER BY 1 LIMIT $2"
     )
+}
+
+/// Each SMTP handoff gets its own fresh authority snapshot. Hold only this
+/// recipient's authority scopes through the handoff, not the entire recipient
+/// list: changes can commit between recipients, and the next check observes
+/// them. These shared scopes synchronize with management's exclusive locks
+/// (0027), in canonical order, without an installation or authority-row lock.
+async fn key_expiry_send_guard(
+    store: &Store,
+    event: Uuid,
+    address: &str,
+) -> Result<Option<Transaction<'static, Postgres>>, sqlx::Error> {
+    use crate::governance::locks::{self, Scope};
+    let mut guard =
+        crate::db::begin_with_setup(&store.pool, "SET LOCAL statement_timeout='10s'").await?;
+    type Authority = (Uuid, Option<Uuid>, Uuid, Uuid, String);
+    let authority: Option<Authority> = sqlx::query_as("SELECT u.id,k.issued_to_user_id,k.governance_key_id,k.workspace_id,w.kind FROM alert_events e JOIN api_keys k ON k.id=e.api_key_id JOIN workspaces w ON w.id=k.workspace_id JOIN users u ON lower(u.email)=$2 WHERE e.id=$1")
+        .bind(event).bind(address).fetch_optional(&mut *guard).await?;
+    let Some((user, holder, lineage, workspace, kind)) = authority else {
+        return Ok(None);
+    };
+    let scopes = [
+        Scope::Workspace(workspace),
+        Scope::User(user),
+        Scope::Lineage(lineage),
+    ]
+    .into_iter()
+    .chain(holder.map(Scope::User))
+    .chain(Scope::of_kind(&kind));
+    locks::shared(&mut guard, scopes).await?;
+    let visible = key_expiry_visible("u.id");
+    let eligible: bool = sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM alert_events e JOIN users u ON u.id=$3 AND lower(u.email)=$2 WHERE e.id=$1 AND ({visible}) AND ({KEY_EXPIRY_DELIVERABLE}))"))
+        .bind(event).bind(address).bind(user).fetch_one(&mut *guard).await?;
+    if !eligible {
+        return Ok(None);
+    }
+    Ok(Some(guard))
 }
 
 /// What one evaluation did. `None` from [`evaluate_once`] means another replica
@@ -1236,6 +1275,11 @@ pub async fn evaluate_once_fenced(
             sqlx::query("SELECT pg_advisory_xact_lock($1)")
                 .bind(EVALUATION_LOCK)
                 .execute(&mut *tx)
+                .await?;
+            // Earlier rules may have crossed an expiry/band boundary or
+            // waited on locks. Use database time in this job, after its lock.
+            let now = sqlx::query_scalar("SELECT clock_timestamp()")
+                .fetch_one(&mut *tx)
                 .await?;
             key_expiring_tick(&mut tx, now).await
         }
@@ -1463,24 +1507,28 @@ async fn deliver_one(store: &Store, id: Uuid) -> anyhow::Result<bool> {
             .await?
     };
     let (settings, installation) = relay(&mut tx).await?;
-    let finish = |status: &'static str, sent: i32, failed: i32, error: Option<&'static str>| {
+    let finish = |status: &'static str,
+                  recipients: i32,
+                  sent: i32,
+                  failed: i32,
+                  error: Option<&'static str>| {
         sqlx::query("UPDATE alert_deliveries SET status=$2,recipients=$3,sent=$4,failed=$5,error=$6,completed_at=clock_timestamp() WHERE id=$1 AND status='pending'")
             .bind(id)
             .bind(status)
-            .bind(recipients.len() as i32)
+            .bind(recipients)
             .bind(sent)
             .bind(failed)
             .bind(error)
     };
-    if recipients.is_empty() {
-        finish("no_recipients", 0, 0, None)
+    if recipients.is_empty() && (kind == "key_expiring" || settings.is_some()) {
+        finish("no_recipients", 0, 0, 0, None)
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
         return Ok(true);
     }
     let Some(settings) = settings else {
-        finish("not_configured", 0, 0, None)
+        finish("not_configured", recipients.len() as i32, 0, 0, None)
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
@@ -1543,6 +1591,14 @@ async fn deliver_one(store: &Store, id: Uuid) -> anyhow::Result<bool> {
     }
     let (mut sent, mut failed, mut error) = (0, 0, None);
     for to in &recipients {
+        let authority = if kind == "key_expiring" {
+            match key_expiry_send_guard(store, event_id, to).await? {
+                Some(guard) => Some(guard),
+                None => continue,
+            }
+        } else {
+            None
+        };
         match settings
             .send(
                 &store.smtp_secrets,
@@ -1560,13 +1616,17 @@ async fn deliver_one(store: &Store, id: Uuid) -> anyhow::Result<bool> {
                 error.get_or_insert(e.as_str());
             }
         }
+        if let Some(authority) = authority {
+            authority.commit().await?;
+        }
     }
     let status = match (sent, failed) {
+        (0, 0) => "no_recipients",
         (_, 0) => "sent",
         (0, _) => "failed",
         _ => "partial",
     };
-    finish(status, sent, failed, error)
+    finish(status, sent + failed, sent, failed, error)
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
