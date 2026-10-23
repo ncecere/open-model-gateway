@@ -636,6 +636,11 @@ impl Runner {
         {
             Ok(Some(d)) => Planned::Route(d),
             Err(InferenceError::RouteCoolingDown(_)) => Planned::CoolingDown,
+            // A transient planning failure is not "no route serves this line":
+            // wait and plan again instead of dispatching it ungated, because an
+            // ungated attempt may only be refused at admission (#243), which
+            // would fail a line that a moment later had a route.
+            Err(InferenceError::Storage | InferenceError::Timeout) => Planned::CoolingDown,
             _ => Planned::Nothing,
         }
     }
@@ -736,7 +741,8 @@ struct Pin {
 /// Outcome of planning a waiting line's route.
 enum Planned {
     Route(Deployment),
-    /// Every route serving the line is cooling down: wait, do not fail.
+    /// Every route serving the line is cooling down, or planning hit a
+    /// transient storage/timeout failure: wait and plan again, do not fail.
     CoolingDown,
     /// Nothing serves the line (it fails like an interactive request).
     Nothing,
