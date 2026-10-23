@@ -21,12 +21,12 @@ Alert emails, including the new key-expiry reminders (#100), now go through a du
 - **Replicas:** claims are leased across replicas and fenced, so a result from an expired claim is ignored. SMTP I/O never holds a database connection, and each tick has a bounded send budget.
 - **Status:** incident History shows Waiting, Retrying, Sent, Exhausted or Failed per delivery, plus the waiting count and the next attempt time.
 - **Monitoring:** new metrics `gateway_alert_email_attempts_total{outcome}` and `gateway_alert_email_deliveries{state}`, and an example Prometheus rule `GatewayAlertEmailPersistentFailure`.
-- **Key-expiry reminders:** live eligibility is rechecked just before each send, instead of #100's authority locks held across SMTP. A revocation that lands during the send itself (bounded by the 30 s send timeout) can still receive that one reminder. The reminder never contains a key name or ID.
+- **Key-expiry reminders:** live eligibility is rechecked just before each send, instead of #100's authority locks held across SMTP. A revocation that lands during the send itself (bounded by the 40 s send deadline) can still receive that one reminder. The reminder never contains a key name or ID.
 - **Privacy:** recipient addresses aren't stored in the outbox, only delivery-scoped fingerprints. These are pseudonymous personal data and never appear in the API, metrics or logs.
 
 ### Upgrade
 - Apply migration `0050_alert_recipient_outbox.sql` explicitly, then reapply and verify runtime grants (new table and column grants).
-- **Stop older delivery workers before starting the new ones.** Old binaries don't understand the outbox. The database refuses an old binary's attempt to finalize a delivery whose recipients are still queued (SQLSTATE 55006), so it fails loudly instead of losing or duplicating mail.
+- **Stop every older delivery worker before applying 0050**: scale the old pods to zero, or unset `GATEWAY_ALERT_INTERVAL_SECONDS` on them, then start the new ones. Old binaries don't understand the outbox. The database refuses an old binary's attempt to finalize a delivery whose recipients are still queued (SQLSTATE 55006), so outbox state is never lost. But an old worker sends before it writes, and retries every interval, so an old worker left running repeatedly **re-sends** that delivery's mail to every recipient.
 - Historical terminal deliveries are not replayed. Outbox rows are append-only and retained like other audit tables.
 
 ## Authorized key-expiry reminders (#100)

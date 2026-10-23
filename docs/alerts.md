@@ -79,7 +79,7 @@ A budget or installation spend alert fires at the highest threshold reached. Whe
 
 ### Upgrade
 
-Apply explicit migration `0050_alert_recipient_outbox.sql` (after 0049's key-expiry reminders), then reapply/verify runtime grants. `serve` never migrates. **Historical terminal deliveries are not replayed**; only pending deliveries initialize an outbox. Deploy this code together across delivery workers: stop older workers before upgrading, since old workers do not understand the recipient queue. No operator action should reset a terminal delivery to pending; guards refuse reopening terminal deliveries or recipient outcomes.
+Apply explicit migration `0050_alert_recipient_outbox.sql` (after 0049's key-expiry reminders), then reapply/verify runtime grants. `serve` never migrates. **Historical terminal deliveries are not replayed**; only pending deliveries initialize an outbox. Stop every older delivery worker before applying the migration (scale to zero, or unset `GATEWAY_ALERT_INTERVAL_SECONDS`): old workers don't understand the recipient queue. The guard refuses an old worker's finalize while recipients are queued (SQLSTATE 55006), but an old worker sends before that write and retries every interval, so one left running re-sends the delivery's mail. No operator action should reset a terminal delivery to pending; guards refuse reopening terminal deliveries or recipient outcomes.
 
 ## Privacy
 

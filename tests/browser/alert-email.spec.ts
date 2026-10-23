@@ -68,8 +68,10 @@ test("incident history shows waiting, retrying, sent and exhausted delivery", as
     // specs (e.g. key-expiry) see the same unconfigured baseline they
     // expect regardless of project run order, and never dial this test's
     // relay after it closes.
-    await api(page, "PUT", "/platform/settings/email", {});
+    const reset = await api(page, "PUT", "/platform/settings/email", {}).catch(() => null);
     await context.close(); await db.end();
     await new Promise<void>((resolve, reject) => relay.close(error => error ? reject(error) : resolve()));
+    // Asserted after teardown, so a failed reset can't skip it.
+    expect(reset?.ok(), "email settings reset for later specs").toBe(true);
   }
 });

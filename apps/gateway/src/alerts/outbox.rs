@@ -231,6 +231,9 @@ pub(super) async fn complete(
 ///
 /// Unbounded by wall-clock budget: callers that must themselves stay inside a
 /// tick (the evaluator loop) use [`deliver_pending_within`] instead.
+/// Upper bound for one tick's cleanup transaction.
+pub(crate) const CLEANUP_BOUND: Duration = Duration::from_secs(30);
+
 pub async fn deliver_pending(store: &Store, limit: i64) -> usize {
     // Effectively unlimited: preserves the historical unbounded behaviour
     // for the CLI/report callers and the large existing test suite, while
@@ -250,10 +253,17 @@ pub(super) async fn deliver_pending_within(store: &Store, limit: i64, budget: Du
     let mut touched = HashSet::new();
     let owner = Uuid::new_v4();
     let outcome = async {
-        let mut tx =
-            crate::db::begin_with_setup(&store.pool, "SET LOCAL statement_timeout='10s'").await?;
-        cleanup(&mut tx).await?;
-        tx.commit().await?;
+        // Cleanup counts against the budget (`started` is taken before it) and
+        // has its own bound, so a degraded database cannot stall the tick.
+        tokio::time::timeout(CLEANUP_BOUND, async {
+            let mut tx =
+                crate::db::begin_with_setup(&store.pool, "SET LOCAL statement_timeout='10s'")
+                    .await?;
+            cleanup(&mut tx).await?;
+            tx.commit().await
+        })
+        .await
+        .map_err(|_| sqlx::Error::PoolTimedOut)??;
         for _ in 0..limit.clamp(1, DELIVERIES_PER_TICK) {
             if started.elapsed() + SEND_DEADLINE > budget {
                 break;
