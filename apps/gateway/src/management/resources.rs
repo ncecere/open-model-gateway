@@ -461,7 +461,7 @@ pub(super) fn platform_routes() -> Router<Store> {
 /// Configuration values only; never credentials or endpoints.
 async fn server_policy(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
 ) -> ApiResult {
     let tx = catalog_tx(&s, &u, false).await?;
     tx.commit().await?;
@@ -498,7 +498,7 @@ pub(super) fn search(q: Option<&str>) -> Result<Option<&str>, ApiError> {
     }
     Ok(q.map(str::trim).filter(|s| !s.is_empty()))
 }
-async fn collection(s: &Store, u: &BrowserPrincipal, p: CatalogQuery, query: &str) -> ApiResult {
+async fn collection(s: &Store, u: &impl Actor, p: CatalogQuery, query: &str) -> ApiResult {
     let mut tx = catalog_tx(s, u, false).await?;
     let (l, o) = Page {
         limit: p.limit,
@@ -517,7 +517,7 @@ async fn collection(s: &Store, u: &BrowserPrincipal, p: CatalogQuery, query: &st
 }
 async fn providers(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Query(p): Query<CatalogQuery>,
 ) -> ApiResult {
     collection(&s,&u,p,"SELECT jsonb_build_object('id',id,'name',name,'provider',provider,'endpoint',endpoint,'region',region,'enabled',enabled,'auth_mode',CASE WHEN credential_ref='none' THEN 'none' ELSE 'credential' END,'aws_auth',CASE WHEN credential_ref='aws:default' THEN 'default' WHEN credential_ref LIKE 'aws:profile:%' THEN 'profile' WHEN credential_ref LIKE 'aws:role:%' THEN 'role' END,'model_count',(SELECT count(DISTINCT d.model_id) FROM deployments d WHERE d.provider_connection_id=provider_connections.id)) FROM provider_connections WHERE ($3::text IS NULL OR strpos(lower(name),lower($3))>0 OR strpos(lower(provider),lower($3))>0 OR strpos(lower(endpoint),lower($3))>0 OR strpos(lower(region),lower($3))>0) AND ($4::boolean IS NULL OR enabled=$4) ORDER BY name,id LIMIT $1 OFFSET $2").await
@@ -565,7 +565,7 @@ pub(super) fn model_json() -> String {
 }
 async fn deployments(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Query(p): Query<DeploymentQuery>,
 ) -> ApiResult {
     let mut tx = catalog_tx(&s, &u, false).await?;
@@ -578,7 +578,7 @@ async fn deployments(
     tx.commit().await?;
     Ok(Json(json!({"data":data})))
 }
-async fn detail(s: &Store, u: &BrowserPrincipal, id: Uuid, query: &str) -> ApiResult {
+async fn detail(s: &Store, u: &impl Actor, id: Uuid, query: &str) -> ApiResult {
     let mut tx = catalog_tx(s, u, false).await?;
     let v: Value = sqlx::query_scalar(query)
         .bind(id)
@@ -590,14 +590,14 @@ async fn detail(s: &Store, u: &BrowserPrincipal, id: Uuid, query: &str) -> ApiRe
 }
 async fn provider(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
 ) -> ApiResult {
     detail(&s,&u,id,"SELECT jsonb_build_object('id',id,'name',name,'provider',provider,'endpoint',endpoint,'region',region,'enabled',enabled,'auth_mode',CASE WHEN credential_ref='none' THEN 'none' ELSE 'credential' END,'aws_auth',CASE WHEN credential_ref='aws:default' THEN 'default' WHEN credential_ref LIKE 'aws:profile:%' THEN 'profile' WHEN credential_ref LIKE 'aws:role:%' THEN 'role' END,'model_count',(SELECT count(DISTINCT d.model_id) FROM deployments d WHERE d.provider_connection_id=provider_connections.id)) FROM provider_connections WHERE id=$1").await
 }
 async fn model(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
 ) -> ApiResult {
     detail(
@@ -710,7 +710,7 @@ fn profile_valid(b: &ProviderInput) -> bool {
 }
 async fn create_provider(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Json(mut b): Json<ProviderInput>,
 ) -> ApiResult {
     let mut tx = catalog_tx(&s, &u, true).await?;
@@ -754,7 +754,7 @@ struct ProviderUpdate {
 }
 async fn update_provider(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
     Json(b): Json<ProviderUpdate>,
 ) -> ApiResult {
@@ -830,7 +830,7 @@ fn alias_valid(s: &str) -> bool {
 }
 async fn create_model(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Json(b): Json<ModelInput>,
 ) -> ApiResult {
     let mut tx = catalog_tx(&s, &u, true).await?;
@@ -841,7 +841,7 @@ async fn create_model(
 /// Validates, inserts and audits a model. The caller holds an exclusive `catalog_tx`.
 pub(super) async fn insert_model(
     tx: &mut Transaction<'_, Postgres>,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     b: ModelInput,
 ) -> Result<Uuid, ApiError> {
     if !valid_name(&b.display_name)
@@ -863,7 +863,7 @@ pub(super) struct Enabled {
 }
 async fn toggle(
     s: Store,
-    u: BrowserPrincipal,
+    u: ManagementPrincipal,
     id: Uuid,
     b: Enabled,
     table: &str,
@@ -926,7 +926,7 @@ where
 }
 async fn update_model(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
     Json(b): Json<ModelUpdate>,
 ) -> DetailedResult {
@@ -976,28 +976,28 @@ async fn update_model(
 // Delete means retire; historical prices/executions and foreign keys are never removed.
 async fn delete_provider(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
 ) -> DetailedResult {
     toggle(s, u, id, Enabled { enabled: false }, "provider_connections").await
 }
 async fn delete_model(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
 ) -> DetailedResult {
     toggle(s, u, id, Enabled { enabled: false }, "models").await
 }
 async fn delete_deployment(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
 ) -> DetailedResult {
     toggle(s, u, id, Enabled { enabled: false }, "deployments").await
 }
 async fn update_deployment(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
     Json(b): Json<Enabled>,
 ) -> DetailedResult {
@@ -1013,7 +1013,7 @@ pub(super) struct DeploymentInput {
 }
 async fn create_deployment(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Json(b): Json<DeploymentInput>,
 ) -> DetailedResult {
     let mut tx = catalog_tx(&s, &u, true).await?;
@@ -1025,7 +1025,7 @@ async fn create_deployment(
 /// foreign-key conflicts. The caller holds an exclusive `catalog_tx`.
 pub(super) async fn insert_deployment(
     tx: &mut Transaction<'_, Postgres>,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     b: DeploymentInput,
 ) -> Result<Uuid, ManagementError> {
     if b.upstream_model.trim().is_empty()
@@ -1140,7 +1140,7 @@ impl AuditQuery {
 }
 async fn platform_audit(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Query(p): Query<AuditQuery>,
 ) -> ApiResult {
     let mut tx = catalog_tx(&s, &u, false).await?;

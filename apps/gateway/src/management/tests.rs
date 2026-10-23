@@ -154,6 +154,10 @@ async fn call(
     body: Value,
 ) -> (StatusCode, Value) {
     let response = routes()
+        // Both extensions: a real browser session's middleware inserts both
+        // (identity::authenticate_management), and this bypasses that
+        // middleware entirely to call a handler directly.
+        .layer(Extension(ManagementPrincipal::Browser(u.clone())))
         .layer(Extension(u.clone()))
         .with_state(s.clone())
         .oneshot(

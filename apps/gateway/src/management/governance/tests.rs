@@ -68,6 +68,9 @@ mod db {
                 "/api/v1/workspaces/{ws}/keys/{key}/stats",
                 axum::routing::get(crate::management::keys::key_stats),
             )
+            .layer(Extension(crate::identity::ManagementPrincipal::Browser(
+                u.clone(),
+            )))
             .layer(Extension(u.clone()))
             .with_state(f.store.clone())
             .oneshot(
