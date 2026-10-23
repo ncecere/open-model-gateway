@@ -77,6 +77,8 @@ pub const KEY_EXPIRY_WARNING_DAYS: i32 = 7;
 /// expiry/fired-ordered, so already-processed rows never starve later
 /// candidates.
 const KEY_EXPIRY_PROGRESS: i64 = 500;
+/// New incidents only; deferred tuples remain eligible on a later tick/band.
+const KEY_EXPIRY_WORKSPACE_24H: i64 = 100;
 
 /// `GATEWAY_ALERT_INTERVAL_SECONDS`: default 60, `0` disables, at most 86400.
 pub fn interval_from_env() -> anyhow::Result<Option<Duration>> {
@@ -1005,14 +1007,18 @@ pub(crate) async fn retire_inactive(
 /// and keys that are not eligible at all: revoked, disabled, expired or
 /// expiry-less, in a disabled workspace, a disabled service account, or a
 /// human key whose holder lost workspace membership.
-const KEY_EXPIRY_CANDIDATES: &str = "SELECT k.id,k.expires_at,k.workspace_id,CASE WHEN k.expires_at<=$1+interval '1 day' THEN 1 ELSE 7 END \
+const KEY_EXPIRY_CANDIDATES: &str = "WITH eligible AS MATERIALIZED (SELECT k.id,k.expires_at,k.workspace_id,CASE WHEN k.expires_at<=$1+interval '1 day' THEN 1 ELSE 7 END threshold \
  FROM api_keys k JOIN workspaces w ON w.id=k.workspace_id \
  WHERE k.revoked_at IS NULL AND k.disabled_at IS NULL AND k.expires_at IS NOT NULL AND w.disabled_at IS NULL \
  AND k.expires_at>$1 AND k.expires_at<=$1+interval '7 days' \
  AND (k.issued_to_user_id IS NULL OR EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=k.workspace_id AND m.user_id=k.issued_to_user_id)) \
  AND (k.service_account_id IS NULL OR EXISTS(SELECT 1 FROM service_accounts sa WHERE sa.id=k.service_account_id AND sa.disabled_at IS NULL)) \
  AND NOT EXISTS(SELECT 1 FROM alert_events e WHERE e.kind='key_expiring' AND e.api_key_id=k.id AND e.key_expires_at=k.expires_at AND e.threshold_days=CASE WHEN k.expires_at<=$1+interval '1 day' THEN 1 ELSE 7 END) \
- ORDER BY k.expires_at,k.id LIMIT $2";
+ ), allowances AS MATERIALIZED (SELECT w.workspace_id, \
+ (SELECT count(*) FROM alert_events e WHERE e.kind='key_expiring' AND e.workspace_id=w.workspace_id AND e.fired_at>$1-interval '24 hours') recent \
+ FROM (SELECT DISTINCT workspace_id FROM eligible) w), ranked AS ( \
+ SELECT k.*,a.recent,row_number() OVER(PARTITION BY k.workspace_id ORDER BY k.expires_at,k.id) ordinal \
+ FROM eligible k JOIN allowances a USING(workspace_id))";
 
 /// Silently resolves (no delivery row, ever) at most [`KEY_EXPIRY_PROGRESS`]
 /// open key-expiry incidents, oldest first: `cleared` when the key is no
@@ -1049,8 +1055,21 @@ pub(crate) async fn key_expiring_tick(
         .execute(&mut **tx)
         .await?
         .rows_affected() as usize;
-    let candidates: Vec<KeyExpiryCandidate> = sqlx::query_as(KEY_EXPIRY_CANDIDATES)
+    // Apply each workspace's remaining allowance BEFORE the global LIMIT:
+    // even an earlier-expiring backlog cannot fill the tick with skipped rows.
+    // Resolved incidents still count, and no dedup row is written for excess keys.
+    let capped: Vec<(Uuid, i64, i64)> = sqlx::query_as(&format!("{KEY_EXPIRY_CANDIDATES} SELECT workspace_id,max(recent),count(*) FROM ranked GROUP BY workspace_id HAVING max(recent)+count(*)>$2"))
         .bind(now)
+        .bind(KEY_EXPIRY_WORKSPACE_24H)
+        .fetch_all(&mut **tx)
+        .await?;
+    for (workspace_id, count, eligible_candidates) in capped {
+        tracing::warn!(%workspace_id, count, eligible_candidates, cap = KEY_EXPIRY_WORKSPACE_24H,
+            "workspace key-expiry reminder cap applies; excess candidates deferred");
+    }
+    let candidates: Vec<KeyExpiryCandidate> = sqlx::query_as(&format!("{KEY_EXPIRY_CANDIDATES} SELECT id,expires_at,workspace_id,threshold FROM ranked WHERE ordinal+recent<=$2 ORDER BY expires_at,id LIMIT $3"))
+        .bind(now)
+        .bind(KEY_EXPIRY_WORKSPACE_24H)
         .bind(KEY_EXPIRY_PROGRESS)
         .fetch_all(&mut **tx)
         .await?;

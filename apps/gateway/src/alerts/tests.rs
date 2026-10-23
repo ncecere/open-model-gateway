@@ -119,6 +119,17 @@ async fn key_expiry_cycles_rotation_expiry_changes_and_silent_retirement(pool: P
         },
         "restoring an old tuple never replays"
     );
+    let resolutions: Vec<(DateTime<Utc>, i32, String)> = sqlx::query_as("SELECT key_expires_at,threshold_days,resolution FROM alert_events WHERE api_key_id=$1 ORDER BY key_expires_at,threshold_days")
+        .bind(s.key).fetch_all(&s.pool).await.unwrap();
+    assert_eq!(
+        resolutions,
+        vec![
+            (expiry, 1, "cleared".to_owned()),
+            (expiry, 7, "superseded".to_owned()),
+            (expiry + chrono::Duration::days(1), 7, "cleared".to_owned()),
+            (expiry + chrono::Duration::days(2), 7, "cleared".to_owned()),
+        ]
+    );
     // Real credential rotation: same lineage, different credential id.
     sqlx::query("UPDATE api_keys SET revoked_at=now() WHERE id=$1")
         .bind(s.key)
@@ -140,11 +151,62 @@ async fn key_expiry_cycles_rotation_expiry_changes_and_silent_retirement(pool: P
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
+async fn key_expiry_workspace_rolling_cap_defers_without_starving_other_workspaces(pool: PgPool) {
+    let s = seed(pool).await;
+    let now = expiry_now(&s).await;
+    // More than a global tick's worth, earlier than the quiet workspace's key.
+    sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash,expires_at) SELECT gen_random_uuid(),$1,$2,'backlog',decode(repeat('23',32),'hex'),$3 FROM generate_series(1,601)")
+        .bind(s.team).bind(s.owner).bind(now+chrono::Duration::days(3)).execute(&s.pool).await.unwrap();
+    set_expiry(&s, s.personal_key, Some(now + chrono::Duration::days(4))).await;
+    assert_eq!(
+        expiry_tick(&s, now).await.fired,
+        101,
+        "100 noisy + 1 quiet in the same tick"
+    );
+    assert_eq!(expiry_tick(&s, expiry_now(&s).await).await.fired, 0);
+    let counts: Vec<(Uuid, i64)> = sqlx::query_as("SELECT workspace_id,count(*) FROM alert_events WHERE kind='key_expiring' GROUP BY workspace_id ORDER BY workspace_id")
+        .fetch_all(&s.pool).await.unwrap();
+    let mut expected = vec![(s.team, 100), (s.personal, 1)];
+    expected.sort();
+    assert_eq!(counts, expected);
+    let later = expiry_now(&s).await + chrono::Duration::hours(24);
+    assert_eq!(
+        expiry_tick(&s, later).await.fired,
+        100,
+        "deferred tuples were not permanently deduplicated"
+    );
+    assert_eq!(
+        expiry_tick(&s, later).await.fired,
+        0,
+        "new events count toward the next window"
+    );
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM alert_events WHERE kind='key_expiring'"
+        )
+        .await,
+        201
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
 async fn key_expiry_bounded_progress_does_not_starve_retirements(pool: PgPool) {
     let s = seed(pool).await;
     let now = expiry_now(&s).await;
-    sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash,expires_at) SELECT gen_random_uuid(),$1,$2,'backlog',decode(repeat('23',32),'hex'),$3 FROM generate_series(1,1001)")
-        .bind(s.team).bind(s.owner).bind(now+chrono::Duration::days(4)).execute(&s.pool).await.unwrap();
+    // 1001 keys across eleven workspaces, each below the rolling cap.
+    for _ in 0..11 {
+        let ws = Uuid::new_v4();
+        sqlx::query("INSERT INTO workspaces(id,name,kind) VALUES($1,'Backlog','team')")
+            .bind(ws)
+            .execute(&s.pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source) VALUES($1,$2,'owner','manual')")
+            .bind(ws).bind(s.owner).execute(&s.pool).await.unwrap();
+        sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash,expires_at) SELECT gen_random_uuid(),$1,$2,'backlog',decode(repeat('23',32),'hex'),$3 FROM generate_series(1,91)")
+            .bind(ws).bind(s.owner).bind(now+chrono::Duration::days(4)).execute(&s.pool).await.unwrap();
+    }
     for n in [500, 500, 1, 0] {
         assert_eq!(expiry_tick(&s, now).await.fired, n);
     }

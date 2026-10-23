@@ -55,6 +55,8 @@ ALTER TABLE alert_events ADD CONSTRAINT alert_events_key_expiring_threshold
 -- same sentinel for every row of this kind and `subject_key` carries the
 -- key id).
 CREATE UNIQUE INDEX alert_events_key_expiry_dedup ON alert_events(api_key_id,key_expires_at,threshold_days) WHERE kind='key_expiring';
+-- Rolling 24-hour workspace cap counts all incidents, including resolved ones.
+CREATE INDEX alert_events_key_expiring_workspace_fired ON alert_events(workspace_id,fired_at) WHERE kind='key_expiring';
 -- Bounds the per-tick retirement scan of open key-expiry incidents.
 CREATE INDEX alert_events_key_expiring_open ON alert_events(fired_at) WHERE kind='key_expiring' AND resolved_at IS NULL;
 
