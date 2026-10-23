@@ -179,7 +179,12 @@ impl RequestTelemetry {
                 if let Some(error) = error {
                     span.attribute(telemetry::Attribute::Error(error_kind_of(error)));
                 }
-                context.record(span);
+                // Reserved outside the ordinary per-request child-span
+                // budget (#98 PR 2 review item 6): this is the request's
+                // sole root span, recorded exactly once here (guarded by
+                // `self.finished` above), so it must never be the span a
+                // full budget of children drops.
+                context.record_root(span);
             }
         }
         if let Some(eligibility) = self.eligibility.take() {

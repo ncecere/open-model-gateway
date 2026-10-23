@@ -489,6 +489,21 @@ impl Context {
         span.trace = self.trace;
         self.spans.push(span);
     }
+    /// Always recorded, outside the ordinary per-request child-span budget
+    /// (#98 PR 2 review item 6): the root span (`inference.request`) is the
+    /// trace's sole anchor, recorded exactly once, last, once the terminal
+    /// outcome is known. Three failover attempts plus an admission deadlock
+    /// retry can fill the whole `MAX_REQUEST` budget with child spans
+    /// before the root is ever recorded; routing it through the same
+    /// budget as [`Context::record`] would then drop the root itself,
+    /// orphaning every child span that *did* export. `RequestTelemetry`
+    /// (inference/mod.rs) calls this at most once per request, guarded by
+    /// its own `finished` flag, so this never grows `self.spans` by more
+    /// than one extra span beyond the ordinary budget.
+    pub fn record_root(&mut self, mut span: Span) {
+        span.trace = self.trace;
+        self.spans.push(span);
+    }
     /// The model alias admission resolved for this request, folded to
     /// `other` past the registry bound. `None` for another request's admission.
     pub fn admitted_alias(&self, admission: &SharedAdmission) -> Option<PublicAlias> {
@@ -1059,6 +1074,37 @@ mod tests {
         export_shared(context);
         assert!(started.elapsed() < Duration::from_millis(100));
         assert_eq!(recorder.counts.dropped(DropReason::QueueFull), 1);
+        rx.close();
+    }
+
+    /// #98 PR 2 review item 6: the root span (`inference.request`) is
+    /// recorded last, once the terminal outcome is known, after every child
+    /// span (`routing`, `admission`(.*), `upstream.attempt`, `settlement`(.*))
+    /// a request's attempts already recorded. Three failover attempts plus
+    /// an admission deadlock retry can fill the whole per-request span
+    /// budget before the root is ever recorded, which would otherwise drop
+    /// the root itself (an orphaned trace: every child exports, but the
+    /// trace's own anchor never does) through the exact same budget check
+    /// as any other span.
+    #[tokio::test]
+    async fn the_root_span_survives_the_per_request_budget_even_once_children_fill_it() {
+        let (recorder, mut rx) = Recorder::channel(1.0);
+        let mut context = recorder.begin(Uuid::new_v4()).unwrap();
+        for _ in 0..(MAX_REQUEST + 10) {
+            context.record(span());
+        }
+        assert_eq!(recorder.counts.dropped(DropReason::RequestLimit), 10);
+        context.record_root(span());
+        export_shared(context);
+        let mut exported = 0usize;
+        while rx.try_recv().is_ok() {
+            exported += 1;
+        }
+        assert_eq!(
+            exported,
+            MAX_REQUEST + 1,
+            "the root span must still export once children already filled the whole per-request budget"
+        );
         rx.close();
     }
 
