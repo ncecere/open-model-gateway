@@ -205,7 +205,9 @@ impl StreamSettlement {
     }
     /// Durably settle success; only then may the body terminate cleanly.
     pub async fn succeed(&mut self) -> Result<(), InferenceError> {
-        self.guard.finish(Outcome::Succeeded, None).await
+        // Non-generation workloads are outside this PR's tracing scope
+        // (#98 PR 2 covers chat/responses/messages only): no phase buffer.
+        self.guard.finish(Outcome::Succeeded, None, None).await
     }
     /// Record failure and return the error the client should see.
     pub async fn fail(&mut self, error: InferenceError) -> InferenceError {
@@ -213,7 +215,7 @@ impl StreamSettlement {
             self.guard.health_observation = false;
         }
         self.guard
-            .finish(Outcome::Failed, Some(error))
+            .finish(Outcome::Failed, Some(error), None)
             .await
             .err()
             .unwrap_or(error)
@@ -451,12 +453,15 @@ impl Engine {
             )
             .await
             .map_err(|_| InferenceError::Timeout)??;
+            // Non-generation workloads are outside this PR's tracing scope
+            // (#98 PR 2): no correlation id to log.
             let mut guard = ExecutionGuard::new(
                 self.repository.clone(),
                 execution_id,
                 target.id,
                 started,
                 permit.clone(),
+                None,
             );
             let evidence_ok =
                 |u: Usage| valid_usage(u) && (!input_only || u.output_tokens == Some(0));
@@ -485,7 +490,7 @@ impl Engine {
                     }
                     if !evidence_ok(usage) || !request.valid_response(&response) {
                         guard
-                            .finish(Outcome::Failed, Some(InferenceError::InvalidUpstream))
+                            .finish(Outcome::Failed, Some(InferenceError::InvalidUpstream), None)
                             .await?;
                         return Err(InferenceError::InvalidUpstream);
                     }
@@ -501,11 +506,11 @@ impl Engine {
                             },
                         ));
                     }
-                    guard.finish(Outcome::Succeeded, None).await?;
+                    guard.finish(Outcome::Succeeded, None, None).await?;
                     return Ok(response);
                 }
                 Err(error) => {
-                    guard.finish(Outcome::Failed, Some(error)).await?;
+                    guard.finish(Outcome::Failed, Some(error), None).await?;
                     if attempt + 1 < plan.max_attempts
                         && attempt + 1 < plan.deployment_ids.len()
                         && crate::routing::may_failover(&plan, error)

@@ -49,6 +49,7 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         "usage_rollup_dirty",
         "archived_partitions",
         "admission_lock_waits",
+        "admin_api_tokens",
     ] {
         assert_eq!(
             sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
@@ -83,6 +84,7 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
     audit_export_runs_as_runtime(&pool).await;
     legal_holds_run_as_runtime(&pool).await;
     dashboard_sessions_run_as_runtime(&pool).await;
+    admin_tokens_run_as_runtime(&pool).await;
     // Last: its unknown batch hold would change the installation-wide totals above.
     async_jobs_run_as_runtime(&pool).await;
     sqlx::query("SELECT pg_advisory_unlock(72419505)")
@@ -594,6 +596,10 @@ async fn alert_evaluation_runs_as_runtime(pool: &PgPool) {
  INSERT INTO alert_rules(id,scope,kind,name,window_minutes,consecutive_failures) VALUES(gen_random_uuid(),'installation','provider_failing','Upstream',15,3);
  INSERT INTO alert_rules(id,scope,workspace_id,kind,name,budget_layers,thresholds,notify_workspace_admins,notify_emails) VALUES(gen_random_uuid(),'workspace',ws,'budget_threshold','Project budgets',ARRAY['local'],ARRAY[80],true,ARRAY['ops@example.invalid']);
  -- 0036: one project sustained 2 admissions/s (every minute of the window).
+ -- g starts at 1, not 0: the current minute already has a row from the
+ -- rate_counters_reservation_insert trigger fired by the governance_reservations
+ -- inserts above (0024), and boosting it here would desync it from history
+ -- (history_verify_runs_as_runtime scans and compares against it below).
  INSERT INTO rate_minute_counters(minute_start,scope_kind,scope_id,requests) SELECT date_trunc('minute',now(),'UTC')-make_interval(mins=>g),'workspace',ws,120 FROM generate_series(1,7) g;
  INSERT INTO alert_rules(id,scope,kind,name,window_minutes,ceiling_requests_per_second,ceiling_lock_wait_ms,notify_platform_admins) VALUES(gen_random_uuid(),'installation','admission_ceiling','Ceiling',5,2,250,true);
  END $$"#)
@@ -613,18 +619,61 @@ async fn alert_evaluation_runs_as_runtime(pool: &PgPool) {
         .await
         .unwrap();
     let store = open_model_gateway::store::Store::new(runtime.clone());
-    // 0036: replicas flush their scope-lock waits and maintenance prunes them, as runtime.
-    open_model_gateway::governance::pressure::record(
-        chrono::Utc::now(),
-        uuid::Uuid::new_v4(),
-        uuid::Uuid::new_v4(),
-        std::time::Duration::from_millis(30),
-    );
-    assert!(
+    // The seeded workspace, its key and the seeded personal workspace, read
+    // back by their fixed names rather than threaded through the `DO $$`
+    // block as bind parameters: needed below to target the admission-ceiling
+    // pressure sample at the real scope, and to label incidents by scope
+    // instead of a magic total (#262).
+    let ws: uuid::Uuid =
+        sqlx::query_scalar("SELECT id FROM workspaces WHERE name='Alerts project'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let personal: uuid::Uuid =
+        sqlx::query_scalar("SELECT id FROM workspaces WHERE name='Personal' AND kind='personal'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let key_id: uuid::Uuid = sqlx::query_scalar("SELECT id FROM api_keys WHERE name='Alerts'")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    // 0036: replicas flush their scope-lock waits and maintenance prunes them,
+    // as runtime. #262: the admission_ceiling rule above ("Ceiling") can also
+    // fire purely from `rate_minute_counters` (every complete minute of its
+    // 5-minute window at or above 2 admissions/s, seeded above), but that
+    // check races the wall clock: the seed above used the database's `now()`
+    // inside the committed `DO $$` block, while `alerts::evaluate_once`
+    // below takes its own, later `clock_timestamp()`, after this function's
+    // remaining round-trips. Under CI latency that can land one UTC minute
+    // later, shifting the rule's window one minute past the seeded range and
+    // losing the one admissions-rate incident for `ws` -- exactly the
+    // observed flake (`fired: 9` instead of 10). The rule's other,
+    // independent trigger -- 5% or more of a scope's admissions waiting at
+    // least its lock-wait threshold -- does not have that race: recording it
+    // for a minute strictly before `Utc::now()` (never the still-open
+    // current minute, which `ceiling_conditions`'s half-open window always
+    // excludes) means it lands inside the rule's window relative to *any*
+    // `clock_timestamp()` evaluate_once could observe here, giving the same
+    // single incident a deterministic second path that does not depend on
+    // which minute evaluation lands in.
+    let pressure_at = chrono::Utc::now() - chrono::Duration::minutes(1);
+    for _ in 0..40 {
+        open_model_gateway::governance::pressure::record(
+            pressure_at,
+            ws,
+            key_id,
+            std::time::Duration::from_millis(300),
+        );
+    }
+    // Deterministic, not merely `>= 2`: every record() above names the same
+    // minute and only these two scopes, so the upsert always writes exactly
+    // one (minute, workspace, ws) row and one (minute, key, key_id) row.
+    assert_eq!(
         open_model_gateway::governance::pressure::flush(&store)
             .await
-            .unwrap()
-            >= 2
+            .unwrap(),
+        2
     );
     open_model_gateway::governance::pressure::prune_fenced(&store, 100, None)
         .await
@@ -634,8 +683,104 @@ async fn alert_evaluation_runs_as_runtime(pool: &PgPool) {
         .unwrap()
         .unwrap();
     assert_eq!(report.failed_rules, 0, "{report:?}");
-    // Existing eight incidents plus shared/personal key-expiry reminders.
-    assert_eq!(report.fired, 10, "{report:?}");
+    // The ten incidents by kind and scope, not merely their total (#262):
+    // each installation rule fires once ("none" scope, no workspace), each
+    // workspace-scoped and built-in budget rule fires for its own workspace,
+    // and key-expiry fires exactly one shared and one personal reminder.
+    #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+    struct Incident {
+        kind: String,
+        source: Option<String>,
+        scope: String,
+        level: i32,
+    }
+    let mut incidents: Vec<Incident> = sqlx::query_as::<_, (String, Option<String>, Option<uuid::Uuid>, i32)>(
+        "SELECT e.kind,coalesce(r.name,e.builtin),e.workspace_id,e.level FROM alert_events e LEFT JOIN alert_rules r ON r.id=e.rule_id WHERE e.resolved_at IS NULL",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|(kind, source, workspace_id, level)| Incident {
+        kind,
+        source,
+        scope: match workspace_id {
+            Some(id) if id == ws => "ws".to_owned(),
+            Some(id) if id == personal => "personal".to_owned(),
+            Some(_) => "other".to_owned(),
+            None => "none".to_owned(),
+        },
+        level,
+    })
+    .collect();
+    incidents.sort();
+    let mut expected = vec![
+        Incident {
+            kind: "admission_ceiling".into(),
+            source: Some("Ceiling".into()),
+            scope: "ws".into(),
+            level: 1,
+        },
+        Incident {
+            kind: "budget_threshold".into(),
+            source: Some("Budgets".into()),
+            scope: "ws".into(),
+            level: 100,
+        },
+        Incident {
+            kind: "budget_threshold".into(),
+            source: Some("Project budgets".into()),
+            scope: "ws".into(),
+            level: 80,
+        },
+        Incident {
+            kind: "budget_threshold".into(),
+            source: Some("personal_budget".into()),
+            scope: "personal".into(),
+            level: 100,
+        },
+        Incident {
+            kind: "error_rate".into(),
+            source: Some("Errors".into()),
+            scope: "none".into(),
+            level: 1,
+        },
+        // Exactly one shared and one personal key_expiring reminder: never
+        // loosened per #262.
+        Incident {
+            kind: "key_expiring".into(),
+            source: None,
+            scope: "personal".into(),
+            level: 7,
+        },
+        Incident {
+            kind: "key_expiring".into(),
+            source: None,
+            scope: "ws".into(),
+            level: 7,
+        },
+        Incident {
+            kind: "provider_failing".into(),
+            source: Some("Upstream".into()),
+            scope: "none".into(),
+            level: 1,
+        },
+        Incident {
+            kind: "spend_spike".into(),
+            source: Some("Spike".into()),
+            scope: "none".into(),
+            level: 1,
+        },
+        Incident {
+            kind: "spend_threshold".into(),
+            source: Some("Installation spend".into()),
+            scope: "none".into(),
+            level: 80,
+        },
+    ];
+    expected.sort();
+    assert_eq!(incidents, expected, "{report:?}");
+    assert_eq!(report.fired, incidents.len(), "{report:?}");
     assert_eq!(
         open_model_gateway::alerts::evaluate_once(&store)
             .await
@@ -1174,6 +1319,192 @@ async fn budget_totals_maintained_as_runtime(pool: &PgPool) {
     .await
     .unwrap();
     assert_eq!(held, ["500", "500", "500", "500"]);
+    runtime.close().await;
+}
+
+/// #37 PR1: create, revoke (idempotent), authenticate-for-authorization and
+/// the throttled last-use update, as the runtime role; plus the
+/// owner-invalidation triggers (role loss) firing for a runtime-performed
+/// write, and that no role can rewrite identity/digest/scopes/expiry/
+/// allowlist or remove a row.
+async fn admin_tokens_run_as_runtime(pool: &PgPool) {
+    use open_model_gateway::governance::locks::{self, Scope};
+    let runtime = runtime_pool(pool).await;
+    let store = open_model_gateway::store::Store::new(runtime.clone());
+    let owner = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,email) VALUES($1,$2)")
+        .bind(owner)
+        .bind(format!("admin-tokens-{owner}@example.test"))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO platform_role_grants(user_id,role,source) VALUES($1,'admin','manual')",
+    )
+    .bind(owner)
+    .execute(pool)
+    .await
+    .unwrap();
+    // PR2's documented contract: the handler takes the owner's scope lock
+    // exclusive up front, in its own transaction, then creates on it.
+    let mut tx = runtime.begin().await.unwrap();
+    locks::exclusive(&mut tx, [Scope::User(owner)])
+        .await
+        .unwrap();
+    let created = open_model_gateway::admin_tokens::create_admin_token(
+        &mut tx,
+        owner,
+        "Runtime probe",
+        &["platform:read".to_string()],
+        30,
+        None,
+    )
+    .await
+    .expect("runtime creates an admin token");
+    tx.commit().await.unwrap();
+    let found = store
+        .authenticate_admin_token(&created.token)
+        .await
+        .expect("runtime authenticates an admin token")
+        .expect("the token is live");
+    assert_eq!(found.owner_user_id, owner);
+    store
+        .touch_admin_token_use(created.id, Some("203.0.113.9".parse().unwrap()))
+        .await
+        .expect("runtime records successful use");
+    let (touched, address): (bool, String) = sqlx::query_as(
+        "SELECT last_used_at>now()-interval '1 minute',host(last_used_address) FROM admin_api_tokens WHERE id=$1",
+    )
+    .bind(created.id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert!(touched);
+    assert_eq!(address, "203.0.113.9");
+    store
+        .touch_admin_token_use(created.id, Some("198.51.100.1".parse().unwrap()))
+        .await
+        .unwrap();
+    let address: String =
+        sqlx::query_scalar("SELECT host(last_used_address) FROM admin_api_tokens WHERE id=$1")
+            .bind(created.id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(address, "203.0.113.9", "last-use throttle did not hold");
+    let mut tx = runtime.begin().await.unwrap();
+    assert!(
+        open_model_gateway::admin_tokens::revoke_admin_token(&mut tx, created.id)
+            .await
+            .unwrap(),
+        "runtime revokes a token"
+    );
+    tx.commit().await.unwrap();
+    let mut tx = runtime.begin().await.unwrap();
+    assert!(
+        open_model_gateway::admin_tokens::revoke_admin_token(&mut tx, created.id)
+            .await
+            .unwrap(),
+        "runtime revokes an already-revoked token idempotently"
+    );
+    tx.commit().await.unwrap();
+    assert!(
+        store
+            .authenticate_admin_token(&created.token)
+            .await
+            .unwrap()
+            .is_none(),
+        "a revoked token never authenticates"
+    );
+    for statement in [
+        "UPDATE admin_api_tokens SET revoked_at=NULL WHERE id=$1",
+        "UPDATE admin_api_tokens SET name='renamed' WHERE id=$1",
+        "UPDATE admin_api_tokens SET scopes=ARRAY['settings:write'] WHERE id=$1",
+        "UPDATE admin_api_tokens SET expires_at=now()+interval '1 day' WHERE id=$1",
+        "UPDATE admin_api_tokens SET owner_user_id=gen_random_uuid() WHERE id=$1",
+        "DELETE FROM admin_api_tokens WHERE id=$1",
+    ] {
+        let denied = sqlx::query(statement)
+            .bind(created.id)
+            .execute(&runtime)
+            .await
+            .unwrap_err();
+        let text = denied.to_string();
+        assert!(
+            text.contains("permission denied")
+                || text.contains("immutable")
+                || text.contains("final"),
+            "{statement}: {denied}"
+        );
+    }
+    assert!(
+        sqlx::query("TRUNCATE admin_api_tokens")
+            .execute(&runtime)
+            .await
+            .is_err()
+    );
+    // Adversarial re-review of #37 PR1, issue 1 (MEDIUM, BLOCKING): the
+    // runtime had a whole-row INSERT and the Rust insert supplied
+    // `created_at`, so the 1-90 day CHECK was measured against a
+    // caller-chosen `created_at` -- `now()+10 years` with `expires_at`
+    // only 90 days past it passed the CHECK as written and left the
+    // token with roughly 3,700 days left on `authenticate_admin_token`'s
+    // own predicate. The runtime role's INSERT grant now excludes
+    // created_at (and revoked_at/last_used_at/last_used_address)
+    // entirely, so the identical attack is refused at the column-grant
+    // level, before migration 0051's creation guard (which forces
+    // created_at to now() regardless) is ever reached.
+    {
+        let mut tx = runtime.begin().await.unwrap();
+        locks::exclusive(&mut tx, [Scope::User(owner)])
+            .await
+            .unwrap();
+        let denied = sqlx::query(
+            "INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,created_at,expires_at)
+             VALUES(gen_random_uuid(),$1,'attack',decode(repeat('c1',32),'hex'),ARRAY['platform:read'],now()+interval '10 years',now()+interval '10 years'+interval '90 days')",
+        )
+        .bind(owner)
+        .execute(&mut *tx)
+        .await
+        .unwrap_err();
+        assert!(
+            denied.to_string().contains("permission denied"),
+            "runtime must not be able to INSERT a forged created_at: {denied}"
+        );
+        let _ = tx.rollback().await;
+    }
+    let mut tx = runtime.begin().await.unwrap();
+    locks::exclusive(&mut tx, [Scope::User(owner)])
+        .await
+        .unwrap();
+    let second = open_model_gateway::admin_tokens::create_admin_token(
+        &mut tx,
+        owner,
+        "Second",
+        &["platform:read".to_string()],
+        30,
+        None,
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    sqlx::query(
+        "UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND role='admin'",
+    )
+    .bind(owner)
+    .execute(&runtime)
+    .await
+    .expect("runtime revokes a platform role grant");
+    let revoked: bool =
+        sqlx::query_scalar("SELECT revoked_at IS NOT NULL FROM admin_api_tokens WHERE id=$1")
+            .bind(second.id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert!(
+        revoked,
+        "the role-loss owner-invalidation trigger did not fire for a runtime-performed revocation"
+    );
     runtime.close().await;
 }
 

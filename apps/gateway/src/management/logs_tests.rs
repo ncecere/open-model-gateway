@@ -352,7 +352,8 @@ async fn platform_logs_show_shared_workspaces_only_never_personal(pool: PgPool) 
     )
     .await;
 
-    // The owner sees their personal request in their own workspace.
+    // The owner sees their personal request in their own workspace, with a
+    // null trace_id (#98): personal requests are never traced.
     let (_, own) = get(
         &f,
         &f.owner,
@@ -360,6 +361,7 @@ async fn platform_logs_show_shared_workspaces_only_never_personal(pool: PgPool) 
     )
     .await;
     assert_eq!(rows(&own).len(), 1);
+    assert!(rows(&own)[0]["trace_id"].is_null());
 
     for u in [&f.admin, &f.auditor] {
         let (status, list) = get(&f, u, "/api/v1/platform/logs/requests").await;
@@ -372,6 +374,17 @@ async fn platform_logs_show_shared_workspaces_only_never_personal(pool: PgPool) 
         assert!(!list.to_string().contains("Private"));
         assert_eq!(rows(&list)[0]["workspace"]["id"], f.team.to_string());
         assert_eq!(rows(&list)[1]["workspace"]["kind"], "project");
+        // Shared-workspace rows carry the deterministic correlation id
+        // (#98): the same hex id for every viewer, derived only from the
+        // root request id, never a client header.
+        assert_eq!(
+            rows(&list)[0]["trace_id"],
+            hex::encode(crate::telemetry::trace_id(t.root))
+        );
+        assert_eq!(
+            rows(&list)[1]["trace_id"],
+            hex::encode(crate::telemetry::trace_id(p.root))
+        );
         // Workspace filter; a personal workspace id yields nothing.
         let (_, only) = get(
             &f,
@@ -430,6 +443,10 @@ async fn platform_logs_show_shared_workspaces_only_never_personal(pool: PgPool) 
         assert_eq!(d["workspace_id"], f.team.to_string());
         assert_eq!(d["next_id"], p.root.to_string());
         assert_eq!(
+            d["trace_id"],
+            hex::encode(crate::telemetry::trace_id(t.root))
+        );
+        assert_eq!(
             get(
                 &f,
                 u,
@@ -453,6 +470,21 @@ async fn platform_logs_show_shared_workspaces_only_never_personal(pool: PgPool) 
             );
         }
     }
+    // An unauthorized viewer (not a member of the team workspace, no
+    // platform role) never sees trace_id for someone else's request
+    // (#98): the whole row is refused, following the existing visibility
+    // rules.
+    let (status, refused) = get(
+        &f,
+        &f.outsider,
+        &format!("/api/v1/workspaces/{}/requests/{}", f.team, t.root),
+    )
+    .await;
+    assert!(
+        matches!(status, StatusCode::FORBIDDEN | StatusCode::NOT_FOUND),
+        "{status} {refused}"
+    );
+    assert!(refused["trace_id"].is_null());
 }
 
 /// Async jobs in Logs: the `workload=jobs` filter, the job summary on rows

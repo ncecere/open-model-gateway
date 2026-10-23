@@ -170,6 +170,8 @@ function RequestDetail({ scope, id }: { scope: LogsScope; id: string }) {
       </StatTileGrid>
       <Card title="Details" titleAs="h2"><DescriptionList dividers items={[
         { label: "Request ID", value: <CopyId value={r!.root_request_id} label="request ID" head={13} tail={12} /> },
+        // Shared (team/project) requests only; a personal request's trace_id is null.
+        ...(r!.trace_id ? [{ label: "Trace ID", value: <CopyId value={r!.trace_id} label="trace ID" head={16} tail={16} /> }] : []),
         { label: "Model", value: r!.model },
         // What the provider reported serving (final attempt), else the route's configured id, marked "configured".
         ...(servedModel(r!) ? [{ label: "Upstream model", value: <UpstreamModel row={r!} showRoute /> }] : []),

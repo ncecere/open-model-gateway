@@ -7,7 +7,7 @@ use uuid::Uuid;
 use super::error::InferenceError;
 pub use super::workload_types::*;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ApiProtocol {
     ChatCompletions,
     Responses,
