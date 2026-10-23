@@ -84,9 +84,27 @@ SCIM never removes platform access from the last active Platform Admin. An activ
 
 To retire the last Admin, grant Admin to someone else first, then repeat the change in the identity provider. The same rule applies to manual changes: Admin › Users and the management API refuse to revoke the last Admin grant, suspend the last Admin, or change or delete the group mapping that holds it. There is no last-owner safeguard for SCIM: losing a Team or Project owner through SCIM follows the identity provider.
 
+## Authentik
+
+Authentik 2025.10's SCIM provider needs three non-default settings:
+
+- **`userName` must be the email.** The default user mapping sends Authentik's username, not the email. The gateway matches existing accounts by `userName` (the email until SCIM first writes it) or by email, so with the default mapping a `POST` returns `409 uniqueness` on the email and the user never links. Use a custom SCIM user mapping that returns `"userName": request.user.email`.
+- **Limit pushed groups.** `filter_group` on the provider filters users only; Authentik still pushes every directory group. Use a custom group mapping that pushes only the groups the gateway maps:
+
+  ```python
+  if group.name != "<access group>":
+      raise SkipObject
+  return {"displayName": group.name}
+  ```
+
+  `SkipObject` is provided in the expression context. Importing `SkipObjectException` from `authentik.lib.sync.outgoing.exceptions` fails on 2025.10.
+- **Omit `emails` for reserved test domains.** Authentik validates email addresses before sending, so a test account on `.invalid`, `.test` or `.example` aborts the whole user sync at that account ("Stopping sync due to error"); the rest of the page never syncs. Omit `emails` for those domains in the mapping. The account still matches by `userName`.
+
+Authentik's provider also has a dry-run mode, a safe way to see the planned requests before turning it on.
+
 ## Operations and limits
 
 - Each write runs in one transaction under the installation lock, the same lock that sign-in and management use. The last-admin check runs at the end of that transaction (see [above](#the-last-platform-admin-is-protected)). A change to a very large group's name or `externalId` re-checks every member in that transaction.
 - Runtime database access is limited to the reviewed columns in `deploy/staging/runtime-grants.sql` (migration `0014_scim.sql`; the last-admin alert kind is in `0018_job_limits.sql`). SCIM user links cannot be deleted or re-keyed. Groups and memberships are directory state that can be removed, and grant history stays in the grant tables and audit log. `verify-privileges.sql` checks this and runs rollback-only probes.
 - Rate-limit `/scim` at the edge, and keep `Authorization` headers out of edge logs.
-- Tests in `apps/gateway/src/scim/tests.rs` use local requests only. Real Okta and Entra acceptance has not been run yet.
+- Tests in `apps/gateway/src/scim/tests.rs` use local requests only. Authentik 2025.10 was run against v0.7.1 on 2026-10-23, covering matching of existing users, one pushed group, and deactivate/reactivate; Okta and Entra have still not been run.
