@@ -388,6 +388,12 @@ GRANT EXECUTE ON FUNCTION public.omg_admin_tokens_require_owner_lock(uuid) TO ga
 -- like valid_model_protocols and friends above.
 GRANT EXECUTE ON FUNCTION public.valid_admin_token_scopes(text[]),
  public.valid_admin_token_allowlist(cidr[]) TO gateway_runtime;
+-- #37 PR2: every admitted admin-token attempt is its own append-only pair
+-- of rows (start, then completion); runtime only ever INSERTs, never
+-- UPDATEs or DELETEs (the immutable_history() triggers in 0052 are the
+-- backstop, not the only gate -- the same append-only pattern as
+-- audit_export_queue and every history table above).
+GRANT SELECT,INSERT ON public.admin_token_attempts TO gateway_runtime;
 -- No UPDATE/DELETE/TRUNCATE of immutable prices, ledger or audit; no removal of
 -- users/workspaces/keys/history and no rewrite of immutable admission snapshots.
 COMMIT;

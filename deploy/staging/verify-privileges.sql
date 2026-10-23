@@ -215,6 +215,14 @@ DO $$ DECLARE r record; t text; BEGIN
  -- comment); assert the attribute directly instead of only ever forcing
  -- it with SET CONSTRAINTS below.
  IF NOT (SELECT tgdeferrable AND tginitdeferred FROM pg_trigger WHERE tgname='admin_api_tokens_role_lost') THEN RAISE EXCEPTION 'admin API token role-loss trigger is not DEFERRABLE INITIALLY DEFERRED'; END IF;
+ -- Admin token audit (0052/#37 PR2): business-action attribution and the
+ -- per-attempt log are both append-only for runtime.
+ IF NOT has_column_privilege('gateway_runtime','public.audit_events','admin_token_id','INSERT,SELECT')
+  OR has_column_privilege('gateway_runtime','public.audit_events','admin_token_id','UPDATE') THEN RAISE EXCEPTION 'admin token attribution column misconfigured on audit_events'; END IF;
+ IF NOT EXISTS(SELECT FROM pg_indexes WHERE schemaname='public' AND tablename='audit_events' AND indexname='audit_events_token_attribution') THEN RAISE EXCEPTION 'audit token-attribution index missing'; END IF;
+ IF NOT has_table_privilege('gateway_runtime','public.admin_token_attempts','SELECT,INSERT')
+  OR has_table_privilege('gateway_runtime','public.admin_token_attempts','UPDATE,DELETE,TRUNCATE') THEN RAISE EXCEPTION 'admin token attempts not append-only for runtime'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgrelid='public.admin_token_attempts'::regclass AND tgenabled='O' AND NOT tgisinternal)<>3 THEN RAISE EXCEPTION 'admin token attempt append-only guards missing or disabled'; END IF;
 END $$;
 BEGIN;
 -- A probe-only work lease (rolled back with everything else) so the election
@@ -847,6 +855,23 @@ BEGIN
   -- Runtime never has DELETE on users at all (existing grants); the FK
   -- RESTRICT itself is exercised by the owner-level test suite.
   BEGIN DELETE FROM users WHERE id=au; RAISE EXCEPTION 'admin token owner removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ END;
+ -- Admin token audit (0052/#37 PR2): both writes an attempt pair as
+ -- runtime and append-only (no UPDATE/DELETE/TRUNCATE).
+ DECLARE tu uuid:=gen_random_uuid(); ta uuid:=gen_random_uuid(); req uuid:=gen_random_uuid(); attempt_row uuid:=gen_random_uuid(); BEGIN
+  INSERT INTO users(id,email) VALUES(tu,'attempt-owner-'||tu||'@example.invalid');
+  INSERT INTO platform_role_grants(id,user_id,role,source) VALUES(gen_random_uuid(),tu,'admin','manual');
+  PERFORM pg_advisory_xact_lock(72419512,omg_scope_key(tu));
+  INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,expires_at) VALUES(ta,tu,'Attempt probe token',decode(repeat('ba',32),'hex'),ARRAY['platform:read'],now()+interval '30 days');
+  INSERT INTO admin_token_attempts(id,request_id,phase,token_id,owner_user_id,route_method,route_template,required_scope,outcome)
+   VALUES(attempt_row,req,'start',ta,tu,'GET','/api/v1/platform/providers','platform:read','allowed');
+  INSERT INTO admin_token_attempts(id,request_id,phase,token_id,owner_user_id,route_method,route_template,required_scope,outcome,status_code)
+   VALUES(gen_random_uuid(),req,'completion',ta,tu,'GET','/api/v1/platform/providers','platform:read','allowed',200);
+  BEGIN UPDATE admin_token_attempts SET status_code=500 WHERE id=attempt_row; RAISE EXCEPTION 'admin token attempt rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN DELETE FROM admin_token_attempts WHERE id=attempt_row; RAISE EXCEPTION 'admin token attempt removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  -- Business-action audit attribution: an admin-token-attributed row reads
+  -- back the token id, like every other audit_events column.
+  INSERT INTO audit_events(id,actor_user_id,action,resource_type,resource_id,admin_token_id) VALUES(gen_random_uuid(),tu,'provider.updated','provider',gen_random_uuid(),ta);
  END;
  -- Work leases (0029): election, renewal, fencing, release and takeover as runtime.
  DECLARE me uuid:=gen_random_uuid(); other uuid:=gen_random_uuid(); term bigint; BEGIN

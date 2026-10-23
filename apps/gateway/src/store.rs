@@ -156,6 +156,8 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "legal_holds",
     // 0051 admin API tokens, storage and lifecycle (#37 PR1)
     "admin_api_tokens",
+    // 0052 admin API token authentication and audit (#37 PR2)
+    "admin_token_attempts",
 ];
 /// Partitioned parents (0030/0031). Any partition of one of these in
 /// `public` (`pg_class.relispartition`; month partitions are created ahead of
