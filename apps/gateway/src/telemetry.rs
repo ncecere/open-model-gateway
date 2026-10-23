@@ -126,7 +126,14 @@ fixed_enum!(Provider { OpenAi => "openai", Anthropic => "anthropic", Bedrock => 
 fixed_enum!(Route { Chat => "/v1/chat/completions", Responses => "/v1/responses", Messages => "/v1/messages" });
 fixed_enum!(Outcome { Completed => "completed", Error => "error", Cancelled => "cancelled", Unknown => "unknown" });
 fixed_enum!(ErrorKind { InvalidRequest => "invalid_request", Unauthorized => "unauthorized", Forbidden => "forbidden", NotFound => "not_found", Unsupported => "unsupported", Busy => "busy", Timeout => "timeout", Upstream => "upstream", Storage => "storage", Configuration => "configuration", Cancelled => "cancelled", Unknown => "unknown" });
-fixed_enum!(DropReason { Contexts => "contexts", RequestLimit => "request_limit", SpanLimit => "span_limit", QueueFull => "queue_full", Shutdown => "shutdown", Ineligible => "ineligible", Delivery => "delivery" });
+// `Invalid` (#98 PR 2 review item 5): `Span::new`/`Span::reserved` return
+// `None` on a malformed shape (end < start, a zero id/trace) or entropy
+// exhaustion. No existing reason describes that: `SpanLimit` is a
+// successfully-built span too large/unserializable, not one that was
+// never built at all. Counted wherever a `Context` or `Recorder` is in
+// hand at the failed construction, so "every span is either delivered or
+// counted" also covers construction, not just export.
+fixed_enum!(DropReason { Contexts => "contexts", RequestLimit => "request_limit", SpanLimit => "span_limit", QueueFull => "queue_full", Shutdown => "shutdown", Ineligible => "ineligible", Delivery => "delivery", Invalid => "invalid" });
 fixed_enum!(Delivery { Accepted => "accepted", HttpStatus => "http_status", Transport => "transport", Timeout => "timeout", Acknowledgement => "acknowledgement" });
 
 /// Constructed only after primary admission has proved shared-workspace
@@ -467,6 +474,7 @@ impl Recorder {
             return;
         }
         let Some(span) = Span::new(span.name(), trace_id(synthetic), None, start, end) else {
+            self.counts.drop_spans(DropReason::Invalid, 1);
             return;
         };
         let Ok(text) = serde_json::to_string(&span) else {
@@ -542,6 +550,11 @@ impl Context {
         self.root_recorded = true;
         span.trace = self.trace;
         self.spans.push(span);
+    }
+    /// Counts one span that could never be built at all (#98 PR 2 review
+    /// item 5): `DropReason::Invalid`, never a silent, uncounted loss.
+    pub(crate) fn drop_invalid(&self) {
+        self.recorder.counts.drop_spans(DropReason::Invalid, 1);
     }
     /// The model alias admission resolved for this request, folded to
     /// `other` past the registry bound. `None` for another request's admission.
@@ -1796,6 +1809,17 @@ mod tests {
         }
         names.sort();
         assert_eq!(names, ["lock_wait_prune", "rate_prune"]);
+    }
+
+    /// #98 PR 2 review item 5: `Span::new` returning `None` (here, a
+    /// malformed `end < start` shape) must be counted `DropReason::Invalid`
+    /// with a `Recorder` in hand, not silently discarded.
+    #[test]
+    fn record_background_counts_an_unbuildable_span_instead_of_silently_dropping_it() {
+        let (recorder, mut rx) = Recorder::channel(1.0);
+        recorder.record_background(BackgroundSpan::RatePrune, 2, 1); // end < start
+        assert!(rx.try_recv().is_err(), "no span should have been sent");
+        assert_eq!(recorder.counts.dropped(DropReason::Invalid), 1);
     }
 
     #[test]

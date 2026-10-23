@@ -145,6 +145,13 @@ impl RequestTelemetry {
             context.record(span);
         }
     }
+    /// Counts one span that could never be built at all (#98 PR 2 review
+    /// item 5), a no-op while telemetry is inactive for this request.
+    fn drop_invalid(&self) {
+        if let Some(context) = self.context.as_ref() {
+            context.drop_invalid();
+        }
+    }
     /// Keeps the most recent eligibility a committed admission resolved for
     /// this request; never overwritten back to `None` by a later attempt
     /// that did not itself commit for a shared workspace.
@@ -179,7 +186,7 @@ impl RequestTelemetry {
         };
         if let Some(root) = self.root {
             let end = telemetry::now_unix_nanos().max(self.start);
-            if let Some(mut span) = telemetry::Span::reserved(
+            match telemetry::Span::reserved(
                 telemetry::SpanName::InferenceRequest,
                 context.trace_id(),
                 root,
@@ -187,18 +194,24 @@ impl RequestTelemetry {
                 self.start,
                 end,
             ) {
-                span.attribute(telemetry::Attribute::Operation(self.operation));
-                span.attribute(telemetry::Attribute::Streamed(self.streamed));
-                span.attribute(telemetry::Attribute::Outcome(outcome));
-                if let Some(error) = error {
-                    span.attribute(telemetry::Attribute::Error(error_kind_of(error)));
+                Some(mut span) => {
+                    span.attribute(telemetry::Attribute::Operation(self.operation));
+                    span.attribute(telemetry::Attribute::Streamed(self.streamed));
+                    span.attribute(telemetry::Attribute::Outcome(outcome));
+                    if let Some(error) = error {
+                        span.attribute(telemetry::Attribute::Error(error_kind_of(error)));
+                    }
+                    // Reserved outside the ordinary per-request child-span
+                    // budget (#98 PR 2 review item 6): this is the
+                    // request's sole root span, recorded exactly once here
+                    // (guarded by `self.finished` above), so it must never
+                    // be the span a full budget of children drops.
+                    context.record_root(span);
                 }
-                // Reserved outside the ordinary per-request child-span
-                // budget (#98 PR 2 review item 6): this is the request's
-                // sole root span, recorded exactly once here (guarded by
-                // `self.finished` above), so it must never be the span a
-                // full budget of children drops.
-                context.record_root(span);
+                // #98 PR 2 review item 5: the root span could not be built
+                // at all (a malformed shape, or entropy exhaustion) -
+                // counted, never a silent, uncounted loss.
+                None => context.drop_invalid(),
             }
         }
         if let Some(eligibility) = self.eligibility.take() {
@@ -258,15 +271,20 @@ fn end_phase_group(
     let Some(trace) = telemetry.trace() else {
         return;
     };
-    let Some(mut span) = telemetry::Span::reserved(
+    let mut span = match telemetry::Span::reserved(
         name,
         trace,
         id,
         telemetry.root(),
         start,
         telemetry::now_unix_nanos(),
-    ) else {
-        return;
+    ) {
+        Some(span) => span,
+        // #98 PR 2 review item 5: counted, never a silent, uncounted loss.
+        None => {
+            telemetry.drop_invalid();
+            return;
+        }
     };
     if let Ok(n) = u8::try_from(attempt) {
         span.attribute(telemetry::Attribute::Attempt(n));
@@ -290,13 +308,20 @@ fn attempt_span(
     timings: &AttemptTelemetry,
 ) -> Option<telemetry::Span> {
     let trace = telemetry.trace()?;
-    let mut span = telemetry::Span::new(
+    let mut span = match telemetry::Span::new(
         telemetry::SpanName::UpstreamAttempt,
         trace,
         telemetry.root(),
         start,
         end,
-    )?;
+    ) {
+        Some(span) => span,
+        // #98 PR 2 review item 5: counted, never a silent, uncounted loss.
+        None => {
+            telemetry.drop_invalid();
+            return None;
+        }
+    };
     if let Ok(n) = u8::try_from(attempt_number) {
         span.attribute(telemetry::Attribute::Attempt(n));
     }
@@ -556,16 +581,22 @@ impl Engine {
         }
         if let Some(start) = routing_start
             && let Some(trace) = telemetry.trace()
-            && let Some(mut span) = telemetry::Span::new(
+        {
+            match telemetry::Span::new(
                 telemetry::SpanName::Routing,
                 trace,
                 telemetry.root(),
                 start,
                 telemetry::now_unix_nanos(),
-            )
-        {
-            span.attribute(telemetry::Attribute::Route(route_of(protocol)));
-            telemetry.record(span);
+            ) {
+                Some(mut span) => {
+                    span.attribute(telemetry::Attribute::Route(route_of(protocol)));
+                    telemetry.record(span);
+                }
+                // #98 PR 2 review item 5: counted, never a silent,
+                // uncounted loss.
+                None => telemetry.drop_invalid(),
+            }
         }
         let streamed = request.stream;
         for (attempt, id) in plan
