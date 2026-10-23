@@ -136,24 +136,45 @@ impl Engine {
         if deployments.is_empty() {
             return Err(InferenceError::ModelUnavailable);
         }
-        let candidates: Vec<_> = deployments
-            .into_iter()
-            .filter(|deployment| {
-                deployment
-                    .supported_protocols
-                    .iter()
-                    .any(|p| p == protocol.as_str())
-                    && self
-                        .registry
-                        .get(&deployment.provider)
-                        .is_some_and(|adapter| {
-                            adapter.supports_protocol(protocol)
-                                && adapter.supports_chat_request(&request)
-                        })
-            })
-            .collect();
+        // Coarse protocol/capability gate (unchanged), then a pure,
+        // deterministic per-candidate check (`ProviderAdapter::validate_chat_request`)
+        // against the client's own request: a route that would refuse this
+        // exact request deterministically is never durably admitted or
+        // reserved for it. This is eligibility, not failover - a refusal here
+        // consumes no attempt slot and produces no routing health
+        // observation, and another authorized route may still accept the
+        // same request.
+        let mut candidates = Vec::new();
+        let mut saw_invalid_request = false;
+        for deployment in deployments {
+            if !deployment
+                .supported_protocols
+                .iter()
+                .any(|p| p == protocol.as_str())
+            {
+                continue;
+            }
+            let Some(adapter) = self.registry.get(&deployment.provider) else {
+                continue;
+            };
+            if !(adapter.supports_protocol(protocol) && adapter.supports_chat_request(&request)) {
+                continue;
+            }
+            match adapter.validate_chat_request(&request) {
+                Ok(()) => candidates.push(deployment),
+                Err(InferenceError::InvalidRequest) => saw_invalid_request = true,
+                // The contract allows only InvalidRequest/Unsupported; any
+                // other value a nonconforming adapter returned is treated as
+                // a capability refusal, never silently admitted.
+                Err(_) => {}
+            }
+        }
         if candidates.is_empty() {
-            return Err(InferenceError::Unsupported);
+            return Err(if saw_invalid_request {
+                InferenceError::InvalidRequest
+            } else {
+                InferenceError::Unsupported
+            });
         }
         let plan = timeout_at(
             deadline,
@@ -488,6 +509,8 @@ impl Drop for ExecutionGuard {
     }
 }
 
+#[cfg(all(test, feature = "integration-tests"))]
+mod admission_validation_tests;
 #[cfg(all(test, feature = "integration-tests"))]
 mod steering_tests;
 #[cfg(test)]
