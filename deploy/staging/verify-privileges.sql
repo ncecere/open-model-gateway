@@ -478,12 +478,15 @@ BEGIN
    BEGIN INSERT INTO alert_events(id,kind,subject_key,level,severity,workspace_id,summary,api_key_id,key_expires_at,threshold_days) VALUES(gen_random_uuid(),'key_expiring','z',5,'warning',ws,'x',k,exp,5); RAISE EXCEPTION 'off-list threshold accepted'; EXCEPTION WHEN check_violation THEN NULL; END;
    BEGIN INSERT INTO alert_events(id,kind,subject_key,level,severity,workspace_id,summary,api_key_id,key_expires_at,threshold_days) VALUES(gen_random_uuid(),'key_expiring','z',1,'critical',personal,'x',k,exp,1); RAISE EXCEPTION 'cross-workspace key-expiry incident allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
    BEGIN INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary,api_key_id,key_expires_at,threshold_days) VALUES(gen_random_uuid(),ar,'key_expiring','z',1,'critical',ws,'x',k,exp,1); RAISE EXCEPTION 'key-expiry incident with a rule allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+   INSERT INTO alert_deliveries(id,event_id,transition) VALUES(gen_random_uuid(),kev,'fired');
+   UPDATE alert_deliveries SET status='failed',error='host_not_allowed',completed_at=now() WHERE event_id=kev;
    PERFORM id FROM alert_events WHERE id=kev FOR UPDATE;
    UPDATE alert_events SET resolved_at=now(),resolution='cleared' WHERE id=kev;
    BEGIN UPDATE alert_events SET api_key_id=NULL WHERE id=kev; RAISE EXCEPTION 'key-expiry attribution rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
    IF has_column_privilege('gateway_runtime','public.alert_events','api_key_id','UPDATE') OR has_column_privilege('gateway_runtime','public.alert_events','key_expires_at','UPDATE') OR has_column_privilege('gateway_runtime','public.alert_events','threshold_days','UPDATE') THEN RAISE EXCEPTION 'key-expiry attribution columns grant UPDATE'; END IF;
-   -- A key-expiring incident's holder-or-admin visibility predicate (apps/gateway/src/management/alerts.rs VISIBLE): the holder sees it live.
-   PERFORM 1 FROM alert_events e JOIN workspaces w ON w.id=e.workspace_id WHERE e.id=kev AND w.disabled_at IS NULL AND (EXISTS(SELECT 1 FROM api_keys kk WHERE kk.id=e.api_key_id AND kk.issued_to_user_id=u) OR EXISTS(SELECT 1 FROM effective_workspace_memberships m WHERE m.workspace_id=e.workspace_id AND m.user_id=u AND m.role IN ('owner','admin')));
+   -- Runtime may read the live holder membership needed by key_expiry_visible;
+   -- the management regressions exercise that full predicate through every API.
+   PERFORM 1 FROM alert_events e JOIN api_keys kk ON kk.id=e.api_key_id JOIN effective_workspace_memberships m ON m.workspace_id=e.workspace_id AND m.user_id=kk.issued_to_user_id WHERE e.id=kev AND m.user_id=u;
    IF NOT FOUND THEN RAISE EXCEPTION 'key-expiry visibility predicate did not admit the holder'; END IF;
   END;
  END;

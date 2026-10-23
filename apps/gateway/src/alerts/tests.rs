@@ -327,6 +327,7 @@ async fn key_expiry_send_time_loss_and_terminal_outcomes(pool: PgPool) {
         "membership",
         "platform",
         "user",
+        "cleaned",
         "workspace",
     ] {
         let now = expiry_now(&s).await;
@@ -345,11 +346,12 @@ async fn key_expiry_send_time_loss_and_terminal_outcomes(pool: PgPool) {
             }
             "platform" => "UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1",
             "user" => "UPDATE users SET disabled_at=now() WHERE id=$1",
+            "cleaned" => "UPDATE users SET cleaned_at=now() WHERE id=$1",
             "workspace" => "UPDATE workspaces SET disabled_at=now() WHERE id=$1",
             _ => unreachable!(),
         };
         let id = match loss {
-            "membership" | "platform" | "user" => s.owner,
+            "membership" | "platform" | "user" | "cleaned" => s.owner,
             "workspace" => s.team,
             _ => k,
         };
@@ -359,7 +361,7 @@ async fn key_expiry_send_time_loss_and_terminal_outcomes(pool: PgPool) {
         assert_eq!(status, "no_recipients", "{loss}");
         assert!(rx.try_recv().is_err(), "{loss}");
         // Restore authority (test setup), then keep this key permanently ineligible.
-        sqlx::query("UPDATE users SET disabled_at=NULL WHERE id=$1")
+        sqlx::query("UPDATE users SET disabled_at=NULL,cleaned_at=NULL WHERE id=$1")
             .bind(s.owner)
             .execute(&s.pool)
             .await
@@ -559,6 +561,30 @@ async fn key_expiry_schema_rejects_ambiguous_shapes_and_mutable_attribution(pool
     ] {
         assert!(sqlx::query(&sql).execute(&s.pool).await.is_err());
     }
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn key_expiry_job_transaction_itself_holds_fence_and_advisory_lock(pool: PgPool) {
+    let s = seed(pool).await;
+    set_expiry(
+        &s,
+        s.key,
+        Some(expiry_now(&s).await + chrono::Duration::days(3)),
+    )
+    .await;
+    let leases = crate::leases::Leases::new();
+    assert!(leases.renew_once(&s.pool).await > 0);
+    let fence = leases.held(crate::leases::Lease::Alerts).unwrap();
+    // Inspect locks in the INSERT transaction, not the earlier claim/rule
+    // transactions. Removing the key-reminder job's fence or advisory lock
+    // makes this trigger abort the insert and the assertion below fail.
+    sqlx::raw_sql(&format!("CREATE FUNCTION expiry_assert_guards() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_locks WHERE pid=pg_backend_pid() AND relation='work_leases'::regclass AND mode='RowShareLock' AND granted) OR NOT EXISTS(SELECT 1 FROM pg_locks WHERE pid=pg_backend_pid() AND locktype='advisory' AND classid=0 AND objid={EVALUATION_LOCK} AND objsubid=1 AND granted) THEN RAISE EXCEPTION 'missing expiry job fence or lock'; END IF; RETURN NEW; END $$; CREATE TRIGGER expiry_assert_guards BEFORE INSERT ON alert_events FOR EACH ROW WHEN (NEW.kind='key_expiring') EXECUTE FUNCTION expiry_assert_guards();"))
+        .execute(&s.pool).await.unwrap();
+    let report = evaluate_once_fenced(&s.store, Some(&fence))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((report.fired, report.failed_rules), (1, 0), "{report:?}");
 }
 
 struct Seed {
