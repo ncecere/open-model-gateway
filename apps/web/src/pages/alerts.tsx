@@ -38,7 +38,9 @@ function EventState({ event }: { event: AlertEvent }) {
   if (event.state === "firing") return <StatusBadge tone={event.severity === "critical" ? "danger" : "warning"}>Firing</StatusBadge>;
   return <StatusBadge tone="neutral" title={event.resolution ? resolutionLabels[event.resolution] : undefined}>Resolved</StatusBadge>;
 }
-const eventSecondary = (e: AlertEvent) => [sourceText(e), unknownCostNote(e) ? "Some cost unknown" : ""].filter(Boolean).join(" · ");
+const eventSecondary = (e: AlertEvent) => e.kind === "key_expiring"
+  ? <>{sourceText(e)} · Expires <TableTime value={typeof e.details.expires_at === "string" ? e.details.expires_at : null} />{e.email && <> · Email: {emailLabels[e.email.status]}</>}</>
+  : [sourceText(e), unknownCostNote(e) ? "Some cost unknown" : ""].filter(Boolean).join(" · ");
 
 export function NewRuleButton({ scope }: { scope: AlertScope }) {
   return <Button render={<ResourceLink search={recordSearch(scope, "new")} />}><Plus aria-hidden /> New rule</Button>;
