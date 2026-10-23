@@ -1567,9 +1567,13 @@ async fn old_binary_finalizing_a_delivery_with_live_outbox_rows_is_refused(pool:
         .bind(id)
         .execute(&s.pool)
         .await;
-    let error = legacy.expect_err("an old binary must never finalize a delivery the outbox has not finished");
+    let error = legacy
+        .expect_err("an old binary must never finalize a delivery the outbox has not finished");
     assert_eq!(
-        error.as_database_error().and_then(|e| e.code()).map(|c| c.into_owned()),
+        error
+            .as_database_error()
+            .and_then(|e| e.code())
+            .map(|c| c.into_owned()),
         Some("55006".to_owned())
     );
     // The new flow is unaffected and still completes both recipients.
@@ -1924,7 +1928,14 @@ async fn outbox_unsetting_smtp_preserves_a_live_claim_result(pool: PgPool) {
     assert!(outbox::complete(&s.store, &claim, Ok(())).await.unwrap());
     // One recipient sent, the other not_configured: a real send happened, so
     // the overall status must report it, not mask it behind not_configured.
-    assert_eq!(count(&s,"SELECT count(*) FROM alert_deliveries WHERE status='sent' AND sent=1 AND waiting=0").await,1);
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM alert_deliveries WHERE status='sent' AND sent=1 AND waiting=0"
+        )
+        .await,
+        1
+    );
     assert_eq!(deliver_pending(&s.store, 25).await, 0);
 }
 
