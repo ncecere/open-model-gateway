@@ -275,6 +275,17 @@ test("member creates a key, calls the mock model, sees Logs and Usage, then revo
   await page.keyboard.press("Escape");
   await page.setViewportSize({ width: 1440, height: 900 });
 
+  // #232: Logs does not poll; Refresh fetches the current tab now and brings in a request made after the page loaded.
+  await page.goto(`/workspaces/${product}/logs`);
+  await expect(page.getByRole("row", { name: /mock\/chat ci-key/ })).toHaveCount(1);
+  const second = await chat(token);
+  expect(second.status).toBe(200);
+  await expect(page.getByRole("row", { name: /mock\/chat ci-key/ })).toHaveCount(1);
+  const refreshed = page.waitForResponse(r => new URL(r.url()).pathname === `/api/v1/workspaces/${product}/requests` && r.ok());
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await refreshed;
+  await expect(page.getByRole("row", { name: /mock\/chat ci-key/ })).toHaveCount(2);
+
   await page.goto(`/workspaces/${product}/keys`);
   await page.getByRole("button", { name: "Actions for ci-key" }).click();
   await page.getByRole("menuitem", { name: "Revoke key…" }).click();
@@ -291,7 +302,8 @@ test("team admin sees the member's request workspace-wide; the member cannot see
   const { product } = readFixture();
   const alex = await signIn(browser, "alex");
   await alex.page.goto(`/workspaces/${product}/logs`);
-  await expect(alex.page.getByRole("row", { name: /mock\/chat ci-key/ })).toBeVisible();
+  // Two requests exist by now (the earlier journey step made a second one).
+  await expect(alex.page.getByRole("row", { name: /mock\/chat ci-key/ })).toHaveCount(2);
   await alex.context.close();
   const blair = await signIn(browser, "blair");
   expect((await api(blair.page, "GET", "/platform/logs/requests")).status()).toBe(403);
@@ -307,7 +319,8 @@ test("Logs deep links filter and fit at 1440; usage tiles line up their charts a
   await page.goto(`/workspaces/${product}/logs?model=mock%2Fchat`);
   await filtered;
   await expect(page.getByRole("combobox", { name: "Model" })).toHaveValue(/mock\/chat/);
-  await expect(page.getByRole("row", { name: /mock\/chat ci-key/ })).toBeVisible();
+  // Two requests exist by now (the earlier journey step made a second one).
+  await expect(page.getByRole("row", { name: /mock\/chat ci-key/ })).toHaveCount(2);
   await expectTableFits(page, "Requests");
   await page.goto(`/workspaces/${product}/logs?model=nothing%2Fhere`);
   await expect(page.getByRole("row", { name: /mock\/chat ci-key/ })).toHaveCount(0);
