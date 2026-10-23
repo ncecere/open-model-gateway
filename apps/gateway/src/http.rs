@@ -419,12 +419,18 @@ async fn readiness(store: Store, web: Option<WebAssets>) -> Response {
     let web_ok = web.as_ref().is_none_or(WebAssets::is_intact);
     let ready = checks.database && checks.schema && web_ok;
     let word = |ok: bool| if ok { "ok" } else { "fail" };
+    // #203: a non-failing warning, never more detail than the checks above
+    // already give an unauthenticated caller (no endpoint names here; those
+    // are in the startup log only).
+    let approvals_pending_refusal =
+        crate::providers::local::endpoints::has_pending_refusal_warning();
     let body = json!({
         "status": if ready { "ready" } else { "not_ready" },
         "checks": {
             "database": word(checks.database),
             "schema": if checks.database { word(checks.schema) } else { "unknown" },
             "web": if web.is_some() { word(web_ok) } else { "disabled" },
+            "local_upstream_approvals": if approvals_pending_refusal { "warning" } else { "ok" },
         },
     });
     let status = if ready {
@@ -569,7 +575,7 @@ mod tests {
             serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
         assert_eq!(
             body,
-            json!({"status":"not_ready","checks":{"database":"fail","schema":"unknown","web":"disabled"}})
+            json!({"status":"not_ready","checks":{"database":"fail","schema":"unknown","web":"disabled","local_upstream_approvals":"ok"}})
         );
     }
 

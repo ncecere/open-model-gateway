@@ -129,7 +129,8 @@ impl Engine {
         let labels = client::current();
         let deployments = timeout_at(
             deadline,
-            self.repository.deployments(&principal, &request.model),
+            self.repository
+                .candidate_deployments(&principal, &request.model, request_id),
         )
         .await
         .map_err(|_| InferenceError::Timeout)??;

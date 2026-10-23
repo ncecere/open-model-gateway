@@ -292,6 +292,18 @@ BEGIN
  INSERT INTO monetary_ledger(id,execution_id,kind,amount_microusd,meter_usage,output_image_variant,provider_cost_microusd,admitted_at) SELECT gen_random_uuid(),e,'unknown',1,meter_usage,output_image_variant,provider_cost_microusd,started_at FROM inference_executions WHERE id=e;
  -- Budget totals (0015): the runtime's reservation writes maintained them; unknown keeps its hold.
  IF (SELECT (held_microusd,settled_microusd,reservations,pending,unknown,held_unknown_microusd)::text FROM budget_totals WHERE scope_kind='key' AND scope_id=k AND period='lifetime')<>'(1,0,1,0,1,1)' THEN RAISE EXCEPTION 'budget totals not maintained'; END IF;
+ -- Headroom (103): the reporting-only indexed lookup needs SELECT alone.
+ IF (SELECT (coalesce(t.settled_microusd,0)::text,
+   coalesce(t.held_microusd-t.held_unknown_microusd,0)::text,
+   coalesce(t.held_unknown_microusd,0)::text,
+   coalesce(t.unknown::numeric+t.unresolved-t.unresolved_unknown+t.unreserved_executions,0)::text,
+   coalesce(t.unresolved::numeric+t.unreserved_executions,0)>0,
+   coalesce(t.unknown>=0 AND t.unresolved>=0 AND t.unreserved_executions>=0
+    AND t.unresolved_unknown BETWEEN 0 AND least(t.unknown,t.unresolved)
+    AND (t.unknown>0 OR t.held_unknown_microusd=0),true))::text
+   FROM unnest(ARRAY['key']::text[],ARRAY[k]::uuid[],ARRAY['lifetime']::text[],ARRAY['epoch'::timestamptz]) WITH ORDINALITY q(kind,id,period,start,i)
+   LEFT JOIN budget_totals t ON t.scope_kind=q.kind AND t.scope_id=q.id AND t.period=q.period AND t.period_start=q.start
+   ORDER BY q.i)<>'(0,0,1,1,f,t)' THEN RAISE EXCEPTION 'budget headroom reporting unavailable'; END IF;
  -- No installation scope (0026): no request writes a global totals row; installation spend sums workspace rows.
  IF EXISTS(SELECT FROM budget_totals WHERE scope_kind NOT IN ('workspace','key')) THEN RAISE EXCEPTION 'installation totals scope maintained'; END IF;
  PERFORM coalesce(sum(t.settled_microusd+t.held_microusd-t.held_unknown_microusd),0),coalesce(sum(t.unknown+t.unresolved-t.unresolved_unknown),0) FROM budget_totals t WHERE t.scope_kind='workspace' AND t.period='month' AND t.period_start=date_trunc('month',now(),'UTC');

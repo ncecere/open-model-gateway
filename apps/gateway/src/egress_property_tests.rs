@@ -89,6 +89,15 @@ proptest! {
         prop_assert_eq!(classify(IpAddr::V4(v4(bits))), oracle_v4(bits));
     }
 
+    /// The shared special-use table (#203) agrees with the independent
+    /// oracle too, not only `classify`'s use of it: a drift inside
+    /// `special_use` itself, or in how `egress.rs` maps its categories to a
+    /// `Class`, is caught here independently of `providers/local/endpoints.rs`.
+    #[test]
+    fn the_shared_table_matches_the_registries_for_ipv4(bits in any::<u32>()) {
+        prop_assert_eq!(class_for(crate::special_use::classify_v4(v4(bits))), oracle_v4(bits));
+    }
+
     /// An IPv6 form that carries an IPv4 destination is judged as that IPv4
     /// address, for every IPv4 address and every filler bit.
     #[test]

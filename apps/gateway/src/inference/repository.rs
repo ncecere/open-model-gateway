@@ -131,6 +131,27 @@ pub trait InferenceRepository: Send + Sync {
         principal: &Principal,
         model: &str,
     ) -> Result<Vec<Deployment>, InferenceError>;
+    /// The deployments [`super::Engine::execute_protocol`] validates and
+    /// routes against for one attempt. Default: every live candidate
+    /// (`deployments`), unchanged for interactive requests.
+    ///
+    /// A repository that pins one attempt to a single route (gateway-run
+    /// batch lines, `jobs::runner::LineRepository`) can narrow this to just
+    /// that route. Then the deterministic pre-admission check this shares
+    /// with interactive requests (#228) judges a pinned line on its own
+    /// route only, instead of on every deployment of the model, so a pin
+    /// whose route deterministically refuses the request reaches the
+    /// existing "every capable route refused" classification (400/501)
+    /// instead of a bare `ModelUnavailable` from `route_plan`'s pin
+    /// enforcement (#238).
+    async fn candidate_deployments(
+        &self,
+        principal: &Principal,
+        model: &str,
+        _request_id: Uuid,
+    ) -> Result<Vec<Deployment>, InferenceError> {
+        self.deployments(principal, model).await
+    }
     async fn start(&self, record: &ExecutionStart) -> Result<(), InferenceError>;
     async fn finish(&self, record: &ExecutionFinish) -> Result<(), InferenceError>;
     /// Finish with attempt telemetry (finish reason, timings). Telemetry is

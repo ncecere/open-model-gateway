@@ -103,6 +103,100 @@ pub(crate) async fn read(
         .collect()
 }
 
+/// Read-only reporting facts, deliberately separate from admission's hot read.
+/// Unknown holds are retained floors, not proven upper bounds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct BudgetReport {
+    pub settled_microusd: i128,
+    pub pending_held_microusd: i128,
+    pub unknown_held_microusd: i128,
+    pub unknown_cost_requests: i128,
+    /// Validated once while decoding; overflow invalidates only this window.
+    used_microusd: i128,
+    /// Legacy unresolved_usage excludes bounded unknown reservations.
+    pub unresolved: bool,
+}
+impl BudgetReport {
+    pub(crate) fn used(self) -> i128 {
+        self.used_microusd
+    }
+    pub(crate) fn remaining(self, amount: i64) -> Option<String> {
+        (self.unknown_cost_requests == 0)
+            .then(|| (i128::from(amount) - self.used()).max(0).to_string())
+    }
+}
+
+/// One indexed lookup per visible scope/window, in request order (at most
+/// layer × period in policy reports). A single statement gives every layer
+/// the same accounting snapshot. Only a missing bucket is a known zero.
+/// Invalid or unrepresentable accounting is `None` in its original slot;
+/// SQL/transport decoding failures still propagate. Hidden scopes must never
+/// be supplied by callers.
+pub(crate) async fn read_budget_report(
+    tx: &mut Transaction<'_, Postgres>,
+    windows: &[(Scope, BudgetPeriod)],
+    at: DateTime<Utc>,
+) -> Result<Vec<Option<BudgetReport>>, sqlx::Error> {
+    if windows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut kinds = Vec::with_capacity(windows.len());
+    let mut ids = Vec::with_capacity(windows.len());
+    let mut periods = Vec::with_capacity(windows.len());
+    let mut starts = Vec::with_capacity(windows.len());
+    for (scope, period) in windows {
+        let (kind, id) = scope.key();
+        kinds.push(kind);
+        ids.push(id);
+        periods.push(period.as_str());
+        starts.push(period.bucket_start(at));
+    }
+    let rows: Vec<(String, String, String, String, bool, bool)> = sqlx::query_as(
+        "SELECT coalesce(t.settled_microusd,0)::text,
+         coalesce(t.held_microusd-t.held_unknown_microusd,0)::text,
+         coalesce(t.held_unknown_microusd,0)::text,
+         coalesce(t.unknown::numeric+t.unresolved-t.unresolved_unknown+t.unreserved_executions,0)::text,
+         coalesce(t.unresolved::numeric+t.unreserved_executions,0)>0,
+         coalesce(t.unknown>=0 AND t.unresolved>=0 AND t.unreserved_executions>=0
+          AND t.unresolved_unknown BETWEEN 0 AND least(t.unknown,t.unresolved)
+          AND (t.unknown>0 OR t.held_unknown_microusd=0),true)
+         FROM unnest($1::text[],$2::uuid[],$3::text[],$4::timestamptz[]) WITH ORDINALITY q(kind,id,period,start,i)
+         LEFT JOIN budget_totals t ON t.scope_kind=q.kind AND t.scope_id=q.id AND t.period=q.period AND t.period_start=q.start
+         ORDER BY q.i",
+    )
+    .bind(&kinds)
+    .bind(&ids)
+    .bind(&periods)
+    .bind(&starts)
+    .fetch_all(&mut **tx)
+    .await?;
+    fn exact(value: String) -> Option<i128> {
+        value.parse().ok().filter(|n| *n >= 0)
+    }
+    Ok(rows
+        .into_iter()
+        .map(|(settled, pending, unknown, count, unresolved, valid)| {
+            if !valid {
+                return None;
+            }
+            let settled_microusd = exact(settled)?;
+            let pending_held_microusd = exact(pending)?;
+            let unknown_held_microusd = exact(unknown)?;
+            let used_microusd = settled_microusd
+                .checked_add(pending_held_microusd)
+                .and_then(|n| n.checked_add(unknown_held_microusd))?;
+            Some(BudgetReport {
+                settled_microusd,
+                pending_held_microusd,
+                unknown_held_microusd,
+                unknown_cost_requests: exact(count)?,
+                used_microusd,
+                unresolved,
+            })
+        })
+        .collect())
+}
+
 /// Budget consumption of one workspace (or one key lineage inside it) in the
 /// current window of `period` at `at`. Used by policy reports; admission
 /// reads the same rows.

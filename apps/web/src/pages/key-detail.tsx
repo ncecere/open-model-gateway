@@ -32,7 +32,7 @@ import { permissions, type DashboardSearch } from "../lib/permissions";
 import { Button, ErrorNotice, Stack, useAction, useApi, useChoices } from "../components/ui";
 import { ResourceLink, useDashboardNavigation } from "../components/navigation-link";
 import { useResourceName } from "../components/layout/breadcrumbs";
-import { ScopeLimits } from "../components/scope-limits";
+import { BudgetHeadroomDetails, EffectiveBudgetHeadroom, ScopeLimits } from "../components/scope-limits";
 import { EffectiveAccess } from "../components/effective-access";
 import { BackLink } from "../components/templates/form-page";
 import { BudgetRing } from "../components/templates/budget-ring";
@@ -81,10 +81,11 @@ export function KeyUsage({ workspace, keyId, part = "spending" }: { workspace: S
 }
 /** Every budget that applies to this key (key, workspace, platform), each in its current window; spent plus on hold. */
 function KeyBudgets({ stats }: { stats: KeyStats }) {
-  return <Card title="Budgets" titleAs="h2" description="Every budget that applies to this key. Spent plus on hold.">
+  return <Card title="Budgets" titleAs="h2" description="Every budget that applies to this key. Settled estimates and active holds.">
       {stats.budgets.length === 0 ? <p className={s.note}>No budget applies to this key.</p> : <div className={k.rings}>{stats.budgets.map(w => { const period = w.period ?? w.budget_period, amount = w.amount_microusd ?? w.monthly_budget_microusd, label = `${layerNames[w.layer]} ${periodName[period].toLowerCase()}`; return w.usage_visible
-        ? <div key={`${w.layer}-${period}`}><BudgetRing label={label} used={w.used_microusd} limit={amount} period={period} />{w.unresolved_usage && <span className={s.secondary}>Some costs aren't known yet: at least this much.</span>}</div>
-        : <p key={`${w.layer}-${period}`} className={s.note}>{label}: {formatMicroUsd(amount)}. Only workspace admins see how much of it is used.</p>; })}</div>}
+        ? <div key={`${w.layer}-${period}`}><BudgetRing label={label} used={w.used_microusd} limit={amount} period={period} /><BudgetHeadroomDetails window={w} /></div>
+        : <p key={`${w.layer}-${period}`} className={s.note}>{label}: {formatMicroUsd(amount)}. Remaining: Restricted. Only workspace admins see how much of it is used.</p>; })}</div>}
+      <EffectiveBudgetHeadroom windows={stats.budgets} />
     </Card>;
 }
 const keyTabs = [{ value: "overview", label: "Overview", icon: <LayoutDashboard aria-hidden /> }, { value: "limits", label: "Limits", icon: <Gauge aria-hidden /> }, { value: "access", label: "Access", icon: <ShieldCheck aria-hidden /> }];
