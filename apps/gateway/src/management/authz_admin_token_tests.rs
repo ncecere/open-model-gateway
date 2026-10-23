@@ -79,6 +79,37 @@ fn concrete_path(path: &str, team: Uuid) -> String {
         .replace("{token}", &filler)
 }
 
+/// A synthetic, distinct-per-call client address (#37 PR2 finding 2
+/// regression guard): the *existing*, unrelated per-IP admin-token limiter
+/// in `identity.rs` buckets every in-process request with no `ConnectInfo`
+/// under one shared "unknown peer" bucket, and the expanded matrix below
+/// issues far more requests than that bucket's burst allows. Each probe
+/// gets its own address so this test exercises the token-policy matrix,
+/// not an unrelated rate limiter it isn't about.
+fn synthetic_peer(seq: u32) -> std::net::SocketAddr {
+    std::net::SocketAddr::new(
+        std::net::IpAddr::V4(std::net::Ipv4Addr::from(0x0A00_0001u32.wrapping_add(seq))),
+        0,
+    )
+}
+
+/// Like [`authz_matrix_tests::request`](super::request), but for an admin
+/// token only, with its own synthetic peer address per call (see
+/// [`synthetic_peer`]).
+async fn probe(app: &Router, method: &str, path: &str, token: &str, seq: u32) -> StatusCode {
+    let mut req = Request::builder()
+        .method(method)
+        .uri(path)
+        .header("content-type", "application/json")
+        .header("origin", ORIGIN)
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::from("{}"))
+        .unwrap();
+    req.extensions_mut()
+        .insert(axum::extract::ConnectInfo(synthetic_peer(seq)));
+    app.clone().oneshot(req).await.unwrap().status()
+}
+
 fn stub_app(s: &Store, identity: identity::IdentityState) -> Router {
     stub_routes()
         .route_layer(middleware::from_fn_with_state(
@@ -95,22 +126,52 @@ fn stub_app(s: &Store, identity: identity::IdentityState) -> Router {
 /// TEST-FIRST (RED before this PR's authentication/authorization layer
 /// existed, every one of these requests 404'd or 401'd with no scope
 /// concept at all): every declared route's token policy is enforced
-/// exactly as declared, for every route in the inventory -- not a sample.
-/// `Denied`/`BrowserAdminOnly` refuse any token outright; a `Scope(_)`
-/// route admits the exact matching scope and refuses every other one. The
-/// per-attempt audit row (`admin_token_attempts`) is the oracle: its
-/// `outcome` is the authorization decision alone, independent of whatever
-/// status code the stub or a real handler would go on to return.
+/// exactly as declared, for every route in the inventory -- not a sample,
+/// and not only against one "a wrong scope" probe (finding 2: the original
+/// version of this test took only the *first* mismatching scope via
+/// `Iterator::find`, so a route that happened to also admit, say, the
+/// second-tried scope by mistake would never have been caught). For a
+/// `Scope(required)` route this now probes, individually, every one of the
+/// five single-scope tokens (exactly one must admit it), a token holding
+/// all five scopes together (still admitted: extra scopes never revoke the
+/// one that matters), and a token holding every *other* scope but not the
+/// required one (still refused: holding several wrong scopes at once must
+/// not accidentally satisfy the check). `Denied`/`BrowserAdminOnly` routes
+/// refuse all of that -- every single-scope token and the all-five token
+/// alike -- regardless of how many scopes the token holds.
+///
+/// Two independent oracles, not one: the per-attempt audit row
+/// (`admin_token_attempts.outcome`, the authorization decision alone) and
+/// the actual HTTP response (which also depends on route readiness --
+/// finding 1's HEAD/501 bug was invisible to the audit-only oracle alone,
+/// since the outcome is decided before the readiness check runs).
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn every_route_enforces_its_declared_token_policy(pool: PgPool) {
     let f = fixture(&pool).await;
     let mock = MockProvider::start(None).await;
     let identity = mock.state(pool.clone()).await;
     let app = stub_app(&f.s, identity);
+    let all_scope_strings: Vec<&str> = TokenScope::ALL.iter().map(|s| s.as_str()).collect();
     let mut tokens = std::collections::HashMap::new();
     for scope in TokenScope::ALL {
         let (id, token) = mint(&pool, f.admin.user_id, &[scope.as_str()], None).await;
         tokens.insert(scope.as_str(), (id, token));
+    }
+    let (all_five_id, all_five_token) =
+        mint(&pool, f.admin.user_id, &all_scope_strings, None).await;
+    // Keyed by the *excluded* scope: every other scope present, the
+    // required one deliberately absent.
+    let mut missing_one = std::collections::HashMap::new();
+    for excluded in TokenScope::ALL {
+        let rest: Vec<&str> = all_scope_strings
+            .iter()
+            .copied()
+            .filter(|s| *s != excluded.as_str())
+            .collect();
+        missing_one.insert(
+            excluded.as_str(),
+            mint(&pool, f.admin.user_id, &rest, None).await,
+        );
     }
     let mut checked = 0;
     for route in ROUTES {
@@ -124,36 +185,79 @@ async fn every_route_enforces_its_declared_token_policy(pool: PgPool) {
             }
         }) {
             let path = concrete_path(route.path, f.team);
-            let probes: Vec<(&str, &'static str)> = match route.token_policy {
-                TokenPolicy::Denied | TokenPolicy::BrowserAdminOnly => {
-                    vec![(TokenScope::ALL[0].as_str(), "denied")]
-                }
-                TokenPolicy::Scope(required) => {
-                    let wrong = TokenScope::ALL
-                        .iter()
-                        .copied()
-                        .find(|s| s.as_str() != required.as_str())
-                        .unwrap();
-                    vec![(required.as_str(), "allowed"), (wrong.as_str(), "denied")]
-                }
+            // (token id, token, expected outcome, expected response is 501).
+            let probes: Vec<(Uuid, &str, &'static str)> = match route.token_policy {
+                TokenPolicy::Denied | TokenPolicy::BrowserAdminOnly => TokenScope::ALL
+                    .iter()
+                    .map(|s| {
+                        let (id, token) = &tokens[s.as_str()];
+                        (*id, token.as_str(), "denied")
+                    })
+                    .chain(std::iter::once((
+                        all_five_id,
+                        all_five_token.as_str(),
+                        "denied",
+                    )))
+                    .collect(),
+                TokenPolicy::Scope(required) => TokenScope::ALL
+                    .iter()
+                    .map(|s| {
+                        let (id, token) = &tokens[s.as_str()];
+                        let expected = if s.as_str() == required.as_str() {
+                            "allowed"
+                        } else {
+                            "denied"
+                        };
+                        (*id, token.as_str(), expected)
+                    })
+                    .chain(std::iter::once((
+                        all_five_id,
+                        all_five_token.as_str(),
+                        "allowed",
+                    )))
+                    .chain(std::iter::once({
+                        let (id, token) = &missing_one[required.as_str()];
+                        (*id, token.as_str(), "denied")
+                    }))
+                    .collect(),
             };
-            for (scope, expected) in probes {
-                let (token_id, token) = &tokens[scope];
-                request(&app, method, &path, None, Some(token), false, ORIGIN).await;
-                let outcome = last_outcome(&pool, *token_id, method, route.path).await;
+            for (token_id, token, expected) in probes {
+                checked += 1;
+                let status = probe(&app, method, &path, token, checked).await;
+                let outcome = last_outcome(&pool, token_id, method, route.path).await;
                 assert_eq!(
                     outcome.as_deref(),
                     Some(expected),
-                    "{method} {} scope={scope}",
+                    "{method} {} token={token_id}",
                     route.path
                 );
-                checked += 1;
+                assert_ne!(
+                    status,
+                    StatusCode::NOT_IMPLEMENTED,
+                    "{method} {} token={token_id}: an 'allowed' or 'denied' decision must \
+                     never surface as a stub 501 (finding 1)",
+                    route.path
+                );
+                if expected == "allowed" {
+                    assert!(
+                        !status.is_client_error() && !status.is_server_error(),
+                        "{method} {} token={token_id}: expected a real success, got {status}",
+                        route.path,
+                    );
+                } else {
+                    assert_eq!(
+                        status,
+                        StatusCode::FORBIDDEN,
+                        "{method} {} token={token_id}",
+                        route.path
+                    );
+                }
             }
         }
     }
     assert!(
-        checked > 300,
-        "the token-policy matrix must exercise the complete route inventory"
+        checked > 900,
+        "the token-policy matrix must exercise the complete route inventory across every scope"
     );
 }
 
@@ -847,5 +951,221 @@ async fn demotion_after_authentication_but_before_the_authority_check_still_deni
     assert!(
         decision.is_err() || decision.unwrap() != "admin",
         "a demoted owner must not still read back as admin"
+    );
+}
+
+/// Finding 1, end to end on the real served router (not the stub): a GET-
+/// only token-ready route answers a real HEAD request with an empty body
+/// and the completion row carries the real 200, never the stub-matrix's
+/// NOT_IMPLEMENTED symptom this finding described. `route_policy::find`'s
+/// own HEAD->GET fallback already resolved the Access/TokenPolicy decision
+/// correctly before this fix; only the separate `TOKEN_READY_ROUTES`
+/// readiness lookup had its own, un-mirrored exact-method comparison.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn head_on_a_get_only_ready_route_succeeds_with_a_correct_completion(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let mock = MockProvider::start(None).await;
+    let identity = mock.state(pool.clone()).await;
+    let engine = crate::inference::Engine::new(
+        std::sync::Arc::new(f.s.clone()),
+        crate::providers::ProviderRegistry::default(),
+        crate::inference::EngineLimits::default(),
+    )
+    .unwrap();
+    let app = crate::http::router_with_identity(f.s.clone(), None, engine, identity);
+    let (token_id, token) = mint(&pool, f.admin.user_id, &["platform:read"], None).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("HEAD")
+                .uri("/api/v1/platform/providers")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "a token-ready GET route must answer HEAD too, not 501"
+    );
+    let body = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+    assert!(body.is_empty(), "HEAD must return an empty body");
+    let outcome = last_outcome(&pool, token_id, "HEAD", "/api/v1/platform/providers").await;
+    assert_eq!(outcome.as_deref(), Some("allowed"));
+    let completion_status: Option<i16> = sqlx::query_scalar(
+        "SELECT status_code FROM admin_token_attempts WHERE token_id=$1 AND route_method='HEAD' AND phase='completion'",
+    )
+    .bind(token_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(completion_status, Some(200));
+}
+
+/// Finding 4: a database error from the live authorization recheck is
+/// reported honestly instead of being collapsed into a misleading 403
+/// "denied". Only the table `access_inner`'s live boundary check
+/// additionally needs (`workspaces`) is dropped here, not
+/// `effective_platform_roles`: dropping that would instead fail
+/// *authentication* itself (identity.rs, before this layer ever runs),
+/// which is a different fault than the one this test targets -- the
+/// authentication step below must still succeed.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn authorization_infrastructure_errors_are_distinguished_from_denials(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let mock = MockProvider::start(None).await;
+    let identity = mock.state(pool.clone()).await;
+    let engine = crate::inference::Engine::new(
+        std::sync::Arc::new(f.s.clone()),
+        crate::providers::ProviderRegistry::default(),
+        crate::inference::EngineLimits::default(),
+    )
+    .unwrap();
+    let app = crate::http::router_with_identity(f.s.clone(), None, engine, identity);
+    let (token_id, token) = mint(&pool, f.admin.user_id, &["platform:read"], None).await;
+    assert!(
+        f.s.authenticate_admin_token(&token)
+            .await
+            .unwrap()
+            .is_some(),
+        "authentication must still work before the table is dropped"
+    );
+    sqlx::query("DROP TABLE workspaces CASCADE")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        f.s.authenticate_admin_token(&token)
+            .await
+            .unwrap()
+            .is_some(),
+        "authentication never touches `workspaces`, so it must still succeed afterward"
+    );
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/workspaces/{}", f.team))
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "an infrastructure failure must never be reported as a 403 denial"
+    );
+    let outcome = last_outcome(&pool, token_id, "GET", "/api/v1/workspaces/{ws}").await;
+    assert_eq!(outcome.as_deref(), Some("error"));
+}
+
+/// Finding 3: a per-token admission bound holds even when the same token
+/// is presented from many different client addresses, which the existing
+/// per-IP limiter alone cannot see. A tiny, test-injected per-token rate
+/// (no real-minute wait, no injected clock) exhausts deterministically
+/// within a handful of in-process requests; the replica-wide bound is set
+/// generously high here so only the per-token bound is under test.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn per_token_limiter_bounds_one_token_even_across_many_client_addresses(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let mock = MockProvider::start(None).await;
+    let identity = mock
+        .state(pool.clone())
+        .await
+        .with_admin_token_limits(2, 1_000);
+    let engine = crate::inference::Engine::new(
+        std::sync::Arc::new(f.s.clone()),
+        crate::providers::ProviderRegistry::default(),
+        crate::inference::EngineLimits::default(),
+    )
+    .unwrap();
+    let app = crate::http::router_with_identity(f.s.clone(), None, engine, identity);
+    let (token_id, token) = mint(&pool, f.admin.user_id, &["platform:read"], None).await;
+    let mut statuses = Vec::new();
+    for i in 0..4u8 {
+        let addr: std::net::SocketAddr = format!("203.0.113.{i}:12345").parse().unwrap();
+        let mut req = Request::builder()
+            .uri("/api/v1/platform/providers")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(addr));
+        statuses.push(app.clone().oneshot(req).await.unwrap().status());
+    }
+    assert_eq!(&statuses[..2], [StatusCode::OK, StatusCode::OK]);
+    assert_eq!(
+        statuses[2],
+        StatusCode::TOO_MANY_REQUESTS,
+        "a varying peer address must not bypass the per-token bound"
+    );
+    assert_eq!(statuses[3], StatusCode::TOO_MANY_REQUESTS);
+    // The two throttled attempts never reached `management::authorization`
+    // at all: exactly one start+completion pair per admitted request, and
+    // nothing for the rejected ones.
+    let rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM admin_token_attempts WHERE token_id=$1")
+            .bind(token_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        rows, 4,
+        "two admitted requests, one start and one completion row each"
+    );
+}
+
+/// Finding 3: the aggregate per-replica bound applies before a single
+/// request is even authenticated, across distinct valid tokens and distinct
+/// client addresses alike -- the per-IP and per-token limiters cannot see
+/// this shape (many different tokens, each from its own address, none
+/// individually over its own limit).
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn replica_limiter_bounds_the_aggregate_before_authentication(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let mock = MockProvider::start(None).await;
+    let identity = mock
+        .state(pool.clone())
+        .await
+        .with_admin_token_limits(1_000, 2);
+    let engine = crate::inference::Engine::new(
+        std::sync::Arc::new(f.s.clone()),
+        crate::providers::ProviderRegistry::default(),
+        crate::inference::EngineLimits::default(),
+    )
+    .unwrap();
+    let app = crate::http::router_with_identity(f.s.clone(), None, engine, identity);
+    let mut tokens = Vec::new();
+    for _ in 0..3u8 {
+        tokens.push(mint(&pool, f.admin.user_id, &["platform:read"], None).await);
+    }
+    let mut statuses = Vec::new();
+    for (i, (_, token)) in tokens.iter().enumerate() {
+        let addr: std::net::SocketAddr = format!("203.0.113.{i}:1").parse().unwrap();
+        let mut req = Request::builder()
+            .uri("/api/v1/platform/providers")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(addr));
+        statuses.push(app.clone().oneshot(req).await.unwrap().status());
+    }
+    assert_eq!(&statuses[..2], [StatusCode::OK, StatusCode::OK]);
+    assert_eq!(
+        statuses[2],
+        StatusCode::TOO_MANY_REQUESTS,
+        "the shared replica bound applies across distinct tokens and addresses alike"
+    );
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM admin_token_attempts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        rows, 4,
+        "the third (throttled) token never authenticated, so it never produced an attempt row"
     );
 }

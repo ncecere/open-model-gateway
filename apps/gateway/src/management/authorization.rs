@@ -255,9 +255,17 @@ pub(super) const TOKEN_READY_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/v1/platform/batches"),
 ];
 fn token_ready(method: &str, path: &str) -> bool {
-    TOKEN_READY_ROUTES
-        .iter()
-        .any(|(m, p)| *m == method && *p == path)
+    let exact = |m: &str| {
+        TOKEN_READY_ROUTES
+            .iter()
+            .any(|(rm, rp)| *rm == m && *rp == path)
+    };
+    // Mirror route_policy::find's own HEAD->GET fallback (finding 1): the
+    // Access/TokenPolicy lookup above already treats an undeclared HEAD as
+    // its route's declared GET, so a GET-only entry here must answer ready
+    // for HEAD too, or every token-readable GET route wrongly 501s on HEAD
+    // even though it was just admitted as "allowed".
+    exact(method) || (method == "HEAD" && exact("GET"))
 }
 
 /// Everything an `admin_token_attempts` row (start or completion) needs,
@@ -330,7 +338,13 @@ async fn handle_admin_token(
         Some(TokenPolicy::Scope(scope)) => Some(scope),
         _ => None,
     };
-    let mut allowed = false;
+    // The authorization decision for this attempt: `Ok(())` admits it;
+    // `Err` refuses it. A refusal is either an ordinary, expected decision
+    // (403/404/409/...) or, when the underlying failure is infrastructure
+    // (a pool/view/storage error -- `ApiError`'s own `From<sqlx::Error>`
+    // already maps those to a 5xx), a distinct "error" outcome reported at
+    // its own status rather than collapsed into a misleading 403 (finding 4).
+    let mut authorization: Result<(), ApiError> = Err(denied());
     if let (Some(scope), Some(access)) = (required_scope, access) {
         let scope_ok = context.scopes.iter().any(|s| s.as_str() == scope.as_str());
         let ip_ok = crate::admin_tokens::ip_allowed(
@@ -341,13 +355,31 @@ async fn handle_admin_token(
             let ws = workspace_param(&mut parts, &s, access).await;
             let key = key_param(&mut parts, &s, access).await;
             let principal = ManagementPrincipal::AdminToken(context.clone());
-            allowed = database_access(&s, &principal, access, ws, key)
-                .await
-                .is_ok();
+            authorization = database_access(&s, &principal, access, ws, key).await;
         }
     }
+    let allowed = authorization.is_ok();
+    let (outcome, early_response): (&'static str, Option<Response>) = match authorization {
+        Ok(()) => ("allowed", None),
+        Err(error) => {
+            if error.0.is_server_error() {
+                // Normalize to 503, never whatever other 5xx the
+                // underlying failure happened to carry: the client-facing
+                // contract for an infrastructure error is always 503 with
+                // outcome 'error' (finding 4), not an incidental 500 or
+                // any other server-error status a future error source
+                // might construct. The expected-refusal branch below
+                // keeps the original status exactly as returned.
+                (
+                    "error",
+                    Some(ApiError(StatusCode::SERVICE_UNAVAILABLE, error.1).into_response()),
+                )
+            } else {
+                ("denied", Some(error.into_response()))
+            }
+        }
+    };
     let required_scope_str = required_scope.map(TokenScope::as_str);
-    let outcome = if allowed { "allowed" } else { "denied" };
     let attempt = Attempt {
         request_id,
         token_id: context.token_id,
@@ -362,25 +394,25 @@ async fn handle_admin_token(
         return audit_unavailable().into_response();
     }
     let ready = allowed && token_ready(method.as_str(), &template);
-    let mut response = if !allowed {
-        denied().into_response()
-    } else if !ready {
-        ApiError(
+    let mut response = match early_response {
+        Some(early) => early,
+        None if !ready => ApiError(
             StatusCode::NOT_IMPLEMENTED,
             "This route does not yet accept admin API tokens",
         )
-        .into_response()
-    } else {
-        if let Err(error) = s
-            .touch_admin_token_use(context.token_id, context.client_address)
-            .await
-        {
-            tracing::warn!(%error, "could not record admin token use");
+        .into_response(),
+        None => {
+            if let Err(error) = s
+                .touch_admin_token_use(context.token_id, context.client_address)
+                .await
+            {
+                tracing::warn!(%error, "could not record admin token use");
+            }
+            parts
+                .extensions
+                .insert(ManagementPrincipal::AdminToken(context.clone()));
+            next.run(Request::from_parts(parts, body)).await
         }
-        parts
-            .extensions
-            .insert(ManagementPrincipal::AdminToken(context.clone()));
-        next.run(Request::from_parts(parts, body)).await
     };
     let status = response.status().as_u16();
     if let Err(error) = record_attempt(&s.pool, "completion", &attempt, Some(status)).await {
@@ -475,4 +507,40 @@ async fn key_param(
         .iter()
         .find(|(n, _)| *n == "key")
         .and_then(|(_, value)| Uuid::parse_str(value).ok())
+}
+
+#[cfg(test)]
+mod ready_set_tests {
+    use super::*;
+    use crate::route_policy::ROUTES;
+
+    /// TOKEN_READY_ROUTES must declare exactly the Scope-policy route
+    /// inventory in `route_policy::ROUTES`: no route missing (silently
+    /// 501-forever) and no stale/extra entry left behind. This is a static
+    /// equality over the *declared* method/path pairs only -- neither side
+    /// of this comparison ever contains a "HEAD" entry (routes are
+    /// declared as GET; HEAD is [`token_ready`]'s own runtime fallback), so
+    /// this test by construction cannot exercise, and could not have
+    /// caught, finding 1's missing-HEAD-fallback bug. That is what
+    /// `authz_admin_token_tests::head_on_a_get_only_ready_route_succeeds_with_a_correct_completion`
+    /// (a real HEAD request through the real router) proves instead; this
+    /// test only guards the inventory mapping itself.
+    #[test]
+    fn ready_set_matches_the_scope_route_inventory_exactly() {
+        let mut expected: Vec<(&str, &str)> = ROUTES
+            .iter()
+            .filter(|r| matches!(r.token_policy, TokenPolicy::Scope(_)))
+            .flat_map(|r| r.methods.split_whitespace().map(move |m| (m, r.path)))
+            .collect();
+        expected.sort_unstable();
+        expected.dedup();
+        let mut actual: Vec<(&str, &str)> = TOKEN_READY_ROUTES.to_vec();
+        actual.sort_unstable();
+        actual.dedup();
+        assert_eq!(
+            actual, expected,
+            "TOKEN_READY_ROUTES must declare exactly the Scope-policy route \
+             inventory, with no missing and no extra entry"
+        );
+    }
 }
