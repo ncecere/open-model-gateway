@@ -93,8 +93,15 @@ async fn create_returns_plaintext_once_and_authenticate_round_trips(pool: PgPool
             .await
             .unwrap();
     assert_eq!(stored, created.digest.to_vec());
-    // A wrong secret with the right id does not authenticate.
-    let tampered = format!("{}0", &created.token[..created.token.len() - 1]);
+    // A wrong secret with the right id does not authenticate. Flip the
+    // last hex digit to a value it provably isn't (pre-existing flake,
+    // found incidentally while running this suite for #37 PR1's
+    // adversarial re-review: replacing it with a fixed '0' was a no-op,
+    // and so a false pass, on the 1-in-16 run where that digit already
+    // was '0').
+    let last = created.token.chars().next_back().unwrap();
+    let flipped = if last == '0' { '1' } else { '0' };
+    let tampered = format!("{}{flipped}", &created.token[..created.token.len() - 1]);
     assert!(
         store
             .authenticate_admin_token(&tampered)
