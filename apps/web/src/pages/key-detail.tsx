@@ -81,11 +81,15 @@ export function KeyUsage({ workspace, keyId, part = "spending" }: { workspace: S
 }
 /** Every budget that applies to this key (key, workspace, platform), each in its current window; spent plus on hold. */
 function KeyBudgets({ stats }: { stats: KeyStats }) {
+  // The rings (or their restricted/empty substitute) and Effective headroom are separate sections (#242): stacked
+  // with the same section gap used elsewhere in this card, instead of the heading touching the last budget line.
   return <Card title="Budgets" titleAs="h2" description="Every budget that applies to this key. Settled estimates and active holds.">
-      {stats.budgets.length === 0 ? <p className={s.note}>No budget applies to this key.</p> : <div className={k.rings}>{stats.budgets.map(w => { const period = w.period ?? w.budget_period, amount = w.amount_microusd ?? w.monthly_budget_microusd, label = `${layerNames[w.layer]} ${periodName[period].toLowerCase()}`; return w.usage_visible
-        ? <div key={`${w.layer}-${period}`}><BudgetRing label={label} used={w.used_microusd} limit={amount} period={period} /><BudgetHeadroomDetails window={w} /></div>
-        : <p key={`${w.layer}-${period}`} className={s.note}>{label}: {formatMicroUsd(amount)}. Remaining: Restricted. Only workspace admins see how much of it is used.</p>; })}</div>}
-      <EffectiveBudgetHeadroom windows={stats.budgets} />
+      <Stack gap={4}>
+        {stats.budgets.length === 0 ? <p className={s.note}>No budget applies to this key.</p> : <div className={k.rings}>{stats.budgets.map(w => { const period = w.period ?? w.budget_period, amount = w.amount_microusd ?? w.monthly_budget_microusd, label = `${layerNames[w.layer]} ${periodName[period].toLowerCase()}`; return w.usage_visible
+          ? <div key={`${w.layer}-${period}`}><BudgetRing label={label} used={w.used_microusd} limit={amount} period={period} /><BudgetHeadroomDetails window={w} /></div>
+          : <p key={`${w.layer}-${period}`} className={s.note}>{label}: {formatMicroUsd(amount)}. Remaining: Restricted. Only workspace admins see how much of it is used.</p>; })}</div>}
+        <EffectiveBudgetHeadroom windows={stats.budgets} />
+      </Stack>
     </Card>;
 }
 const keyTabs = [{ value: "overview", label: "Overview", icon: <LayoutDashboard aria-hidden /> }, { value: "limits", label: "Limits", icon: <Gauge aria-hidden /> }, { value: "access", label: "Access", icon: <ShieldCheck aria-hidden /> }];

@@ -11,6 +11,7 @@ pub const SECRET_POINTERS: &[&str] = &[
     "GATEWAY_SCIM_TOKEN_ENV",
     "GATEWAY_AUDIT_WEBHOOK_SECRET_ENV",
     "GATEWAY_AUDIT_OTLP_HEADERS_ENV",
+    "GATEWAY_TRACES_OTLP_HEADERS_ENV",
 ];
 
 /// A gateway-owned variable must never be directed to a provider or SMTP.
@@ -140,15 +141,9 @@ mod tests {
 
     #[test]
     fn indirect_gateway_secrets_are_refused_without_reading_their_values() {
-        let settings = [
-            "GATEWAY_FILE_ENCRYPTION_KEYS_ENV",
-            "GATEWAY_S3_ACCESS_KEY_ID_ENV",
-            "GATEWAY_S3_SECRET_ACCESS_KEY_ENV",
-            "GATEWAY_SCIM_TOKEN_ENV",
-            "GATEWAY_AUDIT_WEBHOOK_SECRET_ENV",
-            "GATEWAY_AUDIT_OTLP_HEADERS_ENV",
-        ];
-        for setting in settings {
+        // Every registered pointer, so a new one is covered automatically.
+        let settings = SECRET_POINTERS;
+        for &setting in settings {
             let resolver = EnvSecrets::from_lookup(
                 ["PRIVATE_MATERIAL".to_owned(), "OPENAI_API_KEY".to_owned()],
                 |name| {

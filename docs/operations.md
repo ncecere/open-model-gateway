@@ -135,6 +135,20 @@ Set `GATEWAY_AUDIT_OTLP_URL` to an OpenTelemetry collector's full OTLP/HTTP logs
 - **Authenticity:** OTLP requests aren't signed, and there is no client certificate option. Make the collector require a token (sent in the headers), and keep the audit pipeline separate from general telemetry so other senders can't write `omg.audit` records or fake heartbeats.
 - **Kubernetes:** set the URL with `gateway.env` and the headers variable through `gateway.extraEnvFrom` from a Secret; list its name in `GATEWAY_AUDIT_OTLP_HEADERS_ENV`. The chart's NetworkPolicy opens only 443: for port 4318, add a `networkPolicy.egress.extraEgress` rule.
 
+## Traces (preview: transport only, #98 PR 1)
+
+The bounded OTLP/HTTP **JSON** exporter exists; inference spans and Logs correlation arrive in PR 2. This preview starts no automatic instrumentation and emits no production spans. It does not export audit logs or metrics. `OTEL_*` variables are ignored.
+
+- `GATEWAY_TRACES_OTLP_URL`: unset disables tracing. Set the complete `/v1/traces` URL, using verified HTTPS with public roots. No credentials, query or fragment; HTTP is allowed only on development loopback. There are no insecure TLS, custom-CA or mTLS switches.
+- `GATEWAY_TRACES_SAMPLE_RATIO`: finite number in `[0,1]`, default `0.01`. Gateway root sampling and request-UUID-derived trace IDs are deterministic; a trace ID does not prove sampling or delivery.
+- `GATEWAY_TRACES_OTLP_HEADERS_ENV`: optional name of a dedicated secret variable containing audit-style `Authorization=Bearer token,X-Tenant=value` headers (at most 16 headers and 4 KiB). Do not share the reference with providers, SMTP or audit export. Invalid settings fail startup without printing their values.
+
+Use existing Helm `gateway.env`/Secret references for these settings. Private collectors need `GATEWAY_EGRESS_PRIVATE_ALLOW` covering their destination CIDRs and an explicit egress NetworkPolicy rule for the collector's port (typically TCP 4318); cloud metadata is always refused. DNS answers are policy-filtered at connection time. Redirects, ambient proxies and retries are disabled.
+
+Recording never waits for a collector: 256 active contexts, 64 spans/request, 24 attributes and 1 KiB/span, a 2,048-span drop-on-full queue, one worker, and batches of at most 64 spans/64 KiB every second. Connect timeout is 1s; the whole exchange, including a bounded 64 KiB acknowledgement, is limited to 2s. Shutdown drains for at most 3s, then discards. Sustained export is therefore at most 64 spans per second per replica: a request produces several spans, so raising `GATEWAY_TRACES_SAMPLE_RATIO` far above the default on a busy replica fills the queue and shows up as `queue_full` drops before the collector is the limit. No disk spool or readiness dependency. Monitor `gateway_trace_dropped_spans_total{reason}`, `gateway_trace_deliveries_total{outcome}` and `gateway_trace_rejected_spans_total`; collector partial rejections are counted and never retried or logged with receiver bodies. Existing metrics are unchanged.
+
+The typed contract excludes arbitrary attributes and identities; PR 2 will establish shared-workspace eligibility from primary admission before exporting buffered observations. Personal and unknown/failed classifications export nothing. Tempo lookup and end-to-end collector acceptance will be documented and exercised with instrumentation, not claimed by this transport preview.
+
 ## Health endpoints
 
 Both endpoints are on the public listener. They are not authenticated and never return error details.
