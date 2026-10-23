@@ -259,6 +259,37 @@ test("registered packages pruned by the real scanner fail closed instead of clai
   });
 });
 
+test("scanner coverage requires strict, complete graph diagnostic accounting", async t => {
+  const { validateScannerCoverage } = await import(script);
+  const metadata = {
+    packages: [{ name: "fixture", version: "0.1.0" }, { ...registration }, { name: "other", version: "1.0.0" }],
+    metadata: { vendored: { smallvec: registration } },
+  };
+  const log = message => `2026-10-23 09:00:00 ${message}\n`;
+  const gathered = n => log(`[INFO] gathered ${n} crates in 1ms`);
+  const filtered = log("[DEBUG] filtered smallvec 1.10.0");
+  const cases = {
+    "altered filtering verb, completion intact": log("[DEBUG] pruned smallvec 1.10.0") + gathered(2),
+    "missing filter diagnostic, completion intact": gathered(2),
+    "malformed filtered identity": log("[DEBUG] filtered smallvec@1.10.0") + gathered(2),
+    "extra filter diagnostic fields": log("[DEBUG] filtered other 1.0.0 reason=target") + gathered(2),
+    "unknown filtered package": log("[DEBUG] filtered unknown 1.0.0") + gathered(2),
+    "duplicate filtered package": log("[DEBUG] filtered other 1.0.0").repeat(2) + gathered(1),
+    "gathered count too high": gathered(4),
+    "duplicate completion marker": gathered(3) + gathered(3),
+    "unparseable completion": gathered("three"),
+    "changed completion suffix": gathered(3).replace("1ms", "1 milliseconds"),
+    "missing completion": "",
+    "unsafe integer count": gathered("9007199254740993"),
+    "filtered registered package": filtered + gathered(2),
+  };
+  for (const [name, stderr] of Object.entries(cases)) await t.test(name, () => {
+    assert.throws(() => validateScannerCoverage(stderr, metadata), /vendored advisories:/);
+  });
+  validateScannerCoverage(gathered(3), metadata);
+  validateScannerCoverage(log("[DEBUG] filtered other 1.0.0") + gathered(2), metadata);
+});
+
 test("no-vendor control passes unchanged, including the actual CLI", { skip: absent ? "cargo-deny 0.20.2 absent; install CI's pinned tool or set CARGO_DENY" : false }, async () => {
   const { projectMetadata } = await import(script);
   const f = fixture(false);

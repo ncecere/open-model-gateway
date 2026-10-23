@@ -170,6 +170,34 @@ function command(binary, args, options = {}) {
   return result;
 }
 
+export function validateScannerCoverage(stderr, metadata) {
+  const prefix = String.raw`\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} `;
+  const completion = new RegExp(`^${prefix}\\[INFO\\] gathered (0|[1-9]\\d*) crates in (0|[1-9]\\d*)ms$`);
+  const pruning = new RegExp(`^${prefix}\\[DEBUG\\] filtered ([A-Za-z0-9_-]+) (\\S+)$`);
+  let gathered;
+  const filtered = new Set();
+  for (const line of stderr.split("\n")) {
+    if (line.includes("[INFO] gathered")) {
+      const match = line.match(completion);
+      requireThat(match && gathered === undefined && Number.isSafeInteger(Number(match[1])), "invalid/duplicate scanner graph completion diagnostic");
+      gathered = Number(match[1]);
+    } else if (/\] filtered\b/.test(line)) {
+      const match = line.match(pruning);
+      requireThat(match, "unparseable scanner filtered diagnostic");
+      const candidates = metadata.packages.filter(p => p.name === match[1] && p.version === match[2]);
+      requireThat(candidates.length === 1 && !filtered.has(candidates[0]), "unknown/ambiguous/duplicate scanner filtered package");
+      filtered.add(candidates[0]);
+    }
+  }
+  requireThat(gathered !== undefined, "scanner graph completion diagnostic missing");
+  requireThat(gathered + filtered.size === metadata.packages.length,
+    `scanner graph accounting mismatch: gathered ${gathered} + filtered ${filtered.size} != metadata ${metadata.packages.length}; upstream-base coverage not established`);
+  for (const entry of Object.values(metadata.metadata.vendored)) {
+    requireThat(![...filtered].some(p => p.name === entry.name && p.version === entry.version),
+      `registered package filtered by cargo-deny: ${entry.name} ${entry.version}; upstream-base coverage not established`);
+  }
+}
+
 function main() {
   requireThat(process.argv.slice(2).every(a => a === "--offline") && process.argv.length <= 3, "usage: node .github/scripts/vendored-advisories.mjs [--offline]");
   const offline = process.argv.includes("--offline") ? ["--offline"] : [];
@@ -189,20 +217,13 @@ function main() {
     // In pinned 0.20.2 its build_with_metadata callback logs EVERY pruned package
     // at debug level (src/cargo-deny/common.rs). Refuse a green result if any
     // registered identity was pruned; do not invent extra roots/edges or change
-    // the real policy to force inclusion. Require the completion marker too, so
-    // a missing/changed diagnostic contract cannot silently disable this guard.
+    // the real policy to force inclusion. Strictly reconcile the gathered count
+    // and each unique filtered identity against ALL projected packages, so lost
+    // or changed filter diagnostics cannot silently disable this guard.
     const scan = command(binary, ["--log-level", "debug", "--color", "never", "--all-features", ...offline, "--metadata-path", path, "check", "advisories"]);
     process.stdout.write(scan.stdout);
     process.stderr.write(scan.stderr);
-    if (scan.status === 0 && count > 0) {
-      requireThat(/\[INFO\] gathered \d+ crates in \d+ms/.test(scan.stderr), "scanner graph completion diagnostic missing");
-      const filtered = scan.stderr.split("\n").filter(line => line.includes("[DEBUG] filtered "));
-      for (const entry of Object.values(metadata.metadata.vendored)) {
-        const marker = `[DEBUG] filtered ${entry.name} ${entry.version}`;
-        requireThat(!filtered.some(line => line === marker || line.endsWith(marker) || line.includes(`${marker} `)),
-          `registered package filtered by cargo-deny: ${entry.name} ${entry.version}; upstream-base coverage not established`);
-      }
-    }
+    if (scan.status === 0 && count > 0) validateScannerCoverage(scan.stderr, metadata);
     process.exitCode = scan.status;
   } finally {
     rmSync(temporary, { recursive: true, force: true });
