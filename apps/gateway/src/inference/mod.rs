@@ -992,7 +992,7 @@ impl ExecutionGuard {
         })
         .and_then(|result| result);
         if result.is_err() {
-            tracing::error!(execution_id = %self.id, trace_id = ?self.log_trace_id, "inference finalization failed; reconciliation required");
+            tracing::error!(execution_id = %self.id, trace_id = self.log_trace_id.as_deref(), "inference finalization failed; reconciliation required");
         }
         // Health is advisory; a failed health write never discards a durably accounted response.
         if self.health_observation
@@ -1006,7 +1006,7 @@ impl ExecutionGuard {
                 Ok(Ok(()))
             )
         {
-            tracing::warn!(execution_id=%self.id, trace_id = ?self.log_trace_id, "routing health update failed");
+            tracing::warn!(execution_id=%self.id, trace_id = self.log_trace_id.as_deref(), "routing health update failed");
         }
         result
     }
@@ -1028,7 +1028,7 @@ impl Drop for ExecutionGuard {
                     crate::metrics::METRICS.observe_settlement(crate::metrics::Settlement::Held);
                 }
                 if !matches!(finished, Ok(Ok(()))) {
-                    tracing::error!(execution_id = %record.id, trace_id = ?log_trace_id, "cancelled inference finalization failed; reconciliation required");
+                    tracing::error!(execution_id = %record.id, trace_id = log_trace_id.as_deref(), "cancelled inference finalization failed; reconciliation required");
                 }
             });
         }

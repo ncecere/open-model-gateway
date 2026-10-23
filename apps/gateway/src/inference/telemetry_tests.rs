@@ -724,3 +724,69 @@ async fn the_attempt_span_ends_before_settlement_even_when_settlement_is_slow() 
          attempt_end={attempt_end} settlement_start={settlement_start}"
     );
 }
+
+/// Captures formatted JSON log lines for one test (same shape as
+/// `management::snapshot_tests::Captured`, duplicated locally: that one is
+/// private to its own module).
+#[derive(Clone, Default)]
+struct Captured(Arc<Mutex<Vec<u8>>>);
+impl std::io::Write for Captured {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(b);
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+    type Writer = Captured;
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+/// #98 PR 2 review item 2: `ExecutionGuard`'s reconciliation log lines pass
+/// `self.log_trace_id.as_deref()` (an `Option<&str>`) as the `trace_id`
+/// field, not `?self.log_trace_id` (`Debug`-formatted `Option<String>`,
+/// which would log `Some("…")` - never matching a Tempo/Loki search by the
+/// bare hex id - and the literal string `"None"` for an untraced request).
+/// Proven directly against `tracing`'s own `Value` impl for `Option<&str>`,
+/// through a dedicated local call site: the shared production call sites
+/// (`inference finalization failed…`) are also hit, unguarded, by several
+/// other tests and by production code, so racing tracing's process-wide
+/// per-callsite interest cache under parallel `cargo test` made capturing
+/// *that* exact call site flaky; this call site exists only here.
+#[test]
+fn trace_id_field_is_a_bare_string_when_present_and_absent_when_none() {
+    fn emit(trace_id: Option<&str>) {
+        tracing::error!(
+            trace_id = trace_id,
+            "#98 pr2 review item 2: trace_id field probe"
+        );
+    }
+    let out = Captured::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_writer(out.clone())
+        .finish();
+    let guard = tracing::subscriber::set_default(subscriber);
+    tracing::callsite::rebuild_interest_cache();
+    emit(Some("992a49ad267e06d4659fc313c1b9c6ba"));
+    emit(None);
+    drop(guard);
+    let logged = String::from_utf8(out.0.lock().unwrap().clone()).unwrap();
+    let lines: Vec<Value> = logged
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 2, "{logged}");
+    assert_eq!(
+        lines[0]["fields"]["trace_id"], "992a49ad267e06d4659fc313c1b9c6ba",
+        "a known trace id must log as the bare hex string, not Debug-formatted: {logged}"
+    );
+    assert!(
+        lines[1]["fields"].get("trace_id").is_none(),
+        "an absent trace id must omit the field entirely, never log the literal string \"None\": {logged}"
+    );
+}
