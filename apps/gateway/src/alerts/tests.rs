@@ -1482,6 +1482,64 @@ async fn outbox_due(s: &Seed) {
     sqlx::query("UPDATE alert_recipient_outbox SET next_attempt_at=clock_timestamp()-interval '1 second' WHERE state='waiting'").execute(&s.pool).await.unwrap();
 }
 
+/// A pre-0051 binary's legacy `deliver_one` finalizes a delivery with one
+/// plain `UPDATE ... SET status=... WHERE status='pending'`, oblivious to
+/// the outbox. While recipients are still waiting or leased, that overlap
+/// must be refused loudly (not silently finalize mail the outbox has not
+/// finished sending); the new flow must still complete normally.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn old_binary_finalizing_a_delivery_with_live_outbox_rows_is_refused(pool: PgPool) {
+    let s = seed(pool).await;
+    let (port, mut rx) = mock::serve(Behaviour::default()).await;
+    relay(&s, port).await;
+    outbox_incident(&s, "'one@example.test','two@example.test'").await;
+    // One claim initializes both recipients and leases exactly one,
+    // leaving the other 'waiting'.
+    let (id, claim) = outbox::claim(&s.store, Uuid::new_v4())
+        .await
+        .unwrap()
+        .unwrap();
+    let claim = claim.unwrap();
+    let (waiting, leased): (i64, i64) = (
+        count(
+            &s,
+            "SELECT count(*) FROM alert_recipient_outbox WHERE state='waiting'",
+        )
+        .await,
+        count(
+            &s,
+            "SELECT count(*) FROM alert_recipient_outbox WHERE state='leased'",
+        )
+        .await,
+    );
+    // notify_workspace_admins (set by outbox_incident) adds the workspace
+    // admin as a third recipient alongside the two explicit addresses.
+    assert_eq!((waiting, leased), (2, 1));
+    // The legacy direct finalize: no outbox awareness at all.
+    let legacy = sqlx::query("UPDATE alert_deliveries SET status='sent',completed_at=clock_timestamp() WHERE id=$1 AND status='pending'")
+        .bind(id)
+        .execute(&s.pool)
+        .await;
+    let error = legacy.expect_err("an old binary must never finalize a delivery the outbox has not finished");
+    assert_eq!(
+        error.as_database_error().and_then(|e| e.code()).map(|c| c.into_owned()),
+        Some("55006".to_owned())
+    );
+    // The new flow is unaffected and still completes both recipients.
+    assert!(outbox::complete(&s.store, &claim, Ok(())).await.unwrap());
+    outbox_due(&s).await;
+    assert_eq!(deliver_pending(&s.store, 25).await, 1);
+    for _ in 0..2 {
+        rx.recv().await.unwrap();
+    }
+    let status: String = sqlx::query_scalar("SELECT status FROM alert_deliveries WHERE id=$1")
+        .bind(id)
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "sent");
+}
+
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn outbox_partial_success_is_durable_and_never_resent(pool: PgPool) {
     let s = seed(pool).await;

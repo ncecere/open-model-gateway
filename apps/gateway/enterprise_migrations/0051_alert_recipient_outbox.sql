@@ -54,6 +54,16 @@ BEGIN
  IF (OLD.initialized AND NOT NEW.initialized) OR (OLD.status<>'pending' AND NEW IS DISTINCT FROM OLD) THEN
   RAISE EXCEPTION 'completed alert deliveries cannot be replayed';
  END IF;
+ -- Rolling-upgrade overlap: a pre-0051 binary's legacy deliver_one finalizes
+ -- a delivery straight to a terminal status with one UPDATE, unaware of the
+ -- outbox. Refuse that loudly while recipients are still waiting or leased,
+ -- so mail is never silently lost or duplicated and complete() never
+ -- no-ops against a delivery it can no longer see as pending. New code
+ -- never trips this: refresh() only leaves 'pending' once every recipient
+ -- is terminal.
+ IF OLD.initialized AND NEW.status<>'pending' AND EXISTS(SELECT 1 FROM alert_recipient_outbox q WHERE q.delivery_id=OLD.id AND q.state IN ('waiting','leased')) THEN
+  RAISE EXCEPTION 'alert delivery outbox still has waiting or leased recipients' USING ERRCODE='55006';
+ END IF;
  RETURN NEW;
 END $$;
 CREATE TRIGGER alert_delivery_outbox_guard BEFORE UPDATE ON alert_deliveries FOR EACH ROW EXECUTE FUNCTION alert_delivery_outbox_guard();
