@@ -4,6 +4,7 @@ Notes for changes on `main` after [v0.7.2](v0.7.2.md). They become the next rele
 
 ## Added
 
+- **Logs Refresh, and a Sessions-to-Requests hint (#232).** Workspace and Admin Logs gained an explicit **Refresh** action (next to Columns/density) that re-fetches the current tab's rows and its summary tiles for the current filters; Logs never polled and still doesn't. The empty **Sessions** tab keeps its explanation of how sessions form and now also says that requests without session metadata are listed under **Requests**, with a button that switches to that tab keeping the same filters. No backend change: #232's diagnosis found the data correct; only the Logs page didn't refresh itself, and an empty Sessions tab read like "no logs." Admin Logs still excludes personal workspaces; no new data is exposed.
 - **Budget headroom (#103).** Workspace and key budget views separate settled estimates, pending holds and retained unknown-cost floors. Remaining budget is shown only for complete accounting; hidden parent usage stays restricted, and unknown or invalid accounting never becomes available money. Effective headroom is the lowest remaining amount across applicable layers **within each independent period**, not a sum of overlapping scopes. Older gateways without the new facts show headroom unavailable. Reporting only: admission, limits, schema and runtime privileges are unchanged.
 
 ## Batch planning no longer sizes the parent envelope for deterministic adapter rejections (#238)
