@@ -10,6 +10,7 @@ const openai = new OpenAI({ apiKey: key, baseURL: `${base}/v1`, maxRetries: 0 })
 // retry defaults, separately from the legacy capability/refusal fixtures.
 const ordinaryOpenai = new OpenAI({ apiKey: key, baseURL: `${base}/v1` });
 const anthropic = new Anthropic({ apiKey: key, baseURL: base, maxRetries: 0 });
+const ordinaryAnthropic = new Anthropic({ apiKey: key, baseURL: base });
 const messages = [{ role: "user", content: "hello" }];
 const chat = await ordinaryOpenai.chat.completions.create({ model: "company/smart", messages });
 assert.equal(chat.choices[0].message.content, "Hello from fixture");
@@ -143,7 +144,86 @@ assert.equal(finalMessage.usage.input_tokens, 3);
 assert.equal(finalMessage.usage.output_tokens, 4);
 assert.equal(finalMessage.content[0].text, "Hello from fixture");
 assert.equal(finalMessage.stop_reason, "end_turn");
-console.log("OpenAI Chat (including legacy max_tokens), Responses, and Anthropic Messages SDK contracts passed (JSON + streaming helpers)");
+// OpenAI 7.28 FunctionDefinition: omitted parameters means an empty parameter
+// list, not an unconstrained object. Only intentional tool/stream selectors are
+// added to the API-required fields; no maximum/store workaround.
+const pingMessages = [{ role: "user", content: "call ping" }];
+const pingTools = [{ type: "function", function: { name: "ping" } }];
+async function pingChat(args, streaming) {
+  if (!streaming) return (await ordinaryOpenai.chat.completions.create(args)).choices[0].message;
+  // Assemble wire deltas rather than helper-enriched parsed fields. Public
+  // nullable assistant fields such as refusal are covered separately by #221.
+  const message = { role: "assistant", content: "", tool_calls: [] };
+  for await (const event of await ordinaryOpenai.chat.completions.create({ ...args, stream: true })) {
+    const delta = event.choices[0]?.delta;
+    message.content += delta?.content ?? "";
+    for (const part of delta?.tool_calls ?? []) {
+      const call = message.tool_calls[part.index] ??= { id: "", type: "function", function: { name: "", arguments: "" } };
+      call.id += part.id ?? "";
+      call.function.name += part.function?.name ?? "";
+      call.function.arguments += part.function?.arguments ?? "";
+    }
+  }
+  return message;
+}
+for (const streaming of [false, true]) {
+  const args = { model: "company/smart", messages: pingMessages, tools: pingTools };
+  const prior = await pingChat(args, streaming);
+  const call = prior.tool_calls[0];
+  assert.equal(call.id, "ping-call");
+  assert.equal(call.function.name, "ping");
+  assert.deepEqual(JSON.parse(call.function.arguments), {});
+  const followup = {
+    ...args,
+    messages: [...pingMessages, prior, { role: "tool", tool_call_id: call.id, content: "" }],
+  };
+  const next = await pingChat(followup, streaming);
+  assert.equal(next.content, "Tool result received");
+}
+const noArguments = { type: "object", properties: {}, additionalProperties: false };
+const nativePing = { model: "company/smart", messages: pingMessages, max_tokens: 32, tools: [{ name: "ping", input_schema: noArguments }] };
+let nativePrior;
+for (const streaming of [false, true]) {
+  const prior = streaming
+    ? await ordinaryAnthropic.messages.stream(nativePing).finalMessage()
+    : await ordinaryAnthropic.messages.create(nativePing);
+  nativePrior = prior;
+  const call = prior.content.find((block) => block.type === "tool_use");
+  assert.equal(call.id, "ping-call");
+  assert.equal(call.name, "ping");
+  assert.deepEqual(call.input, {});
+  for (const defaults of [{}, { is_error: false }]) {
+    const args = { ...nativePing, messages: [...pingMessages, { role: "assistant", content: prior.content }, { role: "user", content: [{ type: "tool_result", tool_use_id: call.id, ...defaults }] }] };
+    const next = streaming
+      ? await ordinaryAnthropic.messages.stream(args).finalMessage()
+      : await ordinaryAnthropic.messages.create(args);
+    assert.equal(next.content[0].text, "Tool result received");
+  }
+}
+const explicitSchema = { type: "object", properties: { city: { type: "string" } }, required: ["city"], additionalProperties: false };
+for (const strict of [false, true]) {
+  await ordinaryOpenai.chat.completions.create({ model: "company/smart", messages, tools: [{ type: "function", function: { name: "weather", parameters: explicitSchema, strict } }] });
+}
+const nativeFollowup = (block) => ({ ...nativePing, messages: [...pingMessages, { role: "assistant", content: nativePrior.content }, { role: "user", content: [block] }] });
+await ordinaryAnthropic.messages.create(nativeFollowup({ type: "tool_result", tool_use_id: "ping-call", content: [{ type: "text", text: "ok" }], is_error: false }));
+for (const parameters of [null, false, 0, "object", []]) {
+  await assert.rejects(ordinaryOpenai.chat.completions.create({ model: "company/smart", messages, tools: [{ type: "function", function: { name: "ping", parameters } }] }), (e) => e.status === 400);
+}
+for (const fn of [{ name: "ping", extra: true }, { name: "ping", strict: "false" }]) {
+  await assert.rejects(ordinaryOpenai.chat.completions.create({ model: "company/smart", messages, tools: [{ type: "function", function: fn }] }), (e) => e.status === 400);
+}
+await assert.rejects(ordinaryOpenai.chat.completions.create({ model: "company/smart", messages: [...pingMessages, { role: "tool", content: "" }] }), (e) => e.status === 400);
+for (const block of [
+  { type: "tool_result", tool_use_id: "ping-call", content: null },
+  { type: "tool_result", tool_use_id: "ping-call", extra: true },
+  { type: "tool_result" }, { type: "tool_result", tool_use_id: null },
+  { type: "tool_result", tool_use_id: "" },
+  ...[null, 0, "false", [], {}].map((is_error) => ({ type: "tool_result", tool_use_id: "ping-call", is_error })),
+]) {
+  await assert.rejects(ordinaryAnthropic.messages.create(nativeFollowup(block)), (e) => e.status === 400);
+}
+await assert.rejects(ordinaryAnthropic.messages.create(nativeFollowup({ type: "tool_result", tool_use_id: "ping-call", is_error: true })), (e) => e.status === 501);
+console.log("OpenAI Chat (including omitted function parameters), Responses, and Anthropic Messages (including empty tool success) SDK contracts passed (JSON + streaming helpers)");
 // Files API (gateway-owned store): the official SDK's multipart order works.
 const jsonl = '{"custom_id":"a","method":"POST","url":"/v1/chat/completions","body":{}}\n';
 const uploaded = await openai.files.create({ file: await toFile(Buffer.from(jsonl), "input.jsonl"), purpose: "batch" });
