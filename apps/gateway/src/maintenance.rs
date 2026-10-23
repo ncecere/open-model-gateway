@@ -151,7 +151,7 @@ pub fn start(store: Store, retention_days: Option<i32>) -> tokio::task::JoinHand
                 .await;
                 if let Some(traces) = store.traces() {
                     traces.record_background(
-                        crate::telemetry::SpanName::LockWaitPrune,
+                        crate::telemetry::BackgroundSpan::LockWaitPrune,
                         start,
                         crate::telemetry::now_unix_nanos(),
                     );
@@ -172,7 +172,7 @@ pub fn start(store: Store, retention_days: Option<i32>) -> tokio::task::JoinHand
                 .await;
                 if let Some(traces) = store.traces() {
                     traces.record_background(
-                        crate::telemetry::SpanName::RatePrune,
+                        crate::telemetry::BackgroundSpan::RatePrune,
                         start,
                         crate::telemetry::now_unix_nanos(),
                     );

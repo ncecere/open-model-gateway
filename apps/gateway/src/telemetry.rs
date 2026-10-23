@@ -425,6 +425,32 @@ impl Recorder {
     }
 }
 
+/// The fixed allowlist [`Recorder::record_background`] accepts (#98 PR 2
+/// review item 7): only the two independent maintenance-run roots, never
+/// an arbitrary [`SpanName`] - which would let a caller mis-tag a
+/// background run as a request-scoped span such as `admission`, or bypass
+/// `SharedAdmission`'s eligibility design for request spans by routing one
+/// through this ungated path instead.
+///
+/// ```compile_fail
+/// use open_model_gateway::telemetry::{BackgroundSpan, SpanName};
+/// fn needs_background_span(_: BackgroundSpan) {}
+/// needs_background_span(SpanName::Admission);
+/// ```
+#[derive(Clone, Copy)]
+pub enum BackgroundSpan {
+    RatePrune,
+    LockWaitPrune,
+}
+impl BackgroundSpan {
+    fn name(self) -> SpanName {
+        match self {
+            Self::RatePrune => SpanName::RatePrune,
+            Self::LockWaitPrune => SpanName::LockWaitPrune,
+        }
+    }
+}
+
 impl Recorder {
     /// Records one independent background-root span (`rate_prune`,
     /// `lock_wait_prune` maintenance runs only): no workspace, user, or
@@ -433,7 +459,7 @@ impl Recorder {
     /// (the only export capability for inference-request spans). Still
     /// subject to the same sample ratio, span budget and drop-on-full
     /// queue as every other span.
-    pub fn record_background(&self, name: SpanName, start: u64, end: u64) {
+    pub fn record_background(&self, span: BackgroundSpan, start: u64, end: u64) {
         if self.stopping.load(Ordering::Relaxed) {
             return;
         }
@@ -441,7 +467,7 @@ impl Recorder {
         if !root_sampled(synthetic, self.ratio) {
             return;
         }
-        let Some(span) = Span::new(name, trace_id(synthetic), None, start, end) else {
+        let Some(span) = Span::new(span.name(), trace_id(synthetic), None, start, end) else {
             return;
         };
         let Ok(text) = serde_json::to_string(&span) else {
@@ -1659,6 +1685,20 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn record_background_still_emits_the_two_allowed_maintenance_spans() {
+        let (recorder, mut rx) = Recorder::channel(1.0);
+        recorder.record_background(BackgroundSpan::RatePrune, 1, 2);
+        recorder.record_background(BackgroundSpan::LockWaitPrune, 1, 2);
+        let mut names = Vec::new();
+        while let Ok(raw) = rx.try_recv() {
+            let span: Value = serde_json::from_str(raw.get()).unwrap();
+            names.push(span["name"].as_str().unwrap().to_owned());
+        }
+        names.sort();
+        assert_eq!(names, ["lock_wait_prune", "rate_prune"]);
     }
 
     #[test]
