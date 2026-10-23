@@ -312,6 +312,255 @@ async fn key_expiry_live_delivery_suppresses_obsolete_and_hides_secrets(pool: Pg
     assert!(rx.try_recv().is_err());
 }
 
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn key_expiry_send_time_loss_and_terminal_outcomes(pool: PgPool) {
+    let s = seed(pool).await;
+    let (port, mut rx) = mock::serve(Behaviour::default()).await;
+    relay(&s, port).await;
+    // Every transition is made after queueing, before delivery, without an intervening tick.
+    for loss in [
+        "revoked",
+        "disabled",
+        "expired",
+        "no_expiry",
+        "changed_expiry",
+        "membership",
+        "platform",
+        "user",
+        "workspace",
+    ] {
+        let now = expiry_now(&s).await;
+        let k = expiry_key(&s, Some(now + chrono::Duration::days(3))).await;
+        assert_eq!(evaluate(&s).await.fired, 1, "{loss}");
+        let sql = match loss {
+            "revoked" => "UPDATE api_keys SET revoked_at=now() WHERE id=$1",
+            "disabled" => "UPDATE api_keys SET disabled_at=now() WHERE id=$1",
+            "expired" => "UPDATE api_keys SET expires_at=now() WHERE id=$1",
+            "no_expiry" => "UPDATE api_keys SET expires_at=NULL WHERE id=$1",
+            "changed_expiry" => {
+                "UPDATE api_keys SET expires_at=now()+interval '4 days' WHERE id=$1"
+            }
+            "membership" => {
+                "UPDATE workspace_membership_grants SET revoked_at=now() WHERE user_id=$1"
+            }
+            "platform" => "UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1",
+            "user" => "UPDATE users SET disabled_at=now() WHERE id=$1",
+            "workspace" => "UPDATE workspaces SET disabled_at=now() WHERE id=$1",
+            _ => unreachable!(),
+        };
+        let id = match loss {
+            "membership" | "platform" | "user" => s.owner,
+            "workspace" => s.team,
+            _ => k,
+        };
+        sqlx::query(sql).bind(id).execute(&s.pool).await.unwrap();
+        assert_eq!(deliver_pending(&s.store, 10).await, 1, "{loss}");
+        let status: String = sqlx::query_scalar("SELECT d.status FROM alert_deliveries d JOIN alert_events e ON e.id=d.event_id WHERE e.api_key_id=$1").bind(k).fetch_one(&s.pool).await.unwrap();
+        assert_eq!(status, "no_recipients", "{loss}");
+        assert!(rx.try_recv().is_err(), "{loss}");
+        // Restore authority (test setup), then keep this key permanently ineligible.
+        sqlx::query("UPDATE users SET disabled_at=NULL WHERE id=$1")
+            .bind(s.owner)
+            .execute(&s.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE workspaces SET disabled_at=NULL WHERE id=$1")
+            .bind(s.team)
+            .execute(&s.pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source) SELECT DISTINCT workspace_id,user_id,role,'manual' FROM workspace_membership_grants WHERE user_id=$1 ON CONFLICT DO NOTHING")
+            .bind(s.owner)
+            .execute(&s.pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO platform_role_grants(user_id,role,source) VALUES($1,'user','manual') ON CONFLICT DO NOTHING")
+            .bind(s.owner)
+            .execute(&s.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE api_keys SET revoked_at=coalesce(revoked_at,now()) WHERE id=$1")
+            .bind(k)
+            .execute(&s.pool)
+            .await
+            .unwrap();
+    }
+    // Superseded/cleared incidents and changed-band reminders also suppress old pending mail.
+    let now = expiry_now(&s).await;
+    let k = expiry_key(&s, Some(now + chrono::Duration::days(3))).await;
+    assert_eq!(evaluate(&s).await.fired, 1);
+    sqlx::query(
+        "UPDATE alert_events SET resolved_at=now(),resolution='superseded' WHERE api_key_id=$1",
+    )
+    .bind(k)
+    .execute(&s.pool)
+    .await
+    .unwrap();
+    assert_eq!(deliver_pending(&s.store, 10).await, 1);
+    assert!(rx.try_recv().is_err());
+    sqlx::query("UPDATE api_keys SET revoked_at=now() WHERE id=$1")
+        .bind(k)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    let (port, _rx) = mock::serve(Behaviour {
+        reject_recipient: true,
+        ..Default::default()
+    })
+    .await;
+    relay(&s, port).await;
+    expiry_key(&s, Some(now + chrono::Duration::hours(12))).await;
+    assert_eq!(evaluate(&s).await.fired, 1);
+    assert_eq!(deliver_pending(&s.store, 10).await, 1);
+    let status: (String, Option<String>) =
+        sqlx::query_as("SELECT status,error FROM alert_deliveries WHERE status='failed'")
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+    assert_eq!(status, ("failed".to_owned(), Some("rejected".to_owned())));
+    assert_eq!(
+        deliver_pending(&s.store, 10).await,
+        0,
+        "terminal failure is not retried"
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn key_expiry_service_recipients_are_current_owners_admins_not_platform_roles(pool: PgPool) {
+    let s = seed(pool).await;
+    let sa = Uuid::new_v4();
+    sqlx::query("INSERT INTO service_accounts(id,workspace_id,name) VALUES($1,$2,'automation')")
+        .bind(sa)
+        .bind(s.team)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    let mut users = Vec::new();
+    for (email, role) in [
+        ("delegate@example.test", "admin"),
+        ("member@example.test", "member"),
+    ] {
+        let id = Uuid::new_v4();
+        sqlx::query("INSERT INTO users(id,email) VALUES($1,$2)")
+            .bind(id)
+            .bind(email)
+            .execute(&s.pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO platform_role_grants(user_id,role,source) VALUES($1,'user','manual')",
+        )
+        .bind(id)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source) VALUES($1,$2,$3,'manual')").bind(s.team).bind(id).bind(role).execute(&s.pool).await.unwrap();
+        users.push(id);
+    }
+    let k = Uuid::new_v4();
+    sqlx::query("INSERT INTO api_keys(id,workspace_id,service_account_id,name,secret_hash,expires_at) VALUES($1,$2,$3,'Private automation name',decode(repeat('24',32),'hex'),now()+interval '3 days')").bind(k).bind(s.team).bind(sa).execute(&s.pool).await.unwrap();
+    sqlx::query("UPDATE service_accounts SET disabled_at=now() WHERE id=$1")
+        .bind(sa)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(evaluate(&s).await.fired, 0);
+    sqlx::query("UPDATE service_accounts SET disabled_at=NULL WHERE id=$1")
+        .bind(sa)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(evaluate(&s).await.fired, 1);
+    // A former administrator is not entitled merely because they created a service account/key.
+    sqlx::query("UPDATE workspace_membership_grants SET revoked_at=now() WHERE user_id=$1")
+        .bind(users[0])
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    let (port, mut rx) = mock::serve(Behaviour::default()).await;
+    relay(&s, port).await;
+    assert_eq!(deliver_pending(&s.store, 10).await, 1);
+    let mail = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(mail.rcpt_to.join(",").contains("owner@example.test"));
+    assert!(!mail.data.contains("Private automation name"));
+    assert!(rx.try_recv().is_err());
+    // A distinct expiry is a new cycle. Current owners and admins receive it, never members/platform-only admins.
+    sqlx::query("INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source) VALUES($1,$2,'admin','manual')")
+        .bind(s.team)
+        .bind(users[0])
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    set_expiry(
+        &s,
+        k,
+        Some(expiry_now(&s).await + chrono::Duration::days(4)),
+    )
+    .await;
+    assert_eq!(evaluate(&s).await.fired, 1);
+    assert_eq!(deliver_pending(&s.store, 10).await, 1);
+    let mut recipients = Vec::new();
+    for _ in 0..2 {
+        recipients.extend(
+            tokio::time::timeout(Duration::from_secs(5), rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+                .rcpt_to,
+        );
+    }
+    let recipients = recipients.join(",");
+    assert!(
+        recipients.contains("owner@example.test") && recipients.contains("delegate@example.test"),
+        "{recipients}"
+    );
+    assert!(
+        !recipients.contains("member@example.test") && !recipients.contains("admin@example.test")
+    );
+    assert!(rx.try_recv().is_err());
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn key_expiry_schema_rejects_ambiguous_shapes_and_mutable_attribution(pool: PgPool) {
+    let s = seed(pool).await;
+    let now = expiry_now(&s).await;
+    set_expiry(&s, s.key, Some(now + chrono::Duration::days(3))).await;
+    assert_eq!(evaluate(&s).await.fired, 1);
+    for (column, value) in [
+        ("api_key_id", "NULL"),
+        ("key_expires_at", "now()"),
+        ("threshold_days", "1"),
+        ("kind", "'budget_threshold'"),
+        ("workspace_id", "NULL"),
+        ("severity", "'critical'"),
+    ] {
+        let result=sqlx::query(&format!("UPDATE alert_events SET {column}={value},resolved_at=now(),resolution='cleared' WHERE kind='key_expiring'")).execute(&s.pool).await;
+        assert!(result.is_err(), "mutable {column}");
+    }
+    let r = rule(
+        &s,
+        "scope,kind,budget_layers,thresholds",
+        "'installation','budget_threshold',ARRAY['local'],ARRAY[80]",
+    )
+    .await;
+    // Both source columns must be NULL for key-expiry; no partial attribution on other kinds.
+    for sql in [
+        format!(
+            "INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary,api_key_id,key_expires_at,threshold_days) VALUES(gen_random_uuid(),'{r}','key_expiring','other',7,'warning','{}','x','{}',now(),7)",
+            s.team, s.key
+        ),
+        format!(
+            "INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,summary,api_key_id) VALUES(gen_random_uuid(),'{r}','budget_threshold','other',80,'warning','x','{}')",
+            s.key
+        ),
+    ] {
+        assert!(sqlx::query(&sql).execute(&s.pool).await.is_err());
+    }
+}
+
 struct Seed {
     store: Store,
     pool: PgPool,
