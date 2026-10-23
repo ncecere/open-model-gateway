@@ -4,7 +4,7 @@ Notes for changes on `main` after [v0.7.2](v0.7.2.md). They become the next rele
 
 ## Trace exporter preview: contract and transport only (#98, PR 1)
 
-Adds an opt-in, bounded OTLP/HTTP JSON trace recorder/exporter using existing dependencies, with typed attributes, deterministic sampling/correlation primitives, dedicated secret headers and the gateway's egress protections. Disabled unless `GATEWAY_TRACES_OTLP_URL` is set; `OTEL_*` is ignored. Collector failure never blocks or retries inference. No engine instrumentation or production spans are emitted yet: those arrive in PR 2, with collector acceptance in PR 3. See [operations](../operations.md#traces-preview-transport-only-98-pr-1).
+Adds an opt-in, bounded OTLP/HTTP JSON trace recorder/exporter using existing dependencies, with typed attributes, deterministic sampling/correlation primitives, dedicated secret headers and the gateway's egress protections. Disabled unless `GATEWAY_TRACES_OTLP_URL` is set; `OTEL_*` is ignored. Collector failure never blocks or retries inference. No engine instrumentation or production spans are emitted yet: those arrive in PR 2, with collector acceptance in PR 3. See [operations](../operations.md#traces-98).
 
 ## Instrumentation and correlation for interactive generation traces (#98, PR 2)
 
@@ -15,7 +15,19 @@ PR 1's exporter now has a production span source, limited to one complete intera
 - **Streaming is drop-safe:** the trace context is moved into the stream alongside the existing `ExecutionGuard` and finishes (export, or drop-count) exactly once on completion, error, timeout, client cancellation (including before the first poll) and settlement write failure. A cancelled attempt's settlement still runs, in a detached task outside the phase scope: its sub-phase spans are legitimately absent from a cancelled trace, not a gap.
 - **Logs correlation:** the Logs request list and detail responses add `trace_id` - the deterministic hex id for a shared-workspace row, `null` for personal, absent for an unauthorized viewer because the row itself is withheld. The dashboard's request detail page shows a "Trace ID" field when it is present. The same id is attached to the existing reconciliation log lines once eligibility is known. `x-request-id` is unchanged.
 
-See [operations](../operations.md#traces-98-pr-2-instrumentation-and-correlation). Collector acceptance and chart assertions remain PR 3's scope.
+See [operations](../operations.md#traces-98). Collector acceptance and chart assertions were PR 3's scope; see the next section.
+
+## End-to-end collector acceptance, chart documentation and docs (#98, PR 3)
+
+The final PR of #98: proves PR 1's exporter (#259) and PR 2's instrumentation (#266) end to end against a real running gateway and a local mock OTLP collector, and documents the Helm chart's side of deploying this.
+
+- **Mock-collector acceptance tests** (`apps/gateway/tests/telemetry_acceptance.rs`): a shared-workspace (team) chat request exports the documented span set (`inference.request`, `routing`, `admission`(.*), `upstream.attempt`, `settlement`(.*)) with correct parentage, and every exported span's `traceId` matches `telemetry::trace_id` of the request's own id - the same value Logs' `trace_id` field computes for that row. A personal-workspace request exports nothing. A collector outage - a closed port, then a collector that accepts but never replies within the 2s whole-exchange timeout - never fails or measurably slows the inference request, and both failures are counted (`gateway_trace_dropped_spans_total{reason="delivery"}`, `gateway_trace_deliveries_total{outcome}`), scraped from a real metrics listener. A refused trace-collector destination (a private address without `GATEWAY_EGRESS_PRIVATE_ALLOW` in production, or the cloud metadata address) fails the real binary's startup before any database connection, without ever echoing the refused URL (`apps/gateway/tests/startup.rs`).
+- **Helm chart:** `gateway.env`'s existing free-form non-secret map already carries `GATEWAY_TRACES_OTLP_URL`/`GATEWAY_TRACES_SAMPLE_RATIO`/`GATEWAY_TRACES_OTLP_HEADERS_ENV` to the gateway container's ConfigMap/envFrom - never the migrate Job, which never mounts that ConfigMap at all - and `gateway.extraEnvFrom` already carries the header secret's own variable from a Secret. `values.yaml` now documents both, plus a `networkPolicy.egress.extraEgress` example for the collector's port (typically TCP 4318); `docs/kubernetes.md` gets a short "Traces (#98)" how-to. No chart template logic changed: these settings only needed documenting through mechanisms the chart already had (`tests/helm-chart.test.mjs`).
+- **Docs:** `docs/operations.md`'s Traces section drops the "preview"/"PR 2" framing now that spans, the exporter and chart support are all in place; adds a Grafana Tempo "search by trace ID from Logs" how-to; and states plainly what remains unsupported by design - no `OTEL_*` variables, OTLP/HTTP JSON only (no protobuf/gRPC), no inbound `traceparent`/`tracestate`/`baggage` propagation (and none forwarded upstream), no automatic resource/host discovery, and no metrics or logs over OTLP from this exporter (Prometheus metrics and audit export's separate OTLP/HTTP logs destination are unaffected).
+
+No src/ changes beyond tests: PR 1 and PR 2 already implement the exporter, egress policy and engine instrumentation this proves out. No migration, no grant changes, no new dependencies.
+
+See [operations](../operations.md#traces-98) and [kubernetes](../kubernetes.md#traces-98).
 
 ## Helm: CNPG backups through the Barman Cloud plugin (#261)
 
