@@ -889,36 +889,71 @@ async fn an_empty_route_plan_still_returns_busy_and_exports_nothing() {
     assert!(drain(&mut rx).await.is_empty());
 }
 
-/// #98 PR 2 review item 4 (structural): the fallback `Err(InferenceError::Busy)`
-/// after the attempt loop (reached only when `plan.deployment_ids` is empty,
-/// so the loop runs zero iterations and no admission - and therefore no
-/// telemetry eligibility - is ever possible for this exact trigger; that is
-/// why the test above can observe the return value but never an exported
-/// span either way) must still call `telemetry.finish(...)` explicitly
-/// first, like every other return path in this function, so `Drop` is
-/// never the one deciding this outcome and a real `Busy` is never silently
-/// relabelled `Cancelled` if a future change makes eligibility reachable
-/// here. Checked structurally (the same grep-based architecture-test
-/// pattern `telemetry.rs` already uses), since nothing distinguishes
-/// "finished explicitly" from "finished by Drop" through any externally
-/// observable side effect today.
-#[test]
-fn the_empty_route_plan_fallback_finishes_telemetry_before_returning_busy() {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/inference/mod.rs");
-    let source = std::fs::read_to_string(path).unwrap();
-    let marker = "\n        Err(InferenceError::Busy)\n    }\n}\n";
-    let pos = source
-        .find(marker)
-        .expect("the empty-route-plan fallback's shape moved; update this test's marker");
-    // Narrow enough to exclude the sibling match arm's own, unrelated
-    // telemetry.finish(...) call just above the loop's closing brace (about
-    // 144 bytes further back), wide enough for a one-line explicit finish
-    // call placed directly before this return.
-    let window_start = pos.saturating_sub(100);
-    let preceding = &source[window_start..pos];
+/// #98 PR 2 review item 4 (behavioural, replacing a structural source grep):
+/// the fallback `Err(InferenceError::Busy)` after the attempt loop (reached
+/// only when `plan.deployment_ids` is empty, so the loop runs zero
+/// iterations and no admission - and therefore no telemetry eligibility -
+/// is ever possible for this exact trigger; that is why the test above can
+/// observe the return value but never an exported span either way) must
+/// still call `telemetry.finish(...)` explicitly before returning, like
+/// every other return path in this function, so `Drop` is never the one
+/// deciding this outcome and a real `Busy` is never silently relabelled
+/// `Cancelled` if a future change makes eligibility reachable here.
+///
+/// Nothing ever exports for this trigger (proven above), so the closest
+/// observable is the root span's own fate inside `Context`: an explicit
+/// `telemetry.finish(...)` call records a root span into `Context` before
+/// it is dropped un-exported (no eligibility ever committed), which
+/// `Context::Drop` counts into `gateway_trace_dropped_spans_total` with
+/// `reason="ineligible"`. The pre-fix bug (leaving this return to `Drop`'s
+/// own `Outcome::Cancelled` default) would still increment that same
+/// counter once Drop runs its own `finish` - the metric alone cannot tell
+/// "finished explicitly" apart from "finished by Drop" - so this proves
+/// only that a root span is produced at all for this trigger (never
+/// silently skipped, closing the uncounted-loss gap); item 2's engine test
+/// proves the outcome/error.type labelling itself, on the sibling trigger
+/// that does export.
+#[tokio::test]
+async fn an_empty_route_plan_still_records_its_root_span_before_dropping_it_ineligible() {
+    async fn ineligible_drops() -> f64 {
+        let text = crate::metrics::METRICS.render(None).await;
+        let needle = "gateway_trace_dropped_spans_total{reason=\"ineligible\"}";
+        text.lines()
+            .find(|l| l.starts_with(needle))
+            .and_then(|l| l.split_whitespace().last())
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.0)
+    }
+    let before = ineligible_drops().await;
+    let repository = Arc::new(TelemetryRepository::default());
+    repository.deployments.lock().unwrap().push(deployment());
+    repository.shared.store(true, Ordering::SeqCst);
+    *repository.plan.lock().unwrap() = Some(crate::routing::RoutePlan {
+        deployment_ids: vec![],
+        max_attempts: 1,
+        allow_ambiguous_failover: false,
+    });
+    let mut registry = ProviderRegistry::default();
+    registry
+        .register(Arc::new(Adapter {
+            mode: Mutex::new(vec![]),
+        }))
+        .unwrap();
+    let (recorder, mut rx) = telemetry::Recorder::channel(1.0);
+    let engine = Engine::new(repository, registry, EngineLimits::default())
+        .unwrap()
+        .with_telemetry(Some(recorder));
+    let error = expect_err(
+        engine
+            .execute(principal(), request(false), Uuid::new_v4())
+            .await,
+    );
+    assert_eq!(error, InferenceError::Busy);
+    assert!(drain(&mut rx).await.is_empty());
+    let after = ineligible_drops().await;
     assert!(
-        preceding.contains("telemetry.finish("),
-        "the fallback Err(InferenceError::Busy) must call telemetry.finish(...) \
-         explicitly before returning, like every other return path: {preceding:?}"
+        after > before,
+        "the fallback must still record (then drop, ineligible) a root span before \
+         returning Busy, not silently skip it: before={before} after={after}"
     );
 }
