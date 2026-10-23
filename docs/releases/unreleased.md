@@ -18,6 +18,14 @@ Creating a gateway-run batch (`POST /v1/batches`) now runs every chat line throu
 
 A batch whose lines are all such rejections is refused per line at creation (no batch, no reservation, nothing dispatched); a mixed batch reserves only for its valid lines. An excluded line is still copied into the batch and still dispatches; it is refused per line with no execution or reservation of its own. Unknown-hold retention and envelope release on close are unchanged. No schema or grant changes.
 
+## Gateway-run batch dispatch now validates an omitted-maximum line against the same bound planning did (#245)
+
+For an omitted-maximum (pinned) batch line, planning (`jobs/plan.rs`) already validated the line's own adapter with its resolved output bound - the same clamped value `encode_native_line` uses - not the client's raw omission (#238). At dispatch, though, the engine's pre-admission check (`Engine::execute_protocol`'s `validate_chat_request`, #228) still saw the unmodified line, with the maximum still omitted, while the real adapter `execute` call only received the resolved maximum afterward, once admission computed it. No shipped adapter's validation depends on the maximum today, so no request was ever wrongly accepted or refused by this gap, but a future ceiling-sensitive adapter could pass planning and still fail dispatch (or the reverse).
+
+The runner now copies the line's plan-time resolved output bound onto the still-omitted request before the engine ever sees it (`jobs::runner::LineRun::execute`), so planning, the engine's pre-admission check and the real upstream attempt all judge the same body. This only affects batch lines already pinned to one deployment and price at plan time; admission still independently resolves the same bound from that same pinned price, so the admitted cap is unchanged (#215: the admission-pinned cap still equals the upstream cap).
+
+Interactive requests are unchanged. An interactive request's candidate deployment, and therefore its price, is not chosen until admission; pre-filling its pre-admission check with a resolved maximum would require reading a price before a route is picked, which would violate #228's "no prices, no network" contract for that check. An interactive omitted maximum keeps reaching `validate_chat_request` as the raw `None` the client sent, exactly as before. No schema changes beyond an internal, backward-compatible field in the batch line's own private plan metadata (never client-visible); no grant changes.
+
 ## Upgrade note: local-upstream approvals in special-use ranges will be refused next minor release (#203)
 
 `GATEWAY_LOCAL_UPSTREAMS` approvals for an HTTPS endpoint still accept, this

@@ -1110,7 +1110,7 @@ impl LineRun {
     /// hint (if any) scoped to this attempt.
     async fn execute(
         &self,
-        request: BatchRequest,
+        mut request: BatchRequest,
         execution: Uuid,
         pin: Option<Pin>,
         plan: Option<lines::LinePlan>,
@@ -1118,6 +1118,23 @@ impl LineRun {
         if let Some(deployment) = plan.map(|p| p.deployment).or(pin.map(|p| p.deployment)) {
             self.repository
                 .pin(execution, deployment, plan.map(|p| p.price));
+        }
+        // An omitted-maximum line is pinned at plan time to this one price,
+        // which already resolved and validated the line against this exact
+        // bound (`jobs::plan::scan`). Copy it onto the still-omitted request
+        // before the engine ever sees it, so its pre-admission
+        // `validate_chat_request` (and the real upstream attempt) judge the
+        // same body planning did, not the raw client omission (#245). `0`
+        // only for a plan written before this field existed; the omission
+        // is left as-is for those already-queued lines, matching the prior
+        // behavior, and admission still resolves the same price-derived
+        // bound on its own (#215: the admission-pinned cap equals the
+        // upstream cap either way).
+        if let (Some(plan), BatchRequest::Chat(r)) = (plan, &mut request)
+            && r.max_output_tokens.is_none()
+            && plan.output > 0
+        {
+            r.max_output_tokens = Some(plan.output);
         }
         let attempt = self.execute_attempt(request, execution);
         let result = match pin.and_then(|p| p.priority.map(|priority| (p.deployment, priority))) {

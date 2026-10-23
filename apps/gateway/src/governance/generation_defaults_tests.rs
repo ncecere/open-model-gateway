@@ -315,6 +315,92 @@ async fn generation_defaults_dispatch_chat_responses_and_explicit_limits(pool: s
     assert_eq!(counts(&f).await, before);
     assert_eq!(a.seen.lock().unwrap().len(), 8);
 }
+/// #245 CONTROL (interactive unchanged): an interactive request's
+/// candidate deployment is not pinned before admission the way a batch
+/// line pinned at plan time is, so which price (and therefore which
+/// resolved maximum) applies is only known once admission picks a route.
+/// Reading a price before that to pre-fill the engine's pre-admission
+/// `validate_chat_request` would violate #228's "no prices, no network"
+/// contract for that check. So an omitted maximum must keep reaching
+/// `validate_chat_request` as the raw `None` the client sent - exactly the
+/// behaviour `generation_defaults_dispatch_chat_responses_and_explicit_limits`
+/// already proves for the rest of the admission/dispatch pipeline (the
+/// resolved maximum, `Some(50)`, only appears once the real adapter
+/// `execute` runs, after admission). This adapter's own
+/// `validate_chat_request` is ceiling-sensitive like the batch fixture in
+/// `jobs::batch_tests`, so it would accept `Some(50)` but refuses the raw
+/// omission - proving the engine does not (and, by design, cannot) give an
+/// interactive pre-admission check the batch-only treatment.
+struct CeilingSensitive {
+    seen: Mutex<Vec<Option<u32>>>,
+}
+#[async_trait]
+impl ProviderAdapter for CeilingSensitive {
+    fn id(&self) -> &'static str {
+        "openai"
+    }
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            text_chat: true,
+            streaming: false,
+            tools: false,
+        }
+    }
+    fn validate_chat_request(&self, request: &ChatRequest) -> Result<(), InferenceError> {
+        if request.max_output_tokens == Some(50) {
+            Ok(())
+        } else {
+            Err(InferenceError::Unsupported)
+        }
+    }
+    async fn execute(
+        &self,
+        _: &Deployment,
+        request: ChatRequest,
+    ) -> Result<ProviderOutput, InferenceError> {
+        self.seen.lock().unwrap().push(request.max_output_tokens);
+        Ok(ProviderOutput::Complete(ChatResponse {
+            content: Some("ok".into()),
+            tool_calls: vec![],
+            finish_reason: FinishReason::Stop,
+            usage: Usage {
+                input_tokens: Some(1),
+                output_tokens: Some(1),
+                ..Default::default()
+            },
+        }))
+    }
+}
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn generation_defaults_interactive_omitted_maximum_pre_admission_validation_still_sees_the_raw_omission(
+    pool: sqlx::PgPool,
+) {
+    let f = fixture(pool).await;
+    let _price = f.price(1_000_000).await;
+    let adapter = Arc::new(CeilingSensitive {
+        seen: Mutex::default(),
+    });
+    let mut registry = ProviderRegistry::default();
+    registry.register(adapter.clone()).unwrap();
+    let e = Engine::new(Arc::new(f.store.clone()), registry, EngineLimits::default()).unwrap();
+    let before = counts(&f).await;
+    assert_eq!(
+        execute(&f, &e, None, false, ApiProtocol::ChatCompletions).await,
+        Err(InferenceError::Unsupported),
+        "an omitted-maximum interactive request must still be refused by the engine's own pre-admission check on the raw omission, unchanged from before #245"
+    );
+    assert_eq!(
+        counts(&f).await,
+        before,
+        "a pre-admission refusal must not durably admit or reserve anything, same as #228"
+    );
+    assert!(adapter.seen.lock().unwrap().is_empty());
+    execute(&f, &e, Some(50), false, ApiProtocol::ChatCompletions)
+        .await
+        .unwrap();
+    assert_eq!(*adapter.seen.lock().unwrap(), vec![Some(50)]);
+}
+
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn generation_defaults_wire_and_invalid_server_defaults_write_nothing(pool: sqlx::PgPool) {
     let f = fixture(pool).await;
