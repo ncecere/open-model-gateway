@@ -5,6 +5,39 @@
 use super::*;
 use sqlx::PgPool;
 
+/// Test convenience: `create_admin_token` on a transaction of its own
+/// (begin, call, commit/rollback). Most tests below don't care about the
+/// lock-holding contract PR2 must follow (see the dedicated tests that
+/// do, further down); they just want a token.
+async fn create(
+    pool: &PgPool,
+    owner: Uuid,
+    name: &str,
+    scopes: &[String],
+    days: i32,
+    allowlist: Option<&[String]>,
+) -> Result<NewAdminToken, CreateAdminTokenError> {
+    let mut tx = crate::db::begin(pool).await.unwrap();
+    match create_admin_token(&mut tx, owner, name, scopes, days, allowlist).await {
+        Ok(token) => {
+            tx.commit().await.unwrap();
+            Ok(token)
+        }
+        Err(e) => {
+            let _ = tx.rollback().await;
+            Err(e)
+        }
+    }
+}
+
+/// Test convenience: `revoke_admin_token` on a transaction of its own.
+async fn revoke(pool: &PgPool, id: Uuid) -> bool {
+    let mut tx = crate::db::begin(pool).await.unwrap();
+    let result = revoke_admin_token(&mut tx, id).await.unwrap();
+    tx.commit().await.unwrap();
+    result
+}
+
 async fn admin(pool: &PgPool, email: &str) -> Uuid {
     let id = Uuid::new_v4();
     sqlx::query("INSERT INTO users(id,email) VALUES($1,$2)")
@@ -32,10 +65,16 @@ fn scopes(values: &[&str]) -> Vec<String> {
 async fn create_returns_plaintext_once_and_authenticate_round_trips(pool: PgPool) {
     let store = Store::new(pool.clone());
     let owner = admin(&pool, "owner@test.invalid").await;
-    let created = store
-        .create_admin_token(owner, "CI token", &scopes(&["platform:read"]), 30, None)
-        .await
-        .unwrap();
+    let created = create(
+        &pool,
+        owner,
+        "CI token",
+        &scopes(&["platform:read"]),
+        30,
+        None,
+    )
+    .await
+    .unwrap();
     assert!(created.token.starts_with("omg_admin_"));
     let found = store
         .authenticate_admin_token(&created.token)
@@ -67,83 +106,86 @@ async fn create_returns_plaintext_once_and_authenticate_round_trips(pool: PgPool
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn create_rejects_invalid_input_before_touching_the_database(pool: PgPool) {
-    let store = Store::new(pool.clone());
     let owner = admin(&pool, "owner@test.invalid").await;
     assert!(matches!(
-        store
-            .create_admin_token(owner, "", &scopes(&["platform:read"]), 30, None)
-            .await,
+        create(&pool, owner, "", &scopes(&["platform:read"]), 30, None).await,
         Err(CreateAdminTokenError::Invalid(
             NewAdminTokenError::InvalidName
         ))
     ));
     assert!(matches!(
-        store
-            .create_admin_token(
-                owner,
-                &"x".repeat(121),
-                &scopes(&["platform:read"]),
-                30,
-                None
-            )
-            .await,
+        create(
+            &pool,
+            owner,
+            &"x".repeat(121),
+            &scopes(&["platform:read"]),
+            30,
+            None
+        )
+        .await,
         Err(CreateAdminTokenError::Invalid(
             NewAdminTokenError::InvalidName
         ))
     ));
     assert!(matches!(
-        store
-            .create_admin_token(owner, "n", &scopes(&[]), 30, None)
-            .await,
+        create(&pool, owner, "n", &scopes(&[]), 30, None).await,
         Err(CreateAdminTokenError::Invalid(
             NewAdminTokenError::InvalidScopes
         ))
     ));
     assert!(matches!(
-        store
-            .create_admin_token(owner, "n", &scopes(&["platform:admin"]), 30, None)
-            .await,
+        create(&pool, owner, "n", &scopes(&["platform:admin"]), 30, None).await,
         Err(CreateAdminTokenError::Invalid(
             NewAdminTokenError::InvalidScopes
         ))
     ));
     assert!(matches!(
-        store
-            .create_admin_token(
-                owner,
-                "n",
-                &scopes(&["platform:read", "platform:read"]),
-                30,
-                None
-            )
-            .await,
+        create(
+            &pool,
+            owner,
+            "n",
+            &scopes(&["platform:read", "platform:read"]),
+            30,
+            None
+        )
+        .await,
         Err(CreateAdminTokenError::Invalid(
             NewAdminTokenError::InvalidScopes
         ))
     ));
     for days in [0, 91, -1] {
         assert!(matches!(
-            store
-                .create_admin_token(owner, "n", &scopes(&["platform:read"]), days, None)
-                .await,
+            create(&pool, owner, "n", &scopes(&["platform:read"]), days, None).await,
             Err(CreateAdminTokenError::Invalid(
                 NewAdminTokenError::InvalidExpiry
             ))
         ));
     }
     assert!(matches!(
-        store
-            .create_admin_token(owner, "n", &scopes(&["platform:read"]), 30, Some(&[]))
-            .await,
+        create(
+            &pool,
+            owner,
+            "n",
+            &scopes(&["platform:read"]),
+            30,
+            Some(&[])
+        )
+        .await,
         Err(CreateAdminTokenError::Invalid(
             NewAdminTokenError::InvalidAllowlist
         ))
     ));
     let too_many: Vec<String> = (0..33).map(|i| format!("10.0.{i}.0/24")).collect();
     assert!(matches!(
-        store
-            .create_admin_token(owner, "n", &scopes(&["platform:read"]), 30, Some(&too_many))
-            .await,
+        create(
+            &pool,
+            owner,
+            "n",
+            &scopes(&["platform:read"]),
+            30,
+            Some(&too_many)
+        )
+        .await,
         Err(CreateAdminTokenError::Invalid(
             NewAdminTokenError::InvalidAllowlist
         ))
@@ -160,13 +202,18 @@ async fn create_rejects_invalid_input_before_touching_the_database(pool: PgPool)
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn create_accepts_a_valid_cidr_allowlist(pool: PgPool) {
-    let store = Store::new(pool.clone());
     let owner = admin(&pool, "owner@test.invalid").await;
     let list = vec!["10.0.0.0/24".to_string(), "2001:db8::/32".to_string()];
-    let created = store
-        .create_admin_token(owner, "n", &scopes(&["platform:read"]), 30, Some(&list))
-        .await
-        .unwrap();
+    let created = create(
+        &pool,
+        owner,
+        "n",
+        &scopes(&["platform:read"]),
+        30,
+        Some(&list),
+    )
+    .await
+    .unwrap();
     let stored: Vec<String> =
         sqlx::query_scalar("SELECT ip_allowlist::text[] FROM admin_api_tokens WHERE id=$1")
             .bind(created.id)
@@ -251,13 +298,18 @@ async fn database_level_schema_constraints_hold_even_bypassing_the_rust_validato
 async fn identity_digest_scopes_expiry_and_allowlist_are_immutable_and_rows_are_never_deleted(
     pool: PgPool,
 ) {
-    let store = Store::new(pool.clone());
     let owner = admin(&pool, "owner@test.invalid").await;
     let list = vec!["10.0.0.0/24".to_string()];
-    let created = store
-        .create_admin_token(owner, "n", &scopes(&["platform:read"]), 30, Some(&list))
-        .await
-        .unwrap();
+    let created = create(
+        &pool,
+        owner,
+        "n",
+        &scopes(&["platform:read"]),
+        30,
+        Some(&list),
+    )
+    .await
+    .unwrap();
     for (label, sql) in [
         (
             "name",
@@ -308,11 +360,10 @@ async fn identity_digest_scopes_expiry_and_allowlist_are_immutable_and_rows_are_
 async fn revocation_is_final_and_revoke_is_idempotent(pool: PgPool) {
     let store = Store::new(pool.clone());
     let owner = admin(&pool, "owner@test.invalid").await;
-    let created = store
-        .create_admin_token(owner, "n", &scopes(&["platform:read"]), 30, None)
+    let created = create(&pool, owner, "n", &scopes(&["platform:read"]), 30, None)
         .await
         .unwrap();
-    assert!(store.revoke_admin_token(created.id).await.unwrap());
+    assert!(revoke(&pool, created.id).await);
     // Idempotent: revoking again is not an error and does not move the time.
     let first: DateTime<Utc> =
         sqlx::query_scalar("SELECT revoked_at FROM admin_api_tokens WHERE id=$1")
@@ -320,7 +371,7 @@ async fn revocation_is_final_and_revoke_is_idempotent(pool: PgPool) {
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert!(store.revoke_admin_token(created.id).await.unwrap());
+    assert!(revoke(&pool, created.id).await);
     let second: DateTime<Utc> =
         sqlx::query_scalar("SELECT revoked_at FROM admin_api_tokens WHERE id=$1")
             .bind(created.id)
@@ -329,7 +380,7 @@ async fn revocation_is_final_and_revoke_is_idempotent(pool: PgPool) {
             .unwrap();
     assert_eq!(first, second);
     // Revoking a token that never existed is not an error either.
-    assert!(!store.revoke_admin_token(Uuid::new_v4()).await.unwrap());
+    assert!(!revoke(&pool, Uuid::new_v4()).await);
     // Cannot be un-revoked, by anyone, ever.
     assert!(
         sqlx::query("UPDATE admin_api_tokens SET revoked_at=NULL WHERE id=$1")
@@ -373,11 +424,17 @@ async fn lookup_rejects_expired_revoked_and_owner_not_admin(pool: PgPool) {
         "expired tokens never authenticate"
     );
 
-    let revoked = store
-        .create_admin_token(owner, "revoked", &scopes(&["platform:read"]), 30, None)
-        .await
-        .unwrap();
-    assert!(store.revoke_admin_token(revoked.id).await.unwrap());
+    let revoked = create(
+        &pool,
+        owner,
+        "revoked",
+        &scopes(&["platform:read"]),
+        30,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(revoke(&pool, revoked.id).await);
     assert!(
         store
             .authenticate_admin_token(&revoked.token)
@@ -388,10 +445,16 @@ async fn lookup_rejects_expired_revoked_and_owner_not_admin(pool: PgPool) {
 
     // Owner demoted to a non-admin role: the token no longer authenticates,
     // even though it is itself unrevoked and unexpired.
-    let demoted = store
-        .create_admin_token(owner, "demoted", &scopes(&["platform:read"]), 30, None)
-        .await
-        .unwrap();
+    let demoted = create(
+        &pool,
+        owner,
+        "demoted",
+        &scopes(&["platform:read"]),
+        30,
+        None,
+    )
+    .await
+    .unwrap();
     sqlx::query(
         "UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND role='admin'",
     )
@@ -430,12 +493,9 @@ async fn lookup_rejects_expired_revoked_and_owner_not_admin(pool: PgPool) {
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn owner_transitions_revoke_tokens_and_regaining_admin_never_restores_them(pool: PgPool) {
-    let store = Store::new(pool.clone());
-
     // Manual demotion of the only admin grant.
     let manual = admin(&pool, "manual@test.invalid").await;
-    let t1 = store
-        .create_admin_token(manual, "t1", &scopes(&["platform:read"]), 30, None)
+    let t1 = create(&pool, manual, "t1", &scopes(&["platform:read"]), 30, None)
         .await
         .unwrap();
     sqlx::query(
@@ -479,8 +539,7 @@ async fn owner_transitions_revoke_tokens_and_regaining_admin_never_restores_them
         .execute(&pool)
         .await
         .unwrap();
-    let t2 = store
-        .create_admin_token(grouped, "t2", &scopes(&["platform:read"]), 30, None)
+    let t2 = create(&pool, grouped, "t2", &scopes(&["platform:read"]), 30, None)
         .await
         .unwrap();
     sqlx::query(
@@ -494,10 +553,16 @@ async fn owner_transitions_revoke_tokens_and_regaining_admin_never_restores_them
 
     // Suspension.
     let suspended = admin(&pool, "suspended@test.invalid").await;
-    let t3 = store
-        .create_admin_token(suspended, "t3", &scopes(&["platform:read"]), 30, None)
-        .await
-        .unwrap();
+    let t3 = create(
+        &pool,
+        suspended,
+        "t3",
+        &scopes(&["platform:read"]),
+        30,
+        None,
+    )
+    .await
+    .unwrap();
     sqlx::query("UPDATE users SET disabled_at=now(),disable_reason='admin_suspension' WHERE id=$1")
         .bind(suspended)
         .execute(&pool)
@@ -516,16 +581,16 @@ async fn owner_transitions_revoke_tokens_and_regaining_admin_never_restores_them
 
     // SCIM deactivation uses the same disabled_at column (scim.rs).
     let scim_deactivated = admin(&pool, "scim@test.invalid").await;
-    let t4 = store
-        .create_admin_token(
-            scim_deactivated,
-            "t4",
-            &scopes(&["platform:read"]),
-            30,
-            None,
-        )
-        .await
-        .unwrap();
+    let t4 = create(
+        &pool,
+        scim_deactivated,
+        "t4",
+        &scopes(&["platform:read"]),
+        30,
+        None,
+    )
+    .await
+    .unwrap();
     sqlx::query("UPDATE users SET disabled_at=now(),disable_reason='scim_deactivated' WHERE id=$1")
         .bind(scim_deactivated)
         .execute(&pool)
@@ -535,8 +600,7 @@ async fn owner_transitions_revoke_tokens_and_regaining_admin_never_restores_them
 
     // Cleanup.
     let cleaned = admin(&pool, "cleaned@test.invalid").await;
-    let t5 = store
-        .create_admin_token(cleaned, "t5", &scopes(&["platform:read"]), 30, None)
+    let t5 = create(&pool, cleaned, "t5", &scopes(&["platform:read"]), 30, None)
         .await
         .unwrap();
     sqlx::query("UPDATE users SET disabled_at=now(),cleaned_at=now(),email=NULL WHERE id=$1")
@@ -554,8 +618,7 @@ async fn owner_transitions_revoke_tokens_and_regaining_admin_never_restores_them
         .execute(&pool)
         .await
         .unwrap();
-    let t6 = store
-        .create_admin_token(dual, "t6", &scopes(&["platform:read"]), 30, None)
+    let t6 = create(&pool, dual, "t6", &scopes(&["platform:read"]), 30, None)
         .await
         .unwrap();
     sqlx::query(
@@ -607,7 +670,6 @@ async fn write_skew_scenario(pool: &PgPool, first_source: &str) {
     } else {
         "manual"
     };
-    let store = Store::new(pool.clone());
     let owner = admin(pool, &format!("writeskew-{first_source}@test.invalid")).await;
     let mapping = Uuid::new_v4();
     sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role) VALUES($1,'https://issuer.test','admins','platform','admin')")
@@ -624,8 +686,7 @@ async fn write_skew_scenario(pool: &PgPool, first_source: &str) {
     .execute(pool)
     .await
     .unwrap();
-    let token = store
-        .create_admin_token(owner, "t", &scopes(&["platform:read"]), 30, None)
+    let token = create(pool, owner, "t", &scopes(&["platform:read"]), 30, None)
         .await
         .unwrap();
 
@@ -704,8 +765,6 @@ fn assert_owner_not_admin<T>(result: &Result<T, CreateAdminTokenError>) {
 /// owner regains admin later.
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn create_fails_when_the_owner_is_not_currently_an_effective_admin(pool: PgPool) {
-    let store = Store::new(pool.clone());
-
     let non_admin = Uuid::new_v4();
     sqlx::query("INSERT INTO users(id,email) VALUES($1,$2)")
         .bind(non_admin)
@@ -721,9 +780,7 @@ async fn create_fails_when_the_owner_is_not_currently_an_effective_admin(pool: P
     .execute(&pool)
     .await
     .unwrap();
-    let result = store
-        .create_admin_token(non_admin, "n", &scopes(&["platform:read"]), 30, None)
-        .await;
+    let result = create(&pool, non_admin, "n", &scopes(&["platform:read"]), 30, None).await;
     assert_owner_not_admin(&result);
 
     let disabled = admin(&pool, "disabled-create@test.invalid").await;
@@ -732,9 +789,7 @@ async fn create_fails_when_the_owner_is_not_currently_an_effective_admin(pool: P
         .execute(&pool)
         .await
         .unwrap();
-    let result = store
-        .create_admin_token(disabled, "n", &scopes(&["platform:read"]), 30, None)
-        .await;
+    let result = create(&pool, disabled, "n", &scopes(&["platform:read"]), 30, None).await;
     assert_owner_not_admin(&result);
 
     let cleaned = admin(&pool, "cleaned-create@test.invalid").await;
@@ -743,9 +798,7 @@ async fn create_fails_when_the_owner_is_not_currently_an_effective_admin(pool: P
         .execute(&pool)
         .await
         .unwrap();
-    let result = store
-        .create_admin_token(cleaned, "n", &scopes(&["platform:read"]), 30, None)
-        .await;
+    let result = create(&pool, cleaned, "n", &scopes(&["platform:read"]), 30, None).await;
     assert_owner_not_admin(&result);
 
     assert_eq!(
@@ -764,7 +817,6 @@ async fn create_fails_when_the_owner_is_not_currently_an_effective_admin(pool: P
 /// never insert a token for an owner who has already lost admin.
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn concurrent_demotion_blocks_and_then_fails_a_pending_create(pool: PgPool) {
-    let store = Store::new(pool.clone());
     let owner = admin(&pool, "race-create@test.invalid").await;
 
     let mut tx1 = pool.begin().await.unwrap();
@@ -775,13 +827,33 @@ async fn concurrent_demotion_blocks_and_then_fails_a_pending_create(pool: PgPool
     .execute(&mut *tx1)
     .await
     .unwrap();
-    // tx1's role-loss trigger now holds the owner's users row FOR UPDATE.
+    // tx1's role-loss trigger now holds the owner's user-scope advisory lock.
 
-    let store2 = store.clone();
+    let pool2 = pool.clone();
     let handle = tokio::spawn(async move {
-        store2
-            .create_admin_token(owner, "race", &["platform:read".to_string()], 30, None)
-            .await
+        // PR2's own contract: take the lock up front in the same
+        // transaction, then create on it.
+        let mut tx2 = crate::db::begin(&pool2).await.unwrap();
+        crate::governance::locks::exclusive(
+            &mut tx2,
+            [crate::governance::locks::Scope::User(owner)],
+        )
+        .await
+        .unwrap();
+        let result = create_admin_token(
+            &mut tx2,
+            owner,
+            "race",
+            &["platform:read".to_string()],
+            30,
+            None,
+        )
+        .await;
+        match &result {
+            Ok(_) => tx2.commit().await.unwrap(),
+            Err(_) => tx2.rollback().await.unwrap(),
+        }
+        result
     });
 
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
@@ -811,14 +883,12 @@ async fn concurrent_demotion_blocks_and_then_fails_a_pending_create(pool: PgPool
 /// must come from one database instant.
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn created_at_and_expires_at_come_from_the_database_clock_not_the_app(pool: PgPool) {
-    let store = Store::new(pool.clone());
     let owner = admin(&pool, "clock@test.invalid").await;
     let before: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&pool)
         .await
         .unwrap();
-    let created = store
-        .create_admin_token(owner, "n", &scopes(&["platform:read"]), 30, None)
+    let created = create(&pool, owner, "n", &scopes(&["platform:read"]), 30, None)
         .await
         .unwrap();
     let after: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
@@ -898,9 +968,7 @@ async fn concurrent_manual_and_group_revocation_does_not_deadlock(pool: PgPool) 
     .execute(&pool)
     .await
     .unwrap();
-    let store = Store::new(pool.clone());
-    let token = store
-        .create_admin_token(owner, "t", &scopes(&["platform:read"]), 30, None)
+    let token = create(&pool, owner, "t", &scopes(&["platform:read"]), 30, None)
         .await
         .unwrap();
 
@@ -986,9 +1054,7 @@ async fn concurrent_manual_and_group_revocation_does_not_deadlock(pool: PgPool) 
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn manual_demotion_under_scope_lock_audit_mode_does_not_trip_the_audit_check(pool: PgPool) {
     let owner = admin(&pool, "audit@test.invalid").await;
-    let store = Store::new(pool.clone());
-    let token = store
-        .create_admin_token(owner, "t", &scopes(&["platform:read"]), 30, None)
+    let token = create(&pool, owner, "t", &scopes(&["platform:read"]), 30, None)
         .await
         .unwrap();
 
@@ -1026,8 +1092,7 @@ async fn revoked(pool: &PgPool, id: Uuid) -> bool {
 async fn last_use_is_throttled_to_once_per_five_minutes(pool: PgPool) {
     let store = Store::new(pool.clone());
     let owner = admin(&pool, "owner@test.invalid").await;
-    let created = store
-        .create_admin_token(owner, "n", &scopes(&["platform:read"]), 30, None)
+    let created = create(&pool, owner, "n", &scopes(&["platform:read"]), 30, None)
         .await
         .unwrap();
     store
@@ -1090,10 +1155,8 @@ async fn malformed_tokens_never_reach_the_database(pool: PgPool) {
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn owner_restrict_prevents_removing_a_user_with_live_tokens(pool: PgPool) {
-    let store = Store::new(pool.clone());
     let owner = admin(&pool, "owner@test.invalid").await;
-    let created = store
-        .create_admin_token(owner, "n", &scopes(&["platform:read"]), 30, None)
+    let created = create(&pool, owner, "n", &scopes(&["platform:read"]), 30, None)
         .await
         .unwrap();
     assert!(
@@ -1255,4 +1318,59 @@ async fn role_loss_guard_allows_read_committed(pool: PgPool) {
     .await
     .unwrap();
     tx.commit().await.unwrap();
+}
+
+/// Coordinator review of #37 PR1, issue 2 (HIGH): PR2's handler is
+/// documented to hold `governance::locks::exclusive(Scope::User(owner))`
+/// in its own transaction before calling `create_admin_token`, exactly as
+/// this test does. Before the fix this ran `create_admin_token` on a
+/// *different* connection (`&self.pool`); its `INSERT`'s owner-admin guard
+/// trigger then tried to take that exact same transaction-scoped advisory
+/// lock, which blocked until the caller's own transaction ended -- but the
+/// caller could not end its transaction until this call returned. Running
+/// on the caller's own `tx`, as it does now, makes the trigger's lock
+/// acquisition re-entrant (free) instead, so this returns immediately.
+/// Bounded with a timeout so a regression cannot hang the whole suite.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn create_must_not_hang_when_the_caller_already_holds_the_owners_scope_lock(pool: PgPool) {
+    let owner = admin(&pool, "hang-create@test.invalid").await;
+    let mut tx = crate::db::begin(&pool).await.unwrap();
+    crate::governance::locks::exclusive(&mut tx, [crate::governance::locks::Scope::User(owner)])
+        .await
+        .unwrap();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        create_admin_token(&mut tx, owner, "n", &scopes(&["platform:read"]), 30, None),
+    )
+    .await;
+    let created = result
+        .expect("create_admin_token hung while the caller's own transaction already held the owner's scope lock (PR2's documented contract)")
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert!(!revoked(&pool, created.id).await);
+}
+
+/// Coordinator review of #37 PR1, issue 2 (HIGH), companion requirement:
+/// `revoke_admin_token` must run on the caller's own transaction too (so
+/// it is atomic with whatever else that transaction does, e.g. audit
+/// insertion, and rolls back with it), not commit on a separate
+/// connection the instant it is called.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn revoke_runs_on_the_callers_transaction_and_rolls_back_with_it(pool: PgPool) {
+    let owner = admin(&pool, "revoke-tx@test.invalid").await;
+    let token = create(&pool, owner, "n", &scopes(&["platform:read"]), 30, None)
+        .await
+        .unwrap();
+    let mut tx = crate::db::begin(&pool).await.unwrap();
+    assert!(revoke_admin_token(&mut tx, token.id).await.unwrap());
+    tx.rollback().await.unwrap();
+    assert!(
+        !revoked(&pool, token.id).await,
+        "revoke_admin_token must run on the caller's own transaction, so rolling it back undoes the revocation"
+    );
+    // The converse: committing the caller's transaction commits the revoke.
+    let mut tx = crate::db::begin(&pool).await.unwrap();
+    assert!(revoke_admin_token(&mut tx, token.id).await.unwrap());
+    tx.commit().await.unwrap();
+    assert!(revoked(&pool, token.id).await);
 }

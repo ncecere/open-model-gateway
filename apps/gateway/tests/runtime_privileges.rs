@@ -1165,6 +1165,7 @@ async fn budget_totals_maintained_as_runtime(pool: &PgPool) {
 /// write, and that no role can rewrite identity/digest/scopes/expiry/
 /// allowlist or remove a row.
 async fn admin_tokens_run_as_runtime(pool: &PgPool) {
+    use open_model_gateway::governance::locks::{self, Scope};
     let runtime = runtime_pool(pool).await;
     let store = open_model_gateway::store::Store::new(runtime.clone());
     let owner = uuid::Uuid::new_v4();
@@ -1181,16 +1182,23 @@ async fn admin_tokens_run_as_runtime(pool: &PgPool) {
     .execute(pool)
     .await
     .unwrap();
-    let created = store
-        .create_admin_token(
-            owner,
-            "Runtime probe",
-            &["platform:read".to_string()],
-            30,
-            None,
-        )
+    // PR2's documented contract: the handler takes the owner's scope lock
+    // exclusive up front, in its own transaction, then creates on it.
+    let mut tx = runtime.begin().await.unwrap();
+    locks::exclusive(&mut tx, [Scope::User(owner)])
         .await
-        .expect("runtime creates an admin token");
+        .unwrap();
+    let created = open_model_gateway::admin_tokens::create_admin_token(
+        &mut tx,
+        owner,
+        "Runtime probe",
+        &["platform:read".to_string()],
+        30,
+        None,
+    )
+    .await
+    .expect("runtime creates an admin token");
+    tx.commit().await.unwrap();
     let found = store
         .authenticate_admin_token(&created.token)
         .await
@@ -1221,14 +1229,22 @@ async fn admin_tokens_run_as_runtime(pool: &PgPool) {
             .await
             .unwrap();
     assert_eq!(address, "203.0.113.9", "last-use throttle did not hold");
+    let mut tx = runtime.begin().await.unwrap();
     assert!(
-        store.revoke_admin_token(created.id).await.unwrap(),
+        open_model_gateway::admin_tokens::revoke_admin_token(&mut tx, created.id)
+            .await
+            .unwrap(),
         "runtime revokes a token"
     );
+    tx.commit().await.unwrap();
+    let mut tx = runtime.begin().await.unwrap();
     assert!(
-        store.revoke_admin_token(created.id).await.unwrap(),
+        open_model_gateway::admin_tokens::revoke_admin_token(&mut tx, created.id)
+            .await
+            .unwrap(),
         "runtime revokes an already-revoked token idempotently"
     );
+    tx.commit().await.unwrap();
     assert!(
         store
             .authenticate_admin_token(&created.token)
@@ -1264,10 +1280,21 @@ async fn admin_tokens_run_as_runtime(pool: &PgPool) {
             .await
             .is_err()
     );
-    let second = store
-        .create_admin_token(owner, "Second", &["platform:read".to_string()], 30, None)
+    let mut tx = runtime.begin().await.unwrap();
+    locks::exclusive(&mut tx, [Scope::User(owner)])
         .await
         .unwrap();
+    let second = open_model_gateway::admin_tokens::create_admin_token(
+        &mut tx,
+        owner,
+        "Second",
+        &["platform:read".to_string()],
+        30,
+        None,
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
     sqlx::query(
         "UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND role='admin'",
     )

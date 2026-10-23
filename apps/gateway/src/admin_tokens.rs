@@ -18,6 +18,7 @@
 //! access never restores them (revocation is final).
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
+use sqlx::{Postgres, Transaction};
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
@@ -74,7 +75,13 @@ fn token_id(token: &str) -> Option<Uuid> {
 /// A newly created token's plaintext is returned once, then discarded; it
 /// is never stored, logged, serialized or retained. Intentionally does not
 /// implement `Debug`. `created_at`/`expires_at` are the database's own
-/// values (see [`Store::create_admin_token`]), never the app's clock.
+/// values (see [`create_admin_token`]), never the app's clock.
+///
+/// `token` is deliberately **not** zeroized on drop: it is this type's
+/// entire reason to exist (the one-time plaintext the caller must still
+/// return to its own caller, e.g. serialize into an HTTP response, before
+/// this value is dropped), unlike [`GeneratedSecret`]'s intermediate
+/// `Zeroizing` buffer, which never leaves [`GeneratedSecret::generate`].
 pub struct NewAdminToken {
     pub id: Uuid,
     pub token: String,
@@ -85,7 +92,7 @@ pub struct NewAdminToken {
 
 /// The secret-bearing part of a token, generated before any database
 /// access. `created_at`/`expires_at` are assigned only after the database
-/// accepts the insert (see [`Store::create_admin_token`]), from the
+/// accepts the insert (see [`create_admin_token`]), from the
 /// database's own clock, never the app's.
 struct GeneratedSecret {
     id: Uuid,
@@ -218,98 +225,118 @@ struct TokenRecord {
     scopes: Vec<String>,
 }
 
+/// Create a token owned by `owner_user_id` (the caller, a currently
+/// effective Platform Admin; enforcing that this is the *creating* user is
+/// PR2's handler-level job — this is the storage primitive). Returns the
+/// plaintext once.
+///
+/// Runs on the caller's own `tx`, never a separate pool connection
+/// (coordinator review of #37 PR1, issue 2: PR1 originally ran this on
+/// `&self.pool`. Migration 0050's `BEFORE INSERT` trigger takes the
+/// owner's `governance::locks` user-scope authority lock
+/// (`Scope::User(owner_user_id)`) before checking that the owner is
+/// currently an effective Admin; that lock is transaction-scoped
+/// (`pg_advisory_xact_lock`), so a caller that already holds it in its own
+/// transaction — as PR2's handler is documented to, before calling this —
+/// and then ran this `INSERT` on a *different* connection would hang: the
+/// `INSERT`'s own re-entrant acquisition attempt blocks until the caller's
+/// transaction ends, which it cannot do until this call returns). **The
+/// caller must still take that same lock exclusive up front in `tx`**,
+/// like every other management change of that scope (AGENTS.md's
+/// canonical lock order), before calling this: the trigger's own
+/// re-entrant acquisition inside the single `INSERT` statement is a
+/// correctness backstop (and, now that both run on the same connection,
+/// free to ask for again), not a substitute for the caller holding the
+/// lock across its own multi-statement transaction (e.g. an earlier read
+/// of the caller's own role, or audit insertion, that must not race a
+/// concurrent demotion either).
+pub async fn create_admin_token(
+    tx: &mut Transaction<'_, Postgres>,
+    owner_user_id: Uuid,
+    name: &str,
+    scopes: &[String],
+    expires_in_days: i32,
+    ip_allowlist: Option<&[String]>,
+) -> Result<NewAdminToken, CreateAdminTokenError> {
+    if !valid_name(name) {
+        return Err(CreateAdminTokenError::Invalid(
+            NewAdminTokenError::InvalidName,
+        ));
+    }
+    if !valid_scopes(scopes) {
+        return Err(CreateAdminTokenError::Invalid(
+            NewAdminTokenError::InvalidScopes,
+        ));
+    }
+    if !valid_expires_in_days(expires_in_days) {
+        return Err(CreateAdminTokenError::Invalid(
+            NewAdminTokenError::InvalidExpiry,
+        ));
+    }
+    if let Some(list) = ip_allowlist
+        && !valid_allowlist(list)
+    {
+        return Err(CreateAdminTokenError::Invalid(
+            NewAdminTokenError::InvalidAllowlist,
+        ));
+    }
+    let secret = GeneratedSecret::generate().map_err(CreateAdminTokenError::Entropy)?;
+    // created_at and expires_at are computed by the database, from one
+    // instant (`now()` is fixed for the whole transaction, so the two
+    // references below are identical), never the app's clock: a
+    // skewed app clock must not be able to create an already-expired
+    // token or one that outlives 90 real days.
+    let (created_at, expires_at): (DateTime<Utc>, DateTime<Utc>) = sqlx::query_as(
+        "INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,ip_allowlist,created_at,expires_at)
+         VALUES($1,$2,$3,$4,$5,$6::text[]::cidr[],now(),now()+make_interval(days=>$7))
+         RETURNING created_at,expires_at",
+    )
+    .bind(secret.id)
+    .bind(owner_user_id)
+    .bind(name)
+    .bind(secret.digest.as_slice())
+    .bind(scopes)
+    .bind(ip_allowlist)
+    .bind(expires_in_days)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(map_create_error)?;
+    Ok(NewAdminToken {
+        id: secret.id,
+        token: secret.token,
+        digest: secret.digest,
+        created_at,
+        expires_at,
+    })
+}
+
+/// Idempotent: revoking an already-revoked (or missing) token is not an
+/// error. `Ok(true)` iff a token with this id exists (revoked now or
+/// already). Revocation is final (migration 0050's trigger): nothing
+/// ever un-revokes a token, including regaining the Admin role.
+///
+/// Runs on the caller's own `tx`, like [`create_admin_token`]: revocation
+/// must be atomic with whatever else that transaction does (PR2's audit
+/// insertion, in particular), and roll back with it rather than
+/// committing early on a separate connection the instant this is called.
+/// Revoking a token does not itself need the owner's scope lock (no
+/// trigger on `admin_api_tokens` takes one), but running on the caller's
+/// transaction keeps this symmetric with `create_admin_token` and correct
+/// for PR2's atomicity requirement regardless.
+pub async fn revoke_admin_token(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE admin_api_tokens SET revoked_at=coalesce(revoked_at,now()) WHERE id=$1",
+    )
+    .bind(id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
 impl Store {
-    /// Create a token owned by `owner_user_id` (the caller, a currently
-    /// effective Platform Admin; enforcing that this is the *creating*
-    /// user is PR2's handler-level job — this is the storage primitive).
-    ///
-    /// Migration 0050's `BEFORE INSERT` trigger takes the owner's
-    /// `governance::locks` user-scope authority lock
-    /// (`Scope::User(owner_user_id)`) before checking that the owner is
-    /// currently an effective Admin, and refuses the insert otherwise
-    /// (`CreateAdminTokenError::OwnerNotAdmin`). **PR2's handler must still
-    /// take that same lock exclusive up front**, like every other
-    /// management change of that scope (AGENTS.md's canonical lock order),
-    /// before calling this: the trigger's own re-entrant acquisition
-    /// inside the single `INSERT` statement is a correctness backstop, not
-    /// a substitute for the handler holding the lock across its own
-    /// multi-statement transaction (e.g. an earlier read of the caller's
-    /// own role, or audit insertion, that must not race a concurrent
-    /// demotion either). Returns the plaintext once.
-    pub async fn create_admin_token(
-        &self,
-        owner_user_id: Uuid,
-        name: &str,
-        scopes: &[String],
-        expires_in_days: i32,
-        ip_allowlist: Option<&[String]>,
-    ) -> Result<NewAdminToken, CreateAdminTokenError> {
-        if !valid_name(name) {
-            return Err(CreateAdminTokenError::Invalid(
-                NewAdminTokenError::InvalidName,
-            ));
-        }
-        if !valid_scopes(scopes) {
-            return Err(CreateAdminTokenError::Invalid(
-                NewAdminTokenError::InvalidScopes,
-            ));
-        }
-        if !valid_expires_in_days(expires_in_days) {
-            return Err(CreateAdminTokenError::Invalid(
-                NewAdminTokenError::InvalidExpiry,
-            ));
-        }
-        if let Some(list) = ip_allowlist
-            && !valid_allowlist(list)
-        {
-            return Err(CreateAdminTokenError::Invalid(
-                NewAdminTokenError::InvalidAllowlist,
-            ));
-        }
-        let secret = GeneratedSecret::generate().map_err(CreateAdminTokenError::Entropy)?;
-        // created_at and expires_at are computed by the database, from one
-        // instant (`now()` is fixed for the whole transaction, so the two
-        // references below are identical), never the app's clock: a
-        // skewed app clock must not be able to create an already-expired
-        // token or one that outlives 90 real days.
-        let (created_at, expires_at): (DateTime<Utc>, DateTime<Utc>) = sqlx::query_as(
-            "INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,ip_allowlist,created_at,expires_at)
-             VALUES($1,$2,$3,$4,$5,$6::text[]::cidr[],now(),now()+make_interval(days=>$7))
-             RETURNING created_at,expires_at",
-        )
-        .bind(secret.id)
-        .bind(owner_user_id)
-        .bind(name)
-        .bind(secret.digest.as_slice())
-        .bind(scopes)
-        .bind(ip_allowlist)
-        .bind(expires_in_days)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(map_create_error)?;
-        Ok(NewAdminToken {
-            id: secret.id,
-            token: secret.token,
-            digest: secret.digest,
-            created_at,
-            expires_at,
-        })
-    }
-
-    /// Idempotent: revoking an already-revoked (or missing) token is not an
-    /// error. `Ok(true)` iff a token with this id exists (revoked now or
-    /// already). Revocation is final (migration 0050's trigger): nothing
-    /// ever un-revokes a token, including regaining the Admin role.
-    pub async fn revoke_admin_token(&self, id: Uuid) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query(
-            "UPDATE admin_api_tokens SET revoked_at=coalesce(revoked_at,now()) WHERE id=$1",
-        )
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
-        Ok(result.rows_affected() > 0)
-    }
-
     /// Live lookup-for-authorization. A malformed token is rejected by the
     /// strict parser with no database access at all. No positive
     /// authorization cache: every call re-reads the primary database.
