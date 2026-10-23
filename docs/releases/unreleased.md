@@ -16,7 +16,9 @@ release, the ranges `providers/local/endpoints.rs` always accepted but
 - `192.0.0.0/24` (IETF protocol assignments)
 - `192.88.99.0/24` (deprecated 6to4 relay)
 - `192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`, `2001:db8::/32`, `3fff::/20` (documentation)
-- `fd00:ec2::/32` beyond the already-refused `fd00:ec2::254` (AWS IPv6 metadata)
+- `fd00:ec2::/32` beyond the already-refused `fd00:ec2::254` (AWS IPv6 metadata;
+  unlike the other ranges above, this one is accepted over plain HTTP too, not
+  only HTTPS, the same as an ordinary private address)
 
 **The next minor release will refuse these ranges too and fail startup** for
 an installation that approved one, naming the approval and the setting to

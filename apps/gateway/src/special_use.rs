@@ -69,20 +69,6 @@ pub(crate) enum Category {
 }
 
 impl Category {
-    /// The ranges #203 lists as currently approved for local upstreams over
-    /// HTTPS, but already refused by the egress policy for every other
-    /// client: accepted for release N, refused from release N+1.
-    pub(crate) fn is_pending_refusal(self) -> bool {
-        matches!(
-            self,
-            Self::Benchmarking
-                | Self::Documentation
-                | Self::IetfProtocolAssignments
-                | Self::Deprecated6to4Relay
-                | Self::AwsMetadataRange
-        )
-    }
-
     /// A short, operator-facing name: a log field and a readiness label,
     /// never a secret.
     pub(crate) fn label(self) -> &'static str {
@@ -201,6 +187,41 @@ pub(crate) fn classify_v6(ip: Ipv6Addr) -> Category {
     Category::Reserved
 }
 
+/// The exact ranges #203 lists as approved today but already refused by
+/// `egress.rs` for every other client, pending refusal in the next minor
+/// release. Deliberately independent of [`Category`]/[`classify_v4`]/
+/// [`classify_v6`]: those three exist to preserve `egress.rs`'s pre-#203
+/// outcomes exactly, including the `3ff0::/12` mask `classify_v6` inherited
+/// unchanged from the old egress code for `Category::Documentation` (wider
+/// than the `3fff::/20` RFC 9637 block #203 and IANA actually name), so
+/// reusing `Category::Documentation` for this warning would also fire for
+/// `3ff0::/12` addresses the issue never lists. Callers pass the address
+/// they have already decided to judge (each caller's own translation step:
+/// mapped/compatible/6to4/Teredo embedded IPv4, under its own rules for
+/// when to do so).
+pub(crate) fn is_pending_refusal_v4(ip: Ipv4Addr) -> bool {
+    let o = ip.octets();
+    (o[0] == 198 && (o[1] == 18 || o[1] == 19)) // 198.18.0.0/15, benchmarking
+        || (o[0] == 192 && o[1] == 0 && o[2] == 0) // 192.0.0.0/24, IETF protocol assignments
+        || (o[0] == 192 && o[1] == 88 && o[2] == 99) // 192.88.99.0/24, deprecated 6to4 relay
+        || (o[0] == 192 && o[1] == 0 && o[2] == 2) // 192.0.2.0/24, documentation
+        || (o[0] == 198 && o[1] == 51 && o[2] == 100) // 198.51.100.0/24, documentation
+        || (o[0] == 203 && o[1] == 0 && o[2] == 113) // 203.0.113.0/24, documentation
+}
+
+/// See [`is_pending_refusal_v4`]. `fd00:ec2::254` is excluded: it is already
+/// refused today (`Category::Metadata`), not pending.
+pub(crate) fn is_pending_refusal_v6(ip: Ipv6Addr) -> bool {
+    if ip == AWS_METADATA {
+        return false;
+    }
+    let s = ip.segments();
+    (s[0] == 0x2001 && s[1] == 0xdb8) // 2001:db8::/32, documentation
+        || (s[0] == 0x3fff && (s[1] & 0xf000) == 0) // 3fff::/20 (RFC 9637), documentation
+        || (s[0] == 0x2001 && s[1] == 2 && s[2] == 0) // 2001:2::/48, benchmarking
+        || (s[0] == 0xfd00 && s[1] == 0x0ec2) // fd00:ec2::/32, AWS metadata range
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,29 +287,95 @@ mod tests {
         }
     }
 
+    /// #203 review finding: the warning's pending-refusal membership must be
+    /// exactly the issue's ranges, not `classify_v6`'s wider legacy
+    /// `3ff0::/12` mask for `Category::Documentation`. `3fff::1` and the last
+    /// address of `3fff::/20` warn; `3fff:1000::1` (just outside `/20`),
+    /// `3ff0::1` and `3ffe:ffff::1` (inside the legacy `/12` mask but outside
+    /// the issue's `/20`) do not.
     #[test]
-    fn exactly_the_ranges_pending_refusal_in_release_n_are_flagged() {
-        for pending in [
-            Category::Benchmarking,
-            Category::Documentation,
-            Category::IetfProtocolAssignments,
-            Category::Deprecated6to4Relay,
-            Category::AwsMetadataRange,
+    fn pending_refusal_v6_3fff_boundary_is_exactly_the_20_not_the_legacy_12() {
+        for (addr, expected) in [
+            ("3fff::1", true),
+            ("3fff:0fff:ffff::", true),
+            ("3fff:1000::1", false),
+            ("3ff0::1", false),
+            ("3ffe:ffff::1", false),
         ] {
-            assert!(pending.is_pending_refusal(), "{pending:?}");
+            assert_eq!(is_pending_refusal_v6(v6(addr)), expected, "{addr}");
         }
-        for not_pending in [
-            Category::Public,
-            Category::Private,
-            Category::Loopback,
-            Category::LinkLocal,
-            Category::Multicast,
-            Category::Broadcast,
-            Category::Reserved,
-            Category::Metadata,
-            Category::Cgnat,
-        ] {
-            assert!(!not_pending.is_pending_refusal(), "{not_pending:?}");
+    }
+
+    /// The address just outside the boundary of every /20 and /12 check
+    /// above keeps `classify_v6`'s legacy outcome (egress's behaviour here is
+    /// unchanged by this fix): `3ff0::1` and `3ffe:ffff::1` are still
+    /// `Category::Documentation` even though they no longer trigger the
+    /// pending-refusal warning.
+    #[test]
+    fn legacy_classification_for_3ff0_12_is_unchanged_by_the_narrower_warning() {
+        for addr in ["3ff0::1", "3ffe:ffff::1"] {
+            assert_eq!(classify_v6(v6(addr)), Category::Documentation, "{addr}");
+            assert!(!is_pending_refusal_v6(v6(addr)), "{addr}");
+        }
+    }
+
+    /// First and last address of every IPv4 range the issue lists, and the
+    /// address just outside each boundary.
+    #[test]
+    fn pending_refusal_v4_boundaries_match_the_issue_exactly() {
+        let cases: &[(&str, bool)] = &[
+            ("198.18.0.0", true),
+            ("198.19.255.255", true),
+            ("198.17.255.255", false),
+            ("198.20.0.0", false),
+            ("192.0.0.0", true),
+            ("192.0.0.255", true),
+            ("191.255.255.255", false),
+            ("192.0.1.0", false),
+            ("192.88.99.0", true),
+            ("192.88.99.255", true),
+            ("192.88.98.255", false),
+            ("192.88.100.0", false),
+            ("192.0.2.0", true),
+            ("192.0.2.255", true),
+            ("192.0.1.255", false),
+            ("192.0.3.0", false),
+            ("198.51.100.0", true),
+            ("198.51.100.255", true),
+            ("198.51.99.255", false),
+            ("198.51.101.0", false),
+            ("203.0.113.0", true),
+            ("203.0.113.255", true),
+            ("203.0.112.255", false),
+            ("203.0.114.0", false),
+        ];
+        for (addr, expected) in cases {
+            assert_eq!(is_pending_refusal_v4(v4(addr)), *expected, "{addr}");
+        }
+    }
+
+    /// First and last address of every IPv6 range the issue lists (apart
+    /// from `3fff::/20`, covered above), and the address just outside each
+    /// boundary; plus the already-refused AWS metadata exception.
+    #[test]
+    fn pending_refusal_v6_boundaries_match_the_issue_exactly() {
+        let cases: &[(&str, bool)] = &[
+            ("2001:db8::", true),
+            ("2001:db8:ffff:ffff:ffff:ffff:ffff:ffff", true),
+            ("2001:db7:ffff:ffff:ffff:ffff:ffff:ffff", false),
+            ("2001:db9::", false),
+            ("2001:2::", true),
+            ("2001:2:0:ffff:ffff:ffff:ffff:ffff", true),
+            ("2001:1:ffff:ffff:ffff:ffff:ffff:ffff", false),
+            ("2001:2:1::", false),
+            ("fd00:ec2::", true),
+            ("fd00:ec2:ffff:ffff:ffff:ffff:ffff:ffff", true),
+            ("fd00:ec2::254", false),
+            ("fd00:ec1:ffff:ffff:ffff:ffff:ffff:ffff", false),
+            ("fd00:ec3::", false),
+        ];
+        for (addr, expected) in cases {
+            assert_eq!(is_pending_refusal_v6(v6(addr)), *expected, "{addr}");
         }
     }
 }
