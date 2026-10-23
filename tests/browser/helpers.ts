@@ -60,9 +60,19 @@ export async function chat(token: string) {
   });
 }
 
+/**
+ * The document must not scroll sideways. Callers often resize the viewport just before this,
+ * and `setViewportSize` does not wait for the app to re-render at the new breakpoint, so poll
+ * until layout settles (a transient 70px was seen on CI at 390px). The bound is unchanged:
+ * persistent overflow still fails after the timeout.
+ */
 export async function expectNoHorizontalScroll(page: Page) {
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-  expect(overflow, "document must not scroll sideways").toBeLessThanOrEqual(0);
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth), {
+      message: "document must not scroll sideways",
+      timeout: 3_000,
+    })
+    .toBeLessThanOrEqual(0);
 }
 
 /** WCAG 2.x A/AA + best-practice scan; serious and critical violations fail the test. */
