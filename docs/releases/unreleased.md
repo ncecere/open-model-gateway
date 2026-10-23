@@ -2,6 +2,10 @@
 
 Notes for changes on `main` after [v0.7.2](v0.7.2.md). They become the next release's notes.
 
+## Trace exporter preview: contract and transport only (#98, PR 1)
+
+Adds an opt-in, bounded OTLP/HTTP JSON trace recorder/exporter using existing dependencies, with typed attributes, deterministic sampling/correlation primitives, dedicated secret headers and the gateway's egress protections. Disabled unless `GATEWAY_TRACES_OTLP_URL` is set; `OTEL_*` is ignored. Collector failure never blocks or retries inference. No engine instrumentation or production spans are emitted yet: those arrive in PR 2, with collector acceptance in PR 3. See [operations](../operations.md#traces-preview-transport-only-98-pr-1).
+
 ## Vendored upstream-base advisory coverage (#214)
 
 The existing read-only cargo-deny job now runs a separately labelled advisory-only check for explicitly registered vendored dependencies. It validates root workspace metadata registrations and the complete graph, then projects only the reviewed crates.io base name/version/source identity and graph references in temporary scanner input. Unknown path dependencies, stale or mismatched registrations, non-canonical/escaping paths and malformed/incomplete graphs fail closed. There are no vendored dependencies today; the check passes and says so.
