@@ -146,6 +146,13 @@ impl RequestTelemetry {
             .as_ref()?
             .admitted_alias(self.eligibility.as_ref()?)
     }
+    /// This request's trace id, only once a commit has already proved
+    /// shared eligibility for it (log-line correlation, #98): `None` for a
+    /// personal workspace or while telemetry is inactive.
+    fn trace_from_eligibility(&self) -> Option<[u8; 16]> {
+        self.eligibility.as_ref()?;
+        self.context.as_ref().map(telemetry::Context::trace_id)
+    }
     /// Finishes exactly once: the first call (explicit, at a terminal return
     /// in `execute_protocol`, or `Drop` for every other path) wins.
     fn finish(&mut self, outcome: telemetry::Outcome, error: Option<InferenceError>) {
@@ -600,12 +607,17 @@ impl Engine {
                 attempt + 1,
             );
             let admission = admission_result.map_err(|_| InferenceError::Timeout)??;
+            // Logging-only correlation (#98): known only once a
+            // shared-workspace admission has already committed for this
+            // request; never for personal workspaces.
+            let log_trace_id = telemetry.trace_from_eligibility().map(hex::encode);
             let mut guard = ExecutionGuard::new(
                 self.repository.clone(),
                 execution_id,
                 deployment.id,
                 attempt_started,
                 permit.clone(),
+                log_trace_id,
             );
             // This clone belongs only to this attempt. A failover resolves its
             // own default from its own immutable price, never from this cap.
@@ -884,6 +896,12 @@ struct ExecutionGuard {
     finished: bool,
     health_observation: bool,
     _permit: SharedPermit,
+    /// The request's correlation id (#98), for the reconciliation log lines
+    /// below only: `Some` only once a shared-workspace admission has
+    /// already committed for this request, `None` for a personal workspace
+    /// (never logged) or while telemetry is disabled. Never affects
+    /// accounting; `x-request-id` is unchanged.
+    log_trace_id: Option<String>,
 }
 fn millis(d: Duration) -> u64 {
     d.as_millis().min(u64::MAX as u128) as u64
@@ -896,6 +914,7 @@ impl ExecutionGuard {
         deployment_id: Uuid,
         started: Instant,
         permit: SharedPermit,
+        log_trace_id: Option<String>,
     ) -> Self {
         Self {
             repository,
@@ -908,6 +927,7 @@ impl ExecutionGuard {
             finished: false,
             health_observation: true,
             _permit: permit,
+            log_trace_id,
         }
     }
     /// Streams: the first delta carrying text or a tool call sets time to first token.
@@ -964,7 +984,7 @@ impl ExecutionGuard {
         })
         .and_then(|result| result);
         if result.is_err() {
-            tracing::error!(execution_id = %self.id, "inference finalization failed; reconciliation required");
+            tracing::error!(execution_id = %self.id, trace_id = ?self.log_trace_id, "inference finalization failed; reconciliation required");
         }
         // Health is advisory; a failed health write never discards a durably accounted response.
         if self.health_observation
@@ -978,7 +998,7 @@ impl ExecutionGuard {
                 Ok(Ok(()))
             )
         {
-            tracing::warn!(execution_id=%self.id,"routing health update failed");
+            tracing::warn!(execution_id=%self.id, trace_id = ?self.log_trace_id, "routing health update failed");
         }
         result
     }
@@ -991,6 +1011,7 @@ impl Drop for ExecutionGuard {
         let repository = self.repository.clone();
         let record = self.record(Outcome::Cancelled, None);
         let telemetry = self.telemetry_now();
+        let log_trace_id = self.log_trace_id.clone();
         // Network work is dropped synchronously. Only best-effort accounting is detached.
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
@@ -999,7 +1020,7 @@ impl Drop for ExecutionGuard {
                     crate::metrics::METRICS.observe_settlement(crate::metrics::Settlement::Held);
                 }
                 if !matches!(finished, Ok(Ok(()))) {
-                    tracing::error!(execution_id = %record.id, "cancelled inference finalization failed; reconciliation required");
+                    tracing::error!(execution_id = %record.id, trace_id = ?log_trace_id, "cancelled inference finalization failed; reconciliation required");
                 }
             });
         }

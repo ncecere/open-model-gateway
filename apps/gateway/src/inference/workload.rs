@@ -453,12 +453,15 @@ impl Engine {
             )
             .await
             .map_err(|_| InferenceError::Timeout)??;
+            // Non-generation workloads are outside this PR's tracing scope
+            // (#98 PR 2): no correlation id to log.
             let mut guard = ExecutionGuard::new(
                 self.repository.clone(),
                 execution_id,
                 target.id,
                 started,
                 permit.clone(),
+                None,
             );
             let evidence_ok =
                 |u: Usage| valid_usage(u) && (!input_only || u.output_tokens == Some(0));
