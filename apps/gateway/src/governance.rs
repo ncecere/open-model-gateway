@@ -24,19 +24,34 @@ fn storage(error: sqlx::Error) -> InferenceError {
     locks::note(&error);
     InferenceError::Storage
 }
-/// Proof, for [`crate::telemetry::mark_shared`], that this exact module's
-/// own commit branch of `admit_unobserved` resolved shared-workspace trace
-/// eligibility (#98 PR 2 review item 3). `new` has default (private)
-/// visibility, so only code inside `crate::governance` (this file and its
-/// submodules) can construct one; the struct itself is `pub(crate)` only
-/// so `telemetry::mark_shared`'s signature can name the type. This makes
-/// the single-call-site invariant a compiler fact, not just a grep check.
-pub(crate) struct SharedEligibilityCommitted(());
-impl SharedEligibilityCommitted {
-    fn new() -> Self {
-        Self(())
+/// A private submodule so [`SharedEligibilityCommitted`]'s own tuple field
+/// (and therefore `SharedEligibilityCommitted(())` construction) is scoped
+/// to this submodule alone, not to the whole `governance` module tree
+/// (#98 PR 2 review item 3). A private field on a struct defined directly
+/// in `governance.rs` would have been constructible from *every* submodule
+/// declared there (`batch`, `jobs`, `locks`, `pressure`, `rates`, `totals`,
+/// `realtime`): Rust grants a private item's defining module *and all of
+/// that module's descendants* access, and those submodules are all
+/// descendants of `governance`. Nesting one level down shrinks that
+/// descendant set to `proof` itself, which has none.
+mod proof {
+    /// Proof, for [`crate::telemetry::mark_shared`], that this exact
+    /// module's own commit branch of `admit_unobserved` resolved
+    /// shared-workspace trace eligibility. The struct's *type name* is
+    /// `pub(crate)` only so it can be re-exported from `governance` (see
+    /// below) and named in `telemetry::mark_shared`'s signature; its
+    /// unnamed tuple field has ordinary default (private) visibility,
+    /// which Rust scopes to this `proof` submodule alone (it has no
+    /// descendants), so `SharedEligibilityCommitted(())` can only ever be
+    /// written here. `committed_shared` is `pub(super)` - the narrowest
+    /// visibility that still lets `governance.rs`'s `admit_unobserved`
+    /// (this module's parent) call it - and is the one place that does.
+    pub(crate) struct SharedEligibilityCommitted(());
+    pub(super) fn committed_shared() -> SharedEligibilityCommitted {
+        SharedEligibilityCommitted(())
     }
 }
+pub(crate) use proof::SharedEligibilityCommitted;
 /// Bounded in-process queues in front of the governance transactions, one for
 /// admissions and one for settlements/reconciliation. In the global mode work
 /// under the installation lock is serialized anyway, so letting every
@@ -859,7 +874,7 @@ async fn admit_unobserved(
     // has actually succeeded.
     if shared {
         crate::telemetry::mark_shared(
-            SharedEligibilityCommitted::new(),
+            proof::committed_shared(),
             record.root_request_id,
             &record.model,
         );

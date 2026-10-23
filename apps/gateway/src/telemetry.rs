@@ -667,12 +667,13 @@ fn set_shared_eligibility(request: Uuid, alias: &str) {
 }
 /// Records the [`SharedAdmission`] an admission commit resolved for the
 /// ambient request, if telemetry is active. `proof` is a
-/// [`crate::governance::SharedEligibilityCommitted`] token: its
-/// constructor is private to the `governance` module, so only code inside
-/// `governance.rs`'s own commit branch of `admit_unobserved` - gated on
-/// the workspace being `team`/`project`, after `tx.commit()` has
-/// succeeded, never personal, never from client text - can produce one to
-/// call this at all. The compiler enforces that, not just a grep check;
+/// [`crate::governance::SharedEligibilityCommitted`] token: it is only
+/// constructible inside `governance`'s own private `proof` submodule
+/// (#98 PR 2 review item 3), which `governance.rs`'s commit branch of
+/// `admit_unobserved` - gated on the workspace being `team`/`project`,
+/// after `tx.commit()` has succeeded, never personal, never from client
+/// text - calls to produce one before calling this at all. The compiler
+/// enforces that, not just a grep check;
 /// `telemetry::tests::mark_shared_has_one_production_call_site` remains a
 /// secondary, informational check of the same invariant.
 pub(crate) fn mark_shared(
@@ -1702,9 +1703,12 @@ mod tests {
     // The real, compiler-enforced invariant (#98 PR 2 review item 3) is:
     // `SharedAdmission::new` has default (private) visibility, so no module
     // outside this file can construct one at all; and `mark_shared` takes
-    // a `governance::SharedEligibilityCommitted` token whose own
-    // constructor is private to the `governance` module, so no module
-    // outside `governance.rs` can call `mark_shared` at all. A bypass like
+    // a `governance::SharedEligibilityCommitted` token constructible only
+    // inside `governance`'s own private `proof` submodule (narrower than
+    // the whole `governance` module tree, which a bare private field on a
+    // struct defined directly in `governance.rs` would have exposed to
+    // every one of its submodules), so no module outside `governance.rs`'s
+    // own `admit_unobserved` can call `mark_shared` at all. A bypass like
     // `use crate::telemetry::mark_shared as m;` or a line-wrapped call no
     // longer helps: the compiler itself rejects it from any other module.
     #[test]
