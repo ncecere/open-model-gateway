@@ -6,6 +6,10 @@ Notes for changes on `main` after [v0.7.2](v0.7.2.md). They become the next rele
 
 Adds an opt-in, bounded OTLP/HTTP JSON trace recorder/exporter using existing dependencies, with typed attributes, deterministic sampling/correlation primitives, dedicated secret headers and the gateway's egress protections. Disabled unless `GATEWAY_TRACES_OTLP_URL` is set; `OTEL_*` is ignored. Collector failure never blocks or retries inference. No engine instrumentation or production spans are emitted yet: those arrive in PR 2, with collector acceptance in PR 3. See [operations](../operations.md#traces-98).
 
+## SCIM docs: Authentik acceptance recorded (#265)
+
+`docs/scim.md` adds the three non-default Authentik settings the gateway's `userName`/group matching needs: a custom user mapping so `userName` is the email, a custom group mapping using `SkipObject` to push only the groups the gateway maps (`filter_group` on the provider filters users only), and omitting `emails` for reserved test domains so one bad test account doesn't stop the whole sync; plus a note on the provider's dry-run mode. It now records that Authentik 2025.10 was run against v0.7.1 on 2026-10-23, covering matching of existing users, one pushed group, and deactivate/reactivate; Okta and Entra acceptance (#60) still hasn't been run. Docs only, no code change.
+
 ## Helm: CNPG backups through the Barman Cloud plugin (#261)
 
 `deploy/helm/open-model-gateway`'s CNPG `Cluster` backup gains a `cnpg.cluster.backup.method` choice: `barmanObjectStore` (default, CNPG's in-tree backup, rendering unchanged from earlier releases) or `plugin` (the Barman Cloud plugin upstream CNPG now recommends, and the only mode the homelab cluster runs).
