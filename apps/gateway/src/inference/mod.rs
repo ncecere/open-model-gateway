@@ -574,14 +574,30 @@ impl Engine {
             .take(plan.max_attempts)
             .enumerate()
         {
-            let deployment = candidates
-                .iter()
-                .find(|d| d.id == *id)
-                .ok_or(InferenceError::Configuration)?;
-            let adapter = self
-                .registry
-                .get(&deployment.provider)
-                .ok_or(InferenceError::Configuration)?;
+            let deployment = match candidates.iter().find(|d| d.id == *id) {
+                Some(deployment) => deployment,
+                None => {
+                    // #98 PR 2 review item 2: an early return must still
+                    // finish telemetry explicitly, exactly like every other
+                    // terminal path below, so Drop never mislabels a real
+                    // denial `cancelled` with no `error.type`.
+                    telemetry.finish(
+                        telemetry::Outcome::Error,
+                        Some(InferenceError::Configuration),
+                    );
+                    return Err(InferenceError::Configuration);
+                }
+            };
+            let adapter = match self.registry.get(&deployment.provider) {
+                Some(adapter) => adapter,
+                None => {
+                    telemetry.finish(
+                        telemetry::Outcome::Error,
+                        Some(InferenceError::Configuration),
+                    );
+                    return Err(InferenceError::Configuration);
+                }
+            };
             let execution_id = if attempt == 0 {
                 request_id
             } else {
@@ -626,7 +642,24 @@ impl Engine {
                 telemetry::SpanName::Admission,
                 attempt + 1,
             );
-            let admission = admission_result.map_err(|_| InferenceError::Timeout)??;
+            let admission = match admission_result.map_err(|_| InferenceError::Timeout) {
+                Err(error) => {
+                    // #98 PR 2 review item 2: the timeout and the admission's
+                    // own error (e.g. a team-workspace rate or budget
+                    // denial) both return here, before any
+                    // `ExecutionGuard`/settlement path exists for this
+                    // attempt - so, like every other terminal return in this
+                    // function, telemetry must be finished explicitly here
+                    // rather than left for Drop to mislabel `cancelled`.
+                    telemetry.finish(telemetry::Outcome::Error, Some(error));
+                    return Err(error);
+                }
+                Ok(Err(error)) => {
+                    telemetry.finish(telemetry::Outcome::Error, Some(error));
+                    return Err(error);
+                }
+                Ok(Ok(admission)) => admission,
+            };
             // Logging-only correlation (#98): known only once a
             // shared-workspace admission has already committed for this
             // request; never for personal workspaces.

@@ -25,7 +25,7 @@ use uuid::Uuid;
 
 use super::*;
 use crate::{
-    inference::{repository::GenerationAdmission, types::*},
+    inference::{error::LimitScope, repository::GenerationAdmission, types::*},
     providers::ProviderAdapter,
     telemetry,
 };
@@ -40,6 +40,11 @@ struct TelemetryRepository {
     /// Settlement sleeps briefly before returning (#98 PR 2 review item 1):
     /// proves `upstream.attempt`'s own duration never grows by settlement's.
     slow_finish: AtomicBool,
+    /// When set, `admit` still marks shared eligibility (if `shared` is
+    /// set) before returning this error - simulating a team-workspace rate
+    /// or budget denial discovered after a committed admission (#98 PR 2
+    /// review item 2).
+    admit_error: Mutex<Option<InferenceError>>,
     finishes: Mutex<Vec<ExecutionFinish>>,
 }
 #[async_trait]
@@ -96,6 +101,9 @@ impl InferenceRepository for TelemetryRepository {
         // tests can observe exported spans without a real database.
         if self.shared.load(Ordering::SeqCst) {
             telemetry::mark_shared_for_tests(record.root_request_id, &request.model);
+        }
+        if let Some(error) = *self.admit_error.lock().unwrap() {
+            return Err(error);
         }
         Ok(GenerationAdmission {
             max_output_tokens: None,
@@ -789,6 +797,58 @@ fn trace_id_field_is_a_bare_string_when_present_and_absent_when_none() {
         lines[1]["fields"].get("trace_id").is_none(),
         "an absent trace id must omit the field entirely, never log the literal string \"None\": {logged}"
     );
+}
+
+/// #98 PR 2 review item 2: an admission denial discovered only after a
+/// committed shared-workspace admission (a team-workspace rate or budget
+/// limit, modelled here by `TelemetryRepository::admit_error`) must still
+/// finish telemetry explicitly with `Outcome::Error` and the denial's own
+/// `error.type`, not fall through to `Drop`'s `cancelled` default: the
+/// early `admission_result...??` return this proves covers both the inner
+/// admission error and (by construction, since both arms of that match now
+/// call `telemetry.finish`) the outer timeout error.
+#[tokio::test]
+async fn an_admission_denial_after_committed_eligibility_still_exports_an_error_outcome() {
+    let repository = Arc::new(TelemetryRepository::default());
+    repository.deployments.lock().unwrap().push(deployment());
+    repository.shared.store(true, Ordering::SeqCst);
+    *repository.admit_error.lock().unwrap() =
+        Some(InferenceError::BudgetExceeded(LimitScope::Workspace));
+    let mut registry = ProviderRegistry::default();
+    registry
+        .register(Arc::new(Adapter {
+            mode: Mutex::new(vec![]),
+        }))
+        .unwrap();
+    let (recorder, mut rx) = telemetry::Recorder::channel(1.0);
+    let engine = Engine::new(repository, registry, EngineLimits::default())
+        .unwrap()
+        .with_telemetry(Some(recorder));
+    let error = expect_err(
+        engine
+            .execute(principal(), request(false), Uuid::new_v4())
+            .await,
+    );
+    assert_eq!(error, InferenceError::BudgetExceeded(LimitScope::Workspace));
+    let spans = drain(&mut rx).await;
+    let root = spans
+        .iter()
+        .find(|s| name(s) == "inference.request")
+        .expect("eligibility committed before the denial, so the trace still exports");
+    assert_eq!(
+        attr(root, "gateway.outcome"),
+        Some(json!({"stringValue": "error"})),
+        "a denial must never be mislabeled cancelled: {spans:#?}"
+    );
+    assert_eq!(
+        attr(root, "error.type"),
+        Some(json!({"stringValue": "forbidden"})),
+        "must carry the denial's own error.type, not be absent: {spans:#?}"
+    );
+    // Admission's own real phase boundaries are still recorded on the way
+    // to the denial (the same already-proven mechanism as settlement's on
+    // a write failure).
+    assert!(spans.iter().any(|s| name(s) == "admission"), "{spans:#?}");
 }
 
 /// #98 PR 2 review item 4: a route plan with no deployment ids (the
