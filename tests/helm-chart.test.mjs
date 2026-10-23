@@ -133,7 +133,7 @@ test("CNPG backups in plugin mode render an ObjectStore, Cluster plugins block a
   const [store] = docsOfKind(rendered, "ObjectStore");
   assert.ok(store, "no ObjectStore rendered in plugin mode");
   assert.match(store, /^apiVersion: barmancloud\.cnpg\.io\/v1$/m);
-  assert.match(store, /name: omg-test[\w-]*-db-backup$/m);
+  assert.match(store, /name: omg-test[\w-]*-db-backup-store$/m);
   assert.match(store, /retentionPolicy: "14d"/);
   assert.match(store, /destinationPath: s3:\/\/omg-backups\/omg/);
   assert.match(store, /endpointURL: http:\/\/rustfs-svc\.object-storage\.svc\.cluster\.local:9000/);
@@ -145,7 +145,7 @@ test("CNPG backups in plugin mode render an ObjectStore, Cluster plugins block a
   assert.doesNotMatch(store, /ACCESS_KEY_ID_VALUE|AKIA|secretAccessKey:\s*\n\s*-/, "no literal credential value, only secret refs");
 
   const [cluster] = docsOfKind(rendered, "Cluster");
-  assert.match(cluster, /plugins:\s+- name: barman-cloud\.cloudnative-pg\.io\s+isWALArchiver: true\s+parameters:\s+barmanObjectName: omg-test[\w-]*-db-backup/);
+  assert.match(cluster, /plugins:\s+- name: barman-cloud\.cloudnative-pg\.io\s+isWALArchiver: true\s+parameters:\s+barmanObjectName: omg-test[\w-]*-db-backup-store/);
   assert.doesNotMatch(cluster, /^\s+backup:\s*$/m, "plugin mode renders no in-tree backup: block");
 
   const [scheduled] = docsOfKind(rendered, "ScheduledBackup");
@@ -161,6 +161,16 @@ test("CNPG backup plugin mode refuses inline S3 credential strings; only secret 
     { encoding: "utf8", timeout: 30_000 });
   assert.notEqual(inline.status, 0, "an inline accessKeyId string must be refused by the schema");
   assert.match(inline.stderr, /accessKeyId|s3Credentials|values don't meet the specifications/i);
+});
+
+test("CNPG backup plugin mode without S3 credentials fails with the required-value message, not a template panic (#261)", () => {
+  const missing = spawnSync("helm", ["template", "omg-test", chart, "-f", join(chart, "ci/cnpg-values.yaml"),
+    "--set", "cnpg.cluster.backup.enabled=true", "--set", "cnpg.cluster.backup.method=plugin",
+    "--set", "cnpg.cluster.backup.plugin.objectStore.destinationPath=s3://omg-backups/omg"],
+    { encoding: "utf8", timeout: 30_000 });
+  assert.notEqual(missing.status, 0, "missing credentials must be refused");
+  assert.doesNotMatch(missing.stderr, /nil pointer/, "must not be a raw template panic");
+  assert.match(missing.stderr, /s3Credentials\.accessKeyId\.name is required when cnpg\.cluster\.backup\.method is "plugin"/);
 });
 
 test("cnpg.cluster.backup.method is validated against its enum (#261)", () => {

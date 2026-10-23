@@ -53,6 +53,7 @@
                         "s3Credentials": {
                           "type": "object",
                           "description": "Secret references only; inline accessKeyId/secretAccessKey strings are refused.",
+                          "additionalProperties": false,
                           "properties": {
                             "accessKeyId": { "$ref": "#/definitions/secretKeyRef" },
                             "secretAccessKey": { "$ref": "#/definitions/secretKeyRef" }

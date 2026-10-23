@@ -101,11 +101,11 @@ spec:
     {{- end }}
     s3Credentials:
       accessKeyId:
-        name: {{ required "cnpg.cluster.backup.plugin.objectStore.s3Credentials.accessKeyId.name is required when cnpg.cluster.backup.method is \"plugin\"" $store.s3Credentials.accessKeyId.name }}
-        key: {{ required "cnpg.cluster.backup.plugin.objectStore.s3Credentials.accessKeyId.key is required when cnpg.cluster.backup.method is \"plugin\"" $store.s3Credentials.accessKeyId.key }}
+        name: {{ required "cnpg.cluster.backup.plugin.objectStore.s3Credentials.accessKeyId.name is required when cnpg.cluster.backup.method is \"plugin\"" (dig "accessKeyId" "name" "" ($store.s3Credentials | default dict)) }}
+        key: {{ required "cnpg.cluster.backup.plugin.objectStore.s3Credentials.accessKeyId.key is required when cnpg.cluster.backup.method is \"plugin\"" (dig "accessKeyId" "key" "" ($store.s3Credentials | default dict)) }}
       secretAccessKey:
-        name: {{ required "cnpg.cluster.backup.plugin.objectStore.s3Credentials.secretAccessKey.name is required when cnpg.cluster.backup.method is \"plugin\"" $store.s3Credentials.secretAccessKey.name }}
-        key: {{ required "cnpg.cluster.backup.plugin.objectStore.s3Credentials.secretAccessKey.key is required when cnpg.cluster.backup.method is \"plugin\"" $store.s3Credentials.secretAccessKey.key }}
+        name: {{ required "cnpg.cluster.backup.plugin.objectStore.s3Credentials.secretAccessKey.name is required when cnpg.cluster.backup.method is \"plugin\"" (dig "secretAccessKey" "name" "" ($store.s3Credentials | default dict)) }}
+        key: {{ required "cnpg.cluster.backup.plugin.objectStore.s3Credentials.secretAccessKey.key is required when cnpg.cluster.backup.method is \"plugin\"" (dig "secretAccessKey" "key" "" ($store.s3Credentials | default dict)) }}
     {{- with $store.wal }}
     wal:
       {{- toYaml . | nindent 6 }}

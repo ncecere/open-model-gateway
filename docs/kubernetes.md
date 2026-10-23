@@ -216,7 +216,7 @@ picks one of two mutually exclusive ways to reach the object store (#261):
   Cluster gets a `spec.backup.barmanObjectStore` block rendered as-is from
   `cnpg.cluster.backup.barmanObjectStore`, and the `ScheduledBackup` has no `method`/`pluginConfiguration`.
 - **`plugin`.** The Barman Cloud plugin, which upstream CNPG now recommends over the in-tree backup.
-  The chart additionally renders a `barmancloud.cnpg.io/v1` `ObjectStore` (named `<cluster>-backup`,
+  The chart additionally renders a `barmancloud.cnpg.io/v1` `ObjectStore` (named `<cluster>-backup-store`,
   or `cnpg.cluster.backup.plugin.objectStoreName`) from `cnpg.cluster.backup.plugin.objectStore`; the
   Cluster gets `spec.plugins: [{name: barman-cloud.cloudnative-pg.io, isWALArchiver: true, parameters:
   {barmanObjectName: <that ObjectStore's name>}}]` and **no** `spec.backup` block; the `ScheduledBackup`
@@ -261,6 +261,14 @@ picks one of two mutually exclusive ways to reach the object store (#261):
   This mirrors the homelab's own `pi-durable-platform` `ObjectStore`/`ScheduledBackup` pair; the
   bucket, its scoped S3 user and the Secret that backs `s3Credentials` are provisioned outside this
   chart (see that cluster's `tools/provision-*-backups.py`), not by OMG itself.
+
+**Switching an existing cluster between modes is a one-way cutover, not a migration.** Changing
+`cnpg.cluster.backup.method` on a running release (for example `barmanObjectStore` → `plugin`)
+removes `spec.backup.barmanObjectStore` and adds `spec.plugins` on the live Cluster. WAL archiving
+stops and restarts under the new mode, and the plugin does not take over the old backup catalog. Take
+a fresh base backup in the new mode right away, keep the old object-store prefix until its retention
+passes, and don't rely on point-in-time recovery across the switch. To be able to restore from either
+chain during the transition, point the new mode at a different `destinationPath`.
 
 **NetworkPolicy:** this chart's `NetworkPolicy` templates (`networkPolicy.enabled`) govern only the
 gateway Deployment's own pods (`app.kubernetes.io/component: gateway`); they do not select CNPG's
