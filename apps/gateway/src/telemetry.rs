@@ -575,7 +575,9 @@ async fn worker(exporter: Exporter, mut pending: Pending, mut stop: oneshot::Rec
         tokio::time::Instant::now() + Duration::from_secs(1),
         Duration::from_secs(1),
     );
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // A slow exchange must not align the next two batches to adjacent old
+    // tick boundaries and create a catch-up burst (also true while draining).
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut draining = false;
     let overhead = exporter.body(&[]).len();
     loop {
@@ -1161,10 +1163,13 @@ mod tests {
         );
         assert!(started.elapsed() < Duration::from_millis(2300));
         task.abort();
+        // A live target distinguishes policy refusal from connection-refused.
+        // A resolver bypass would queue a TCP connection on this listener.
+        let dns_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let dns_port = dns_listener.local_addr().unwrap().port();
         let config = TraceConfig::from_lookup(
             |key| {
-                (key == TraceConfig::URL)
-                    .then(|| format!("https://localhost:{}/v1/traces", address.port()))
+                (key == TraceConfig::URL).then(|| format!("https://localhost:{dns_port}/v1/traces"))
             },
             Environment::Production,
         )
@@ -1181,6 +1186,12 @@ mod tests {
         assert_eq!(
             exporter.send(exporter.body(&[]), 0).await,
             Err(Delivery::Transport)
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), dns_listener.accept())
+                .await
+                .is_err(),
+            "production telemetry connected to a refused loopback DNS answer"
         );
     }
 
@@ -1200,6 +1211,69 @@ mod tests {
             )));
         }
         assert!(text.contains("gateway_trace_rejected_spans_total"));
+    }
+
+    #[tokio::test]
+    async fn slow_then_fast_collector_cannot_catch_up_with_burst_batches() {
+        use axum::{Json, Router, extract::State, routing::post};
+        type Starts = Arc<(Mutex<Vec<Instant>>, tokio::sync::Notify)>;
+        async fn wait_for(starts: &Starts, count: usize) {
+            tokio::time::timeout(Duration::from_secs(6), async {
+                loop {
+                    let notified = starts.1.notified();
+                    if starts.0.lock().unwrap().len() >= count {
+                        break;
+                    }
+                    notified.await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+        for drain in [false, true] {
+            let starts: Starts = Arc::default();
+            let app = Router::new()
+                .route(
+                    "/v1/traces",
+                    post(
+                        |State(starts): State<Starts>, Json(_): Json<Value>| async move {
+                            let first = {
+                                let mut times = starts.0.lock().unwrap();
+                                times.push(Instant::now());
+                                times.len() == 1
+                            };
+                            starts.1.notify_one();
+                            if first {
+                                tokio::time::sleep(Duration::from_millis(1500)).await;
+                            }
+                            Json(json!({}))
+                        },
+                    ),
+                )
+                .with_state(starts.clone());
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/v1/traces", listener.local_addr().unwrap());
+            let task = tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap();
+            });
+            let runtime = runtime(&url);
+            let recorder = runtime.recorder();
+            for _ in 0..3 {
+                emit(&recorder, 64);
+            }
+            wait_for(&starts, if drain { 1 } else { 3 }).await;
+            runtime.shutdown().await;
+            let times = starts.0.lock().unwrap();
+            assert_eq!(times.len(), 3);
+            for pair in times.windows(2) {
+                assert!(
+                    pair[1].duration_since(pair[0]) >= Duration::from_millis(900),
+                    "catch-up burst (drain={drain}): {:?}",
+                    pair[1].duration_since(pair[0])
+                );
+            }
+            task.abort();
+        }
     }
 
     #[tokio::test]
