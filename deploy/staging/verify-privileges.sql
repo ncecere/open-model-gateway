@@ -728,6 +728,19 @@ BEGIN
  BEGIN INSERT INTO config_versions(topic) VALUES('other'); RAISE EXCEPTION 'configuration topic insert allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  BEGIN DELETE FROM config_versions; RAISE EXCEPTION 'configuration topic removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  BEGIN TRUNCATE TABLE config_versions; RAISE EXCEPTION 'configuration topic truncate allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ -- Admin API tokens (0050/#37 PR1) role-loss authority-change coverage
+ -- (coordinator review issue 4): the runtime role has none of the three
+ -- privileges that would let it reach the shapes migration 0027 treats as
+ -- an authority change but a narrower trigger might have missed --
+ -- UPDATE(role), UPDATE(user_id) or DELETE on platform_role_grants; only
+ -- revoked_at is runtime-writable, and INSERT/SELECT carry no DELETE.
+ -- These three shapes are exercised directly (by the owner/migrator role,
+ -- which this script runs as) in the Rust test suite instead.
+ IF has_column_privilege('gateway_runtime','public.platform_role_grants','role','UPDATE')
+  OR has_column_privilege('gateway_runtime','public.platform_role_grants','user_id','UPDATE')
+  OR has_table_privilege('gateway_runtime','public.platform_role_grants','DELETE') THEN
+  RAISE EXCEPTION 'runtime can reach an authority-change shape the role-loss trigger relies on being database-owner-only';
+ END IF;
  -- Admin API tokens (0050/#37 PR1): create, idempotent revoke, finality,
  -- immutability and the owner-invalidation triggers (role loss, suspension,
  -- cleanup), as runtime.

@@ -169,12 +169,40 @@ $$;
 -- below (left unconditional and immediate: a suspension or cleanup is
 -- always a real loss, never a same-transaction replacement), does not
 -- matter.
+--
+-- Covers every authority-change shape migration 0027 treats as one
+-- (coordinator review issue 4): `UPDATE OF revoked_at,role,user_id OR
+-- DELETE`. A plain `revoked_at` revocation is the common case; a role
+-- change away from 'admin', a `DELETE` of the row outright, or moving the
+-- row to another user (`user_id`) each also end that row's contribution
+-- to its (old) user's admin status just as finally, and the runtime role
+-- has none of these three privileges at all (`verify-privileges.sql`;
+-- only a human operator with direct database access, or the
+-- owner/migrator role, can reach them) -- but a schema that did not
+-- account for them would leave a token unrevoked, and usable again after
+-- a later re-grant. `OLD.user_id` is the row's affected user for a
+-- `DELETE` or a `user_id` move (it is the one losing this row's
+-- contribution); `NEW.user_id` is also checked for a `user_id` move,
+-- which costs nothing extra (the destination user cannot have *lost*
+-- anything from gaining a row, so this can only ever find nothing to do)
+-- and keeps the set of users this statement might affect explicit.
 CREATE FUNCTION omg_admin_tokens_role_lost() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE lost uuid;
 BEGIN
  -- Snapshot-bound guard: refuse outright under anything but READ
  -- COMMITTED (see the function's own comment above); only the gateway's
  -- own isolation level may rely on the lock-then-EXISTS pattern below.
  PERFORM omg_admin_tokens_require_read_committed();
+ IF TG_OP='DELETE' THEN
+  lost := OLD.user_id;
+ ELSIF NEW.revoked_at IS NOT NULL OR NEW.role<>'admin' OR NEW.user_id<>OLD.user_id THEN
+  lost := OLD.user_id;
+ ELSE
+  -- An UPDATE of one of the three watched columns that did not actually
+  -- change whether this row counts as OLD.user_id's active 'admin' grant
+  -- (e.g. `user_id` and `role` both set back to their own value): nothing lost.
+  RETURN NEW;
+ END IF;
  -- Write-skew guard: two admin grants of different provenance (manual and
  -- group) can be revoked by two concurrent transactions that otherwise
  -- share no lock here. Take the same user-scope authority lock 0027's
@@ -186,15 +214,21 @@ BEGIN
  -- new snapshot, so once this lock is granted the EXISTS is guaranteed to
  -- see whatever the other transaction already committed, instead of each
  -- transaction's stale view of the sibling grant.
- PERFORM omg_scope_lock_exclusive(72419512,omg_scope_key(NEW.user_id));
- IF NOT EXISTS(SELECT 1 FROM platform_role_grants WHERE user_id=NEW.user_id AND role='admin' AND revoked_at IS NULL) THEN
-  PERFORM omg_admin_tokens_revoke_owner(NEW.user_id);
+ PERFORM omg_scope_lock_exclusive(72419512,omg_scope_key(lost));
+ IF NOT EXISTS(SELECT 1 FROM platform_role_grants WHERE user_id=lost AND role='admin' AND revoked_at IS NULL) THEN
+  PERFORM omg_admin_tokens_revoke_owner(lost);
  END IF;
- RETURN NEW;
+ IF TG_OP<>'DELETE' AND NEW.user_id<>OLD.user_id THEN
+  PERFORM omg_scope_lock_exclusive(72419512,omg_scope_key(NEW.user_id));
+  IF NOT EXISTS(SELECT 1 FROM platform_role_grants WHERE user_id=NEW.user_id AND role='admin' AND revoked_at IS NULL) THEN
+   PERFORM omg_admin_tokens_revoke_owner(NEW.user_id);
+  END IF;
+ END IF;
+ RETURN COALESCE(NEW,OLD);
 END $$;
-CREATE CONSTRAINT TRIGGER admin_api_tokens_role_lost AFTER UPDATE OF revoked_at ON platform_role_grants
+CREATE CONSTRAINT TRIGGER admin_api_tokens_role_lost AFTER UPDATE OF revoked_at,role,user_id OR DELETE ON platform_role_grants
  DEFERRABLE INITIALLY DEFERRED
- FOR EACH ROW WHEN (NEW.role='admin' AND NEW.revoked_at IS NOT NULL AND OLD.revoked_at IS NULL)
+ FOR EACH ROW WHEN (OLD.role='admin' AND OLD.revoked_at IS NULL)
  EXECUTE FUNCTION omg_admin_tokens_role_lost();
 
 -- Suspension (users.disabled_at) and cleanup (users.cleaned_at) each revoke

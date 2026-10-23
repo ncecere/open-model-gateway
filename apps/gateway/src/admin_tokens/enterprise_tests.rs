@@ -1490,3 +1490,72 @@ async fn a_real_group_grant_loss_with_no_replacement_still_revokes_at_commit(poo
         "losing the group grant with no replacement must still revoke the owner's tokens, at commit"
     );
 }
+
+/// Coordinator review of #37 PR1, issue 4 (MEDIUM): migration 0027 treats
+/// `UPDATE OF revoked_at,user_id,role OR DELETE` on `platform_role_grants`
+/// as authority changes, but 0050's role-loss trigger only watched
+/// `revoked_at`. These three shapes left a token unrevoked and usable
+/// again after a re-grant, even though the owner's only `admin` row was
+/// gone. The runtime role itself has none of these three privileges
+/// (verified in `verify-privileges.sql`); these tests run as the
+/// migrator/owner role to exercise the trigger directly, the same way a
+/// human operator with direct database access could.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn changing_the_role_away_from_admin_revokes_owned_tokens(pool: PgPool) {
+    let owner = admin(&pool, "role-change@test.invalid").await;
+    let token = create(&pool, owner, "n", &scopes(&["platform:read"]), 30, None)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE platform_role_grants SET role='auditor' WHERE user_id=$1 AND role='admin'")
+        .bind(owner)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        revoked(&pool, token.id).await,
+        "UPDATE ... SET role (away from admin) must revoke the owner's tokens"
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn deleting_the_grant_row_revokes_owned_tokens(pool: PgPool) {
+    let owner = admin(&pool, "grant-delete@test.invalid").await;
+    let token = create(&pool, owner, "n", &scopes(&["platform:read"]), 30, None)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM platform_role_grants WHERE user_id=$1 AND role='admin'")
+        .bind(owner)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        revoked(&pool, token.id).await,
+        "DELETE of the owner's only admin grant row must revoke the owner's tokens"
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn moving_the_grant_to_another_user_revokes_the_original_owners_tokens(pool: PgPool) {
+    let owner = admin(&pool, "grant-move-from@test.invalid").await;
+    // A plain user with no grant of its own, so the moved row does not
+    // collide with the active_platform_grant uniqueness constraint.
+    let other = Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,email) VALUES($1,'grant-move-to@test.invalid')")
+        .bind(other)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let token = create(&pool, owner, "n", &scopes(&["platform:read"]), 30, None)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE platform_role_grants SET user_id=$2 WHERE user_id=$1 AND role='admin'")
+        .bind(owner)
+        .bind(other)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        revoked(&pool, token.id).await,
+        "moving the owner's only admin grant row to another user must revoke the original owner's tokens"
+    );
+}
