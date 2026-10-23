@@ -17,9 +17,9 @@ pub(super) fn routes() -> Router<Store> {
 }
 
 /// Platform Admins and Auditors.
-async fn status(State(s): State<Store>, Extension(u): Extension<BrowserPrincipal>) -> ApiResult {
+async fn status(State(s): State<Store>, Extension(u): Extension<ManagementPrincipal>) -> ApiResult {
     let mut tx = crate::db::begin(&s.pool).await?;
-    resources::platform_read(&mut tx, u.user_id).await?;
+    resources::platform_read(&mut tx, u.user_id()).await?;
     tx.commit().await?;
     let mut v = crate::audit_export::status(&s).await?;
     // Whether the replica answering has a destination (all should agree).
@@ -33,7 +33,7 @@ async fn status(State(s): State<Store>, Extension(u): Extension<BrowserPrincipal
 /// rate-limited from the audit log (replica-safe).
 async fn test(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     body: axum::body::Bytes,
 ) -> ApiResult {
     // Authority first: only a Platform Admin learns whether export is set up.
@@ -44,7 +44,7 @@ async fn test(
         .cloned()
         .ok_or(ApiError(StatusCode::CONFLICT, NOT_CONFIGURED))?;
     let (mine, all): (i64, i64) = sqlx::query_as("SELECT count(*) FILTER(WHERE actor_user_id=$1 AND created_at>now()-interval '1 minute'),count(*) FROM audit_events WHERE action='audit_export.tested' AND created_at>now()-interval '1 hour'")
-        .bind(u.user_id)
+        .bind(u.user_id())
         .fetch_one(&mut *tx)
         .await?;
     if mine >= TESTS_PER_MINUTE || all >= TESTS_PER_HOUR {

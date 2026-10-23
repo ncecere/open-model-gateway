@@ -65,19 +65,37 @@ pub(super) fn routes() -> Router<Store> {
 
 pub(super) async fn write_tx<'a>(
     s: &'a Store,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
 ) -> Result<Transaction<'a, Postgres>, ApiError> {
     let mut tx = resources::installation_tx(s).await?;
-    resources::platform_write(&mut tx, u.user_id).await?;
+    resources::platform_write(&mut tx, u.user_id()).await?;
     Ok(tx)
 }
 async fn read_tx<'a>(
     s: &'a Store,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
 ) -> Result<Transaction<'a, Postgres>, ApiError> {
     let mut tx = resources::installation_tx(s).await?;
-    resources::platform_read(&mut tx, u.user_id).await?;
+    resources::platform_read(&mut tx, u.user_id()).await?;
     Ok(tx)
+}
+/// The address a test email goes to: a browser session's verified claim,
+/// or (for an admin token, which has no session) the owner's current
+/// directory email. Settings:write explicitly covers the email test for
+/// tokens too (#37 PR2 approved spec).
+async fn test_recipient(
+    tx: &mut Transaction<'_, Postgres>,
+    u: &ManagementPrincipal,
+) -> Result<String, ApiError> {
+    if let Some(browser) = u.as_browser() {
+        return Ok(browser.email.clone());
+    }
+    sqlx::query_scalar("SELECT email FROM users WHERE id=$1")
+        .bind(u.user_id())
+        .fetch_optional(&mut **tx)
+        .await?
+        .flatten()
+        .ok_or_else(|| ApiError(StatusCode::CONFLICT, EMAIL_NOT_CONFIGURED))
 }
 fn bad(message: &'static str) -> ApiError {
     ApiError(StatusCode::BAD_REQUEST, message)
@@ -142,7 +160,7 @@ fn file_runtime(
 
 async fn general(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     ext: Option<Extension<crate::filestore::FileStoreRuntime>>,
 ) -> ApiResult {
     let mut tx = read_tx(&s, &u).await?;
@@ -160,7 +178,7 @@ struct GeneralInput {
 }
 async fn update_general(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     ext: Option<Extension<crate::filestore::FileStoreRuntime>>,
     Json(b): Json<GeneralInput>,
 ) -> ApiResult {
@@ -179,7 +197,7 @@ async fn update_general(
         .bind(support)
         .bind(logo)
         .bind(b.human_key_max_lifetime_days)
-        .bind(u.user_id)
+        .bind(u.user_id())
         .execute(&mut *tx)
         .await?;
     audit(
@@ -259,7 +277,7 @@ async fn load_privacy(
         .fetch_one(&mut **tx)
         .await?)
 }
-async fn privacy(State(s): State<Store>, Extension(u): Extension<BrowserPrincipal>) -> ApiResult {
+async fn privacy(State(s): State<Store>, Extension(u): Extension<ManagementPrincipal>) -> ApiResult {
     let mut tx = read_tx(&s, &u).await?;
     let (policy, retention, updated) = load_privacy(&mut tx).await?;
     tx.commit().await?;
@@ -274,7 +292,7 @@ struct PrivacyInput {
 }
 async fn update_privacy(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Json(b): Json<PrivacyInput>,
 ) -> ApiResult {
     let mut tx = write_tx(&s, &u).await?;
@@ -294,7 +312,7 @@ async fn update_privacy(
     sqlx::query("UPDATE installation_settings SET openrouter_data_collection=$1,request_log_retention_days=$2,updated_at=now(),updated_by=$3 WHERE singleton")
         .bind(policy.as_str())
         .bind(b.request_log_retention_days)
-        .bind(u.user_id)
+        .bind(u.user_id())
         .execute(&mut *tx)
         .await?;
     audit(
@@ -392,7 +410,7 @@ async fn email_json(
 }
 async fn email_settings(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
 ) -> ApiResult {
     let mut tx = read_tx(&s, &u).await?;
     let v = email_json(&mut tx, &s.smtp_secrets).await?;
@@ -484,7 +502,7 @@ fn email_input(
 }
 async fn update_email(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Json(b): Json<EmailInput>,
 ) -> ApiResult {
     let mut tx = write_tx(&s, &u).await?;
@@ -499,7 +517,7 @@ async fn update_email(
         .bind(c.and_then(|c| c.password_ref.clone()))
         .bind(c.map(|c| c.from_address.clone()))
         .bind(c.and_then(|c| c.from_name.clone()))
-        .bind(u.user_id)
+        .bind(u.user_id())
         .execute(&mut *tx)
         .await?;
     audit(
@@ -519,7 +537,7 @@ async fn update_email(
 /// Send a fixed test message to the signed-in admin's verified address.
 async fn test_email(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     body: axum::body::Bytes,
 ) -> ApiResult {
     let mut tx = write_tx(&s, &u).await?;
@@ -527,9 +545,10 @@ async fn test_email(
     let settings = load_smtp(&mut tx)
         .await?
         .ok_or(ApiError(StatusCode::CONFLICT, EMAIL_NOT_CONFIGURED))?;
+    let recipient = test_recipient(&mut tx, &u).await?;
     // The audit trail is the replica-safe counter (serialized by the installation lock).
     let (mine, all): (i64, i64) = sqlx::query_as("SELECT count(*) FILTER(WHERE actor_user_id=$1 AND created_at>now()-interval '1 minute'),count(*) FROM audit_events WHERE action='settings.email_test' AND created_at>now()-interval '1 hour'")
-        .bind(u.user_id)
+        .bind(u.user_id())
         .fetch_one(&mut *tx)
         .await?;
     if mine >= TESTS_PER_MINUTE || all >= TESTS_PER_HOUR {
@@ -552,7 +571,7 @@ async fn test_email(
     tx.commit().await?;
     let result = settings
         .send(&s.smtp_secrets, OutgoingEmail {
-            to: u.email.clone(),
+            to: recipient.clone(),
             subject: format!("Test email from {name}"),
             body: format!(
                 "This is a test email from {name}.\r\n\r\nEmail delivery works: invitations will be sent through this relay.\r\n\r\nYou received it because a Platform Admin chose \"Send test email\" in Admin > Settings > Email.\r\n"
@@ -568,7 +587,7 @@ async fn test_email(
         .execute(&s.pool)
         .await?;
     Ok(Json(
-        json!({"ok": error.is_none(), "error": error, "recipient": u.email}),
+        json!({"ok": error.is_none(), "error": error, "recipient": recipient}),
     ))
 }
 
@@ -641,7 +660,7 @@ pub(super) async fn send_invitation(
 
 async fn sign_in(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     config: Option<Extension<SignIn>>,
 ) -> ApiResult {
     let mut tx = read_tx(&s, &u).await?;
