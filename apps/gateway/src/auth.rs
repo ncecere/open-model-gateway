@@ -160,7 +160,7 @@ pub(crate) async fn revalidate(
 pub(crate) async fn revalidate_admission(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     principal: &Principal,
-) -> Result<Option<Uuid>, sqlx::Error> {
+) -> Result<Option<(Uuid, bool)>, sqlx::Error> {
     revalidate_admission_with(tx, principal, true).await
 }
 
@@ -169,11 +169,15 @@ pub(crate) async fn revalidate_admission(
 /// authority locks of the key's workspace, user and lineage
 /// (`governance::locks`), which every revocation takes exclusively, so the
 /// rows read cannot change until commit and no `FOR SHARE` is needed).
+/// The second element of a live result is whether the admitting workspace is
+/// shared (`team`/`project`): the authoritative, live-revalidated kind the
+/// admission commit path uses to decide trace export eligibility
+/// (`governance::admit_unobserved`), never a cached or client-asserted kind.
 pub(crate) async fn revalidate_admission_with(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     principal: &Principal,
     lock: bool,
-) -> Result<Option<Uuid>, sqlx::Error> {
+) -> Result<Option<(Uuid, bool)>, sqlx::Error> {
     type Row = (Uuid, String, Option<Uuid>, i64, i64, i64, i64);
     static UNLOCKED: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
         ADMISSION_SQL
@@ -201,7 +205,8 @@ pub(crate) async fn revalidate_admission_with(
         Some(_) => None,
         None if shared => (account > 0).then_some(lineage),
         None => None,
-    })
+    }
+    .map(|lineage| (lineage, shared)))
 }
 
 const ADMISSION_SQL: &str = "WITH k AS MATERIALIZED (SELECT k.governance_key_id lineage,k.service_account_id account,w.kind,w.owner_user_id owner FROM api_keys k

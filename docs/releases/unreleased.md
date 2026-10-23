@@ -18,6 +18,17 @@ See [kubernetes](../kubernetes.md#backups).
 
 Switching an **existing** cluster between modes is a one-way cutover: WAL archiving restarts under the new mode and the plugin doesn't adopt the old backup catalog, so take a fresh base backup right away and don't rely on point-in-time recovery across the switch ([Kubernetes › Backups](../kubernetes.md#backups)). Omitting S3 credentials in plugin mode now fails with the required-value message instead of a template error.
 
+## Instrumentation and correlation for interactive generation traces (#98, PR 2)
+
+PR 1's exporter now has a production span source, limited to one complete interactive generation path: chat completions, Responses and Messages through the shared engine. Nothing else (async jobs, batches, embeddings, images, audio, realtime) is instrumented.
+
+- **Spans:** `inference.request` (engine entry through terminal settlement, including streamed consumption), `routing`, `admission` and `settlement` per attempt (each with its own real sub-phase boundaries from `governance.rs`), `upstream.attempt` per attempt (at most 3, only under the existing explicit failover policy; first content means the first non-empty text or tool-call delta, never headers, empty deltas, usage or finish, and stays absent for non-streaming requests), and independent background roots for the existing `rate_prune`/`lock_wait_prune` runs.
+- **Eligibility is unchanged and now live:** the `SharedAdmission` export capability is constructed in exactly one place - the commit branch of `governance::admit_unobserved`, once commit has succeeded for a live-revalidated `team`/`project` workspace - never for personal workspaces, never from client input, never before commit. A personal request, or one that never reaches admission, exports nothing.
+- **Streaming is drop-safe:** the trace context is moved into the stream alongside the existing `ExecutionGuard` and finishes (export, or drop-count) exactly once on completion, error, timeout, client cancellation (including before the first poll) and settlement write failure. A cancelled attempt's settlement still runs, in a detached task outside the phase scope: its sub-phase spans are legitimately absent from a cancelled trace, not a gap.
+- **Logs correlation:** the Logs request list and detail responses add `trace_id` - the deterministic hex id for a shared-workspace row, `null` for personal, absent for an unauthorized viewer because the row itself is withheld. The dashboard's request detail page shows a "Trace ID" field when it is present. The same id is attached to the existing reconciliation log lines once eligibility is known. `x-request-id` is unchanged.
+
+See [operations](../operations.md#traces-98-pr-2-instrumentation-and-correlation). Collector acceptance and chart assertions remain PR 3's scope.
+
 ## Vendored upstream-base advisory coverage (#214)
 
 The existing read-only cargo-deny job now runs a separately labelled advisory-only check for explicitly registered vendored dependencies. It validates root workspace metadata registrations and the complete graph, then projects only the reviewed crates.io base name/version/source identity and graph references in temporary scanner input. Unknown path dependencies, stale or mismatched registrations, non-canonical/escaping paths and malformed/incomplete graphs fail closed. There are no vendored dependencies today; the check passes and says so.

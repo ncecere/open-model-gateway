@@ -176,7 +176,7 @@ async fn reserve_window_once(
 ) -> Result<(), InferenceError> {
     let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
     admission_prefix(store, &mut tx, principal).await?;
-    let lineage = authorize(store, &mut tx, principal).await?;
+    let (lineage, _shared) = authorize(store, &mut tx, principal).await?;
     let s = session(&mut tx, id).await?;
     if s.workspace_id != principal.workspace_id
         || s.api_key_id != principal.key_id
