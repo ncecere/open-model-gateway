@@ -56,6 +56,34 @@ impl BedrockAdapter {
         })
     }
 
+    /// A real adapter whose client is pinned to a local mock HTTP endpoint
+    /// with fixed, non-production test credentials. For cross-module
+    /// integration tests (e.g. `inference::admission_validation_tests`)
+    /// that need the real adapter without reaching AWS; `bedrock::tests`
+    /// builds the same shape inline since it already has field access.
+    #[cfg(test)]
+    pub(crate) fn for_test(base: &str) -> Self {
+        let adapter = Self::new().unwrap();
+        let config = aws_sdk_bedrockruntime::Config::builder()
+            .behavior_version(BehaviorVersion::latest())
+            .region(Region::new("us-east-1"))
+            .credentials_provider(aws_sdk_bedrockruntime::config::Credentials::new(
+                "AKIDLOCALTEST",
+                "local-not-a-secret",
+                Some("local-session-token".into()),
+                None,
+                "local-test",
+            ))
+            .endpoint_url(base)
+            .http_client(adapter.http.clone())
+            .retry_config(RetryConfig::standard().with_max_attempts(1))
+            .build();
+        Self {
+            test_client: Some(Client::from_conf(config)),
+            ..adapter
+        }
+    }
+
     async fn client(&self, plan: &auth::Plan) -> Client {
         #[cfg(test)]
         if let Some(client) = &self.test_client {
@@ -121,6 +149,13 @@ impl ProviderAdapter for BedrockAdapter {
     }
     fn supports_protocol(&self, protocol: ApiProtocol) -> bool {
         super::capabilities::serves(self.id(), protocol)
+    }
+    /// Dry-runs the real, pure `encode` and discards the converted input:
+    /// pre-admission validation can never drift from what `execute` would
+    /// actually reject, and this never resolves credentials or touches the
+    /// network (`execute` only calls `encode` before any of that).
+    fn validate_chat_request(&self, request: &ChatRequest) -> Result<()> {
+        encode(request).map(|_| ())
     }
     async fn execute(&self, target: &Deployment, request: ChatRequest) -> Result<ProviderOutput> {
         let plan = auth::Plan::new(target, &self.policy).ok_or(InferenceError::Configuration)?;
