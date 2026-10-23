@@ -534,21 +534,25 @@ async fn lookup_rejects_expired_revoked_and_owner_not_admin(pool: PgPool) {
     // `runtime_privileges.rs`'s storage/stored_files fixtures) -- not any
     // schema CHECK, which this row must still genuinely satisfy.
     let raw = GeneratedSecret::generate().unwrap();
+    // One transaction: a panic rolls the DISABLE back instead of leaving
+    // the guard off for the rest of this test database.
+    let mut tx = pool.begin().await.unwrap();
     sqlx::query("ALTER TABLE admin_api_tokens DISABLE TRIGGER admin_api_tokens_owner_is_admin")
-        .execute(&pool)
+        .execute(&mut *tx)
         .await
         .unwrap();
     sqlx::query("INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,created_at,expires_at) VALUES($1,$2,'expired',$3,ARRAY['platform:read'],now()-interval '10 days',now()-interval '1 minute')")
         .bind(raw.id)
         .bind(owner)
         .bind(raw.digest.as_slice())
-        .execute(&pool)
+        .execute(&mut *tx)
         .await
         .unwrap();
     sqlx::query("ALTER TABLE admin_api_tokens ENABLE TRIGGER admin_api_tokens_owner_is_admin")
-        .execute(&pool)
+        .execute(&mut *tx)
         .await
         .unwrap();
+    tx.commit().await.unwrap();
     assert!(
         store
             .authenticate_admin_token(&raw.token)

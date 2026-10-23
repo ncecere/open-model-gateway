@@ -463,7 +463,7 @@ impl Store {
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
             "UPDATE admin_api_tokens SET last_used_at=clock_timestamp(),last_used_address=$2::text::inet
-             WHERE id=$1 AND (last_used_at IS NULL OR last_used_at<clock_timestamp()-make_interval(secs=>$3))",
+             WHERE id=$1 AND revoked_at IS NULL AND (last_used_at IS NULL OR last_used_at<clock_timestamp()-make_interval(secs=>$3))",
         )
         .bind(id)
         .bind(address.map(|a| a.to_string()))

@@ -146,6 +146,9 @@ CREATE FUNCTION valid_admin_token_allowlist(allowlist cidr[]) RETURNS boolean LA
  SELECT allowlist IS NULL OR (
   cardinality(allowlist) BETWEEN 1 AND 32 AND array_position(allowlist,NULL) IS NULL
   AND NOT EXISTS(SELECT 1 FROM unnest(allowlist) n WHERE masklen(n)=0)
+  -- IPv4-mapped IPv6 networks are refused, as in Rust (admin_tokens.rs):
+  -- '::ffff:0.0.0.0/96' would otherwise be an IPv4 catch-all in disguise.
+  AND NOT EXISTS(SELECT 1 FROM unnest(allowlist) n WHERE family(n)=6 AND n <<= '::ffff:0:0/96'::cidr)
   AND cardinality(allowlist)=(SELECT count(DISTINCT n) FROM unnest(allowlist) n)
  )
 $$;
