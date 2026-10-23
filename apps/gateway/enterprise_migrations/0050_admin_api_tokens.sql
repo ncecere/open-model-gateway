@@ -41,6 +41,44 @@
 -- AGENTS.md) pays nothing to ask for it again here.
 SET lock_timeout = '60s';
 
+-- Project-specific SQLSTATE codes (PostgreSQL Appendix A: codes whose
+-- class starts with a digit 5-9 or a letter I-Z are available for
+-- implementation-defined conditions and never collide with a standard or
+-- future PostgreSQL code). This file's custom codes:
+--   OM001 - admin API token creation refused: the owner is not, at the
+--           instant of insertion, a currently effective Platform Admin.
+--   OM002 - an admin-token authority guard (creation or role-loss) was
+--           run under an isolation level other than READ COMMITTED.
+-- Every other RAISE in this file reuses an existing standard SQLSTATE
+-- (23514 check_violation and friends), matching the rest of this
+-- repository's migrations; these two are deliberately distinct so Rust
+-- can map on the code alone, with no message-text matching (#37 PR1,
+-- coordinator review issue 5a).
+
+-- Both admin-token authority guards below (role-loss and creation) read
+-- `effective_platform_roles`/`platform_role_grants` with a plain `SELECT
+-- ... EXISTS` after taking the user-scope advisory lock. Under READ
+-- COMMITTED (the gateway's own isolation level; see crate::db::begin) that
+-- statement always takes a fresh snapshot, so once the lock is granted the
+-- read is guaranteed to see every write already committed by whoever held
+-- the lock before. Under REPEATABLE READ or SERIALIZABLE, the whole
+-- transaction shares one snapshot taken at its first statement; the
+-- advisory lock still serializes with a concurrent demotion, but the
+-- EXISTS check can still read a snapshot that predates a commit it waited
+-- on, so a transaction that observed the owner as admin before a
+-- concurrent, now-committed demotion can still create a token for them (or
+-- still see an admin grant that was already revoked out from under it).
+-- PostgreSQL's Serializable Snapshot Isolation does not reliably abort
+-- this either (verified by hand): the anomaly is a stale read behind a
+-- lock wait, not the read-write conflict pattern SSI detects. Refuse
+-- outright instead of trying to reason about it further.
+CREATE FUNCTION omg_admin_tokens_require_read_committed() RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+ IF current_setting('transaction_isolation')<>'read committed' THEN
+  RAISE EXCEPTION 'admin API token authority checks require READ COMMITTED (a higher isolation level''s snapshot can read a stale admin grant behind this function''s own lock wait)' USING ERRCODE='OM002';
+ END IF;
+END $$;
+
 -- Every admin-token scope (route assignments are PR2's route_policy.rs); no
 -- wildcard, no duplicates, non-empty.
 CREATE FUNCTION valid_admin_token_scopes(scopes text[]) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
@@ -114,6 +152,10 @@ $$;
 -- losing the user's last 'admin' grant revokes the same way.
 CREATE FUNCTION omg_admin_tokens_role_lost() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+ -- Snapshot-bound guard: refuse outright under anything but READ
+ -- COMMITTED (see the function's own comment above); only the gateway's
+ -- own isolation level may rely on the lock-then-EXISTS pattern below.
+ PERFORM omg_admin_tokens_require_read_committed();
  -- Write-skew guard: two admin grants of different provenance (manual and
  -- group) can be revoked by two concurrent transactions that otherwise
  -- share no lock here. Take the same user-scope authority lock 0027's
@@ -171,9 +213,12 @@ CREATE TRIGGER admin_api_tokens_user_cleaned AFTER UPDATE OF cleaned_at ON users
 -- (re-entrant) for the common case where the caller already holds it.
 CREATE FUNCTION omg_admin_tokens_owner_must_be_admin() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+ -- Snapshot-bound guard: see omg_admin_tokens_require_read_committed's
+ -- own comment above for why this refuses anything but READ COMMITTED.
+ PERFORM omg_admin_tokens_require_read_committed();
  PERFORM omg_scope_lock_exclusive(72419512,omg_scope_key(NEW.owner_user_id));
  IF NOT EXISTS(SELECT 1 FROM effective_platform_roles WHERE user_id=NEW.owner_user_id AND role='admin') THEN
-  RAISE EXCEPTION 'admin API token owner must be a currently effective Platform Admin' USING ERRCODE='23514';
+  RAISE EXCEPTION 'admin API token owner must be a currently effective Platform Admin' USING ERRCODE='OM001';
  END IF;
  RETURN NEW;
 END $$;

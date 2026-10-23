@@ -126,8 +126,19 @@ pub enum CreateAdminTokenError {
     Entropy(crate::entropy::EntropyUnavailable),
     /// The owner is not, at the instant of insertion, a currently
     /// effective Platform Admin (migration 0050's `BEFORE INSERT` trigger;
-    /// never bypassed, including under a concurrent demotion).
+    /// never bypassed, including under a concurrent demotion). Mapped from
+    /// SQLSTATE `OM001` alone, never message text (coordinator review
+    /// issue 5a).
     OwnerNotAdmin,
+    /// The caller's transaction is running at an isolation level other
+    /// than READ COMMITTED when an admin-token authority guard (creation
+    /// or role-loss) ran; under REPEATABLE READ/SERIALIZABLE the guard's
+    /// own snapshot can be stale behind its lock wait (coordinator review
+    /// issue 1), so it refuses outright instead. Mapped from SQLSTATE
+    /// `OM002` alone. The gateway's own transactions are always READ
+    /// COMMITTED (`crate::db::begin`), so this should never occur on a
+    /// production path; it exists as a hard backstop.
+    UnsupportedIsolation,
     Database(sqlx::Error),
 }
 impl std::fmt::Display for CreateAdminTokenError {
@@ -138,22 +149,28 @@ impl std::fmt::Display for CreateAdminTokenError {
             Self::OwnerNotAdmin => {
                 f.write_str("the owner is not a currently effective Platform Admin")
             }
+            Self::UnsupportedIsolation => {
+                f.write_str("admin token authority checks require a READ COMMITTED transaction")
+            }
             Self::Database(e) => e.fmt(f),
         }
     }
 }
 impl std::error::Error for CreateAdminTokenError {}
 
-/// Map a database error from the creation `INSERT`: the owner-admin guard
-/// trigger (migration 0050) raises `check_violation` (23514) with this
-/// exact message and no named constraint; everything else is passed
-/// through as [`CreateAdminTokenError::Database`].
+/// Map a database error from the creation `INSERT`. The owner-admin guard
+/// trigger (migration 0050) raises its own dedicated SQLSTATE (`OM001`),
+/// as does the isolation-level guard (`OM002`); both are mapped on the
+/// code alone, with no message-text matching, so a translated or reworded
+/// `RAISE EXCEPTION` message can never silently stop being recognized.
+/// Everything else is passed through as [`CreateAdminTokenError::Database`].
 fn map_create_error(error: sqlx::Error) -> CreateAdminTokenError {
-    if let sqlx::Error::Database(ref db) = error
-        && db.code().as_deref() == Some("23514")
-        && db.message().contains("currently effective Platform Admin")
-    {
-        return CreateAdminTokenError::OwnerNotAdmin;
+    if let sqlx::Error::Database(ref db) = error {
+        match db.code().as_deref() {
+            Some("OM001") => return CreateAdminTokenError::OwnerNotAdmin,
+            Some("OM002") => return CreateAdminTokenError::UnsupportedIsolation,
+            _ => {}
+        }
     }
     CreateAdminTokenError::Database(error)
 }

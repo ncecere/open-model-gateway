@@ -1106,3 +1106,153 @@ async fn owner_restrict_prevents_removing_a_user_with_live_tokens(pool: PgPool) 
     );
     let _ = created.digest; // silence unused-field lints on this struct's other field
 }
+
+/// Coordinator review of #37 PR1, issue 1 (HIGH): the creation guard's
+/// `omg_scope_lock_exclusive` serializes with a concurrent demotion, but
+/// does not refresh an already-established REPEATABLE READ/SERIALIZABLE
+/// snapshot. Repro: S1 opens a snapshot that observes the owner as a
+/// currently effective admin; S2 revokes the owner's only admin grant and
+/// commits; S1 then tries to create a token inside its stale snapshot.
+/// Before the fix this `INSERT` succeeds even though the owner's admin
+/// status was already gone (and committed) by the time of the insert: the
+/// token is never revoked, and would become usable again if Admin is
+/// re-granted. Bypasses the Rust helper (raw SQL against the trigger
+/// directly), since the snapshot has to be established and held on a
+/// specific transaction object the test controls.
+async fn isolation_guard_refuses_a_stale_snapshot(pool: &PgPool, setup: &'static str, label: &str) {
+    let owner = admin(pool, &format!("stale-{label}@test.invalid")).await;
+    let mut tx = crate::db::begin_with_setup(pool, setup).await.unwrap();
+    // Establish the snapshot: observe the owner as currently effective admin.
+    let seen_admin: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM effective_platform_roles WHERE user_id=$1 AND role='admin')",
+    )
+    .bind(owner)
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    assert!(
+        seen_admin,
+        "the snapshot must see the owner as admin before the concurrent revoke"
+    );
+    // A concurrent transaction revokes the owner's only admin grant and commits.
+    sqlx::query(
+        "UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND role='admin'",
+    )
+    .bind(owner)
+    .execute(pool)
+    .await
+    .unwrap();
+    // The stale snapshot still attempts to create a token for this now-demoted owner.
+    let id = Uuid::new_v4();
+    let result = sqlx::query(
+        "INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,expires_at)
+         VALUES($1,$2,'stale',decode(repeat('11',32),'hex'),ARRAY['platform:read'],now()+interval '30 days')",
+    )
+    .bind(id)
+    .bind(owner)
+    .execute(&mut *tx)
+    .await;
+    let _ = tx.rollback().await;
+    assert!(
+        result.is_err(),
+        "a {label} snapshot predating a committed demotion must not create a token for the now-demoted owner"
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn creation_guard_refuses_a_stale_repeatable_read_snapshot(pool: PgPool) {
+    isolation_guard_refuses_a_stale_snapshot(
+        &pool,
+        "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+        "rr",
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn creation_guard_refuses_a_stale_serializable_snapshot(pool: PgPool) {
+    isolation_guard_refuses_a_stale_snapshot(
+        &pool,
+        "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+        "serializable",
+    )
+    .await;
+}
+
+/// The common case (the gateway's own isolation level) is unaffected: a
+/// plain READ COMMITTED creation still works.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn creation_guard_allows_read_committed(pool: PgPool) {
+    let owner = admin(&pool, "read-committed@test.invalid").await;
+    let mut tx = crate::db::begin(&pool).await.unwrap();
+    let id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,expires_at)
+         VALUES($1,$2,'rc',decode(repeat('11',32),'hex'),ARRAY['platform:read'],now()+interval '30 days')",
+    )
+    .bind(id)
+    .bind(owner)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+}
+
+/// The role-loss check (`omg_admin_tokens_role_lost`) has the same
+/// snapshot problem in principle (it also does a fresh `EXISTS` after
+/// taking the lock): refuse it under RR/SERIALIZABLE too, even though no
+/// production code path runs a `platform_role_grants` write at an elevated
+/// isolation level today (verified by grep; this is pure defense in depth).
+async fn role_loss_guard_refuses_elevated_isolation(
+    pool: &PgPool,
+    setup: &'static str,
+    label: &str,
+) {
+    let owner = admin(pool, &format!("role-loss-stale-{label}@test.invalid")).await;
+    let mut tx = crate::db::begin_with_setup(pool, setup).await.unwrap();
+    let result = sqlx::query(
+        "UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND role='admin'",
+    )
+    .bind(owner)
+    .execute(&mut *tx)
+    .await;
+    let _ = tx.rollback().await;
+    assert!(
+        result.is_err(),
+        "the role-loss guard must refuse to run under a {label} isolation level"
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn role_loss_guard_refuses_repeatable_read(pool: PgPool) {
+    role_loss_guard_refuses_elevated_isolation(
+        &pool,
+        "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+        "rr",
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn role_loss_guard_refuses_serializable(pool: PgPool) {
+    role_loss_guard_refuses_elevated_isolation(
+        &pool,
+        "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+        "serializable",
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn role_loss_guard_allows_read_committed(pool: PgPool) {
+    let owner = admin(&pool, "role-loss-rc@test.invalid").await;
+    let mut tx = crate::db::begin(&pool).await.unwrap();
+    sqlx::query(
+        "UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND role='admin'",
+    )
+    .bind(owner)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+}

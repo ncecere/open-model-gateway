@@ -358,6 +358,9 @@ GRANT UPDATE(revoked_at,last_used_at,last_used_address) ON public.admin_api_toke
 -- this helper directly (not only through the trigger mechanism, which needs
 -- no grant of its own); it needs EXECUTE like the other PL/pgSQL helpers above.
 GRANT EXECUTE ON FUNCTION public.omg_admin_tokens_revoke_owner(uuid) TO gateway_runtime;
+-- Both authority guards (role-loss and creation) call this isolation check
+-- directly for the same reason.
+GRANT EXECUTE ON FUNCTION public.omg_admin_tokens_require_read_committed() TO gateway_runtime;
 -- The scopes/allowlist CHECK constraints call these at every INSERT/UPDATE,
 -- like valid_model_protocols and friends above.
 GRANT EXECUTE ON FUNCTION public.valid_admin_token_scopes(text[]),
