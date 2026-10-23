@@ -489,6 +489,24 @@ mod tests {
         }
     }
 
+    /// #244: the IPv6 documentation range `3fff::/20` (RFC 9637) is refused,
+    /// but the rest of `3ff0::/12` (which the old `(s[0] & 0xfff0) ==
+    /// 0x3ff0` mask wrongly matched too) is ordinary global unicast and is
+    /// allowed. This intentionally changes egress's outcome for those
+    /// addresses: they were refused before #244 and are allowed after.
+    #[test]
+    fn issue_244_3fff_20_documentation_boundary() {
+        let strict = Policy::default();
+        for refused in ["3fff::1", "3fff:0fff:ffff:ffff:ffff:ffff:ffff:ffff"] {
+            assert_eq!(classify(ip(refused)), Class::Refused, "{refused}");
+            assert!(!strict.allows(ip(refused)), "{refused}");
+        }
+        for allowed in ["3fff:1000::1", "3ff0::1", "3ffe:ffff::1", "3ff1:dead::1"] {
+            assert_eq!(classify(ip(allowed)), Class::Public, "{allowed}");
+            assert!(strict.allows(ip(allowed)), "{allowed}");
+        }
+    }
+
     #[test]
     fn private_networks_and_loopback_need_explicit_approval() {
         let allow = Networks::parse(

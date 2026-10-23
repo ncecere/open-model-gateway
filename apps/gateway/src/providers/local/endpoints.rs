@@ -80,9 +80,12 @@ impl ApprovedEndpoints {
                 //
                 // Pending-refusal membership is independent of `Category`
                 // (review finding): it must fire for exactly the issue's
-                // ranges, including the exact `3fff::/20`, not the wider
-                // legacy `3ff0::/12` `classify_v6` still groups as
-                // documentation for egress's unchanged outcome.
+                // ranges, including the exact `3fff::/20`. (Before #244,
+                // `classify_v6` used a wider `3ff0::/12` mask for
+                // `Category::Documentation`; #244 narrowed it to the exact
+                // `/20`, so the two now agree here too, but this check stays
+                // independent of `Category` on principle, see
+                // `is_pending_refusal_v6`'s doc comment in `special_use.rs`.)
                 let effective = effective_address(ip);
                 let pending = match effective {
                     IpAddr::V4(v4) => crate::special_use::is_pending_refusal_v4(v4),
@@ -959,12 +962,21 @@ mod pending_refusal_tests {
         }
     }
 
-    /// #203 review finding: the warning for `3fff::/20` must not also fire
-    /// for the wider legacy `3ff0::/12` mask `classify_v6` keeps for
-    /// `Category::Documentation` (egress's outcome there is unchanged by
-    /// this fix, and so is `allowed`'s: both still accept it over HTTPS).
+    /// #203 review finding, updated for #244: the warning for `3fff::/20`
+    /// must not also fire for `3ff0::/12` addresses outside it.
+    /// `providers/local/endpoints.rs`'s own accept/refuse decision for these
+    /// addresses (`allowed`, via `allowed_v6`) is unchanged by #244: before
+    /// #244 they were `Category::Documentation`, after they are
+    /// `Category::Public`, and `allowed_v6` maps both to `!http`, so the
+    /// local-upstream approval is still accepted over HTTPS either way.
+    /// `egress.rs`'s decision for them is *not* unchanged: #244 fixes the
+    /// over-wide `3ff0::/12` documentation mask there, so these addresses
+    /// move from `Category::Documentation` (refused) to `Category::Public`
+    /// (allowed) for every other client. That egress outcome change is the
+    /// point of #244; this test only proves it does not also change
+    /// `endpoints.rs`'s own decision or the exact-`/20` warning.
     #[test]
-    fn warning_fires_for_3fff_20_only_not_the_legacy_3ff0_12() {
+    fn warning_fires_for_3fff_20_only_not_the_wider_3ff0_12() {
         let warned = ApprovedEndpoints::parse(
             &serde_json::json!([{"endpoint": "https://[3fff::1]/v1", "addresses": ["3fff::1"]}])
                 .to_string(),
@@ -976,11 +988,17 @@ mod pending_refusal_tests {
 
         for address in ["3ff0::1", "3ffe:ffff::1"] {
             let ip: IpAddr = address.parse().unwrap();
-            // Outcome unchanged: still accepted over HTTPS, still refused by
-            // egress for every other client.
+            // endpoints.rs's own decision is unchanged: still accepted over
+            // HTTPS (`allowed_v6` maps both `Public` and `Documentation` to
+            // `!http`).
             assert!(allowed(ip, false, false), "{address}");
+            // egress's decision *does* change (#244, intentional): these
+            // addresses are `Category::Public` now, not `Documentation`, so
+            // the strict policy allows them.
             let strict = crate::egress::Policy::default();
-            assert!(!strict.allows(ip), "{address}");
+            assert!(strict.allows(ip), "{address}");
+            // No warning either before or after #244: these addresses were
+            // never in `is_pending_refusal_v6`'s exact ranges.
             let not_warned = ApprovedEndpoints::parse(
                 &serde_json::json!([{"endpoint": format!("https://[{address}]/v1"), "addresses": [address]}])
                     .to_string(),

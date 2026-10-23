@@ -37,6 +37,21 @@ struct Script {
     /// on both can show the difference between judging a line against one
     /// deployment and judging it against every authorized candidate.
     permissive: bool,
+    /// #243 ungated-admission race tests: when true, the next
+    /// `validate_chat_request` call is judged normally (so it can still
+    /// refuse), but as a side effect this provider becomes `permissive`
+    /// immediately afterward - simulating a route that starts accepting
+    /// the line between the runner's dispatch-time planning decision
+    /// (`Runner::plan_route_inner`) and the engine's own check at
+    /// admission, moments later.
+    accept_after_first_check: bool,
+    /// #243 ungated-admission race tests for a PINNED (omitted-maximum)
+    /// line: when true, the next `supports_protocol` call is ineligible
+    /// (consumed immediately, regardless of outcome), simulating this
+    /// provider's pinned route being briefly disabled at the runner's
+    /// dispatch-time planning and available again by the time the engine
+    /// itself checks eligibility at admission.
+    coarse_unavailable_once: bool,
     /// Encoded native records of the last submission.
     submitted: Vec<Value>,
     submissions: Vec<Vec<Value>>,
@@ -71,6 +86,36 @@ impl Fake {
     fn push_batch(&self, status: BatchStatus) {
         let mut s = self.script.lock().unwrap();
         s.batches.push_back(upstream(status));
+    }
+    /// The deterministic verdict `validate_chat_request` returns once not
+    /// `permissive` (the matching logic itself, factored out so the #243
+    /// ungated-admission tests can flip `permissive` around a single judged
+    /// call instead of only before or after every call).
+    fn judge(&self, request: &ChatRequest) -> Result<(), InferenceError> {
+        match request.messages[0].content.as_deref().unwrap_or_default() {
+            "strict-tool" => Err(InferenceError::Unsupported),
+            "bad-tool-args" => Err(InferenceError::InvalidRequest),
+            // #238 multi-route tests: every provider refuses, but not with
+            // the same kind (anthropic 501, openai 400) - so the upload's
+            // reported kind must come from every candidate, not just the
+            // one deployment planning happened to size the line against.
+            "mixed-reject" => Err(if self.id == "openai" {
+                InferenceError::InvalidRequest
+            } else {
+                InferenceError::Unsupported
+            }),
+            // #238 clamped-request test: only the line's own resolved output
+            // bound (the fixture's 50-token ceiling) satisfies this adapter -
+            // the raw client omission (`None`) must not.
+            "ceiling-sensitive" => {
+                if request.max_output_tokens == Some(50) {
+                    Ok(())
+                } else {
+                    Err(InferenceError::Unsupported)
+                }
+            }
+            _ => Ok(()),
+        }
     }
 }
 fn usage(input: u64, output: u64) -> Usage {
@@ -123,6 +168,16 @@ impl ProviderAdapter for Fake {
         }
     }
     fn supports_protocol(&self, p: ApiProtocol) -> bool {
+        // #243 ungated-admission race tests (pinned/omitted-maximum lines):
+        // when armed, this one call is ineligible (simulating the pinned
+        // route being briefly disabled at the runner's dispatch-time
+        // planning, `Runner::plan_route_inner`), then every later call -
+        // including the engine's own admission check, moments later -
+        // sees the route available again, exactly like
+        // `accept_after_first_check` does for `validate_chat_request`.
+        if std::mem::take(&mut self.script.lock().unwrap().coarse_unavailable_once) {
+            return false;
+        }
         match self.id {
             "anthropic" => matches!(p, ApiProtocol::ChatCompletions | ApiProtocol::Messages),
             _ => matches!(
@@ -139,33 +194,17 @@ impl ProviderAdapter for Fake {
     /// a model-wide incompatibility), but this exact body is deterministically
     /// refused, exactly like Anthropic/Bedrock reject a strict function tool.
     fn validate_chat_request(&self, request: &ChatRequest) -> Result<(), InferenceError> {
-        if self.script.lock().unwrap().permissive {
+        let mut script = self.script.lock().unwrap();
+        if script.permissive {
             return Ok(());
         }
-        match request.messages[0].content.as_deref().unwrap_or_default() {
-            "strict-tool" => Err(InferenceError::Unsupported),
-            "bad-tool-args" => Err(InferenceError::InvalidRequest),
-            // #238 multi-route tests: every provider refuses, but not with
-            // the same kind (anthropic 501, openai 400) - so the upload's
-            // reported kind must come from every candidate, not just the
-            // one deployment planning happened to size the line against.
-            "mixed-reject" => Err(if self.id == "openai" {
-                InferenceError::InvalidRequest
-            } else {
-                InferenceError::Unsupported
-            }),
-            // #238 clamped-request test: only the line's own resolved output
-            // bound (the fixture's 50-token ceiling) satisfies this adapter -
-            // the raw client omission (`None`) must not.
-            "ceiling-sensitive" => {
-                if request.max_output_tokens == Some(50) {
-                    Ok(())
-                } else {
-                    Err(InferenceError::Unsupported)
-                }
-            }
-            _ => Ok(()),
+        let flip = std::mem::take(&mut script.accept_after_first_check);
+        drop(script);
+        let result = self.judge(request);
+        if flip {
+            self.script.lock().unwrap().permissive = true;
         }
+        result
     }
     async fn execute(
         &self,
@@ -1141,6 +1180,397 @@ async fn multi_route_unpinned_line_is_sized_and_runs_on_the_accepting_route(pool
     // disabled for both), so both lines ran there; anthropic ran neither.
     assert!(w.openai.executed().contains(&"strict-tool".to_owned()));
     assert_eq!(w.anthropic.executed(), Vec::<String>::new());
+    consistent(f).await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn scheduler_skips_a_rejecting_route_and_claims_the_accepting_one_with_both_enabled(
+    pool: PgPool,
+) {
+    // #243: the scheduler's own dispatch-time candidate filter
+    // (`jobs::runner::Runner::plan_route_inner`) must apply the same
+    // deterministic eligibility the engine runs before admission
+    // (`ProviderAdapter::validate_chat_request`, #228), not only the coarse
+    // capability check - otherwise it can claim and pin a route that
+    // deterministically rejects an unpinned (explicit-maximum) line while
+    // another authorized route would accept it, refusing a line an
+    // interactive request would succeed on.
+    //
+    // Unlike `multi_route_unpinned_line_is_sized_and_runs_on_the_accepting_route`
+    // (which disables the rejecting route before dispatch and so does not
+    // cover this), BOTH of `company/claude`'s routes stay enabled through
+    // dispatch here. Anthropic is given the higher (numerically lower)
+    // routing priority and refuses "strict-tool"; openai is given the lower
+    // priority but is made permissive, so it accepts the same body.
+    // Priority alone would make the scheduler claim and pin anthropic.
+    let w = world(pool, false, false, 1).await;
+    let f = &w.f;
+    let openai_route = second_claude_route(&w).await;
+    w.openai.script.lock().unwrap().permissive = true;
+    for (deployment, priority) in [(w.claude_deployment, 0), (openai_route, 10)] {
+        sqlx::query("INSERT INTO deployment_routing(deployment_id,priority) VALUES($1,$2)")
+            .bind(deployment)
+            .bind(priority)
+            .execute(&f.store.pool)
+            .await
+            .unwrap();
+    }
+    let file = w
+        .upload(
+            &f.principal,
+            &[chat_line("a", "company/claude", "strict-tool")],
+        )
+        .await;
+    let job = w
+        .create(f.principal, &file, BatchEndpoint::ChatCompletions, None)
+        .await
+        .unwrap();
+    assert_eq!(job.mode(), Some(BatchMode::Gateway));
+    // Both routes remain enabled all the way through dispatch.
+    let runner = Runner::new(w.jobs.clone());
+    assert!(runner.run_next().await.unwrap());
+    let job = w.reload(&job).await;
+    assert_eq!(job.state, "completed");
+    assert_eq!(
+        (job.request_completed, job.request_failed),
+        (Some(1), Some(0))
+    );
+    let out = w.read(f.principal.workspace_id, job.output_file_id).await;
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0]["response"]["status_code"], 200);
+    assert!(job.error_file_id.is_none());
+    // The line ran on the accepting route (openai), never on the rejecting
+    // one (anthropic), even though anthropic has the higher priority.
+    assert!(w.openai.executed().contains(&"strict-tool".to_owned()));
+    assert_eq!(w.anthropic.executed(), Vec::<String>::new());
+    // Exactly one line execution, on the accepting route.
+    let executions: Vec<Uuid> =
+        sqlx::query_scalar("SELECT deployment_id FROM inference_executions WHERE batch_job_id=$1")
+            .bind(job.id)
+            .fetch_all(&f.store.pool)
+            .await
+            .unwrap();
+    assert_eq!(executions, [openai_route]);
+    // The line's own `batch_lines` row was claimed on that accepting route
+    // (a scheduler route-capacity claim, not the ungated path with no
+    // route, #243): `deployment_id` is the accepting route itself, not
+    // merely inferred from `inference_executions`.
+    let line_deployment: Option<Uuid> =
+        sqlx::query_scalar("SELECT deployment_id FROM batch_lines WHERE job_id=$1 AND line_no=0")
+            .bind(job.id)
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+    assert_eq!(line_deployment, Some(openai_route));
+    // The rejecting route recorded no execution and no reservation of its
+    // own for this line (only the planning-time envelope reservation, keyed
+    // by `job.execution_id`, ever touched it).
+    let anthropic_line_reservations: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id WHERE e.batch_job_id=$1 AND r.deployment_id=$2",
+    )
+    .bind(job.id)
+    .bind(w.claude_deployment)
+    .fetch_one(&f.store.pool)
+    .await
+    .unwrap();
+    assert_eq!(anthropic_line_reservations, 0);
+    consistent(f).await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn ungated_dispatch_never_admits_when_a_route_starts_accepting_before_execution(
+    pool: PgPool,
+) {
+    // #243 review finding: an unpinned line both authorized candidates
+    // deterministically reject at dispatch-time planning
+    // (`Runner::plan_route_inner`) runs ungated - the runner claims no
+    // route capacity for it and expects only the engine's own refusal. That
+    // planning decision is cached (and the line claimed into `batch_lines`)
+    // well before the line actually executes. If a candidate starts
+    // accepting the exact body in that window - openai here, right after
+    // the planning check that found it still rejecting - the engine's own
+    // admission would otherwise select and admit it, executing the line on
+    // a route the scheduler never claimed capacity on
+    // (`batch_lines.deployment_id` stays NULL): a bypass of route windows,
+    // live-load gates, fair-share ordering and cross-runner route
+    // concurrency accounting. The fix (`LineRepository::admit`/
+    // `admit_embeddings`/`admit_workload`) must refuse that admission: an
+    // ungated line may only be refused, never admitted, no matter what a
+    // candidate decides after dispatch.
+    //
+    // A single-line "every candidate rejects" upload is refused whole at
+    // creation (no batch at all), so this is a mixed upload: an ordinary
+    // line keeps the batch real and dispatching, and the raced line is
+    // physically first so its planning is the first `validate_chat_request`
+    // call after the flip is armed (`accept_after_first_check`), not the
+    // ordinary line's.
+    let w = world(pool, false, false, 1).await;
+    let f = &w.f;
+    second_claude_route(&w).await;
+    let file = w
+        .upload(
+            &f.principal,
+            &[
+                chat_line("race", "company/claude", "strict-tool"),
+                chat_line("safe", "company/claude", "fine"),
+            ],
+        )
+        .await;
+    let job = w
+        .create(f.principal, &file, BatchEndpoint::ChatCompletions, None)
+        .await
+        .unwrap();
+    assert_eq!(job.mode(), Some(BatchMode::Gateway));
+    assert_eq!(job.request_total, Some(2));
+    // Armed only after creation: creation's own exclusion check
+    // (`every_candidate_route_refuses`) must see both routes reject
+    // "strict-tool" exactly as they will at the runner's own planning,
+    // not an openai already flipped permissive.
+    w.openai.script.lock().unwrap().accept_after_first_check = true;
+    let runner = Runner::new(w.jobs.clone());
+    assert!(runner.run_next().await.unwrap());
+    let job = w.reload(&job).await;
+    assert_eq!(job.state, "completed");
+    assert_eq!(
+        (job.request_completed, job.request_failed),
+        (Some(1), Some(1))
+    );
+    let out = w.read(f.principal.workspace_id, job.output_file_id).await;
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0]["custom_id"], "safe");
+    assert_eq!(out[0]["response"]["status_code"], 200);
+    let errs = w.read(f.principal.workspace_id, job.error_file_id).await;
+    assert_eq!(errs.len(), 1);
+    assert_eq!(errs[0]["custom_id"], "race");
+    // Refused, not admitted: the raced line never reached either provider,
+    // even though openai would have accepted it by the time the engine
+    // checked.
+    assert!(!w.openai.executed().contains(&"strict-tool".to_owned()));
+    assert!(!w.anthropic.executed().contains(&"strict-tool".to_owned()));
+    // Never gated: no route capacity was ever claimed for the raced line.
+    let race_deployment: Option<Uuid> =
+        sqlx::query_scalar("SELECT deployment_id FROM batch_lines WHERE job_id=$1 AND line_no=0")
+            .bind(job.id)
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+    assert_eq!(race_deployment, None);
+    // Never admitted either: only the ordinary line's attempt exists (an
+    // ungated admission would have durably recorded a second one, on
+    // openai, with no claim behind it).
+    let executions: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM inference_executions WHERE batch_job_id=$1")
+            .bind(job.id)
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+    assert_eq!(executions, 1);
+    consistent(f).await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn omitted_maximum_ungated_dispatch_never_admits_when_its_pinned_route_recovers_before_execution(
+    pool: PgPool,
+) {
+    // #243 review finding 1: `LineRepository::gated` used to conflate two
+    // different facts stored in the same `pins` map - an omitted-maximum
+    // line's creation-time routing/pricing plan (`jobs/plan.rs`, pinned to
+    // one deployment at upload) and THIS attempt's scheduler route-capacity
+    // claim. `LineRun::execute` calls `self.repository.pin(..)` whenever a
+    // plan exists, even when the scheduler never claimed a route (dispatch
+    // found the pinned deployment ineligible and spawned the line
+    // ungated, `pin: Option<Pin>` is `None`). The old `gated()` - keyed off
+    // presence in `pins` - then treated that ungated attempt as pinned, so
+    // if the pinned deployment became eligible again before the engine's
+    // own admission check, it admitted and ran on a route the scheduler
+    // never claimed capacity on: a bypass of route windows, live-load
+    // gates, fair share and cross-runner route concurrency accounting.
+    //
+    // Mirrors `ungated_dispatch_never_admits_when_a_route_starts_accepting_before_execution`
+    // (an explicit-maximum/unpinned line), but for an OMITTED-maximum
+    // (pinned) line: its one candidate (`w.openai`, the only deployment of
+    // `company/smart`) is made ineligible for exactly the runner's
+    // dispatch-time planning call (`Runner::plan_route_inner`,
+    // `coarse_unavailable_once`), armed only after creation so the
+    // upload's own resolution (`Jobs::resolve`/`Jobs::select`) sees it
+    // eligible, then becomes eligible again for every later call,
+    // including the engine's own admission check.
+    let w = world(pool, false, false, 1).await;
+    let f = &w.f;
+    let mut line = chat_line("race", "company/smart", "normal");
+    line["body"]
+        .as_object_mut()
+        .unwrap()
+        .remove("max_completion_tokens");
+    let file = w.upload(&f.principal, &[line]).await;
+    let job = w
+        .create(f.principal, &file, BatchEndpoint::ChatCompletions, None)
+        .await
+        .unwrap();
+    assert_eq!(job.mode(), Some(BatchMode::Gateway));
+    w.openai.script.lock().unwrap().coarse_unavailable_once = true;
+    let runner = Runner::new(w.jobs.clone());
+    assert!(runner.run_next().await.unwrap());
+    let job = w.reload(&job).await;
+    assert_eq!(job.state, "completed");
+    assert_eq!(
+        (job.request_completed, job.request_failed),
+        (Some(0), Some(1))
+    );
+    assert!(job.output_file_id.is_none());
+    let errs = w.read(f.principal.workspace_id, job.error_file_id).await;
+    assert_eq!(errs.len(), 1);
+    assert_eq!(errs[0]["custom_id"], "race");
+    // The line never reached the provider: refused, not admitted, even
+    // though its pinned route would have accepted it by the time the
+    // engine checked.
+    assert_eq!(w.openai.executed(), Vec::<String>::new());
+    // Never gated: the scheduler's own claim-time INSERT (which would set
+    // `deployment_id`) never ran for this line.
+    let race_deployment: Option<Uuid> =
+        sqlx::query_scalar("SELECT deployment_id FROM batch_lines WHERE job_id=$1 AND line_no=0")
+            .bind(job.id)
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+    assert_eq!(race_deployment, None);
+    // Never admitted either: no execution or reservation exists for it.
+    let executions: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM inference_executions WHERE batch_job_id=$1")
+            .bind(job.id)
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+    assert_eq!(executions, 0);
+    let reservations: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id WHERE e.batch_job_id=$1",
+    )
+    .bind(job.id)
+    .fetch_one(&f.store.pool)
+    .await
+    .unwrap();
+    assert_eq!(reservations, 0);
+    consistent(f).await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn omitted_maximum_line_on_an_available_pinned_route_is_claimed_and_admitted_normally(
+    pool: PgPool,
+) {
+    // #243 review finding 1 POSITIVE CONTROL, alongside the ungated-recovery
+    // test above: an omitted-maximum line whose pinned route stays
+    // eligible all the way through dispatch must still be claimed by the
+    // scheduler (gated) and admitted normally, at its creation-time pinned
+    // price - the fix (tracking the scheduler's claim separately from the
+    // creation-time plan) must not turn every omitted-maximum line
+    // ungated.
+    let w = world(pool, false, false, 1).await;
+    let f = &w.f;
+    let mut line = chat_line("a", "company/smart", "normal");
+    line["body"]
+        .as_object_mut()
+        .unwrap()
+        .remove("max_completion_tokens");
+    let file = w.upload(&f.principal, &[line]).await;
+    let job = w
+        .create(f.principal, &file, BatchEndpoint::ChatCompletions, None)
+        .await
+        .unwrap();
+    assert_eq!(job.mode(), Some(BatchMode::Gateway));
+    // The price pinned at upload (a gateway-run batch's own envelope
+    // reservation pins no price - it is never settled from usage - so the
+    // line's own pin is read from the private work copy, before the
+    // runner's own run discards that file at settlement).
+    let work = w.read(f.principal.workspace_id, job.work_file_id).await;
+    let old_price: Uuid = serde_json::from_value(work[0]["_omg_plan"]["price"].clone()).unwrap();
+    let runner = Runner::new(w.jobs.clone());
+    assert!(runner.run_next().await.unwrap());
+    let job = w.reload(&job).await;
+    assert_eq!(job.state, "completed");
+    assert_eq!(
+        (job.request_completed, job.request_failed),
+        (Some(1), Some(0))
+    );
+    let out = w.read(f.principal.workspace_id, job.output_file_id).await;
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0]["response"]["status_code"], 200);
+    assert!(job.error_file_id.is_none());
+    assert!(w.openai.executed().contains(&"normal".to_owned()));
+    // Claimed: the scheduler's own claim-time INSERT set `deployment_id`.
+    let deployment: Option<Uuid> =
+        sqlx::query_scalar("SELECT deployment_id FROM batch_lines WHERE job_id=$1 AND line_no=0")
+            .bind(job.id)
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+    assert_eq!(deployment, Some(f.deployment));
+    // Admitted at the pinned price computed at upload, not re-priced.
+    let price: Uuid = sqlx::query_scalar(
+        "SELECT r.price_id FROM governance_reservations r JOIN inference_executions e ON e.id=r.execution_id WHERE e.batch_job_id=$1",
+    )
+    .bind(job.id)
+    .fetch_one(&f.store.pool)
+    .await
+    .unwrap();
+    assert_eq!(price, old_price);
+    consistent(f).await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn ungated_admission_refusal_does_not_rate_limit_batch_dispatch(pool: PgPool) {
+    // #243 review finding 2: `LineRepository::refuse_ungated` returns
+    // `InferenceError::Busy`, and `LineRun::run` used to treat every Busy
+    // as upstream rate limiting (`RunState::rate_limited`), backing off the
+    // WHOLE batch's dispatch (>= 1 s, doubling to 60 s) even though an
+    // ungated refusal is internal and never reached an upstream. The fix
+    // only calls `rate_limited()` when the attempt was claimed/gated
+    // (`pin.is_some()` at the `LineRun::run` call site), since an ungated
+    // attempt can no longer reach a provider.
+    //
+    // Reuses the same #243 ungated-admission race as
+    // `ungated_dispatch_never_admits_when_a_route_starts_accepting_before_execution`
+    // (the "race" line is refused with Busy at admission), immediately
+    // followed in the SAME batch by an ordinary "safe" line on the same
+    // model, with only one worker permit (`concurrency: 1`): if the first
+    // line's refusal incorrectly paused dispatch, the second line waits
+    // out that pause before it can claim its own permit, adding at least
+    // the backoff's first step (1 s) to this call's wall time.
+    let w = world(pool, false, false, 1).await;
+    let f = &w.f;
+    second_claude_route(&w).await;
+    let file = w
+        .upload(
+            &f.principal,
+            &[
+                chat_line("race", "company/claude", "strict-tool"),
+                chat_line("safe", "company/claude", "fine"),
+            ],
+        )
+        .await;
+    let job = w
+        .create(f.principal, &file, BatchEndpoint::ChatCompletions, None)
+        .await
+        .unwrap();
+    assert_eq!(job.mode(), Some(BatchMode::Gateway));
+    w.openai.script.lock().unwrap().accept_after_first_check = true;
+    let runner = Runner::new(w.jobs.clone());
+    assert!(runner.run_next().await.unwrap());
+    let job = w.reload(&job).await;
+    assert_eq!(job.state, "completed");
+    assert_eq!(
+        (job.request_completed, job.request_failed),
+        (Some(1), Some(1))
+    );
+    // No artificial backoff: the batch's provider-429 pause never engages
+    // for a refusal that never reached a provider. Counted directly (not by
+    // wall-clock time, which made this flaky on slower CI runners).
+    assert_eq!(
+        w.jobs
+            .rate_limit_pauses
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "ungated refusal paused batch dispatch"
+    );
     consistent(f).await;
 }
 

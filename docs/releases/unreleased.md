@@ -2,6 +2,12 @@
 
 Notes for changes on `main` after [v0.7.2](v0.7.2.md). They become the next release's notes.
 
+## Vendored upstream-base advisory coverage (#214)
+
+The existing read-only cargo-deny job now runs a separately labelled advisory-only check for explicitly registered vendored dependencies. It validates root workspace metadata registrations and the complete graph, then projects only the reviewed crates.io base name/version/source identity and graph references in temporary scanner input. Unknown path dependencies, stale or mismatched registrations, non-canonical/escaping paths and malformed/incomplete graphs fail closed. There are no vendored dependencies today; the check passes and says so.
+
+The normal `cargo deny --all-features check` is unchanged. No dependency is vendored here; `Cargo.lock`, builds, license/ban/source checks, SBOMs and provenance are unchanged. This is upstream-base advisory coverage, not certification of patched code. Offline tests with the real pinned scanner and a synthetic local advisory database prove the path-package miss and projected detection, plus positive and refusal controls. See [verification](../verification.md#supply-chain).
+
 ## Added
 
 - **Logs Refresh, and a Sessions-to-Requests hint (#232).** Workspace and Admin Logs gained an explicit **Refresh** action (next to Columns/density) that re-fetches the current tab's rows and its summary tiles for the current filters; Logs never polled and still doesn't. The empty **Sessions** tab keeps its explanation of how sessions form and now also says that requests without session metadata are listed under **Requests**, with a button that switches to that tab keeping the same filters. No backend change: #232's diagnosis found the data correct; only the Logs page didn't refresh itself, and an empty Sessions tab read like "no logs." Admin Logs still excludes personal workspaces; no new data is exposed.
@@ -19,13 +25,29 @@ Creating a gateway-run batch (`POST /v1/batches`) now runs every chat line throu
 
 A batch whose lines are all such rejections is refused per line at creation (no batch, no reservation, nothing dispatched); a mixed batch reserves only for its valid lines. An excluded line is still copied into the batch and still dispatches; it is refused per line with no execution or reservation of its own. Unknown-hold retention and envelope release on close are unchanged. No schema or grant changes.
 
-## Gateway-run batch dispatch now validates an omitted-maximum line against the same bound planning did (#245)
+## Egress no longer over-refuses the IPv6 documentation range's neighbors (#244)
 
-For an omitted-maximum (pinned) batch line, planning (`jobs/plan.rs`) already validated the line's own adapter with its resolved output bound - the same clamped value `encode_native_line` uses - not the client's raw omission (#238). At dispatch, though, the engine's pre-admission check (`Engine::execute_protocol`'s `validate_chat_request`, #228) still saw the unmodified line, with the maximum still omitted, while the real adapter `execute` call only received the resolved maximum afterward, once admission computed it. No shipped adapter's validation depends on the maximum today, so no request was ever wrongly accepted or refused by this gap, but a future ceiling-sensitive adapter could pass planning and still fail dispatch (or the reverse).
+The outbound address policy (`egress.rs`) classified the IPv6 documentation
+range `3fff::/20` (RFC 9637) with `(s[0] & 0xfff0) == 0x3ff0`. That mask only
+checks the top 12 bits of the first hextet, so it matched the much wider
+`3ff0::/12`: every address whose first hextet was `0x3ff0`-`0x3fff` was
+refused as "documentation", not only the `3fff::/20` IANA and RFC 9637
+actually reserve.
 
-The runner now copies the line's plan-time resolved output bound onto the still-omitted request before the engine ever sees it (`jobs::runner::LineRun::execute`), so planning, the engine's pre-admission check and the real upstream attempt all judge the same body. This only affects batch lines already pinned to one deployment and price at plan time; admission still independently resolves the same bound from that same pinned price, so the admitted cap is unchanged (#215: the admission-pinned cap still equals the upstream cap).
+**Egress now allows** connections to `3ff0::/12` addresses outside the exact
+`3fff::/20` block (for example `3ff0::1`, `3ffe:ffff::1` or `3ff1:dead::1`):
+they are ordinary, unallocated global unicast space, like the rest of
+`2000::/3`, not documentation. `3fff::/20` itself (for example `3fff::1`) is
+still refused, as it always was.
 
-Interactive requests are unchanged. An interactive request's candidate deployment, and therefore its price, is not chosen until admission; pre-filling its pre-admission check with a resolved maximum would require reading a price before a route is picked, which would violate #228's "no prices, no network" contract for that check. An interactive omitted maximum keeps reaching `validate_chat_request` as the raw `None` the client sent, exactly as before. No schema changes beyond an internal, backward-compatible field in the batch line's own private plan metadata (never client-visible); no grant changes.
+This is an availability-only fix: before #244 the gateway refused outbound
+connections to addresses nothing allocates and no installation could
+plausibly need to reach; now it classifies them like the rest of the public
+IPv6 space. Nothing was ever wrongly *allowed* by the bug, and no other
+classification, local-upstream approval decision, or pending-refusal warning
+changes: `providers/local/endpoints.rs`'s own accept/refuse rule already maps
+its `Public` and `Documentation` categories to the same decision, so that
+module's behavior for these addresses is unaffected.
 
 ## Upgrade note: local-upstream approvals in special-use ranges will be refused next minor release (#203)
 
@@ -65,3 +87,21 @@ no warning.
 
 No other behavior changes: every address this release accepts or refuses
 today keeps doing so.
+
+## The batch scheduler no longer claims a route that would deterministically reject the line (#243)
+
+The runner's dispatch-time candidate filter for an unpinned (explicit-maximum) batch line (`jobs::runner::Runner::plan_route_inner`) previously checked only the coarse capability bool before choosing and claiming a route. With several routes on one model, it could claim and pin a route that deterministically rejects the line's exact body (`ProviderAdapter::validate_chat_request`, #228), even though another authorized, protocol-capable route for the same model would accept it - refusing the line (400/501, or 503 `model_temporarily_unavailable` if every refused route happens to be in its circuit-breaker cooldown at that moment) when an interactive request would have succeeded elsewhere.
+
+- Before choosing a route, the runner now applies the same deterministic eligibility `Engine::execute_protocol` runs before admission, once per adapter, and chooses only among routes that pass. If every candidate refuses, nothing is claimed; the line proceeds to the engine's own unpinned refusal path and is reported with the engine's own classification - 400 invalid request or 501 unsupported capability, or 503 route-cooling-down if every refused route is currently cooling down.
+- An omitted-maximum (pinned) line is unaffected: its candidate list is already narrowed to its one pinned route, and it stays judged on that route alone, exactly as before (#238).
+- **A claimed-nothing ("ungated") line may now only be refused, never admitted.** "Ungated" means no scheduler route-capacity claim for this attempt - a creation-time plan (an omitted-maximum line's price/deployment pin from upload, `jobs::lines::LinePlan`) does not by itself count: the scheduler may still never have claimed capacity for that particular dispatch. When the runner claims no route - every candidate deterministically rejected the line above, or (pre-existing, since before #238) none existed at all - the line's `batch_lines` row records no `deployment_id` and it dispatches expecting only the engine's own refusal. That dispatch-time decision is read, not persisted, and is cached for up to the replan interval (10s): the live catalog or an adapter's deterministic eligibility can change before the line actually executes. The repository the runner's engine instance uses (`jobs::runner::LineRepository`) tracks this attempt's scheduler claim separately from its routing/pricing plan (the plan still decides price and route when the attempt *is* admitted, unchanged), and refuses admission outright for any attempt that was never claimed - even an omitted-maximum line whose pinned route was briefly ineligible at dispatch and recovered before admission, and even if a candidate decides to accept the request by the time admission is reached - instead of letting the engine admit and execute it on a route the scheduler never claimed capacity for, which would bypass route windows, live-load gates, fair-share ordering and cross-runner route-concurrency accounting. The refusal reuses the existing, already-retryable `rate_limit_error`/`Busy` denial (no new error path); a batch with its own explicit retry policy (`omg_retries`) gets its own bounded additional attempts, each independently and correctly refused the same way while still ungated. This closes the same gap for both the new deterministic-rejection case above and the pre-existing zero-candidate case from before #238 - they share this one dispatch and admission path. Because that refusal never reached a provider, it does not count toward the batch's own upstream-429 backoff (`RunState::rate_limited`): only a claimed attempt's `Busy` does, so an ungated refusal cannot stall the rest of the batch's dispatch waiting out a backoff it never earned.
+- A transient `Storage` or `Timeout` error while planning a line's route (not a genuine no-route or configuration refusal) is treated like a cooling-down route: the line waits and is planned again rather than dispatching ungated into the refusal above. Because the batch's own completion window (24h by default) is the only other bound on that wait, a *persistent* Storage/Timeout condition - not a transient blip - now has a line wait up to that whole window before it is reported `expired`, instead of failing fast the way it did before this change.
+- Live admission, lock order, scheduler fairness/turn-taking and routing-health observations are unchanged; this only narrows which route dispatch may claim and blocks admission with no claim behind it. No migrations or grant changes.
+
+## Gateway-run batch dispatch now validates an omitted-maximum line against the same bound planning did (#245)
+
+For an omitted-maximum (pinned) batch line, planning (`jobs/plan.rs`) already validated the line's own adapter with its resolved output bound - the same clamped value `encode_native_line` uses - not the client's raw omission (#238). At dispatch, though, the engine's pre-admission check (`Engine::execute_protocol`'s `validate_chat_request`, #228) still saw the unmodified line, with the maximum still omitted, while the real adapter `execute` call only received the resolved maximum afterward, once admission computed it. No shipped adapter's validation depends on the maximum today, so no request was ever wrongly accepted or refused by this gap, but a future ceiling-sensitive adapter could pass planning and still fail dispatch (or the reverse).
+
+The runner now copies the line's plan-time resolved output bound onto the still-omitted request before the engine ever sees it (`jobs::runner::LineRun::execute`), so planning, the engine's pre-admission check and the real upstream attempt all judge the same body. This only affects batch lines already pinned to one deployment and price at plan time; admission still independently resolves the same bound from that same pinned price, so the admitted cap is unchanged (#215: the admission-pinned cap still equals the upstream cap).
+
+Interactive requests are unchanged. An interactive request's candidate deployment, and therefore its price, is not chosen until admission; pre-filling its pre-admission check with a resolved maximum would require reading a price before a route is picked, which would violate #228's "no prices, no network" contract for that check. An interactive omitted maximum keeps reaching `validate_chat_request` as the raw `None` the client sent, exactly as before. No schema changes beyond an internal, backward-compatible field in the batch line's own private plan metadata (never client-visible); no grant changes.
