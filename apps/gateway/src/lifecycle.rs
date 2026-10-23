@@ -68,6 +68,18 @@ pub(crate) async fn cleanup_user(
     .bind(user)
     .execute(&mut **tx)
     .await?;
+    // Admin API tokens (#37 PR1): the owner-invalidation trigger already
+    // revoked every token this user owns the instant `platform_role_grants`
+    // below loses their last `admin` row (or, independently, the moment
+    // `users.cleaned_at` below is set). The address is kept until then (it
+    // helps investigate misuse of a high-risk credential), but a cleaned-up
+    // account is gone for good, so scrub it here like the rest of this
+    // function's address/identity copies (docs/identity.md's retention
+    // note next to the sessions statement).
+    sqlx::query("UPDATE admin_api_tokens SET last_used_address=NULL WHERE owner_user_id=$1")
+        .bind(user)
+        .execute(&mut **tx)
+        .await?;
     sqlx::query(
         "UPDATE platform_role_grants SET revoked_at=coalesce(revoked_at,now()) WHERE user_id=$1",
     )
@@ -136,7 +148,7 @@ pub async fn cleanup_inactive_accounts_fenced(
 /// never touched. `scope=None` reconciles every mapping of the issuer (a signed sign-in
 /// claim, plus mappings that no longer exist). `scope=Some(values)` reconciles only
 /// mappings whose group value is in `values` (SCIM-managed groups).
-async fn apply_group_grants(
+pub(crate) async fn apply_group_grants(
     tx: &mut Transaction<'_, Postgres>,
     user: Uuid,
     issuer: &str,

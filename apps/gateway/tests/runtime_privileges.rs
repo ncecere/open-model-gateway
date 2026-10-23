@@ -49,6 +49,7 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         "usage_rollup_dirty",
         "archived_partitions",
         "admission_lock_waits",
+        "admin_api_tokens",
     ] {
         assert_eq!(
             sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
@@ -83,6 +84,7 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
     audit_export_runs_as_runtime(&pool).await;
     legal_holds_run_as_runtime(&pool).await;
     dashboard_sessions_run_as_runtime(&pool).await;
+    admin_tokens_run_as_runtime(&pool).await;
     // Last: its unknown batch hold would change the installation-wide totals above.
     async_jobs_run_as_runtime(&pool).await;
     sqlx::query("SELECT pg_advisory_unlock(72419505)")
@@ -1174,6 +1176,192 @@ async fn budget_totals_maintained_as_runtime(pool: &PgPool) {
     .await
     .unwrap();
     assert_eq!(held, ["500", "500", "500", "500"]);
+    runtime.close().await;
+}
+
+/// #37 PR1: create, revoke (idempotent), authenticate-for-authorization and
+/// the throttled last-use update, as the runtime role; plus the
+/// owner-invalidation triggers (role loss) firing for a runtime-performed
+/// write, and that no role can rewrite identity/digest/scopes/expiry/
+/// allowlist or remove a row.
+async fn admin_tokens_run_as_runtime(pool: &PgPool) {
+    use open_model_gateway::governance::locks::{self, Scope};
+    let runtime = runtime_pool(pool).await;
+    let store = open_model_gateway::store::Store::new(runtime.clone());
+    let owner = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,email) VALUES($1,$2)")
+        .bind(owner)
+        .bind(format!("admin-tokens-{owner}@example.test"))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO platform_role_grants(user_id,role,source) VALUES($1,'admin','manual')",
+    )
+    .bind(owner)
+    .execute(pool)
+    .await
+    .unwrap();
+    // PR2's documented contract: the handler takes the owner's scope lock
+    // exclusive up front, in its own transaction, then creates on it.
+    let mut tx = runtime.begin().await.unwrap();
+    locks::exclusive(&mut tx, [Scope::User(owner)])
+        .await
+        .unwrap();
+    let created = open_model_gateway::admin_tokens::create_admin_token(
+        &mut tx,
+        owner,
+        "Runtime probe",
+        &["platform:read".to_string()],
+        30,
+        None,
+    )
+    .await
+    .expect("runtime creates an admin token");
+    tx.commit().await.unwrap();
+    let found = store
+        .authenticate_admin_token(&created.token)
+        .await
+        .expect("runtime authenticates an admin token")
+        .expect("the token is live");
+    assert_eq!(found.owner_user_id, owner);
+    store
+        .touch_admin_token_use(created.id, Some("203.0.113.9".parse().unwrap()))
+        .await
+        .expect("runtime records successful use");
+    let (touched, address): (bool, String) = sqlx::query_as(
+        "SELECT last_used_at>now()-interval '1 minute',host(last_used_address) FROM admin_api_tokens WHERE id=$1",
+    )
+    .bind(created.id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert!(touched);
+    assert_eq!(address, "203.0.113.9");
+    store
+        .touch_admin_token_use(created.id, Some("198.51.100.1".parse().unwrap()))
+        .await
+        .unwrap();
+    let address: String =
+        sqlx::query_scalar("SELECT host(last_used_address) FROM admin_api_tokens WHERE id=$1")
+            .bind(created.id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(address, "203.0.113.9", "last-use throttle did not hold");
+    let mut tx = runtime.begin().await.unwrap();
+    assert!(
+        open_model_gateway::admin_tokens::revoke_admin_token(&mut tx, created.id)
+            .await
+            .unwrap(),
+        "runtime revokes a token"
+    );
+    tx.commit().await.unwrap();
+    let mut tx = runtime.begin().await.unwrap();
+    assert!(
+        open_model_gateway::admin_tokens::revoke_admin_token(&mut tx, created.id)
+            .await
+            .unwrap(),
+        "runtime revokes an already-revoked token idempotently"
+    );
+    tx.commit().await.unwrap();
+    assert!(
+        store
+            .authenticate_admin_token(&created.token)
+            .await
+            .unwrap()
+            .is_none(),
+        "a revoked token never authenticates"
+    );
+    for statement in [
+        "UPDATE admin_api_tokens SET revoked_at=NULL WHERE id=$1",
+        "UPDATE admin_api_tokens SET name='renamed' WHERE id=$1",
+        "UPDATE admin_api_tokens SET scopes=ARRAY['settings:write'] WHERE id=$1",
+        "UPDATE admin_api_tokens SET expires_at=now()+interval '1 day' WHERE id=$1",
+        "UPDATE admin_api_tokens SET owner_user_id=gen_random_uuid() WHERE id=$1",
+        "DELETE FROM admin_api_tokens WHERE id=$1",
+    ] {
+        let denied = sqlx::query(statement)
+            .bind(created.id)
+            .execute(&runtime)
+            .await
+            .unwrap_err();
+        let text = denied.to_string();
+        assert!(
+            text.contains("permission denied")
+                || text.contains("immutable")
+                || text.contains("final"),
+            "{statement}: {denied}"
+        );
+    }
+    assert!(
+        sqlx::query("TRUNCATE admin_api_tokens")
+            .execute(&runtime)
+            .await
+            .is_err()
+    );
+    // Adversarial re-review of #37 PR1, issue 1 (MEDIUM, BLOCKING): the
+    // runtime had a whole-row INSERT and the Rust insert supplied
+    // `created_at`, so the 1-90 day CHECK was measured against a
+    // caller-chosen `created_at` -- `now()+10 years` with `expires_at`
+    // only 90 days past it passed the CHECK as written and left the
+    // token with roughly 3,700 days left on `authenticate_admin_token`'s
+    // own predicate. The runtime role's INSERT grant now excludes
+    // created_at (and revoked_at/last_used_at/last_used_address)
+    // entirely, so the identical attack is refused at the column-grant
+    // level, before migration 0051's creation guard (which forces
+    // created_at to now() regardless) is ever reached.
+    {
+        let mut tx = runtime.begin().await.unwrap();
+        locks::exclusive(&mut tx, [Scope::User(owner)])
+            .await
+            .unwrap();
+        let denied = sqlx::query(
+            "INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,created_at,expires_at)
+             VALUES(gen_random_uuid(),$1,'attack',decode(repeat('c1',32),'hex'),ARRAY['platform:read'],now()+interval '10 years',now()+interval '10 years'+interval '90 days')",
+        )
+        .bind(owner)
+        .execute(&mut *tx)
+        .await
+        .unwrap_err();
+        assert!(
+            denied.to_string().contains("permission denied"),
+            "runtime must not be able to INSERT a forged created_at: {denied}"
+        );
+        let _ = tx.rollback().await;
+    }
+    let mut tx = runtime.begin().await.unwrap();
+    locks::exclusive(&mut tx, [Scope::User(owner)])
+        .await
+        .unwrap();
+    let second = open_model_gateway::admin_tokens::create_admin_token(
+        &mut tx,
+        owner,
+        "Second",
+        &["platform:read".to_string()],
+        30,
+        None,
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    sqlx::query(
+        "UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND role='admin'",
+    )
+    .bind(owner)
+    .execute(&runtime)
+    .await
+    .expect("runtime revokes a platform role grant");
+    let revoked: bool =
+        sqlx::query_scalar("SELECT revoked_at IS NOT NULL FROM admin_api_tokens WHERE id=$1")
+            .bind(second.id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert!(
+        revoked,
+        "the role-loss owner-invalidation trigger did not fire for a runtime-performed revocation"
+    );
     runtime.close().await;
 }
 

@@ -706,7 +706,7 @@ class DisposableDatabaseTests(unittest.TestCase):
         # #146: a restore brings back keys, grants, sessions and invitations
         # revoked, and users, keys, service accounts and workspaces disabled,
         # after the backup. Re-apply them from the old database.
-        revocable = ["api_keys", "workspace_membership_grants", "platform_role_grants", "workspace_invitations"]
+        revocable = ["api_keys", "workspace_membership_grants", "platform_role_grants", "workspace_invitations", "admin_api_tokens"]
         schema = ["ALTER TABLE installation ADD COLUMN id uuid NOT NULL DEFAULT '11111111-1111-4111-8111-111111111111';",
                   "CREATE TABLE browser_sessions(token_hash bytea PRIMARY KEY, revoked_at timestamptz);",
                   "INSERT INTO browser_sessions SELECT sha256(g::text::bytea), NULL FROM generate_series(1,3) g;",
