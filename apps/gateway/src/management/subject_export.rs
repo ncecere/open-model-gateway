@@ -250,11 +250,7 @@ async fn platform(
         .map_err(|_| busy())?
 }
 
-async fn export_platform(
-    s: &Store,
-    u: &impl Actor,
-    user: Uuid,
-) -> Result<Response, ApiError> {
+async fn export_platform(s: &Store, u: &impl Actor, user: Uuid) -> Result<Response, ApiError> {
     record(s, u, "user.exported", user).await?;
     let mut tx = s.snapshot().await?;
     sqlx::query(STATEMENT_TIMEOUT).execute(&mut *tx).await?;

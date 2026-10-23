@@ -71,10 +71,7 @@ pub(super) async fn write_tx<'a>(
     resources::platform_write(&mut tx, u.user_id()).await?;
     Ok(tx)
 }
-async fn read_tx<'a>(
-    s: &'a Store,
-    u: &impl Actor,
-) -> Result<Transaction<'a, Postgres>, ApiError> {
+async fn read_tx<'a>(s: &'a Store, u: &impl Actor) -> Result<Transaction<'a, Postgres>, ApiError> {
     let mut tx = resources::installation_tx(s).await?;
     resources::platform_read(&mut tx, u.user_id()).await?;
     Ok(tx)
@@ -277,7 +274,10 @@ async fn load_privacy(
         .fetch_one(&mut **tx)
         .await?)
 }
-async fn privacy(State(s): State<Store>, Extension(u): Extension<ManagementPrincipal>) -> ApiResult {
+async fn privacy(
+    State(s): State<Store>,
+    Extension(u): Extension<ManagementPrincipal>,
+) -> ApiResult {
     let mut tx = read_tx(&s, &u).await?;
     let (policy, retention, updated) = load_privacy(&mut tx).await?;
     tx.commit().await?;

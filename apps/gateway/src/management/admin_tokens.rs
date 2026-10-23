@@ -18,13 +18,12 @@ async fn admin_tx<'a>(
 }
 
 pub(super) fn routes() -> Router<Store> {
-    Router::new().route(
-        "/api/v1/platform/admin-tokens",
-        get(list).post(create),
-    ).route(
-        "/api/v1/platform/admin-tokens/{token}",
-        axum::routing::delete(revoke),
-    )
+    Router::new()
+        .route("/api/v1/platform/admin-tokens", get(list).post(create))
+        .route(
+            "/api/v1/platform/admin-tokens/{token}",
+            axum::routing::delete(revoke),
+        )
 }
 
 const LIST_SQL: &str = "SELECT jsonb_build_object(\

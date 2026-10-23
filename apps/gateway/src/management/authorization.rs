@@ -164,8 +164,14 @@ pub(super) const TOKEN_READY_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/v1/platform/legal-holds"),
     ("POST", "/api/v1/platform/legal-holds"),
     ("POST", "/api/v1/platform/legal-holds/{hold}/release"),
-    ("PUT", "/api/v1/platform/deployments/{deployment}/batch-scheduling"),
-    ("GET", "/api/v1/platform/deployments/{deployment}/batch-scheduling"),
+    (
+        "PUT",
+        "/api/v1/platform/deployments/{deployment}/batch-scheduling",
+    ),
+    (
+        "GET",
+        "/api/v1/platform/deployments/{deployment}/batch-scheduling",
+    ),
     ("GET", "/api/v1/platform/installation/policy"),
     ("PUT", "/api/v1/platform/installation/policy"),
     ("GET", "/api/v1/platform/workspace-types/{kind}/policy"),
@@ -178,11 +184,17 @@ pub(super) const TOKEN_READY_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/v1/workspaces/{ws}/cost-summary"),
     ("GET", "/api/v1/workspaces/{ws}/costs"),
     ("GET", "/api/v1/workspaces/{ws}/usage-export"),
-    ("POST", "/api/v1/workspaces/{ws}/costs/{execution}/reconcile"),
+    (
+        "POST",
+        "/api/v1/workspaces/{ws}/costs/{execution}/reconcile",
+    ),
     ("GET", "/api/v1/platform/cost-report"),
     ("GET", "/api/v1/platform/deployments/{deployment}/prices"),
     ("POST", "/api/v1/platform/deployments/{deployment}/prices"),
-    ("GET", "/api/v1/platform/deployments/{deployment}/price-suggestion"),
+    (
+        "GET",
+        "/api/v1/platform/deployments/{deployment}/price-suggestion",
+    ),
     ("GET", "/api/v1/platform/models/{model}/routing"),
     ("PUT", "/api/v1/platform/models/{model}/routing"),
     ("GET", "/api/v1/platform/deployments/{deployment}/routing"),
@@ -315,13 +327,17 @@ async fn handle_admin_token(
     let mut allowed = false;
     if let (Some(scope), Some(access)) = (required_scope, access) {
         let scope_ok = context.scopes.iter().any(|s| s.as_str() == scope.as_str());
-        let ip_ok =
-            crate::admin_tokens::ip_allowed(context.ip_allowlist.as_deref(), context.client_address);
+        let ip_ok = crate::admin_tokens::ip_allowed(
+            context.ip_allowlist.as_deref(),
+            context.client_address,
+        );
         if scope_ok && ip_ok {
             let ws = workspace_param(&mut parts, &s, access).await;
             let key = key_param(&mut parts, &s, access).await;
             let principal = ManagementPrincipal::AdminToken(context.clone());
-            allowed = database_access(&s, &principal, access, ws, key).await.is_ok();
+            allowed = database_access(&s, &principal, access, ws, key)
+                .await
+                .is_ok();
         }
     }
     let required_scope_str = required_scope.map(TokenScope::as_str);
@@ -457,7 +473,11 @@ async fn workspace_param(
         .and_then(|(_, value)| Uuid::parse_str(value).ok())
 }
 
-async fn key_param(parts: &mut axum::http::request::Parts, s: &Store, access: Access) -> Option<Uuid> {
+async fn key_param(
+    parts: &mut axum::http::request::Parts,
+    s: &Store,
+    access: Access,
+) -> Option<Uuid> {
     if !matches!(access, Access::WorkspaceKey | Access::WorkspaceKeyRotate) {
         return None;
     }

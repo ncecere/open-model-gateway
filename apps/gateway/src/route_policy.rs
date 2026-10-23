@@ -104,12 +104,7 @@ pub(crate) const ROUTES: &[Route] = &[
     route!("POST", "/v1/responses", InferenceKey, DENIED),
     route!("POST", "/v1/messages", InferenceKey, DENIED),
     route!("POST", "/v1/embeddings", InferenceKey, DENIED),
-    route!(
-        "POST",
-        "/v1/realtime/client_secrets",
-        InferenceKey,
-        DENIED
-    ),
+    route!("POST", "/v1/realtime/client_secrets", InferenceKey, DENIED),
     route!("POST", "/v1/realtime/calls", InferenceKey, DENIED),
     route!("POST", "/v1/images/generations", InferenceKey, DENIED),
     route!("POST", "/v1/rerank", InferenceKey, DENIED),
@@ -134,12 +129,7 @@ pub(crate) const ROUTES: &[Route] = &[
     route!("GET POST", "/scim/v2/Users", Scim, DENIED),
     route!("GET PUT PATCH DELETE", "/scim/v2/Users/{id}", Scim, DENIED),
     route!("GET POST", "/scim/v2/Groups", Scim, DENIED),
-    route!(
-        "GET PUT PATCH DELETE",
-        "/scim/v2/Groups/{id}",
-        Scim,
-        DENIED
-    ),
+    route!("GET PUT PATCH DELETE", "/scim/v2/Groups/{id}", Scim, DENIED),
     route!("*", "/scim", Scim, DENIED),
     route!("*", "/scim/{*rest}", Scim, DENIED),
     route!("GET", "/api/v1/me", Browser, DENIED),
@@ -148,22 +138,12 @@ pub(crate) const ROUTES: &[Route] = &[
     route!("GET", "/api/v1/me/models", Browser, DENIED),
     route!("GET", "/api/v1/me/export", Browser, DENIED),
     route!("GET", "/api/v1/me/notifications", Browser, DENIED),
-    route!(
-        "GET",
-        "/api/v1/me/notifications/summary",
-        Browser,
-        DENIED
-    ),
+    route!("GET", "/api/v1/me/notifications/summary", Browser, DENIED),
     route!("POST", "/api/v1/me/notifications/read", Browser, DENIED),
     route!("GET", "/api/v1/me/sessions", Browser, DENIED),
     // Session ownership is checked by the handler, returning 404 across users.
     route!("DELETE", "/api/v1/me/sessions/{session}", Browser, DENIED),
-    route!(
-        "POST",
-        "/api/v1/me/sessions/revoke-others",
-        Browser,
-        DENIED
-    ),
+    route!("POST", "/api/v1/me/sessions/revoke-others", Browser, DENIED),
     route!("POST", "/api/v1/invitations/accept", Browser, DENIED),
     route!(
         "GET",
@@ -220,7 +200,12 @@ pub(crate) const ROUTES: &[Route] = &[
         WorkspaceMetadata,
         PLATFORM_READ
     ),
-    route!("PUT", "/api/v1/workspaces/{ws}/policy", WorkspaceAdmin, DENIED),
+    route!(
+        "PUT",
+        "/api/v1/workspaces/{ws}/policy",
+        WorkspaceAdmin,
+        DENIED
+    ),
     route!(
         "GET",
         "/api/v1/workspaces/{ws}/members",
@@ -489,8 +474,18 @@ pub(crate) const ROUTES: &[Route] = &[
         WorkspaceAdminOrReader,
         PLATFORM_READ
     ),
-    route!("GET", "/api/v1/platform/catalogs", PlatformRead, PLATFORM_READ),
-    route!("POST", "/api/v1/platform/catalogs", PlatformWrite, CATALOG_WRITE),
+    route!(
+        "GET",
+        "/api/v1/platform/catalogs",
+        PlatformRead,
+        PLATFORM_READ
+    ),
+    route!(
+        "POST",
+        "/api/v1/platform/catalogs",
+        PlatformWrite,
+        CATALOG_WRITE
+    ),
     route!(
         "GET",
         "/api/v1/platform/catalogs/{id}",
@@ -581,8 +576,18 @@ pub(crate) const ROUTES: &[Route] = &[
         PlatformWrite,
         SETTINGS_WRITE
     ),
-    route!("GET", "/api/v1/platform/key-safety", PlatformRead, PLATFORM_READ),
-    route!("GET", "/api/v1/platform/alerts/rules", PlatformRead, PLATFORM_READ),
+    route!(
+        "GET",
+        "/api/v1/platform/key-safety",
+        PlatformRead,
+        PLATFORM_READ
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/alerts/rules",
+        PlatformRead,
+        PLATFORM_READ
+    ),
     route!(
         "POST",
         "/api/v1/platform/alerts/rules",
@@ -667,7 +672,12 @@ pub(crate) const ROUTES: &[Route] = &[
         PlatformRead,
         PLATFORM_READ
     ),
-    route!("GET", "/api/v1/platform/workspaces", PlatformRead, PLATFORM_READ),
+    route!(
+        "GET",
+        "/api/v1/platform/workspaces",
+        PlatformRead,
+        PLATFORM_READ
+    ),
     route!(
         "POST",
         "/api/v1/platform/workspaces",
@@ -687,7 +697,12 @@ pub(crate) const ROUTES: &[Route] = &[
         ACCESS_WRITE
     ),
     route!("GET", "/api/v1/platform/users", PlatformRead, PLATFORM_READ),
-    route!("POST", "/api/v1/platform/users", PlatformWrite, ACCESS_WRITE),
+    route!(
+        "POST",
+        "/api/v1/platform/users",
+        PlatformWrite,
+        ACCESS_WRITE
+    ),
     route!(
         "GET",
         "/api/v1/platform/users/{user}",
@@ -772,8 +787,18 @@ pub(crate) const ROUTES: &[Route] = &[
         PlatformWrite,
         GOVERNANCE_WRITE
     ),
-    route!("GET", "/api/v1/platform/batches", PlatformRead, PLATFORM_READ),
-    route!("GET", "/api/v1/platform/providers", PlatformRead, PLATFORM_READ),
+    route!(
+        "GET",
+        "/api/v1/platform/batches",
+        PlatformRead,
+        PLATFORM_READ
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/providers",
+        PlatformRead,
+        PLATFORM_READ
+    ),
     route!(
         "POST",
         "/api/v1/platform/providers",
@@ -792,8 +817,18 @@ pub(crate) const ROUTES: &[Route] = &[
         PlatformWrite,
         CATALOG_WRITE
     ),
-    route!("GET", "/api/v1/platform/models", PlatformRead, PLATFORM_READ),
-    route!("POST", "/api/v1/platform/models", PlatformWrite, CATALOG_WRITE),
+    route!(
+        "GET",
+        "/api/v1/platform/models",
+        PlatformRead,
+        PLATFORM_READ
+    ),
+    route!(
+        "POST",
+        "/api/v1/platform/models",
+        PlatformWrite,
+        CATALOG_WRITE
+    ),
     route!(
         "GET",
         "/api/v1/platform/models/{id}",
@@ -957,7 +992,12 @@ pub(crate) const ROUTES: &[Route] = &[
         PlatformWrite,
         CATALOG_WRITE
     ),
-    route!("GET", "/api/v1/platform/overview", PlatformRead, PLATFORM_READ),
+    route!(
+        "GET",
+        "/api/v1/platform/overview",
+        PlatformRead,
+        PLATFORM_READ
+    ),
     route!(
         "GET",
         "/api/v1/platform/settings/storage",
@@ -1055,7 +1095,12 @@ pub(crate) const ROUTES: &[Route] = &[
         PlatformWrite,
         CATALOG_WRITE
     ),
-    route!("GET", "/api/v1/platform/cost-report", PlatformRead, PLATFORM_READ),
+    route!(
+        "GET",
+        "/api/v1/platform/cost-report",
+        PlatformRead,
+        PLATFORM_READ
+    ),
     // #37 PR2: admin API token CRUD. Browser session (Platform Admin) only,
     // never delegable to a token, regardless of any scope it holds.
     route!(
@@ -1106,10 +1151,7 @@ mod tests {
     fn every_route_has_an_explicit_token_policy() {
         for route in ROUTES {
             assert_eq!(
-                token_policy(
-                    route.methods.split_whitespace().next().unwrap(),
-                    route.path
-                ),
+                token_policy(route.methods.split_whitespace().next().unwrap(), route.path),
                 Some(route.token_policy),
                 "{} {}",
                 route.methods,

@@ -64,7 +64,10 @@ async fn model_setup(
     ))
 }
 /// Aggregate counts only: no names, emails, keys, credential references or request details.
-async fn overview(State(s): State<Store>, Extension(u): Extension<ManagementPrincipal>) -> ApiResult {
+async fn overview(
+    State(s): State<Store>,
+    Extension(u): Extension<ManagementPrincipal>,
+) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, false).await?;
     sqlx::query("SET LOCAL statement_timeout='10s'")
         .execute(&mut *tx)

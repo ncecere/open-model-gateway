@@ -4,8 +4,14 @@ use super::*;
 async fn admin_lists_creates_and_revokes_tokens(pool: PgPool) {
     let f = fixture(&pool).await;
     // List starts empty.
-    let (status, list) = call(&f.s, &f.admin, "GET", "/api/v1/platform/admin-tokens", Value::Null)
-        .await;
+    let (status, list) = call(
+        &f.s,
+        &f.admin,
+        "GET",
+        "/api/v1/platform/admin-tokens",
+        Value::Null,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(list["data"], json!([]));
 
@@ -23,8 +29,14 @@ async fn admin_lists_creates_and_revokes_tokens(pool: PgPool) {
     let id = id(&created);
 
     // Listed, metadata only, never a hash or the plaintext.
-    let (status, list) = call(&f.s, &f.admin, "GET", "/api/v1/platform/admin-tokens", Value::Null)
-        .await;
+    let (status, list) = call(
+        &f.s,
+        &f.admin,
+        "GET",
+        "/api/v1/platform/admin-tokens",
+        Value::Null,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let rows = list["data"].as_array().unwrap();
     assert_eq!(rows.len(), 1);
@@ -109,12 +121,11 @@ async fn auditor_cannot_manage_admin_tokens_and_creation_is_only_for_oneself(poo
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let owner: Uuid =
-        sqlx::query_scalar("SELECT owner_user_id FROM admin_api_tokens WHERE id=$1")
-            .bind(id(&created))
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let owner: Uuid = sqlx::query_scalar("SELECT owner_user_id FROM admin_api_tokens WHERE id=$1")
+        .bind(id(&created))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(owner, f.admin.user_id);
 }
 
@@ -129,8 +140,14 @@ async fn invalid_creation_input_is_rejected(pool: PgPool) {
         json!({"name":"x","scopes":["platform:read"],"expires_in_days":91}),
         json!({"name":"x","scopes":["platform:read"],"expires_in_days":30,"ip_allowlist":["0.0.0.0/0"]}),
     ] {
-        let (status, body_out) =
-            call(&f.s, &f.admin, "POST", "/api/v1/platform/admin-tokens", body.clone()).await;
+        let (status, body_out) = call(
+            &f.s,
+            &f.admin,
+            "POST",
+            "/api/v1/platform/admin-tokens",
+            body.clone(),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {body_out}");
     }
     let (status, created) = call(

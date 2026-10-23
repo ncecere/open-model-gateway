@@ -208,7 +208,10 @@ async fn every_route_refuses_lower_principals_and_unverified_mutations(pool: PgP
             f.s.clone(),
             authorization::require_route_access,
         ))
-        .route_layer(middleware::from_fn_with_state(identity, authenticate_management))
+        .route_layer(middleware::from_fn_with_state(
+            identity,
+            authenticate_management,
+        ))
         .with_state(f.s.clone());
     assert_eq!(
         request(

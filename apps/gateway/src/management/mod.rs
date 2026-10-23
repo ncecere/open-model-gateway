@@ -558,7 +558,10 @@ pub fn router(identity: IdentityState) -> Router<Store> {
             authorization::require_route_access,
         ))
         .layer(Extension(sign_in))
-        .route_layer(middleware::from_fn_with_state(identity, authenticate_management))
+        .route_layer(middleware::from_fn_with_state(
+            identity,
+            authenticate_management,
+        ))
 }
 /// Public, sessionless routes: the installation logo (the sign-in page shows
 /// it before login).
@@ -573,7 +576,10 @@ pub fn upload_router(identity: IdentityState) -> Router<Store> {
             identity.store().clone(),
             authorization::require_route_access,
         ))
-        .route_layer(middleware::from_fn_with_state(identity, authenticate_management))
+        .route_layer(middleware::from_fn_with_state(
+            identity,
+            authenticate_management,
+        ))
 }
 fn routes() -> Router<Store> {
     Router::new()
