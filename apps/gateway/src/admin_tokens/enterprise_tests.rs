@@ -18,6 +18,13 @@ async fn create(
     allowlist: Option<&[String]>,
 ) -> Result<NewAdminToken, CreateAdminTokenError> {
     let mut tx = crate::db::begin(pool).await.unwrap();
+    // PR2's documented contract, which the creation guard now REQUIRES
+    // rather than acquiring lazily (adversarial re-review of #37 PR1,
+    // issue 6): take the owner's user-scope lock exclusive up front, in
+    // the same transaction, before creating on it.
+    crate::governance::locks::exclusive(&mut tx, [crate::governance::locks::Scope::User(owner)])
+        .await
+        .unwrap();
     match create_admin_token(&mut tx, owner, name, scopes, days, allowlist).await {
         Ok(token) => {
             tx.commit().await.unwrap();
@@ -353,7 +360,32 @@ async fn database_level_schema_constraints_hold_even_bypassing_the_rust_validato
                 Some("ARRAY[]::cidr[]"),
             ),
         ),
+        // Adversarial re-review of #37 PR1, issue 4: a zero-length prefix
+        // and a duplicate entry are rejected at the database level too,
+        // not only by Rust's own canonicalization.
+        (
+            "zero-length prefix allowlist",
+            insert(
+                "ARRAY['platform:read']",
+                "interval '10 days'",
+                Some("ARRAY['0.0.0.0/0']::cidr[]"),
+            ),
+        ),
+        (
+            "duplicate allowlist entry",
+            insert(
+                "ARRAY['platform:read']",
+                "interval '10 days'",
+                Some("ARRAY['10.0.0.0/24','10.0.0.0/24']::cidr[]"),
+            ),
+        ),
     ] {
+        // These negative probes do not hold the owner's scope lock, so
+        // migration 0050's creation guard now refuses them at its own
+        // lock-holding check (OM003) before the row ever reaches the
+        // schema CHECK this test means to exercise (adversarial re-review
+        // of #37 PR1, issue 6); either way the row is refused, which is
+        // all this loop asserts.
         let result = sqlx::query(&sql).execute(&pool).await;
         assert!(
             result.is_err(),
@@ -372,9 +404,15 @@ async fn database_level_schema_constraints_hold_even_bypassing_the_rust_validato
         "33 allowlist entries should be rejected"
     );
     // A fully valid row (the positive control; schema constraints did not
-    // over-reject anything else).
+    // over-reject anything else). This one must succeed, so it needs the
+    // owner's scope lock held first.
     let sql = insert("ARRAY['platform:read']", "interval '10 days'", None);
-    sqlx::query(&sql).execute(&pool).await.unwrap();
+    let mut tx = crate::db::begin(&pool).await.unwrap();
+    crate::governance::locks::exclusive(&mut tx, [crate::governance::locks::Scope::User(owner)])
+        .await
+        .unwrap();
+    sqlx::query(&sql).execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
@@ -487,14 +525,27 @@ async fn lookup_rejects_expired_revoked_and_owner_not_admin(pool: PgPool) {
     let store = Store::new(pool.clone());
     let owner = admin(&pool, "owner@test.invalid").await;
 
-    // expires_at is immutable (by design); an expired fixture is inserted
-    // directly with both created_at and expires_at in the past (satisfying
-    // the 1-90 day bound measured from created_at).
+    // expires_at is immutable (by design); an expired fixture needs a
+    // created_at/expires_at pair already in the past. The creation guard
+    // now forces created_at to the real now() unconditionally (adversarial
+    // re-review of #37 PR1, issue 1), so backdating this fixture disables
+    // that one trigger only -- the same way other tests in this
+    // repository backdate a maintained timestamp to seed history (e.g.
+    // `runtime_privileges.rs`'s storage/stored_files fixtures) -- not any
+    // schema CHECK, which this row must still genuinely satisfy.
     let raw = GeneratedSecret::generate().unwrap();
+    sqlx::query("ALTER TABLE admin_api_tokens DISABLE TRIGGER admin_api_tokens_owner_is_admin")
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::query("INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,created_at,expires_at) VALUES($1,$2,'expired',$3,ARRAY['platform:read'],now()-interval '10 days',now()-interval '1 minute')")
         .bind(raw.id)
         .bind(owner)
         .bind(raw.digest.as_slice())
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("ALTER TABLE admin_api_tokens ENABLE TRIGGER admin_api_tokens_owner_is_admin")
         .execute(&pool)
         .await
         .unwrap();
@@ -1268,6 +1319,14 @@ async fn owner_restrict_prevents_removing_a_user_with_live_tokens(pool: PgPool) 
 async fn isolation_guard_refuses_a_stale_snapshot(pool: &PgPool, setup: &'static str, label: &str) {
     let owner = admin(pool, &format!("stale-{label}@test.invalid")).await;
     let mut tx = crate::db::begin_with_setup(pool, setup).await.unwrap();
+    // Deliberately not taking `governance::locks::exclusive` here (doing
+    // so before the concurrent revoke below commits would deadlock: that
+    // revoke's own trigger, 0027's omg_authority_platform_grants, takes
+    // the very same lock, and this tx would already be holding it). That
+    // is fine for this test either way: under RR/SERIALIZABLE the
+    // creation guard's isolation check (`OM002`) fires before its
+    // lock-holding check (`OM003`) ever runs, so this stale-snapshot
+    // `INSERT` below still fails regardless of whether the lock is held.
     // Establish the snapshot: observe the owner as currently effective admin.
     let seen_admin: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM effective_platform_roles WHERE user_id=$1 AND role='admin')",
@@ -1331,6 +1390,9 @@ async fn creation_guard_refuses_a_stale_serializable_snapshot(pool: PgPool) {
 async fn creation_guard_allows_read_committed(pool: PgPool) {
     let owner = admin(&pool, "read-committed@test.invalid").await;
     let mut tx = crate::db::begin(&pool).await.unwrap();
+    crate::governance::locks::exclusive(&mut tx, [crate::governance::locks::Scope::User(owner)])
+        .await
+        .unwrap();
     let id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,expires_at)
@@ -1641,4 +1703,178 @@ async fn moving_the_grant_to_another_user_revokes_the_original_owners_tokens(poo
         revoked(&pool, token.id).await,
         "moving the owner's only admin grant row to another user must revoke the original owner's tokens"
     );
+}
+
+/// Adversarial re-review of #37 PR1, issue 6: the lock-holding contract
+/// ("PR2's handler must already hold the owner's user-scope lock
+/// exclusive before calling create_admin_token") was documentation only --
+/// nothing enforced it, so a caller that forgot it still got a working
+/// INSERT. The creation guard now checks `pg_locks` directly and refuses
+/// with a dedicated SQLSTATE (`OM003`, mapped to
+/// `CreateAdminTokenError::OwnerLockNotHeld`) instead of acquiring the
+/// lock lazily.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn create_without_the_owners_scope_lock_held_is_refused_with_om003(pool: PgPool) {
+    let owner = admin(&pool, "no-lock@test.invalid").await;
+    let mut tx = crate::db::begin(&pool).await.unwrap();
+    // Deliberately not taking `governance::locks::exclusive` first.
+    let result =
+        create_admin_token(&mut tx, owner, "n", &scopes(&["platform:read"]), 30, None).await;
+    let _ = tx.rollback().await;
+    assert!(
+        matches!(result, Err(CreateAdminTokenError::OwnerLockNotHeld)),
+        "expected OwnerLockNotHeld, got {:?}",
+        result.as_ref().err()
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM admin_api_tokens")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+/// Companion to the above: with the lock correctly taken up front, in the
+/// same transaction, creation succeeds exactly as before.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn create_with_the_owners_scope_lock_held_succeeds(pool: PgPool) {
+    let owner = admin(&pool, "with-lock@test.invalid").await;
+    let mut tx = crate::db::begin(&pool).await.unwrap();
+    crate::governance::locks::exclusive(&mut tx, [crate::governance::locks::Scope::User(owner)])
+        .await
+        .unwrap();
+    let created = create_admin_token(&mut tx, owner, "n", &scopes(&["platform:read"]), 30, None)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert!(!revoked(&pool, created.id).await);
+}
+
+/// Adversarial re-review of #37 PR1, issue 1 (MEDIUM, BLOCKING): the
+/// runtime had a whole-row INSERT and the Rust insert supplied
+/// `created_at` itself, so the 1-90 day CHECK was measured against a
+/// caller-chosen `created_at`: `created_at => now()+10 years, expires_at
+/// => created_at+90 days` passed the CHECK as written and left the token
+/// practically unexpiring (`authenticate_admin_token` only ever compares
+/// `expires_at` against the current instant). The creation guard now
+/// forces `created_at` to the database's own `now()` unconditionally
+/// (before the CHECK ever runs), so the identical attack row is measured
+/// against the real creation instant instead and fails the ordinary
+/// 1-90-day bound.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn a_forged_future_created_at_cannot_make_a_token_practically_unexpiring(pool: PgPool) {
+    let owner = admin(&pool, "lifetime-bypass@test.invalid").await;
+    let mut tx = crate::db::begin(&pool).await.unwrap();
+    crate::governance::locks::exclusive(&mut tx, [crate::governance::locks::Scope::User(owner)])
+        .await
+        .unwrap();
+    let result = sqlx::query(
+        "INSERT INTO admin_api_tokens(id,owner_user_id,name,secret_hash,scopes,created_at,expires_at)
+         VALUES(gen_random_uuid(),$1,'attack',decode(repeat('c0',32),'hex'),ARRAY['platform:read'],now()+interval '10 years',now()+interval '10 years'+interval '90 days')",
+    )
+    .bind(owner)
+    .execute(&mut *tx)
+    .await;
+    let _ = tx.rollback().await;
+    assert!(
+        result.is_err(),
+        "a forged ten-year-future created_at must not survive to make the token practically unexpiring"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM admin_api_tokens")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0,
+        "the attack insert must not have left any row behind"
+    );
+}
+
+/// Coordinator decision (#37 PR1, issue 2): an admin token's last-use
+/// address is kept -- it helps investigate misuse of a high-risk
+/// credential -- until the token is revoked or its owner is cleaned up,
+/// whichever comes first. Cleanup scrubs it the same way it scrubs every
+/// other address/identity copy on the account (docs/identity.md).
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn cleanup_scrubs_the_last_used_address(pool: PgPool) {
+    let store = Store::new(pool.clone());
+    let owner = admin(&pool, "cleanup-scrub@test.invalid").await;
+    let token = create(&pool, owner, "n", &scopes(&["platform:read"]), 30, None)
+        .await
+        .unwrap();
+    store
+        .touch_admin_token_use(token.id, Some("203.0.113.77".parse().unwrap()))
+        .await
+        .unwrap();
+    let before: Option<String> =
+        sqlx::query_scalar("SELECT host(last_used_address) FROM admin_api_tokens WHERE id=$1")
+            .bind(token.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(before.as_deref(), Some("203.0.113.77"));
+    let mut tx = crate::db::begin(&pool).await.unwrap();
+    assert!(
+        crate::lifecycle::cleanup_user(&mut tx, owner)
+            .await
+            .unwrap()
+    );
+    tx.commit().await.unwrap();
+    let after: Option<String> =
+        sqlx::query_scalar("SELECT host(last_used_address) FROM admin_api_tokens WHERE id=$1")
+            .bind(token.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(after, None, "cleanup must scrub the last-use address");
+    assert!(
+        revoked(&pool, token.id).await,
+        "cleanup also revokes every token the owner holds"
+    );
+}
+
+/// Adversarial re-review of #37 PR1, issue 5: `AdminTokenPrincipal` must
+/// carry the token's own canonical allowlist, not silently omit it, so a
+/// future PR2 handler cannot forget to enforce it before dispatch.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn authenticate_returns_the_tokens_canonical_ip_allowlist(pool: PgPool) {
+    let store = Store::new(pool.clone());
+    let owner = admin(&pool, "principal-allowlist@test.invalid").await;
+    let list = vec!["10.0.0.0/24".to_string(), "2001:DB8::/32".to_string()];
+    let restricted = create(
+        &pool,
+        owner,
+        "restricted",
+        &scopes(&["platform:read"]),
+        30,
+        Some(&list),
+    )
+    .await
+    .unwrap();
+    let found = store
+        .authenticate_admin_token(&restricted.token)
+        .await
+        .unwrap()
+        .expect("a live token authenticates");
+    assert_eq!(
+        found.ip_allowlist,
+        Some(vec!["10.0.0.0/24".to_string(), "2001:db8::/32".to_string()])
+    );
+    let unrestricted = create(
+        &pool,
+        owner,
+        "unrestricted",
+        &scopes(&["platform:read"]),
+        30,
+        None,
+    )
+    .await
+    .unwrap();
+    let found = store
+        .authenticate_admin_token(&unrestricted.token)
+        .await
+        .unwrap()
+        .expect("a live token authenticates");
+    assert_eq!(found.ip_allowlist, None);
 }
