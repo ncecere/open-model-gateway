@@ -186,6 +186,44 @@ async fn native_terminal_reasons_survive_real_http_json_and_sse() {
 }
 
 #[tokio::test]
+async fn no_argument_tool_defaults_preserve_messages_wire() {
+    let mock = Mock::new(200, None).await;
+    for request in super::super::contract::no_argument_tool_requests() {
+        for strict in [None, Some(false), Some(true)] {
+            let mut r = request.clone();
+            r.tools[0].strict = strict;
+            if strict == Some(true) {
+                assert!(matches!(
+                    encode("private", &r),
+                    Err(InferenceError::Unsupported)
+                ));
+                assert!(matches!(
+                    mock.adapter.execute(&target(), r).await,
+                    Err(InferenceError::Unsupported)
+                ));
+            } else {
+                mock.adapter.execute(&target(), r).await.unwrap();
+            }
+        }
+    }
+    let capture = mock.capture.lock().unwrap();
+    assert_eq!(capture.len(), 6, "strict refusals never dispatch");
+    for (_, uri, body) in capture.iter() {
+        assert_eq!(uri.path(), "/v1/messages");
+        assert_eq!(
+            body["tools"][0]["input_schema"],
+            json!({"type":"object","properties":{},"additionalProperties":false})
+        );
+        assert!(body["tools"][0].get("strict").is_none());
+        assert_eq!(body["messages"][1]["content"][0]["id"], "ping-call");
+        assert_eq!(body["messages"][1]["content"][0]["input"], json!({}));
+        assert_eq!(
+            body["messages"][2]["content"][0],
+            json!({"type":"tool_result","tool_use_id":"ping-call","content":""})
+        );
+    }
+}
+#[tokio::test]
 async fn local_contract_and_native_headers() {
     let mock = Mock::new(200, None).await;
     // `message.model` is reported; thinking tokens come from

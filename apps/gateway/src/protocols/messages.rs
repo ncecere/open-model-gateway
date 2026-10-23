@@ -121,14 +121,26 @@ impl Request {
                         });
                     }
                     Some("tool_result") if role == Role::User => {
-                        fields(block, &["type", "tool_use_id", "content"])?;
+                        fields(block, &["type", "tool_use_id", "content", "is_error"])?;
                         let id = string(&block["tool_use_id"])?;
                         if id.is_empty() {
                             return Err(InferenceError::InvalidRequest);
                         }
+                        if let Some(flag) = block.get("is_error")
+                            && flag.as_bool().ok_or(InferenceError::InvalidRequest)?
+                        {
+                            // The shared result type cannot represent failure. Never
+                            // silently downgrade an error-marked result to success.
+                            return Err(InferenceError::Unsupported);
+                        }
+                        let content = block
+                            .get("content")
+                            .map(text)
+                            .transpose()?
+                            .unwrap_or_default();
                         messages.push(Message {
                             role: Role::Tool,
-                            content: Some(text(&block["content"])?),
+                            content: Some(content),
                             tool_call_id: Some(id),
                             tool_calls: vec![],
                         });
