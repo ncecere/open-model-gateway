@@ -1920,6 +1920,8 @@ mod safety_tests;
 #[cfg(test)]
 pub(crate) mod tests;
 #[cfg(all(test, feature = "integration-tests"))]
+mod telemetry_tests;
+#[cfg(all(test, feature = "integration-tests"))]
 mod totals_tests;
 #[cfg(all(test, feature = "integration-tests"))]
 mod v3_tests;
