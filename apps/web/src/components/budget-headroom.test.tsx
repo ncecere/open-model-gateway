@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { BudgetMeters } from "./scope-limits";
+import { BudgetMeters, EffectiveBudgetHeadroom } from "./scope-limits";
 import { KeyUsage } from "../pages/key-detail";
 import { markup, team } from "../lib/test-fixtures";
 import { effectiveBudgetHeadroom, windowHeadroom, type BudgetWindow } from "../lib/governance";
@@ -67,5 +67,14 @@ describe("budget headroom", () => {
     expect(restricted).toContain("Remaining: Restricted");
     expect(restricted).not.toContain("$123.456789");
     expect(restricted).not.toContain("$987.654321");
+  });
+  it("gives Effective headroom its own section, not a trailing line under the last budget row (#242)", () => {
+    // Structural, not pixel: the heading starts a new <section>, so it can never read as part of the block above it.
+    const html = renderToStaticMarkup(<EffectiveBudgetHeadroom windows={[window()]} />);
+    expect(html).toMatch(/^<section><h3[^>]*>Effective headroom<\/h3>/);
+    expect(renderToStaticMarkup(<EffectiveBudgetHeadroom windows={[]} />)).toBe("");
+    // The key detail Budgets card stacks the rings and this section as separate sibling blocks of one Stack, not one run-on block.
+    const key = markup(<KeyUsage workspace={team} keyId="key" part="budgets" />, [["/api/v1/workspaces/team/keys/key/stats", { daily: [], budgets: [window()] }]]);
+    expect(key).toMatch(/<\/div><section><h3[^>]*>Effective headroom<\/h3>/);
   });
 });
