@@ -50,5 +50,6 @@ pub mod scim;
 pub(crate) mod special_use;
 pub mod startup;
 pub mod store;
+pub mod telemetry;
 pub mod visibility;
 pub mod web;

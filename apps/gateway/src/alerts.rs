@@ -28,8 +28,11 @@ use serde_json::{Value, json};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
+mod outbox;
+pub use outbox::deliver_pending;
+
 use crate::{
-    email::{OutgoingEmail, SmtpSettings, TlsMode},
+    email::{SmtpSettings, TlsMode},
     governance::BudgetPeriod,
     store::Store,
 };
@@ -1132,57 +1135,11 @@ pub(crate) fn key_expiry_visible(viewer: &str) -> String {
     )
 }
 
+// Shared with `outbox::recipients`: the outbox's per-claim live-eligibility
+// recheck (never a held authority lock spanning SMTP I/O) is what makes a
+// key-expiry reminder that becomes obsolete before send (revoked, disabled,
+// expired, lost membership, etc.) unsendable; see docs/alerts.md.
 const KEY_EXPIRY_DELIVERABLE: &str = "e.resolved_at IS NULL AND e.key_expires_at<=clock_timestamp()+interval '7 days' AND e.threshold_days=CASE WHEN e.key_expires_at<=clock_timestamp()+interval '1 day' THEN 1 ELSE 7 END";
-
-fn key_expiry_recipients() -> String {
-    let visible = key_expiry_visible("u.id");
-    format!(
-        "SELECT DISTINCT lower(u.email) FROM alert_events e JOIN effective_workspace_memberships members ON members.workspace_id=e.workspace_id JOIN users u ON u.id=members.user_id WHERE e.id=$1 AND ({visible}) AND ({KEY_EXPIRY_DELIVERABLE}) AND u.email IS NOT NULL ORDER BY 1 LIMIT $2"
-    )
-}
-
-/// Each SMTP handoff gets its own fresh authority snapshot. Hold only this
-/// recipient's authority scopes through the handoff, not the entire recipient
-/// list: changes can commit between recipients, and the next check observes
-/// them. These shared scopes synchronize with management's exclusive locks
-/// (0027), in canonical order, without an installation or authority-row lock.
-async fn key_expiry_send_guard(
-    store: &Store,
-    event: Uuid,
-    address: &str,
-) -> Result<Option<Transaction<'static, Postgres>>, sqlx::Error> {
-    use crate::governance::locks::{self, Scope};
-    let mut guard =
-        crate::db::begin_with_setup(&store.pool, "SET LOCAL statement_timeout='10s'").await?;
-    // Exclusive-catalog management may acquire authority scopes lazily;
-    // exclude it before taking any scoped locks (canonical protocol prefix).
-    sqlx::query("SELECT pg_advisory_xact_lock_shared($1)")
-        .bind(locks::CATALOG_LOCK)
-        .execute(&mut *guard)
-        .await?;
-    type Authority = (Uuid, Option<Uuid>, Uuid, Uuid, String);
-    let authority: Option<Authority> = sqlx::query_as("SELECT u.id,k.issued_to_user_id,k.governance_key_id,k.workspace_id,w.kind FROM alert_events e JOIN api_keys k ON k.id=e.api_key_id JOIN workspaces w ON w.id=k.workspace_id JOIN users u ON lower(u.email)=$2 WHERE e.id=$1")
-        .bind(event).bind(address).fetch_optional(&mut *guard).await?;
-    let Some((user, holder, lineage, workspace, kind)) = authority else {
-        return Ok(None);
-    };
-    let scopes = [
-        Scope::Workspace(workspace),
-        Scope::User(user),
-        Scope::Lineage(lineage),
-    ]
-    .into_iter()
-    .chain(holder.map(Scope::User))
-    .chain(Scope::of_kind(&kind));
-    locks::shared(&mut guard, scopes).await?;
-    let visible = key_expiry_visible("u.id");
-    let eligible: bool = sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM alert_events e JOIN users u ON u.id=$3 AND lower(u.email)=$2 WHERE e.id=$1 AND ({visible}) AND ({KEY_EXPIRY_DELIVERABLE}))"))
-        .bind(event).bind(address).bind(user).fetch_one(&mut *guard).await?;
-    if !eligible {
-        return Ok(None);
-    }
-    Ok(Some(guard))
-}
 
 /// What one evaluation did. `None` from [`evaluate_once`] means another replica
 /// is evaluating right now.
@@ -1229,10 +1186,14 @@ pub async fn evaluate_once_fenced(
     let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut *tx)
         .await?;
-    // Deliveries a crashed process left behind are recorded, not resent forever.
-    sqlx::query("UPDATE alert_deliveries SET status='failed',error='interrupted',completed_at=clock_timestamp() WHERE status='pending' AND created_at<now()-interval '1 day'")
-        .execute(&mut *tx)
-        .await?;
+    // Outbox cleanup deliberately does not run here. The delivery worker
+    // already runs it in its own short transaction on every tick (and the
+    // CLI's one-shot `deliver_pending` call does too), so running it again
+    // in this longer transaction (which also fetches the rule list before
+    // committing) would only risk blocking a concurrent complete()'s
+    // `FOR UPDATE` on the same delivery row until this transaction commits,
+    // for no benefit: dropping the call is simpler than giving cleanup its
+    // own committed transaction here, and just as correct.
     let mut report = Report {
         resolved: retire_inactive(&mut tx, None).await? as usize
             + resolve_scim_last_admin(&mut tx).await?,
@@ -1468,104 +1429,48 @@ struct Pending {
     severity: String,
     fired_at: DateTime<Utc>,
     resolved_at: Option<DateTime<Utc>>,
-    rule_id: Option<Uuid>,
     rule_name: Option<String>,
     workspace_name: Option<String>,
     workspace_kind: Option<String>,
     connection_name: Option<String>,
-    personal_workspace: Option<Uuid>,
-    event_id: Uuid,
     builtin: Option<String>,
     kind: String,
     key_expires_at: Option<DateTime<Utc>>,
 }
 
-/// Send one pending delivery while holding its row lock (no double sends
-/// across replicas). Returns false when nothing was pending.
-async fn deliver_one(store: &Store, id: Uuid) -> anyhow::Result<bool> {
-    let mut tx = crate::db::begin(&store.pool).await?;
-    let row: Option<Pending> = sqlx::query_as("SELECT d.transition,e.summary,e.severity,e.fired_at,e.resolved_at,e.rule_id,r.name rule_name,w.name workspace_name,w.kind workspace_kind,p.name connection_name,CASE WHEN e.builtin IS NOT NULL THEN e.workspace_id END personal_workspace,e.id event_id,e.builtin,e.kind,e.key_expires_at FROM alert_deliveries d JOIN alert_events e ON e.id=d.event_id LEFT JOIN alert_rules r ON r.id=e.rule_id LEFT JOIN workspaces w ON w.id=e.workspace_id LEFT JOIN provider_connections p ON p.id=e.provider_connection_id WHERE d.id=$1 AND d.status='pending' FOR UPDATE OF d SKIP LOCKED")
-        .bind(id)
-        .fetch_optional(&mut *tx)
-        .await?;
-    let Some(Pending {
+// Pure: constructs one email's subject/body from its stored facts. Called
+// only from `outbox::claim` (the durable per-recipient queue, #46), which
+// resolves recipients (generic rule recipients, or, for `key_expiring`,
+// the live key-following recipients) and performs the SMTP handoff outside
+// any open transaction. There is no `deliver_one`/legacy `deliver_pending`
+// here any more: #100's whole-delivery loop (and the `key_expiry_send_guard`
+// lock-holding-during-SMTP mechanism it used) is superseded by the outbox's
+// own live-eligibility recheck, performed in a short claim transaction
+// immediately before leasing a recipient and strictly before any SMTP I/O
+// (see docs/alerts.md's "Recipient outbox" and "Authorized key-expiry
+// reminders" sections). That recheck already excludes a key that became
+// ineligible (revoked, disabled, expired, lost membership, etc.) before its
+// claim is leased, with the same narrow claimed-then-authority-changes race
+// window the outbox documents for every other rule kind.
+fn email_message(row: Pending, installation: String) -> (String, String) {
+    let Pending {
         transition,
         summary,
         severity,
         fired_at,
         resolved_at,
-        rule_id: rule,
         rule_name,
         workspace_name: ws_name,
         workspace_kind: ws_kind,
         connection_name: connection,
-        personal_workspace: personal,
-        event_id,
         builtin,
         kind,
         key_expires_at,
-    }) = row
-    else {
-        return Ok(false);
-    };
-    // key_expiring carries neither rule_id nor builtin (#100's rolling-upgrade
-    // safety mechanism), so it is never reachable through the generic query
-    // below (which is also exactly why an old binary resolves no recipients
-    // for it); it gets its own live recipient resolution instead.
-    let recipients: Vec<String> = if kind == "key_expiring" {
-        sqlx::query_scalar(&key_expiry_recipients())
-            .bind(event_id)
-            .bind(MAX_RECIPIENTS)
-            .fetch_all(&mut *tx)
-            .await?
-    } else {
-        sqlx::query_scalar("SELECT DISTINCT lower(x.email) FROM (
- SELECT unnest(r.notify_emails) email FROM alert_rules r WHERE r.id=$1
- UNION ALL SELECT u.email FROM alert_rules r JOIN effective_workspace_memberships m ON m.workspace_id=r.workspace_id AND m.role IN ('owner','admin') JOIN users u ON u.id=m.user_id WHERE r.id=$1 AND r.notify_workspace_admins
- UNION ALL SELECT u.email FROM alert_rules r JOIN effective_platform_roles p ON p.role='admin' JOIN users u ON u.id=p.user_id WHERE r.id=$1 AND r.notify_platform_admins
- UNION ALL SELECT u.email FROM workspaces w JOIN users u ON u.id=w.owner_user_id JOIN effective_platform_roles p ON p.user_id=u.id WHERE w.id=$2 AND w.kind='personal' AND w.disabled_at IS NULL
- UNION ALL SELECT u.email FROM alert_events e JOIN effective_platform_roles p ON p.role='admin' JOIN users u ON u.id=p.user_id WHERE e.id=$4 AND e.builtin=ANY($5)
-) x WHERE x.email IS NOT NULL ORDER BY 1 LIMIT $3")
-            .bind(rule)
-            .bind(personal)
-            .bind(MAX_RECIPIENTS)
-            .bind(event_id)
-            .bind(&INSTALLATION_BUILTINS[..])
-            .fetch_all(&mut *tx)
-            .await?
-    };
-    let (settings, installation) = relay(&mut tx).await?;
-    let finish = |status: &'static str,
-                  recipients: i32,
-                  sent: i32,
-                  failed: i32,
-                  error: Option<&'static str>| {
-        sqlx::query("UPDATE alert_deliveries SET status=$2,recipients=$3,sent=$4,failed=$5,error=$6,completed_at=clock_timestamp() WHERE id=$1 AND status='pending'")
-            .bind(id)
-            .bind(status)
-            .bind(recipients)
-            .bind(sent)
-            .bind(failed)
-            .bind(error)
-    };
-    if recipients.is_empty() && (kind == "key_expiring" || settings.is_some()) {
-        finish("no_recipients", 0, 0, 0, None)
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        return Ok(true);
-    }
-    let Some(settings) = settings else {
-        finish("not_configured", recipients.len() as i32, 0, 0, None)
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        return Ok(true);
-    };
-    // Keyed off the workspace's own kind, not the `personal_workspace`
-    // builtin-derived column: that column is only ever set for kinds that
-    // carry `builtin` (not key_expiring), and every alert tied to a personal
-    // workspace is owner-only regardless of how it was sourced.
+    } = row;
+    // Keyed off the workspace's own kind: every alert tied to a personal
+    // workspace is owner-only regardless of how it was sourced (a builtin
+    // personal_budget incident or, for key_expiring, the key's own
+    // workspace), so there is no separate builtin-derived column to carry.
     let scope = if ws_kind.as_deref() == Some("personal") {
         "Your personal workspace".to_owned()
     } else if let Some(connection) = connection {
@@ -1617,72 +1522,7 @@ async fn deliver_one(store: &Store, id: Uuid) -> anyhow::Result<bool> {
             expiry.format("%Y-%m-%d %H:%M:%S")
         ));
     }
-    let (mut sent, mut failed, mut error) = (0, 0, None);
-    for to in &recipients {
-        let authority = if kind == "key_expiring" {
-            match key_expiry_send_guard(store, event_id, to).await? {
-                Some(guard) => Some(guard),
-                None => continue,
-            }
-        } else {
-            None
-        };
-        match settings
-            .send(
-                &store.smtp_secrets,
-                OutgoingEmail {
-                    to: to.clone(),
-                    subject: subject.clone(),
-                    body: body.clone(),
-                },
-            )
-            .await
-        {
-            Ok(()) => sent += 1,
-            Err(e) => {
-                failed += 1;
-                error.get_or_insert(e.as_str());
-            }
-        }
-        if let Some(authority) = authority {
-            authority.commit().await?;
-        }
-    }
-    let status = match (sent, failed) {
-        (0, 0) => "no_recipients",
-        (_, 0) => "sent",
-        (0, _) => "failed",
-        _ => "partial",
-    };
-    finish(status, sent + failed, sent, failed, error)
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await?;
-    Ok(true)
-}
-
-/// Deliver up to `limit` pending emails (oldest first). Failures are recorded
-/// per delivery and never stop the others.
-pub async fn deliver_pending(store: &Store, limit: i64) -> usize {
-    let Ok(ids) = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM alert_deliveries WHERE status='pending' ORDER BY created_at,id LIMIT $1",
-    )
-    .bind(limit.clamp(1, 1000))
-    .fetch_all(&store.pool)
-    .await
-    else {
-        tracing::warn!("alert delivery queue unavailable");
-        return 0;
-    };
-    let mut done = 0;
-    for id in ids {
-        match deliver_one(store, id).await {
-            Ok(true) => done += 1,
-            Ok(false) => {}
-            Err(_) => tracing::warn!("alert email delivery could not be recorded; retrying later"),
-        }
-    }
-    done
+    (subject, body)
 }
 
 /// Background evaluator for `serve`.
@@ -1735,9 +1575,15 @@ pub fn start(store: Store, every: Duration) -> tokio::task::JoinHandle<()> {
                     tracing::warn!("alert evaluation incomplete; retrying next interval")
                 }
             }
+            // `deliver_pending_within` stops claiming once a further send could
+            // overrun SEND_BUDGET, and its cleanup has its own bound. The worst
+            // case is cleanup, then one send started just inside the budget, so
+            // the outer timeout is only a backstop above that.
+            const SEND_BUDGET: Duration = Duration::from_secs(60);
+            let backstop = SEND_BUDGET + outbox::SEND_DEADLINE + outbox::CLEANUP_BOUND;
             if tokio::time::timeout(
-                Duration::from_secs(300),
-                deliver_pending(&store, DELIVERIES_PER_TICK),
+                backstop,
+                outbox::deliver_pending_within(&store, DELIVERIES_PER_TICK, SEND_BUDGET),
             )
             .await
             .is_err()

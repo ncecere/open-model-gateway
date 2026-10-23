@@ -4,7 +4,7 @@
 //! Format `omg_admin_<32-hex uuid>.<64-hex secret>`, 256 secret bits from
 //! the same fallible OS CSPRNG inference keys use (`entropy.rs`); strictly
 //! parsed before any database access. The whole token's SHA-256 is stored
-//! (migration 0050); lookup is by the token's embedded id (an indexed,
+//! (migration 0051); lookup is by the token's embedded id (an indexed,
 //! non-secret correlator, never the secret itself), then the stored digest
 //! is compared to the presented token's digest in constant time — the same
 //! pattern `auth.rs` uses for inference keys.
@@ -13,7 +13,7 @@
 //! unexpired, owner active and currently effective role exactly `admin`.
 //! There is no positive authorization cache. Losing that status (manual or
 //! group-derived grant loss, suspension, SCIM deactivation or cleanup)
-//! permanently revokes the owner's tokens through migration 0050's
+//! permanently revokes the owner's tokens through migration 0051's
 //! triggers, in the same transaction as whatever caused the loss; regaining
 //! access never restores them (revocation is final).
 use chrono::{DateTime, Utc};
@@ -34,13 +34,13 @@ pub const SCOPES: [&str; 5] = [
     "settings:write",
 ];
 
-/// Shortest/longest explicit lifetime, inclusive (migration 0050 enforces
+/// Shortest/longest explicit lifetime, inclusive (migration 0051 enforces
 /// the same bound against `created_at` in the database).
 pub const MIN_EXPIRES_IN_DAYS: i32 = 1;
 pub const MAX_EXPIRES_IN_DAYS: i32 = 90;
 
 /// Admin tokens never cache a positive authorization; successful use is
-/// recorded at most this often (migration 0050: `last_used_at`/`last_used_address`).
+/// recorded at most this often (migration 0051: `last_used_at`/`last_used_address`).
 const LAST_USE_EVERY_SECONDS: i64 = 5 * 60;
 
 const PREFIX: &str = "omg_admin_";
@@ -113,7 +113,7 @@ impl GeneratedSecret {
 }
 
 /// Why [`Store::create_admin_token`] refused to create a token. Validated
-/// here before any database round trip; migration 0050's `CHECK`
+/// here before any database round trip; migration 0051's `CHECK`
 /// constraints are the backstop, not the primary gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NewAdminTokenError {
@@ -134,7 +134,7 @@ pub enum CreateAdminTokenError {
     Invalid(NewAdminTokenError),
     Entropy(crate::entropy::EntropyUnavailable),
     /// The owner is not, at the instant of insertion, a currently
-    /// effective Platform Admin (migration 0050's `BEFORE INSERT` trigger;
+    /// effective Platform Admin (migration 0051's `BEFORE INSERT` trigger;
     /// never bypassed, including under a concurrent demotion). Mapped from
     /// SQLSTATE `OM001` alone, never message text (coordinator review
     /// issue 5a).
@@ -151,7 +151,7 @@ pub enum CreateAdminTokenError {
     /// The caller does not already hold the owner's user-scope authority
     /// lock exclusive (`governance::locks::exclusive(Scope::User(owner))`,
     /// taken up front, before the first write -- AGENTS.md's canonical
-    /// lock order). Migration 0050's creation guard checks this directly
+    /// lock order). Migration 0051's creation guard checks this directly
     /// instead of acquiring the lock lazily (adversarial re-review of #37
     /// PR1, issue 6); a real PR2 handler that forgets this gets an
     /// unambiguous refusal instead of a lock-holding contract that was
@@ -180,7 +180,7 @@ impl std::fmt::Display for CreateAdminTokenError {
 impl std::error::Error for CreateAdminTokenError {}
 
 /// Map a database error from the creation `INSERT`. The owner-admin guard
-/// trigger (migration 0050) raises its own dedicated SQLSTATE (`OM001`), as
+/// trigger (migration 0051) raises its own dedicated SQLSTATE (`OM001`), as
 /// do the isolation-level guard (`OM002`) and the lock-holding guard
 /// (`OM003`); all three are mapped on the code alone, with no message-text
 /// matching, so a translated or reworded `RAISE EXCEPTION` message can
@@ -300,7 +300,7 @@ struct TokenRecord {
 ///
 /// Runs on the caller's own `tx`, never a separate pool connection
 /// (coordinator review of #37 PR1, issue 2: PR1 originally ran this on
-/// `&self.pool`. Migration 0050's `BEFORE INSERT` trigger takes the
+/// `&self.pool`. Migration 0051's `BEFORE INSERT` trigger takes the
 /// owner's `governance::locks` user-scope authority lock
 /// (`Scope::User(owner_user_id)`) before checking that the owner is
 /// currently an effective Admin; that lock is transaction-scoped
@@ -351,7 +351,7 @@ pub async fn create_admin_token(
     };
     let secret = GeneratedSecret::generate().map_err(CreateAdminTokenError::Entropy)?;
     // created_at is never supplied here (adversarial re-review of #37
-    // PR1, issue 1): migration 0050's creation guard forces it to the
+    // PR1, issue 1): migration 0051's creation guard forces it to the
     // database's own now() unconditionally, and the runtime role's own
     // column grant does not extend to created_at at all
     // (`runtime-grants.sql`), so a caller-chosen creation instant can
@@ -387,7 +387,7 @@ pub async fn create_admin_token(
 
 /// Idempotent: revoking an already-revoked (or missing) token is not an
 /// error. `Ok(true)` iff a token with this id exists (revoked now or
-/// already). Revocation is final (migration 0050's trigger): nothing
+/// already). Revocation is final (migration 0051's trigger): nothing
 /// ever un-revokes a token, including regaining the Admin role.
 ///
 /// Runs on the caller's own `tx`, like [`create_admin_token`]: revocation

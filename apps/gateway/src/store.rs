@@ -101,6 +101,7 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "alert_events",
     "alert_deliveries",
     "alert_reads",
+    "alert_recipient_outbox",
     // 0014 SCIM
     "scim_users",
     "scim_groups",
@@ -153,7 +154,7 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "audit_export_queue",
     // 0045 legal holds (#75)
     "legal_holds",
-    // 0050 admin API tokens, storage and lifecycle (#37 PR1)
+    // 0051 admin API tokens, storage and lifecycle (#37 PR1)
     "admin_api_tokens",
 ];
 /// Partitioned parents (0030/0031). Any partition of one of these in

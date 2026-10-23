@@ -1021,7 +1021,7 @@ REVOCABLE = [
     ("platform_role_grants", "{a}id::text"),
     ("browser_sessions", "encode({a}token_hash,'hex')"),
     ("workspace_invitations", "{a}id::text"),
-    # Admin API tokens (migration 0050, #37 PR1): revocation is final there
+    # Admin API tokens (migration 0051, #37 PR1): revocation is final there
     # too; a restore must not resurrect one the old database revoked.
     ("admin_api_tokens", "{a}id::text"),
 ]

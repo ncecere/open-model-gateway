@@ -71,8 +71,15 @@ DO $$ DECLARE r record; t text; BEGIN
  IF has_column_privilege('gateway_runtime','public.scim_groups','id','UPDATE') OR has_any_column_privilege('gateway_runtime','public.scim_group_members','UPDATE') OR has_table_privilege('gateway_runtime','public.scim_groups','TRUNCATE') OR has_table_privilege('gateway_runtime','public.scim_group_members','TRUNCATE') THEN RAISE EXCEPTION 'scim group identity rewritable'; END IF;
  IF has_table_privilege('gateway_runtime','public.scim_state','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.scim_state','singleton','UPDATE') THEN RAISE EXCEPTION 'scim state row replaceable'; END IF;
  -- Alerts (0011): no removal; incidents resolve once; rule identity/scope fixed.
- FOREACH t IN ARRAY ARRAY['alert_rules','alert_events','alert_deliveries','alert_reads'] LOOP
+ FOREACH t IN ARRAY ARRAY['alert_rules','alert_events','alert_deliveries','alert_reads','alert_recipient_outbox'] LOOP
   IF has_table_privilege('gateway_runtime','public.'||t,'DELETE,TRUNCATE') THEN RAISE EXCEPTION 'alert history removable: %',t; END IF;
+ END LOOP;
+ FOREACH t IN ARRAY ARRAY['delivery_id','fingerprint','internal_user_id'] LOOP
+  IF has_column_privilege('gateway_runtime','public.alert_recipient_outbox',t,'UPDATE') THEN RAISE EXCEPTION 'mutable outbox identity'; END IF;
+ END LOOP;
+ FOREACH t IN ARRAY ARRAY['state','attempt_count','next_attempt_at','lease_owner','lease_token','lease_expires_at','error'] LOOP
+  IF has_column_privilege('gateway_runtime','public.alert_recipient_outbox',t,'INSERT') THEN RAISE EXCEPTION 'outbox initial state bypass'; END IF;
+  IF NOT has_column_privilege('gateway_runtime','public.alert_recipient_outbox',t,'UPDATE') THEN RAISE EXCEPTION 'outbox not maintainable'; END IF;
  END LOOP;
  IF has_any_column_privilege('gateway_runtime','public.alert_reads','UPDATE') THEN RAISE EXCEPTION 'read marks rewritable'; END IF;
  FOREACH t IN ARRAY ARRAY['id','scope','workspace_id','kind','created_by','created_at'] LOOP
@@ -180,7 +187,7 @@ DO $$ DECLARE r record; t text; BEGIN
  IF EXISTS(SELECT FROM pg_constraint WHERE contype='f' AND conparentid=0 AND conrelid IN ('public.inference_executions'::regclass,'public.governance_reservations'::regclass)
    AND confrelid NOT IN ('public.inference_executions'::regclass)) THEN RAISE EXCEPTION 'hot history foreign keys present (MultiXacts)'; END IF;
  IF NOT EXISTS(SELECT FROM work_leases WHERE name='history_verify') THEN RAISE EXCEPTION 'history_verify lease missing'; END IF;
- -- Admin API tokens (0050/#37 PR1): no removal, no rename/renewal; only
+ -- Admin API tokens (0051/#37 PR1): no removal, no rename/renewal; only
  -- revocation and successful-use tracking are runtime-writable.
  IF has_table_privilege('gateway_runtime','public.admin_api_tokens','DELETE,TRUNCATE') THEN RAISE EXCEPTION 'admin API tokens removable'; END IF;
  FOREACH t IN ARRAY ARRAY['id','owner_user_id','name','secret_hash','scopes','ip_allowlist','created_at','expires_at'] LOOP
@@ -502,6 +509,13 @@ BEGIN
   BEGIN INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,summary) VALUES(gen_random_uuid(),ar,'scim_last_admin','y',1,'critical','x'); RAISE EXCEPTION 'rule scim alert allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
   PERFORM id FROM alert_events WHERE id=ev FOR UPDATE;
   INSERT INTO alert_deliveries(id,event_id,transition) VALUES(gen_random_uuid(),ev,'fired');
+  INSERT INTO alert_recipient_outbox(delivery_id,fingerprint) SELECT id,sha256('probe'::bytea) FROM alert_deliveries WHERE event_id=ev;
+  UPDATE alert_deliveries SET initialized=true WHERE event_id=ev;
+  UPDATE alert_recipient_outbox SET state='leased',attempt_count=1,lease_owner=gen_random_uuid(),lease_token=gen_random_uuid(),lease_expires_at=now()+interval '90 seconds' WHERE delivery_id IN(SELECT id FROM alert_deliveries WHERE event_id=ev);
+  UPDATE alert_recipient_outbox SET state='sent',lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL WHERE delivery_id IN(SELECT id FROM alert_deliveries WHERE event_id=ev);
+  BEGIN UPDATE alert_recipient_outbox SET fingerprint=sha256('rewrite'::bytea); RAISE EXCEPTION 'outbox rekey allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN DELETE FROM alert_recipient_outbox; RAISE EXCEPTION 'outbox deletion allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN INSERT INTO alert_recipient_outbox(delivery_id,fingerprint,state) SELECT id,sha256('bypass'::bytea),'sent' FROM alert_deliveries WHERE event_id=ev; RAISE EXCEPTION 'outbox initial state bypass allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   UPDATE alert_deliveries SET status='partial',recipients=2,sent=1,failed=1,error='rejected',completed_at=now() WHERE event_id=ev;
   UPDATE alert_events SET resolved_at=now(),resolution='cleared' WHERE id=ev;
   INSERT INTO alert_reads(user_id,event_id) VALUES(u,ev);
@@ -763,7 +777,7 @@ BEGIN
  BEGIN INSERT INTO config_versions(topic) VALUES('other'); RAISE EXCEPTION 'configuration topic insert allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  BEGIN DELETE FROM config_versions; RAISE EXCEPTION 'configuration topic removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  BEGIN TRUNCATE TABLE config_versions; RAISE EXCEPTION 'configuration topic truncate allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
- -- Admin API tokens (0050/#37 PR1) role-loss authority-change coverage
+ -- Admin API tokens (0051/#37 PR1) role-loss authority-change coverage
  -- (coordinator review issue 4): the runtime role has none of the three
  -- privileges that would let it reach the shapes migration 0027 treats as
  -- an authority change but a narrower trigger might have missed --
@@ -776,7 +790,7 @@ BEGIN
   OR has_table_privilege('gateway_runtime','public.platform_role_grants','DELETE') THEN
   RAISE EXCEPTION 'runtime can reach an authority-change shape the role-loss trigger relies on being database-owner-only';
  END IF;
- -- Admin API tokens (0050/#37 PR1): create, idempotent revoke, finality,
+ -- Admin API tokens (0051/#37 PR1): create, idempotent revoke, finality,
  -- immutability and the owner-invalidation triggers (role loss, suspension,
  -- cleanup), as runtime.
  DECLARE au uuid:=gen_random_uuid(); ag uuid:=gen_random_uuid(); at1 uuid:=gen_random_uuid(); at2 uuid:=gen_random_uuid(); at3 uuid:=gen_random_uuid(); BEGIN
@@ -813,7 +827,7 @@ BEGIN
   -- review issue 3); this whole script never commits (it ends in
   -- ROLLBACK), so force it to fire now, mid-transaction, to observe it.
   -- This is the one explicitly-permitted use of SET CONSTRAINTS on this
-  -- trigger (migration 0050's own comment): the gateway itself must never
+  -- trigger (migration 0051's own comment): the gateway itself must never
   -- issue it, and the static assertion above already confirms the
   -- trigger really is DEFERRABLE INITIALLY DEFERRED independent of this
   -- forced-firing probe.

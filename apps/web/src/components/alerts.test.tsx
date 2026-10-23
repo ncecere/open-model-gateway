@@ -47,6 +47,16 @@ describe("Admin › Settings › Alerts", () => {
     expect(screen.getAllByRole("link", { name: /New rule/ })[0]!.getAttribute("href")).toBe("/admin/alerts/new");
     client.clear();
   });
+  it("shows aggregate retry and exhaustion facts without recipient details", async () => {
+    const email = { status: "pending", recipients: 2, sent: 1, failed: 0, error: "connection", attempt_count: 2, retrying: true, waiting: 1, exhausted: 0, next_attempt_at: "2026-10-22T10:00:00Z" };
+    serve(admin, path => path.startsWith("/api/v1/platform/alerts/events") ? { data: [{ ...notification, email }, { ...notification, id: "e2", summary: "Exhausted delivery", email: { ...email, status: "failed", sent: 0, waiting: 0, retrying: false, exhausted: 1, next_attempt_at: null } }], has_more: false } : undefined);
+    const { client } = await mount("/admin/settings/alerts?tab=history");
+    expect(await screen.findByText("Retrying · 1 waiting")).toBeTruthy();
+    expect(screen.getByText("Exhausted · 1")).toBeTruthy();
+    expect(document.body.textContent).toContain("next");
+    expect(document.body.textContent).not.toContain("fingerprint");
+    client.clear();
+  });
   it("creates a rule from the header actions with exact values, validating first", async () => {
     const user = userEvent.setup(), fetch = serve(admin, (path, init) => init?.method === "POST" && path === "/api/v1/platform/alerts/rules" ? { ...rule, id: "r2" } : undefined);
     const { client, router } = await mount("/admin/alerts/new");

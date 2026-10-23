@@ -315,7 +315,7 @@ async fn create_canonicalizes_allowlist_entries(pool: PgPool) {
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn database_level_schema_constraints_hold_even_bypassing_the_rust_validator(pool: PgPool) {
-    // These exercise migration 0050's CHECK constraints directly: the Rust
+    // These exercise migration 0051's CHECK constraints directly: the Rust
     // validator in create_admin_token is a fail-fast gate, not the only one.
     let owner = admin(&pool, "owner@test.invalid").await;
     let make_hash = |b: u8| vec![b; 32];
@@ -381,7 +381,7 @@ async fn database_level_schema_constraints_hold_even_bypassing_the_rust_validato
         ),
     ] {
         // These negative probes do not hold the owner's scope lock, so
-        // migration 0050's creation guard now refuses them at its own
+        // migration 0051's creation guard now refuses them at its own
         // lock-holding check (OM003) before the row ever reaches the
         // schema CHECK this test means to exercise (adversarial re-review
         // of #37 PR1, issue 6); either way the row is refused, which is
@@ -604,7 +604,7 @@ async fn lookup_rejects_expired_revoked_and_owner_not_admin(pool: PgPool) {
     .execute(&pool)
     .await
     .unwrap();
-    // Migration 0050's trigger already revoked it on the role-loss UPDATE
+    // Migration 0051's trigger already revoked it on the role-loss UPDATE
     // above (owner-invalidation); the lookup refuses it either way.
     assert!(
         store
@@ -794,7 +794,7 @@ async fn owner_transitions_revoke_tokens_and_regaining_admin_never_restores_them
 /// to already serialize exactly this scenario today (verified by hand with
 /// two real `psql` sessions before writing this test). That is a different
 /// migration's incidental coverage, not a property `admin_api_tokens` owns
-/// or that migration 0050 asserts anywhere. This test disables that one
+/// or that migration 0051 asserts anywhere. This test disables that one
 /// trigger for its duration so it exercises `omg_admin_tokens_role_lost`'s
 /// own correctness in isolation, independent of whether 0027's lock
 /// continues to cover this case.
@@ -1063,7 +1063,7 @@ fn is_deadlock(e: &sqlx::Error) -> bool {
 
 /// Coordinator review of #37 PR1, follow-up: the `users ... FOR UPDATE`
 /// fix for issue 1 introduced a new deadlock (40P01) that did not exist
-/// before migration 0050.
+/// before migration 0051.
 ///
 /// The manual demotion path (management/directory.rs) locks the owner's
 /// `users` row `FOR UPDATE` first, then updates the grant, which fires
@@ -1074,7 +1074,7 @@ fn is_deadlock(e: &sqlx::Error) -> bool {
 /// `FOR UPDATE`. T1 holds the row and waits for the advisory lock; T2
 /// holds the advisory lock and waits for the row: a circular wait Postgres
 /// resolves by aborting one side with SQLSTATE 40P01. Before migration
-/// 0050 neither trigger touched the `users` row at all, so this deadlock
+/// 0051 neither trigger touched the `users` row at all, so this deadlock
 /// is new.
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn concurrent_manual_and_group_revocation_does_not_deadlock(pool: PgPool) {
@@ -1638,7 +1638,7 @@ async fn a_real_group_grant_loss_with_no_replacement_still_revokes_at_commit(poo
 
 /// Coordinator review of #37 PR1, issue 4 (MEDIUM): migration 0027 treats
 /// `UPDATE OF revoked_at,user_id,role OR DELETE` on `platform_role_grants`
-/// as authority changes, but 0050's role-loss trigger only watched
+/// as authority changes, but 0051's role-loss trigger only watched
 /// `revoked_at`. These three shapes left a token unrevoked and usable
 /// again after a re-grant, even though the owner's only `admin` row was
 /// gone. The runtime role itself has none of these three privileges

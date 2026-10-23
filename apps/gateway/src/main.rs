@@ -477,15 +477,25 @@ async fn run(cli: Cli) -> Result<()> {
                 "pass --once; `serve` evaluates alerts every GATEWAY_ALERT_INTERVAL_SECONDS"
             );
             store.preflight_enterprise().await?;
-            match open_model_gateway::alerts::evaluate_once(&store).await? {
-                Some(report) => {
-                    let emails = open_model_gateway::alerts::deliver_pending(&store, 1000).await;
-                    println!(
-                        "Evaluated {} alert rules: {} fired, {} resolved, {} failed; {} email deliveries processed.",
-                        report.rules, report.fired, report.resolved, report.failed_rules, emails
-                    );
-                }
-                None => println!("Another replica is evaluating alerts right now; nothing done."),
+            let report = open_model_gateway::alerts::evaluate_once(&store).await?;
+            // Delivery is fenced per recipient claim, not by the evaluation
+            // lease, so draining is safe (and useful) even when another
+            // replica is evaluating. Bounded so a hanging relay cannot hang
+            // the command.
+            let emails = tokio::time::timeout(
+                std::time::Duration::from_secs(25 * 40 + 60),
+                open_model_gateway::alerts::deliver_pending(&store, 1000),
+            )
+            .await
+            .unwrap_or(0);
+            match report {
+                Some(report) => println!(
+                    "Evaluated {} alert rules: {} fired, {} resolved, {} failed; {} email deliveries processed.",
+                    report.rules, report.fired, report.resolved, report.failed_rules, emails
+                ),
+                None => println!(
+                    "Another replica is evaluating alerts right now; {emails} email deliveries processed."
+                ),
             }
         }
         Command::Budget {
@@ -923,6 +933,8 @@ async fn run(cli: Cli) -> Result<()> {
                     .await;
                 }
             });
+            // Preview transport only (#98 PR 1). No engine/HTTP spans yet.
+            let traces = open_model_gateway::telemetry::Runtime::start(config.traces);
             let served = axum::serve(
                 listener,
                 http::router_with_identity(store, web, engine, identity)
@@ -933,6 +945,9 @@ async fn run(cli: Cli) -> Result<()> {
             )
             .with_graceful_shutdown(shutdown_signal())
             .await;
+            if let Some(traces) = traces {
+                traces.shutdown().await;
+            }
             if let Some(alerts) = alerts {
                 alerts.abort();
                 let _ = alerts.await;
@@ -1170,6 +1185,11 @@ mod demo {
             admission_mode: Default::default(),
             listen_database_url: None,
             config_cache: true,
+            traces: open_model_gateway::config::TraceConfig::from_lookup(
+                |_| None,
+                open_model_gateway::config::Environment::Development,
+            )
+            .unwrap(),
         };
         assert!(ensure_demo_config(&config).is_ok());
         for url in [

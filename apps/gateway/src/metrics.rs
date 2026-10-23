@@ -43,6 +43,10 @@ const MAX_LABEL_CHARS: usize = 96;
 /// Reservation gauges are refreshed at most this often, however often scraped.
 const RESERVATION_REFRESH: Duration = Duration::from_secs(15);
 
+// Pending work is bounded by its admission window; terminal failures must
+// remain visible for a full observation window after completion/cleanup.
+const ALERT_DELIVERY_COUNTS: &str = "SELECT count(*) FILTER(WHERE retrying),count(*) FILTER(WHERE exhausted>0),count(*) FILTER(WHERE status IN ('failed','partial')) FROM alert_deliveries WHERE (status='pending' AND created_at>clock_timestamp()-interval '24 hours') OR (status<>'pending' AND completed_at>clock_timestamp()-interval '24 hours')";
+
 pub const CONTENT_TYPE: &str = "application/openmetrics-text; version=1.0.0; charset=utf-8";
 
 fn request_buckets() -> Histogram {
@@ -178,6 +182,8 @@ pub struct Metrics {
     reservations: Family<L1, Gauge>,
     alert_runs: Family<L1, Counter>,
     alert_rule_failures: Counter,
+    alert_delivery_attempts: Family<L1, Counter>,
+    alert_delivery_queue: Family<L1, Gauge>,
     deadlock_retries: Family<L1, Counter>,
     scope_lock_wait: Histograms<L2>,
     scope_lock_waiting: Family<L1, Gauge>,
@@ -201,6 +207,9 @@ pub struct Metrics {
     egress_denied: Family<L1, Counter>,
     audit_export_deliveries: Family<L1, Counter>,
     audit_export_rejected_records: Counter,
+    trace_dropped_spans: [Counter; crate::telemetry::DropReason::COUNT],
+    trace_deliveries: [Counter; crate::telemetry::Delivery::COUNT],
+    trace_rejected_spans: Counter,
     audit_export_queued: Gauge,
     audit_export_oldest:
         prometheus_client::metrics::gauge::Gauge<f64, std::sync::atomic::AtomicU64>,
@@ -288,6 +297,26 @@ pub struct AttemptObservation<'a> {
 impl Metrics {
     fn new() -> Self {
         let mut registry = Registry::with_prefix("gateway");
+        // Pre-create every trace label once. Recording increments plain atomic
+        // counters, never takes a Family's lock or allocates label strings.
+        let trace_drops = Family::<L1, Counter>::default();
+        let trace_dropped_spans = std::array::from_fn(|i| {
+            trace_drops
+                .get_or_create(&[(
+                    "reason",
+                    crate::telemetry::DropReason::ALL[i].as_str().to_owned(),
+                )])
+                .clone()
+        });
+        let trace_exchanges = Family::<L1, Counter>::default();
+        let trace_deliveries = std::array::from_fn(|i| {
+            trace_exchanges
+                .get_or_create(&[(
+                    "outcome",
+                    crate::telemetry::Delivery::ALL[i].as_str().to_owned(),
+                )])
+                .clone()
+        });
         let metrics = Self {
             http_requests: Family::default(),
             http_duration: Family::new_with_constructor(request_buckets),
@@ -303,6 +332,8 @@ impl Metrics {
             reservations: Family::default(),
             alert_runs: Family::default(),
             alert_rule_failures: Counter::default(),
+            alert_delivery_attempts: Family::default(),
+            alert_delivery_queue: Family::default(),
             deadlock_retries: Family::default(),
             scope_lock_wait: Family::new_with_constructor(phase_buckets),
             scope_lock_waiting: Family::default(),
@@ -326,6 +357,9 @@ impl Metrics {
             egress_denied: Family::default(),
             audit_export_deliveries: Family::default(),
             audit_export_rejected_records: Counter::default(),
+            trace_dropped_spans,
+            trace_deliveries,
+            trace_rejected_spans: Counter::default(),
             audit_export_queued: Gauge::default(),
             audit_export_oldest: Default::default(),
             config_listener: Gauge::default(),
@@ -416,6 +450,16 @@ impl Metrics {
             "alert_rule_failures",
             "Individual alert rules that failed during an evaluation",
             metrics.alert_rule_failures.clone(),
+        );
+        registry.register(
+            "alert_email_attempts",
+            "Recipient attempt outcomes (no recipient labels)",
+            metrics.alert_delivery_attempts.clone(),
+        );
+        registry.register(
+            "alert_email_deliveries",
+            "Pending deliveries created or terminal failures completed in the last 24 hours",
+            metrics.alert_delivery_queue.clone(),
         );
         registry.register(
             "lock_deadlock_retries",
@@ -511,6 +555,21 @@ impl Metrics {
             "audit_export_rejected_records",
             "Audit events an OTLP collector refused for good (not retried; receivers see the seq gap)",
             metrics.audit_export_rejected_records.clone(),
+        );
+        registry.register(
+            "trace_dropped_spans",
+            "Trace spans dropped locally, by fixed reason",
+            trace_drops,
+        );
+        registry.register(
+            "trace_deliveries",
+            "Trace export exchanges, by fixed outcome (no retries)",
+            trace_exchanges,
+        );
+        registry.register(
+            "trace_rejected_spans",
+            "Trace spans rejected by the collector partialSuccess acknowledgement",
+            metrics.trace_rejected_spans.clone(),
         );
         registry.register(
             "audit_export_queued",
@@ -620,6 +679,18 @@ impl Metrics {
         self.config_changes
             .get_or_create(&[("topic", topic.to_owned())])
             .inc();
+    }
+
+    pub(crate) fn trace_drop(&self, reason: crate::telemetry::DropReason, n: u64) {
+        self.trace_dropped_spans[reason as usize].inc_by(n);
+    }
+
+    pub(crate) fn trace_delivery(&self, outcome: crate::telemetry::Delivery) {
+        self.trace_deliveries[outcome as usize].inc();
+    }
+
+    pub(crate) fn trace_rejected(&self, n: u64) {
+        self.trace_rejected_spans.inc_by(n);
     }
 
     pub(crate) fn audit_export_delivery(&self, outcome: &'static str) {
@@ -883,6 +954,12 @@ impl Metrics {
             .inc();
     }
 
+    pub fn observe_alert_delivery(&self, outcome: &'static str) {
+        self.alert_delivery_attempts
+            .get_or_create(&[("outcome", outcome.to_owned())])
+            .inc();
+    }
+
     pub fn observe_alert_run(&self, result: &'static str, failed_rules: usize) {
         self.alert_runs
             .get_or_create(&[("result", result.to_owned())])
@@ -1039,6 +1116,7 @@ impl Metrics {
             && leases.held(crate::leases::Lease::Metrics).is_none()
         {
             self.reservations.clear();
+            self.alert_delivery_queue.clear();
             *self
                 .reservations_refreshed
                 .lock()
@@ -1054,6 +1132,25 @@ impl Metrics {
                 return;
             }
             *refreshed = Some(Instant::now());
+        }
+        match tokio::time::timeout(
+            Duration::from_secs(2),
+            sqlx::query_as::<_, (i64, i64, i64)>(ALERT_DELIVERY_COUNTS).fetch_one(pool),
+        )
+        .await
+        {
+            Ok(Ok((retrying, exhausted, failed))) => {
+                for (state, count) in [
+                    ("retrying", retrying),
+                    ("exhausted", exhausted),
+                    ("failed", failed),
+                ] {
+                    self.alert_delivery_queue
+                        .get_or_create(&[("state", state.to_owned())])
+                        .set(count);
+                }
+            }
+            _ => self.collection_error("alert_email"),
         }
         // The workspace lifetime totals rows (0015) count every pending and
         // unknown reservation exactly (each belongs to one workspace): one row
@@ -1340,6 +1437,7 @@ mod tests {
         m.observe_settlement(Settlement::Settled);
         m.observe_settlement(Settlement::Unknown);
         m.observe_alert_run("ok", 2);
+        m.observe_alert_delivery("transient_failure");
         m.observe_file_store("s3", "put", None);
         m.observe_file_store("local", "get", Some("integrity"));
         m.observe_file_store_bytes("s3", "put", 42);
@@ -1358,12 +1456,67 @@ mod tests {
             r#"gateway_settlements_total{outcome="unknown"} 1"#,
             r#"gateway_alert_evaluations_total{result="ok"} 1"#,
             "gateway_alert_rule_failures_total 2",
+            r#"gateway_alert_email_attempts_total{outcome="transient_failure"} 1"#,
             r#"gateway_file_store_operations_total{backend="s3",op="put",outcome="ok"} 1"#,
             r#"gateway_file_store_operations_total{backend="local",op="get",outcome="integrity"} 1"#,
             r#"gateway_file_store_bytes_total{backend="s3",op="put"} 42"#,
             "# EOF",
         ] {
             assert!(out.contains(expected), "missing {expected} in\n{out}");
+        }
+    }
+
+    #[cfg(feature = "integration-tests")]
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn expired_outbox_cleanup_remains_visible_past_failure_alert_window(pool: sqlx::PgPool) {
+        let store = Store::new(pool.clone());
+        let event = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,summary) VALUES($1,'scim_last_admin','scim_last_admin','user',100,'critical','Test')")
+            .bind(event).execute(&pool).await.unwrap();
+        let initialized = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO alert_deliveries(id,event_id,transition,created_at,initialized) VALUES($1,$2,'fired',clock_timestamp()-interval '25 hours',false),(gen_random_uuid(),$2,'resolved',clock_timestamp()-interval '25 hours',false)")
+            .bind(initialized).bind(event).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO alert_recipient_outbox(delivery_id,fingerprint) VALUES($1,sha256('test'::bytea))")
+            .bind(initialized).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE alert_deliveries SET initialized=true WHERE id=$1")
+            .bind(initialized)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let before = Metrics::new().render(Some(&store)).await;
+        assert!(before.contains("gateway_alert_email_deliveries{state=\"retrying\"} 0"));
+        crate::alerts::deliver_pending(&store, 25).await;
+        let outcomes: Vec<(String, i32, i32, bool)> = sqlx::query_as("SELECT status,exhausted,attempt_count,completed_at IS NOT NULL FROM alert_deliveries ORDER BY initialized")
+            .fetch_all(&pool).await.unwrap();
+        assert_eq!(
+            outcomes,
+            vec![("failed".into(), 0, 0, true), ("failed".into(), 1, 0, true)]
+        );
+        // Cleanup made no network attempt; never inflate its attempt counter.
+        {
+            let scrape = Metrics::new().render(Some(&store)).await;
+            assert!(
+                scrape.contains("gateway_alert_email_deliveries{state=\"failed\"} 2"),
+                "recent cleanup failures must survive the 15m alert window"
+            );
+            assert!(scrape.contains("gateway_alert_email_deliveries{state=\"exhausted\"} 1"));
+            assert!(
+                !scrape.contains("gateway_alert_email_attempts_total{"),
+                "cleanup is not an SMTP attempt"
+            );
+        }
+        // Evaluate the same scrape query at later clocks without rewriting
+        // immutable terminal rows or sleeping through the alert's 15m window.
+        for (age, expected) in [
+            ("16 minutes", (0_i64, 1_i64, 2_i64)),
+            ("25 hours", (0, 0, 0)),
+        ] {
+            let later = ALERT_DELIVERY_COUNTS.replace(
+                "clock_timestamp()",
+                &format!("(clock_timestamp()+interval '{age}')"),
+            );
+            let counts: (i64, i64, i64) = sqlx::query_as(&later).fetch_one(&pool).await.unwrap();
+            assert_eq!(counts, expected);
         }
     }
 

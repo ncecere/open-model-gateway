@@ -663,6 +663,26 @@ async fn alert_evaluation_runs_as_runtime(pool: &PgPool) {
         0,
         "key reminder retirements never enqueue resolution mail"
     );
+    // 0050: the real outbox claim/completion path, as runtime. An unlisted
+    // host is refused before DNS/SMTP, with terminal outcomes (no real mail).
+    sqlx::query("UPDATE installation_settings SET smtp_host='outbox-runtime.example.invalid',smtp_port=587,smtp_tls='starttls',smtp_from_address='gateway@example.invalid' WHERE singleton").execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO alert_deliveries(id,event_id,transition) SELECT gen_random_uuid(),e.id,'resolved' FROM alert_events e JOIN alert_rules r ON r.id=e.rule_id WHERE r.name='Project budgets'").execute(&runtime).await.unwrap();
+    assert_eq!(
+        open_model_gateway::alerts::deliver_pending(&store, 25).await,
+        1
+    );
+    let (attempts, failed): (i32, i32) = sqlx::query_as(
+        "SELECT attempt_count,failed FROM alert_deliveries WHERE transition='resolved'",
+    )
+    .fetch_one(&runtime)
+    .await
+    .unwrap();
+    assert_eq!((attempts, failed), (2, 2));
+    assert_eq!(
+        open_model_gateway::alerts::deliver_pending(&store, 25).await,
+        0
+    );
+    sqlx::query("UPDATE installation_settings SET smtp_host=NULL,smtp_port=NULL,smtp_tls=NULL,smtp_from_address=NULL WHERE singleton").execute(pool).await.unwrap();
     // The synthetic minute counters are not backed by history: zero them so
     // `budget verify` below stays exact (zero rows equal missing ones).
     sqlx::query("UPDATE rate_minute_counters SET requests=0 WHERE scope_kind='workspace' AND requests=120 AND unreserved=0 AND tokens=0")
@@ -1289,7 +1309,7 @@ async fn admin_tokens_run_as_runtime(pool: &PgPool) {
     // own predicate. The runtime role's INSERT grant now excludes
     // created_at (and revoked_at/last_used_at/last_used_address)
     // entirely, so the identical attack is refused at the column-grant
-    // level, before migration 0050's creation guard (which forces
+    // level, before migration 0051's creation guard (which forces
     // created_at to now() regardless) is ever reached.
     {
         let mut tx = runtime.begin().await.unwrap();

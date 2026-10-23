@@ -26,6 +26,11 @@ for (const width of [1440, 390]) {
     await holder.page.setViewportSize({ width, height: 900 });
     const auditor = await signIn(browser, "auditor");
     try {
+      // Self-contained regardless of project run order: this journey's
+      // `not_configured` assertions require the shared installation's SMTP
+      // to be unconfigured, so never rely on another spec (e.g.
+      // alert-email) to have already cleared it.
+      expect((await api(operator.page, "PUT", "/platform/settings/email", {})).ok()).toBe(true);
       const me = await (await api(holder.page, "GET", "/me")).json();
       const admin = await (await api(operator.page, "GET", "/me")).json();
       const workspaceName = `Expiry acceptance ${width}`;
