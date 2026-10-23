@@ -6,6 +6,18 @@ Notes for changes on `main` after [v0.7.2](v0.7.2.md). They become the next rele
 
 Adds an opt-in, bounded OTLP/HTTP JSON trace recorder/exporter using existing dependencies, with typed attributes, deterministic sampling/correlation primitives, dedicated secret headers and the gateway's egress protections. Disabled unless `GATEWAY_TRACES_OTLP_URL` is set; `OTEL_*` is ignored. Collector failure never blocks or retries inference. No engine instrumentation or production spans are emitted yet: those arrive in PR 2, with collector acceptance in PR 3. See [operations](../operations.md#traces-preview-transport-only-98-pr-1).
 
+## Helm: CNPG backups through the Barman Cloud plugin (#261)
+
+`deploy/helm/open-model-gateway`'s CNPG `Cluster` backup gains a `cnpg.cluster.backup.method` choice: `barmanObjectStore` (default, CNPG's in-tree backup, rendering unchanged from earlier releases) or `plugin` (the Barman Cloud plugin upstream CNPG now recommends, and the only mode the homelab cluster runs).
+
+In `plugin` mode the chart additionally renders a `barmancloud.cnpg.io/v1` `ObjectStore` (named `<cluster>-backup-store`, or `cnpg.cluster.backup.plugin.objectStoreName`) from `cnpg.cluster.backup.plugin.objectStore`; the Cluster gets `spec.plugins: [{name: barman-cloud.cloudnative-pg.io, isWALArchiver: true, parameters: {barmanObjectName: ...}}]` and no in-tree `spec.backup` block; the `ScheduledBackup` gets `method: plugin` and `pluginConfiguration.name: barman-cloud.cloudnative-pg.io`, keeping its existing `schedule` and `backupOwnerReference: self`. S3 credentials are Secret name/key references only (`s3Credentials.accessKeyId`/`secretAccessKey`); `values.schema.json` validates `method`'s enum and refuses an inline credential string. `wal`/`data` tuning and the plugin sidecar's `instanceSidecarConfiguration` resources render as given.
+
+This chart's `NetworkPolicy` templates govern only the gateway's own pods; they do not and never did select CNPG's instance pods in either backup mode, so an operator running a default-deny namespace policy must add their own egress rule for the CNPG pods to reach the object store (documented in `docs/kubernetes.md#backups`, matching the homelab's own `postgres-egress` policy). Restoring from either backup mode is a CNPG-native recovery into a fresh Cluster, not a chart operation; `docs/kubernetes.md#backups` points to #146 and `docs/operations.md`'s "Backups and restore" runbook for re-applying revocations and the spend-since-backup caveat afterward.
+
+See [kubernetes](../kubernetes.md#backups).
+
+Switching an **existing** cluster between modes is a one-way cutover: WAL archiving restarts under the new mode and the plugin doesn't adopt the old backup catalog, so take a fresh base backup right away and don't rely on point-in-time recovery across the switch ([Kubernetes › Backups](../kubernetes.md#backups)). Omitting S3 credentials in plugin mode now fails with the required-value message instead of a template error.
+
 ## Instrumentation and correlation for interactive generation traces (#98, PR 2)
 
 PR 1's exporter now has a production span source, limited to one complete interactive generation path: chat completions, Responses and Messages through the shared engine. Nothing else (async jobs, batches, embeddings, images, audio, realtime) is instrumented.

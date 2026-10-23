@@ -208,12 +208,84 @@ refunded or charged twice (#25).
 
 ## Backups
 
-`cnpg.cluster.backup.enabled=true` renders a `ScheduledBackup` against a Barman object store you
-configure in `cnpg.cluster.backup.barmanObjectStore` (CNPG's own object-store backup, independent of
-the application-level dump). For the logical, lineage-checked dump/restore workflow this project
-documents everywhere else, keep running `scripts/backup.py` (see `docs/operations.md` "Backups and
-restore") against the Cluster's `-rw` service from outside the cluster, or as a CronJob you add
-separately; this chart does not wrap `scripts/backup.py` in a Job.
+`cnpg.cluster.backup.enabled=true` renders a CNPG object-store backup (continuous WAL archiving plus
+a scheduled base backup), independent of the application-level dump. `cnpg.cluster.backup.method`
+picks one of two mutually exclusive ways to reach the object store (#261):
+
+- **`barmanObjectStore` (default, unchanged since earlier releases).** CNPG's in-tree backup: the
+  Cluster gets a `spec.backup.barmanObjectStore` block rendered as-is from
+  `cnpg.cluster.backup.barmanObjectStore`, and the `ScheduledBackup` has no `method`/`pluginConfiguration`.
+- **`plugin`.** The Barman Cloud plugin, which upstream CNPG now recommends over the in-tree backup.
+  The chart additionally renders a `barmancloud.cnpg.io/v1` `ObjectStore` (named `<cluster>-backup-store`,
+  or `cnpg.cluster.backup.plugin.objectStoreName`) from `cnpg.cluster.backup.plugin.objectStore`; the
+  Cluster gets `spec.plugins: [{name: barman-cloud.cloudnative-pg.io, isWALArchiver: true, parameters:
+  {barmanObjectName: <that ObjectStore's name>}}]` and **no** `spec.backup` block; the `ScheduledBackup`
+  gets `method: plugin` and `pluginConfiguration.name: barman-cloud.cloudnative-pg.io`, keeping its
+  `schedule` and `backupOwnerReference: self`. The [Barman Cloud plugin](https://github.com/cloudnative-pg/plugin-barman-cloud)
+  must already be installed cluster-wide, the same way CNPG itself is.
+
+  S3 credentials are **Secret references only**: `s3Credentials.accessKeyId`/`secretAccessKey` are each
+  `{name: <Secret>, key: <data key>}`, validated by `values.schema.json` (an inline key string is
+  refused at `helm template`/`install` time). The chart never generates or stores that Secret.
+  `wal`/`data` (compression, parallelism) and `instanceSidecarConfiguration` (the plugin sidecar's
+  resources) are rendered as given; see the plugin's `ObjectStore` CRD for the full field set.
+
+  ```yaml
+  cnpg:
+    cluster:
+      backup:
+        enabled: true
+        method: plugin
+        scheduledBackup:
+          schedule: "0 15 3 * * *" # seconds first: 03:15 UTC daily
+        plugin:
+          objectStore:
+            destinationPath: s3://omg-db-backups/
+            endpointURL: http://rustfs-svc.object-storage.svc.cluster.local:9000
+            retentionPolicy: "14d"
+            s3Credentials:
+              accessKeyId: { name: omg-backup-s3, key: ACCESS_KEY_ID }
+              secretAccessKey: { name: omg-backup-s3, key: ACCESS_SECRET_KEY }
+            wal:
+              compression: gzip
+              maxParallel: 2
+            data:
+              compression: gzip
+              jobs: 2
+            instanceSidecarConfiguration:
+              resources:
+                requests: { cpu: 10m, memory: 64Mi }
+                limits: { memory: 256Mi }
+  ```
+
+  This mirrors the homelab's own `pi-durable-platform` `ObjectStore`/`ScheduledBackup` pair; the
+  bucket, its scoped S3 user and the Secret that backs `s3Credentials` are provisioned outside this
+  chart (see that cluster's `tools/provision-*-backups.py`), not by OMG itself.
+
+**Switching an existing cluster between modes is a one-way cutover, not a migration.** Changing
+`cnpg.cluster.backup.method` on a running release (for example `barmanObjectStore` → `plugin`)
+removes `spec.backup.barmanObjectStore` and adds `spec.plugins` on the live Cluster. WAL archiving
+stops and restarts under the new mode, and the plugin does not take over the old backup catalog. Take
+a fresh base backup in the new mode right away, keep the old object-store prefix until its retention
+passes, and don't rely on point-in-time recovery across the switch. To be able to restore from either
+chain during the transition, point the new mode at a different `destinationPath`.
+
+**NetworkPolicy:** this chart's `NetworkPolicy` templates (`networkPolicy.enabled`) govern only the
+gateway Deployment's own pods (`app.kubernetes.io/component: gateway`); they do not select CNPG's
+instance pods (`cnpg.io/cluster: <name>`) at all, in either backup mode. If your namespace runs a
+default-deny `NetworkPolicy`, add your own rule allowing egress from the CNPG instance pods
+(`podSelector: {matchLabels: {cnpg.io/cluster: <release>-db}}`) to the object store's namespace and
+port (for example `object-storage`/`9000` for an in-cluster RustFS), the same way
+`pi-durable-platform`'s `postgres-egress` policy does — this chart does not render that policy for you.
+
+For the logical, lineage-checked dump/restore workflow this project documents everywhere else, keep
+running `scripts/backup.py` (see `docs/operations.md` "Backups and restore") against the Cluster's
+`-rw` service from outside the cluster, or as a CronJob you add separately; this chart does not wrap
+`scripts/backup.py` in a Job. Either CNPG backup mode above restores through CNPG's own
+[bootstrap.recovery](https://cloudnative-pg.io/documentation/current/recovery/) into a fresh Cluster,
+not through this chart; after any restore (CNPG or `scripts/backup.py`), re-apply revocations for keys,
+membership and platform grants revoked after the backup was taken and expect spend recorded since the
+backup to be lost — see #146 and `docs/operations.md` "Backups and restore" for that runbook.
 
 ## Troubleshooting
 
