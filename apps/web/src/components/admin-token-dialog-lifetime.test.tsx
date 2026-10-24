@@ -410,7 +410,7 @@ describe("CreateAdminTokenDialog Copy lifetime", () => {
     expectNoSecretPersistence(view);
   });
 
-  it("keeps the manual-copy fallback when a live clipboard write fails", async () => {
+  it("keeps the manual-copy fallback when a live clipboard write fails, with a visible message naming no secret", async () => {
     const view = await setup();
     const write = vi.spyOn(navigator.clipboard, "writeText").mockRejectedValueOnce(new Error("synthetic clipboard denial"));
     const button = await issue(view);
@@ -418,6 +418,13 @@ describe("CreateAdminTokenDialog Copy lifetime", () => {
     expect(write).toHaveBeenCalledExactlyOnceWith(secret);
     expect(screen.getByRole("button", { name: "Copy token" })).toBeDefined();
     expect(screen.getByRole("textbox", { name: "Admin API token" })).toBeDefined();
+    const status = await screen.findByText("Clipboard unavailable. Select and copy the token manually.");
+    expect(status.textContent).not.toContain(secret);
+    // A corrected retry clears the failure message once the clipboard succeeds.
+    write.mockResolvedValueOnce();
+    await view.user.click(button);
+    await screen.findByRole("button", { name: "Copied" });
+    expect(status.textContent).toBe("");
   });
 
   it("proves Copy handler capture is sound: invoking the actual captured onClick binding directly copies the live secret (positive control)", async () => {

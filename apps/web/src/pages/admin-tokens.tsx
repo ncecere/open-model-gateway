@@ -24,9 +24,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { api, platformPath, type Session } from "../lib/api";
 import {
-  adminTokenCidrError, adminTokenExpiryDefault, adminTokenExpiryError, adminTokenNameError,
-  adminTokenPill, adminTokenScopes, adminTokenScopesError, adminTokenStatus, canRevokeAdminToken,
-  parseCidrAllowlist, scopeLabel, type AdminToken, type AdminTokenScope,
+  adminTokenAllowlistSummary, adminTokenCidrError, adminTokenExpiryDefault, adminTokenExpiryError,
+  adminTokenNameError, adminTokenPill, adminTokenScopes, adminTokenScopesError, adminTokenStatus,
+  canRevokeAdminToken, parseCidrAllowlist, scopeLabel, type AdminToken, type AdminTokenScope,
 } from "../lib/admin-tokens";
 import { Alert, Button, CollectionTable, ErrorNotice, FormField, Heading, Input, Stack, Textarea, useAction } from "../components/ui";
 import { ActionMenu } from "../components/templates/action-menu";
@@ -62,6 +62,8 @@ export function AdminTokensPage({ session }: { session: Session }) {
       { title: "Scopes", render: t => <span title={t.scopes.join(", ")}>{t.scopes.map(scopeLabel).join(", ")}</span> },
       { title: "Expires", render: t => <Time value={t.expires_at} format="date" /> },
       { title: "Last used", render: t => t.last_used_at ? <CellText primary={<Time value={t.last_used_at} format="relative" />} secondary={t.last_used_address ?? undefined} /> : <span className={s.muted}>Never</span>, narrow: true },
+      // Immutable metadata, set at creation and never edited: hidden by default (Columns menu), never a control.
+      { title: "IP allowlist", render: t => <span title={t.ip_allowlist?.join(", ")}>{adminTokenAllowlistSummary(t.ip_allowlist)}</span>, hidden: true },
       { title: "Created", render: t => <Time value={t.created_at} format="date" />, hidden: true },
       { title: "Actions", render: t => <ActionMenu label={`Actions for ${t.name}`} actions={[
         copyIdAction(t.id, "Copy token ID"),
@@ -85,7 +87,7 @@ export function CreateAdminTokenDialog({ session, onClose }: { session: Session;
   const [name, setName] = useState(""), [scopes, setScopes] = useState<string[]>(["platform:read"]);
   const [expiry, setExpiry] = useState(String(adminTokenExpiryDefault)), [cidr, setCidr] = useState("");
   const [submitted, setSubmitted] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState<unknown>();
-  const [result, setResult] = useState<CreateResult>(), [copied, setCopied] = useState(false);
+  const [result, setResult] = useState<CreateResult>(), [copied, setCopied] = useState(false), [copyFailed, setCopyFailed] = useState(false);
   // Copy bindings retain only this lifetime's authority, never a later disclosure's.
   const copyGeneration = useRef(0), displayedGeneration = copyGeneration.current;
   // Mount replay may revive this same owner (StrictMode), but never undo its retirement.
@@ -143,11 +145,12 @@ export function CreateAdminTokenDialog({ session, onClose }: { session: Session;
   }
   async function copySecret() {
     if (lifetime.current.closed || copyGeneration.current !== displayedGeneration || !result) return;
+    setCopyFailed(false);
     try {
       await navigator.clipboard.writeText(result.token);
       if (copyGeneration.current !== displayedGeneration) return;
       setCopied(true);
-    } catch { /* The manual-copy fallback (readonly textarea) remains available. */ }
+    } catch { if (copyGeneration.current === displayedGeneration) setCopyFailed(true); }
   }
   const close = (navigated = false) => { if (!busy) { lifetime.current.closed = true; copyGeneration.current++; controller.current?.abort(); setResult(undefined); onClose(navigated); } };
   if (result) return <Dialog open title="Save your admin API token" description="Use it from your script or automation. It can't sign in to this dashboard." onOpenChange={open => { if (!open) close(); }}
@@ -157,6 +160,8 @@ export function CreateAdminTokenDialog({ session, onClose }: { session: Session;
       <p className={s.note}>Scopes: {result.scopes.map(scopeLabel).join(", ")}.</p>
       <FormField label="Admin API token"><Textarea readOnly value={result.token} rows={3} spellCheck={false} autoComplete="off" autoFocus onFocus={event => event.currentTarget.select()} /></FormField>
       <Button variant="secondary" onClick={copySecret}>{copied ? "Copied" : "Copy token"}</Button>
+      {/* Never the secret itself: a visible manual fallback, same pattern as the generic action dialog's one-time secret. */}
+      <p role="status">{copyFailed ? "Clipboard unavailable. Select and copy the token manually." : ""}</p>
     </Stack>
   </Dialog>;
   return <Dialog open title="Create admin API token" description="A long-lived credential scoped to platform management routes only." hideClose={busy} onOpenChange={open => { if (!open) close(); }}

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  adminTokenCidrError, adminTokenExpiryDefault, adminTokenExpiryError, adminTokenNameError,
-  adminTokenPill, adminTokenScopes, adminTokenScopesError, adminTokenStatus, canRevokeAdminToken,
-  parseCidrAllowlist, scopeLabel,
+  adminTokenAllowlistSummary, adminTokenCidrError, adminTokenExpiryDefault, adminTokenExpiryError,
+  adminTokenNameError, adminTokenPill, adminTokenScopes, adminTokenScopesError, adminTokenStatus,
+  canRevokeAdminToken, parseCidrAllowlist, scopeLabel,
 } from "./admin-tokens";
 
 const now = Date.parse("2026-10-23T00:00:00Z");
@@ -62,6 +62,19 @@ describe("admin token creation field validation", () => {
     expect(adminTokenNameError("x".repeat(121))).toBeDefined();
   });
   it("trims a valid name", () => { expect(adminTokenNameError("  CI publisher  ")).toBeUndefined(); });
+});
+
+describe("admin token allowlist summary (immutable metadata, display only)", () => {
+  it("reads as unrestricted when there is no allowlist", () => {
+    expect(adminTokenAllowlistSummary(null)).toBe("Any");
+  });
+  it("counts entries with correct singular/plural wording", () => {
+    expect(adminTokenAllowlistSummary(["10.0.0.0/8"])).toBe("1 address");
+    expect(adminTokenAllowlistSummary(["10.0.0.0/8", "192.168.1.0/24"])).toBe("2 addresses");
+  });
+  it("treats an explicit empty list the same as no allowlist", () => {
+    expect(adminTokenAllowlistSummary([])).toBe("Any");
+  });
 });
 
 describe("CIDR allowlist textarea (no second network parser; the server is authoritative)", () => {

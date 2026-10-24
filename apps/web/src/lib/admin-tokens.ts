@@ -74,3 +74,7 @@ export function adminTokenCidrError(raw: string): string | undefined {
   const entries = parseCidrAllowlist(raw);
   return entries && entries.length > 32 ? "List at most 32 addresses or ranges." : undefined;
 }
+/** Display-only summary of a token's immutable allowlist: it's set at creation and never edited. */
+export function adminTokenAllowlistSummary(ipAllowlist: string[] | null): string {
+  return ipAllowlist && ipAllowlist.length ? `${ipAllowlist.length} address${ipAllowlist.length === 1 ? "" : "es"}` : "Any";
+}

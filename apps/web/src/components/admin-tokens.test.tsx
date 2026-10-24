@@ -78,6 +78,18 @@ describe("Admin API tokens list (#37 PR3)", () => {
     await userEvent.setup().click(screen.getByRole("button", { name: "Actions for CI publisher" }));
     expect(await screen.findByRole("menuitem", { name: "Revoke token…" })).toBeDefined();
   });
+  it("shows the immutable IP allowlist metadata in an optional column, never editable", async () => {
+    mount([token({ id: "tok-allow", ip_allowlist: ["10.0.0.0/8", "192.168.1.0/24"] }), token({ id: "tok-open", name: "Open automation", ip_allowlist: null })]);
+    await screen.findByText("CI publisher");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Columns" }));
+    await user.click(await screen.findByRole("menuitemcheckbox", { name: "IP allowlist" }));
+    expect(await screen.findByText("2 addresses")).toBeDefined();
+    expect(screen.getByText("Any")).toBeDefined();
+    // Metadata only: no control anywhere in this row lets the allowlist be edited after creation.
+    expect(screen.queryByRole("textbox", { name: /allowlist/i })).toBeNull();
+  });
+
   it("opens the create dialog from the page action and returns focus to it on cancel", async () => {
     const view = mount([]);
     await view.user.click(screen.getByRole("button", { name: "Create token" }));
