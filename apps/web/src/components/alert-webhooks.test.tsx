@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -14,8 +14,14 @@ const exactly = (name: string) => new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\
 const saved: AlertWebhook = { id: "hook1", label: "Operations", enabled: false, signing_configured: true, overlap_active: false, previous_secret_until: null, waiting: 0, exhausted: 0, last_success_at: null, last_error: null, created_at: "2026-10-22T00:00:00Z", updated_at: "2026-10-22T00:00:00Z", url: "https://receiver.example/hook", current_secret_ref: "env:ALERT_SIGNING", previous_secret_ref: null };
 let rows: AlertWebhook[], failure: { method: string; status: number; message: string; reason?: string } | undefined;
 let activeClient: ReturnType<typeof testClient> | undefined;
+let testResponse: Promise<Response> | undefined;
+function deferTestResponse() {
+  let resolve!: (response: Response) => void;
+  testResponse = new Promise<Response>(done => { resolve = done; });
+  return resolve;
+}
 beforeEach(() => {
-  rows = [{ ...saved }]; failure = undefined;
+  rows = [{ ...saved }]; failure = undefined; testResponse = undefined;
   document.cookie = "omg_csrf=test-csrf; Path=/"; localStorage.clear(); sessionStorage.clear();
   Object.defineProperty(Element.prototype, "getAnimations", { configurable: true, value: () => [] });
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
@@ -27,8 +33,8 @@ function serve(who: Session = admin) {
     if (path === "/api/v1/me") return Response.json(who);
     if (path.startsWith(webhookPath)) {
       if (failure?.method === method) return Response.json({ error: { code: String(failure.status), message: failure.message, reason: failure.reason } }, { status: failure.status });
-      if (path.endsWith("/deliveries")) return Response.json({ destination: rows[0], counts: { waiting: 1, leased: 0, sent: 0, failed: 0, exhausted: 0, ineligible: 0 }, data: [{ id: "delivery1", state: "waiting", test: true, attempt_count: 0, created_at: saved.created_at, completed_at: null, next_attempt_at: saved.created_at, last_error: null, payload: "PRIVATE_PAYLOAD_CANARY", signature: "PRIVATE_SIGNATURE_CANARY", secret: "PRIVATE_SECRET_CANARY" }] });
-      if (path.endsWith("/test")) return Response.json({ id: "delivery1", state: "waiting" });
+      if (path.endsWith("/deliveries")) return Response.json({ destination: rows.find(row => path === `${webhookPath}/${row.id}/deliveries`), counts: { waiting: 1, leased: 0, sent: 0, failed: 0, exhausted: 0, ineligible: 0 }, data: [{ id: "delivery1", state: "waiting", test: true, attempt_count: 0, created_at: saved.created_at, completed_at: null, next_attempt_at: saved.created_at, last_error: null, payload: "PRIVATE_PAYLOAD_CANARY", signature: "PRIVATE_SIGNATURE_CANARY", secret: "PRIVATE_SECRET_CANARY" }] });
+      if (path.endsWith("/test")) return testResponse ?? Response.json({ id: "delivery1", state: "waiting" });
       if (method === "POST") { rows.push({ ...saved, id: "hook2", ...JSON.parse(String(init?.body)) }); return Response.json(rows[1]); }
       if (method === "PATCH") { rows[0] = { ...rows[0]!, ...JSON.parse(String(init?.body)) }; return Response.json(rows[0]); }
       if (method === "DELETE") { rows = []; return Response.json({ deleted: true }); }
@@ -108,6 +114,52 @@ describe("Admin Alerts Webhooks", () => {
     await waitFor(() => expect(writes(fetch, "PATCH")[1]).toEqual([`${webhookPath}/hook1`, { enabled: false }]));
     await action("Delete…"); expect(writes(fetch, "DELETE")).toEqual([]); await confirm("Delete webhook");
     await waitFor(() => expect(writes(fetch, "DELETE")).toEqual([[`${webhookPath}/hook1`, null]]));
+  });
+  it("does not reopen closed deliveries when a delayed test succeeds", async () => {
+    rows[0]!.enabled = true; const { fetch } = await mount(), resolve = deferTestResponse();
+    await action("Send test");
+    expect(writes(fetch, "POST")).toEqual([[`${webhookPath}/hook1/test`, null]]);
+    await action("Deliveries"); await confirm("Close deliveries");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await act(async () => { resolve(Response.json({ id: "delivery1", state: "waiting" })); });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByText("Test queued")).toBeNull();
+  });
+  it("does not replace another destination's deliveries when a delayed test succeeds", async () => {
+    rows = [{ ...saved, enabled: true }, { ...saved, id: "hook2", label: "Security" }];
+    const { fetch } = await mount(), resolve = deferTestResponse();
+    await action("Send test");
+    expect(writes(fetch, "POST")).toEqual([[`${webhookPath}/hook1/test`, null]]);
+    await action("Deliveries", "Security");
+    await screen.findByRole("dialog", { name: exactly("Deliveries · Security") });
+    await act(async () => { resolve(Response.json({ id: "delivery1", state: "waiting" })); });
+    expect(screen.getByRole("dialog", { name: exactly("Deliveries · Security") })).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: exactly("Deliveries · Operations") })).toBeNull();
+    expect(screen.queryByText("Test queued")).toBeNull();
+  });
+  it("does not surface a delayed test error after deliveries are opened and closed", async () => {
+    rows[0]!.enabled = true; await mount(); const resolve = deferTestResponse();
+    await action("Send test"); await action("Deliveries"); await confirm("Close deliveries");
+    await act(async () => { resolve(Response.json({ error: { code: "429", message: "Too many webhook tests; try again later" } }, { status: 429 })); });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByText(webhookTestLimitMessage)).toBeNull();
+  });
+  it.each(["cancel", "save", "discard"] as const)("returns focus to the originating row actions after Edit %s", async mode => {
+    await mount();
+    const trigger = await screen.findByRole("button", { name: exactly("Actions for Operations") });
+    const user = await action("Edit…");
+    if (mode === "discard") {
+      await user.type(within(screen.getByRole("dialog")).getByRole("textbox", { name: "Name" }), " changed");
+      await confirm("Cancel");
+      await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: /Discard/ }));
+    } else await confirm(mode === "save" ? "Save webhook" : "Cancel");
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+  it("returns Edit focus to Create webhook if the originating row disappears", async () => {
+    await mount(); await action("Edit…");
+    rows = []; await act(async () => { await activeClient!.invalidateQueries({ queryKey: ["api"] }); });
+    await confirm("Cancel");
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: exactly("Create webhook") })));
   });
   it("edits references and overlap, never a URL or enablement, and clears overlap explicitly", async () => {
     rows[0] = { ...saved, previous_secret_ref: "env:OLD", previous_secret_until: "2026-10-23T00:00:00Z" };
