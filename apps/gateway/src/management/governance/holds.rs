@@ -7,11 +7,11 @@ use std::collections::HashMap;
 
 pub(super) const AGED: &str = "unknown_since <= observed_at - interval '24 hours'";
 
-struct Scope {
-    user: Uuid,
-    workspace: Option<Uuid>,
-    own: Option<Uuid>,
-    admin: bool,
+pub(super) struct Scope {
+    pub(super) user: Uuid,
+    pub(super) workspace: Option<Uuid>,
+    pub(super) own: Option<Uuid>,
+    pub(super) admin: bool,
 }
 // Logs-style position only, never a credential or visibility scope. Every
 // page authorizes afresh and applies the full SQL predicate before aggregates.
@@ -20,11 +20,24 @@ const CURSOR_MAX_LEN: usize = 20 + 1 + 36; // signed i64 microseconds + '_' + UU
 fn cursor(since: DateTime<Utc>, id: Uuid) -> String {
     format!("{}_{}", since.timestamp_micros(), id)
 }
+/// PostgreSQL `timestamptz` spans 4713 BC (Julian day 0, proleptic Gregorian
+/// -4713-11-24) to before 294277 AD. chrono is wider on the early side, and
+/// binding an unrepresentable instant fails in the server (a 503, not a 400).
+fn pg_timestamptz_representable(t: DateTime<Utc>) -> bool {
+    use chrono::{Datelike, NaiveDate};
+    let min = NaiveDate::from_ymd_opt(-4713, 11, 24)
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .map(|t| t.and_utc());
+    min.is_some_and(|min| t >= min) && t.year() <= 294_276
+}
 fn position(value: &str) -> Result<(DateTime<Utc>, Uuid), ApiError> {
     if value.is_empty() || value.len() > CURSOR_MAX_LEN {
         return Err(invalid());
     }
     let (since, id) = crate::management::logs::cursor_parts(value)?;
+    if !pg_timestamptz_representable(since) {
+        return Err(invalid());
+    }
     // Require the exact emitted spelling: no extra fields, whitespace, '+',
     // leading zeros, alternate UUID encodings or out-of-range timestamps.
     if cursor(since, id) != value {
@@ -32,12 +45,12 @@ fn position(value: &str) -> Result<(DateTime<Utc>, Uuid), ApiError> {
     }
     Ok((since, id))
 }
-struct Filters {
+pub(super) struct Filters {
     limit: usize,
     cursor: Option<String>,
 }
 impl Filters {
-    fn parse(raw: Option<String>) -> Result<Self, ApiError> {
+    pub(super) fn parse(raw: Option<String>) -> Result<Self, ApiError> {
         let mut params = HashMap::new();
         if let Some(raw) = raw {
             if raw.len() > 4096 {
@@ -97,7 +110,7 @@ shared_rows AS (SELECT * FROM aged WHERE NOT $3 OR workspace_kind IN('team','pro
 const SUMMARY: &str = "jsonb_build_object('count',count(*)::text,'known_floor_microusd',sum(held_microusd::numeric)::numeric(38,0)::text,'unbounded_count',count(*) FILTER(WHERE unbounded_cost)::text,'oldest_age_hours',max(age_hours))";
 const ROW: &str = "jsonb_build_object('execution_id',execution_id,'root_request_id',root_request_id,'workspace',jsonb_build_object('id',workspace_id,'name',workspace_name,'kind',workspace_kind),'public_model',public_model,'provider',provider,'workload_kind',workload_kind,'unknown_since',unknown_since,'age_hours',age_hours,'held_microusd',held_microusd::numeric(38,0)::text,'unbounded_cost',unbounded_cost,'unresolved_reason',CASE WHEN price_id IS NULL THEN 'unpriced' WHEN unbounded_cost THEN 'unbounded_cost_or_unknown_rate' WHEN pricing_version=1 THEN 'incomplete_raw_usage' WHEN pricing_version=3 THEN 'incomplete_or_unpriced_meter_usage' WHEN billing_usage IS NULL THEN 'missing_billing_usage' ELSE 'incomplete_usage_or_cache_allocation' END,'can_reconcile',$5 AND workspace_enabled AND price_id IS NOT NULL AND workload_kind<>'realtime' AND execution_state IN('succeeded','failed','cancelled'))";
 
-async fn page(
+pub(super) async fn page(
     tx: &mut Transaction<'_, Postgres>,
     scope: &Scope,
     f: Filters,
@@ -223,6 +236,32 @@ mod tests {
         ] {
             assert!(position(&malformed).is_err(), "{malformed}");
         }
+    }
+    #[test]
+    fn cursor_rejects_timestamps_postgres_cannot_store() {
+        use chrono::NaiveDate;
+        let id = Uuid::new_v4();
+        let at = |year| {
+            NaiveDate::from_ymd_opt(year, 11, 24)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap()
+                .and_utc()
+        };
+        // timestamptz starts at Julian day 0 (4713 BC); one microsecond
+        // earlier is rejected by the server when bound as $6.
+        let min = at(-4713);
+        assert_eq!(position(&cursor(min, id)).unwrap(), (min, id));
+        for early in [
+            min - chrono::Duration::microseconds(1),
+            at(-4714),
+            at(-100_000),
+            DateTime::<Utc>::MIN_UTC,
+        ] {
+            assert!(position(&cursor(early, id)).is_err(), "{early}");
+        }
+        // chrono ends at year 262142, below PostgreSQL's 294276 AD limit.
+        assert!(position(&cursor(DateTime::<Utc>::MAX_UTC, id)).is_ok());
     }
     #[test]
     fn parameters_are_strict() {

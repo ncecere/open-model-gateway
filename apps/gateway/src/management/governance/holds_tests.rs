@@ -5,6 +5,7 @@ use axum::{
     body::{Body, to_bytes},
     http::Request,
 };
+use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use tower::ServiceExt;
 
@@ -678,4 +679,44 @@ async fn queue_realtime_hold_is_listed_but_never_reconcilable(pool: PgPool) {
         .await
         .is_err()
     );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn queue_cursor_outside_postgres_timestamp_range_is_400_not_503(pool: PgPool) {
+    use chrono::NaiveDate;
+    let f = fixture(pool).await;
+    let ws = f.team.workspace_id;
+    hold(&f, ws, f.team.key_id, "unknown", Some(10), 3, None).await;
+    let min = NaiveDate::from_ymd_opt(-4713, 11, 24)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc();
+    let before = min - chrono::Duration::microseconds(1);
+    // The boundary is PostgreSQL's own: this is what the server does with it.
+    for (t, stored) in [(min, true), (before, false)] {
+        let r = sqlx::query_scalar::<_, DateTime<Utc>>("SELECT $1::timestamptz")
+            .bind(t)
+            .fetch_one(&f.store.pool)
+            .await;
+        assert_eq!(r.is_ok(), stored, "{t}");
+    }
+    let nil = Uuid::nil();
+    let at = |t: DateTime<Utc>| format!("{}_{nil}", t.timestamp_micros());
+    for base in [
+        format!("/api/v1/workspaces/{ws}/holds"),
+        "/api/v1/platform/holds".to_string(),
+    ] {
+        let (status, v) = call(&f, f.owner, &format!("{base}?cursor={}", at(min))).await;
+        assert_eq!(status, StatusCode::OK, "{base}: {v}");
+        for bad in [before, DateTime::<Utc>::MIN_UTC] {
+            assert_eq!(
+                call(&f, f.owner, &format!("{base}?cursor={}", at(bad)))
+                    .await
+                    .0,
+                StatusCode::BAD_REQUEST,
+                "{base} {bad}"
+            );
+        }
+    }
 }
