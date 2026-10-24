@@ -11,6 +11,9 @@ CREATE TABLE report_schedules(
  delivery_time time NOT NULL CHECK(EXTRACT(SECOND FROM delivery_time)=0 AND delivery_time<'24:00'),
  state text NOT NULL DEFAULT 'paused' CHECK(state IN ('active','paused')),
  configuration_revision bigint NOT NULL DEFAULT 1 CHECK(configuration_revision>0),
+ -- Internal configuration marker for the normalized recipient set. Management
+ -- advances it once only when that set changes, never for order-only edits.
+ recipient_revision bigint NOT NULL DEFAULT 1 CHECK(recipient_revision>0),
  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
  deleted_at timestamptz,
@@ -33,8 +36,8 @@ CREATE TABLE report_schedule_recipients(
  PRIMARY KEY(schedule_id,user_id),
  UNIQUE(schedule_id,slot)
 );
-CREATE INDEX report_schedules_platform ON report_schedules(created_at,id) WHERE workspace_id IS NULL AND deleted_at IS NULL;
-CREATE INDEX report_schedules_workspace ON report_schedules(workspace_id,created_at,id) WHERE deleted_at IS NULL;
+CREATE INDEX report_schedules_platform ON report_schedules(id) WHERE workspace_id IS NULL AND deleted_at IS NULL;
+CREATE INDEX report_schedules_workspace ON report_schedules(workspace_id,id) WHERE deleted_at IS NULL;
 CREATE INDEX report_schedules_due ON report_schedules(next_run_at,id) WHERE state='active' AND deleted_at IS NULL;
 CREATE INDEX report_schedule_recipient_user ON report_schedule_recipients(user_id,schedule_id);
 CREATE FUNCTION report_schedules_guard() RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,public,pg_temp AS $$
@@ -46,6 +49,7 @@ BEGIN
    RAISE EXCEPTION 'report schedule workspace scope mismatch' USING ERRCODE='23514';
   END IF;
   NEW.configuration_revision=1;
+  NEW.recipient_revision=1;
  ELSE
   IF OLD.deleted_at IS NOT NULL OR NEW.id<>OLD.id OR NEW.scope_kind<>OLD.scope_kind
    OR NEW.workspace_id IS DISTINCT FROM OLD.workspace_id OR NEW.cost_center_id IS DISTINCT FROM OLD.cost_center_id
@@ -53,7 +57,15 @@ BEGIN
    OR NEW.configuration_revision<>OLD.configuration_revision THEN
    RAISE EXCEPTION 'immutable report schedule identity or deleted schedule';
   END IF;
-  NEW.configuration_revision=OLD.configuration_revision+1;
+  IF NEW.recipient_revision NOT IN (OLD.recipient_revision,OLD.recipient_revision+1) THEN
+   RAISE EXCEPTION 'report recipient revision must advance by one';
+  END IF;
+  -- Cursor/observation/tombstone-only updates never invalidate a generation's
+  -- pinned configuration. Identity/scope narrowing remains immutable above.
+  IF ROW(NEW.cadence,NEW.timezone,NEW.delivery_time,NEW.state,NEW.recipient_revision)
+     IS DISTINCT FROM ROW(OLD.cadence,OLD.timezone,OLD.delivery_time,OLD.state,OLD.recipient_revision) THEN
+   NEW.configuration_revision=OLD.configuration_revision+1;
+  END IF;
  END IF;
  NEW.updated_at=clock_timestamp();
  RETURN NEW;

@@ -273,18 +273,25 @@ async fn update(
         .state
         .as_deref()
         .unwrap_or_else(|| old["state"].as_str().unwrap());
-    let users: Vec<Uuid> = if let Some(users) = b.recipient_user_ids {
-        users
-    } else {
-        serde_json::from_value(old["recipient_user_ids"].clone()).map_err(|_| invalid())?
-    };
+    let old_users: Vec<Uuid> =
+        serde_json::from_value(old["recipient_user_ids"].clone()).map_err(|_| invalid())?;
+    let recipients_set = b.recipient_user_ids.is_some();
+    let users = b.recipient_user_ids.unwrap_or_else(|| old_users.clone());
     validate(cadence, timezone, time, state, &users, config.as_ref())?;
     lock_authority(&mut tx, &u, ws, &users).await?;
     let kind = old["scope_kind"].as_str().ok_or_else(invalid)?;
-    eligible(&mut tx, kind, ws, &users).await?;
-    sqlx::query("UPDATE report_schedules SET cadence=$2,timezone=$3,delivery_time=$4::text::time,state=$5 WHERE id=$1 AND deleted_at IS NULL")
-        .bind(id).bind(cadence).bind(timezone).bind(time).bind(state).execute(&mut *tx).await?;
-    recipients(&mut tx, id, &users).await?;
+    // Stale recipients must never prevent an authorized operator from pausing.
+    // Explicit recipient writes and a transition back to active reauthorize.
+    if recipients_set || (state == "active" && old["state"] != "active") {
+        eligible(&mut tx, kind, ws, &users).await?;
+    }
+    let recipients_changed = users.iter().collect::<std::collections::HashSet<_>>()
+        != old_users.iter().collect::<std::collections::HashSet<_>>();
+    sqlx::query("UPDATE report_schedules SET cadence=$2,timezone=$3,delivery_time=$4::text::time,state=$5,recipient_revision=recipient_revision+CASE WHEN $6 THEN 1 ELSE 0 END WHERE id=$1 AND deleted_at IS NULL")
+        .bind(id).bind(cadence).bind(timezone).bind(time).bind(state).bind(recipients_changed).execute(&mut *tx).await?;
+    if recipients_changed {
+        recipients(&mut tx, id, &users).await?;
+    }
     let action = if old["state"] != state {
         if state == "paused" {
             "report_schedule.paused"
@@ -334,7 +341,19 @@ async fn list(s: Store, u: BrowserPrincipal, ws: Option<Uuid>, q: List) -> ApiRe
     if !(1..=100).contains(&q.limit) {
         return Err(invalid());
     }
-    let mut values:Vec<Value> = sqlx::query_scalar(&format!("SELECT {JSON_ROW} FROM report_schedules s WHERE s.workspace_id IS NOT DISTINCT FROM $1 AND s.deleted_at IS NULL AND ($2::uuid IS NULL OR s.id>$2) ORDER BY s.id LIMIT $3"))
+    // Explicit equality/null and continuation predicates keep the scope+id
+    // indexes usable without a null-safe comparison or optional-OR scan.
+    let scope = if ws.is_some() {
+        "s.workspace_id=$1"
+    } else {
+        "s.workspace_id IS NULL AND $1::uuid IS NULL"
+    };
+    let continuation = if q.after.is_some() {
+        "s.id>$2"
+    } else {
+        "$2::uuid IS NULL"
+    };
+    let mut values:Vec<Value> = sqlx::query_scalar(&format!("SELECT {JSON_ROW} FROM report_schedules s WHERE {scope} AND s.deleted_at IS NULL AND {continuation} ORDER BY s.id LIMIT $3"))
         .bind(ws).bind(q.after).bind(q.limit+1).fetch_all(&mut *tx).await?;
     let has_more = values.len() > q.limit as usize;
     values.truncate(q.limit as usize);
