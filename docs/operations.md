@@ -18,6 +18,8 @@ The golden inventory pins every family's System, Traffic or Excluded class. Syst
 
 Coordinator decision: the DB-only `gateway_alert_delivery_pending_buckets` and `gateway_alert_delivery_oldest_pending_age_seconds` gauges are **Traffic**, the same data class as `gateway_alert_email_deliveries`, despite having no labels. Traffic includes personal-workspace work as identity-free aggregates and is off by default. Only Traffic families carry `model`/`provider` labels: `model` contains platform-catalog public model aliases, not arbitrary request model strings; `provider` contains provider kinds. Each dynamic label inventory is bounded to 200 values of at most 96 characters (overflow uses a fixed fallback).
 
+Coordinator decision (#45): `gateway_alert_webhook_attempts`, `gateway_alert_webhook_deliveries` and `gateway_alert_webhook_oldest_waiting_seconds` are also **Traffic**: notification-activity aggregates, not System health. They fail closed with Traffic off by default, even the label-free oldest-waiting gauge. Only fixed `outcome`/`state` labels are permitted; never destination identifiers, URLs or signing-secret references. This classification does not enable OTLP delivery; the metrics worker is still pending.
+
 Runtime/acceptance requirements for slice 3: failure to obtain entropy for the per-process instance ID must quietly disable metrics export, without a predictable fallback or a startup failure. The UUID privacy canary must exempt exactly the `service.instance.id` resource attribute, not UUID-shaped values elsewhere.
 
 ## Configuration reference

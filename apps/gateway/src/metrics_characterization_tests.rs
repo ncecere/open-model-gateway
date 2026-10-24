@@ -16,6 +16,8 @@ async fn db_collector_label_keys_match_golden(pool: sqlx::PgPool) {
         "gateway_db_pool_connections",
         "gateway_reservations_held",
         "gateway_alert_email_deliveries",
+        "gateway_alert_webhook_deliveries",
+        "gateway_alert_webhook_oldest_waiting_seconds",
         "gateway_alert_delivery_pending_buckets",
         "gateway_alert_delivery_oldest_pending_age_seconds",
     ] {
@@ -118,11 +120,6 @@ pub(crate) fn populated_registry() -> &'static Metrics {
     m.observe_settlement_phases(PhaseTimer::start(), "settled");
     m.observe_alert_run("ok", 0);
     m.observe_alert_delivery("delivered");
-    m.observe_alert_webhook("sent");
-    m.alert_webhook_queue
-        .get_or_create(&[("state", "waiting".into())])
-        .set(0);
-    m.alert_webhook_oldest.get_or_create(&[]).set(0);
     m.observe_deadlock_retry("reconciliation");
     drop(m.scope_lock_wait("rows", "admission"));
     m.observe_collection_error("reservations");
@@ -146,7 +143,8 @@ pub(crate) fn populated_registry() -> &'static Metrics {
     m.observe_background_run("metrics", "ok");
     m.set_partition_months("requests", 2);
     m.observe_rollup_hours("new", 1);
-    // These five families are populated only by the DB refresh; prime their
+    m.observe_alert_webhook("sent");
+    // These seven families are populated only by the DB refresh; prime their
     // known state labels without requiring a DB for this characterization.
     m.pool_connections
         .get_or_create(&[("state", "idle".into())])
@@ -157,6 +155,10 @@ pub(crate) fn populated_registry() -> &'static Metrics {
     m.alert_delivery_queue
         .get_or_create(&[("state", "retrying".into())])
         .set(0);
+    m.alert_webhook_queue
+        .get_or_create(&[("state", "waiting".into())])
+        .set(3);
+    m.alert_webhook_oldest.get_or_create(&[]).set(17);
     m.alert_pending_buckets.get_or_create(&[]).set(0);
     m.alert_oldest_pending_age.get_or_create(&[]).set(0);
     m
