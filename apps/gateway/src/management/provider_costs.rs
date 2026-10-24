@@ -1,5 +1,6 @@
 //! #48 browser-only, append-only provider-reported cost reconciliation.
 use super::*;
+use axum::extract::rejection::JsonRejection;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 mod matching;
@@ -44,6 +45,21 @@ pub(super) fn upload_routes() -> Router<Store> {
         ))
 }
 
+// Do not format the rejection or call IntoResponse: Axum's default response
+// and rejection trace can include uploaded field names and values.
+fn json_body<T>(body: Result<Json<T>, JsonRejection>) -> Result<T, ApiError> {
+    body.map(|Json(value)| value).map_err(|rejection| {
+        let status = rejection.status();
+        let message = match status {
+            StatusCode::PAYLOAD_TOO_LARGE => "Provider cost request body exceeds the size limit",
+            StatusCode::UNSUPPORTED_MEDIA_TYPE => "Provider cost request requires application/json",
+            StatusCode::UNPROCESSABLE_ENTITY => "Invalid provider cost request fields",
+            _ => "Invalid provider cost JSON body",
+        };
+        ApiError(status, message)
+    })
+}
+
 fn conflict() -> ApiError {
     ApiError(
         StatusCode::CONFLICT,
@@ -75,8 +91,9 @@ async fn account_lock(tx: &mut Transaction<'_, Postgres>, account: &str) -> Resu
 async fn import(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
-    Json(b): Json<Upload>,
+    body: Result<Json<Upload>, JsonRejection>,
 ) -> ApiResult {
+    let b = json_body(body)?;
     let mut tx = write_tx(&s, &u).await?;
     let parsed = parser::parse(&b)?;
     let evidence = serde_json::to_string(&b).map_err(|_| invalid())?;
@@ -169,8 +186,9 @@ struct ModelMapping {
 async fn create_mapping(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
-    Json(b): Json<Mapping>,
+    body: Result<Json<Mapping>, JsonRejection>,
 ) -> ApiResult {
+    let b = json_body(body)?;
     let mut tx = write_tx(&s, &u).await?;
     if !bounded(&b.account_id, 200)
         || !bounded(&b.evidence_reference, 256)
@@ -259,8 +277,9 @@ struct Reconcile {
 async fn reconcile(
     State(s): State<Store>,
     Extension(u): Extension<BrowserPrincipal>,
-    Json(b): Json<Reconcile>,
+    body: Result<Json<Reconcile>, JsonRejection>,
 ) -> ApiResult {
+    let b = json_body(body)?;
     let mut tx = write_tx(&s, &u).await?;
     let (account, start, end): (String, DateTime<Utc>, DateTime<Utc>) = sqlx::query_as(
         "SELECT account_id,period_start,period_end FROM provider_cost_imports WHERE id=$1",

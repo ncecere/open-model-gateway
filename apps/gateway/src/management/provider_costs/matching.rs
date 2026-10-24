@@ -21,6 +21,7 @@ struct Observation {
     day: DateTime<Utc>,
     started_at: DateTime<Utc>,
     workspace_id: Uuid,
+    workspace_kind: String,
     connection_id: Uuid,
     deployment_id: Uuid,
     upstream_model: Option<String>,
@@ -117,7 +118,7 @@ pub(super) async fn snapshot(
     // The evidence, observation timestamp, archive status and raw rows come
     // from ONE statement snapshot, so concurrent settlement/archive cannot
     // tear the comparison. Only attested historical account scopes qualify.
-    let raw:Value=sqlx::query_scalar("SELECT jsonb_build_object('observed_at',statement_timestamp(),'archived',EXISTS(SELECT FROM archived_partitions WHERE archive_group='history' AND lower_bound<$3 AND upper_bound>$2),'rows',(SELECT coalesce(jsonb_agg(to_jsonb(q)),'[]') FROM (SELECT date_trunc('day',e.started_at,'UTC') AS day,e.started_at,e.workspace_id,d.provider_connection_id AS connection_id,e.deployment_id,e.upstream_model,e.reported_upstream_model,r.price_tier AS tier,r.state AS reservation_state,r.actual_microusd::text AS settled,r.held_microusd::text AS held,coalesce(r.unbounded_cost,true) AS unbounded,e.details_redacted_at IS NOT NULL AS redacted FROM inference_executions e JOIN deployments d ON d.id=e.deployment_id LEFT JOIN governance_reservations r ON r.execution_id=e.id AND r.admitted_at=e.started_at WHERE e.provider='anthropic' AND e.started_at>=$2 AND e.started_at<$3 AND EXISTS(SELECT FROM provider_cost_bindings b WHERE b.mapping_id=$1 AND b.connection_id=d.provider_connection_id AND (b.deployment_id IS NULL OR b.deployment_id=e.deployment_id) AND e.started_at>=b.effective_start AND e.started_at<b.effective_end) ORDER BY e.started_at,e.id LIMIT 100001) q))")
+    let raw:Value=sqlx::query_scalar("SELECT jsonb_build_object('observed_at',statement_timestamp(),'personal_workspaces',(SELECT coalesce(jsonb_agg(w.id),'[]') FROM workspaces w WHERE w.kind='personal' AND EXISTS(SELECT FROM provider_cost_bindings b WHERE b.mapping_id=$1 AND b.workspace_id=w.id)),'archived',EXISTS(SELECT FROM archived_partitions WHERE archive_group='history' AND lower_bound<$3 AND upper_bound>$2),'rows',(SELECT coalesce(jsonb_agg(to_jsonb(q)),'[]') FROM (SELECT date_trunc('day',e.started_at,'UTC') AS day,e.started_at,e.workspace_id,w.kind AS workspace_kind,d.provider_connection_id AS connection_id,e.deployment_id,e.upstream_model,e.reported_upstream_model,r.price_tier AS tier,r.state AS reservation_state,r.actual_microusd::text AS settled,r.held_microusd::text AS held,coalesce(r.unbounded_cost,true) AS unbounded,e.details_redacted_at IS NOT NULL AS redacted FROM inference_executions e JOIN workspaces w ON w.id=e.workspace_id JOIN deployments d ON d.id=e.deployment_id LEFT JOIN governance_reservations r ON r.execution_id=e.id AND r.admitted_at=e.started_at WHERE e.provider='anthropic' AND e.started_at>=$2 AND e.started_at<$3 AND EXISTS(SELECT FROM provider_cost_bindings b WHERE b.mapping_id=$1 AND b.connection_id=d.provider_connection_id AND (b.deployment_id IS NULL OR b.deployment_id=e.deployment_id) AND e.started_at>=b.effective_start AND e.started_at<b.effective_end) ORDER BY e.started_at,e.id LIMIT 100001) q))")
         .bind(mapping_id).bind(start).bind(end).fetch_one(&mut **tx).await?;
     let observations: Vec<Observation> =
         serde_json::from_value(raw["rows"].clone()).map_err(|_| invalid())?;
@@ -128,6 +129,23 @@ pub(super) async fn snapshot(
         ));
     }
     let archived = raw["archived"].as_bool().unwrap_or(true);
+    let mut personal_workspaces: BTreeSet<Uuid> =
+        serde_json::from_value(raw["personal_workspaces"].clone()).map_err(|_| invalid())?;
+    personal_workspaces.extend(
+        observations
+            .iter()
+            .filter(|o| o.workspace_kind == "personal")
+            .map(|o| o.workspace_id),
+    );
+    // Resolve kind in the observation statement, then project before freezing.
+    // Never attach personal totals to a model, connection, day or workspace.
+    let public_bindings: Vec<_> = bindings
+        .iter()
+        .filter(|b| {
+            b.workspace_id
+                .is_none_or(|ws| !personal_workspaces.contains(&ws))
+        })
+        .collect();
     let lines:Vec<(DateTime<Utc>,Value,String)>=sqlx::query_as("SELECT bucket_start,dimensions,amount_microusd::text FROM provider_cost_lines WHERE import_id=$1 ORDER BY line_number")
         .bind(import_id).fetch_all(&mut **tx).await?;
     let mut actuals: BTreeMap<ActualKey, Actual> = BTreeMap::new();
@@ -185,10 +203,18 @@ pub(super) async fn snapshot(
     let mut used = BTreeSet::new();
     let mut total_actual = 0_i128;
     let mut total_estimate = Estimate::default();
+    let mut personal_estimate = Estimate::default();
+    let mut personal_actual = 0_i128;
+    let mut personal_actual_categories: BTreeMap<String, i128> = BTreeMap::new();
+    let mut personal_reasons = BTreeSet::new();
     let mut index: ObservationIndex<'_> = BTreeMap::new();
     let mut workspaces: BTreeMap<ScopeKey, BTreeSet<Uuid>> = BTreeMap::new();
     for (position, o) in observations.iter().enumerate() {
         total_estimate.observe(o)?;
+        if o.workspace_kind == "personal" {
+            personal_estimate.observe(o)?;
+            personal_reasons.insert("timing_basis");
+        }
         let historical = o
             .reported_upstream_model
             .clone()
@@ -219,6 +245,7 @@ pub(super) async fn snapshot(
             reasons.insert("incomplete_estimate");
         }
         let mut estimates: BTreeMap<Uuid, Estimate> = BTreeMap::new();
+        let mut unresolved_coverage = Estimate::default();
         let mut actual_workspace = None;
         if candidates.len() != 1 {
             let partial = bindings.iter().any(|b| {
@@ -288,6 +315,27 @@ pub(super) async fn snapshot(
                         estimates.entry(o.workspace_id).or_default().observe(o)?;
                     }
                 }
+                // Missing model/tier detail cannot establish absence from a
+                // compatible bucket. Keep this overlapping coverage separate
+                // from allocated estimates/holds, and never consume it under
+                // one arbitrary model or tier (it may taint several buckets).
+                for key in [
+                    (day, binding.connection_id, Some(expected.to_owned()), None),
+                    (day, binding.connection_id, None, tier.clone()),
+                    (day, binding.connection_id, None, None),
+                ] {
+                    for &(_, o) in index.get(&key).into_iter().flatten() {
+                        if scoped(binding, o)
+                            && (key.2.is_none() || model_matches(binding, model, o))
+                        {
+                            reasons.insert("incomplete_estimate");
+                            if !personal_workspaces.contains(&o.workspace_id) {
+                                unresolved_coverage.observe(o)?;
+                                unresolved_coverage.unresolved = unresolved_coverage.attempts;
+                            }
+                        }
+                    }
+                }
                 if estimates.is_empty() {
                     reasons.insert("unknown_model");
                     reasons.insert("provider_only");
@@ -334,17 +382,33 @@ pub(super) async fn snapshot(
         } else {
             None
         };
+        if actual_workspace.is_some_and(|ws| personal_workspaces.contains(&ws)) {
+            add(&mut personal_actual, actual.amount)?;
+            add(
+                personal_actual_categories.entry(category).or_default(),
+                actual.amount,
+            )?;
+            personal_reasons.extend(reasons);
+            continue;
+        }
+        let incomplete = reasons.contains("incomplete_estimate");
         let workspace_estimates: Vec<Value> = estimates
             .into_iter()
-            .map(|(ws, e)| json!({"workspace_id":ws,"totals":e.value(archived)}))
+            .filter(|(ws, _)| !personal_workspaces.contains(ws))
+            .map(|(ws, e)| json!({"workspace_id":ws,"totals":e.value(incomplete)}))
             .collect();
         rows.push(json!({"day":day,"provider_workspace_id":provider_workspace,"model":model,"service_tier":tier,"category":category,
             "dimensions":actual.dimensions,"workspace_id":actual_workspace,"imported_microusd":actual.amount.to_string(),
-            "variance_microusd":variance,"workspace_estimates":workspace_estimates,"reasons":reasons}));
+            "variance_microusd":variance,"workspace_estimates":workspace_estimates,
+            "unresolved_coverage":unresolved_coverage.value(archived),"reasons":reasons}));
     }
     let mut estimate_only: BTreeMap<EstimateKey, Estimate> = BTreeMap::new();
     for (index, o) in observations.iter().enumerate() {
         if !used.contains(&index) {
+            if personal_workspaces.contains(&o.workspace_id) {
+                personal_reasons.insert("estimate_only");
+                continue;
+            }
             let key = (
                 o.day,
                 o.workspace_id,
@@ -364,6 +428,13 @@ pub(super) async fn snapshot(
         rows.push(json!({"day":day,"workspace_id":workspace,"model":model,"service_tier":tier,
             "imported_microusd":null,"variance_microusd":null,"estimate":estimate.value(archived),"reasons":reasons}));
     }
+    if archived || personal_estimate.unresolved > 0 {
+        personal_reasons.insert("incomplete_estimate");
+    }
+    let personal_actual_categories: BTreeMap<_, _> = personal_actual_categories
+        .into_iter()
+        .map(|(category, amount)| (category, amount.to_string()))
+        .collect();
     let category_coverage: Vec<Value> = [
         ("usage", &["tokens"][..]), ("discounts", &["discount", "discounts"][..]),
         ("credits", &["credit", "credits"][..]), ("taxes", &["tax", "taxes"][..]),
@@ -376,7 +447,11 @@ pub(super) async fn snapshot(
         "timing_basis":{"omg":"attempt_start_utc","provider":"provider_accounting_bucket","equivalent":false},
         "not_supplied":["invoice_completeness","priority_tier"],"category_coverage":category_coverage,
         "archived_detail_missing":archived,"unmapped_account_scopes":"not_inferred",
-        "mapping_provenance":bindings,"imported_microusd":total_actual.to_string(),
+        "mapping_provenance":public_bindings,"personal_mapping_provenance":"retained_in_mapping_revision",
+        "personal_activity":{"estimates":personal_estimate.value(archived),
+            "exclusively_attributed_imported_microusd":personal_actual.to_string(),
+            "exclusively_attributed_imported_by_category":personal_actual_categories,"reasons":personal_reasons},
+        "imported_microusd":total_actual.to_string(),
         "estimates":total_estimate.value(archived),"rows":rows}),
     )
 }
