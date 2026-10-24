@@ -87,6 +87,7 @@ fn reads(f: &Fixture) -> Vec<(&BrowserPrincipal, String)> {
 }
 async fn status(s: &Store, u: &BrowserPrincipal, path: &str) -> StatusCode {
     let response = routes()
+        .layer(Extension(ManagementPrincipal::Browser(u.clone())))
         .layer(Extension(u.clone()))
         .with_state(s.clone())
         .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap());

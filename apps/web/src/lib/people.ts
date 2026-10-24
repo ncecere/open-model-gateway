@@ -93,6 +93,7 @@ export function splitUsage(rows: Breakdown[], shared: Map<string, { name: string
  * (from a newer gateway) falls back to the code itself.
  */
 export const auditActionLabels: Record<string, string> = {
+  "admin_token.created": "Created admin API token", "admin_token.revoked": "Revoked admin API token",
   "alert_rule.created": "Created alert rule", "alert_rule.updated": "Changed alert rule", "alert_rule.deleted": "Deleted alert rule",
   "batch.cancelled": "Cancelled batch", "batch_scheduling.updated": "Changed batch scheduling",
   "catalog.created": "Created catalog", "catalog.updated": "Changed catalog", "catalog.deleted": "Deleted catalog", "catalog.models_replaced": "Changed catalog models",

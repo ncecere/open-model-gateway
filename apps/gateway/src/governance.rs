@@ -1787,6 +1787,48 @@ async fn reconcile_batch(store: &Store, batch: i64) -> Result<usize, InferenceEr
         Ok(ids.len())
     }
 }
+/// The identity performing a usage reconciliation: the owning user, and --
+/// when an admin token (not a browser session) authenticated the call --
+/// that token's id (#37 PR2 review: the blocking finding that
+/// `resolve_usage`'s caller authenticates in its own, already-committed
+/// transaction before ever reaching this one, so an explicit revoke or
+/// expiry between the two must still be caught here, inside the write's own
+/// transaction, not just at the earlier authentication).
+///
+/// `From<Uuid>` (a plain browser/test actor, `token_id: None`) keeps every
+/// existing caller of `resolve_usage` compiling unchanged: none of them
+/// need to change for this fix.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReconcilingActor {
+    pub user_id: Uuid,
+    pub token_id: Option<Uuid>,
+}
+impl From<Uuid> for ReconcilingActor {
+    fn from(user_id: Uuid) -> Self {
+        Self {
+            user_id,
+            token_id: None,
+        }
+    }
+}
+/// The token-row liveness check (#37 PR2 review): unrevoked, unexpired and
+/// still owned by `actor.user_id`, `FOR SHARE` so a concurrent explicit
+/// revoke blocks on this transaction until it commits. A no-op for a
+/// browser actor (`token_id: None`). Must run after this transaction's own
+/// ordered authority locks (so a concurrent owner-loss trigger cannot race
+/// ahead of it) and before the reservation row or any write.
+async fn revalidate_token(tx: &mut Tx<'_>, actor: ReconcilingActor) -> Result<(), InferenceError> {
+    let Some(token_id) = actor.token_id else {
+        return Ok(());
+    };
+    if !crate::admin_tokens::token_row_live(tx, token_id, actor.user_id)
+        .await
+        .map_err(storage)?
+    {
+        return Err(InferenceError::Unauthenticated);
+    }
+    Ok(())
+}
 /// Authorization remains live after waiting. Personal details never become platform-public.
 pub async fn resolve_usage(
     store: &Store,
@@ -1794,8 +1836,9 @@ pub async fn resolve_usage(
     execution: Uuid,
     usage: Usage,
     evidence: &str,
-    actor: Uuid,
+    actor: impl Into<ReconcilingActor>,
 ) -> Result<(), InferenceError> {
+    let actor = actor.into();
     if evidence.trim().is_empty()
         || evidence.chars().count() > 200
         || evidence.chars().any(char::is_control)
@@ -1813,7 +1856,7 @@ async fn resolve_usage_once(
     execution: Uuid,
     usage: Usage,
     evidence: &str,
-    actor: Uuid,
+    actor: ReconcilingActor,
 ) -> Result<(), InferenceError> {
     let mut tx = crate::db::begin(&store.pool).await.map_err(storage)?;
     if scoped(store) {
@@ -1824,14 +1867,26 @@ async fn resolve_usage_once(
             &mut tx,
             [
                 locks::Scope::Workspace(workspace),
-                locks::Scope::User(actor),
+                locks::Scope::User(actor.user_id),
             ],
         )
         .await
         .map_err(storage)?;
     } else {
         lock(&mut tx).await?;
+        // Global mode takes no User-scope advisory lock for a browser actor
+        // (preserving this mode's original behaviour exactly); a token
+        // actor needs the owner's authority lock held before the token
+        // row check below, or a concurrent owner-loss trigger could revoke
+        // the token between this check and the role check that follows,
+        // observing neither consistently (#37 PR2 review).
+        if actor.token_id.is_some() {
+            locks::shared(&mut tx, [locks::Scope::User(actor.user_id)])
+                .await
+                .map_err(storage)?;
+        }
     }
+    revalidate_token(&mut tx, actor).await?;
     let r = reservation(&mut tx, execution, scoped(store)).await?;
     // Realtime sessions are valued per response (`realtime`); an aggregate
     // reconciliation could not reproduce that valuation, so it is refused.
@@ -1839,7 +1894,7 @@ async fn resolve_usage_once(
         return Err(InferenceError::InvalidRequest);
     }
     let authorized:Option<Uuid>=sqlx::query_scalar(&format!("SELECT u.id FROM users u JOIN effective_platform_roles p ON p.user_id=u.id AND p.role='admin' JOIN workspaces w ON w.id=$2 AND w.disabled_at IS NULL WHERE u.id=$1 AND u.disabled_at IS NULL AND u.cleaned_at IS NULL AND (w.kind IN('team','project') OR w.owner_user_id=u.id){}", if scoped(store) { "" } else { " FOR SHARE OF u,w" }))
-        .bind(actor).bind(workspace).fetch_optional(&mut *tx).await.map_err(storage)?;
+        .bind(actor.user_id).bind(workspace).fetch_optional(&mut *tx).await.map_err(storage)?;
     if authorized.is_none() {
         return Err(InferenceError::InvalidRequest);
     }
@@ -1912,7 +1967,7 @@ async fn resolve_usage_once(
         Some(evidence),
     )
     .await?;
-    sqlx::query("INSERT INTO audit_events(id,workspace_id,actor_user_id,action,resource_type,resource_id,metadata) VALUES($1,$2,$3,'usage.reconciled','execution',$4,'{}')").bind(Uuid::new_v4()).bind(workspace).bind(actor).bind(execution).execute(&mut *tx).await.map_err(storage)?;
+    sqlx::query("INSERT INTO audit_events(id,workspace_id,actor_user_id,action,resource_type,resource_id,metadata,admin_token_id) VALUES($1,$2,$3,'usage.reconciled','execution',$4,'{}',$5)").bind(Uuid::new_v4()).bind(workspace).bind(actor.user_id).bind(execution).bind(actor.token_id).execute(&mut *tx).await.map_err(storage)?;
     tx.commit().await.map_err(storage)
 }
 #[cfg(all(test, feature = "integration-tests"))]
@@ -1947,6 +2002,8 @@ mod rates_tests;
 pub mod realtime;
 #[cfg(all(test, feature = "integration-tests"))]
 mod realtime_tests;
+#[cfg(all(test, feature = "integration-tests"))]
+mod reconcile_token_tests;
 #[cfg(all(test, feature = "integration-tests"))]
 mod safety_tests;
 #[cfg(all(test, feature = "integration-tests"))]

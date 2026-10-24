@@ -68,6 +68,9 @@ mod db {
                 "/api/v1/workspaces/{ws}/keys/{key}/stats",
                 axum::routing::get(crate::management::keys::key_stats),
             )
+            .layer(Extension(crate::identity::ManagementPrincipal::Browser(
+                u.clone(),
+            )))
             .layer(Extension(u.clone()))
             .with_state(f.store.clone())
             .oneshot(
@@ -1299,6 +1302,9 @@ mod db {
             let catalog = catalog.clone();
             async move {
                 let r = platform_routes()
+                    .layer(Extension(crate::identity::ManagementPrincipal::Browser(
+                        u.clone(),
+                    )))
                     .layer(Extension(u))
                     .layer(Extension(catalog))
                     .with_state(store)
@@ -1376,6 +1382,9 @@ mod db {
             std::time::Duration::from_millis(500),
         ));
         let r = platform_routes()
+            .layer(Extension(crate::identity::ManagementPrincipal::Browser(
+                admin.clone(),
+            )))
             .layer(Extension(admin.clone()))
             .layer(Extension(dead))
             .with_state(f.store.clone())

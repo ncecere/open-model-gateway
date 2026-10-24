@@ -354,15 +354,15 @@ async fn report(
 /// data optionally from the reporting replica.
 async fn platform_report_tx(
     s: &Store,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
 ) -> Result<Transaction<'static, Postgres>, ApiError> {
     let mut tx = s.snapshot().await?;
-    resources::platform_read_snapshot(&mut tx, u.user_id).await?;
+    resources::platform_read_snapshot(&mut tx, u.user_id()).await?;
     Ok(s.reporting(tx).await?)
 }
 async fn workspace_report_tx(
     s: &Store,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Uuid,
 ) -> Result<(Transaction<'static, Postgres>, resources::WorkspaceAccess), ApiError> {
     let mut tx = s.snapshot().await?;
@@ -378,7 +378,7 @@ async fn deadline<T>(
 }
 pub(super) async fn workspace_report(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
     RawQuery(raw): RawQuery,
 ) -> ApiResult {
@@ -392,7 +392,7 @@ pub(super) async fn workspace_report(
             if a.view_all_activity {
                 None
             } else {
-                Some(u.user_id)
+                Some(u.user_id())
             },
             false,
         )
@@ -404,7 +404,7 @@ pub(super) async fn workspace_report(
 }
 pub(super) async fn platform_report(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     RawQuery(raw): RawQuery,
 ) -> ApiResult {
     deadline(async {
@@ -418,10 +418,10 @@ pub(super) async fn platform_report(
 }
 pub(super) async fn cost_summary(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
 ) -> ApiResult {
-    deadline(async {let now=Utc::now().date_naive();let f=Filters{workspace:Some(ws),start:now.with_day(1).ok_or_else(invalid)?,end:now.checked_add_signed(TimeDelta::days(1)).ok_or_else(invalid)?,..Default::default()};let(mut tx,a)=workspace_report_tx(&s,&u,ws).await?;let value=report(&mut tx,&f,if a.view_all_activity{None}else{Some(u.user_id)},false).await?;tx.commit().await?;Ok(Json(json!({"currency":"USD","known_cost_microusd":value["totals"]["known_cost_microusd"],"held_microusd":value["totals"]["held_microusd"],"unknown_cost_requests":value["totals"]["unresolved_attempts"],"requests":value["totals"]["attempts"]})))}).await
+    deadline(async {let now=Utc::now().date_naive();let f=Filters{workspace:Some(ws),start:now.with_day(1).ok_or_else(invalid)?,end:now.checked_add_signed(TimeDelta::days(1)).ok_or_else(invalid)?,..Default::default()};let(mut tx,a)=workspace_report_tx(&s,&u,ws).await?;let value=report(&mut tx,&f,if a.view_all_activity{None}else{Some(u.user_id())},false).await?;tx.commit().await?;Ok(Json(json!({"currency":"USD","known_cost_microusd":value["totals"]["known_cost_microusd"],"held_microusd":value["totals"]["held_microusd"],"unknown_cost_requests":value["totals"]["unresolved_attempts"],"requests":value["totals"]["attempts"]})))}).await
 }
 async fn cost_rows(
     tx: &mut Transaction<'_, Postgres>,
@@ -440,7 +440,7 @@ async fn cost_rows(
 }
 pub(super) async fn costs(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
     RawQuery(raw): RawQuery,
 ) -> ApiResult {
@@ -455,7 +455,7 @@ pub(super) async fn costs(
             if a.view_all_activity {
                 None
             } else {
-                Some(u.user_id)
+                Some(u.user_id())
             },
             limit + 1,
         )
@@ -481,7 +481,7 @@ fn csv_cell(value: &str) -> String {
 }
 pub(super) async fn usage_export(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
     RawQuery(raw): RawQuery,
 ) -> Result<Response, ApiError> {
@@ -496,7 +496,7 @@ pub(super) async fn usage_export(
             if a.view_all_activity {
                 None
             } else {
-                Some(u.user_id)
+                Some(u.user_id())
             },
             limit,
         )
@@ -594,12 +594,12 @@ pub(super) struct Reconcile {
 }
 pub(super) async fn reconcile(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path((ws, execution)): Path<(Uuid, Uuid)>,
     Json(p): Json<Reconcile>,
 ) -> ApiResult {
     let (mut tx, _) = resources::workspace_tx(&s, &u, ws).await?;
-    resources::platform_write(&mut tx, u.user_id).await?;
+    resources::platform_write(&mut tx, &u).await?;
     sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM inference_executions WHERE workspace_id=$1 AND id=$2",
     )
@@ -623,19 +623,35 @@ pub(super) async fn reconcile(
         reasoning_tokens: None,
         reported_model: None,
     };
-    crate::governance::resolve_usage(&s, ws, execution, usage, &p.evidence, u.user_id)
-        .await
-        .map_err(|e| match e {
-            InferenceError::InvalidRequest => invalid(),
-            InferenceError::Configuration => ApiError(
-                StatusCode::CONFLICT,
-                "Execution has no complete pinned valuation",
-            ),
-            _ => ApiError(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Reconciliation unavailable",
-            ),
-        })?;
+    crate::governance::resolve_usage(
+        &s,
+        ws,
+        execution,
+        usage,
+        &p.evidence,
+        crate::governance::ReconcilingActor {
+            user_id: u.user_id(),
+            token_id: u.token_id(),
+        },
+    )
+    .await
+    .map_err(|e| match e {
+        InferenceError::InvalidRequest => invalid(),
+        InferenceError::Configuration => ApiError(
+            StatusCode::CONFLICT,
+            "Execution has no complete pinned valuation",
+        ),
+        // The caller's admin token was revoked or expired between its own
+        // authentication and this write's own transaction (#37 PR2 review):
+        // the same refusal `resources::platform_write`'s revalidation gives
+        // a browser-session handler for the identical race, not a 503 and
+        // never a ledger write.
+        InferenceError::Unauthenticated => denied(),
+        _ => ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Reconciliation unavailable",
+        ),
+    })?;
     Ok(ok())
 }
 #[cfg(test)]

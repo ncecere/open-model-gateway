@@ -29,7 +29,7 @@ fn legacy() -> i16 {
 }
 pub(super) async fn prices(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
     Query(page): Query<Page>,
 ) -> ApiResult {
@@ -112,7 +112,7 @@ pub(crate) struct ValidPrice {
 }
 pub(super) async fn create_price(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(deployment): Path<Uuid>,
     Json(p): Json<Price>,
 ) -> DetailedResult {
@@ -223,7 +223,7 @@ pub(crate) fn validate_price(p: Price) -> Result<ValidPrice, ApiError> {
 /// Inserts and audits an immutable price version. The caller holds an exclusive `catalog_tx`.
 pub(crate) async fn insert_price(
     tx: &mut Transaction<'_, Postgres>,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     deployment: Uuid,
     v: ValidPrice,
 ) -> Result<Uuid, ManagementError> {
@@ -297,7 +297,7 @@ pub(super) struct ModelRouting {
 }
 pub(super) async fn model_routing(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(model): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, false).await?;
@@ -307,7 +307,7 @@ pub(super) async fn model_routing(
 }
 pub(super) async fn put_model_routing(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(model): Path<Uuid>,
     Json(p): Json<ModelRouting>,
 ) -> ApiResult {
@@ -347,7 +347,7 @@ pub(super) struct DeploymentRouting {
 }
 pub(super) async fn deployment_routing(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, false).await?;
@@ -357,7 +357,7 @@ pub(super) async fn deployment_routing(
 }
 pub(super) async fn put_deployment_routing(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
     Json(p): Json<DeploymentRouting>,
 ) -> ApiResult {

@@ -167,6 +167,13 @@ async fn every_json_management_write_rejects_unknown_fields_after_valid_control(
         json!({"name":"New connection","provider":"openai","credential_ref":"env:OPENAI_API_KEY","enabled":false})
     );
     case!(
+        "admin_tokens::create",
+        "POST",
+        format!("{platform}/admin-tokens"),
+        &f.admin,
+        json!({"name":"Matrix probe","scopes":["platform:read"],"expires_in_days":30})
+    );
+    case!(
         "resources::update_provider",
         "PATCH",
         format!("{platform}/providers/{connection}"),

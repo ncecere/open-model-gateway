@@ -51,7 +51,7 @@ describe("audit event labels", () => {
   it("labels every audit code the gateway emits", () => {
     const codes = emittedAuditCodes();
     // The scan itself must find the codes (guards against a silently broken extractor).
-    for (const known of ["key.created", "file.uploaded", "alert_rule.created", "scim.user.deactivated", "user.bootstrap_role", "usage.reconciled", "settings.storage_test"]) expect(codes).toContain(known);
+    for (const known of ["admin_token.created", "admin_token.revoked", "key.created", "file.uploaded", "alert_rule.created", "scim.user.deactivated", "user.bootstrap_role", "usage.reconciled", "settings.storage_test"]) expect(codes).toContain(known);
     expect(codes.size).toBeGreaterThan(60);
     const missing = [...codes].filter(code => !auditActionLabels[code]).sort();
     expect(missing).toEqual([]);

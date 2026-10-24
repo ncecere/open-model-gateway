@@ -411,7 +411,50 @@ pub struct IdentityState {
     scim: Option<Arc<ScimRuntime>>,
     /// Lifetime and idle timeout of new sessions and of recorded activity.
     policy: SessionPolicy,
+    /// #37 PR2: admin-token request handling (IP allowlist resolution) is
+    /// independent of whether OIDC sign-in is configured at all, so this is
+    /// read directly from `GATEWAY_TRUSTED_PROXIES` rather than through
+    /// `IdentityConfig` (which only exists when OIDC is configured).
+    trusted_proxies: throttle::TrustedProxies,
+    /// Bounded per-replica rate limiting of admin-token authentication
+    /// attempts (malformed credentials, unknown/expired/revoked tokens):
+    /// these are never individually audited (coordinator decision), only
+    /// aggregated and rate-limited, so a flood of garbage bearer tokens
+    /// cannot grow the audit log or the key-lookup load without bound.
+    admin_token_limiter: Arc<throttle::Limiter>,
+    /// #37 PR2 finding 3: a second, independent admission bound on top of
+    /// the per-IP limiter above, checked *after* a token has successfully
+    /// authenticated and before the attempt is started or dispatched --
+    /// bounds how much one compromised or misbehaving token can do even
+    /// from many different client addresses (which the per-IP limiter
+    /// alone cannot see).
+    admin_token_per_token_limiter: Arc<throttle::TokenLimiter>,
+    /// #37 PR2 finding 3: one shared, replica-wide admission bound, checked
+    /// *before* the expensive (one database round trip) authentication
+    /// lookup -- bounds distributed floods of invalid-shape or unknown-id
+    /// credentials spread across many client addresses, each individually
+    /// under the per-IP limit, before any of that database work happens.
+    admin_token_replica_limiter: Arc<throttle::ReplicaLimiter>,
 }
+/// Default rate of admin-token authentication attempts believed per client
+/// address, per replica (same shape as [`LOGIN_RATE_PER_MINUTE`]). Higher
+/// than the human sign-in rate: a legitimate automation caller using a
+/// single admin token can reasonably issue many requests a minute, and only
+/// requests that at least look like an admin token (not merely bearing some
+/// Authorization header) ever consume this budget.
+const ADMIN_TOKEN_AUTH_RATE_PER_MINUTE: u32 = 1_000;
+/// #37 PR2 finding 3: per admitted (authenticated) admin token, per minute,
+/// per replica. Same shape and magnitude as the per-IP rate above, but keyed
+/// on the token's own id instead of a client address, so it still bounds a
+/// single token's admission load even when spread across many addresses.
+const ADMIN_TOKEN_PER_TOKEN_RATE_PER_MINUTE: u32 = 1_000;
+/// #37 PR2 finding 3: every admin-token authentication attempt on one
+/// replica, successful or not, aggregated into a single shared bound. Ten
+/// times the per-IP/per-token rate: generous for one legitimate caller, but
+/// still a hard ceiling on the database work a distributed flood (many
+/// addresses, each individually under the per-IP limit) can cause on this
+/// replica before a single request is even authenticated.
+const ADMIN_TOKEN_REPLICA_RATE_PER_MINUTE: u32 = 10_000;
 
 impl IdentityState {
     /// Discovery/issuer/JWKS validation is fail-closed: configured OIDC failure prevents startup.
@@ -544,11 +587,31 @@ impl IdentityState {
         let policy = provider
             .as_ref()
             .map_or_else(SessionPolicy::default, |p| p.config.session_policy);
+        // Reuses whatever the OIDC provider already parsed from the same
+        // env var when configured; parsed independently otherwise, so
+        // admin-token IP resolution works even with no OIDC configured.
+        let trusted_proxies = match &provider {
+            Some(provider) => provider.config.trusted_proxies.clone(),
+            None => match env::var("GATEWAY_TRUSTED_PROXIES") {
+                Ok(value) if !value.trim().is_empty() => throttle::TrustedProxies::parse(&value)?,
+                Ok(_) => anyhow::bail!("GATEWAY_TRUSTED_PROXIES must not be empty"),
+                Err(env::VarError::NotPresent) => throttle::TrustedProxies::default(),
+                Err(_) => anyhow::bail!("GATEWAY_TRUSTED_PROXIES is not valid Unicode"),
+            },
+        };
         Ok(Self {
             store,
             provider,
             scim: None,
             policy,
+            trusted_proxies,
+            admin_token_limiter: Arc::new(throttle::Limiter::new(ADMIN_TOKEN_AUTH_RATE_PER_MINUTE)),
+            admin_token_per_token_limiter: Arc::new(throttle::TokenLimiter::new(
+                ADMIN_TOKEN_PER_TOKEN_RATE_PER_MINUTE,
+            )),
+            admin_token_replica_limiter: Arc::new(throttle::ReplicaLimiter::new(
+                ADMIN_TOKEN_REPLICA_RATE_PER_MINUTE,
+            )),
         })
     }
 
@@ -569,6 +632,38 @@ impl IdentityState {
 
     pub(crate) fn store(&self) -> &Store {
         &self.store
+    }
+
+    /// Test-only: a copy with an explicit `GATEWAY_TRUSTED_PROXIES` policy,
+    /// for admin-token IP-allowlist tests that need a trusted proxy chain
+    /// (`management::authz_matrix_tests`, outside this module's own tree).
+    #[cfg(test)]
+    pub(crate) fn with_trusted_proxies(mut self, proxies: throttle::TrustedProxies) -> Self {
+        self.trusted_proxies = proxies;
+        self
+    }
+
+    /// Replace the per-token and replica admin-token limiters with tiny,
+    /// test-chosen rates (#37 PR2 finding 3): deterministic small-limit
+    /// tests exhaust a limiter of 1-2 requests a minute within a handful of
+    /// in-process requests, with no real-minute wait and no injected clock
+    /// (the limiters still read the wall clock, but a burst this small is
+    /// exhausted well inside one test's execution). Independent `Arc`s, so
+    /// a clone of this state still shares its own limiters correctly
+    /// (`management::authz_admin_token_tests` clones `IdentityState`
+    /// freely); this only ever replaces the limiter this value points at
+    /// before any clone is made, never a production default.
+    #[cfg(test)]
+    pub(crate) fn with_admin_token_limits(
+        mut self,
+        per_token_per_minute: u32,
+        replica_per_minute: u32,
+    ) -> Self {
+        self.admin_token_per_token_limiter =
+            Arc::new(throttle::TokenLimiter::new(per_token_per_minute));
+        self.admin_token_replica_limiter =
+            Arc::new(throttle::ReplicaLimiter::new(replica_per_minute));
+        self
     }
 
     pub(crate) fn scim(&self) -> Option<Arc<ScimRuntime>> {
@@ -615,6 +710,61 @@ pub struct BrowserPrincipal {
     pub email: String,
     pub platform_admin: bool,
     pub platform_auditor: bool,
+}
+
+/// A live admin-token request context (#37 PR2): everything
+/// `authenticate_admin_token` returned, plus the request's resolved client
+/// address (identical resolution as [`throttle::client_ip`]), needed to
+/// enforce the token's optional IP allowlist and to record last use.
+#[derive(Clone)]
+pub struct AdminTokenContext {
+    pub token_id: Uuid,
+    pub owner_user_id: Uuid,
+    pub scopes: Vec<String>,
+    pub ip_allowlist: Option<Vec<String>>,
+    pub client_address: Option<IpAddr>,
+}
+
+/// Exactly one credential family authenticated a management request (#37
+/// PR2): a browser session, or an admin API token. Never both -- selection
+/// happens once, in [`authenticate_management`], before extraction, and a
+/// `BrowserPrincipal` is never manufactured for a token (a token's
+/// authority is its own: an owner id, scopes and an optional allowlist, not
+/// a verified email or session claim).
+#[derive(Clone)]
+pub enum ManagementPrincipal {
+    Browser(BrowserPrincipal),
+    AdminToken(AdminTokenContext),
+}
+impl ManagementPrincipal {
+    /// The user whose authority governs this request: the signed-in user,
+    /// or the token's (immutable, currently-effective-Admin) owner.
+    pub fn user_id(&self) -> Uuid {
+        match self {
+            Self::Browser(b) => b.user_id,
+            Self::AdminToken(t) => t.owner_user_id,
+        }
+    }
+    /// The admin token that authenticated this request, for audit
+    /// attribution; `None` for a browser session.
+    pub fn token_id(&self) -> Option<Uuid> {
+        match self {
+            Self::Browser(_) => None,
+            Self::AdminToken(t) => Some(t.token_id),
+        }
+    }
+    pub fn as_browser(&self) -> Option<&BrowserPrincipal> {
+        match self {
+            Self::Browser(b) => Some(b),
+            Self::AdminToken(_) => None,
+        }
+    }
+    pub fn as_admin_token(&self) -> Option<&AdminTokenContext> {
+        match self {
+            Self::Browser(_) => None,
+            Self::AdminToken(t) => Some(t),
+        }
+    }
 }
 
 pub fn router(state: IdentityState) -> Router<Store> {
@@ -879,7 +1029,7 @@ async fn login(
 
 /// The connection's peer address, when the server records it
 /// (`into_make_service_with_connect_info`); in-process tests have none.
-struct PeerIp(Option<IpAddr>);
+pub struct PeerIp(Option<IpAddr>);
 impl<S: Send + Sync> axum::extract::FromRequestParts<S> for PeerIp {
     type Rejection = std::convert::Infallible;
     async fn from_request_parts(
@@ -1346,25 +1496,197 @@ fn verify_csrf(
     Ok(())
 }
 
-/// Apply to every management route (not inference). Never accepts an Authorization bearer key.
-pub async fn require_session(
+/// A `Bearer` credential's token, from exactly one `Authorization` header
+/// (the caller has already refused more than one). Strict: case-insensitive
+/// `Bearer` scheme only, a non-empty token with no internal whitespace --
+/// the same shape `http.rs`'s own `credential()` enforces for inference
+/// keys, with no `x-api-key` fallback (management never accepts that header).
+fn bearer_credential(headers: &HeaderMap) -> Option<&str> {
+    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
+    let (scheme, token) = value.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("bearer")
+        || token.is_empty()
+        || token.bytes().any(|b| b.is_ascii_whitespace())
+    {
+        return None;
+    }
+    Some(token)
+}
+
+/// An inference key's exact shape (`omg_<32-hex>.<64-hex>`, 101 characters)
+/// with the admin-token prefix excluded. Checked before any database access
+/// so a well-formed inference key presented to a management route is
+/// refused outright rather than merely failing the admin-token parser by
+/// coincidence (the approved spec calls this out explicitly).
+fn looks_like_inference_key(token: &str) -> bool {
+    token.len() == 101 && token.starts_with("omg_") && !token.starts_with("omg_admin_")
+}
+
+/// Whether a (possibly malformed) `omg_session` cookie is present at all,
+/// regardless of its value's validity: used only to refuse a request that
+/// also carries an `Authorization` header (#37 PR2) -- "even an invalid
+/// cookie" means this check must not itself validate the cookie's shape.
+/// An undecodable `Cookie` header line is treated as present (fails closed):
+/// this function only ever makes credential selection *stricter*.
+fn raw_cookie_present(headers: &HeaderMap, name: &str) -> bool {
+    for line in headers.get_all(header::COOKIE) {
+        let Ok(line) = line.to_str() else {
+            return true;
+        };
+        for part in line.split(';') {
+            let key = part.split_once('=').map_or(part, |(k, _)| k);
+            if key.trim() == name {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Apply to every management route (not inference). Selects exactly one
+/// credential family -- an admin API token (`Authorization: Bearer`) or a
+/// browser session (`omg_session` cookie) -- never both, with no fallback
+/// in either direction (#37 PR2): a duplicate `Authorization` header, or any
+/// request carrying both an `Authorization` header and an `omg_session`
+/// cookie (even an invalid one), is refused before either credential is
+/// examined.
+pub async fn authenticate_management(
     State(state): State<IdentityState>,
+    PeerIp(peer): PeerIp,
     mut request: Request,
     next: Next,
 ) -> Response {
-    let session = match verify_session(&state, request.headers()).await {
+    let headers = request.headers().clone();
+    let authorization_count = headers.get_all(header::AUTHORIZATION).iter().count();
+    if authorization_count > 0 {
+        if authorization_count > 1 || raw_cookie_present(&headers, SESSION) {
+            return AuthError(StatusCode::UNAUTHORIZED).into_response();
+        }
+        return authenticate_admin_token_request(&state, peer, &headers, request, next).await;
+    }
+    let session = match verify_session(&state, &headers).await {
         Ok(session) => session,
         Err(error) => return error.into_response(),
     };
     if request.method() != Method::GET
         && request.method() != Method::HEAD
-        && let Err(error) = verify_csrf(&state, request.headers(), &session.csrf_hash)
+        && let Err(error) = verify_csrf(&state, &headers, &session.csrf_hash)
     {
         return error.into_response();
     }
+    request
+        .extensions_mut()
+        .insert(ManagementPrincipal::Browser(session.principal.clone()));
     request.extensions_mut().insert(session.principal);
     request.extensions_mut().insert(CurrentSession(session.id));
     private(next.run(request).await)
+}
+
+/// The admin-token half of [`authenticate_management`]: a pre-authentication
+/// failure (malformed credential, inference-key shape, or an unknown/
+/// expired/revoked/wrong-owner token -- `authenticate_admin_token` itself
+/// re-reads the primary database live, no cache) is rate-limited and
+/// aggregated only, never individually audited (coordinator decision: there
+/// is no token id yet to attribute it to, and auditing unauthenticated noise
+/// would itself be a flood vector). Only after the token authenticates does
+/// an attempt exist to audit, which `management::authorization` does for
+/// every request it admits or refuses from here on.
+async fn authenticate_admin_token_request(
+    state: &IdentityState,
+    peer: Option<IpAddr>,
+    headers: &HeaderMap,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let pre_auth_fail = |reason: &'static str| {
+        crate::metrics::METRICS.auth_throttled("admin_token", reason);
+        AuthError(StatusCode::UNAUTHORIZED).into_response()
+    };
+    // Free, format-only rejections (not even shaped like `omg_admin_...`)
+    // never consume the rate limiter below: there is nothing here for a
+    // flood of these to protect (no database access, no admin-token
+    // parsing), and reserving the limiter's budget for credentials that at
+    // least look like an admin token keeps a mixed flood (garbage plus
+    // real-looking attempts) from starving genuine admin-token traffic.
+    let Some(token) = bearer_credential(headers) else {
+        return pre_auth_fail("malformed_credential");
+    };
+    if looks_like_inference_key(token) {
+        return pre_auth_fail("inference_key_shape");
+    }
+    let client = throttle::client_ip(peer, headers, &state.trusted_proxies);
+    if let Err(wait) = state
+        .admin_token_limiter
+        .check(client, std::time::Instant::now())
+    {
+        return throttled(
+            "admin_token",
+            "client_rate",
+            StatusCode::TOO_MANY_REQUESTS,
+            wait,
+        );
+    }
+    // Aggregate, replica-wide gate, before the expensive (one database
+    // round trip) authentication lookup below (#37 PR2 finding 3): bounds
+    // a distributed flood of invalid-shape or unknown-id credentials spread
+    // across many client addresses, each individually under the per-IP
+    // limit above, before any of that database work happens.
+    if let Err(wait) = state
+        .admin_token_replica_limiter
+        .check(std::time::Instant::now())
+    {
+        return throttled(
+            "admin_token",
+            "replica_rate",
+            StatusCode::TOO_MANY_REQUESTS,
+            wait,
+        );
+    }
+    match state.store.authenticate_admin_token(token).await {
+        Ok(Some(principal)) => {
+            // Per-token gate, only now that the token has successfully
+            // authenticated, and before this attempt is started (audited)
+            // or dispatched (#37 PR2 finding 3): the key here is the
+            // token's own id, never allocated for an arbitrary
+            // unauthenticated credential pre-authentication. A rejection
+            // here is counted only in the fixed, low-cardinality
+            // `auth_throttled` metric, never as an individual audit row --
+            // the request never reaches `management::authorization`, which
+            // is where that row would be written.
+            if let Err(wait) = state
+                .admin_token_per_token_limiter
+                .check(principal.token_id, std::time::Instant::now())
+            {
+                return throttled(
+                    "admin_token",
+                    "token_rate",
+                    StatusCode::TOO_MANY_REQUESTS,
+                    wait,
+                );
+            }
+            let context = AdminTokenContext {
+                token_id: principal.token_id,
+                owner_user_id: principal.owner_user_id,
+                scopes: principal.scopes,
+                ip_allowlist: principal.ip_allowlist,
+                client_address: client,
+            };
+            request
+                .extensions_mut()
+                .insert(ManagementPrincipal::AdminToken(context));
+            // Exempt from CSRF: the credential is a Bearer secret a
+            // cross-site form or script can never already hold, unlike a
+            // cookie a browser attaches automatically (#37 PR2 coordinator
+            // decision). Browser-session mutations keep exact Origin and
+            // CSRF-token validation above, unchanged.
+            private(next.run(request).await)
+        }
+        Ok(None) => pre_auth_fail("invalid_credential"),
+        Err(error) => {
+            tracing::error!(%error, "admin token authentication database lookup failed");
+            AuthError(StatusCode::INTERNAL_SERVER_ERROR).into_response()
+        }
+    }
 }
 
 fn wants_html(headers: &HeaderMap) -> bool {

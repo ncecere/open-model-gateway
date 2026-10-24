@@ -36,7 +36,7 @@ struct ModelSetup {
 }
 async fn model_setup(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Json(b): Json<ModelSetup>,
 ) -> Result<(StatusCode, Json<Value>), ManagementError> {
     let mut tx = resources::catalog_tx(&s, &u, true).await?;
@@ -64,7 +64,10 @@ async fn model_setup(
     ))
 }
 /// Aggregate counts only: no names, emails, keys, credential references or request details.
-async fn overview(State(s): State<Store>, Extension(u): Extension<BrowserPrincipal>) -> ApiResult {
+async fn overview(
+    State(s): State<Store>,
+    Extension(u): Extension<ManagementPrincipal>,
+) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, false).await?;
     sqlx::query("SET LOCAL statement_timeout='10s'")
         .execute(&mut *tx)

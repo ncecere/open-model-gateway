@@ -411,6 +411,75 @@ pub async fn revoke_admin_token(
     Ok(result.rows_affected() > 0)
 }
 
+/// Whether `client` satisfies `allowlist` (the token's canonical `addr/len`
+/// entries, exactly as returned by [`Store::authenticate_admin_token`]).
+/// `None` means unrestricted. Fails closed (#37 PR2 approved spec, section
+/// 3): a restricted token with no resolved client address never matches,
+/// regardless of the allowlist's contents.
+pub fn ip_allowed(allowlist: Option<&[String]>, client: Option<std::net::IpAddr>) -> bool {
+    let Some(allowlist) = allowlist else {
+        return true;
+    };
+    let Some(client) = client else {
+        return false;
+    };
+    allowlist.iter().any(|entry| {
+        crate::egress::parse_network("ip_allowlist", entry)
+            .is_ok_and(|(net, prefix)| network_contains(net, prefix, client))
+    })
+}
+
+/// `ip` matches `net/prefix`, after normalizing an IPv4-mapped IPv6 client
+/// address to plain IPv4 (`canonical_allowlist` never stores a mapped
+/// network itself, so the comparison must agree on family).
+fn network_contains(net: std::net::IpAddr, prefix: u8, ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    let ip = match ip {
+        IpAddr::V6(v6) => v6.to_ipv4().map_or(IpAddr::V6(v6), IpAddr::V4),
+        v4 => v4,
+    };
+    match (net, ip) {
+        (IpAddr::V4(n), IpAddr::V4(i)) => {
+            let mask = u32::MAX.checked_shl(32 - u32::from(prefix)).unwrap_or(0);
+            (u32::from(n) & mask) == (u32::from(i) & mask)
+        }
+        (IpAddr::V6(n), IpAddr::V6(i)) => {
+            let mask = u128::MAX.checked_shl(128 - u32::from(prefix)).unwrap_or(0);
+            (u128::from(n) & mask) == (u128::from(i) & mask)
+        }
+        _ => false,
+    }
+}
+
+/// Live credential-row check for a caller that already resolved a token's
+/// owner and id in an earlier step (authentication, or a `ManagementPrincipal`
+/// carried across a transaction boundary, e.g. `governance::resolve_usage`'s
+/// two-transaction reconciliation path): unrevoked, unexpired by the
+/// database's own clock, and still owned by the expected user (defense in
+/// depth; the owner column is itself immutable per token). `FOR SHARE`, so a
+/// concurrent explicit revoke (a plain row `UPDATE`) blocks on this
+/// transaction until it commits -- the same guarantee
+/// `management/resources.rs::revalidate_token_row` relies on for every other
+/// management handler transaction, which calls this directly rather than
+/// duplicating the query. Callers needing the owner's advisory authority
+/// lock too must take it themselves first, in the canonical lock order,
+/// before calling this (this function takes no lock of its own beyond the
+/// row's `FOR SHARE`).
+pub(crate) async fn token_row_live(
+    tx: &mut Transaction<'_, Postgres>,
+    token_id: Uuid,
+    owner_user_id: Uuid,
+) -> Result<bool, sqlx::Error> {
+    let live: Option<bool> = sqlx::query_scalar(
+        "SELECT owner_user_id=$2 AND revoked_at IS NULL AND expires_at>clock_timestamp() FROM admin_api_tokens WHERE id=$1 FOR SHARE",
+    )
+    .bind(token_id)
+    .bind(owner_user_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(live.unwrap_or(false))
+}
+
 impl Store {
     /// Live lookup-for-authorization. A malformed token is rejected by the
     /// strict parser with no database access at all. No positive
@@ -481,6 +550,36 @@ mod enterprise_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ip_allowed_matches_exactly_and_fails_closed() {
+        let allow = vec!["10.0.0.0/24".to_string(), "2001:db8::/32".to_string()];
+        // No allowlist: unrestricted.
+        assert!(ip_allowed(None, None));
+        assert!(ip_allowed(None, Some("203.0.113.9".parse().unwrap())));
+        // Set allowlist, no resolved address: fails closed.
+        assert!(!ip_allowed(Some(&allow), None));
+        // Matching and non-matching addresses, both families.
+        assert!(ip_allowed(Some(&allow), Some("10.0.0.42".parse().unwrap())));
+        assert!(!ip_allowed(Some(&allow), Some("10.0.1.1".parse().unwrap())));
+        assert!(ip_allowed(
+            Some(&allow),
+            Some("2001:db8::1234".parse().unwrap())
+        ));
+        assert!(!ip_allowed(
+            Some(&allow),
+            Some("2001:db9::1".parse().unwrap())
+        ));
+        assert!(!ip_allowed(
+            Some(&allow),
+            Some("203.0.113.9".parse().unwrap())
+        ));
+        // An IPv4-mapped IPv6 client address is compared as its IPv4 form.
+        assert!(ip_allowed(
+            Some(&allow),
+            Some("::ffff:10.0.0.5".parse().unwrap())
+        ));
+    }
 
     #[test]
     fn tokens_have_the_expected_format_and_independent_random_secrets() {

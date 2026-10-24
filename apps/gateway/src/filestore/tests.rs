@@ -772,6 +772,73 @@ async fn format_v1_fixtures_from_earlier_releases_still_decrypt() {
     }
 }
 
+/// A format-v1 object written by an earlier release (fixed `aes-gcm` fixture
+/// bytes) re-wraps cleanly to a new master key: the header changes, every
+/// chunk byte is untouched, and the fixture's original key can then be
+/// dropped from the ring entirely (#17 upgrade regression, paired with
+/// `format_v1_fixtures_from_earlier_releases_still_decrypt`).
+#[tokio::test]
+async fn legacy_fixtures_rewrap_to_a_new_key_and_the_old_key_can_then_be_removed() {
+    for (index, (object_key, raw)) in FIXTURE_OBJECTS.into_iter().enumerate() {
+        let key = ObjectKey::parse(object_key).unwrap();
+        let plain = fixture_plaintext(index);
+        let backend = MemoryBackend::default();
+        backend.set_raw(&key, Bytes::from_static(raw));
+        let both = Encrypted::new(backend.clone(), fixture_ring());
+        assert_eq!(
+            both.rekey(&key, "k2026").await.unwrap(),
+            Rekeyed::Rewrapped,
+            "{object_key}"
+        );
+        let rewritten = backend.objects().get(key.as_str()).cloned().unwrap();
+        assert_eq!(rewritten.len(), raw.len(), "{object_key}");
+        assert_eq!(
+            rewritten[HEADER_LEN..],
+            raw[HEADER_LEN..],
+            "{object_key}: chunks must stay byte-for-byte unchanged"
+        );
+        assert_ne!(
+            rewritten[..HEADER_LEN],
+            raw[..HEADER_LEN],
+            "{object_key}: header must be replaced"
+        );
+        assert_eq!(crypto::header_key_id(&rewritten).as_deref(), Some("k2026"));
+        // A second run against the same target is a no-op.
+        assert_eq!(
+            both.rekey(&key, "k2026").await.unwrap(),
+            Rekeyed::AlreadyOn,
+            "{object_key}"
+        );
+
+        // The fixture's original key ("k2025") is no longer needed at all.
+        let new_only = Encrypted::new(backend.clone(), ring(&format!("k2026:{}", key_b64(0x26))));
+        assert_eq!(
+            collect(new_only.get(&key).await.unwrap()).await.unwrap(),
+            plain,
+            "{object_key}"
+        );
+
+        // Still authenticated after rewrap: tampering the new header or the
+        // final tag fails, and truncation at the header boundary fails too.
+        for at in [0, HEADER_LEN - 1, rewritten.len() - 1] {
+            let mut tampered = rewritten.to_vec();
+            tampered[at] ^= 1;
+            backend.set_raw(&key, Bytes::from(tampered));
+            assert_eq!(
+                collect(new_only.get(&key).await.unwrap()).await,
+                Err(FileStoreError::Integrity),
+                "{object_key} bit {at}"
+            );
+        }
+        backend.set_raw(&key, rewritten.slice(..HEADER_LEN));
+        assert_eq!(
+            collect(new_only.get(&key).await.unwrap()).await,
+            Err(FileStoreError::Integrity),
+            "{object_key} truncated to header"
+        );
+    }
+}
+
 /// #35: re-wrapping moves an object to another master key without touching its
 /// contents; afterwards the old key is not needed, and a second run is a no-op.
 #[tokio::test]

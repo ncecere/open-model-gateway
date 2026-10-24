@@ -115,7 +115,7 @@ async fn revoke_others(
 /// lost laptop) without suspending them. Audited with the count only.
 async fn revoke_all_for_user(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(user): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, true).await?;

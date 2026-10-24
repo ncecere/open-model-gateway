@@ -245,7 +245,7 @@ fn share(value: &str, total: &str) -> String {
 /// the same snapshot, or one on the reporting replica.
 async fn scope(
     s: &Store,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Option<Uuid>,
     filter: Option<Uuid>,
     f: &Filters,
@@ -259,13 +259,13 @@ async fn scope(
             let a = resources::workspace_access_snapshot(&mut tx, u, ws).await?;
             Scope {
                 workspace: Some(ws),
-                own: (!a.view_all_activity).then_some(u.user_id),
+                own: (!a.view_all_activity).then_some(u.user_id()),
                 platform: false,
                 members: a.view_all_activity,
             }
         }
         None => {
-            resources::platform_read_snapshot(&mut tx, u.user_id).await?;
+            resources::platform_read_snapshot(&mut tx, u.user_id()).await?;
             Scope {
                 workspace: filter,
                 own: None,
@@ -287,7 +287,7 @@ async fn deadline<T>(
         .await
         .map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE, "Report deadline exceeded"))?
 }
-async fn overview(s: Store, u: BrowserPrincipal, ws: Option<Uuid>, p: OverviewQuery) -> ApiResult {
+async fn overview(s: Store, u: impl Actor, ws: Option<Uuid>, p: OverviewQuery) -> ApiResult {
     deadline(async {
         let (prior, start, end) = period(&p.start_date, &p.end_date)?;
         let f = filters(
@@ -365,7 +365,7 @@ async fn overview(s: Store, u: BrowserPrincipal, ws: Option<Uuid>, p: OverviewQu
 }
 pub(super) async fn workspace_overview(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
     Query(p): Query<OverviewQuery>,
 ) -> ApiResult {
@@ -373,19 +373,19 @@ pub(super) async fn workspace_overview(
 }
 pub(super) async fn platform_overview(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Query(p): Query<OverviewQuery>,
 ) -> ApiResult {
     overview(s, u, None, p).await
 }
-async fn explore(s: Store, u: BrowserPrincipal, ws: Option<Uuid>, p: ExploreQuery) -> ApiResult {
+async fn explore(s: Store, u: impl Actor, ws: Option<Uuid>, p: ExploreQuery) -> ApiResult {
     explore_with(s, u, ws, p, crate::rollups::mode()).await
 }
 /// Explore; long ranges of additive metrics read hourly rollups (identical
 /// results, see `ROLLUP_BASE`).
 async fn explore_with(
     s: Store,
-    u: BrowserPrincipal,
+    u: impl Actor,
     ws: Option<Uuid>,
     p: ExploreQuery,
     rollups: crate::rollups::Mode,
@@ -490,7 +490,7 @@ async fn explore_with(
 }
 pub(super) async fn workspace_explore(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
     Query(p): Query<ExploreQuery>,
 ) -> ApiResult {
@@ -498,7 +498,7 @@ pub(super) async fn workspace_explore(
 }
 pub(super) async fn platform_explore(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Query(p): Query<ExploreQuery>,
 ) -> ApiResult {
     explore(s, u, None, p).await

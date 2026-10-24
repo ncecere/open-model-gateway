@@ -59,7 +59,7 @@ pub(super) struct ModelListQuery {
 }
 pub(super) async fn platform_models(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Query(p): Query<ModelListQuery>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, false).await?;
@@ -179,7 +179,7 @@ fn governance_money(v: &str) -> Result<i64, ApiError> {
 }
 pub(super) async fn deployment_detail(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, false).await?;
@@ -230,7 +230,7 @@ pub(super) struct CatalogQuery {
 /// Workspace-visible catalog: enabled models eligible for (or assigned to) the workspace.
 pub(super) async fn workspace_catalog(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
     Query(p): Query<CatalogQuery>,
 ) -> ApiResult {

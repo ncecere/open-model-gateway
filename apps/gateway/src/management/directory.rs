@@ -62,7 +62,7 @@ struct DirectoryQuery {
 const SHARED_WORKSPACE_JSON: &str = "jsonb_build_object('id',w.id,'name',w.name,'kind',w.kind,'cost_center_id',w.cost_center_id,'cost_center',CASE WHEN c.id IS NULL THEN NULL ELSE jsonb_build_object('id',c.id,'name',c.name,'code',c.code) END,'member_count',(SELECT count(DISTINCT g.user_id) FROM workspace_membership_grants g WHERE g.workspace_id=w.id AND g.revoked_at IS NULL),'disabled_at',w.disabled_at,'created_at',w.created_at) FROM workspaces w LEFT JOIN cost_centers c ON c.id=w.cost_center_id";
 async fn workspaces(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Query(p): Query<DirectoryQuery>,
 ) -> ApiResult {
     let mut tx = resources::platform_read_tx(&s, &u).await?;
@@ -102,7 +102,7 @@ struct NewWorkspace {
 }
 async fn create_workspace(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Json(b): Json<NewWorkspace>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, true).await?;
@@ -133,7 +133,7 @@ async fn create_workspace(
 }
 async fn workspace(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
 ) -> ApiResult {
     let (mut tx, a) = resources::workspace_tx(&s, &u, ws).await?;
@@ -143,10 +143,10 @@ async fn workspace(
         "SELECT role FROM effective_workspace_memberships WHERE workspace_id=$1 AND user_id=$2",
     )
     .bind(ws)
-    .bind(u.user_id)
+    .bind(u.user_id())
     .fetch_optional(&mut *tx)
     .await?;
-    let source:Option<String>=sqlx::query_scalar("SELECT CASE WHEN count(DISTINCT source)>1 THEN 'mixed' ELSE min(source) END FROM workspace_membership_grants WHERE workspace_id=$1 AND user_id=$2 AND revoked_at IS NULL").bind(ws).bind(u.user_id).fetch_one(&mut *tx).await?;
+    let source:Option<String>=sqlx::query_scalar("SELECT CASE WHEN count(DISTINCT source)>1 THEN 'mixed' ELSE min(source) END FROM workspace_membership_grants WHERE workspace_id=$1 AND user_id=$2 AND revoked_at IS NULL").bind(ws).bind(u.user_id()).fetch_one(&mut *tx).await?;
     v["role"] = json!(if a.kind == "personal" {
         Some("owner")
     } else {
@@ -163,7 +163,7 @@ async fn workspace(
 }
 async fn platform_workspace(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, false).await?;
@@ -195,7 +195,7 @@ struct WorkspaceUpdate {
 }
 async fn update_workspace(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
     Json(b): Json<WorkspaceUpdate>,
 ) -> ApiResult {
@@ -341,7 +341,7 @@ pub(super) fn users_list_sql() -> String {
 }
 async fn users(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Query(p): Query<UserQuery>,
 ) -> ApiResult {
     let mut tx = resources::platform_read_tx(&s, &u).await?;
@@ -373,7 +373,7 @@ async fn users(
 }
 async fn platform_user(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = resources::platform_read_tx(&s, &u).await?;
@@ -420,7 +420,7 @@ struct NewUser {
 }
 async fn create_user(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Json(b): Json<NewUser>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, true).await?;
@@ -434,7 +434,7 @@ async fn create_user(
         .bind(email)
         .execute(&mut *tx)
         .await?;
-    sqlx::query("INSERT INTO platform_role_grants(id,user_id,role,source,granted_by) VALUES($1,$2,$3,'manual',$4)").bind(Uuid::new_v4()).bind(id).bind(&b.platform_role).bind(u.user_id).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO platform_role_grants(id,user_id,role,source,granted_by) VALUES($1,$2,$3,'manual',$4)").bind(Uuid::new_v4()).bind(id).bind(&b.platform_role).bind(u.user_id()).execute(&mut *tx).await?;
     audit(
         &mut tx,
         &u,
@@ -479,7 +479,7 @@ struct UserUpdate {
 }
 async fn update_user(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
     Json(b): Json<UserUpdate>,
 ) -> ApiResult {
@@ -592,7 +592,7 @@ async fn update_user(
 /// pseudonymous reference.
 async fn remove_personal_data(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, true).await?;
@@ -657,7 +657,7 @@ struct RoleInput {
 }
 async fn grant_role(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
     Json(b): Json<RoleInput>,
 ) -> ApiResult {
@@ -672,7 +672,7 @@ async fn grant_role(
     .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(missing)?;
-    sqlx::query("INSERT INTO platform_role_grants(id,user_id,role,source,granted_by) VALUES($1,$2,$3,'manual',$4) ON CONFLICT DO NOTHING").bind(Uuid::new_v4()).bind(id).bind(&b.role).bind(u.user_id).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO platform_role_grants(id,user_id,role,source,granted_by) VALUES($1,$2,$3,'manual',$4) ON CONFLICT DO NOTHING").bind(Uuid::new_v4()).bind(id).bind(&b.role).bind(u.user_id()).execute(&mut *tx).await?;
     audit(
         &mut tx,
         &u,
@@ -688,7 +688,7 @@ async fn grant_role(
 }
 async fn revoke_role(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path((id, role)): Path<(Uuid, String)>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, true).await?;
@@ -792,7 +792,7 @@ async fn validate_mapping(
 }
 async fn mappings(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Query(p): Query<Page>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, false).await?;
@@ -803,7 +803,7 @@ async fn mappings(
 }
 async fn create_mapping(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Json(b): Json<MappingInput>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, true).await?;
@@ -845,7 +845,7 @@ async fn revoke_mapping_grants(
 }
 async fn update_mapping(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
     Json(patch): Json<Value>,
 ) -> ApiResult {
@@ -892,7 +892,7 @@ async fn update_mapping(
 }
 async fn delete_mapping(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, true).await?;
@@ -922,7 +922,7 @@ async fn delete_mapping(
 }
 async fn cost_centers(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Query(p): Query<Page>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, false).await?;
@@ -939,7 +939,7 @@ async fn cost_centers(
 }
 async fn cost_center(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, false).await?;
@@ -959,7 +959,7 @@ struct CostCenterInput {
 }
 async fn create_cost_center(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Json(b): Json<CostCenterInput>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, true).await?;
@@ -988,7 +988,7 @@ async fn create_cost_center(
 }
 async fn update_cost_center(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
     Json(b): Json<CostCenterInput>,
 ) -> ApiResult {
@@ -1022,7 +1022,7 @@ async fn update_cost_center(
 }
 async fn archive_cost_center(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, true).await?;
