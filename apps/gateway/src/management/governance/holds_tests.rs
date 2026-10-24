@@ -101,7 +101,7 @@ async fn queue_project_authority_and_resolving_between_pages(pool: PgPool) {
             &f.store,
             f.team.workspace_id,
             first_id,
-            usage.clone(),
+            usage,
             "queue-id-cross-workspace",
             f.owner
         )
