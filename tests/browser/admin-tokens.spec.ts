@@ -14,11 +14,13 @@ import { expect, request, test, type APIRequestContext, type Page } from "@playw
 import { api, chat, expectNoCspViolations, signIn } from "./helpers";
 import { BASE_URL } from "./stack.mjs";
 
-// Playwright also persists failure-time ARIA trees in error-context.md, independently
-// of trace/screenshots. Never snapshot a privileged token's disclosure textarea.
+// Playwright 1.64.0 also persists failure-time ARIA trees in error-context.md,
+// independently of trace/screenshots. Never snapshot the disclosure textarea.
+// Set this in the dedicated project's worker, not during test-file collection;
+// keep it through artifact teardown (afterAll restoration would be too early).
 // Keep credential assertions boolean; do not use ARIA/snapshot matchers here,
 // whose own failure contexts bypass this automatic-snapshot guard.
-process.env.PLAYWRIGHT_NO_COPY_PROMPT = "1";
+test.beforeAll(() => { process.env.PLAYWRIGHT_NO_COPY_PROMPT = "1"; });
 test.afterEach(expectNoCspViolations);
 // A real admin token is a privileged management credential: never retain it in traces/images.
 test.use({ trace: "off", screenshot: "off", video: "off" });
