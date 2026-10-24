@@ -21,14 +21,19 @@ async fn replica(pool: &PgPool) -> Store {
 }
 
 fn holders(n: usize) -> Vec<Arc<Leases>> {
-    (0..n).map(|_| Arc::new(Leases::with_ttl(SHORT))).collect()
+    holders_with_ttl(n, SHORT)
+}
+
+fn holders_with_ttl(n: usize, ttl: Duration) -> Vec<Arc<Leases>> {
+    (0..n).map(|_| Arc::new(Leases::with_ttl(ttl))).collect()
 }
 
 /// Concurrent elections: every lease has exactly one holder; renewals keep
 /// the holder and its epoch.
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn exactly_one_of_three_replicas_holds_each_lease(pool: PgPool) {
-    let replicas = holders(3);
+    // Exercise unexpired renewal even under load; expiry and fencing have separate tests.
+    let replicas = holders_with_ttl(3, Duration::from_secs(60));
     let stores = [
         replica(&pool).await,
         replica(&pool).await,
@@ -58,6 +63,79 @@ async fn exactly_one_of_three_replicas_holds_each_lease(pool: PgPool) {
     }
 }
 
+/// [`SHORT`] as a database-timestamp difference.
+fn term() -> chrono::Duration {
+    chrono::Duration::from_std(SHORT).unwrap()
+}
+
+/// Whether the database's clock has not yet reached `instant`. Expiry is the
+/// database's decision (`omg_lease_acquire` compares against
+/// `clock_timestamp()`), so the test reads the same clock rather than timing
+/// the test process, whose pace under load says nothing about the term.
+async fn db_before(pool: &PgPool, instant: chrono::DateTime<chrono::Utc>) -> bool {
+    sqlx::query_scalar("SELECT clock_timestamp() < $1")
+        .bind(instant)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// Block inside the database until its clock has reached `instant`.
+async fn wait_db_until(pool: &PgPool, instant: chrono::DateTime<chrono::Utc>) {
+    while db_before(pool, instant).await {
+        sqlx::query(
+            "SELECT pg_sleep(GREATEST(EXTRACT(EPOCH FROM ($1 - clock_timestamp())), 0.001))",
+        )
+        .bind(instant)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+}
+
+/// One `work_leases` row as the database recorded it: (name, holder, epoch,
+/// acquired_at, expires_at).
+type LeaseRow = (
+    String,
+    Option<Uuid>,
+    i64,
+    Option<chrono::DateTime<chrono::Utc>>,
+    chrono::DateTime<chrono::Utc>,
+);
+
+async fn lease_rows(pool: &PgPool) -> Vec<LeaseRow> {
+    sqlx::query_as("SELECT name,holder,epoch,acquired_at,expires_at FROM work_leases ORDER BY name")
+        .fetch_all(pool)
+        .await
+        .unwrap()
+}
+
+/// No lease changed hands before its original term ended. Compares every row
+/// with `original`; a row whose holder or epoch changed must have been
+/// acquired (database `acquired_at`) no earlier than that lease's original
+/// `expires_at`. Unlike a check on how the clock stands after an attempt, this
+/// reads the acquisition time the database itself recorded, so an early
+/// acquisition of any lease is caught however late the check runs. Call it
+/// right after every attempt, before another attempt can overwrite the row.
+async fn assert_no_early_takeover(pool: &PgPool, original: &[LeaseRow], when: &str) {
+    let now = lease_rows(pool).await;
+    assert_eq!(now.len(), original.len(), "{when}: lease set changed");
+    for (was, is) in original.iter().zip(&now) {
+        assert_eq!(was.0, is.0, "{when}: lease set changed");
+        if (was.1, was.2) == (is.1, is.2) {
+            continue;
+        }
+        let acquired =
+            is.3.unwrap_or_else(|| panic!("{when}: {} changed hands without acquired_at", is.0));
+        assert!(
+            acquired >= was.4,
+            "{when}: lease {} was taken at {acquired} before its term ended at {}",
+            is.0,
+            was.4
+        );
+    }
+}
+
 /// A holder that dies (stops renewing) loses its leases once the term
 /// expires; another replica takes over with a larger epoch, and the former
 /// holder's fenced writes fail.
@@ -67,24 +145,62 @@ async fn a_dead_holder_is_replaced_after_expiry_and_fenced(pool: PgPool) {
     let store = replica(&pool).await;
     assert_eq!(replicas[0].renew_once(&pool).await, Lease::ALL.len());
     let old = replicas[0].held(Lease::Maintenance).unwrap();
-    // While the term is current nobody else gets it.
-    assert_eq!(replicas[1].renew_once(&pool).await, 0);
-    assert_eq!(replicas[2].renew_once(&pool).await, 0);
-    // Replica 0 dies. The survivors keep trying; one takes over after expiry.
-    let started = Instant::now();
+    // The old term as the database recorded it: every timing assertion below
+    // is made on these database timestamps, not on how fast this process ran.
+    let (old_acquired, old_expires): (
+        chrono::DateTime<chrono::Utc>,
+        chrono::DateTime<chrono::Utc>,
+    ) = sqlx::query_as("SELECT acquired_at,expires_at FROM work_leases WHERE name='maintenance'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(old_expires >= old_acquired + term());
+    // Every lease's original term, for all leases (not just maintenance).
+    let original = lease_rows(&pool).await;
+    assert_eq!(original.len(), Lease::ALL.len());
+    for row in &original {
+        assert_eq!(row.1, Some(replicas[0].holder()), "{}", row.0);
+    }
+    // Each lease has its own expiry: a survivor may acquire an expired lease
+    // while maintenance is still current. Check every lease's recorded
+    // acquisition time against its own original expiry after each attempt,
+    // so a delayed check cannot excuse an early acquisition.
+    for survivor in [1, 2] {
+        replicas[survivor].renew_once(&pool).await;
+        assert_no_early_takeover(&pool, &original, "before expiry").await;
+    }
+    // Replica 0 dies. The survivors keep trying; one takes over once the
+    // database clock is past the expiry (never earlier). The attempt count is
+    // only a retry budget for the takeover to happen eventually, not a bound on
+    // how soon it must.
+    wait_db_until(&pool, old_expires).await;
+    let mut attempts = 0;
     let survivor = loop {
-        assert!(started.elapsed() < SHORT * 4, "no takeover");
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        attempts += 1;
+        assert!(attempts <= 20, "no takeover");
         replicas[1].renew_once(&pool).await;
+        assert_no_early_takeover(&pool, &original, "after expiry").await;
         replicas[2].renew_once(&pool).await;
+        assert_no_early_takeover(&pool, &original, "after expiry").await;
         if let Some(i) = (1..3).find(|i| replicas[*i].held(Lease::Maintenance).is_some()) {
             break i;
         }
     };
-    let takeover = started.elapsed();
+    // The new term began no earlier than the old one's expiry, i.e. at least a
+    // full term after the old one began (database time, no tolerance needed).
+    let new_acquired: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT acquired_at FROM work_leases WHERE name='maintenance'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert!(
-        takeover >= SHORT - Duration::from_millis(300),
-        "{takeover:?}"
+        new_acquired >= old_expires,
+        "{new_acquired} < {old_expires}"
+    );
+    assert!(
+        new_acquired - old_acquired >= term(),
+        "{:?}",
+        new_acquired - old_acquired
     );
     let new = replicas[survivor].held(Lease::Maintenance).unwrap();
     assert_eq!(new.epoch, old.epoch + 1);

@@ -174,7 +174,10 @@ GRANT EXECUTE ON FUNCTION public.alert_webhook_summary(text),public.alert_webhoo
 GRANT INSERT(label,url,current_secret_ref) ON public.alert_webhook_destinations TO gateway_runtime;
 GRANT UPDATE(label,current_secret_ref,previous_secret_ref,previous_secret_until,enabled,deleted_at)
  ON public.alert_webhook_destinations TO gateway_runtime;
--- Trigger enqueue and future single-attempt tests share this explicit insert set.
+-- Trigger enqueue and single-attempt tests share this explicit insert set.
+  -- Slice 2 destination FOR SHARE is covered by the column UPDATE grants
+  -- above; queue FOR UPDATE and fenced outcomes use the grants below.
+  -- No payload rewrite, DELETE or TRUNCATE privilege is needed.
 GRANT INSERT(id,event_id,transition,destination_id,destination_generation,test,payload) ON public.alert_webhook_outbox TO gateway_runtime;
 GRANT UPDATE(state,attempt_count,next_attempt_at,lease_owner,lease_token,lease_expires_at,completed_at,last_error)
  ON public.alert_webhook_outbox TO gateway_runtime;

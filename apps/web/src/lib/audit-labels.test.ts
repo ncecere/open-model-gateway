@@ -56,6 +56,17 @@ describe("audit event labels", () => {
     const missing = [...codes].filter(code => !auditActionLabels[code]).sort();
     expect(missing).toEqual([]);
   });
+  it.each([
+    ["alert_webhook.created", "Created webhook"],
+    ["alert_webhook.updated", "Changed webhook"],
+    ["alert_webhook.disabled", "Disabled webhook"],
+    ["alert_webhook.deleted", "Deleted webhook"],
+    ["alert_webhook.tested", "Queued webhook test"],
+    ["alert_webhook.failed", "Webhook delivery failed"],
+    ["alert_webhook.exhausted", "Webhook delivery exhausted"],
+  ])("labels webhook event %s", (code, label) => {
+    expect(auditActionLabels[code]).toBe(label);
+  });
   it("uses short labels, not codes", () => {
     for (const [code, label] of Object.entries(auditActionLabels)) {
       expect(label, code).not.toMatch(/[._]/);
