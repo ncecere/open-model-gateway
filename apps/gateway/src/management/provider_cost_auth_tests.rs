@@ -113,11 +113,20 @@ async fn provider_cost_browser_only_origin_csrf_and_live_roles(pool: PgPool) {
             );
         }
     }
-    sqlx::query("UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1")
+    // Live demotion: keep an entitled User grant and drop only Admin (revoking
+    // every role would make the session unentitled, which is 401 everywhere).
+    sqlx::query("INSERT INTO platform_role_grants(user_id,role,source) VALUES($1,'user','manual')")
         .bind(f.admin.user_id)
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::query(
+        "UPDATE platform_role_grants SET revoked_at=now() WHERE user_id=$1 AND role='admin'",
+    )
+    .bind(f.admin.user_id)
+    .execute(&pool)
+    .await
+    .unwrap();
     assert_eq!(
         request(
             &app,
