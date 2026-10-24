@@ -46,7 +46,7 @@ const RESERVATION_REFRESH: Duration = Duration::from_secs(15);
 
 // Pending work is bounded by its admission window; terminal failures must
 // remain visible for a full observation window after completion/cleanup.
-const ALERT_DELIVERY_COUNTS: &str = "SELECT recent.*,pending.* FROM (SELECT count(*) FILTER(WHERE retrying),count(*) FILTER(WHERE exhausted>0),count(*) FILTER(WHERE status IN ('failed','partial')) FROM alert_deliveries WHERE (status='pending' AND created_at>clock_timestamp()-interval '24 hours') OR (status<>'pending' AND completed_at>clock_timestamp()-interval '24 hours')) recent CROSS JOIN (SELECT count(DISTINCT bucket_id),floor(greatest(0,coalesce(extract(epoch FROM clock_timestamp()-min(created_at)),0)))::bigint FROM alert_deliveries WHERE status='pending') pending";
+const ALERT_DELIVERY_COUNTS: &str = "SELECT recent.*,pending.* FROM (SELECT count(*) FILTER(WHERE retrying),count(*) FILTER(WHERE exhausted>0),count(*) FILTER(WHERE status IN ('failed','partial')) FROM alert_deliveries WHERE event_id IS NOT NULL AND ((status='pending' AND created_at>clock_timestamp()-interval '24 hours') OR (status<>'pending' AND completed_at>clock_timestamp()-interval '24 hours'))) recent CROSS JOIN (SELECT count(DISTINCT bucket_id),floor(greatest(0,coalesce(extract(epoch FROM clock_timestamp()-min(created_at)),0)))::bigint FROM alert_deliveries WHERE status='pending') pending";
 
 pub const CONTENT_TYPE: &str = "application/openmetrics-text; version=1.0.0; charset=utf-8";
 
@@ -225,6 +225,8 @@ pub struct Metrics {
     lease_terms: Family<L1, Counter>,
     background_runs: Family<L2, Counter>,
     report_outcomes: Family<L1, Counter>,
+    report_delivery_attempts: Family<L1, Counter>,
+    report_delivery_queue: Family<L1, Gauge>,
     report_backlog: Family<L0, Gauge>,
     report_backlog_capped: Family<L0, Gauge>,
     report_oldest_due_lag: Family<L0, Gauge>,
@@ -401,6 +403,8 @@ impl Metrics {
             lease_terms: Family::default(),
             background_runs: Family::default(),
             report_outcomes: Family::default(),
+            report_delivery_attempts: Family::default(),
+            report_delivery_queue: Family::default(),
             report_backlog: Family::default(),
             report_backlog_capped: Family::default(),
             report_oldest_due_lag: Family::default(),
@@ -686,6 +690,12 @@ impl Metrics {
             metrics.report_outcomes.clone(),
         );
         registry.register(
+            "report_email_attempts",
+            "Report recipient send outcomes; fixed categories only",
+            metrics.report_delivery_attempts.clone(),
+        );
+        registry.register("report_email_recipients", "Recipient states in the latest 1024 report deliveries created within 24 hours; ineligible means authorization suppression", metrics.report_delivery_queue.clone());
+        registry.register(
             "report_due_backlog",
             "Active due schedules, saturated at 1024; includes uninitialized calendars",
             metrics.report_backlog.clone(),
@@ -902,6 +912,11 @@ impl Metrics {
             .inc();
     }
 
+    pub(crate) fn observe_report_delivery(&self, outcome: &'static str, n: u64) {
+        self.report_delivery_attempts
+            .get_or_create(&[("outcome", outcome.to_owned())])
+            .inc_by(n);
+    }
     pub(crate) fn observe_report_outcome(&self, category: crate::scheduled_reports::Outcome) {
         self.report_outcomes
             .get_or_create(&[("category", category.as_str().to_owned())])
@@ -1262,6 +1277,7 @@ impl Metrics {
         {
             self.reservations.clear();
             self.alert_delivery_queue.clear();
+            self.report_delivery_queue.clear();
             self.alert_pending_buckets.clear();
             self.alert_oldest_pending_age.clear();
             *self
@@ -1302,6 +1318,14 @@ impl Metrics {
                 }
             }
             _ => self.collection_error("alert_email"),
+        }
+        match tokio::time::timeout(Duration::from_secs(2), sqlx::query_as::<_,(String,i64)>("SELECT q.state,count(*) FROM (SELECT id FROM alert_deliveries WHERE report_run_id IS NOT NULL AND created_at>clock_timestamp()-interval '24 hours' ORDER BY created_at DESC,id LIMIT 1024) d JOIN alert_recipient_outbox q ON q.delivery_id=d.id GROUP BY q.state").fetch_all(pool)).await {
+            Ok(Ok(rows)) => {
+                for state in ["waiting","leased","sent","failed","ineligible","exhausted","not_configured"] {
+                    self.report_delivery_queue.get_or_create(&[("state",state.to_owned())]).set(rows.iter().find(|(s,_)|s==state).map_or(0,|(_,n)|*n));
+                }
+            }
+            _ => self.collection_error("report_email"),
         }
         // The workspace lifetime totals rows (0015) count every pending and
         // unknown reservation exactly (each belongs to one workspace): one row

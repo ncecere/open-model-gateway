@@ -1,4 +1,4 @@
-//! #102: browser-only configuration. Calendar initialization, never email.
+//! #102: browser-only configuration and live-authorized occurrence reads.
 use super::*;
 
 pub(super) fn routes() -> Router<Store> {
@@ -6,6 +6,14 @@ pub(super) fn routes() -> Router<Store> {
         .route(
             "/api/v1/platform/report-schedules",
             get(platform_list).post(platform_create),
+        )
+        .route(
+            "/api/v1/platform/report-schedules/{id}/runs/{run}",
+            get(platform_run),
+        )
+        .route(
+            "/api/v1/workspaces/{ws}/report-schedules/{id}/runs/{run}",
+            get(workspace_run),
         )
         .route(
             "/api/v1/platform/report-schedules/{id}",
@@ -411,6 +419,43 @@ async fn get_one(s: Store, u: BrowserPrincipal, ws: Option<Uuid>, id: Uuid) -> A
     let value = row(&mut tx, ws, id).await?;
     tx.commit().await?;
     Ok(Json(value))
+}
+async fn read_run(
+    s: Store,
+    u: BrowserPrincipal,
+    ws: Option<Uuid>,
+    id: Uuid,
+    run: Uuid,
+) -> Result<Response, ApiError> {
+    // Always primary, never a reporting replica or authorization cached at
+    // enqueue/send time. A link is an identifier, not a capability.
+    let mut tx = resources::read_snapshot(&s).await?;
+    authority(&mut tx, &u, ws, false).await?;
+    let value: Value = sqlx::query_scalar("SELECT jsonb_build_object('id',r.id,'schedule_id',r.schedule_id,'period_start',r.period_start,'period_end',r.period_end,'configuration_revision',r.configuration_revision::text,'observed_at',r.observed_at,'expires_at',r.expires_at,'snapshot',p.body,'delivery', (SELECT jsonb_build_object('status',d.status,'recipients',d.recipients,'sent',d.sent,'failed',d.failed,'waiting',d.waiting) FROM alert_deliveries d WHERE d.report_run_id=r.id)) FROM report_runs r JOIN report_schedules s ON s.id=r.schedule_id JOIN report_snapshots p ON p.run_id=r.id WHERE r.id=$1 AND s.id=$2 AND s.workspace_id IS NOT DISTINCT FROM $3 AND s.deleted_at IS NULL AND p.expires_at>clock_timestamp()")
+        .bind(run).bind(id).bind(ws).fetch_optional(&mut *tx).await?.ok_or_else(missing)?;
+    tx.commit().await?;
+    Ok((
+        [
+            (axum::http::header::CACHE_CONTROL, "no-store"),
+            (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        Json(value),
+    )
+        .into_response())
+}
+async fn platform_run(
+    State(s): State<Store>,
+    Extension(u): Extension<BrowserPrincipal>,
+    Path((id, run)): Path<(Uuid, Uuid)>,
+) -> Result<Response, ApiError> {
+    read_run(s, u, None, id, run).await
+}
+async fn workspace_run(
+    State(s): State<Store>,
+    Extension(u): Extension<BrowserPrincipal>,
+    Path((ws, id, run)): Path<(Uuid, Uuid, Uuid)>,
+) -> Result<Response, ApiError> {
+    read_run(s, u, Some(ws), id, run).await
 }
 async fn platform_list(
     State(s): State<Store>,

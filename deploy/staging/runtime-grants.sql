@@ -165,7 +165,10 @@ GRANT SELECT ON public.alert_recipient_outbox TO gateway_runtime;
 GRANT INSERT(delivery_id,fingerprint,internal_user_id) ON public.alert_recipient_outbox TO gateway_runtime;
 GRANT UPDATE(state,attempt_count,next_attempt_at,lease_owner,lease_token,lease_expires_at,error)
  ON public.alert_recipient_outbox TO gateway_runtime;
--- 0061/0063 report configuration and generation only. No delivery writes.
+-- 0061/0063/0065 report configuration, generation and delivery. 0065 reuses
+-- alert_deliveries/alert_recipient_outbox SELECT/INSERT and bounded outcome
+-- UPDATE grants above; report_run_id is insert-only, trigger-validated lineage.
+-- No new table privileges or destination/address write API.
 -- Scope, creator, creation time and configuration revision are not writable.
 GRANT SELECT ON public.report_schedules,public.report_schedule_recipients TO gateway_runtime;
 GRANT INSERT(scope_kind,workspace_id,cost_center_id,created_by,cadence,timezone,delivery_time,state)

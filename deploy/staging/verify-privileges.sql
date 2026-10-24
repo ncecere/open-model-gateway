@@ -70,7 +70,9 @@ DO $$ DECLARE r record; t text; BEGIN
  IF has_table_privilege('gateway_runtime','public.scim_users','DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.scim_users','user_id','UPDATE') OR has_column_privilege('gateway_runtime','public.scim_users','created_at','UPDATE') THEN RAISE EXCEPTION 'scim user link removable or re-keyable'; END IF;
  IF has_column_privilege('gateway_runtime','public.scim_groups','id','UPDATE') OR has_any_column_privilege('gateway_runtime','public.scim_group_members','UPDATE') OR has_table_privilege('gateway_runtime','public.scim_groups','TRUNCATE') OR has_table_privilege('gateway_runtime','public.scim_group_members','TRUNCATE') THEN RAISE EXCEPTION 'scim group identity rewritable'; END IF;
  IF has_table_privilege('gateway_runtime','public.scim_state','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.scim_state','singleton','UPDATE') THEN RAISE EXCEPTION 'scim state row replaceable'; END IF;
- -- Scheduled reports (0061/0063): configuration, fenced runs and retained payloads.
+ -- Scheduled reports (0061/0063/0065): configuration, publication and shared delivery.
+ IF NOT has_column_privilege('gateway_runtime','public.alert_deliveries','report_run_id','INSERT') OR has_column_privilege('gateway_runtime','public.alert_deliveries','report_run_id','UPDATE') THEN RAISE EXCEPTION 'report delivery lineage ACL'; END IF;
+ IF NOT EXISTS(SELECT FROM pg_constraint WHERE conrelid='public.alert_deliveries'::regclass AND conname='alert_deliveries_source' AND convalidated) OR NOT EXISTS(SELECT FROM pg_constraint WHERE conrelid='public.alert_deliveries'::regclass AND conname='alert_deliveries_source_state' AND convalidated) THEN RAISE EXCEPTION 'report delivery source guards missing'; END IF;
  IF NOT has_table_privilege('gateway_runtime','public.report_schedules','SELECT') OR has_table_privilege('gateway_runtime','public.report_schedules','INSERT,UPDATE,DELETE,TRUNCATE') THEN RAISE EXCEPTION 'report schedule table ACL'; END IF;
  FOREACH t IN ARRAY ARRAY['id','scope_kind','workspace_id','cost_center_id','created_by','configuration_revision','created_at','updated_at'] LOOP
   IF has_column_privilege('gateway_runtime','public.report_schedules',t,'UPDATE') THEN RAISE EXCEPTION 'mutable report schedule identity/cursor: %',t; END IF;
@@ -319,6 +321,12 @@ DO $$ DECLARE who uuid:=gen_random_uuid(); schedule uuid; col text; BEGIN
  DELETE FROM report_schedule_recipients WHERE schedule_id=schedule;
  UPDATE report_schedules SET state='paused',deleted_at=clock_timestamp() WHERE id=schedule;
  BEGIN UPDATE report_schedules SET deleted_at=NULL WHERE id=schedule; RAISE EXCEPTION 'deleted schedule resurrected'; EXCEPTION WHEN raise_exception THEN IF SQLERRM NOT LIKE 'immutable report schedule%' THEN RAISE; END IF; END;
+END $$;
+-- 0065 shared envelopes keep report lineage insert-only. No existing rows
+-- are changed by these refusal probes, including on a live installation.
+DO $$ BEGIN
+ BEGIN UPDATE alert_deliveries SET report_run_id=report_run_id; RAISE EXCEPTION 'report delivery identity mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN INSERT INTO alert_deliveries(id,report_run_id,transition) VALUES(gen_random_uuid(),gen_random_uuid(),'fired'); RAISE EXCEPTION 'unpublished report delivery allowed'; EXCEPTION WHEN no_data_found THEN NULL; END;
 END $$;
 -- 0063 refusal probes never take/steal the running scheduler's lease. The
 -- successful primary snapshot + fenced publication path runs in the disposable

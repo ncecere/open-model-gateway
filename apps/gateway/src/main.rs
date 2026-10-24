@@ -834,7 +834,8 @@ async fn run(cli: Cli) -> Result<()> {
             let batch_runner = open_model_gateway::jobs::runner::start(batch_jobs);
             let alerts =
                 alert_interval.map(|every| open_model_gateway::alerts::start(store.clone(), every));
-            // Generation only: no report outbox or email sending in #102B.
+            // Reports publish into the same fair email outbox dispatched by
+            // the alert/email loop above; disabling that loop pauses all mail.
             let reports = open_model_gateway::scheduled_reports::start(store.clone());
             let audit_export = audit_exporter
                 .map(|exporter| open_model_gateway::audit_export::start(store.clone(), exporter));

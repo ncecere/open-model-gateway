@@ -6,7 +6,10 @@ use std::collections::{HashMap, HashSet};
 use sha2::{Digest, Sha256};
 
 use super::*;
-use crate::email::{DeliveryError, OutgoingEmail};
+use crate::{
+    email::{DeliveryError, OutgoingEmail},
+    scheduled_reports::delivery as reports,
+};
 
 #[cfg(all(test, feature = "integration-tests"))]
 #[path = "report_delivery_tests.rs"]
@@ -26,6 +29,7 @@ pub(super) struct Claim {
     settings: SmtpSettings,
     email: OutgoingEmail,
     send_until: tokio::time::Instant,
+    report: bool,
 }
 
 fn fingerprint(delivery: Uuid, email: &str) -> Vec<u8> {
@@ -69,11 +73,24 @@ async fn recipients(
         .fetch_all(&mut **tx).await
 }
 
+async fn suppress(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+    eligible: &[Vec<u8>],
+) -> sqlx::Result<()> {
+    let n = sqlx::query("UPDATE alert_recipient_outbox SET state='ineligible',lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL WHERE delivery_id=$1 AND NOT(fingerprint=ANY($2)) AND (state='waiting' OR (state='leased' AND lease_expires_at<=clock_timestamp()))")
+        .bind(id).bind(eligible).execute(&mut **tx).await?.rows_affected();
+    if n > 0 {
+        reports::audit(tx, id, "authorization_suppressed", n as i64).await?;
+    }
+    Ok(())
+}
+
 /// Caller holds the delivery lock. Serialize aggregates with claims/completions
 /// so concurrent successful recipients cannot lose each other's counts.
 async fn refresh(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> sqlx::Result<()> {
     sqlx::query("WITH totals AS (SELECT count(*)::integer recipients,count(*) FILTER(WHERE state='sent')::integer sent,count(*) FILTER(WHERE state IN ('failed','exhausted'))::integer failed,coalesce(sum(attempt_count),0)::integer attempts,count(*) FILTER(WHERE state IN ('waiting','leased'))::integer waiting,count(*) FILTER(WHERE state='exhausted')::integer exhausted,count(*) FILTER(WHERE state='not_configured')::integer not_configured,coalesce(bool_or((state='waiting' AND attempt_count>0) OR (state='leased' AND attempt_count>1)),false) retrying,min(CASE WHEN state='waiting' THEN next_attempt_at WHEN state='leased' THEN lease_expires_at END) due,min(CASE WHEN error='host_not_allowed' THEN 'connection' ELSE error END) FILTER(WHERE state IN ('failed','exhausted','waiting')) error FROM alert_recipient_outbox WHERE delivery_id=$1)
- UPDATE alert_deliveries d SET recipients=t.recipients,sent=t.sent,failed=t.failed,attempt_count=t.attempts,waiting=t.waiting,exhausted=t.exhausted,retrying=t.retrying,next_attempt_at=t.due,error=t.error,status=CASE WHEN t.waiting>0 THEN 'pending' WHEN t.not_configured>0 AND t.sent=0 AND t.failed=0 THEN 'not_configured' WHEN t.sent>0 AND t.failed>0 THEN 'partial' WHEN t.failed>0 THEN 'failed' WHEN t.sent>0 THEN 'sent' ELSE 'no_recipients' END,completed_at=CASE WHEN t.waiting=0 THEN clock_timestamp() END FROM totals t WHERE d.id=$1 AND d.status='pending'")
+ UPDATE alert_deliveries d SET recipients=t.recipients,sent=t.sent,failed=t.failed,attempt_count=t.attempts,waiting=t.waiting,exhausted=t.exhausted,retrying=t.retrying,next_attempt_at=t.due,error=t.error,status=CASE WHEN t.waiting>0 THEN d.status WHEN t.not_configured>0 AND t.sent=0 AND t.failed=0 THEN 'not_configured' WHEN t.sent>0 AND t.failed>0 THEN 'partial' WHEN t.failed>0 THEN 'failed' WHEN t.sent>0 THEN 'sent' ELSE 'no_recipients' END,completed_at=CASE WHEN t.waiting=0 THEN clock_timestamp() END FROM totals t WHERE d.id=$1 AND d.status IN ('pending','report_pending')")
         .bind(id).execute(&mut **tx).await?;
     Ok(())
 }
@@ -81,11 +98,12 @@ async fn refresh(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> sqlx::Result<(
 /// Bounded cleanup, compatible with the old 24h interrupted outcome. Live
 /// leases cannot outlast the delivery deadline; terminal successes stay put.
 pub(super) async fn cleanup(tx: &mut Transaction<'_, Postgres>) -> sqlx::Result<()> {
-    let ids: Vec<Uuid> = sqlx::query_scalar("SELECT d.id FROM alert_deliveries d WHERE d.status='pending' AND (d.created_at<=clock_timestamp()-interval '24 hours' OR EXISTS(SELECT 1 FROM alert_recipient_outbox q WHERE q.delivery_id=d.id AND q.state='leased' AND q.lease_expires_at<=clock_timestamp() AND q.attempt_count>=5)) ORDER BY d.created_at,d.id LIMIT 25 FOR UPDATE OF d SKIP LOCKED")
+    let ids: Vec<Uuid> = sqlx::query_scalar("SELECT d.id FROM alert_deliveries d WHERE d.status IN ('pending','report_pending') AND (d.created_at<=clock_timestamp()-interval '24 hours' OR EXISTS(SELECT 1 FROM alert_recipient_outbox q WHERE q.delivery_id=d.id AND q.state='leased' AND q.lease_expires_at<=clock_timestamp() AND q.attempt_count>=5)) ORDER BY d.created_at,d.id LIMIT 25 FOR UPDATE OF d SKIP LOCKED")
         .fetch_all(&mut **tx).await?;
     for id in ids {
         sqlx::query("UPDATE alert_recipient_outbox q SET state='exhausted',error='interrupted',lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL FROM alert_deliveries d WHERE q.delivery_id=$1 AND d.id=q.delivery_id AND q.state IN ('waiting','leased') AND (d.created_at<=clock_timestamp()-interval '24 hours' OR (q.state='leased' AND q.attempt_count>=5 AND q.lease_expires_at<=clock_timestamp()))")
             .bind(id).execute(&mut **tx).await?;
+        reports::audit(tx, id, "exhausted", 1).await?;
         let initialized: bool =
             sqlx::query_scalar("SELECT initialized FROM alert_deliveries WHERE id=$1")
                 .bind(id)
@@ -107,17 +125,17 @@ fn due_delivery(now: &str) -> String {
     // A bound database instant, not a volatile clock_timestamp() expression:
     // PostgreSQL can seek past the expired creation-time range in the index.
     format!(
-        "d.status='pending' AND d.created_at>{now}::timestamptz-interval '24 hours'+interval '45 seconds' AND (NOT d.initialized OR EXISTS(SELECT 1 FROM alert_recipient_outbox q WHERE q.delivery_id=d.id AND q.attempt_count<5 AND ((q.state='waiting' AND q.next_attempt_at<={now}::timestamptz) OR (q.state='leased' AND q.lease_expires_at<={now}::timestamptz))))"
+        "d.status IN ('pending','report_pending') AND d.created_at>{now}::timestamptz-interval '24 hours'+interval '45 seconds' AND (NOT d.initialized OR EXISTS(SELECT 1 FROM alert_recipient_outbox q WHERE q.delivery_id=d.id AND q.attempt_count<5 AND ((q.state='waiting' AND q.next_attempt_at<={now}::timestamptz) OR (q.state='leased' AND q.lease_expires_at<={now}::timestamptz))))"
     )
 }
 
 pub(super) fn bucket_candidates_sql() -> String {
     let due = due_delivery("$5");
     format!("WITH RECURSIVE buckets(bucket_id) AS (
- (SELECT bucket_id FROM alert_deliveries WHERE status='pending' ORDER BY bucket_id LIMIT 1)
+ (SELECT bucket_id FROM alert_deliveries WHERE status IN ('pending','report_pending') ORDER BY bucket_id LIMIT 1)
  UNION ALL
  SELECT next.bucket_id FROM buckets b CROSS JOIN LATERAL
-  (SELECT bucket_id FROM alert_deliveries WHERE status='pending' AND bucket_id>b.bucket_id ORDER BY bucket_id LIMIT 1) next
+  (SELECT bucket_id FROM alert_deliveries WHERE status IN ('pending','report_pending') AND bucket_id>b.bucket_id ORDER BY bucket_id LIMIT 1) next
 ), served AS (SELECT * FROM unnest($1::uuid[],$2::integer[]) AS s(bucket_id,slots)),
 recent AS (SELECT * FROM unnest($3::uuid[],$4::bigint[]) AS r(bucket_id,turn))
 SELECT b.bucket_id FROM buckets b CROSS JOIN LATERAL
@@ -190,6 +208,23 @@ pub(super) async fn claim_with_hook(
     served: &HashMap<Uuid, u32>,
     after_eligibility_read: impl std::future::Future<Output = ()>,
 ) -> sqlx::Result<Option<(Uuid, Option<Claim>, Uuid)>> {
+    claim_with_origin(
+        store,
+        owner,
+        served,
+        after_eligibility_read,
+        reports::public_origin(),
+    )
+    .await
+}
+
+async fn claim_with_origin(
+    store: &Store,
+    owner: Uuid,
+    served: &HashMap<Uuid, u32>,
+    after_eligibility_read: impl std::future::Future<Output = ()>,
+    report_origin: Option<String>,
+) -> sqlx::Result<Option<(Uuid, Option<Claim>, Uuid)>> {
     let mut tx =
         crate::db::begin_with_setup(&store.pool, "SET LOCAL statement_timeout='10s'").await?;
     let (buckets, slots): (Vec<_>, Vec<_>) = served
@@ -225,13 +260,39 @@ pub(super) async fn claim_with_hook(
     let Some((id, initialized, bucket)) = row else {
         return Ok(None);
     };
+    let report: Option<Uuid> =
+        sqlx::query_scalar("SELECT report_run_id FROM alert_deliveries WHERE id=$1")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+    // Reports snapshot recipients at publication, then intersect live authority
+    // under canonical locks immediately before every claim, including retries.
+    let report_addresses = if let Some(run) = report {
+        reports::lock_recipients(&mut tx, run).await?;
+        let addresses: Vec<TypedRecipient> = sqlx::query_as(reports::RECIPIENTS)
+            .bind(id)
+            .fetch_all(&mut *tx)
+            .await?;
+        let eligible: Vec<Vec<u8>> = addresses
+            .iter()
+            .map(|to| fingerprint(id, &to.address))
+            .collect();
+        suppress(&mut tx, id, &eligible).await?;
+        Some(addresses)
+    } else {
+        None
+    };
     let (settings, installation) = relay(&mut tx).await?;
+    let settings = settings.filter(|_| report.is_none() || report_origin.is_some());
     let Some(settings) = settings else {
         // Do not cancel a live claim: its result must still be recorded.
-        sqlx::query("UPDATE alert_recipient_outbox SET state='not_configured',lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL WHERE delivery_id=$1 AND (state='waiting' OR (state='leased' AND lease_expires_at<=clock_timestamp()))")
-            .bind(id).execute(&mut *tx).await?;
+        let unconfigured = sqlx::query("UPDATE alert_recipient_outbox SET state='not_configured',lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL WHERE delivery_id=$1 AND (state='waiting' OR (state='leased' AND lease_expires_at<=clock_timestamp()))")
+            .bind(id).execute(&mut *tx).await?.rows_affected();
         if initialized {
             refresh(&mut tx, id).await?;
+            if unconfigured > 0 {
+                reports::audit(&mut tx, id, "not_configured", unconfigured as i64).await?;
+            }
         } else {
             // Preserve legacy counts without storing pseudonyms for mail we
             // will never attempt.
@@ -241,7 +302,10 @@ pub(super) async fn claim_with_hook(
         tx.commit().await?;
         return Ok(Some((id, None, bucket)));
     };
-    let addresses = recipients(&mut tx, id, !initialized).await?;
+    let addresses = match report_addresses {
+        Some(addresses) => addresses,
+        None => recipients(&mut tx, id, !initialized).await?,
+    };
     after_eligibility_read.await;
     if !initialized {
         for to in &addresses {
@@ -265,8 +329,7 @@ pub(super) async fn claim_with_hook(
         .collect();
     // Never cancel a live claim held by another worker. It already authorized
     // its send; the next claim checks live authority again.
-    sqlx::query("UPDATE alert_recipient_outbox SET state='ineligible',lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL WHERE delivery_id=$1 AND NOT(fingerprint=ANY($2)) AND (state='waiting' OR (state='leased' AND lease_expires_at<=clock_timestamp()))")
-        .bind(id).bind(&eligible).execute(&mut *tx).await?;
+    suppress(&mut tx, id, &eligible).await?;
     let token = Uuid::new_v4();
     let before_claim = tokio::time::Instant::now();
     let fp: Option<(Vec<u8>, f64)> = sqlx::query_as("WITH candidate AS (SELECT fingerprint FROM alert_recipient_outbox WHERE delivery_id=$1 AND fingerprint=ANY($2) AND attempt_count<5 AND ((state='waiting' AND next_attempt_at<=clock_timestamp()) OR (state='leased' AND lease_expires_at<=clock_timestamp())) ORDER BY next_attempt_at,fingerprint LIMIT 1 FOR UPDATE SKIP LOCKED) UPDATE alert_recipient_outbox q SET state='leased',attempt_count=q.attempt_count+1,lease_owner=$3,lease_token=$4,lease_expires_at=least(clock_timestamp()+make_interval(secs=>$5::integer),d.created_at+interval '24 hours') FROM candidate c,alert_deliveries d WHERE q.delivery_id=$1 AND q.fingerprint=c.fingerprint AND d.id=q.delivery_id RETURNING q.fingerprint,extract(epoch FROM q.lease_expires_at-clock_timestamp())::float8")
@@ -276,9 +339,20 @@ pub(super) async fn claim_with_hook(
         tx.commit().await?;
         return Ok(Some((id, None, bucket)));
     };
-    let pending: Pending = sqlx::query_as("SELECT d.transition,e.summary,e.severity,e.fired_at,e.resolved_at,e.rule_id,r.name rule_name,w.name workspace_name,w.kind workspace_kind,p.name connection_name,e.id event_id,e.builtin,e.kind,e.key_expires_at FROM alert_deliveries d JOIN alert_events e ON e.id=d.event_id LEFT JOIN alert_rules r ON r.id=e.rule_id LEFT JOIN workspaces w ON w.id=e.workspace_id LEFT JOIN provider_connections p ON p.id=e.provider_connection_id WHERE d.id=$1")
-        .bind(id).fetch_one(&mut *tx).await?;
-    let (subject, body) = email_message(pending, installation);
+    let (subject, body) = if let Some(run) = report {
+        reports::message(
+            &mut tx,
+            run,
+            report_origin
+                .as_deref()
+                .expect("validated before report claim"),
+        )
+        .await?
+    } else {
+        let pending: Pending = sqlx::query_as("SELECT d.transition,e.summary,e.severity,e.fired_at,e.resolved_at,e.rule_id,r.name rule_name,w.name workspace_name,w.kind workspace_kind,p.name connection_name,e.id event_id,e.builtin,e.kind,e.key_expires_at FROM alert_deliveries d JOIN alert_events e ON e.id=d.event_id LEFT JOIN alert_rules r ON r.id=e.rule_id LEFT JOIN workspaces w ON w.id=e.workspace_id LEFT JOIN provider_connections p ON p.id=e.provider_connection_id WHERE d.id=$1")
+            .bind(id).fetch_one(&mut *tx).await?;
+        email_message(pending, installation)
+    };
     let to = addresses
         .into_iter()
         .find(|to| fingerprint(id, &to.address) == fp)
@@ -295,6 +369,7 @@ pub(super) async fn claim_with_hook(
             settings,
             email: OutgoingEmail { to, subject, body },
             send_until: before_claim + Duration::from_secs_f64((remaining - 5.0).max(0.0)),
+            report: report.is_some(),
         }),
         bucket,
     )))
@@ -315,19 +390,27 @@ pub(super) async fn complete(
         Ok(()) => ("sent", None, false),
         Err(e) => ("failed", Some(e.as_str()), e.retryable()),
     };
-    let updated = sqlx::query("UPDATE alert_recipient_outbox q SET state=CASE WHEN $6 AND (q.attempt_count>=5 OR d.created_at+interval '24 hours'<=clock_timestamp()+make_interval(secs=>($7::integer[])[least(q.attempt_count,4)])) THEN 'exhausted' WHEN $6 THEN 'waiting' ELSE $4 END,error=$5,next_attempt_at=CASE WHEN $6 THEN clock_timestamp()+make_interval(secs=>($7::integer[])[least(q.attempt_count,4)]) ELSE q.next_attempt_at END,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL FROM alert_deliveries d WHERE q.delivery_id=$1 AND q.fingerprint=$2 AND q.lease_token=$3 AND q.lease_owner=$8 AND q.state='leased' AND q.lease_expires_at>clock_timestamp() AND d.id=q.delivery_id AND d.status='pending'")
+    let updated = sqlx::query("UPDATE alert_recipient_outbox q SET state=CASE WHEN $6 AND (q.attempt_count>=5 OR d.created_at+interval '24 hours'<=clock_timestamp()+make_interval(secs=>($7::integer[])[least(q.attempt_count,4)])) THEN 'exhausted' WHEN $6 THEN 'waiting' ELSE $4 END,error=$5,next_attempt_at=CASE WHEN $6 THEN clock_timestamp()+make_interval(secs=>($7::integer[])[least(q.attempt_count,4)]) ELSE q.next_attempt_at END,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL FROM alert_deliveries d WHERE q.delivery_id=$1 AND q.fingerprint=$2 AND q.lease_token=$3 AND q.lease_owner=$8 AND q.state='leased' AND q.lease_expires_at>clock_timestamp() AND d.id=q.delivery_id AND d.status IN ('pending','report_pending')")
         .bind(claim.delivery).bind(&claim.fingerprint).bind(claim.token).bind(state).bind(error).bind(retryable).bind(&BACKOFF_SECONDS[..]).bind(claim.owner)
         .execute(&mut *tx).await?.rows_affected() == 1;
+    let outcome = match result {
+        Ok(()) => "sent",
+        Err(e) if e.retryable() => "transient_failure",
+        Err(_) => "permanent_failure",
+    };
     if updated {
         refresh(&mut tx, claim.delivery).await?;
+        if claim.report {
+            reports::audit(&mut tx, claim.delivery, outcome, 1).await?;
+        }
     }
     tx.commit().await?;
     if updated {
-        crate::metrics::METRICS.observe_alert_delivery(match result {
-            Ok(()) => "sent",
-            Err(e) if e.retryable() => "transient_failure",
-            Err(_) => "permanent_failure",
-        });
+        if claim.report {
+            crate::metrics::METRICS.observe_report_delivery(outcome, 1);
+        } else {
+            crate::metrics::METRICS.observe_alert_delivery(outcome);
+        }
     }
     Ok(updated)
 }
