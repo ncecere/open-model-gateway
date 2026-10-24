@@ -8,6 +8,10 @@ use sha2::{Digest, Sha256};
 use super::*;
 use crate::email::{DeliveryError, OutgoingEmail};
 
+#[cfg(all(test, feature = "integration-tests"))]
+#[path = "report_delivery_tests.rs"]
+mod report_tests;
+
 pub(super) const SEND_DEADLINE: Duration = Duration::from_secs(40);
 // 90s lease > 40s whole send deadline. Claims leave >=45s of the 24h window.
 const LEASE_SECONDS: i32 = 90;

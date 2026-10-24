@@ -172,8 +172,19 @@ async fn scheduled_reports_run_as_runtime(pool: &PgPool) {
         .await
         .unwrap();
     assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM report_runs r JOIN report_snapshots p ON p.run_id=r.id WHERE r.schedule_id=$1").bind(id).fetch_one(&runtime).await.unwrap(),1);
+    let deliveries: i64 = sqlx::query_scalar("SELECT count(*) FROM alert_deliveries d JOIN report_runs r ON r.id=d.report_run_id WHERE r.schedule_id=$1 AND d.status='report_pending'").bind(id).fetch_one(&runtime).await.unwrap();
+    assert_eq!(deliveries, 1);
+    open_model_gateway::alerts::deliver_pending(&store, 25).await;
+    let status: String = sqlx::query_scalar("SELECT d.status FROM alert_deliveries d JOIN report_runs r ON r.id=d.report_run_id WHERE r.schedule_id=$1").bind(id).fetch_one(&runtime).await.unwrap();
+    assert_eq!(status, "not_configured");
     leases.release_all(&runtime).await;
     for statement in [
+        "UPDATE alert_deliveries SET report_run_id=gen_random_uuid()",
+        "UPDATE alert_deliveries SET event_id=gen_random_uuid()",
+        "UPDATE alert_deliveries SET bucket_id=gen_random_uuid()",
+        "DELETE FROM alert_recipient_outbox",
+        "TRUNCATE alert_recipient_outbox",
+        "INSERT INTO alert_deliveries(id,report_run_id,transition) VALUES(gen_random_uuid(),gen_random_uuid(),'fired')",
         "UPDATE report_schedules SET id=gen_random_uuid()",
         "UPDATE report_schedules SET created_by=gen_random_uuid()",
         "UPDATE report_schedules SET scope_kind='installation'",
