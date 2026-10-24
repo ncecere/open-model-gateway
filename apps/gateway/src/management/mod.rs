@@ -8,6 +8,7 @@ mod batches;
 pub(crate) mod branding;
 mod catalogs;
 mod compare;
+mod deployment_configuration;
 mod directory;
 mod files;
 mod governance;
