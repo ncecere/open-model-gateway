@@ -156,19 +156,13 @@ async fn a_dead_holder_is_replaced_after_expiry_and_fenced(pool: PgPool) {
     for row in &original {
         assert_eq!(row.1, Some(replicas[0].holder()), "{}", row.0);
     }
-    // While the term is current nobody else gets it, for any lease. (A survivor
-    // may only hold one if the database clock had already passed the expiry
-    // when it asked; checked after the attempt, so a stalled host cannot fake
-    // a violation.) Each attempt is followed at once by the all-lease check on
-    // the acquisition times the database recorded, so an early acquisition
-    // cannot be excused by the clock passing the expiry before the check ran.
+    // Each lease has its own expiry: a survivor may acquire an expired lease
+    // while maintenance is still current. Check every lease's recorded
+    // acquisition time against its own original expiry after each attempt,
+    // so a delayed check cannot excuse an early acquisition.
     for survivor in [1, 2] {
-        let held = replicas[survivor].renew_once(&pool).await;
+        replicas[survivor].renew_once(&pool).await;
         assert_no_early_takeover(&pool, &original, "before expiry").await;
-        assert!(
-            held == 0 || !db_before(&pool, old_expires).await,
-            "replica {survivor} took a current term"
-        );
     }
     // Replica 0 dies. The survivors keep trying; one takes over once the
     // database clock is past the expiry (never earlier). The attempt count is
