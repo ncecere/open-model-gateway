@@ -32,6 +32,21 @@ spec:
       # Secret, so CNPG uses it as-is instead of minting new credentials.
       secret:
         name: {{ $migrator.existingSecret }}
+      # Fresh initdb only; never an upgrade-time ACL repair. CNPG 1.30.1
+      # creates these operational roles after bootstrap (see docs/kubernetes.md).
+      # Seed passwordless roles so CONNECT survives removal of PUBLIC access;
+      # CNPG still configures replication, pg_monitor and pooler auth_query.
+      postInitSQL:
+        - "CREATE ROLE cnpg_pooler_pgbouncer LOGIN PASSWORD NULL;"
+        - "CREATE ROLE cnpg_metrics_exporter LOGIN PASSWORD NULL;"
+        - "CREATE ROLE streaming_replica LOGIN PASSWORD NULL;"
+        - {{ printf "CREATE ROLE \"%s\" NOLOGIN;" ($runtime.name | replace "\"" "\"\"") | quote }}
+        - "GRANT CONNECT ON DATABASE postgres, template1 TO cnpg_pooler_pgbouncer, cnpg_metrics_exporter, streaming_replica;"
+        - {{ printf "REVOKE CONNECT ON DATABASE postgres, template1 FROM PUBLIC, \"%s\";" ($runtime.name | replace "\"" "\"\"") | quote }}
+      # Keep PUBLIC CONNECT on the application database: the runtime's managed
+      # role gets its login/password after initdb, but must never inherit TEMP.
+      postInitApplicationSQL:
+        - {{ printf "REVOKE TEMPORARY ON DATABASE \"%s\" FROM PUBLIC, \"%s\";" (.Values.cnpg.cluster.database | replace "\"" "\"\"") ($runtime.name | replace "\"" "\"\"") | quote }}
   # A CNPG managed role for gateway_runtime, backed by its own pre-created
   # Secret. The runtime role gets no superuser/createdb/createrole/login-DDL
   # attribute here; its actual table/column privileges come only from
