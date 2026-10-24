@@ -16,12 +16,23 @@
  * only (type default, platform override, workspace local); key layers have
  * none. It is typed with a unit ("5 GB", "500 MB"; a plain
  * number is GB, 1 GB = 2^30 bytes) and follows the same tighten-only rules.
+ *
+ * "Keys per person / per workspace per 24 h" (`key_issuances_per_holder`, `key_issuances_per_workspace`, #253) sit on
+ * the same workspace layers: how many keys one holder, and the whole workspace, may create or rotate in a rolling 24
+ * hours (1 to 10,000). Same tighten-only rules; blank = inherit (the server never reads blank as unlimited).
  */
 import { ApiError } from "./api";
 import { dollarsToMicroUsd, formatMicroUsd, microUsdToDollars, type BudgetPeriod, type Policy, type PolicyBudget } from "./governance";
 
 export type RateKey = "requests_per_minute" | "tokens_per_minute" | "concurrent_requests" | "concurrent_jobs";
-export type Limits = Record<RateKey, number | null> & { budgets: PolicyBudget[]; /** Workspace layers only; absent = none. */ storage_bytes?: number | null };
+export type IssuanceKey = "key_issuances_per_holder" | "key_issuances_per_workspace";
+export type Limits = Record<RateKey, number | null> & { budgets: PolicyBudget[]; /** Workspace layers only; absent = none. */ storage_bytes?: number | null } & Partial<Record<IssuanceKey, number | null>>;
+/** Largest key issuance budget the server accepts. */
+export const MAX_KEY_ISSUANCES = 10000;
+export const issuanceRows: { key: IssuanceKey; label: string; description: string; unit: string }[] = [
+  { key: "key_issuances_per_holder", label: "Keys per person per 24 h", description: "How many keys one member (or one service account) can create or rotate in a rolling 24 hours in this workspace. Rotations count.", unit: "per 24 h" },
+  { key: "key_issuances_per_workspace", label: "Keys per workspace per 24 h", description: "How many keys everyone together can create or rotate in this workspace in a rolling 24 hours. Rotations count.", unit: "per 24 h" },
+];
 export const stackPeriods: BudgetPeriod[] = ["day", "week", "month", "lifetime"];
 export const rateRows: { key: RateKey; label: string; description: string; unit: string }[] = [
   { key: "requests_per_minute", label: "Requests per minute", description: "How many requests can start each minute. Fallback attempts count too.", unit: "per min" },
@@ -41,8 +52,10 @@ export function policyBudgets(policy: Pick<Policy, "budgets" | "monthly_budget_m
   if (Array.isArray(policy.budgets)) return sortBudgets(policy.budgets.filter(b => stackPeriods.includes(b.period)));
   return policy.monthly_budget_microusd === null ? [] : [{ period: policy.budget_period ?? "month", amount_microusd: policy.monthly_budget_microusd }];
 }
+/** The issuance fields a policy carries; absent from older gateways and on key layers. */
+const issuanceOf = (policy: Partial<Record<IssuanceKey, number | null>>) => Object.fromEntries(issuanceRows.filter(r => policy[r.key] !== undefined).map(r => [r.key, policy[r.key] ?? null])) as Partial<Record<IssuanceKey, number | null>>;
 export function limitsOf(policy: Policy): Limits {
-  return { requests_per_minute: policy.requests_per_minute, tokens_per_minute: policy.tokens_per_minute, concurrent_requests: policy.concurrent_requests, concurrent_jobs: policy.concurrent_jobs ?? null, budgets: policyBudgets(policy), storage_bytes: policy.storage_bytes ?? null };
+  return { requests_per_minute: policy.requests_per_minute, tokens_per_minute: policy.tokens_per_minute, concurrent_requests: policy.concurrent_requests, concurrent_jobs: policy.concurrent_jobs ?? null, budgets: policyBudgets(policy), storage_bytes: policy.storage_bytes ?? null, ...issuanceOf(policy) };
 }
 export const noLimits: Limits = { requests_per_minute: null, tokens_per_minute: null, concurrent_requests: null, concurrent_jobs: null, budgets: [] };
 export const budgetFor = (limits: Pick<Limits, "budgets"> | undefined, period: BudgetPeriod) => limits?.budgets.find(b => b.period === period)?.amount_microusd ?? null;
@@ -53,14 +66,18 @@ export function composeLimits(...layers: (Limits | undefined)[]): Limits {
   const minimum = (key: RateKey) => known.reduce<number | null>((acc, l) => l[key] === null ? acc : acc === null ? l[key] : Math.min(acc, l[key]!), null);
   const budgets = stackPeriods.flatMap(period => { const amount = known.reduce<string | null>((acc, l) => minAmount(acc, budgetFor(l, period)), null); return amount === null ? [] : [{ period, amount_microusd: amount }]; });
   const storage = known.reduce<number | null>((acc, l) => l.storage_bytes == null ? acc : acc === null ? l.storage_bytes : Math.min(acc, l.storage_bytes), null);
-  return { requests_per_minute: minimum("requests_per_minute"), tokens_per_minute: minimum("tokens_per_minute"), concurrent_requests: minimum("concurrent_requests"), concurrent_jobs: minimum("concurrent_jobs"), budgets, storage_bytes: storage };
+  // Absent unless some layer carries them (key layers and older gateways have none).
+  const issuance = Object.fromEntries(issuanceRows.filter(r => known.some(l => l[r.key] != null)).map(r => [r.key, Math.min(...known.map(l => l[r.key]).filter((v): v is number => v != null))]));
+  return { requests_per_minute: minimum("requests_per_minute"), tokens_per_minute: minimum("tokens_per_minute"), concurrent_requests: minimum("concurrent_requests"), concurrent_jobs: minimum("concurrent_jobs"), budgets, storage_bytes: storage, ...issuance };
 }
 /**
  * The full PUT body: four explicit rate fields plus the complete stacked budget set (never the legacy fields).
- * `storage_bytes` is sent only for workspace layers (`storage`); elsewhere it is omitted, which keeps the stored value.
+ * `storage_bytes` and the key issuance budgets are sent only for workspace layers (`storage`); elsewhere they are
+ * omitted, which keeps the stored value. The issuance budgets are also omitted when the layer didn't carry them (an
+ * older gateway, which would refuse an unknown field).
  */
 export function limitsBody(limits: Limits, storage = false) {
-  return { requests_per_minute: limits.requests_per_minute, tokens_per_minute: limits.tokens_per_minute, concurrent_requests: limits.concurrent_requests, concurrent_jobs: limits.concurrent_jobs, ...storage ? { storage_bytes: limits.storage_bytes ?? null } : {}, budgets: sortBudgets(limits.budgets).map(b => ({ period: b.period, amount_microusd: b.amount_microusd })) };
+  return { requests_per_minute: limits.requests_per_minute, tokens_per_minute: limits.tokens_per_minute, concurrent_requests: limits.concurrent_requests, concurrent_jobs: limits.concurrent_jobs, ...storage ? { storage_bytes: limits.storage_bytes ?? null, ...Object.fromEntries(issuanceRows.filter(r => limits[r.key] !== undefined).map(r => [r.key, limits[r.key]])) } : {}, budgets: sortBudgets(limits.budgets).map(b => ({ period: b.period, amount_microusd: b.amount_microusd })) };
 }
 
 /* Storage quota (bytes): exact text with a unit, and parsing. */
@@ -103,21 +120,22 @@ export function budgetsText(budgets: PolicyBudget[], empty = "No budget"): strin
 /** One-line summary of a layer: "60 RPM · $5.00 daily", or "No limits". */
 export function limitsSummary(limits: Partial<Limits> | null | undefined, empty = "No limits"): string {
   if (!limits) return empty;
-  const parts = [limits.storage_bytes != null ? `${storageText(limits.storage_bytes)} storage` : "", limits.requests_per_minute != null ? `${limits.requests_per_minute.toLocaleString("en-US")} RPM` : "", limits.tokens_per_minute != null ? `${limits.tokens_per_minute.toLocaleString("en-US")} TPM` : "", limits.concurrent_requests != null ? `${limits.concurrent_requests.toLocaleString("en-US")} at once` : "", limits.concurrent_jobs != null ? `${limits.concurrent_jobs.toLocaleString("en-US")} ${limits.concurrent_jobs === 1 ? "job" : "jobs"} at once` : "", limits.budgets?.length ? budgetsText(limits.budgets) : ""].filter(Boolean);
+  const keys = (n: number | null | undefined, who: string) => n != null ? `${n.toLocaleString("en-US")} ${n === 1 ? "key" : "keys"} per ${who} per 24 h` : "";
+  const parts = [limits.storage_bytes != null ? `${storageText(limits.storage_bytes)} storage` : "", limits.requests_per_minute != null ? `${limits.requests_per_minute.toLocaleString("en-US")} RPM` : "", limits.tokens_per_minute != null ? `${limits.tokens_per_minute.toLocaleString("en-US")} TPM` : "", limits.concurrent_requests != null ? `${limits.concurrent_requests.toLocaleString("en-US")} at once` : "", limits.concurrent_jobs != null ? `${limits.concurrent_jobs.toLocaleString("en-US")} ${limits.concurrent_jobs === 1 ? "job" : "jobs"} at once` : "", limits.budgets?.length ? budgetsText(limits.budgets) : "", keys(limits.key_issuances_per_holder, "person"), keys(limits.key_issuances_per_workspace, "workspace")].filter(Boolean);
   return parts.length ? parts.join(" · ") : empty;
 }
 
 /* Editable drafts. */
 export type BudgetDraft = { key: string; period: BudgetPeriod; amount: string };
-export type LimitsDraft = Record<RateKey, string> & { budgets: BudgetDraft[]; /** Storage quota text ("5 GB"); workspace layers only. */ storage?: string };
+export type LimitsDraft = Record<RateKey, string> & { budgets: BudgetDraft[]; /** Storage quota text ("5 GB"); workspace layers only. */ storage?: string } & Partial<Record<IssuanceKey, string>>;
 let draftKeys = 0;
 export const newBudgetKey = () => `b${++draftKeys}`;
 export function draftOf(limits: Limits): LimitsDraft {
-  return { requests_per_minute: limits.requests_per_minute?.toString() ?? "", tokens_per_minute: limits.tokens_per_minute?.toString() ?? "", concurrent_requests: limits.concurrent_requests?.toString() ?? "", concurrent_jobs: limits.concurrent_jobs?.toString() ?? "", budgets: limits.budgets.map(b => ({ key: `saved-${b.period}`, period: b.period, amount: microUsdToDollars(b.amount_microusd) })), storage: storageDraft(limits.storage_bytes) };
+  return { requests_per_minute: limits.requests_per_minute?.toString() ?? "", tokens_per_minute: limits.tokens_per_minute?.toString() ?? "", concurrent_requests: limits.concurrent_requests?.toString() ?? "", concurrent_jobs: limits.concurrent_jobs?.toString() ?? "", budgets: limits.budgets.map(b => ({ key: `saved-${b.period}`, period: b.period, amount: microUsdToDollars(b.amount_microusd) })), storage: storageDraft(limits.storage_bytes), ...Object.fromEntries(issuanceRows.filter(r => limits[r.key] !== undefined).map(r => [r.key, limits[r.key]?.toString() ?? ""])) };
 }
 export function sameDraft(a: LimitsDraft, b: LimitsDraft) {
   const budgets = (d: LimitsDraft) => JSON.stringify(sortBudgets(d.budgets.map(x => ({ period: x.period, amount_microusd: x.amount.trim() }))));
-  return rateRows.every(r => a[r.key].trim() === b[r.key].trim()) && budgets(a) === budgets(b) && (a.storage ?? "").trim() === (b.storage ?? "").trim();
+  return rateRows.every(r => a[r.key].trim() === b[r.key].trim()) && budgets(a) === budgets(b) && (a.storage ?? "").trim() === (b.storage ?? "").trim() && issuanceRows.every(r => (a[r.key] ?? "").trim() === (b[r.key] ?? "").trim());
 }
 /** The first period not used by a row (to add a budget). */
 export const nextPeriod = (draft: LimitsDraft): BudgetPeriod | undefined => (["month", "day", "week", "lifetime"] as BudgetPeriod[]).find(p => !draft.budgets.some(b => b.period === p));
@@ -131,6 +149,12 @@ export function rateError(raw: string): string | undefined {
   const n = Number(value);
   return n > MAX_INT ? `Enter 1 to ${MAX_INT.toLocaleString("en-US")}, or leave blank for no limit.` : undefined;
 }
+/** Why a typed key issuance budget can't be saved; blank is valid (inherit). */
+export function issuanceError(raw: string): string | undefined {
+  const value = raw.trim();
+  if (!value) return;
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < 1 || Number(value) > MAX_KEY_ISSUANCES) return `Enter 1 to ${MAX_KEY_ISSUANCES.toLocaleString("en-US")}, or leave blank to inherit.`;
+}
 /** Why a typed budget amount can't be saved. A budget row needs an amount above $0 (remove the row for no budget). */
 export function budgetAmountError(raw: string): string | undefined {
   if (!raw.trim()) return "Enter an amount, or remove this budget.";
@@ -141,10 +165,10 @@ export function budgetAmountError(raw: string): string | undefined {
 /** Draft to limits; call only on a draft without errors. */
 export function draftLimits(draft: LimitsDraft): Limits {
   const int = (v: string) => v.trim() ? Number(v.trim()) : null;
-  return { requests_per_minute: int(draft.requests_per_minute), tokens_per_minute: int(draft.tokens_per_minute), concurrent_requests: int(draft.concurrent_requests), concurrent_jobs: int(draft.concurrent_jobs), budgets: sortBudgets(draft.budgets.map(b => ({ period: b.period, amount_microusd: dollarsToMicroUsd(b.amount) }))), storage_bytes: draft.storage?.trim() ? parseStorage(draft.storage) ?? null : null };
+  return { requests_per_minute: int(draft.requests_per_minute), tokens_per_minute: int(draft.tokens_per_minute), concurrent_requests: int(draft.concurrent_requests), concurrent_jobs: int(draft.concurrent_jobs), budgets: sortBudgets(draft.budgets.map(b => ({ period: b.period, amount_microusd: dollarsToMicroUsd(b.amount) }))), storage_bytes: draft.storage?.trim() ? parseStorage(draft.storage) ?? null : null, ...Object.fromEntries(issuanceRows.filter(r => draft[r.key] !== undefined).map(r => [r.key, int(draft[r.key]!)])) };
 }
 /** Rows whose typed value can't be used yet: their Effective cell shows "—" while the other rows keep theirs. */
-export type InvalidRows = { rates: RateKey[]; periods: BudgetPeriod[]; storage?: boolean };
+export type InvalidRows = { rates: RateKey[]; periods: BudgetPeriod[]; storage?: boolean; issuance?: IssuanceKey[] };
 /**
  * The draft's valid part as limits, for a live Effective preview while other rows are being fixed: a rate with an
  * error and a budget with an error are left out and named in `invalid`. A saved tighten-only budget missing from the
@@ -161,12 +185,13 @@ export function draftLimitsValid(draft: LimitsDraft, errors: DraftErrors, stored
   for (const b of draft.budgets) if (invalid.periods.includes(b.period)) { const i = budgets.findIndex(x => x.period === b.period); if (i >= 0) budgets.splice(i, 1); }
   if (errors.form.length) for (const s of stored.budgets) if (!draft.budgets.some(b => b.period === s.period) && !invalid.periods.includes(s.period)) invalid.periods.push(s.period);
   if (errors.storage) invalid.storage = true;
+  const issuance = Object.fromEntries(issuanceRows.map(r => { const bad = !!errors.issuance?.[r.key], v = draft[r.key]?.trim(); if (bad) (invalid.issuance ??= []).push(r.key); return [r.key, bad || !v ? null : Number(v)]; }));
   const storage = errors.storage || !draft.storage?.trim() ? null : parseStorage(draft.storage) ?? null;
-  return { limits: { requests_per_minute: rate("requests_per_minute"), tokens_per_minute: rate("tokens_per_minute"), concurrent_requests: rate("concurrent_requests"), concurrent_jobs: rate("concurrent_jobs"), budgets: sortBudgets(budgets), storage_bytes: storage }, invalid };
+  return { limits: { requests_per_minute: rate("requests_per_minute"), tokens_per_minute: rate("tokens_per_minute"), concurrent_requests: rate("concurrent_requests"), concurrent_jobs: rate("concurrent_jobs"), budgets: sortBudgets(budgets), storage_bytes: storage, ...issuance }, invalid };
 }
 export type Parent = { label: string; limits: Limits };
-export type DraftErrors = { rates: Partial<Record<RateKey, string>>; budgets: Record<string, string>; form: string[]; storage?: string };
-export const hasErrors = (e: DraftErrors) => Object.keys(e.rates).length > 0 || Object.keys(e.budgets).length > 0 || e.form.length > 0 || !!e.storage;
+export type DraftErrors = { rates: Partial<Record<RateKey, string>>; budgets: Record<string, string>; form: string[]; storage?: string; issuance?: Partial<Record<IssuanceKey, string>> };
+export const hasErrors = (e: DraftErrors) => Object.keys(e.rates).length > 0 || Object.keys(e.budgets).length > 0 || e.form.length > 0 || !!e.storage || Object.keys(e.issuance ?? {}).length > 0;
 const money = (amount: string) => formatMicroUsd(amount);
 /**
  * Field errors. `free` (platform scopes, replacement overrides) checks syntax and one budget per period;
@@ -192,6 +217,17 @@ export function draftErrors(draft: LimitsDraft, mode: "free" | "tighten", parent
       else for (const parent of parents) { const cap = parent.limits.storage_bytes ?? null; if (n !== null && cap !== null && n > cap) { errors.storage = `Can't be higher than the ${parent.label} quota (${storageText(cap)}).`; break; } }
     }
   }
+  for (const r of issuanceRows) {
+    if (draft[r.key] === undefined) continue;
+    const raw = draft[r.key]!.trim(), syntax = issuanceError(raw), n = raw && !syntax ? Number(raw) : null, old = stored[r.key] ?? null;
+    let message = syntax;
+    if (!message && mode === "tighten") {
+      if (old !== null && n === null) message = `A saved limit can't be removed here, only lowered (now ${old.toLocaleString("en-US")}).`;
+      else if (old !== null && n !== null && n > old) message = `A saved limit can only be lowered (now ${old.toLocaleString("en-US")}).`;
+      else for (const parent of parents) { const cap = parent.limits[r.key] ?? null; if (n !== null && cap !== null && n > cap) { message = `Can't be higher than the ${parent.label} limit (${cap.toLocaleString("en-US")}).`; break; } }
+    }
+    if (message) (errors.issuance ??= {})[r.key] = message;
+  }
   const seen = new Set<BudgetPeriod>();
   for (const b of draft.budgets) {
     if (seen.has(b.period)) { errors.budgets[b.key] = `Only one ${periodName[b.period].toLowerCase()} budget is allowed.`; continue; }
@@ -213,16 +249,17 @@ export const lockedBudget = (mode: "free" | "tighten", stored: Limits, row: Budg
 /* Server rejections (ux-api-contract "Policy rejection reasons"): `reason` plus the period or limit it concerns. */
 
 const isPeriod = (value: string | undefined): value is BudgetPeriod => !!value && (stackPeriods as string[]).includes(value);
-const rateLabel = (value: string | undefined) => value === "storage_bytes" ? "Storage" : rateRows.find(r => r.key === value)?.label;
-type PolicyRejection = { message: string; rate?: RateKey; period?: BudgetPeriod; form?: boolean; storage?: boolean };
+const rateLabel = (value: string | undefined) => value === "storage_bytes" ? "Storage" : rateRows.find(r => r.key === value)?.label ?? issuanceRows.find(r => r.key === value)?.label;
+type PolicyRejection = { message: string; rate?: RateKey; period?: BudgetPeriod; form?: boolean; storage?: boolean; issuance?: IssuanceKey };
 /** The specific, plain explanation of a policy rejection with a known `reason`, and which field it concerns. */
 export function policyRejection(error: unknown): PolicyRejection | undefined {
   if (!(error instanceof ApiError) || !error.reason) return;
   const detail = error.detail?.period, period = isPeriod(detail) ? detail : undefined, budget = period ? `${periodName[period].toLowerCase()} budget` : "budget";
   const limit = rateRows.find(r => r.key === error.detail?.limit)?.key, rate = rateLabel(error.detail?.limit), storage = error.detail?.limit === "storage_bytes";
+  const issued = issuanceRows.find(r => r.key === error.detail?.limit)?.key;
   switch (error.reason) {
-    case "exceeds_parent_rate": if (storage) return { storage, message: "Storage is higher than an inherited quota. Lower it to at most the inherited value." }; break;
-    case "stored_rate_loosen_not_allowed": if (storage) return { storage, message: "The saved storage quota can only be lowered, never raised or removed." }; break;
+    case "exceeds_parent_rate": if (issued) return { issuance: issued, message: `${rate} is higher than an inherited limit. Lower it to at most the inherited value.` }; if (storage) return { storage, message: "Storage is higher than an inherited quota. Lower it to at most the inherited value." }; break;
+    case "stored_rate_loosen_not_allowed": if (issued) return { issuance: issued, message: `The saved ${rate!.toLowerCase()} limit can only be lowered, never raised or removed.` }; if (storage) return { storage, message: "The saved storage quota can only be lowered, never raised or removed." }; break;
   }
   switch (error.reason) {
     case "exceeds_parent_budget": return { period, message: `The ${budget} is higher than an inherited ${budget} for the same period. Lower it to at most the inherited amount.` };
@@ -256,6 +293,7 @@ export function rejectionErrors(error: unknown, draft: Pick<LimitsDraft, "budget
   const errors: DraftErrors = { rates: {}, budgets: {}, form: [] };
   const row = known.period ? draft.budgets.find(b => b.period === known.period) : undefined;
   if (known.storage) errors.storage = known.message;
+  else if (known.issuance) errors.issuance = { [known.issuance]: known.message };
   else if (known.rate) errors.rates[known.rate] = known.message;
   else if (row && !known.form) errors.budgets[row.key] = known.message;
   else errors.form.push(known.message);
@@ -264,5 +302,6 @@ export function rejectionErrors(error: unknown, draft: Pick<LimitsDraft, "budget
 /** Client errors first; a server rejection fills only fields the client found nothing wrong with. */
 export function mergeErrors(client: DraftErrors, server: DraftErrors | undefined): DraftErrors {
   if (!server) return client;
-  return { rates: { ...server.rates, ...client.rates }, budgets: { ...server.budgets, ...client.budgets }, form: [...client.form, ...server.form.filter(f => !client.form.includes(f))], storage: client.storage ?? server.storage };
+  const issuance = { ...server.issuance, ...client.issuance };
+  return { rates: { ...server.rates, ...client.rates }, budgets: { ...server.budgets, ...client.budgets }, form: [...client.form, ...server.form.filter(f => !client.form.includes(f))], storage: client.storage ?? server.storage, ...Object.keys(issuance).length ? { issuance } : {} };
 }

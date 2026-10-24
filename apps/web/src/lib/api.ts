@@ -3,9 +3,11 @@ export class ApiError extends Error {
   /**
    * `code`: `error.code`, the HTTP status as a string for management errors.
    * `reason`: the server's stable machine code for selected errors (`error.reason`), when present. `detail`: the one
-   * non-sensitive field that accompanies a policy rejection (`error.period` or `error.limit`), never an amount.
+   * non-sensitive field that accompanies a policy rejection (`error.period` or `error.limit`), never an amount; a key
+   * issuance refusal (429) names its `scope` and `operation` the same way. `retryAfter`: whole seconds until a 429 may
+   * succeed (`error.retry_after_seconds`, else the `Retry-After` header).
    */
-  constructor(public status: number, public code: string, message: string, public reason?: string, public detail?: { period?: string; limit?: string }) { super(message); this.name = "ApiError"; }
+  constructor(public status: number, public code: string, message: string, public reason?: string, public detail?: { period?: string; limit?: string; scope?: string; operation?: string }, public retryAfter?: number) { super(message); this.name = "ApiError"; }
 }
 export function csrfCookie(cookie: string): string | undefined {
   const value = cookie.split(";").map(part => part.trim()).find(part => part.startsWith("omg_csrf="))?.slice(9);
@@ -43,9 +45,11 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
       const message = error && typeof error === "object" && "message" in error && typeof error.message === "string" ? error.message : plain || `Request failed (${response.status}).`;
       if (response.status === 403 && method === "GET" && path !== `${API}/me` && typeof window !== "undefined") window.dispatchEvent(new Event("omg:access-refresh"));
       const reason = error && typeof error === "object" && "reason" in error && typeof error.reason === "string" ? error.reason : undefined;
-      const field = (name: "period" | "limit") => error && typeof error === "object" && name in error && typeof (error as Record<string, unknown>)[name] === "string" && /^[a-z_]{1,40}$/.test((error as Record<string, string>)[name]!) ? (error as Record<string, string>)[name] : undefined;
-      const period = field("period"), limit = field("limit");
-      throw new ApiError(response.status, code, message, reason, period || limit ? { ...(period ? { period } : {}), ...(limit ? { limit } : {}) } : undefined);
+      const field = (name: "period" | "limit" | "scope" | "operation") => error && typeof error === "object" && name in error && typeof (error as Record<string, unknown>)[name] === "string" && /^[a-z_]{1,40}$/.test((error as Record<string, string>)[name]!) ? (error as Record<string, string>)[name] : undefined;
+      const period = field("period"), limit = field("limit"), scope = field("scope"), operation = field("operation");
+      const waited = error && typeof error === "object" && "retry_after_seconds" in error ? Number(error.retry_after_seconds) : Number(response.headers.get("retry-after"));
+      const retryAfter = response.status === 429 && Number.isSafeInteger(waited) && waited > 0 ? waited : undefined;
+      throw new ApiError(response.status, code, message, reason, period || limit || scope || operation ? { ...(period ? { period } : {}), ...(limit ? { limit } : {}), ...(scope ? { scope } : {}), ...(operation ? { operation } : {}) } : undefined, retryAfter);
     }
     signal.throwIfAborted();
     if (body === undefined && response.status !== 204) throw new ApiError(response.status, "invalid_response", "The gateway returned an invalid response.");

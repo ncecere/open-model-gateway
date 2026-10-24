@@ -25,7 +25,7 @@ import { Plus, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api, platformWorkspacePath, type WorkspaceKind } from "../lib/api";
 import { dollarsToMicroUsd, effectiveBudgetHeadroom, formatMicroUsd, hasBudgetFacts, windowHeadroom, type BudgetHeadroom, type BudgetPeriod, type BudgetWindow, type PolicyResponse } from "../lib/governance";
-import { budgetFor, composeLimits, draftErrors, draftLimits, draftLimitsValid, draftOf, hasErrors, limitsBody, limitsOf, limitsSaveError, limitsSummary, lockedBudget, mergeErrors, newBudgetKey, nextPeriod, noLimits, periodName, rateRows, rateText, rejectionErrors, resetText, sameDraft, stackPeriods, storageText, type DraftErrors, type InvalidRows, type Limits, type LimitsDraft, type Parent, type RateKey } from "../lib/limits";
+import { budgetFor, composeLimits, draftErrors, draftLimits, draftLimitsValid, draftOf, hasErrors, issuanceRows, MAX_KEY_ISSUANCES, limitsBody, limitsOf, limitsSaveError, limitsSummary, lockedBudget, mergeErrors, newBudgetKey, nextPeriod, noLimits, periodName, rateRows, rateText, rejectionErrors, resetText, sameDraft, stackPeriods, storageText, type DraftErrors, type InvalidRows, type Limits, type LimitsDraft, type Parent, type RateKey } from "../lib/limits";
 import { StorageBar } from "./templates/storage-bar";
 import { resetsAt } from "../lib/usage";
 import { kindLabels } from "../lib/people";
@@ -45,6 +45,8 @@ import s from "../pages/shared.module.css";
 import l from "./scope-limits.module.css";
 
 export type LimitsMode = "replacement" | "local" | "key";
+/** A key issuance budget: a blank value is the 10,000 ceiling, never "no limit". */
+const issuanceText = (value: number | null | undefined) => value == null ? `${MAX_KEY_ISSUANCES.toLocaleString("en-US")} (maximum)` : value.toLocaleString("en-US");
 const amountText = (amount: string | null) => amount === null ? "No budget" : formatMicroUsd(amount);
 
 export type LimitsTableProps = {
@@ -98,6 +100,12 @@ export function LimitsTable({ caption, scopeLabel, draft, onChange, editing, bus
         <Td>{editing ? <Field label={`Storage · ${scopeLabel}`} hideLabel error={errors?.storage} className={l.amountField}><span className={l.amount}><Input size="sm" className={l.amountInput} maxLength={24} autoComplete="off" placeholder={inherited?.limits?.storage_bytes != null ? `Inherited: ${storageText(inherited.limits.storage_bytes)}` : "e.g. 5 GB"} value={draft.storage ?? ""} disabled={busy} onChange={event => set({ storage: event.target.value })} /></span></Field> : draft.storage?.trim() ? draft.storage : <span className={s.muted}>{emptyText}</span>}</Td>
         {effective && <Td>{effective.limits && !effective.invalid?.storage ? storageText(effective.limits.storage_bytes) : "—"}</Td>}
       </Tr>}
+      {storage && issuanceRows.map(r => <Tr key={r.key}>
+        <Td><span className={s.primary} title={r.description}>{r.label}</span></Td>
+        {inherited && <Td>{inherited.limits ? issuanceText(inherited.limits[r.key]) : "—"}</Td>}
+        <Td>{editing ? <Field label={`${r.label} · ${scopeLabel}`} hideLabel error={errors?.issuance?.[r.key]} className={l.amountField}><span className={l.amount}><GroupedIntegerInput className={l.amountInput} placeholder={inherited?.limits?.[r.key] != null ? `Inherited: ${inherited.limits[r.key]!.toLocaleString("en-US")}` : `Up to ${MAX_KEY_ISSUANCES.toLocaleString("en-US")}`} value={draft[r.key] ?? ""} disabled={busy} onChange={value => set({ [r.key]: value })} /><span aria-hidden className={l.unit}>{r.unit}</span></span></Field> : draft[r.key]?.trim() ? Number(draft[r.key]).toLocaleString("en-US") : <span className={s.muted}>{emptyText === "No limit" ? issuanceText(null) : emptyText}</span>}</Td>
+        {effective && <Td>{effective.limits && !effective.invalid?.issuance?.includes(r.key) ? issuanceText(effective.limits[r.key]) : "—"}</Td>}
+      </Tr>)}
       {rows.map(({ period, row }) => {
         const parent = budgetFor(inherited?.limits, period), locked = !!row && lockedBudget(mode, stored, row);
         const used = new Set(draft.budgets.filter(b => b !== row).map(b => b.period));

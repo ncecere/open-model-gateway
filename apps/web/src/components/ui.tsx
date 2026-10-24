@@ -4,6 +4,7 @@ import { ApiError, api, type Collection, type OneTimeToken, type Session } from 
 import { parseCheckboxValues, validateFields, type Field, type Option, type Values } from "../lib/forms";
 import { Combobox, type ComboboxOption } from "./ui/combobox/combobox";
 import { detailTime } from "../lib/format";
+import { issuanceRefusal } from "../lib/key-issuance";
 import { DataTable, type DataTableColumn } from "./ui/data-table/data-table";
 import type { Facet } from "./ui/filter-bar/filter-bar";
 import { FilterToolbar } from "./templates/filter-toolbar";
@@ -31,7 +32,9 @@ import { useDashboardNavigation } from "./navigation-link";
 import s from "../pages/shared.module.css";
 export { Button, Input, NativeSelect, Textarea, FormField, Alert, Stack, Inline };
 export { StatCard } from "./ui/stat-card/stat-card";
-export function ErrorNotice({ error, retry }: { error: unknown; retry?: () => void }) { return <ErrorAlert error={error} title={error instanceof ApiError && error.status === 403 ? "Access denied" : error instanceof ApiError && error.status === 404 ? "Not found" : "Unable to complete request"} onRetry={retry} />; }
+/** A refused key creation or rotation (#253) is a named warning with the retry time, never a generic failure. */
+const refusalNotice = (error: unknown) => { const refusal = issuanceRefusal(error); return refusal ? { title: "Key issuance limit reached", message: refusal.message, tone: "warning" as const } : undefined; };
+export function ErrorNotice({ error, retry }: { error: unknown; retry?: () => void }) { return <ErrorAlert error={error} title={refusalNotice(error)?.title ?? (error instanceof ApiError && error.status === 403 ? "Access denied" : error instanceof ApiError && error.status === 404 ? "Not found" : "Unable to complete request")} describe={refusalNotice} onRetry={retry} />; }
 /** `titleAs` keeps heading order valid where the empty state follows the page h1 directly. */
 export function Empty({ title = "Nothing here yet", children, titleAs = "h3" }: { title?: string; children?: ReactNode; titleAs?: "h2" | "h3" | "p" }) { return <EmptyState title={title} description={children} titleAs={titleAs} />; }
 export function Badge({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "good" | "bad" }) { return <BitopBadge tone={tone === "good" ? "success" : tone === "bad" ? "danger" : "neutral"}>{children}</BitopBadge>; }
