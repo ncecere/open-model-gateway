@@ -1,6 +1,6 @@
 import { LegalHolds } from "./legal-holds";
 import { AuditExportSettingsPage } from "./settings/audit-export";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { abortRequests, api, ApiError, API, type AuthConfig, type Session, type Workspace } from "../lib/api";
@@ -142,8 +142,14 @@ export function DashboardContent({ session, search, workspace, navigate }: { ses
     default: return <PermissionNotice title="Page not found" />;
   }
 }
+type AccessState = { navigation: string | undefined; phase: "ready" | "checking" | "denied" | "ended"; automaticUsed: boolean };
+const nonSession = (query: { queryKey: readonly unknown[] }) => query.queryKey[0] !== "session";
 export function Home() {
-  const location = useLocation(), routerNavigate = useNavigate(), client = useQueryClient(), [ended, setEnded] = useState(false), [rechecking, setRechecking] = useState(false), [logoutError, setLogoutError] = useState<unknown>(), [loggingOut, setLoggingOut] = useState(false), [confirmLogout, setConfirmLogout] = useState(false), mounted = useRef(true);
+  const location = useLocation(), routerNavigate = useNavigate(), client = useQueryClient(), [ended, setEnded] = useState(false), [logoutError, setLogoutError] = useState<unknown>(), [loggingOut, setLoggingOut] = useState(false), [confirmLogout, setConfirmLogout] = useState(false), mounted = useRef(true);
+  const navigation = location.state.__TSR_key;
+  const access = useRef<AccessState>({ navigation, phase: "ready", automaticUsed: false });
+  const [accessView, setAccessView] = useState(access.current);
+  const accessPhase = accessView.navigation === navigation ? accessView.phase : "ready";
   const session = useQuery({ queryKey: ["session"], queryFn: ({ signal }) => api<Session>(`${API}/me`, { signal }), retry: false, refetchOnWindowFocus: true, staleTime: 0, enabled: !ended });
   // Public sign-in configuration (the installation logo), only needed while signed out.
   const signedOut = ended || session.isError;
@@ -154,12 +160,68 @@ export function Home() {
   const parsed = parseDashboardLocation(`${location.pathname}${query.size ? `?${query}` : ""}`);
   const search: DashboardSearch = session.data ? resolveDashboardSearch(parsed ?? { page: "overview" }, session.data) : { page: "overview" };
   const workspace = session.data?.workspaces.find(w => w.id === search.ws);
-  useEffect(() => { mounted.current = true; const onUnauthorized = () => { abortRequests(); void client.cancelQueries(); client.clear(); setEnded(true); };
-    const refreshAccess = async () => { setRechecking(true); abortRequests(); await client.cancelQueries({ predicate: q => q.queryKey[0] !== "session" }); client.removeQueries({ predicate: q => q.queryKey[0] !== "session" }); await session.refetch(); if (mounted.current) setRechecking(false); };
+  useLayoutEffect(() => {
+    if (access.current.navigation === navigation) return;
+    const previous = access.current;
+    const next: AccessState = { navigation, phase: previous.phase === "ended" ? "ended" : "ready", automaticUsed: false };
+    access.current = next;
+    // A new history entry (even at the same pathname) owns a fresh budget.
+    // Cancel the old revalidation before its response can update this entry.
+    if (previous.phase === "checking") void client.cancelQueries({ queryKey: ["session"], exact: true });
+    setAccessView(next);
+  }, [navigation, client]);
+  useEffect(() => {
+    mounted.current = true;
+    const onUnauthorized = () => {
+      if (access.current.phase === "ended") return;
+      const next: AccessState = { ...access.current, phase: "ended" };
+      access.current = next;
+      abortRequests(); void client.cancelQueries(); client.clear();
+      // Batch the render so every event listener can fence its live controls
+      // before React unmounts them; the authority/cache fences above are immediate.
+      setAccessView(next); setConfirmLogout(false); setEnded(true);
+    };
+    const refreshAccess = (event: Event) => {
+      const current = access.current;
+      if (current.phase === "ended") return;
+      const detail: unknown = event instanceof CustomEvent ? event.detail : undefined;
+      const automatic = !!detail && typeof detail === "object" && "cause" in detail && detail.cause === "forbidden";
+      // Other listeners still receive every refusal and retire their credentials.
+      // An already-hidden view shares the one pending probe, never cancels it.
+      if (automatic && current.phase === "checking") return;
+      const denied = automatic && current.automaticUsed;
+      // Each immutable state is an async ticket: only its own /me completion
+      // can reveal content. Fence it before abort/cancel completes older work.
+      // Repeated refusals in a denied shell must not remount even the shell.
+      const next: AccessState = denied && current.phase === "denied" ? current : { ...current, phase: denied ? "denied" : "checking", automaticUsed: current.automaticUsed || automatic };
+      access.current = next;
+      abortRequests();
+      const cancelled = client.cancelQueries();
+      client.removeQueries({ predicate: nonSession });
+      client.getMutationCache().clear();
+      if (next !== current) { setAccessView(next); setConfirmLogout(false); }
+      if (denied) return;
+      void (async () => {
+        await cancelled;
+        if (!mounted.current || access.current !== next) return;
+        await session.refetch();
+        if (!mounted.current || access.current !== next) return;
+        const ready: AccessState = { ...next, phase: "ready" };
+        access.current = ready; setAccessView(ready);
+      })();
+    };
     window.addEventListener("omg:unauthorized", onUnauthorized); window.addEventListener("omg:access-refresh", refreshAccess);
-    return () => { mounted.current = false; window.removeEventListener("omg:unauthorized", onUnauthorized); window.removeEventListener("omg:access-refresh", refreshAccess); };
+    return () => {
+      mounted.current = false;
+      access.current = { ...access.current }; // invalidate the captured async ticket
+      if (access.current.phase === "checking") void client.cancelQueries({ queryKey: ["session"], exact: true });
+      window.removeEventListener("omg:unauthorized", onUnauthorized); window.removeEventListener("omg:access-refresh", refreshAccess);
+    };
   }, [client, session.refetch]);
-  useEffect(() => { if (session.error instanceof ApiError && [401, 403].includes(session.error.status)) { abortRequests(); void client.cancelQueries(); client.clear(); setEnded(true); if (session.error.status === 403) setLogoutError(session.error); } }, [session.error, client]);
+  useEffect(() => { if (session.error instanceof ApiError && [401, 403].includes(session.error.status)) {
+    access.current = { ...access.current, phase: "ended" };
+    abortRequests(); void client.cancelQueries(); client.clear(); setEnded(true); if (session.error.status === 403) setLogoutError(session.error);
+  } }, [session.error, client]);
   useEffect(() => { if (identity.current && authorization && identity.current !== authorization) {
     const staleScope = (q: { queryKey: readonly unknown[] }) => q.queryKey[0] === "api" && q.queryKey[1] !== authorization;
     void client.cancelQueries({ predicate: staleScope }); client.removeQueries({ predicate: staleScope });
@@ -178,15 +240,16 @@ export function Home() {
   }, [session.data, location.pathname, location.search]);
   useEffect(() => { const heading = document.querySelector<HTMLElement>("#main h1"); if (heading) { heading.tabIndex = -1; heading.focus({ preventScroll: true }); } }, [location.pathname]);
   const logout = async (confirmed = false) => { if (loggingOut) return; if (!confirmed && document.querySelector('[data-dirty="true"]')) { setConfirmLogout(true); return; } setConfirmLogout(false); setLoggingOut(true); setLogoutError(undefined); const current = session.data;
+    access.current = { ...access.current, phase: "ended" };
     abortRequests(); await client.cancelQueries(); client.clear(); setEnded(true); if (current) { clearRememberedPortals(window.localStorage); try { clearRememberedPortals(window.sessionStorage); } catch { /* Storage is optional. */ } }
     try { await api(`${API}/auth/logout`, { method: "POST" }); try { window.sessionStorage.setItem(SIGNED_OUT, "1"); } catch { /* Storage is optional. */ } if (mounted.current) window.location.assign("/"); } catch (error) { if (mounted.current) { setLogoutError(error); setLoggingOut(false); } }
   };
   const callbackDenied = query.get("auth_error") === "access_denied" || new URLSearchParams(window.location.search).get("auth_error") === "access_denied";
-  if (ended) return <AuthRequired branding={branding.data} denied={callbackDenied} error={logoutError} refresh={() => { setEnded(false); void session.refetch(); }} />;
-  if (session.isPending || rechecking) return <main className={s.page}><p role="status">Checking current access…</p></main>;
+  if (ended) return <AuthRequired branding={branding.data} denied={callbackDenied} error={logoutError} refresh={() => { const next: AccessState = { navigation, phase: "ready", automaticUsed: false }; access.current = next; setAccessView(next); setEnded(false); void session.refetch(); }} />;
+  if (session.isPending || accessPhase === "checking") return <main className={s.page}><p role="status">Checking current access…</p></main>;
   if (session.isError || !session.data) return <AuthRequired branding={branding.data} denied={callbackDenied} error={session.error} refresh={() => void session.refetch()} />;
   const current = session.data;
   // The complete live authorization snapshot keys all content and dialogs. Revocation remounts the
   // scope, aborts transport, and drops query entries before another identity can inspect them.
-  return <ApiScopeProvider session={current}><DashboardNavigationProvider search={search} navigate={navigate}><CrumbProvider><ActionProvider key={`${authorization}:${location.pathname}`}><DashboardShell session={current} search={search} workspace={workspace} navigate={navigate} logout={() => void logout()} refresh={() => void session.refetch()}><DashboardContent key={`${location.pathname}:${workspace?.id ?? "platform"}`} session={current} search={search} workspace={workspace} navigate={navigate} /></DashboardShell><AlertDialog open={confirmLogout} onOpenChange={setConfirmLogout} title="Sign out without saving?" description="Unsaved changes and one-time credentials will be cleared. In-flight requests will be aborted." confirmLabel="Sign out" cancelLabel="Keep editing" onConfirm={() => void logout(true)} /></ActionProvider></CrumbProvider></DashboardNavigationProvider></ApiScopeProvider>;
+  return <ApiScopeProvider session={current}><DashboardNavigationProvider search={search} navigate={navigate}><CrumbProvider><ActionProvider key={`${authorization}:${location.pathname}:${accessPhase === "denied" ? "denied" : "ready"}`}><DashboardShell session={current} search={search} workspace={workspace} accessDenied={accessPhase === "denied"} navigate={navigate} logout={() => void logout()} refresh={() => window.dispatchEvent(new Event("omg:access-refresh"))}>{accessPhase === "denied" ? <PermissionNotice /> : <DashboardContent key={`${location.pathname}:${workspace?.id ?? "platform"}`} session={current} search={search} workspace={workspace} navigate={navigate} />}</DashboardShell><AlertDialog open={confirmLogout} onOpenChange={setConfirmLogout} title="Sign out without saving?" description="Unsaved changes and one-time credentials will be cleared. In-flight requests will be aborted." confirmLabel="Sign out" cancelLabel="Keep editing" onConfirm={() => void logout(true)} /></ActionProvider></CrumbProvider></DashboardNavigationProvider></ApiScopeProvider>;
 }
