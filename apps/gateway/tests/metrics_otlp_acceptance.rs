@@ -192,6 +192,16 @@ impl Drop for Collector {
     }
 }
 
+#[cfg(unix)]
+struct AbortOnDrop(JoinHandle<()>);
+
+#[cfg(unix)]
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 type Output = Arc<Mutex<Vec<u8>>>;
 
 fn drain(mut pipe: impl AsyncRead + Unpin + Send + 'static) -> (Output, JoinHandle<()>) {
@@ -681,7 +691,17 @@ struct Identity {
     arrived: tokio::time::Instant,
 }
 
-fn verify_receipt(receipt: Receipt, canaries: &[String], process_started_after: u64) -> Identity {
+enum LeaseRole {
+    Holder,
+    Standby,
+}
+
+fn verify_receipt(
+    receipt: Receipt,
+    canaries: &[String],
+    process_started_after: u64,
+    lease_role: LeaseRole,
+) -> Identity {
     assert_eq!(receipt.method, Method::POST);
     assert_eq!(receipt.uri.path(), "/v1/metrics");
     assert!(receipt.uri.query().is_none());
@@ -834,15 +854,47 @@ fn verify_receipt(receipt: Receipt, canaries: &[String], process_started_after: 
             }
         }
     }
-    for required in [
-        "gateway_db_pool_connections",
-        "gateway_db_pool_max_connections",
-        "gateway_otlp_metrics_pushes",
-        "gateway_otlp_metrics_dropped",
-        "gateway_otlp_metrics_rejected_points",
+    let mut expected_system: BTreeSet<_> = golden
+        .iter()
+        .filter_map(|(name, (_, _, class))| (*class == "System").then_some(*name))
+        .collect();
+    // These Families have no samples in a fresh, healthy serve process:
+    // audit export is unconfigured; loopback collector egress is allowed;
+    // no deadlocks or collection errors occur; the freshly migrated database
+    // has no completed hours due for rollup (nor inference history).
+    for dormant in [
+        "gateway_audit_export_deliveries",
+        "gateway_egress_denied",
+        "gateway_lock_deadlock_retries",
+        "gateway_metrics_collection_errors",
+        "gateway_usage_rollup_hours",
     ] {
-        assert!(names.contains(required), "missing required system family");
+        assert!(
+            expected_system.remove(dormant),
+            "dormant family must be System in golden"
+        );
     }
+    if matches!(lease_role, LeaseRole::Standby) {
+        // The URL-unset control starts first and holds every available work
+        // lease. Its enabled peer still reports leases_held=0, but has never
+        // acquired a term or run a singleton job (including partition coverage).
+        // The standalone shutdown fixture holds those leases and MUST emit
+        // these families; do not allow their absence for that process.
+        for lease_dependent in [
+            "gateway_background_runs",
+            "gateway_history_partition_months_ahead",
+            "gateway_work_lease_terms",
+        ] {
+            assert!(
+                expected_system.remove(lease_dependent),
+                "lease-dependent family must be System in golden"
+            );
+        }
+    }
+    assert_eq!(
+        names, expected_system,
+        "exact fresh-process System family set"
+    );
     let identity = Identity {
         instance,
         start: start.unwrap(),
@@ -991,11 +1043,11 @@ async fn refused_checkpoint(pool: PgPool) {
         // reserved for the whole test, so there is no ephemeral-port race.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/v1/metrics", listener.local_addr().unwrap());
-        let refused = tokio::spawn(async move {
+        let _refused = AbortOnDrop(tokio::spawn(async move {
             while let Ok((socket, _)) = listener.accept().await {
                 drop(socket);
             }
-        });
+        }));
         let mut gateway =
             Gateway::spawn_with_scrape(&fresh_child_url(&pool), &url, true, true).await;
         gateway.ready("refusing collector").await;
@@ -1003,7 +1055,6 @@ async fn refused_checkpoint(pool: PgPool) {
         gateway.assert_serving().await;
         gateway.terminate().await;
         gateway.assert_fixed_warning("transport", &url);
-        refused.abort();
     })
     .await
     .expect("bounded connection-refusal acceptance");
@@ -1023,8 +1074,18 @@ async fn final_snapshot_checkpoint(pool: PgPool) {
         let mut gateway = Gateway::spawn(&database_url, &collector.url, true).await;
         gateway.ready("healthy shutdown collector").await;
         collector.reply_allowed.send_replace(true);
-        let first = verify_receipt(collector.next().await, &canaries, not_before);
-        let second = verify_receipt(collector.next().await, &canaries, not_before);
+        let first = verify_receipt(
+            collector.next().await,
+            &canaries,
+            not_before,
+            LeaseRole::Holder,
+        );
+        let second = verify_receipt(
+            collector.next().await,
+            &canaries,
+            not_before,
+            LeaseRole::Holder,
+        );
         assert_eq!(first.instance, second.instance);
         assert!(second.accepted > first.accepted);
         gateway.terminate().await;
@@ -1032,7 +1093,8 @@ async fn final_snapshot_checkpoint(pool: PgPool) {
             .receipts
             .try_recv()
             .expect("exactly one final snapshot before process exit");
-        let final_snapshot = verify_receipt(final_receipt, &canaries, not_before);
+        let final_snapshot =
+            verify_receipt(final_receipt, &canaries, not_before, LeaseRole::Holder);
         assert_eq!(final_snapshot.instance, second.instance);
         assert_eq!(final_snapshot.start, second.start);
         assert!(final_snapshot.time > second.time);
@@ -1097,8 +1159,8 @@ async fn startup_and_periodic_checkpoint(pool: PgPool) {
                 enabled.ready("metrics enabled").await;
                 // Readiness has succeeded without any collector acknowledgement.
                 enabled_collector.reply_allowed.send_replace(true);
-                let first = verify_receipt(enabled_collector.next().await, &canaries, not_before);
-                let second = verify_receipt(enabled_collector.next().await, &canaries, not_before);
+                let first = verify_receipt(enabled_collector.next().await, &canaries, not_before, LeaseRole::Standby);
+                let second = verify_receipt(enabled_collector.next().await, &canaries, not_before, LeaseRole::Standby);
                 (first, second)
             } => receipts,
         };
