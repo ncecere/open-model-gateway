@@ -21,7 +21,7 @@ export function DeploymentStatusActions({ record, name }: { record: Record; name
 export function DeploymentReviewDialog({ record, name, retire = false, returnFocus, onClose }: { record: Record; name: string; retire?: boolean; returnFocus?: HTMLElement; onClose: () => void }) {
   const ask = useAction(), scope = useApiScope(), enabled = retire ? false : !record.enabled, confirming = useRef(false);
   const path = `${platformPath}/deployments/${encodeURIComponent(record.id)}`;
-  const q = useQuery({ queryKey: ["configuration-preview", scope, path, enabled], queryFn: ({ signal }) => api<DeploymentPreview>(`${path}/configuration/preview`, { method: "POST", body: { enabled }, signal }), retry: false, staleTime: 0, gcTime: 0, refetchOnMount: "always", refetchOnWindowFocus: false });
+  const q = useQuery({ queryKey: ["api", scope, `${path}/configuration/preview`, enabled], queryFn: ({ signal }) => api<DeploymentPreview>(`${path}/configuration/preview`, { method: "POST", body: { enabled }, signal }), retry: false, staleTime: 0, gcTime: 0, refetchOnMount: "always", refetchOnWindowFocus: false });
   const mismatch = q.data && (q.data.target.kind !== "deployment" || q.data.target.id !== record.id);
   const preview = !q.isError && !q.isFetching && !mismatch ? q.data : undefined;
   const confirm = () => {
