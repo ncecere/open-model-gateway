@@ -71,7 +71,7 @@ describe("Usage & costs › Holds tab", () => {
     expect(text).toContain("not an upper bound"); expect(text).toContain("Nothing is refunded"); expect(text).toContain("Everyone in Product");
     expect(screen.queryByRole("button", { name: /Reconcile/ })).toBeNull();
     // Totals: exact decimal strings and counts, never summed with spend.
-    expect(text).toContain("At least $9,007,199,254.740993"); expect(text).toContain("8 days 8 hours");
+    expect(text).toContain("Known floor (at least)"); expect(within(screen.getByRole("group", { name: "Aged unknown hold totals" })).getByText("$9,007,199,254.740993")).toBeTruthy(); expect(text).toContain("8 days 8 hours");
     client.clear();
   });
 

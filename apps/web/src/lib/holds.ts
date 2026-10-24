@@ -28,6 +28,8 @@ export const holdsUnavailable = (error: unknown) => error instanceof ApiError &&
 
 const exact = (value: string | null | undefined): value is string => typeof value === "string" && value.length <= 128 && /^\d+$/.test(value);
 /** "At least $1.500000": the retained floor, exact to the micro-USD. Null or malformed is "No floor known", never zero. */
+/** The bare exact amount (for a tile already labelled "at least"), or "No floor known". */
+export const floorAmount = (value: string | null | undefined) => exact(value) ? formatMicroUsd(value) : "No floor known";
 export const floorText = (value: string | null | undefined) => exact(value) ? `At least ${formatMicroUsd(value)}` : "No floor known";
 const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"}`;
 /** Whole hours as "1 day 2 hours". */

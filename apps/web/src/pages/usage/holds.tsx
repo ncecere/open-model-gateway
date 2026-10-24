@@ -12,7 +12,7 @@ import { useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { api, platformPath, wsPath, type Session, type Workspace } from "../../lib/api";
 import type { BillingUsage } from "../../lib/governance";
-import { ageText, canReconcileHold, floorText, holdRequestLink, holdsPath, holdsQuery, holdsScopeText, holdsUnavailable, mergeHoldPages, reasonText, type HoldRow, type HoldsPage, type HoldTotals } from "../../lib/holds";
+import { ageText, canReconcileHold, floorAmount, floorText, holdRequestLink, holdsPath, holdsQuery, holdsScopeText, holdsUnavailable, mergeHoldPages, reasonText, type HoldRow, type HoldsPage, type HoldTotals } from "../../lib/holds";
 import { formatCount } from "../../lib/reports";
 import type { RequestDetail } from "../../lib/requests";
 import { workloadLabels } from "../../lib/usage";
@@ -37,7 +37,7 @@ const kindLabel = (kind: string) => kind === "project" ? "Project" : kind === "t
 function Totals({ totals }: { totals: HoldTotals }) {
   return <StatTileGrid label="Aged unknown hold totals" columns={4}>
     <StatTile label="Aged unknown holds" value={formatCount(totals.count)} />
-    <StatTile label="Known floor" value={floorText(totals.known_floor_microusd)} hint="Adds only holds with a known floor. Not an upper bound, and never added to spend." />
+    <StatTile label="Known floor (at least)" value={floorAmount(totals.known_floor_microusd)} hint="Adds only holds with a known floor. Not an upper bound, and never added to spend." />
     <StatTile label="Unbounded" value={formatCount(totals.unbounded_count)} hint="Holds with no known upper limit." />
     <StatTile label="Oldest" value={ageText(totals.oldest_age_hours)} />
   </StatTileGrid>;
@@ -47,7 +47,7 @@ function Totals({ totals }: { totals: HoldTotals }) {
 function PersonalAggregate({ totals }: { totals: HoldTotals }) {
   const none = totals.count === "0";
   return <div role="group" aria-label="Personal workspaces, combined" className={u.personal}>
-    <h3 className={u.personalTitle}>Personal workspaces, combined</h3>
+    <h2 className={u.personalTitle}>Personal workspaces, combined</h2>
     {none ? <p className={u.personalFacts}>None</p> : <p className={u.personalFacts}>
       <span>{formatCount(totals.count)} {totals.count === "1" ? "hold" : "holds"}</span>
       <span>{floorText(totals.known_floor_microusd)}</span>

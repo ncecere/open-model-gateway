@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "./api";
-import { agedHoldLink, ageText, canReconcileHold, floorText, holdRequestLink, holdsPath, holdsQuery, holdsScopeText, holdsUnavailable, mergeHoldPages, reasonText, type HoldRow, type HoldsPage } from "./holds";
+import { agedHoldLink, ageText, canReconcileHold, floorAmount, floorText, holdRequestLink, holdsPath, holdsQuery, holdsScopeText, holdsUnavailable, mergeHoldPages, reasonText, type HoldRow, type HoldsPage } from "./holds";
 import { admin, auditor, member, personal, session, team } from "./test-fixtures";
 
 const row = (patch: Partial<HoldRow> = {}): HoldRow => ({ execution_id: "e1", root_request_id: "r1", workspace: { id: "team", name: "Product", kind: "team" }, public_model: "company/smart", provider: "openai", workload_kind: "generation", unknown_since: "2026-10-01T00:00:00Z", age_hours: 30, held_microusd: "1500", unbounded_cost: false, unresolved_reason: "missing_billing_usage", can_reconcile: false, ...patch });
@@ -19,6 +19,10 @@ describe("hold floors", () => {
   it("treats a null or malformed floor as no known floor, never zero", () => {
     for (const bad of [null, undefined, "", "abc", "1.5", "-3", "1e9", "9".repeat(129)]) expect(floorText(bad)).toBe("No floor known");
   });
+});
+
+describe("hold floor amounts", () => {
+  it("gives the bare exact amount for a tile labelled at least, else no floor", () => { expect(floorAmount("9007199254740993")).toBe("$9,007,199,254.740993"); expect(floorAmount("1500")).toBe("$0.0015"); expect(floorAmount(null)).toBe("No floor known"); expect(floorAmount("1.5")).toBe("No floor known"); });
 });
 
 describe("hold age", () => {
