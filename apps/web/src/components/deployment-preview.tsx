@@ -33,7 +33,7 @@ export function DeploymentReviewDialog({ record, name, retire = false, returnFoc
     // ActionProvider has already invalidated these queries. Join its in-flight
     // refetches without cancelling/restarting them, then resolve the stable id
     // after the refreshed render (headers and regrouped rows can remount).
-    void client.refetchQueries({ queryKey: ["api", scope], type: "active" }, { cancelRefetch: false }).then(() => {
+    void client.refetchQueries({ queryKey: ["api", scope], type: "active", fetchStatus: "fetching" }, { cancelRefetch: false }).then(() => {
       requestAnimationFrame(() => {
         const active = document.activeElement;
         // Do not steal focus if the user moved on while the refresh was pending.

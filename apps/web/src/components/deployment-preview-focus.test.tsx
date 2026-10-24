@@ -38,6 +38,10 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
+// The menu moves focus into its popup after opening; keyboard navigation sent
+// before that lands on the trigger and is lost (flaky under load).
+const menuFocused = () => waitFor(() => expect(document.activeElement?.closest('[role="menu"]')).not.toBeNull());
+
 describe("menu-originated deployment review focus", () => {
   for (const source of ["retire", "narrow-retire", "review-disable", "review-enable", "route-menu", "route-menu-enable"] as const) {
     it.each(["review-cancel", "cancel", "success"] as const)(`${source}: %s restores a connected trigger or fallback`, async outcome => {
@@ -67,6 +71,7 @@ describe("menu-originated deployment review focus", () => {
       await user.keyboard("{Enter}");
       if (!reviewButton) {
         await screen.findByRole("menuitem", { name: routeMenu ? initiallyEnabled ? /^Disable route…$/ : /^Enable route…$/ : /^Retire resource…$/ });
+        await menuFocused();
         await user.keyboard("{End}{Enter}");
       }
       await screen.findByText(initiallyEnabled ? "Enabled → Disabled" : "Disabled → Enabled");
@@ -114,6 +119,7 @@ describe("menu-originated deployment review focus", () => {
     screen.getByRole("button", { name: /^More actions$/ }).focus();
     await user.keyboard("{Enter}");
     expect((await screen.findAllByRole("menuitem")).map(i => i.textContent)).toEqual(["Other action", "Retire resource…"]);
+    await menuFocused();
     await user.keyboard("{Home}{Enter}");
     expect(other).toHaveBeenCalledOnce();
   });
