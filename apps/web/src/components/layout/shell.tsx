@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Boxes, LayoutDashboard, Shield, LogOut, UserRound, RefreshCw, House, PanelLeft } from "lucide-react";
 import type { Session, Workspace } from "../../lib/api";
 import { authorityLabel } from "../../lib/access";
-import { canAdminister, type DashboardSearch, type Page } from "../../lib/permissions";
+import { canAdminister, canView, type DashboardSearch, type Page } from "../../lib/permissions";
 import { navigation, navParents, hiddenPages, activeAdminGroup, adminGroups, contextOptions, isAdminPage, personalWorkspace, rememberedPortal, rememberedWorkspace, rememberPortal, rememberWorkspace, scopeSearch, workspaceSections } from "../../lib/navigation";
 import { ResourceLink } from "../navigation-link";
 import { AppShell, Sidebar, SidebarHeader, SidebarContent, SidebarFooter, SidebarNav, SidebarSection, SidebarItem, SidebarModeSwitch, SidebarUser, Brand, WorkspaceSwitcher, TopBar, Main, useAppShell } from "../ui/app-shell/app-shell";
@@ -66,7 +66,7 @@ export function DashboardShell({ session, search, workspace, navigate, refresh, 
     <MenuLinkItem render={<ResourceLink search={{ page: "home" }} />} icon={<House aria-hidden />}>Home</MenuLinkItem>
   </WorkspaceSwitcher>;
   const nav = admin
-    ? adminGroups(page).map(group => <SidebarSection key={group} label={group || undefined} collapsible={!!group} open={group ? groups.isOpen(group) : undefined} onOpenChange={group ? open => groups.setOpen(group, open) : undefined}>{navigation.filter(n => n.group === group).map(item => <SidebarItem key={item.page} label={item.label} icon={<item.icon aria-hidden />} current={navParent === item.page} render={<ResourceLink search={{ page: item.page }} />} />)}</SidebarSection>)
+    ? adminGroups(page).map(group => <SidebarSection key={group} label={group || undefined} collapsible={!!group} open={group ? groups.isOpen(group) : undefined} onOpenChange={group ? open => groups.setOpen(group, open) : undefined}>{navigation.filter(n => n.group === group && canView(n.page, session)).map(item => <SidebarItem key={item.page} label={item.label} icon={<item.icon aria-hidden />} current={navParent === item.page} render={<ResourceLink search={{ page: item.page }} />} />)}</SidebarSection>)
     : workspaceSections(session, active).map(section => <SidebarSection key={section.id} label={section.label}>{section.items.map(item => <SidebarItem key={item.page} label={item.label} icon={<item.icon aria-hidden />} current={navParent === item.page} render={<ResourceLink search={scopeSearch(item.page, active?.id)} />} />)}</SidebarSection>);
   const sidebar = <Sidebar label={admin ? "Admin sidebar" : "Workspace sidebar"}><SidebarHeader><Brand name={session.installation.name} logo={<InstallationLogo logo={session.installation.logo} alt="" />} render={<ResourceLink search={{ page: "home" }} />} />{canAdminister(session) && <SidebarModeSwitch label="Portal" items={[{ label: "Workspace", icon: <LayoutDashboard aria-hidden />, current: !admin, render: <ResourceLink search={{ page: "home" }} /> }, { label: "Admin", icon: <Shield aria-hidden />, current: admin, render: <ResourceLink search={portal(session, "admin") ?? { page: "platform-overview" }} /> }]} />}{admin ? <AdminHeader readonly={readonly} /> : switcher}</SidebarHeader>
     <SidebarContent><SidebarNav aria-label="Main">{nav}</SidebarNav></SidebarContent>
