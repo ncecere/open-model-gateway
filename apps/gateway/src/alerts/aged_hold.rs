@@ -28,6 +28,9 @@ pub(crate) fn aged_hold_visible(viewer: &str) -> String {
     )
 }
 
+type AgedHoldCandidate = (String, Option<Uuid>, DateTime<Utc>);
+type AgedHoldRetirement = (Uuid, String);
+
 /// One serialized/fenced job. All time comes from the post-lock database
 /// clock supplied by evaluate_once_fenced. The maintained lifetime counts
 /// gate candidate probing; retirement is independent so disabled/cleared
@@ -43,28 +46,46 @@ pub(crate) async fn aged_hold_tick(
     let critical = scope_exists("168", "$1");
     // No step-down: a critical incident stays open while ANY 24h hold is
     // present. Silent supersede/clear, exactly like key-expiry retirement.
-    let retired = sqlx::query(&format!("WITH decided AS (SELECT e.id,e.fired_at,CASE WHEN NOT ({aged}) THEN 'cleared' WHEN e.level=1 AND ({critical}) THEN 'superseded' END resolution FROM alert_events e WHERE e.kind='aged_unknown_hold' AND e.resolved_at IS NULL), obsolete AS (SELECT id,resolution FROM decided WHERE resolution IS NOT NULL ORDER BY fired_at,id LIMIT $2) UPDATE alert_events e SET resolved_at=clock_timestamp(),resolution=o.resolution FROM obsolete o WHERE e.id=o.id"))
-        .bind(now).bind(RETIRE_PER_TICK).execute(&mut **tx).await?.rows_affected();
-    let mut changes = Changes {
-        resolved: retired as usize,
-        ..Changes::default()
+    // Decide retirements without writing yet: all candidate bucket locks
+    // must precede even the incident UPDATEs in this multi-bucket job.
+    let retirements: Vec<AgedHoldRetirement> = sqlx::query_as(&format!("WITH decided AS (SELECT e.id,e.fired_at,CASE WHEN NOT ({aged}) THEN 'cleared' WHEN e.level=1 AND ({critical}) THEN 'superseded' END resolution FROM alert_events e WHERE e.kind='aged_unknown_hold' AND e.resolved_at IS NULL) SELECT id,resolution FROM decided WHERE resolution IS NOT NULL ORDER BY fired_at,id LIMIT $2"))
+        .bind(now).bind(RETIRE_PER_TICK).fetch_all(&mut **tx).await?;
+    let retired_ids: Vec<Uuid> = retirements.iter().map(|r| r.0).collect();
+    let allowance = if unknown == 0 {
+        0
+    } else {
+        let recent: i64 = sqlx::query_scalar("SELECT count(*) FROM alert_events WHERE kind='aged_unknown_hold' AND fired_at>$1-interval '24 hours'")
+            .bind(now).fetch_one(&mut **tx).await?;
+        FIRE_PER_TICK.min((FIRE_PER_DAY - recent).max(0))
     };
-    if unknown == 0 {
-        return Ok(changes);
-    }
-    let recent: i64 = sqlx::query_scalar("SELECT count(*) FROM alert_events WHERE kind='aged_unknown_hold' AND fired_at>$1-interval '24 hours'")
-        .bind(now).fetch_one(&mut **tx).await?;
-    let allowance = FIRE_PER_TICK.min((FIRE_PER_DAY - recent).max(0));
-    if allowance == 0 {
-        return Ok(changes);
-    }
     // Probe only workspaces with maintained unknown>0. Each lateral lookup
     // uses workspace/admitted_at and the sound admission cutoff, and prunes
     // both reservation and ledger partitions. No global reservation scan.
     // Aggregating personal candidates erases every workspace identity before
     // constructing an incident. Oldest first, stable subject tie-break.
-    let candidates: Vec<(String, Option<Uuid>, DateTime<Utc>)> = sqlx::query_as("WITH candidates AS (SELECT CASE WHEN w.kind='personal' THEN 'personal' ELSE 'workspace:'||w.id END subject, CASE WHEN w.kind='personal' THEN NULL ELSE w.id END workspace_id, first.unknown_since FROM budget_totals t JOIN workspaces w ON w.id=t.scope_id CROSS JOIN LATERAL (SELECT coalesce(l.created_at,r.admitted_at) unknown_since FROM governance_reservations r LEFT JOIN monetary_ledger l ON l.execution_id=r.execution_id AND l.admitted_at=r.admitted_at AND l.kind='unknown' WHERE r.workspace_id=w.id AND r.state='unknown' AND r.admitted_at<=$1-interval '24 hours' AND coalesce(l.created_at,r.admitted_at)<=$1-interval '24 hours' ORDER BY 1,r.execution_id LIMIT 1) first WHERE t.scope_kind='workspace' AND t.period='lifetime' AND t.period_start='epoch' AND t.unknown>0 AND w.disabled_at IS NULL), scopes AS (SELECT subject,workspace_id,min(unknown_since) unknown_since FROM candidates GROUP BY subject,workspace_id) SELECT subject,workspace_id,unknown_since FROM scopes s WHERE NOT EXISTS(SELECT 1 FROM alert_events e WHERE e.kind='aged_unknown_hold' AND e.subject_key=s.subject AND (e.resolved_at IS NULL OR e.fired_at>$1-interval '24 hours')) ORDER BY unknown_since,subject LIMIT $2")
-        .bind(now).bind(allowance).fetch_all(&mut **tx).await?;
+    // Ignore only the selected retirements for open-incident dedup; their
+    // fired_at still counts for cooldown. This preserves escalation and
+    // the 500-retirement cap while probing candidates before any writes.
+    let candidates: Vec<AgedHoldCandidate> = if allowance > 0 {
+        sqlx::query_as("WITH candidates AS (SELECT CASE WHEN w.kind='personal' THEN 'personal' ELSE 'workspace:'||w.id END subject, CASE WHEN w.kind='personal' THEN NULL ELSE w.id END workspace_id, first.unknown_since FROM budget_totals t JOIN workspaces w ON w.id=t.scope_id CROSS JOIN LATERAL (SELECT coalesce(l.created_at,r.admitted_at) unknown_since FROM governance_reservations r LEFT JOIN monetary_ledger l ON l.execution_id=r.execution_id AND l.admitted_at=r.admitted_at AND l.kind='unknown' WHERE r.workspace_id=w.id AND r.state='unknown' AND r.admitted_at<=$1-interval '24 hours' AND coalesce(l.created_at,r.admitted_at)<=$1-interval '24 hours' ORDER BY 1,r.execution_id LIMIT 1) first WHERE t.scope_kind='workspace' AND t.period='lifetime' AND t.period_start='epoch' AND t.unknown>0 AND w.disabled_at IS NULL), scopes AS (SELECT subject,workspace_id,min(unknown_since) unknown_since FROM candidates GROUP BY subject,workspace_id) SELECT subject,workspace_id,unknown_since FROM scopes s WHERE NOT EXISTS(SELECT 1 FROM alert_events e WHERE e.kind='aged_unknown_hold' AND e.subject_key=s.subject AND ((e.resolved_at IS NULL AND NOT(e.id=ANY($3::uuid[]))) OR e.fired_at>$1-interval '24 hours')) ORDER BY unknown_since,subject LIMIT $2")
+            .bind(now).bind(allowance).bind(&retired_ids).fetch_all(&mut **tx).await?
+    } else {
+        Vec::new()
+    };
+    let buckets: Vec<Uuid> = candidates
+        .iter()
+        .map(|c| c.1.unwrap_or(Uuid::nil()))
+        .collect();
+    lock_delivery_buckets(tx, &buckets).await?;
+    // Retirement stays silent and still runs when no fires are allowed.
+    // It must precede inserts so escalations can claim the open subject.
+    let resolutions: Vec<&str> = retirements.iter().map(|r| r.1.as_str()).collect();
+    let retired = sqlx::query("UPDATE alert_events e SET resolved_at=clock_timestamp(),resolution=o.resolution FROM unnest($1::uuid[],$2::text[]) o(id,resolution) WHERE e.id=o.id AND e.resolved_at IS NULL")
+        .bind(&retired_ids).bind(resolutions).execute(&mut **tx).await?.rows_affected();
+    let mut changes = Changes {
+        resolved: retired as usize,
+        ..Changes::default()
+    };
     for (subject, workspace, since) in candidates {
         let critical = since <= now - TimeDelta::hours(AGED_HOLD_CRITICAL_HOURS);
         let hours = if critical {

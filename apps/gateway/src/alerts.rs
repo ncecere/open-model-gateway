@@ -900,8 +900,8 @@ pub struct Changes {
 
 /// Prelock the complete bucket union before any incident row locks/writes.
 /// SQL sorts actual signed advisory keys (UUID order is not lock-key order).
-/// Multi-bucket producers added later (including aged-hold evaluation) must
-/// use this before their first delivery, not incrementally per condition.
+/// All multi-bucket producers (rules, key expiry and aged holds) use this
+/// before incident writes, never incrementally per condition.
 pub(crate) async fn lock_delivery_buckets(
     tx: &mut Transaction<'_, Postgres>,
     buckets: &[Uuid],
