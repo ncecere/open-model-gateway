@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "./api";
-import { composeLimits, draftErrors, draftLimits, draftOf, hasErrors, limitsBody, limitsOf, limitsSaveError, limitsSummary, lockedBudget, mergeErrors, noLimits, policyBudgets, policyRejection, rateRows, rejectionErrors, resetText, type Limits, type LimitsDraft } from "./limits";
+import { composeLimits, draftErrors, draftLimits, draftLimitsValid, draftOf, hasErrors, inheritIssuance, issuanceRows, limitsBody, limitsOf, limitsSaveError, limitsSummary, lockedBudget, mergeErrors, noLimits, policyBudgets, policyRejection, rateRows, rejectionErrors, resetText, sameDraft, type Limits, type LimitsDraft } from "./limits";
 
 const base = { requests_per_minute: null, tokens_per_minute: null, concurrent_requests: null, monthly_budget_microusd: null };
 const limits = (patch: Partial<Limits>): Limits => ({ ...noLimits, ...patch });
@@ -101,5 +101,70 @@ describe("jobs at once", () => {
     expect(limitsBody(draftLimits({ ...d, concurrent_jobs: "1" })).concurrent_jobs).toBe(1);
     const reject = new ApiError(400, "400", "server text", "exceeds_parent_rate", { limit: "concurrent_jobs" });
     expect(policyRejection(reject)).toEqual({ rate: "concurrent_jobs", message: "Jobs at once is higher than an inherited limit. Lower it to at most the inherited value." });
+  });
+});
+
+describe("key issuance limits (#253)", () => {
+  const issued = (patch: Partial<Limits> = {}) => limits({ key_issuances_per_holder: 50, key_issuances_per_workspace: 500, ...patch });
+  it("lists the two workspace-layer rows and reads them from the server; older gateways read as absent", () => {
+    expect(issuanceRows.map(r => r.key)).toEqual(["key_issuances_per_holder", "key_issuances_per_workspace"]);
+    expect(issuanceRows.map(r => r.label)).toEqual(["Keys per person per 24 h", "Keys per workspace per 24 h"]);
+    expect(limitsOf({ ...base, key_issuances_per_holder: 50, key_issuances_per_workspace: null }).key_issuances_per_holder).toBe(50);
+    expect(limitsOf({ ...base, key_issuances_per_holder: 50, key_issuances_per_workspace: null }).key_issuances_per_workspace).toBeNull();
+    expect(limitsOf(base).key_issuances_per_holder).toBeUndefined();
+  });
+  it("composes by minimum, and leaves the fields absent when no layer has them", () => {
+    const c = composeLimits(issued(), issued({ key_issuances_per_holder: 5, key_issuances_per_workspace: null }), limits({}));
+    expect([c.key_issuances_per_holder, c.key_issuances_per_workspace]).toEqual([5, 500]);
+    expect(composeLimits(limits({}), limits({})).key_issuances_per_holder).toBeUndefined();
+  });
+  it("is sent only for workspace layers, null when blank, and round-trips through the draft", () => {
+    const d = draftOf(issued());
+    expect(d.key_issuances_per_holder).toBe("50");
+    expect(draftLimits({ ...d, key_issuances_per_holder: "7", key_issuances_per_workspace: "" })).toMatchObject({ key_issuances_per_holder: 7, key_issuances_per_workspace: null });
+    expect(limitsBody(draftLimits(d), true)).toMatchObject({ key_issuances_per_holder: 50, key_issuances_per_workspace: 500 });
+    expect(limitsBody(draftLimits({ ...d, key_issuances_per_workspace: "" }), true).key_issuances_per_workspace).toBeNull();
+    expect(limitsBody(draftLimits(d))).not.toHaveProperty("key_issuances_per_holder");
+    expect(sameDraft(d, { ...d, key_issuances_per_holder: "51" })).toBe(false);
+    expect(sameDraft(d, { ...d })).toBe(true);
+  });
+  it("validates 1 to 10000, tighten-only against parents and saved caps", () => {
+    const d = draftOf(issued());
+    for (const bad of ["0", "-1", "10001", "1.5", "abc"]) expect(draftErrors({ ...d, key_issuances_per_holder: bad }, "free").issuance?.key_issuances_per_holder, bad).toBeDefined();
+    expect(draftErrors({ ...d, key_issuances_per_holder: "10000", key_issuances_per_workspace: "" }, "free").issuance).toBeUndefined();
+    expect(hasErrors(draftErrors({ ...d, key_issuances_per_holder: "10001" }, "free"))).toBe(true);
+    const parents = [{ label: "platform", limits: issued() }];
+    expect(draftErrors({ ...d, key_issuances_per_holder: "51" }, "tighten", parents).issuance?.key_issuances_per_holder).toBe("Can't be higher than the platform limit (50).");
+    expect(draftErrors({ ...d, key_issuances_per_workspace: "501" }, "tighten", parents).issuance?.key_issuances_per_workspace).toContain("platform limit (500)");
+    expect(draftErrors({ ...d, key_issuances_per_holder: "10" }, "tighten", parents).issuance).toBeUndefined();
+    const stored = issued({ key_issuances_per_holder: 5 });
+    expect(draftErrors({ ...d, key_issuances_per_holder: "6" }, "tighten", [], stored).issuance?.key_issuances_per_holder).toBe("A saved limit can only be lowered (now 5).");
+    expect(draftErrors({ ...d, key_issuances_per_holder: "" }, "tighten", [], stored).issuance?.key_issuances_per_holder).toBe("A saved limit can't be removed here, only lowered (now 5).");
+    expect(draftErrors({ ...d, key_issuances_per_holder: "4" }, "tighten", [], stored).issuance).toBeUndefined();
+  });
+  it("previews the valid part and marks rows with errors", () => {
+    const d = { ...draftOf(issued()), key_issuances_per_holder: "10001" };
+    const v = draftLimitsValid(d, draftErrors(d, "free"));
+    expect(v.invalid.issuance).toEqual(["key_issuances_per_holder"]);
+    expect(v.limits.key_issuances_per_holder).toBeNull();
+    expect(v.limits.key_issuances_per_workspace).toBe(500);
+  });
+  it("summarises and places server rejections on the issuance row", () => {
+    expect(limitsSummary(issued({ key_issuances_per_holder: 5 }))).toBe("5 keys per person per 24 h · 500 keys per workspace per 24 h");
+    expect(limitsSummary(limits({ key_issuances_per_workspace: 1 }))).toBe("1 key per workspace per 24 h");
+    const reject = (status: number, reason: string, limit: string) => new ApiError(status, String(status), "server text", reason, { limit });
+    const d = draftOf(issued());
+    expect(rejectionErrors(reject(400, "exceeds_parent_rate", "key_issuances_per_holder"), d)!.issuance).toEqual({ key_issuances_per_holder: "Keys per person per 24 h is higher than an inherited limit. Lower it to at most the inherited value." });
+    expect(rejectionErrors(reject(403, "stored_rate_loosen_not_allowed", "key_issuances_per_workspace"), d)!.issuance).toEqual({ key_issuances_per_workspace: "The saved keys per workspace per 24 h limit can only be lowered, never raised or removed." });
+    expect(mergeErrors({ rates: {}, budgets: {}, form: [], issuance: { key_issuances_per_holder: "client" } }, rejectionErrors(reject(400, "exceeds_parent_rate", "key_issuances_per_holder"), d))!.issuance?.key_issuances_per_holder).toBe("client");
+  });
+  it("fills empty issuance fields of an override from the type default for previews, and never the other way", () => {
+    const typeDefault = issued();
+    const layer = limits({ key_issuances_per_holder: null, key_issuances_per_workspace: 20 });
+    expect(inheritIssuance(layer, typeDefault)).toMatchObject({ key_issuances_per_holder: 50, key_issuances_per_workspace: 20 });
+    expect(inheritIssuance(layer, undefined)).toEqual(layer);
+    // Older gateways: nothing is invented.
+    expect(inheritIssuance(limits({}), limits({})).key_issuances_per_holder).toBeUndefined();
+    expect(composeLimits(inheritIssuance(layer, typeDefault), issued({ key_issuances_per_holder: 5 })).key_issuances_per_holder).toBe(5);
   });
 });

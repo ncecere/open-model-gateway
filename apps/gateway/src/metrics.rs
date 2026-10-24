@@ -204,6 +204,7 @@ pub struct Metrics {
     config_changes: Family<L1, Counter>,
     config_poll_failures: Counter,
     auth_throttled: Family<L2, Counter>,
+    key_issuance_refused: Family<L2, Counter>,
     egress_denied: Family<L1, Counter>,
     audit_export_deliveries: Family<L1, Counter>,
     audit_export_rejected_records: Counter,
@@ -354,6 +355,7 @@ impl Metrics {
             config_changes: Family::default(),
             config_poll_failures: Counter::default(),
             auth_throttled: Family::default(),
+            key_issuance_refused: Family::default(),
             egress_denied: Family::default(),
             audit_export_deliveries: Family::default(),
             audit_export_rejected_records: Counter::default(),
@@ -592,6 +594,11 @@ impl Metrics {
             metrics.auth_throttled.clone(),
         );
         registry.register(
+            "key_issuance_refused",
+            "API key creations and rotations refused by the issuance budget (#253), by scope (holder, workspace) and operation (create, rotate). No workspace or user identifiers",
+            metrics.key_issuance_refused.clone(),
+        );
+        registry.register(
             "config_poll_failures",
             "Failed configuration version polls (caches are bypassed after 3 s without a successful poll)",
             metrics.config_poll_failures.clone(),
@@ -750,6 +757,25 @@ impl Metrics {
             .get_or_create(&[
                 ("endpoint", endpoint.to_owned()),
                 ("reason", reason.to_owned()),
+            ])
+            .get()
+    }
+
+    pub(crate) fn key_issuance_refused(&self, scope: &'static str, operation: &'static str) {
+        self.key_issuance_refused
+            .get_or_create(&[
+                ("scope", scope.to_owned()),
+                ("operation", operation.to_owned()),
+            ])
+            .inc();
+    }
+
+    /// Issuance refusals so far for one scope and operation (tests).
+    pub fn key_issuance_refused_count(&self, scope: &str, operation: &str) -> u64 {
+        self.key_issuance_refused
+            .get_or_create(&[
+                ("scope", scope.to_owned()),
+                ("operation", operation.to_owned()),
             ])
             .get()
     }

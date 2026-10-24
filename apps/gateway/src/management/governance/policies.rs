@@ -30,6 +30,13 @@ pub(super) struct Policy {
     /// null clears it (tighten-only rules still apply).
     #[serde(default, deserialize_with = "supplied")]
     storage_bytes: Option<Option<i64>>,
+    /// Key issuance budgets per rolling 24 hours (0053): one holder's, and the
+    /// workspace's. Workspace layers only, like `storage_bytes`: absent keeps
+    /// the stored value; explicit null clears it (tighten-only rules apply).
+    #[serde(default, deserialize_with = "supplied")]
+    key_issuances_per_holder: Option<Option<i64>>,
+    #[serde(default, deserialize_with = "supplied")]
+    key_issuances_per_workspace: Option<Option<i64>>,
     /// Deprecated single budget (amount per `budget_period`). Required unless
     /// `budgets` is supplied; then it must be absent.
     #[serde(default, deserialize_with = "supplied")]
@@ -64,9 +71,16 @@ pub(crate) struct Limits {
     pub(crate) concurrent_jobs: Option<i64>,
     /// File store quota in bytes (workspace layers only; never key layers).
     pub(crate) storage_bytes: Option<i64>,
+    /// Key creations and rotations one holder may make in a rolling 24 hours
+    /// (workspace layers only; never key layers).
+    pub(crate) key_issuances_per_holder: Option<i64>,
+    /// Key creations and rotations a workspace may make in a rolling 24 hours.
+    pub(crate) key_issuances_per_workspace: Option<i64>,
     pub(crate) budgets: Budgets,
 }
 type Row = (
+    Option<i64>,
+    Option<i64>,
     Option<i64>,
     Option<i64>,
     Option<i64>,
@@ -76,21 +90,28 @@ type Row = (
 const COLS: &str = "requests_per_minute,tokens_per_minute,concurrent_requests,concurrent_jobs";
 /// Largest storage quota (1 PiB); rate limits stay within i32.
 const MAX_STORAGE_BYTES: i64 = 1 << 50;
-/// The storage column of a layer table: real on workspace layers, NULL elsewhere.
-fn storage_col(scope: &Scope) -> &'static str {
+/// Ceiling (and the value of a missing platform limit) of a key issuance budget.
+pub(crate) const MAX_KEY_ISSUANCES: i64 = 10_000;
+/// The workspace-only columns of a layer table (storage and the key issuance
+/// budgets): real on workspace layers, NULL elsewhere.
+fn workspace_cols(scope: &Scope) -> &'static str {
     match scope {
-        Scope::Type(_) | Scope::Override(_) | Scope::Local(_) => "storage_bytes",
-        Scope::Key(..) => "NULL::bigint",
+        Scope::Type(_) | Scope::Override(_) | Scope::Local(_) => {
+            "storage_bytes,key_issuances_per_holder,key_issuances_per_workspace"
+        }
+        Scope::Key(..) => "NULL::bigint,NULL::bigint,NULL::bigint",
     }
 }
 impl Limits {
-    fn rates(&self) -> [Option<i64>; 5] {
+    fn rates(&self) -> [Option<i64>; 7] {
         [
             self.requests_per_minute,
             self.tokens_per_minute,
             self.concurrent_requests,
             self.concurrent_jobs,
             self.storage_bytes,
+            self.key_issuances_per_holder,
+            self.key_issuances_per_workspace,
         ]
     }
     /// Deprecated single-budget mirror: the smallest amount (ties prefer the shorter period).
@@ -107,13 +128,15 @@ impl Limits {
     }
 }
 fn rates(row: Option<Row>) -> Limits {
-    let (r, t, c, j, st) = row.unwrap_or_default();
+    let (r, t, c, j, st, kh, kw) = row.unwrap_or_default();
     Limits {
         requests_per_minute: r,
         tokens_per_minute: t,
         concurrent_requests: c,
         concurrent_jobs: j,
         storage_bytes: st,
+        key_issuances_per_holder: kh,
+        key_issuances_per_workspace: kw,
         budgets: Budgets::new(),
     }
 }
@@ -195,6 +218,13 @@ impl Policy {
                 .storage_bytes
                 .flatten()
                 .is_some_and(|n| !(1..=MAX_STORAGE_BYTES).contains(&n))
+            || [
+                self.key_issuances_per_holder,
+                self.key_issuances_per_workspace,
+            ]
+            .into_iter()
+            .flat_map(Option::flatten)
+            .any(|n| !(1..=MAX_KEY_ISSUANCES).contains(&n))
         {
             return Err(invalid());
         }
@@ -223,6 +253,12 @@ impl Policy {
             concurrent_requests: self.concurrent_requests,
             concurrent_jobs: self.concurrent_jobs.unwrap_or(stored.concurrent_jobs),
             storage_bytes: self.storage_bytes.unwrap_or(stored.storage_bytes),
+            key_issuances_per_holder: self
+                .key_issuances_per_holder
+                .unwrap_or(stored.key_issuances_per_holder),
+            key_issuances_per_workspace: self
+                .key_issuances_per_workspace
+                .unwrap_or(stored.key_issuances_per_workspace),
             budgets,
         })
     }
@@ -236,7 +272,7 @@ pub(crate) fn json_budgets(b: &Budgets) -> Value {
 }
 pub(crate) fn json_limits(l: &Limits) -> Value {
     let legacy = l.legacy();
-    json!({"requests_per_minute":l.requests_per_minute,"tokens_per_minute":l.tokens_per_minute,"concurrent_requests":l.concurrent_requests,"concurrent_jobs":l.concurrent_jobs,"storage_bytes":l.storage_bytes,"monthly_budget_microusd":legacy.map(|(_,a)|a.to_string()),"budget_period":legacy.map_or("month",|(p,_)|p.as_str()),"budgets":json_budgets(&l.budgets)})
+    json!({"requests_per_minute":l.requests_per_minute,"tokens_per_minute":l.tokens_per_minute,"concurrent_requests":l.concurrent_requests,"concurrent_jobs":l.concurrent_jobs,"storage_bytes":l.storage_bytes,"key_issuances_per_holder":l.key_issuances_per_holder,"key_issuances_per_workspace":l.key_issuances_per_workspace,"monthly_budget_microusd":legacy.map(|(_,a)|a.to_string()),"budget_period":legacy.map_or("month",|(p,_)|p.as_str()),"budgets":json_budgets(&l.budgets)})
 }
 /// Rate limits and same-period budgets take the minimum. Budgets of different
 /// periods are all enforced independently.
@@ -260,6 +296,11 @@ pub(crate) fn compose(a: &Limits, b: &Limits) -> Limits {
         concurrent_requests: min(a.concurrent_requests, b.concurrent_requests),
         concurrent_jobs: min(a.concurrent_jobs, b.concurrent_jobs),
         storage_bytes: min(a.storage_bytes, b.storage_bytes),
+        key_issuances_per_holder: min(a.key_issuances_per_holder, b.key_issuances_per_holder),
+        key_issuances_per_workspace: min(
+            a.key_issuances_per_workspace,
+            b.key_issuances_per_workspace,
+        ),
         budgets,
     }
 }
@@ -276,12 +317,14 @@ pub(crate) fn compose(a: &Limits, b: &Limits) -> Limits {
 /// Rejections carry a stable `error.reason` and the period/limit name, never
 /// an amount (see `POLICY_REASONS`).
 fn validate_tighten(new: &Limits, parents: &[&Limits], old: &Limits) -> Result<(), ApiError> {
-    const RATE_NAMES: [&str; 5] = [
+    const RATE_NAMES: [&str; 7] = [
         "requests_per_minute",
         "tokens_per_minute",
         "concurrent_requests",
         "concurrent_jobs",
         "storage_bytes",
+        "key_issuances_per_holder",
+        "key_issuances_per_workspace",
     ];
     let bad = StatusCode::BAD_REQUEST;
     let forbidden = StatusCode::FORBIDDEN;
@@ -350,8 +393,8 @@ pub(crate) fn initial_key_limits(
         tokens_per_minute,
         concurrent_requests,
         concurrent_jobs,
-        storage_bytes: None,
         budgets,
+        ..Limits::default()
     };
     Ok((l != Limits::default()).then_some(l))
 }
@@ -408,11 +451,11 @@ async fn get_rates<
     table: &str,
     col: &str,
     id: T,
-    storage: &str,
+    workspace_cols: &str,
 ) -> Result<Limits, ApiError> {
     Ok(rates(
         sqlx::query_as(&format!(
-            "SELECT {COLS},{storage} FROM {table} WHERE {col}=$1"
+            "SELECT {COLS},{workspace_cols} FROM {table} WHERE {col}=$1"
         ))
         .bind(id)
         .fetch_optional(&mut **tx)
@@ -420,7 +463,7 @@ async fn get_rates<
     ))
 }
 async fn get_layer(tx: &mut Transaction<'_, Postgres>, scope: &Scope) -> Result<Limits, ApiError> {
-    let st = storage_col(scope);
+    let st = workspace_cols(scope);
     let mut l = match scope {
         Scope::Type(k) => {
             get_rates(tx, "workspace_type_policies", "kind", k.clone(), st).await?
@@ -489,11 +532,11 @@ async fn put_layer(
 ) -> Result<(), ApiError> {
     lock_scope(tx, scope, u).await?;
     let sets = "requests_per_minute=excluded.requests_per_minute,tokens_per_minute=excluded.tokens_per_minute,concurrent_requests=excluded.concurrent_requests,concurrent_jobs=excluded.concurrent_jobs";
-    // Key layers have no storage column; workspace layers store it like the
-    // other limits.
+    // Key layers have no storage or issuance columns; workspace layers store
+    // them like the other limits.
     let qs = |table: &str, col: &str| {
         format!(
-            "INSERT INTO {table}({col},{COLS},storage_bytes) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT({col}) DO UPDATE SET {sets},storage_bytes=excluded.storage_bytes"
+            "INSERT INTO {table}({col},{COLS},storage_bytes,key_issuances_per_holder,key_issuances_per_workspace) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT({col}) DO UPDATE SET {sets},storage_bytes=excluded.storage_bytes,key_issuances_per_holder=excluded.key_issuances_per_holder,key_issuances_per_workspace=excluded.key_issuances_per_workspace"
         )
     };
     fn rates<'q>(
@@ -512,6 +555,8 @@ async fn put_layer(
                 l,
             )
             .bind(l.storage_bytes)
+            .bind(l.key_issuances_per_holder)
+            .bind(l.key_issuances_per_workspace)
             .execute(&mut **tx)
             .await?;
         }
@@ -521,6 +566,8 @@ async fn put_layer(
                 l,
             )
             .bind(l.storage_bytes)
+            .bind(l.key_issuances_per_holder)
+            .bind(l.key_issuances_per_workspace)
             .execute(&mut **tx)
             .await?;
         }
@@ -530,6 +577,8 @@ async fn put_layer(
                 l,
             )
             .bind(l.storage_bytes)
+            .bind(l.key_issuances_per_holder)
+            .bind(l.key_issuances_per_workspace)
             .execute(&mut **tx)
             .await?;
         }
@@ -562,7 +611,14 @@ async fn platform_tx<'a>(
     Ok(tx)
 }
 pub(crate) struct Layers {
+    /// The platform layer as it applies: the override if the workspace has one,
+    /// else the type default; an override's empty key issuance fields inherit the
+    /// type default (see [`inherit_issuance`]).
     pub(crate) platform: Limits,
+    /// The platform layer as stored: the override's own fields (empty key issuance
+    /// fields stay empty), or, with no override, the type default with empty
+    /// issuance fields. What an override edit starts from; never used to compose.
+    pub(crate) platform_own: Limits,
     pub(crate) local: Limits,
     pub(crate) type_default: Limits,
     pub(crate) override_present: bool,
@@ -598,16 +654,25 @@ pub(crate) async fn layers_with(
     .fetch_one(&mut **tx)
     .await?;
     let type_default = get_layer(tx, &Scope::Type(kind.clone())).await?;
-    let (platform, source) = if over {
+    let (platform_own, source) = if over {
         (
             get_layer(tx, &Scope::Override(ws)).await?,
             "workspace_override",
         )
     } else {
-        (type_default.clone(), "type_default")
+        (
+            Limits {
+                key_issuances_per_holder: None,
+                key_issuances_per_workspace: None,
+                ..type_default.clone()
+            },
+            "type_default",
+        )
     };
+    let platform = inherit_issuance(platform_own.clone(), &type_default);
     Ok(Layers {
         platform,
+        platform_own,
         local: get_layer(tx, &Scope::Local(ws)).await?,
         type_default,
         override_present: over,
@@ -615,6 +680,20 @@ pub(crate) async fn layers_with(
         kind,
         created_at,
     })
+}
+/// A platform override's key issuance fields that are empty inherit the type
+/// default; a field it sets replaces it. (Every other limit's empty override
+/// field means no limit.) This makes a row written without the columns, by a
+/// replica that predates migration 0053, harmless: the workspace keeps its type
+/// default instead of being loosened to the 10,000 ceiling.
+fn inherit_issuance(mut platform: Limits, type_default: &Limits) -> Limits {
+    platform.key_issuances_per_holder = platform
+        .key_issuances_per_holder
+        .or(type_default.key_issuances_per_holder);
+    platform.key_issuances_per_workspace = platform
+        .key_issuances_per_workspace
+        .or(type_default.key_issuances_per_workspace);
+    platform
 }
 pub(crate) async fn key_limits(
     tx: &mut Transaction<'_, Postgres>,
@@ -804,6 +883,7 @@ async fn response(
 ) -> Result<Value, ApiError> {
     let Layers {
         platform: p,
+        platform_own: po,
         local: l,
         type_default,
         source,
@@ -827,7 +907,7 @@ async fn response(
     }
     let budgets = budget_windows(tx, ws, &entries).await?;
     let storage = storage_json(tx, ws, workspace_usage).await?;
-    let mut value = json!({"storage":storage,"policy":json_limits(if key.is_some(){&k}else if local_response{&l}else{&p}),"effective":json_limits(&compose(&compose(&p,&l),&k)),"mode":if source=="workspace_override"{"replace"}else{"inherit"},"provenance":{"platform_source":source,"platform":json_limits(&p),"local":json_limits(&l),"key":key.map(|_|json_limits(&k))},"budgets":budgets});
+    let mut value = json!({"storage":storage,"policy":json_limits(if key.is_some(){&k}else if local_response{&l}else{&po}),"effective":json_limits(&compose(&compose(&p,&l),&k)),"mode":if source=="workspace_override"{"replace"}else{"inherit"},"provenance":{"platform_source":source,"platform":json_limits(&p),"local":json_limits(&l),"key":key.map(|_|json_limits(&k))},"budgets":budgets});
     // Platform readers also see the live type default behind an override.
     if platform {
         value["provenance"]["type_default"] = json_limits(&type_default);
@@ -906,7 +986,7 @@ pub(super) async fn put_platform_workspace_policy(
     // A new override starts from the layer it replaces (legacy single budget period).
     let current = layers(&mut tx, ws).await?;
     let l = p.limits(
-        &current.platform,
+        &current.platform_own,
         current
             .platform
             .legacy()
@@ -1020,8 +1100,12 @@ pub(super) async fn put_key_policy(
     Path((ws, key)): Path<(Uuid, Uuid)>,
     Json(p): Json<Policy>,
 ) -> ApiResult {
-    // Storage is a workspace quota; keys have no storage layer.
-    if p.storage_bytes.flatten().is_some() {
+    // Storage and key issuance are workspace quotas; keys have no such layer
+    // (no key exists at creation).
+    if p.storage_bytes.flatten().is_some()
+        || p.key_issuances_per_holder.flatten().is_some()
+        || p.key_issuances_per_workspace.flatten().is_some()
+    {
         return Err(invalid());
     }
     let (mut tx, a) = resources::workspace_tx(&s, &u, ws).await?;
@@ -1127,6 +1211,91 @@ mod tests {
                 && initial_key_limits([None, None, None, Some(1)], None)
                     .unwrap()
                     .is_some_and(|l| l == jobs(1))
+        );
+    }
+    fn issuance(holder: Option<i64>, workspace: Option<i64>) -> Limits {
+        Limits {
+            key_issuances_per_holder: holder,
+            key_issuances_per_workspace: workspace,
+            ..Limits::default()
+        }
+    }
+    #[test]
+    fn key_issuance_budgets_are_tighten_only_composed_limits_within_1_to_10000() {
+        for (new, name) in [
+            (
+                issuance(Some(6), None),
+                "key_issuances_per_holder exceeds a parent limit",
+            ),
+            (
+                issuance(None, Some(51)),
+                "key_issuances_per_workspace exceeds a parent limit",
+            ),
+        ] {
+            let e = validate_tighten(&new, &[&issuance(Some(5), Some(50))], &empty()).unwrap_err();
+            assert_eq!((e.0, e.1), (StatusCode::BAD_REQUEST, name));
+        }
+        for new in [issuance(Some(6), None), issuance(None, None)] {
+            let e = validate_tighten(&new, &[], &issuance(Some(5), None)).unwrap_err();
+            assert_eq!(
+                (e.0, e.1),
+                (
+                    StatusCode::FORBIDDEN,
+                    "A stored key_issuances_per_holder cap cannot be raised or removed"
+                )
+            );
+        }
+        assert!(
+            validate_tighten(
+                &issuance(Some(5), Some(9)),
+                &[&issuance(Some(5), Some(50))],
+                &issuance(Some(5), None)
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            compose(&issuance(Some(50), Some(500)), &issuance(Some(5), None)),
+            issuance(Some(5), Some(500))
+        );
+        // A key layer never carries them; the JSON shows null.
+        assert_eq!(
+            json_limits(&empty())["key_issuances_per_workspace"],
+            Value::Null
+        );
+        // Absent keeps, null clears, and the range is 1..=10000.
+        let stored = issuance(Some(7), Some(70));
+        let keep = body(json!({"budgets":[]}))
+            .unwrap()
+            .limits(&stored, Month)
+            .unwrap();
+        assert_eq!(
+            (
+                keep.key_issuances_per_holder,
+                keep.key_issuances_per_workspace
+            ),
+            (Some(7), Some(70))
+        );
+        let set = body(json!({"budgets":[],"key_issuances_per_holder":null,"key_issuances_per_workspace":10000})).unwrap().limits(&stored, Month).unwrap();
+        assert_eq!(
+            (
+                set.key_issuances_per_holder,
+                set.key_issuances_per_workspace
+            ),
+            (None, Some(10_000))
+        );
+        for bad in [0, -1, 10_001] {
+            for field in ["key_issuances_per_holder", "key_issuances_per_workspace"] {
+                let p = body(json!({"budgets":[], field: bad})).unwrap();
+                assert!(p.limits(&stored, Month).is_err(), "{field}={bad}");
+            }
+        }
+        // Creation-time key limits never carry them.
+        assert_eq!(
+            initial_key_limits([None, None, None, Some(1)], None)
+                .unwrap()
+                .unwrap()
+                .key_issuances_per_holder,
+            None
         );
     }
     #[test]

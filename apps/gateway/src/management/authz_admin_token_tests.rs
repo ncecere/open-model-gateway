@@ -1384,3 +1384,159 @@ async fn completion_audit_failure_before_dispatch_reports_no_action(pool: PgPool
     assert!(message.contains("was not processed"), "{message}");
     assert!(!message.contains("may have completed"), "{message}");
 }
+
+/// #253: the key-issuance budget through the real router and middleware: the
+/// refusal is a 429 with `Retry-After` only after authentication, route access
+/// and authority (401/403/404 first), and an admin token can neither read the
+/// view nor issue keys.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn key_issuance_budget_and_view_follow_real_router_authorization(pool: PgPool) {
+    let f = fixture(&pool).await;
+    sqlx::query("UPDATE workspace_type_policies SET key_issuances_per_holder=1 WHERE kind='team'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mock = MockProvider::start(None).await;
+    let identity = mock.state(pool.clone()).await;
+    let engine = crate::inference::Engine::new(
+        std::sync::Arc::new(f.s.clone()),
+        crate::providers::ProviderRegistry::default(),
+        crate::inference::EngineLimits::default(),
+    )
+    .unwrap();
+    let app = crate::http::router_with_identity(f.s.clone(), None, engine, identity);
+    async fn send(
+        app: &Router,
+        method: &str,
+        path: &str,
+        who: Option<&Session>,
+        bearer: Option<&str>,
+        body: Value,
+    ) -> (StatusCode, Option<String>, Value) {
+        let mut req = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("content-type", "application/json")
+            .header("origin", ORIGIN);
+        if let Some(s) = who {
+            req = req
+                .header("cookie", format!("omg_session={}", s.cookie))
+                .header("x-csrf-token", &s.csrf);
+        }
+        if let Some(b) = bearer {
+            req = req.header("authorization", format!("Bearer {b}"));
+        }
+        let response = app
+            .clone()
+            .oneshot(req.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let retry = response
+            .headers()
+            .get("retry-after")
+            .map(|v| v.to_str().unwrap().to_owned());
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        (
+            status,
+            retry,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+    let keys = format!("/api/v1/workspaces/{}/keys", f.team);
+    let view = format!("/api/v1/workspaces/{}/key-issuance", f.team);
+    let create = json!({"name":"Issued","expires_in_days":1});
+    let (member, owner, outsider, auditor, admin) = (
+        session(&pool, &f.member).await,
+        session(&pool, &f.owner).await,
+        session(&pool, &f.outsider).await,
+        session(&pool, &f.auditor).await,
+        session(&pool, &f.admin).await,
+    );
+    // Unauthenticated: 401, never a budget answer.
+    assert_eq!(
+        send(&app, "GET", &view, None, None, Value::Null).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, retry, _) = send(&app, "POST", &keys, Some(&member), None, create.clone()).await;
+    assert_eq!((status, retry), (StatusCode::OK, None));
+    let (status, retry, body) =
+        send(&app, "POST", &keys, Some(&member), None, create.clone()).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    assert_eq!(body["error"]["reason"], "key_issuance_limit_exceeded");
+    assert_eq!(
+        retry.unwrap(),
+        body["error"]["retry_after_seconds"]
+            .as_i64()
+            .unwrap()
+            .to_string()
+    );
+    // The holder at the cap: non-members, platform readers and unknown workspaces
+    // are answered by authorization, never the budget.
+    for (who, expected) in [
+        (&outsider, StatusCode::FORBIDDEN),
+        (&auditor, StatusCode::FORBIDDEN),
+        (&admin, StatusCode::FORBIDDEN),
+    ] {
+        assert_eq!(
+            send(&app, "POST", &keys, Some(who), None, create.clone())
+                .await
+                .0,
+            expected
+        );
+        assert_eq!(
+            send(&app, "GET", &view, Some(who), None, Value::Null)
+                .await
+                .0,
+            expected
+        );
+    }
+    let unknown = format!("/api/v1/workspaces/{}", Uuid::new_v4());
+    assert_eq!(
+        send(
+            &app,
+            "POST",
+            &format!("{unknown}/keys"),
+            Some(&member),
+            None,
+            create.clone()
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        send(
+            &app,
+            "GET",
+            &format!("{unknown}/key-issuance"),
+            Some(&member),
+            None,
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    // The view: members see their own budget only; the workspace owner both.
+    let (status, _, v) = send(&app, "GET", &view, Some(&member), None, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        (v["holder"]["used"].as_i64(), v["holder"]["limit"].as_i64()),
+        (Some(1), Some(1))
+    );
+    assert!(v.get("workspace").is_none());
+    let (status, _, v) = send(&app, "GET", &view, Some(&owner), None, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(v["holder"]["used"], 0);
+    assert_eq!(v["workspace"]["used"], 1);
+    // An admin token (every scope) can neither read the view nor issue keys.
+    let (_, token) = mint(&pool, f.admin.user_id, &admin_tokens::SCOPES, None).await;
+    for (method, path) in [("GET", view.as_str()), ("POST", keys.as_str())] {
+        assert_eq!(
+            request(&app, method, path, None, Some(&token), false, ORIGIN).await,
+            StatusCode::FORBIDDEN,
+            "{method} {path}"
+        );
+    }
+}

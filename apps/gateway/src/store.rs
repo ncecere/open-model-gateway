@@ -179,6 +179,58 @@ pub const PARTITIONED_RELATIONS: &[&str] = &[
 /// `installation_policy` is dropped by 0026 (installation limits removed).
 const RETIRED_RELATIONS: &[&str] = &["installation_policy"];
 
+/// Takes the session lock that serializes `migrate` and `grants apply`, polling
+/// `pg_try_advisory_lock` instead of blocking in `pg_advisory_lock`. A blocked
+/// lock statement is a running transaction, and a migration that builds an index
+/// CONCURRENTLY (0054) waits for every transaction older than it: a second
+/// migrator parked in a blocking lock call would wait on the first, which waits
+/// on it, a deadlock. A poller holds no transaction between attempts.
+async fn migration_lock(connection: &mut PgConnection) -> sqlx::Result<()> {
+    loop {
+        let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock(72419503)")
+            .fetch_one(&mut *connection)
+            .await?;
+        if acquired {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+/// Indexes that a no-transaction migration builds with `CREATE INDEX CONCURRENTLY
+/// IF NOT EXISTS` (the migration file is their only definition). A failed
+/// no-transaction migration is not recorded, so `migrate` reruns it, but an
+/// interrupted build leaves an INVALID index of the same name that `IF NOT
+/// EXISTS` would skip. [`drop_invalid_concurrent_indexes`] removes such a
+/// leftover first.
+const CONCURRENT_INDEXES: &[&str] = &["api_keys_workspace_created"];
+
+/// Before the migrations run, drops any [`CONCURRENT_INDEXES`] entry that is
+/// invalid, with a standalone `DROP INDEX CONCURRENTLY` (never inside a
+/// transaction and never an ACCESS EXCLUSIVE lock on the table, unlike plain
+/// `DROP INDEX`: key authentication reads `api_keys` on every request). Like the
+/// concurrent build it waits for older transactions. The caller holds the
+/// migration lock.
+async fn drop_invalid_concurrent_indexes(connection: &mut PgConnection) -> sqlx::Result<()> {
+    for name in CONCURRENT_INDEXES {
+        let invalid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname=$1 AND NOT i.indisvalid)")
+            .bind(name)
+            .fetch_one(&mut *connection)
+            .await?;
+        if invalid {
+            tracing::warn!(
+                index = name,
+                "dropping an invalid index left by an interrupted concurrent build"
+            );
+            // One statement, simple protocol: it cannot run inside a transaction block.
+            sqlx::raw_sql(&format!("DROP INDEX CONCURRENTLY IF EXISTS public.{name}"))
+                .execute(&mut *connection)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
 fn lineage_matches(
     applied: &[(i64, Vec<u8>, bool)],
     expected: &[(i64, &[u8])],
@@ -448,11 +500,10 @@ impl Store {
         // Detached connection closes on drop, including cancellation/panic. Neither our
         // session lock nor SQLx's migration lock can leak back into the runtime pool.
         let mut connection = self.pool.acquire().await?.detach();
-        sqlx::query("SELECT pg_advisory_lock(72419503)")
-            .execute(&mut connection)
-            .await?;
+        migration_lock(&mut connection).await?;
         let result = async {
             preflight(&mut connection, true).await?;
+            drop_invalid_concurrent_indexes(&mut connection).await?;
             MIGRATOR.run(&mut connection).await?;
             Ok(())
         }
@@ -471,9 +522,7 @@ impl Store {
     /// silently revoke runtime access to newer tables.
     pub async fn apply_runtime_grants(&self) -> anyhow::Result<()> {
         let mut connection = self.pool.acquire().await?.detach();
-        sqlx::query("SELECT pg_advisory_lock(72419503)")
-            .execute(&mut connection)
-            .await?;
+        migration_lock(&mut connection).await?;
         preflight(&mut connection, false).await?;
         sqlx::raw_sql(RUNTIME_GRANTS_SQL)
             .execute(&mut connection)
@@ -575,6 +624,11 @@ mod tests {
         );
     }
 
+    /// Deadlock regression (0054): two migrators started together must both succeed.
+    /// The second waits on the migration session lock while the first builds an
+    /// index CONCURRENTLY, which waits for every older transaction; a second
+    /// migrator blocked inside `pg_advisory_lock` is such a transaction. The lock
+    /// is therefore polled (`migration_lock`), never waited for in a statement.
     #[sqlx::test(migrations = false)]
     async fn fresh_initialization_is_idempotent_and_checks_readiness(pool: PgPool) {
         let store = Store::new(pool.clone());
@@ -809,5 +863,191 @@ mod tests {
             .await
             .unwrap();
         assert!(!valid);
+    }
+    async fn index_valid(pool: &PgPool) -> Option<bool> {
+        sqlx::query_scalar("SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE c.relname='api_keys_workspace_created'")
+            .fetch_optional(pool)
+            .await
+            .unwrap()
+    }
+    async fn applied(pool: &PgPool, version: i64) -> bool {
+        sqlx::query_scalar(
+            "SELECT EXISTS(SELECT FROM _sqlx_migrations WHERE version=$1 AND success)",
+        )
+        .bind(version)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    /// A database migrated up to 0053: the state `migrate` finds when the build of
+    /// 0054's index was interrupted (a failed no-transaction migration is not
+    /// recorded). Independent of any later migration.
+    async fn migrated_to_0053(pool: &PgPool) {
+        sqlx::migrate::Migrator {
+            migrations: std::borrow::Cow::Owned(
+                MIGRATOR
+                    .iter()
+                    .filter(|m| m.version <= 53)
+                    .cloned()
+                    .collect(),
+            ),
+            ignore_missing: false,
+            locking: true,
+            no_tx: false,
+        }
+        .run(pool)
+        .await
+        .unwrap();
+        assert_eq!(index_valid(pool).await, None);
+    }
+    /// What an interrupted CREATE INDEX CONCURRENTLY leaves: an INVALID index of the name.
+    async fn leave_an_invalid_index(pool: &PgPool) {
+        sqlx::raw_sql("CREATE INDEX api_keys_workspace_created ON api_keys(workspace_id, created_at); UPDATE pg_index SET indisvalid=false WHERE indexrelid='public.api_keys_workspace_created'::regclass")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(index_valid(pool).await, Some(false));
+    }
+
+    /// An interrupted CREATE INDEX CONCURRENTLY leaves an INVALID index of its
+    /// name, which the rerun's IF NOT EXISTS would skip. `migrate` drops it
+    /// (concurrently) first, then 0054 builds the index.
+    #[sqlx::test(migrations = false)]
+    async fn migrate_recovers_from_an_interrupted_concurrent_index_build(pool: PgPool) {
+        assert!(MIGRATOR.iter().any(|m| m.version == 54 && m.no_tx));
+        migrated_to_0053(&pool).await;
+        leave_an_invalid_index(&pool).await;
+        let store = Store::new(pool.clone());
+        store.migrate_enterprise().await.unwrap();
+        assert_eq!(index_valid(&pool).await, Some(true));
+        assert!(applied(&pool, 54).await && store.is_ready().await);
+        // Nothing to recover: a rerun changes nothing.
+        let oid = || async {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT 'public.api_keys_workspace_created'::regclass::oid::bigint",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        };
+        let before = oid().await;
+        store.migrate_enterprise().await.unwrap();
+        assert_eq!(oid().await, before, "a valid index is never rebuilt");
+    }
+
+    /// Interrupted after the drop and before the rebuild (the index is gone and
+    /// 0054 is not recorded, the state of a database at 0053): still recoverable.
+    #[sqlx::test(migrations = false)]
+    async fn migrate_builds_the_index_when_interrupted_between_the_drop_and_the_rebuild(
+        pool: PgPool,
+    ) {
+        migrated_to_0053(&pool).await;
+        let store = Store::new(pool.clone());
+        store.migrate_enterprise().await.unwrap();
+        assert_eq!(index_valid(&pool).await, Some(true));
+        assert!(applied(&pool, 54).await && store.is_ready().await);
+    }
+
+    /// Recovery waits for older transactions (a concurrent drop and build do), but
+    /// takes no lock that blocks others: while it waits, key authentication reads
+    /// and key writes of api_keys proceed.
+    #[sqlx::test(migrations = false)]
+    async fn recovery_never_blocks_reads_or_writes_of_api_keys(pool: PgPool) {
+        migrated_to_0053(&pool).await;
+        leave_an_invalid_index(&pool).await;
+        let store = Store::new(pool.clone());
+        // An older transaction: the recovery's concurrent drop must wait for it.
+        let mut old = pool.begin().await.unwrap();
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM api_keys")
+            .fetch_one(&mut *old)
+            .await
+            .unwrap();
+        let during = async {
+            // Wait until the drop is actually waiting for `old`.
+            let mut waiting = false;
+            for _ in 0..200 {
+                waiting = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM pg_stat_activity WHERE query LIKE 'DROP INDEX CONCURRENTLY%' AND wait_event_type='Lock'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+                    > 0;
+                if waiting {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            assert!(
+                waiting,
+                "the recovery's drop never waited for the older transaction"
+            );
+            assert_eq!(index_valid(&pool).await, Some(false), "still recovering");
+            let bound = std::time::Duration::from_secs(3);
+            tokio::time::timeout(
+                bound,
+                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM api_keys").fetch_one(&pool),
+            )
+            .await
+            .expect("a read of api_keys was blocked by the recovery")
+            .unwrap();
+            let (user, ws) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+            tokio::time::timeout(bound, async {
+                sqlx::query("INSERT INTO users(id,email) VALUES($1,'recover@example.test')").bind(user).execute(&pool).await?;
+                sqlx::query("INSERT INTO workspaces(id,name,kind) VALUES($1,'Recover','team')").bind(ws).execute(&pool).await?;
+                sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash) VALUES(gen_random_uuid(),$1,$2,'k',decode(repeat('ab',32),'hex'))").bind(ws).bind(user).execute(&pool).await
+            })
+            .await
+            .expect("a write to api_keys was blocked by the recovery")
+            .unwrap();
+            old.commit().await.unwrap();
+        };
+        let (recovery, ()) = tokio::join!(store.migrate_enterprise(), during);
+        recovery.unwrap();
+        assert_eq!(index_valid(&pool).await, Some(true));
+    }
+
+    /// `grants apply` and `migrate` queue behind a running migrator by polling
+    /// `pg_try_advisory_lock`, never by blocking in `pg_advisory_lock`, so a
+    /// waiter holds no transaction a concurrent index build would wait for.
+    #[sqlx::test(migrations = false)]
+    async fn waiting_migrators_poll_the_lock_and_hold_no_transaction(pool: PgPool) {
+        let store = Store::new(pool.clone());
+        store.migrate_enterprise().await.unwrap();
+        // A running migrator, simulated by its session lock.
+        let mut holder = pool.acquire().await.unwrap().detach();
+        sqlx::query("SELECT pg_advisory_lock(72419503)")
+            .execute(&mut holder)
+            .await
+            .unwrap();
+        let driver = async {
+            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+            let (blocked, open): (i64, i64) = sqlx::query_as("SELECT count(*) FILTER(WHERE wait_event='advisory'),count(*) FILTER(WHERE state='idle in transaction') FROM pg_stat_activity WHERE datname=current_database()")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(
+                (blocked, open),
+                (0, 0),
+                "a waiter blocked in pg_advisory_lock or held a transaction open"
+            );
+            sqlx::query("SELECT pg_advisory_unlock(72419503)")
+                .execute(&mut holder)
+                .await
+                .unwrap();
+        };
+        // Both wait for the lock until the driver releases it (the first
+        // sleep proves they queued: neither can finish before 600 ms).
+        let started = std::time::Instant::now();
+        let (_grants, migrate, ()) = tokio::join!(
+            store.apply_runtime_grants(),
+            store.migrate_enterprise(),
+            driver
+        );
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(600),
+            "they did not wait for the lock"
+        );
+        // `migrate` of a migrated database succeeds; `grants apply` may need a role this test database lacks.
+        migrate.unwrap();
     }
 }

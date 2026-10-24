@@ -302,6 +302,12 @@ pub(crate) const ROUTES: &[Route] = &[
     ),
     route!(
         "GET",
+        "/api/v1/workspaces/{ws}/key-issuance",
+        WorkspaceMember,
+        DENIED
+    ),
+    route!(
+        "GET",
         "/api/v1/workspaces/{ws}/key-safety",
         WorkspaceMember,
         DENIED

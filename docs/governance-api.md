@@ -13,8 +13,9 @@ Money and financial aggregate/token counts are decimal **strings**; unknown meas
 | `/platform/workspaces/{ws}/policy` | GET/PUT replacement override; DELETE restores live type defaults. |
 | `/workspaces/{ws}/policy` | GET/PUT local tightening by owner/shared administrator. |
 | `/workspaces/{ws}/keys/{key}/policy` | GET/PUT visible key-lineage tightening; rotations retain consumption. |
+| `/workspaces/{ws}/key-issuance` | GET the caller's key issuance budget: `{window_seconds, holder:{used, limit, next_available_at}}`, plus `workspace:{…}` for workspace admins only. Members and admins only; admin API tokens are refused. |
 
-PUT accepts the **inner** object, with the three rate fields explicit plus one budget form, and returns `{ok:true}`. `concurrent_jobs` ("Jobs at once", 0018) is optional: absent keeps the stored value, null clears it (subject to tighten-only rules). GET always returns it. `storage_bytes` ("Storage", 0020; bytes, 1 to 2^50) works the same way on the workspace-type default, platform override and workspace local layers. Key layers have no storage limit: GET returns null, and a non-null value on their PUT is `400`. Workspace policy responses add `storage:{quota_bytes, used_bytes, usage_visible}` ([Files API](files-api.md#storage-quota)).
+PUT accepts the **inner** object, with the three rate fields explicit plus one budget form, and returns `{ok:true}`. `concurrent_jobs` ("Jobs at once", 0018) is optional: absent keeps the stored value, null clears it (subject to tighten-only rules). GET always returns it. `storage_bytes` ("Storage", 0020; bytes, 1 to 2^50) works the same way on the workspace-type default, platform override and workspace local layers. Key layers have no storage limit: GET returns null, and a non-null value on their PUT is `400`. `key_issuances_per_holder` and `key_issuances_per_workspace` (0053; 1 to 10,000, creates and rotations in a rolling 24 hours) follow the same rules on the same three layers, with type defaults of 50 and 500; see [governance](governance.md#key-issuance). Workspace policy responses add `storage:{quota_bytes, used_bytes, usage_visible}` ([Files API](files-api.md#storage-quota)).
 
 ```json
 {"requests_per_minute":120,"tokens_per_minute":null,"concurrent_requests":8,"concurrent_jobs":2,
@@ -55,7 +56,7 @@ Tighten-only rejections keep their HTTP status and add a stable `error.reason` p
 | Status | `reason` | Detail | Cause |
 | --- | --- | --- | --- |
 | 400 | `exceeds_parent_budget` | `period` | Budget for P is above a parent budget for the same P. |
-| 400 | `exceeds_parent_rate` | `limit` | `requests_per_minute`, `tokens_per_minute`, `concurrent_requests`, `concurrent_jobs` or `storage_bytes` is above a parent cap. |
+| 400 | `exceeds_parent_rate` | `limit` | `requests_per_minute`, `tokens_per_minute`, `concurrent_requests`, `concurrent_jobs`, `storage_bytes`, `key_issuances_per_holder` or `key_issuances_per_workspace` is above a parent cap. |
 | 403 | `stored_budget_raise_not_allowed` | `period` | Raises the stored budget for that period. |
 | 403 | `period_change_not_allowed` | `period` | Removes the stored budget for that period, including moving it to another period. |
 | 403 | `stored_rate_loosen_not_allowed` | `limit` | Raises or clears a stored rate cap. |
