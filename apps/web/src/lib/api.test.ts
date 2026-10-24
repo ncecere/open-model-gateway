@@ -93,6 +93,13 @@ describe("management API", () => {
     expect(event.detail).not.toBeNull();
     expect(event.detail).toBeTypeOf("object");
   });
+  it("keeps automatic refusal detail free of query values and response text", async () => {
+    const dispatchEvent = vi.fn(); vi.stubGlobal("window", { dispatchEvent });
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() => Promise.resolve(Response.json({ error: { code: "403", message: "synthetic-private-message" } }, { status: 403 }))));
+    await expect(api(`${API}/platform/models?q=synthetic-private-query`)).rejects.toMatchObject({ status: 403 });
+    expect(dispatchEvent).toHaveBeenCalledTimes(1);
+    expect(dispatchEvent.mock.calls[0][0].detail).toEqual({ cause: "forbidden", path: `${API}/platform/models` });
+  });
   it.each([
     ["GET", "/me"], ["POST", "/platform/models"], ["PUT", "/platform/models/model"],
     ["PATCH", "/platform/models/model"], ["DELETE", "/platform/models/model"],

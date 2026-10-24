@@ -5,7 +5,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dashboardRouteTree } from "../router";
-import { abortRequests, type Session } from "../lib/api";
+import { abortRequests, api, type Session } from "../lib/api";
 import { admin, auditor, testClient } from "../lib/test-fixtures";
 import { adminTokensPath } from "../pages/admin-tokens";
 
@@ -177,6 +177,57 @@ describe("bounded automatic access refresh on the actual dashboard router", () =
     expect(view.router.state.location.state.__TSR_key).not.toBe(key);
     await stableDenied(view, 3); // initial probe + one refresh for EACH navigation
     expect(view.resourceCalls.some(path => new URL(path, window.location.origin).searchParams.get("data_policy") === "allow")).toBe(true);
+  });
+
+  it("fences a pending old-navigation probe before a same-path new entry revalidates", async () => {
+    const view = await setup({ freezeRefresh: true });
+    await waitFor(() => expect(view.sessionCalls).toHaveLength(2));
+    const previousProbe = view.sessionCalls[1].signal;
+    expect(previousProbe?.aborted).toBe(false);
+    await act(async () => { await view.router.navigate({ to: "/admin/models", search: { policy: "allow" } }); });
+    await waitFor(() => expect(view.sessionCalls).toHaveLength(3));
+    expect(previousProbe?.aborted).toBe(true);
+    expect(view.sessionCalls[2].signal?.aborted).toBe(false);
+    await view.resume(); // also attempts to complete the abandoned old request
+    await stableDenied(view, 3);
+    expect(view.router.state.location.search.policy).toBe("allow");
+    expect(view.client.getQueryData(["session"])).toEqual(admin);
+  });
+
+  it("keeps a later denied fence when an aborted background /me response completes", async () => {
+    const view = await setup({ refuseOnce: true });
+    await recoveredOnce(view);
+    view.freezeNextRefresh();
+    // Model a window-focus session probe, independent of automatic 403 handling.
+    let probe!: Promise<void>;
+    await act(async () => { probe = view.client.refetchQueries({ queryKey: ["session"], exact: true }); });
+    await waitFor(() => expect(view.sessionCalls).toHaveLength(3));
+    view.forbidAgain(); seedPrivate(view);
+    await act(async () => { await view.client.invalidateQueries({ predicate: query => query.queryKey[0] === "api" && String(query.queryKey[2]).startsWith(modelsPath) }); });
+    await stableDenied(view, 3); // no fourth /me for the repeated refusal
+    expect(view.sessionCalls[2].signal?.aborted).toBe(true);
+    view.authority(auditor);
+    await view.resume();
+    await probe;
+    await stableDenied(view, 3);
+    expect(view.client.getQueryData(["session"])).toEqual(admin);
+    expectPrivateGone(view);
+  });
+
+  it("never revives an ended session when a superseded automatic /me completes", async () => {
+    const view = await setup({ freezeRefresh: true });
+    await waitFor(() => expect(view.sessionCalls).toHaveLength(2));
+    seedPrivate(view); view.expire();
+    await act(async () => { await expect(api(`${modelsPath}?late401=true`)).rejects.toMatchObject({ status: 401 }); });
+    await screen.findByRole("link", { name: "Sign in with single sign-on" });
+    expect(view.sessionCalls[1].signal?.aborted).toBe(true);
+    await view.resume();
+    await flushNotifications();
+    expect(view.sessionCalls).toHaveLength(2);
+    expect(view.client.getQueryData(["session"])).toBeUndefined();
+    expectPrivateGone(view);
+    expect(screen.getByRole("link", { name: "Sign in with single sign-on" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Add model" })).toBeNull();
   });
 
   it("still honors a bare manual authority event after automatic refresh, clearing private data", async () => {
