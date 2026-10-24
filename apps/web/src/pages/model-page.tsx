@@ -26,7 +26,7 @@ import { useInferenceBaseUrl } from "../components/ui";
 import { modelReadiness, modelSectionFor, notServingReason, protocolEndpoints, protocolLabel, protocolOptions, protocolProfiles, readinessText, retiredWorkloads, routeDataPolicy, routeSectionFor, routeTiers, workloadModalities, type RouteTiers } from "../lib/model-setup";
 import { parseCheckboxValues, type Field } from "../lib/forms";
 import { ResourceLink } from "../components/navigation-link";
-import { DeploymentReviewDialog } from "../components/deployment-preview";
+import { DeploymentReviewDialog, DeploymentStatusActions } from "../components/deployment-preview";
 import { LabBadge, LabIcon, ProviderIcon, TitleWithIcon, WithIcon } from "../components/provider-icon";
 import { Alert, Badge, Button, DateTime, ErrorNotice, useAction, useApi, useApiScope, useChoices, useCollection } from "../components/ui";
 import { Badge as BitopBadge } from "../components/ui/badge/badge";
@@ -246,16 +246,17 @@ function RouteEditor({ route, workload, profile, editing, onClose }: { route: De
   return <PriceEditorDialog deployment={route} workload={workload} profile={profile} current={q.data?.data[0]} importOnOpen={editing.importOnOpen} onClose={onClose} />;
 }
 function RouteActions({ row, workload, writable }: { row: RouteRow; model: Model; workload: WorkloadKind; writable: boolean }) {
-  const { route } = row, ask = useAction(), [editing, setEditing] = useState<Editing>(null), [reviewing, setReviewing] = useState(false), profile = row.detail?.provider;
+  const { route } = row, ask = useAction(), [editing, setEditing] = useState<Editing>(null), [reviewing, setReviewing] = useState<HTMLElement | null>(null), profile = row.detail?.provider;
+  const triggerId = `deployment-actions-${route.id}`;
   // Read-only viewers get the same ⋯ menu (review #48), with only what they can do.
   if (!writable) return <ActionMenu label={`Actions for route ${route.upstream_model}`} actions={[{ label: "Route page", render: <ResourceLink search={{ page: "deployment-detail", record: route.id }} /> }, { label: "Price history", render: <ResourceLink search={{ page: "deployment-detail", record: route.id, tab: "pricing" }} /> }]} />;
-  return <><ActionMenu label={`Actions for route ${route.upstream_model}`} actions={[
+  return <><ActionMenu triggerId={triggerId} label={`Actions for route ${route.upstream_model}`} actions={[
     { label: "Edit routing…", disabled: !row.routing, disabledReason: "Routing could not be loaded", onSelect: () => row.routing && ask({ title: `Routing · ${route.upstream_model}`, description: "No implicit retries: fallback attempts follow the model's routing policy only.", fields: deploymentRoutingFields(row.routing.routing), submitLabel: "Save routing", run: (v, signal) => api(routingPath(route.id), { method: "PUT", body: deploymentRoutingBody(v, row.routing!.routing, true), signal }) }) },
     { label: "Publish price…", onSelect: () => setEditing({ importOnOpen: false }) },
     { label: "Import current OpenRouter price…", hidden: profile !== "openrouter", onSelect: () => setEditing({ importOnOpen: true }) },
     { label: "Route page", render: <ResourceLink search={{ page: "deployment-detail", record: route.id }} /> },
-    { label: route.enabled ? "Disable route…" : "Enable route…", danger: route.enabled, onSelect: () => setReviewing(true) },
-  ]} /><RouteEditor route={route} workload={workload} profile={profile} editing={editing} onClose={() => setEditing(null)} />{reviewing && <DeploymentReviewDialog record={route} name={`route ${route.upstream_model}`} onClose={() => setReviewing(false)} />}</>;
+    { label: route.enabled ? "Disable route…" : "Enable route…", danger: route.enabled, onSelectWithTrigger: origin => setReviewing(origin) },
+  ]} /><RouteEditor route={route} workload={workload} profile={profile} editing={editing} onClose={() => setEditing(null)} />{reviewing && <DeploymentReviewDialog record={route} name={`route ${route.upstream_model}`} returnFocus={reviewing} fallbackFocus={() => document.getElementById(triggerId)} onClose={() => setReviewing(null)} />}</>;
 }
 /** Per-route price lines with tiers, ceilings and the publish/import actions. */
 function RoutePricing({ set, model, workload, writable }: { set: RouteSet; model: Model; workload: WorkloadKind; writable: boolean }) {
@@ -344,11 +345,12 @@ export function RoutePage({ session, route: d, path, tab }: { session: Session; 
     { id: "batch-scheduling", label: "Batch scheduling", icon: <Layers aria-hidden />, title: "Batch scheduling", description: "When gateway-run batch lines may start here.", actions: writable ? <Button size="sm" variant="secondary" disabled={!batch.data} aria-label="Edit batch scheduling" onClick={() => batch.data && editBatchScheduling(ask, d.id, batch.data, title)}><Pencil aria-hidden />Edit</Button> : undefined, content: <RouteBatchScheduling query={batch} /> },
     { id: "price-history", label: "Price history", icon: <History aria-hidden />, title: "Price history", content: <PriceVersions path={`${path}/prices`} writable={false} deployment={d} /> },
   ];
-  return <Stack gap={6} className={s.page}>
-    <PageHeader title={<TitleWithIcon icon={<ProviderIcon profile={d.provider} size="xl" />}>{title}</TitleWithIcon>} meta={<><Badge tone={d.enabled ? "good" : "neutral"}>{d.enabled ? "Enabled" : "Disabled"}</Badge>{tier && tierBadge[tier]}</>}
+  const header = (statusActions?: ReactNode) => <PageHeader title={<TitleWithIcon icon={<ProviderIcon profile={d.provider} size="xl" />}>{title}</TitleWithIcon>} meta={<><Badge tone={d.enabled ? "good" : "neutral"}>{d.enabled ? "Enabled" : "Disabled"}</Badge>{tier && tierBadge[tier]}</>}
       description={<>{code(d.upstream_model)} · Route of <ResourceLink search={{ page: "model-detail", record: d.model_id }}>{modelName}</ResourceLink> on <ResourceLink search={{ page: "provider-detail", record: d.provider_connection_id }}>{d.provider_name ?? "its connection"}</ResourceLink></>}
       breadcrumbs={<BackLink label={modelName} search={{ page: "model-detail", record: d.model_id }} />}
-      actions={<>{set.list.data && <PrevNext noun="route" position={index >= 0 ? { index, total: set.ordered.length } : undefined} prev={target(prev)} next={target(next)} shortcuts />}{writable && catalogStatusActions(ask, "deployments", d, d.upstream_model)}</>} />
+      actions={<>{set.list.data && <PrevNext noun="route" position={index >= 0 ? { index, total: set.ordered.length } : undefined} prev={target(prev)} next={target(next)} shortcuts />}{statusActions}</>} />;
+  return <Stack gap={6} className={s.page}>
+    {writable ? <DeploymentStatusActions record={d} name={d.upstream_model}>{header}</DeploymentStatusActions> : header()}
     <StatTileGrid label="Route summary" columns={5}>
       <StatTile label="Connection" value={d.provider_name ?? null} hint={d.connection_enabled === false ? "Connection disabled · route can't serve" : d.region ? `Region ${d.region}` : d.connection_enabled ? "Connection enabled" : undefined} />
       <RoutePriceTile price={price} meters={meters} />

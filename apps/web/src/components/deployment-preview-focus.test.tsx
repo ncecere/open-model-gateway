@@ -40,7 +40,7 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("menu-originated deployment review focus", () => {
   for (const source of ["retire", "narrow-retire", "route-menu"] as const) {
-    it.each(["cancel", "success"] as const)(`${source}: confirmation %s restores a connected trigger or fallback`, async outcome => {
+    it.each(["review-cancel", "cancel", "success"] as const)(`${source}: %s restores a connected trigger or fallback`, async outcome => {
       if (source === "narrow-retire") viewport(390);
       let applied = () => {};
       function Controls() {
@@ -65,6 +65,15 @@ describe("menu-originated deployment review focus", () => {
       await screen.findByRole("menuitem", { name: source === "route-menu" ? /^Disable route…$/ : /^Retire resource…$/ });
       await user.keyboard("{End}{Enter}");
       await screen.findByText("Enabled → Disabled");
+      if (outcome === "review-cancel") {
+        screen.getByRole("button", { name: /^Cancel$/ }).focus();
+        await user.keyboard("{Enter}");
+        await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+        await waitFor(() => expect(document.activeElement).toBe(origin));
+        expect(origin.isConnected).toBe(true);
+        expect(fetch).toHaveBeenCalledTimes(1);
+        return;
+      }
       const proceed = screen.getByRole("button", { name: /^Continue to confirmation$/ });
       proceed.focus();
       await user.keyboard("{Enter}");
