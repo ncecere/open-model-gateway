@@ -236,27 +236,10 @@ async fn webhook_forced_enqueue_failure_never_aborts_builtin_delivery(pool: PgPo
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn webhook_disabled_fast_path_never_reads_event_projection(pool: PgPool) {
     receiver(&pool, false).await;
-    let event = event(&pool, "scim_last_admin").await;
-    let role = format!("w45a_{}", Uuid::new_v4().simple());
-    sqlx::raw_sql(&format!("CREATE ROLE {role}; GRANT USAGE ON SCHEMA public TO {role}; GRANT SELECT ON alert_webhook_destinations,alert_deliveries TO {role}; GRANT INSERT ON alert_deliveries TO {role};")).execute(&pool).await.unwrap();
-    let mut tx = pool.begin().await.unwrap();
-    sqlx::query(&format!("SET LOCAL ROLE {role}"))
-        .execute(&mut *tx)
-        .await
-        .unwrap();
-    assert!(
-        sqlx::query(DELIVERY)
-            .bind(event)
-            .execute(&mut *tx)
-            .await
-            .is_ok(),
-        "disabled webhooks must not require alert_events SELECT"
-    );
-    tx.commit().await.unwrap();
-    sqlx::raw_sql(&format!("DROP OWNED BY {role}; DROP ROLE {role};"))
-        .execute(&pool)
-        .await
-        .unwrap();
+    // #253's BEFORE INSERT bucket trigger legitimately reads alert_events,
+    // so a role without alert_events SELECT can no longer insert deliveries at
+    // all. The fast path is proven behaviorally below, from what the insert
+    // actually touched.
     // Behavioral: with no enabled destination the trigger reads the
     // destination list and nothing else (no event projection, no rule,
     // workspace or installation read) and writes no outbox row. The
