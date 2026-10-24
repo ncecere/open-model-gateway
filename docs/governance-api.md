@@ -4,6 +4,48 @@ All paths below are under `/api/v1`, authenticated by browser session. Mutations
 
 Money and financial aggregate/token counts are decimal **strings**; unknown measurements are `null`, never zero. Limit fields, pagination and attempt numbers remain JSON numbers. USD values are exact integer micro-USD. Configured rates are estimates, not invoices.
 
+## Scheduled cost-report configuration (#102, slice A)
+
+**Configuration only: a configured schedule sends nothing in this slice, even when `active`.** There is no calendar/generation worker, report snapshot, email sending, report read/download endpoint or Scheduled reports UI yet. `next_run_at` and `last_period_end` are explicitly `null`; they are not predictions. The `report_scheduler` lease is reserved, without a job. The later calendar slice must initialize future occurrences without historical replay.
+
+All schedule routes are **browser-only**, including reads: every exact method/template has `TokenPolicy::Denied`. Even a Platform Admin's token with all five scopes is refused. Browser mutations require the configured Origin and CSRF token; inference keys never authorize these APIs.
+
+| Path | Methods | Authority |
+| --- | --- | --- |
+| `/platform/report-schedules` | GET, POST | Admin creates installation/cross-workspace cost-center schedules; Admin/Auditor lists. |
+| `/platform/report-schedules/{id}` | GET, PATCH, DELETE | Admin changes/deletes; Admin/Auditor reads. |
+| `/workspaces/{ws}/report-schedules` | GET, POST | Team/Project owner/admin by live membership, or personal owner only. |
+| `/workspaces/{ws}/report-schedules/{id}` | GET, PATCH, DELETE | The same workspace authority, for a schedule in exactly that workspace. |
+
+Ordinary members are refused. A platform role alone grants no workspace-schedule access. Another owner's personal workspace is indistinguishable from an unknown workspace (`404`), including for Platform Admins/Auditors. Cross-scope schedule IDs and deleted schedules return `404`. Disabled workspaces are unavailable. Read authorization uses a primary read-only snapshot; mutations recheck live authority and recipient eligibility under ordered workspace/user authority locks, transactionally with audit.
+
+POST accepts:
+
+```json
+{
+  "cadence": "weekly",
+  "timezone": "UTC",
+  "delivery_time": "09:00",
+  "state": "paused",
+  "recipient_user_ids": ["11111111-1111-4111-8111-111111111111"]
+}
+```
+
+- `cadence` is `weekly` or `monthly`; daily is refused. `timezone` is a validated IANA zone (maximum 64 bytes); `delivery_time` is exact local `HH:MM`. These store delivery preferences only. Planned accounting boundaries remain Monday-to-Monday UTC or UTC calendar months, `[start,end)`, independent of the delivery zone.
+- `state` is `active` or `paused`, default `paused`. Active configuration requires the operator's `GATEWAY_PUBLIC_URL` validated at OIDC startup (HTTPS, or development/test loopback HTTP); no schedule-supplied destination is accepted. Active still sends nothing in this slice.
+- Recipients are **1–50 distinct internal user UUIDs**, explicitly selected, without directory expansion or address strings. Platform recipients must currently be Admins/Auditors. Shared-workspace recipients must currently be that workspace's owners/admins. Personal recipients must be the owner. Suspended, cleaned, revoked/unentitled and nonexistent users are refused with `400`; framework body/UUID extraction errors may differ.
+- Optional `cost_center_id` restricts historical admission-time allocation. On a platform schedule it selects `scope_kind:"cost_center"` instead of `"installation"`; on a shared workspace it narrows that workspace. Archived cost centers are valid and need not be today's workspace assignment. Personal schedules cannot be narrowed. Cost centers are labels, never permissions; omitting the filter includes unallocated activity.
+
+POST, GET detail and PATCH return the schedule object: `id`, derived `scope_kind`, nullable `workspace_id`/`cost_center_id`, immutable `created_by`, the configuration fields above, decimal-string `configuration_revision`, `created_at`, `updated_at`, and nullable `next_run_at`/`last_period_end`. No email addresses or report content are returned.
+
+PATCH accepts any nonempty subset of `cadence`, `timezone`, `delivery_time`, `state`, `recipient_user_ids`; supplied nulls and unknown fields are refused. Scope, cost-center filter and creator are immutable: create a replacement schedule to change them. Every PATCH revalidates the resulting recipient set, including unchanged recipients; replace revoked recipients as part of the edit. DELETE remains available without validating recipients and returns `{deleted:true}`. Deletion is a final retained tombstone, not removal or a way to replay past runs.
+
+GET collection uses `limit=1..100` (default 50) and optional UUID `after`, ordered by schedule UUID. It returns `{data,has_more,next_cursor}`; pass `next_cursor` as `after` for the next page. Every page reapplies scope and live authority.
+
+Mutations emit `report_schedule.created`, `.updated`, `.paused`, `.resumed` or `.deleted` inside the resource transaction, recording typed scope/resource/actor IDs and scope kind/recipient count, never addresses or message bodies. Migration **0061_report_schedules** adds retained schedule configuration, scoped recipient foreign keys with fifty unique slots, guards, indexes and the lease seed. Explicitly apply migration/runtime grants and run privilege verification on the selected database; `serve` never migrates or resets it. Version numbers need not be contiguous: lineage checks compare the actual embedded version/checksum list, not a presumed 0058–0060 range.
+
+Later slices implement fenced immutable snapshots and authenticated, independently reauthorized report reads/aggregate CSV, followed by link-only email through the shared fair alert dispatcher. A link will grant no authority. Generation must pause schedules whose creator lost authority; delivery must recheck live recipient entitlement/status and the originally captured address identity before every claim. These are not implemented guarantees of a sender in this slice, because no sender exists yet.
+
 ## Policy payloads
 
 | Path | Methods / layer |
