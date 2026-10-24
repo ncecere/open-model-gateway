@@ -283,6 +283,61 @@ impl Gateway {
     }
 }
 
+/// Requests per timing sample.
+const SAMPLES: usize = 5;
+
+/// Headroom a fault request gets over the same-run healthy baseline. The
+/// hanging collector's whole exchange takes 2 s, so a request held up by an
+/// export exchange overshoots this and fails, while an ordinary host stall
+/// (scheduler pause, loaded CI machine) stays inside it.
+const FAULT_HEADROOM: Duration = Duration::from_millis(1500);
+
+/// The wall-clock time of each of [`SAMPLES`] consecutive chat requests, in
+/// request order (each request must succeed). Every timing is kept: the
+/// caller bounds each one, so a request that blocks only sometimes (the
+/// first after the fault begins, or the one that flushes a batch) is not
+/// hidden behind faster neighbours.
+async fn timed_chats(gateway: &Gateway, key: &str) -> Vec<Duration> {
+    let mut timings = Vec::with_capacity(SAMPLES);
+    for _ in 0..SAMPLES {
+        let started = std::time::Instant::now();
+        let (status, body, _) = gateway.chat(key).await;
+        let elapsed = started.elapsed();
+        assert_eq!(status, StatusCode::OK, "{body}");
+        timings.push(elapsed);
+    }
+    timings
+}
+
+/// Asserts that every request in `timings` finished within
+/// [`FAULT_HEADROOM`] of `baseline`, the first one included, and prints all
+/// timings on failure.
+fn assert_no_request_slowed(fault: &str, timings: &[Duration], baseline: Duration) {
+    let bound = baseline + FAULT_HEADROOM;
+    for (index, elapsed) in timings.iter().enumerate() {
+        assert!(
+            *elapsed < bound,
+            "{fault} must never slow an inference request: request {} of {} took {elapsed:?}, bound {bound:?} (same-run baseline {baseline:?} + {FAULT_HEADROOM:?}); all fault timings {timings:?}",
+            index + 1,
+            timings.len(),
+        );
+    }
+}
+
+/// The same-run reference for the outage timings below: the fastest of
+/// [`SAMPLES`] requests against the same gateway wiring with tracing enabled,
+/// a healthy collector and no fault. Whatever the host's load makes a
+/// request cost right now, this measures it. The minimum is the right
+/// reference here because an unrelated stall only ever inflates some
+/// samples.
+async fn healthy_baseline(pool: &PgPool, key: &str) -> Duration {
+    let healthy = Collector::start(StatusCode::OK, "{}", Duration::ZERO).await;
+    let gateway = Gateway::for_trace_config(pool, Some(&healthy.url), 1.0).await;
+    let timings = timed_chats(&gateway, key).await;
+    gateway.shutdown().await;
+    timings.into_iter().min().expect("SAMPLES is non-zero")
+}
+
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn a_shared_workspace_request_exports_the_expected_span_set_with_parentage_matching_the_logs_trace_id(
     pool: PgPool,
@@ -398,6 +453,8 @@ async fn a_personal_workspace_request_exports_nothing(pool: PgPool) {
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn a_collector_outage_never_fails_or_slows_inference_and_drops_are_counted(pool: PgPool) {
     let keys = seed(&pool).await;
+    // Same run, same host load, no fault: what a request costs right now.
+    let baseline = healthy_baseline(&pool, &keys.team_key.token).await;
 
     // Phase 1: closed port. Bind to get a free loopback port, then drop
     // the listener immediately so the address refuses every connection.
@@ -412,14 +469,8 @@ async fn a_collector_outage_never_fails_or_slows_inference_and_drops_are_counted
     let dropped_before = gateway
         .metric_value("gateway_trace_dropped_spans_total", "reason=\"delivery\"")
         .await;
-    let started = std::time::Instant::now();
-    let (status, body, _) = gateway.chat(&keys.team_key.token).await;
-    let elapsed = started.elapsed();
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert!(
-        elapsed < Duration::from_secs(1),
-        "a closed collector must never slow the inference request, took {elapsed:?}"
-    );
+    let timings = timed_chats(&gateway, &keys.team_key.token).await;
+    assert_no_request_slowed("a closed collector", &timings, baseline);
 
     let mut dropped_after = dropped_before;
     for _ in 0..50 {
@@ -451,14 +502,8 @@ async fn a_collector_outage_never_fails_or_slows_inference_and_drops_are_counted
     let timeout_deliveries_before = gateway
         .metric_value("gateway_trace_deliveries_total", "outcome=\"timeout\"")
         .await;
-    let started = std::time::Instant::now();
-    let (status, body, _) = gateway.chat(&keys.team_key.token).await;
-    let elapsed = started.elapsed();
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert!(
-        elapsed < Duration::from_secs(1),
-        "a hanging collector must never slow the inference request, took {elapsed:?}"
-    );
+    let timings = timed_chats(&gateway, &keys.team_key.token).await;
+    assert_no_request_slowed("a hanging collector", &timings, baseline);
 
     let mut timeout_deliveries_after = timeout_deliveries_before;
     // The exporter's own 2 s whole-exchange timeout plus one 1 s batch
