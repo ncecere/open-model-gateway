@@ -21,14 +21,19 @@ async fn replica(pool: &PgPool) -> Store {
 }
 
 fn holders(n: usize) -> Vec<Arc<Leases>> {
-    (0..n).map(|_| Arc::new(Leases::with_ttl(SHORT))).collect()
+    holders_with_ttl(n, SHORT)
+}
+
+fn holders_with_ttl(n: usize, ttl: Duration) -> Vec<Arc<Leases>> {
+    (0..n).map(|_| Arc::new(Leases::with_ttl(ttl))).collect()
 }
 
 /// Concurrent elections: every lease has exactly one holder; renewals keep
 /// the holder and its epoch.
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn exactly_one_of_three_replicas_holds_each_lease(pool: PgPool) {
-    let replicas = holders(3);
+    // Exercise unexpired renewal even under load; expiry and fencing have separate tests.
+    let replicas = holders_with_ttl(3, Duration::from_secs(60));
     let stores = [
         replica(&pool).await,
         replica(&pool).await,
