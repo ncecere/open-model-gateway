@@ -267,6 +267,9 @@ DO $$ DECLARE fu uuid:=gen_random_uuid(); BEGIN
 END $$;
 SET LOCAL ROLE gateway_runtime;
 SELECT version,checksum,success FROM public._sqlx_migrations ORDER BY version;
+-- Take the normal management lock before any probe can touch an existing
+-- saved destination (including the rollback-only full-capacity case).
+SELECT lock_installation();
 -- Webhook executable probes run as runtime and roll back with everything below.
 DO $$ DECLARE receiver uuid; ev uuid:=gen_random_uuid(); col text; BEGIN
  -- Make one capacity slot available in this rollback-only probe even on a full installation.
@@ -305,7 +308,6 @@ SELECT kind,owner_user_id,disabled_at IS NOT NULL FROM public.workspaces WHERE i
 -- Pre-extraction human/service key checks (#195), without any key value.
 SELECT issued_to_user_id,service_account_id FROM public.api_keys
  WHERE workspace_id=NULL::uuid AND id=NULL::uuid;
-SELECT lock_installation();
 SELECT id FROM public.users WHERE false FOR UPDATE;
 SELECT model_id FROM public.workspace_model_grants WHERE false FOR SHARE;
 DO $$ DECLARE
