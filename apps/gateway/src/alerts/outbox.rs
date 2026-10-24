@@ -99,19 +99,73 @@ pub(super) async fn cleanup(tx: &mut Transaction<'_, Postgres>) -> sqlx::Result<
 
 // Shared verbatim by the lock-free head lookup and the locking claim. Keep
 // the cutoff and recipient due predicates identical in both selection steps.
-const DUE_DELIVERY: &str = "d.status='pending' AND d.created_at>clock_timestamp()-interval '24 hours'+interval '45 seconds' AND (NOT d.initialized OR EXISTS(SELECT 1 FROM alert_recipient_outbox q WHERE q.delivery_id=d.id AND q.attempt_count<5 AND ((q.state='waiting' AND q.next_attempt_at<=clock_timestamp()) OR (q.state='leased' AND q.lease_expires_at<=clock_timestamp()))))";
+fn due_delivery(now: &str) -> String {
+    // A bound database instant, not a volatile clock_timestamp() expression:
+    // PostgreSQL can seek past the expired creation-time range in the index.
+    format!(
+        "d.status='pending' AND d.created_at>{now}::timestamptz-interval '24 hours'+interval '45 seconds' AND (NOT d.initialized OR EXISTS(SELECT 1 FROM alert_recipient_outbox q WHERE q.delivery_id=d.id AND q.attempt_count<5 AND ((q.state='waiting' AND q.next_attempt_at<={now}::timestamptz) OR (q.state='leased' AND q.lease_expires_at<={now}::timestamptz))))"
+    )
+}
 
 pub(super) fn bucket_candidates_sql() -> String {
+    let due = due_delivery("$5");
     format!("WITH RECURSIVE buckets(bucket_id) AS (
  (SELECT bucket_id FROM alert_deliveries WHERE status='pending' ORDER BY bucket_id LIMIT 1)
  UNION ALL
  SELECT next.bucket_id FROM buckets b CROSS JOIN LATERAL
   (SELECT bucket_id FROM alert_deliveries WHERE status='pending' AND bucket_id>b.bucket_id ORDER BY bucket_id LIMIT 1) next
-), served AS (SELECT * FROM unnest($1::uuid[],$2::integer[]) AS s(bucket_id,slots))
+), served AS (SELECT * FROM unnest($1::uuid[],$2::integer[]) AS s(bucket_id,slots)),
+recent AS (SELECT * FROM unnest($3::uuid[],$4::bigint[]) AS r(bucket_id,turn))
 SELECT b.bucket_id FROM buckets b CROSS JOIN LATERAL
- (SELECT d.created_at FROM alert_deliveries d WHERE d.bucket_id=b.bucket_id AND {DUE_DELIVERY} ORDER BY d.created_at,d.id LIMIT 1) head
+ (SELECT d.created_at FROM alert_deliveries d WHERE d.bucket_id=b.bucket_id AND {due} ORDER BY d.created_at,d.id LIMIT 1) head
 LEFT JOIN served s ON s.bucket_id=b.bucket_id
-ORDER BY coalesce(s.slots,0),head.created_at,b.bucket_id LIMIT 32")
+LEFT JOIN recent r ON r.bucket_id=b.bucket_id
+ORDER BY coalesce(s.slots,0),r.turn NULLS FIRST,head.created_at,b.bucket_id LIMIT 32")
+}
+
+// Scheduling memory only; no authority, credentials or recipient data. The
+// evaluator's Store clones share it across ticks, but failover may reset it.
+pub(super) const RECENT_BUCKETS: usize = 4096;
+
+fn last_served_order(store: &Store) -> (Vec<Uuid>, Vec<i64>) {
+    let history = store
+        .alert_dispatch
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let mut recent: Vec<_> = history.iter().map(|(b, at)| (*b, *at)).collect();
+    drop(history);
+    recent.sort_by_key(|(bucket, at)| (*at, *bucket));
+    // Export monotonic ranks rather than translating process Instants into
+    // wall-clock timestamps. SQL NULL means absent/never served.
+    let mut previous = None;
+    let mut turn = 0_i64;
+    recent
+        .into_iter()
+        .map(|(bucket, at)| {
+            if previous != Some(at) {
+                turn += 1;
+                previous = Some(at);
+            }
+            (bucket, turn)
+        })
+        .unzip()
+}
+
+fn remember_served(store: &Store, bucket: Uuid) {
+    let mut history = store
+        .alert_dispatch
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if history.len() >= RECENT_BUCKETS
+        && !history.contains_key(&bucket)
+        && let Some(oldest) = history
+            .iter()
+            .min_by_key(|(b, at)| (**at, **b))
+            .map(|(b, _)| *b)
+    {
+        history.remove(&oldest);
+    }
+    history.insert(bucket, std::time::Instant::now());
 }
 
 // One short claim transaction; None means no due work (not a network result).
@@ -138,17 +192,27 @@ pub(super) async fn claim_with_hook(
         .iter()
         .map(|(bucket, n)| (*bucket, *n as i32))
         .unzip();
+    let (recent_buckets, turns) = last_served_order(store);
+    // Use one database instant for both selection steps. Later lease and live
+    // authorization checks retain their existing clock/statement semantics.
+    let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut *tx)
+        .await?;
     // Loose/distinct index walk: one seek per pending bucket, never a full
     // backlog scan merely to discover bucket ids. No row locks in step one.
     let candidates: Vec<Uuid> = sqlx::query_scalar(&bucket_candidates_sql())
         .bind(&buckets)
         .bind(&slots)
+        .bind(&recent_buckets)
+        .bind(&turns)
+        .bind(now)
         .fetch_all(&mut *tx)
         .await?;
     let mut row = None;
+    let due = due_delivery("$2");
     for bucket in candidates {
-        let head: Option<(Uuid, bool)> = sqlx::query_as(&format!("SELECT d.id,d.initialized FROM alert_deliveries d WHERE d.bucket_id=$1 AND {DUE_DELIVERY} ORDER BY d.created_at,d.id LIMIT 1 FOR UPDATE OF d SKIP LOCKED"))
-            .bind(bucket).fetch_optional(&mut *tx).await?;
+        let head: Option<(Uuid, bool)> = sqlx::query_as(&format!("SELECT d.id,d.initialized FROM alert_deliveries d WHERE d.bucket_id=$1 AND {due} ORDER BY d.created_at,d.id LIMIT 1 FOR UPDATE OF d SKIP LOCKED"))
+            .bind(bucket).bind(now).fetch_optional(&mut *tx).await?;
         if let Some((id, initialized)) = head {
             row = Some((id, initialized, bucket));
             break;
@@ -308,10 +372,20 @@ pub(super) async fn deliver_pending_within(store: &Store, limit: i64, budget: Du
             if started.elapsed() + SEND_DEADLINE > budget {
                 break;
             }
-            let Some((id, claim, bucket)) = claim(store, owner, &served).await? else {
-                break;
+            let (id, claim, bucket) = match claim(store, owner, &served).await {
+                Ok(Some(claimed)) => claimed,
+                Ok(None) => break,
+                Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("57014") => {
+                    // The aborted claim transaction rolls back. Cleanup already
+                    // ran, and the next tick may retry; do not burn more time on
+                    // the same expensive statement in this tick.
+                    tracing::warn!("alert outbox claim timed out; ending dispatch tick");
+                    break;
+                }
+                Err(error) => return Err(error),
             };
             *served.entry(bucket).or_insert(0) += 1;
+            remember_served(store, bucket);
             touched.insert(id);
             if let Some(claim) = claim {
                 let now = tokio::time::Instant::now();

@@ -25,6 +25,10 @@ pub struct Store {
     /// `governance::LockGate`): waiters queue here instead of holding pooled
     /// connections, so authentication and settlement are not starved.
     pub(crate) lock_gates: std::sync::Arc<crate::governance::LockGates>,
+    /// Bounded per-process alert dispatch history, shared across ticks/clones.
+    /// Advisory scheduling only: no recipient or durable lease authority.
+    pub(crate) alert_dispatch:
+        std::sync::Arc<std::sync::Mutex<std::collections::HashMap<uuid::Uuid, std::time::Instant>>>,
     /// Admission protocol (`GATEWAY_ADMISSION_MODE`, see
     /// `governance::locks`): scoped locks (default) or the former
     /// installation row lock.
@@ -330,6 +334,7 @@ impl Store {
             provider_secrets: Default::default(),
             smtp_secrets: Default::default(),
             lock_gates: std::sync::Arc::new(gates),
+            alert_dispatch: Default::default(),
             admission_mode: mode,
             reporting: None,
             reporting_max_lag: std::time::Duration::from_secs(30),

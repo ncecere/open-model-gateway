@@ -19,3 +19,7 @@ CREATE TRIGGER alert_delivery_set_bucket BEFORE INSERT ON alert_deliveries
 UPDATE alert_deliveries d
  SET bucket_id=coalesce(e.workspace_id,'00000000-0000-0000-0000-000000000000'::uuid)
  FROM alert_events e WHERE e.id=d.event_id AND d.status='pending';
+
+-- SET is session-scoped even in a transactional migration. Do not pass the
+-- ALTER's acquisition timeout to 0057's concurrent index build.
+RESET lock_timeout;
