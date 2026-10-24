@@ -25,7 +25,7 @@ import { Plus, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api, platformWorkspacePath, type WorkspaceKind } from "../lib/api";
 import { dollarsToMicroUsd, effectiveBudgetHeadroom, formatMicroUsd, hasBudgetFacts, windowHeadroom, type BudgetHeadroom, type BudgetPeriod, type BudgetWindow, type PolicyResponse } from "../lib/governance";
-import { budgetFor, composeLimits, draftErrors, draftLimits, draftLimitsValid, draftOf, hasErrors, inheritIssuance, issuanceRows, MAX_KEY_ISSUANCES, limitsBody, limitsOf, limitsSaveError, limitsSummary, lockedBudget, mergeErrors, newBudgetKey, nextPeriod, noLimits, periodName, rateRows, rateText, rejectionErrors, resetText, sameDraft, stackPeriods, storageText, type DraftErrors, type InvalidRows, type Limits, type LimitsDraft, type Parent, type RateKey } from "../lib/limits";
+import { budgetFor, composeLimits, draftErrors, draftLimits, draftLimitsValid, draftOf, hasErrors, inheritIssuance, issuanceRows, overrideStart, MAX_KEY_ISSUANCES, limitsBody, limitsOf, limitsSaveError, limitsSummary, lockedBudget, mergeErrors, newBudgetKey, nextPeriod, noLimits, periodName, rateRows, rateText, rejectionErrors, resetText, sameDraft, stackPeriods, storageText, type DraftErrors, type InvalidRows, type Limits, type LimitsDraft, type Parent, type RateKey } from "../lib/limits";
 import { StorageBar } from "./templates/storage-bar";
 import { resetsAt } from "../lib/usage";
 import { kindLabels } from "../lib/people";
@@ -185,7 +185,7 @@ export function ReplacementLimitsDialog({ workspaceId, name, onClose }: { worksp
   // A reply without a policy (an older or misbehaving gateway) is treated as unavailable, never as "no limits".
   const data = query.data?.policy ? query.data : undefined, provenance = data?.provenance;
   const typeDefault = provenance ? provenance.type_default ? limitsOf(provenance.type_default) : data?.mode === "replace" ? undefined : limitsOf(provenance.platform) : undefined;
-  const saved = data ? draftOf(data.mode === "replace" || !typeDefault ? limitsOf(data.policy) : typeDefault) : undefined;
+  const saved = data ? data.mode === "replace" || !typeDefault ? draftOf(limitsOf(data.policy)) : overrideStart(typeDefault) : undefined;
   const form = draft ?? saved, errors = form ? draftErrors(form, "free") : undefined, invalid = !!errors && hasErrors(errors);
   const local = provenance ? limitsOf(provenance.local) : undefined;
   // Valid rows keep their live preview while others are being fixed.
@@ -270,7 +270,7 @@ export function ScopeLimits({ path, mode, writable, kind = "team", scopeLabel, r
     ? picked === "defaults" ? "Workspace caps and key limits still apply on top." : "Blank means no limit, except key issuance, where blank keeps the type default. Workspace caps and key limits still apply on top."
     : writable ? "Blank inherits. The lowest limit applies; saved caps can only be lowered." : `${readOnlyReason ? `${readOnlyReason} ` : ""}The lowest limit applies.`;
   return <Stack gap={6}>
-    {mode === "replacement" && <RadioGroup legend="Limits source" variant="card" orientation="horizontal" value={picked} disabled={!writable || busy} onValueChange={value => { setChoice(value as "defaults" | "override"); if (value === "override" && !replaced && !draft) setDraft(draftOf(typeDefault ?? noLimits)); }} options={[
+    {mode === "replacement" && <RadioGroup legend="Limits source" variant="card" orientation="horizontal" value={picked} disabled={!writable || busy} onValueChange={value => { setChoice(value as "defaults" | "override"); if (value === "override" && !replaced && !draft) setDraft(overrideStart(typeDefault ?? noLimits)); }} options={[
       { value: "defaults", label: `Use ${noun} defaults`, description: typeDefault ? `Current ${noun} defaults: ${limitsSummary(typeDefault)}.` : `The ${noun} defaults, updated automatically.` },
       { value: "override", label: `Override for this ${lower}`, description: `Replaces the ${noun} defaults for this ${lower} only.` },
     ]} />}

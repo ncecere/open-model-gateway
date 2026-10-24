@@ -143,6 +143,16 @@ export const newBudgetKey = () => `b${++draftKeys}`;
 export function draftOf(limits: Limits): LimitsDraft {
   return { requests_per_minute: limits.requests_per_minute?.toString() ?? "", tokens_per_minute: limits.tokens_per_minute?.toString() ?? "", concurrent_requests: limits.concurrent_requests?.toString() ?? "", concurrent_jobs: limits.concurrent_jobs?.toString() ?? "", budgets: limits.budgets.map(b => ({ key: `saved-${b.period}`, period: b.period, amount: microUsdToDollars(b.amount_microusd) })), storage: storageDraft(limits.storage_bytes), ...Object.fromEntries(issuanceRows.filter(r => limits[r.key] !== undefined).map(r => [r.key, limits[r.key]?.toString() ?? ""])) };
 }
+/**
+ * The draft a first platform override starts from: the type default's limits, as every override is prefilled, except
+ * the key issuance fields, which start blank: an empty override field inherits the type default, so saving without
+ * touching them keeps following it (a snapshot of 50/500 would not). Fields the gateway doesn't carry stay absent.
+ */
+export function overrideStart(typeDefault: Limits): LimitsDraft {
+  const draft = draftOf(typeDefault);
+  for (const r of issuanceRows) if (draft[r.key] !== undefined) draft[r.key] = "";
+  return draft;
+}
 export function sameDraft(a: LimitsDraft, b: LimitsDraft) {
   const budgets = (d: LimitsDraft) => JSON.stringify(sortBudgets(d.budgets.map(x => ({ period: x.period, amount_microusd: x.amount.trim() }))));
   return rateRows.every(r => a[r.key].trim() === b[r.key].trim()) && budgets(a) === budgets(b) && (a.storage ?? "").trim() === (b.storage ?? "").trim() && issuanceRows.every(r => (a[r.key] ?? "").trim() === (b[r.key] ?? "").trim());
