@@ -2,6 +2,8 @@
 
 This API-only first slice of #48 compares uploaded **Anthropic Claude Platform Cost Report** charges with frozen aggregates of OMG's configured-rate estimates. It is **not a verified invoice**, a complete payable balance, or customer invoicing. There is no UI, automatic provider pull, organization credential, outbound fetch, or change to estimated costs or holds.
 
+**Mapping limit: each effective provider workspace/account binding maps to exactly one OMG connection in this slice. A provider workspace fed by multiple OMG connections must remain shared/unallocated; this slice cannot combine those connections into one fully covered comparison. Never attest exclusive coverage for only one of those connections.**
+
 Anthropic's [Cost Report format](https://platform.claude.com/docs/en/api/beta/organization/cost_report/retrieve) uses decimal-string **cents**, not dollars. Its [usage/cost documentation](https://platform.claude.com/docs/en/manage-claude/usage-cost-api) excludes Priority Tier costs. Upload provenance and completeness are admin attestations, not independently verified provider evidence. Do not upload credentials, headers, prompts, or responses.
 
 ## Authority and routes
@@ -68,6 +70,8 @@ Example with placeholder IDs, based on the documented format:
 }
 ```
 
+JSON extraction failures return static messages, with no uploaded field names or values in responses or rejection logs. Statuses remain 400 for malformed JSON/body failures, 413 for an oversized body, 415 for a missing/unsupported JSON content type, and 422 for invalid typed fields. The upload body limit is handled without echoing its content.
+
 Limits are **5 MiB per upload and 50,000 lines**. Raw response-page nesting is capped at 16 levels; fixed typed envelopes reject other shapes. Dimension/cursor strings are at most 4096 UTF-8 bytes, account IDs 200, evidence references 256 and timestamps 40. References are opaque text: never URLs fetched by the gateway, filesystem paths opened by it, or executable instructions. Unknown JSON fields and duplicate JSON object keys are rejected. Only USD is supported. Evidence is retained append-only, with no deletion path in this slice; only upload material appropriate for permanent financial history.
 
 ### Exact money and revision identity
@@ -107,6 +111,8 @@ A changed report needs `supersedes` naming the **current exact-coverage revision
 }
 ```
 
+**One provider workspace/account binding maps to exactly one OMG connection**, optionally narrowed to a deployment belonging to it. Overlapping bindings cannot be used to collect multiple connections for the same provider workspace. If that provider workspace is shared across OMG connections, leave its actual charges shared/unallocated; a nonexclusive binding can show one connection's estimates, not prove complete coverage of all contributing connections.
+
 Connections must be Anthropic connections; an optional deployment must belong to the connection. Effective intervals use `[start,end)`. `exclusive:true` requires an OMG workspace, `non_omg_traffic:false`, an attestation and evidence reference. Historical credential ownership is **not** inferred from current settings. A nonexclusive binding may identify external traffic; actual charges then remain shared/unallocated even if the observed OMG traffic has only one workspace.
 
 Provider `workspace_id:null` means the provider's default/missing identifier, not OMG Unallocated and not a wildcard over provider workspaces. Overlapping provider-workspace bindings or overlapping reverse ownership of a connection/deployment are refused. Mapping revisions allow at most 1000 bindings and 100 explicit model mappings per binding. A model mapping is `{"provider_model":"…","upstream_model":"…"}`; both names are bounded to 512 bytes. The set can be empty to record explicitly unmapped coverage.
@@ -136,9 +142,15 @@ Rows expose imported charges, workspace aggregate estimates, nullable signed var
 - `incomplete_estimate`: unresolved/missing reservation, redacted detail or overlapping archived history prevents a complete comparison.
 - `timing_basis`: OMG uses attempt-start UTC; provider accounting buckets need not use that clock.
 
+When an attempt lacks historical model or tier detail (including a missing reservation), every compatible comparison bucket is marked `incomplete_estimate` and its variance is null. A missing tier can affect both standard and batch; a missing model can affect multiple models. Known workspace subtotals remain visible with `complete:false`. `unresolved_coverage` separately reports compatible unresolved shared-workspace coverage; it overlaps the snapshot's total estimates and estimate-only rows and may appear in multiple buckets. **Do not sum it across buckets or add it to estimates or holds.** Personal coverage is retained only in the identity-free personal totals.
+
 `settled_estimate_microusd` is a known configured-rate subtotal. `held_floor_microusd`, unresolved counts and unbounded-hold counts stay separate; `holds_upper_bound_microusd` is null, not a claim that a retained floor bounds the final charge. Variance is null for shared or incomplete comparisons. Category coverage says `supplied`/`not_supplied`. The overall snapshot always states `verified_invoice:false,complete:false`; this source does not establish invoice completeness.
 
-Personal activity is exposed only as financial aggregates, never key IDs, request/root IDs, actor activity, public aliases, prompts or responses. All existing prices, ledger entries, reservations, policy budgets and usage rollups remain unchanged. Reconciliation does not settle, release, refund or rewrite anything in the inference accounting path.
+Personal activity is projected **before the immutable snapshot is stored**, identically for Admin and Auditor reads. `personal_activity.estimates` combines personal activity across workspaces, days, models and tiers, including matched and estimate-only activity. Exclusively attributed personal charges are combined in `exclusively_attributed_imported_microusd`, with signed category subtotals in `exclusively_attributed_imported_by_category`; shared actual charges are never allocated to that total. These totals are subsets of the snapshot-wide totals, not additional amounts.
+
+Personal activity never appears in model-linked workspace estimates or estimate-only rows. Exclusive personal actual buckets also collapse into the identity-free financial totals, without model-linked variance or dimensions. Personal bindings are omitted from the snapshot's inline `mapping_provenance`; the selected immutable mapping revision retains the original operator attestation. No personal workspace UUID, historical upstream model, key ID, request/root ID, actor activity, public alias, prompt or response is attached to personal activity in the frozen snapshot.
+
+All existing prices, ledger entries, reservations, policy budgets and usage rollups remain unchanged. Reconciliation does not settle, release, refund or rewrite anything in the inference accounting path.
 
 ## Explicit schema operation
 
