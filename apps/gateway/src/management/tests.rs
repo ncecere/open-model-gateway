@@ -76,6 +76,8 @@ mod storage_tests;
 mod subject_export_tests;
 #[path = "ux_tests.rs"]
 mod ux_tests;
+#[path = "alerts/webhook_tests.rs"]
+mod webhook_tests;
 
 struct Fixture {
     s: Store,
