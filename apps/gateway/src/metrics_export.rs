@@ -19,7 +19,8 @@ fixed_enum!(DropReason {
     Unclassified => "unclassified", InvalidValue => "invalid_value"
 });
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// Ordering is export priority: System health must not be starved by Traffic.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Class {
     System,
     Traffic,
@@ -264,13 +265,13 @@ fn integer_count(value: &str) -> Option<u64> {
 /// used by Prometheus. No DB collection of its own; lease-holder omissions are
 /// retained. Metadata cannot override the static type/privacy table.
 pub struct Snapshot {
-    points: BTreeMap<usize, Vec<(Labels, Value)>>,
+    points: BTreeMap<(Class, usize), Vec<(Labels, Value)>>,
     dropped: Drops,
 }
 impl Snapshot {
     pub fn parse(text: &str, traffic: bool) -> Self {
         let mut dropped = Drops::default();
-        let mut raw = BTreeMap::<usize, BTreeMap<Labels, RawPoint>>::new();
+        let mut raw = BTreeMap::<(Class, usize), BTreeMap<Labels, RawPoint>>::new();
         let mut invalid_labels = BTreeSet::new();
         for line in text
             .lines()
@@ -281,6 +282,11 @@ impl Snapshot {
                 dropped.add(DropReason::Unclassified);
                 continue;
             };
+            // Skip disabled/excluded families before parsing or validating labels:
+            // they cannot enter the snapshot and must not count as drops.
+            if class.class == Class::Excluded || (class.class == Class::Traffic && !traffic) {
+                continue;
+            }
             let (mut labels, value) = match sample(&line[name.len()..]) {
                 Ok(sample) => sample,
                 Err(reason) => {
@@ -296,8 +302,6 @@ impl Snapshot {
             } else {
                 None
             };
-            // Check even Excluded families. Disabled traffic never enters the
-            // snapshot; malformed identity labels still cannot be exported.
             if !labels_allowed(class, &labels) {
                 // The synthetic `le` was removed above: every component of
                 // one rejected histogram contributes exactly one series drop.
@@ -306,11 +310,8 @@ impl Snapshot {
                 }
                 continue;
             }
-            if class.class == Class::Excluded || (class.class == Class::Traffic && !traffic) {
-                continue;
-            }
             labels.sort();
-            raw.entry(index)
+            raw.entry((class.class, index))
                 .or_default()
                 .entry(labels)
                 .or_default()
@@ -318,7 +319,7 @@ impl Snapshot {
         }
         let mut points = BTreeMap::new();
         let mut total = 0;
-        for (index, series) in raw {
+        for (key @ (_, index), series) in raw {
             let mut accepted = Vec::new();
             for (labels, point) in series {
                 let Some(value) = point.finish(CLASSES[index].kind) else {
@@ -333,7 +334,7 @@ impl Snapshot {
                 total += 1;
             }
             if !accepted.is_empty() {
-                points.insert(index, accepted);
+                points.insert(key, accepted);
             }
         }
         Self { points, dropped }
@@ -432,7 +433,9 @@ pub struct Encoded {
     pub points: usize,
 }
 impl Encoder {
-    /// Slice 3 must capture the timestamp at process start, NOT per push.
+    /// Slice 3 must capture the timestamp at process start, NOT per push, and
+    /// quietly disable export if instance-id entropy is unavailable. Acceptance
+    /// UUID privacy checks must exempt only the service.instance.id resource key.
     pub fn new(
         environment: Environment,
         process_start_unix_nano: u64,
@@ -463,7 +466,7 @@ impl Encoder {
         let mut size = json_size(&self.envelope(Vec::new()));
         let mut points = 0;
         let mut full = false;
-        for (index, series) in snapshot.points {
+        for ((_, index), series) in snapshot.points {
             let class = &CLASSES[index];
             let field = class.kind.field();
             let mut metric = json!({"name":class.name,"unit":class.unit,field:{"dataPoints":[]}});
@@ -485,7 +488,7 @@ impl Encoder {
                 point["startTimeUnixNano"] = json!(self.start.to_string());
                 point["timeUnixNano"] = json!(now.to_string());
                 let extra = json_size(&point) + if data.is_empty() { overhead } else { 1 };
-                // Retain a sorted prefix. Once full, every remaining point
+                // Retain a System-first, sorted prefix. Once full, every remaining point
                 // is a body drop, irrespective of a later point's size.
                 if full || size + extra > limit {
                     full = true;

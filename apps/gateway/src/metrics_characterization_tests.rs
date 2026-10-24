@@ -1,4 +1,5 @@
-//! #99's baseline, not an OTLP parser or an export classification table.
+//! #99's Prometheus baseline; the golden's final column separately pins each
+//! family's OTLP privacy class (not present in the Prometheus exposition).
 //! Coordinator amendment: `path` is retained on the two scope-lock families
 //! and lock_deadlock_retries. Slice 2 must permit it ONLY there and ONLY for
 //! admission/settlement/reconciliation; arbitrary HTTP paths remain forbidden.
@@ -22,7 +23,7 @@ async fn db_collector_label_keys_match_golden(pool: sqlx::PgPool) {
             .lines()
             .find(|line| line.starts_with(&format!("{family} ")))
             .unwrap();
-        let expected = golden.rsplit_once(' ').unwrap().1;
+        let expected = golden.split_whitespace().nth(2).unwrap();
         let lines = out
             .lines()
             .filter(|line| line.starts_with(&format!("{family}{{")))
@@ -204,5 +205,9 @@ async fn prometheus_family_types_and_label_keys_match_golden() {
             format!("{name} {kind} {keys}\n")
         })
         .collect::<String>();
-    assert_eq!(actual, include_str!("metrics_families.golden"));
+    let prometheus_golden = include_str!("metrics_families.golden")
+        .lines()
+        .map(|line| format!("{}\n", line.rsplit_once(' ').unwrap().0))
+        .collect::<String>();
+    assert_eq!(actual, prometheus_golden);
 }

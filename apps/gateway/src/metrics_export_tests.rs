@@ -54,7 +54,7 @@ fn registration_inventory_includes_families_without_instantiated_series() {
 }
 
 #[test]
-fn every_registered_family_classified_once_with_exact_type_and_keys() {
+fn every_registered_family_classified_once_with_pinned_class_type_and_keys() {
     let golden = include_str!("metrics_families.golden");
     assert_eq!(CLASSES.len(), golden.lines().count());
     let mut names = BTreeSet::new();
@@ -66,9 +66,14 @@ fn every_registered_family_classified_once_with_exact_type_and_keys() {
             class.labels.join(",")
         };
         assert!(
-            golden
-                .lines()
-                .any(|line| line == format!("{} {} {}", class.name, class.kind.as_str(), keys)),
+            golden.lines().any(|line| line
+                == format!(
+                    "{} {} {} {:?}",
+                    class.name,
+                    class.kind.as_str(),
+                    keys,
+                    class.class
+                )),
             "{}",
             class.name
         );
@@ -222,6 +227,21 @@ fn traffic_default_and_build_info_are_absent() {
 }
 
 #[test]
+fn disabled_families_skip_even_malformed_labels_without_drops() {
+    for sample in [
+        "{email=\"private@example.invalid\"} 1",
+        "{method=\"unterminated} 1",
+    ] {
+        let (body, drops) = encode(
+            &format!("gateway_http_requests_total{sample}\ngateway_build_info{sample}\n"),
+            false,
+        );
+        assert!(metrics(&body).is_empty());
+        assert_eq!(drops.total(), 0);
+    }
+}
+
+#[test]
 fn labels_escape_safely_and_identity_canaries_never_escape() {
     let canary = "07980fdd-1f4a-4716-bff3-20317aa86598";
     for class in CLASSES {
@@ -244,7 +264,12 @@ fn labels_escape_safely_and_identity_canaries_never_escape() {
             let (body, drops) = encode(&format!("{name}{{{key}=\"{canary}\"}} 1\n"), true);
             assert!(metrics(&body).is_empty());
             assert!(!body.to_string().contains(canary));
-            assert_eq!(drops.get(DropReason::Label), 1, "{} {key}", class.name);
+            assert_eq!(
+                drops.get(DropReason::Label),
+                u64::from(class.class != Class::Excluded),
+                "{} {key}",
+                class.name
+            );
         }
     }
     let (body, drops) = encode(
@@ -401,12 +426,62 @@ fn caps_are_sorted_and_deterministic() {
 }
 
 #[test]
+fn system_families_precede_traffic_under_point_and_body_caps() {
+    let mut lines = [
+        "gateway_admission_denials",
+        "gateway_alert_email_attempts",
+        "gateway_auth_throttled",
+        "gateway_batch_lines",
+        "gateway_batch_route_pauses",
+        "gateway_batches",
+        "gateway_cache_lookups",
+        "gateway_http_requests",
+    ]
+    .into_iter()
+    .flat_map(|name| {
+        let class = CLASSES.iter().find(|c| c.name == name).unwrap();
+        assert_eq!(class.class, Class::Traffic);
+        (0..300).map(move |i| format!("{name}_total{{{}=\"{i:03}\"}} 1\n", class.labels[0]))
+    })
+    .collect::<Vec<_>>();
+    lines.push("gateway_work_lease_terms_total{lease=\"x\"} 1\n".into());
+    let text = lines.concat();
+    let (body, drops) = encode(&text, true);
+    assert!(
+        metrics(&body)
+            .iter()
+            .any(|m| m["name"] == "gateway_work_lease_terms"),
+        "Traffic must not starve the lease point"
+    );
+    assert_eq!(metrics(&body)[0]["name"], "gateway_work_lease_terms");
+    assert_eq!(points(&metrics(&body)[0])[0]["asInt"], "1");
+    assert_eq!(
+        metrics(&body)
+            .iter()
+            .map(|m| points(m).len())
+            .sum::<usize>(),
+        MAX_POINTS
+    );
+    assert_eq!(drops.get(DropReason::SeriesLimit), 401);
+    let reversed = lines.into_iter().rev().collect::<String>();
+    assert_eq!((body, drops), encode(&reversed, true));
+    let limited = encoder().encode_with_limit(Snapshot::parse(&text, true), 456, 2048);
+    let body: Value = serde_json::from_slice(&limited.body).unwrap();
+    assert_eq!(metrics(&body)[0]["name"], "gateway_work_lease_terms");
+    assert!(limited.dropped.get(DropReason::BodyLimit) > 0);
+}
+
+#[test]
 fn malformed_histograms_are_not_fabricated() {
-    for buckets in [
-        "",
-        "le=\"1\"} 2\n",
-        "le=\"+Inf\"} 2\n",
-        "le=\"1\"} 3\ngateway_scope_lock_wait_seconds_bucket{le=\"+Inf\"} 2\n",
+    for (buckets, count) in [
+        ("", 1),
+        ("le=\"1\"} 2\n", 1),
+        ("le=\"+Inf\"} 2\n", 1),
+        // +Inf matches count: only the decreasing cumulative buckets are invalid.
+        (
+            "le=\"1\"} 3\ngateway_scope_lock_wait_seconds_bucket{le=\"+Inf\"} 2\n",
+            2,
+        ),
     ] {
         let prefix = if buckets.is_empty() {
             "".into()
@@ -415,7 +490,7 @@ fn malformed_histograms_are_not_fabricated() {
         };
         let (body, drops) = encode(
             &format!(
-                "{prefix}gateway_scope_lock_wait_seconds_count 1\ngateway_scope_lock_wait_seconds_sum 1\n"
+                "{prefix}gateway_scope_lock_wait_seconds_count {count}\ngateway_scope_lock_wait_seconds_sum 1\n"
             ),
             true,
         );
@@ -513,10 +588,10 @@ async fn actual_prometheus_render_round_trips_without_value_loss() {
     }
 }
 
-// Reproduce the all-features-only failure: DB refresh instantiates two gauges
-// absent from the old table, even when Traffic is off. A private registry keeps
-// unrelated lease tests from clearing those gauges during the render, while
-// global recording continues throughout refresh, parsing and encoding.
+// DB refresh instantiates gauges absent from a render without a store. Use a
+// private registry so unrelated global lease tests cannot clear them. The writer
+// records into both registries; only its private writes exercise contention with
+// this refresh, parsing and encoding. Validate both privacy selections.
 #[cfg(feature = "integration-tests")]
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn db_refresh_round_trips_with_concurrent_global_recording(pool: sqlx::PgPool) {
@@ -544,7 +619,12 @@ async fn db_refresh_round_trips_with_concurrent_global_recording(pool: sqlx::PgP
     ready.await.unwrap();
     let text = m.render(Some(&crate::store::Store::new(pool))).await;
     // Compare one render against its own parse, never a later counter read.
-    let encoded = encoder().encode(Snapshot::parse(&text, false), 456);
+    let encoded = [false, true].map(|traffic| {
+        (
+            traffic,
+            encoder().encode(Snapshot::parse(&text, traffic), 456),
+        )
+    });
     stop.send(()).unwrap();
     writer.await.unwrap();
     for name in [
@@ -553,13 +633,53 @@ async fn db_refresh_round_trips_with_concurrent_global_recording(pool: sqlx::PgP
     ] {
         assert!(text.contains(&format!("{name}{{}} ")));
     }
-    assert_eq!(encoded.dropped.total(), 0, "{:?}", encoded.dropped);
-    let body: Value = serde_json::from_slice(&encoded.body).unwrap();
-    assert!(metrics(&body).iter().all(|metric| {
-        CLASSES
-            .iter()
-            .any(|class| metric["name"] == class.name && class.class == Class::System)
-    }));
+    for (traffic, encoded) in encoded {
+        assert_eq!(encoded.dropped.total(), 0, "{:?}", encoded.dropped);
+        let body: Value = serde_json::from_slice(&encoded.body).unwrap();
+        assert!(metrics(&body).iter().all(|metric| {
+            CLASSES.iter().any(|class| {
+                metric["name"] == class.name
+                    && (class.class == Class::System || (traffic && class.class == Class::Traffic))
+            })
+        }));
+        for name in [
+            "gateway_reservations_held",
+            "gateway_alert_email_deliveries",
+            "gateway_alert_delivery_pending_buckets",
+            "gateway_alert_delivery_oldest_pending_age_seconds",
+        ] {
+            let metric = metrics(&body).iter().find(|metric| metric["name"] == name);
+            if !traffic {
+                assert!(metric.is_none(), "{name} must be opt-in");
+                continue;
+            }
+            let metric = metric.unwrap_or_else(|| panic!("DB gauge missing: {name}"));
+            for point in points(metric) {
+                let labels = point["attributes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|a| {
+                        (
+                            a["key"].as_str().unwrap().to_owned(),
+                            a["value"]["stringValue"].as_str().unwrap().to_owned(),
+                        )
+                    })
+                    .collect::<Labels>();
+                let expected = point["asInt"].as_str().unwrap();
+                assert!(
+                    text.lines().any(|line| {
+                        line.strip_prefix(name).is_some_and(|rest| {
+                            sample(rest).is_ok_and(|(source_labels, value)| {
+                                source_labels == labels && value == expected
+                            })
+                        })
+                    }),
+                    "{name}: {point}"
+                );
+            }
+        }
+    }
 }
 
 #[test]
