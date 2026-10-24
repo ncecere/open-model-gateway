@@ -16,10 +16,10 @@ const impact = {
   observed_at: "2026-10-21T12:00:00Z", dependency_versions: { catalog: "12" },
   warnings: ["Configuration estimate, not a reservation.", "Personal workspace effects are omitted."],
 };
-function view() {
+function view(current = record) {
   document.cookie = "omg_csrf=test; path=/";
   const client = testClient();
-  render(<QueryClientProvider client={client}><ActionProvider><DeploymentReviewButton record={record} name="Upstream" /></ActionProvider></QueryClientProvider>);
+  render(<QueryClientProvider client={client}><ActionProvider><DeploymentReviewButton record={current} name="Upstream" /></ActionProvider></QueryClientProvider>);
   return userEvent.setup();
 }
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -46,6 +46,20 @@ describe("deployment configuration review", () => {
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
     expect(fetch.mock.calls[1][0]).toBe("/api/v1/platform/deployments/deployment");
     expect(fetch.mock.calls[1][1]).toMatchObject({ method: "PATCH", body: JSON.stringify({ enabled: false }) });
+  });
+  it("enable review sends true and a failed apply stays in the existing confirmation", async () => {
+    const fetch = vi.fn().mockResolvedValueOnce(Response.json({ ...impact, diff: [{ field: "enabled", before: false, after: true }], serving_routes_gained: [record.id], serving_routes_lost: [], models_losing_last_serving_route: [] })).mockResolvedValueOnce(Response.json({ error: { code: "403", message: "Live authority revoked" } }, { status: 403 }));
+    vi.stubGlobal("fetch", fetch);
+    const user = view({ ...record, enabled: false });
+    await user.click(screen.getByRole("button", { name: /^Review changes$/ }));
+    await screen.findByText("Disabled → Enabled");
+    expect(fetch.mock.calls[0][1].body).toBe(JSON.stringify({ enabled: true }));
+    await user.click(screen.getByRole("button", { name: /^Continue to confirmation$/ }));
+    await screen.findByRole("dialog", { name: /^Enable Upstream\?$/ });
+    await user.click(screen.getByRole("button", { name: /^Enable$/ }));
+    await screen.findByText("Live authority revoked");
+    expect(screen.getByRole("dialog", { name: /^Enable Upstream\?$/ })).toBeTruthy();
+    expect(fetch.mock.calls[1][1].body).toBe(JSON.stringify({ enabled: true }));
   });
   it("cancel never applies and reopening obtains a new observation", async () => {
     const fetch = vi.fn().mockImplementation(() => Promise.resolve(Response.json(impact)));

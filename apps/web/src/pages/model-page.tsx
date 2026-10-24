@@ -26,6 +26,7 @@ import { useInferenceBaseUrl } from "../components/ui";
 import { modelReadiness, modelSectionFor, notServingReason, protocolEndpoints, protocolLabel, protocolOptions, protocolProfiles, readinessText, retiredWorkloads, routeDataPolicy, routeSectionFor, routeTiers, workloadModalities, type RouteTiers } from "../lib/model-setup";
 import { parseCheckboxValues, type Field } from "../lib/forms";
 import { ResourceLink } from "../components/navigation-link";
+import { DeploymentReviewDialog } from "../components/deployment-preview";
 import { LabBadge, LabIcon, ProviderIcon, TitleWithIcon, WithIcon } from "../components/provider-icon";
 import { Alert, Badge, Button, DateTime, ErrorNotice, useAction, useApi, useApiScope, useChoices, useCollection } from "../components/ui";
 import { Badge as BitopBadge } from "../components/ui/badge/badge";
@@ -245,7 +246,7 @@ function RouteEditor({ route, workload, profile, editing, onClose }: { route: De
   return <PriceEditorDialog deployment={route} workload={workload} profile={profile} current={q.data?.data[0]} importOnOpen={editing.importOnOpen} onClose={onClose} />;
 }
 function RouteActions({ row, workload, writable }: { row: RouteRow; model: Model; workload: WorkloadKind; writable: boolean }) {
-  const { route } = row, ask = useAction(), [editing, setEditing] = useState<Editing>(null), profile = row.detail?.provider;
+  const { route } = row, ask = useAction(), [editing, setEditing] = useState<Editing>(null), [reviewing, setReviewing] = useState(false), profile = row.detail?.provider;
   // Read-only viewers get the same ⋯ menu (review #48), with only what they can do.
   if (!writable) return <ActionMenu label={`Actions for route ${route.upstream_model}`} actions={[{ label: "Route page", render: <ResourceLink search={{ page: "deployment-detail", record: route.id }} /> }, { label: "Price history", render: <ResourceLink search={{ page: "deployment-detail", record: route.id, tab: "pricing" }} /> }]} />;
   return <><ActionMenu label={`Actions for route ${route.upstream_model}`} actions={[
@@ -253,8 +254,8 @@ function RouteActions({ row, workload, writable }: { row: RouteRow; model: Model
     { label: "Publish price…", onSelect: () => setEditing({ importOnOpen: false }) },
     { label: "Import current OpenRouter price…", hidden: profile !== "openrouter", onSelect: () => setEditing({ importOnOpen: true }) },
     { label: "Route page", render: <ResourceLink search={{ page: "deployment-detail", record: route.id }} /> },
-    { label: route.enabled ? "Disable route…" : "Enable route…", danger: route.enabled, onSelect: () => ask({ title: `${route.enabled ? "Disable" : "Enable"} route ${route.upstream_model}?`, description: "Changes eligibility for new requests. A disabled model or connection still prevents serving.", danger: route.enabled, submitLabel: route.enabled ? "Disable route" : "Enable route", run: (_, signal) => api(routePath(route.id), { method: "PATCH", body: { enabled: !route.enabled }, signal }) }) },
-  ]} /><RouteEditor route={route} workload={workload} profile={profile} editing={editing} onClose={() => setEditing(null)} /></>;
+    { label: route.enabled ? "Disable route…" : "Enable route…", danger: route.enabled, onSelect: () => setReviewing(true) },
+  ]} /><RouteEditor route={route} workload={workload} profile={profile} editing={editing} onClose={() => setEditing(null)} />{reviewing && <DeploymentReviewDialog record={route} name={`route ${route.upstream_model}`} onClose={() => setReviewing(false)} />}</>;
 }
 /** Per-route price lines with tiers, ceilings and the publish/import actions. */
 function RoutePricing({ set, model, workload, writable }: { set: RouteSet; model: Model; workload: WorkloadKind; writable: boolean }) {
