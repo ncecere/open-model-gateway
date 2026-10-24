@@ -16,6 +16,9 @@ pub struct Readiness {
 }
 
 #[derive(Clone)]
+/// Next-due time and schedule id of the scheduler's last keyset page (per process).
+pub(crate) type ReportScanFrontier = (chrono::DateTime<chrono::Utc>, uuid::Uuid);
+
 pub struct Store {
     pub(crate) pool: PgPool,
     /// Immutable operator policy, injected once at startup; empty by default.
@@ -32,8 +35,7 @@ pub struct Store {
         std::sync::Arc<std::sync::Mutex<std::collections::HashMap<uuid::Uuid, std::time::Instant>>>,
     /// Advisory report scan frontier; reset on restart/failover. No authority
     /// or claim ownership depends on this per-process keyset cursor.
-    pub(crate) report_dispatch:
-        std::sync::Arc<std::sync::Mutex<Option<(chrono::DateTime<chrono::Utc>, uuid::Uuid)>>>,
+    pub(crate) report_dispatch: std::sync::Arc<std::sync::Mutex<Option<ReportScanFrontier>>>,
     /// Admission protocol (`GATEWAY_ADMISSION_MODE`, see
     /// `governance::locks`): scoped locks (default) or the former
     /// installation row lock.
