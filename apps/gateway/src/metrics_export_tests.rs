@@ -712,6 +712,204 @@ fn real_body_limit_keeps_a_sorted_prefix_of_histogram_points() {
     assert_eq!(first.points as u64 + first.dropped.total(), 1800);
 }
 
+// Like holds_tests::queue_cursor_replica_worker, re-exec exactly one helper:
+// INSTANCE is process-global, so no test ordering/reset of its LazyLock is safe.
+#[tokio::test]
+async fn runtime_entropy_failure_is_quiet_and_cached_in_a_fresh_process() {
+    let output = tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "metrics_export::tests::runtime_entropy_failure_child",
+                "--ignored",
+                "--nocapture",
+            ])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .expect("bounded entropy subprocess")
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "entropy subprocess failed: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "optional exporter entropy failure must not log"
+    );
+}
+
+#[tokio::test]
+#[ignore = "invoked only by runtime_entropy_failure_is_quiet_and_cached_in_a_fresh_process"]
+async fn runtime_entropy_failure_child() {
+    #[derive(Clone)]
+    struct Logs(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Logs {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let logs = Logs(Default::default());
+    let writer = logs.clone();
+    let store = unit_store().await;
+    let config = crate::config::MetricsExportConfig {
+        endpoint: Some((
+            "http://127.0.0.1:1/v1/metrics".parse().unwrap(),
+            reqwest::Client::new(),
+        )),
+        headers: Default::default(),
+        interval: Duration::from_secs(10),
+        traffic: false,
+    };
+    tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::TRACE)
+        .with_writer(move || writer.clone())
+        .init();
+    let baseline = tokio::runtime::Handle::current()
+        .metrics()
+        .num_alive_tasks();
+    let fail = crate::entropy::seam::fail_on_this_thread();
+    assert!(Runtime::start(config.clone(), Environment::Development, 1, store.clone()).is_none());
+    assert_eq!(
+        tokio::runtime::Handle::current()
+            .metrics()
+            .num_alive_tasks(),
+        baseline,
+        "no exporter task on entropy failure"
+    );
+    drop(fail);
+    assert!(
+        crate::entropy::bytes_quiet::<16>().is_ok(),
+        "entropy seam has reset"
+    );
+    for _ in 0..3 {
+        assert!(
+            Runtime::start(config.clone(), Environment::Development, 1, store.clone()).is_none(),
+            "cached failure must not draw a new successful identity"
+        );
+        assert_eq!(
+            tokio::runtime::Handle::current()
+                .metrics()
+                .num_alive_tasks(),
+            baseline
+        );
+    }
+    assert!(
+        logs.0.lock().unwrap().is_empty(),
+        "no warning/error for optional identity failure"
+    );
+}
+
+// Closed pool plus no metrics lease: render uses local pool gauges only, never
+// a DB connection, DNS, or real PostgreSQL. Do not introduce a production hook.
+async fn unit_store() -> crate::store::Store {
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+        .unwrap();
+    pool.close().await;
+    crate::store::Store::new(pool).with_leases(std::sync::Arc::new(crate::leases::Leases::new()))
+}
+
+#[tokio::test(start_paused = true)]
+async fn slow_push_skips_overdue_ticks_without_catch_up_bursts() {
+    // The configured minimum interval is 10s, but using 1s directly on the
+    // worker makes its real 5s exchange exceed several ticks deterministically.
+    // Poll/yield instead of awaiting socket readiness under paused time: Tokio
+    // must not auto-advance a transport timeout while the OS handles loopback.
+    async fn spin_until(mut condition: impl FnMut() -> bool) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while !condition() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "loopback fixture did not progress"
+            );
+            tokio::task::yield_now().await;
+        }
+    }
+    struct Abort(tokio::task::JoinHandle<()>);
+    impl Drop for Abort {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+    let store = unit_store().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1/metrics", listener.local_addr().unwrap());
+    let received = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = received.clone();
+    let closed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let closed_by_server = closed.clone();
+    let server = Abort(tokio::spawn(async move {
+        let mut sockets = tokio::task::JoinSet::new();
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let observed = observed.clone();
+            let closed = closed_by_server.clone();
+            sockets.spawn(async move {
+                use tokio::io::AsyncReadExt;
+                let mut buf = [0; 4096];
+                // Seeing request bytes (not just accept) proves the push is
+                // in its HTTP exchange. Never answer; timeout closes it.
+                assert!(socket.read(&mut buf).await.unwrap() > 0);
+                observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                while socket.read(&mut buf).await.is_ok_and(|n| n > 0) {}
+                closed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            });
+        }
+    }));
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let exporter = Exporter {
+        url: url.parse().unwrap(),
+        client: reqwest::Client::builder().no_proxy().build().unwrap(),
+        headers: Default::default(),
+        encoder: encoder(),
+        traffic: false,
+    };
+    let worker = Abort(tokio::spawn(super::worker(
+        exporter,
+        store,
+        Duration::from_secs(1),
+        stopped,
+    )));
+    tokio::task::yield_now().await; // install the first tick
+    tokio::time::advance(Duration::from_secs(1)).await;
+    spin_until(|| received.load(std::sync::atomic::Ordering::SeqCst) == 1).await;
+    tokio::time::advance(EXCHANGE).await; // several ticks overdue; first push times out
+    // EOF proves the worker consumed the timeout/cancelled its exchange.
+    // It installs its next timer synchronously before yielding again.
+    spin_until(|| closed.load(std::sync::atomic::Ordering::SeqCst) == 1).await;
+    assert_eq!(received.load(std::sync::atomic::Ordering::SeqCst), 1);
+    tokio::time::advance(Duration::from_millis(999)).await;
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        received.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "no immediate replay of overdue ticks"
+    );
+    tokio::time::advance(Duration::from_millis(1)).await;
+    spin_until(|| received.load(std::sync::atomic::Ordering::SeqCst) == 2).await;
+    // The second request stays in-flight even after the skipped-tick boundary;
+    // there is only one worker, never overlapping/catch-up exports.
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(received.load(std::sync::atomic::Ordering::SeqCst), 2);
+    drop(stop);
+    worker.0.abort();
+    server.0.abort();
+}
+
 proptest::proptest! {
     #[test]
     fn hostile_exposition_never_panics(text in "(?s).{0,4096}", label in "(?s).{0,120}", value in proptest::sample::select(vec!["NaN", "+Inf", "-Inf", "1", "9007199254740993"])) {

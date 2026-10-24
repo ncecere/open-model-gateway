@@ -1,7 +1,7 @@
 #![cfg(feature = "integration-tests")]
 // Deliberately discard errors that might embed credentials or connection URLs.
 #![allow(clippy::ok_expect)]
-//! #99 slice C, first checkpoint: the actual `serve` process, a fresh SQLx
+//! #99 slice C: the actual `serve` process, a fresh SQLx
 //! enterprise database and a local HTTP collector. No inference/provider calls.
 //!
 //! The parent must explicitly select a DISPOSABLE PostgreSQL cluster through
@@ -16,8 +16,7 @@
 //! never creates/alters roles, changes passwords or applies cluster-wide ACLs.
 //!
 //! startup.rs supplies the clean-environment subprocess pattern;
-//! telemetry_acceptance.rs supplies the fresh-DB/local-collector pattern. No
-//! future worker API is referenced, so this compiles before the runtime exists.
+//! telemetry_acceptance.rs supplies the fresh-DB/local-collector pattern.
 //! Transport hardening (#313) is a separate prerequisite, not copied here.
 
 use axum::{
@@ -55,6 +54,8 @@ const BINARY: &str = env!("CARGO_BIN_EXE_open-model-gateway");
 const BODY_LIMIT: usize = 1024 * 1024;
 const OUTPUT_LIMIT: usize = 64 * 1024;
 const HEADER_SECRET: &str = "metrics-header-canary-99c";
+const HEADER_NAME: &str = "x-metrics-canary-99c";
+const SERVER_CANARY: &str = "collector-error-text-canary-99c";
 const REQUEST_CANARY: &str = "request-header-canary-99c";
 const BODY_CANARY: &str = "request-body-canary-99c";
 const OTEL_CANARY: &str = "ignored-otel-canary-99c";
@@ -85,6 +86,7 @@ struct CollectorState {
     receipts: mpsc::Sender<Receipt>,
     reply_allowed: watch::Receiver<bool>,
     overflow: Arc<AtomicBool>,
+    failure: bool,
 }
 
 async fn collect(
@@ -102,7 +104,8 @@ async fn collect(
             .is_some_and(|v| v == "application/json"),
         authenticated: headers
             .get("authorization")
-            .is_some_and(|v| v == HEADER_SECRET),
+            .is_some_and(|v| v == HEADER_SECRET)
+            && headers.get(HEADER_NAME).is_some_and(|v| v == HEADER_SECRET),
         raw,
         arrived: tokio::time::Instant::now(),
     };
@@ -123,13 +126,15 @@ async fn collect(
     .await
     .is_ok_and(|result| result.is_ok());
     (
-        if allowed {
+        if state.failure {
+            StatusCode::INTERNAL_SERVER_ERROR
+        } else if allowed {
             StatusCode::OK
         } else {
             StatusCode::SERVICE_UNAVAILABLE
         },
         [("content-type", "application/json")],
-        "{}",
+        if state.failure { SERVER_CANARY } else { "{}" },
     )
 }
 
@@ -142,6 +147,9 @@ struct Collector {
 }
 impl Collector {
     async fn start() -> Self {
+        Self::with_failure(false).await
+    }
+    async fn with_failure(failure: bool) -> Self {
         let listener = loopback_listener().await;
         let url = format!("http://{}/v1/metrics", listener.local_addr().unwrap());
         let (tx, receipts) = mpsc::channel(4);
@@ -155,6 +163,7 @@ impl Collector {
                 receipts: tx,
                 reply_allowed: rx,
                 overflow: overflow.clone(),
+                failure,
             });
         let task = tokio::spawn(async move {
             axum::serve(listener, app)
@@ -205,12 +214,27 @@ fn drain(mut pipe: impl AsyncRead + Unpin + Send + 'static) -> (Output, JoinHand
 struct Gateway {
     child: Child,
     addr: SocketAddr,
+    scrape: Option<SocketAddr>,
     outputs: Vec<Output>,
     drains: Vec<JoinHandle<()>>,
     _dir: tempfile::TempDir,
 }
 impl Gateway {
     async fn spawn(database_url: &str, collector_url: &str, enabled: bool) -> Self {
+        Self::spawn_with_scrape(database_url, collector_url, enabled, false).await
+    }
+    async fn spawn_with_scrape(
+        database_url: &str,
+        collector_url: &str,
+        enabled: bool,
+        scrape: bool,
+    ) -> Self {
+        let scrape_listener = if scrape {
+            Some(loopback_listener().await)
+        } else {
+            None
+        };
+        let scrape = scrape_listener.as_ref().map(|l| l.local_addr().unwrap());
         let dir = tempfile::tempdir().expect("isolated subprocess directory");
         let empty_env = dir.path().join("empty.env");
         std::fs::write(&empty_env, "").expect("empty environment file");
@@ -237,9 +261,10 @@ impl Gateway {
             .env("OTEL_SERVICE_NAME", OTEL_CANARY)
             .env(
                 "METRICS_ACCEPTANCE_HEADERS",
-                format!("Authorization={HEADER_SECRET}"),
+                format!("Authorization={HEADER_SECRET},{HEADER_NAME}={HEADER_SECRET}"),
             )
-            // No GATEWAY_METRICS_ADDR, traces URL, or Traffic setting.
+            // Scrape is opt-in below, only for fault-isolation tests.
+            // No traces URL or Traffic setting.
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -250,6 +275,10 @@ impl Gateway {
                 .env(MetricsExportConfig::INTERVAL, "10")
                 .env(MetricsExportConfig::HEADERS, "METRICS_ACCEPTANCE_HEADERS");
         }
+        if let Some(scrape) = scrape {
+            command.env("GATEWAY_METRICS_ADDR", scrape.to_string());
+        }
+        drop(scrape_listener);
         drop(listener);
         let mut child = command.spawn().expect("spawn gateway binary");
         let (stdout, stdout_task) = drain(child.stdout.take().unwrap());
@@ -257,6 +286,7 @@ impl Gateway {
         Self {
             child,
             addr,
+            scrape,
             outputs: vec![stdout, stderr],
             drains: vec![stdout_task, stderr_task],
             _dir: dir,
@@ -322,6 +352,233 @@ impl Drop for Gateway {
             task.abort();
         }
     }
+}
+
+// Raw TCP deliberately sends no HTTP headers or body. Observe EOF/reset as
+// well as accepts: process exit alone would not prove cancellation of sockets.
+struct HangingCollector {
+    url: String,
+    connections: watch::Receiver<(usize, usize)>, // opened, closed
+    task: JoinHandle<()>,
+}
+impl HangingCollector {
+    async fn start() -> Self {
+        let listener = loopback_listener().await;
+        let url = format!("http://{}/v1/metrics", listener.local_addr().unwrap());
+        let (counts, connections) = watch::channel((0, 0));
+        let task = tokio::spawn(async move {
+            let mut sockets = tokio::task::JoinSet::new();
+            loop {
+                tokio::select! {
+                    accepted = listener.accept() => {
+                        let (mut stream, _) = accepted.unwrap();
+                        counts.send_modify(|n| n.0 += 1);
+                        let counts = counts.clone();
+                        sockets.spawn(async move {
+                            let mut bytes = [0u8; 4096];
+                            let mut total = 0;
+                            while let Ok(n) = stream.read(&mut bytes).await {
+                                if n == 0 { break; }
+                                total += n;
+                                assert!(total <= BODY_LIMIT + 16 * 1024, "bounded HTTP request");
+                            }
+                            counts.send_modify(|n| n.1 += 1);
+                        });
+                    }
+                    result = sockets.join_next(), if !sockets.is_empty() => {
+                        result.unwrap().expect("hanging collector socket task");
+                    }
+                }
+            }
+        });
+        Self {
+            url,
+            connections,
+            task,
+        }
+    }
+    async fn opened(&mut self, expected: usize) {
+        tokio::time::timeout(
+            Duration::from_secs(17),
+            self.connections.wait_for(|n| n.0 >= expected),
+        )
+        .await
+        .expect("expected hanging collector connection")
+        .unwrap();
+    }
+    async fn all_closed(&mut self, expected: usize) {
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            self.connections.wait_for(|n| n.0 >= expected && n.0 == n.1),
+        )
+        .await
+        .expect("gateway left detached collector sockets")
+        .unwrap();
+    }
+}
+impl Drop for HangingCollector {
+    fn drop(&mut self) {
+        self.task.abort();
+    } // JoinSet also aborts every socket task.
+}
+
+fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(1))
+        .build()
+        .unwrap()
+}
+
+impl Gateway {
+    async fn assert_serving(&mut self) {
+        assert!(self.child.try_wait().unwrap().is_none());
+        let client = http_client();
+        for (path, status) in [("/health/ready", "ready"), ("/health/live", "ok")] {
+            let response = client
+                .get(format!("http://{}{path}", self.addr))
+                .send()
+                .await
+                .expect("collector outage must not block HTTP");
+            assert_eq!(response.status(), StatusCode::OK);
+            let body: Value = response.json().await.unwrap();
+            assert_eq!(body["status"], status);
+        }
+    }
+
+    async fn wait_for_pushes(&mut self, expected_outcome: &str, count: u64) {
+        let client = http_client();
+        let scrape = self.scrape.expect("fault-isolation-only scrape listener");
+        tokio::time::timeout(Duration::from_secs(32), async {
+            loop {
+                self.assert_serving().await;
+                let response = client
+                    .get(format!("http://{scrape}/metrics"))
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let text = response.text().await.unwrap();
+                let mut seen = BTreeMap::new();
+                for outcome in [
+                    "accepted",
+                    "http_status",
+                    "transport",
+                    "timeout",
+                    "acknowledgement",
+                ] {
+                    let prefix =
+                        format!("gateway_otlp_metrics_pushes_total{{outcome=\"{outcome}\"}} ");
+                    let value = text
+                        .lines()
+                        .find_map(|line| line.strip_prefix(&prefix))
+                        .expect("precreated fixed outcome series")
+                        .parse::<u64>()
+                        .unwrap();
+                    if outcome != expected_outcome {
+                        assert_eq!(value, 0, "unexpected exporter outcome");
+                    }
+                    seen.insert(outcome, value);
+                }
+                if seen[expected_outcome] >= count {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("periodic failure counter did not advance");
+    }
+
+    #[cfg(unix)]
+    async fn terminate(&mut self) {
+        let started = std::time::Instant::now();
+        let pid = self.child.id().expect("running gateway").to_string();
+        let signalled = Command::new("kill")
+            .args(["-TERM", &pid])
+            .status()
+            .await
+            .unwrap();
+        assert!(signalled.success());
+        let status = tokio::time::timeout(Duration::from_secs(6), self.child.wait())
+            .await
+            .expect("SIGTERM exceeded 3s drain plus headroom")
+            .expect("reap gateway");
+        assert!(started.elapsed() < Duration::from_secs(6));
+        assert!(
+            status.success(),
+            "SIGTERM must exit cleanly, not via forced kill"
+        );
+        for task in &mut self.drains {
+            tokio::time::timeout(Duration::from_secs(1), task)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    }
+
+    fn assert_fixed_warning(&self, outcome: &str, collector_url: &str) {
+        for output in &self.outputs {
+            let bytes = output.lock().unwrap();
+            assert!(
+                bytes.len() < OUTPUT_LIMIT,
+                "cannot verify truncated diagnostics"
+            );
+            let text = String::from_utf8_lossy(&bytes);
+            for canary in [
+                collector_url,
+                collector_url.strip_suffix("/v1/metrics").unwrap(),
+                HEADER_SECRET,
+                HEADER_NAME,
+                "METRICS_ACCEPTANCE_HEADERS",
+                SERVER_CANARY,
+            ] {
+                assert!(
+                    !text
+                        .to_ascii_lowercase()
+                        .contains(&canary.to_ascii_lowercase()),
+                    "collector diagnostic leaked private material (withheld)"
+                );
+            }
+            assert!(!text.to_ascii_lowercase().contains("authorization"));
+        }
+        let stderr = self.outputs[1].lock().unwrap();
+        let events: Vec<Value> = String::from_utf8_lossy(&stderr)
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("structured stderr"))
+            .filter(|event| event["target"] == "open_model_gateway::metrics_export")
+            .collect();
+        assert_eq!(
+            events.len(),
+            1,
+            "one outage transition, not one warning per failed push"
+        );
+        assert_eq!(events[0]["level"], "WARN");
+        assert_eq!(
+            events[0]["fields"],
+            serde_json::json!({"message":"metrics exporter state changed", "outcome":outcome})
+        );
+    }
+}
+
+fn fresh_child_url(pool: &PgPool) -> String {
+    let base: PgConnectOptions = std::env::var("DATABASE_URL")
+        .ok()
+        .unwrap()
+        .parse()
+        .ok()
+        .unwrap();
+    let options = pool.connect_options();
+    assert!(options.get_database().is_some() && options.get_database() != base.get_database());
+    let mut url = options.to_url_lossy();
+    if let Some(value) = options.get_options() {
+        url.query_pairs_mut().append_pair("options", value);
+    }
+    if let Some(value) = options.get_application_name() {
+        url.query_pairs_mut().append_pair("application_name", value);
+    }
+    url.to_string()
 }
 
 async fn seed_canaries(pool: &PgPool) -> Vec<String> {
@@ -605,36 +862,189 @@ fn verify_receipt(receipt: Receipt, canaries: &[String], process_started_after: 
     identity
 }
 
-#[test]
-fn serve_exports_periodic_system_metrics_only_when_configured_without_a_scrape_listener() {
-    // The ordinary #[sqlx::test(pool)] setup reads dotenv BEFORE entering the
-    // test body. Use exactly its public runner, but refuse an absent explicit
-    // selection before it can create a DB on an implicitly discovered cluster.
-    let selected = std::env::var("DATABASE_URL")
-        .ok()
-        .expect("explicit disposable-cluster DATABASE_URL required; no dotenv fallback");
-    let url = reqwest::Url::parse(&selected)
-        .ok()
-        .expect("explicit PostgreSQL URL");
-    assert!(
-        !url.path().trim_start_matches('/').is_empty()
-            || url
-                .query_pairs()
-                .any(|(key, value)| key == "dbname" && !value.is_empty()),
-        "DATABASE_URL must explicitly name the disposable base database"
-    );
-    let _: PgConnectOptions = selected
-        .parse()
-        .ok()
-        .expect("valid explicit PostgreSQL connection options");
-    static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./enterprise_migrations");
-    let mut args = sqlx::testing::TestArgs::new(concat!(
-        module_path!(),
-        "::serve_exports_periodic_system_metrics_only_when_configured_without_a_scrape_listener"
-    ));
-    args.migrator(&MIGRATOR);
-    let checkpoint: fn(PgPool) -> _ = startup_and_periodic_checkpoint;
-    sqlx::testing::TestFn::run_test(checkpoint, args);
+macro_rules! database_checkpoint {
+    ($name:ident, $checkpoint:ident) => {
+        #[test]
+        fn $name() {
+            // The ordinary #[sqlx::test(pool)] setup reads dotenv BEFORE entering the
+            // test body. Use exactly its public runner, but refuse an absent explicit
+            // selection before it can create a DB on an implicitly discovered cluster.
+            let selected = std::env::var("DATABASE_URL")
+                .ok()
+                .expect("explicit disposable-cluster DATABASE_URL required; no dotenv fallback");
+            let url = reqwest::Url::parse(&selected)
+                .ok()
+                .expect("explicit PostgreSQL URL");
+            assert!(
+                !url.path().trim_start_matches('/').is_empty()
+                    || url
+                        .query_pairs()
+                        .any(|(key, value)| key == "dbname" && !value.is_empty()),
+                "DATABASE_URL must explicitly name the disposable base database"
+            );
+            let _: PgConnectOptions = selected
+                .parse()
+                .ok()
+                .expect("valid explicit PostgreSQL connection options");
+            static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./enterprise_migrations");
+            let mut args =
+                sqlx::testing::TestArgs::new(concat!(module_path!(), "::", stringify!($name)));
+            args.migrator(&MIGRATOR);
+            let checkpoint: fn(PgPool) -> _ = $checkpoint;
+            sqlx::testing::TestFn::run_test(checkpoint, args);
+        }
+    };
+}
+
+database_checkpoint!(
+    serve_exports_periodic_system_metrics_only_when_configured_without_a_scrape_listener,
+    startup_and_periodic_checkpoint
+);
+
+#[cfg(unix)]
+database_checkpoint!(
+    serve_isolates_hanging_metrics_collector_and_bounds_sigterm,
+    hanging_checkpoint
+);
+#[cfg(unix)]
+database_checkpoint!(
+    serve_isolates_metrics_collector_http_500,
+    http_failure_checkpoint
+);
+#[cfg(unix)]
+database_checkpoint!(
+    serve_isolates_metrics_collector_connection_refusal,
+    refused_checkpoint
+);
+#[cfg(unix)]
+database_checkpoint!(
+    serve_shutdown_sends_exactly_one_final_metrics_snapshot,
+    final_snapshot_checkpoint
+);
+
+#[cfg(unix)]
+async fn hanging_checkpoint(pool: PgPool) {
+    tokio::time::timeout(Duration::from_secs(55), async {
+        seed_canaries(&pool).await;
+        let database_url = fresh_child_url(&pool);
+        let mut collector = HangingCollector::start().await;
+        let mut gateway =
+            Gateway::spawn_with_scrape(&database_url, &collector.url, true, true).await;
+        gateway.ready("hanging collector").await;
+        gateway.wait_for_pushes("timeout", 2).await;
+        // Stop during the THIRD exchange, not in its idle interval. Shutdown
+        // must cancel it and the fresh final exchange within ONE 3s budget.
+        collector.opened(3).await;
+        gateway.assert_serving().await;
+        gateway.terminate().await;
+        collector.all_closed(4).await;
+        assert_eq!(
+            *collector.connections.borrow(),
+            (4, 4),
+            "three periodic attempts and one cancelled final attempt; no detached sockets"
+        );
+        gateway.assert_fixed_warning("timeout", &collector.url);
+    })
+    .await
+    .expect("bounded hanging-collector acceptance");
+}
+
+#[cfg(unix)]
+async fn http_failure_checkpoint(pool: PgPool) {
+    tokio::time::timeout(Duration::from_secs(45), async {
+        seed_canaries(&pool).await;
+        let mut collector = Collector::with_failure(true).await;
+        collector.reply_allowed.send_replace(true);
+        let mut gateway =
+            Gateway::spawn_with_scrape(&fresh_child_url(&pool), &collector.url, true, true).await;
+        gateway.ready("HTTP 500 collector").await;
+        gateway.wait_for_pushes("http_status", 2).await;
+        gateway.assert_serving().await;
+        gateway.terminate().await;
+        gateway.assert_fixed_warning("http_status", &collector.url);
+        // The collector actually received authenticated, nonempty metrics,
+        // not an unrelated client/probe responsible for the 500 counter.
+        for _ in 0..3 {
+            let receipt = collector
+                .receipts
+                .try_recv()
+                .expect("two periodic and one final receipt");
+            assert!(receipt.authenticated && !receipt.raw.is_empty());
+            assert_eq!(receipt.method, Method::POST);
+        }
+        assert!(collector.receipts.try_recv().is_err());
+        assert!(!collector.overflow.load(Ordering::SeqCst));
+    })
+    .await
+    .expect("bounded HTTP-500 acceptance");
+}
+
+#[cfg(unix)]
+async fn refused_checkpoint(pool: PgPool) {
+    tokio::time::timeout(Duration::from_secs(45), async {
+        seed_canaries(&pool).await;
+        // A bound but NOT listening TCP socket reserves the port throughout
+        // the test while the OS refuses connects (no ephemeral-port race).
+        let refused = tokio::net::TcpSocket::new_v4().unwrap();
+        refused.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let url = format!("http://{}/v1/metrics", refused.local_addr().unwrap());
+        let mut gateway =
+            Gateway::spawn_with_scrape(&fresh_child_url(&pool), &url, true, true).await;
+        gateway.ready("refusing collector").await;
+        gateway.wait_for_pushes("transport", 2).await;
+        gateway.assert_serving().await;
+        gateway.terminate().await;
+        gateway.assert_fixed_warning("transport", &url);
+        drop(refused);
+    })
+    .await
+    .expect("bounded connection-refusal acceptance");
+}
+
+#[cfg(unix)]
+async fn final_snapshot_checkpoint(pool: PgPool) {
+    tokio::time::timeout(Duration::from_secs(45), async {
+        let mut canaries = seed_canaries(&pool).await;
+        let database_url = fresh_child_url(&pool);
+        let mut collector = Collector::start().await;
+        canaries.extend([database_url.clone(), collector.url.clone()]);
+        let not_before = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+        let mut gateway = Gateway::spawn(&database_url, &collector.url, true).await;
+        gateway.ready("healthy shutdown collector").await;
+        collector.reply_allowed.send_replace(true);
+        let first = verify_receipt(collector.next().await, &canaries, not_before);
+        let second = verify_receipt(collector.next().await, &canaries, not_before);
+        assert_eq!(first.instance, second.instance);
+        assert!(second.accepted > first.accepted);
+        gateway.terminate().await;
+        let final_receipt = collector
+            .receipts
+            .try_recv()
+            .expect("exactly one final snapshot before process exit");
+        let final_snapshot = verify_receipt(final_receipt, &canaries, not_before);
+        assert_eq!(final_snapshot.instance, second.instance);
+        assert_eq!(final_snapshot.start, second.start);
+        assert!(final_snapshot.time > second.time);
+        // SIGTERM may cancel the second exchange before its acknowledgement
+        // is recorded, even though the collector has already received it.
+        assert!(final_snapshot.accepted >= second.accepted);
+        assert!(
+            final_snapshot.arrived.duration_since(second.arrived) < Duration::from_secs(9),
+            "final is shutdown-driven, not the next periodic tick"
+        );
+        // Child has been reaped and its pipes drained: all its sends have
+        // completed. Check the full queue, not just the first receipt.
+        assert!(matches!(
+            collector.receipts.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        assert!(!collector.overflow.load(Ordering::SeqCst));
+    })
+    .await
+    .expect("bounded final-snapshot acceptance");
 }
 
 async fn startup_and_periodic_checkpoint(pool: PgPool) {

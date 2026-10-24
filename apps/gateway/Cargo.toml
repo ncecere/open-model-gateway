@@ -75,6 +75,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 
 [dev-dependencies]
+# Deterministic paused-time coverage of the metrics worker's missed ticks.
+tokio = { version = "1", features = ["test-util"] }
 proc-macro2 = "1"
 # Parse source inventories for route declarations and the configuration surface.
 syn = { version = "2", features = ["full", "visit"] }
