@@ -1,7 +1,7 @@
 //! Standard-review regressions for #102 slice A (real PostgreSQL).
 use super::*;
 
-async fn configured_call(
+pub(super) async fn configured_call(
     app: &Router,
     method: &str,
     path: &str,

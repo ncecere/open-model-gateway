@@ -1353,6 +1353,18 @@ mod tests {
     use tower::ServiceExt;
 
     #[test]
+    fn scheduled_reports_metrics_are_system_and_identifier_free() {
+        let m = Metrics::new();
+        m.observe_report_outcome(crate::scheduled_reports::Outcome::Timeout);
+        m.set_report_queue(1024, true, 42);
+        let mut out = String::new();
+        encode(&mut out, &m.registry).unwrap();
+        assert!(out.contains("gateway_report_generation_outcomes_total{category=\"timeout\"} 1"));
+        assert!(out.contains("gateway_report_due_backlog 1024"));
+        assert!(out.contains("gateway_report_due_backlog_capped 1"));
+        assert!(out.contains("gateway_report_oldest_due_lag_seconds 42"));
+    }
+    #[test]
     fn listener_is_optional_and_never_the_public_port() {
         let public: SocketAddr = "127.0.0.1:8080".parse().unwrap();
         assert_eq!(listen_from(None, public).unwrap(), None);

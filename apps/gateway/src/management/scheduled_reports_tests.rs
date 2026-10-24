@@ -1,6 +1,8 @@
 //! #102 slice A: real PostgreSQL and served-router authorization, no SMTP worker.
 use super::*;
 use crate::route_policy::{self, TokenPolicy};
+#[path = "scheduled_reports_cap_tests.rs"]
+mod caps;
 #[path = "scheduled_reports_review_tests.rs"]
 mod review;
 const PLATFORM: &str = "/api/v1/platform/report-schedules";
