@@ -10,6 +10,12 @@ Fresh storage is `apps/gateway/enterprise_migrations/0001_enterprise.sql`, with 
 
 Requests/tokens use fixed UTC minutes, sampled from database wall-clock **after acquiring locks**. Concurrency counts pending unexpired leases. A child cap does not reserve capacity. Increasing policy does not reset consumption.
 
+### Transaction isolation
+
+Normal gateway transactions explicitly begin at **READ COMMITTED**, independent of PostgreSQL server, database, login-role and connection defaults. A separate statement after acquiring a lock therefore sees every commit that preceded the lock grant, even if an earlier statement read before waiting. The cancellation-safe transaction helper does not rewrite session defaults or force read-write access: session read-only policy is inherited.
+
+Callers that deliberately request another isolation level still apply their setup before the first query. Reporting snapshots remain **REPEATABLE READ READ ONLY**: an open snapshot keeps its old view, and the next snapshot sees intervening commits. SQL and issuance guards still refuse explicitly elevated isolation where lock-then-check logic requires READ COMMITTED.
+
 ### Jobs at once
 
 `0018_job_limits.sql` adds `concurrent_jobs` ("Jobs at once") to every policy layer: workspace-type default, platform override, workspace local and key lineage (0018 also added it to the former installation layer, removed in 0026). It is how many async jobs (video and batch, see [async jobs](async-jobs.md)) a scope may have active at the same time. It composes like the other rate limits: every applicable layer applies, an absent child limit inherits, local/key layers are tighten-only, and an override replaces the type default. Type defaults start at **2** per workspace.
