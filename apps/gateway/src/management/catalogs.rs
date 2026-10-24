@@ -711,7 +711,11 @@ async fn revoke_direct_model(
 ) -> ApiResult {
     change_model(s, u, ws, model, false, true).await
 }
-async fn change_model(
+// `pub(super)` (not private) only so `management::tests`'s own test
+// modules can call it directly for the #37 PR2 review fail-closed guard
+// below, without going through the type-safe `Extension<BrowserPrincipal>`
+// extractor that already makes a token actor unreachable at the HTTP layer.
+pub(super) async fn change_model(
     s: Store,
     u: impl Actor,
     ws: Uuid,
@@ -727,6 +731,20 @@ async fn change_model(
         resources::platform_write_role_only(&mut tx, u.user_id()).await?;
         validate_ids(&mut tx, &[ws], "workspaces").await?;
     } else {
+        // Fail-closed guard (#37 PR2 review), not just a `debug_assert`: this
+        // branch's `workspace_access` takes its User-scope revalidation lock
+        // (`resources::revalidate_admin_token`) up front, then this function
+        // takes the Workspace/Lineage scope locks later (`locks::exclusive`
+        // below) -- out of canonical order for a token actor specifically
+        // (`resources::access_inner`'s locked path assumes no later scope
+        // lock in its own call chain). Only `BrowserPrincipal` reaches this
+        // branch today (`select_model`/`deselect_model`'s own extractor
+        // type), so no live token actor can currently trigger the ordering
+        // problem, but refuse explicitly here rather than depending solely
+        // on that routing fact never changing.
+        if u.token_id().is_some() {
+            return Err(denied());
+        }
         let a = resources::workspace_access(&mut tx, &u, ws).await?;
         resources::manage(&a)?;
     }

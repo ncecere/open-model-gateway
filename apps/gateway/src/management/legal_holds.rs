@@ -30,6 +30,9 @@ async fn list(
         Some(_) => return Err(invalid()),
     };
     let mut tx = crate::db::begin(&s.pool).await?;
+    // #37 PR2 review: catalog shared lock first, in canonical order, ahead
+    // of `platform_read`'s own possible User-scope lock for a token actor.
+    resources::catalog_lock(&mut tx, false).await?;
     resources::platform_read(&mut tx, &u).await?;
     let data: Value = sqlx::query_scalar(&format!("SELECT coalesce(jsonb_agg(jsonb_build_object('id',h.id,'target',jsonb_build_object('kind',CASE WHEN h.user_id IS NOT NULL THEN 'user' ELSE 'workspace' END,'id',coalesce(h.user_id,h.workspace_id),'label',{LABEL}),'reference',h.reference,'created_at',h.created_at,'created_by',(SELECT coalesce(nullif(btrim(x.display_name),''),x.email,'Retained identity') FROM users x WHERE x.id=h.created_by_user_id),'released_at',h.released_at) ORDER BY h.released_at IS NOT NULL,h.created_at DESC,h.id),'[]'::jsonb) FROM legal_holds h WHERE $1 OR h.released_at IS NULL"))
         .bind(all)

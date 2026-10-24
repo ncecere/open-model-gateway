@@ -228,6 +228,10 @@ async fn platform(
 ) -> Result<Response, ApiError> {
     {
         let mut tx = crate::db::begin(&s.pool).await?;
+        // #37 PR2 review: catalog shared lock first, in canonical order,
+        // ahead of `platform_read`'s own possible User-scope lock for a
+        // token actor.
+        resources::catalog_lock(&mut tx, false).await?;
         resources::platform_read(&mut tx, &u).await?;
         let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id=$1)")
             .bind(user)

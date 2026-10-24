@@ -374,8 +374,12 @@ async fn access_inner(
     let (role, kind, owner_user, disabled, membership) = if lock {
         // #37 PR2 item 1: transaction-level admin-token/owner revalidation
         // (see `revalidate_admin_token`'s own doc), before the role and
-        // workspace row checks below. No other scope lock is taken later
-        // in this call chain, so this is safe at the canonical position.
+        // workspace row checks below. No other scope lock may be taken
+        // later in this call chain for a token actor: the one caller that
+        // otherwise would (`catalogs::change_model`'s non-direct branch,
+        // which takes Workspace/Lineage scope locks after this returns)
+        // fails closed for a token actor before ever reaching this
+        // function, rather than relying on this comment alone.
         revalidate_admin_token(tx, u).await?;
         let role = role_inner(tx, u.user_id(), true).await?;
         let (kind, owner_user, disabled): (String, Option<Uuid>, bool) = sqlx::query_as(

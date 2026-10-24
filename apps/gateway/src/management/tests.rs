@@ -24,6 +24,8 @@ mod batch_scheduling_tests;
 mod branding_tests;
 #[path = "catalog_ux_tests.rs"]
 mod catalog_ux_tests;
+#[path = "catalogs_token_guard_tests.rs"]
+mod catalogs_token_guard_tests;
 #[path = "configuration_matrix_tests.rs"]
 mod configuration_matrix_tests;
 #[path = "configuration_tests.rs"]

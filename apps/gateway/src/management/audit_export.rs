@@ -19,6 +19,13 @@ pub(super) fn routes() -> Router<Store> {
 /// Platform Admins and Auditors.
 async fn status(State(s): State<Store>, Extension(u): Extension<ManagementPrincipal>) -> ApiResult {
     let mut tx = crate::db::begin(&s.pool).await?;
+    // #37 PR2 review: catalog shared lock first, in canonical order, ahead
+    // of `platform_read`'s own possible User-scope lock
+    // (`resources::revalidate_admin_token`, for a token actor) -- a plain
+    // read-only snapshot otherwise, so this adds no contention beyond the
+    // existing shared catalog lock every other management read already
+    // takes.
+    resources::catalog_lock(&mut tx, false).await?;
     resources::platform_read(&mut tx, &u).await?;
     tx.commit().await?;
     let mut v = crate::audit_export::status(&s).await?;

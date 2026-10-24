@@ -13,6 +13,13 @@ async fn admin_tx<'a>(
     u: &BrowserPrincipal,
 ) -> Result<Transaction<'a, Postgres>, ApiError> {
     let mut tx = crate::db::begin(&s.pool).await?;
+    // #37 PR2 review: catalog shared lock first, in canonical order. A
+    // `BrowserPrincipal` here never takes `platform_write`'s own
+    // User-scope lock (`token_id()` is always `None` for a browser
+    // session), so this adds no contention today; it keeps this call site
+    // consistent with every other management transaction's canonical
+    // order rather than depending on that fact never changing.
+    resources::catalog_lock(&mut tx, false).await?;
     resources::platform_write(&mut tx, u).await?;
     Ok(tx)
 }
