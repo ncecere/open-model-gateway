@@ -1,4 +1,4 @@
-//! Cancellation-safe transaction start.
+//! Cancellation-safe READ COMMITTED transaction start.
 //!
 //! sqlx 0.8 (`PgTransactionManager::begin`) counts a transaction only after
 //! `BEGIN`'s reply arrives, and its drop guard rolls back only counted
@@ -14,15 +14,19 @@
 //! statement) runs to completion in its own task, so dropping the caller can
 //! never interrupt it. A transaction nobody receives is dropped by the task,
 //! which queues its `ROLLBACK`; the pool flushes it on release. Direct
-//! `Pool::begin` is rejected by `clippy.toml` (`disallowed-methods`).
+//! `Pool::begin` and `Pool::begin_with` are rejected by `clippy.toml`
+//! (`disallowed-methods`) outside this sanctioned call site.
 use sqlx::{PgPool, Postgres, Transaction};
 
-/// Begin a transaction on `pool` (read committed, read write).
+#[cfg(all(test, feature = "integration-tests"))]
+mod tests;
+
+/// Begin a READ COMMITTED transaction, inheriting the session's read-only policy.
 pub(crate) async fn begin(pool: &PgPool) -> sqlx::Result<Transaction<'static, Postgres>> {
     start(pool, None).await
 }
 
-/// Begin a transaction and run `setup` (simple-query protocol, so it may hold
+/// Begin at READ COMMITTED and run `setup` (simple-query protocol, so it may hold
 /// several statements, e.g. `SET TRANSACTION ...`) as its first statement,
 /// both uncancellable.
 pub(crate) async fn begin_with_setup(
@@ -39,7 +43,9 @@ async fn start(
     let pool = pool.clone();
     let task = tokio::spawn(async move {
         #[allow(clippy::disallowed_methods)] // the one sanctioned call site
-        let mut tx = pool.begin().await?;
+        let mut tx = pool
+            .begin_with("BEGIN ISOLATION LEVEL READ COMMITTED")
+            .await?;
         if let Some(sql) = setup {
             sqlx::Executor::execute(&mut *tx, sql).await?;
         }

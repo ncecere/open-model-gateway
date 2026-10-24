@@ -241,7 +241,8 @@ DO $$ DECLARE r record; t text; BEGIN
   OR has_table_privilege('gateway_runtime','public.admin_token_attempts','UPDATE,DELETE,TRUNCATE') THEN RAISE EXCEPTION 'admin token attempts not append-only for runtime'; END IF;
  IF (SELECT count(*) FROM pg_trigger WHERE tgrelid='public.admin_token_attempts'::regclass AND tgenabled='O' AND NOT tgisinternal)<>3 THEN RAISE EXCEPTION 'admin token attempt append-only guards missing or disabled'; END IF;
 END $$;
-BEGIN;
+-- Match the gateway baseline even under elevated database/login defaults.
+BEGIN ISOLATION LEVEL READ COMMITTED;
 -- A probe-only work lease (rolled back with everything else) so the election
 -- checks never contend with leases held by a running gateway.
 INSERT INTO work_leases(name) VALUES('privilege_probe');

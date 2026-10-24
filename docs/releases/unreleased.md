@@ -8,6 +8,43 @@ Notes for changes on `main` after [v0.8.0](v0.8.0.md). They become the next rele
 
 **Upgrade:** this change adds no schema migration or runtime privilege. Explicitly reapply the matching binary's grants as the database/schema/object owner (`gateway_migrator` in staging), then run `grants verify` with a role allowed to `SET ROLE gateway_runtime`; verification now attempts `CREATE TEMP TABLE` and requires its refusal. Use a **dedicated gateway database**: all roles relying on PUBLIC TEMP lose it there, not just runtime. The owner/migrator's privileges and all unrelated databases are unchanged. `serve` never migrates or applies grants automatically. See [database authority](../staging.md#database-authority-and-releases).
 
+## Transaction isolation independent of PostgreSQL defaults (#281)
+
+Normal gateway transactions now explicitly begin at **READ COMMITTED**, so database, login-role or connection defaults of REPEATABLE READ or SERIALIZABLE cannot leave lock-then-check queries using a stale snapshot. Session defaults are not rewritten, and session read-only policy is still inherited. Intentional reporting snapshots remain REPEATABLE READ and read-only; their bounded-staleness contract and the elevated-isolation refusal guards are unchanged. No migration or new database privilege is needed. See [transaction isolation](../governance.md#transaction-isolation).
+
+## Local-upstream approvals in special-use ranges are now refused (#203)
+
+**Breaking change for affected installations.** `GATEWAY_LOCAL_UPSTREAMS` approvals that pin an address in one of the ranges below are refused at startup. v0.8.0 only warned. An installation whose approvals are all public or RFC 1918 (private) addresses is not affected and needs no action.
+
+| Range | Category |
+|---|---|
+| `198.18.0.0/15`, `2001:2::/48` | benchmarking |
+| `192.0.0.0/24` | IETF protocol assignments |
+| `192.88.99.0/24` | deprecated 6to4 relay |
+| `192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`, `2001:db8::/32`, `3fff::/20` | documentation |
+| `fd00:ec2::/32` (all of it, including what was accepted besides `fd00:ec2::254`) | AWS IPv6 metadata range |
+
+These are the ranges the outbound egress policy already refused for every other client; approvals now follow the same table (`special_use.rs`), so the two cannot drift. The rules are over both schemes: the `fd00:ec2::/32` range was also accepted over plain HTTP like a private address, and is refused there too. An address that carries an IPv4 address (IPv4-mapped `::ffff:a.b.c.d`, compatible `::a.b.c.d`, 6to4, Teredo) is judged by the IPv4 address it carries, so `2002:c612:1::1` (6to4 of `198.18.0.1`) is refused as well. NAT64 (`64:ff9b::/96`) stays refused, as before. Every other address keeps its exact decision: public over HTTPS, RFC 1918 and unique-local over HTTP or HTTPS, loopback only with `GATEWAY_ENV=development`, and the same unconditional refusals as before (unspecified, link-local, multicast, broadcast, carrier-grade NAT, cloud metadata).
+
+**How `serve` fails.** `open-model-gateway serve` stops before it connects to the database and exits with status 1, naming every affected approval (host, pinned address and category) and the setting, for example:
+
+```
+Error: GATEWAY_LOCAL_UPSTREAMS: refused approval(s), each pins an address in a range the gateway never connects to: host models.internal pins 198.18.0.1 (category: benchmarking). Change each approval's address to a public or RFC 1918 (private) address, or remove the approval (#203; see the release notes).
+```
+
+No credential can appear in it: the message contains only the URL's host, the pinned address and a category label (an approval URL cannot carry credentials; one that does is rejected as invalid). Only `serve` loads approvals; `migrate`, `grants` and the other commands are unaffected. A replica that fails this way never answers `/health/ready`, so a rolling deployment keeps the old replicas until you fix the setting.
+
+**Check before you upgrade:**
+
+1. Read `GATEWAY_LOCAL_UPSTREAMS` (every approval's `addresses`) against the table above.
+2. If you run v0.8.0, look for the startup `WARN` it logs per affected approval (host and category), or `GET /health/ready`: `checks.local_upstream_approvals` is `"warning"` when any approval is affected. Stay on v0.8.0 until that is `"ok"`.
+
+**What to change:** replace the approval's address with the real address of the model server, an ordinary public address or an RFC 1918 one (for example the `10.x` address of the host), or remove the approval. If you remove an approval, provider connections that use its endpoint can no longer be saved or used until they point at an approved endpoint; re-point or disable them first. Change `GATEWAY_LOCAL_UPSTREAMS` in the deployment's configuration before rolling out the new release.
+
+**`/health/ready` is unchanged in shape.** `checks.local_upstream_approvals` stays in the response and is now always `"ok"`: the warning phase has ended, because an affected approval stops startup instead of being reported. It is kept so dashboards and alerts that read it keep working; do not rely on it for anything beyond "this replica started". It never affected the `ready`/`not_ready` decision and still carries no endpoint names.
+
+Removed: the v0.8.0 startup warning (it can no longer apply). See [provider adapters](../provider-adapters.md#approve-local-endpoints-out-of-band), [operations](../operations.md#health-endpoints) and the threat model (EGR-3).
+
 ## Saved alert webhook authority and schema (#45, slice 1)
 
 Adds migration **0057_alert_webhooks**, operator URL/signing-reference allowlists, a platform-only destination management API and a separate retained outbox. Destinations start disabled; live URLs and queued payloads are immutable, and final soft deletion scrubs URLs and signing references. Read-only tokens receive redacted status. The enqueue trigger takes no explicit destination locks (its outbox foreign key takes `FOR KEY SHARE`, which management's `FOR NO KEY UPDATE` does not block, so destination edits never stall alert evaluation), isolates webhook errors per destination from email/built-in evaluation, builds every envelope in one SQL function whose exact bytes the outbox guard requires (for direct runtime inserts too), and snapshots only approved installation transitions through an explicit privacy projection, excluding workspace rules, personal incidents, all key-expiry reminders and all admission-ceiling incidents. An enqueue failure or a racing destination emits a sanitized warning naming only the event id and skips just that destination, without backfill. Each destination has a trigger-owned enable generation, incremented on every `enabled` change; queued rows record the generation the enqueue read, the outbox guard refuses a stale one and re-enabling ends older waiting rows, so a late-committing enqueue can never be replayed after a disable and re-enable. Delivery in slice 2 must recheck eligibility before every claim (including deleted destinations, scrubbed NULL URLs and row generation equal to the destination's), locking destination before outbox row. A rule edited between fire and clear can drop the `resolved` webhook. Runtime column grants and refusal probes cover both tables. Apply `migrate` and `grants apply` explicitly; exact schema-lineage readiness remains required.
