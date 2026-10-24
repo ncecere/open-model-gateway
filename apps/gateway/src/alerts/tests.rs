@@ -5,6 +5,9 @@ use super::*;
 use crate::email::mock::{self, Behaviour};
 use sqlx::PgPool;
 
+#[path = "fair_dispatch_tests.rs"]
+mod fair_dispatch;
+
 async fn expiry_now(s: &Seed) -> DateTime<Utc> {
     sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&s.pool)
