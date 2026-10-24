@@ -1,6 +1,9 @@
 use super::*;
 use crate::auth::NewApiKey;
 
+mod issuance;
+pub(in crate::management) use issuance::key_issuance;
+
 /// Display status: revoked (permanent) > expired > disabled (reversible) > active.
 pub(super) const KEY_STATUS: &str = "CASE WHEN k.revoked_at IS NOT NULL THEN 'revoked' WHEN k.expires_at IS NOT NULL AND k.expires_at<=now() THEN 'expired' WHEN k.disabled_at IS NOT NULL THEN 'disabled' ELSE 'active' END";
 /// Latest admitted attempt of this credential (not the whole lineage).
@@ -215,16 +218,16 @@ pub(super) async fn create_key(
     Extension(u): Extension<BrowserPrincipal>,
     Path(ws): Path<Uuid>,
     Json(mut b): Json<NewKey>,
-) -> ApiResult {
+) -> DetailedResult {
     let (mut tx, a) = resources::workspace_tx(&s, &u, ws).await?;
     resources::detail_access(&a)?;
     expiry(b.expires_in_days)?;
     if !valid_name(&b.name) {
-        return Err(invalid());
+        return Err(invalid().into());
     }
     if let Some(ids) = &mut b.model_ids {
         if ids.len() > 200 {
-            return Err(invalid());
+            return Err(invalid().into());
         }
         ids.sort_unstable();
         ids.dedup();
@@ -236,17 +239,17 @@ pub(super) async fn create_key(
         .fetch_one(&mut *tx)
         .await?;
         if n != ids.len() as i64 {
-            return Err(invalid());
+            return Err(invalid().into());
         }
     }
     if let Some(id) = b.service_account_id {
         resources::manage(&a)?;
         if !shared(&a.kind) {
-            return Err(denied());
+            return Err(denied().into());
         }
         sqlx::query_scalar::<_,Uuid>("SELECT id FROM service_accounts WHERE workspace_id=$1 AND id=$2 AND disabled_at IS NULL FOR UPDATE").bind(ws).bind(id).fetch_optional(&mut *tx).await?.ok_or_else(missing)?;
     } else if !a.member {
-        return Err(denied());
+        return Err(denied().into());
     } else {
         // Human keys follow Admin > Settings > General's maximum lifetime.
         super::settings::check_human_key_lifetime(&mut tx, b.expires_in_days).await?;
@@ -263,6 +266,12 @@ pub(super) async fn create_key(
     if let Some(l) = &limits {
         governance::check_initial_key_limits(&mut tx, ws, l).await?;
     }
+    // After authority and validation (401/403/404, 400/409), before the key exists.
+    let holder = match b.service_account_id {
+        Some(account) => issuance::Holder::Service(account),
+        None => issuance::Holder::User(u.user_id),
+    };
+    issuance::check(&mut tx, ws, holder, issuance::Operation::Create).await?;
     let key = insert_key(
         &mut tx,
         ws,
@@ -377,7 +386,7 @@ pub(super) async fn rotate_key(
     Extension(u): Extension<BrowserPrincipal>,
     Path((ws, id)): Path<(Uuid, Uuid)>,
     Json(b): Json<Expiry>,
-) -> ApiResult {
+) -> DetailedResult {
     let (mut tx, a) = resources::workspace_tx(&s, &u, ws).await?;
     resources::detail_access(&a)?;
     expiry(b.expires_in_days)?;
@@ -385,17 +394,23 @@ pub(super) async fn rotate_key(
     locks::exclusive(&mut tx, scopes).await?;
     let(name,issued,service,lineage,disabled):(String,Option<Uuid>,Option<Uuid>,Uuid,bool)=sqlx::query_as("SELECT name,issued_to_user_id,service_account_id,governance_key_id,disabled_at IS NOT NULL FROM api_keys WHERE workspace_id=$1 AND id=$2 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>now()) FOR NO KEY UPDATE").bind(ws).bind(id).fetch_optional(&mut *tx).await?.ok_or_else(missing)?;
     if disabled {
-        return Err(key_disabled());
+        return Err(key_disabled().into());
     }
     // Shared inherited authority can revoke human keys, never mint credentials as another person.
     if let Some(service) = service {
         resources::manage(&a)?;
         sqlx::query_scalar::<_,Uuid>("SELECT id FROM service_accounts WHERE workspace_id=$1 AND id=$2 AND disabled_at IS NULL FOR UPDATE").bind(ws).bind(service).fetch_optional(&mut *tx).await?.ok_or_else(denied)?;
     } else if issued != Some(u.user_id) || !a.member {
-        return Err(denied());
+        return Err(denied().into());
     } else {
         super::settings::check_human_key_lifetime(&mut tx, b.expires_in_days).await?;
     }
+    // A rotation mints a credential like a create, so it counts in the same budget.
+    let holder = match service {
+        Some(account) => issuance::Holder::Service(account),
+        None => issuance::Holder::User(issued.ok_or_else(denied)?),
+    };
+    issuance::check(&mut tx, ws, holder, issuance::Operation::Rotate).await?;
     let key = insert_key(
         &mut tx,
         ws,
