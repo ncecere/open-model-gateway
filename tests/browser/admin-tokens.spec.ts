@@ -51,7 +51,7 @@ async function dismissNotices(page: Page) {
  * call instead; the caller creates one per test and disposes it in `finally`.
  */
 async function bearerClient(): Promise<APIRequestContext> {
-  return request.newContext({ storageState: undefined });
+  return request.newContext({ storageState: { cookies: [], origins: [] } });
 }
 function bearerRequest(client: APIRequestContext, token: string, path: string, init: { method?: string; data?: unknown } = {}) {
   return client.fetch(`${BASE_URL}/api/v1${path}`, { method: init.method ?? "GET", data: init.data, headers: { authorization: `Bearer ${token}` }, failOnStatusCode: false });
@@ -100,11 +100,11 @@ test("create -> copy -> dismiss -> revoke", async ({ browser }) => {
     await expect(dialog.getByText("Shown only once")).toBeVisible();
     const disclosure = dialog.getByRole("textbox", { name: "Admin API token" });
     const token = await disclosure.inputValue();
-    expect(token).toMatch(TOKEN_SHAPE);
+    expect(TOKEN_SHAPE.test(token)).toBe(true);
 
     await dialog.getByRole("button", { name: "Copy token" }).click();
     await expect(dialog.getByRole("button", { name: "Copied" })).toBeVisible();
-    expect(await copiedValue(page)).toBe(token);
+    expect((await copiedValue(page)) === token).toBe(true);
 
     await dialog.getByRole("button", { name: "I have saved it" }).click();
     await expect(dialog).toHaveCount(0);
@@ -157,7 +157,7 @@ test("an unrevoked token can never manage its own kind, see another owner's pers
     const created = await api(page, "POST", "/platform/admin-tokens", { name: tokenName(), scopes: ["platform:read", "access:write"], expires_in_days: 1 });
     expect(created.status()).toBe(200);
     const body = await created.json();
-    expect(body.token).toMatch(TOKEN_SHAPE);
+    expect(typeof body.token === "string" && TOKEN_SHAPE.test(body.token)).toBe(true);
 
     // BrowserAdminOnly: a valid, unrevoked bearer credential is still authenticated, so this is
     // an authorization refusal (403), never 401 - no scope ever lets a token manage its own kind.

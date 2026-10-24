@@ -141,7 +141,7 @@ export function CreateAdminTokenDialog({ session, onClose }: { session: Session;
     } catch (caught) {
       if (request.signal.aborted || copyGeneration.current !== generation) return;
       setError(caught);
-    } finally { inFlight.current = false; if (copyGeneration.current === generation) setBusy(false); }
+    } finally { inFlight.current = false; if (lifetime.current.mounted) setBusy(false); }
   }
   async function copySecret() {
     if (lifetime.current.closed || copyGeneration.current !== displayedGeneration || !result) return;
