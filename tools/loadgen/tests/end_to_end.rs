@@ -14,8 +14,17 @@
 //! - a reader-endpoint-coverage scenario under a controlled, owned-fixture
 //!   management-read delay (never applied to inference/provider traffic, and
 //!   never a change to production gateway code; issue #273);
-//! - a warmup-exclusion scenario confirming CLI warmup semantics are
-//!   unchanged by the reader fix.
+//! - a warmup-exclusion scenario (readers disabled) confirming CLI warmup
+//!   semantics for inference requests. The reader/warmup interaction is
+//!   proven deterministically, without network timing, by
+//!   `reader::summarize`'s own unit tests in `src/reader.rs`.
+//!
+//! `SCENARIO_GUARD` below serializes the three `#[tokio::test]` functions
+//! against each other: the standard test harness otherwise runs them
+//! concurrently in this process, and the gateway's admission/settlement
+//! metrics counters (`metrics::METRICS`, a process-global singleton) would
+//! then mix traffic from more than one scenario into the one each test
+//! scrapes and asserts on.
 use std::{future::Future, str::FromStr, sync::Arc, time::Duration};
 
 use axum::{
@@ -41,10 +50,13 @@ use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
 };
 
-/// Serializes the only process-wide state this file touches
-/// (`GATEWAY_LOCAL_UPSTREAMS`) across the test functions below, which the
-/// standard test harness otherwise runs concurrently in this process.
-static ENV_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// Serializes the three `#[tokio::test]` scenarios below against each
+/// other (see the module doc) so each one's own gateway metrics scrape
+/// reflects only its own traffic. Held for the entire scenario, including
+/// `with_throwaway_database`'s cleanup, which is why this is an async
+/// `tokio::sync::Mutex` (the critical section spans awaits) rather than a
+/// `std::sync::Mutex`, which must never be held across an `.await`.
+static SCENARIO_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Create a throwaway `omg_loadtest_<prefix>_<random>` database on the
 /// loopback server named by `DATABASE_URL`, run `body`, then drop the
@@ -161,21 +173,19 @@ async fn harness(
     .await
     .unwrap();
 
-    // The real gateway with the local adapters approved for the mock.
-    // `GATEWAY_LOCAL_UPSTREAMS` is process-wide, so the critical section
-    // reading it is serialized against the other scenarios in this file by
-    // `ENV_GUARD`; it is not read again once `engine` is built.
+    // The real gateway with the local adapters approved for the mock. This
+    // harness owns the approval JSON directly and parses it with the same
+    // validation `from_env` uses, rather than mutating the process-wide
+    // `GATEWAY_LOCAL_UPSTREAMS` environment variable (unsafe to do
+    // concurrently in a multi-threaded test binary, and not necessary: the
+    // approval parser is public precisely so trusted, owned-fixture callers
+    // like this one can pass it configuration directly).
     let engine = {
-        let _guard = ENV_GUARD.lock().unwrap();
-        // SAFETY: held by `_guard` above; the value is test-only.
-        unsafe {
-            std::env::set_var(
-                "GATEWAY_LOCAL_UPSTREAMS",
-                format!(r#"[{{"endpoint":"{mock_base}/v1","addresses":["127.0.0.1"]}}]"#),
-            );
-        }
-        let approvals =
-            providers::local::endpoints::ApprovedEndpoints::from_env("development").unwrap();
+        let approvals = providers::local::endpoints::ApprovedEndpoints::parse(
+            &format!(r#"[{{"endpoint":"{mock_base}/v1","addresses":["127.0.0.1"]}}]"#),
+            "development",
+        )
+        .unwrap();
         let mut registry = providers::ProviderRegistry::default();
         for adapter in providers::local::adapters(
             Arc::new(providers::secrets::EnvSecrets::new(Vec::new())),
@@ -215,6 +225,7 @@ async fn harness(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn seeded_keys_drive_the_real_gateway_and_every_request_settles_exactly() {
+    let _guard = SCENARIO_GUARD.lock().await;
     with_throwaway_database("main", |options| async move {
         scenario_main(options).await;
     })
@@ -359,6 +370,7 @@ async fn scenario_main(options: PgConnectOptions) {
 /// same gateway to show this is deterministic, not a lucky rerun.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn readers_cover_every_endpoint_despite_slow_management_responses() {
+    let _guard = SCENARIO_GUARD.lock().await;
     with_throwaway_database("slow", |options| async move {
         scenario_slow_management(options).await;
     })
@@ -409,12 +421,20 @@ async fn scenario_slow_management(options: PgConnectOptions) {
 }
 
 /// Separate warmup-exclusion coverage (full stack, alongside the fix above):
-/// inference and reader samples that start before the warmup boundary are
-/// excluded from measured stats exactly as before. Readers still wait for
-/// the common start (never excluded for being early) and, given the whole
-/// run, still reach every endpoint.
+/// inference samples that start before the warmup boundary are excluded
+/// from measured stats exactly as before. Readers are disabled here
+/// (`readers: 0`, so `report.reader` is `None`): a prior version of this
+/// scenario also asserted on a couple of closed-loop readers reaching every
+/// endpoint inside a 0.5 s measured window, which depended on host speed
+/// the same way issue #273 did for the main scenario. That coverage is now
+/// proven deterministically and without any network timing by
+/// `reader::summarize`'s own unit tests in `src/reader.rs`
+/// (`summary_excludes_warmup_and_failures_from_latency` and the explicit
+/// pre-warmup/boundary/inside-sample test alongside it); nothing about
+/// reader/warmup exclusion is weakened, it is just tested orthogonally.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn warmup_excludes_early_inference_and_reader_samples() {
+async fn warmup_excludes_early_inference_samples() {
+    let _guard = SCENARIO_GUARD.lock().await;
     with_throwaway_database("warmup", |options| async move {
         scenario_warmup(options).await;
     })
@@ -441,7 +461,7 @@ async fn scenario_warmup(options: PgConnectOptions) {
         metrics_urls: vec![],
         database_url: None,
         label: Some("warmup".into()),
-        readers: 2,
+        readers: 0,
         reader_days: 7,
     })
     .await
@@ -456,8 +476,7 @@ async fn scenario_warmup(options: PgConnectOptions) {
         "warmup excludes only the leading half of inference requests: {:?}",
         report.totals
     );
-    let readers = report.reader.as_ref().unwrap();
-    assert!(readers.ok >= 1, "{readers:?}");
-    assert_eq!(readers.endpoints.len(), 8, "{readers:?}");
+    // Readers disabled (`readers: 0` above): no reader stats are collected.
+    assert!(report.reader.is_none(), "{:?}", report.reader);
     h.pool.close().await;
 }

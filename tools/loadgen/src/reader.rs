@@ -6,11 +6,13 @@
 //! seeded reader's browser session (user 1: a platform Auditor that owns
 //! shared workspace 1 and personal workspace 1; see `seed.sql`) and
 //! `/v1/models` with key 0. Latency is measured per endpoint. A reader waits
-//! for the run's common scheduled start before issuing its first request, so
-//! it never contributes a sample the measured-window filter below would
-//! exclude for starting early; it then stops issuing new requests when the
-//! inference schedule ends. Samples that start during the warmup are
-//! excluded like inference requests.
+//! for the run's common *schedule* start (not the later measured-window
+//! start, which differs when a warmup is configured) before issuing its
+//! first request, so it never contributes a sample excluded for starting
+//! before the run has begun at all; it then stops issuing new requests when
+//! the inference schedule ends. Samples that start during a configured
+//! warmup are still intentionally excluded from measured stats below, like
+//! warmup inference requests.
 use std::{
     collections::BTreeMap,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -126,9 +128,15 @@ pub struct Sample {
 }
 
 /// One reader: wait for the common scheduled `not_before` start, then issue
-/// `cycle[offset..]` round-robin until `until`. Waiting first means the
-/// initial, endpoint-guaranteeing request of every reader is never started
-/// before the run's measured window and so is never excluded by it.
+/// `cycle[offset..]` round-robin until `until`. `not_before` is the run's
+/// common *schedule* start, not the measured window; the two differ when a
+/// warmup is configured (the measured window starts later, at the warmup
+/// boundary). Waiting for the schedule start means the initial,
+/// endpoint-guaranteeing request of every reader is never started before
+/// the run has begun at all, so it is never excluded by `summarize` for
+/// that reason. Samples that land during a configured warmup are still
+/// intentionally excluded from measured stats below, exactly like warmup
+/// inference requests.
 #[allow(clippy::too_many_arguments)]
 pub async fn reader(
     client: reqwest::Client,
@@ -300,5 +308,39 @@ mod tests {
         assert_eq!(stats.latency.max_ms, 30.0);
         assert_eq!(stats.endpoints["a"].by_status["503"], 1);
         assert_eq!(stats.ok_per_s, 0.2);
+    }
+
+    /// Deterministic, network-free proof that `summarize` excludes a
+    /// pre-warmup sample and counts a sample exactly at the measured-window
+    /// boundary and one inside it: no owned-fixture delay, no real gateway,
+    /// no host-speed dependence. This is the orthogonal replacement for the
+    /// reader/warmup coverage that `tools/loadgen/tests/end_to_end.rs`'s
+    /// warmup scenario used to assert with two closed-loop readers inside a
+    /// 0.5 s measured window (issue #273-follow-up): that depended on how
+    /// fast the host could complete requests, exactly like the original
+    /// bug. `reader::reader`'s own `until` guard (proven by
+    /// `reader_never_sends_its_first_request_before_the_common_start`
+    /// above and the loop condition in `reader` itself) is what keeps a
+    /// reader from producing samples after a run ends; `summarize` itself
+    /// only ever needs to look at the lower boundary, so that is what this
+    /// test exercises.
+    #[test]
+    fn summary_excludes_only_samples_before_the_measured_start() {
+        let measured_start = Instant::now() + Duration::from_millis(100);
+        let window = Duration::from_millis(200);
+        let before = measured_start - Duration::from_millis(50); // warmup: excluded.
+        let boundary = measured_start; // exactly at the boundary: counted.
+        let inside = measured_start + Duration::from_millis(50); // inside the window: counted.
+        let s = |endpoint, started| Sample {
+            endpoint,
+            status: 200,
+            latency_us: 1_000,
+            started,
+        };
+        let samples = vec![s("a", before), s("a", boundary), s("a", inside)];
+        let stats = summarize(1, 7, &samples, measured_start, window);
+        assert_eq!(stats.requests, 2, "{stats:?}");
+        assert_eq!(stats.ok, 2, "{stats:?}");
+        assert_eq!(stats.endpoints["a"].requests, 2, "{stats:?}");
     }
 }
