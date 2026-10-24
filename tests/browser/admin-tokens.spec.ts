@@ -3,14 +3,14 @@
  * 403/deep-link refusals, and membership/privacy refusals exercised with the token itself
  * (never another owner's personal keys/requests, never admin-token CRUD, never inference).
  *
- * Not yet wired into playwright.config.ts `projects`: the route declarations, scope
- * enforcement and `/api/v1/platform/admin-tokens` endpoints this depends on (#37 PR2) are on a
- * feature branch, not `main`. Because no project's `testMatch` names this file, `npm run
- * test:browser` does not discover, run or fail on it today. This file is real and ready to run
- * once PR2 is integrated: add a project entry (e.g. `{ name: "admin-tokens", testMatch:
- * /admin-tokens\.spec\.ts/, dependencies: ["journey"] }`) and remove this note.
+ * Wired into playwright.config.ts `projects` as "admin-tokens". Execution still depends on the
+ * route declarations, scope enforcement and `/api/v1/platform/admin-tokens` endpoints (#37 PR2),
+ * which land on `main` separately from this UI-only branch: running this project before PR2 is
+ * integrated fails at the real gateway, not at discovery. `npx playwright test --list` proves
+ * this file is discovered; a real run is the coordinator's to perform once PR2 and a built UI
+ * are both in place.
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, request, test, type APIRequestContext, type Page } from "@playwright/test";
 import { api, chat, expectNoCspViolations, signIn } from "./helpers";
 import { BASE_URL } from "./stack.mjs";
 
@@ -42,9 +42,19 @@ async function dismissNotices(page: Page) {
   for (let index = 0; index < count; index++) await dismiss.first().click();
 }
 
-/** A raw bearer request, bypassing the browser session entirely: this is what a script using the issued token would send. */
-function bearerRequest(page: Page, token: string, path: string, init: { method?: string; data?: unknown } = {}) {
-  return page.request.fetch(`${BASE_URL}/api/v1${path}`, { method: init.method ?? "GET", data: init.data, headers: { authorization: `Bearer ${token}` }, failOnStatusCode: false });
+/*
+ * A raw bearer request, bypassing the browser session entirely: this is what a script using the
+ * issued token would send. `page.request` is NOT this: it shares the page's browser context,
+ * including its session cookie, so a request built from it is really a mixed cookie+Bearer
+ * request (rejected globally - see the dedicated test below) and never proves the bearer-only
+ * path. Use a disposable, cookie-free `APIRequestContext` (no storageState) for every bearer-only
+ * call instead; the caller creates one per test and disposes it in `finally`.
+ */
+async function bearerClient(): Promise<APIRequestContext> {
+  return request.newContext({ storageState: undefined });
+}
+function bearerRequest(client: APIRequestContext, token: string, path: string, init: { method?: string; data?: unknown } = {}) {
+  return client.fetch(`${BASE_URL}/api/v1${path}`, { method: init.method ?? "GET", data: init.data, headers: { authorization: `Bearer ${token}` }, failOnStatusCode: false });
 }
 
 test.describe("Admin API tokens role authority", () => {
@@ -76,6 +86,7 @@ test.describe("Admin API tokens role authority", () => {
 
 test("create -> copy -> dismiss -> revoke", async ({ browser }) => {
   const { page, context } = await signIn(browser, "operator");
+  const bearer = await bearerClient();
   try {
     await page.goto(ADMIN_TOKENS_PATH);
     await stubClipboard(page);
@@ -111,12 +122,30 @@ test("create -> copy -> dismiss -> revoke", async ({ browser }) => {
     await row.getByRole("button", { name: `Actions for ${name}` }).click();
     await expect(page.getByRole("menuitem", { name: "Revoke token…" })).toHaveCount(0);
     await dismissNotices(page);
-    expect((await bearerRequest(page, token, "/platform/users")).status()).toBe(401);
+    // Revocation is a credential failure for a bearer-only client: always 401, never 403.
+    expect((await bearerRequest(bearer, token, "/platform/users")).status()).toBe(401);
+  } finally { await bearer.dispose(); await context.close(); }
+});
+
+test("a bearer token paired with an active browser session cookie is rejected globally (401), not resolved by cookie precedence", async ({ browser }) => {
+  const { page, context } = await signIn(browser, "operator");
+  try {
+    const created = await api(page, "POST", "/platform/admin-tokens", { name: tokenName(), scopes: ["platform:read"], expires_in_days: 1 });
+    expect(created.status()).toBe(200);
+    const body = await created.json();
+    // page.request shares this page's browser context, including its session cookie: adding a
+    // Bearer header on top makes this a mixed cookie+Bearer request, kept as its own explicit
+    // case precisely because it looks like `bearerRequest` built on `page.request` used to.
+    const csrf = (await page.context().cookies(BASE_URL)).find(c => c.name === "omg_csrf")?.value ?? "";
+    const mixed = await page.request.fetch(`${BASE_URL}/api/v1/platform/users`, { headers: { authorization: `Bearer ${body.token}`, origin: BASE_URL, "x-csrf-token": csrf }, failOnStatusCode: false });
+    expect(mixed.status()).toBe(401);
+    expect((await api(page, "DELETE", `/platform/admin-tokens/${body.id}`)).ok()).toBe(true);
   } finally { await context.close(); }
 });
 
 test("an unrevoked token can never manage its own kind, see another owner's personal data, or call inference", async ({ browser }) => {
   const { page, context } = await signIn(browser, "operator");
+  const bearer = await bearerClient();
   try {
     const alex = await signIn(browser, "alex");
     let alexPersonal: string;
@@ -130,22 +159,23 @@ test("an unrevoked token can never manage its own kind, see another owner's pers
     const body = await created.json();
     expect(body.token).toMatch(TOKEN_SHAPE);
 
-    // BrowserAdminOnly: no scope ever lets a token read, create or revoke admin tokens.
-    expect((await bearerRequest(page, body.token, "/platform/admin-tokens")).status()).toBe(401);
-    expect((await bearerRequest(page, body.token, "/platform/admin-tokens", { method: "POST", data: { name: "nested", scopes: ["platform:read"], expires_in_days: 1 } })).status()).toBe(401);
-    expect((await bearerRequest(page, body.token, `/platform/admin-tokens/${body.id}`, { method: "DELETE" })).status()).toBe(401);
+    // BrowserAdminOnly: a valid, unrevoked bearer credential is still authenticated, so this is
+    // an authorization refusal (403), never 401 - no scope ever lets a token manage its own kind.
+    expect((await bearerRequest(bearer, body.token, "/platform/admin-tokens")).status()).toBe(403);
+    expect((await bearerRequest(bearer, body.token, "/platform/admin-tokens", { method: "POST", data: { name: "nested", scopes: ["platform:read"], expires_in_days: 1 } })).status()).toBe(403);
+    expect((await bearerRequest(bearer, body.token, `/platform/admin-tokens/${body.id}`, { method: "DELETE" })).status()).toBe(403);
 
     // platform:read covers this existing PlatformRead route.
-    expect((await bearerRequest(page, body.token, "/platform/users")).status()).toBe(200);
+    expect((await bearerRequest(bearer, body.token, "/platform/users")).status()).toBe(200);
     // The same scope reaches the workspace list route, but personal-workspace privacy still
     // applies underneath it: never another owner's keys or request details.
-    expect((await bearerRequest(page, body.token, `/workspaces/${alexPersonal}/keys`)).status()).toBe(403);
-    expect((await bearerRequest(page, body.token, `/workspaces/${alexPersonal}/requests`)).status()).toBe(403);
+    expect((await bearerRequest(bearer, body.token, `/workspaces/${alexPersonal}/keys`)).status()).toBe(403);
+    expect((await bearerRequest(bearer, body.token, `/workspaces/${alexPersonal}/requests`)).status()).toBe(403);
 
     // Never usable for inference or to issue inference keys, whatever scopes it holds.
     expect((await chat(body.token)).status).toBe(401);
-    expect((await bearerRequest(page, body.token, `/workspaces/${alexPersonal}/keys`, { method: "POST", data: { name: "forged", expires_in_days: 1 } })).status()).toBe(403);
+    expect((await bearerRequest(bearer, body.token, `/workspaces/${alexPersonal}/keys`, { method: "POST", data: { name: "forged", expires_in_days: 1 } })).status()).toBe(403);
 
     expect((await api(page, "DELETE", `/platform/admin-tokens/${body.id}`)).ok()).toBe(true);
-  } finally { await context.close(); }
+  } finally { await bearer.dispose(); await context.close(); }
 });
