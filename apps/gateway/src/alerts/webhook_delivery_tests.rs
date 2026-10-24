@@ -264,6 +264,91 @@ async fn late_generation_disabled_deleted_and_scrubbed_refused(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
+async fn rule_notification_revocation_blocks_initial_claim_and_retry(pool: PgPool) {
+    use axum::{Router, routing::post};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = calls.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/hook", listener.local_addr().unwrap());
+    let server = tokio::spawn(
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/hook",
+                post(move || {
+                    let seen = seen.clone();
+                    async move {
+                        seen.fetch_add(1, Ordering::SeqCst);
+                        axum::http::StatusCode::SERVICE_UNAVAILABLE
+                    }
+                }),
+            ),
+        )
+        .into_future(),
+    );
+    let d: Uuid = sqlx::query_scalar("INSERT INTO alert_webhook_destinations(label,url,current_secret_ref,enabled) VALUES('receiver',$1,'env:HOOK',true) RETURNING id").bind(&url).fetch_one(&pool).await.unwrap();
+    let s = Store::new(pool.clone()).with_alert_webhooks(
+        crate::config::AlertWebhookPolicy::parse(
+            &[url],
+            vec!["HOOK".into()],
+            crate::config::Environment::Development,
+        )
+        .unwrap(),
+    );
+    for retry in [false, true] {
+        let rule: Uuid = sqlx::query_scalar("INSERT INTO alert_rules(id,scope,kind,name,spike_factor_percent,min_spend_microusd,notify_platform_admins) VALUES(gen_random_uuid(),'installation','spend_spike','rule',200,1,true) RETURNING id").fetch_one(&pool).await.unwrap();
+        let event: Uuid = sqlx::query_scalar("INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,summary) VALUES(gen_random_uuid(),$1,'spend_spike',gen_random_uuid()::text,1,'warning','private canary') RETURNING id").bind(rule).fetch_one(&pool).await.unwrap();
+        // Exercise the evaluator's real enqueue trigger, not a direct test row.
+        sqlx::query("INSERT INTO alert_deliveries(id,event_id,transition) VALUES(gen_random_uuid(),$1,'fired')").bind(event).execute(&pool).await.unwrap();
+        let id: Uuid = sqlx::query_scalar(
+            "SELECT id FROM alert_webhook_outbox WHERE destination_id=$1 AND event_id=$2",
+        )
+        .bind(d)
+        .bind(event)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(state(&pool, id).await, ("waiting".into(), 0, None));
+        if retry {
+            let c = claimed(&s).await;
+            assert_eq!(c.row.id, id);
+            let result = send_with(&s, &c, |_| Some(zeroize::Zeroizing::new(vec![b's'; 32]))).await;
+            assert_eq!(result, Err(Failure::TransientStatus));
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            assert!(complete(&s, &c, result).await.unwrap());
+            sqlx::query(
+                "UPDATE alert_webhook_outbox SET next_attempt_at=clock_timestamp() WHERE id=$1",
+            )
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query("UPDATE alert_rules SET notify_platform_admins=false WHERE id=$1")
+            .bind(rule)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let before = calls.load(Ordering::SeqCst);
+        deliver(&s).await;
+        let (status, attempts, _) = state(&pool, id).await;
+        assert_eq!(status, "ineligible");
+        assert_eq!(attempts, i32::from(retry));
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            before,
+            "revoked rule reached receiver"
+        );
+        assert!(claim(&s, Uuid::new_v4()).await.unwrap().is_none());
+    }
+    server.abort();
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
 async fn claim_share_serializes_management_without_blocking_enqueue(pool: PgPool) {
     let d = destination(&pool).await;
     let id = queue(&pool, d, false).await;
