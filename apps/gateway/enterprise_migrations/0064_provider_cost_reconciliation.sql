@@ -81,13 +81,13 @@ CREATE TABLE provider_reconciliations (
 -- Account-scoped serialization also protects privileged/manual INSERTs. No
 -- historical credential inference, implicit revision sum or branching lineage.
 CREATE FUNCTION provider_cost_revision_guard() RETURNS trigger LANGUAGE plpgsql SET search_path=public,pg_temp AS $$
-DECLARE previous record; overlaps boolean;
+DECLARE previous record; has_overlap boolean;
 BEGIN
  PERFORM pg_advisory_xact_lock(hashtextextended('provider-cost:'||NEW.account_id,72419548));
  IF TG_TABLE_NAME='provider_cost_imports' THEN
   IF NEW.supersedes IS NULL THEN
-   SELECT EXISTS(SELECT FROM provider_cost_imports WHERE account_id=NEW.account_id AND period_start<NEW.period_end AND period_end>NEW.period_start) INTO overlaps;
-   IF overlaps THEN RAISE EXCEPTION 'overlapping provider report requires exact supersession' USING ERRCODE='23514'; END IF;
+   SELECT EXISTS(SELECT FROM provider_cost_imports WHERE account_id=NEW.account_id AND period_start<NEW.period_end AND period_end>NEW.period_start) INTO has_overlap;
+   IF has_overlap THEN RAISE EXCEPTION 'overlapping provider report requires exact supersession' USING ERRCODE='23514'; END IF;
    NEW.revision:=1;
   ELSE
    SELECT * INTO previous FROM provider_cost_imports WHERE id=NEW.supersedes;
