@@ -153,7 +153,19 @@ async fn scheduled_reports_delivery_live_refusals_never_redirect_or_reactivate(p
 async fn scheduled_reports_delivery_revoked_role(pool: PgPool) {
     let (store, _, _, user, _) = published(&pool, "installation").await;
     configured(&pool).await;
-    sqlx::query("DELETE FROM platform_role_grants WHERE user_id=$1")
+    let first = report_claim(&store).await.unwrap();
+    assert!(
+        complete(&store, &first, Err(DeliveryError::Connection))
+            .await
+            .unwrap()
+    );
+    sqlx::query(
+        "UPDATE alert_recipient_outbox SET next_attempt_at=clock_timestamp()-interval '1 second'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE platform_role_grants SET revoked_at=clock_timestamp() WHERE user_id=$1")
         .bind(user)
         .execute(&pool)
         .await
@@ -165,7 +177,7 @@ async fn scheduled_reports_delivery_revoked_role(pool: PgPool) {
 async fn scheduled_reports_delivery_removed_membership(pool: PgPool) {
     let (store, _, _, user, ws) = published(&pool, "workspace").await;
     configured(&pool).await;
-    sqlx::query("DELETE FROM workspace_membership_grants WHERE user_id=$1 AND workspace_id=$2")
+    sqlx::query("UPDATE workspace_membership_grants SET revoked_at=clock_timestamp() WHERE user_id=$1 AND workspace_id=$2")
         .bind(user)
         .bind(ws)
         .execute(&pool)
@@ -245,6 +257,74 @@ async fn scheduled_reports_delivery_retry_backoff_expiry_fencing_and_not_configu
     assert!(!complete(&store, &current, Ok(())).await.unwrap());
 }
 #[sqlx::test(migrations = "./enterprise_migrations")]
+async fn scheduled_reports_delivery_five_attempts_exhaust_without_replay(pool: PgPool) {
+    let (store, _, _, _, _) = published(&pool, "installation").await;
+    configured(&pool).await;
+    for attempt in 1..=5 {
+        let c = report_claim(&store).await.unwrap();
+        assert!(
+            complete(&store, &c, Err(DeliveryError::Connection))
+                .await
+                .unwrap()
+        );
+        let n: i32 = sqlx::query_scalar("SELECT attempt_count FROM alert_recipient_outbox")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, attempt);
+        if attempt < 5 {
+            assert_eq!(state(&pool).await, "waiting");
+            sqlx::query("UPDATE alert_recipient_outbox SET next_attempt_at=clock_timestamp()-interval '1 second'").execute(&pool).await.unwrap();
+        }
+    }
+    assert_eq!(state(&pool).await, "exhausted");
+    assert_eq!(deliver_pending(&store, 25).await, 0);
+}
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn scheduled_reports_delivery_24h_cleanup_and_initial_not_configured(pool: PgPool) {
+    let (store, _, _, _, _) = published(&pool, "installation").await;
+    assert_eq!(deliver_pending(&store, 25).await, 1);
+    assert_eq!(state(&pool).await, "not_configured");
+    assert_eq!(deliver_pending(&store, 25).await, 0);
+}
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn scheduled_reports_delivery_expired_lease_24h_is_fenced(pool: PgPool) {
+    let (store, _, _, _, _) = published(&pool, "installation").await;
+    configured(&pool).await;
+    let c = report_claim(&store).await.unwrap();
+    sqlx::query("UPDATE alert_deliveries SET created_at=clock_timestamp()-interval '25 hours'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    deliver_pending(&store, 25).await;
+    assert_eq!(state(&pool).await, "exhausted");
+    assert!(!complete(&store, &c, Ok(())).await.unwrap());
+}
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn scheduled_reports_delivery_paused_schedule_suppresses(pool: PgPool) {
+    let (store, schedule, _, _, _) = published(&pool, "workspace").await;
+    configured(&pool).await;
+    sqlx::query("UPDATE report_schedules SET state='paused' WHERE id=$1")
+        .bind(schedule)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(report_claim(&store).await.is_none());
+    assert_eq!(state(&pool).await, "ineligible");
+}
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn scheduled_reports_delivery_disabled_workspace_suppresses(pool: PgPool) {
+    let (store, _, _, _, ws) = published(&pool, "workspace").await;
+    configured(&pool).await;
+    sqlx::query("UPDATE workspaces SET disabled_at=clock_timestamp() WHERE id=$1")
+        .bind(ws)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(report_claim(&store).await.is_none());
+    assert_eq!(state(&pool).await, "ineligible");
+}
+#[sqlx::test(migrations = "./enterprise_migrations")]
 async fn scheduled_reports_delivery_smtp_link_only_and_shared_fair_bucket(pool: PgPool) {
     let (store, schedule, run, _, ws) = published(&pool, "workspace").await;
     let (port, mut rx) = mock::serve(Behaviour::default()).await;
@@ -256,7 +336,7 @@ async fn scheduled_reports_delivery_smtp_link_only_and_shared_fair_bucket(pool: 
         .unwrap();
     // An alert in a different bucket competes in exactly the same selection.
     let event = Uuid::new_v4();
-    sqlx::query("INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,summary) VALUES($1,'installation_spend','installation_spend','fair',80,'warning','Alert')").bind(event).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,summary) VALUES($1,'scim_last_admin','scim_last_admin','fair',80,'warning','Alert')").bind(event).execute(&pool).await.unwrap();
     sqlx::query(
         "INSERT INTO alert_deliveries(id,event_id,transition) VALUES(gen_random_uuid(),$1,'fired')",
     )

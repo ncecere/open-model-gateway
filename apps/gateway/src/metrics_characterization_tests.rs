@@ -16,6 +16,7 @@ async fn db_collector_label_keys_match_golden(pool: sqlx::PgPool) {
         "gateway_db_pool_connections",
         "gateway_reservations_held",
         "gateway_alert_email_deliveries",
+        "gateway_report_email_recipients",
         "gateway_alert_delivery_pending_buckets",
         "gateway_alert_delivery_oldest_pending_age_seconds",
     ] {
@@ -152,6 +153,10 @@ pub(crate) fn populated_registry() -> &'static Metrics {
         .set(0);
     m.alert_delivery_queue
         .get_or_create(&[("state", "retrying".into())])
+        .set(0);
+    m.observe_report_delivery("sent", 1);
+    m.report_delivery_queue
+        .get_or_create(&[("state", "waiting".into())])
         .set(0);
     m.alert_pending_buckets.get_or_create(&[]).set(0);
     m.alert_oldest_pending_age.get_or_create(&[]).set(0);

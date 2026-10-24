@@ -62,6 +62,21 @@ async fn scheduled_reports_read_authority_personal_privacy_auditor_and_live_revo
 ) {
     let f = fixture(&pool).await;
     let (_, _, platform) = occurrence(&f, &pool, &f.admin, None).await;
+    let response = routes()
+        .layer(Extension(ManagementPrincipal::Browser(f.admin.clone())))
+        .layer(Extension(f.admin.clone()))
+        .with_state(f.s.clone())
+        .oneshot(
+            Request::builder()
+                .uri(&platform)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    assert_eq!(response.headers()["x-content-type-options"], "nosniff");
     let (_, _, team) = occurrence(&f, &pool, &f.owner, Some(f.team)).await;
     let (_, _, personal) = occurrence(&f, &pool, &f.owner, Some(f.personal)).await;
     for who in [&f.admin, &f.auditor] {
@@ -99,7 +114,7 @@ async fn scheduled_reports_read_authority_personal_privacy_auditor_and_live_revo
         call(&f.s, &f.owner, "GET", &unknown, Value::Null).await.0,
         StatusCode::NOT_FOUND
     );
-    sqlx::query("DELETE FROM workspace_membership_grants WHERE workspace_id=$1 AND user_id=$2")
+    sqlx::query("UPDATE workspace_membership_grants SET revoked_at=clock_timestamp() WHERE workspace_id=$1 AND user_id=$2")
         .bind(f.team)
         .bind(f.owner.user_id)
         .execute(&pool)
@@ -109,7 +124,7 @@ async fn scheduled_reports_read_authority_personal_privacy_auditor_and_live_revo
         call(&f.s, &f.owner, "GET", &team, Value::Null).await.0,
         StatusCode::FORBIDDEN
     );
-    sqlx::query("DELETE FROM platform_role_grants WHERE user_id=$1")
+    sqlx::query("UPDATE platform_role_grants SET revoked_at=clock_timestamp() WHERE user_id=$1")
         .bind(f.auditor.user_id)
         .execute(&pool)
         .await

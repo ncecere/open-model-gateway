@@ -158,6 +158,12 @@ async fn scheduled_reports_run_as_runtime(pool: &PgPool) {
     .await
     .unwrap();
     let id:uuid::Uuid=sqlx::query_scalar("INSERT INTO report_schedules(scope_kind,created_by,cadence,timezone,delivery_time,state) VALUES('installation',$1,'weekly','UTC','00:01','active') RETURNING id").bind(user).fetch_one(&runtime).await.unwrap();
+    sqlx::query("INSERT INTO report_schedule_recipients(schedule_id,slot,user_id) VALUES($1,1,$2)")
+        .bind(id)
+        .bind(user)
+        .execute(&runtime)
+        .await
+        .unwrap();
     let leases = open_model_gateway::leases::Leases::new();
     leases.renew_once(&runtime).await;
     let fence = leases
@@ -174,6 +180,10 @@ async fn scheduled_reports_run_as_runtime(pool: &PgPool) {
     assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM report_runs r JOIN report_snapshots p ON p.run_id=r.id WHERE r.schedule_id=$1").bind(id).fetch_one(&runtime).await.unwrap(),1);
     let deliveries: i64 = sqlx::query_scalar("SELECT count(*) FROM alert_deliveries d JOIN report_runs r ON r.id=d.report_run_id WHERE r.schedule_id=$1 AND d.status='report_pending'").bind(id).fetch_one(&runtime).await.unwrap();
     assert_eq!(deliveries, 1);
+    sqlx::query("UPDATE installation_settings SET smtp_host=NULL WHERE singleton")
+        .execute(&runtime)
+        .await
+        .unwrap();
     open_model_gateway::alerts::deliver_pending(&store, 25).await;
     let status: String = sqlx::query_scalar("SELECT d.status FROM alert_deliveries d JOIN report_runs r ON r.id=d.report_run_id WHERE r.schedule_id=$1").bind(id).fetch_one(&runtime).await.unwrap();
     assert_eq!(status, "not_configured");

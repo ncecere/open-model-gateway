@@ -497,7 +497,12 @@ async fn fair_dispatch_bucket_index_is_usable_for_large_backlog(pool: PgPool) {
             .await
             .unwrap();
     let plan = plan.join("\n");
-    assert!(plan.contains("alert_deliveries_pending_bucket"), "{plan}");
+    // 0065 broadens this same bucket walk to report-owned envelopes. The
+    // shared partial index must serve the whole predicate, not just alerts.
+    assert!(
+        plan.contains("alert_deliveries_shared_pending_bucket"),
+        "{plan}"
+    );
     assert!(!plan.contains("Seq Scan on alert_deliveries"), "{plan}");
 }
 
