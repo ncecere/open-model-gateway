@@ -129,9 +129,14 @@ revokes CONNECT on `postgres` and `template1` from PUBLIC and the runtime role.
 `postInitApplicationSQL` revokes TEMPORARY on the configured application database from
 PUBLIC and runtime. PUBLIC CONNECT on the application database is deliberately retained;
 object privileges still come only from `grants apply`. Database and runtime names are SQL
-identifier-quoted, including embedded double quotes.
+identifier-quoted, including embedded double quotes. The Cluster's database, owner and
+managed runtime-role name are also YAML-quoted so punctuation round-trips unchanged.
+The hard-coded privilege verifier assumes the default runtime role name `gateway_runtime`;
+rendering a custom runtime name does not make it supported by that verifier.
 
-These are CNPG's **one-time initdb hooks**, run as `postgres`, not Helm upgrade hooks.
+For chart-managed CNPG, the chart always renders `bootstrap.initdb`; recovery/import
+bootstrap is not supported by the chart. These are CNPG's **one-time initdb hooks**, run
+as `postgres` only on a fresh initdb, not Helm upgrade hooks.
 They do not repair an existing Cluster, run after a physical restore, or affect external
 databases. Never recreate a Cluster/PVC or rerun initdb to apply this fix. For existing
 installations use the [manual ACL remediation](postgresql-ha.md#existing-cnpg-cluster-acl-remediation-315).

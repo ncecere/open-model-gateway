@@ -26,8 +26,8 @@ spec:
     {{- toYaml .Values.cnpg.cluster.resources | nindent 4 }}
   bootstrap:
     initdb:
-      database: {{ .Values.cnpg.cluster.database }}
-      owner: {{ $migrator.name }}
+      database: {{ .Values.cnpg.cluster.database | quote }}
+      owner: {{ $migrator.name | quote }}
       # Never chart-generated: the operator pre-creates this basic-auth
       # Secret, so CNPG uses it as-is instead of minting new credentials.
       secret:
@@ -54,7 +54,7 @@ spec:
   # (AGENTS.md "explicit table/column ACLs, never owner credentials").
   managed:
     roles:
-      - name: {{ $runtime.name }}
+      - name: {{ $runtime.name | quote }}
         ensure: present
         login: true
         superuser: false
