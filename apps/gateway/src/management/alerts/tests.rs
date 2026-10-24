@@ -2,6 +2,8 @@
 //! privacy of history and in-app notifications.
 use super::*;
 use crate::alerts as core;
+#[path = "aged_hold_tests.rs"]
+mod aged_hold;
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn alert_generation_history_fired_and_cleared_preserves_privacy(pool: PgPool) {
