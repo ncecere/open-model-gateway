@@ -75,6 +75,8 @@ impl Filters {
 // Authorization filters precede BOTH detail selection and aggregation. Project
 // and Team are siblings; platform personal exposure is aggregated separately,
 // never projected as a detail row. Ledger joins include the admission partition.
+// Realtime holds are listed but never reconcilable: sessions are valued per
+// response and `governance::resolve_usage` refuses an aggregate reconciliation.
 const BASE: &str = "WITH clock AS MATERIALIZED (SELECT clock_timestamp() observed_at),
 visible AS (
  SELECT r.execution_id,r.workspace_id,w.name workspace_name,w.kind workspace_kind,w.disabled_at IS NULL workspace_enabled,
@@ -93,7 +95,7 @@ visible AS (
 ), aged AS (SELECT *,floor(extract(epoch FROM observed_at-unknown_since)/3600)::bigint age_hours FROM visible WHERE {AGED}),
 shared_rows AS (SELECT * FROM aged WHERE NOT $3 OR workspace_kind IN('team','project'))";
 const SUMMARY: &str = "jsonb_build_object('count',count(*)::text,'known_floor_microusd',sum(held_microusd::numeric)::numeric(38,0)::text,'unbounded_count',count(*) FILTER(WHERE unbounded_cost)::text,'oldest_age_hours',max(age_hours))";
-const ROW: &str = "jsonb_build_object('execution_id',execution_id,'root_request_id',root_request_id,'workspace',jsonb_build_object('id',workspace_id,'name',workspace_name,'kind',workspace_kind),'public_model',public_model,'provider',provider,'workload_kind',workload_kind,'unknown_since',unknown_since,'age_hours',age_hours,'held_microusd',held_microusd::numeric(38,0)::text,'unbounded_cost',unbounded_cost,'unresolved_reason',CASE WHEN price_id IS NULL THEN 'unpriced' WHEN unbounded_cost THEN 'unbounded_cost_or_unknown_rate' WHEN pricing_version=1 THEN 'incomplete_raw_usage' WHEN pricing_version=3 THEN 'incomplete_or_unpriced_meter_usage' WHEN billing_usage IS NULL THEN 'missing_billing_usage' ELSE 'incomplete_usage_or_cache_allocation' END,'can_reconcile',$5 AND workspace_enabled AND price_id IS NOT NULL AND execution_state IN('succeeded','failed','cancelled'))";
+const ROW: &str = "jsonb_build_object('execution_id',execution_id,'root_request_id',root_request_id,'workspace',jsonb_build_object('id',workspace_id,'name',workspace_name,'kind',workspace_kind),'public_model',public_model,'provider',provider,'workload_kind',workload_kind,'unknown_since',unknown_since,'age_hours',age_hours,'held_microusd',held_microusd::numeric(38,0)::text,'unbounded_cost',unbounded_cost,'unresolved_reason',CASE WHEN price_id IS NULL THEN 'unpriced' WHEN unbounded_cost THEN 'unbounded_cost_or_unknown_rate' WHEN pricing_version=1 THEN 'incomplete_raw_usage' WHEN pricing_version=3 THEN 'incomplete_or_unpriced_meter_usage' WHEN billing_usage IS NULL THEN 'missing_billing_usage' ELSE 'incomplete_usage_or_cache_allocation' END,'can_reconcile',$5 AND workspace_enabled AND price_id IS NOT NULL AND workload_kind<>'realtime' AND execution_state IN('succeeded','failed','cancelled'))";
 
 async fn page(
     tx: &mut Transaction<'_, Postgres>,

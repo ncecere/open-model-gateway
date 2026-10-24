@@ -632,3 +632,50 @@ async fn queue_selection_money_unknown_clock_and_no_writes(pool: PgPool) {
     let unchanged: Value = sqlx::query_scalar("SELECT jsonb_build_object('reservations',(SELECT jsonb_agg(to_jsonb(r) ORDER BY execution_id) FROM governance_reservations r),'ledger',(SELECT jsonb_agg(to_jsonb(l) ORDER BY id) FROM monetary_ledger l),'totals',(SELECT jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text) FROM budget_totals t))").fetch_one(&f.store.pool).await.unwrap();
     assert_eq!(snapshot, unchanged);
 }
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn queue_realtime_hold_is_listed_but_never_reconcilable(pool: PgPool) {
+    let f = fixture(pool).await;
+    let ws = f.team.workspace_id;
+    let realtime = hold(&f, ws, f.team.key_id, "unknown", Some(10), 3, None).await;
+    let generation = hold(&f, ws, f.team.key_id, "unknown", Some(20), 4, None).await;
+    sqlx::query("UPDATE inference_executions SET workload_kind='realtime' WHERE id=$1")
+        .bind(realtime)
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    // Priced, terminal and unknown: only the realtime workload differs.
+    for path in [
+        format!("/api/v1/workspaces/{ws}/holds"),
+        "/api/v1/platform/holds".to_string(),
+    ] {
+        let (status, v) = call(&f, f.owner, &path).await;
+        assert_eq!(status, StatusCode::OK, "{v}");
+        let rows = v["data"].as_array().unwrap();
+        assert_eq!(rows.len(), 2, "realtime holds stay listed: {v}");
+        let find = |id: Uuid| rows.iter().find(|r| r["execution_id"] == id.to_string());
+        let r = find(realtime).unwrap();
+        assert_eq!(r["workload_kind"], "realtime");
+        assert_eq!(r["can_reconcile"], false, "{path}: {r}");
+        assert_eq!(find(generation).unwrap()["can_reconcile"], true, "{path}");
+        assert_eq!(v["totals"]["count"], "2");
+    }
+    // The advertised flag must agree with the action it offers.
+    let usage = Usage {
+        input_tokens: Some(1),
+        output_tokens: Some(0),
+        ..Default::default()
+    };
+    assert!(
+        crate::governance::resolve_usage(
+            &f.store,
+            ws,
+            realtime,
+            usage,
+            "realtime-refused",
+            f.owner
+        )
+        .await
+        .is_err()
+    );
+}
