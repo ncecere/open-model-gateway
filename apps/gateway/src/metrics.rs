@@ -300,8 +300,7 @@ pub struct AttemptObservation<'a> {
 
 impl Metrics {
     fn new() -> Self {
-        let mut root = Registry::default();
-        let registry = root.sub_registry_with_prefix("gateway");
+        let mut registry = Registry::with_prefix("gateway");
         // Pre-create every trace label once. Recording increments plain atomic
         // counters, never takes a Family's lock or allocates label strings.
         let trace_drops = Family::<L1, Counter>::default();
@@ -644,21 +643,20 @@ impl Metrics {
             "Hours the rollups job (re)computed on this replica, by reason (new, changed)",
             metrics.rollup_hours.clone(),
         );
-        // #253 specifies these label-free names independently of the legacy
-        // gateway_* namespace. Empty-label families can be cleared on replicas
-        // that do not hold the metrics lease (rather than exporting stale data).
-        root.register(
-            "omg_alert_delivery_pending_buckets",
+        // Empty-label families can be cleared on replicas that do not hold
+        // the metrics lease, rather than exporting stale data.
+        registry.register(
+            "alert_delivery_pending_buckets",
             "Distinct pending delivery buckets, including overdue work awaiting cleanup",
             metrics.alert_pending_buckets.clone(),
         );
-        root.register(
-            "omg_alert_delivery_oldest_pending_age_seconds",
+        registry.register(
+            "alert_delivery_oldest_pending_age_seconds",
             "Age in seconds of the oldest pending delivery, or zero for an empty queue",
             metrics.alert_oldest_pending_age.clone(),
         );
         Self {
-            registry: root,
+            registry,
             ..metrics
         }
     }
@@ -1539,12 +1537,14 @@ mod tests {
         let m = Metrics::new();
         let scrape = m.render(Some(&store)).await;
         assert!(
-            scrape.contains("omg_alert_delivery_pending_buckets{} 2"),
+            scrape.contains("gateway_alert_delivery_pending_buckets{} 2"),
             "{scrape}"
         );
         let age = scrape
             .lines()
-            .find_map(|line| line.strip_prefix("omg_alert_delivery_oldest_pending_age_seconds{} "))
+            .find_map(|line| {
+                line.strip_prefix("gateway_alert_delivery_oldest_pending_age_seconds{} ")
+            })
             .unwrap()
             .parse::<i64>()
             .unwrap();
@@ -1557,17 +1557,17 @@ mod tests {
         assert!(
             !scrape
                 .lines()
-                .any(|line| line.starts_with("omg_alert_delivery_pending_buckets{"))
+                .any(|line| line.starts_with("gateway_alert_delivery_pending_buckets{"))
         );
         assert!(
             !scrape
                 .lines()
-                .any(|line| line.starts_with("omg_alert_delivery_oldest_pending_age_seconds{"))
+                .any(|line| line.starts_with("gateway_alert_delivery_oldest_pending_age_seconds{"))
         );
         crate::alerts::deliver_pending(&store, 25).await;
         let scrape = Metrics::new().render(Some(&store)).await;
-        assert!(scrape.contains("omg_alert_delivery_pending_buckets{} 0"));
-        assert!(scrape.contains("omg_alert_delivery_oldest_pending_age_seconds{} 0"));
+        assert!(scrape.contains("gateway_alert_delivery_pending_buckets{} 0"));
+        assert!(scrape.contains("gateway_alert_delivery_oldest_pending_age_seconds{} 0"));
     }
 
     #[cfg(feature = "integration-tests")]
