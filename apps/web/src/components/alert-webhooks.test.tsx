@@ -8,6 +8,8 @@ import { dashboardRouteTree } from "../router";
 import { abortRequests, type Session } from "../lib/api";
 import { admin, auditor, session, testClient } from "../lib/test-fixtures";
 import { webhookPath, webhookTestLimitMessage, type AlertWebhook } from "../lib/alert-webhooks";
+/** Exact accessible-name match: ByRoleOptions has no `exact`; anchor an escaped pattern instead. */
+const exactly = (name: string) => new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
 
 const saved: AlertWebhook = { id: "hook1", label: "Operations", enabled: false, signing_configured: true, overlap_active: false, previous_secret_until: null, waiting: 0, exhausted: 0, last_success_at: null, last_error: null, created_at: "2026-10-22T00:00:00Z", updated_at: "2026-10-22T00:00:00Z", url: "https://receiver.example/hook", current_secret_ref: "env:ALERT_SIGNING", previous_secret_ref: null };
 let rows: AlertWebhook[], failure: { method: string; status: number; message: string; reason?: string } | undefined;
@@ -46,9 +48,9 @@ const writes = (fetch: ReturnType<typeof vi.fn>, method: string) => fetch.mock.c
 async function action(name: string, label = "Operations") {
   const user = userEvent.setup();
   await user.click(within((await screen.findByText(label)).closest("tr")!).getByRole("button", { name: `Actions for ${label}` }));
-  await user.click(await screen.findByRole("menuitem", { name, exact: true })); return user;
+  await user.click(await screen.findByRole("menuitem", { name: exactly(name) })); return user;
 }
-async function confirm(name: string) { await userEvent.setup().click(within(await screen.findByRole("dialog")).getByRole("button", { name, exact: true })); }
+async function confirm(name: string) { await userEvent.setup().click(within(await screen.findByRole("dialog")).getByRole("button", { name: exactly(name) })); }
 
 describe("Admin Alerts Webhooks", () => {
   it("routes to the Webhooks tab and shows bounded status, not secret material", async () => {
@@ -71,10 +73,10 @@ describe("Admin Alerts Webhooks", () => {
     const user = await action("Deliveries");
     expect(document.body.textContent).not.toContain(saved.url);
     expect(document.body.textContent).not.toContain(saved.current_secret_ref);
-    expect(screen.queryByRole("button", { name: "Send test", exact: true })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Send\ test$/ })).toBeNull();
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close deliveries" }));
     await user.click(within(screen.getByText("Operations").closest("tr")!).getByRole("button", { name: /Actions/ }));
-    for (const name of ["Edit…", "Enable…", "Delete…", "Send test"]) expect(screen.queryByRole("menuitem", { name, exact: true })).toBeNull();
+    for (const name of ["Edit…", "Enable…", "Delete…", "Send test"]) expect(screen.queryByRole("menuitem", { name: exactly(name) })).toBeNull();
   });
   it("does not fetch webhooks for a non-platform user", async () => {
     const { fetch, router } = await mount(session);
@@ -120,9 +122,9 @@ describe("Admin Alerts Webhooks", () => {
   it("saves a live signing rotation with a bounded previous-key overlap", async () => {
     rows[0]!.enabled = true; const { fetch } = await mount(); const user = await action("Edit…");
     const dialog = within(screen.getByRole("dialog")), until = new Date(Date.now() + 23 * 3600000).toISOString();
-    await user.clear(dialog.getByRole("textbox", { name: "Signing reference", exact: true }));
-    await user.type(dialog.getByRole("textbox", { name: "Signing reference", exact: true }), "env:NEW_KEY");
-    await user.type(dialog.getByRole("textbox", { name: "Previous signing reference", exact: true }), saved.current_secret_ref!);
+    await user.clear(dialog.getByRole("textbox", { name: /^Signing\ reference$/ }));
+    await user.type(dialog.getByRole("textbox", { name: /^Signing\ reference$/ }), "env:NEW_KEY");
+    await user.type(dialog.getByRole("textbox", { name: /^Previous\ signing\ reference$/ }), saved.current_secret_ref!);
     await user.type(dialog.getByRole("textbox", { name: /Overlap ends/ }), until);
     await confirm("Save webhook");
     await waitFor(() => expect(writes(fetch, "PATCH")).toEqual([[`${webhookPath}/hook1`, { current_secret_ref: "env:NEW_KEY", previous_secret_ref: saved.current_secret_ref, previous_secret_until: until }]]));
