@@ -214,6 +214,7 @@ impl AlertWebhookPolicy {
         });
         anyhow::ensure!(
             value.len() <= 2048
+                && url.as_str().len() <= 2048
                 && !value.chars().any(|c| c.is_whitespace() || c.is_control())
                 && url.host_str().is_some()
                 && url.username().is_empty()
