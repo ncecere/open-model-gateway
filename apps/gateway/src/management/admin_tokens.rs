@@ -6,8 +6,8 @@ use super::*;
 use crate::admin_tokens::{self, CreateAdminTokenError, NewAdminTokenError};
 
 /// Every admin-tokens operation requires a currently effective Platform
-/// Admin specifically (not Auditor), checked live: no installation or
-/// catalog lock is relevant to this independent resource.
+/// Admin specifically (not Auditor), checked live. The shared catalog lock
+/// precedes any authority lock; these operations need no installation lock.
 async fn admin_tx<'a>(
     s: &'a Store,
     u: &BrowserPrincipal,

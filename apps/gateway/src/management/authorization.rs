@@ -417,7 +417,13 @@ async fn handle_admin_token(
     let status = response.status().as_u16();
     if let Err(error) = record_attempt(&s.pool, "completion", &attempt, Some(status)).await {
         crate::management::log_storage_error(&error);
-        response = audit_unavailable().into_response();
+        // Dispatch has already returned, so a write may have committed even
+        // though its completion record failed. Never claim it was not processed.
+        response = ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Audit completion unavailable; the request may have completed. Check the resource before retrying",
+        )
+        .into_response();
     }
     response
 }
