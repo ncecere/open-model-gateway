@@ -46,7 +46,10 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
-use crate::store::Store;
+use crate::{
+    otlp::{check_secret_env_name, export_http_client, parse_otlp_headers},
+    store::Store,
+};
 
 pub const URL_ENV: &str = "GATEWAY_AUDIT_WEBHOOK_URL";
 pub const SECRET_ENV_ENV: &str = "GATEWAY_AUDIT_WEBHOOK_SECRET_ENV";
@@ -56,22 +59,6 @@ pub const SYSLOG_CLIENT_CERT_FILE_ENV: &str = "GATEWAY_AUDIT_SYSLOG_CLIENT_CERT_
 pub const SYSLOG_CLIENT_KEY_FILE_ENV: &str = "GATEWAY_AUDIT_SYSLOG_CLIENT_KEY_FILE";
 pub const OTLP_URL_ENV: &str = "GATEWAY_AUDIT_OTLP_URL";
 pub const OTLP_HEADERS_ENV_ENV: &str = "GATEWAY_AUDIT_OTLP_HEADERS_ENV";
-/// Headers the OTLP variable may set.
-const OTLP_MAX_HEADERS: usize = 16;
-/// Headers the request sets itself, so the variable can't.
-/// Set by the client, or hop-by-hop headers that break HTTP/1 framing or are
-/// forbidden in HTTP/2: never configurable.
-const OTLP_RESERVED_HEADERS: [&str; 9] = [
-    "content-type",
-    "host",
-    "content-length",
-    "transfer-encoding",
-    "connection",
-    "upgrade",
-    "te",
-    "keep-alive",
-    "expect",
-];
 /// The OTLP response is read up to this size; a larger one rejects nothing.
 const OTLP_ACK_LIMIT: usize = 64 * 1024;
 /// The OTLP instrumentation scope.
@@ -473,88 +460,6 @@ impl Exporter {
     }
 }
 
-/// The rules for a variable an audit-export setting names (the webhook
-/// secret #106, the OTLP headers #108): an upper-case name, not on the
-/// provider or SMTP allowlist, and not reserved. A Platform Admin chooses
-/// where provider credentials and the SMTP password go: if either allowlist
-/// could read it, an admin could learn it (#140's rule, here too).
-pub(crate) fn check_secret_env_name(
-    setting: &str,
-    name: &str,
-    get: &impl Fn(&str) -> Option<String>,
-) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        !name.is_empty()
-            && name.len() <= 128
-            && name
-                .bytes()
-                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_'),
-        "{setting} must name an upper-case environment variable"
-    );
-    let listed =
-        |var: &str| get(var).is_some_and(|list| list.split(',').map(str::trim).any(|n| n == name));
-    anyhow::ensure!(
-        !listed("GATEWAY_SECRET_ENV_ALLOWLIST") && !listed(crate::email::SMTP_ALLOWLIST_VAR),
-        "{setting} names {name}, which a provider or SMTP allowlist can also read; use a variable only the audit export reads"
-    );
-    anyhow::ensure!(
-        !crate::startup::SECRET_NAMES.contains(&name)
-            && !name.starts_with("AWS_")
-            && !name.starts_with("GATEWAY_"),
-        "{setting} names a reserved variable ({name})"
-    );
-    Ok(())
-}
-
-/// `Key=Value,Key2=Value2` from the OTLP headers variable (#108). Errors say
-/// which item is wrong, never its name or value (a misplaced `=` could put a
-/// token in the name).
-pub(crate) fn parse_otlp_headers(
-    setting: &str,
-    value: &str,
-) -> anyhow::Result<reqwest::header::HeaderMap> {
-    let mut headers = reqwest::header::HeaderMap::new();
-    let items: Vec<&str> = value.split(',').collect();
-    anyhow::ensure!(
-        items.len() <= OTLP_MAX_HEADERS,
-        "{setting}: at most {OTLP_MAX_HEADERS} headers"
-    );
-    for (i, item) in items.into_iter().enumerate() {
-        let n = i + 1;
-        let (name, value) = item
-            .split_once('=')
-            .ok_or_else(|| anyhow::anyhow!("{setting}: header {n} is not Key=Value"))?;
-        // Spaces around `=` and `,` are ignored; a CR or LF never is.
-        let (name, value) = (name.trim_matches(' '), value.trim_matches(' '));
-        // An HTTP token (RFC 9110 5.6.2).
-        anyhow::ensure!(
-            !name.is_empty()
-                && name
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)),
-            "{setting}: header {n} has an invalid name"
-        );
-        anyhow::ensure!(
-            !OTLP_RESERVED_HEADERS
-                .iter()
-                .any(|reserved| name.eq_ignore_ascii_case(reserved)),
-            "{setting}: header {n} is one the gateway sets itself (Content-Type, Host or Content-Length)"
-        );
-        // Visible ASCII and space: no CR, LF or other control characters.
-        anyhow::ensure!(
-            !value.is_empty() && value.bytes().all(|b| (b' '..=b'~').contains(&b)),
-            "{setting}: header {n} has an empty or invalid value (visible ASCII and spaces only)"
-        );
-        let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
-            .map_err(|_| anyhow::anyhow!("{setting}: header {n} has an invalid name"))?;
-        let mut value = reqwest::header::HeaderValue::from_str(value)
-            .map_err(|_| anyhow::anyhow!("{setting}: header {n} has an invalid value"))?;
-        value.set_sensitive(true);
-        headers.append(name, value);
-    }
-    Ok(headers)
-}
-
 /// The URL checks and client shared by the webhook and the OTLP collector:
 /// HTTPS only (plain HTTP only to loopback in development), no credentials
 /// or fragment, the outbound address policy, no proxy, redirects or retries.
@@ -586,28 +491,6 @@ fn https_client(
         REQUEST_TIMEOUT,
     )?;
     Ok((url, client))
-}
-
-/// Shared export transport, never a durable queue or retry policy.
-pub(crate) fn export_http_client(
-    url: &reqwest::Url,
-    purpose: crate::egress::Purpose,
-    development: bool,
-    connect_timeout: Duration,
-    exchange_timeout: Duration,
-) -> anyhow::Result<reqwest::Client> {
-    let policy = crate::egress::policy().permit_loopback(development);
-    crate::egress::check_url(&policy, purpose, url)?;
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .dns_resolver(crate::egress::resolver_with(purpose, policy))
-        .redirect(reqwest::redirect::Policy::none())
-        .retry(reqwest::retry::never())
-        .timeout(exchange_timeout)
-        .connect_timeout(connect_timeout)
-        .build()
-        .map_err(|_| anyhow::anyhow!("cannot build the export client"))?;
-    Ok(client)
 }
 
 /// Read a PEM file at startup. Errors name the setting, never the contents.

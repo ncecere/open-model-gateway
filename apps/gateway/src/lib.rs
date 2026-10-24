@@ -39,6 +39,7 @@ pub mod maintenance;
 pub mod management;
 pub mod metrics;
 pub mod notify;
+pub(crate) mod otlp;
 pub mod partitions;
 pub mod protocols;
 pub mod providers;
