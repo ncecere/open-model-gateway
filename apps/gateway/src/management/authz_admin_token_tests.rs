@@ -1169,3 +1169,92 @@ async fn replica_limiter_bounds_the_aggregate_before_authentication(pool: PgPool
         "the third (throttled) token never authenticated, so it never produced an attempt row"
     );
 }
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn completion_audit_failure_reports_uncertainty_after_committed_mutation(pool: PgPool) {
+    let mut f = fixture(&pool).await;
+    f.s = f.s.with_secret_allowlists(
+        crate::providers::secrets::EnvSecrets::from_lookup(["OPENAI_API_KEY".into()], |_| None),
+        crate::providers::secrets::EnvSecrets::default(),
+    );
+    let mock = MockProvider::start(None).await;
+    let identity = mock.state(pool.clone()).await;
+    let engine = crate::inference::Engine::new(
+        std::sync::Arc::new(f.s.clone()),
+        crate::providers::ProviderRegistry::default(),
+        crate::inference::EngineLimits::default(),
+    )
+    .unwrap();
+    let app = crate::http::router_with_identity(f.s.clone(), None, engine, identity);
+    let (token_id, token) = mint(&pool, f.admin.user_id, &["catalog:write"], None).await;
+    // Fail only the post-dispatch insert, not the durable start or the
+    // transaction's business audit. This models losing audit availability
+    // after the handler has already committed its mutation.
+    sqlx::raw_sql(
+        "CREATE FUNCTION reject_completion_for_test() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN
+          IF NEW.phase='completion' THEN RAISE EXCEPTION 'simulated completion audit outage'; END IF;
+          RETURN NEW;
+         END $$;
+         CREATE TRIGGER reject_completion_for_test BEFORE INSERT ON admin_token_attempts
+         FOR EACH ROW EXECUTE FUNCTION reject_completion_for_test();",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/platform/providers")
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::from(
+                    json!({
+                        "name":"Completion audit probe", "provider":"openai",
+                        "credential_ref":"env:OPENAI_API_KEY", "enabled":false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let created: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM provider_connections WHERE name='Completion audit probe'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(created, 1, "the business mutation already committed");
+    let audited: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events WHERE admin_token_id=$1 AND action='provider.created'",
+    )
+    .bind(token_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        audited, 1,
+        "business audit remains atomic with the mutation"
+    );
+    let phases: Vec<String> = sqlx::query_scalar(
+        "SELECT phase FROM admin_token_attempts WHERE token_id=$1 ORDER BY phase",
+    )
+    .bind(token_id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        phases,
+        ["start"],
+        "an incomplete attempt must remain honest"
+    );
+    let bytes = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(message.contains("may have completed"), "{message}");
+    assert!(!message.contains("was not processed"), "{message}");
+    assert!(!message.contains(&token));
+}
