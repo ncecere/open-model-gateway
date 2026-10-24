@@ -2547,14 +2547,16 @@ mod database {
         let receiver = receiver().await;
         enable(&pool, &store, &receiver).await;
 
+        // Fixture events reuse existing action codes, rather than inventing
+        // new runtime actions solely for this export-attribution regression.
         let attributed = Uuid::now_v7();
-        sqlx::query("INSERT INTO audit_events(id,actor_user_id,workspace_id,action,resource_type,metadata,admin_token_id) VALUES($1,$2,$3,'token.action','test','{}',$4)")
+        sqlx::query("INSERT INTO audit_events(id,actor_user_id,workspace_id,action,resource_type,metadata,admin_token_id) VALUES($1,$2,$3,'workspace.updated','test','{}',$4)")
             .bind(attributed).bind(owner).bind(team).bind(token.id).execute(&pool).await.unwrap();
         let browser = Uuid::now_v7();
-        sqlx::query("INSERT INTO audit_events(id,actor_user_id,workspace_id,action,resource_type,metadata) VALUES($1,$2,$3,'browser.action','test','{}')")
+        sqlx::query("INSERT INTO audit_events(id,actor_user_id,workspace_id,action,resource_type,metadata) VALUES($1,$2,$3,'workspace.created','test','{}')")
             .bind(browser).bind(owner).bind(team).execute(&pool).await.unwrap();
         let personal_attributed = Uuid::now_v7();
-        sqlx::query("INSERT INTO audit_events(id,actor_user_id,workspace_id,action,resource_type,metadata,admin_token_id) VALUES($1,$2,$3,'token.personal','test','{}',$4)")
+        sqlx::query("INSERT INTO audit_events(id,actor_user_id,workspace_id,action,resource_type,metadata,admin_token_id) VALUES($1,$2,$3,'key.created','test','{}',$4)")
             .bind(personal_attributed).bind(owner).bind(personal).bind(token.id).execute(&pool).await.unwrap();
 
         deliver_once(&store, &exporter(&receiver.url), None)
