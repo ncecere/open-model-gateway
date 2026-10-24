@@ -10,15 +10,42 @@ Use incident History's Waiting/Retrying/Exhausted, waiting count and next due ti
 
 `gateway_alert_email_attempts_total{outcome="sent|transient_failure|permanent_failure"}` counts recorded attempt outcomes. `gateway_alert_email_deliveries{state="retrying|failed|exhausted"}` counts pending deliveries created in the last 24 hours and terminal failures/exhaustion completed in the last 24 hours (the metrics lease holder exports the installation aggregate). The completion window keeps newly expired/cleaned-up failures visible beyond the 15-minute alert window, even when they were created over 24 hours ago. Cleanup without a send does not increment the attempt counter. Failed and exhausted overlap; do not add them. The [example Prometheus rules](../deploy/monitoring/prometheus-rules.yml) include `GatewayAlertEmailPersistentFailure`. Send it through an independent operations channel, not a recursive email-failure incident inside the gateway. Missing SMTP is `not_configured`, not a retry loop. No metric labels, incident API fields or logs contain outbox fingerprints/recipient addresses. Fingerprints are pseudonymous personal data; restrict database access and backups accordingly.
 
-## OTLP metrics groundwork (#99, slice 2)
+## OTLP metrics (#99)
 
-The scrape-derived snapshot and encoder are implemented, but no metrics worker is wired yet; a configured metrics OTLP URL still refuses startup. Leave the metrics OTLP settings unset until the runtime slice ships. Prometheus scraping is unchanged.
+Each configured `serve` replica runs one optional OTLP/HTTP **JSON** metrics worker, independent of traces and the Prometheus listener. It renders the same scrape-derived metrics (including database-backed gauges and metrics-lease-holder omissions), then takes a bounded snapshot. No scrape listener is required; existing Prometheus scraping is unchanged. Export begins after the first interval, not during startup.
 
-The golden inventory pins every family's System, Traffic or Excluded class. System families are encoded first, then opt-in Traffic, with deterministic family/series ordering within each class. This keeps Traffic from consuming the 2,000-point or 1 MiB body allowance ahead of System health metrics. Disabled Traffic and Excluded families are skipped before label validation and do not count as drops.
+### Settings
 
-Coordinator decision: the DB-only `gateway_alert_delivery_pending_buckets` and `gateway_alert_delivery_oldest_pending_age_seconds` gauges are **Traffic**, the same data class as `gateway_alert_email_deliveries`, despite having no labels. Traffic includes personal-workspace work as identity-free aggregates and is off by default. Only Traffic families carry `model`/`provider` labels: `model` contains platform-catalog public model aliases, not arbitrary request model strings; `provider` contains provider kinds. Each dynamic label inventory is bounded to 200 values of at most 96 characters (overflow uses a fixed fallback).
+| Variable | Default | Purpose |
+|---|---|---|
+| `GATEWAY_METRICS_OTLP_URL` | unset (disabled) | Full collector URL with exactly `/v1/metrics`; the path is not added. Verified HTTPS with public roots, no credentials, query or fragment. HTTP is allowed only on development loopback (`GATEWAY_ENV=development`). |
+| `GATEWAY_METRICS_OTLP_HEADERS_ENV` | unset | Name of a dedicated secret variable holding `Key=Value,Key2=Value2` collector headers. At most 16 headers and 4 KiB; no control characters or transport-owned headers. Inject the value through a Secret, not a ConfigMap or public frontend setting. |
+| `GATEWAY_METRICS_OTLP_INTERVAL_SECONDS` | `60` | Integer from `10` to `300`, inclusive. Overdue ticks are skipped, never replayed in catch-up bursts. |
+| `GATEWAY_METRICS_OTLP_TRAFFIC` | `off` | Explicit `on` includes Traffic families, including identity-free personal-workspace aggregates. |
 
-Runtime/acceptance requirements for slice 3: failure to obtain entropy for the per-process instance ID must quietly disable metrics export, without a predictable fallback or a startup failure. The UUID privacy canary must exempt exactly the `service.instance.id` resource attribute, not UUID-shaped values elsewhere.
+The other three settings require the URL; invalid settings stop startup rather than silently disabling export. The header secret must be non-reserved, absent from provider/SMTP allowlists, and not selected by another secret pointer (including trace and audit export). Metrics never reads `OTEL_*` settings or borrows another signal's headers. The [outbound address policy](#outbound-connections) applies; proxies, redirects and implicit retries are disabled. HTTP's post-DNS loopback tightening is tracked separately in #313; this slice does not claim to implement it. There are no insecure TLS, custom-CA or mTLS switches.
+
+### Privacy and limits
+
+The [golden inventory](../apps/gateway/src/metrics_families.golden) explicitly classifies every family as **System**, **Traffic** or **Excluded**. System health comes first, followed by opt-in Traffic, with deterministic family/series ordering within each class. Caps are 300 series per family, 2,000 logical data points per snapshot (one histogram is one point), and a 1 MiB encoded body. Traffic cannot consume these allowances ahead of System health. Disabled Traffic and Excluded families (currently build info) are skipped before label validation and do not count as drops; unclassified families are dropped.
+
+The DB-only `gateway_alert_delivery_pending_buckets` and `gateway_alert_delivery_oldest_pending_age_seconds` gauges are **Traffic**, the same data class as `gateway_alert_email_deliveries`, despite having no labels. Only Traffic families carry `model`/`provider` labels: `model` contains platform-catalog public aliases, not arbitrary request strings; `provider` contains provider kinds. Each dynamic inventory is bounded to 200 values of at most 96 characters (overflow uses a fixed fallback). Exported label values cannot contain control characters. No workspace, user, key, request, trace or execution identities, email, session, host, IP or URL labels are exported. `path` is permitted only on scope-lock and lock-deadlock-retry families, and only as the operational enums `admission`, `settlement` or `reconciliation`, never a URL path. Prompts, responses and credentials are not exported.
+
+The only resource attributes are `service.name`, `service.version`, `deployment.environment.name` and `service.instance.id`. The last is a random per-process UUID, never an installation or user identifier; it appears only at that resource attribute. Counters and histograms are cumulative with one process-start timestamp. If instance-ID entropy is unavailable, export stays quietly disabled for that process: no worker, fallback identity, repeated entropy draws or startup failure.
+
+### Failures and shutdown
+
+Collector outages never gate readiness or normal HTTP requests. One worker owns at most one snapshot/body/exchange; collection releases metrics locks and database connections before HTTP. Each exchange, including its bounded acknowledgement, has a 5-second deadline (1 second to connect). There are **no retries, queue or disk spool**: after a failed push the next interval collects a fresh snapshot.
+
+Shutdown cancels an in-flight periodic push and attempts exactly one fresh final snapshot. Collection and delivery share **one total 3-second exporter drain budget**, concurrently with trace shutdown, not separate 3-second phases. On expiry the task is aborted and joined; dropping the runtime also aborts its work. The final snapshot is best effort, not a delivery guarantee.
+
+Watch these System metrics (Prometheus names below; OTLP counters omit `_total`):
+
+- `gateway_otlp_metrics_pushes_total{outcome="accepted|http_status|transport|timeout|acknowledgement"}`: completed push outcomes, including shutdown when it completes. `accepted` includes a valid partial-success acknowledgement; non-2xx, transport, deadline and malformed/oversized acknowledgement failures have fixed outcomes.
+- `gateway_otlp_metrics_rejected_points_total`: collector-rejected points reported by partial success, bounded by the sent point count; they are not retried.
+- `gateway_otlp_metrics_dropped_total{reason="series_limit|body_limit|label|unclassified|invalid_value"}`: points omitted locally. These and delivery outcomes appear in the **next** snapshot, never a recursive export.
+
+Only transitions into or out of an outage produce the fixed-enum `metrics exporter state changed` warning, not every failed push. Diagnostics never include the collector URL, header names/values, transport error text or collector response text. Monitor silence at the receiver too: a failed exporter cannot report its current failure through that same destination.
 
 ## Configuration reference
 

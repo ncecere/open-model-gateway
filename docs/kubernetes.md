@@ -195,6 +195,24 @@ networkPolicy:
 
 The Secret `omg-trace-headers` needs one key named `GATEWAY_TRACES_HEADERS` (matching the name given to `GATEWAY_TRACES_OTLP_HEADERS_ENV` above), holding `Key=Value,Key2=Value2` header pairs such as `Authorization=Bearer ...`. A private collector destination also needs `GATEWAY_EGRESS_PRIVATE_ALLOW` covering its address, exactly like any other private destination above; a collector outside the cluster still needs 4318 reachable under `httpsCidrs`/`httpsExceptCidrs` if those are set and the URL uses HTTPS (plain HTTP to a collector is accepted only on development loopback). This chart's `configmap.yaml`/`deployment.yaml` route every `gateway.env` entry to the gateway container alone: the migration Job never mounts this ConfigMap, so a trace setting placed here never reaches it.
 
+### OTLP metrics (#99)
+
+Metrics push is independent of traces and `GATEWAY_METRICS_ADDR`; it needs no ServiceMonitor or inbound metrics port. Put `GATEWAY_METRICS_OTLP_URL` (full HTTPS `/v1/metrics` URL), `GATEWAY_METRICS_OTLP_INTERVAL_SECONDS` (10–300, default 60), `GATEWAY_METRICS_OTLP_TRAFFIC` (`off` by default) and the optional `GATEWAY_METRICS_OTLP_HEADERS_ENV` secret-variable **name** in `gateway.env`. For example:
+
+```yaml
+gateway:
+  env:
+    GATEWAY_METRICS_OTLP_URL: "https://otel-collector.observability.svc.cluster.local:4318/v1/metrics"
+    GATEWAY_METRICS_OTLP_INTERVAL_SECONDS: "60"
+    GATEWAY_METRICS_OTLP_TRAFFIC: "off"
+    GATEWAY_METRICS_OTLP_HEADERS_ENV: "METRICS_COLLECTOR_HEADERS"
+  extraEnvFrom:
+    - secretRef:
+        name: omg-metrics-headers
+```
+
+The Secret's `METRICS_COLLECTOR_HEADERS` key holds `Key=Value,Key2=Value2`; never put its value in `gateway.env` or share it with provider, SMTP, trace or audit credentials. Apply the collector egress rule above for TCP 4318 and allow its private address range in `GATEWAY_EGRESS_PRIVATE_ALLOW`. Production collectors require HTTPS, including in-cluster collectors; plain HTTP is development-loopback-only (post-DNS tightening is tracked separately in #313). Each replica has one worker, no retries or spool, and a single 3-second exporter shutdown budget shared by collection and final delivery, concurrent with trace drain. Collector failure does not affect readiness. See [OTLP metrics](operations.md#otlp-metrics-99) for privacy classes, caps and outcome metrics. No chart template change is needed.
+
 ## Failover timing
 
 `cnpg.cluster.smartShutdownTimeout` (default 15 s) is how long a stopping primary waits for clients
