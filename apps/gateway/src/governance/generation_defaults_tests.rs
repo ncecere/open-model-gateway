@@ -550,6 +550,58 @@ async fn generation_defaults_failover_uses_each_attempt_price_not_prior_cap(pool
             .unwrap();
     assert_eq!(pins, [first, second_price]);
 }
+/// Polls `sql` (bound to one pid) until it returns a backend pid. The wait is
+/// on the database's own lock state (`pg_locks`, `pg_stat_activity`,
+/// `pg_blocking_pids`), never on elapsed time: only the poll interval sleeps,
+/// and the generous deadline only turns a genuine hang into a failure.
+async fn wait_for_backend(pool: &sqlx::PgPool, what: &str, sql: &str, pid: i32) -> i32 {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        if let Some(found) = sqlx::query_scalar::<_, i32>(sql)
+            .bind(pid)
+            .fetch_optional(pool)
+            .await
+            .unwrap()
+        {
+            return found;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{what} never reached its lock wait"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+}
+/// The admission backend: it already holds the shared catalog lock (granted)
+/// and is waiting, blocked by `blocker`, for its authority lock. Observing
+/// both from outside is exactly the state the assertions below rely on.
+async fn wait_admission_blocked(pool: &sqlx::PgPool, blocker: i32) -> i32 {
+    wait_for_backend(
+        pool,
+        "admission",
+        "SELECT a.pid FROM pg_stat_activity a WHERE a.datname=current_database() \
+         AND a.pid<>$1 AND a.wait_event_type='Lock' AND $1=ANY(pg_blocking_pids(a.pid)) \
+         AND EXISTS(SELECT 1 FROM pg_locks l WHERE l.pid=a.pid AND l.locktype='advisory' \
+          AND l.classid=0 AND l.objid=72419502 AND l.objsubid=1 AND l.mode='ShareLock' AND l.granted) \
+         LIMIT 1",
+        blocker,
+    )
+    .await
+}
+/// The catalog writer: waiting (not granted) for the exclusive catalog lock,
+/// blocked by the admission backend's shared hold.
+async fn wait_catalog_writer_blocked(pool: &sqlx::PgPool, admission: i32) -> i32 {
+    wait_for_backend(
+        pool,
+        "catalog writer",
+        "SELECT a.pid FROM pg_stat_activity a JOIN pg_locks l ON l.pid=a.pid AND NOT l.granted \
+         AND l.locktype='advisory' AND l.classid=0 AND l.objid=72419502 AND l.objsubid=1 \
+         AND l.mode='ExclusiveLock' WHERE a.datname=current_database() \
+         AND a.wait_event_type='Lock' AND $1=ANY(pg_blocking_pids(a.pid)) LIMIT 1",
+        admission,
+    )
+    .await
+}
 async fn publication_barrier(pool: sqlx::PgPool, mode: locks::AdmissionMode) {
     let mut f = fixture(pool).await;
     f.store = f.store.with_admission_mode(mode);
@@ -578,8 +630,22 @@ async fn publication_barrier(pool: sqlx::PgPool, mode: locks::AdmissionMode) {
     let s = f.start();
     let mut r = request();
     r.max_output_tokens = None;
+    let blocker_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *blocker)
+        .await
+        .unwrap();
     let admitted = admit_generation(&f.store, &s, &r, 30, &d, u32::MAX);
     tokio::pin!(admitted);
+    // Drive admission until its backend is observed holding the shared catalog
+    // lock while blocked by the authority lock; it must not complete meanwhile.
+    let admission_pid = tokio::select! {
+        done = &mut admitted => panic!(
+            "admission finished (ok={}) while authority was blocked",
+            done.is_ok()
+        ),
+        pid = wait_admission_blocked(&f.store.pool, blocker_pid) => pid,
+    };
+    // Now it is parked inside the database: it still cannot complete.
     assert!(
         tokio::time::timeout(std::time::Duration::from_millis(100), &mut admitted)
             .await
@@ -595,6 +661,15 @@ async fn publication_barrier(pool: sqlx::PgPool, mode: locks::AdmissionMode) {
     let new = Uuid::now_v7();
     let writer = sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_microusd_per_million,output_microusd_per_million,input_token_limit,output_token_limit,pricing_version) VALUES($1,$2,1000000,1000000,100,23,1)").bind(new).bind(f.deployment).execute(&f.store.pool);
     tokio::pin!(writer);
+    // Drive the writer until its backend is observed waiting for the exclusive
+    // catalog lock behind admission's shared hold; it must not complete.
+    tokio::select! {
+        done = &mut writer => panic!(
+            "catalog writer finished (ok={}) while admission held the catalog lock",
+            done.is_ok()
+        ),
+        _ = wait_catalog_writer_blocked(&f.store.pool, admission_pid) => {}
+    }
     assert!(
         tokio::time::timeout(std::time::Duration::from_millis(100), &mut writer)
             .await
