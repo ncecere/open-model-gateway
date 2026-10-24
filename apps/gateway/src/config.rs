@@ -17,6 +17,8 @@ pub struct Config {
     pub inference_limits: crate::inference::EngineLimits,
     /// Optional separate Prometheus listener (`GATEWAY_METRICS_ADDR`); `None` disables it.
     pub metrics_listen: Option<SocketAddr>,
+    /// Optional independent OTLP push transport; never a readiness dependency.
+    pub metrics_export: MetricsExportConfig,
     /// `GATEWAY_DATABASE_MAX_CONNECTIONS` (default 10) per replica.
     pub database_max_connections: u32,
     /// Optional `GATEWAY_REPORTING_DATABASE_URL`: a read-only reporting
@@ -117,8 +119,7 @@ impl TraceConfig {
 }
 
 /// Operator-only metrics export settings. Never Debug: headers contain secrets.
-/// Parsing does not spawn a task or send anything. Until the worker ships,
-/// `Config::from_env` explicitly refuses a configured endpoint.
+/// Parsing does not spawn a task or send anything.
 #[derive(Clone)]
 pub struct MetricsExportConfig {
     pub endpoint: Option<(reqwest::Url, reqwest::Client)>,
@@ -388,10 +389,6 @@ impl Config {
         // allowlist could read is reported like every other pointer: by setting
         // and variable name, never value. Trace errors themselves stay generic.
         let traces = TraceConfig::from_env(environment)?;
-        anyhow::ensure!(
-            metrics_export.endpoint.is_none(),
-            "GATEWAY_METRICS_OTLP_URL: metrics export is not implemented in this release; leave it unset"
-        );
         let max_concurrent = std::env::var("GATEWAY_MAX_CONCURRENT_REQUESTS")
             .unwrap_or_else(|_| "128".into())
             .parse::<usize>()
@@ -481,6 +478,7 @@ impl Config {
             alert_webhooks,
             inference_limits,
             metrics_listen,
+            metrics_export,
             database_max_connections,
             reporting_database_url,
             reporting_max_lag,
