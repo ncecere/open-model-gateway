@@ -166,9 +166,16 @@ impl SecretResolver for Secrets {
 
 struct World {
     app: Router,
+    pool: PgPool,
     keys: DevelopmentKeys,
     approved: Upstream,
     attacker: Upstream,
+}
+impl World {
+    async fn close(self) {
+        drop(self.app);
+        self.pool.close().await;
+    }
 }
 
 const NA_METERS: [&str; 11] = [
@@ -262,7 +269,16 @@ async fn connection(pool: &PgPool, provider: &str, endpoint: Option<&str>) -> Uu
 
 /// The routes: one model per protocol, on the adapter that serves it.
 /// (public name, client path, protocol, provider, upstream model, price)
-async fn world(pool: PgPool) -> World {
+async fn world(provided: PgPool) -> World {
+    // These callers use fresh databases, without session SETs or pool callbacks.
+    // Keep their connection options, but not SQLx's shared parent capacity or
+    // short test-pool idle expiry. Open connections only as needed, up to five.
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .min_connections(0)
+        .connect_with((*provided.connect_options()).clone())
+        .await
+        .unwrap();
     let (approved, attacker) = (Upstream::start().await, Upstream::start().await);
     let store = Store::new(pool.clone());
     let keys = bootstrap::seed(&store, Environment::Development)
@@ -508,6 +524,7 @@ async fn world(pool: PgPool) -> World {
         .layer(axum::Extension(FileStoreRuntime::memory()));
     World {
         app,
+        pool,
         keys,
         approved,
         attacker,
@@ -588,10 +605,15 @@ async fn control(w: &World, label: &str, request: Request) -> Control {
         );
     }
     assert_no_attacker(w, label, "control");
+    let reason = reason(&text);
+    assert_ne!(
+        reason, "accounting_unavailable",
+        "{label}: an accounting failure is not a clean control ({status})"
+    );
     Control {
         hit,
         status: status.as_u16(),
-        reason: reason(&text),
+        reason,
     }
 }
 
@@ -1090,7 +1112,7 @@ async fn steering_world_dispatch_is_independent_of_the_provided_pool(pool: PgPoo
 
     // Clean up before the outcome assertions, including on the expected RED.
     drop(held);
-    drop(w);
+    w.close().await;
     provided.close().await;
 
     assert_eq!(
@@ -1172,7 +1194,7 @@ async fn steering_control_rejects_accounting_unavailable_after_a_real_upstream_h
     );
     assert_eq!(hits[0].body, clean.hit.body, "the clean body is unchanged");
     assert_no_attacker(&w, "Ollama embedding", "injected accounting failure");
-    drop(w);
+    w.close().await;
     assert!(
         outcome.is_err(),
         "control must panic, not accept 503/accounting_unavailable as its baseline"
@@ -1324,6 +1346,7 @@ async fn no_json_inference_input_can_steer_the_upstream(pool: PgPool) {
             check(case.to_owned(), post(&[], &labelled(extra)), want).await;
         }
     }
+    w.close().await;
 }
 
 const BOUNDARY: &str = "steering-boundary";
@@ -1476,6 +1499,7 @@ async fn no_multipart_audio_input_can_steer_the_upstream(pool: PgPool) {
             .await;
         }
     }
+    w.close().await;
 }
 
 async fn upload(w: &World, fields: &[(&str, &str)], name: &str, content: &[u8]) -> (u16, String) {
@@ -1672,6 +1696,7 @@ async fn files_and_batches_cannot_steer_the_upstream(pool: PgPool) {
         is(&post(body).await, 400, "invalid_batch_input", case);
         silent(case);
     }
+    w.close().await;
 }
 
 /// Model resolution is exact: whatever string a request carries (arbitrary
@@ -1682,9 +1707,9 @@ async fn only_an_exact_configured_name_ever_resolves(pool: PgPool) {
     use crate::inference::repository::InferenceRepository;
     use proptest::{prelude::*, strategy::ValueTree, test_runner::TestRunner};
 
-    let w = world(pool.clone()).await;
+    let w = world(pool).await;
     let user: Uuid = sqlx::query_scalar("SELECT id FROM users LIMIT 1")
-        .fetch_one(&pool)
+        .fetch_one(&w.pool)
         .await
         .unwrap();
     let principal = crate::auth::Principal {
@@ -1692,7 +1717,7 @@ async fn only_an_exact_configured_name_ever_resolves(pool: PgPool) {
         workspace_id: w.keys.personal_workspace_id,
         user_id: Some(user),
     };
-    let store = Store::new(pool);
+    let store = Store::new(w.pool.clone());
     let configured: Vec<String> = targets().iter().map(|t| t.model.to_owned()).collect();
     // Mixed case, dots, colons: valid names that differ from others only slightly.
     for name in [
@@ -1771,6 +1796,8 @@ async fn only_an_exact_configured_name_ever_resolves(pool: PgPool) {
         }
     }
     assert!(resolved >= known.len(), "the configured names resolved");
+    drop(store);
+    w.close().await;
 }
 
 /// Names inserted by SQL outside the management charset (a space, `@`, an
@@ -1780,9 +1807,9 @@ async fn only_an_exact_configured_name_ever_resolves(pool: PgPool) {
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn names_outside_the_management_charset_keep_resolving(pool: PgPool) {
     use crate::inference::repository::InferenceRepository;
-    let w = world(pool.clone()).await;
+    let w = world(pool).await;
     let user: Uuid = sqlx::query_scalar("SELECT id FROM users LIMIT 1")
-        .fetch_one(&pool)
+        .fetch_one(&w.pool)
         .await
         .unwrap();
     let principal = crate::auth::Principal {
@@ -1790,7 +1817,7 @@ async fn names_outside_the_management_charset_keep_resolving(pool: PgPool) {
         workspace_id: w.keys.personal_workspace_id,
         user_id: Some(user),
     };
-    let store = Store::new(pool);
+    let store = Store::new(w.pool.clone());
     let legacy = ["team model", "team@model", "caf\u{e9}", "a#b%2F", "x/../y"];
     for name in legacy {
         let c = connection(&store.pool, "openai", None).await;
@@ -1846,4 +1873,6 @@ async fn names_outside_the_management_charset_keep_resolving(pool: PgPool) {
             "{name:?}"
         );
     }
+    drop(store);
+    w.close().await;
 }
