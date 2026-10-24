@@ -23,7 +23,15 @@ fn json_handlers() -> BTreeSet<String> {
             // `Json<T>`, or a handler that inspects the rejection itself
             // (`Result<Json<T>, JsonRejection>`, `Option<Json<T>>`) so it can
             // refuse without echoing input: both are JSON write extractors.
-            fn is_json(ty: &syn::Type) -> bool {
+            // A helper generic over the body type (`fn f<T>(Result<Json<T>, _>)`)
+            // is not a route handler: Axum handlers extract a concrete DTO.
+            let generic: BTreeSet<String> = node
+                .sig
+                .generics
+                .type_params()
+                .map(|t| t.ident.to_string())
+                .collect();
+            fn is_json(ty: &syn::Type, generic: &BTreeSet<String>) -> bool {
                 let syn::Type::Path(p) = ty else {
                     return false;
                 };
@@ -31,7 +39,14 @@ fn json_handlers() -> BTreeSet<String> {
                     return false;
                 };
                 if last.ident == "Json" {
-                    return true;
+                    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+                        return true;
+                    };
+                    return !matches!(
+                        args.args.first(),
+                        Some(syn::GenericArgument::Type(syn::Type::Path(inner)))
+                            if inner.path.get_ident().is_some_and(|i| generic.contains(&i.to_string()))
+                    );
                 }
                 if last.ident != "Result" && last.ident != "Option" {
                     return false;
@@ -39,10 +54,10 @@ fn json_handlers() -> BTreeSet<String> {
                 let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
                     return false;
                 };
-                matches!(args.args.first(), Some(syn::GenericArgument::Type(inner)) if is_json(inner))
+                matches!(args.args.first(), Some(syn::GenericArgument::Type(inner)) if is_json(inner, generic))
             }
             let json = node.sig.inputs.iter().any(|arg| match arg {
-                syn::FnArg::Typed(p) => is_json(&p.ty),
+                syn::FnArg::Typed(p) => is_json(&p.ty, &generic),
                 _ => false,
             });
             if json {
