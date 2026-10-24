@@ -20,11 +20,29 @@ fn json_handlers() -> BTreeSet<String> {
             if crate::configuration_source_tests::test_only(&node.attrs) {
                 return;
             }
+            // `Json<T>`, or a handler that inspects the rejection itself
+            // (`Result<Json<T>, JsonRejection>`, `Option<Json<T>>`) so it can
+            // refuse without echoing input: both are JSON write extractors.
+            fn is_json(ty: &syn::Type) -> bool {
+                let syn::Type::Path(p) = ty else {
+                    return false;
+                };
+                let Some(last) = p.path.segments.last() else {
+                    return false;
+                };
+                if last.ident == "Json" {
+                    return true;
+                }
+                if last.ident != "Result" && last.ident != "Option" {
+                    return false;
+                }
+                let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+                    return false;
+                };
+                matches!(args.args.first(), Some(syn::GenericArgument::Type(inner)) if is_json(inner))
+            }
             let json = node.sig.inputs.iter().any(|arg| match arg {
-                syn::FnArg::Typed(p) => match p.ty.as_ref() {
-                    syn::Type::Path(p) => p.path.segments.last().is_some_and(|s| s.ident == "Json"),
-                    _ => false,
-                },
+                syn::FnArg::Typed(p) => is_json(&p.ty),
                 _ => false,
             });
             if json {
