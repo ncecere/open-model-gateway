@@ -156,7 +156,7 @@ pub(super) async fn workspace_compare(
 /// GET /platform/models/compare?ids=…: any model; Team/Project activity only.
 pub(super) async fn platform_compare(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Query(q): Query<CompareQuery>,
 ) -> ApiResult {
     let ids = parse_ids(&q.ids)?;

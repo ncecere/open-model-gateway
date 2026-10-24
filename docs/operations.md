@@ -86,10 +86,10 @@ With `GATEWAY_AUDIT_WEBHOOK_URL` and `GATEWAY_AUDIT_WEBHOOK_SECRET_ENV` set, the
   {"schema":"omg.audit.v1","installation_id":"…","sent_at":"…","events":[
     {"id":"…","occurred_at":"…","action":"key.revoked","resource":{"type":"key","id":"…"},
      "actor":{"id":"…","label":"Alex Doe"},"workspace":{"id":"…","name":"Product","kind":"team"},
-     "metadata":{"count":1},"seq":42}]}
+     "admin_token_id":null,"metadata":{"count":1},"seq":42}]}
   ```
 
-  `actor` and `workspace` may be `null`. `actor.label` is the display name, or the email when there's none (personal data leaving the gateway), read when the event is delivered. `metadata` holds only the audit log's safe fields (flags, counts, codes). A test delivery has `"test": true` and no events.
+  `actor` and `workspace` may be `null`. `actor.label` is the display name, or the email when there's none (personal data leaving the gateway), read when the event is delivered. `admin_token_id` (#37 PR2, additive) is the admin API token's own id when an admin token performed the action, `null` for a browser-session action (every event before this field existed, and still today's typical event) — never a digest or the token's plaintext. `metadata` holds only the audit log's safe fields (flags, counts, codes). A test delivery has `"test": true` and no events.
 - **Destination:** HTTPS through the [outbound address policy](#outbound-connections); no redirects or proxies; 10-second timeout.
 - **Watch:** `gateway_audit_export_queued` and `gateway_audit_export_oldest_seconds` (alert when the oldest event is older than, say, 15 minutes), `gateway_audit_export_deliveries_total{outcome}` (requests), and for OTLP `increase(gateway_audit_export_rejected_records_total[15m]) > 0`. The gateway's own credentials can stop the export, so also alert on the receiver on gaps and silence (above).
 - **Kubernetes:** set the URL with `gateway.env` and the secret through `gateway.extraEnvFrom` from a Secret; list the variable's name in `GATEWAY_AUDIT_WEBHOOK_SECRET_ENV`. Allow the receiver in `networkPolicy.egress.httpsCidrs` if you narrowed it.

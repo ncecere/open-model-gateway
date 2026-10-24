@@ -147,12 +147,12 @@ type PlatformRow = (
 
 pub(super) async fn platform_storage_usage(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Query(q): Query<StorageQuery>,
 ) -> ApiResult {
     let (start, end) = period(&q)?;
     let mut tx = resources::installation_tx(&s).await?;
-    resources::platform_read(&mut tx, u.user_id).await?;
+    resources::platform_read(&mut tx, &u).await?;
     sqlx::query("SET LOCAL statement_timeout='10s'")
         .execute(&mut *tx)
         .await?;

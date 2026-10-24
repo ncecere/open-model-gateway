@@ -6,6 +6,10 @@ use axum::{
 };
 use sqlx::PgPool;
 use tower::ServiceExt;
+#[path = "admin_token_revalidation_tests.rs"]
+mod admin_token_revalidation_tests;
+#[path = "admin_tokens_tests.rs"]
+mod admin_tokens_tests;
 #[path = "alerts/tests.rs"]
 mod alert_tests;
 #[path = "audit_export_tests.rs"]
@@ -20,6 +24,8 @@ mod batch_scheduling_tests;
 mod branding_tests;
 #[path = "catalog_ux_tests.rs"]
 mod catalog_ux_tests;
+#[path = "catalogs_token_guard_tests.rs"]
+mod catalogs_token_guard_tests;
 #[path = "configuration_matrix_tests.rs"]
 mod configuration_matrix_tests;
 #[path = "configuration_tests.rs"]
@@ -152,6 +158,10 @@ async fn call(
     body: Value,
 ) -> (StatusCode, Value) {
     let response = routes()
+        // Both extensions: a real browser session's middleware inserts both
+        // (identity::authenticate_management), and this bypasses that
+        // middleware entirely to call a handler directly.
+        .layer(Extension(ManagementPrincipal::Browser(u.clone())))
         .layer(Extension(u.clone()))
         .with_state(s.clone())
         .oneshot(

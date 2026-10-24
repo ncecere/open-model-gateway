@@ -339,7 +339,7 @@ pub(super) async fn revoke_key(
 /// Handlers still recheck locked authority; this snapshot grants no lease.
 pub(super) async fn key_access_snapshot(
     tx: &mut Transaction<'_, Postgres>,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Uuid,
     id: Uuid,
     admin: bool,
@@ -356,7 +356,7 @@ pub(super) async fn key_access_snapshot(
     let allowed = if service.is_some() {
         admin
     } else {
-        issued == Some(u.user_id) || (admin && !rotate)
+        issued == Some(u.user_id()) || (admin && !rotate)
     };
     // As on main: rotating a service key without workspace management is 403
     // (the handler's `manage`), while the key-policy routes (`lineage`) answer

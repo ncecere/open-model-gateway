@@ -128,6 +128,7 @@ async fn test_actions_reject_configuration_bodies(pool: PgPool) {
         .unwrap();
     f.s = f.s.with_audit_export(std::sync::Arc::new(exporter));
     let router = routes()
+        .layer(Extension(ManagementPrincipal::Browser(f.admin.clone())))
         .layer(Extension(f.admin.clone()))
         .layer(Extension(crate::filestore::FileStoreRuntime::memory()))
         .with_state(f.s.clone());
@@ -318,6 +319,7 @@ async fn logo_headers_cannot_select_a_filesystem_path(pool: PgPool) {
     .unwrap();
     let rt = FileStoreRuntime::build(config).await.unwrap();
     let router = routes()
+        .layer(Extension(ManagementPrincipal::Browser(f.admin.clone())))
         .layer(Extension(f.admin.clone()))
         .layer(Extension(rt.clone()))
         .with_state(f.s.clone());

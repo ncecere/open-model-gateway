@@ -110,7 +110,7 @@ struct CatalogListQuery {
 }
 async fn catalogs(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Query(p): Query<CatalogListQuery>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, false).await?;
@@ -128,7 +128,7 @@ async fn catalogs(
 }
 async fn catalog(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, false).await?;
@@ -152,7 +152,7 @@ fn catalog_valid(b: &CatalogInput) -> bool {
 }
 async fn create_catalog(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Json(b): Json<CatalogInput>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, true).await?;
@@ -181,7 +181,7 @@ async fn create_catalog(
 }
 async fn update_catalog(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
     Json(b): Json<CatalogInput>,
 ) -> ApiResult {
@@ -215,7 +215,7 @@ async fn update_catalog(
 }
 async fn delete_catalog(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, true).await?;
@@ -254,7 +254,7 @@ async fn delete_catalog(
 }
 async fn catalog_models(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
     Query(p): Query<Page>,
 ) -> ApiResult {
@@ -272,7 +272,7 @@ struct Models {
 }
 async fn put_catalog_models(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
     Json(b): Json<Models>,
 ) -> ApiResult {
@@ -294,7 +294,7 @@ pub(super) enum Membership {
 /// Each changed catalog records `catalog.models_replaced` with its resulting model count.
 pub(super) async fn replace_membership(
     tx: &mut Transaction<'_, Postgres>,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     m: Membership,
 ) -> Result<(), ApiError> {
     let changed: Vec<Uuid> = match m {
@@ -346,7 +346,7 @@ pub(super) async fn replace_membership(
 }
 async fn model_catalogs(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, false).await?;
@@ -362,7 +362,7 @@ async fn model_catalogs(
 }
 async fn put_model_catalogs(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
     Json(b): Json<CatalogIds>,
 ) -> ApiResult {
@@ -387,7 +387,7 @@ struct CatalogIds {
 }
 async fn type_catalogs(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(kind): Path<String>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, false).await?;
@@ -405,7 +405,7 @@ async fn type_catalogs(
 }
 async fn put_type_catalogs(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(kind): Path<String>,
     Json(mut b): Json<CatalogIds>,
 ) -> ApiResult {
@@ -470,7 +470,7 @@ struct DefaultsMatrix {
 }
 async fn catalog_defaults(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, false).await?;
     let mut v = json!({});
@@ -485,7 +485,7 @@ async fn catalog_defaults(
 /// selected only through an unchecked catalog are retired and never restored.
 async fn put_catalog_defaults(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Json(b): Json<DefaultsMatrix>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, true).await?;
@@ -524,7 +524,7 @@ async fn put_catalog_defaults(
 }
 async fn workspace_catalogs(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, false).await?;
@@ -565,7 +565,7 @@ struct Override {
 }
 async fn put_workspace_catalogs(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
     Json(mut b): Json<Override>,
 ) -> ApiResult {
@@ -603,7 +603,7 @@ async fn put_workspace_catalogs(
 }
 async fn reset_workspace_catalogs(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, true).await?;
@@ -639,7 +639,7 @@ struct ModelQuery {
 }
 async fn workspace_models(
     s: Store,
-    u: BrowserPrincipal,
+    u: impl Actor,
     ws: Uuid,
     p: ModelQuery,
     available: bool,
@@ -662,7 +662,7 @@ async fn workspace_models(
 }
 async fn available_models(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
     Query(p): Query<ModelQuery>,
 ) -> ApiResult {
@@ -670,7 +670,7 @@ async fn available_models(
 }
 async fn selected_models(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
     Query(p): Query<ModelQuery>,
 ) -> ApiResult {
@@ -698,7 +698,7 @@ async fn deselect_model(
 }
 async fn direct_model(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
     Json(b): Json<Grant>,
 ) -> ApiResult {
@@ -706,14 +706,18 @@ async fn direct_model(
 }
 async fn revoke_direct_model(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path((ws, model)): Path<(Uuid, Uuid)>,
 ) -> ApiResult {
     change_model(s, u, ws, model, false, true).await
 }
-async fn change_model(
+// `pub(super)` (not private) only so `management::tests`'s own test
+// modules can call it directly for the #37 PR2 review fail-closed guard
+// below, without going through the type-safe `Extension<BrowserPrincipal>`
+// extractor that already makes a token actor unreachable at the HTTP layer.
+pub(super) async fn change_model(
     s: Store,
-    u: BrowserPrincipal,
+    u: impl Actor,
     ws: Uuid,
     model: Uuid,
     add: bool,
@@ -721,9 +725,26 @@ async fn change_model(
 ) -> ApiResult {
     let mut tx = resources::installation_tx(&s).await?;
     if direct {
-        resources::platform_write(&mut tx, u.user_id).await?;
+        // #37 PR2 item 1 exception: deferred to the merged `locks::exclusive`
+        // call below (this transaction takes Workspace/Lineage scope locks
+        // later; see `resources::platform_write_role_only`'s doc).
+        resources::platform_write_role_only(&mut tx, u.user_id()).await?;
         validate_ids(&mut tx, &[ws], "workspaces").await?;
     } else {
+        // Fail-closed guard (#37 PR2 review), not just a `debug_assert`: this
+        // branch's `workspace_access` takes its User-scope revalidation lock
+        // (`resources::revalidate_admin_token`) up front, then this function
+        // takes the Workspace/Lineage scope locks later (`locks::exclusive`
+        // below) -- out of canonical order for a token actor specifically
+        // (`resources::access_inner`'s locked path assumes no later scope
+        // lock in its own call chain). Only `BrowserPrincipal` reaches this
+        // branch today (`select_model`/`deselect_model`'s own extractor
+        // type), so no live token actor can currently trigger the ordering
+        // problem, but refuse explicitly here rather than depending solely
+        // on that routing fact never changing.
+        if u.token_id().is_some() {
+            return Err(denied());
+        }
         let a = resources::workspace_access(&mut tx, &u, ws).await?;
         resources::manage(&a)?;
     }
@@ -743,7 +764,11 @@ async fn change_model(
         locks::key_lineages(&mut tx, "governance_key_id IN (SELECT governance_key_id FROM key_model_selections WHERE workspace_id=$1)", Some(ws), None).await?
     };
     scopes.push(locks::Scope::Workspace(ws));
+    if let Some(owner) = resources::owner_scope(&u) {
+        scopes.push(owner);
+    }
     locks::exclusive(&mut tx, scopes).await?;
+    resources::revalidate_admin_token_locked(&mut tx, &u).await?;
     if add {
         sqlx::query("INSERT INTO workspace_model_grants(workspace_id,model_id,source) VALUES($1,$2,$3) ON CONFLICT DO NOTHING").bind(ws).bind(model).bind(source).execute(&mut *tx).await?;
     } else {

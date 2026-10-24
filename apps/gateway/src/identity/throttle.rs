@@ -16,6 +16,7 @@ use std::{
 };
 
 use axum::http::HeaderMap;
+use uuid::Uuid;
 
 /// Distinct client buckets kept per replica. Past this, new addresses share
 /// one overflow bucket, so an attacker with many addresses cannot grow memory.
@@ -245,6 +246,131 @@ impl Limiter {
     }
 }
 
+/// A bucket keyed by an admin-token id, or one shared overflow bucket once
+/// the table is full (#37 PR2 finding 3): bounded-memory per-token admission
+/// limiting, with the same capped/sweep/overflow design as [`Limiter`]
+/// above, reused rather than duplicated as a second map-keyed-by-address
+/// type. Checked only *after* a token has already authenticated (the key
+/// here is never an attacker-chosen value pre-authentication: nothing
+/// before that point allocates an entry for an arbitrary unauthenticated
+/// token id), and before the attempt is started or dispatched.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+enum TokenKey {
+    Token(Uuid),
+    /// The bucket table is full; every token past the cap shares this one
+    /// bucket, so an attacker minting many tokens cannot grow memory.
+    Overflow,
+}
+
+#[derive(Default)]
+struct TokenTable {
+    buckets: HashMap<TokenKey, Bucket>,
+    swept: Option<Instant>,
+}
+
+pub(crate) struct TokenLimiter {
+    table: Mutex<TokenTable>,
+    per_second: f64,
+    burst: f64,
+    capacity: usize,
+}
+
+impl TokenLimiter {
+    pub(crate) fn new(per_minute: u32) -> Self {
+        Self::with_capacity(per_minute, MAX_BUCKETS)
+    }
+
+    fn with_capacity(per_minute: u32, capacity: usize) -> Self {
+        Self {
+            table: Mutex::default(),
+            per_second: f64::from(per_minute) / 60.0,
+            burst: f64::from(per_minute),
+            capacity,
+        }
+    }
+
+    /// Take one token for this admin-token id, or say how long until one is
+    /// free. Identical sweep-then-overflow semantics to [`Limiter::check`].
+    pub(crate) fn check(&self, token_id: Uuid, now: Instant) -> Result<(), Duration> {
+        let mut table = self.table.lock().unwrap_or_else(|e| e.into_inner());
+        let mut key = TokenKey::Token(token_id);
+        if !table.buckets.contains_key(&key) && table.buckets.len() >= self.capacity {
+            if table
+                .swept
+                .is_none_or(|at| now.saturating_duration_since(at) >= SWEEP_EVERY)
+            {
+                table.swept = Some(now);
+                let (rate, burst) = (self.per_second, self.burst);
+                table.buckets.retain(|_, b| {
+                    b.tokens + now.saturating_duration_since(b.updated).as_secs_f64() * rate < burst
+                });
+            }
+            if table.buckets.len() >= self.capacity {
+                key = TokenKey::Overflow;
+            }
+        }
+        let bucket = table.buckets.entry(key).or_insert(Bucket {
+            tokens: self.burst,
+            updated: now,
+        });
+        let elapsed = now.saturating_duration_since(bucket.updated).as_secs_f64();
+        bucket.tokens = (bucket.tokens + elapsed * self.per_second).min(self.burst);
+        bucket.updated = now;
+        if bucket.tokens >= 1.0 {
+            bucket.tokens -= 1.0;
+            Ok(())
+        } else {
+            let wait = (1.0 - bucket.tokens) / self.per_second;
+            Err(Duration::from_secs_f64((wait - 1e-9).ceil().max(1.0)))
+        }
+    }
+
+    #[cfg(test)]
+    fn tracked(&self) -> usize {
+        self.table.lock().unwrap().buckets.len()
+    }
+}
+
+/// One shared token bucket for every admin-token authentication attempt on
+/// this replica, with no per-key map at all (#37 PR2 finding 3): O(1)
+/// memory, so there is nothing here for a flood of distinct client
+/// addresses or token-shaped credentials to grow unbounded. Checked
+/// *before* the expensive, one-database-round-trip authentication lookup,
+/// bounding distributed floods (many addresses, each under the per-IP
+/// limit) that the per-IP [`Limiter`] alone cannot.
+pub(crate) struct ReplicaLimiter {
+    bucket: Mutex<Bucket>,
+    per_second: f64,
+    burst: f64,
+}
+
+impl ReplicaLimiter {
+    pub(crate) fn new(per_minute: u32) -> Self {
+        Self {
+            bucket: Mutex::new(Bucket {
+                tokens: f64::from(per_minute),
+                updated: Instant::now(),
+            }),
+            per_second: f64::from(per_minute) / 60.0,
+            burst: f64::from(per_minute),
+        }
+    }
+
+    pub(crate) fn check(&self, now: Instant) -> Result<(), Duration> {
+        let mut bucket = self.bucket.lock().unwrap_or_else(|e| e.into_inner());
+        let elapsed = now.saturating_duration_since(bucket.updated).as_secs_f64();
+        bucket.tokens = (bucket.tokens + elapsed * self.per_second).min(self.burst);
+        bucket.updated = now;
+        if bucket.tokens >= 1.0 {
+            bucket.tokens -= 1.0;
+            Ok(())
+        } else {
+            let wait = (1.0 - bucket.tokens) / self.per_second;
+            Err(Duration::from_secs_f64((wait - 1e-9).ceil().max(1.0)))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -408,6 +534,51 @@ mod tests {
         let later = now + Duration::from_secs(120);
         assert!(limiter.check(Some(ip("198.51.100.3")), later).is_ok());
         assert!(limiter.tracked() <= 2);
+    }
+
+    #[test]
+    fn token_limiter_is_bounded_per_token_and_shares_an_overflow_bucket() {
+        let limiter = TokenLimiter::with_capacity(1, 2);
+        let now = Instant::now();
+        let (a, b, c) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        assert!(limiter.check(a, now).is_ok());
+        assert!(
+            limiter.check(a, now).is_err(),
+            "this token's own bucket is empty"
+        );
+        assert!(
+            limiter.check(b, now).is_ok(),
+            "a different token is unaffected"
+        );
+        // Table full: a third distinct token id shares the overflow bucket.
+        assert!(limiter.check(c, now).is_ok());
+        assert_eq!(limiter.tracked(), 3, "two tokens plus overflow");
+        let mut other = Uuid::new_v4();
+        while other == a || other == b || other == c {
+            other = Uuid::new_v4();
+        }
+        assert!(
+            limiter.check(other, now).is_err(),
+            "the overflow bucket is already spent by c"
+        );
+        // Once old buckets refill they are forgotten and new tokens get their own.
+        let later = now + Duration::from_secs(120);
+        assert!(limiter.check(other, later).is_ok());
+        assert!(limiter.tracked() <= 2);
+    }
+
+    #[test]
+    fn replica_limiter_is_one_shared_bucket_with_no_per_key_map() {
+        let limiter = ReplicaLimiter::new(2);
+        let now = Instant::now();
+        assert!(limiter.check(now).is_ok());
+        assert!(limiter.check(now).is_ok());
+        assert_eq!(
+            limiter.check(now),
+            Err(Duration::from_secs(30)),
+            "the shared bucket is now empty, regardless of who is asking"
+        );
+        assert!(limiter.check(now + Duration::from_secs(30)).is_ok());
     }
 
     #[test]

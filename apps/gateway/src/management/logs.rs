@@ -233,18 +233,18 @@ pub(super) async fn workspace_scope(
 /// Platform scope: Admin/Auditor, Team/Project workspaces only.
 pub(super) async fn platform_scope(
     s: &Store,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     p: &LogQuery,
 ) -> Result<(Transaction<'static, Postgres>, LogScope), ApiError> {
     let mut tx = s.snapshot().await?;
-    resources::platform_read_snapshot(&mut tx, u.user_id).await?;
+    resources::platform_read_snapshot(&mut tx, u.user_id()).await?;
     Ok((
         s.reporting(tx).await?,
         LogScope {
             platform: true,
             workspace: p.workspace_id,
             all: true,
-            user: u.user_id,
+            user: u.user_id(),
         },
     ))
 }
@@ -557,7 +557,7 @@ pub(super) async fn workspace_metrics(
 }
 pub(super) async fn platform_requests(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Query(p): Query<LogQuery>,
 ) -> ApiResult {
     let (tx, scope) = platform_scope(&s, &u, &p).await?;
@@ -565,7 +565,7 @@ pub(super) async fn platform_requests(
 }
 pub(super) async fn platform_request(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(root): Path<String>,
     Query(p): Query<LogQuery>,
 ) -> ApiResult {
@@ -574,7 +574,7 @@ pub(super) async fn platform_request(
 }
 pub(super) async fn platform_generations(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Query(p): Query<LogQuery>,
 ) -> ApiResult {
     let (tx, scope) = platform_scope(&s, &u, &p).await?;
@@ -582,7 +582,7 @@ pub(super) async fn platform_generations(
 }
 pub(super) async fn platform_sessions(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Query(p): Query<LogQuery>,
 ) -> ApiResult {
     let (tx, scope) = platform_scope(&s, &u, &p).await?;
@@ -590,7 +590,7 @@ pub(super) async fn platform_sessions(
 }
 pub(super) async fn platform_session(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path((ws, session)): Path<(Uuid, String)>,
     Query(p): Query<LogQuery>,
 ) -> ApiResult {
@@ -603,7 +603,7 @@ pub(super) async fn platform_session(
 }
 pub(super) async fn platform_metrics(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Query(p): Query<LogQuery>,
 ) -> ApiResult {
     let (tx, scope) = platform_scope(&s, &u, &p).await?;

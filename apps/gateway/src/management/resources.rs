@@ -25,17 +25,17 @@ pub(crate) async fn read_snapshot(s: &Store) -> Result<Transaction<'static, Post
 /// [`read_snapshot`] for a Platform Admin or Auditor (live role check).
 pub(crate) async fn platform_read_tx(
     s: &Store,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
 ) -> Result<Transaction<'static, Postgres>, ApiError> {
     let mut tx = read_snapshot(s).await?;
-    platform_read_snapshot(&mut tx, u.user_id).await?;
+    platform_read_snapshot(&mut tx, u.user_id()).await?;
     Ok(tx)
 }
 /// [`workspace_tx`] for read-only handlers: the same live access rules in a
 /// [`read_snapshot`], without row locks.
 pub(crate) async fn workspace_snapshot_tx(
     s: &Store,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Uuid,
 ) -> Result<(Transaction<'static, Postgres>, WorkspaceAccess), ApiError> {
     let mut tx = read_snapshot(s).await?;
@@ -96,11 +96,21 @@ async fn role_inner(
         .await?
         .ok_or_else(denied)
 }
+/// Platform-reader authorization for a real (lock-capable) transaction,
+/// with #37 PR2 item 1's transaction-level admin-token/owner revalidation
+/// (see [`revalidate_admin_token`]'s own doc): middleware preflight alone
+/// cannot see a token revoked, or an owner demoted/suspended/cleaned up,
+/// after preflight but before this handler's own transaction. A no-op for
+/// a browser principal.
 pub(crate) async fn platform_read(
     tx: &mut Transaction<'_, Postgres>,
-    user: Uuid,
+    u: &impl Actor,
 ) -> Result<(), ApiError> {
-    if !matches!(platform_role(tx, user).await?.as_str(), "admin" | "auditor") {
+    revalidate_admin_token(tx, u).await?;
+    if !matches!(
+        platform_role(tx, u.user_id()).await?.as_str(),
+        "admin" | "auditor"
+    ) {
         return Err(denied());
     }
     Ok(())
@@ -118,7 +128,29 @@ pub(crate) async fn platform_read_snapshot(
     }
     Ok(())
 }
+/// [`platform_read`]'s write counterpart, with the same transaction-level
+/// admin-token/owner revalidation.
 pub(crate) async fn platform_write(
+    tx: &mut Transaction<'_, Postgres>,
+    u: &impl Actor,
+) -> Result<(), ApiError> {
+    revalidate_admin_token(tx, u).await?;
+    platform_write_role_only(tx, u.user_id()).await
+}
+/// [`platform_write`]'s role check alone, with no admin-token revalidation
+/// and no lock: for the handful of exception call sites
+/// (governance/policies.rs `lock_scope`, catalogs.rs `change_model`,
+/// members.rs `manual_member`/`unset_member`) that must instead merge
+/// [`owner_scope`] into their own later `governance::locks::exclusive` call
+/// -- taking the owner's user-scope lock here, early, would be acquired
+/// before a Type/Workspace scope those sites lock afterward (violating the
+/// canonical Type<Workspace<User<Lineage order, `docs/governance.md`), or
+/// out of ascending order against a *different* User-class key (a target
+/// user), risking a cross-admin deadlock (two admins managing each other
+/// through their own tokens, each requesting the pair of keys in the
+/// opposite order). Those sites finish with
+/// [`revalidate_admin_token_locked`] once their own merged lock is held.
+pub(crate) async fn platform_write_role_only(
     tx: &mut Transaction<'_, Postgres>,
     user: Uuid,
 ) -> Result<(), ApiError> {
@@ -127,18 +159,98 @@ pub(crate) async fn platform_write(
     }
     Ok(())
 }
+/// #37 PR2 item 1: transaction-level admin-token and owner revalidation.
+/// Middleware preflight (`authorization.rs`) is a lock-free snapshot taken
+/// before extraction; it cannot see a token revoked, or its owner
+/// demoted/suspended/cleaned up, after that snapshot but before this
+/// handler's own transaction. A no-op for a browser principal
+/// (`u.token_id()` is `None`).
+///
+/// Takes the owner's user-scope authority lock *shared* -- the same
+/// precedent `governance.rs::resolve_usage` already uses
+/// (`locks::shared([Scope::Workspace, Scope::User])`): every owner-loss
+/// path (role-grant revoke, suspension, cleanup; migration 0051's deferred
+/// and immediate triggers) takes this same lock *exclusive* before
+/// revoking the owner's tokens, so a transaction already holding it shared
+/// is guaranteed to finish (commit or roll back) before such a revocation
+/// can, and a transaction that only starts after it commits sees the loss.
+///
+/// Then checks the token's own row with `FOR SHARE`: the single-token
+/// explicit revoke (`admin_tokens::revoke_admin_token`, browser-only, never
+/// takes this advisory lock at all) only ever does a plain row write, so
+/// `FOR SHARE` here blocks that write from completing until this
+/// transaction ends, giving the same finish-before-or-see-it guarantee for
+/// that case too. The user-scope lock is taken *before* this row read
+/// deliberately, matching every owner-loss trigger's own order (lock
+/// first, then touch the owner's token rows): the reverse order
+/// (token-row-then-user-lock) would deadlock against the bulk
+/// revoke-on-demotion trigger, which already holds the user-scope lock
+/// exclusive by the time it writes the token rows.
+///
+/// Only for sites that take no other Type/Workspace/User(other)/Lineage
+/// scope lock later in the same transaction (see [`platform_write_role_only`]
+/// for the exceptions that do).
+pub(crate) async fn revalidate_admin_token(
+    tx: &mut Transaction<'_, Postgres>,
+    u: &impl Actor,
+) -> Result<(), ApiError> {
+    let Some(token_id) = u.token_id() else {
+        return Ok(());
+    };
+    locks::shared(tx, [locks::Scope::User(u.user_id())]).await?;
+    revalidate_token_row(tx, token_id, u.user_id()).await
+}
+/// The owner's user-scope lock to merge into a handler's own later
+/// `governance::locks::exclusive` call, for the exception sites
+/// [`platform_write_role_only`]'s doc names. `None` for a browser
+/// principal: nothing to merge.
+pub(crate) fn owner_scope(u: &impl Actor) -> Option<locks::Scope> {
+    u.token_id().map(|_| locks::Scope::User(u.user_id()))
+}
+/// Finishes revalidation for an exception site that has already merged
+/// [`owner_scope`] into its own `governance::locks::exclusive` call: a
+/// fresh role re-check (a read from before that lock was granted could not
+/// have observed a demotion the lock now excludes) and the token's own row
+/// check, without acquiring any lock itself. A no-op for a browser
+/// principal.
+pub(crate) async fn revalidate_admin_token_locked(
+    tx: &mut Transaction<'_, Postgres>,
+    u: &impl Actor,
+) -> Result<(), ApiError> {
+    let Some(token_id) = u.token_id() else {
+        return Ok(());
+    };
+    if platform_role(tx, u.user_id()).await? != "admin" {
+        return Err(denied());
+    }
+    revalidate_token_row(tx, token_id, u.user_id()).await
+}
+/// Thin wrapper over the shared validator (`crate::admin_tokens::token_row_live`)
+/// so governance's own two-transaction reconciliation path
+/// (`governance::resolve_usage`) can reuse the identical check without
+/// depending on this management module.
+async fn revalidate_token_row(
+    tx: &mut Transaction<'_, Postgres>,
+    token_id: Uuid,
+    owner_user_id: Uuid,
+) -> Result<(), ApiError> {
+    if !crate::admin_tokens::token_row_live(tx, token_id, owner_user_id).await? {
+        return Err(denied());
+    }
+    Ok(())
+}
 pub(crate) async fn catalog_tx<'a>(
     s: &'a Store,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     write: bool,
 ) -> Result<Transaction<'a, Postgres>, ApiError> {
     let mut tx = crate::db::begin(&s.pool).await?;
     catalog_lock(&mut tx, write).await?;
     installation_lock(&mut tx).await?;
     if write {
-        platform_write(&mut tx, u.user_id).await?
+        platform_write(&mut tx, u).await?
     } else {
-        platform_read(&mut tx, u.user_id).await?
+        platform_read(&mut tx, u).await?
     }
     Ok(tx)
 }
@@ -178,7 +290,7 @@ impl WorkspaceAccess {
 }
 pub(crate) async fn workspace_tx<'a>(
     s: &'a Store,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Uuid,
 ) -> Result<(Transaction<'a, Postgres>, WorkspaceAccess), ApiError> {
     let mut tx = installation_tx(s).await?;
@@ -192,7 +304,7 @@ pub(crate) async fn workspace_tx<'a>(
 /// Handlers using it must not mutate.
 pub(crate) async fn workspace_read_tx<'a>(
     s: &'a Store,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Uuid,
 ) -> Result<(Transaction<'a, Postgres>, WorkspaceAccess), ApiError> {
     let mut tx = installation_tx(s).await?;
@@ -201,7 +313,7 @@ pub(crate) async fn workspace_read_tx<'a>(
 }
 pub(crate) async fn workspace_access(
     tx: &mut Transaction<'_, Postgres>,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Uuid,
 ) -> Result<WorkspaceAccess, ApiError> {
     access_inner(tx, u, ws, false, true).await
@@ -212,7 +324,7 @@ pub(crate) async fn workspace_access(
 /// [`workspace_access`].
 pub(crate) async fn workspace_access_snapshot(
     tx: &mut Transaction<'_, Postgres>,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Uuid,
 ) -> Result<WorkspaceAccess, ApiError> {
     access_inner(tx, u, ws, false, false).await
@@ -221,7 +333,7 @@ pub(crate) async fn workspace_access_snapshot(
 /// transaction/locking checks so a preflight cannot preserve revoked authority.
 pub(super) async fn workspace_boundary_snapshot(
     tx: &mut Transaction<'_, Postgres>,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Uuid,
     allow_disabled: bool,
 ) -> Result<WorkspaceAccess, ApiError> {
@@ -231,10 +343,10 @@ pub(super) async fn workspace_boundary_snapshot(
 /// an unknown workspace. Do not perform a workspace read for a non-admin.
 pub(super) async fn workspace_platform_write_snapshot(
     tx: &mut Transaction<'_, Postgres>,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Uuid,
 ) -> Result<(), ApiError> {
-    let role = platform_role_snapshot(tx, u.user_id).await?;
+    let role = platform_role_snapshot(tx, u.user_id()).await?;
     if role != "admin" {
         return Err(denied());
     }
@@ -247,26 +359,35 @@ pub(super) async fn workspace_platform_write_snapshot(
     .ok_or_else(missing)?;
     // Membership does not grant this platform-controlled operation. The same
     // decision still enforces personal ownership and disabled-workspace rules.
-    let a = workspace_authority(u.user_id, &role, kind, owner, disabled, None, false)?;
+    let a = workspace_authority(u.user_id(), &role, kind, owner, disabled, None, false)?;
     debug_assert!(a.platform_writer);
     a.metadata_read()
 }
 
 async fn access_inner(
     tx: &mut Transaction<'_, Postgres>,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Uuid,
     allow_disabled: bool,
     lock: bool,
 ) -> Result<WorkspaceAccess, ApiError> {
     let (role, kind, owner_user, disabled, membership) = if lock {
-        let role = role_inner(tx, u.user_id, true).await?;
+        // #37 PR2 item 1: transaction-level admin-token/owner revalidation
+        // (see `revalidate_admin_token`'s own doc), before the role and
+        // workspace row checks below. No other scope lock may be taken
+        // later in this call chain for a token actor: the one caller that
+        // otherwise would (`catalogs::change_model`'s non-direct branch,
+        // which takes Workspace/Lineage scope locks after this returns)
+        // fails closed for a token actor before ever reaching this
+        // function, rather than relying on this comment alone.
+        revalidate_admin_token(tx, u).await?;
+        let role = role_inner(tx, u.user_id(), true).await?;
         let (kind, owner_user, disabled): (String, Option<Uuid>, bool) = sqlx::query_as(
             "SELECT kind,owner_user_id,disabled_at IS NOT NULL FROM workspaces WHERE id=$1 AND ($2 OR disabled_at IS NULL) FOR NO KEY UPDATE",
         ).bind(ws).bind(allow_disabled).fetch_optional(&mut **tx).await?.ok_or_else(missing)?;
         let membership = if !disabled && shared(&kind) {
             sqlx::query_scalar("SELECT role FROM effective_workspace_memberships WHERE workspace_id=$1 AND user_id=$2")
-                .bind(ws).bind(u.user_id).fetch_optional(&mut **tx).await?
+                .bind(ws).bind(u.user_id()).fetch_optional(&mut **tx).await?
         } else {
             None
         };
@@ -284,7 +405,7 @@ async fn access_inner(
         );
         let (role,kind,owner_user,disabled,membership): AuthorityRow = sqlx::query_as(
             "SELECT p.role,w.kind,w.owner_user_id,w.disabled_at IS NOT NULL,m.role FROM effective_platform_roles p LEFT JOIN workspaces w ON w.id=$2 LEFT JOIN effective_workspace_memberships m ON m.workspace_id=w.id AND m.user_id=p.user_id WHERE p.user_id=$1",
-        ).bind(u.user_id).bind(ws).fetch_optional(&mut **tx).await?.ok_or_else(denied)?;
+        ).bind(u.user_id()).bind(ws).fetch_optional(&mut **tx).await?.ok_or_else(denied)?;
         (
             role,
             kind.ok_or_else(missing)?,
@@ -294,7 +415,7 @@ async fn access_inner(
         )
     };
     workspace_authority(
-        u.user_id,
+        u.user_id(),
         &role,
         kind,
         owner_user,
@@ -380,9 +501,12 @@ pub(crate) fn manage(a: &WorkspaceAccess) -> Result<(), ApiError> {
 }
 /// Audit is inside the resource transaction; no plaintext, identity claims or arbitrary strings.
 /// Only typed safe flags/counts/provenance are retained, not untrusted metadata fields.
+/// Carries admin-token attribution (`u.token_id()`) when the acting
+/// principal is a token (#37 PR2: "Business-action audit events carry
+/// token attribution"); `NULL` for a browser session, exactly as before.
 pub(crate) async fn audit(
     tx: &mut Transaction<'_, Postgres>,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Option<Uuid>,
     action: &str,
     resource_type: &str,
@@ -420,7 +544,7 @@ pub(crate) async fn audit(
             }
         }
     }
-    sqlx::query("INSERT INTO audit_events(id,actor_user_id,workspace_id,action,resource_type,resource_id,metadata) VALUES($1,$2,$3,$4,$5,$6,$7)").bind(Uuid::now_v7()).bind(u.user_id).bind(ws).bind(action).bind(resource_type).bind(resource_id).bind(Value::Object(safe)).execute(&mut **tx).await?;
+    sqlx::query("INSERT INTO audit_events(id,actor_user_id,workspace_id,action,resource_type,resource_id,metadata,admin_token_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8)").bind(Uuid::now_v7()).bind(u.user_id()).bind(ws).bind(action).bind(resource_type).bind(resource_id).bind(Value::Object(safe)).bind(u.token_id()).execute(&mut **tx).await?;
     Ok(())
 }
 pub(super) fn platform_routes() -> Router<Store> {
@@ -458,7 +582,7 @@ pub(super) fn platform_routes() -> Router<Store> {
 /// Configuration values only; never credentials or endpoints.
 async fn server_policy(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
 ) -> ApiResult {
     let tx = catalog_tx(&s, &u, false).await?;
     tx.commit().await?;
@@ -495,7 +619,7 @@ pub(super) fn search(q: Option<&str>) -> Result<Option<&str>, ApiError> {
     }
     Ok(q.map(str::trim).filter(|s| !s.is_empty()))
 }
-async fn collection(s: &Store, u: &BrowserPrincipal, p: CatalogQuery, query: &str) -> ApiResult {
+async fn collection(s: &Store, u: &impl Actor, p: CatalogQuery, query: &str) -> ApiResult {
     let mut tx = catalog_tx(s, u, false).await?;
     let (l, o) = Page {
         limit: p.limit,
@@ -514,7 +638,7 @@ async fn collection(s: &Store, u: &BrowserPrincipal, p: CatalogQuery, query: &st
 }
 async fn providers(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Query(p): Query<CatalogQuery>,
 ) -> ApiResult {
     collection(&s,&u,p,"SELECT jsonb_build_object('id',id,'name',name,'provider',provider,'endpoint',endpoint,'region',region,'enabled',enabled,'auth_mode',CASE WHEN credential_ref='none' THEN 'none' ELSE 'credential' END,'aws_auth',CASE WHEN credential_ref='aws:default' THEN 'default' WHEN credential_ref LIKE 'aws:profile:%' THEN 'profile' WHEN credential_ref LIKE 'aws:role:%' THEN 'role' END,'model_count',(SELECT count(DISTINCT d.model_id) FROM deployments d WHERE d.provider_connection_id=provider_connections.id)) FROM provider_connections WHERE ($3::text IS NULL OR strpos(lower(name),lower($3))>0 OR strpos(lower(provider),lower($3))>0 OR strpos(lower(endpoint),lower($3))>0 OR strpos(lower(region),lower($3))>0) AND ($4::boolean IS NULL OR enabled=$4) ORDER BY name,id LIMIT $1 OFFSET $2").await
@@ -562,7 +686,7 @@ pub(super) fn model_json() -> String {
 }
 async fn deployments(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Query(p): Query<DeploymentQuery>,
 ) -> ApiResult {
     let mut tx = catalog_tx(&s, &u, false).await?;
@@ -575,7 +699,7 @@ async fn deployments(
     tx.commit().await?;
     Ok(Json(json!({"data":data})))
 }
-async fn detail(s: &Store, u: &BrowserPrincipal, id: Uuid, query: &str) -> ApiResult {
+async fn detail(s: &Store, u: &impl Actor, id: Uuid, query: &str) -> ApiResult {
     let mut tx = catalog_tx(s, u, false).await?;
     let v: Value = sqlx::query_scalar(query)
         .bind(id)
@@ -587,14 +711,14 @@ async fn detail(s: &Store, u: &BrowserPrincipal, id: Uuid, query: &str) -> ApiRe
 }
 async fn provider(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
 ) -> ApiResult {
     detail(&s,&u,id,"SELECT jsonb_build_object('id',id,'name',name,'provider',provider,'endpoint',endpoint,'region',region,'enabled',enabled,'auth_mode',CASE WHEN credential_ref='none' THEN 'none' ELSE 'credential' END,'aws_auth',CASE WHEN credential_ref='aws:default' THEN 'default' WHEN credential_ref LIKE 'aws:profile:%' THEN 'profile' WHEN credential_ref LIKE 'aws:role:%' THEN 'role' END,'model_count',(SELECT count(DISTINCT d.model_id) FROM deployments d WHERE d.provider_connection_id=provider_connections.id)) FROM provider_connections WHERE id=$1").await
 }
 async fn model(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
 ) -> ApiResult {
     detail(
@@ -707,7 +831,7 @@ fn profile_valid(b: &ProviderInput) -> bool {
 }
 async fn create_provider(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Json(mut b): Json<ProviderInput>,
 ) -> ApiResult {
     let mut tx = catalog_tx(&s, &u, true).await?;
@@ -751,7 +875,7 @@ struct ProviderUpdate {
 }
 async fn update_provider(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
     Json(b): Json<ProviderUpdate>,
 ) -> ApiResult {
@@ -827,7 +951,7 @@ fn alias_valid(s: &str) -> bool {
 }
 async fn create_model(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Json(b): Json<ModelInput>,
 ) -> ApiResult {
     let mut tx = catalog_tx(&s, &u, true).await?;
@@ -838,7 +962,7 @@ async fn create_model(
 /// Validates, inserts and audits a model. The caller holds an exclusive `catalog_tx`.
 pub(super) async fn insert_model(
     tx: &mut Transaction<'_, Postgres>,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     b: ModelInput,
 ) -> Result<Uuid, ApiError> {
     if !valid_name(&b.display_name)
@@ -860,7 +984,7 @@ pub(super) struct Enabled {
 }
 async fn toggle(
     s: Store,
-    u: BrowserPrincipal,
+    u: ManagementPrincipal,
     id: Uuid,
     b: Enabled,
     table: &str,
@@ -923,7 +1047,7 @@ where
 }
 async fn update_model(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
     Json(b): Json<ModelUpdate>,
 ) -> DetailedResult {
@@ -973,28 +1097,28 @@ async fn update_model(
 // Delete means retire; historical prices/executions and foreign keys are never removed.
 async fn delete_provider(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
 ) -> DetailedResult {
     toggle(s, u, id, Enabled { enabled: false }, "provider_connections").await
 }
 async fn delete_model(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
 ) -> DetailedResult {
     toggle(s, u, id, Enabled { enabled: false }, "models").await
 }
 async fn delete_deployment(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
 ) -> DetailedResult {
     toggle(s, u, id, Enabled { enabled: false }, "deployments").await
 }
 async fn update_deployment(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
     Json(b): Json<Enabled>,
 ) -> DetailedResult {
@@ -1010,7 +1134,7 @@ pub(super) struct DeploymentInput {
 }
 async fn create_deployment(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Json(b): Json<DeploymentInput>,
 ) -> DetailedResult {
     let mut tx = catalog_tx(&s, &u, true).await?;
@@ -1022,7 +1146,7 @@ async fn create_deployment(
 /// foreign-key conflicts. The caller holds an exclusive `catalog_tx`.
 pub(super) async fn insert_deployment(
     tx: &mut Transaction<'_, Postgres>,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     b: DeploymentInput,
 ) -> Result<Uuid, ManagementError> {
     if b.upstream_model.trim().is_empty()
@@ -1137,7 +1261,7 @@ impl AuditQuery {
 }
 async fn platform_audit(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Query(p): Query<AuditQuery>,
 ) -> ApiResult {
     let mut tx = catalog_tx(&s, &u, false).await?;

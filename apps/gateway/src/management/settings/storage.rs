@@ -110,7 +110,7 @@ async fn storage_json(
 
 async fn storage(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     ext: Option<Extension<FileStoreRuntime>>,
 ) -> ApiResult {
     let rt = runtime(ext);
@@ -166,7 +166,7 @@ struct StorageInput {
 
 async fn update_storage(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     ext: Option<Extension<FileStoreRuntime>>,
     Json(b): Json<StorageInput>,
 ) -> ApiResult {
@@ -205,7 +205,7 @@ async fn update_storage(
         .bind(b.user_files.enabled)
         .bind(b.user_files.retention_days)
         .bind(b.export.retention_days)
-        .bind(u.user_id)
+        .bind(u.user_id())
         .execute(&mut *tx)
         .await?;
     let enabled = [b.batch.enabled, b.video.enabled, b.user_files.enabled]
@@ -229,7 +229,7 @@ async fn update_storage(
 
 async fn test_storage(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     ext: Option<Extension<FileStoreRuntime>>,
     body: axum::body::Bytes,
 ) -> ApiResult {
@@ -240,7 +240,7 @@ async fn test_storage(
         return Err(ApiError(StatusCode::CONFLICT, STORAGE_OFF));
     }
     let (mine, all): (i64, i64) = sqlx::query_as("SELECT count(*) FILTER(WHERE actor_user_id=$1 AND created_at>now()-interval '1 minute'),count(*) FROM audit_events WHERE action='settings.storage_test' AND created_at>now()-interval '1 hour'")
-        .bind(u.user_id)
+        .bind(u.user_id())
         .fetch_one(&mut *tx)
         .await?;
     if mine >= 5 || all >= 60 {

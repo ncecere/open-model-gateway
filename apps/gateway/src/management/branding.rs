@@ -360,7 +360,7 @@ fn store_unavailable() -> ApiError {
 /// `Content-Type`. Replaces any current logo and clears the deprecated `logo_url`.
 async fn upload(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     ext: Option<Extension<FileStoreRuntime>>,
     headers: HeaderMap,
     body: Bytes,
@@ -381,7 +381,7 @@ async fn upload(
     let size = body.len();
     let files = FileStorage::new(s.clone(), rt.clone());
     let new = NewFile {
-        created_by_user_id: Some(u.user_id),
+        created_by_user_id: Some(u.user_id()),
         filename: Some(format!("logo.{}", image.kind.as_str())),
         content_type: Some(image.kind.content_type().to_owned()),
         max_bytes: Some(MAX_BYTES as u64),
@@ -405,7 +405,7 @@ async fn upload(
             .bind(file.id)
             .bind(i32::try_from(image.width).map_err(|_| invalid())?)
             .bind(i32::try_from(image.height).map_err(|_| invalid())?)
-            .bind(u.user_id)
+            .bind(u.user_id())
             .execute(&mut *tx)
             .await?;
         audit(
@@ -442,7 +442,7 @@ async fn upload(
 /// with the store off too (the object is then deleted by the sweeper later).
 async fn remove(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     ext: Option<Extension<FileStoreRuntime>>,
 ) -> ApiResult {
     let rt = runtime(ext);
@@ -454,7 +454,7 @@ async fn remove(
     .await?;
     if let Some(previous) = previous {
         sqlx::query("UPDATE installation_settings SET branding_logo_file_id=NULL,branding_logo_updated_at=NULL,branding_logo_width=NULL,branding_logo_height=NULL,updated_at=now(),updated_by=$1 WHERE singleton")
-            .bind(u.user_id)
+            .bind(u.user_id())
             .execute(&mut *tx)
             .await?;
         audit(

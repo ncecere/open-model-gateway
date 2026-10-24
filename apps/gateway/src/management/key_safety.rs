@@ -299,14 +299,14 @@ pub(super) async fn workspace_key_safety(
 /// GET /platform/key-safety: Team/Project findings plus personal aggregate counts.
 pub(super) async fn platform_key_safety(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Query(q): Query<SafetyQuery>,
 ) -> ApiResult {
     if q.key_id.is_some() {
         return Err(invalid());
     }
     let mut tx = resources::installation_tx(&s).await?;
-    resources::platform_read(&mut tx, u.user_id).await?;
+    resources::platform_read(&mut tx, &u).await?;
     if let Some(ws) = q.workspace_id {
         // Only a live Team/Project can be filtered on; personal workspaces are never itemized.
         sqlx::query_scalar::<_, Uuid>(
@@ -320,7 +320,7 @@ pub(super) async fn platform_key_safety(
     let (rows, t) = load(
         &mut tx,
         PLATFORM_SCOPE,
-        (q.workspace_id, true, u.user_id, None),
+        (q.workspace_id, true, u.user_id(), None),
         &q,
     )
     .await?;

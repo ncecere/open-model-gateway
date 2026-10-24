@@ -958,7 +958,7 @@ mod database {
                 )
                 .route_layer(middleware::from_fn_with_state(
                     state.clone(),
-                    require_session,
+                    authenticate_management,
                 ));
         for (method, origin, token, expected) in [
             ("GET", None, None, StatusCode::OK),
@@ -1209,7 +1209,7 @@ mod database {
     }
 
     // Exercises the public auth routes, signed token exchange, persisted session,
-    // production require_session middleware and actual management handlers.
+    // production authenticate_management middleware and actual management handlers.
     async fn http_sign_in(app: &Router, mock: &MockProvider) -> (String, String) {
         let (session, csrf, _) = http_sign_in_from(app, mock, "/api/v1/auth/login").await;
         (session, csrf)

@@ -67,6 +67,20 @@ The first of three PRs for long-lived Admin API tokens. This PR adds only the da
 - **Adversarial re-review follow-up (lock-holding contract, LOW).** "The caller must already hold the owner's user-scope lock exclusive" was documentation only. The creation guard now probes `pg_locks` directly (the same pattern 0027's own audit-mode check uses) and refuses with a dedicated SQLSTATE (`OM003`, mapped to `CreateAdminTokenError::OwnerLockNotHeld`) instead of acquiring the lock lazily; the role-loss trigger keeps its own lazy, re-entrant acquisition, since it already holds the lock for other reasons.
 - **Adversarial re-review follow-up (docs, LOW).** Migration 0051 and this section now say explicitly that suspension and cleanup stay immediate and unconditional on purpose - unlike the role-loss trigger - since no gateway path suspends and re-enables, or cleans up and un-cleans, an account inside one transaction.
 
+## Admin API tokens: authentication, scopes and audit (#37 PR2)
+
+Adds management API authentication for the credentials introduced in PR1. The dashboard UI follows separately.
+
+- **Credential separation:** accepts one admin Bearer token or one browser session, never a mixture or fallback. Only authenticated admin tokens are CSRF-exempt; browser mutations keep their Origin/CSRF checks. Inference keys still cannot manage, and admin tokens cannot authorize inference.
+- **Five explicit scopes:** `platform:read`, `catalog:write`, `access:write`, `governance:write`, `settings:write`, assigned per exact method/template. Write scopes do not imply read access. Workspace-member/key/admin and SCIM routes refuse tokens; existing workspace/object and personal-privacy checks still apply. Optional immutable CIDRs use the trusted-proxy address resolver and fail closed without an address.
+- **Browser Admin-only token API:** list/create at `/api/v1/platform/admin-tokens`, revoke at `/api/v1/platform/admin-tokens/{token}`. Creation is for oneself, requires expiry of 1–90 days, and returns plaintext once with explicit `Cache-Control: no-store`. Any Admin can revoke any token; tokens cannot manage tokens.
+- **Live transaction checks:** protected writes serialize with revocation and owner demotion. Reconciliation preserves token identity across its second transaction and deadlock retries. Signing out sessions does not revoke tokens; losing Admin permanently does.
+- **Bounded admission and audit:** per-address, authenticated-token and aggregate per-replica token buckets cap authentication/audit work. Every admitted attempt appends start/completion records; pre-authentication and over-limit floods are counted rather than individually audited. Business-action audit includes `admin_token_id`, also exported through webhook, syslog and OTLP; personal events remain excluded. If completion auditing fails after an action commits, the response is `503`: inspect state before retrying. The separate attempt table is not exported to the SIEM.
+
+**Upgrade:** migration **0052_admin_token_audit** adds the append-only attempt table and business-audit token attribution/index. Run the explicit `migrate` and `grants apply` commands with migrator credentials; `serve` never performs either. Runtime-role checks cover the new insert/select grants and immutable-history refusals.
+
+See [management API](../management-api.md#admin-api-tokens), [identity](../identity.md#your-sessions) and [audit export](../operations.md#audit-export).
+
 ## Vendored upstream-base advisory coverage (#214)
 
 The existing read-only cargo-deny job now runs a separately labelled advisory-only check for explicitly registered vendored dependencies. It validates root workspace metadata registrations and the complete graph, then projects only the reviewed crates.io base name/version/source identity and graph references in temporary scanner input. Unknown path dependencies, stale or mismatched registrations, non-canonical/escaping paths and malformed/incomplete graphs fail closed. There are no vendored dependencies today; the check passes and says so.

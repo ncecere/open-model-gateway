@@ -133,12 +133,12 @@ fn slug_valid(s: &str) -> bool {
 }
 pub(super) async fn price_suggestion(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     catalog: Option<Extension<Arc<OpenRouterCatalog>>>,
     Path(id): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, false).await?;
-    resources::platform_write(&mut tx, u.user_id).await?;
+    resources::platform_write(&mut tx, &u).await?;
     let (upstream, provider, protocols): (String, String, Vec<String>) = sqlx::query_as("SELECT d.upstream_model,p.provider,m.supported_protocols FROM deployments d JOIN provider_connections p ON p.id=d.provider_connection_id JOIN models m ON m.id=d.model_id WHERE d.id=$1").bind(id).fetch_optional(&mut *tx).await?.ok_or_else(missing)?;
     // Recent provider-reported costs on this route identify which OpenRouter
     // endpoint actually served it. Only counts are read; nothing is returned

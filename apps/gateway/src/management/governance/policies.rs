@@ -373,7 +373,7 @@ pub(crate) async fn store_initial_key_limits(
     lineage: Uuid,
     l: &Limits,
 ) -> Result<(), ApiError> {
-    put_layer(tx, &Scope::Key(ws, lineage), l).await?;
+    put_layer(tx, &Scope::Key(ws, lineage), l, u).await?;
     resources::audit(
         tx,
         u,
@@ -454,22 +454,40 @@ async fn get_layer(tx: &mut Transaction<'_, Postgres>, scope: &Scope) -> Result<
 /// The authority scope a policy layer change affects: admissions of that
 /// scope hold it shared (`governance::locks`), so the change waits for them
 /// and every later admission sees it. Taken before the layer's first write.
-async fn lock_scope(tx: &mut Transaction<'_, Postgres>, scope: &Scope) -> Result<(), ApiError> {
+///
+/// #37 PR2 item 1 exception: when `u` is an admin token, its owner's
+/// user-scope lock is merged into this *same* exclusive call (ascending
+/// canonical key order, one round trip) rather than taken separately and
+/// early by `resources::platform_write` -- that would be acquired before
+/// this Type/Workspace/Lineage lock, violating the canonical
+/// Type<Workspace<User<Lineage order (`docs/governance.md`). Revalidation
+/// finishes with `revalidate_admin_token_locked` once this merged lock is
+/// held (a no-op for a browser principal).
+async fn lock_scope(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: &Scope,
+    u: &impl Actor,
+) -> Result<(), ApiError> {
     use crate::governance::locks;
     let scope = match scope {
         Scope::Type(kind) => locks::Scope::of_kind(kind).ok_or_else(invalid)?,
         Scope::Override(w) | Scope::Local(w) => locks::Scope::Workspace(*w),
         Scope::Key(_, lineage) => locks::Scope::Lineage(*lineage),
     };
-    locks::exclusive(tx, [scope]).await?;
-    Ok(())
+    let mut scopes = vec![scope];
+    if let Some(owner) = resources::owner_scope(u) {
+        scopes.push(owner);
+    }
+    locks::exclusive(tx, scopes).await?;
+    resources::revalidate_admin_token_locked(tx, u).await
 }
 async fn put_layer(
     tx: &mut Transaction<'_, Postgres>,
     scope: &Scope,
     l: &Limits,
+    u: &impl Actor,
 ) -> Result<(), ApiError> {
-    lock_scope(tx, scope).await?;
+    lock_scope(tx, scope, u).await?;
     let sets = "requests_per_minute=excluded.requests_per_minute,tokens_per_minute=excluded.tokens_per_minute,concurrent_requests=excluded.concurrent_requests,concurrent_jobs=excluded.concurrent_jobs";
     // Key layers have no storage column; workspace layers store it like the
     // other limits.
@@ -529,14 +547,17 @@ fn period_audit(new: &Limits, old: &Limits) -> Value {
 }
 async fn platform_tx<'a>(
     s: &'a Store,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     write: bool,
 ) -> Result<Transaction<'a, Postgres>, ApiError> {
     let mut tx = resources::installation_tx(s).await?;
     if write {
-        resources::platform_write(&mut tx, u.user_id).await?;
+        // Deferred to `lock_scope`/`put_layer`: every write call site below
+        // takes a Type/Workspace/Lineage scope lock later in this same
+        // transaction (#37 PR2 item 1 exception; see `lock_scope`'s doc).
+        resources::platform_write_role_only(&mut tx, u.user_id()).await?;
     } else {
-        resources::platform_read(&mut tx, u.user_id).await?;
+        resources::platform_read(&mut tx, u).await?;
     }
     Ok(tx)
 }
@@ -828,7 +849,7 @@ fn kind(k: &str) -> Result<(), ApiError> {
 }
 pub(super) async fn type_policy(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(k): Path<String>,
 ) -> ApiResult {
     kind(&k)?;
@@ -839,7 +860,7 @@ pub(super) async fn type_policy(
 }
 pub(super) async fn put_type_policy(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(k): Path<String>,
     Json(p): Json<Policy>,
 ) -> ApiResult {
@@ -848,7 +869,7 @@ pub(super) async fn put_type_policy(
     let scope = Scope::Type(k.clone());
     let old = get_layer(&mut tx, &scope).await?;
     let l = p.limits(&old, BudgetPeriod::Month)?;
-    put_layer(&mut tx, &scope, &l).await?;
+    put_layer(&mut tx, &scope, &l, &u).await?;
     let mut metadata = period_audit(&l, &old);
     metadata["kind"] = json!(k);
     resources::audit(
@@ -866,7 +887,7 @@ pub(super) async fn put_type_policy(
 }
 pub(super) async fn platform_workspace_policy(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = platform_tx(&s, &u, false).await?;
@@ -877,7 +898,7 @@ pub(super) async fn platform_workspace_policy(
 }
 pub(super) async fn put_platform_workspace_policy(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
     Json(p): Json<Policy>,
 ) -> ApiResult {
@@ -891,7 +912,7 @@ pub(super) async fn put_platform_workspace_policy(
             .legacy()
             .map_or(BudgetPeriod::Month, |(p, _)| p),
     )?;
-    put_layer(&mut tx, &Scope::Override(ws), &l).await?;
+    put_layer(&mut tx, &Scope::Override(ws), &l, &u).await?;
     resources::audit(
         &mut tx,
         &u,
@@ -907,12 +928,12 @@ pub(super) async fn put_platform_workspace_policy(
 }
 pub(super) async fn reset_platform_workspace_policy(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = platform_tx(&s, &u, true).await?;
     layers(&mut tx, ws).await?;
-    lock_scope(&mut tx, &Scope::Override(ws)).await?;
+    lock_scope(&mut tx, &Scope::Override(ws), &u).await?;
     store_budgets(&mut tx, &Scope::Override(ws), &Budgets::new()).await?;
     sqlx::query("DELETE FROM workspace_platform_policy_overrides WHERE workspace_id=$1")
         .bind(ws)
@@ -933,7 +954,7 @@ pub(super) async fn reset_platform_workspace_policy(
 }
 pub(super) async fn workspace_policy(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
 ) -> ApiResult {
     let (mut tx, a) = resources::workspace_tx(&s, &u, ws).await?;
@@ -959,7 +980,7 @@ pub(super) async fn put_workspace_policy(
     let current = layers(&mut tx, ws).await?;
     let l = p.limits(&current.local, BudgetPeriod::Month)?;
     validate_tighten(&l, &[&current.platform], &current.local)?;
-    put_layer(&mut tx, &Scope::Local(ws), &l).await?;
+    put_layer(&mut tx, &Scope::Local(ws), &l, &u).await?;
     resources::audit(
         &mut tx,
         &u,
@@ -975,12 +996,12 @@ pub(super) async fn put_workspace_policy(
 }
 pub(crate) async fn lineage(
     tx: &mut Transaction<'_, Postgres>,
-    u: &BrowserPrincipal,
+    u: &impl Actor,
     ws: Uuid,
     key: Uuid,
     all: bool,
 ) -> Result<Uuid, ApiError> {
-    sqlx::query_scalar("SELECT governance_key_id FROM api_keys WHERE workspace_id=$1 AND id=$2 AND ($3 OR issued_to_user_id=$4)").bind(ws).bind(key).bind(all).bind(u.user_id).fetch_optional(&mut **tx).await?.ok_or_else(missing)
+    sqlx::query_scalar("SELECT governance_key_id FROM api_keys WHERE workspace_id=$1 AND id=$2 AND ($3 OR issued_to_user_id=$4)").bind(ws).bind(key).bind(all).bind(u.user_id()).fetch_optional(&mut **tx).await?.ok_or_else(missing)
 }
 pub(super) async fn key_policy(
     State(s): State<Store>,
@@ -1009,7 +1030,7 @@ pub(super) async fn put_key_policy(
     let old = key_limits(&mut tx, ws, key).await?;
     let l = p.limits(&old, BudgetPeriod::Month)?;
     validate_tighten(&l, &[&current.platform, &current.local], &old)?;
-    put_layer(&mut tx, &Scope::Key(ws, key), &l).await?;
+    put_layer(&mut tx, &Scope::Key(ws, key), &l, &u).await?;
     resources::audit(
         &mut tx,
         &u,

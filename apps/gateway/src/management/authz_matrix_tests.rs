@@ -6,6 +6,8 @@ use crate::{
 };
 use sha2::{Digest, Sha256};
 
+#[path = "authz_admin_token_tests.rs"]
+mod admin_token_tests;
 #[path = "authz_middleware_tests.rs"]
 mod isolated;
 #[path = "authz_matrix_fixtures.rs"]
@@ -208,7 +210,10 @@ async fn every_route_refuses_lower_principals_and_unverified_mutations(pool: PgP
             f.s.clone(),
             authorization::require_route_access,
         ))
-        .route_layer(middleware::from_fn_with_state(identity, require_session))
+        .route_layer(middleware::from_fn_with_state(
+            identity,
+            authenticate_management,
+        ))
         .with_state(f.s.clone());
     assert_eq!(
         request(

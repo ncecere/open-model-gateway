@@ -21,7 +21,7 @@ struct ListQuery {
 
 async fn list(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Query(q): Query<ListQuery>,
 ) -> ApiResult {
     let all = match q.state.as_deref() {
@@ -30,7 +30,10 @@ async fn list(
         Some(_) => return Err(invalid()),
     };
     let mut tx = crate::db::begin(&s.pool).await?;
-    resources::platform_read(&mut tx, u.user_id).await?;
+    // #37 PR2 review: catalog shared lock first, in canonical order, ahead
+    // of `platform_read`'s own possible User-scope lock for a token actor.
+    resources::catalog_lock(&mut tx, false).await?;
+    resources::platform_read(&mut tx, &u).await?;
     let data: Value = sqlx::query_scalar(&format!("SELECT coalesce(jsonb_agg(jsonb_build_object('id',h.id,'target',jsonb_build_object('kind',CASE WHEN h.user_id IS NOT NULL THEN 'user' ELSE 'workspace' END,'id',coalesce(h.user_id,h.workspace_id),'label',{LABEL}),'reference',h.reference,'created_at',h.created_at,'created_by',(SELECT coalesce(nullif(btrim(x.display_name),''),x.email,'Retained identity') FROM users x WHERE x.id=h.created_by_user_id),'released_at',h.released_at) ORDER BY h.released_at IS NOT NULL,h.created_at DESC,h.id),'[]'::jsonb) FROM legal_holds h WHERE $1 OR h.released_at IS NULL"))
         .bind(all)
         .fetch_one(&mut *tx)
@@ -56,7 +59,7 @@ fn reference_valid(r: &str) -> bool {
 
 async fn place(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Json(b): Json<PlaceHold>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     // Authority before anything about the request.
@@ -109,7 +112,7 @@ async fn place(
         .bind(b.user_id)
         .bind(b.workspace_id)
         .bind(&b.reference)
-        .bind(u.user_id)
+        .bind(u.user_id())
         .execute(&mut *tx)
         .await?
         .rows_affected();
@@ -135,13 +138,13 @@ async fn place(
 
 async fn release(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(hold): Path<Uuid>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, true).await?;
     let target: Option<(Option<Uuid>, Option<Uuid>)> = sqlx::query_as("UPDATE legal_holds SET released_at=now(),released_by_user_id=$2 WHERE id=$1 AND released_at IS NULL RETURNING user_id,workspace_id")
         .bind(hold)
-        .bind(u.user_id)
+        .bind(u.user_id())
         .fetch_optional(&mut *tx)
         .await?;
     let Some((user, workspace)) = target else {

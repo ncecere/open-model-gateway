@@ -65,7 +65,7 @@ type ModelRow = (
 );
 async fn access(
     s: Store,
-    u: BrowserPrincipal,
+    u: impl Actor,
     ws: Uuid,
     key: Option<Uuid>,
     model: Option<Uuid>,
@@ -223,7 +223,7 @@ async fn access(
 }
 pub(super) async fn workspace_access(
     State(s): State<Store>,
-    Extension(u): Extension<BrowserPrincipal>,
+    Extension(u): Extension<ManagementPrincipal>,
     Path(ws): Path<Uuid>,
     Query(q): Query<AccessQuery>,
 ) -> ApiResult {
