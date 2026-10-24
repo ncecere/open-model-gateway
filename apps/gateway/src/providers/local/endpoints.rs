@@ -340,7 +340,7 @@ pub fn log_pending_refusal_warnings(approvals: &ApprovedEndpoints) {
         tracing::warn!(
             endpoint = %warning.endpoint,
             category = warning.category,
-            "approved local upstream is in an address range the egress policy already refuses for every other client; the next minor release will refuse it at startup too (see docs/releases/unreleased.md)"
+            "approved local upstream is in an address range the egress policy already refuses for every other client; the next minor release will refuse it at startup too (see the special-use local approvals note in docs/releases/v0.8.0.md)"
         );
     }
     if !approvals.warnings().is_empty() {

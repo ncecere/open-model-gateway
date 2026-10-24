@@ -16,6 +16,12 @@ describe("live enterprise capability presentation", () => {
   it("allows members only their own credentials", () => { expect(canManageKey(session, member, key)).toBe(false); expect(canManageKey(session, member, { ...key, issued_to_user_id: "me" })).toBe(true); expect(canRotateKey(session, member, { ...key, issued_to_user_id: null, service_account_id: "service" })).toBe(false); });
   it("authorizes service-account rotation independently", () => { expect(canRotateKey(session, team, { ...key, issued_to_user_id: null, service_account_id: "service" })).toBe(true); });
   it.each([admin, auditor, session])("never authorizes foreign personal data, even for platform staff", actor => { const foreign = { ...personal, owner_user_id: "other" }; expect(canView("keys", actor, foreign)).toBe(false); expect(canView("costs", actor, foreign)).toBe(false); expect(canManageKey(actor, foreign, key)).toBe(false); expect(permissions(actor, foreign).reconcileCosts).toBe(false); });
+  it("gates admin-tokens on platform_write, not platform_read: Auditors are denied like ordinary members", () => {
+    expect(canView("admin-tokens", admin)).toBe(true);
+    expect(canView("admin-tokens", auditor)).toBe(false);
+    expect(canView("admin-tokens", session)).toBe(false);
+    expect(canView("admin-tokens", session, team)).toBe(false);
+  });
   it("keeps profile and invitation acceptance independent of memberships", () => { expect(canView("profile", session)).toBe(true); expect(canView("accept-invitation", session)).toBe(true); expect(canView("overview", session)).toBe(false); });
   it("separates local policy, pricing and reconciliation writes", () => { expect(permissions(session, member)).toMatchObject({ managePolicy: false, managePricing: false, reconcileCosts: false }); expect(permissions(session, team).managePolicy).toBe(true); expect(permissions(admin, team).reconcileCosts).toBe(true); expect(permissions(admin).reconcileCosts).toBe(false); });
   it("drops organization, secret and unknown URL state", () => { expect(dashboardSearch({ org: "removed", ws: "team", page: "keys", token: "secret" })).toEqual({ ws: "team", page: "keys" }); expect(dashboardSearch({ ws: {}, page: "unknown" })).toEqual({ ws: undefined, page: undefined }); });

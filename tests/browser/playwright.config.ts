@@ -30,6 +30,7 @@ export default defineConfig({
     { name: "key-expiry", testMatch: /key-expiry\.spec\.ts/, dependencies: ["journey"] },
     { name: "key-issuance", testMatch: /key-issuance\.spec\.ts/, dependencies: ["journey"] },
     { name: "budget-headroom", testMatch: /budget-headroom\.spec\.ts/, dependencies: ["journey"] },
+    { name: "admin-tokens", testMatch: /admin-tokens\.spec\.ts/, dependencies: ["journey"] },
     { name: "accessibility", testMatch: /accessibility\.spec\.ts/, dependencies: ["journey"] },
   ],
 });
