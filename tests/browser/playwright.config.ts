@@ -32,6 +32,7 @@ export default defineConfig({
     { name: "budget-headroom", testMatch: /budget-headroom\.spec\.ts/, dependencies: ["journey"] },
     { name: "admin-tokens", testMatch: /admin-tokens\.spec\.ts/, dependencies: ["journey"] },
     { name: "holds", testMatch: /holds\.spec\.ts/, dependencies: ["journey"] },
+    { name: "access-refresh", testMatch: /access-refresh\.spec\.ts/ },
     { name: "accessibility", testMatch: /accessibility\.spec\.ts/, dependencies: ["journey"] },
   ],
 });
