@@ -56,6 +56,8 @@ mod personal_data_tests;
 mod portal_tests;
 #[path = "project_tests.rs"]
 mod project_tests;
+#[path = "provider_cost_tests.rs"]
+mod provider_cost_tests;
 #[path = "read_scale_tests.rs"]
 mod read_scale_tests;
 #[path = "resources/tests.rs"]

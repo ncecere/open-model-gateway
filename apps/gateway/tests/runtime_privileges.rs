@@ -52,6 +52,11 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         "admin_api_tokens",
         "alert_webhook_destinations",
         "alert_webhook_outbox",
+        "provider_cost_imports",
+        "provider_cost_lines",
+        "provider_cost_mappings",
+        "provider_cost_bindings",
+        "provider_reconciliations",
     ] {
         assert_eq!(
             sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
