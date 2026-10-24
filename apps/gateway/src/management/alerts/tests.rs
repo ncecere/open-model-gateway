@@ -2,6 +2,8 @@
 //! privacy of history and in-app notifications.
 use super::*;
 use crate::alerts as core;
+#[path = "aged_hold_tests.rs"]
+mod aged_hold;
 
 const EVENT_FROM: &str = "FROM alert_events e LEFT JOIN alert_rules r ON r.id=e.rule_id LEFT JOIN workspaces w ON w.id=e.workspace_id";
 
