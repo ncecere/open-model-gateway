@@ -50,6 +50,8 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         "archived_partitions",
         "admission_lock_waits",
         "admin_api_tokens",
+        "alert_webhook_destinations",
+        "alert_webhook_outbox",
     ] {
         assert_eq!(
             sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
@@ -85,6 +87,7 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
     legal_holds_run_as_runtime(&pool).await;
     dashboard_sessions_run_as_runtime(&pool).await;
     admin_tokens_run_as_runtime(&pool).await;
+    alert_webhooks_run_as_runtime(&pool).await;
     key_issuance_runs_as_runtime(&pool).await;
     // Last: its unknown batch hold would change the installation-wide totals above.
     async_jobs_run_as_runtime(&pool).await;
@@ -1320,6 +1323,153 @@ async fn budget_totals_maintained_as_runtime(pool: &PgPool) {
     .await
     .unwrap();
     assert_eq!(held, ["500", "500", "500", "500"]);
+    runtime.close().await;
+}
+
+/// Saved-webhook management through a running HTTP router using runtime ACLs.
+async fn alert_webhooks_run_as_runtime(pool: &PgPool) {
+    use open_model_gateway::{
+        config::{AlertWebhookPolicy, Environment},
+        governance::locks::{self, Scope},
+        store::Store,
+    };
+    let runtime = runtime_pool(pool).await;
+    let owner = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,email) VALUES($1,$2)")
+        .bind(owner)
+        .bind(format!("webhook-{owner}@example.test"))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO platform_role_grants(user_id,role,source) VALUES($1,'admin','manual')",
+    )
+    .bind(owner)
+    .execute(pool)
+    .await
+    .unwrap();
+    let mut tx = runtime.begin().await.unwrap();
+    locks::exclusive(&mut tx, [Scope::User(owner)])
+        .await
+        .unwrap();
+    let token = open_model_gateway::admin_tokens::create_admin_token(
+        &mut tx,
+        owner,
+        "Webhook ACL probe",
+        &["settings:write".into(), "platform:read".into()],
+        30,
+        None,
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let store = Store::new(runtime.clone()).with_alert_webhooks(
+        AlertWebhookPolicy::parse(
+            &["https://example.test/hook".into()],
+            vec!["HOOK".into()],
+            Environment::Production,
+        )
+        .unwrap(),
+    );
+    let identity = open_model_gateway::identity::IdentityState::new(store.clone(), None)
+        .await
+        .unwrap();
+    let app = open_model_gateway::management::router(identity).with_state(store);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!(
+        "http://{}/api/v1/platform/alerts/webhooks",
+        listener.local_addr().unwrap()
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let response=client.post(&base).bearer_auth(&token.token).json(&serde_json::json!({"label":"Runtime receiver","url":"https://example.test/hook","current_secret_ref":"env:HOOK"})).send().await.unwrap();
+    let status = response.status();
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(status, 200, "{body}");
+    let id = body["id"].as_str().unwrap();
+    let item = format!("{base}/{id}");
+    assert_eq!(
+        client
+            .get(&item)
+            .bearer_auth(&token.token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    assert_eq!(
+        client
+            .patch(&item)
+            .bearer_auth(&token.token)
+            .json(&serde_json::json!({"enabled":true}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    assert_eq!(
+        client
+            .patch(&item)
+            .bearer_auth(&token.token)
+            .json(&serde_json::json!({"url":"https://other.test/"}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        400
+    );
+    let event = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,summary) VALUES($1,'scim_last_admin','scim_last_admin','runtime-webhook',1,'critical','safe')").bind(event).execute(&runtime).await.unwrap();
+    sqlx::query(
+        "INSERT INTO alert_deliveries(id,event_id,transition) VALUES(gen_random_uuid(),$1,'fired')",
+    )
+    .bind(event)
+    .execute(&runtime)
+    .await
+    .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM alert_webhook_outbox WHERE event_id=$1")
+            .bind(event)
+            .fetch_one(&runtime)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        client
+            .delete(&item)
+            .bearer_auth(&token.token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    assert_eq!(
+        client
+            .get(&item)
+            .bearer_auth(&token.token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT state FROM alert_webhook_outbox WHERE event_id=$1")
+            .bind(event)
+            .fetch_one(&runtime)
+            .await
+            .unwrap(),
+        "ineligible"
+    );
+    server.abort();
     runtime.close().await;
 }
 
