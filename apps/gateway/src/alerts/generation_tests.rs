@@ -399,6 +399,59 @@ async fn alert_generation_clock_boundary_forgery_and_isolation(pool: PgPool) {
     }
 }
 
+/// A REPEATABLE READ snapshot taken before another transaction commits 50
+/// recipients would count a stale 0 and admit a 51st; the guard therefore
+/// refuses elevated isolation outright (review finding on #277).
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn alert_generation_recipient_guard_refuses_stale_snapshots(pool: PgPool) {
+    let s = seed(pool).await;
+    let ids = generation_events(&s, Some(s.team), 1).await;
+    sqlx::query(GENERATE)
+        .bind(&ids)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    let admitted: Uuid =
+        sqlx::query_scalar("SELECT id FROM alert_deliveries WHERE quota_charged LIMIT 1")
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+    let mut stale = s.pool.begin().await.unwrap();
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *stale)
+        .await
+        .unwrap();
+    // Take the snapshot before the other writer commits.
+    sqlx::query("SELECT count(*) FROM alert_recipient_outbox")
+        .execute(&mut *stale)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO alert_recipient_outbox(delivery_id,fingerprint) SELECT $1,sha256(i::text::bytea) FROM generate_series(1,50) i")
+        .bind(admitted)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    let error = sqlx::query(
+        "INSERT INTO alert_recipient_outbox(delivery_id,fingerprint) VALUES($1,sha256('51'::bytea))",
+    )
+    .bind(admitted)
+    .execute(&mut *stale)
+    .await
+    .unwrap_err();
+    assert_eq!(
+        error.as_database_error().unwrap().code().as_deref(),
+        Some("25001")
+    );
+    stale.rollback().await.unwrap();
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM alert_recipient_outbox WHERE delivery_id=$1")
+            .bind(admitted)
+            .fetch_one(&s.pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 50);
+}
+
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn alert_generation_recipient_50_51_and_suppressed_terminal(pool: PgPool) {
     let s = seed(pool).await;
