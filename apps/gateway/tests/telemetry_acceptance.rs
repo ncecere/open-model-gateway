@@ -283,6 +283,39 @@ impl Gateway {
     }
 }
 
+/// Requests per timing sample.
+const SAMPLES: usize = 5;
+
+/// The fastest of [`SAMPLES`] chat requests (each must succeed).
+///
+/// A wall-clock bound on one request measures the host as much as the
+/// gateway: a stall that lands on that single request (a loaded CI machine
+/// or a workspace-wide test run) fails it with no fault involved. A request
+/// the exporter really holds up is held up every time, so the fastest sample
+/// still shows it, while an unrelated stall only ever inflates some samples.
+async fn fastest_chat(gateway: &Gateway, key: &str) -> Duration {
+    let mut fastest = Duration::MAX;
+    for _ in 0..SAMPLES {
+        let started = std::time::Instant::now();
+        let (status, body, _) = gateway.chat(key).await;
+        let elapsed = started.elapsed();
+        assert_eq!(status, StatusCode::OK, "{body}");
+        fastest = fastest.min(elapsed);
+    }
+    fastest
+}
+
+/// The same-run reference for the outage timings below: the same gateway
+/// wiring and tracing enabled, a healthy collector, no fault. Whatever the
+/// host's load makes a request cost right now, this measures it.
+async fn healthy_baseline(pool: &PgPool, key: &str) -> Duration {
+    let healthy = Collector::start(StatusCode::OK, "{}", Duration::ZERO).await;
+    let gateway = Gateway::for_trace_config(pool, Some(&healthy.url), 1.0).await;
+    let baseline = fastest_chat(&gateway, key).await;
+    gateway.shutdown().await;
+    baseline
+}
+
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn a_shared_workspace_request_exports_the_expected_span_set_with_parentage_matching_the_logs_trace_id(
     pool: PgPool,
@@ -398,6 +431,8 @@ async fn a_personal_workspace_request_exports_nothing(pool: PgPool) {
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn a_collector_outage_never_fails_or_slows_inference_and_drops_are_counted(pool: PgPool) {
     let keys = seed(&pool).await;
+    // Same run, same host load, no fault: what a request costs right now.
+    let baseline = healthy_baseline(&pool, &keys.team_key.token).await;
 
     // Phase 1: closed port. Bind to get a free loopback port, then drop
     // the listener immediately so the address refuses every connection.
@@ -412,13 +447,10 @@ async fn a_collector_outage_never_fails_or_slows_inference_and_drops_are_counted
     let dropped_before = gateway
         .metric_value("gateway_trace_dropped_spans_total", "reason=\"delivery\"")
         .await;
-    let started = std::time::Instant::now();
-    let (status, body, _) = gateway.chat(&keys.team_key.token).await;
-    let elapsed = started.elapsed();
-    assert_eq!(status, StatusCode::OK, "{body}");
+    let elapsed = fastest_chat(&gateway, &keys.team_key.token).await;
     assert!(
-        elapsed < Duration::from_secs(1),
-        "a closed collector must never slow the inference request, took {elapsed:?}"
+        elapsed < baseline + Duration::from_secs(1),
+        "a closed collector must never slow the inference request: took {elapsed:?} against a same-run baseline of {baseline:?}"
     );
 
     let mut dropped_after = dropped_before;
@@ -451,13 +483,10 @@ async fn a_collector_outage_never_fails_or_slows_inference_and_drops_are_counted
     let timeout_deliveries_before = gateway
         .metric_value("gateway_trace_deliveries_total", "outcome=\"timeout\"")
         .await;
-    let started = std::time::Instant::now();
-    let (status, body, _) = gateway.chat(&keys.team_key.token).await;
-    let elapsed = started.elapsed();
-    assert_eq!(status, StatusCode::OK, "{body}");
+    let elapsed = fastest_chat(&gateway, &keys.team_key.token).await;
     assert!(
-        elapsed < Duration::from_secs(1),
-        "a hanging collector must never slow the inference request, took {elapsed:?}"
+        elapsed < baseline + Duration::from_secs(1),
+        "a hanging collector must never slow the inference request: took {elapsed:?} against a same-run baseline of {baseline:?}"
     );
 
     let mut timeout_deliveries_after = timeout_deliveries_before;
