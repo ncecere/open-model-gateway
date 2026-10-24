@@ -13,7 +13,8 @@ test.afterEach(expectNoCspViolations);
 
 const shots = path.resolve("target/browser-tests/holds");
 const BIG = "9007199254740993"; // 2^53 + 1: any Number math would print ...992.
-type Seeded = { team: string; paging: string; personal: string; roots: Record<"a" | "b" | "c" | "d" | "fresh", string>; executions: Record<"a" | "b" | "c" | "d", string> };
+type Seeded = { team: string; paging: string; personal: string; roots: Record<"a" | "b" | "c" | "d" | "fresh" | "settle", string>; executions: Record<"a" | "b" | "c" | "d" | "settle", string> };
+const SETTLE_FLOOR = "123456";
 const seedFile = path.resolve("target/browser-tests/state/holds-seed.json");
 let seeded: Promise<Seeded> | undefined;
 
@@ -49,9 +50,10 @@ async function seed(browser: Browser): Promise<Seeded> {
     };
     const a = await hold(holds, keys.blair, "holds-a/bounded", BIG, 96), b = await hold(holds, keys.blair, "holds-b/unbounded", null, 216);
     const c = await hold(holds, keys.alex, "holds-c/admin-only", "1500", 80), fresh = await hold(holds, keys.alex, "holds-e/fresh", "7", 2);
+    const settle = await hold(holds, keys.alex, "holds-r/reconcile", SETTLE_FLOOR, 90);
     const d = await hold(personal, keys.alexPersonal, "holds-d/personal", "42", 120);
     for (let i = 0; i < 52; i++) await hold(paging, keys.alexPaging, `holds-p/${String(i).padStart(2, "0")}`, String(100 + i), 25 + i);
-    return { team: holds, paging, personal, roots: { a, b, c, d, fresh }, executions: { a, b, c, d } };
+    return { team: holds, paging, personal, roots: { a, b, c, d, fresh, settle }, executions: { a, b, c, d, settle } };
   } finally {
     await db.end();
     for (const session of [operator, alex, blair]) await session.context.close();
@@ -229,6 +231,51 @@ for (const width of [1440, 390]) {
     });
   });
 }
+
+test("Platform Admin settles an aged unknown hold through the real reconcile dialog and it leaves the queue", async ({ browser }) => {
+  const ids = await ensure(browser), operator = await signIn(browser, "operator");
+  const page = operator.page, db = new pg.Client({ connectionString: process.env.OMG_BROWSER_DATABASE_URL });
+  await db.connect();
+  try {
+    const snapshot = async () => { const body = await (await api(page, "GET", "/platform/holds?limit=200")).json(); return { totals: body.totals, rows: body.data.map((r: { execution_id: string }) => r.execution_id) as string[] }; };
+    const before = await snapshot();
+    expect(before.rows).toContain(ids.executions.settle);
+    await open(page, "/admin/costs?tab=holds");
+    const target = row(page, "holds-r/reconcile");
+    await expect(target).toContainText("At least $0.123456");
+    const reconcile = target.getByRole("button", { name: /^Reconcile request / });
+    await reconcile.focus(); await page.keyboard.press("Enter");
+    const dialog = page.getByRole("dialog", { name: "Reconcile pinned usage" });
+    await expect(dialog).toBeVisible();
+    // Authoritative usage for the priced route, as the existing flow requires (v2/v3 prices need the explicit billing counters).
+    const { rows: [price] } = await db.query("SELECT p.pricing_version FROM governance_reservations r JOIN deployment_prices p ON p.id=r.price_id WHERE r.execution_id=$1", [ids.executions.settle]);
+    expect([1, 2, 3], "the journey's price is a token price").toContain(price.pricing_version);
+    const fill = async (label: string | RegExp, value: string) => dialog.getByLabel(label).fill(value);
+    await fill(/Original raw input tokens/, "100"); await fill(/Original raw output tokens/, "20");
+    if (price.pricing_version >= 2) for (const [label, value] of [["Total input · inclusive", "100"], ["Uncached input", "100"], ["Cache read", "0"], ["Cache write · overlapping aggregate", "0"], ["Cache write · default", "0"], ["Cache write · 5-minute", "0"], ["Cache write · 1-hour", "0"]]) await fill(label, value);
+    await fill(/Authoritative evidence reference/, "browser-acceptance-usage-ref-1");
+    await dialog.getByRole("button", { name: "Reconcile usage" }).click();
+    await expect(dialog).toHaveCount(0);
+    // The refreshed queue no longer lists the hold; the totals drop by exactly its count and floor.
+    await expect(target).toHaveCount(0);
+    const after = await snapshot();
+    expect(after.rows).not.toContain(ids.executions.settle);
+    expect(BigInt(before.totals.count) - BigInt(after.totals.count)).toBe(1n);
+    expect(BigInt(before.totals.known_floor_microusd) - BigInt(after.totals.known_floor_microusd)).toBe(BigInt(SETTLE_FLOOR));
+    await expect(page.getByRole("group", { name: "Aged unknown hold totals" })).toContainText(BigInt(after.totals.count).toLocaleString("en-US"));
+    // Other holds are untouched.
+    await expect(row(page, "holds-a/bounded")).toBeVisible();
+    // The accounting is real: settled with a final cost and a reconciliation ledger entry, and the evidence is the only input kept.
+    const { rows: [settled] } = await db.query("SELECT state, actual_microusd::text actual, input_tokens::text input, output_tokens::text output FROM governance_reservations WHERE execution_id=$1", [ids.executions.settle]);
+    expect(settled).toMatchObject({ state: "settled", input: "100", output: "20" }); expect(BigInt(settled.actual)).toBeGreaterThan(0n);
+    const { rows: ledger } = await db.query("SELECT kind, evidence FROM monetary_ledger WHERE execution_id=$1 ORDER BY created_at", [ids.executions.settle]);
+    expect(ledger.map(l => l.kind)).toEqual(["unknown", "reconciliation"]); expect(ledger[1].evidence).toBe("browser-acceptance-usage-ref-1");
+    const { rows: [audit] } = await db.query("SELECT count(*)::int n FROM audit_events WHERE action='usage.reconciled' AND resource_id=$1", [ids.executions.settle]);
+    expect(audit.n).toBe(1);
+    await expectNoHorizontalScroll(page);
+    await expectAccessible(page, "holds after reconcile");
+  } finally { await db.end(); await operator.context.close(); }
+});
 
 test("keyset Load more from the keyboard appends the rest and then goes away", async ({ browser }) => {
   const ids = await ensure(browser), alex = await signIn(browser, "alex");
