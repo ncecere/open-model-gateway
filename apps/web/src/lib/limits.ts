@@ -76,7 +76,7 @@ export function composeLimits(...layers: (Limits | undefined)[]): Limits {
  * omitted, which keeps the stored value. The issuance budgets are also omitted when the layer didn't carry them (an
  * older gateway, which would refuse an unknown field).
  */
-export function limitsBody(limits: Limits, storage = false) {
+export function limitsBody(limits: Limits, storage = false): Record<RateKey, number | null> & { storage_bytes?: number | null; budgets: PolicyBudget[] } & Partial<Record<IssuanceKey, number | null>> {
   return { requests_per_minute: limits.requests_per_minute, tokens_per_minute: limits.tokens_per_minute, concurrent_requests: limits.concurrent_requests, concurrent_jobs: limits.concurrent_jobs, ...storage ? { storage_bytes: limits.storage_bytes ?? null, ...Object.fromEntries(issuanceRows.filter(r => limits[r.key] !== undefined).map(r => [r.key, limits[r.key]])) } : {}, budgets: sortBudgets(limits.budgets).map(b => ({ period: b.period, amount_microusd: b.amount_microusd })) };
 }
 
