@@ -295,7 +295,8 @@ async fn complete(store: &Store, c: &Claim, result: Result<(), Failure>) -> sqlx
 }
 
 /// Row leases fence all replicas, just as #46 does. A crash after acceptance
-/// may duplicate; no terminal state can reopen. At most 25 steps / 60 seconds.
+/// may duplicate; no terminal state can reopen. At most 25 steps, with a
+/// 60-second claiming budget and a 70-second hard dispatch timeout.
 pub(crate) async fn deliver(store: &Store) {
     deliver_within(store, Duration::from_secs(60)).await;
 }
