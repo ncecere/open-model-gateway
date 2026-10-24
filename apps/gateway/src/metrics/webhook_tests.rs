@@ -183,7 +183,7 @@ async fn webhook_metrics_index_upgrade_recovers_interrupted_build_and_requires_r
     store.preflight_upgrade().await.unwrap();
     // Same simulated interrupted-build state as 0054/0056: no migration record
     // and an INVALID index that IF NOT EXISTS alone would silently skip.
-    sqlx::raw_sql("CREATE INDEX alert_webhook_outbox_completed ON alert_webhook_outbox(completed_at,state) WHERE state IN ('sent','failed','exhausted','ineligible'); UPDATE pg_index SET indisvalid=false WHERE indexrelid='public.alert_webhook_outbox_completed'::regclass")
+    sqlx::raw_sql("CREATE INDEX alert_webhook_outbox_completed ON alert_webhook_outbox(completed_at) INCLUDE (state) WHERE state IN ('sent','failed','exhausted','ineligible'); UPDATE pg_index SET indisvalid=false WHERE indexrelid='public.alert_webhook_outbox_completed'::regclass")
         .execute(&pool).await.unwrap();
     store.migrate_enterprise().await.unwrap();
     let (valid, ready, applied): (bool, bool, bool) = sqlx::query_as("SELECT i.indisvalid,i.indisready,EXISTS(SELECT FROM _sqlx_migrations WHERE version=62 AND success) FROM pg_index i WHERE i.indexrelid='public.alert_webhook_outbox_completed'::regclass")
