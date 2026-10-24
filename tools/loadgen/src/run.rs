@@ -454,6 +454,7 @@ pub async fn run(config: RunConfig) -> anyhow::Result<Report> {
                 session.clone(),
                 key.clone(),
                 offset,
+                start,
                 until,
                 timeout,
             ));
