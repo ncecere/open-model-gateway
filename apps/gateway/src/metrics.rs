@@ -1539,12 +1539,12 @@ mod tests {
         let m = Metrics::new();
         let scrape = m.render(Some(&store)).await;
         assert!(
-            scrape.contains("omg_alert_delivery_pending_buckets 2"),
+            scrape.contains("omg_alert_delivery_pending_buckets{} 2"),
             "{scrape}"
         );
         let age = scrape
             .lines()
-            .find_map(|line| line.strip_prefix("omg_alert_delivery_oldest_pending_age_seconds "))
+            .find_map(|line| line.strip_prefix("omg_alert_delivery_oldest_pending_age_seconds{} "))
             .unwrap()
             .parse::<i64>()
             .unwrap();
@@ -1557,17 +1557,17 @@ mod tests {
         assert!(
             !scrape
                 .lines()
-                .any(|line| line.starts_with("omg_alert_delivery_pending_buckets "))
+                .any(|line| line.starts_with("omg_alert_delivery_pending_buckets{"))
         );
         assert!(
             !scrape
                 .lines()
-                .any(|line| line.starts_with("omg_alert_delivery_oldest_pending_age_seconds "))
+                .any(|line| line.starts_with("omg_alert_delivery_oldest_pending_age_seconds{"))
         );
         crate::alerts::deliver_pending(&store, 25).await;
         let scrape = Metrics::new().render(Some(&store)).await;
-        assert!(scrape.contains("omg_alert_delivery_pending_buckets 0"));
-        assert!(scrape.contains("omg_alert_delivery_oldest_pending_age_seconds 0"));
+        assert!(scrape.contains("omg_alert_delivery_pending_buckets{} 0"));
+        assert!(scrape.contains("omg_alert_delivery_oldest_pending_age_seconds{} 0"));
     }
 
     #[cfg(feature = "integration-tests")]
