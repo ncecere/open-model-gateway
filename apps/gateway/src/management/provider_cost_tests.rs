@@ -352,7 +352,21 @@ async fn provider_cost_reconciliation_aggregate_privacy_shared_unknown_and_estim
     assert!(raw.contains("incomplete_estimate"), "{raw}");
     assert!(raw.contains("timing_basis"), "{raw}");
     assert!(!raw.contains(&execution.to_string()));
+    assert!(!raw.contains(&f.personal.to_string()));
     assert!(!raw.contains(&id(&k).to_string()));
+    assert!(
+        report["snapshot"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["workspace_estimates"]
+                .as_array()
+                .is_none_or(Vec::is_empty))
+    );
+    assert_eq!(
+        report["snapshot"]["personal_activity"]["estimates"]["held_floor_microusd"],
+        "42"
+    );
     assert!(!raw.contains("placeholder-public-alias"));
     assert_eq!(financial_state(&pool).await, before);
     let (_, again) = call(&f.s, &f.auditor, "GET", &path, Value::Null).await;

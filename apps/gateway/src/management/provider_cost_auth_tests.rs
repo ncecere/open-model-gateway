@@ -1,4 +1,118 @@
 use super::*;
+use tracing::instrument::WithSubscriber;
+
+#[derive(Clone, Default)]
+struct RejectionLogs(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+impl std::io::Write for RejectionLogs {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for RejectionLogs {
+    type Writer = Self;
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn provider_cost_json_rejections_preserve_status_without_echoing_or_logging_uploads(
+    pool: PgPool,
+) {
+    let f = fixture(&pool).await;
+    let mock = MockProvider::start(None).await;
+    let identity = mock.state(pool.clone()).await;
+    let app = crate::management::router(identity.clone())
+        .merge(crate::management::upload_router(identity))
+        .with_state(f.s.clone());
+    let admin = session(&pool, &f.admin).await;
+    let logs = RejectionLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .with_writer(logs.clone())
+        .finish();
+    let dispatch = tracing::Dispatch::new(subscriber);
+    const FIELD: &str = "canary_field_DO_NOT_ECHO";
+    const VALUE: &str = "canary_value_DO_NOT_ECHO";
+    for (path, valid, uuid_field) in [
+        (
+            "/api/v1/platform/provider-cost-imports",
+            super::super::provider_cost_tests::upload(),
+            "supersedes",
+        ),
+        (
+            "/api/v1/platform/provider-cost-mappings",
+            super::super::provider_cost_tests::mapping(Uuid::new_v4(), None),
+            "supersedes",
+        ),
+        (
+            "/api/v1/platform/provider-reconciliations",
+            json!({"import_id":Uuid::new_v4(),"mapping_id":Uuid::new_v4()}),
+            "import_id",
+        ),
+    ] {
+        let mut unknown = valid.clone();
+        unknown[FIELD] = json!(VALUE);
+        let mut invalid_value = valid;
+        invalid_value[uuid_field] = json!(VALUE);
+        for (body, content_type, expected) in [
+            (
+                unknown.to_string(),
+                "application/json",
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                invalid_value.to_string(),
+                "application/json",
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                format!("{FIELD}={VALUE}"),
+                "application/json",
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                format!("{FIELD}={VALUE}"),
+                "text/plain",
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            ),
+            (
+                format!("{FIELD}{VALUE}{}", " ".repeat(5 * 1024 * 1024 + 1)),
+                "application/json",
+                StatusCode::PAYLOAD_TOO_LARGE,
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(path)
+                        .header("content-type", content_type)
+                        .header("origin", ORIGIN)
+                        .header("cookie", format!("omg_session={}", admin.cookie))
+                        .header("x-csrf-token", &admin.csrf)
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .with_subscriber(dispatch.clone())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected, "{path}");
+            let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+            let response = String::from_utf8(bytes.to_vec()).unwrap();
+            assert!(!response.contains(FIELD), "{response}");
+            assert!(!response.contains(VALUE), "{response}");
+        }
+    }
+    let logged = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    assert!(!logged.contains(FIELD), "{logged}");
+    assert!(!logged.contains(VALUE), "{logged}");
+}
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn provider_cost_upload_real_http_router_allows_more_than_two_mib_but_refuses_more_than_five(
