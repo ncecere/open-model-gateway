@@ -53,7 +53,7 @@ impl PreviewSnapshot {
         ).fetch_one(&mut **tx).await?;
         let other_serving_routes = sqlx::query_scalar(&format!(
             "SELECT count(*) FROM deployments d WHERE d.model_id=$1 AND d.id<>$2 AND {}",
-            &*resources::SERVING_ROUTE,
+            *resources::SERVING_ROUTE,
         ))
         .bind(change.before.model_id)
         .bind(change.before.id)
