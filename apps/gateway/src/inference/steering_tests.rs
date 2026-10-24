@@ -605,6 +605,12 @@ async fn control(w: &World, label: &str, request: Request) -> Control {
         );
     }
     assert_no_attacker(w, label, "control");
+    // This fixture needs no 5xx baseline; Anthropic storage errors have no code.
+    assert!(
+        !status.is_server_error(),
+        "{label}: a server error is not a clean control ({})",
+        status.as_u16()
+    );
     let reason = reason(&text);
     assert_ne!(
         reason, "accounting_unavailable",
@@ -1124,7 +1130,7 @@ async fn steering_world_dispatch_is_independent_of_the_provided_pool(pool: PgPoo
     assert!(attacker.is_empty(), "the attacker must not be contacted");
 }
 
-/// A real upstream hop does not make an accounting failure a usable baseline.
+/// Neither protocol's storage-error envelope is a baseline, even after a real hop.
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn steering_control_rejects_accounting_unavailable_after_a_real_upstream_hop(pool: PgPool) {
     use axum::middleware::{Next, from_fn};
@@ -1132,73 +1138,117 @@ async fn steering_control_rejects_accounting_unavailable_after_a_real_upstream_h
     use std::panic::AssertUnwindSafe;
 
     let mut w = world(pool).await;
-    let request = || {
-        json_request(
-            &w.keys.personal_key.token,
-            "/v1/embeddings",
-            &[],
-            &json!({"model":"t/ollama-embed","input":"hi"}),
-        )
-    };
-    let clean = control(&w, "clean Ollama embedding", request()).await;
-    assert_eq!(
-        (clean.status, clean.reason.as_str()),
-        (400, "upstream_rejected"),
-        "the unwrapped dispatch must be a valid clean control"
-    );
-    let wrapped_request = request();
-    let observed = Arc::new(Mutex::new(None));
-    let observation = observed.clone();
-    let approved_hits = w.approved.hits.clone();
-    w.app = w
-        .app
-        .clone()
-        .layer(from_fn(move |request: Request, next: Next| {
-            let observation = observation.clone();
-            let approved_hits = approved_hits.clone();
-            async move {
-                // Run the actual router/admission/adapter before replacing anything.
-                let response = next.run(request).await;
-                let status = response.status();
-                let bytes = to_bytes(response.into_body(), 16 << 20).await.unwrap();
-                let text = String::from_utf8_lossy(&bytes).into_owned();
-                *observation.lock().unwrap() =
-                    Some((status, text, approved_hits.lock().unwrap().clone()));
-                (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    axum::Json(json!({"error":{"code":"accounting_unavailable"}})),
-                )
-                    .into_response()
-            }
-        }));
+    let mut outcomes = Vec::new();
+    for (target_label, clean_reason, envelope) in [
+        (
+            "embeddings/ollama",
+            "upstream_rejected",
+            json!({"error":{"message":InferenceError::Storage.message(),"type":"accounting_unavailable","code":"accounting_unavailable","param":null}}),
+        ),
+        (
+            "messages/anthropic",
+            "invalid_request_error",
+            // Match messages::error_body(Storage): api_error, without error.code.
+            json!({"type":"error","error":{"type":"api_error","message":InferenceError::Storage.message()}}),
+        ),
+    ] {
+        let t = targets()
+            .into_iter()
+            .find(|t| t.label == target_label)
+            .expect("the real protocol target exists");
+        let request = || {
+            json_request(
+                &w.keys.personal_key.token,
+                t.path,
+                &t.base(),
+                &(t.body)(t.model),
+            )
+        };
+        let clean = control(&w, t.label, request()).await;
+        assert_eq!(
+            (clean.status, clean.reason.as_str()),
+            (400, clean_reason),
+            "{}: the unwrapped dispatch must be a valid clean control",
+            t.label
+        );
+        let wrapped_request = request();
+        let observed = Arc::new(Mutex::new(None));
+        let observation = observed.clone();
+        let approved_hits = w.approved.hits.clone();
+        let attacker_hits = w.attacker.hits.clone();
+        let unwrapped = w.app.clone();
+        w.app = unwrapped
+            .clone()
+            .layer(from_fn(move |request: Request, next: Next| {
+                let observation = observation.clone();
+                let approved_hits = approved_hits.clone();
+                let attacker_hits = attacker_hits.clone();
+                let envelope = envelope.clone();
+                async move {
+                    // Run the actual router/admission/adapter before replacing anything.
+                    let response = next.run(request).await;
+                    let status = response.status();
+                    let bytes = to_bytes(response.into_body(), 16 << 20).await.unwrap();
+                    let text = String::from_utf8_lossy(&bytes).into_owned();
+                    // Snapshot both logs before control's assertions can drain either.
+                    *observation.lock().unwrap() = Some((
+                        status,
+                        text,
+                        approved_hits.lock().unwrap().clone(),
+                        attacker_hits.lock().unwrap().clone(),
+                    ));
+                    (StatusCode::SERVICE_UNAVAILABLE, axum::Json(envelope)).into_response()
+                }
+            }));
 
-    let outcome = AssertUnwindSafe(control(&w, "injected accounting failure", wrapped_request))
-        .catch_unwind()
-        .await;
+        let label = format!("{} injected accounting failure", t.label);
+        let outcome = AssertUnwindSafe(control(&w, &label, wrapped_request))
+            .catch_unwind()
+            .await;
+        // Remove the wrapper between cases; no spare router may retain the pool.
+        w.app = unwrapped;
 
-    // These checks are outside catch_unwind: a broken dispatch or middleware
-    // must not be mistaken for the control helper rejecting the injected error.
-    let (status, text, hits) = observed.lock().unwrap().take().expect("middleware ran");
-    assert_eq!(
-        (status.as_u16(), reason(&text)),
-        (400, "upstream_rejected".to_owned()),
-        "the wrapped dispatch must still reach the real clean outcome: {text}"
-    );
-    assert_eq!(hits.len(), 1, "exactly one approved upstream hop");
-    assert_clean(
-        "Ollama embedding",
-        "injected accounting failure",
-        &hits[0],
-        &clean.hit,
-        &w,
-    );
-    assert_eq!(hits[0].body, clean.hit.body, "the clean body is unchanged");
-    assert_no_attacker(&w, "Ollama embedding", "injected accounting failure");
+        // These checks are outside catch_unwind: a broken dispatch or middleware
+        // must not be mistaken for the control helper rejecting the injected error.
+        let (status, text, hits, attacker) =
+            observed.lock().unwrap().take().expect("middleware ran");
+        assert_eq!(
+            (status.as_u16(), reason(&text)),
+            (400, clean_reason.to_owned()),
+            "{}: the wrapped dispatch must still reach the real clean outcome: {text}",
+            t.label
+        );
+        assert_eq!(hits.len(), 1, "exactly one approved upstream hop");
+        assert_clean(
+            t.label,
+            "injected accounting failure",
+            &hits[0],
+            &clean.hit,
+            &w,
+        );
+        assert_eq!(hits[0].body, clean.hit.body, "the clean body is unchanged");
+        assert!(
+            attacker.is_empty(),
+            "{}: the pre-assertion snapshot must contain no attacker requests",
+            t.label
+        );
+        assert_no_attacker(&w, t.label, "injected accounting failure");
+        outcomes.push((label, outcome));
+    }
     w.close().await;
-    assert!(
-        outcome.is_err(),
-        "control must panic, not accept 503/accounting_unavailable as its baseline"
-    );
+    for (label, outcome) in outcomes {
+        let panic_message = outcome.as_ref().err().and_then(|payload| {
+            payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+        });
+        let expected = format!("{label}: a server error is not a clean control (503)");
+        assert!(
+            panic_message == Some(expected.as_str()),
+            "{label}: control must fail specifically at the server-error baseline guard"
+        );
+    }
 }
 
 /// Every JSON inference protocol, on every adapter and local profile that serves it.
