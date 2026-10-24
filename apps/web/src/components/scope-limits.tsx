@@ -82,6 +82,8 @@ export function LimitsTable({ caption, scopeLabel, draft, onChange, editing, bus
   // Budget rows: this scope's rows, plus inherited periods this scope doesn't set (read-only, "Add" offers a cap).
   const inheritedOnly = stackPeriods.filter(p => budgetFor(inherited?.limits, p) !== null && !draft.budgets.some(b => b.period === p));
   const rows = [...draft.budgets.map(b => ({ period: b.period, row: b })), ...inheritedOnly.map(period => ({ period, row: undefined }))].sort((a, b) => stackPeriods.indexOf(a.period) - stackPeriods.indexOf(b.period));
+  // A gateway that predates the issuance budgets sends no such fields anywhere: show no row (and no ceiling it doesn't enforce).
+  const issuanceSupported = issuanceRows.some(r => draft[r.key] !== undefined || stored[r.key] !== undefined || inherited?.limits?.[r.key] !== undefined || effective?.limits?.[r.key] !== undefined);
   const canAdd = editing && !!nextPeriod(draft);
   const add = (period?: BudgetPeriod) => { const p = period ?? nextPeriod(draft); if (p) set({ budgets: [...draft.budgets, { key: newBudgetKey(), period: p, amount: "" }] }); };
   return <>
@@ -100,7 +102,7 @@ export function LimitsTable({ caption, scopeLabel, draft, onChange, editing, bus
         <Td>{editing ? <Field label={`Storage · ${scopeLabel}`} hideLabel error={errors?.storage} className={l.amountField}><span className={l.amount}><Input size="sm" className={l.amountInput} maxLength={24} autoComplete="off" placeholder={inherited?.limits?.storage_bytes != null ? `Inherited: ${storageText(inherited.limits.storage_bytes)}` : "e.g. 5 GB"} value={draft.storage ?? ""} disabled={busy} onChange={event => set({ storage: event.target.value })} /></span></Field> : draft.storage?.trim() ? draft.storage : <span className={s.muted}>{emptyText}</span>}</Td>
         {effective && <Td>{effective.limits && !effective.invalid?.storage ? storageText(effective.limits.storage_bytes) : "—"}</Td>}
       </Tr>}
-      {storage && issuanceRows.map(r => <Tr key={r.key}>
+      {storage && issuanceSupported && issuanceRows.map(r => <Tr key={r.key}>
         <Td><span className={s.primary} title={r.description}>{r.label}</span></Td>
         {inherited && <Td>{inherited.limits ? issuanceText(inherited.limits[r.key]) : "—"}</Td>}
         <Td>{editing ? <Field label={`${r.label} · ${scopeLabel}`} hideLabel error={errors?.issuance?.[r.key]} className={l.amountField}><span className={l.amount}><GroupedIntegerInput className={l.amountInput} placeholder={inherited?.limits?.[r.key] != null ? `Inherited: ${inherited.limits[r.key]!.toLocaleString("en-US")}` : `Up to ${MAX_KEY_ISSUANCES.toLocaleString("en-US")}`} value={draft[r.key] ?? ""} disabled={busy} onChange={value => set({ [r.key]: value })} /><span aria-hidden className={l.unit}>{r.unit}</span></span></Field> : draft[r.key]?.trim() ? Number(draft[r.key]).toLocaleString("en-US") : <span className={s.muted}>{emptyText === "No limit" ? issuanceText(null) : emptyText}</span>}</Td>

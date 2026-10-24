@@ -23,8 +23,9 @@ const waitFrom = (block: IssuanceBlock, now: number) => retryText(block.next_ava
 /** Which budget stops Create right now (the person's before the workspace's), with a plain explanation; undefined while there is room. */
 export function issuanceBlock(view: KeyIssuance, now = Date.now()): { scope: "holder" | "workspace"; message: string } | undefined {
   const { holder, workspace } = view;
-  if (holder.used >= holder.limit) return { scope: "holder", message: `You have created or rotated ${plural(holder.limit, "key")} in the last 24 hours, the most this workspace allows. You can issue another ${waitFrom(holder, now)}.` };
-  if (workspace && workspace.used >= workspace.limit) return { scope: "workspace", message: `This workspace has issued ${plural(workspace.limit, "key")} in the last 24 hours, the most it allows. Another can be issued ${waitFrom(workspace, now)}.` };
+  // A lowered limit can leave the use above it: say what was used, then what is now allowed.
+  if (holder.used >= holder.limit) return { scope: "holder", message: `You have created or rotated ${plural(holder.used, "key")} in the last 24 hours${holder.used > holder.limit ? `, and this workspace now allows ${holder.limit}` : ", the most this workspace allows"}. You can issue another ${waitFrom(holder, now)}.` };
+  if (workspace && workspace.used >= workspace.limit) return { scope: "workspace", message: `This workspace has issued ${plural(workspace.used, "key")} in the last 24 hours${workspace.used > workspace.limit ? `, and it now allows ${workspace.limit}` : ", the most it allows"}. Another can be issued ${waitFrom(workspace, now)}.` };
 }
 export type IssuanceRefusal = { scope: "holder" | "workspace"; operation: string; retrySeconds: number | undefined; message: string };
 /** A 429 `key_issuance_limit_exceeded` as a named message; undefined for any other error. */

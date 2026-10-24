@@ -37,6 +37,13 @@ describe("key issuance budget text", () => {
     expect(issuanceBlock(view([3, 3, "2026-10-23T11:00:00Z"]), now)?.message).toContain("in 1 second");
     expect(issuanceBlock(view([1, 1, "2026-10-23T12:00:30Z"]), now)?.message).toContain("created or rotated 1 key ");
   });
+  it("says what was used when a lowered limit leaves the use above it", () => {
+    const now = Date.parse("2026-10-23T12:00:00Z");
+    // 5 used, limit lowered to 3: never "created 3 keys".
+    expect(issuanceBlock(view([5, 3, "2026-10-23T14:00:00Z"]), now)?.message).toBe("You have created or rotated 5 keys in the last 24 hours, and this workspace now allows 3. You can issue another in 2 hours.");
+    expect(issuanceBlock(view([1, 3, null], [7, 4, "2026-10-23T12:10:00Z"]), now)?.message).toBe("This workspace has issued 7 keys in the last 24 hours, and it now allows 4. Another can be issued in 10 minutes.");
+    expect(issuanceBlock(view([1, 1, "2026-10-23T12:00:30Z"]), now)?.message).toContain("created or rotated 1 key ");
+  });
   it("turns a 429 refusal into a named message with the retry time and nothing else", () => {
     expect(issuanceRefusal(refusal("holder", 7500))).toEqual({ scope: "holder", operation: "create", retrySeconds: 7500, message: "You've reached this workspace's limit on creating or rotating keys. You can try again in 2 hours 5 minutes." });
     expect(issuanceRefusal(refusal("workspace", 90, "rotate"))).toEqual({ scope: "workspace", operation: "rotate", retrySeconds: 90, message: "This workspace has reached its limit on creating or rotating keys across all members. Try again in 2 minutes." });
