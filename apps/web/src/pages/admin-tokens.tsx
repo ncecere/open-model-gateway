@@ -91,6 +91,12 @@ export function CreateAdminTokenDialog({ session, onClose }: { session: Session;
   // Mount replay may revive this same owner (StrictMode), but never undo its retirement.
   const lifetime = useRef({ mounted: false, closed: false });
   const controller = useRef<AbortController | undefined>(undefined);
+  // Synchronous guards, checked and set before any await: a busy React *state* read is stale
+  // for a second submit dispatched in the same event-loop turn (both see busy===false), which
+  // would POST two high-privilege tokens from one connected form. `succeeded` additionally seals
+  // creation forever after a first success, so a retained old submit binding can never mint a
+  // second credential even though it stays directly callable.
+  const inFlight = useRef(false), succeeded = useRef(false);
   useLayoutEffect(() => {
     lifetime.current.mounted = true;
     // Home's checking/removal render is asynchronous; retire before dispatch returns.
@@ -115,7 +121,8 @@ export function CreateAdminTokenDialog({ session, onClose }: { session: Session;
   async function submit() {
     if (!lifetime.current.mounted || lifetime.current.closed) return;
     setSubmitted(true);
-    if (invalid || busy) return;
+    if (invalid || inFlight.current || succeeded.current) return;
+    inFlight.current = true;
     const generation = copyGeneration.current;
     const request = new AbortController(); controller.current = request;
     setBusy(true); setError(undefined);
@@ -126,12 +133,13 @@ export function CreateAdminTokenDialog({ session, onClose }: { session: Session;
       // the request (close, unmount, navigation, a role/authority change) must not resurrect it.
       if (!lifetime.current.mounted || lifetime.current.closed || copyGeneration.current !== generation) return;
       if (typeof created?.token !== "string" || !created.token) throw new Error("No token was returned. Check the list before trying again.");
+      succeeded.current = true;
       void client.invalidateQueries({ queryKey: ["api"] });
       setResult(created);
     } catch (caught) {
       if (request.signal.aborted || copyGeneration.current !== generation) return;
       setError(caught);
-    } finally { if (copyGeneration.current === generation) setBusy(false); }
+    } finally { inFlight.current = false; if (copyGeneration.current === generation) setBusy(false); }
   }
   async function copySecret() {
     if (lifetime.current.closed || copyGeneration.current !== displayedGeneration || !result) return;
