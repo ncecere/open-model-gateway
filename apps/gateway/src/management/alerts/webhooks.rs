@@ -176,7 +176,10 @@ async fn update(
 ) -> ApiResult {
     let mut tx = super::super::settings::write_tx(&s, &u).await?;
     let b: Patch = serde_json::from_slice(&body).map_err(|_| invalid())?;
-    let old: Saved=sqlx::query_as("SELECT label,url,enabled,current_secret_ref,previous_secret_ref,previous_secret_until FROM alert_webhook_destinations WHERE id=$1 AND deleted_at IS NULL FOR UPDATE")
+    // FOR NO KEY UPDATE, never FOR UPDATE: alert enqueue's outbox foreign key takes
+    // FOR KEY SHARE on this row, and a blocked enqueue would hit the
+    // evaluator's statement_timeout (57014), which its handler cannot catch.
+    let old: Saved=sqlx::query_as("SELECT label,url,enabled,current_secret_ref,previous_secret_ref,previous_secret_until FROM alert_webhook_destinations WHERE id=$1 AND deleted_at IS NULL FOR NO KEY UPDATE")
         .bind(id).fetch_optional(&mut *tx).await?.ok_or_else(missing)?;
     let label = b
         .label

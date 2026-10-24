@@ -365,3 +365,91 @@ async fn webhook_authority_redaction_and_strict_management(pool: PgPool) {
         assert!(!details.to_string().contains("HOOK_PRIVATE"));
     }
 }
+
+// Alert evaluation inserts `alert_deliveries`; the enqueue trigger's outbox
+// INSERT takes FOR KEY SHARE on the destination through its foreign key. The
+// real PATCH handler's destination lock must not conflict with that.
+const ENQUEUE: &str =
+    "INSERT INTO alert_deliveries(id,event_id,transition) VALUES(gen_random_uuid(),$1,'fired')";
+async fn lock_fixture(pool: &PgPool) -> (Fixture, Uuid, Uuid, String) {
+    let mut f = fixture(pool).await;
+    f.s = f.s.with_alert_webhooks(
+        crate::config::AlertWebhookPolicy::parse(
+            &["https://example.test/hook".into()],
+            vec!["HOOK".into()],
+            crate::config::Environment::Production,
+        )
+        .unwrap(),
+    );
+    let dest: Uuid = sqlx::query_scalar("INSERT INTO alert_webhook_destinations(label,url,current_secret_ref,enabled) VALUES('receiver','https://example.test/hook','env:HOOK',true) RETURNING id").fetch_one(pool).await.unwrap();
+    let event: Uuid = sqlx::query_scalar("INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,summary) VALUES(gen_random_uuid(),'scim_last_admin','scim_last_admin','lock-order',1,'critical','safe') RETURNING id").fetch_one(pool).await.unwrap();
+    (f, dest, event, format!("{WEBHOOKS}/{dest}"))
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn webhook_patch_in_flight_does_not_stall_alert_enqueue(pool: PgPool) {
+    let (f, _dest, event, path) = lock_fixture(&pool).await;
+    // Hold the real handler after it has taken its destination lock: its audit
+    // INSERT waits for this table lock until the enqueue below has finished.
+    let mut gate = pool.begin().await.unwrap();
+    sqlx::query("LOCK TABLE audit_events IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *gate)
+        .await
+        .unwrap();
+    let (s, admin, p) = (f.s.clone(), f.admin.clone(), path.clone());
+    let patch = tokio::spawn(async move {
+        call(&s, &admin, "PATCH", &p, json!({"label":"renamed"})).await
+    });
+    let mut blocked = 0_i64;
+    for _ in 0..100 {
+        blocked = sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'").fetch_one(&pool).await.unwrap();
+        if blocked > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(blocked > 0, "PATCH never reached its held audit write");
+    let mut enqueue = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL statement_timeout='2s'")
+        .execute(&mut *enqueue)
+        .await
+        .unwrap();
+    let queued = sqlx::query(ENQUEUE)
+        .bind(event)
+        .execute(&mut *enqueue)
+        .await;
+    assert!(
+        queued.is_ok(),
+        "enqueue must proceed while a PATCH transaction is open: {queued:?}"
+    );
+    enqueue.commit().await.unwrap();
+    gate.rollback().await.unwrap();
+    assert_eq!(patch.await.unwrap().0, StatusCode::OK);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM alert_webhook_outbox WHERE event_id=$1")
+            .bind(event)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        1
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn webhook_patch_does_not_wait_for_an_in_flight_enqueue(pool: PgPool) {
+    let (f, _dest, event, path) = lock_fixture(&pool).await;
+    let mut enqueue = pool.begin().await.unwrap();
+    sqlx::query(ENQUEUE)
+        .bind(event)
+        .execute(&mut *enqueue)
+        .await
+        .unwrap();
+    let patched = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        call(&f.s, &f.admin, "PATCH", &path, json!({"label":"renamed"})),
+    )
+    .await
+    .expect("PATCH must not wait for an uncommitted enqueue's key-share lock");
+    assert_eq!(patched.0, StatusCode::OK);
+    enqueue.commit().await.unwrap();
+}
