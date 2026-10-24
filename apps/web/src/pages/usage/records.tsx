@@ -15,7 +15,7 @@ import { formatCount, knownSpendText, reconciliationBody, reconciliationFields }
 import { permissions } from "../../lib/permissions";
 import { saveCsv, usageCsv, EXPORT_MAX_ROWS } from "../../lib/usage-export";
 import { filterCount, periodLabel, recordCostText, recordStatuses, recordStatusText, recordsQuery, usageFilters, usageStatuses, workloadLabels, type RecordFilters, type UsageContext, type UsagePeriod } from "../../lib/usage";
-import { Button, ErrorNotice, Stack, useAction, useApi, useChoices } from "../../components/ui";
+import { Button, ErrorNotice, Stack, useAction, useApi, useChoices, type Action } from "../../components/ui";
 import { ActionMenu } from "../../components/templates/action-menu";
 import { CopyId } from "../../components/templates/copy-id";
 import { InfoBanner } from "../../components/templates/notices";
@@ -35,6 +35,11 @@ import u from "./usage.module.css";
 
 const id = encodeURIComponent;
 const PAGE = 50;
+
+/** What the reconcile dialog needs of a cost record: its execution id and the pinned original observations it must preserve. */
+export type ReconcileTarget = Pick<Cost, "id" | "input_tokens" | "output_tokens" | "billing_usage">;
+/** The one reconcile dialog and write path (`POST …/costs/{execution}/reconcile`), shared by Cost records and Holds. */
+export const reconcileAction = (base: string, cost: ReconcileTarget): Action => ({ title: "Reconcile pinned usage", description: "Platform Admin action. Preserve every known original/raw and normalized count. Use authoritative evidence, including TTL allocations; the original pinned price is used. Unknown rates are not free.", fields: reconciliationFields(cost), submitLabel: "Reconcile usage", run: (v, signal) => api(`${base}/costs/${id(cost.id)}/reconcile`, { method: "POST", body: reconciliationBody(v), signal }) });
 
 /**
  * The records filters from the URL (the bar is shared with Overview/Explore; see ./filters). Records match a model by
@@ -56,7 +61,7 @@ export function WorkspaceRecords({ session, workspace, ctx, period, nav }: { ses
   // One request with every filter: the server takes the key and a comma list of statuses.
   const main = useApi<Collection<Cost>>(`${base}/costs?${recordsQuery(period, filters, { platform: false, limit: PAGE, offset })}`, ready);
   const filtered = filterCount(filters) > 0 || !!filters.cost_status;
-  const reconcile = (cost: Cost) => ask({ title: "Reconcile pinned usage", description: "Platform Admin action. Preserve every known original/raw and normalized count. Use authoritative evidence, including TTL allocations; the original pinned price is used. Unknown rates are not free.", fields: reconciliationFields(cost), submitLabel: "Reconcile usage", run: (v, signal) => api(`${base}/costs/${id(cost.id)}/reconcile`, { method: "POST", body: reconciliationBody(v), signal }) });
+  const reconcile = (cost: Cost) => ask(reconcileAction(base, cost));
   const exportCsv = () => ask({ title: "Export CSV?", submitLabel: "Download CSV", successNotice: "CSV downloaded.",
     description: `Downloads up to ${EXPORT_MAX_ROWS.toLocaleString("en-US")} records from ${periodLabel(period)}${scopeText ? ` (${scopeText})` : ""}, newest first, with exact micro-USD amounts. ${workspace.kind !== "personal" && workspace.capabilities.view_all_activity ? `It covers everyone in ${workspace.name}.` : "It covers only your own keys."} No prompts or responses are included.`,
     run: async (_, signal) => { const blob = await usageCsv(workspace.id, EXPORT_MAX_ROWS, 0, signal, recordsQuery(period, filters, { platform: false })); signal.throwIfAborted(); saveCsv(blob, 0); } });

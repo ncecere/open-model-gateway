@@ -14,6 +14,16 @@ describe("canonical enterprise dashboard locations", () => {
   it("bounds query lengths and offsets", () => { expect(dashboardSearch({ q: "x".repeat(200), offset: 100000 })).toMatchObject({ q: "x".repeat(200), offset: 100000 }); expect(dashboardSearch({ offset: 100001 }).offset).toBeUndefined(); });
   it("round trips nested limits and report filters without API-scope changes", () => { const state: DashboardSearch = { page: "workspace-settings", ws: "team", tab: "limits", scope: "workspace", view: "inherited" }; expect(parseDashboardLocation(dashboardHref(state))).toMatchObject(state); expect(dashboardHref({ page: "workspace-settings", ws: "team", tab: "limits", scope: "keys", record: "key-id" })).toBe("/workspaces/team/keys/key-id"); expect(dashboardHref({ page: "workspace-settings", ws: "team", tab: "limits", scope: "keys" })).toBe("/workspaces/team/keys"); expect(scopeSearch("keys", "personal")).toEqual({ page: "keys", ws: "personal" }); });
 });
+describe("Usage & costs Holds tab location (#101)", () => {
+  it.each([[{ page: "platform-costs", tab: "holds" }, "/admin/costs?tab=holds"], [{ page: "costs", ws: "team", tab: "holds" }, "/workspaces/team/costs?tab=holds"]] as [DashboardSearch, string][])("round trips %j", (search, href) => {
+    expect(dashboardHref(search)).toBe(href); expect(parseDashboardLocation(href)).toMatchObject(search); expect(dashboardHref(parseDashboardLocation(href)!)).toBe(href);
+  });
+  it("keeps the tab through the allowlist and drops unknown tabs", () => { expect(dashboardSearch({ tab: "holds" }).tab).toBe("holds"); expect(dashboardSearch({ tab: "holds2" }).tab).toBeUndefined(); });
+  it("keeps Admin's holds tab behind platform read and the workspace tab behind membership", () => {
+    expect(authorizedLocation({ page: "platform-costs", tab: "holds" }, admin)).toBe(true); expect(authorizedLocation({ page: "platform-costs", tab: "holds" }, auditor)).toBe(true); expect(authorizedLocation({ page: "platform-costs", tab: "holds" }, session)).toBe(false);
+    expect(authorizedLocation({ page: "costs", ws: "team", tab: "holds" }, session)).toBe(true);
+  });
+});
 describe("Admin API tokens location authority (#37 PR3)", () => {
   it("requires platform_write (not platform_read) and denies a direct deep link accordingly", () => {
     expect(isAdminPage("admin-tokens")).toBe(true);
