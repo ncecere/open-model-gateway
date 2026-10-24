@@ -197,8 +197,12 @@ pub(crate) fn parse_otlp_headers(
 
 /// Select the export transport's policy from an explicit base policy.
 /// Kept pure so address decisions can be tested without process-wide state.
-fn export_http_policy(_url: &reqwest::Url, policy: crate::egress::Policy) -> crate::egress::Policy {
-    policy
+fn export_http_policy(url: &reqwest::Url, policy: crate::egress::Policy) -> crate::egress::Policy {
+    if url.scheme() == "http" {
+        policy.only_loopback()
+    } else {
+        policy
+    }
 }
 
 /// Shared export transport, never a durable queue or retry policy.

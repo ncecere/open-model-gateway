@@ -73,6 +73,8 @@ The gateway's own HTTP clients (OpenAI, Anthropic, OpenRouter, Bedrock requests,
 
 Names are resolved by the gateway, refused addresses are dropped, and the connection goes only to an address that passed (so a DNS answer can't change between the check and the connection). Configured IP-literal URLs are checked at startup: `GATEWAY_S3_ENDPOINT`, `GATEWAY_BEDROCK_ENDPOINT_ALLOWLIST`, the OIDC issuer and the endpoints it publishes. A refused OIDC issuer stops startup with a message naming `GATEWAY_EGRESS_PRIVATE_ALLOW`. A refused request fails like an unreachable upstream; the log names the purpose, host and reason, and `gateway_egress_denied_total{purpose}` counts it. Approved local upstreams (`GATEWAY_LOCAL_UPSTREAMS`), including their vLLM metrics, keep their own pinned approval and need no entry here; they are refused in the same special-use ranges as above (#203), and an approval in one stops startup.
 
+The development HTTP exception for OTLP exports (traces and audit logs) and the shared audit webhook transport is stricter: every DNS answer must be canonical loopback, including IPv4-mapped loopback. Any non-loopback answer rejects the entire result, even alongside loopback or when covered by `GATEWAY_EGRESS_PRIVATE_ALLOW`. HTTPS retains the general policy above.
+
 List a private network when you use one of these:
 
 - an IdP or S3-compatible store on a private address (homelab Authentik, MinIO or RustFS);

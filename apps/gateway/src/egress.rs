@@ -207,6 +207,7 @@ fn masked(ip: IpAddr, prefix: u8) -> IpAddr {
 pub struct Policy {
     development: bool,
     private_allow: Networks,
+    loopback_only: bool,
 }
 
 impl Policy {
@@ -214,6 +215,7 @@ impl Policy {
         Self {
             development,
             private_allow,
+            loopback_only: false,
         }
     }
 
@@ -233,11 +235,23 @@ impl Policy {
     pub fn permit_loopback(&self, loopback: bool) -> Self {
         Self {
             development: self.development || loopback,
-            private_allow: self.private_allow.clone(),
+            ..self.clone()
+        }
+    }
+
+    /// Tighten to canonical loopback addresses without granting loopback access.
+    /// DNS answers containing any refused address fail as a whole in this mode.
+    pub(crate) fn only_loopback(&self) -> Self {
+        Self {
+            loopback_only: true,
+            ..self.clone()
         }
     }
 
     pub fn allows(&self, ip: IpAddr) -> bool {
+        if self.loopback_only && !canonical(ip).is_loopback() {
+            return false;
+        }
         match classify(ip) {
             Class::Refused => false,
             Class::Loopback => self.development,
@@ -248,6 +262,9 @@ impl Policy {
 
     /// Why `ip` is refused, in words an operator can act on.
     fn refusal(&self, ip: IpAddr) -> &'static str {
+        if self.loopback_only && !canonical(ip).is_loopback() {
+            return "not a loopback address, required by this transport";
+        }
         match classify(ip) {
             Class::Refused => "a reserved, link-local or metadata address, never allowed",
             Class::Loopback => "loopback, allowed only with GATEWAY_ENV=development",
@@ -283,9 +300,9 @@ fn denied(purpose: Purpose, host: &str, ip: IpAddr, policy: &Policy) {
     );
 }
 
-/// Keep the addresses the policy allows. Refusal is counted and logged only
-/// when none remain (a dual-stack host with one refused record still works,
-/// and that's not an incident); partial drops are debug logs.
+/// Keep the addresses the policy allows. Loopback-only policies reject the
+/// entire answer if any address is refused. Otherwise, refusal is counted and
+/// logged only when none remain (dual-stack partial drops are debug logs).
 fn filter(
     policy: &Policy,
     purpose: Purpose,
@@ -294,7 +311,7 @@ fn filter(
 ) -> anyhow::Result<Vec<SocketAddr>> {
     let (allowed, refused): (Vec<_>, Vec<_>) =
         found.iter().copied().partition(|a| policy.allows(a.ip()));
-    if !allowed.is_empty() {
+    if !allowed.is_empty() && (!policy.loopback_only || refused.is_empty()) {
         for addr in &refused {
             tracing::debug!(purpose = purpose.as_str(), host, address = %addr.ip(), reason = policy.refusal(addr.ip()), "egress policy dropped one resolved address");
         }
@@ -584,6 +601,44 @@ mod tests {
         for bad in ["10.0.0.1/8", "10.0.0.0/33", "nope", "::ffff:10.0.0.0/104"] {
             assert!(Networks::parse(PRIVATE_ALLOW_ENV, bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn loopback_only_never_grants_access_and_survives_policy_derivation() {
+        let strict = Policy::default().only_loopback();
+        for address in ["127.0.0.1", "::1", "::ffff:127.0.0.1"] {
+            assert!(!strict.allows(ip(address)), "{address}");
+        }
+        let narrowed = Policy::new(
+            true,
+            Networks::parse(PRIVATE_ALLOW_ENV, "0.0.0.0/0,::/0").unwrap(),
+        )
+        .only_loopback();
+        for policy in [
+            narrowed.clone(),
+            narrowed.permit_loopback(false),
+            narrowed.permit_loopback(true),
+            strict.permit_loopback(true),
+        ] {
+            for address in ["127.0.0.1", "::1", "::ffff:127.0.0.1"] {
+                assert!(policy.allows(ip(address)), "{address}");
+            }
+            for address in [
+                "8.8.8.8",
+                "10.1.2.3",
+                "fd12::1",
+                "64:ff9b::7f00:1",
+                "2002:7f00:1::1",
+            ] {
+                assert!(!policy.allows(ip(address)), "{address}");
+            }
+        }
+        assert!(
+            filter(&narrowed, Purpose::Telemetry, "empty.example", vec![])
+                .unwrap_err()
+                .to_string()
+                .contains("could not resolve")
+        );
     }
 
     #[test]
