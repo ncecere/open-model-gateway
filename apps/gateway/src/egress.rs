@@ -89,28 +89,16 @@ fn classify(ip: IpAddr) -> Class {
 /// this is egress's own mapping from "what kind of range" to "what the
 /// policy does with it" (`Policy::allows`, gated separately).
 fn class_for(category: crate::special_use::Category) -> Class {
-    use crate::special_use::Category;
-    match category {
-        Category::Public => Class::Public,
+    use crate::special_use::Disposition;
+    match category.disposition() {
+        Disposition::Public => Class::Public,
         // RFC1918 and carrier-grade NAT (IPv4), unique-local (IPv6): the same
         // gate, `GATEWAY_EGRESS_PRIVATE_ALLOW`.
-        Category::Private | Category::Cgnat => Class::Private,
-        Category::Loopback => Class::Loopback,
-        // Everything else is never allowed, regardless of policy: link-local
-        // (cloud metadata lives here for IPv4), multicast, broadcast,
-        // reserved, the exact metadata address and the rest of its /32,
-        // benchmarking, documentation, IETF protocol assignments and the
-        // deprecated 6to4 relay.
-        Category::LinkLocal
-        | Category::Multicast
-        | Category::Broadcast
-        | Category::Reserved
-        | Category::Metadata
-        | Category::AwsMetadataRange
-        | Category::Benchmarking
-        | Category::Documentation
-        | Category::IetfProtocolAssignments
-        | Category::Deprecated6to4Relay => Class::Refused,
+        Disposition::Private | Disposition::Cgnat => Class::Private,
+        Disposition::Loopback => Class::Loopback,
+        // Never allowed, regardless of policy; decided once for both this
+        // policy and local-upstream approvals by `Category::disposition`.
+        Disposition::Refused => Class::Refused,
     }
 }
 
