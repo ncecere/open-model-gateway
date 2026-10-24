@@ -41,7 +41,10 @@ check authority live: Platform Admins/Auditors see all; current shared-workspace
 owners/admins see their workspace's incident. Members and personal owners get
 no alert solely for those roles; they can still use their authorized Holds queue.
 No request, key, owner or personal-workspace identity is stored in an incident.
-Details contain only `threshold_hours`; summaries are fixed. **Open holds**
+Details contain only `threshold_hours`; summaries are fixed. Shared-workspace
+incidents are not webhook-eligible. Only the anonymous installation aggregate
+can enqueue a fired webhook, through the existing kind-only privacy projection
+(no details, subject or workspace fields); clear remains silent. **Open holds**
 links to the authorized Usage & costs tab for current counts, ages and retained
 floors, never stale accounting facts embedded in an incident.
 
