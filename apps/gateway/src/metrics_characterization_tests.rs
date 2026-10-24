@@ -5,6 +5,44 @@
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// The unit fixture primes DB gauges manually. Also prove their REAL refresh
+/// path uses the golden keys, so a refresh-only label change cannot hide.
+#[cfg(feature = "integration-tests")]
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn db_collector_label_keys_match_golden(pool: sqlx::PgPool) {
+    let out = Metrics::new().render(Some(&Store::new(pool))).await;
+    for family in [
+        "gateway_db_pool_connections",
+        "gateway_reservations_held",
+        "gateway_alert_email_deliveries",
+    ] {
+        let golden = include_str!("metrics_families.golden")
+            .lines()
+            .find(|line| line.starts_with(&format!("{family} ")))
+            .unwrap();
+        let expected = golden.rsplit_once(' ').unwrap().1;
+        let lines = out
+            .lines()
+            .filter(|line| line.starts_with(&format!("{family}{{")))
+            .collect::<Vec<_>>();
+        assert!(
+            !lines.is_empty(),
+            "DB collector must have refreshed {family}"
+        );
+        for line in lines {
+            let labels = line.split_once('{').unwrap().1.split_once('}').unwrap().0;
+            let keys = labels
+                .split(',')
+                .map(|label| label.split_once('=').unwrap().0)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>()
+                .join(",");
+            assert_eq!(keys, expected, "{family}");
+        }
+    }
+}
+
 #[tokio::test]
 async fn prometheus_family_types_and_label_keys_match_golden() {
     // Isolated registry: parallel tests cannot add or remove fixture series.

@@ -514,6 +514,45 @@ fn non_unicode_metrics_settings_fail_real_startup() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn non_unicode_metrics_header_material_fails_without_disclosure() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    let f = Fixture::new();
+    let output = f.run(
+        &["serve"],
+        [
+            (
+                OsString::from("DATABASE_URL"),
+                OsString::from("postgres://gateway@127.0.0.1:1/gateway"),
+            ),
+            (
+                "GATEWAY_METRICS_OTLP_URL".into(),
+                "https://collector.invalid/v1/metrics".into(),
+            ),
+            (
+                "GATEWAY_METRICS_OTLP_HEADERS_ENV".into(),
+                "PRIVATE_MATERIAL".into(),
+            ),
+            (
+                "PRIVATE_MATERIAL".into(),
+                OsString::from_vec(b"X=canary-\xff".to_vec()),
+            ),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = text(&output.stderr);
+    assert!(
+        stderr.contains("GATEWAY_METRICS_OTLP_HEADERS_ENV"),
+        "{stderr}"
+    );
+    for value in ["canary", "PRIVATE_MATERIAL", "could not connect"] {
+        assert!(!stderr.contains(value), "{stderr}");
+    }
+}
+
 /// #98 PR 3 acceptance: a refused trace-collector destination fails the
 /// real binary's startup (`serve`, before any database connection is even
 /// attempted - `Config::from_env` validates `GATEWAY_TRACES_*` ahead of

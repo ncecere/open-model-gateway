@@ -210,10 +210,6 @@ impl MetricsExportConfig {
     }
 }
 
-#[cfg(test)]
-#[path = "metrics_export_config_tests.rs"]
-mod metrics_export_config_tests;
-
 /// Validated at startup and exposed only to authenticated dashboard users.
 #[derive(Clone, Default)]
 pub struct InferenceBaseUrl(pub Option<String>);
@@ -533,6 +529,10 @@ fn disjoint_allowlists(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "metrics_export_config_tests.rs"]
+mod metrics_export_config_tests;
 
 #[cfg(test)]
 mod allowlist_tests {

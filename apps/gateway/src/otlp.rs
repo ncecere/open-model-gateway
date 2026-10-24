@@ -63,6 +63,21 @@ pub(crate) fn endpoint(
             && (url.scheme() == "https" || (development && loopback && url.scheme() == "http")),
         "{setting} is invalid (full signal URL required; HTTPS except development loopback)"
     );
+    // check_url also emits a host/address diagnostic on refusal. Startup
+    // telemetry validation must not disclose setting values through that
+    // side channel. Apply the SAME policy first, count the refusal, and
+    // return only the setting; do not duplicate address classification here.
+    if let Some(ip) = url.host_str().and_then(|host| {
+        host.trim_matches(['[', ']'])
+            .parse::<std::net::IpAddr>()
+            .ok()
+    }) && !crate::egress::policy()
+        .permit_loopback(development)
+        .allows(ip)
+    {
+        crate::metrics::METRICS.egress_denied(crate::egress::Purpose::Telemetry.as_str());
+        return Err(invalid());
+    }
     let client = export_http_client(
         &url,
         crate::egress::Purpose::Telemetry,
