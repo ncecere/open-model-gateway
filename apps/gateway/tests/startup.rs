@@ -169,6 +169,21 @@ fn reserved_allowlists_stop_before_database_access_without_disclosure() {
                 assert_eq!(output.status.code(), Some(1), "{args:?}");
                 assert!(output.stdout.is_empty());
                 let stderr = text(&output.stderr);
+                // #99's newly inventoried pointer has stricter diagnostics:
+                // setting only, not even the selected variable's name. Keep
+                // every pre-existing pointer's assertions below unchanged.
+                if pointer == Some("GATEWAY_METRICS_OTLP_HEADERS_ENV") {
+                    assert!(stderr.contains("GATEWAY_METRICS_OTLP_HEADERS_ENV"));
+                    for forbidden in [
+                        name,
+                        "could not connect",
+                        "private-database-marker",
+                        "private-value-marker",
+                    ] {
+                        assert!(!stderr.contains(forbidden), "{stderr}");
+                    }
+                    continue;
+                }
                 assert!(stderr.contains(allowlist));
                 assert!(stderr.contains(name), "{args:?}");
                 if let Some(pointer) = pointer {
@@ -303,6 +318,238 @@ fn healthcheck_exit_status_follows_readiness() {
     ] {
         let output = f.run(&args, std::iter::empty::<(&str, &str)>());
         assert_eq!(output.status.code(), Some(1), "{args:?}");
+    }
+}
+
+/// #99 slice 1: config is validated before any DB access. Even valid metrics
+/// export settings are refused explicitly until the worker ships (slice 3).
+#[test]
+fn metrics_otlp_refusals_use_the_real_startup_path_without_disclosure() {
+    const URL: &str = "GATEWAY_METRICS_OTLP_URL";
+    const HEADERS: &str = "GATEWAY_METRICS_OTLP_HEADERS_ENV";
+    const INTERVAL: &str = "GATEWAY_METRICS_OTLP_INTERVAL_SECONDS";
+    const TRAFFIC: &str = "GATEWAY_METRICS_OTLP_TRAFFIC";
+    let f = Fixture::new();
+    let valid = "https://collector.invalid/v1/metrics";
+    let too_many = (0..17)
+        .map(|i| format!("X-{i}=canary-secret"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let too_long = format!("X={}", "a".repeat(4095));
+    let mut cases = vec![
+        (HEADERS, vec![(URL, valid), (HEADERS, "PRIVATE_MATERIAL")]),
+        (
+            HEADERS,
+            vec![
+                (URL, valid),
+                (HEADERS, "PRIVATE_MATERIAL"),
+                ("PRIVATE_MATERIAL", "canary-no-equals"),
+            ],
+        ),
+        (
+            HEADERS,
+            vec![
+                (URL, valid),
+                (HEADERS, "PRIVATE_MATERIAL"),
+                ("PRIVATE_MATERIAL", too_many.as_str()),
+            ],
+        ),
+        (
+            HEADERS,
+            vec![
+                (URL, valid),
+                (HEADERS, "PRIVATE_MATERIAL"),
+                ("PRIVATE_MATERIAL", too_long.as_str()),
+            ],
+        ),
+        (URL, vec![(URL, "https://10.1.1.1/v1/metrics")]),
+        (
+            URL,
+            vec![
+                (URL, "https://169.254.169.254/v1/metrics"),
+                ("GATEWAY_EGRESS_PRIVATE_ALLOW", "0.0.0.0/0"),
+            ],
+        ),
+        (URL, vec![(URL, "https://collector.invalid/v1/traces")]),
+        (URL, vec![(URL, "https://collector.invalid/v1/logs")]),
+        (
+            URL,
+            vec![(
+                URL,
+                "https://canary-user:canary-pass@collector.invalid/v1/metrics",
+            )],
+        ),
+        (
+            URL,
+            vec![(URL, "https://collector.invalid/v1/metrics?canary-query")],
+        ),
+        (
+            URL,
+            vec![(URL, "https://collector.invalid/v1/metrics#canary-fragment")],
+        ),
+        (URL, vec![(URL, "")]),
+        (URL, vec![(URL, "http://127.0.0.1:4318/v1/metrics")]),
+        (INTERVAL, vec![(URL, valid), (INTERVAL, "9")]),
+        (INTERVAL, vec![(URL, valid), (INTERVAL, "301")]),
+        (INTERVAL, vec![(URL, valid), (INTERVAL, "60.0")]),
+        (TRAFFIC, vec![(URL, valid), (TRAFFIC, "ON")]),
+        (
+            HEADERS,
+            vec![
+                (URL, valid),
+                (HEADERS, "PRIVATE_MATERIAL"),
+                ("PRIVATE_MATERIAL", "Host=canary-secret"),
+            ],
+        ),
+        (
+            HEADERS,
+            vec![
+                (URL, valid),
+                (HEADERS, "PRIVATE_MATERIAL"),
+                ("PRIVATE_MATERIAL", "X=canary-secret\r\n"),
+            ],
+        ),
+        (
+            HEADERS,
+            vec![
+                (URL, valid),
+                (HEADERS, "PGPASSWORD"),
+                ("PGPASSWORD", "X=canary-secret"),
+            ],
+        ),
+        (
+            HEADERS,
+            vec![
+                (URL, valid),
+                (HEADERS, "PRIVATE_MATERIAL"),
+                ("GATEWAY_SECRET_ENV_ALLOWLIST", "PRIVATE_MATERIAL"),
+            ],
+        ),
+        (
+            HEADERS,
+            vec![
+                (URL, valid),
+                (HEADERS, "PRIVATE_MATERIAL"),
+                ("GATEWAY_SMTP_SECRET_ENV_ALLOWLIST", "PRIVATE_MATERIAL"),
+            ],
+        ),
+        (URL, vec![(URL, valid)]),
+    ];
+    for (setting, value) in [
+        (HEADERS, "PRIVATE_MATERIAL"),
+        (INTERVAL, "60"),
+        (TRAFFIC, "off"),
+    ] {
+        cases.push((setting, vec![(setting, value)]));
+    }
+    for pointer in open_model_gateway::providers::secrets::SECRET_POINTERS {
+        if *pointer != HEADERS {
+            cases.push((
+                HEADERS,
+                vec![
+                    (URL, valid),
+                    (HEADERS, "PRIVATE_MATERIAL"),
+                    (pointer, "PRIVATE_MATERIAL"),
+                    ("PRIVATE_MATERIAL", "X=canary-secret"),
+                ],
+            ));
+        }
+    }
+    for (setting, mut env) in cases {
+        env.push((
+            "DATABASE_URL",
+            "postgres://gateway:never-dialed-marker@127.0.0.1:1/gateway",
+        ));
+        let output = f.run(&["serve"], env.clone());
+        assert_eq!(output.status.code(), Some(1), "{setting}");
+        assert!(output.stdout.is_empty());
+        let stderr = text(&output.stderr);
+        assert!(stderr.contains(setting), "{setting}: {stderr}");
+        assert!(!stderr.contains("could not connect"), "{stderr}");
+        for value in [
+            "canary-",
+            "never-dialed-marker",
+            valid,
+            "10.1.1.1",
+            "169.254.169.254",
+            "PRIVATE_MATERIAL",
+        ] {
+            assert!(!stderr.contains(value), "disclosure: {stderr}");
+        }
+        if env.contains(&(URL, valid)) && env.len() == 2 {
+            assert!(stderr.contains("not implemented"), "{stderr}");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn non_unicode_metrics_settings_fail_real_startup() {
+    use std::os::unix::ffi::OsStringExt;
+    let f = Fixture::new();
+    for setting in [
+        "GATEWAY_METRICS_OTLP_URL",
+        "GATEWAY_METRICS_OTLP_HEADERS_ENV",
+        "GATEWAY_METRICS_OTLP_INTERVAL_SECONDS",
+        "GATEWAY_METRICS_OTLP_TRAFFIC",
+    ] {
+        let output = f.run(
+            &["serve"],
+            [
+                (
+                    std::ffi::OsString::from("DATABASE_URL"),
+                    std::ffi::OsString::from("postgres://gateway@127.0.0.1:1/gateway"),
+                ),
+                (
+                    setting.into(),
+                    std::ffi::OsString::from_vec(b"canary-\xff".to_vec()),
+                ),
+            ],
+        );
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = text(&output.stderr);
+        assert!(stderr.contains(setting), "{stderr}");
+        assert!(!stderr.contains("canary"));
+        assert!(!stderr.contains("could not connect"));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn non_unicode_metrics_header_material_fails_without_disclosure() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    let f = Fixture::new();
+    let output = f.run(
+        &["serve"],
+        [
+            (
+                OsString::from("DATABASE_URL"),
+                OsString::from("postgres://gateway@127.0.0.1:1/gateway"),
+            ),
+            (
+                "GATEWAY_METRICS_OTLP_URL".into(),
+                "https://collector.invalid/v1/metrics".into(),
+            ),
+            (
+                "GATEWAY_METRICS_OTLP_HEADERS_ENV".into(),
+                "PRIVATE_MATERIAL".into(),
+            ),
+            (
+                "PRIVATE_MATERIAL".into(),
+                OsString::from_vec(b"X=canary-\xff".to_vec()),
+            ),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = text(&output.stderr);
+    assert!(
+        stderr.contains("GATEWAY_METRICS_OTLP_HEADERS_ENV"),
+        "{stderr}"
+    );
+    for value in ["canary", "PRIVATE_MATERIAL", "could not connect"] {
+        assert!(!stderr.contains(value), "{stderr}");
     }
 }
 

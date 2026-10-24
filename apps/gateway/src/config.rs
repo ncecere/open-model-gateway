@@ -91,49 +91,122 @@ impl TraceConfig {
             sample_ratio.is_finite() && (0.0..=1.0).contains(&sample_ratio),
             "invalid trace sample ratio"
         );
-        let endpoint = get(Self::URL).map(|value| {
-            let url = reqwest::Url::parse(&value).map_err(|_| invalid())?;
-            let loopback = url.host_str().is_some_and(|host| host == "localhost" || host.trim_matches(['[', ']']).parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback()));
-            anyhow::ensure!(
-                url.host_str().is_some() && url.username().is_empty() && url.password().is_none()
-                && url.query().is_none() && url.fragment().is_none() && url.path() == "/v1/traces"
-                && !value.chars().any(|c| c.is_whitespace() || c.is_control())
-                && (url.scheme() == "https" || (environment == Environment::Development && loopback && url.scheme() == "http")),
-                "invalid trace endpoint (full /v1/traces URL required; HTTPS except development loopback)"
-            );
-            let client = crate::audit_export::export_http_client(&url, crate::egress::Purpose::Telemetry, environment == Environment::Development, Duration::from_secs(1), Duration::from_secs(2)).map_err(|_| invalid())?;
-            Ok::<_, anyhow::Error>((url, client))
-        }).transpose()?;
+        let endpoint = get(Self::URL)
+            .map(|value| {
+                crate::otlp::endpoint(
+                    Self::URL,
+                    &value,
+                    "/v1/traces",
+                    environment,
+                    Duration::from_secs(2),
+                )
+            })
+            .transpose()?;
         let mut headers = reqwest::header::HeaderMap::new();
         if let Some(name) = get(Self::HEADERS) {
             anyhow::ensure!(endpoint.is_some(), "trace headers require a trace endpoint");
-            crate::audit_export::check_secret_env_name(Self::HEADERS, &name, &get)
-                .map_err(|_| invalid())?;
-            // Never share a gateway-owned secret reference, including audit's.
-            anyhow::ensure!(
-                !crate::providers::secrets::SECRET_POINTERS
-                    .iter()
-                    .filter(|key| **key != Self::HEADERS)
-                    .any(|key| get(key).is_some_and(|v| v.trim() == name)),
-                "trace headers require a dedicated secret variable"
-            );
-            anyhow::ensure!(
-                !crate::providers::secrets::reserved_env_name(
-                    &name,
-                    &|key| if key == Self::HEADERS { None } else { get(key) }
-                ),
-                "trace headers name a reserved secret variable"
-            );
-            let value = zeroize::Zeroizing::new(get(&name).ok_or_else(invalid)?);
-            anyhow::ensure!(value.len() <= 4096, "trace headers exceed the 4 KiB limit");
-            headers = crate::audit_export::parse_otlp_headers(Self::HEADERS, &value)
-                .map_err(|_| invalid())?;
+            headers = crate::otlp::headers(Self::HEADERS, &name, &get).map_err(|_| invalid())?;
         }
         Ok(Self {
             endpoint,
             headers,
             sample_ratio,
             environment,
+        })
+    }
+}
+
+/// Operator-only metrics export settings. Never Debug: headers contain secrets.
+/// Parsing does not spawn a task or send anything. Until the worker ships,
+/// `Config::from_env` explicitly refuses a configured endpoint.
+#[derive(Clone)]
+pub struct MetricsExportConfig {
+    pub endpoint: Option<(reqwest::Url, reqwest::Client)>,
+    pub headers: reqwest::header::HeaderMap,
+    pub interval: Duration,
+    /// Includes identity-free personal-workspace traffic when explicitly on.
+    pub traffic: bool,
+}
+
+impl MetricsExportConfig {
+    pub const URL: &'static str = "GATEWAY_METRICS_OTLP_URL";
+    pub const HEADERS: &'static str = "GATEWAY_METRICS_OTLP_HEADERS_ENV";
+    pub const INTERVAL: &'static str = "GATEWAY_METRICS_OTLP_INTERVAL_SECONDS";
+    pub const TRAFFIC: &'static str = "GATEWAY_METRICS_OTLP_TRAFFIC";
+
+    pub fn from_env(environment: Environment) -> Result<Self> {
+        let mut values = std::collections::HashMap::new();
+        for key in [Self::URL, Self::HEADERS, Self::INTERVAL, Self::TRAFFIC] {
+            match std::env::var(key) {
+                Ok(value) => {
+                    values.insert(key.to_owned(), value);
+                }
+                Err(std::env::VarError::NotPresent) => {}
+                Err(_) => bail!("{key} is not valid Unicode"),
+            }
+        }
+        Self::from_lookup(
+            |key| values.get(key).cloned().or_else(|| std::env::var(key).ok()),
+            environment,
+        )
+    }
+
+    pub fn from_lookup(
+        get: impl Fn(&str) -> Option<String>,
+        environment: Environment,
+    ) -> Result<Self> {
+        let url = get(Self::URL);
+        for key in [Self::HEADERS, Self::INTERVAL, Self::TRAFFIC] {
+            anyhow::ensure!(
+                url.is_some() || get(key).is_none(),
+                "{key} requires GATEWAY_METRICS_OTLP_URL"
+            );
+        }
+        let endpoint = url
+            .map(|value| {
+                crate::otlp::endpoint(
+                    Self::URL,
+                    &value,
+                    "/v1/metrics",
+                    environment,
+                    Duration::from_secs(5),
+                )
+            })
+            .transpose()?;
+        let headers = get(Self::HEADERS)
+            .map(|name| crate::otlp::headers(Self::HEADERS, &name, &get))
+            .transpose()?
+            .unwrap_or_default();
+        let interval = match get(Self::INTERVAL) {
+            None => 60,
+            Some(value) => {
+                let invalid = || {
+                    anyhow::anyhow!(
+                        "GATEWAY_METRICS_OTLP_INTERVAL_SECONDS must be an integer from 10 to 300"
+                    )
+                };
+                anyhow::ensure!(
+                    !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()),
+                    "GATEWAY_METRICS_OTLP_INTERVAL_SECONDS must be an integer from 10 to 300"
+                );
+                let n = value.parse::<u64>().map_err(|_| invalid())?;
+                anyhow::ensure!(
+                    (10..=300).contains(&n),
+                    "GATEWAY_METRICS_OTLP_INTERVAL_SECONDS must be an integer from 10 to 300"
+                );
+                n
+            }
+        };
+        let traffic = match get(Self::TRAFFIC).as_deref() {
+            None | Some("off") => false,
+            Some("on") => true,
+            _ => bail!("GATEWAY_METRICS_OTLP_TRAFFIC must be off or on"),
+        };
+        Ok(Self {
+            endpoint,
+            headers,
+            interval: Duration::from_secs(interval),
+            traffic,
         })
     }
 }
@@ -299,6 +372,9 @@ impl Config {
             .filter(|name| !name.is_empty())
             .map(str::to_owned)
             .collect();
+        // Validate metrics before generic allowlist checks: its diagnostics
+        // name only the setting, never the selected secret variable or value.
+        let metrics_export = MetricsExportConfig::from_env(environment)?;
         let webhook_names = env_list("GATEWAY_ALERT_WEBHOOK_SECRET_ENV_ALLOWLIST")?;
         disjoint_allowlists(
             &secret_env_allowlist,
@@ -312,6 +388,10 @@ impl Config {
         // allowlist could read is reported like every other pointer: by setting
         // and variable name, never value. Trace errors themselves stay generic.
         let traces = TraceConfig::from_env(environment)?;
+        anyhow::ensure!(
+            metrics_export.endpoint.is_none(),
+            "GATEWAY_METRICS_OTLP_URL: metrics export is not implemented in this release; leave it unset"
+        );
         let max_concurrent = std::env::var("GATEWAY_MAX_CONCURRENT_REQUESTS")
             .unwrap_or_else(|_| "128".into())
             .parse::<usize>()
@@ -535,6 +615,10 @@ fn disjoint_allowlists(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "metrics_export_config_tests.rs"]
+mod metrics_export_config_tests;
 
 #[cfg(test)]
 mod allowlist_tests {

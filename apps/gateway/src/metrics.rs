@@ -1292,6 +1292,10 @@ pub fn listen_from(value: Option<&str>, public: SocketAddr) -> anyhow::Result<Op
 }
 
 #[cfg(test)]
+#[path = "metrics_characterization_tests.rs"]
+mod characterization_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use axum::body::{Body, HttpBody, to_bytes};

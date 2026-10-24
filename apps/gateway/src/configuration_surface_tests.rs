@@ -34,6 +34,8 @@ const PROCESS_SPAWN_ALLOWLIST: &[(&str, &str)] = &[];
 struct Guard {
     startup: bool,
     main: bool,
+    /// OTLP transports get configuration from their caller, never the process.
+    otlp: bool,
     in_main: bool,
     importing: bool,
     startup_mutations: usize,
@@ -62,6 +64,10 @@ impl Guard {
         }
     }
     fn check(&mut self, word: &str) {
+        if self.otlp && word == "env" {
+            self.violations
+                .push("OTLP transport must not read process configuration".into());
+        }
         if MUTATIONS.contains(&word) {
             if self.importing {
                 self.startup_mutations += 1;
@@ -221,6 +227,7 @@ fn production_cannot_mutate_environment_or_load_code() {
         let mut guard = Guard {
             startup: source.name == "startup.rs",
             main: source.name == "main.rs",
+            otlp: source.name == "otlp.rs",
             file: source.name.clone(),
             ..Guard::default()
         };
@@ -234,6 +241,23 @@ fn production_cannot_mutate_environment_or_load_code() {
         mutations += guard.startup_mutations;
     }
     assert_eq!(mutations, 2, "review changes to the startup-only exception");
+}
+
+#[test]
+fn otlp_configuration_boundary_catches_environment_imports_and_aliases() {
+    for source in [
+        "fn read() { std::env::var(setting); }",
+        "use std::env as settings; fn read() { settings::var(setting); }",
+        "use std::{env::{var as read}}; fn run() { read(setting); }",
+        "fn read() { discover!(std::env::vars()); }",
+    ] {
+        let mut guard = Guard {
+            otlp: true,
+            ..Guard::default()
+        };
+        guard.visit_file(&syn::parse_file(source).unwrap());
+        assert!(!guard.violations.is_empty(), "{source}");
+    }
 }
 
 #[test]
