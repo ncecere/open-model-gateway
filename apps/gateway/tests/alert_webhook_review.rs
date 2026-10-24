@@ -17,7 +17,7 @@ const DELIVERY: &str = "INSERT INTO alert_deliveries(id,event_id,transition) VAL
 async fn webhook_normal_attempts_increment_exactly_once_through_five(pool: PgPool) {
     let dest = receiver(&pool, true).await;
     let event = event(&pool, "scim_last_admin").await;
-    let id:Uuid=sqlx::query_scalar("INSERT INTO alert_webhook_outbox(destination_id,event_id,transition,payload) VALUES($1,$2,'fired','{}'::bytea) RETURNING id").bind(dest).bind(event).fetch_one(&pool).await.unwrap();
+    let id:Uuid=sqlx::query_scalar("INSERT INTO alert_webhook_outbox(id,destination_id,event_id,transition,payload) SELECT i,$1,$2,'fired',convert_to(alert_webhook_payload(i,$2,'fired'),'UTF8') FROM (SELECT gen_random_uuid() AS i) x RETURNING id").bind(dest).bind(event).fetch_one(&pool).await.unwrap();
     let update = "UPDATE alert_webhook_outbox SET attempt_count=$2 WHERE id=$1";
     let error = sqlx::query(update)
         .bind(id)
@@ -234,7 +234,11 @@ async fn webhook_disabled_fast_path_never_reads_event_projection(pool: PgPool) {
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert!(definition.find("IF NOT EXISTS").unwrap() < definition.find("INTO STRICT e").unwrap());
+    assert!(
+        definition.find("IF NOT EXISTS").unwrap() < definition.find("alert_webhook_payload(").unwrap(),
+        "the disabled fast path must return before any event projection"
+    );
+    assert!(!definition.contains("FROM alert_events"));
     assert!(
         !definition.contains("SQLERRM"),
         "warning must not contain error text"
@@ -252,7 +256,18 @@ async fn webhook_insert_rechecks_destination_and_fixed_test_shape(pool: PgPool) 
         "INSERT INTO alert_webhook_outbox(id,destination_id,test,payload) VALUES($1,$2,true,$3)";
     let id = Uuid::new_v4();
     let envelope = serde_json::json!({"schema":"omg.alert.v1","installation_id":installation,"delivery_id":id,"test":true,"event":null});
-    let bytes = serde_json::to_vec(&envelope).unwrap();
+    let canonical = |id: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>("SELECT alert_webhook_payload($1,NULL,NULL)")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .into_bytes()
+        }
+    };
+    let bytes = canonical(id).await;
     let normal_event = event(&pool, "scim_last_admin").await;
     for destination in [dest, Uuid::new_v4()] {
         let error = sqlx::query(insert)
@@ -350,7 +365,7 @@ async fn webhook_insert_rechecks_destination_and_fixed_test_shape(pool: PgPool) 
     sqlx::query("UPDATE alert_webhook_destinations SET enabled=false,deleted_at=clock_timestamp() WHERE id=$1").bind(dest).execute(&pool).await.unwrap();
     assert!(
         sqlx::query(insert)
-            .bind(Uuid::new_v4())
+            .bind(id)
             .bind(dest)
             .bind(&bytes)
             .execute(&pool)

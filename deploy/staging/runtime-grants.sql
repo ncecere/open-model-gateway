@@ -162,7 +162,9 @@ GRANT UPDATE(state,attempt_count,next_attempt_at,lease_owner,lease_token,lease_e
 -- 0055 platform webhook destinations and retained outbox. Generated identity,
 -- capacity slots, creation clocks and initial queue state are default/trigger-only.
 GRANT SELECT ON public.alert_webhook_destinations,public.alert_webhook_outbox TO gateway_runtime;
-GRANT EXECUTE ON FUNCTION public.alert_webhook_summary(text) TO gateway_runtime;
+-- The envelope constructor and its summary projection run as the inserting
+-- role: the enqueue trigger and the outbox guard both call them.
+GRANT EXECUTE ON FUNCTION public.alert_webhook_summary(text),public.alert_webhook_payload(uuid,uuid,text) TO gateway_runtime;
 GRANT INSERT(label,url,current_secret_ref) ON public.alert_webhook_destinations TO gateway_runtime;
 GRANT UPDATE(label,current_secret_ref,previous_secret_ref,previous_secret_until,enabled,deleted_at)
  ON public.alert_webhook_destinations TO gateway_runtime;

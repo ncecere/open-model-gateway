@@ -93,6 +93,7 @@ CREATE TRIGGER alert_webhook_destinations_no_delete BEFORE DELETE ON alert_webho
 CREATE TRIGGER alert_webhook_destinations_no_truncate BEFORE TRUNCATE ON alert_webhook_destinations FOR EACH STATEMENT EXECUTE FUNCTION immutable_history();
 
 CREATE FUNCTION alert_webhook_outbox_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE expected text;
 BEGIN
  IF TG_OP='INSERT' THEN
   -- A plain live read, never a destination row lock. Slice 2 must repeat
@@ -100,9 +101,20 @@ BEGIN
   IF NOT EXISTS(SELECT FROM alert_webhook_destinations d WHERE d.id=NEW.destination_id AND d.enabled AND d.deleted_at IS NULL) THEN
    RAISE EXCEPTION 'webhook destination is not eligible' USING ERRCODE='23514';
   END IF;
-  IF NEW.test AND convert_from(NEW.payload,'UTF8')::jsonb IS DISTINCT FROM jsonb_build_object(
-   'schema','omg.alert.v1','installation_id',(SELECT id FROM installation WHERE singleton),'delivery_id',NEW.id,'test',true,'event',NULL) THEN
-   RAISE EXCEPTION 'invalid webhook test envelope' USING ERRCODE='23514';
+  -- The signed bytes are the queued bytes: exact text equality with the one
+  -- constructor (never jsonb equality), the delivery id bound to the row id,
+  -- and, for events, eligibility recomputed from the event itself so a direct
+  -- INSERT by any role cannot queue an excluded event or an arbitrary body.
+  IF NEW.test THEN
+   expected=CASE WHEN NEW.event_id IS NULL AND NEW.transition IS NULL THEN alert_webhook_payload(NEW.id,NULL,NULL) END;
+   IF expected IS NULL OR convert_from(NEW.payload,'UTF8') IS DISTINCT FROM expected THEN
+    RAISE EXCEPTION 'invalid webhook test envelope' USING ERRCODE='23514';
+   END IF;
+  ELSE
+   expected=CASE WHEN NEW.event_id IS NOT NULL THEN alert_webhook_payload(NEW.id,NEW.event_id,NEW.transition) END;
+   IF expected IS NULL OR convert_from(NEW.payload,'UTF8') IS DISTINCT FROM expected THEN
+    RAISE EXCEPTION 'invalid webhook payload' USING ERRCODE='23514';
+   END IF;
   END IF;
  ELSE
  IF NEW.id<>OLD.id OR NEW.event_id IS DISTINCT FROM OLD.event_id OR NEW.transition IS DISTINCT FROM OLD.transition
@@ -149,8 +161,44 @@ CREATE FUNCTION alert_webhook_summary(text) RETURNS text LANGUAGE sql IMMUTABLE 
  END
 $$;
 
+-- The only constructor of an envelope, for the enqueue trigger, the outbox
+-- guard and the test-send path. With no event it is the fixed test envelope.
+-- With an event it is NULL unless that event is eligible for a webhook. The
+-- text is jsonb's canonical output, so the signed bytes are fully determined.
+CREATE FUNCTION alert_webhook_payload(p_delivery uuid, p_event uuid, p_transition text) RETURNS text LANGUAGE plpgsql STABLE AS $$
+DECLARE e alert_events; installation_id uuid; safe_summary text;
+BEGIN
+ IF p_delivery IS NULL THEN RETURN NULL; END IF;
+ SELECT id INTO installation_id FROM installation WHERE singleton;
+ IF installation_id IS NULL THEN RETURN NULL; END IF;
+ IF p_event IS NULL THEN
+  IF p_transition IS NOT NULL THEN RETURN NULL; END IF;
+  RETURN jsonb_build_object('schema','omg.alert.v1','installation_id',installation_id,'delivery_id',p_delivery,'test',true,'event',NULL)::text;
+ END IF;
+ IF p_transition IS NULL OR p_transition NOT IN ('fired','resolved') THEN RETURN NULL; END IF;
+ SELECT * INTO e FROM alert_events WHERE id=p_event;
+ IF NOT FOUND THEN RETURN NULL; END IF;
+ -- Deliberately narrower than platform history. Never copy summary, details
+ -- or subject_key: even installation rules can refer to individual objects.
+ IF e.kind IN ('key_expiring','admission_ceiling')
+  OR (p_transition='resolved' AND e.resolution IS DISTINCT FROM 'cleared')
+  OR (e.workspace_id IS NOT NULL AND NOT EXISTS(SELECT FROM workspaces w WHERE w.id=e.workspace_id AND w.kind IN ('team','project') AND w.disabled_at IS NULL))
+  OR NOT (
+   (e.rule_id IS NOT NULL AND EXISTS(SELECT FROM alert_rules r WHERE r.id=e.rule_id AND r.scope='installation' AND r.enabled AND r.deleted_at IS NULL AND r.notify_platform_admins))
+   OR (e.rule_id IS NULL AND e.workspace_id IS NULL AND e.builtin IN ('scim_last_admin','partitions_missing','history_orphans'))
+  ) THEN RETURN NULL; END IF;
+ safe_summary=alert_webhook_summary(e.kind);
+ -- Fail closed for future kinds until their projection is reviewed.
+ IF safe_summary IS NULL THEN RETURN NULL; END IF;
+ RETURN jsonb_build_object(
+  'schema','omg.alert.v1','installation_id',installation_id,'delivery_id',p_delivery,'test',false,
+  'event',jsonb_build_object('id',e.id,'transition',p_transition,'kind',e.kind,'severity',e.severity,
+   'occurred_at',to_char((CASE WHEN p_transition='resolved' THEN e.resolved_at ELSE e.fired_at END) AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+   'summary',safe_summary))::text;
+END $$;
+
 CREATE FUNCTION alert_webhook_enqueue() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE e alert_events; d record; delivery uuid; installation_id uuid; safe_summary text;
+DECLARE d record; delivery uuid;
 BEGIN
  -- Webhooks are best effort and cannot break email or built-in evaluation,
  -- including the explicit migrate-to-grants window. This subtransaction
@@ -160,20 +208,8 @@ BEGIN
  IF NOT EXISTS(SELECT FROM alert_webhook_destinations WHERE enabled AND deleted_at IS NULL) THEN
   RETURN NULL;
  END IF;
- SELECT * INTO STRICT e FROM alert_events WHERE id=NEW.event_id;
- -- Deliberately narrower than platform history. Never copy summary, details
- -- or subject_key: even installation rules can refer to individual objects.
- IF e.kind IN ('key_expiring','admission_ceiling')
-  OR (NEW.transition='resolved' AND e.resolution IS DISTINCT FROM 'cleared')
-  OR (e.workspace_id IS NOT NULL AND NOT EXISTS(SELECT FROM workspaces w WHERE w.id=e.workspace_id AND w.kind IN ('team','project') AND w.disabled_at IS NULL))
-  OR NOT (
-   (e.rule_id IS NOT NULL AND EXISTS(SELECT FROM alert_rules r WHERE r.id=e.rule_id AND r.scope='installation' AND r.enabled AND r.deleted_at IS NULL AND r.notify_platform_admins))
-   OR (e.rule_id IS NULL AND e.workspace_id IS NULL AND e.builtin IN ('scim_last_admin','partitions_missing','history_orphans'))
-  ) THEN RETURN NULL; END IF;
- safe_summary=alert_webhook_summary(e.kind);
- -- Fail closed for future kinds until their projection is reviewed.
- IF safe_summary IS NULL THEN RETURN NULL; END IF;
- SELECT id INTO STRICT installation_id FROM installation WHERE singleton;
+ -- Ineligible events (see alert_webhook_payload) are never queued.
+ IF alert_webhook_payload(gen_random_uuid(),NEW.event_id,NEW.transition) IS NULL THEN RETURN NULL; END IF;
  -- No explicit destination locks (the outbox foreign key takes FOR KEY
  -- SHARE, which management's FOR NO KEY UPDATE does not conflict with).
  -- A concurrent disable/delete is resolved by slice 2's mandatory
@@ -183,11 +219,8 @@ BEGIN
   BEGIN
   delivery=gen_random_uuid();
   INSERT INTO alert_webhook_outbox(id,event_id,transition,destination_id,payload)
-   VALUES(delivery,e.id,NEW.transition,d.id,convert_to(jsonb_build_object(
-    'schema','omg.alert.v1','installation_id',installation_id,'delivery_id',delivery,'test',false,
-    'event',jsonb_build_object('id',e.id,'transition',NEW.transition,'kind',e.kind,'severity',e.severity,
-     'occurred_at',to_char((CASE WHEN NEW.transition='resolved' THEN e.resolved_at ELSE e.fired_at END) AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
-     'summary',safe_summary))::text,'UTF8')) ON CONFLICT(event_id,transition,destination_id) DO NOTHING;
+   VALUES(delivery,NEW.event_id,NEW.transition,d.id,convert_to(alert_webhook_payload(delivery,NEW.event_id,NEW.transition),'UTF8'))
+   ON CONFLICT(event_id,transition,destination_id) DO NOTHING;
   EXCEPTION WHEN OTHERS THEN
    -- Never interpolate error text, destination ids or payloads: they may
    -- contain URLs, references or bodies. The event id is a bare UUID.
