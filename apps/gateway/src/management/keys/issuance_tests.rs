@@ -408,21 +408,134 @@ async fn workspaces_are_budgeted_independently(pool: PgPool) {
 async fn the_window_rolls_at_24_hours(pool: PgPool) {
     let f = fixture(&pool).await;
     type_limits(&pool, "team", Some(1), Some(500)).await;
-    // Just outside the window: not counted.
-    seed(&pool, f.team, f.member.user_id, 1, DAY + 1).await;
-    // Just inside it (the margin covers the test's own latency): counted.
-    seed(&pool, f.team, f.owner.user_id, 1, DAY - 3).await;
+    // No sleeping and no tight timing: rows are placed minutes either side of
+    // the edge and moved through the owner pool.
+    seed(&pool, f.team, f.member.user_id, 1, DAY + 300).await;
+    seed(&pool, f.team, f.owner.user_id, 1, DAY - 300).await;
     assert_eq!(create(&f, &f.member, f.team).await.0, StatusCode::OK);
     let (status, headers, v) = create(&f, &f.owner, f.team).await;
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{v}");
     let retry = v["error"]["retry_after_seconds"].as_i64().unwrap();
-    assert!((1..=3).contains(&retry), "{retry}");
+    assert!((250..=300).contains(&retry), "{retry}");
     assert_eq!(
         headers.get("retry-after").unwrap().to_str().unwrap(),
         retry.to_string()
     );
-    tokio::time::sleep(std::time::Duration::from_secs(retry as u64 + 1)).await;
+    // Time passes: the row ages out of the window, and the next issuance is admitted.
+    sqlx::query("UPDATE api_keys SET created_at=created_at-interval '600 seconds' WHERE issued_to_user_id=$1")
+        .bind(f.owner.user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
     assert_eq!(create(&f, &f.owner, f.team).await.0, StatusCode::OK);
+    // And it is the new key that now counts.
+    assert_eq!(
+        create(&f, &f.owner, f.team).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn the_window_edge_is_exact_for_a_given_now(pool: PgPool) {
+    use crate::management::keys::issuance::{Holder, usage};
+    let f = fixture(&pool).await;
+    // A fixed "now": rows one second either side of the window start, and on it.
+    let since = chrono::Utc::now() - chrono::Duration::hours(24);
+    let one = chrono::Duration::seconds(1);
+    for (user, created) in [
+        (f.member.user_id, since + one),
+        (f.member.user_id, since),
+        (f.member.user_id, since - one),
+        (f.owner.user_id, since + one),
+        (f.owner.user_id, since - one),
+    ] {
+        sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash,expires_at,created_at) VALUES(gen_random_uuid(),$1,$2,'Edge',decode(repeat('ab',32),'hex'),now()+interval '1 day',$3)")
+            .bind(f.team)
+            .bind(user)
+            .bind(created)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    let mut tx = pool.begin().await.unwrap();
+    let u = usage(&mut tx, f.team, Holder::User(f.member.user_id), since)
+        .await
+        .unwrap();
+    // Strictly after the start counts: the row on the edge and the one before do not.
+    assert_eq!((u.holder_used, u.workspace_used), (1, 2));
+    let later = usage(
+        &mut tx,
+        f.team,
+        Holder::User(f.member.user_id),
+        since + one * 2,
+    )
+    .await
+    .unwrap();
+    assert_eq!((later.holder_used, later.workspace_used), (0, 0));
+    let earlier = usage(
+        &mut tx,
+        f.team,
+        Holder::User(f.member.user_id),
+        since - one * 2,
+    )
+    .await
+    .unwrap();
+    assert_eq!((earlier.holder_used, earlier.workspace_used), (3, 5));
+}
+
+/// The window predicates bound `api_keys_workspace_created` on `created_at`
+/// (a volatile `clock_timestamp()` in them could not), so a count does not
+/// read lifetime history. `enable_seqscan=off` tests that the index is usable
+/// for the exact query, not the planner's cost choice on a small table.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn window_counts_bound_the_workspace_created_index_on_created_at(pool: PgPool) {
+    use crate::management::keys::issuance::{Holder, usage_sql};
+    let f = fixture(&pool).await;
+    // Substantial expired history, plus a few rows inside the window.
+    sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash,expires_at,created_at) SELECT gen_random_uuid(),$1,$2,'Old',decode(md5(g::text)||md5(g::text||'x'),'hex'),now()+interval '1 day',now()-interval '3 days'-make_interval(secs=>g) FROM generate_series(1,20000) g")
+        .bind(f.team)
+        .bind(f.member.user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    seed(&pool, f.team, f.member.user_id, 3, 60).await;
+    sqlx::query("ANALYZE api_keys")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let since = chrono::Utc::now() - chrono::Duration::hours(24);
+    for holder in [
+        Holder::User(f.member.user_id),
+        Holder::Service(Uuid::new_v4()),
+    ] {
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query("SET LOCAL enable_seqscan=off")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let plan: Vec<String> = sqlx::query_scalar(&format!("EXPLAIN {}", usage_sql(holder)))
+            .bind(f.team)
+            .bind(match holder {
+                Holder::User(u) | Holder::Service(u) => u,
+            })
+            .bind(since)
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap();
+        let plan = plan.join("\n");
+        assert!(
+            plan.matches("api_keys_workspace_created").count() >= 2,
+            "both counts use the index:\n{plan}"
+        );
+        assert!(
+            plan.lines()
+                .filter(|l| l.contains("Index Cond"))
+                .filter(|l| l.contains("created_at >"))
+                .count()
+                >= 2,
+            "created_at must be an index condition, not a filter:\n{plan}"
+        );
+    }
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
@@ -1000,6 +1113,15 @@ async fn concurrent_local_policy_puts_and_creates_never_exceed_the_limit(pool: P
     );
     let made = keys_of(&pool, f.team).await;
     assert!((2..=6).contains(&made), "{made}");
+    // One of the OKs is the policy PUT; every other OK left exactly one row, and
+    // every remaining request was refused.
+    let oks = count(&codes, StatusCode::OK);
+    assert_eq!(made as usize, oks - 1, "{codes:?}");
+    assert_eq!(
+        count(&codes, StatusCode::TOO_MANY_REQUESTS),
+        codes.len() - oks,
+        "{codes:?}"
+    );
     // Whatever the interleaving, the final limit is the tighter one and holds.
     assert_eq!(
         create(&f, &f.member, f.team).await.0,
@@ -1113,4 +1235,198 @@ async fn policy_changes_keep_their_audit_shape_and_refusals_count_in_a_metric(po
             .collect::<std::collections::BTreeSet<_>>(),
         ["budget_period", "count", "kind", "previous_budget_period"].into()
     );
+}
+
+// ---- Review follow-ups (#253) ----
+
+/// A store whose every connection defaults to the given isolation level.
+async fn store_at(pool: &PgPool, level: &'static str) -> Store {
+    let options = (*pool.connect_options()).clone();
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(4)
+        .after_connect(move |c, _| {
+            Box::pin(async move {
+                sqlx::Executor::execute(
+                    c,
+                    format!("SET default_transaction_isolation='{level}'").as_str(),
+                )
+                .await?;
+                Ok(())
+            })
+        })
+        .connect_with(options)
+        .await
+        .unwrap();
+    Store::new(pool)
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn issuance_fails_closed_outside_read_committed(pool: PgPool) {
+    let f = fixture(&pool).await;
+    type_limits(&pool, "team", Some(5), Some(500)).await;
+    let keys = seed(&pool, f.team, f.member.user_id, 1, 60).await;
+    for level in ["repeatable read", "serializable"] {
+        let strict = store_at(&pool, level).await;
+        // Well under the limit, yet never admitted: the count could not be trusted.
+        let (status, _, v) = call_h(
+            &strict,
+            &f.member,
+            "POST",
+            &format!("/api/v1/workspaces/{}/keys", f.team),
+            json!({"name":"Strict","expires_in_days":1}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{level}: {v}");
+        let text = v.to_string();
+        assert!(
+            !text.contains("isolation") && !text.contains(&f.member.user_id.to_string()),
+            "{text}"
+        );
+        let (status, _, v) = call_h(
+            &strict,
+            &f.member,
+            "POST",
+            &format!("/api/v1/workspaces/{}/keys/{}/rotate", f.team, keys[0]),
+            json!({"expires_in_days":1}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{level}: {v}");
+        assert_eq!(
+            keys_of(&pool, f.team).await,
+            1,
+            "{level}: nothing was issued"
+        );
+        let revoked: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM api_keys WHERE revoked_at IS NOT NULL")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(revoked, 0, "{level}: a refused rotation revokes nothing");
+    }
+    // The same requests at READ COMMITTED are admitted.
+    let committed = store_at(&pool, "read committed").await;
+    let (status, _, v) = call_h(
+        &committed,
+        &f.member,
+        "POST",
+        &format!("/api/v1/workspaces/{}/keys", f.team),
+        json!({"name":"Committed","expires_in_days":1}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+}
+
+/// Two transactions on separate connections hold only the workspace row lock
+/// (no installation row): the second `check` must wait for the first, then
+/// count its committed row. Removing `check`'s lock or its count fails this.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn the_workspace_lock_alone_serializes_check_and_insert(pool: PgPool) {
+    use crate::management::keys::issuance::{Holder, Operation, check};
+    let f = fixture(&pool).await;
+    type_limits(&pool, "team", Some(1), Some(500)).await;
+    let holder = Holder::User(f.member.user_id);
+    let mut first = crate::db::begin(&pool).await.unwrap();
+    check(&mut first, f.team, holder, Operation::Create)
+        .await
+        .unwrap();
+    let second = {
+        let (pool, team) = (pool.clone(), f.team);
+        tokio::spawn(async move {
+            let mut tx = crate::db::begin(&pool).await.unwrap();
+            check(&mut tx, team, holder, Operation::Create).await
+        })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert!(
+        !second.is_finished(),
+        "the second check did not wait for the workspace lock"
+    );
+    sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash,expires_at) VALUES(gen_random_uuid(),$1,$2,'First',decode(repeat('ab',32),'hex'),now()+interval '1 day')")
+        .bind(f.team)
+        .bind(f.member.user_id)
+        .execute(&mut *first)
+        .await
+        .unwrap();
+    first.commit().await.unwrap();
+    match second.await.unwrap() {
+        Err(ManagementError::Detailed { status, code, .. }) => {
+            assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+            assert_eq!(code, "key_issuance_limit_exceeded");
+        }
+        other => panic!("the second check must see the first's committed row: {other:?}"),
+    }
+}
+
+#[sqlx::test(migrations = false)]
+async fn migration_0053_backfills_existing_overrides_from_their_type_default(pool: PgPool) {
+    let first = sqlx::migrate::Migrator {
+        migrations: std::borrow::Cow::Owned(
+            crate::store::MIGRATOR
+                .iter()
+                .filter(|m| m.version < 53)
+                .cloned()
+                .collect(),
+        ),
+        ignore_missing: false,
+        locking: true,
+        no_tx: false,
+    };
+    first.run(&pool).await.unwrap();
+    // Overrides that predate 0053 (replacement semantics: they replace the type default).
+    let owner = Uuid::new_v4();
+    sqlx::query("INSERT INTO users(id,email) VALUES($1,'owner@example.test')")
+        .bind(owner)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (team, project, plain) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    for (id, kind) in [(team, "team"), (project, "project"), (plain, "team")] {
+        sqlx::query("INSERT INTO workspaces(id,name,kind) VALUES($1,$2,$3)")
+            .bind(id)
+            .bind(format!("{kind} {id}"))
+            .bind(kind)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    for id in [team, project] {
+        sqlx::query("INSERT INTO workspace_platform_policy_overrides(workspace_id,concurrent_jobs) VALUES($1,7)")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query("INSERT INTO workspace_local_policies(workspace_id,concurrent_jobs) VALUES($1,3)")
+        .bind(team)
+        .execute(&pool)
+        .await
+        .unwrap();
+    Store::new(pool.clone()).migrate_enterprise().await.unwrap();
+    let rows: Vec<(Uuid, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as("SELECT workspace_id,key_issuances_per_holder,key_issuances_per_workspace,concurrent_jobs FROM workspace_platform_policy_overrides ORDER BY workspace_id")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    for (id, holder, workspace, jobs) in rows {
+        assert_eq!(
+            (holder, workspace, jobs),
+            (Some(50), Some(500), Some(7)),
+            "{id}: an override must keep the type default's budgets, not the 10000 ceiling"
+        );
+    }
+    // Local layers inherit (NULL), and type defaults are unchanged.
+    let local: (Option<i64>, Option<i64>) = sqlx::query_as("SELECT key_issuances_per_holder,key_issuances_per_workspace FROM workspace_local_policies WHERE workspace_id=$1")
+        .bind(team)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(local, (None, None));
+    let types: Vec<(Option<i64>, Option<i64>)> = sqlx::query_as(
+        "SELECT key_issuances_per_holder,key_issuances_per_workspace FROM workspace_type_policies",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(types.len(), 3);
+    assert!(types.iter().all(|t| *t == (Some(50), Some(500))));
 }

@@ -1,7 +1,7 @@
 use super::*;
 use crate::auth::NewApiKey;
 
-mod issuance;
+pub(in crate::management) mod issuance;
 pub(in crate::management) use issuance::key_issuance;
 
 /// Display status: revoked (permanent) > expired > disabled (reversible) > active.
@@ -406,9 +406,10 @@ pub(super) async fn rotate_key(
         super::settings::check_human_key_lifetime(&mut tx, b.expires_in_days).await?;
     }
     // A rotation mints a credential like a create, so it counts in the same budget.
+    // A human key was just checked to be the caller's own (`issued == Some(user)`).
     let holder = match service {
         Some(account) => issuance::Holder::Service(account),
-        None => issuance::Holder::User(issued.ok_or_else(denied)?),
+        None => issuance::Holder::User(u.user_id),
     };
     issuance::check(&mut tx, ws, holder, issuance::Operation::Rotate).await?;
     let key = insert_key(
