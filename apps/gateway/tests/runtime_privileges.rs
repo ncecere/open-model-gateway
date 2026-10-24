@@ -54,6 +54,9 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         "alert_webhook_outbox",
         "report_schedules",
         "report_schedule_recipients",
+        "report_generation_claims",
+        "report_runs",
+        "report_snapshots",
     ] {
         assert_eq!(
             sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
@@ -153,6 +156,14 @@ async fn scheduled_reports_run_as_runtime(pool: &PgPool) {
         "DELETE FROM report_schedules",
         "TRUNCATE report_schedules CASCADE",
         "UPDATE report_schedule_recipients SET user_id=gen_random_uuid()",
+        "UPDATE report_runs SET configuration_revision=2",
+        "DELETE FROM report_runs",
+        "TRUNCATE report_runs",
+        "UPDATE report_snapshots SET body='{}'",
+        "DELETE FROM report_snapshots",
+        "TRUNCATE report_snapshots",
+        "UPDATE report_generation_claims SET schedule_id=gen_random_uuid()",
+        "TRUNCATE report_generation_claims",
     ] {
         assert!(
             sqlx::query(statement).execute(&runtime).await.is_err(),

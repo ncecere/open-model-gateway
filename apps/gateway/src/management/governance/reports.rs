@@ -2,6 +2,9 @@ use super::*;
 use axum::{extract::RawQuery, http::header};
 use chrono::{Datelike, NaiveDate, TimeDelta, Utc};
 use std::collections::HashMap;
+#[cfg(all(test, feature = "integration-tests"))]
+#[path = "scheduled_snapshot_tests.rs"]
+mod scheduled_snapshot_tests;
 #[derive(Default)]
 struct Filters {
     start: NaiveDate,

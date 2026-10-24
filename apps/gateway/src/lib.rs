@@ -48,6 +48,8 @@ pub mod reporting;
 pub mod rollups;
 mod route_policy;
 pub mod routing;
+#[cfg(test)]
+mod scheduled_reports_tests;
 pub mod scim;
 pub(crate) mod special_use;
 pub mod startup;
