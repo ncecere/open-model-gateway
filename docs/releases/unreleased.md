@@ -2,6 +2,18 @@
 
 Notes for changes on `main` after [v0.7.2](v0.7.2.md). They become the next release's notes.
 
+## Admin API tokens: dashboard (#37 PR3)
+
+Admin › Settings › **Admin API tokens** (`/admin/settings/admin-tokens`) completes the browser workflow for PR2's management API. Platform Admins can list token metadata, create their own token and revoke any token. Auditors cannot open the page or fetch its metadata; users without Admin-portal access are redirected Home.
+
+- Creation requires a name, explicit scopes and expiry of 1–90 days (default 30), with an optional immutable CIDR allowlist. Write scopes do not imply read access; tokens cannot authorize inference or issue inference keys.
+- Plaintext is shown once, held only in dialog state and copied only on an explicit click. Closing, navigation, unmount or authority refresh retires the disclosure. Late responses and retained callbacks cannot restore it or mint another token. A failed clipboard write offers manual copying, without putting the token in a notification.
+- The table shows owner, status, scopes, expiry and last use, with optional IP-allowlist and identifier columns. Revocation is confirmed and permanent; returning to Admin does not reactivate an old token.
+
+Browser journeys against a gateway running as the restricted PostgreSQL runtime role cover creation/copy/revocation, role and personal-data refusals, credential mixing, scoped writes, owner demotion/re-grant and CIDR enforcement. Disclosure tests disable media and automatic failure-page snapshots; credential assertions never print their values.
+
+No additional migration or dependency beyond PR2.
+
 ## Trace exporter preview: contract and transport only (#98, PR 1)
 
 Adds an opt-in, bounded OTLP/HTTP JSON trace recorder/exporter using existing dependencies, with typed attributes, deterministic sampling/correlation primitives, dedicated secret headers and the gateway's egress protections. Disabled unless `GATEWAY_TRACES_OTLP_URL` is set; `OTEL_*` is ignored. Collector failure never blocks or retries inference. No engine instrumentation or production spans are emitted yet: those arrive in PR 2, with collector acceptance in PR 3. See [operations](../operations.md#traces-98).
@@ -224,3 +236,4 @@ Source change: the crate's breaking 0.x release replaces the deprecated `AeadInP
 ## Fixes
 
 - **Key Budgets card spacing (#242).** The key detail page's Limits tab Budgets card now gives "Effective headroom" its own spaced section instead of it sitting directly under the last budget line above it. Cosmetic only; data and accessibility are unchanged.
+- **Duplicate key creation and rotation guard (#272).** Creating an API key now refuses a second submit in the same React batch as the first (the old guard used React state, which both submits read as idle), so one form can no longer create two active keys while showing only one secret. After a new or replacement key is shown, both creation and rotation dialogs are sealed: a retained submit callback cannot create another key or rotate again (which would invalidate the key you were shown). A failed request still allows an explicit retry; nothing retries automatically. No API or data changes.

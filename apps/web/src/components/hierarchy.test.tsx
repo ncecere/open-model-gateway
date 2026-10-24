@@ -10,6 +10,14 @@ describe("sibling enterprise management", () => {
   it("selector contains only existing sibling resources", () => { expect(contextOptions(session).map(g => g.items.map(i => i.ws))).toEqual([[personal.id], [team.id], [project.id]]); expect(contextOptions({ ...admin, workspaces: [] })).toEqual([]); });
   it("global destinations clear contextual workspace", () => { expect(scopeSearch("users", personal.id)).toEqual({ page: "users", ws: undefined }); expect(scopeSearch("members", team.id)).toMatchObject({ page: "workspace-settings", ws: team.id, tab: "members" }); });
   it("allows Admin-only shared creation, including with no memberships", () => { const empty = { ...admin, workspaces: [] }; expect(canAdminister(empty)).toBe(true); expect(markup(<PlatformTeams session={empty} kind="team" />)).toContain("Create team"); expect(markup(<PlatformTeams session={auditor} kind="team" />)).not.toContain("Create team</button>"); expect(markup(<PlatformTeams session={session} kind="team" />)).not.toContain("Create team</button>"); });
+  it("keeps the Admin API tokens Settings link out of an Auditor's sidebar, matching the page's own write-only gate", () => {
+    const settings = navigation.filter(n => n.group === "Settings");
+    expect(settings.map(n => n.page)).toContain("admin-tokens");
+    expect(settings.filter(n => canView(n.page, admin)).map(n => n.page)).toContain("admin-tokens");
+    expect(settings.filter(n => canView(n.page, auditor)).map(n => n.page)).not.toContain("admin-tokens");
+    // Every other Settings link stays read-gated like before: Auditors still see them.
+    expect(settings.filter(n => canView(n.page, auditor)).length).toBe(settings.length - 1);
+  });
   it("personal ownership does not unlock administrative directories", () => { expect(canView("platform-teams", session, personal)).toBe(false); expect(canView("users", session, team)).toBe(false); });
   it("creates Projects without Team parents", () => { expect(workspaceCreateBody({ name: "Research", owner_user_id: "owner" }, "project")).toEqual({ name: "Research", kind: "project", owner_user_id: "owner" }); const html = markup(<PlatformTeams session={admin} kind="project" />, [["/api/v1/platform/workspaces?kind=project&limit=50&offset=0", { data: [project] }]]); expect(html).toContain("Research"); expect(html).toContain("with their own members"); expect(html).toContain("/admin/projects/project"); });
   it("renders entitled user provenance rather than a read-only dead directory", () => { const html = markup(<PlatformUsers session={admin} />, [["/api/v1/platform/users?limit=50&offset=0", { data: [{ id: "me", email: "person@example.invalid", platform_role: "admin", disabled_at: null, role_grants: [{ role: "admin", source: "group" }] }] }]]); expect(html).toContain("person@example.invalid"); expect(html).toContain("Admin · group"); expect(html).toContain("Add user"); expect(markup(<PlatformUsers session={auditor} />)).not.toContain("Add user</button>"); });
