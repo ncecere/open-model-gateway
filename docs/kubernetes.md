@@ -122,6 +122,51 @@ pass `/health/ready`. Verified on kind with CloudNativePG 1.30.1: about two minu
 Every later migrating upgrade is `helm upgrade ... --set migrations.run=true --wait`; there the Job
 is a `pre-upgrade` hook, so the schema changes before any new gateway pod starts.
 
+### CNPG bootstrap database ACLs (#315)
+
+For a **fresh, explicitly installed** chart-managed Cluster, `bootstrap.initdb.postInitSQL`
+revokes CONNECT on `postgres` and `template1` from PUBLIC and the runtime role.
+`postInitApplicationSQL` revokes TEMPORARY on the configured application database from
+PUBLIC and runtime. PUBLIC CONNECT on the application database is deliberately retained;
+object privileges still come only from `grants apply`. Database and runtime names are SQL
+identifier-quoted, including embedded double quotes.
+
+These are CNPG's **one-time initdb hooks**, run as `postgres`, not Helm upgrade hooks.
+They do not repair an existing Cluster, run after a physical restore, or affect external
+databases. Never recreate a Cluster/PVC or rerun initdb to apply this fix. For existing
+installations use the [manual ACL remediation](postgresql-ha.md#existing-cnpg-cluster-acl-remediation-315).
+The verifier is unchanged: maintenance access and application TEMP still fail closed.
+
+**Why bootstrap seeds roles.** Source inspection uses CloudNativePG **v1.30.1**
+(`2a35abb4628f209d149825ef3c38011e0701ff2f`), the operator used for chart validation:
+
+- [Bootstrap documentation](https://github.com/cloudnative-pg/cloudnative-pg/blob/v1.30.1/docs/src/bootstrap.md#executing-queries-after-initialization)
+  specifies superuser hooks in postgres → template1 → application order;
+  [`ConfigureNewInstance`, initdb.go:308–395](https://github.com/cloudnative-pg/cloudnative-pg/blob/v1.30.1/pkg/management/postgres/initdb.go#L308-L395)
+  creates only the application owner before the hooks, then creates the application database.
+  The runtime managed role and operational roles do not yet exist.
+- [`configureInstancePermissions`, lifecycle/run.go:157–253](https://github.com/cloudnative-pg/cloudnative-pg/blob/v1.30.1/internal/cmd/manager/instance/run/lifecycle/run.go#L157-L253)
+  creates/repairs `streaming_replica` at instance startup, including LOGIN/REPLICATION and
+  pg_rewind privileges; it does not grant database CONNECT.
+- [`SetupMetricsExporterRole`, metrics_exporter_role.go:33–85](https://github.com/cloudnative-pg/cloudnative-pg/blob/v1.30.1/pkg/management/postgres/metrics_exporter_role.go#L33-L85)
+  creates/repairs the passwordless LOGIN role `cnpg_metrics_exporter` and `pg_monitor`
+  membership at startup/reconciliation, but does not grant CONNECT.
+- [`reconcilePgbouncerAuthUser`, instance_controller.go:844–934](https://github.com/cloudnative-pg/cloudnative-pg/blob/v1.30.1/internal/management/controller/instance_controller.go#L844-L934)
+  creates `cnpg_pooler_pgbouncer` only after Pooler integration is present. It grants CONNECT
+  on its auth database (`postgres`) **only when creating the role**, not on each reconcile;
+  it still configures auth_query and function EXECUTE when the role already exists.
+
+Consequently, bootstrap first creates these three operational roles with LOGIN and **NULL
+passwords**, explicitly grants each CONNECT on both maintenance databases, and only then
+revokes PUBLIC/runtime maintenance CONNECT. CNPG remains responsible for replication,
+monitoring and pooler function privileges/certificates. The pooler role must already have
+LOGIN because its reconciler does not repair that attribute on an existing role. The roles
+are seeded even when the Pooler is disabled, so enabling it later needs no ACL repair.
+Runtime is seeded NOLOGIN with no password; CNPG `managed.roles` later enables LOGIN and
+sets the password from its separate Secret. No operational role receives application
+object privileges. Check this lifecycle and actual metrics/replication/pooler connections
+on your installed operator version before production rollout, especially if not 1.30.1.
+
 ## Migration Job and runtime grants
 
 `AGENTS.md` forbids migrating or bootstrapping in `serve`. `migrations.run=false` by default; set

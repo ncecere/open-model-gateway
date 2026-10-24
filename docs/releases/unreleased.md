@@ -2,6 +2,19 @@
 
 Notes for changes on `main` after [v0.8.0](v0.8.0.md). They become the next release's notes.
 
+## Fresh CNPG installs restrict database ACLs (#315)
+
+Fresh, explicitly installed chart-managed CNPG clusters now revoke PUBLIC/runtime CONNECT
+on `postgres` and `template1` and PUBLIC/runtime TEMPORARY on the application database.
+Bootstrap seeds passwordless CNPG operational roles and preserves their maintenance CONNECT
+explicitly; CNPG still supplies replication, monitoring and PgBouncer authentication privileges.
+Application CONNECT is retained. This changes only one-time initdb hooks, not the verifier,
+`grants apply`, migrations, external databases or existing clusters. Existing installations need
+an explicitly reviewed [manual remediation](../postgresql-ha.md#existing-cnpg-cluster-acl-remediation-315),
+including operational-role preconditions and strict tagged verification before restarting gateways.
+See [bootstrap lifecycle evidence](../kubernetes.md#cnpg-bootstrap-database-acls-315) for CNPG 1.30.1.
+The application TEMP revoke overlaps the separate #295 work; this change stays in the CNPG path.
+
 ## Transaction isolation independent of PostgreSQL defaults (#281)
 
 Normal gateway transactions now explicitly begin at **READ COMMITTED**, so database, login-role or connection defaults of REPEATABLE READ or SERIALIZABLE cannot leave lock-then-check queries using a stale snapshot. Session defaults are not rewritten, and session read-only policy is still inherited. Intentional reporting snapshots remain REPEATABLE READ and read-only; their bounded-staleness contract and the elevated-isolation refusal guards are unchanged. No migration or new database privilege is needed. See [transaction isolation](../governance.md#transaction-isolation).
