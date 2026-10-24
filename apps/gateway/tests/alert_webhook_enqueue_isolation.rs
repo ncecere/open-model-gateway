@@ -30,6 +30,24 @@ impl Captured {
         String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
     }
 }
+/// One process-wide subscriber, installed before any query runs. A scoped
+/// `set_default` races the callsite interest cache when tests run in parallel
+/// threads, and then silently captures nothing.
+fn captured() -> &'static Captured {
+    static CAPTURED: std::sync::OnceLock<Captured> = std::sync::OnceLock::new();
+    CAPTURED.get_or_init(|| {
+        let captured = Captured::default();
+        tracing::subscriber::set_global_default(
+            tracing_subscriber::fmt()
+                .with_writer(captured.clone())
+                .with_ansi(false)
+                .with_max_level(tracing::Level::WARN)
+                .finish(),
+        )
+        .unwrap();
+        captured
+    })
+}
 
 /// Two enabled destinations, returned in the order the trigger visits them.
 async fn two_receivers(pool: &PgPool) -> (Uuid, Uuid) {
@@ -57,6 +75,7 @@ async fn rows(pool: &PgPool, event: Uuid, destination: Uuid) -> i64 {
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn destination_disabled_mid_enqueue_skips_only_that_destination(pool: PgPool) {
+    captured();
     let (first, second) = two_receivers(&pool).await;
     // While the first destination's snapshot is written, the second is
     // disabled in the same transaction: its own insert is then refused.
@@ -77,29 +96,27 @@ async fn destination_disabled_mid_enqueue_skips_only_that_destination(pool: PgPo
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn one_failing_destination_keeps_the_others_and_warns_with_the_event_id_only(pool: PgPool) {
+    captured();
     let (first, second) = two_receivers(&pool).await;
     sqlx::raw_sql(&format!("CREATE FUNCTION force_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'PRIVATE-CANARY https://example.test/one env:HOOK'; END $$; CREATE TRIGGER forced BEFORE INSERT ON alert_webhook_outbox FOR EACH ROW WHEN (NEW.destination_id='{first}') EXECUTE FUNCTION force_failure();")).execute(&pool).await.unwrap();
     let event = event(&pool).await;
-    let captured = Captured::default();
-    let subscriber = tracing_subscriber::fmt()
-        .with_writer(captured.clone())
-        .with_ansi(false)
-        .with_max_level(tracing::Level::WARN)
-        .finish();
-    let guard = tracing::subscriber::set_default(subscriber);
     sqlx::query(DELIVERY)
         .bind(event)
         .execute(&pool)
         .await
         .expect("a failing destination never aborts the delivery");
-    drop(guard);
     assert_eq!(rows(&pool, event, first).await, 0);
     assert_eq!(
         rows(&pool, event, second).await,
         1,
         "one failure must skip only its destination"
     );
-    let warnings = captured.text();
+    let everything = captured().text();
+    let warnings = everything
+        .lines()
+        .filter(|line| line.contains(&event.to_string()))
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(
         warnings.contains(&event.to_string()),
         "the warning names the event: {warnings:?}"
@@ -112,6 +129,6 @@ async fn one_failing_destination_keeps_the_others_and_warns_with_the_event_id_on
         &first.to_string(),
         &second.to_string(),
     ] {
-        assert!(!warnings.contains(private), "warning leaked {private}");
+        assert!(!everything.contains(private), "a warning leaked {private}");
     }
 }
