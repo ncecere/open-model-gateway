@@ -49,8 +49,18 @@ export function AlertWebhooks({ session }: { session: Session }) {
   const q = useApi<{ data: AlertWebhook[] }>(webhookPath, readable), ask = useAction(), write = useWebhookWrite(session);
   const [editing, setEditing] = useState<AlertWebhook | "new">(), [selected, setSelected] = useState<AlertWebhook>();
   const [error, setError] = useState<unknown>(), [queued, setQueued] = useState(false), [testing, setTesting] = useState<string>();
-  const inFlight = useRef(false), createTrigger = useRef<HTMLButtonElement>(null);
-  const showDeliveries = (d: AlertWebhook) => { setQueued(false); setSelected(d); };
+  const inFlight = useRef(false), createTrigger = useRef<HTMLButtonElement>(null), formTrigger = useRef<HTMLButtonElement | null>(null);
+  const presentation = useRef(0);
+  useLayoutEffect(() => () => { presentation.current++; }, []);
+  const showDeliveries = (d: AlertWebhook) => { presentation.current++; setQueued(false); setSelected(d); };
+  const edit = (d: AlertWebhook) => {
+    formTrigger.current = document.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"][aria-expanded="true"]');
+    setEditing(d);
+  };
+  const closeForm = () => {
+    setEditing(undefined);
+    requestAnimationFrame(() => { const trigger = formTrigger.current; (trigger?.isConnected ? trigger : createTrigger.current)?.focus(); });
+  };
   const toggle = (d: AlertWebhook) => ask({
     title: `${d.enabled ? "Disable" : "Enable"} ${d.label}?`, submitLabel: d.enabled ? "Disable webhook" : "Enable webhook",
     description: d.enabled ? "Waiting deliveries become ineligible. Re-enabling does not replay them. An already-authorized send may finish." : "Only future eligible installation transitions are queued. The operator's URL and reference approvals are checked again; there is no historical backfill.",
@@ -64,14 +74,18 @@ export function AlertWebhooks({ session }: { session: Session }) {
   });
   async function test(d: AlertWebhook) {
     if (!writable || !d.enabled || inFlight.current) return;
+    const generation = presentation.current;
     inFlight.current = true; setTesting(d.id); setError(undefined); setQueued(false);
-    try { await write(`${webhookItemPath(d.id)}/test`, { method: "POST" }); setQueued(true); setSelected(d); }
-    catch (caught) { setError(caught); } finally { inFlight.current = false; setTesting(undefined); }
+    try {
+      await write(`${webhookItemPath(d.id)}/test`, { method: "POST" });
+      if (presentation.current === generation) { setQueued(true); setSelected(d); }
+    } catch (caught) { if (presentation.current === generation) setError(caught); }
+    finally { inFlight.current = false; setTesting(undefined); }
   }
   if (!readable) return <Alert tone="warning" title="Access not available">Platform Admin or Auditor access is required.</Alert>;
   return <Stack gap={5}>
     <Heading title="Webhooks" description="Signed notifications to operator-approved receivers. Up to ten saved destinations, initially disabled."
-      actions={writable && <Button ref={createTrigger} onClick={() => setEditing("new")}><Plus aria-hidden /> Create webhook</Button>} />
+      actions={writable && <Button ref={createTrigger} onClick={() => { formTrigger.current = createTrigger.current; setEditing("new"); }}><Plus aria-hidden /> Create webhook</Button>} />
     <Alert tone="info" title="Verify signatures and prevent replay">
       Signatures use HMAC-SHA256 over exactly &lt;timestamp&gt;.&lt;raw body&gt;. Receivers must verify signatures in constant time, accept timestamps only within ±300 seconds, check X-OMG-Delivery matches the signed delivery_id, and durably deduplicate by delivery_id. The signing secret itself is never shown; only its reference is configured.
     </Alert>
@@ -86,14 +100,14 @@ export function AlertWebhooks({ session }: { session: Session }) {
         { id: "exhausted", header: "Exhausted", numeric: true, cell: d => d.exhausted },
       ]} rowActions={d => [
         { label: "Deliveries", onSelect: () => showDeliveries(d) },
-        { label: "Edit…", hidden: !writable, onSelect: () => setEditing(d) },
+        { label: "Edit…", hidden: !writable, onSelect: () => edit(d) },
         { label: d.enabled ? "Disable…" : "Enable…", hidden: !writable, onSelect: () => toggle(d) },
         { label: testing === d.id ? "Queueing test…" : "Send test", hidden: !writable, disabled: !d.enabled || !!testing, disabledReason: !d.enabled ? "Enable this saved webhook first." : undefined, onSelect: () => void test(d) },
         { label: "Delete…", danger: true, hidden: !writable, onSelect: () => remove(d) },
       ]} empty={{ icon: <Webhook aria-hidden />, title: "No webhooks yet.", description: "Ask the operator to approve a receiver URL and signing reference before creating a destination." }} />
     <Button variant="secondary" onClick={() => void q.refetch()} disabled={q.isFetching}>Refresh webhooks</Button>
-    {writable && editing && <WebhookForm key={typeof editing === "string" ? "new" : editing.id} saved={editing === "new" ? undefined : editing} write={write} onClose={() => { setEditing(undefined); requestAnimationFrame(() => createTrigger.current?.focus()); }} />}
-    {selected && <DeliveryPanel destination={selected} writable={writable} queued={queued} onClose={() => { setSelected(undefined); setQueued(false); }} />}
+    {writable && editing && <WebhookForm key={typeof editing === "string" ? "new" : editing.id} saved={editing === "new" ? undefined : editing} write={write} onClose={closeForm} />}
+    {selected && <DeliveryPanel destination={selected} writable={writable} queued={queued} onClose={() => { presentation.current++; setSelected(undefined); setQueued(false); }} />}
   </Stack>;
 }
 
