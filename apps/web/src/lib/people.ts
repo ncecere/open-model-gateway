@@ -95,6 +95,8 @@ export function splitUsage(rows: Breakdown[], shared: Map<string, { name: string
 export const auditActionLabels: Record<string, string> = {
   "admin_token.created": "Created admin API token", "admin_token.revoked": "Revoked admin API token",
   "alert_rule.created": "Created alert rule", "alert_rule.updated": "Changed alert rule", "alert_rule.deleted": "Deleted alert rule",
+  "alert_webhook.created": "Created webhook", "alert_webhook.updated": "Changed webhook", "alert_webhook.disabled": "Disabled webhook", "alert_webhook.deleted": "Deleted webhook",
+  "alert_webhook.tested": "Queued webhook test", "alert_webhook.failed": "Webhook delivery failed", "alert_webhook.exhausted": "Webhook delivery exhausted",
   "batch.cancelled": "Cancelled batch", "batch_scheduling.updated": "Changed batch scheduling",
   "catalog.created": "Created catalog", "catalog.updated": "Changed catalog", "catalog.deleted": "Deleted catalog", "catalog.models_replaced": "Changed catalog models",
   "catalog.override_replaced": "Replaced workspace catalogs", "catalog.override_reset": "Reset workspace catalogs", "catalog.type_defaults_replaced": "Changed default catalogs",
