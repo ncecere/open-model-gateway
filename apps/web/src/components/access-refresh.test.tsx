@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dashboardRouteTree } from "../router";
 import { abortRequests, type Session } from "../lib/api";
 import { admin, auditor, testClient } from "../lib/test-fixtures";
+import { adminTokensPath } from "../pages/admin-tokens";
 
 const clients: ReturnType<typeof testClient>[] = [];
 const unexpected: string[] = [];
@@ -43,7 +45,7 @@ function pendingResponse(options?: RequestInit) {
   });
   return { promise, answer };
 }
-async function setup({ policy = "deny", refuseOnce = false, freezeRefresh = false } = {}) {
+async function setup({ policy = "deny", refuseOnce = false, freezeRefresh = false, tokenPage = false } = {}) {
   const client = testClient();
   // Keep unobserved private rows alive, so their disappearance proves retirement,
   // not the fixture's default zero-time garbage collection.
@@ -52,6 +54,8 @@ async function setup({ policy = "deny", refuseOnce = false, freezeRefresh = fals
   let current: Session = admin, forbidden = true, unauthorized = false;
   const held: ReturnType<typeof pendingResponse>[] = [];
   const resourceCalls: string[] = [], sessionCalls: RequestInit[] = [];
+  const resourcePath = tokenPage ? adminTokensPath : modelsPath;
+  let tokensCreated = 0;
   const fetch = vi.fn((input: RequestInfo | URL, options?: RequestInit): Promise<Response> => {
     const path = String(input), url = new URL(path, window.location.origin);
     if (options?.method === "GET") {
@@ -65,7 +69,7 @@ async function setup({ policy = "deny", refuseOnce = false, freezeRefresh = fals
         }
         return Promise.resolve(Response.json(current));
       }
-      if (url.pathname === modelsPath) {
+      if (url.pathname === resourcePath) {
         resourceCalls.push(path);
         if (unauthorized) return Promise.resolve(Response.json({ error: { code: "401", message: "Sign in" } }, { status: 401 }));
         if (!forbidden) return Promise.resolve(empty());
@@ -80,17 +84,24 @@ async function setup({ policy = "deny", refuseOnce = false, freezeRefresh = fals
       if (path === "/api/v1/me/notifications/summary") return Promise.resolve(Response.json({ unread: 0 }));
       if (path === "/api/v1/auth/config") return Promise.resolve(Response.json({ enabled: true }));
     }
+    if (tokenPage && path === adminTokensPath && options?.method === "POST") {
+      tokensCreated++;
+      return Promise.resolve(Response.json({ id: `issued-${tokensCreated}`, token: `synthetic-budget-token-${tokensCreated}`, scopes: ["platform:read"], created_at: "2026-10-23T00:00:00Z", expires_at: "2099-01-01T00:00:00Z" }));
+    }
     unexpected.push(`${options?.method} ${path}`);
     throw new Error(`Unexpected synthetic request: ${options?.method} ${path}. No real network permitted.`);
   });
   vi.stubGlobal("fetch", fetch);
-  const router = createRouter({ routeTree: dashboardRouteTree, history: createMemoryHistory({ initialEntries: [`/admin/models?policy=${policy}`] }) });
+  const router = createRouter({ routeTree: dashboardRouteTree, history: createMemoryHistory({ initialEntries: [tokenPage ? "/admin/settings/admin-tokens" : `/admin/models?policy=${policy}`] }) });
   await router.load();
   render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>);
   return {
     client, router, resourceCalls, sessionCalls,
     authority: (next: Session) => { current = next; },
     expire: () => { unauthorized = true; },
+    forbidAgain: () => { forbidden = true; refuseOnce = false; },
+    allow: () => { forbidden = false; },
+    freezeNextRefresh: () => { freezeRefresh = true; },
     resume: async () => {
       freezeRefresh = false;
       await act(async () => { for (const response of held.splice(0)) response.answer(Response.json(current)); });
@@ -180,6 +191,95 @@ describe("bounded automatic access refresh on the actual dashboard router", () =
     expect(view.client.getQueryData(["session"])).toEqual(auditor);
     expect(screen.queryByRole("link", { name: "Add model" })).toBeNull();
     expectPrivateGone(view);
+  });
+
+  it("retires later private data and credentials without another automatic refresh, then recovers by a bare manual event", async () => {
+    const user = userEvent.setup(), view = await setup({ refuseOnce: true, tokenPage: true });
+    const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+    await waitFor(() => {
+      expect(view.sessionCalls).toHaveLength(2);
+      expect(view.client.isFetching()).toBe(0);
+      expect(screen.getByRole("button", { name: "Create token" })).toBeTruthy();
+    });
+    const navKey = view.router.state.location.state.__TSR_key;
+    async function createToken(name: string) {
+      await user.click(screen.getByRole("button", { name: "Create token" }));
+      const dialog = screen.getByRole("dialog");
+      await user.type(within(dialog).getByRole("textbox", { name: "Name" }), name);
+      await user.click(within(dialog).getByRole("button", { name: "Create token" }));
+      const disclosure = await screen.findByRole("textbox", { name: "Admin API token" });
+      if (!(disclosure instanceof HTMLTextAreaElement)) throw new Error("Expected the real one-time credential textarea.");
+      await waitFor(() => expect(view.client.isFetching()).toBe(0));
+      return disclosure;
+    }
+    const disclosure = await createToken("Before later refusal");
+    expect(disclosure.value).toBe("synthetic-budget-token-1");
+    // Retain the real React callback: clicking a detached DOM button would not
+    // prove that the credential's lifetime guard still refuses old bindings.
+    const copy = screen.getByRole("button", { name: "Copy token" });
+    const binding = Object.keys(copy).find(key => key.startsWith("__reactProps$"));
+    const props: unknown = binding ? Reflect.get(copy, binding) : undefined;
+    const oldCopy: unknown = props && typeof props === "object" ? Reflect.get(props, "onClick") : undefined;
+    if (typeof oldCopy !== "function") throw new Error("Expected the actual render-bound Copy callback.");
+    seedPrivate(view);
+    const lists = view.client.getQueryCache().findAll({ predicate: query => query.queryKey[0] === "api" && String(query.queryKey[2]).startsWith(adminTokensPath) });
+    expect(lists).toHaveLength(1);
+    const listKey = lists[0].queryKey, privateName = "synthetic-visible-private-token-metadata";
+    await act(async () => {
+      view.client.setQueryData(listKey, { data: [{ id: "private-token-row", name: privateName, owner_user_id: "me", owner_email: admin.user.email, owner_display_name: null, scopes: ["platform:read"], created_at: "2026-10-23T00:00:00Z", expires_at: "2099-01-01T00:00:00Z", revoked_at: null, last_used_at: null, last_used_address: null, ip_allowlist: null }], has_more: false });
+    });
+    await screen.findByText(privateName);
+    expect(JSON.stringify(view.client.getQueryData(listKey))).toContain(privateName);
+    expect(view.sessionCalls).toHaveLength(2); // creation did not consume a /me refresh
+    const resources = view.resourceCalls.length, sameResource = view.resourceCalls.at(-1);
+    view.forbidAgain();
+    await act(async () => { await view.client.invalidateQueries({ queryKey: listKey, exact: true }); });
+    await stableDenied(view, 2);
+    expect(view.resourceCalls).toHaveLength(resources + 1);
+    expect(view.resourceCalls.at(-1)).toBe(sameResource);
+    expect(view.router.state.location.state.__TSR_key).toBe(navKey);
+    expectPrivateGone(view);
+    expect(JSON.stringify(view.client.getQueryCache().getAll().map(query => query.state.data))).not.toContain(privateName);
+    expect(screen.queryByText(privateName)).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(disclosure.isConnected).toBe(false);
+    expect(Array.from(document.querySelectorAll("textarea"), textarea => textarea.value)).not.toContain("synthetic-budget-token-1");
+    expect(JSON.stringify(view.client.getQueryCache().getAll().map(query => query.state.data))).not.toContain("synthetic-budget-token-1");
+    await act(async () => { oldCopy({}); });
+    expect(write).not.toHaveBeenCalled();
+
+    // Exhausting the automatic budget must not permanently disable refresh, or
+    // turn a later bare authority-change event into a no-op. Hold /me so cache
+    // retirement is required BEFORE the changed authority response can help.
+    seedPrivate(view);
+    const changed = { ...admin, workspaces: admin.workspaces.filter(workspace => workspace.id !== "team") };
+    view.allow(); view.authority(changed); view.freezeNextRefresh();
+    await act(async () => { window.dispatchEvent(new Event("omg:access-refresh")); });
+    await waitFor(() => expect(view.sessionCalls).toHaveLength(3));
+    expectPrivateGone(view);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await view.resume();
+    await waitFor(() => {
+      expect(view.client.getQueryData(["session"])).toEqual(changed);
+      expect(view.client.isFetching()).toBe(0);
+      expect(screen.queryAllByText(/^(Access denied|Access not available|You don't have access)$/)).toHaveLength(0);
+      expect(screen.getByRole("button", { name: "Create token" })).toBeTruthy();
+    });
+    expect(view.router.state.location.state.__TSR_key).toBe(navKey);
+    const fresh = await createToken("After manual recovery");
+    expect(fresh.value).toBe("synthetic-budget-token-2");
+    await act(async () => { oldCopy({}); });
+    expect(write).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Copy token" }));
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenLastCalledWith("synthetic-budget-token-2");
+    expect(view.sessionCalls).toHaveLength(3);
+    expectPrivateGone(view);
+    const persisted = JSON.stringify({ queries: view.client.getQueryCache().getAll().map(query => query.state.data), mutations: view.client.getMutationCache().getAll().map(mutation => mutation.state) });
+    expect(persisted).not.toContain(privateName);
+    expect(persisted).not.toContain("synthetic-budget-token-");
+    expect(document.body.textContent).not.toContain("synthetic-budget-token-1");
+    expect(Array.from(document.querySelectorAll("textarea"), textarea => textarea.value)).not.toContain("synthetic-budget-token-1");
   });
 
   it("still terminates the session on a real protected 401 after automatic refresh", async () => {
