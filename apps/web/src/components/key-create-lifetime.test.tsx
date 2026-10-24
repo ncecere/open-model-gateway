@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { StrictMode, useState, type FormEvent } from "react";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -161,6 +161,57 @@ afterEach(() => {
 });
 
 describe("CreateKeyDialog submit lifetime", () => {
+  it("sends exactly one POST and one disclosure for two submits dispatched in the same React batch", async () => {
+    const view = await setup(), pending = deferPost(view), form = await view.validDraft();
+    // Both dispatches run before React re-renders, so each handler closes over busy === false:
+    // only a synchronous in-flight guard can refuse the second.
+    act(() => { fireEvent.submit(form); fireEvent.submit(form); });
+    expect(view.writes()).toHaveLength(1);
+    expectRequest(view);
+    expect(form.getAttribute("aria-busy")).toBe("true");
+    await act(async () => { pending.resolve(Response.json({ id: "synthetic-batch-key", token: secret })); });
+    await expectDisclosure();
+    expect(screen.getAllByRole("textbox", { name: "API key" })).toHaveLength(1);
+    expect(view.writes()).toHaveLength(1);
+    expectNoSecretPersistence(view);
+  });
+
+  it("blocks the live-captured submit binding retained after the first success from creating a second key", async () => {
+    const view = await setup(), form = await view.validDraft(), submit = retainedSubmit(form);
+    // Positive control: this very capture is a live handler that admits the first request.
+    await act(async () => { submit(); });
+    await expectDisclosure();
+    expect(view.writes()).toHaveLength(1);
+    expect(form.isConnected).toBe(false);
+    // The owner is still mounted and not retired, so only the success seal can refuse it.
+    await act(async () => { submit(); });
+    expect(view.writes()).toHaveLength(1);
+    await expectDisclosure();
+    expectNoSecretPersistence(view);
+  });
+
+  it("releases the in-flight guard and busy state when authority is retired mid-flight, and creates nothing further", async () => {
+    const view = await setup(), pending = deferPost(view), form = await view.validDraft(), submit = retainedSubmit(form);
+    await act(async () => { submit(); });
+    expect(view.writes()).toHaveLength(1);
+    expect(form.getAttribute("aria-busy")).toBe("true");
+    const signal = view.writes()[0][1]?.signal;
+    if (!signal) throw new Error("Expected the admitted request's abort signal.");
+    // What Home does on authority loss: retire the owner, then abort in-flight requests.
+    await act(async () => {
+      window.dispatchEvent(new Event("omg:access-refresh"));
+      abortRequests();
+      pending.resolve(Response.json({ id: "synthetic-late-key", token: secret }));
+    });
+    expect(signal.aborted).toBe(true);
+    await waitFor(() => expect(form.getAttribute("aria-busy")).toBe("false"));
+    expect(screen.getByRole("button", { name: "Cancel" }).hasAttribute("disabled")).toBe(false);
+    expect(screen.queryByRole("textbox", { name: "API key" })).toBeNull();
+    await act(async () => { submit(); });
+    expect(view.writes()).toHaveLength(1);
+    expectNoSecretPersistence(view);
+  });
+
   for (const submitVia of ["ordinary user", "retained mounted form"] as const) {
     it(`admits a fresh human-key draft through ${submitVia} submission with the exact current request`, async () => {
       const view = await setup(), form = await view.validDraft();

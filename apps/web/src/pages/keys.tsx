@@ -169,6 +169,12 @@ export function CreateKeyDialog({ session, workspace, options, accounts, onClose
   const copyGeneration = useRef(0), displayedGeneration = copyGeneration.current;
   // Mount replay may revive this same owner, but never undo its retirement.
   const creationLifetime = useRef({ mounted: false, closed: false });
+  // Synchronous admission, checked and set before any await: `busy` is React state, stale for a
+  // second submit dispatched in the same batch (both see false), which would POST two keys while
+  // only one secret is shown. `succeeded` seals creation after the first disclosure so a retained
+  // submit binding can never mint another key. `inFlight` is released in `finally` whatever the
+  // outcome, so a failed or aborted request still allows an explicit manual retry.
+  const inFlight = useRef(false), succeeded = useRef(false);
   useLayoutEffect(() => {
     creationLifetime.current.mounted = true;
     // Home's checking/removal render is asynchronous; retire before dispatch returns.
@@ -203,15 +209,17 @@ export function CreateKeyDialog({ session, workspace, options, accounts, onClose
   async function submit() {
     if (!creationLifetime.current.mounted || creationLifetime.current.closed) return;
     setSubmitted(true);
-    if (invalid || busy) return;
+    if (invalid || inFlight.current || succeeded.current) return;
+    inFlight.current = true;
     setBusy(true); setError(undefined); setRejected(undefined);
-    const ids = selectedModelIds(modelMode, models, options) as { model_ids: string[] | null };
     try {
+      const ids = selectedModelIds(modelMode, models, options) as { model_ids: string[] | null };
       const days = Number(presetChoiceText(expiry).trim());
       // Limits are validated and stored with the key in one transaction: any rejection creates nothing. Nothing set = inherit.
       const limits = anyLimit ? limitsBody(draftLimits(draft)) : {};
       const created = await api<OneTimeToken & { policy?: Policy | null }>(`${wsPath(workspace.id)}/keys`, { method: "POST", body: { name: name.trim(), expires_in_days: days, ...ids, ...(owner === "service" ? { service_account_id: account } : {}), ...limits } });
       if (typeof created?.token !== "string" || !created.token) throw new Error("No token was returned. Check the list before trying again.");
+      succeeded.current = true;
       void client.invalidateQueries({ queryKey: ["api"] });
       setResult({ id: created.id, token: created.token, policy: created.policy ?? null });
     } catch (caught) {
@@ -219,7 +227,7 @@ export function CreateKeyDialog({ session, workspace, options, accounts, onClose
       if (placed) { setRejected(placed); setError(new Error("The key wasn't created: a limit isn't allowed here. See the highlighted field.")); }
       else setError(limitsSaveError(caught));
     }
-    finally { setBusy(false); }
+    finally { inFlight.current = false; setBusy(false); }
   }
   async function copySecret() {
     if (creationLifetime.current.closed || copyGeneration.current !== displayedGeneration || !result) return;
