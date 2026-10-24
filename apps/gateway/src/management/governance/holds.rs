@@ -110,6 +110,22 @@ shared_rows AS (SELECT * FROM aged WHERE NOT $3 OR workspace_kind IN('team','pro
 const SUMMARY: &str = "jsonb_build_object('count',count(*)::text,'known_floor_microusd',sum(held_microusd::numeric)::numeric(38,0)::text,'unbounded_count',count(*) FILTER(WHERE unbounded_cost)::text,'oldest_age_hours',max(age_hours))";
 const ROW: &str = "jsonb_build_object('execution_id',execution_id,'root_request_id',root_request_id,'workspace',jsonb_build_object('id',workspace_id,'name',workspace_name,'kind',workspace_kind),'public_model',public_model,'provider',provider,'workload_kind',workload_kind,'unknown_since',unknown_since,'age_hours',age_hours,'held_microusd',held_microusd::numeric(38,0)::text,'unbounded_cost',unbounded_cost,'unresolved_reason',CASE WHEN price_id IS NULL THEN 'unpriced' WHEN unbounded_cost THEN 'unbounded_cost_or_unknown_rate' WHEN pricing_version=1 THEN 'incomplete_raw_usage' WHEN pricing_version=3 THEN 'incomplete_or_unpriced_meter_usage' WHEN billing_usage IS NULL THEN 'missing_billing_usage' ELSE 'incomplete_usage_or_cache_allocation' END,'can_reconcile',$5 AND workspace_enabled AND price_id IS NOT NULL AND workload_kind<>'realtime' AND execution_state IN('succeeded','failed','cancelled'))";
 
+/// The shared storage mapping tells callers to "narrow" a timed-out request,
+/// but this route has no filters to narrow with.
+pub(super) fn query_error(e: sqlx::Error) -> ApiError {
+    let timed_out = e
+        .as_database_error()
+        .is_some_and(|d| d.code().as_deref() == Some("57014"));
+    let mapped = ApiError::from(e);
+    if timed_out {
+        ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "The hold queue took too long; try again later",
+        )
+    } else {
+        mapped
+    }
+}
 pub(super) async fn page(
     tx: &mut Transaction<'_, Postgres>,
     scope: &Scope,
@@ -130,7 +146,8 @@ pub(super) async fn page(
         .bind(after.map(|p| p.1))
         .bind((f.limit + 1) as i64)
         .fetch_one(&mut **tx)
-        .await?;
+        .await
+        .map_err(query_error)?;
     let rows = value["data"].as_array_mut().ok_or_else(invalid)?;
     let has_more = rows.len() > f.limit;
     rows.truncate(f.limit);

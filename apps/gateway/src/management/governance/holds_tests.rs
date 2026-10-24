@@ -722,6 +722,22 @@ async fn queue_cursor_outside_postgres_timestamp_range_is_400_not_503(pool: PgPo
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
+async fn queue_statement_timeout_does_not_suggest_nonexistent_filters(pool: PgPool) {
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL statement_timeout='20ms'")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let e = sqlx::query("SELECT pg_sleep(5)")
+        .execute(&mut *tx)
+        .await
+        .unwrap_err();
+    let ApiError(status, message) = holds::query_error(e);
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(!message.contains("narrow"), "{message}");
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
 async fn queue_personal_workspace_predicate_hides_foreign_scopes(pool: PgPool) {
     let f = fixture(pool).await;
     let personal = f.principal.workspace_id;
