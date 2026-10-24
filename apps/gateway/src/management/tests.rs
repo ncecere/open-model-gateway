@@ -60,6 +60,8 @@ mod project_tests;
 mod read_scale_tests;
 #[path = "resources/tests.rs"]
 mod resource_tests;
+#[path = "scheduled_reports_tests.rs"]
+mod scheduled_reports_tests;
 #[path = "session_tests.rs"]
 mod session_tests;
 #[path = "sessions_tests.rs"]
