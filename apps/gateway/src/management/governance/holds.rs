@@ -1,80 +1,36 @@
 //! Read-only review of aged unknown holds. A retained floor is never spend or
 //! an upper bound. No reservation, ledger or totals writes belong here.
 use super::*;
-use aes_gcm::{
-    Aes256Gcm, KeyInit, Nonce,
-    aead::{Aead, Payload},
-};
 use axum::extract::RawQuery;
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
-use std::{collections::HashMap, sync::OnceLock};
+use std::collections::HashMap;
 
 pub(super) const AGED: &str = "unknown_since <= observed_at - interval '24 hours'";
 
-#[derive(serde::Serialize)]
 struct Scope {
     user: Uuid,
-    token: Option<Uuid>,
     workspace: Option<Uuid>,
     own: Option<Uuid>,
     admin: bool,
 }
-impl Scope {
-    fn aad(&self) -> Result<Vec<u8>, ApiError> {
-        serde_json::to_vec(&("aged-unknown-holds-v1", self)).map_err(|_| invalid())
-    }
+// Logs-style position only, never a credential or visibility scope. Every
+// page authorizes afresh and applies the full SQL predicate before aggregates.
+// No process-local state: any replica can continue the same position.
+const CURSOR_MAX_LEN: usize = 20 + 1 + 36; // signed i64 microseconds + '_' + UUID
+fn cursor(since: DateTime<Utc>, id: Uuid) -> String {
+    format!("{}_{}", since.timestamp_micros(), id)
 }
-
-// Ephemeral, replica-local pagination, not a credential. No configuration or
-// durable secret is introduced: restarting/switching replicas requires a fresh
-// first page. A cursor never replaces the live authorization on each page.
-fn cipher() -> Result<Aes256Gcm, ApiError> {
-    static KEY: OnceLock<[u8; 32]> = OnceLock::new();
-    if KEY.get().is_none() {
-        let key = crate::entropy::bytes().map_err(ApiError::from)?;
-        let _ = KEY.set(key);
-    }
-    Aes256Gcm::new_from_slice(KEY.get().ok_or_else(invalid)?).map_err(|_| invalid())
-}
-fn cursor(scope: &Scope, since: DateTime<Utc>, id: Uuid) -> Result<String, ApiError> {
-    let mut plain = Vec::with_capacity(24);
-    plain.extend_from_slice(&since.timestamp_micros().to_be_bytes());
-    plain.extend_from_slice(id.as_bytes());
-    let nonce: [u8; 12] = crate::entropy::bytes().map_err(ApiError::from)?;
-    let encrypted = cipher()?
-        .encrypt(
-            &Nonce::from(nonce),
-            Payload {
-                msg: &plain,
-                aad: &scope.aad()?,
-            },
-        )
-        .map_err(|_| invalid())?;
-    let mut bytes = nonce.to_vec();
-    bytes.extend_from_slice(&encrypted);
-    Ok(URL_SAFE_NO_PAD.encode(bytes))
-}
-fn position(scope: &Scope, value: &str) -> Result<(DateTime<Utc>, Uuid), ApiError> {
-    let bytes = URL_SAFE_NO_PAD.decode(value).map_err(|_| invalid())?;
-    if bytes.len() != 52 || URL_SAFE_NO_PAD.encode(&bytes) != value {
+fn position(value: &str) -> Result<(DateTime<Utc>, Uuid), ApiError> {
+    if value.is_empty() || value.len() > CURSOR_MAX_LEN {
         return Err(invalid());
     }
-    let nonce: [u8; 12] = bytes[..12].try_into().map_err(|_| invalid())?;
-    let plain = cipher()?
-        .decrypt(
-            &Nonce::from(nonce),
-            Payload {
-                msg: &bytes[12..],
-                aad: &scope.aad()?,
-            },
-        )
-        .map_err(|_| invalid())?;
-    let micros = i64::from_be_bytes(plain[..8].try_into().map_err(|_| invalid())?);
-    Ok((
-        DateTime::from_timestamp_micros(micros).ok_or_else(invalid)?,
-        Uuid::from_slice(&plain[8..]).map_err(|_| invalid())?,
-    ))
+    let (since, id) = crate::management::logs::cursor_parts(value)?;
+    // Require the exact emitted spelling: no extra fields, whitespace, '+',
+    // leading zeros, alternate UUID encodings or out-of-range timestamps.
+    if cursor(since, id) != value {
+        return Err(invalid());
+    }
+    Ok((since, id))
 }
 struct Filters {
     limit: usize,
@@ -106,7 +62,9 @@ impl Filters {
         let cursor = params.remove("cursor");
         if !params.is_empty()
             || !(1..=200).contains(&limit)
-            || cursor.as_ref().is_some_and(|s| s.len() != 70)
+            || cursor
+                .as_ref()
+                .is_some_and(|s| s.is_empty() || s.len() > CURSOR_MAX_LEN)
         {
             return Err(invalid());
         }
@@ -142,11 +100,7 @@ async fn page(
     scope: &Scope,
     f: Filters,
 ) -> Result<Value, ApiError> {
-    let after = f
-        .cursor
-        .as_deref()
-        .map(|v| position(scope, v))
-        .transpose()?;
+    let after = f.cursor.as_deref().map(position).transpose()?;
     let sql = format!(
         "{}, page AS (SELECT *,{ROW} item FROM shared_rows WHERE ($6::timestamptz IS NULL OR (unknown_since,execution_id)>($6,$7::uuid)) ORDER BY unknown_since,execution_id LIMIT $8) SELECT jsonb_build_object('observed_at',(SELECT observed_at FROM clock),'data',(SELECT coalesce(jsonb_agg(item ORDER BY unknown_since,execution_id),'[]'::jsonb) FROM page),'totals',(SELECT {SUMMARY} FROM shared_rows),'personal',CASE WHEN $3 THEN (SELECT {SUMMARY} FROM aged WHERE workspace_kind='personal') END)",
         BASE.replace("{AGED}", AGED)
@@ -168,7 +122,6 @@ async fn page(
     let next = if has_more {
         let last = rows.last().ok_or_else(invalid)?;
         Some(cursor(
-            scope,
             last["unknown_since"]
                 .as_str()
                 .ok_or_else(invalid)?
@@ -179,7 +132,7 @@ async fn page(
                 .ok_or_else(invalid)?
                 .parse()
                 .map_err(|_| invalid())?,
-        )?)
+        ))
     } else {
         None
     };
@@ -202,7 +155,6 @@ pub(super) async fn workspace(
         let a = resources::workspace_access_snapshot(&mut tx, &u, ws).await?;
         let scope = Scope {
             user: u.user_id(),
-            token: None,
             workspace: Some(ws),
             own: (!a.view_all_activity).then_some(u.user_id()),
             admin: a.platform_writer,
@@ -228,7 +180,6 @@ pub(super) async fn platform(
         }
         let scope = Scope {
             user: u.user_id(),
-            token: u.token_id(),
             workspace: None,
             own: None,
             admin: role == "admin",
@@ -245,26 +196,31 @@ pub(super) async fn platform(
 mod tests {
     use super::*;
     #[test]
-    fn cursor_authenticates_every_byte_and_scope() {
-        let mut scope = Scope {
-            user: Uuid::new_v4(),
-            token: None,
-            workspace: Some(Uuid::new_v4()),
-            own: None,
-            admin: false,
-        };
-        let now = DateTime::from_timestamp_micros(1_700_000_000_123_456).unwrap();
+    fn cursor_position_has_exact_bounded_format() {
         let id = Uuid::new_v4();
-        let c = cursor(&scope, now, id).unwrap();
-        assert_eq!(position(&scope, &c).unwrap(), (now, id));
-        let bytes = URL_SAFE_NO_PAD.decode(&c).unwrap();
-        for i in 0..bytes.len() {
-            let mut bad = bytes.clone();
-            bad[i] ^= 1;
-            assert!(position(&scope, &URL_SAFE_NO_PAD.encode(bad)).is_err());
+        for micros in [-1, 0, 1_700_000_000_123_456] {
+            let since = DateTime::from_timestamp_micros(micros).unwrap();
+            assert_eq!(position(&cursor(since, id)).unwrap(), (since, id));
         }
-        scope.user = Uuid::new_v4();
-        assert!(position(&scope, &c).is_err());
+        let nil = Uuid::nil();
+        for malformed in [
+            String::new(),
+            "x".repeat(CURSOR_MAX_LEN + 1),
+            format!("+1_{nil}"),
+            format!("01_{nil}"),
+            format!("-0_{nil}"),
+            format!(" 1_{nil}"),
+            format!("1_{nil} "),
+            format!("1_{nil}_extra"),
+            format!("9223372036854775808_{nil}"),
+            format!("9223372036854775807_{nil}"),
+            format!("-9223372036854775808_{nil}"),
+            format!("1_{}", nil.simple()),
+            "1_AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA".into(),
+            "1_bad".into(),
+        ] {
+            assert!(position(&malformed).is_err(), "{malformed}");
+        }
     }
     #[test]
     fn parameters_are_strict() {
