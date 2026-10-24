@@ -4,6 +4,126 @@
 use super::*;
 use sqlx::PgPool;
 
+async fn tick(s: &Seed, now: DateTime<Utc>) -> Changes {
+    let mut tx = s.pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(EVALUATION_LOCK)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let result = aged_hold_tick(&mut tx, now).await.unwrap();
+    tx.commit().await.unwrap();
+    result
+}
+
+async fn hold_since(s: &Seed, ws: Uuid, key: Uuid, since: DateTime<Utc>) {
+    attempt(s, ws, key, "failed", None, "unknown", None, 12000).await;
+    sqlx::query("INSERT INTO monetary_ledger(id,execution_id,admitted_at,kind,created_at) SELECT gen_random_uuid(),r.execution_id,r.admitted_at,'unknown',$2 FROM governance_reservations r WHERE r.workspace_id=$1 AND r.state='unknown' AND NOT EXISTS(SELECT 1 FROM monetary_ledger l WHERE l.execution_id=r.execution_id AND l.admitted_at=r.admitted_at AND l.kind='unknown')")
+        .bind(ws).bind(since).execute(&s.pool).await.unwrap();
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn aged_hold_exact_boundaries_escalation_no_step_down_and_cooldown(pool: PgPool) {
+    let s = seed(pool).await;
+    let now = expiry_now(&s).await;
+    let us = TimeDelta::microseconds(1);
+    hold_since(&s, s.team, s.key, now - TimeDelta::hours(24) + us).await;
+    assert_eq!(tick(&s, now).await, Changes::default());
+    assert_eq!(tick(&s, now + us).await.fired, 1, "exactly 24h");
+    assert_eq!(
+        tick(&s, now + TimeDelta::hours(144)).await,
+        Changes::default(),
+        "168h minus one microsecond"
+    );
+    assert_eq!(
+        tick(&s, now + TimeDelta::hours(144) + us).await,
+        Changes {
+            fired: 1,
+            resolved: 1
+        }
+    );
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM alert_events WHERE resolution='superseded'"
+        )
+        .await,
+        1
+    );
+    // Simulate reconciliation of the oldest hold, leaving a younger aged
+    // hold. There must never be a step down/re-fire while critical is open.
+    sqlx::query("UPDATE governance_reservations SET state='settled',actual_microusd=1,input_tokens=1,output_tokens=1 WHERE workspace_id=$1").bind(s.team).execute(&s.pool).await.unwrap();
+    hold_since(&s, s.team, s.key, now + TimeDelta::hours(120)).await;
+    assert_eq!(
+        tick(&s, now + TimeDelta::hours(145)).await,
+        Changes::default()
+    );
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM alert_events WHERE level=2 AND resolved_at IS NULL"
+        )
+        .await,
+        1
+    );
+    sqlx::query("UPDATE governance_reservations SET state='settled',actual_microusd=1,input_tokens=1,output_tokens=1 WHERE state='unknown'").execute(&s.pool).await.unwrap();
+    assert_eq!(tick(&s, now + TimeDelta::hours(145)).await.resolved, 1);
+    hold_since(&s, s.team, s.key, now + TimeDelta::hours(120)).await;
+    assert_eq!(
+        tick(&s, now + TimeDelta::hours(146)).await.fired,
+        0,
+        "resolved events count toward cooldown"
+    );
+    assert_eq!(
+        tick(&s, now + TimeDelta::hours(168) + us).await.fired,
+        1,
+        "exact rolling 24h releases cooldown"
+    );
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM alert_deliveries WHERE transition='resolved'"
+        )
+        .await,
+        0
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn aged_hold_tick_and_rolling_caps_defer_without_losing_candidates(pool: PgPool) {
+    let s = seed(pool).await;
+    let now = expiry_now(&s).await;
+    for n in 0..505 {
+        let (ws, key) = (Uuid::new_v4(), Uuid::new_v4());
+        sqlx::query("INSERT INTO workspaces(id,name,kind) VALUES($1,'backlog','project')")
+            .bind(ws)
+            .execute(&s.pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash) VALUES($1,$2,$3,'sentinel',decode(repeat('39',32),'hex'))").bind(key).bind(ws).bind(s.owner).execute(&s.pool).await.unwrap();
+        hold_since(
+            &s,
+            ws,
+            key,
+            now - TimeDelta::hours(25) - TimeDelta::seconds(n),
+        )
+        .await;
+    }
+    for _ in 0..5 {
+        assert_eq!(tick(&s, now).await.fired, 100);
+    }
+    assert_eq!(tick(&s, now).await.fired, 0);
+    assert_eq!(tick(&s, now + TimeDelta::hours(24)).await.fired, 5);
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM alert_events WHERE kind='aged_unknown_hold'"
+        )
+        .await,
+        505
+    );
+}
+
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn aged_hold_real_evaluator_fires_deduplicates_and_clears(pool: PgPool) {
     let s = seed(pool).await;
@@ -73,7 +193,7 @@ async fn aged_hold_job_is_fenced_and_serialized(pool: PgPool) {
     let stale = crate::leases::Fence {
         lease: crate::leases::Lease::Alerts,
         holder: Uuid::new_v4(),
-        token: Uuid::new_v4(),
+        epoch: 99,
     };
     assert!(crate::leases::is_fenced(
         &evaluate_once_fenced(&s.store, Some(&stale))

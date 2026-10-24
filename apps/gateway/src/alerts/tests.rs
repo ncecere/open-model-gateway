@@ -5,10 +5,10 @@ use super::*;
 use crate::email::mock::{self, Behaviour};
 use sqlx::PgPool;
 
-#[path = "fair_dispatch_tests.rs"]
-mod fair_dispatch;
 #[path = "aged_hold_tests.rs"]
 mod aged_hold;
+#[path = "fair_dispatch_tests.rs"]
+mod fair_dispatch;
 
 async fn expiry_now(s: &Seed) -> DateTime<Utc> {
     sqlx::query_scalar("SELECT clock_timestamp()")
