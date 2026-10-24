@@ -15,10 +15,10 @@ pub struct Readiness {
     pub schema: bool,
 }
 
-#[derive(Clone)]
 /// Next-due time and schedule id of the scheduler's last keyset page (per process).
 pub(crate) type ReportScanFrontier = (chrono::DateTime<chrono::Utc>, uuid::Uuid);
 
+#[derive(Clone)]
 pub struct Store {
     pub(crate) pool: PgPool,
     /// Immutable operator policy, injected once at startup; empty by default.
