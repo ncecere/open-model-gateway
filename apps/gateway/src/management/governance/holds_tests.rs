@@ -457,7 +457,7 @@ async fn queue_visibility_privacy_pagination_and_strict_parameters(pool: PgPool)
         )
         .await
         .0,
-        StatusCode::FORBIDDEN
+        StatusCode::NOT_FOUND
     );
     for malformed in [
         "bad",

@@ -175,7 +175,7 @@ mod db {
             )
             .await
             .0,
-            StatusCode::FORBIDDEN
+            StatusCode::NOT_FOUND
         );
         assert_eq!(
             sqlx::query_scalar::<_, i64>(
@@ -555,7 +555,7 @@ mod db {
             call(&f, &user(f.other, false), "POST", &p, b.clone())
                 .await
                 .0,
-            StatusCode::FORBIDDEN
+            StatusCode::NOT_FOUND
         );
         assert_eq!(
             call(&f, &user(f.owner, true), "POST", &p, b.clone())
@@ -764,7 +764,7 @@ mod db {
             )
             .await
             .0,
-            StatusCode::FORBIDDEN
+            StatusCode::NOT_FOUND
         );
     }
     #[sqlx::test(migrations = "./enterprise_migrations")]
