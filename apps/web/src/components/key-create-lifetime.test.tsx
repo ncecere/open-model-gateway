@@ -179,7 +179,8 @@ describe("CreateKeyDialog submit lifetime", () => {
     expect(screen.queryByRole("textbox", { name: "API key" })).toBeNull();
     await waitFor(() => expect(view.client.getQueryState(keysQuery)?.isInvalidated).toBe(true));
     await act(async () => { submit(); });
-    expect(apiSpy).toHaveBeenCalledTimes(1);
+    // The required list invalidation refetches through api(); only one write may occur.
+    expect(apiSpy.mock.calls.filter(([, options]) => options?.method === "POST")).toHaveLength(1);
     expect(view.writes()).toHaveLength(1);
     expectNoSecretPersistence(view);
   });
@@ -193,6 +194,8 @@ describe("CreateKeyDialog submit lifetime", () => {
     expect(form.getAttribute("aria-busy")).toBe("false");
     await act(async () => {});
     expect(view.writes()).toHaveLength(1);
+    // The 2xx may have created a key: the list must refresh before any retry.
+    await waitFor(() => expect(view.client.getQueryState(keysQuery)?.isInvalidated).toBe(true));
     await view.user.click(screen.getByRole("button", { name: "Create key" }));
     await expectDisclosure();
     expect(view.writes()).toHaveLength(2);

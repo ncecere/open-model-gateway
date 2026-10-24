@@ -231,9 +231,10 @@ export function CreateKeyDialog({ session, workspace, options, accounts, onClose
       // Limits are validated and stored with the key in one transaction: any rejection creates nothing. Nothing set = inherit.
       const limits = anyLimit ? limitsBody(draftLimits(draft)) : {};
       const created = await api<OneTimeToken & { policy?: Policy | null }>(`${wsPath(workspace.id)}/keys`, { method: "POST", body: { name: name.trim(), expires_in_days: days, ...ids, ...(owner === "service" ? { service_account_id: account } : {}), ...limits } });
+      // Any 2xx may have created a key: refresh the list before validating the token.
+      void client.invalidateQueries({ queryKey: ["api"] });
       if (typeof created?.token !== "string" || !created.token) throw new Error("No token was returned. Check the list before trying again.");
       succeeded.current = true;
-      void client.invalidateQueries({ queryKey: ["api"] });
       if (!creationLifetime.current.mounted || creationLifetime.current.closed || copyGeneration.current !== generation) return;
       setResult({ id: created.id, token: created.token, policy: created.policy ?? null });
     } catch (caught) {

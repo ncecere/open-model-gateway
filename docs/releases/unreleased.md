@@ -4,7 +4,7 @@ Notes for changes on `main` after [v0.8.0](v0.8.0.md). They become the next rele
 
 ## Key dialog lifetime hardening (#276)
 
-Each action dialog request now gets a fresh lifetime, and successful non-secret actions cannot be repeated through retained submit callbacks. Key creation and rotation suppress late disclosures after retirement while completed responses still invalidate the keys list. Admitted create requests remain uncancelled on local retirement so a newly created key can appear in the list and be revoked. A successful response missing its token shows an error; retry remains explicit, never automatic.
+Each ask now gets a fresh dialog lifetime (explicit retries within one dialog keep it), and successful non-secret actions cannot be repeated through retained submit callbacks. Key creation and rotation suppress late disclosures after retirement; a creation that completes after retirement, or any 2xx without a token, still invalidates the keys list so the key can be found and revoked. Admitted create requests remain uncancelled on local retirement so a newly created key can appear in the list and be revoked. A successful response missing its token shows an error; retry remains explicit, never automatic.
 
 ## Transaction isolation independent of PostgreSQL defaults (#281)
 

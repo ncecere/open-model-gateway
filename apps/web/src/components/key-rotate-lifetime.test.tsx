@@ -228,7 +228,8 @@ describe("ActionDialog rotation submit lifetime", () => {
     expect(screen.queryByRole("textbox", { name: "One-time key" })).toBeNull();
     await waitFor(() => expect(view.client.getQueryState(keysQuery)?.isInvalidated).toBe(true));
     await act(async () => { submit(); });
-    expect(apiSpy).toHaveBeenCalledTimes(1);
+    // The required list invalidation refetches through api(); only one write may occur.
+    expect(apiSpy.mock.calls.filter(([, options]) => options?.method === "POST")).toHaveLength(1);
     expect(view.writes()).toHaveLength(1);
     expectNoSecretPersistence(view);
   });
@@ -242,6 +243,8 @@ describe("ActionDialog rotation submit lifetime", () => {
     expect(mountedForm().getAttribute("aria-busy")).toBe("false");
     await act(async () => {});
     expect(view.writes()).toHaveLength(1);
+    // The 2xx may have rotated the key: the list must refresh before any retry.
+    await waitFor(() => expect(view.client.getQueryState(keysQuery)?.isInvalidated).toBe(true));
     freshPosts(view);
     await view.user.click(screen.getByRole("button", { name: "Rotate key" }));
     await expectDisclosure(freshSecret);
