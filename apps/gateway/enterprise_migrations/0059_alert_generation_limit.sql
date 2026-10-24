@@ -98,6 +98,11 @@ CREATE OR REPLACE FUNCTION alert_outbox_guard() RETURNS trigger LANGUAGE plpgsql
 DECLARE parent alert_deliveries;
 BEGIN
  IF TG_OP='INSERT' THEN
+  -- The count below must see recipients committed by earlier writers: a
+  -- REPEATABLE READ/SERIALIZABLE snapshot could count a stale total.
+  IF current_setting('transaction_isolation')<>'read committed' THEN
+   RAISE EXCEPTION 'alert recipient snapshots require READ COMMITTED' USING ERRCODE='25001';
+  END IF;
   SELECT * INTO STRICT parent FROM alert_deliveries WHERE id=NEW.delivery_id FOR UPDATE;
   IF parent.status<>'pending' OR parent.initialized THEN
    RAISE EXCEPTION 'alert recipient snapshot already closed';
