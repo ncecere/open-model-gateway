@@ -2,6 +2,16 @@
 
 Notes for changes on `main` after [v0.7.2](v0.7.2.md). They become the next release's notes.
 
+## Bounded API-key issuance (#253, slice A)
+
+Creating or rotating an API key now counts in a rolling 24 hours against two budgets: the holder's (a member, or a service account) and the workspace's. Defaults are **50 per holder and 500 per workspace**; both are editable on the workspace-type default, platform per-workspace override and (tighten-only) workspace limits, from 1 to 10,000, and a missing platform value means the 10,000 ceiling, never unlimited. Personal workspaces use the type default and any platform override. A spent budget refuses the request with `429`, `reason:"key_issuance_limit_exceeded"`, a `Retry-After` header and `scope`, `operation` and `retry_after_seconds`. Authorization and validation errors still come first, the body carries no amounts, and nothing is audited for a refusal (it is counted in `gateway_key_issuance_refused_total{scope,operation}`). Raising a limit admits at once, and lowering one never revokes keys.
+
+New `GET /workspaces/{ws}/key-issuance` returns the caller's budget (and, for workspace admins, the workspace's). The limits editor gains two rows, and the API keys page shows "X of Y issued in the last 24 h" and explains a spent budget instead of failing at Create. Counting uses the existing workspace lock and the append-only `api_keys` table: no counter rows and no new lock.
+
+**Upgrade:** migration **0053_key_issuance_limits** adds the six policy columns (type defaults 50/500) and `api_keys_workspace_created`. Run `migrate` and `grants apply` with migrator credentials first; `serve` never does either. Replicas still on the previous binary ignore the columns, so issuance is unenforced only during the rolling-upgrade overlap. Fair alert dispatch (slice B) is a separate change.
+
+See [governance](../governance.md#key-issuance), [governance API](../governance-api.md) and [management API](../management-api.md).
+
 ## Trace exporter preview: contract and transport only (#98, PR 1)
 
 Adds an opt-in, bounded OTLP/HTTP JSON trace recorder/exporter using existing dependencies, with typed attributes, deterministic sampling/correlation primitives, dedicated secret headers and the gateway's egress protections. Disabled unless `GATEWAY_TRACES_OTLP_URL` is set; `OTEL_*` is ignored. Collector failure never blocks or retries inference. No engine instrumentation or production spans are emitted yet: those arrive in PR 2, with collector acceptance in PR 3. See [operations](../operations.md#traces-98).
