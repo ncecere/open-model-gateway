@@ -57,6 +57,34 @@ async fn request(
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
+async fn deployment_preview_browser_only_origin_csrf_and_live_roles(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let mock = MockProvider::start(None).await;
+    let identity = mock.state(pool.clone()).await;
+    let engine = crate::inference::Engine::new(
+        std::sync::Arc::new(f.s.clone()),
+        crate::providers::ProviderRegistry::default(),
+        crate::inference::EngineLimits::default(),
+    ).unwrap();
+    let app = crate::http::router_with_identity(f.s.clone(), None, engine, identity);
+    let path = format!("/api/v1/platform/deployments/{}/configuration/preview", Uuid::new_v4());
+    let admin = session(&pool, &f.admin).await;
+    // An authorized empty body reaches typed extraction; refusals happen first.
+    assert_eq!(request(&app, "POST", &path, Some(&admin), None, true, ORIGIN).await, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(request(&app, "POST", &path, Some(&admin), None, false, ORIGIN).await, StatusCode::FORBIDDEN);
+    assert_eq!(request(&app, "POST", &path, Some(&admin), None, true, "https://foreign.example").await, StatusCode::FORBIDDEN);
+    for actor in [&f.auditor, &f.owner] {
+        let s = session(&pool, actor).await;
+        assert_eq!(request(&app, "POST", &path, Some(&s), None, true, ORIGIN).await, StatusCode::FORBIDDEN);
+    }
+    let (status, created) = call(&f.s, &f.admin, "POST", "/api/v1/platform/admin-tokens", json!({"name":"Preview denied","scopes":["platform:read","catalog:write"],"expires_in_days":1})).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    assert_eq!(request(&app, "POST", &path, None, created["token"].as_str(), false, ORIGIN).await, StatusCode::FORBIDDEN);
+    sqlx::query("DELETE FROM platform_role_grants WHERE user_id=$1").bind(f.admin.user_id).execute(&pool).await.unwrap();
+    assert_eq!(request(&app, "POST", &path, Some(&admin), None, true, ORIGIN).await, StatusCode::UNAUTHORIZED);
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
 async fn key_expiry_history_and_feed_use_real_router_authorization(pool: PgPool) {
     let f = fixture(&pool).await;
     let ws_admin = user(&pool, "expiry-workspace-admin", "user").await;
