@@ -73,6 +73,10 @@ Alert email slots are now shared fairly across workspace buckets, plus one bucke
 
 Claims use one captured database timestamp as an index range bound to skip expired backlog. A claim statement timeout logs a warning and ends dispatch for the tick; cleanup still runs. Label-free gauges `gateway_alert_delivery_pending_buckets` and `gateway_alert_delivery_oldest_pending_age_seconds` expose pending bucket count and oldest age, including overdue work awaiting cleanup. See [alerts](../alerts.md#recipient-outbox-46).
 
+## Fixed
+
+- **Bounded dashboard access refresh (#291).** A refused management GET now triggers at most one automatic session refresh per navigation. A repeated refusal retires private cached data and one-time credentials and shows a stable permission notice instead of remounting and retrying indefinitely. Navigating rearms automatic refresh; an explicit access refresh can recover the denied view, and a 401 still ends the session.
+
 ## Added
 
 - **OTLP metrics groundwork (#99, slices 1–2).** Shared trace/audit HTTP validation, bounded trace acknowledgements and a scrape-derived metrics snapshot/encoder are implemented. Metrics settings are parsed and validated (`GATEWAY_METRICS_OTLP_URL`, `GATEWAY_METRICS_OTLP_HEADERS_ENV`, `GATEWAY_METRICS_OTLP_INTERVAL_SECONDS`, `GATEWAY_METRICS_OTLP_TRAFFIC`), but **a configured URL explicitly refuses startup in this release**: no metrics worker is wired yet. Leave all four unset. This avoids silently accepting an export that sends nothing. The future traffic opt-in defaults off and includes personal-workspace traffic as identity-free aggregates. The golden inventory pins privacy classes; System families take priority over Traffic under export caps. The encoder permits existing operational-enum `path` labels only on the scope-lock and lock-deadlock-retry families with `admission`, `settlement` or `reconciliation` values. Prometheus adds only fixed-enum exporter health metrics; no schema, dependency or listener change. See [OTLP metrics groundwork](../operations.md#otlp-metrics-groundwork-99-slice-2) for the Traffic data-class decisions and runtime requirements.
