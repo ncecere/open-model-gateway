@@ -2,6 +2,10 @@
 
 Notes for changes on `main` after [v0.8.0](v0.8.0.md). They become the next release's notes.
 
+## Personal workspace existence privacy (#282)
+
+Workspace-scoped management routes now return the same `404` response for another owner's personal workspace as for an unknown UUID, including for Platform Admins/Auditors. Non-admin platform writes retain their role-first `403` for both. Personal-owner access, Team/Project authorization and platform aggregate reporting are unchanged. No migration or new privilege is required. See [management API refusals](../management-api.md).
+
 ## Transaction isolation independent of PostgreSQL defaults (#281)
 
 Normal gateway transactions now explicitly begin at **READ COMMITTED**, so database, login-role or connection defaults of REPEATABLE READ or SERIALIZABLE cannot leave lock-then-check queries using a stale snapshot. Session defaults are not rewritten, and session read-only policy is still inherited. Intentional reporting snapshots remain REPEATABLE READ and read-only; their bounded-staleness contract and the elevated-isolation refusal guards are unchanged. No migration or new database privilege is needed. See [transaction isolation](../governance.md#transaction-isolation).
