@@ -150,6 +150,21 @@ fn local_references(value: &Value, document: &Value) -> Result<()> {
 fn pointer_segment(value: &str) -> String {
     value.replace('~', "~0").replace('/', "~1")
 }
+/// RFC 6901 section 6: a JSON Pointer used as a URI fragment must
+/// percent-encode every byte outside RFC 3986 `fragment` characters
+/// (for example the braces of templated path keys such as `{session}`).
+fn fragment(pointer: &str) -> String {
+    let mut out = String::with_capacity(pointer.len());
+    for byte in pointer.bytes() {
+        let allowed = byte.is_ascii_alphanumeric() || b"-._~!$&'()*+,;=:@/?".contains(&byte);
+        if allowed {
+            out.push(char::from(byte));
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
 fn inline_schema_pointers(value: &Value, pointer: &str, result: &mut BTreeSet<String>) {
     match value {
         Value::Object(map) => {
@@ -190,8 +205,20 @@ pub(super) fn validate_document(document: &Value) -> Result<()> {
     inline_schema_pointers(document, "", &mut pointers);
     for pointer in pointers {
         let mut schema = document.clone();
-        schema["$ref"] = json!(format!("#{pointer}"));
+        schema["$ref"] = json!(format!("#{}", fragment(&pointer)));
         compile_schema(&schema).with_context(|| format!("compile contract schema at {pointer}"))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod fragment_tests {
+    #[test]
+    fn templated_path_pointers_become_valid_uri_fragments() {
+        assert_eq!(
+            super::fragment("/paths/~1api~1v1~1me~1sessions~1{session}/delete"),
+            "/paths/~1api~1v1~1me~1sessions~1%7Bsession%7D/delete"
+        );
+        assert_eq!(super::fragment("/a b/%/\"/<>"), "/a%20b/%25/%22/%3C%3E");
+    }
 }
