@@ -105,7 +105,7 @@ DO $$ DECLARE r record; t text; BEGIN
  FOREACH t IN ARRAY ARRAY['id','rule_id','builtin','kind','subject_key','level','severity','workspace_id','provider_connection_id','summary','details','fired_at','api_key_id','key_expires_at','threshold_days'] LOOP
   IF has_column_privilege('gateway_runtime','public.alert_events',t,'UPDATE') THEN RAISE EXCEPTION 'mutable alert incident: %',t; END IF;
  END LOOP;
- IF has_column_privilege('gateway_runtime','public.alert_deliveries','event_id','UPDATE') OR has_column_privilege('gateway_runtime','public.alert_deliveries','transition','UPDATE') THEN RAISE EXCEPTION 'mutable alert delivery identity'; END IF;
+ IF has_column_privilege('gateway_runtime','public.alert_deliveries','event_id','UPDATE') OR has_column_privilege('gateway_runtime','public.alert_deliveries','transition','UPDATE') OR has_column_privilege('gateway_runtime','public.alert_deliveries','bucket_id','UPDATE') THEN RAISE EXCEPTION 'mutable alert delivery identity'; END IF;
  FOREACH t IN ARRAY ARRAY['workload_kind','cost_center_id','cost_center_name','cost_center_code','workspace_id','api_key_id','deployment_id','upstream_model','root_request_id','attempt_number','streamed'] LOOP
   IF has_column_privilege('gateway_runtime','public.inference_executions',t,'UPDATE') THEN RAISE EXCEPTION 'mutable admission attribution: %',t; END IF;
  END LOOP;
@@ -570,6 +570,8 @@ BEGIN
   BEGIN INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,summary) VALUES(gen_random_uuid(),ar,'scim_last_admin','y',1,'critical','x'); RAISE EXCEPTION 'rule scim alert allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
   PERFORM id FROM alert_events WHERE id=ev FOR UPDATE;
   INSERT INTO alert_deliveries(id,event_id,transition) VALUES(gen_random_uuid(),ev,'fired');
+  IF EXISTS(SELECT 1 FROM alert_deliveries WHERE event_id=ev AND bucket_id<>ws) THEN RAISE EXCEPTION 'legacy insert missed workspace bucket'; END IF;
+  BEGIN UPDATE alert_deliveries SET bucket_id=gen_random_uuid() WHERE event_id=ev; RAISE EXCEPTION 'delivery bucket rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   INSERT INTO alert_recipient_outbox(delivery_id,fingerprint) SELECT id,sha256('probe'::bytea) FROM alert_deliveries WHERE event_id=ev;
   UPDATE alert_deliveries SET initialized=true WHERE event_id=ev;
   UPDATE alert_recipient_outbox SET state='leased',attempt_count=1,lease_owner=gen_random_uuid(),lease_token=gen_random_uuid(),lease_expires_at=now()+interval '90 seconds' WHERE delivery_id IN(SELECT id FROM alert_deliveries WHERE event_id=ev);

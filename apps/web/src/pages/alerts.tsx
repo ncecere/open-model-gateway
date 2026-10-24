@@ -23,6 +23,7 @@ import { Switch } from "../components/ui/switch/switch";
 import { Card } from "../components/ui/card/card";
 import { DescriptionList } from "../components/ui/description-list/description-list";
 import { ResourceLink, useDashboardNavigation } from "../components/navigation-link";
+import { agedHoldLink } from "../lib/holds";
 import { useResourceName, useResourceParent } from "../components/layout/breadcrumbs";
 import { toast } from "../components/ui/toast/toast";
 import s from "./shared.module.css";
@@ -223,6 +224,8 @@ export function NotificationsPage({ session }: { session: Session }) {
   // Key-expiry reminders (#100) have no rule: the action opens the workspace's
   // keys list, never a key identifier.
   const keysLink = (n: Notification): DashboardSearch | undefined => n.kind === "key_expiring" && n.workspace ? { page: "keys", ws: n.workspace.id } : undefined;
+  // Aged unknown-hold incidents (#101) open the Holds tab: the workspace's own, or Admin's queue.
+  const holdsLink = (n: Notification): DashboardSearch | undefined => agedHoldLink(session, n);
   const columns: DataTableColumn<Notification>[] = [
     { id: "alert", header: "Alert", accessor: n => n.summary, rowHeader: true, hideable: false, cell: n => <CellText primary={n.read ? n.summary : <strong>{n.summary}</strong>} secondary={eventSecondary(n)} title={unknownCostNote(n)} /> },
     { id: "where", header: "Where", accessor: n => whereText(n), cell: n => whereText(n) },
@@ -233,10 +236,11 @@ export function NotificationsPage({ session }: { session: Session }) {
     <Heading title="Notifications" description="Alerts for what you look after." actions={<Button variant="secondary" loading={busy} onClick={() => void markRead({ all: true })}><CheckCheck aria-hidden /> Mark all read</Button>} />
     <DirectoryTable<Notification> path={notificationsPath} label="Notifications" storageKey="notifications" columns={columns} rowKey={n => n.id} rowLabel={n => n.summary}
       facets={[{ id: "status", label: "Show", allLabel: "All", options: [{ value: "unread", label: "Unread" }] }]}
-      rowActions={n => { const link = ruleLink(n), keys = keysLink(n); return [
+      rowActions={n => { const link = ruleLink(n), keys = keysLink(n), holds = holdsLink(n); return [
         { label: "Mark as read", hidden: n.read, onSelect: () => void markRead({ ids: [n.id] }) },
         { label: "Open rule", hidden: !link, render: link ? <ResourceLink search={link} /> : undefined },
         { label: "Open keys", hidden: !keys, render: keys ? <ResourceLink search={keys} /> : undefined },
+        { label: "Open holds", hidden: !holds, render: holds ? <ResourceLink search={holds} /> : undefined },
       ]; }}
       empty={{ icon: <BellRing />, title: "No notifications.", description: "Alerts for your budgets and workspaces show up here." }} />
   </Stack>;

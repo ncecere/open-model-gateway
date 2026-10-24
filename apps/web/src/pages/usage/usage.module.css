@@ -256,3 +256,49 @@
     grid-template-columns: minmax(0, 1fr) auto;
   }
 }
+
+/* Holds: the combined personal total (a quiet panel, never a table of people). */
+.personal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+}
+
+.personalTitle {
+  margin: 0;
+  font-size: var(--font-size-sm, 0.875rem);
+  font-weight: var(--font-weight-medium, 500);
+}
+
+.personalFacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  margin: 0;
+}
+
+/* Holds cells: a long exact amount or reason wraps inside its cell instead of spilling over its neighbour (390 px cards). */
+.holdCell {
+  display: block;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* The badge sits on its own line under the floor, never beside it. */
+.holdBadge {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  margin-top: var(--space-1);
+}
+
+/* The Floor column is right-aligned in the table; keep its badge under the amount, on the same edge. */
+@media (min-width: 37.51rem) {
+  .holdBadge {
+    margin-inline-start: auto;
+  }
+}

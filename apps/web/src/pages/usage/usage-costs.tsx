@@ -21,13 +21,15 @@ import { UsageOverviewTab, showsAccounting } from "./overview";
 import { UsageExploreTab } from "./explore";
 import { PlatformRecords, WorkspaceRecords, usePlatformRecordColumns } from "./records";
 import { UsageChart } from "./chart";
+import { HoldsTab } from "./holds";
+import { holdsScopeText } from "../../lib/holds";
 import { BackLink } from "../../components/templates/form-page";
 import { PageHeader } from "../../components/ui/page-header/page-header";
 import s from "../shared.module.css";
 import u from "./usage.module.css";
 
-type Tab = "overview" | "explore" | "records";
-const tabOf = (tab?: string): Tab | "chart" => tab === "explore" || tab === "records" || tab === "chart" ? tab : "overview";
+type Tab = "overview" | "explore" | "records" | "holds";
+const tabOf = (tab?: string): Tab | "chart" => tab === "explore" || tab === "records" || tab === "holds" || tab === "chart" ? tab : "overview";
 
 export function Costs({ session, workspace }: { session: Session; workspace: Workspace }) { return <UsageCosts session={session} workspace={workspace} />; }
 export function PlatformCosts({ session }: { session: Session }) { return <UsageCosts session={session} />; }
@@ -38,15 +40,18 @@ export function UsageCosts({ session, workspace }: { session: Session; workspace
   try { period = usagePeriod(nav.search); } catch (error) { invalid = error as Error; }
   const workspaceFilter = workspace ? undefined : nav.search.workspace_id;
   // One inline filter bar for every tab and the chart page (URL-backed; Records adds the accounting state).
-  const options = useFilterOptions(workspace, ctx, period, workspaceFilter, nav.search.key_id, nav.search.model_id);
+  // Holds has no period or filters: it fetches none of their option lists.
+  const periodData = tab === "holds" ? undefined : period;
+  const options = useFilterOptions(workspace, ctx, periodData, workspaceFilter, nav.search.key_id, nav.search.model_id, tab !== "holds");
   // Workspace scope: the cost center is a fact about the page (the platform assigns it), not a filter.
   const centers = options.costCenters.filter(c => c.value !== "unallocated"), centerFact = workspace && centers.length ? centers.length === 1 ? `Cost center: ${String(centers[0]!.label)}` : `${centers.length} cost centers` : undefined;
   // One plain line that wraps like text (separate "· …" spans started wrapped lines with a dot on a phone).
   const scopeText = [scopeLine(workspace), period && periodLabel(period), centerFact].filter(Boolean).join(" · ");
-  const header = (title: string) => <Heading title={title} description={scopeText} />;
+  // Holds are not period-bound (the queue has no filters): its subtitle names who the list covers, never a period.
+  const header = (title: string) => <Heading title={title} description={tab === "holds" ? holdsScopeText(workspace) : scopeText} />;
   const periodControl = <PeriodControl key={`${period?.start_date}-${period?.end_date}-${period?.preset}`} period={period} navigate={nav.navigate} />;
   // Admin: narrow every tab to one workspace (a leading toolbar control with its own chip).
-  const scoped = !workspace && session.capabilities.platform_read && !!period, spaces = useWorkspaceScope(period, scoped);
+  const scoped = !workspace && session.capabilities.platform_read && !!period, spaces = useWorkspaceScope(periodData, scoped && tab !== "holds");
   const scope = scoped && <WorkspaceScope spaces={spaces} nav={nav} />;
   const scopeChips = scoped && workspaceFilter ? [{ key: "workspace", label: "Workspace", text: spaces.find(w => w.id === workspaceFilter)?.label ?? "Selected workspace", onRemove: () => nav.navigate({ workspace_id: undefined }) }] : [];
   // One FilterToolbar row; it collapses in place behind "Filters (n)" on a phone (no sheet). An invalid custom period
@@ -64,9 +69,10 @@ export function UsageCosts({ session, workspace }: { session: Session; workspace
     {header("Usage & costs")}
     <Tabs value={tab} onValueChange={v => nav.navigate({ tab: v === "overview" ? undefined : String(v), metric: undefined })}>
       <Stack gap={6}>
-      <TabsList variant="pills" overflow="scroll" aria-label="Usage & costs views"><Tab value="overview">Overview</Tab><Tab value="explore">Explore</Tab><Tab value="records">{workspace ? "Cost records" : "By workspace"}</Tab></TabsList>
-      {filters}
-      {invalid || !period ? <ErrorNotice error={invalid} /> : <>
+      <TabsList variant="pills" overflow="scroll" aria-label="Usage & costs views"><Tab value="overview">Overview</Tab><Tab value="explore">Explore</Tab><Tab value="records">{workspace ? "Cost records" : "By workspace"}</Tab><Tab value="holds">Holds</Tab></TabsList>
+      {tab !== "holds" && filters}
+      <TabsPanel value="holds"><HoldsTab session={session} workspace={workspace} /></TabsPanel>
+      {tab === "holds" ? null : invalid || !period ? <ErrorNotice error={invalid} /> : <>
       <TabsPanel value="overview"><UsageOverviewTab workspace={workspace} ctx={ctx} period={period} nav={nav} workspaceFilter={workspaceFilter} accounting={showsAccounting(workspace) || session.capabilities.platform_read} /></TabsPanel>
       <TabsPanel value="explore"><UsageExploreTab workspace={workspace} ctx={ctx} period={period} nav={nav} workspaceFilter={workspaceFilter} /></TabsPanel>
       <TabsPanel value="records">{workspace ? <WorkspaceRecords session={session} workspace={workspace} ctx={ctx} period={period} nav={nav} /> : <PlatformRecords session={session} ctx={ctx} period={period} nav={nav} workspaceFilter={workspaceFilter} cols={platformCols} />}</TabsPanel>

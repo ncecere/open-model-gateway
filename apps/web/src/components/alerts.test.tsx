@@ -139,6 +139,22 @@ describe("Notifications", () => {
   });
 });
 
+const agedHold: Notification = { ...keyExpiring, id: "e3", kind: "aged_unknown_hold", severity: "warning", summary: "Holds with unknown cost are over 24 hours old", details: { threshold_hours: 24 } };
+describe("Aged unknown-hold notifications (#101)", () => {
+  it("offers Open holds to the Holds tab, never a rule or a key list", async () => {
+    const user = userEvent.setup();
+    serve(session, path => path.startsWith("/api/v1/me/notifications?") ? { data: [agedHold], has_more: false } : undefined);
+    const { client } = await mount("/notifications");
+    await screen.findByText("Holds with unknown cost are over 24 hours old");
+    expect(screen.getByText(/Built-in aged-hold review/)).toBeTruthy();
+    const row = screen.getByText("Holds with unknown cost are over 24 hours old").closest("tr")!;
+    await user.click(within(row).getByRole("button", { name: /actions/i }));
+    expect((await screen.findByRole("menuitem", { name: "Open holds" })).getAttribute("href")).toBe("/workspaces/team/costs?tab=holds");
+    expect(screen.queryByRole("menuitem", { name: "Open rule" })).toBeNull(); expect(screen.queryByRole("menuitem", { name: "Open keys" })).toBeNull();
+    client.clear();
+  });
+});
+
 describe("Workspace Settings › Alerts", () => {
   it("is a tab for Team/Project admins with workspace rules", async () => {
     serve(session, path => path.startsWith("/api/v1/workspaces/team/alerts/rules") ? { data: [{ ...rule, scope: "workspace", workspace_id: "team", budget_layers: ["local"], notify_platform_admins: false, notify_workspace_admins: true }], writable: true } : undefined);
