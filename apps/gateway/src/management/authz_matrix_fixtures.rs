@@ -65,7 +65,10 @@ impl Targets {
                 .fetch_one(pool)
                 .await
                 .unwrap();
+        let webhook: Uuid = sqlx::query_scalar("INSERT INTO alert_webhook_destinations(label,url,current_secret_ref) VALUES('Matrix webhook','https://example.test/hook','env:HOOK') RETURNING id")
+            .fetch_one(pool).await.unwrap();
         let mut rows = BTreeMap::from([
+            ("webhook", webhook.to_string()),
             ("key", key.to_string()),
             ("group", group.to_string()),
             ("model", model.to_string()),
@@ -133,7 +136,9 @@ impl Targets {
         Self(rows)
     }
     pub(super) fn concrete(&self, path: &str, f: &Fixture) -> String {
-        let id = if path.contains("/files") {
+        let id = if path.contains("/alerts/webhooks") {
+            &self.0["webhook"]
+        } else if path.contains("/files") {
             &self.0["file"]
         } else if path.contains("/batches") {
             &self.0["batch"]

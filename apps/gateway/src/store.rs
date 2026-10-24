@@ -21,6 +21,7 @@ pub struct Store {
     /// Immutable operator policy, injected once at startup; empty by default.
     pub(crate) provider_secrets: std::sync::Arc<crate::providers::secrets::EnvSecrets>,
     pub(crate) smtp_secrets: std::sync::Arc<crate::providers::secrets::EnvSecrets>,
+    pub(crate) alert_webhooks: std::sync::Arc<crate::config::AlertWebhookPolicy>,
     /// In-process queues in front of the installation lock (see
     /// `governance::LockGate`): waiters queue here instead of holding pooled
     /// connections, so authentication and settlement are not starved.
@@ -106,6 +107,9 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "alert_deliveries",
     "alert_reads",
     "alert_recipient_outbox",
+    // 0055 platform alert webhooks (#45)
+    "alert_webhook_destinations",
+    "alert_webhook_outbox",
     // 0014 SCIM
     "scim_users",
     "scim_groups",
@@ -326,6 +330,7 @@ impl Store {
             pool,
             provider_secrets: Default::default(),
             smtp_secrets: Default::default(),
+            alert_webhooks: Default::default(),
             lock_gates: std::sync::Arc::new(gates),
             admission_mode: mode,
             reporting: None,
@@ -349,6 +354,12 @@ impl Store {
     ) -> Self {
         self.provider_secrets = std::sync::Arc::new(providers);
         self.smtp_secrets = std::sync::Arc::new(smtp);
+        self
+    }
+
+    /// Dedicated operator-owned webhook approval and signing-reference policy.
+    pub fn with_alert_webhooks(mut self, policy: crate::config::AlertWebhookPolicy) -> Self {
+        self.alert_webhooks = std::sync::Arc::new(policy);
         self
     }
 

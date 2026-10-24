@@ -378,6 +378,7 @@ async fn run(cli: Cli) -> Result<()> {
     let smtp_secrets = EnvSecrets::new(config.smtp_env_allowlist.clone());
     let store = Store::new(pool.clone())
         .with_secret_allowlists(provider_secrets.clone(), smtp_secrets)
+        .with_alert_webhooks(config.alert_webhooks.clone())
         .with_reporting(config.connect_reporting()?, config.reporting_max_lag)
         .with_admission_mode(config.admission_mode);
     match cli.command.unwrap_or(Command::Serve) {
@@ -1183,6 +1184,7 @@ mod demo {
             inference_base_url: Default::default(),
             secret_env_allowlist: vec![],
             smtp_env_allowlist: vec![],
+            alert_webhooks: Default::default(),
             inference_limits: Default::default(),
             metrics_listen: None,
             database_max_connections: 10,

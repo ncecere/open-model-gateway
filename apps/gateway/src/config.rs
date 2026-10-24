@@ -13,6 +13,7 @@ pub struct Config {
     pub inference_base_url: InferenceBaseUrl,
     pub secret_env_allowlist: Vec<String>,
     pub smtp_env_allowlist: Vec<String>,
+    pub alert_webhooks: AlertWebhookPolicy,
     pub inference_limits: crate::inference::EngineLimits,
     /// Optional separate Prometheus listener (`GATEWAY_METRICS_ADDR`); `None` disables it.
     pub metrics_listen: Option<SocketAddr>,
@@ -178,6 +179,72 @@ impl InferenceBaseUrl {
     }
 }
 
+/// Operator approval is canonical URL equality, independent of DNS/egress policy.
+/// Never Debug: paths and reference names are management-only metadata.
+#[derive(Clone, Default)]
+pub struct AlertWebhookPolicy {
+    urls: std::collections::BTreeSet<String>,
+    pub(crate) secrets: crate::providers::secrets::EnvSecrets,
+    development: bool,
+}
+impl AlertWebhookPolicy {
+    pub fn parse(urls: &[String], names: Vec<String>, environment: Environment) -> Result<Self> {
+        Ok(Self {
+            urls: urls
+                .iter()
+                .map(|url| Self::canonical(url, environment == Environment::Development))
+                .collect::<Result<_>>()?,
+            secrets: crate::providers::secrets::EnvSecrets::new(names),
+            development: environment == Environment::Development,
+        })
+    }
+    fn canonical(value: &str, development: bool) -> Result<String> {
+        let invalid = || {
+            anyhow::anyhow!(
+                "invalid alert webhook URL (HTTPS required except development loopback; no credentials, query or fragment)"
+            )
+        };
+        let url = reqwest::Url::parse(value).map_err(|_| invalid())?;
+        let loopback = url.host_str().is_some_and(|host| {
+            host == "localhost"
+                || host
+                    .trim_matches(['[', ']'])
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback())
+        });
+        anyhow::ensure!(
+            value.len() <= 2048
+                && !value.chars().any(|c| c.is_whitespace() || c.is_control())
+                && url.host_str().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.query().is_none()
+                && url.fragment().is_none()
+                && (url.scheme() == "https" || (development && loopback && url.scheme() == "http")),
+            "{}",
+            invalid()
+        );
+        Ok(url.to_string())
+    }
+    /// Saving validates only approval; it never resolves DNS or signing bytes.
+    pub(crate) fn approved_url(&self, value: &str) -> Option<String> {
+        let canonical = Self::canonical(value, self.development).ok()?;
+        self.urls.contains(&canonical).then_some(canonical)
+    }
+}
+fn env_list(name: &str) -> Result<Vec<String>> {
+    match std::env::var(name) {
+        Ok(value) => Ok(value
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .collect()),
+        Err(std::env::VarError::NotPresent) => Ok(Vec::new()),
+        Err(_) => bail!("{name} is not valid Unicode"),
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Environment {
     Development,
@@ -231,9 +298,15 @@ impl Config {
             .filter(|name| !name.is_empty())
             .map(str::to_owned)
             .collect();
-        disjoint_allowlists(&secret_env_allowlist, &smtp_env_allowlist, &|name| {
-            std::env::var(name).ok()
-        })?;
+        let webhook_names = env_list("GATEWAY_ALERT_WEBHOOK_SECRET_ENV_ALLOWLIST")?;
+        disjoint_allowlists(
+            &secret_env_allowlist,
+            &smtp_env_allowlist,
+            &webhook_names,
+            &|name| std::env::var(name).ok(),
+        )?;
+        let webhook_urls = env_list("GATEWAY_ALERT_WEBHOOK_URL_ALLOWLIST")?;
+        let alert_webhooks = AlertWebhookPolicy::parse(&webhook_urls, webhook_names, environment)?;
         // After the allowlist checks, so a trace pointer that a provider or SMTP
         // allowlist could read is reported like every other pointer: by setting
         // and variable name, never value. Trace errors themselves stay generic.
@@ -324,6 +397,7 @@ impl Config {
             inference_base_url,
             secret_env_allowlist,
             smtp_env_allowlist,
+            alert_webhooks,
             inference_limits,
             metrics_listen,
             database_max_connections,
@@ -394,11 +468,11 @@ impl Config {
     }
 }
 
-/// A variable is readable by provider connections or by SMTP, never both:
-/// either side's destination is chosen by a Platform Admin (#140).
+/// Each transport has a dedicated secret boundary, never a shared variable.
 fn disjoint_allowlists(
     providers: &[String],
     smtp: &[String],
+    webhooks: &[String],
     lookup: &impl Fn(&str) -> Option<String>,
 ) -> anyhow::Result<()> {
     let shared: Vec<&str> = smtp
@@ -413,13 +487,24 @@ fn disjoint_allowlists(
     for (setting, names) in [
         ("GATEWAY_SECRET_ENV_ALLOWLIST", providers),
         (crate::email::SMTP_ALLOWLIST_VAR, smtp),
+        ("GATEWAY_ALERT_WEBHOOK_SECRET_ENV_ALLOWLIST", webhooks),
     ] {
+        if setting == "GATEWAY_ALERT_WEBHOOK_SECRET_ENV_ALLOWLIST"
+            && names
+                .iter()
+                .any(|name| providers.contains(name) || smtp.contains(name))
+        {
+            failures.push(
+                "GATEWAY_ALERT_WEBHOOK_SECRET_ENV_ALLOWLIST overlaps provider or SMTP allowlists"
+                    .to_owned(),
+            );
+        }
         let reserved: Vec<String> = names
             .iter()
             .map(String::as_str)
             .filter(|name| {
                 crate::providers::secrets::reserved_env_name(name, lookup)
-                    || (setting == crate::email::SMTP_ALLOWLIST_VAR
+                    || (setting != "GATEWAY_SECRET_ENV_ALLOWLIST"
                         && crate::startup::SECRET_NAMES.contains(name))
             })
             .map(|name| {
@@ -452,6 +537,83 @@ fn disjoint_allowlists(
 
 #[cfg(test)]
 mod allowlist_tests {
+    #[test]
+    fn webhook_url_approval_uses_canonical_equality_and_refuses_unsafe_inputs() {
+        use super::{
+            AlertWebhookPolicy,
+            Environment::{Development, Production},
+        };
+        let policy = AlertWebhookPolicy::parse(
+            &["https://EXAMPLE.test:443/hook".into()],
+            vec!["HOOK".into()],
+            Production,
+        )
+        .unwrap();
+        assert_eq!(
+            policy.approved_url("https://example.test/hook").as_deref(),
+            Some("https://example.test/hook")
+        );
+        for input in [
+            "https://example.test/hook/extra",
+            "https://example.test/hook?x=1",
+            "https://example.test/hook#fragment",
+            "https://user:pass@example.test/hook",
+            "https://example.test.evil/hook",
+        ] {
+            assert!(policy.approved_url(input).is_none());
+        }
+        for input in [
+            "http://127.0.0.1/hook",
+            "http://localhost/hook",
+            "https://u:p@example.test/",
+            "https://example.test/?",
+            "https://example.test/#",
+            "https://example.test/\n",
+            "ftp://example.test/",
+        ] {
+            assert!(AlertWebhookPolicy::parse(&[input.into()], vec![], Production).is_err());
+        }
+        for input in [
+            "http://127.0.0.1/hook",
+            "http://[::1]/hook",
+            "http://localhost/hook",
+        ] {
+            assert!(AlertWebhookPolicy::parse(&[input.into()], vec![], Development).is_ok());
+        }
+        assert!(
+            AlertWebhookPolicy::parse(&["http://192.168.1.1/hook".into()], vec![], Development)
+                .is_err()
+        );
+        assert!(policy.secrets.allows("env:HOOK"));
+        assert!(!policy.secrets.allows("file:/secret"));
+        assert!(!policy.secrets.allows("env:OTHER"));
+        for pointer in crate::providers::secrets::SECRET_POINTERS {
+            assert!(
+                super::disjoint_allowlists(&[], &[], &["MATERIAL".into()], &|key| (key
+                    == *pointer)
+                    .then(|| "MATERIAL".into()))
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn webhook_secret_allowlist_is_disjoint_and_reserved() {
+        assert!(
+            super::disjoint_allowlists(&["HOOK".into()], &[], &["HOOK".into()], &|_| None).is_err()
+        );
+        assert!(
+            super::disjoint_allowlists(&[], &["HOOK".into()], &["HOOK".into()], &|_| None).is_err()
+        );
+        for name in [
+            "DATABASE_URL",
+            "PGPASSWORD",
+            "OPENAI_API_KEY",
+            "GATEWAY_OWNED",
+        ] {
+            assert!(super::disjoint_allowlists(&[], &[], &[name.into()], &|_| None).is_err());
+        }
+    }
     #[test]
     fn trace_configuration_checks_environment_and_dedicated_sensitive_headers() {
         use super::{Environment, TraceConfig};
@@ -531,7 +693,7 @@ mod allowlist_tests {
                 (vec![], vec![name.to_owned()]),
             ] {
                 assert!(
-                    super::disjoint_allowlists(&providers, &smtp, &|_| None).is_err(),
+                    super::disjoint_allowlists(&providers, &smtp, &[], &|_| None).is_err(),
                     "operational credential name must be reserved"
                 );
             }
@@ -543,6 +705,7 @@ mod allowlist_tests {
         let error = super::disjoint_allowlists(
             &["DATABASE_URL".into()],
             &["PRIVATE_MATERIAL".into()],
+            &[],
             &|name| (name == "GATEWAY_FILE_ENCRYPTION_KEYS_ENV").then(|| "PRIVATE_MATERIAL".into()),
         )
         .unwrap_err()
@@ -566,7 +729,7 @@ mod allowlist_tests {
             "GATEWAY_OIDC_CLIENT_SECRET",
             "AWS_SECRET_ACCESS_KEY",
         ] {
-            let error = super::disjoint_allowlists(&[name.to_owned()], &[], &|_| None)
+            let error = super::disjoint_allowlists(&[name.to_owned()], &[], &[], &|_| None)
                 .expect_err("reserved provider allowlist must stop startup")
                 .to_string();
             assert!(error.contains("GATEWAY_SECRET_ENV_ALLOWLIST"));
@@ -593,7 +756,7 @@ mod allowlist_tests {
                     crate::email::SMTP_ALLOWLIST_VAR,
                 ),
             ] {
-                let error = super::disjoint_allowlists(&providers, &smtp, &lookup)
+                let error = super::disjoint_allowlists(&providers, &smtp, &[], &lookup)
                     .unwrap_err()
                     .to_string();
                 assert!(error.contains(setting));
@@ -604,6 +767,7 @@ mod allowlist_tests {
         super::disjoint_allowlists(
             &["OPENAI_API_KEY".into(), "ANTHROPIC_API_KEY".into()],
             &["SMTP_PASSWORD".into()],
+            &[],
             &|_| None,
         )
         .unwrap();
@@ -622,7 +786,7 @@ mod allowlist_tests {
             );
             None
         };
-        super::disjoint_allowlists(&names, &[], &lookup).unwrap();
+        super::disjoint_allowlists(&names, &[], &[], &lookup).unwrap();
         let resolver = crate::providers::secrets::EnvSecrets::from_lookup(names, lookup);
         assert!(resolver.allows("env:OPENAI_API_KEY"));
         assert!(resolver.allows("env:ANTHROPIC_API_KEY"));
@@ -699,13 +863,14 @@ mod allowlist_tests {
         let error = super::disjoint_allowlists(
             &providers,
             &["SMTP_PASSWORD".into(), "SHARED".into()],
+            &[],
             &|_| None,
         )
         .unwrap_err()
         .to_string();
         assert!(error.contains("SHARED"), "{error}");
         assert!(!error.contains("OPENAI_API_KEY"));
-        super::disjoint_allowlists(&providers, &["SMTP_PASSWORD".into()], &|_| None).unwrap();
+        super::disjoint_allowlists(&providers, &["SMTP_PASSWORD".into()], &[], &|_| None).unwrap();
     }
 
     /// Credentials the gateway reads outside the provider allowlist (database,
@@ -722,7 +887,7 @@ mod allowlist_tests {
             "AWS_SESSION_TOKEN",
             "GATEWAY_LISTEN_DATABASE_URL",
         ] {
-            let error = super::disjoint_allowlists(&[], &[name.to_owned()], &|_| None)
+            let error = super::disjoint_allowlists(&[], &[name.to_owned()], &[], &|_| None)
                 .expect_err(name)
                 .to_string();
             assert!(error.contains(name), "{error}");

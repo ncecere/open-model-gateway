@@ -2,6 +2,12 @@
 
 Notes for changes on `main` after [v0.7.2](v0.7.2.md). They become the next release's notes.
 
+## Saved alert webhook authority and schema (#45, slice 1)
+
+Adds migration **0055_alert_webhooks**, operator URL/signing-reference allowlists, a platform-only destination management API and a separate retained outbox. Destinations start disabled and soft-delete; URLs and queued payloads are immutable. The transactional enqueue trigger exports only approved installation transitions through an explicit privacy projection, excluding workspace rules, personal incidents, all key-expiry reminders and all admission-ceiling incidents. Runtime column grants and refusal probes cover both tables. Apply `migrate` and `grants apply` explicitly; exact schema-lineage readiness remains required.
+
+**No webhook is sent by this slice:** the signed worker, test-send, delivery-status routes, metrics and UI follow separately. Saving never contacts receivers or resolves signing bytes. See [alerts](../alerts.md#saved-platform-webhooks-45-slice-1), [API](../management-api.md#saved-alert-webhooks) and [configuration](../operations.md#configuration-reference).
+
 ## Bounded API-key issuance (#253, slice A)
 
 Creating or rotating an API key now counts in a rolling 24 hours against two budgets: the holder's (a member, or a service account) and the workspace's. Defaults are **50 per holder and 500 per workspace**; both are editable on the workspace-type default, platform per-workspace override and (tighten-only) workspace limits, from 1 to 10,000, and a missing platform value means the 10,000 ceiling, never unlimited. Personal workspaces use the type default and any platform override. A spent budget refuses the request with `429`, `reason:"key_issuance_limit_exceeded"`, a `Retry-After` header and `scope`, `operation` and `retry_after_seconds`. Authorization and validation errors still come first, the body carries no amounts, and nothing is audited for a refusal (it is counted in `gateway_key_issuance_refused_total{scope,operation}`). Raising a limit admits at once, and lowering one never revokes keys.
@@ -119,7 +125,7 @@ Alert emails, including the new key-expiry reminders (#100), now go through a du
 
 ### Upgrade
 - Apply migration `0050_alert_recipient_outbox.sql` explicitly, then reapply and verify runtime grants (new table and column grants).
-- **Stop every older delivery worker before applying 0050**: scale the old pods to zero, or unset `GATEWAY_ALERT_INTERVAL_SECONDS` on them, then start the new ones. Old binaries don't understand the outbox. The database refuses an old binary's attempt to finalize a delivery whose recipients are still queued (SQLSTATE 55006), so outbox state is never lost. But an old worker sends before it writes, and retries every interval, so an old worker left running repeatedly **re-sends** that delivery's mail to every recipient.
+- **Stop every older delivery worker before applying 0050**: scale the old pods to zero, or set `GATEWAY_ALERT_INTERVAL_SECONDS=0` on them (unset means enabled), then start the new ones. Old binaries don't understand the outbox. The database refuses an old binary's attempt to finalize a delivery whose recipients are still queued (SQLSTATE 55006), so outbox state is never lost. But an old worker sends before it writes, and retries every interval, so an old worker left running repeatedly **re-sends** that delivery's mail to every recipient.
 - Historical terminal deliveries are not replayed. Outbox rows are append-only and retained like other audit tables.
 
 ## Authorized key-expiry reminders (#100)

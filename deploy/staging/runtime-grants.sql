@@ -159,6 +159,16 @@ GRANT SELECT ON public.alert_recipient_outbox TO gateway_runtime;
 GRANT INSERT(delivery_id,fingerprint,internal_user_id) ON public.alert_recipient_outbox TO gateway_runtime;
 GRANT UPDATE(state,attempt_count,next_attempt_at,lease_owner,lease_token,lease_expires_at,error)
  ON public.alert_recipient_outbox TO gateway_runtime;
+-- 0055 platform webhook destinations and retained outbox. Generated identity,
+-- capacity slots, creation clocks and initial queue state are default/trigger-only.
+GRANT SELECT ON public.alert_webhook_destinations,public.alert_webhook_outbox TO gateway_runtime;
+GRANT INSERT(label,url,current_secret_ref) ON public.alert_webhook_destinations TO gateway_runtime;
+GRANT UPDATE(label,current_secret_ref,previous_secret_ref,previous_secret_until,enabled,deleted_at)
+ ON public.alert_webhook_destinations TO gateway_runtime;
+-- Trigger enqueue and future single-attempt tests share this explicit insert set.
+GRANT INSERT(id,event_id,transition,destination_id,test,payload) ON public.alert_webhook_outbox TO gateway_runtime;
+GRANT UPDATE(state,attempt_count,next_attempt_at,lease_owner,lease_token,lease_expires_at,completed_at,last_error)
+ ON public.alert_webhook_outbox TO gateway_runtime;
 -- SCIM (0014). Directory attributes are upserted per user and cleared at cleanup;
 -- the user link is never re-keyed or removed. Groups and memberships are directory
 -- state (DELETE allowed); group-derived grants keep their own revocation history.
