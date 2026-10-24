@@ -91,10 +91,19 @@ An already-claimed send may finish after authority changes, as for all outbox
 mail. Retry backoff, lease fencing and possible crash-after-acceptance duplicates
 are unchanged; no database transaction spans SMTP.
 
-The anonymous personal email says **Installation** and includes only the static
-summary, severity and firing time, plus the existing installation label and
-Notifications link. It contains no personal workspace name/id, owner, key,
-request, upstream identity, count or monetary amount. Shared emails may name the
+Aged-hold email subjects identify **Aged unknown hold** and the body labels the
+kind **Built-in aged unknown-hold alert**, not a budget alert. The body states
+that retained floors are not upper bounds, nothing is refunded or released,
+and holds are never added to spend: settlement requires a Platform Admin to
+reconcile with evidence. It links to Notifications and the platform Holds tab
+(`/admin/costs?tab=holds`). Links use `GATEWAY_PUBLIC_URL` when configured;
+otherwise they show relative navigation paths alongside the existing instruction
+to open the gateway.
+
+The anonymous personal email says **Installation** and contains only static
+wording, severity and firing time, plus the existing installation label and
+those identity-free links. It contains no personal workspace name/id, owner,
+key, request, upstream identity, count or monetary amount. Shared emails may name the
 Team/Project, never an owner, key or request. Shared aged incidents remain
 webhook-ineligible; the anonymous fired webhook projection above is unchanged.
 
@@ -113,7 +122,10 @@ write extractor or audit action is introduced by slice D.
 only these fixed values:
 
 - `fired`: initial incidents, including those first observed as critical.
-- `escalated`: critical incidents replacing a warning in that tick.
+- `escalated`: critical incidents whose subject has a recorded warning in
+  incident history. Superseding and critical firing need not occur in the same
+  tick: a cooldown, per-tick cap or installation daily cap can defer firing.
+  A critical subject with no warning history counts as `fired`, not `escalated`.
 - `cleared`: obsolete incidents retired as cleared, not superseded.
 - `deferred`: ticks detecting at least one otherwise eligible candidate beyond
   the per-tick or installation daily incident cap. This is a bounded backlog
