@@ -144,7 +144,7 @@ GRANT UPDATE(name,enabled,budget_layers,thresholds,spike_factor_percent,min_spen
  ON public.alert_rules TO gateway_runtime;
 GRANT UPDATE(resolved_at,resolution) ON public.alert_events TO gateway_runtime;
 GRANT UPDATE(status,recipients,sent,failed,error,completed_at,initialized,attempt_count,retrying,next_attempt_at,waiting,exhausted) ON public.alert_deliveries TO gateway_runtime;
--- Fair dispatch (0056/#253): table-level SELECT/INSERT covers bucket_id.
+-- Fair dispatch (0055/#253): table-level SELECT/INSERT covers bucket_id.
 -- Its BEFORE INSERT trigger derives it from the event, including legacy
 -- inserts. Never grant UPDATE(bucket_id); it is immutable runtime attribution.
 -- Key-expiry reminders (0049/#100): reviewed, no new grant needed. The table-

@@ -2,7 +2,7 @@
 use super::*;
 
 // One external recipient per delivery, independent of workspace memberships.
-// Intentionally uses the pre-0056 INSERT shape (no bucket_id).
+// Intentionally uses the pre-0055 INSERT shape (no bucket_id).
 async fn backlog(s: &Seed, workspace: Option<Uuid>, n: i32, age_seconds: i32) {
     let scope = workspace.map_or("'installation'".to_owned(), |ws| {
         format!("'workspace','{ws}'")
@@ -53,8 +53,8 @@ async fn fair_dispatch_upgrade_backfills_only_pending_and_recovers_index(pool: P
             ("pending".into(), s.team)
         ]
     );
-    // Simulate an interrupted concurrent build (0057 not recorded, invalid index).
-    sqlx::raw_sql("DELETE FROM _sqlx_migrations WHERE version=57; UPDATE pg_index SET indisvalid=false WHERE indexrelid='public.alert_deliveries_pending_bucket'::regclass")
+    // Simulate an interrupted concurrent build (0056 not recorded, invalid index).
+    sqlx::raw_sql("DELETE FROM _sqlx_migrations WHERE version=56; UPDATE pg_index SET indisvalid=false WHERE indexrelid='public.alert_deliveries_pending_bucket'::regclass")
         .execute(&s.pool).await.unwrap();
     s.store.migrate_enterprise().await.unwrap();
     let valid: bool = sqlx::query_scalar("SELECT indisvalid FROM pg_index WHERE indexrelid='public.alert_deliveries_pending_bucket'::regclass")
@@ -73,7 +73,7 @@ async fn fair_dispatch_bucket_migration_resets_lock_timeout_before_concurrent_in
         .unwrap();
     sqlx::migrate::Migrator {
         migrations: std::borrow::Cow::Owned(
-            all.iter().filter(|m| m.version <= 56).cloned().collect(),
+            all.iter().filter(|m| m.version <= 55).cloned().collect(),
         ),
         ignore_missing: false,
         locking: true,
@@ -88,7 +88,7 @@ async fn fair_dispatch_bucket_migration_resets_lock_timeout_before_concurrent_in
         .unwrap();
     assert_eq!(
         actual, default,
-        "0057 must not inherit the ALTER lock timeout"
+        "0056 must not inherit the ALTER lock timeout"
     );
 }
 

@@ -21,5 +21,5 @@ UPDATE alert_deliveries d
  FROM alert_events e WHERE e.id=d.event_id AND d.status='pending';
 
 -- SET is session-scoped even in a transactional migration. Do not pass the
--- ALTER's acquisition timeout to 0057's concurrent index build.
+-- ALTER's acquisition timeout to 0056's concurrent index build.
 RESET lock_timeout;
