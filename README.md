@@ -113,10 +113,10 @@ Mock-provider and SDK tests require no paid calls or real enterprise IdP modific
 
 ## Releases and security
 
-- **Current release scope:** [v0.7.2](docs/releases/v0.7.2.md) contains compatibility fixes #220/#221/#228 and the #225 fix, with no new migrations or runtime grants (schema 0048). The broader #222 compatibility program and batch planning validation (#238) are not completed by this patch. Publication and deployment acceptance are separate gates; upgrading from v0.6.1 requires the [v0.7.0 allowlist precautions](docs/releases/v0.7.0.md#before-you-upgrade).
+- **Current release scope:** [v0.8.0](docs/releases/v0.8.0.md) adds the durable alert email outbox (#46), key-expiry reminders (#100), admin API tokens (#37), opt-in OpenTelemetry traces (#98), Helm CNPG Barman Cloud plugin backups (#261) and budget headroom (#103). It adds migrations **0049 to 0052** (schema 0052): stop old alert email workers first, then run `migrate` and `grants apply` explicitly. Upgrades from v0.7.1 and v0.7.2 follow the same [procedure](docs/releases/v0.8.0.md#upgrade); upgrading from v0.6.1 also requires the [v0.7.0 allowlist precautions](docs/releases/v0.7.0.md#before-you-upgrade). The broader #222 compatibility program is not complete. Publication and deployment acceptance are separate gates.
 - **Releases:** [changelog](CHANGELOG.md) and per-release notes in [`docs/releases/`](docs/releases/) (migrations, new settings, upgrade steps, known limitations). Upgrades are explicit: back up, `migrate`, reapply runtime grants, `budget verify`.
 - **Images:** from v0.3.0, `ghcr.io/ncecere/open-model-gateway` is published for linux/amd64 and linux/arm64 with SBOM and provenance attestations and a cosign keyless signature. Each architecture's exact digest passes the isolated staging rehearsal and a Trivy scan before it is tagged. Deploy by digest and [verify the signature](docs/releases/v0.3.0.md#verifying-the-images) first. v0.1.0 and v0.2.0 have no published images. After v0.3.0 the runtime image is distroless (no shell or curl): the binary is the entrypoint, reads `*_FILE` secrets itself and provides `open-model-gateway healthcheck` ([container image](docs/operations.md#container-image)).
-- **Security:** report vulnerabilities privately as [SECURITY.md](SECURITY.md) describes. Only the latest minor release (0.7.x) gets fixes.
+- **Security:** report vulnerabilities privately as [SECURITY.md](SECURITY.md) describes. Only the latest minor release (0.8.x) gets fixes.
 
 ## License
 
