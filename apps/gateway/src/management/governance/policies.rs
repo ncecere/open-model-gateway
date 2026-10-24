@@ -1182,6 +1182,91 @@ mod tests {
                     .is_some_and(|l| l == jobs(1))
         );
     }
+    fn issuance(holder: Option<i64>, workspace: Option<i64>) -> Limits {
+        Limits {
+            key_issuances_per_holder: holder,
+            key_issuances_per_workspace: workspace,
+            ..Limits::default()
+        }
+    }
+    #[test]
+    fn key_issuance_budgets_are_tighten_only_composed_limits_within_1_to_10000() {
+        for (new, name) in [
+            (
+                issuance(Some(6), None),
+                "key_issuances_per_holder exceeds a parent limit",
+            ),
+            (
+                issuance(None, Some(51)),
+                "key_issuances_per_workspace exceeds a parent limit",
+            ),
+        ] {
+            let e = validate_tighten(&new, &[&issuance(Some(5), Some(50))], &empty()).unwrap_err();
+            assert_eq!((e.0, e.1), (StatusCode::BAD_REQUEST, name));
+        }
+        for new in [issuance(Some(6), None), issuance(None, None)] {
+            let e = validate_tighten(&new, &[], &issuance(Some(5), None)).unwrap_err();
+            assert_eq!(
+                (e.0, e.1),
+                (
+                    StatusCode::FORBIDDEN,
+                    "A stored key_issuances_per_holder cap cannot be raised or removed"
+                )
+            );
+        }
+        assert!(
+            validate_tighten(
+                &issuance(Some(5), Some(9)),
+                &[&issuance(Some(5), Some(50))],
+                &issuance(Some(5), None)
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            compose(&issuance(Some(50), Some(500)), &issuance(Some(5), None)),
+            issuance(Some(5), Some(500))
+        );
+        // A key layer never carries them; the JSON shows null.
+        assert_eq!(
+            json_limits(&empty())["key_issuances_per_workspace"],
+            Value::Null
+        );
+        // Absent keeps, null clears, and the range is 1..=10000.
+        let stored = issuance(Some(7), Some(70));
+        let keep = body(json!({"budgets":[]}))
+            .unwrap()
+            .limits(&stored, Month)
+            .unwrap();
+        assert_eq!(
+            (
+                keep.key_issuances_per_holder,
+                keep.key_issuances_per_workspace
+            ),
+            (Some(7), Some(70))
+        );
+        let set = body(json!({"budgets":[],"key_issuances_per_holder":null,"key_issuances_per_workspace":10000})).unwrap().limits(&stored, Month).unwrap();
+        assert_eq!(
+            (
+                set.key_issuances_per_holder,
+                set.key_issuances_per_workspace
+            ),
+            (None, Some(10_000))
+        );
+        for bad in [0, -1, 10_001] {
+            for field in ["key_issuances_per_holder", "key_issuances_per_workspace"] {
+                let p = body(json!({"budgets":[], field: bad})).unwrap();
+                assert!(p.limits(&stored, Month).is_err(), "{field}={bad}");
+            }
+        }
+        // Creation-time key limits never carry them.
+        assert_eq!(
+            initial_key_limits([None, None, None, Some(1)], None)
+                .unwrap()
+                .unwrap()
+                .key_issuances_per_holder,
+            None
+        );
+    }
     #[test]
     fn budget_tightening_is_per_period() {
         // Same period: a larger child amount is rejected.
