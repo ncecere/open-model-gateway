@@ -15,12 +15,23 @@ fn strict_exact_money_and_required_nullable_fields() {
 }
 #[test]
 fn holds_exact_route_and_token_policies() {
-    use crate::route_policy::{Access, TokenPolicy, TokenScope, ROUTES};
+    use crate::route_policy::{Access, ROUTES, TokenPolicy, TokenScope};
     for (path, access, token) in [
-        ("/api/v1/workspaces/{ws}/holds", Access::WorkspaceMetadata, TokenPolicy::Denied),
-        ("/api/v1/platform/holds", Access::PlatformRead, TokenPolicy::Scope(TokenScope::PlatformRead)),
+        (
+            "/api/v1/workspaces/{ws}/holds",
+            Access::WorkspaceMetadata,
+            TokenPolicy::Denied,
+        ),
+        (
+            "/api/v1/platform/holds",
+            Access::PlatformRead,
+            TokenPolicy::Scope(TokenScope::PlatformRead),
+        ),
     ] {
-        let r = ROUTES.iter().find(|r| r.path == path && r.methods == "GET").expect("hold queue route must be declared exactly");
+        let r = ROUTES
+            .iter()
+            .find(|r| r.path == path && r.methods == "GET")
+            .expect("hold queue route must be declared exactly");
         assert_eq!(r.access, access);
         assert_eq!(r.token_policy, token);
     }

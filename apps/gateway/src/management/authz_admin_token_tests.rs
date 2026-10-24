@@ -404,6 +404,62 @@ async fn denied_and_undeclared_routes_refuse_a_token_through_the_full_router(poo
     );
 }
 
+/// #101 A: hold review uses the real router, not just the declared-policy stub.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn hold_queue_admin_tokens_are_platform_read_only(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let mock = MockProvider::start(None).await;
+    let identity = mock.state(pool.clone()).await;
+    let engine = crate::inference::Engine::new(
+        std::sync::Arc::new(f.s.clone()),
+        crate::providers::ProviderRegistry::default(),
+        crate::inference::EngineLimits::default(),
+    )
+    .unwrap();
+    let app = crate::http::router_with_identity(f.s.clone(), None, engine, identity);
+    let (_, token) = mint(&pool, f.admin.user_id, &["platform:read"], None).await;
+    assert_eq!(
+        request(
+            &app,
+            "GET",
+            "/api/v1/platform/holds",
+            None,
+            Some(&token),
+            false,
+            ORIGIN
+        )
+        .await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(
+            &app,
+            "GET",
+            &format!("/api/v1/workspaces/{}/holds", f.team),
+            None,
+            Some(&token),
+            false,
+            ORIGIN
+        )
+        .await,
+        StatusCode::FORBIDDEN
+    );
+    let (_, wrong) = mint(&pool, f.admin.user_id, &["governance:write"], None).await;
+    assert_eq!(
+        request(
+            &app,
+            "GET",
+            "/api/v1/platform/holds",
+            None,
+            Some(&wrong),
+            false,
+            ORIGIN
+        )
+        .await,
+        StatusCode::FORBIDDEN
+    );
+}
+
 /// Credential ambiguity, in both directions, before either credential is
 /// examined: no fallback.
 #[sqlx::test(migrations = "./enterprise_migrations")]

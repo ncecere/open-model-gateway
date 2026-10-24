@@ -4,19 +4,20 @@ use crate::{
     billing::{CachePricing, CostComponents},
     inference::{error::InferenceError, types::Usage},
 };
+mod holds;
 mod policies;
 pub(super) use policies::{
     BudgetInput, Limits, check_initial_key_limits, initial_key_limits, json_budgets, json_limits,
     key_limits, key_usage, layers_with, lineage, lineage_budget_windows, store_initial_key_limits,
     workspace_budget_windows,
 };
+#[cfg(all(test, feature = "integration-tests"))]
+mod holds_tests;
 pub(super) mod prices;
 mod reports;
 pub(crate) mod suggestion;
 #[cfg(test)]
 mod tests;
-#[cfg(all(test, feature = "integration-tests"))]
-mod holds_tests;
 pub(super) fn routes() -> Router<Store> {
     Router::new()
         .route(
@@ -36,6 +37,7 @@ pub(super) fn routes() -> Router<Store> {
             get(reports::cost_summary),
         )
         .route("/api/v1/workspaces/{ws}/costs", get(reports::costs))
+        .route("/api/v1/workspaces/{ws}/holds", get(holds::workspace))
         .route(
             "/api/v1/workspaces/{ws}/usage-export",
             get(reports::usage_export),
@@ -47,6 +49,7 @@ pub(super) fn routes() -> Router<Store> {
 }
 pub(super) fn platform_routes() -> Router<Store> {
     Router::new()
+        .route("/api/v1/platform/holds", get(holds::platform))
         .route(
             "/api/v1/platform/installation/policy",
             get(policies::installation_policy_removed).put(policies::installation_policy_removed),

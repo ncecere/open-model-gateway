@@ -398,6 +398,12 @@ pub(crate) const ROUTES: &[Route] = &[
     ),
     route!(
         "GET",
+        "/api/v1/workspaces/{ws}/holds",
+        WorkspaceMetadata,
+        DENIED
+    ),
+    route!(
+        "GET",
         "/api/v1/workspaces/{ws}/usage-export",
         WorkspaceMetadata,
         PLATFORM_READ
@@ -873,6 +879,7 @@ pub(crate) const ROUTES: &[Route] = &[
         PlatformWrite,
         CATALOG_WRITE
     ),
+    route!("GET", "/api/v1/platform/holds", PlatformRead, PLATFORM_READ),
     route!("GET", "/api/v1/platform/audit", PlatformRead, PLATFORM_READ),
     route!(
         "GET",

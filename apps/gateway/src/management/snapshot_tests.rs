@@ -50,6 +50,7 @@ fn reads(f: &Fixture) -> Vec<(&BrowserPrincipal, String)> {
     let (team, personal, r) = (f.team, f.personal, range());
     let mut out = vec![
         (&f.auditor, format!("/api/v1/platform/cost-report?{r}")),
+        (&f.auditor, "/api/v1/platform/holds".into()),
         (&f.auditor, format!("/api/v1/platform/usage/overview?{r}")),
         (
             &f.auditor,
@@ -69,6 +70,7 @@ fn reads(f: &Fixture) -> Vec<(&BrowserPrincipal, String)> {
         for path in [
             format!("cost-report?{r}"),
             "cost-summary".into(),
+            "holds".into(),
             format!("costs?{r}"),
             format!("usage-export?{r}"),
             format!("usage/overview?{r}"),

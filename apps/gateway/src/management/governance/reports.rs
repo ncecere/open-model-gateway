@@ -22,7 +22,7 @@ struct Filters {
     limit: Option<i64>,
     offset: i64,
 }
-fn decode(s: &str) -> Result<String, ApiError> {
+pub(super) fn decode(s: &str) -> Result<String, ApiError> {
     let s = s.replace('+', " ");
     let bytes = s.as_bytes();
     for (i, b) in bytes.iter().enumerate() {
@@ -369,7 +369,7 @@ async fn workspace_report_tx(
     let access = resources::workspace_access_snapshot(&mut tx, u, ws).await?;
     Ok((s.reporting(tx).await?, access))
 }
-async fn deadline<T>(
+pub(super) async fn deadline<T>(
     future: impl std::future::Future<Output = Result<T, ApiError>>,
 ) -> Result<T, ApiError> {
     tokio::time::timeout(std::time::Duration::from_secs(10), future)

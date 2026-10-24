@@ -27,6 +27,9 @@ GRANT SELECT ON public.installation,public.users,public.oidc_identities,
  public.inference_executions,public.governance_reservations,public.monetary_ledger,
  public.routing_policies,public.deployment_routing,public.deployment_health,public.audit_events
  TO gateway_runtime;
+-- Aged unknown-hold review queue (#101 A): reviewed, no grant change. Its
+-- read-only snapshot uses the existing SELECT on workspaces, keys, executions,
+-- reservations, monetary_ledger and deployment_prices; no new write operation.
 -- Management route preflight (#195) reads live platform/workspace authority
 -- in one SELECT joining effective_platform_roles, workspaces and
 -- effective_workspace_memberships, then api_keys' scoped identity/holder/service
