@@ -10,8 +10,8 @@ use crate::email::{DeliveryError, OutgoingEmail};
 
 pub(super) const SEND_DEADLINE: Duration = Duration::from_secs(40);
 // 90s lease > 40s whole send deadline. Claims leave >=45s of the 24h window.
-const LEASE_SECONDS: i32 = 90;
-const BACKOFF_SECONDS: [i32; 4] = [60, 300, 1800, 7200];
+pub(super) const LEASE_SECONDS: i32 = 90;
+pub(super) const BACKOFF_SECONDS: [i32; 4] = [60, 300, 1800, 7200];
 
 // No Debug/Serialize on this type (nor any holder of a recipient fingerprint).
 pub(super) struct Claim {

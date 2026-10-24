@@ -1,6 +1,126 @@
 use super::*;
 use sqlx::PgPool;
 
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn lifetime_cutoffs_and_policy_failures(pool: PgPool) {
+    let d = destination(&pool).await;
+    let s = Store::new(pool.clone());
+    // Fixtures can set INSERT creation time as owner; runtime cannot.
+    let event: Uuid=sqlx::query_scalar("INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,summary) VALUES(gen_random_uuid(),'scim_last_admin','scim_last_admin',gen_random_uuid()::text,1,'critical','safe') RETURNING id").fetch_one(&pool).await.unwrap();
+    let id: Uuid=sqlx::query_scalar("INSERT INTO alert_webhook_outbox(id,destination_id,destination_generation,event_id,transition,payload,created_at) SELECT i,$1,0,$2,'fired',convert_to(alert_webhook_payload(i,$2,'fired'),'UTF8'),clock_timestamp()-interval '24 hours'+interval '45 seconds' FROM (SELECT gen_random_uuid() i) x RETURNING id").bind(d).bind(event).fetch_one(&pool).await.unwrap();
+    let c = claimed(&s).await;
+    assert!(complete(&s, &c, Err(Failure::Connection)).await.unwrap());
+    assert_eq!(
+        state(&pool, id).await.0,
+        "exhausted",
+        "retry at +60s is beyond cutoff"
+    );
+    for age in ["24 hours", "25 hours"] {
+        let id: Uuid=sqlx::query_scalar("INSERT INTO alert_webhook_outbox(id,destination_id,destination_generation,test,payload,created_at) SELECT i,$1,0,true,convert_to(alert_webhook_payload(i,NULL,NULL),'UTF8'),clock_timestamp()-$2::interval FROM (SELECT gen_random_uuid() i) x RETURNING id").bind(d).bind(age).fetch_one(&pool).await.unwrap();
+        assert!(matches!(
+            claim(&s, Uuid::new_v4()).await.unwrap(),
+            Some(None)
+        ));
+        assert_eq!(
+            state(&pool, id).await,
+            ("exhausted".into(), 0, Some("interrupted".into()))
+        );
+    }
+    for url in [
+        "https://10.0.0.1/hook",
+        "https://169.254.169.254/hook",
+        "https://localhost/hook",
+    ] {
+        let d: Uuid=sqlx::query_scalar("INSERT INTO alert_webhook_destinations(label,url,current_secret_ref,enabled) VALUES('receiver',$1,'env:HOOK',true) RETURNING id").bind(url).fetch_one(&pool).await.unwrap();
+        let id = queue(&pool, d, true).await;
+        let s = Store::new(pool.clone()).with_alert_webhooks(
+            crate::config::AlertWebhookPolicy::parse(
+                &[url.into()],
+                vec!["HOOK".into()],
+                crate::config::Environment::Production,
+            )
+            .unwrap(),
+        );
+        let c = claimed(&s).await;
+        let result = send_with(&s, &c, |_| Some(zeroize::Zeroizing::new(vec![b's'; 32]))).await;
+        assert_eq!(result, Err(Failure::HostNotAllowed), "{url}");
+        complete(&s, &c, result).await.unwrap();
+        assert_eq!(state(&pool, id).await.0, "failed");
+    }
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn tls_and_connection_close_have_distinct_terminal_policy(pool: PgPool) {
+    for (tls, expected) in [(false, Failure::Connection), (true, Failure::Tls)] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "{}://{}/hook",
+            if tls { "https" } else { "http" },
+            listener.local_addr().unwrap()
+        );
+        let receiver = tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0; 8192];
+            let _ = socket.read(&mut buf).await;
+            if tls {
+                socket
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                    .await
+                    .unwrap();
+            }
+        });
+        let d:Uuid=sqlx::query_scalar("INSERT INTO alert_webhook_destinations(label,url,current_secret_ref,enabled) VALUES('receiver',$1,'env:HOOK',true) RETURNING id").bind(&url).fetch_one(&pool).await.unwrap();
+        queue(&pool, d, true).await;
+        let s = Store::new(pool.clone()).with_alert_webhooks(
+            crate::config::AlertWebhookPolicy::parse(
+                &[url],
+                vec!["HOOK".into()],
+                crate::config::Environment::Development,
+            )
+            .unwrap(),
+        );
+        let c = claimed(&s).await;
+        assert_eq!(
+            send_with(&s, &c, |_| Some(zeroize::Zeroizing::new(vec![b's'; 32]))).await,
+            Err(expected)
+        );
+        // Release this claim so the next fixture is the only due row.
+        complete(&s, &c, Err(expected)).await.unwrap();
+        receiver.await.unwrap();
+    }
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn dispatch_is_bounded_before_claiming(pool: PgPool) {
+    let d = destination(&pool).await;
+    let s = Store::new(pool.clone());
+    for _ in 0..26 {
+        queue(&pool, d, true).await;
+    }
+    deliver_within(&s, Duration::from_secs(1)).await;
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM alert_webhook_outbox WHERE state='waiting' AND attempt_count=0"
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        26
+    );
+    deliver(&s).await;
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM alert_webhook_outbox WHERE state='failed' AND attempt_count=1 AND last_error='destination_policy'").fetch_one(&pool).await.unwrap(),25);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM alert_webhook_outbox WHERE state='waiting' AND attempt_count=0"
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        1
+    );
+}
+
 async fn destination(pool: &PgPool) -> Uuid {
     sqlx::query_scalar("INSERT INTO alert_webhook_destinations(label,url,current_secret_ref,enabled) VALUES('receiver','https://example.test/hook','env:HOOK',true) RETURNING id").fetch_one(pool).await.unwrap()
 }

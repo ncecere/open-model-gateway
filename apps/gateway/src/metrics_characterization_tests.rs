@@ -129,7 +129,8 @@ async fn prometheus_family_types_and_label_keys_match_golden() {
             observed.insert(name.clone());
             if let Some((_, rest)) = line.split_once('{') {
                 let (labels, _) = rest.split_once('}').unwrap();
-                for label in labels.split(',') {
+                // A populated Family<L0, Gauge> emits valid empty braces.
+                for label in labels.split(',').filter(|label| !label.is_empty()) {
                     let (key, _) = label.split_once('=').unwrap();
                     if key != "le" {
                         families.get_mut(name).unwrap().1.insert(key.into());

@@ -88,10 +88,17 @@ impl EnvSecrets {
     /// Signing material has a separate byte contract from provider headers.
     /// Resolve directly into a zeroizing owner; never format the value.
     pub(crate) fn signing_bytes(&self, reference: &str) -> Option<zeroize::Zeroizing<Vec<u8>>> {
+        self.signing_bytes_with(reference, |name| std::env::var(name).ok())
+    }
+    fn signing_bytes_with(
+        &self,
+        reference: &str,
+        get: impl Fn(&str) -> Option<String>,
+    ) -> Option<zeroize::Zeroizing<Vec<u8>>> {
         let name = reference
             .strip_prefix("env:")
             .filter(|_| self.allows(reference))?;
-        let bytes = zeroize::Zeroizing::new(std::env::var(name).ok()?.into_bytes());
+        let bytes = zeroize::Zeroizing::new(get(name)?.into_bytes());
         (32..=4096).contains(&bytes.len()).then_some(bytes)
     }
     /// Validate a reference without resolving or exposing its credential.
@@ -114,6 +121,32 @@ impl SecretResolver for EnvSecrets {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn signing_byte_bounds_do_not_read_unapproved_names() {
+        let resolver = EnvSecrets::new(["HOOK".into()]);
+        for reference in ["file:/secret", "env:OTHER", "env:DATABASE_URL"] {
+            assert!(
+                resolver
+                    .signing_bytes_with(reference, |_| panic!("unapproved lookup"))
+                    .is_none()
+            );
+        }
+        for (size, valid) in [
+            (0, false),
+            (31, false),
+            (32, true),
+            (4096, true),
+            (4097, false),
+        ] {
+            assert_eq!(
+                resolver
+                    .signing_bytes_with("env:HOOK", |_| Some("s".repeat(size)))
+                    .is_some(),
+                valid
+            );
+        }
+        assert!(resolver.signing_bytes_with("env:HOOK", |_| None).is_none());
+    }
     #[test]
     fn gateway_secrets_are_refused_even_when_allowlisted() {
         for name in [

@@ -1,6 +1,53 @@
 use super::*;
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
+async fn status_never_counts_late_stale_generation_as_waiting(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let id:Uuid=sqlx::query_scalar("INSERT INTO alert_webhook_destinations(label,url,current_secret_ref,enabled) VALUES('receiver','https://example.test/hook','env:HOOK',true) RETURNING id").fetch_one(&pool).await.unwrap();
+    let mut enqueue = pool.begin().await.unwrap();
+    sqlx::query("INSERT INTO alert_webhook_outbox(id,destination_id,destination_generation,test,payload) SELECT i,$1,0,true,convert_to(alert_webhook_payload(i,NULL,NULL),'UTF8') FROM (SELECT gen_random_uuid() i) x").bind(id).execute(&mut *enqueue).await.unwrap();
+    sqlx::query("UPDATE alert_webhook_destinations SET enabled=false WHERE id=$1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE alert_webhook_destinations SET enabled=true WHERE id=$1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    enqueue.commit().await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM alert_webhook_outbox WHERE state='waiting'"
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        1
+    );
+    let (_, item) = call(
+        &f.s,
+        &f.auditor,
+        "GET",
+        &format!("{WEBHOOKS}/{id}"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(item["waiting"], 0);
+    let (_, status) = call(
+        &f.s,
+        &f.auditor,
+        "GET",
+        &format!("{WEBHOOKS}/{id}/deliveries"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status["counts"]["waiting"], 0);
+    assert_eq!(status["data"].as_array().unwrap().len(), 0);
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
 async fn saved_tests_limits_redaction_and_strict_body(pool: PgPool) {
     let f = fixture(&pool).await;
     let id: Uuid=sqlx::query_scalar("INSERT INTO alert_webhook_destinations(label,url,current_secret_ref) VALUES('receiver','https://example.test/private-canary','env:PRIVATE_CANARY') RETURNING id").fetch_one(&pool).await.unwrap();
