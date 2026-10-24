@@ -1,6 +1,11 @@
 -- #102 slice B. Explicit additive upgrade AFTER the reserved 0058--0062
 -- prefix. No email/outbox path; no historical replay or data backfill.
 ALTER TABLE report_schedules ADD COLUMN next_period_end timestamptz;
+-- report_schedules is new in unmerged 0061; these plain indexes belong to the
+-- same additive rollout, not an implicit concurrent upgrade of an old table.
+CREATE INDEX report_schedules_dispatch_due ON report_schedules((coalesce(next_run_at,'0001-01-01 00:00:00+00'::timestamptz)),id) WHERE state='active' AND deleted_at IS NULL;
+CREATE INDEX report_schedules_paused_initialization ON report_schedules(id) WHERE state='paused' AND deleted_at IS NULL AND next_run_at IS NULL;
+CREATE INDEX report_schedules_personal_capacity ON report_schedules(created_by,id) WHERE scope_kind='personal' AND deleted_at IS NULL;
 CREATE FUNCTION report_calendar_guard() RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,public,pg_temp AS $$
 BEGIN
  IF OLD.last_period_end IS NOT NULL AND (NEW.last_period_end IS NULL OR NEW.last_period_end<OLD.last_period_end) THEN
@@ -48,7 +53,8 @@ CREATE TABLE report_runs(
  observed_at timestamptz NOT NULL,
  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
  expires_at timestamptz NOT NULL,
- UNIQUE(schedule_id,period_start,period_end)
+ UNIQUE(schedule_id,period_start,period_end),
+ UNIQUE(schedule_id,id)
 );
 CREATE INDEX report_runs_schedule_recent ON report_runs(schedule_id,period_end DESC,id);
 CREATE INDEX report_runs_expiry ON report_runs(expires_at,id);
@@ -76,10 +82,31 @@ END $$;
 CREATE TRIGGER report_run_guard BEFORE INSERT ON report_runs FOR EACH ROW EXECUTE FUNCTION report_run_guard();
 CREATE TRIGGER report_runs_immutable BEFORE UPDATE OR DELETE ON report_runs FOR EACH ROW EXECUTE FUNCTION immutable_history();
 CREATE TRIGGER report_runs_no_truncate BEFORE TRUNCATE ON report_runs FOR EACH STATEMENT EXECUTE FUNCTION immutable_history();
+-- Append-only operational occurrence outcomes: no error strings or payloads.
+-- A pre-claim refusal has explicitly unavailable (NULL) period/token metadata.
+CREATE TABLE report_generation_outcomes(
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ schedule_id uuid NOT NULL REFERENCES report_schedules(id),
+ run_id uuid,
+ configuration_revision bigint NOT NULL CHECK(configuration_revision>0),
+ claim_token uuid,
+ period_start timestamptz,
+ period_end timestamptz,
+ category text NOT NULL CHECK(category IN ('success','timeout','snapshot_too_large','history_unavailable','authority_lost','other')),
+ created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ FOREIGN KEY(schedule_id,run_id) REFERENCES report_runs(schedule_id,id),
+ CHECK((period_start IS NULL AND period_end IS NULL) OR (period_start IS NOT NULL AND period_end IS NOT NULL AND period_end>period_start)),
+ CHECK((category='success')=(run_id IS NOT NULL))
+);
+CREATE INDEX report_generation_outcomes_schedule ON report_generation_outcomes(schedule_id,created_at DESC,id);
+CREATE TRIGGER report_generation_outcomes_immutable BEFORE UPDATE OR DELETE ON report_generation_outcomes FOR EACH ROW EXECUTE FUNCTION immutable_history();
+CREATE TRIGGER report_generation_outcomes_no_truncate BEFORE TRUNCATE ON report_generation_outcomes FOR EACH STATEMENT EXECUTE FUNCTION immutable_history();
 CREATE TABLE report_snapshots(
  run_id uuid PRIMARY KEY REFERENCES report_runs(id),
- body jsonb NOT NULL CHECK(jsonb_typeof(body)='object' AND octet_length(body::text)<=1048576)
+ body jsonb NOT NULL CONSTRAINT report_snapshot_size CHECK(jsonb_typeof(body)='object' AND octet_length(body::text)<=1048576),
+ expires_at timestamptz NOT NULL
 );
+CREATE INDEX report_snapshots_expiry ON report_snapshots(expires_at,run_id);
 CREATE FUNCTION report_snapshot_guard() RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,public,pg_temp AS $$
 DECLARE r public.report_runs;
 BEGIN
@@ -89,6 +116,7 @@ BEGIN
   IF r.expires_at<=clock_timestamp() OR NOT EXISTS(SELECT FROM public.report_generation_claims c WHERE c.schedule_id=r.schedule_id AND c.token=r.claim_token AND c.configuration_revision=r.configuration_revision AND c.expires_at>clock_timestamp()) THEN
    RAISE EXCEPTION 'stale report snapshot' USING ERRCODE='55006';
   END IF;
+  NEW.expires_at=r.expires_at;
   RETURN NEW;
  END IF;
  IF TG_OP='DELETE' AND EXISTS(SELECT FROM public.report_runs WHERE id=OLD.run_id AND expires_at<=clock_timestamp()) THEN RETURN OLD; END IF;
@@ -99,10 +127,12 @@ CREATE TRIGGER report_snapshots_no_truncate BEFORE TRUNCATE ON report_snapshots 
 -- Runtime has INSERT/SELECT only, never DELETE. This fixed, bounded maintenance
 -- function is the only runtime removal path; occurrence metadata is untouched.
 CREATE FUNCTION omg_report_prune_snapshots(cap integer) RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,pg_temp AS $$
-DECLARE n bigint;
+DECLARE n bigint; cutoff timestamptz:=clock_timestamp();
 BEGIN
- WITH expired AS (SELECT p.run_id FROM public.report_snapshots p JOIN public.report_runs r ON r.id=p.run_id
-   WHERE r.expires_at<=clock_timestamp() ORDER BY r.expires_at,r.id LIMIT greatest(0,least(cap,100)) FOR UPDATE OF p SKIP LOCKED),
+ -- Expiry is copied from immutable run metadata at INSERT. Scan payloads,
+ -- not the indefinitely retained metadata of already-pruned occurrences.
+ WITH expired AS (SELECT p.run_id FROM public.report_snapshots p
+   WHERE p.expires_at<=cutoff ORDER BY p.expires_at,p.run_id LIMIT greatest(0,least(cap,100)) FOR UPDATE OF p SKIP LOCKED),
  removed AS (DELETE FROM public.report_snapshots p USING expired e WHERE p.run_id=e.run_id RETURNING p.run_id)
  SELECT count(*) INTO n FROM removed;
  RETURN n;

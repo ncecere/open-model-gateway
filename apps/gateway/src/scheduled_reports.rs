@@ -13,6 +13,62 @@ use serde_json::{Value, json};
 use sqlx::{Postgres, Transaction};
 use std::time::Duration;
 use uuid::Uuid;
+pub(crate) const CANDIDATE_BATCH: i64 = 32;
+pub(crate) const SELECT_CANDIDATES_FIRST: &str = "SELECT coalesce(next_run_at,'0001-01-01 00:00:00+00'::timestamptz) due_at,id FROM report_schedules WHERE state='active' AND deleted_at IS NULL AND coalesce(next_run_at,'0001-01-01 00:00:00+00'::timestamptz)<=$1 ORDER BY coalesce(next_run_at,'0001-01-01 00:00:00+00'::timestamptz),id LIMIT $2";
+pub(crate) const SELECT_CANDIDATES_AFTER: &str = "SELECT coalesce(next_run_at,'0001-01-01 00:00:00+00'::timestamptz) due_at,id FROM report_schedules WHERE state='active' AND deleted_at IS NULL AND coalesce(next_run_at,'0001-01-01 00:00:00+00'::timestamptz)<=$1 AND (coalesce(next_run_at,'0001-01-01 00:00:00+00'::timestamptz),id)>($3,$4) ORDER BY coalesce(next_run_at,'0001-01-01 00:00:00+00'::timestamptz),id LIMIT $2";
+/// Every dispatcher transaction has a server deadline, including non-generation
+/// work. A client cancellation is not the only bound on database work.
+pub(crate) async fn begin_dispatch(
+    pool: &sqlx::PgPool,
+) -> Result<Transaction<'static, Postgres>, sqlx::Error> {
+    crate::db::begin_with_setup(pool, "SET LOCAL statement_timeout='10s'").await
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Outcome {
+    Success,
+    Timeout,
+    SnapshotTooLarge,
+    HistoryUnavailable,
+    AuthorityLost,
+    Other,
+}
+impl Outcome {
+    pub(crate) const ALL: [Self; 6] = [
+        Self::Success,
+        Self::Timeout,
+        Self::SnapshotTooLarge,
+        Self::HistoryUnavailable,
+        Self::AuthorityLost,
+        Self::Other,
+    ];
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Timeout => "timeout",
+            Self::SnapshotTooLarge => "snapshot_too_large",
+            Self::HistoryUnavailable => "history_unavailable",
+            Self::AuthorityLost => "authority_lost",
+            Self::Other => "other",
+        }
+    }
+    pub(crate) fn classify(e: &sqlx::Error) -> Self {
+        match e {
+            sqlx::Error::PoolTimedOut => Self::Timeout,
+            sqlx::Error::Database(e) if e.code().as_deref() == Some("57014") => Self::Timeout,
+            sqlx::Error::Database(e) if e.constraint() == Some("report_snapshot_size") => {
+                Self::SnapshotTooLarge
+            }
+            sqlx::Error::Protocol(s) => match s.as_str() {
+                "report snapshot exceeds limit" => Self::SnapshotTooLarge,
+                "report additive history unavailable" => Self::HistoryUnavailable,
+                "report creator authority lost" => Self::AuthorityLost,
+                _ => Self::Other,
+            },
+            _ => Self::Other,
+        }
+    }
+}
+pub(crate) const SELECT_ELIGIBLE: &str = "SELECT i.id FROM unnest($1::uuid[]) WITH ORDINALITY i(id,n) LEFT JOIN LATERAL (SELECT schedule_id,expires_at FROM report_generation_claims WHERE schedule_id=i.id OFFSET 0) c ON true WHERE c.schedule_id IS NULL OR c.expires_at<=$2 ORDER BY c.expires_at NULLS FIRST,i.n LIMIT $3";
 const PER_TICK: i64 = 8;
 const DEADLINE: Duration = Duration::from_secs(10);
 #[derive(Clone, sqlx::FromRow)]
@@ -64,6 +120,17 @@ async fn audit(
         .bind(Uuid::now_v7()).bind(s.workspace_id).bind(action).bind(s.id).bind(metadata).execute(&mut **tx).await?;
     Ok(())
 }
+async fn record_outcome(
+    tx: &mut Transaction<'_, Postgres>,
+    s: &Schedule,
+    c: Option<&Claim>,
+    category: Outcome,
+    run: Option<Uuid>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO report_generation_outcomes(schedule_id,run_id,configuration_revision,claim_token,period_start,period_end,category) VALUES($1,$2,$3,$4,$5,$6,$7)")
+        .bind(s.id).bind(run).bind(c.map_or(s.configuration_revision,|c|c.schedule.configuration_revision)).bind(c.map(|c|c.token)).bind(c.map(|c|c.period.start)).bind(c.map(|c|c.period.end)).bind(category.as_str()).execute(&mut **tx).await?;
+    Ok(())
+}
 async fn pause(tx: &mut Transaction<'_, Postgres>, s: &Schedule) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE report_schedules SET state='paused' WHERE id=$1 AND state='active' AND deleted_at IS NULL").bind(s.id).execute(&mut **tx).await?;
     audit(
@@ -100,14 +167,16 @@ pub(crate) async fn claim(
     fence: &Fence,
     id: Uuid,
 ) -> Result<Option<Claim>, sqlx::Error> {
-    let mut tx = crate::db::begin(&store.pool).await?;
+    let mut tx = begin_dispatch(&store.pool).await?;
     fence.check(&mut tx).await?;
     let Some(before)=sqlx::query_as::<_,Schedule>(&format!("SELECT {COLUMNS} FROM report_schedules WHERE id=$1 AND state='active' AND deleted_at IS NULL")).bind(id).fetch_optional(&mut *tx).await? else {return Ok(None)};
     locks::shared(&mut tx, before.scopes()).await?;
     let Some(s)=sqlx::query_as::<_,Schedule>(&format!("SELECT {COLUMNS} FROM report_schedules WHERE id=$1 AND state='active' AND deleted_at IS NULL FOR UPDATE SKIP LOCKED")).bind(id).fetch_optional(&mut *tx).await? else {return Ok(None)};
     if !authorized(&mut tx, &s).await? {
         pause(&mut tx, &s).await?;
+        record_outcome(&mut tx, &s, None, Outcome::AuthorityLost, None).await?;
         tx.commit().await?;
+        crate::metrics::METRICS.observe_report_outcome(Outcome::AuthorityLost);
         return Ok(None);
     }
     if s.next_run_at.is_none() || s.next_period_end.is_none() {
@@ -170,13 +239,15 @@ pub(crate) async fn complete(
     c: &Claim,
     body: &Value,
 ) -> Result<bool, sqlx::Error> {
-    let mut tx = crate::db::begin(&store.pool).await?;
+    let mut tx = begin_dispatch(&store.pool).await?;
     fence.check(&mut tx).await?;
     locks::shared(&mut tx, c.schedule.scopes()).await?;
     let Some(s)=sqlx::query_as::<_,Schedule>(&format!("SELECT {COLUMNS} FROM report_schedules WHERE id=$1 AND state='active' AND deleted_at IS NULL FOR UPDATE")).bind(c.schedule.id).fetch_optional(&mut *tx).await? else {return Ok(false)};
     if !authorized(&mut tx, &s).await? {
         pause(&mut tx, &s).await?;
+        record_outcome(&mut tx, &s, Some(c), Outcome::AuthorityLost, None).await?;
         tx.commit().await?;
+        crate::metrics::METRICS.observe_report_outcome(Outcome::AuthorityLost);
         return Ok(false);
     }
     if s.configuration_revision != c.schedule.configuration_revision {
@@ -199,37 +270,126 @@ pub(crate) async fn complete(
             .execute(&mut *tx)
             .await?;
         audit(&mut tx,&s,"report.generated",json!({"run_id":run,"configuration_revision":s.configuration_revision.to_string(),"skipped_intervals":c.skipped})).await?;
+        record_outcome(&mut tx, &s, Some(c), Outcome::Success, Some(run)).await?;
     }
     let next = s.calendar()?.next_after(c.period.due, Some(c.period.end))?;
     sqlx::query("UPDATE report_schedules SET last_period_end=$2,next_period_end=$3,next_run_at=$4 WHERE id=$1").bind(s.id).bind(c.period.end).bind(next.end).bind(next.due).execute(&mut *tx).await?;
     sqlx::query("UPDATE report_generation_claims SET expires_at=clock_timestamp() WHERE schedule_id=$1 AND token=$2").bind(s.id).bind(c.token).execute(&mut *tx).await?;
     tx.commit().await?;
+    if run.is_some() {
+        crate::metrics::METRICS.observe_report_outcome(Outcome::Success);
+    }
     Ok(run.is_some())
 }
-/// One bounded tick, also used by real-PostgreSQL tests. Only the seeded report
-/// lease is accepted; no unfenced operator mode that can publish occurrences.
+/// Index range scan first, bounded point-lookups/fairness second. The frontier
+/// is advisory and rotates even across live claims or failed reports. No lock
+/// or transaction is held across generation, and failover may reset the scan.
+async fn select_tick(store: &Store, fence: &Fence) -> Result<(Vec<Uuid>, Vec<Uuid>), sqlx::Error> {
+    let mut tx = begin_dispatch(&store.pool).await?;
+    fence.check(&mut tx).await?;
+    let cutoff: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut *tx)
+        .await?;
+    let pending=sqlx::query_scalar("SELECT id FROM report_schedules WHERE state='paused' AND deleted_at IS NULL AND next_run_at IS NULL ORDER BY id LIMIT $1").bind(PER_TICK).fetch_all(&mut *tx).await?;
+    let frontier = *store
+        .report_dispatch
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let mut candidates: Vec<(DateTime<Utc>, Uuid)> = if let Some((due, id)) = frontier {
+        sqlx::query_as(SELECT_CANDIDATES_AFTER)
+            .bind(cutoff)
+            .bind(CANDIDATE_BATCH)
+            .bind(due)
+            .bind(id)
+            .fetch_all(&mut *tx)
+            .await?
+    } else {
+        Vec::new()
+    };
+    if candidates.is_empty() {
+        candidates = sqlx::query_as(SELECT_CANDIDATES_FIRST)
+            .bind(cutoff)
+            .bind(CANDIDATE_BATCH)
+            .fetch_all(&mut *tx)
+            .await?;
+    }
+    let candidate_ids = candidates.iter().map(|(_, id)| *id).collect::<Vec<_>>();
+    let ids = sqlx::query_scalar(SELECT_ELIGIBLE)
+        .bind(&candidate_ids)
+        .bind(cutoff)
+        .bind(PER_TICK)
+        .fetch_all(&mut *tx)
+        .await?;
+    // Backlog metrics are deliberately saturated, never an unbounded COUNT.
+    let backlog:i64=sqlx::query_scalar("SELECT count(*) FROM (SELECT 1 FROM report_schedules WHERE state='active' AND deleted_at IS NULL AND coalesce(next_run_at,'0001-01-01 00:00:00+00'::timestamptz)<=$1 ORDER BY coalesce(next_run_at,'0001-01-01 00:00:00+00'::timestamptz),id LIMIT 1025) bounded")
+        .bind(cutoff).fetch_one(&mut *tx).await?;
+    let lag:Option<i64>=sqlx::query_scalar("SELECT greatest(0,floor(extract(epoch FROM ($1-next_run_at))))::bigint FROM report_schedules WHERE state='active' AND deleted_at IS NULL AND next_run_at<=$1 ORDER BY next_run_at,id LIMIT 1")
+        .bind(cutoff).fetch_optional(&mut *tx).await?;
+    tx.commit().await?;
+    *store
+        .report_dispatch
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = candidates.last().copied();
+    crate::metrics::METRICS.set_report_queue(backlog.min(1024), backlog > 1024, lag.unwrap_or(0));
+    Ok((pending, ids))
+}
+pub(crate) async fn failed(
+    store: &Store,
+    fence: &Fence,
+    id: Uuid,
+    c: Option<&Claim>,
+    error: &sqlx::Error,
+) -> Result<(), sqlx::Error> {
+    let mut category = Outcome::classify(error);
+    let mut tx = begin_dispatch(&store.pool).await?;
+    fence.check(&mut tx).await?;
+    let s: Schedule = sqlx::query_as(&format!(
+        "SELECT {COLUMNS} FROM report_schedules WHERE id=$1"
+    ))
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    locks::shared(&mut tx, s.scopes()).await?;
+    if !authorized(&mut tx, &s).await? {
+        category = Outcome::AuthorityLost;
+        let active:bool=sqlx::query_scalar("SELECT state='active' AND deleted_at IS NULL FROM report_schedules WHERE id=$1 FOR UPDATE").bind(id).fetch_one(&mut *tx).await?;
+        if active {
+            pause(&mut tx, &s).await?;
+        }
+    }
+    record_outcome(&mut tx, &s, c, category, None).await?;
+    audit(
+        &mut tx,
+        &s,
+        "report.generation_failed",
+        json!({"category":category.as_str()}),
+    )
+    .await?;
+    tx.commit().await?;
+    crate::metrics::METRICS.observe_report_outcome(category);
+    tracing::warn!(schedule_id=%id,category=category.as_str(),"scheduled report generation failed; retry after claim expiry");
+    Ok(())
+}
+/// One bounded tick; no unfenced operator mode can publish occurrences.
 pub async fn tick(store: &Store, fence: &Fence) -> Result<usize, sqlx::Error> {
     if fence.lease != Lease::ReportScheduler {
         return Err(sqlx::Error::Protocol("wrong report lease".into()));
     }
-    // Upgrade-era paused schedules also get real future calendar values.
-    let pending: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM report_schedules WHERE state='paused' AND deleted_at IS NULL AND next_run_at IS NULL ORDER BY id LIMIT $1")
-        .bind(PER_TICK).fetch_all(&store.pool).await?;
+    let (pending, ids) = select_tick(store, fence).await?;
     for id in pending {
-        let mut tx = crate::db::begin(&store.pool).await?;
+        let mut tx = begin_dispatch(&store.pool).await?;
         fence.check(&mut tx).await?;
         initialize(&mut tx, id).await?;
         tx.commit().await?;
     }
-    // Prioritize never-attempted schedules, then oldest expired claims. A
-    // permanently oversized report must not starve other due schedules.
-    let ids:Vec<Uuid>=sqlx::query_scalar("SELECT s.id FROM report_schedules s LEFT JOIN report_generation_claims c ON c.schedule_id=s.id WHERE s.state='active' AND s.deleted_at IS NULL AND (s.next_run_at IS NULL OR s.next_run_at<=clock_timestamp()) AND (c.schedule_id IS NULL OR c.expires_at<=clock_timestamp()) ORDER BY c.expires_at NULLS FIRST,s.next_run_at NULLS FIRST,s.id LIMIT $1").bind(PER_TICK).fetch_all(&store.pool).await?;
     let mut generated = 0;
     for id in ids {
+        let mut attempted: Option<Claim> = None;
         let result = tokio::time::timeout(DEADLINE, async {
             let Some(c) = claim(store, fence, id).await? else {
                 return Ok(false);
             };
+            attempted = Some(c.clone());
             let body = snapshot(store, &c).await?;
             complete(store, fence, &c, &body).await
         })
@@ -238,31 +398,10 @@ pub async fn tick(store: &Store, fence: &Fence) -> Result<usize, sqlx::Error> {
         match result {
             Ok(done) => generated += usize::from(done),
             Err(e) if crate::leases::is_fenced(&e) => return Err(e),
-            Err(_) => {
-                // Categories only, never SQL/upstream replies or payloads.
-                let mut tx = crate::db::begin(&store.pool).await?;
-                fence.check(&mut tx).await?;
-                let s: Schedule = sqlx::query_as(&format!(
-                    "SELECT {COLUMNS} FROM report_schedules WHERE id=$1"
-                ))
-                .bind(id)
-                .fetch_one(&mut *tx)
-                .await?;
-                locks::shared(&mut tx, s.scopes()).await?;
-                if !authorized(&mut tx,&s).await? && sqlx::query_scalar::<_,bool>("SELECT state='active' AND deleted_at IS NULL FROM report_schedules WHERE id=$1 FOR UPDATE").bind(id).fetch_one(&mut *tx).await? {pause(&mut tx,&s).await?;}
-                audit(
-                    &mut tx,
-                    &s,
-                    "report.generation_failed",
-                    json!({"category":"generation_failed"}),
-                )
-                .await?;
-                tx.commit().await?;
-                tracing::warn!(schedule_id=%id,"scheduled report generation failed; retry after claim expiry");
-            }
+            Err(e) => failed(store, fence, id, attempted.as_ref(), &e).await?,
         }
     }
-    let mut tx = crate::db::begin(&store.pool).await?;
+    let mut tx = begin_dispatch(&store.pool).await?;
     fence.check(&mut tx).await?;
     sqlx::query("SELECT omg_report_prune_snapshots(100)")
         .execute(&mut *tx)
@@ -288,6 +427,11 @@ pub fn start(store: Store) -> tokio::task::JoinHandle<()> {
                     },
                 )
                 .await;
+                if leases.held(Lease::ReportScheduler).is_none() {
+                    crate::metrics::METRICS.clear_report_queue();
+                }
+            } else {
+                crate::metrics::METRICS.clear_report_queue();
             }
         }
     })

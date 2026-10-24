@@ -30,6 +30,10 @@ pub struct Store {
     /// Advisory scheduling only: no recipient or durable lease authority.
     pub(crate) alert_dispatch:
         std::sync::Arc<std::sync::Mutex<std::collections::HashMap<uuid::Uuid, std::time::Instant>>>,
+    /// Advisory report scan frontier; reset on restart/failover. No authority
+    /// or claim ownership depends on this per-process keyset cursor.
+    pub(crate) report_dispatch:
+        std::sync::Arc<std::sync::Mutex<Option<(chrono::DateTime<chrono::Utc>, uuid::Uuid)>>>,
     /// Admission protocol (`GATEWAY_ADMISSION_MODE`, see
     /// `governance::locks`): scoped locks (default) or the former
     /// installation row lock.
@@ -117,6 +121,7 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "report_generation_claims",
     "report_runs",
     "report_snapshots",
+    "report_generation_outcomes",
     // 0057 platform alert webhooks (#45)
     "alert_webhook_destinations",
     "alert_webhook_outbox",
@@ -346,6 +351,7 @@ impl Store {
             alert_webhooks: Default::default(),
             lock_gates: std::sync::Arc::new(gates),
             alert_dispatch: Default::default(),
+            report_dispatch: Default::default(),
             admission_mode: mode,
             reporting: None,
             reporting_max_lag: std::time::Duration::from_secs(30),

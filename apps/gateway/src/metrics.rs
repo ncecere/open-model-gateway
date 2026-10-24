@@ -224,6 +224,10 @@ pub struct Metrics {
     leases_held: Family<L1, Gauge>,
     lease_terms: Family<L1, Counter>,
     background_runs: Family<L2, Counter>,
+    report_outcomes: Family<L1, Counter>,
+    report_backlog: Family<L0, Gauge>,
+    report_backlog_capped: Family<L0, Gauge>,
+    report_oldest_due_lag: Family<L0, Gauge>,
     partition_months: Family<L1, Gauge>,
     history_findings: Gauge,
     rollup_hours: Family<L1, Counter>,
@@ -396,6 +400,10 @@ impl Metrics {
             leases_held: Family::default(),
             lease_terms: Family::default(),
             background_runs: Family::default(),
+            report_outcomes: Family::default(),
+            report_backlog: Family::default(),
+            report_backlog_capped: Family::default(),
+            report_oldest_due_lag: Family::default(),
             partition_months: Family::default(),
             history_findings: Gauge::default(),
             rollup_hours: Family::default(),
@@ -666,6 +674,32 @@ impl Metrics {
             "Singleton background job runs on this replica by job and result (ok, failed, fenced: the lease term ended)",
             metrics.background_runs.clone(),
         );
+        for category in crate::scheduled_reports::Outcome::ALL {
+            metrics
+                .report_outcomes
+                .get_or_create(&[("category", category.as_str().to_owned())])
+                .inc_by(0);
+        }
+        registry.register(
+            "report_generation_outcomes",
+            "Scheduled report generation outcomes, fixed categories only; no scope identifiers",
+            metrics.report_outcomes.clone(),
+        );
+        registry.register(
+            "report_due_backlog",
+            "Active due schedules, saturated at 1024; includes uninitialized calendars",
+            metrics.report_backlog.clone(),
+        );
+        registry.register(
+            "report_due_backlog_capped",
+            "Whether due backlog exceeds the 1024-schedule bounded sample",
+            metrics.report_backlog_capped.clone(),
+        );
+        registry.register(
+            "report_oldest_due_lag_seconds",
+            "Oldest initialized active due schedule lag at the scheduler's last bounded check",
+            metrics.report_oldest_due_lag.clone(),
+        );
         registry.register(
             "history_partition_months_ahead",
             "Future UTC months covered by partitions, by history table (the partitions job's last check; alert below 2)",
@@ -868,6 +902,23 @@ impl Metrics {
             .inc();
     }
 
+    pub(crate) fn observe_report_outcome(&self, category: crate::scheduled_reports::Outcome) {
+        self.report_outcomes
+            .get_or_create(&[("category", category.as_str().to_owned())])
+            .inc();
+    }
+    pub(crate) fn set_report_queue(&self, backlog: i64, capped: bool, lag: i64) {
+        self.report_backlog.get_or_create(&[]).set(backlog);
+        self.report_backlog_capped
+            .get_or_create(&[])
+            .set(i64::from(capped));
+        self.report_oldest_due_lag.get_or_create(&[]).set(lag);
+    }
+    pub(crate) fn clear_report_queue(&self) {
+        self.report_backlog.clear();
+        self.report_backlog_capped.clear();
+        self.report_oldest_due_lag.clear();
+    }
     pub(crate) fn observe_background_run(&self, job: &'static str, result: &'static str) {
         self.background_runs
             .get_or_create(&[("job", job.to_owned()), ("result", result.to_owned())])

@@ -4,6 +4,9 @@ async fn scheduled_reports_scope_caps_concurrent_boundary_resume_and_tombstones(
     let f = fixture(&pool).await;
     let mock = crate::identity::tests::MockProvider::start(None).await;
     let identity = mock.state(pool.clone()).await;
+    let shared_admin = user(&pool, "cap-shared-admin", "user").await;
+    member(&pool, f.team, shared_admin.user_id, "admin").await;
+    let platform_admin = user(&pool, "cap-platform-admin", "admin").await;
     let cc = Uuid::new_v4();
     sqlx::query("INSERT INTO cost_centers(id,name,code) VALUES($1,'Reports','REPORTS')")
         .bind(cc)
@@ -21,9 +24,14 @@ async fn scheduled_reports_scope_caps_concurrent_boundary_resume_and_tombstones(
         sqlx::query("INSERT INTO report_schedules(scope_kind,workspace_id,cost_center_id,created_by,cadence,timezone,delivery_time) SELECT CASE WHEN $1='installation' AND g%2=0 THEN 'cost_center' ELSE $1 END,$2,CASE WHEN $1='installation' AND g%2=0 THEN $5 ELSE NULL END,$3,'weekly','UTC','09:00' FROM generate_series(1,$4::bigint) g")
             .bind(kind).bind(ws).bind(who.user_id).bind(cap-1).bind(cc).execute(&pool).await.unwrap();
         let body = input(&[who.user_id]);
+        let competitor = match kind {
+            "workspace" => &shared_admin,
+            "installation" => &platform_admin,
+            _ => who,
+        };
         let (a, b) = tokio::join!(
             call(&f.s, who, "POST", &base, body.clone()),
-            call(&f.s, who, "POST", &base, body.clone())
+            call(&f.s, competitor, "POST", &base, body.clone())
         );
         let mut statuses = vec![a.0, b.0];
         statuses.sort();

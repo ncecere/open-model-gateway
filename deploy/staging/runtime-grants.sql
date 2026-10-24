@@ -182,6 +182,9 @@ GRANT INSERT(schedule_id,token,configuration_revision,period_start,period_end,sk
 GRANT INSERT(schedule_id,period_start,period_end,configuration_revision,claim_token,lease_holder,lease_epoch,skipped_intervals,observed_at)
  ON public.report_runs TO gateway_runtime;
 GRANT INSERT(run_id,body) ON public.report_snapshots TO gateway_runtime;
+GRANT SELECT ON public.report_generation_outcomes TO gateway_runtime;
+GRANT INSERT(schedule_id,run_id,configuration_revision,claim_token,period_start,period_end,category)
+ ON public.report_generation_outcomes TO gateway_runtime;
 -- Only expired payloads, <=100/tick. Deduplication metadata is never removed.
 GRANT EXECUTE ON FUNCTION public.omg_report_prune_snapshots(integer) TO gateway_runtime;
 -- 0057 platform webhook destinations and retained outbox. Generated identity,

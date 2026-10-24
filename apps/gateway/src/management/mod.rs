@@ -121,6 +121,10 @@ const REASONS: &[(&str, &str)] = &[
     (branding::LOGO_DIMENSIONS, "logo_dimensions"),
     (alerts::PERSONAL_BUILTIN_ONLY, "personal_alerts_built_in"),
     (alerts::RULE_LIMIT, "alert_rule_limit"),
+    (
+        scheduled_reports::LIMIT_REACHED,
+        "report_schedule_limit_reached",
+    ),
     (alerts::KIND_FIXED, "alert_rule_kind_fixed"),
     (INSTALLATION_LIMITS_REMOVED, "installation_limits_removed"),
 ];

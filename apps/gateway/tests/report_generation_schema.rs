@@ -48,6 +48,7 @@ async fn scheduled_reports_0063_upgrade_preserves_ordered_prefix_and_refuses_par
         "report_runs",
         "report_snapshots",
         "report_generation_claims",
+        "report_generation_outcomes",
     ] {
         assert_eq!(
             sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))

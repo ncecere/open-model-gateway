@@ -162,6 +162,33 @@ async fn eligible(
     }
     Ok(())
 }
+pub(super) const LIMIT_REACHED: &str = "The report schedule limit for this scope has been reached";
+/// The existing installation management row serializes creates/resumes across
+/// different actors; caller also holds the live authority locks. Paused rows
+/// count, tombstones do not. Keep the count itself bounded on legacy populations.
+async fn capacity(
+    tx: &mut Transaction<'_, Postgres>,
+    kind: &str,
+    ws: Option<Uuid>,
+    owner: Uuid,
+    creating: bool,
+) -> Result<(), ApiError> {
+    let (predicate, scope, cap) = match kind {
+        "personal" => (
+            "scope_kind='personal' AND created_by=$1",
+            Some(owner),
+            10i64,
+        ),
+        "workspace" => ("workspace_id=$1", ws, 50),
+        _ => ("workspace_id IS NULL AND $1::uuid IS NULL", None, 100),
+    };
+    let count: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM (SELECT 1 FROM report_schedules WHERE deleted_at IS NULL AND ({predicate}) LIMIT $2) bounded"))
+        .bind(scope).bind(cap+1).fetch_one(&mut **tx).await?;
+    if count > cap || (creating && count == cap) {
+        return Err(ApiError(StatusCode::CONFLICT, LIMIT_REACHED));
+    }
+    Ok(())
+}
 const JSON_ROW: &str = "jsonb_build_object('id',s.id,'scope_kind',s.scope_kind,'workspace_id',s.workspace_id,'cost_center_id',s.cost_center_id,'created_by',s.created_by,'cadence',s.cadence,'timezone',s.timezone,'delivery_time',left(s.delivery_time::text,5),'state',s.state,'configuration_revision',s.configuration_revision::text,'created_at',s.created_at,'updated_at',s.updated_at,'next_run_at',s.next_run_at,'last_period_end',s.last_period_end,'recipient_user_ids',coalesce((SELECT jsonb_agg(r.user_id ORDER BY r.slot) FROM report_schedule_recipients r WHERE r.schedule_id=s.id),'[]'::jsonb))";
 async fn row(
     tx: &mut Transaction<'_, Postgres>,
@@ -221,6 +248,7 @@ async fn create(
         }
     }
     eligible(&mut tx, &kind, ws, &b.recipient_user_ids).await?;
+    capacity(&mut tx, &kind, ws, u.user_id, true).await?;
     let id:Uuid = sqlx::query_scalar("INSERT INTO report_schedules(scope_kind,workspace_id,cost_center_id,created_by,cadence,timezone,delivery_time,state) VALUES($1,$2,$3,$4,$5,$6,$7::text::time,$8) RETURNING id")
         .bind(&kind).bind(ws).bind(b.cost_center_id).bind(u.user_id).bind(&b.cadence).bind(&b.timezone).bind(&b.delivery_time).bind(&b.state).fetch_one(&mut *tx).await?;
     recipients(&mut tx, id, &b.recipient_user_ids).await?;
@@ -285,6 +313,14 @@ async fn update(
     // Explicit recipient writes and a transition back to active reauthorize.
     if recipients_set || (state == "active" && old["state"] != "active") {
         eligible(&mut tx, kind, ws, &users).await?;
+    }
+    if state == "active" && old["state"] != "active" {
+        let creator: Uuid = old["created_by"]
+            .as_str()
+            .ok_or_else(invalid)?
+            .parse()
+            .map_err(|_| invalid())?;
+        capacity(&mut tx, kind, ws, creator, false).await?;
     }
     let recipients_changed = users.iter().collect::<std::collections::HashSet<_>>()
         != old_users.iter().collect::<std::collections::HashSet<_>>();

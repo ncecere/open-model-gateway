@@ -82,13 +82,16 @@ DO $$ DECLARE r record; t text; BEGIN
  IF NOT has_table_privilege('gateway_runtime','public.report_schedule_recipients','SELECT,DELETE') OR NOT has_column_privilege('gateway_runtime','public.report_schedule_recipients','user_id','INSERT') OR has_any_column_privilege('gateway_runtime','public.report_schedule_recipients','UPDATE') OR has_table_privilege('gateway_runtime','public.report_schedule_recipients','TRUNCATE') THEN RAISE EXCEPTION 'report recipient ACL'; END IF;
  IF (SELECT count(*) FROM pg_trigger WHERE tgname IN ('report_schedules_guard','report_schedules_no_delete','report_schedules_no_truncate','report_schedule_recipients_no_update','report_schedule_recipients_no_truncate') AND tgenabled='O' AND NOT tgisinternal)<>5 THEN RAISE EXCEPTION 'report schedule guards missing or disabled'; END IF;
  IF NOT EXISTS(SELECT FROM work_leases WHERE name='report_scheduler') THEN RAISE EXCEPTION 'report scheduler lease missing'; END IF;
- FOREACH t IN ARRAY ARRAY['report_runs','report_snapshots'] LOOP
+ FOREACH t IN ARRAY ARRAY['report_runs','report_snapshots','report_generation_outcomes'] LOOP
   IF NOT has_table_privilege('gateway_runtime','public.'||t,'SELECT') OR has_table_privilege('gateway_runtime','public.'||t,'INSERT,UPDATE,DELETE,TRUNCATE') OR has_any_column_privilege('gateway_runtime','public.'||t,'UPDATE') THEN RAISE EXCEPTION 'report append-only ACL: %',t; END IF;
  END LOOP;
  IF NOT has_column_privilege('gateway_runtime','public.report_runs','claim_token','INSERT') OR NOT has_column_privilege('gateway_runtime','public.report_snapshots','body','INSERT') OR NOT has_column_privilege('gateway_runtime','public.report_schedules','next_period_end','UPDATE') THEN RAISE EXCEPTION 'report generation not maintainable'; END IF;
  IF has_column_privilege('gateway_runtime','public.report_runs','created_at','INSERT') OR has_column_privilege('gateway_runtime','public.report_runs','configuration','INSERT') OR has_column_privilege('gateway_runtime','public.report_generation_claims','schedule_id','UPDATE') OR has_table_privilege('gateway_runtime','public.report_generation_claims','DELETE,TRUNCATE') THEN RAISE EXCEPTION 'report lineage bypass'; END IF;
+ IF has_column_privilege('gateway_runtime','public.report_snapshots','expires_at','INSERT') THEN RAISE EXCEPTION 'report retention clock bypass'; END IF;
+ IF NOT has_column_privilege('gateway_runtime','public.report_generation_outcomes','category','INSERT') OR has_column_privilege('gateway_runtime','public.report_generation_outcomes','created_at','INSERT') THEN RAISE EXCEPTION 'report outcome ACL'; END IF;
  IF NOT has_function_privilege('gateway_runtime','public.omg_report_prune_snapshots(integer)','EXECUTE') THEN RAISE EXCEPTION 'report expiry unavailable'; END IF;
  IF (SELECT count(*) FROM pg_trigger WHERE tgname IN ('report_schedules_z_calendar_guard','report_claim_identity_guard','report_claims_no_delete','report_claims_no_truncate','report_run_guard','report_runs_immutable','report_runs_no_truncate','report_snapshots_immutable','report_snapshots_no_truncate') AND tgenabled='O' AND NOT tgisinternal)<>9 THEN RAISE EXCEPTION 'report generation guards missing or disabled'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname IN ('report_generation_outcomes_immutable','report_generation_outcomes_no_truncate') AND tgenabled='O' AND NOT tgisinternal)<>2 THEN RAISE EXCEPTION 'report outcome guards missing or disabled'; END IF;
  -- Webhooks (0057): explicit column ACLs, generated identity and frozen bytes.
  FOREACH t IN ARRAY ARRAY['alert_webhook_destinations','alert_webhook_outbox'] LOOP
   IF NOT has_table_privilege('gateway_runtime','public.'||t,'SELECT') OR has_table_privilege('gateway_runtime','public.'||t,'INSERT,UPDATE,DELETE,TRUNCATE') THEN RAISE EXCEPTION 'webhook table privileges: %',t; END IF;
@@ -321,7 +324,7 @@ END $$;
 -- successful primary snapshot + fenced publication path runs in the disposable
 -- runtime-role integration test, not against an operator's live report queue.
 DO $$ DECLARE stmt text; BEGIN
- FOREACH stmt IN ARRAY ARRAY['UPDATE report_runs SET configuration_revision=2','DELETE FROM report_runs','TRUNCATE report_runs','UPDATE report_snapshots SET body=''{}''','DELETE FROM report_snapshots','TRUNCATE report_snapshots','UPDATE report_generation_claims SET schedule_id=gen_random_uuid()','DELETE FROM report_generation_claims','TRUNCATE report_generation_claims'] LOOP
+ FOREACH stmt IN ARRAY ARRAY['UPDATE report_runs SET configuration_revision=2','DELETE FROM report_runs','TRUNCATE report_runs','UPDATE report_snapshots SET body=''{}''','DELETE FROM report_snapshots','TRUNCATE report_snapshots','UPDATE report_generation_claims SET schedule_id=gen_random_uuid()','DELETE FROM report_generation_claims','TRUNCATE report_generation_claims','UPDATE report_generation_outcomes SET category=''other''','DELETE FROM report_generation_outcomes','TRUNCATE report_generation_outcomes'] LOOP
   BEGIN EXECUTE stmt; RAISE EXCEPTION 'report immutable operation allowed: %',stmt; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  END LOOP;
  IF public.omg_report_prune_snapshots(0)<>0 THEN RAISE EXCEPTION 'zero-cap report prune'; END IF;

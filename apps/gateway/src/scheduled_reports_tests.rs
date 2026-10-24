@@ -179,6 +179,59 @@ mod db {
         assert_eq!(count(&pool).await, 0);
     }
     #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn scheduled_reports_occurrence_failure_categories_are_immutable_and_bounded(
+        pool: PgPool,
+    ) {
+        let (s, f, id, _) = setup(&pool).await;
+        let c = claim(&s, &f, id).await.unwrap().unwrap();
+        for (error, category) in [
+            (sqlx::Error::PoolTimedOut, "timeout"),
+            (
+                sqlx::Error::Protocol("report snapshot exceeds limit".into()),
+                "snapshot_too_large",
+            ),
+            (
+                sqlx::Error::Protocol("report additive history unavailable".into()),
+                "history_unavailable",
+            ),
+            (
+                sqlx::Error::Protocol("DO NOT PERSIST RAW DETAILS".into()),
+                "other",
+            ),
+        ] {
+            crate::scheduled_reports::failed(&s, &f, id, Some(&c), &error)
+                .await
+                .unwrap();
+            let recorded:bool=sqlx::query_scalar("SELECT EXISTS(SELECT FROM report_generation_outcomes WHERE schedule_id=$1 AND category=$2 AND period_start IS NOT NULL AND period_end IS NOT NULL AND claim_token IS NOT NULL AND run_id IS NULL)").bind(id).bind(category).fetch_one(&pool).await.unwrap();
+            assert!(recorded);
+        }
+        for statement in [
+            "UPDATE report_generation_outcomes SET category='other'",
+            "DELETE FROM report_generation_outcomes",
+            "TRUNCATE report_generation_outcomes",
+        ] {
+            assert!(
+                sqlx::query(statement).execute(&pool).await.is_err(),
+                "{statement}"
+            );
+        }
+        assert!(sqlx::query("INSERT INTO report_generation_outcomes(schedule_id,configuration_revision,category) VALUES($1,1,'unbounded attacker detail')").bind(id).execute(&pool).await.is_err());
+        assert_eq!(
+            count(&pool).await,
+            0,
+            "failure records are not successful snapshots"
+        );
+        assert!(
+            sqlx::query_scalar::<_, bool>(
+                "SELECT last_period_end IS NULL FROM report_schedules WHERE id=$1"
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        );
+    }
+    #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn scheduled_reports_generation_snapshot_cap_rolls_back_cursor_and_occurrence(
         pool: PgPool,
     ) {
@@ -187,7 +240,11 @@ mod db {
         let body = snapshot(&s, &c).await.unwrap();
         let mut oversized = body.clone();
         oversized["oversized"] = serde_json::json!("x".repeat(1_048_576));
-        assert!(complete(&s, &f, &c, &oversized).await.is_err());
+        let error = complete(&s, &f, &c, &oversized).await.unwrap_err();
+        assert_eq!(
+            crate::scheduled_reports::Outcome::classify(&error),
+            crate::scheduled_reports::Outcome::SnapshotTooLarge
+        );
         assert_eq!(count(&pool).await, 0);
         assert!(
             sqlx::query_scalar::<_, bool>(
@@ -221,6 +278,7 @@ mod db {
         assert_eq!(state, "paused");
         let audit:Value=sqlx::query_scalar("SELECT metadata FROM audit_events WHERE resource_id=$1 AND action='report_schedule.authority_paused'").bind(id).fetch_one(&pool).await.unwrap();
         assert_eq!(audit["category"], "creator_authority_lost");
+        assert!(sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT FROM report_generation_outcomes WHERE schedule_id=$1 AND category='authority_lost' AND period_start IS NOT NULL)").bind(id).fetch_one(&pool).await.unwrap());
     }
     #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn scheduled_reports_generation_workspace_and_personal_live_authority(pool: PgPool) {
@@ -288,7 +346,7 @@ mod db {
         assert!(body["totals"]["root_requests"].is_null());
         // Migrator-only fixture aging. Runtime never receives these privileges;
         // the immutable UPDATE refusal was proved above before changing age.
-        sqlx::raw_sql("ALTER TABLE report_runs DISABLE TRIGGER report_runs_immutable; UPDATE report_runs SET created_at=clock_timestamp()-interval '91 days',expires_at=clock_timestamp()-interval '1 day'; ALTER TABLE report_runs ENABLE TRIGGER report_runs_immutable;")
+        sqlx::raw_sql("ALTER TABLE report_runs DISABLE TRIGGER report_runs_immutable; UPDATE report_runs SET created_at=clock_timestamp()-interval '91 days',expires_at=clock_timestamp()-interval '1 day'; ALTER TABLE report_runs ENABLE TRIGGER report_runs_immutable; ALTER TABLE report_snapshots DISABLE TRIGGER report_snapshots_immutable; UPDATE report_snapshots SET expires_at=clock_timestamp()-interval '1 day'; ALTER TABLE report_snapshots ENABLE TRIGGER report_snapshots_immutable;")
             .execute(&pool).await.unwrap();
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT omg_report_prune_snapshots(100)")

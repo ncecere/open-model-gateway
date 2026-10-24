@@ -43,7 +43,8 @@ fn scheduled_reports_failure_categories_are_bounded() {
 #[cfg(feature = "integration-tests")]
 mod db {
     use crate::scheduled_reports::{
-        CANDIDATE_BATCH, SELECT_CANDIDATES_AFTER, SELECT_CANDIDATES_FIRST, begin_dispatch,
+        CANDIDATE_BATCH, SELECT_CANDIDATES_AFTER, SELECT_CANDIDATES_FIRST, SELECT_ELIGIBLE,
+        begin_dispatch,
     };
     use chrono::{DateTime, Utc};
     use serde_json::Value;
@@ -92,6 +93,27 @@ mod db {
             .fetch_one(&mut *tx)
             .await
             .unwrap();
+        let page: Vec<(DateTime<Utc>, Uuid)> = sqlx::query_as(SELECT_CANDIDATES_FIRST)
+            .bind(cutoff)
+            .bind(CANDIDATE_BATCH)
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap();
+        let ids = page.iter().map(|(_, id)| *id).collect::<Vec<_>>();
+        let join_explain = format!("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {SELECT_ELIGIBLE}");
+        let join: Value = sqlx::query_scalar(&join_explain)
+            .bind(ids)
+            .bind(cutoff)
+            .bind(8i64)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        let (mut ignored, mut join_work) = (false, 0.);
+        inspect(&join[0]["Plan"], &mut ignored, &mut join_work);
+        assert!(
+            join_work <= CANDIDATE_BATCH as f64 * 4.,
+            "unbounded claim join: {join}"
+        );
         for after in [false, true] {
             let sql = if after {
                 SELECT_CANDIDATES_AFTER
@@ -120,5 +142,17 @@ mod db {
                 "unbounded scan work {work}: {plan}"
             );
         }
+        sqlx::query("SET LOCAL statement_timeout='1ms'")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let error = sqlx::query("SELECT pg_sleep(0.05)")
+            .execute(&mut *tx)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            crate::scheduled_reports::Outcome::classify(&error),
+            crate::scheduled_reports::Outcome::Timeout
+        );
     }
 }

@@ -42,6 +42,10 @@ gateway_metrics_collection_errors counter collector System
 gateway_otlp_metrics_dropped counter reason System
 gateway_otlp_metrics_pushes counter outcome System
 gateway_otlp_metrics_rejected_points counter - System
+gateway_report_due_backlog gauge - System
+gateway_report_due_backlog_capped gauge - System
+gateway_report_generation_outcomes counter category System
+gateway_report_oldest_due_lag_seconds gauge - System
 gateway_reservations_held gauge state Traffic
 gateway_scope_lock_wait_seconds histogram lock,path Traffic
 gateway_scope_lock_waiting gauge path Traffic

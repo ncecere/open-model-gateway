@@ -139,6 +139,7 @@ pub(crate) fn populated_registry() -> &'static Metrics {
     m.set_lease_held("metrics", true);
     m.observe_lease_term("metrics");
     m.observe_background_run("metrics", "ok");
+    m.set_report_queue(0, false, 0);
     m.set_partition_months("requests", 2);
     m.observe_rollup_hours("new", 1);
     // These five families are populated only by the DB refresh; prime their
