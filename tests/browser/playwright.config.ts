@@ -26,6 +26,7 @@ export default defineConfig({
   projects: [
     { name: "journey", testMatch: /journey\.spec\.ts/ },
     { name: "alert-email", testMatch: /alert-email\.spec\.ts/ },
+    { name: "alert-webhooks", testMatch: /alert-webhooks\.spec\.ts/ },
     { name: "key-safety", testMatch: /key-safety\.spec\.ts/, dependencies: ["journey"] },
     { name: "key-expiry", testMatch: /key-expiry\.spec\.ts/, dependencies: ["journey"] },
     { name: "key-issuance", testMatch: /key-issuance\.spec\.ts/, dependencies: ["journey"] },
