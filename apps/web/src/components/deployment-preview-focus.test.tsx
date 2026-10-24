@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
-import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { DeploymentStatusActions } from "./deployment-preview";
-import { ActionProvider, Button } from "./ui";
+import { ActionProvider, Button, useApi } from "./ui";
+import { platformPath } from "../lib/api";
 import { PageHeader } from "./templates/page-header";
 import { HEADER_COLLAPSE_QUERY } from "./templates/header-actions";
 import { RoutesTable, type RouteRow, type RouteSet } from "../pages/model-page";
@@ -39,32 +39,37 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("menu-originated deployment review focus", () => {
-  for (const source of ["retire", "narrow-retire", "route-menu"] as const) {
+  for (const source of ["retire", "narrow-retire", "review-disable", "review-enable", "route-menu", "route-menu-enable"] as const) {
     it.each(["review-cancel", "cancel", "success"] as const)(`${source}: %s restores a connected trigger or fallback`, async outcome => {
       if (source === "narrow-retire") viewport(390);
-      let applied = () => {};
+      const routeMenu = source.startsWith("route-menu"), reviewButton = source.startsWith("review-"), initiallyEnabled = !source.endsWith("-enable");
+      const path = `${platformPath}/deployments/${record.id}`, client = testClient();
+      client.setQueryData(["api", undefined, path], { ...record, enabled: initiallyEnabled });
+      let finishRefetch!: (response: Response) => void;
+      const refetchResponse = new Promise<Response>(resolve => { finishRefetch = resolve; });
       function Controls() {
-        const [enabled, setEnabled] = useState(true);
-        applied = () => setEnabled(false);
-        return source === "route-menu"
+        const enabled = useApi<typeof record>(path).data!.enabled;
+        return <><output aria-label="Deployment status">{enabled ? "Enabled" : "Disabled"}</output>{routeMenu
           ? <RoutesTable set={routeSet(enabled)} model={model} workload="generation" writable />
-          : <DeploymentStatusActions record={{ ...record, enabled }} name="Upstream">{actions => <PageHeader title="Route" actions={actions} />}</DeploymentStatusActions>;
+          : <DeploymentStatusActions record={{ ...record, enabled }} name="Upstream">{actions => <PageHeader title="Route" actions={actions} />}</DeploymentStatusActions>}</>;
       }
       const fetch = vi.fn().mockImplementation((_path: string, init: RequestInit) => {
-        if (init.method === "POST") return Promise.resolve(Response.json(impact));
-        applied();
+        if (init.method === "POST") return Promise.resolve(Response.json({ ...impact, diff: [{ field: "enabled", before: initiallyEnabled, after: !initiallyEnabled }] }));
+        if (init.method === "GET") return refetchResponse;
         return Promise.resolve(Response.json({ ok: true }));
       });
       vi.stubGlobal("fetch", fetch);
-      render(<QueryClientProvider client={testClient()}><ActionProvider><Controls /></ActionProvider></QueryClientProvider>);
+      render(<QueryClientProvider client={client}><ActionProvider><Controls /></ActionProvider></QueryClientProvider>);
       const user = userEvent.setup();
-      const triggerName = source === "route-menu" ? /^Actions for route Upstream$/ : source === "narrow-retire" ? /^More actions$/ : /^Actions for Upstream$/;
+      const triggerName = routeMenu ? /^Actions for route Upstream$/ : reviewButton ? /^Review changes$/ : source === "narrow-retire" ? /^More actions$/ : /^Actions for Upstream$/;
       const origin = screen.getByRole("button", { name: triggerName });
       origin.focus();
       await user.keyboard("{Enter}");
-      await screen.findByRole("menuitem", { name: source === "route-menu" ? /^Disable route…$/ : /^Retire resource…$/ });
-      await user.keyboard("{End}{Enter}");
-      await screen.findByText("Enabled → Disabled");
+      if (!reviewButton) {
+        await screen.findByRole("menuitem", { name: routeMenu ? initiallyEnabled ? /^Disable route…$/ : /^Enable route…$/ : /^Retire resource…$/ });
+        await user.keyboard("{End}{Enter}");
+      }
+      await screen.findByText(initiallyEnabled ? "Enabled → Disabled" : "Disabled → Enabled");
       if (outcome === "review-cancel") {
         screen.getByRole("button", { name: /^Cancel$/ }).focus();
         await user.keyboard("{Enter}");
@@ -77,16 +82,27 @@ describe("menu-originated deployment review focus", () => {
       const proceed = screen.getByRole("button", { name: /^Continue to confirmation$/ });
       proceed.focus();
       await user.keyboard("{Enter}");
-      await screen.findByRole("dialog", { name: source === "route-menu" ? /^Disable route Upstream\?$/ : /^Retire Upstream\?$/ });
-      const finish = screen.getByRole("button", { name: outcome === "cancel" ? /^Cancel$/ : source === "route-menu" ? /^Disable$/ : /^Retire resource$/ });
+      await screen.findByRole("dialog", { name: routeMenu ? initiallyEnabled ? /^Disable route Upstream\?$/ : /^Enable route Upstream\?$/ : reviewButton ? initiallyEnabled ? /^Disable Upstream\?$/ : /^Enable Upstream\?$/ : /^Retire Upstream\?$/ });
+      const finish = screen.getByRole("button", { name: outcome === "cancel" ? /^Cancel$/ : routeMenu || reviewButton ? initiallyEnabled ? /^Disable$/ : /^Enable$/ : /^Retire resource$/ });
       finish.focus();
       await user.keyboard("{Enter}");
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-      const destination = outcome === "success" ? screen.getByRole("button", { name: source === "route-menu" ? triggerName : /^Review changes$/ }) : origin;
+      if (outcome === "success") {
+        // The mutation closes confirmation while the invalidated GET is still
+        // pending. Only then deliver the refreshed render that can remove or
+        // remount the originating trigger (retire menu / route regrouping).
+        expect(screen.getByLabelText("Deployment status").textContent).toBe(initiallyEnabled ? "Enabled" : "Disabled");
+        await waitFor(() => expect(document.activeElement).toBe(origin));
+        expect(origin.isConnected).toBe(true);
+        finishRefetch(Response.json({ ...record, enabled: !initiallyEnabled }));
+        await waitFor(() => expect(screen.getByLabelText("Deployment status").textContent).toBe(initiallyEnabled ? "Disabled" : "Enabled"));
+      }
+      const destination = outcome === "success" ? screen.getByRole("button", { name: routeMenu ? triggerName : /^Review changes$/ }) : origin;
       await waitFor(() => expect(document.activeElement).toBe(destination));
       expect(destination.isConnected).toBe(true);
-      expect(fetch).toHaveBeenCalledTimes(outcome === "cancel" ? 1 : 2);
-      if (outcome === "success") expect(fetch.mock.calls[1][1].method).toBe(source === "route-menu" ? "PATCH" : "DELETE");
+      expect(document.activeElement?.isConnected).toBe(true);
+      expect(fetch).toHaveBeenCalledTimes(outcome === "cancel" ? 1 : 3);
+      if (outcome === "success") expect(fetch.mock.calls[1][1].method).toBe(routeMenu || reviewButton ? "PATCH" : "DELETE");
     });
   }
   it("passes deployment actions through the header classifier at 390px, merging sibling actions into one menu", async () => {
