@@ -140,6 +140,66 @@ pub(crate) const ROUTES: &[Route] = &[
     route!("GET PUT PATCH DELETE", "/scim/v2/Groups/{id}", Scim, DENIED),
     route!("*", "/scim", Scim, DENIED),
     route!("*", "/scim/{*rest}", Scim, DENIED),
+    route!(
+        "GET",
+        "/api/v1/platform/provider-cost-imports",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "POST",
+        "/api/v1/platform/provider-cost-imports",
+        PlatformWrite,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/provider-cost-imports/{id}",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/provider-cost-imports/{id}/lines",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/provider-cost-mappings",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "POST",
+        "/api/v1/platform/provider-cost-mappings",
+        PlatformWrite,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/provider-cost-mappings/{id}",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/provider-reconciliations",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "POST",
+        "/api/v1/platform/provider-reconciliations",
+        PlatformWrite,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/provider-reconciliations/{id}",
+        PlatformRead,
+        DENIED
+    ),
     route!("GET", "/api/v1/me", Browser, DENIED),
     route!("GET", "/api/v1/me/summary", Browser, DENIED),
     route!("GET", "/api/v1/me/keys", Browser, DENIED),

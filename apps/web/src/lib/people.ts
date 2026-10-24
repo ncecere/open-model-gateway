@@ -125,6 +125,7 @@ export const auditActionLabels: Record<string, string> = {
   "settings.logo_uploaded": "Uploaded logo", "settings.logo_removed": "Removed logo",
   "service_account.created": "Created service account", "service_account.updated": "Changed service account",
   "usage.reconciled": "Reconciled usage",
+  "provider_cost.imported": "Imported provider-reported costs", "provider_cost.mapped": "Attested provider cost mapping", "provider_cost.reconciled": "Reconciled provider-reported costs",
   "user.provisioned": "Provisioned user", "user.updated": "Changed user", "user.suspended": "Suspended user", "subject.exported": "Exported own data", "user.exported": "Exported user record", "user.personal_data_removed": "Removed personal data", "legal_hold.placed": "Placed legal hold", "legal_hold.released": "Released legal hold", "audit_export.tested": "Sent a test audit export", "user.sessions_revoked": "Signed out all sessions of user", "session.revoked": "Signed out own session", "session.others_revoked": "Signed out own other sessions", "user.reactivated": "Reactivated user", "user.bootstrap_role": "Granted first admin role", "user.cleaned": "Cleaned up departed user",
   "workspace.created": "Created workspace", "workspace.updated": "Changed workspace", "workspace.manual_membership_set": "Set manual membership", "workspace.manual_membership_revoked": "Removed manual membership",
 };

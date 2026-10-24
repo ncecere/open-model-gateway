@@ -546,17 +546,51 @@ async fn every_json_management_write_rejects_unknown_fields_after_valid_control(
         json!({"input_tokens":"1","output_tokens":"1","billing_usage":null,"evidence":"configuration control"})
     );
     let cost_upload = super::provider_cost_tests::upload();
-    let (status, cost_import) = call(&f.s, &f.admin, "POST", "/api/v1/platform/provider-cost-imports", cost_upload.clone()).await;
+    let (status, cost_import) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        "/api/v1/platform/provider-cost-imports",
+        cost_upload.clone(),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{cost_import}");
-    let cost_mapping = super::provider_cost_tests::mapping(connection, Some(ws));
-    let (status, cost_map) = call(&f.s, &f.admin, "POST", "/api/v1/platform/provider-cost-mappings", cost_mapping.clone()).await;
+    let cost_connection = Uuid::new_v4();
+    sqlx::query("INSERT INTO provider_connections(id,name,provider,credential_ref) VALUES($1,'Cost matrix','anthropic','env:PLACEHOLDER')")
+        .bind(cost_connection).execute(&pool).await.unwrap();
+    let cost_mapping = super::provider_cost_tests::mapping(cost_connection, Some(ws));
+    let (status, cost_map) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        "/api/v1/platform/provider-cost-mappings",
+        cost_mapping.clone(),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{cost_map}");
     let mut next_mapping = cost_mapping;
     next_mapping["supersedes"] = cost_map["id"].clone();
-    case!("provider_costs::import", "POST", "/api/v1/platform/provider-cost-imports", &f.admin, cost_upload);
-    case!("provider_costs::create_mapping", "POST", "/api/v1/platform/provider-cost-mappings", &f.admin, next_mapping);
-    case!("provider_costs::reconcile", "POST", "/api/v1/platform/provider-reconciliations", &f.admin,
-        json!({"import_id":id(&cost_import),"mapping_id":id(&cost_map)}));
+    case!(
+        "provider_costs::import",
+        "POST",
+        "/api/v1/platform/provider-cost-imports",
+        &f.admin,
+        cost_upload
+    );
+    case!(
+        "provider_costs::create_mapping",
+        "POST",
+        "/api/v1/platform/provider-cost-mappings",
+        &f.admin,
+        next_mapping
+    );
+    case!(
+        "provider_costs::reconcile",
+        "POST",
+        "/api/v1/platform/provider-reconciliations",
+        &f.admin,
+        json!({"import_id":id(&cost_import),"mapping_id":id(&cost_map)})
+    );
     let covered: BTreeSet<String> = cases.iter().map(|c| c.handler.to_owned()).collect();
     assert_eq!(
         covered,

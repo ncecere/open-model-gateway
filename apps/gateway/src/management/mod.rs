@@ -18,6 +18,7 @@ mod logs;
 mod me;
 mod members;
 mod models_ux;
+mod provider_costs;
 mod requests;
 pub(crate) mod resources;
 mod sessions;
@@ -606,6 +607,7 @@ pub fn public_router() -> Router<Store> {
 /// 2 MiB request limit.
 pub fn upload_router(identity: IdentityState) -> Router<Store> {
     files::upload_routes()
+        .merge(provider_costs::upload_routes())
         .route_layer(middleware::from_fn_with_state(
             identity.store().clone(),
             authorization::require_route_access,
@@ -618,6 +620,7 @@ pub fn upload_router(identity: IdentityState) -> Router<Store> {
 fn routes() -> Router<Store> {
     Router::new()
         .merge(admin_tokens::routes())
+        .merge(provider_costs::routes())
         .merge(directory::routes())
         .merge(resources::platform_routes())
         .merge(catalogs::routes())

@@ -11,6 +11,9 @@ DO $$ DECLARE c record; BEGIN
  END LOOP;
 END $$;
 GRANT USAGE ON SCHEMA public TO gateway_runtime;
+-- 0064/#48 immutable provider-reported evidence, never invoice settlement.
+GRANT SELECT,INSERT ON public.provider_cost_imports,public.provider_cost_lines,
+ public.provider_cost_mappings,public.provider_cost_bindings,public.provider_reconciliations TO gateway_runtime;
 GRANT SELECT(version,checksum,success) ON public._sqlx_migrations TO gateway_runtime;
 GRANT SELECT ON public.installation,public.users,public.oidc_identities,
  public.platform_role_grants,public.effective_platform_roles,public.cost_centers,

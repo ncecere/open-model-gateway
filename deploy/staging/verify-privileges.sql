@@ -6,7 +6,7 @@ DO $$ DECLARE r record; t text; BEGIN
  IF EXISTS(SELECT FROM pg_database WHERE datname=current_database() AND datdba=r.oid) OR EXISTS(SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relowner=r.oid) THEN RAISE EXCEPTION 'runtime owns objects'; END IF;
  IF has_database_privilege('gateway_runtime','postgres','CONNECT') OR has_database_privilege('gateway_runtime','template1','CONNECT') THEN RAISE EXCEPTION 'maintenance database access'; END IF;
  IF has_schema_privilege('gateway_runtime','public','CREATE') OR has_database_privilege('gateway_runtime',current_database(),'CREATE') OR has_database_privilege('gateway_runtime',current_database(),'TEMP') THEN RAISE EXCEPTION 'runtime can create objects'; END IF;
- FOREACH t IN ARRAY ARRAY['_sqlx_migrations','deployment_prices','monetary_ledger','audit_events'] LOOP
+ FOREACH t IN ARRAY ARRAY['_sqlx_migrations','deployment_prices','monetary_ledger','audit_events','provider_cost_imports','provider_cost_lines','provider_cost_mappings','provider_cost_bindings','provider_reconciliations'] LOOP
   IF has_table_privilege('gateway_runtime','public.'||t,'UPDATE,DELETE,TRUNCATE') OR has_any_column_privilege('gateway_runtime','public.'||t,'UPDATE') THEN RAISE EXCEPTION 'mutable immutable history: %',t; END IF;
  END LOOP;
  IF has_table_privilege('gateway_runtime','public._sqlx_migrations','INSERT') OR has_table_privilege('gateway_runtime','public.installation','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.installation','schema_family','UPDATE') OR has_column_privilege('gateway_runtime','public.installation','id','UPDATE') THEN RAISE EXCEPTION 'runtime can rewrite lineage'; END IF;
@@ -70,6 +70,11 @@ DO $$ DECLARE r record; t text; BEGIN
  IF has_table_privilege('gateway_runtime','public.scim_users','DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.scim_users','user_id','UPDATE') OR has_column_privilege('gateway_runtime','public.scim_users','created_at','UPDATE') THEN RAISE EXCEPTION 'scim user link removable or re-keyable'; END IF;
  IF has_column_privilege('gateway_runtime','public.scim_groups','id','UPDATE') OR has_any_column_privilege('gateway_runtime','public.scim_group_members','UPDATE') OR has_table_privilege('gateway_runtime','public.scim_groups','TRUNCATE') OR has_table_privilege('gateway_runtime','public.scim_group_members','TRUNCATE') THEN RAISE EXCEPTION 'scim group identity rewritable'; END IF;
  IF has_table_privilege('gateway_runtime','public.scim_state','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.scim_state','singleton','UPDATE') THEN RAISE EXCEPTION 'scim state row replaceable'; END IF;
+ -- 0064: every provider-reported history table is SELECT/INSERT only.
+ FOREACH t IN ARRAY ARRAY['provider_cost_imports','provider_cost_lines','provider_cost_mappings','provider_cost_bindings','provider_reconciliations'] LOOP
+  IF NOT has_table_privilege('gateway_runtime','public.'||t,'SELECT,INSERT') THEN RAISE EXCEPTION 'provider cost history unavailable: %',t; END IF;
+  IF (SELECT count(*) FROM pg_trigger WHERE tgrelid=('public.'||t)::regclass AND tgenabled='O' AND NOT tgisinternal AND tgfoid='public.immutable_history'::regproc)<>2 THEN RAISE EXCEPTION 'provider cost append-only guards missing: %',t; END IF;
+ END LOOP;
  -- Webhooks (0057): explicit column ACLs, generated identity and frozen bytes.
  FOREACH t IN ARRAY ARRAY['alert_webhook_destinations','alert_webhook_outbox'] LOOP
   IF NOT has_table_privilege('gateway_runtime','public.'||t,'SELECT') OR has_table_privilege('gateway_runtime','public.'||t,'INSERT,UPDATE,DELETE,TRUNCATE') THEN RAISE EXCEPTION 'webhook table privileges: %',t; END IF;
@@ -268,6 +273,30 @@ DO $$ DECLARE fu uuid:=gen_random_uuid(); BEGIN
 END $$;
 SET LOCAL ROLE gateway_runtime;
 SELECT version,checksum,success FROM public._sqlx_migrations ORDER BY version;
+-- Executable provider-cost INSERT and refusal probes, all rollback-only.
+DO $$ DECLARE
+ u uuid:=gen_random_uuid(); imp uuid:=gen_random_uuid(); mapping uuid:=gen_random_uuid();
+ conn uuid:=gen_random_uuid(); account text:='acl-'||gen_random_uuid(); t text;
+BEGIN
+ INSERT INTO users(id,email) VALUES(u,'provider-cost-'||u||'@example.invalid');
+ INSERT INTO provider_connections(id,name,provider,credential_ref) VALUES(conn,'ACL cost scope','anthropic','env:PLACEHOLDER');
+ INSERT INTO provider_cost_imports(id,account_id,period_start,period_end,exported_at,actor_user_id,evidence_reference,evidence_json,fingerprint,line_count)
+  VALUES(imp,account,'2025-08-01T00:00:00Z','2025-08-02T00:00:00Z','2025-08-03T00:00:00Z',u,'opaque:acl','{}',decode(repeat('48',32),'hex'),1);
+ INSERT INTO provider_cost_lines(import_id,line_number,source_page,source_pointer,bucket_start,bucket_end,dimensions,original_amount,amount_microusd,conversion_residual_microusd,dimension_key)
+  VALUES(imp,1,0,'/data/0/results/0','2025-08-01T00:00:00Z','2025-08-02T00:00:00Z','{"currency":"USD"}','-0.00015',-2,'0.5',repeat('48',32));
+ INSERT INTO provider_cost_mappings(id,account_id,evidence_reference,actor_user_id,binding_count) VALUES(mapping,account,'opaque:acl',u,1);
+ INSERT INTO provider_cost_bindings(mapping_id,binding_number,connection_id,effective_start,effective_end,exclusive,non_omg_traffic,attested,evidence_reference,model_mappings)
+  VALUES(mapping,1,conn,'2025-08-01','2025-08-02',false,true,true,'opaque:acl','[]');
+ INSERT INTO provider_reconciliations(id,account_id,import_id,mapping_id,actor_user_id,snapshot) VALUES(gen_random_uuid(),account,imp,mapping,u,'{}');
+ FOREACH t IN ARRAY ARRAY['provider_cost_imports','provider_cost_lines','provider_cost_mappings','provider_cost_bindings','provider_reconciliations'] LOOP
+  EXECUTE format('SELECT count(*) FROM %I',t);
+  BEGIN EXECUTE format('UPDATE %1$I SET %2$I=%2$I',t,CASE WHEN t='provider_cost_lines' THEN 'original_amount' WHEN t='provider_cost_bindings' THEN 'evidence_reference' ELSE 'id' END); RAISE EXCEPTION 'provider cost UPDATE allowed: %',t; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN EXECUTE format('DELETE FROM %I',t); RAISE EXCEPTION 'provider cost DELETE allowed: %',t; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN EXECUTE format('TRUNCATE %I CASCADE',t); RAISE EXCEPTION 'provider cost TRUNCATE allowed: %',t; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ END LOOP;
+END $$;
+SET CONSTRAINTS provider_cost_import_complete,provider_cost_mapping_complete IMMEDIATE;
+SET CONSTRAINTS provider_cost_import_complete,provider_cost_mapping_complete DEFERRED;
 -- Take the normal management lock before any probe can touch an existing
 -- saved destination (including the rollback-only full-capacity case).
 SELECT lock_installation();

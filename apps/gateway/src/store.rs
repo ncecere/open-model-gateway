@@ -170,6 +170,12 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "admin_api_tokens",
     // 0052 admin API token authentication and audit (#37 PR2)
     "admin_token_attempts",
+    // 0064 provider-reported cost reconciliation (#48)
+    "provider_cost_imports",
+    "provider_cost_lines",
+    "provider_cost_mappings",
+    "provider_cost_bindings",
+    "provider_reconciliations",
 ];
 /// Partitioned parents (0030/0031). Any partition of one of these in
 /// `public` (`pg_class.relispartition`; month partitions are created ahead of
