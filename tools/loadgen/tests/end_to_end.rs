@@ -174,9 +174,8 @@ async fn harness(
     // harness owns the approval JSON directly and parses it with the same
     // validation `from_env` uses, rather than mutating the process-wide
     // `GATEWAY_LOCAL_UPSTREAMS` environment variable (unsafe to do
-    // concurrently in a multi-threaded test binary, and not necessary: the
-    // approval parser is public precisely so trusted, owned-fixture callers
-    // like this one can pass it configuration directly).
+    // concurrently in a multi-threaded test binary). The constructor exists
+    // only with the `integration-tests` feature, for trusted fixtures.
     let engine = {
         let approvals =
             providers::local::endpoints::ApprovedEndpoints::parse_for_integration_tests(
