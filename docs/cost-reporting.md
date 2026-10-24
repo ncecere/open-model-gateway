@@ -39,6 +39,8 @@ Every financial amount, aggregate count and billing counter is an exact decimal 
 
 `health` counts pending, unknown, missing-reservation, unpriced, aged-hold and unbounded attempts. They **overlap**: do not sum them as a count of affected requests. Aged holds are unresolved pending/unknown leases past expiry; expiry does not refund money. Missing reservations are also unpriced/unbounded.
 
+The read-only [aged unknown-hold queue](governance-api.md#aged-unknown-hold-review-queue) uses a different clock: an **aged unknown hold** has remained in `unknown` state for at least 24 hours, measured from its unknown ledger entry (admission time only as a fallback), in database time. Pending, settled and unreserved attempts never enter that queue. Its nullable known retained floors and unbounded counts stay separate from settled spend; reading it never releases or refunds a hold. Workspace visibility is applied before counts, and the platform route collapses all personal activity into one identity-free aggregate.
+
 `coverage` counts priced, settled, total, complete-billing, legacy-pricing and incomplete-billing attempts. It measures observed accounting coverage, not an inferred invoice accuracy score.
 
 `cost_components` aggregates the six disjoint **v2 settled** categories plus separate `legacy_microusd` for v1. Their sum equals known cost. V1 history is not silently classified as uncached/cache input. Aggregate `billing_usage` sums observed values; null means no observations for that category, not zero and not proof of complete coverage. Pair sums with coverage.
