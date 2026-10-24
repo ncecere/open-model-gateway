@@ -1258,3 +1258,73 @@ async fn completion_audit_failure_reports_uncertainty_after_committed_mutation(p
     assert!(!message.contains("was not processed"), "{message}");
     assert!(!message.contains(&token));
 }
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn completion_audit_failure_before_dispatch_reports_no_action(pool: PgPool) {
+    let mut f = fixture(&pool).await;
+    f.s = f.s.with_secret_allowlists(
+        crate::providers::secrets::EnvSecrets::from_lookup(["OPENAI_API_KEY".into()], |_| None),
+        crate::providers::secrets::EnvSecrets::default(),
+    );
+    let mock = MockProvider::start(None).await;
+    let identity = mock.state(pool.clone()).await;
+    let engine = crate::inference::Engine::new(
+        std::sync::Arc::new(f.s.clone()),
+        crate::providers::ProviderRegistry::default(),
+        crate::inference::EngineLimits::default(),
+    )
+    .unwrap();
+    let app = crate::http::router_with_identity(f.s.clone(), None, engine, identity);
+    let (token_id, token) = mint(&pool, f.admin.user_id, &["platform:read"], None).await;
+    sqlx::raw_sql(
+        "CREATE FUNCTION reject_completion_for_test() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN
+          IF NEW.phase='completion' THEN RAISE EXCEPTION 'simulated completion audit outage'; END IF;
+          RETURN NEW;
+         END $$;
+         CREATE TRIGGER reject_completion_for_test BEFORE INSERT ON admin_token_attempts
+         FOR EACH ROW EXECUTE FUNCTION reject_completion_for_test();",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/platform/providers")
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::from(
+                    json!({
+                        "name":"Denied completion probe", "provider":"openai",
+                        "credential_ref":"env:OPENAI_API_KEY", "enabled":false
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let created: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM provider_connections WHERE name='Denied completion probe'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(created, 0);
+    let attempts: Vec<(String, String)> = sqlx::query_as(
+        "SELECT phase,outcome FROM admin_token_attempts WHERE token_id=$1 ORDER BY phase",
+    )
+    .bind(token_id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(attempts, [("start".to_owned(), "denied".to_owned())]);
+    let bytes = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(message.contains("was not processed"), "{message}");
+    assert!(!message.contains("may have completed"), "{message}");
+}
