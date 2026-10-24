@@ -40,7 +40,20 @@ async fn fair_dispatch_upgrade_backfills_only_pending_and_recovers_index(pool: P
     backlog(&s, Some(s.team), 2, 60).await;
     sqlx::query("UPDATE alert_deliveries SET status='not_configured',completed_at=clock_timestamp() WHERE id=(SELECT id FROM alert_deliveries ORDER BY id LIMIT 1)")
         .execute(&s.pool).await.unwrap();
-    s.store.migrate_enterprise().await.unwrap();
+    // Upgrade only through the fair-dispatch migrations, so the simulated
+    // interruption below leaves no later migration recorded (as a real
+    // failure of the concurrent build would).
+    sqlx::migrate::Migrator {
+        migrations: std::borrow::Cow::Owned(
+            all.iter().filter(|m| m.version <= 56).cloned().collect(),
+        ),
+        ignore_missing: false,
+        locking: true,
+        no_tx: false,
+    }
+    .run(&s.pool)
+    .await
+    .unwrap();
     let buckets: Vec<(String, Uuid)> =
         sqlx::query_as("SELECT status,bucket_id FROM alert_deliveries ORDER BY status")
             .fetch_all(&s.pool)

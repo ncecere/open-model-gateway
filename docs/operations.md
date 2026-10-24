@@ -16,6 +16,8 @@ Use incident History's Waiting/Retrying/Exhausted, waiting count and next due ti
 |---|---|---|
 | `GATEWAY_INFERENCE_BASE_URL` | unset (dashboard origin + `/v1`) | Display-only SDK base URL, for example `https://api.bitop.dev/v1`, exposed read-only to signed-in users in `/api/v1/me`. Absolute HTTPS URL, no credentials/query/fragment, path ending in `/v1`; a trailing slash is removed. HTTP is allowed only on loopback with `GATEWAY_ENV=development`. Invalid/empty values stop startup. Does not configure ingress, routing or browser API calls; `GATEWAY_PUBLIC_URL` remains the dashboard origin for OIDC/CSRF. |
 | `GATEWAY_METRICS_ADDR` | unset (disabled) | Separate Prometheus listener, for example `127.0.0.1:9464`. It must use a different port from `GATEWAY_LISTEN`. |
+| `GATEWAY_ALERT_WEBHOOK_URL_ALLOWLIST` | unset (none approved) | Comma-separated exact canonical URLs allowed for saved alert receivers (#45 slice 1). HTTPS, or development-only loopback HTTP; no credentials/query/fragment. Save performs no DNS/network I/O. Approval never overrides egress policy. No delivery worker yet. |
+| `GATEWAY_ALERT_WEBHOOK_SECRET_ENV_ALLOWLIST` | unset (none) | Dedicated comma-separated signing variable names for saved alert webhooks. `env:NAME` only, disjoint from provider/SMTP lists; reserved names fail startup. Management validates references without resolving them. Inject values directly through deployment secrets; no general `_FILE` import. |
 | `GATEWAY_AUDIT_WEBHOOK_URL` | unset (no export) | HTTPS endpoint the audit log streams to. See [audit export](#audit-export). |
 | `GATEWAY_AUDIT_WEBHOOK_SECRET_ENV` | unset | Name of the variable holding the webhook signing secret (at least 32 bytes). Required with the URL. |
 | `GATEWAY_AUDIT_SYSLOG_URL` | unset (no export) | `syslog+tls://host[:port]` (default port 6514): export to syslog over TLS instead of the webhook. See [syslog over TLS](#syslog-over-tls). |
@@ -39,14 +41,14 @@ Use incident History's Waiting/Retrying/Exhausted, waiting count and next due ti
 
 ## Credential allowlists
 
-`GATEWAY_SECRET_ENV_ALLOWLIST` and `GATEWAY_SMTP_SECRET_ENV_ALLOWLIST` are operator-only startup settings, not management API settings. The lists must be disjoint. Both refuse `DATABASE_URL`, `DATABASE_URL_FILE`, every `GATEWAY_*` or `AWS_*` name, the entire `PG*` prefix (including `PGPASSWORD`, `PGSSLKEY` and `PGPASSFILE`), `OTEL_*`, and `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` in either case, as well as the variables selected by these pointers (not just the pointer names):
+`GATEWAY_SECRET_ENV_ALLOWLIST`, `GATEWAY_SMTP_SECRET_ENV_ALLOWLIST` and `GATEWAY_ALERT_WEBHOOK_SECRET_ENV_ALLOWLIST` are operator-only startup settings, not management API settings. All three lists must be mutually disjoint. All refuse `DATABASE_URL`, `DATABASE_URL_FILE`, every `GATEWAY_*` or `AWS_*` name, the entire `PG*` prefix (including `PGPASSWORD`, `PGSSLKEY` and `PGPASSFILE`), `OTEL_*`, and `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` in either case, as well as the variables selected by these pointers (not just the pointer names):
 
 - `GATEWAY_SCIM_TOKEN_ENV`
 - `GATEWAY_S3_ACCESS_KEY_ID_ENV`, `GATEWAY_S3_SECRET_ACCESS_KEY_ENV`
 - `GATEWAY_FILE_ENCRYPTION_KEYS_ENV`
 - `GATEWAY_AUDIT_WEBHOOK_SECRET_ENV`, `GATEWAY_AUDIT_OTLP_HEADERS_ENV`
 
-Other startup-owned secret names are reserved too; the two intentional exceptions are provider credentials `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`, which may appear on the provider list but never the SMTP list. Use separate variables for provider, SMTP and gateway secrets. Reserved entries stop startup with both failing allowlists, the offending names, and any pointer settings selecting those names; secret values are never printed. Remove it from the allowlist, use a dedicated provider/SMTP credential if needed, update the connection or SMTP reference, and restart. Never copy a gateway secret into a provider variable to bypass the refusal.
+Other startup-owned secret names are reserved too; the two intentional exceptions are provider credentials `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`, which may appear on the provider list but never the SMTP or alert-webhook lists. Use separate variables for provider, SMTP, alert-webhook and gateway secrets. Reserved entries stop startup with both failing allowlists, the offending names, and any pointer settings selecting those names; secret values are never printed. Remove it from the allowlist, use a dedicated provider/SMTP credential if needed, update the connection or SMTP reference, and restart. Never copy a gateway secret into a provider variable to bypass the refusal.
 
 `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` remain referenceable on the provider allowlist, but each produces a startup **warning**: a custom-endpoint connection using one of these references receives that credential. Prefer dedicated provider variables and review local endpoint approvals. These keys remain forbidden on the SMTP list. `PG*`, proxy and `OTEL_*` entries are refusals, not warnings. Management validation and delivery use the immutable configured allowlists; reserved-name filtering remains a second line of defence.
 

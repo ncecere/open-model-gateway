@@ -70,6 +70,23 @@ DO $$ DECLARE r record; t text; BEGIN
  IF has_table_privilege('gateway_runtime','public.scim_users','DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.scim_users','user_id','UPDATE') OR has_column_privilege('gateway_runtime','public.scim_users','created_at','UPDATE') THEN RAISE EXCEPTION 'scim user link removable or re-keyable'; END IF;
  IF has_column_privilege('gateway_runtime','public.scim_groups','id','UPDATE') OR has_any_column_privilege('gateway_runtime','public.scim_group_members','UPDATE') OR has_table_privilege('gateway_runtime','public.scim_groups','TRUNCATE') OR has_table_privilege('gateway_runtime','public.scim_group_members','TRUNCATE') THEN RAISE EXCEPTION 'scim group identity rewritable'; END IF;
  IF has_table_privilege('gateway_runtime','public.scim_state','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.scim_state','singleton','UPDATE') THEN RAISE EXCEPTION 'scim state row replaceable'; END IF;
+ -- Webhooks (0057): explicit column ACLs, generated identity and frozen bytes.
+ FOREACH t IN ARRAY ARRAY['alert_webhook_destinations','alert_webhook_outbox'] LOOP
+  IF NOT has_table_privilege('gateway_runtime','public.'||t,'SELECT') OR has_table_privilege('gateway_runtime','public.'||t,'INSERT,UPDATE,DELETE,TRUNCATE') THEN RAISE EXCEPTION 'webhook table privileges: %',t; END IF;
+ END LOOP;
+ FOREACH t IN ARRAY ARRAY['id','capacity_slot','url','created_at','updated_at','enable_generation'] LOOP
+  IF has_column_privilege('gateway_runtime','public.alert_webhook_destinations',t,'UPDATE') THEN RAISE EXCEPTION 'mutable webhook destination identity: %',t; END IF;
+ END LOOP;
+ FOREACH t IN ARRAY ARRAY['id','capacity_slot','created_at','updated_at','enabled','enable_generation','previous_secret_ref','previous_secret_until','deleted_at'] LOOP
+  IF has_column_privilege('gateway_runtime','public.alert_webhook_destinations',t,'INSERT') THEN RAISE EXCEPTION 'webhook destination initial state bypass: %',t; END IF;
+ END LOOP;
+ FOREACH t IN ARRAY ARRAY['id','event_id','transition','destination_id','destination_generation','test','payload','created_at'] LOOP
+  IF has_column_privilege('gateway_runtime','public.alert_webhook_outbox',t,'UPDATE') THEN RAISE EXCEPTION 'mutable webhook outbox evidence: %',t; END IF;
+ END LOOP;
+ FOREACH t IN ARRAY ARRAY['state','attempt_count','next_attempt_at','lease_owner','lease_token','lease_expires_at','completed_at','last_error','created_at'] LOOP
+  IF has_column_privilege('gateway_runtime','public.alert_webhook_outbox',t,'INSERT') THEN RAISE EXCEPTION 'webhook outbox initial state bypass: %',t; END IF;
+ END LOOP;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname IN ('alert_webhook_destination_guard','alert_webhook_destinations_no_delete','alert_webhook_destinations_no_truncate','alert_webhook_outbox_guard','alert_webhook_outbox_no_delete','alert_webhook_outbox_no_truncate','alert_webhook_destination_ineligible','alert_deliveries_webhook_enqueue') AND tgenabled='O' AND NOT tgisinternal)<>8 THEN RAISE EXCEPTION 'webhook guards missing or disabled'; END IF;
  -- Alerts (0011): no removal; incidents resolve once; rule identity/scope fixed.
  FOREACH t IN ARRAY ARRAY['alert_rules','alert_events','alert_deliveries','alert_reads','alert_recipient_outbox'] LOOP
   IF has_table_privilege('gateway_runtime','public.'||t,'DELETE,TRUNCATE') THEN RAISE EXCEPTION 'alert history removable: %',t; END IF;
@@ -135,7 +152,7 @@ DO $$ DECLARE r record; t text; BEGIN
   IF has_column_privilege('gateway_runtime','public.batch_route_waits',t,'UPDATE') THEN RAISE EXCEPTION 'mutable batch demand identity: %',t; END IF;
  END LOOP;
  IF has_table_privilege('gateway_runtime','public.batch_route_waits','TRUNCATE') THEN RAISE EXCEPTION 'batch demand truncatable'; END IF;
- IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units','valid_model_protocols_base','valid_cost_components_base','valid_price_lines_base','valid_upstream_job_id','rate_reserved_tokens','rate_contribution','omg_scope_key','omg_type_key','omg_scope_lock_audit_order','omg_lock_scopes','omg_admission_locks','omg_lock_scope_rows','omg_catalog_lock_mode','omg_scope_lock_exclusive','omg_config_bump','omg_lease_acquire','omg_lease_fence','omg_lease_complete','omg_lease_release','omg_ensure_partitions','omg_partition_coverage','omg_partition_bounds','omg_month_start','omg_next_month','omg_usage_aggregate','omg_usage_rows','omg_admin_tokens_revoke_owner','omg_admin_tokens_require_read_committed','omg_admin_tokens_require_owner_lock','valid_admin_token_scopes','valid_admin_token_allowlist')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
+ IF EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND has_function_privilege('gateway_runtime',p.oid,'EXECUTE') AND p.proname NOT IN ('lock_installation','workspace_model_allowed','valid_model_protocols','valid_i64_string','valid_cache_pricing','valid_billing_usage','valid_cost_components','components_total','valid_meter_usage','valid_meter_variant','valid_price_lines','valid_max_units','valid_model_protocols_base','valid_cost_components_base','valid_price_lines_base','valid_upstream_job_id','rate_reserved_tokens','rate_contribution','omg_scope_key','omg_type_key','omg_scope_lock_audit_order','omg_lock_scopes','omg_admission_locks','omg_lock_scope_rows','omg_catalog_lock_mode','omg_scope_lock_exclusive','omg_config_bump','omg_lease_acquire','omg_lease_fence','omg_lease_complete','omg_lease_release','omg_ensure_partitions','omg_partition_coverage','omg_partition_bounds','omg_month_start','omg_next_month','omg_usage_aggregate','omg_usage_rows','omg_admin_tokens_revoke_owner','omg_admin_tokens_require_read_committed','omg_admin_tokens_require_owner_lock','valid_admin_token_scopes','valid_admin_token_allowlist','alert_webhook_summary','alert_webhook_payload')) THEN RAISE EXCEPTION 'unexpected executable function'; END IF;
  -- Change notifications (0028): seeded topics, forward-only versions, triggers present.
  IF has_table_privilege('gateway_runtime','public.config_versions','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.config_versions','topic','UPDATE') THEN RAISE EXCEPTION 'configuration topics mutable'; END IF;
  IF NOT has_table_privilege('gateway_runtime','public.config_versions','SELECT') OR NOT has_column_privilege('gateway_runtime','public.config_versions','version','UPDATE') THEN RAISE EXCEPTION 'configuration versions not maintainable by runtime'; END IF;
@@ -250,6 +267,43 @@ DO $$ DECLARE fu uuid:=gen_random_uuid(); BEGIN
 END $$;
 SET LOCAL ROLE gateway_runtime;
 SELECT version,checksum,success FROM public._sqlx_migrations ORDER BY version;
+-- Take the normal management lock before any probe can touch an existing
+-- saved destination (including the rollback-only full-capacity case).
+SELECT lock_installation();
+-- Webhook executable probes run as runtime and roll back with everything below.
+DO $$ DECLARE receiver uuid; ev uuid:=gen_random_uuid(); col text; gen bigint; BEGIN
+ -- Make one capacity slot available in this rollback-only probe even on a full installation.
+ UPDATE alert_webhook_destinations SET enabled=false,deleted_at=clock_timestamp() WHERE id=(SELECT id FROM alert_webhook_destinations WHERE deleted_at IS NULL ORDER BY id LIMIT 1);
+ INSERT INTO alert_webhook_destinations(label,url,current_secret_ref) VALUES('ACL probe','https://receiver.invalid/hook','env:HOOK') RETURNING id INTO receiver;
+ UPDATE alert_webhook_destinations SET enabled=true,previous_secret_ref='env:OLD',previous_secret_until=clock_timestamp()+interval '1 hour' WHERE id=receiver;
+ INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,summary) VALUES(ev,'scim_last_admin','scim_last_admin','webhook-'||ev,1,'critical','safe');
+ INSERT INTO alert_deliveries(id,event_id,transition) VALUES(gen_random_uuid(),ev,'fired');
+ IF (SELECT count(*) FROM alert_webhook_outbox WHERE destination_id=receiver AND event_id=ev)<>1 THEN RAISE EXCEPTION 'runtime webhook enqueue failed'; END IF;
+ SELECT enable_generation INTO gen FROM alert_webhook_destinations WHERE id=receiver;
+ IF gen<>1 OR (SELECT destination_generation FROM alert_webhook_outbox WHERE destination_id=receiver AND event_id=ev)<>gen THEN RAISE EXCEPTION 'webhook enable generation not stamped'; END IF;
+ BEGIN INSERT INTO alert_webhook_outbox(id,event_id,transition,destination_id,destination_generation,payload) VALUES(gen_random_uuid(),ev,'fired',receiver,gen-1,'{}'::bytea); RAISE EXCEPTION 'webhook stale generation insert allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+ FOREACH col IN ARRAY ARRAY['id','capacity_slot','url','created_at','updated_at','enable_generation'] LOOP
+  BEGIN EXECUTE format('UPDATE alert_webhook_destinations SET %1$I=%1$I WHERE id=$1',col) USING receiver; RAISE EXCEPTION 'webhook destination identity update allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ END LOOP;
+ FOREACH col IN ARRAY ARRAY['id','event_id','transition','destination_id','destination_generation','test','payload','created_at'] LOOP
+  BEGIN EXECUTE format('UPDATE alert_webhook_outbox SET %1$I=%1$I WHERE destination_id=$1',col) USING receiver; RAISE EXCEPTION 'webhook payload or identity update allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ END LOOP;
+ -- The runtime can insert outbox rows, but only the exact canonical envelope of an eligible event.
+ BEGIN INSERT INTO alert_webhook_outbox(id,event_id,transition,destination_id,destination_generation,payload) VALUES(gen_random_uuid(),ev,'fired',receiver,gen,'{}'::bytea); RAISE EXCEPTION 'webhook arbitrary payload insert allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+ BEGIN INSERT INTO alert_webhook_outbox(id,event_id,transition,destination_id,destination_generation,payload) VALUES(gen_random_uuid(),ev,'resolved',receiver,gen,convert_to(alert_webhook_payload(gen_random_uuid(),ev,'fired'),'UTF8')); RAISE EXCEPTION 'webhook forged transition insert allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+ BEGIN INSERT INTO alert_webhook_outbox(id,destination_id,destination_generation,test,payload) VALUES(gen_random_uuid(),receiver,gen,true,'{}'::bytea); RAISE EXCEPTION 'webhook arbitrary test payload insert allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+ BEGIN INSERT INTO alert_webhook_destinations(label,url,current_secret_ref,enabled) VALUES('bypass','https://receiver.invalid/','env:HOOK',true); RAISE EXCEPTION 'webhook enabled insert allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN INSERT INTO alert_webhook_outbox(destination_id,test,payload,state) VALUES(receiver,true,'{}'::bytea,'sent'); RAISE EXCEPTION 'webhook initial state insert allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN DELETE FROM alert_webhook_outbox WHERE destination_id=receiver; RAISE EXCEPTION 'webhook deletion allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN TRUNCATE alert_webhook_outbox; RAISE EXCEPTION 'webhook truncation allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN DELETE FROM alert_webhook_destinations WHERE id=receiver; RAISE EXCEPTION 'webhook destination deletion allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN TRUNCATE alert_webhook_destinations CASCADE; RAISE EXCEPTION 'webhook destination truncation allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ UPDATE alert_webhook_outbox SET state='leased',attempt_count=1,lease_owner=gen_random_uuid(),lease_token=gen_random_uuid(),lease_expires_at=clock_timestamp()+interval '90 seconds' WHERE destination_id=receiver AND event_id=ev;
+ UPDATE alert_webhook_outbox SET state='sent',completed_at=clock_timestamp(),lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL WHERE destination_id=receiver AND event_id=ev;
+ BEGIN UPDATE alert_webhook_outbox SET state='waiting',completed_at=NULL WHERE destination_id=receiver AND event_id=ev; RAISE EXCEPTION 'webhook terminal outcome reopened'; EXCEPTION WHEN raise_exception THEN IF SQLERRM NOT LIKE 'immutable webhook payload%' THEN RAISE; END IF; END;
+ UPDATE alert_webhook_destinations SET enabled=false,deleted_at=clock_timestamp() WHERE id=receiver;
+ IF EXISTS(SELECT FROM alert_webhook_destinations WHERE id=receiver AND (url IS NOT NULL OR current_secret_ref IS NOT NULL OR previous_secret_ref IS NOT NULL OR previous_secret_until IS NOT NULL)) THEN RAISE EXCEPTION 'deleted webhook retains secret-bearing configuration'; END IF;
+END $$;
 -- The combined snapshot authority read (#195); no lock or write privilege.
 SELECT p.role,w.kind,w.owner_user_id,w.disabled_at IS NOT NULL,m.role
  FROM public.effective_platform_roles p
@@ -262,7 +316,6 @@ SELECT kind,owner_user_id,disabled_at IS NOT NULL FROM public.workspaces WHERE i
 -- Pre-extraction human/service key checks (#195), without any key value.
 SELECT issued_to_user_id,service_account_id FROM public.api_keys
  WHERE workspace_id=NULL::uuid AND id=NULL::uuid;
-SELECT lock_installation();
 SELECT id FROM public.users WHERE false FOR UPDATE;
 SELECT model_id FROM public.workspace_model_grants WHERE false FOR SHARE;
 DO $$ DECLARE
