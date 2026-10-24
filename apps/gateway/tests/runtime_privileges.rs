@@ -1372,6 +1372,31 @@ async fn key_issuance_runs_as_runtime(pool: &PgPool) {
         (holder_limit, workspace_limit, holder_used, workspace_used),
         (3, 30, 1, 1)
     );
+    // Exactly the columns `insert_key` names are insertable; the issuance time is
+    // never chosen by the runtime (it defaults to clock_timestamp()).
+    let issued: uuid::Uuid = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,service_account_id,name,secret_hash,expires_at,governance_key_id) VALUES($1,$2,$3,NULL,'runtime-issued',decode(repeat('02',32),'hex'),now()+make_interval(days=>1),$1)")
+        .bind(issued)
+        .bind(ws)
+        .bind(user)
+        .execute(&runtime)
+        .await
+        .unwrap();
+    let stamped: bool = sqlx::query_scalar("SELECT created_at>clock_timestamp()-interval '1 minute' AND created_at<=clock_timestamp() FROM api_keys WHERE id=$1")
+        .bind(issued)
+        .fetch_one(&runtime)
+        .await
+        .unwrap();
+    assert!(stamped, "a runtime-issued key is stamped at insert time");
+    assert!(
+        sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash,created_at) VALUES(gen_random_uuid(),$1,$2,'backdated',decode(repeat('03',32),'hex'),now()-interval '2 days')")
+            .bind(ws)
+            .bind(user)
+            .execute(&runtime)
+            .await
+            .is_err(),
+        "runtime must not choose created_at"
+    );
     // History is append-only: neither the window timestamp nor the row can change.
     for forbidden in [
         "UPDATE api_keys SET created_at=now()-interval '2 days' WHERE id=$1",

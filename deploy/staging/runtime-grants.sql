@@ -53,7 +53,7 @@ GRANT INSERT(id,email,oidc_link_allowed),
 GRANT INSERT ON public.oidc_identities,public.platform_role_grants,public.cost_centers,
  public.workspaces,public.oidc_group_mappings,public.workspace_membership_grants,
  public.oidc_login_attempts,public.browser_sessions,public.workspace_invitations,
- public.service_accounts,public.api_keys,public.provider_connections,public.models,
+ public.service_accounts,public.provider_connections,public.models,
  public.deployments,public.catalogs,public.catalog_models,public.workspace_type_catalogs,
  public.workspace_catalog_overrides,public.workspace_catalog_override_items,
  public.workspace_model_grants,public.key_model_restrictions,public.key_model_selections,
@@ -63,6 +63,12 @@ GRANT INSERT ON public.oidc_identities,public.platform_role_grants,public.cost_c
  public.inference_executions,public.governance_reservations,public.monetary_ledger,
  public.routing_policies,public.deployment_routing,public.deployment_health,public.audit_events
  TO gateway_runtime;
+-- api_keys: explicit INSERT columns, exactly those management/keys.rs insert_key
+-- names. created_at is excluded (it defaults to clock_timestamp()), so a key's
+-- issuance time, the key issuance window's clock (0053, #253), is never chosen
+-- by the runtime role; neither is revoked_at or disabled_at.
+GRANT INSERT(id,workspace_id,issued_to_user_id,service_account_id,name,secret_hash,expires_at,governance_key_id)
+ ON public.api_keys TO gateway_runtime;
 GRANT DELETE ON public.oidc_login_attempts,public.oidc_group_mappings,public.catalogs,
  public.catalog_models,public.workspace_type_catalogs,public.workspace_catalog_overrides,
  public.workspace_catalog_override_items,public.workspace_model_grants,

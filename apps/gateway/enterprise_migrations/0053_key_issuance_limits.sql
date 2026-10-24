@@ -20,6 +20,18 @@
 -- rows take them through the constant DEFAULT (no table rewrite). Override and
 -- local columns are NULL (inherit).
 --
+-- Override rows replace the type default (replacement semantics, as for every
+-- other limit), and an empty override column means the 10000 ceiling. Overrides
+-- that existed before this migration therefore take their workspace kind's
+-- type default for both budgets below; otherwise they would silently loosen
+-- from 50/500 to 10000. A new override that leaves a field empty means 10000.
+--
+-- `api_keys.created_at` is the window clock. It now defaults to
+-- clock_timestamp() (the time of the INSERT, not of the transaction's start: a
+-- key queued behind the installation lock counts from when it exists), and the
+-- runtime role may no longer name it in an INSERT (runtime-grants.sql grants
+-- INSERT on explicit columns), so a key cannot be backdated out of the window.
+--
 -- Rolling upgrade: run `migrate` first. Replicas still on the previous binary
 -- ignore these columns and do not enforce the budget during the overlap; they
 -- keep working on the new schema (additive only).
@@ -37,7 +49,18 @@ ALTER TABLE workspace_local_policies
  ADD COLUMN key_issuances_per_holder bigint CHECK(key_issuances_per_holder BETWEEN 1 AND 10000),
  ADD COLUMN key_issuances_per_workspace bigint CHECK(key_issuances_per_workspace BETWEEN 1 AND 10000);
 
--- The rolling-window counts: rows of one workspace by creation time.
+-- Replacement semantics: pre-existing overrides keep what applied to them (the type default).
+UPDATE workspace_platform_policy_overrides o
+ SET key_issuances_per_holder=t.key_issuances_per_holder,
+     key_issuances_per_workspace=t.key_issuances_per_workspace
+ FROM workspaces w JOIN workspace_type_policies t ON t.kind=w.kind
+ WHERE w.id=o.workspace_id;
+
+ALTER TABLE api_keys ALTER COLUMN created_at SET DEFAULT clock_timestamp();
+
+-- The rolling-window counts: rows of one workspace by creation time. A plain
+-- CREATE INDEX: key writes (create, rotate, revoke, disable) wait while it
+-- builds, briefly unless api_keys is very large.
 CREATE INDEX api_keys_workspace_created ON api_keys(workspace_id, created_at);
 
 RESET lock_timeout;
