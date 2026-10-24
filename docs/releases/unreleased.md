@@ -2,6 +2,10 @@
 
 Notes for changes on `main` after [v0.8.0](v0.8.0.md). They become the next release's notes.
 
+## Key dialog lifetime hardening (#276)
+
+Each action dialog request now gets a fresh lifetime, and successful non-secret actions cannot be repeated through retained submit callbacks. Key creation and rotation suppress late disclosures after retirement while completed responses still invalidate the keys list. Admitted create requests remain uncancelled on local retirement so a newly created key can appear in the list and be revoked. A successful response missing its token shows an error; retry remains explicit, never automatic.
+
 ## Transaction isolation independent of PostgreSQL defaults (#281)
 
 Normal gateway transactions now explicitly begin at **READ COMMITTED**, so database, login-role or connection defaults of REPEATABLE READ or SERIALIZABLE cannot leave lock-then-check queries using a stale snapshot. Session defaults are not rewritten, and session read-only policy is still inherited. Intentional reporting snapshots remain REPEATABLE READ and read-only; their bounded-staleness contract and the elevated-isolation refusal guards are unchanged. No migration or new database privilege is needed. See [transaction isolation](../governance.md#transaction-isolation).
