@@ -224,6 +224,12 @@ GRANT UPDATE(file_batch_enabled,file_batch_retention_days,file_video_enabled,
 GRANT UPDATE(reserved_bytes,api_purpose) ON public.stored_files TO gateway_runtime;
 GRANT UPDATE(storage_bytes) ON public.workspace_type_policies,
  public.workspace_platform_policy_overrides,public.workspace_local_policies TO gateway_runtime;
+-- Key issuance budgets (0053, #253): per holder and per workspace per rolling 24 h,
+-- on the same three workspace layers (no key or installation layer), edited like
+-- storage_bytes. Issuance only reads api_keys (append-only: no UPDATE of
+-- created_at, no DELETE) through api_keys_workspace_created; no counter rows.
+GRANT UPDATE(key_issuances_per_holder,key_issuances_per_workspace) ON public.workspace_type_policies,
+ public.workspace_platform_policy_overrides,public.workspace_local_policies TO gateway_runtime;
 GRANT SELECT,INSERT ON public.storage_usage_hours TO gateway_runtime;
 GRANT SELECT,UPDATE(recorded_through) ON public.storage_usage_progress TO gateway_runtime;
 -- Batch engine (0021). Batch price lists are a column of the append-only
