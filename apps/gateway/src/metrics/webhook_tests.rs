@@ -14,7 +14,7 @@ async fn destination(pool: &PgPool) -> Uuid {
 /// Owner-only fixtures use real guards and canonical envelopes, never disable
 /// triggers or rewrite immutable history. Test deliveries avoid unrelated events.
 async fn terminal_rows(pool: &PgPool, dest: Uuid, n: i32, state: &str, age: &str) {
-    sqlx::query("INSERT INTO alert_webhook_outbox(id,destination_id,destination_generation,test,payload,state,created_at,completed_at) SELECT i,d.id,d.enable_generation,true,convert_to(alert_webhook_payload(i,NULL,NULL),'UTF8'),$3,clock_timestamp()-interval '48 hours',clock_timestamp()-$4::interval FROM (SELECT gen_random_uuid() i FROM generate_series(1,$2)) ids CROSS JOIN alert_webhook_destinations d WHERE d.id=$1")
+    sqlx::query("INSERT INTO alert_webhook_outbox(id,destination_id,destination_generation,test,payload,state,created_at,completed_at) SELECT i,d.id,d.enable_generation,true,convert_to(alert_webhook_payload(i,NULL,NULL),'UTF8'),$3,clock_timestamp()-$4::interval-interval '48 hours',clock_timestamp()-$4::interval FROM (SELECT gen_random_uuid() i FROM generate_series(1,$2)) ids CROSS JOIN alert_webhook_destinations d WHERE d.id=$1")
         .bind(dest).bind(n).bind(state).bind(age).execute(pool).await.unwrap();
 }
 
@@ -146,6 +146,63 @@ async fn webhook_metrics_exact_counts_generations_and_lease_visibility(pool: PgP
     // Losing the lease also invalidates the refresh cache.
     let scrape = m.render(Some(&store)).await;
     assert!(scrape.contains("gateway_alert_webhook_deliveries{state=\"waiting\"} 2"));
+}
+
+#[sqlx::test(migrations = false)]
+async fn webhook_metrics_index_upgrade_recovers_interrupted_build_and_requires_readiness(
+    pool: PgPool,
+) {
+    use crate::store::MIGRATOR;
+    let migration = MIGRATOR.iter().find(|m| m.version == 62).unwrap();
+    assert!(
+        migration.no_tx,
+        "the concurrent build cannot run in a transaction"
+    );
+    sqlx::migrate::Migrator {
+        migrations: std::borrow::Cow::Owned(
+            MIGRATOR
+                .iter()
+                .filter(|m| m.version < 62)
+                .cloned()
+                .collect(),
+        ),
+        ignore_missing: false,
+        locking: true,
+        no_tx: false,
+    }
+    .run(&pool)
+    .await
+    .unwrap();
+    small_fixture(&pool).await;
+    assert_counts(&pool).await;
+    let store = Store::new(pool.clone());
+    assert!(
+        !store.is_ready().await,
+        "0062 is required by exact embedded lineage"
+    );
+    store.preflight_upgrade().await.unwrap();
+    // Same simulated interrupted-build state as 0054/0056: no migration record
+    // and an INVALID index that IF NOT EXISTS alone would silently skip.
+    sqlx::raw_sql("CREATE INDEX alert_webhook_outbox_completed ON alert_webhook_outbox(completed_at,state) WHERE state IN ('sent','failed','exhausted','ineligible'); UPDATE pg_index SET indisvalid=false WHERE indexrelid='public.alert_webhook_outbox_completed'::regclass")
+        .execute(&pool).await.unwrap();
+    store.migrate_enterprise().await.unwrap();
+    let (valid, ready, applied): (bool, bool, bool) = sqlx::query_as("SELECT i.indisvalid,i.indisready,EXISTS(SELECT FROM _sqlx_migrations WHERE version=62 AND success) FROM pg_index i WHERE i.indexrelid='public.alert_webhook_outbox_completed'::regclass")
+        .fetch_one(&pool).await.unwrap();
+    assert!(valid && ready && applied);
+    assert!(store.is_ready().await);
+    assert_counts(&pool).await;
+    let oid: i64 =
+        sqlx::query_scalar("SELECT 'public.alert_webhook_outbox_completed'::regclass::oid::bigint")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    store.migrate_enterprise().await.unwrap();
+    let after: i64 =
+        sqlx::query_scalar("SELECT 'public.alert_webhook_outbox_completed'::regclass::oid::bigint")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(oid, after, "a valid concurrent index is never rebuilt");
 }
 
 /// Sum plan-node tuples (including discarded tuples), weighted by loops. This

@@ -49,7 +49,33 @@ const RESERVATION_REFRESH: Duration = Duration::from_secs(15);
 const ALERT_DELIVERY_COUNTS: &str = "SELECT recent.*,pending.* FROM (SELECT count(*) FILTER(WHERE retrying),count(*) FILTER(WHERE exhausted>0),count(*) FILTER(WHERE status IN ('failed','partial')) FROM alert_deliveries WHERE (status='pending' AND created_at>clock_timestamp()-interval '24 hours') OR (status<>'pending' AND completed_at>clock_timestamp()-interval '24 hours')) recent CROSS JOIN (SELECT count(DISTINCT bucket_id),floor(greatest(0,coalesce(extract(epoch FROM clock_timestamp()-min(created_at)),0)))::bigint FROM alert_deliveries WHERE status='pending') pending";
 
 // Shared with the retained-history EXPLAIN harness: measure the exact collector SQL.
-const ALERT_WEBHOOK_COUNTS: &str = "SELECT s.state,count(q.id)::bigint,coalesce(max(greatest(0,extract(epoch FROM clock_timestamp()-q.created_at))) FILTER(WHERE s.state='waiting'),0)::bigint FROM unnest(ARRAY['waiting','leased','sent','failed','exhausted','ineligible']) s(state) LEFT JOIN (alert_webhook_outbox q JOIN alert_webhook_destinations d ON d.id=q.destination_id) ON q.state=s.state AND (q.state<>'waiting' OR q.destination_generation=d.enable_generation) AND (q.state IN ('waiting','leased') OR q.completed_at>clock_timestamp()-interval '24 hours') GROUP BY s.state";
+// Separate branches can use the existing waiting/leased partial indexes and
+// 0062's completed_at-leading terminal index. statement_timestamp() is a stable
+// range bound; volatile clock_timestamp() would filter retained history instead.
+// One statement retains one snapshot/deadline and always emits all six states.
+// Only waiting needs the destination join: its live generation must match;
+// the foreign key already guarantees destination existence for the other states.
+const ALERT_WEBHOOK_COUNTS: &str = r#"
+WITH counts AS (
+    SELECT 'waiting'::text AS state,count(*)::bigint AS n,
+        coalesce(max(greatest(0,extract(epoch FROM statement_timestamp()-q.created_at))),0)::bigint AS age
+    FROM alert_webhook_outbox q
+    JOIN alert_webhook_destinations d ON d.id=q.destination_id
+    WHERE q.state='waiting' AND q.destination_generation=d.enable_generation
+    UNION ALL
+    SELECT 'leased',count(*)::bigint,0::bigint
+    FROM alert_webhook_outbox WHERE state='leased'
+    UNION ALL
+    SELECT state,count(*)::bigint,0::bigint
+    FROM alert_webhook_outbox
+    WHERE state IN ('sent','failed','exhausted','ineligible')
+        AND completed_at>statement_timestamp()-interval '24 hours'
+    GROUP BY state
+)
+SELECT s.state,coalesce(c.n,0)::bigint,coalesce(c.age,0)::bigint
+FROM unnest(ARRAY['waiting','leased','sent','failed','exhausted','ineligible']) s(state)
+LEFT JOIN counts c ON c.state=s.state
+"#;
 
 #[cfg(all(test, feature = "integration-tests"))]
 #[path = "metrics/webhook_tests.rs"]
