@@ -18,6 +18,7 @@ import { PlatformSessionDetailPage, SessionDetailPage } from "./logs-session";
 import { KeyDetail } from "./key-detail";
 import { WorkspaceModelPage } from "./workspace-model";
 import { KeySafetyPage } from "./key-safety";
+import { AdminTokensPage } from "./admin-tokens";
 import { ModelComparePage } from "./model-compare";
 import { parseCompareIds } from "../lib/model-compare";
 import { ActionProvider, ApiScopeProvider, Button, ErrorNotice, Heading, Panel, Alert, Stack } from "../components/ui";
@@ -112,6 +113,7 @@ export function DashboardContent({ session, search, workspace, navigate }: { ses
     case "platform-audit": return <AuditHistory />;
     case "legal-holds": return <LegalHolds session={session} />;
     case "key-safety": return <KeySafetyPage session={session} />;
+    case "admin-tokens": return <AdminTokensPage session={session} />;
     case "platform-model-compare": return <ModelComparePage scope={{ kind: "platform" }} ids={parseCompareIds(search.ids)} />;
     case "routing": return <Routing session={session} />;
     case "pricing": return <Pricing session={session} />;
