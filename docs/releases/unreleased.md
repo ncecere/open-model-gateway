@@ -2,6 +2,10 @@
 
 Notes for changes on `main` after [v0.8.0](v0.8.0.md). They become the next release's notes.
 
+## Transaction isolation independent of PostgreSQL defaults (#281)
+
+Normal gateway transactions now explicitly begin at **READ COMMITTED**, so database, login-role or connection defaults of REPEATABLE READ or SERIALIZABLE cannot leave lock-then-check queries using a stale snapshot. Session defaults are not rewritten, and session read-only policy is still inherited. Intentional reporting snapshots remain REPEATABLE READ and read-only; their bounded-staleness contract and the elevated-isolation refusal guards are unchanged. No migration or new database privilege is needed. See [transaction isolation](../governance.md#transaction-isolation).
+
 ## Local-upstream approvals in special-use ranges are now refused (#203)
 
 **Breaking change for affected installations.** `GATEWAY_LOCAL_UPSTREAMS` approvals that pin an address in one of the ranges below are refused at startup. v0.8.0 only warned. An installation whose approvals are all public or RFC 1918 (private) addresses is not affected and needs no action.
