@@ -165,7 +165,7 @@ describe("stable denied shell privacy on the actual dashboard router", () => {
     const user = userEvent.setup(), view = await setup();
     await stableDenied(view, 2);
     expect(view.entityCalls).toEqual([]);
-    expect(screen.getByRole("link", { name: "Overview", exact: true })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /^Overview$/ })).toBeTruthy();
     await user.keyboard("{Control>}k{/Control}");
     await flushNotifications();
     expect(view.entityCalls).toEqual([]);
@@ -181,7 +181,7 @@ describe("stable denied shell privacy on the actual dashboard router", () => {
     const user = userEvent.setup(), view = await setup();
     await stableDenied(view, 2);
     const navKey = view.router.state.location.state.__TSR_key;
-    const navigationLink = screen.getByRole("link", { name: "Overview", exact: true });
+    const navigationLink = screen.getByRole("link", { name: /^Overview$/ });
     // Exercise the old leak if the denied shell still exposes search. The fixed
     // shell removes it entirely, so do not require opening a removed widget.
     const trigger = screen.queryByRole("button", { name: "Search or jump to…" });
@@ -236,7 +236,7 @@ describe("stable denied shell privacy on the actual dashboard router", () => {
       expect(view.notificationCalls).toHaveLength(calls);
       expect(view.sessionCalls).toHaveLength(2);
       expect(screen.queryByText("Checking current access…")).toBeNull();
-      expect(screen.getByRole("link", { name: "Overview", exact: true })).toBeTruthy();
+      expect(screen.getByRole("link", { name: /^Overview$/ })).toBeTruthy();
     } finally {
       cleanup(); // dispose fake interval handles before restoring the real clock
       vi.useRealTimers();
