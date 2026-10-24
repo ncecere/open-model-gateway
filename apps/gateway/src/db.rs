@@ -17,6 +17,9 @@
 //! `Pool::begin` is rejected by `clippy.toml` (`disallowed-methods`).
 use sqlx::{PgPool, Postgres, Transaction};
 
+#[cfg(all(test, feature = "integration-tests"))]
+mod tests;
+
 /// Begin a transaction on `pool` (read committed, read write).
 pub(crate) async fn begin(pool: &PgPool) -> sqlx::Result<Transaction<'static, Postgres>> {
     start(pool, None).await
