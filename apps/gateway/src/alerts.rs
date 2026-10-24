@@ -1581,7 +1581,7 @@ fn email_message_with_link(
         // no workspace, owner, key or request identifier enters these links.
         let base = link.unwrap_or_default();
         body.push_str(&format!(
-            "\r\nRetained floors are not upper bounds.\r\nAn unbounded hold has no known limit.\r\nNothing is refunded or released here; these amounts are never added to spend.\r\nA hold settles only when a Platform Admin reconciles it with evidence.\r\n\r\nNotifications: {base}/notifications\r\nOpen holds: {base}/admin/costs?tab=holds\r\n"
+            "\r\nRetained floors are not upper bounds.\r\nAn unbounded hold has no known limit.\r\nNothing is refunded or released here, and\r\nthese amounts are never added to spend.\r\nA hold settles only when a Platform Admin reconciles it with evidence.\r\n\r\nNotifications: {base}/notifications\r\nOpen holds: {base}/admin/costs?tab=holds\r\n"
         ));
     }
     if kind == "key_expiring"
