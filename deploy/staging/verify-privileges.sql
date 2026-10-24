@@ -1,4 +1,15 @@
 -- Enterprise ACL assertions, followed by executable rollback-only probes.
+DO $$ DECLARE c text; BEGIN
+ IF NOT has_table_privilege('gateway_runtime','public.access_requests','SELECT') OR NOT has_column_privilege('gateway_runtime','public.access_requests','status','UPDATE') OR NOT has_column_privilege('gateway_runtime','public.workspaces','discoverable','UPDATE') THEN RAISE EXCEPTION 'request operations unavailable'; END IF;
+ IF has_table_privilege('gateway_runtime','public.access_requests','INSERT,UPDATE,DELETE,TRUNCATE') OR has_table_privilege('gateway_runtime','public.access_request_applications','INSERT,UPDATE,DELETE,TRUNCATE') OR has_any_column_privilege('gateway_runtime','public.access_request_applications','UPDATE') THEN RAISE EXCEPTION 'request history mutable'; END IF;
+ FOREACH c IN ARRAY ARRAY['id','requester','workspace_id','target_kind','requested_role','reason','idempotency_digest','payload_digest','created_at','expires_at'] LOOP
+  IF has_column_privilege('gateway_runtime','public.access_requests',c,'UPDATE') THEN RAISE EXCEPTION 'mutable request identity: %',c; END IF;
+ END LOOP;
+ FOREACH c IN ARRAY ARRAY['id','status','target_kind','requested_role','created_at','expires_at','decided_by','decided_at'] LOOP
+  IF has_column_privilege('gateway_runtime','public.access_requests',c,'INSERT') THEN RAISE EXCEPTION 'request initialization bypass: %',c; END IF;
+ END LOOP;
+ IF has_function_privilege('gateway_runtime','public.access_request_reason_cleanup()','EXECUTE') THEN RAISE EXCEPTION 'cleanup trigger callable'; END IF;
+END $$;
 DO $$ DECLARE r record; t text; BEGIN
  SELECT * INTO STRICT r FROM pg_roles WHERE rolname='gateway_runtime';
  IF r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls THEN RAISE EXCEPTION 'privileged runtime attributes'; END IF;
@@ -961,6 +972,23 @@ BEGIN
   -- Business-action audit attribution: an admin-token-attributed row reads
   -- back the token id, like every other audit_events column.
   INSERT INTO audit_events(id,actor_user_id,action,resource_type,resource_id,admin_token_id) VALUES(gen_random_uuid(),tu,'provider.updated','provider',gen_random_uuid(),ta);
+ END;
+ -- Access requests (0066): real runtime writes, frozen identity/linkage and self-decision refusal.
+ DECLARE ru uuid:=gen_random_uuid(); decider uuid:=gen_random_uuid(); ws uuid:=gen_random_uuid(); req uuid; grant_id uuid:=gen_random_uuid(); BEGIN
+  INSERT INTO users(id,email) VALUES(ru,'request-'||ru||'@example.invalid'),(decider,'decider-'||decider||'@example.invalid');
+  INSERT INTO workspaces(id,name,kind,discoverable) VALUES(ws,'Request probe','team',true);
+  INSERT INTO access_requests(requester,workspace_id,reason,idempotency_digest,payload_digest) VALUES(ru,ws,'Probe',decode(repeat('ab',32),'hex'),decode(repeat('cd',32),'hex')) RETURNING id INTO req;
+  BEGIN UPDATE access_requests SET reason='rewrite' WHERE id=req; RAISE EXCEPTION 'request reason mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE access_requests SET expires_at=now() WHERE id=req; RAISE EXCEPTION 'request expiry mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN DELETE FROM access_requests WHERE id=req; RAISE EXCEPTION 'request removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE access_requests SET status='approved',decided_by=ru WHERE id=req; RAISE EXCEPTION 'request self-decision allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  INSERT INTO workspace_membership_grants(id,workspace_id,user_id,role,source) VALUES(grant_id,ws,ru,'member','manual');
+  INSERT INTO access_request_applications(request_id,workspace_id,requester,membership_grant_id) VALUES(req,ws,ru,grant_id);
+  UPDATE access_requests SET status='approved',decided_by=decider WHERE id=req;
+  SET CONSTRAINTS access_requests_application,access_request_applications_check IMMEDIATE;
+  BEGIN UPDATE access_requests SET status='pending',decided_by=NULL,decided_at=NULL WHERE id=req; RAISE EXCEPTION 'request reopened'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE access_request_applications SET membership_grant_id=gen_random_uuid() WHERE request_id=req; RAISE EXCEPTION 'application mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN DELETE FROM access_request_applications WHERE request_id=req; RAISE EXCEPTION 'application removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  END;
  -- Work leases (0029): election, renewal, fencing, release and takeover as runtime.
  DECLARE me uuid:=gen_random_uuid(); other uuid:=gen_random_uuid(); term bigint; BEGIN

@@ -11,6 +11,12 @@ DO $$ DECLARE c record; BEGIN
  END LOOP;
 END $$;
 GRANT USAGE ON SCHEMA public TO gateway_runtime;
+-- #83: server-owned clocks, immutable identities and application linkage.
+GRANT SELECT ON public.access_requests,public.access_request_applications TO gateway_runtime;
+GRANT INSERT(requester,workspace_id,reason,idempotency_digest,payload_digest) ON public.access_requests TO gateway_runtime;
+GRANT UPDATE(status,decided_by,decided_at) ON public.access_requests TO gateway_runtime;
+GRANT INSERT(request_id,workspace_id,requester,membership_grant_id) ON public.access_request_applications TO gateway_runtime;
+GRANT UPDATE(discoverable) ON public.workspaces TO gateway_runtime;
 GRANT SELECT(version,checksum,success) ON public._sqlx_migrations TO gateway_runtime;
 GRANT SELECT ON public.installation,public.users,public.oidc_identities,
  public.platform_role_grants,public.effective_platform_roles,public.cost_centers,
