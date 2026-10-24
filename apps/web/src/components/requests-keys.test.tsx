@@ -206,3 +206,26 @@ describe("Effective access", () => {
     expect(html.indexOf("Why can&#x27;t I use this model?")).toBeLessThan(html.indexOf("How limits combine"));
   });
 });
+
+describe("Keys page issuance budget (#253)", () => {
+  const render = (view: unknown, workspace = team) => { const client = seedKeys(); client.setQueryData(["api", undefined, `${ws}/key-issuance`], view); return markup(nav({ page: "keys", ws: "team" }, <Keys session={session} workspace={workspace} />), [], client); };
+  const block = (used: number, limit: number, next: string | null = null) => ({ used, limit, next_available_at: next });
+  it("shows how much of the 24-hour budget is used, and nothing when the gateway doesn't report one", () => {
+    const html = render({ window_seconds: 86400, holder: block(3, 50) });
+    expect(html).toContain("3 of 50 issued in the last 24 h");
+    expect(html).not.toContain("Key issuance limit reached");
+    expect(html).not.toContain("This workspace:");
+    expect(render({})).not.toContain("issued in the last 24 h");
+  });
+  it("shows the workspace's budget to those who receive it, and explains a spent budget instead of letting Create fail", () => {
+    const html = render({ window_seconds: 86400, holder: block(3, 50), workspace: block(40, 500) });
+    expect(html).toContain("This workspace: 40 of 500 issued in the last 24 h");
+    const spent = render({ window_seconds: 86400, holder: block(50, 50, new Date(Date.now() + 3 * 3600_000 + 30_000).toISOString()) });
+    expect(spent).toContain("Key issuance limit reached");
+    expect(spent).toContain("You have created or rotated 50 keys in the last 24 hours");
+    expect(spent).toMatch(/You can issue another in 3 hours \d+ minutes?\./);
+    expect(spent).toMatch(/<button[^>]*disabled[^>]*>Create key<\/button>/);
+    const workspaceSpent = render({ window_seconds: 86400, holder: block(1, 50), workspace: block(500, 500, new Date(Date.now() + 90_000).toISOString()) });
+    expect(workspaceSpent).toContain("This workspace has issued 500 keys in the last 24 hours");
+  });
+});

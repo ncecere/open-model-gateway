@@ -53,7 +53,7 @@ GRANT INSERT(id,email,oidc_link_allowed),
 GRANT INSERT ON public.oidc_identities,public.platform_role_grants,public.cost_centers,
  public.workspaces,public.oidc_group_mappings,public.workspace_membership_grants,
  public.oidc_login_attempts,public.browser_sessions,public.workspace_invitations,
- public.service_accounts,public.api_keys,public.provider_connections,public.models,
+ public.service_accounts,public.provider_connections,public.models,
  public.deployments,public.catalogs,public.catalog_models,public.workspace_type_catalogs,
  public.workspace_catalog_overrides,public.workspace_catalog_override_items,
  public.workspace_model_grants,public.key_model_restrictions,public.key_model_selections,
@@ -63,6 +63,12 @@ GRANT INSERT ON public.oidc_identities,public.platform_role_grants,public.cost_c
  public.inference_executions,public.governance_reservations,public.monetary_ledger,
  public.routing_policies,public.deployment_routing,public.deployment_health,public.audit_events
  TO gateway_runtime;
+-- api_keys: explicit INSERT columns, exactly those management/keys.rs insert_key
+-- names. created_at is excluded (it defaults to clock_timestamp()), so a key's
+-- issuance time, the key issuance window's clock (0053, #253), is never chosen
+-- by the runtime role; neither is revoked_at or disabled_at.
+GRANT INSERT(id,workspace_id,issued_to_user_id,service_account_id,name,secret_hash,expires_at,governance_key_id)
+ ON public.api_keys TO gateway_runtime;
 GRANT DELETE ON public.oidc_login_attempts,public.oidc_group_mappings,public.catalogs,
  public.catalog_models,public.workspace_type_catalogs,public.workspace_catalog_overrides,
  public.workspace_catalog_override_items,public.workspace_model_grants,
@@ -223,6 +229,12 @@ GRANT UPDATE(file_batch_enabled,file_batch_retention_days,file_video_enabled,
 -- forward (trigger); FOR UPDATE SKIP LOCKED needs its UPDATE column.
 GRANT UPDATE(reserved_bytes,api_purpose) ON public.stored_files TO gateway_runtime;
 GRANT UPDATE(storage_bytes) ON public.workspace_type_policies,
+ public.workspace_platform_policy_overrides,public.workspace_local_policies TO gateway_runtime;
+-- Key issuance budgets (0053, #253): per holder and per workspace per rolling 24 h,
+-- on the same three workspace layers (no key or installation layer), edited like
+-- storage_bytes. Issuance only reads api_keys (append-only: no UPDATE of
+-- created_at, no DELETE) through api_keys_workspace_created; no counter rows.
+GRANT UPDATE(key_issuances_per_holder,key_issuances_per_workspace) ON public.workspace_type_policies,
  public.workspace_platform_policy_overrides,public.workspace_local_policies TO gateway_runtime;
 GRANT SELECT,INSERT ON public.storage_usage_hours TO gateway_runtime;
 GRANT SELECT,UPDATE(recorded_through) ON public.storage_usage_progress TO gateway_runtime;

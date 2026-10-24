@@ -218,6 +218,18 @@ const POLICY_REASONS: &[(&str, &str, &str, &str)] = &[
         "storage_bytes",
     ),
     (
+        "key_issuances_per_holder exceeds a parent limit",
+        "exceeds_parent_rate",
+        "limit",
+        "key_issuances_per_holder",
+    ),
+    (
+        "key_issuances_per_workspace exceeds a parent limit",
+        "exceeds_parent_rate",
+        "limit",
+        "key_issuances_per_workspace",
+    ),
+    (
         "A stored day budget cannot be raised",
         "stored_budget_raise_not_allowed",
         "period",
@@ -294,6 +306,18 @@ const POLICY_REASONS: &[(&str, &str, &str, &str)] = &[
         "stored_rate_loosen_not_allowed",
         "limit",
         "storage_bytes",
+    ),
+    (
+        "A stored key_issuances_per_holder cap cannot be raised or removed",
+        "stored_rate_loosen_not_allowed",
+        "limit",
+        "key_issuances_per_holder",
+    ),
+    (
+        "A stored key_issuances_per_workspace cap cannot be raised or removed",
+        "stored_rate_loosen_not_allowed",
+        "limit",
+        "key_issuances_per_workspace",
     ),
 ];
 /// Policy rejection with `reason` and detail value (a period or limit name).
@@ -495,12 +519,22 @@ impl IntoResponse for ManagementError {
             } => {
                 // Same envelope as `ApiError`: `code` is the HTTP status,
                 // `reason` the machine code.
+                let retry_after = (status == StatusCode::TOO_MANY_REQUESTS)
+                    .then(|| details.get("retry_after_seconds").and_then(Value::as_u64))
+                    .flatten();
                 let mut error =
                     json!({"code":status.as_u16().to_string(),"message":message,"reason":code});
                 if let Some(object) = error.as_object_mut() {
                     object.extend(details);
                 }
-                (status, Json(json!({ "error": error }))).into_response()
+                let mut response = (status, Json(json!({ "error": error }))).into_response();
+                // A 429 that names its wait also sends it as the standard header.
+                if let Some(seconds) = retry_after {
+                    response
+                        .headers_mut()
+                        .insert(axum::http::header::RETRY_AFTER, seconds.into());
+                }
+                response
             }
         }
     }
@@ -662,6 +696,10 @@ fn routes() -> Router<Store> {
         .route(
             "/api/v1/workspaces/{ws}/keys",
             get(keys::keys).post(keys::create_key),
+        )
+        .route(
+            "/api/v1/workspaces/{ws}/key-issuance",
+            get(keys::key_issuance),
         )
         .route(
             "/api/v1/workspaces/{ws}/keys/{key}",

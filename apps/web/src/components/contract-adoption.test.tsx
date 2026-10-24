@@ -129,4 +129,20 @@ describe("Admin › Costs › Set custom limits", () => {
     expect(api.writes()).toEqual([{ method: "PUT", url: path, body: { requests_per_minute: 60, tokens_per_minute: null, concurrent_requests: null, concurrent_jobs: null, storage_bytes: null, budgets: [{ period: "day", amount_microusd: "2500000" }, { period: "month", amount_microusd: "100000000" }] } }]);
     api.client.clear();
   });
+  it("starts a first override with the key issuance fields blank (inheriting 50/500) and saves them as null (#253)", async () => {
+    const user = userEvent.setup(), path = "/api/v1/platform/workspaces/w1/policy", onClose = vi.fn();
+    const typeDefault = { ...policy, requests_per_minute: 60, key_issuances_per_holder: 50, key_issuances_per_workspace: 500 };
+    // While no override exists the server reports the override's own issuance fields as null.
+    const own = { ...policy, requests_per_minute: 60, key_issuances_per_holder: null, key_issuances_per_workspace: null };
+    const current = { policy: own, effective: typeDefault, mode: "inherit", provenance: { platform_source: "type_default", platform: typeDefault, local: policy, key: null, type_default: typeDefault } };
+    const api = serve([[path, current]], (method, url) => method === "PUT" && url === path ? Response.json({ ok: true }) : method === "GET" && url === path ? Response.json(current) : undefined);
+    mount(<ReplacementLimitsDialog workspaceId="w1" name="Data science" onClose={onClose} />, api.client);
+    const holder = screen.getByRole("textbox", { name: /^Keys per person per 24 h/ }) as HTMLInputElement, workspace = screen.getByRole("textbox", { name: /^Keys per workspace per 24 h/ }) as HTMLInputElement;
+    expect([holder.value, holder.placeholder, workspace.value, workspace.placeholder]).toEqual(["", "Inherits: 50", "", "Inherits: 500"]);
+    await user.click(screen.getByRole("button", { name: "Save custom limits" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(api.writes()).toHaveLength(1);
+    expect(api.writes()[0]!.body).toMatchObject({ requests_per_minute: 60, key_issuances_per_holder: null, key_issuances_per_workspace: null });
+    api.client.clear();
+  });
 });

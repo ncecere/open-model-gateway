@@ -38,6 +38,8 @@ mod entropy_tests;
 mod files_tests;
 #[path = "filter_scale_tests.rs"]
 mod filter_scale_tests;
+#[path = "keys/issuance_tests.rs"]
+mod key_issuance_tests;
 #[path = "key_safety_tests.rs"]
 mod key_safety_tests;
 #[path = "keys/tests.rs"]

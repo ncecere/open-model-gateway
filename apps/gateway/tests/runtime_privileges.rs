@@ -85,6 +85,7 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
     legal_holds_run_as_runtime(&pool).await;
     dashboard_sessions_run_as_runtime(&pool).await;
     admin_tokens_run_as_runtime(&pool).await;
+    key_issuance_runs_as_runtime(&pool).await;
     // Last: its unknown batch hold would change the installation-wide totals above.
     async_jobs_run_as_runtime(&pool).await;
     sqlx::query("SELECT pg_advisory_unlock(72419505)")
@@ -1319,6 +1320,97 @@ async fn budget_totals_maintained_as_runtime(pool: &PgPool) {
     .await
     .unwrap();
     assert_eq!(held, ["500", "500", "500", "500"]);
+    runtime.close().await;
+}
+
+/// #253: key issuance budgets as the runtime role. Every workspace layer
+/// stores both budgets, the window counts read `api_keys`, the 1..=10000 range
+/// is enforced, and issuance history (created_at, rows) cannot be rewritten.
+async fn key_issuance_runs_as_runtime(pool: &PgPool) {
+    let (ws, user, key) = (
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+    );
+    sqlx::query("INSERT INTO users(id,email) VALUES($1,$2)")
+        .bind(user)
+        .bind(format!("issuance-{user}@example.test"))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO workspaces(id,name,kind) VALUES($1,'Issuance probe','team')")
+        .bind(ws)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash) VALUES($1,$2,$3,'issued',decode(repeat('01',32),'hex'))").bind(key).bind(ws).bind(user).execute(pool).await.unwrap();
+    let runtime = runtime_pool(pool).await;
+    for (table, column, id) in [
+        ("workspace_platform_policy_overrides", "workspace_id", ws),
+        ("workspace_local_policies", "workspace_id", ws),
+    ] {
+        sqlx::query(&format!("INSERT INTO {table}({column},key_issuances_per_holder,key_issuances_per_workspace) VALUES($1,3,30) ON CONFLICT({column}) DO UPDATE SET key_issuances_per_holder=excluded.key_issuances_per_holder,key_issuances_per_workspace=excluded.key_issuances_per_workspace"))
+            .bind(id).execute(&runtime).await.unwrap();
+    }
+    sqlx::query("UPDATE workspace_type_policies SET key_issuances_per_holder=60,key_issuances_per_workspace=600 WHERE kind='team'")
+        .execute(&runtime)
+        .await
+        .unwrap();
+    for bad in [
+        "UPDATE workspace_local_policies SET key_issuances_per_holder=0 WHERE workspace_id=$1",
+        "UPDATE workspace_platform_policy_overrides SET key_issuances_per_workspace=10001 WHERE workspace_id=$1",
+    ] {
+        assert!(
+            sqlx::query(bad).bind(ws).execute(&runtime).await.is_err(),
+            "{bad}"
+        );
+    }
+    // The same statement the issuance check runs: limits and both window counts.
+    let (holder_limit, workspace_limit, holder_used, workspace_used): (i64, i64, i64, i64) = sqlx::query_as("SELECT least(coalesce(o.key_issuances_per_holder,t.key_issuances_per_holder,10000),coalesce(l.key_issuances_per_holder,10000)),least(coalesce(o.key_issuances_per_workspace,t.key_issuances_per_workspace,10000),coalesce(l.key_issuances_per_workspace,10000)),(SELECT count(*) FROM api_keys k WHERE k.workspace_id=w.id AND k.issued_to_user_id=$2 AND k.created_at>clock_timestamp()-make_interval(secs=>86400)),(SELECT count(*) FROM api_keys k WHERE k.workspace_id=w.id AND k.created_at>clock_timestamp()-make_interval(secs=>86400)) FROM workspaces w LEFT JOIN workspace_platform_policy_overrides o ON o.workspace_id=w.id LEFT JOIN workspace_type_policies t ON t.kind=w.kind LEFT JOIN workspace_local_policies l ON l.workspace_id=w.id WHERE w.id=$1")
+        .bind(ws).bind(user).fetch_one(&runtime).await.unwrap();
+    assert_eq!(
+        (holder_limit, workspace_limit, holder_used, workspace_used),
+        (3, 30, 1, 1)
+    );
+    // Exactly the columns `insert_key` names are insertable; the issuance time is
+    // never chosen by the runtime (it defaults to clock_timestamp()).
+    let issued: uuid::Uuid = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,service_account_id,name,secret_hash,expires_at,governance_key_id) VALUES($1,$2,$3,NULL,'runtime-issued',decode(repeat('02',32),'hex'),now()+make_interval(days=>1),$1)")
+        .bind(issued)
+        .bind(ws)
+        .bind(user)
+        .execute(&runtime)
+        .await
+        .unwrap();
+    let stamped: bool = sqlx::query_scalar("SELECT created_at>clock_timestamp()-interval '1 minute' AND created_at<=clock_timestamp() FROM api_keys WHERE id=$1")
+        .bind(issued)
+        .fetch_one(&runtime)
+        .await
+        .unwrap();
+    assert!(stamped, "a runtime-issued key is stamped at insert time");
+    assert!(
+        sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash,created_at) VALUES(gen_random_uuid(),$1,$2,'backdated',decode(repeat('03',32),'hex'),now()-interval '2 days')")
+            .bind(ws)
+            .bind(user)
+            .execute(&runtime)
+            .await
+            .is_err(),
+        "runtime must not choose created_at"
+    );
+    // History is append-only: neither the window timestamp nor the row can change.
+    for forbidden in [
+        "UPDATE api_keys SET created_at=now()-interval '2 days' WHERE id=$1",
+        "DELETE FROM api_keys WHERE id=$1",
+    ] {
+        assert!(
+            sqlx::query(forbidden)
+                .bind(key)
+                .execute(&runtime)
+                .await
+                .is_err(),
+            "{forbidden}"
+        );
+    }
     runtime.close().await;
 }
 

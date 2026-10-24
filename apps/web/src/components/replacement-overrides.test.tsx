@@ -124,6 +124,35 @@ describe("Limits · replacement override", () => {
     await waitFor(() => expect(api.writes()).toEqual([{ method: "PUT", body: { requests_per_minute: 60, tokens_per_minute: 100000, concurrent_requests: 8, concurrent_jobs: null, storage_bytes: null, budgets: [{ period: "day", amount_microusd: "5000000" }, { period: "month", amount_microusd: "100000000" }] } }]));
     api.client.clear();
   });
+  it("creates a first override with the key issuance fields empty (inheriting), never a snapshot of the type default (#253)", async () => {
+    const issued = { ...typeDefault, key_issuances_per_holder: 50, key_issuances_per_workspace: 500 };
+    // The server reports the override's own fields as null while none exists.
+    const own = { ...typeDefault, key_issuances_per_holder: null, key_issuances_per_workspace: null };
+    const state = { mode: "inherit", policy: own, effective: issued, provenance: { platform_source: "type_default", platform: issued, local: policy, key: null, type_default: issued }, budgets: [] };
+    const user = userEvent.setup(), api = serve(policyPath, state);
+    mount(<ScopeLimits mode="replacement" kind="project" path={policyPath} writable />, api.client);
+    await user.click(screen.getByRole("radio", { name: "Override for this project" }));
+    const holder = screen.getByRole("textbox", { name: /^Keys per person per 24 h · / }) as HTMLInputElement;
+    const workspace = screen.getByRole("textbox", { name: /^Keys per workspace per 24 h · / }) as HTMLInputElement;
+    expect([holder.value, holder.placeholder, workspace.value, workspace.placeholder]).toEqual(["", "Inherits: 50", "", "Inherits: 500"]);
+    await user.click(screen.getByRole("button", { name: "Save limits" }));
+    await waitFor(() => expect(api.writes()).toHaveLength(1));
+    expect(api.writes()[0]!.body).toMatchObject({ key_issuances_per_holder: null, key_issuances_per_workspace: null, requests_per_minute: 60 });
+    api.client.clear();
+  });
+  it("sends an explicit key issuance value when the admin sets one", async () => {
+    const issued = { ...typeDefault, key_issuances_per_holder: 50, key_issuances_per_workspace: 500 };
+    const own = { ...typeDefault, key_issuances_per_holder: null, key_issuances_per_workspace: null };
+    const state = { mode: "inherit", policy: own, effective: issued, provenance: { platform_source: "type_default", platform: issued, local: policy, key: null, type_default: issued }, budgets: [] };
+    const user = userEvent.setup(), api = serve(policyPath, state);
+    mount(<ScopeLimits mode="replacement" kind="project" path={policyPath} writable />, api.client);
+    await user.click(screen.getByRole("radio", { name: "Override for this project" }));
+    await user.type(screen.getByRole("textbox", { name: /^Keys per person per 24 h · / }), "200");
+    await user.click(screen.getByRole("button", { name: "Save limits" }));
+    await waitFor(() => expect(api.writes()).toHaveLength(1));
+    expect(api.writes()[0]!.body).toMatchObject({ key_issuances_per_holder: 200, key_issuances_per_workspace: null });
+    api.client.clear();
+  });
   it("saves a removed budget row as no budget, not the inherited type default (live acceptance F3)", async () => {
     const user = userEvent.setup(), api = serve(policyPath, inherited);
     mount(<ScopeLimits mode="replacement" kind="project" path={policyPath} writable />, api.client);

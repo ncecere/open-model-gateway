@@ -23,6 +23,7 @@ import { permissions, type DashboardSearch } from "../lib/permissions";
 import { ownKeyHelp } from "../lib/access";
 import { expiryField } from "../lib/forms";
 import { formatMicroUsd, type BudgetPeriod, type Policy, type PolicyResponse } from "../lib/governance";
+import { issuanceBlock, issuanceRefusal, issuanceUsageText, type KeyIssuance } from "../lib/key-issuance";
 import { keyModelOptions, keyModelRestrictionHelp, keyModelSummary, keyRotationDescription, selectedModelIds } from "../lib/key-models";
 import { canDisable, canEnable, canRevoke, canRotate, expiryError, expiryPresets, filterKeys, issuedTo, keyListStatus, keyPill, keyStatus, type KeyRow } from "../lib/keys";
 import { draftErrors, draftLimits, hasErrors, limitsBody, limitsOf, limitsSaveError, limitsSummary, mergeErrors, newBudgetKey, periodName, rateRows, rejectionErrors, resetText, stackPeriods, type BudgetDraft, type DraftErrors, type LimitsDraft, type Parent, type RateKey } from "../lib/limits";
@@ -101,10 +102,16 @@ export function Keys({ session, workspace }: Scope) {
   const failure = keys.error ?? grants.error ?? accounts.error, retryAll = () => { void keys.refetch(); void grants.refetch(); if (p.manageServiceAccounts) void accounts.refetch(); };
   // Active by default; "All" is explicit (status=all), so revoked keys don't fill the first page.
   const status = keyListStatus(search.status);
+  // Key issuance budget (#253): the caller's own, and for workspace admins the workspace's.
+  const issuance = useApi<KeyIssuance>(`${wsPath(workspace.id)}/key-issuance`);
   const safety = useKeySafety(workspace), risks = useMemo(() => findingsByKey(safety.data), [safety.data]);
   const rows = useMemo(() => { const list = filterKeys(keys.data ?? [], status, search.q); return search.risk === "attention" ? list.filter(x => risks.has(x.id)) : list; }, [keys.data, status, search.q, search.risk, risks]);
   const activeAccounts = accounts.data?.filter(a => !a.disabled_at) ?? [];
   const canIssue = p.createUserKey || p.manageServiceAccounts && activeAccounts.length > 0, noModels = grants.isSuccess && options.length === 0;
+  // A spent personal budget doesn't stop an admin from issuing a service-account key (its own budget); a spent workspace budget stops everyone.
+  // A reply without the caller's block (an older gateway) shows nothing and blocks nothing.
+  const budget = issuance.data?.holder ? issuance.data : undefined, spent = budget ? issuanceBlock(budget) : undefined;
+  const refused = spent && (spent.scope === "workspace" || !(p.manageServiceAccounts && activeAccounts.length > 0)) ? spent : undefined;
   const ready = grants.isSuccess && !grants.isFetching && (!p.manageServiceAccounts || accounts.isSuccess);
   const rowSearch = { status: search.status, q: search.q, risk: search.risk }, narrow = useMediaQuery(NARROW_QUERY);
   // Selection is ours (not DataTable's): revoked and expired keys can't be picked, and with no
@@ -131,7 +138,9 @@ export function Keys({ session, workspace }: Scope) {
   const cols = useStoredColumns(columns, "omg.enterprise.columns.keys");
   return <Stack gap={6} className={s.page}>
     <Heading title="API keys" description={workspace.capabilities.view_all_activity && workspace.kind !== "personal" ? "Keys for calling this workspace's models from code." : "Your keys for calling this workspace's models from code."}
-      actions={<Button ref={createTrigger} disabled={!ready || !canIssue || noModels || !!failure} onClick={() => setCreating(true)}>Create key</Button>} />
+      actions={<Button ref={createTrigger} disabled={!ready || !canIssue || noModels || !!failure || !!refused} onClick={() => setCreating(true)}>Create key</Button>} />
+    {budget && <p role="status" className={s.note} data-testid="key-issuance-usage">{issuanceUsageText(budget.holder)}{budget.workspace ? ` · This workspace: ${issuanceUsageText(budget.workspace)}` : ""}</p>}
+    {spent && <Alert tone="warning" title="Key issuance limit reached">{spent.message}{refused ? "" : " Service-account keys count separately."}</Alert>}
     {noModels && <Alert tone="info" title="Add a model first">This workspace has no models yet, so a new key couldn't call anything. {p.manageGrants ? <ResourceLink search={{ page: "grants", ws: workspace.id }}>Add models</ResourceLink> : "Ask a workspace admin to add models."}</Alert>}
     {!p.createUserKey && <Alert tone="info">{ownKeyHelp(workspace)}</Alert>}
     {grants.isFetching && <p role="status" className={s.note}>Loading this workspace&apos;s models…</p>}
@@ -223,6 +232,7 @@ export function CreateKeyDialog({ session, workspace, options, accounts, onClose
       void client.invalidateQueries({ queryKey: ["api"] });
       setResult({ id: created.id, token: created.token, policy: created.policy ?? null });
     } catch (caught) {
+      if (issuanceRefusal(caught)) void client.invalidateQueries({ queryKey: ["api"] });
       const placed = rejectionErrors(caught, draft);
       if (placed) { setRejected(placed); setError(new Error("The key wasn't created: a limit isn't allowed here. See the highlighted field.")); }
       else setError(limitsSaveError(caught));

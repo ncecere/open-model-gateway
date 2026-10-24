@@ -28,6 +28,8 @@ Limits are **effective**, which means every layer that applies at admission coun
 
 A key's severity is its worst finding.
 
+Key issuance is bounded separately (a [rolling 24-hour budget](governance.md#key-issuance) on creates and rotations per holder and per workspace). It adds no finding and changes none of the rules above; a rotation that is refused for the budget leaves the old key in place.
+
 ## Fixes
 
 | Fix | Findings | Action |
