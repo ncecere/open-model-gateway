@@ -14,6 +14,11 @@ import { expect, request, test, type APIRequestContext, type Page } from "@playw
 import { api, chat, expectNoCspViolations, signIn } from "./helpers";
 import { BASE_URL } from "./stack.mjs";
 
+// Playwright also persists failure-time ARIA trees in error-context.md, independently
+// of trace/screenshots. Never snapshot a privileged token's disclosure textarea.
+// Keep credential assertions boolean; do not use ARIA/snapshot matchers here,
+// whose own failure contexts bypass this automatic-snapshot guard.
+process.env.PLAYWRIGHT_NO_COPY_PROMPT = "1";
 test.afterEach(expectNoCspViolations);
 // A real admin token is a privileged management credential: never retain it in traces/images.
 test.use({ trace: "off", screenshot: "off", video: "off" });
@@ -178,4 +183,47 @@ test("an unrevoked token can never manage its own kind, see another owner's pers
 
     expect((await api(page, "DELETE", `/platform/admin-tokens/${body.id}`)).ok()).toBe(true);
   } finally { await bearer.dispose(); await context.close(); }
+});
+
+test("scoped writes honor live owner authority and immutable client-address restrictions", async ({ browser }) => {
+  const operator = await signIn(browser, "operator"), alex = await signIn(browser, "alex");
+  const bearer = await bearerClient();
+  let restrictedId: string | undefined, alexId: string | undefined;
+  try {
+    const me = await (await api(alex.page, "GET", "/me")).json();
+    alexId = me.user.id;
+    const roles = `/platform/users/${alexId}/roles`;
+    // Alex keeps User entitlement throughout; Operator remains the safety Admin.
+    expect((await api(operator.page, "POST", roles, { role: "admin" })).ok()).toBe(true);
+    const created = await api(alex.page, "POST", "/platform/admin-tokens", {
+      name: tokenName(), scopes: ["access:write"], expires_in_days: 1, ip_allowlist: ["127.0.0.1/32"],
+    });
+    expect(created.status()).toBe(200);
+    const body = await created.json();
+    expect(typeof body.token === "string" && TOKEN_SHAPE.test(body.token)).toBe(true);
+    // A write scope never implies platform:read, even with a matching CIDR.
+    expect((await bearerRequest(bearer, body.token, "/platform/users")).status()).toBe(403);
+    expect((await bearerRequest(bearer, body.token, `${roles}/admin`, { method: "DELETE" })).status()).toBe(200);
+    expect((await bearerRequest(bearer, body.token, "/platform/users")).status()).toBe(401);
+    expect((await api(operator.page, "POST", roles, { role: "admin" })).ok()).toBe(true);
+    // Restoring Admin must never reactivate the old token.
+    expect((await bearerRequest(bearer, body.token, "/platform/users")).status()).toBe(401);
+
+    const restricted = await api(operator.page, "POST", "/platform/admin-tokens", {
+      name: tokenName(), scopes: ["platform:read"], expires_in_days: 1, ip_allowlist: ["203.0.113.0/24"],
+    });
+    expect(restricted.status()).toBe(200);
+    const denied = await restricted.json(); restrictedId = denied.id;
+    expect((await bearerRequest(bearer, denied.token, "/platform/users")).status()).toBe(403);
+    const forged = await bearer.fetch(`${BASE_URL}/api/v1/platform/users`, {
+      headers: { authorization: `Bearer ${denied.token}`, "x-forwarded-for": "203.0.113.7" },
+      failOnStatusCode: false,
+    });
+    expect(forged.status()).toBe(403);
+  } finally {
+    try {
+      if (restrictedId) expect((await api(operator.page, "DELETE", `/platform/admin-tokens/${restrictedId}`)).ok()).toBe(true);
+      if (alexId) expect((await api(operator.page, "DELETE", `/platform/users/${alexId}/roles/admin`)).ok()).toBe(true);
+    } finally { await bearer.dispose(); await alex.context.close(); await operator.context.close(); }
+  }
 });
