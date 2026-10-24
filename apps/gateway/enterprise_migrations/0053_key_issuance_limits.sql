@@ -39,9 +39,9 @@
 -- The window index is NOT built here. The ALTERs below hold ACCESS EXCLUSIVE
 -- locks until this transaction ends, and key authentication reads api_keys on
 -- every request, so a build in this transaction would block them for its whole
--- duration. 0054 builds it CONCURRENTLY outside a transaction; 0055 repairs an
--- invalid leftover of an interrupted build. These ALTERs are metadata-only and
--- brief (lock_timeout bounds the wait for the locks).
+-- duration. 0054 builds it CONCURRENTLY outside a transaction (the migrator
+-- recovers an invalid leftover of an interrupted build). These ALTERs are
+-- metadata-only and brief (lock_timeout bounds the wait for the locks).
 --
 -- Rolling upgrade: run `migrate` first. Replicas still on the previous binary
 -- ignore these columns and do not enforce the budget during the overlap; they

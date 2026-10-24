@@ -5,7 +5,12 @@
 -- CREATE INDEX CONCURRENTLY cannot run in a multi-statement query.
 --
 -- If a build is interrupted (a cancel, a crash), PostgreSQL leaves an INVALID
--- index of this name; IF NOT EXISTS then skips it on a retry, and 0055 (next)
--- drops and rebuilds an invalid one, so rerunning `migrate` always ends with a
--- valid index. Explicit operator upgrade only (`migrate`); never run by serve.
+-- index of this name, and this migration is not recorded. The next `migrate`
+-- drops the invalid leftover with DROP INDEX CONCURRENTLY before running
+-- migrations (`drop_invalid_concurrent_indexes` in store.rs; not a migration,
+-- since a transactional DROP INDEX would block key authentication reads) and
+-- then runs this file again. Both concurrent statements wait for transactions
+-- older than themselves and have no lock timeout: an idle-in-transaction session
+-- stalls `migrate` (see the release notes). Explicit operator upgrade only
+-- (`migrate`); never run by serve.
 CREATE INDEX CONCURRENTLY IF NOT EXISTS api_keys_workspace_created ON api_keys(workspace_id, created_at);

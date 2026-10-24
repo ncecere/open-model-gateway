@@ -1490,7 +1490,8 @@ async fn the_workspace_lock_alone_serializes_check_and_insert(pool: PgPool) {
 /// 0053's ALTERs hold ACCESS EXCLUSIVE locks until its transaction ends, so the
 /// index build must not share that transaction: it is its own no-transaction
 /// migration and builds CONCURRENTLY (readers of api_keys, which authenticates
-/// every request, are never blocked by it).
+/// every request, are never blocked by it). Recovery from an interrupted build
+/// is in `Store::migrate_enterprise`, not in a migration (see store.rs tests).
 #[test]
 fn the_window_index_is_built_concurrently_outside_the_alter_transaction() {
     let migrator = &crate::store::MIGRATOR;
@@ -1506,61 +1507,25 @@ fn the_window_index_is_built_concurrently_outside_the_alter_transaction() {
         build.no_tx,
         "the index build must run outside a transaction"
     );
-    let sql = build.sql.to_uppercase();
-    assert!(sql.contains("CREATE INDEX CONCURRENTLY IF NOT EXISTS API_KEYS_WORKSPACE_CREATED"));
-    // One statement: CREATE INDEX CONCURRENTLY cannot share a multi-statement query.
-    let code: Vec<&str> = build
+    // Exactly one statement (CREATE INDEX CONCURRENTLY cannot share a multi-statement
+    // query): the file's code, comments removed, is one CREATE INDEX ending in `;`.
+    let code = build
         .sql
         .lines()
         .filter(|l| !l.trim_start().starts_with("--"))
-        .collect();
-    assert_eq!(code.join("\n").matches(';').count(), 1, "{code:?}");
-    // A later transactional migration repairs an invalid leftover of an interrupted build.
-    let repair = by_version(55);
-    assert!(!repair.no_tx && repair.sql.contains("indisvalid"));
-}
-
-#[sqlx::test(migrations = "./enterprise_migrations")]
-async fn an_invalid_leftover_index_from_an_interrupted_build_is_repaired(pool: PgPool) {
-    let valid = || async {
-        sqlx::query_scalar::<_, bool>("SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE c.relname='api_keys_workspace_created'")
-            .fetch_optional(&pool)
-            .await
-            .unwrap()
-    };
-    assert_eq!(valid().await, Some(true));
-    // An interrupted CREATE INDEX CONCURRENTLY leaves an invalid index of this name.
-    sqlx::raw_sql("UPDATE pg_index SET indisvalid=false WHERE indexrelid='public.api_keys_workspace_created'::regclass")
-        .execute(&pool)
-        .await
-        .unwrap();
-    assert_eq!(valid().await, Some(false));
-    // Retrying the build skips the existing name (IF NOT EXISTS)...
-    let build = crate::store::MIGRATOR
-        .iter()
-        .find(|m| m.version == 54)
-        .unwrap();
-    sqlx::raw_sql(&build.sql).execute(&pool).await.unwrap();
-    assert_eq!(valid().await, Some(false));
-    // ...and the repair migration leaves a valid index of the same definition.
-    let repair = crate::store::MIGRATOR
-        .iter()
-        .find(|m| m.version == 55)
-        .unwrap();
-    sqlx::raw_sql(&repair.sql).execute(&pool).await.unwrap();
-    assert_eq!(valid().await, Some(true));
-    let def: String = sqlx::query_scalar(
-        "SELECT indexdef FROM pg_indexes WHERE indexname='api_keys_workspace_created'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert!(def.contains("(workspace_id, created_at)"), "{def}");
-    // And with the index missing altogether, the repair builds it.
-    sqlx::raw_sql("DROP INDEX api_keys_workspace_created")
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::raw_sql(&repair.sql).execute(&pool).await.unwrap();
-    assert_eq!(valid().await, Some(true));
+        .collect::<Vec<_>>()
+        .join(" ");
+    let statement = code
+        .trim()
+        .strip_suffix(';')
+        .expect("the statement ends with a semicolon");
+    assert!(!statement.contains(';'), "more than one statement: {code}");
+    assert!(
+        statement.to_uppercase().starts_with(
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS API_KEYS_WORKSPACE_CREATED ON API_KEYS"
+        ),
+        "{statement}"
+    );
+    // No later migration repairs it (a transactional DROP INDEX would block key reads).
+    assert_eq!(migrator.iter().map(|m| m.version).max(), Some(54));
 }
