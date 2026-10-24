@@ -81,8 +81,8 @@ export function HoldsTab({ session, workspace }: { session: Session; workspace?:
   };
   const columns: DataTableColumn<HoldRow>[] = [
     { id: "age", header: "Unknown for", rowHeader: true, hideable: false, cell: r => <>{ageText(r.age_hours)}<span className={s.secondary}>since <TableTime value={r.unknown_since} fallback={r.unknown_since} /></span></> },
-    { id: "floor", header: "Floor", numeric: true, cell: r => <>{floorText(r.held_microusd)}{r.unbounded_cost && <> <Badge tone="warning" title="No upper limit is known for this hold">Unbounded</Badge></>}</> },
-    { id: "reason", header: "Reason", cell: r => reasonText(r.unresolved_reason) },
+    { id: "floor", header: "Floor", numeric: true, cell: r => <span className={u.holdCell}>{floorText(r.held_microusd)}{r.unbounded_cost && <Badge tone="warning" className={u.holdBadge} title="No upper limit is known for this hold">Unbounded</Badge>}</span> },
+    { id: "reason", header: "Reason", cell: r => <span className={u.holdCell}>{reasonText(r.unresolved_reason)}</span> },
     { id: "model", header: "Model", cell: r => <>{r.public_model}<span className={s.secondary}>{r.provider} · {workloadLabels[r.workload_kind as keyof typeof workloadLabels] ?? r.workload_kind}</span></> },
     ...(workspace ? [] : [{ id: "workspace", header: "Workspace", cell: (r: HoldRow) => <>{r.workspace.name}<span className={s.secondary}>{kindLabel(r.workspace.kind)}</span></> }]),
     { id: "request", header: "Request", cell: r => { const link = holdRequestLink(session, r, workspace); return link ? <ResourceLink search={link} aria-label={`Request ${r.root_request_id.slice(0, 8)}`}>{shortId(r.root_request_id)}</ResourceLink> : <CopyId value={r.root_request_id} label="request ID" />; } },

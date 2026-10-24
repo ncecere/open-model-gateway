@@ -73,6 +73,31 @@ async function open(page: Page, href: string) {
   await expect(queue(page)).toBeVisible();
   // Rows, not the loading skeleton.
   await expect(queue(page).getByRole("row")).not.toHaveCount(1);
+  await expectCellsDoNotOverlap(page, href);
+}
+/**
+ * No two cells of a row, and no badge and its neighbour, draw their text over each other. The page-level overflow check
+ * cannot see this: a long unbreakable value spills out of its card cell without widening the document.
+ */
+async function expectCellsDoNotOverlap(page: Page, label: string) {
+  const problems = await queue(page).evaluate(table => {
+    const box = (node: Element) => { const r = document.createRange(); r.selectNodeContents(node); const b = r.getBoundingClientRect(); return { left: b.left, right: b.right, top: b.top, bottom: b.bottom, width: b.width, height: b.height }; };
+    const hit = (a: ReturnType<typeof box>, b: ReturnType<typeof box>) => a.width > 0 && b.width > 0 && a.height > 0 && b.height > 0 && a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5;
+    const out: string[] = [];
+    for (const [index, tr] of [...table.querySelectorAll("tbody > tr")].entries()) {
+      const cells = [...tr.children].filter(c => c.textContent?.trim());
+      const boxes = cells.map(c => ({ name: c.getAttribute("data-label") ?? c.textContent!.slice(0, 12), box: box(c), cell: c.getBoundingClientRect() }));
+      for (const [i, a] of boxes.entries()) {
+        // Text must stay inside its own cell.
+        if (a.box.right > a.cell.right + 0.5 || a.box.left < a.cell.left - 0.5) out.push(`row ${index}: "${a.name}" text spills out of its cell`);
+        for (const b of boxes.slice(i + 1)) if (hit(a.box, b.box)) out.push(`row ${index}: "${a.name}" overlaps "${b.name}"`);
+      }
+      // The badge never sits on top of its neighbouring text.
+      for (const badge of tr.querySelectorAll("span[data-tone]")) for (const other of boxes) if (!other.name.includes("Floor") && other.name !== "Unknown for" && hit(box(badge), other.box)) out.push(`row ${index}: badge overlaps "${other.name}"`);
+    }
+    return out;
+  });
+  expect(problems, `${label}: cell contents must not overlap or spill`).toEqual([]);
 }
 async function shot(page: Page, name: string) { mkdirSync(shots, { recursive: true }); await page.locator("main").screenshot({ path: path.join(shots, `${name}.png`) }); }
 
@@ -90,6 +115,7 @@ for (const width of [1440, 390]) {
         await expect(page).toHaveURL(/\/admin\/costs\?tab=holds$/);
         await expect(queue(page)).toBeVisible();
         await expect(queue(page).getByRole("row")).not.toHaveCount(1);
+        await expectCellsDoNotOverlap(page, `admin ${width}`);
         const a = row(page, "holds-a/bounded");
         await expect(a).toContainText("At least $9,007,199,254.740993");
         await expect(a).toContainText("4 days"); await expect(a).toContainText("Holds acceptance");

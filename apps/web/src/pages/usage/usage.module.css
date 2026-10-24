@@ -279,3 +279,26 @@
   gap: var(--space-1) var(--space-4);
   margin: 0;
 }
+
+/* Holds cells: a long exact amount or reason wraps inside its cell instead of spilling over its neighbour (390 px cards). */
+.holdCell {
+  display: block;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* The badge sits on its own line under the floor, never beside it. */
+.holdBadge {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  margin-top: var(--space-1);
+}
+
+/* The Floor column is right-aligned in the table; keep its badge under the amount, on the same edge. */
+@media (min-width: 37.51rem) {
+  .holdBadge {
+    margin-inline-start: auto;
+  }
+}
