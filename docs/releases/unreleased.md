@@ -2,6 +2,10 @@
 
 Notes for changes on `main` after [v0.8.0](v0.8.0.md). They become the next release's notes.
 
+## Development HTTP telemetry exports are loopback-only after DNS (#313)
+
+**Behavior change for development installations.** Plain-HTTP OTLP traces, audit OTLP logs and audit webhooks (allowed only with `GATEWAY_ENV=development`) now connect only to canonical loopback addresses after name resolution, including IPv4-mapped loopback. If any resolved address is not loopback, the whole answer is refused, even when other answers are loopback or the address is covered by `GATEWAY_EGRESS_PRIVATE_ALLOW`. Literal non-loopback HTTP endpoints are refused before any connection. HTTPS exports keep the general egress policy, and production (non-development) installations are unaffected: they never allowed plain HTTP. To export to another host, use HTTPS. See [operations](../operations.md#outbound-connections).
+
 ## Transaction isolation independent of PostgreSQL defaults (#281)
 
 Normal gateway transactions now explicitly begin at **READ COMMITTED**, so database, login-role or connection defaults of REPEATABLE READ or SERIALIZABLE cannot leave lock-then-check queries using a stale snapshot. Session defaults are not rewritten, and session read-only policy is still inherited. Intentional reporting snapshots remain REPEATABLE READ and read-only; their bounded-staleness contract and the elevated-isolation refusal guards are unchanged. No migration or new database privilege is needed. See [transaction isolation](../governance.md#transaction-isolation).
