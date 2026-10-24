@@ -132,6 +132,10 @@ GRANT UPDATE(state,actual_microusd,input_tokens,output_tokens,billing_usage,cost
 GRANT UPDATE(strategy,max_attempts,allow_ambiguous_failover,required_residency) ON public.routing_policies TO gateway_runtime;
 GRANT UPDATE(priority,weight,residency,failure_threshold,cooldown_seconds) ON public.deployment_routing TO gateway_runtime;
 GRANT UPDATE(consecutive_failures,open_until,last_observed_at) ON public.deployment_health TO gateway_runtime;
+-- #101 C (0058): reviewed, no grant changes. Existing alert_events
+-- SELECT/INSERT and resolution-only UPDATE cover the new kind; existing
+-- SELECT on reservations, ledger and budget_totals covers read-only probes.
+-- No new reservation/ledger UPDATE or DELETE authority is introduced.
 -- Alerts (0011). Rules are soft-deleted (deleted_at), never removed; scope,
 -- workspace and kind are fixed at creation. Incidents are inserted by the
 -- evaluator and only ever resolved once (resolved_at/resolution; a trigger

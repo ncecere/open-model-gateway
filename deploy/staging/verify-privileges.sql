@@ -624,6 +624,23 @@ BEGIN
   BEGIN INSERT INTO alert_rules(id,scope,workspace_id,kind,name,spike_factor_percent,min_spend_microusd) VALUES(gen_random_uuid(),'workspace',personal,'spend_spike','Personal rule',300,1); RAISE EXCEPTION 'personal alert rule allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN INSERT INTO alert_rules(id,scope,workspace_id,kind,name,window_minutes,consecutive_failures) VALUES(gen_random_uuid(),'workspace',ws,'provider_failing','Workspace upstream',15,3); RAISE EXCEPTION 'workspace connection rule allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN INSERT INTO alert_events(id,rule_id,builtin,kind,subject_key,level,severity,summary) VALUES(gen_random_uuid(),ar,'personal_budget','budget_threshold','x',1,'warning','x'); RAISE EXCEPTION 'ambiguous alert source allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  -- #101 C (0058): source-less incidents, one open per shared scope;
+  -- the personal aggregate contains no workspace identity. No new grants.
+  DECLARE aev uuid:=gen_random_uuid(); pev uuid:=gen_random_uuid(); envelope jsonb; BEGIN
+   INSERT INTO alert_events(id,kind,subject_key,workspace_id,level,severity,summary,details) VALUES(aev,'aged_unknown_hold','workspace:'||ws,ws,1,'warning','Holds with unknown cost are over 24 hours old','{"threshold_hours":24}');
+   BEGIN INSERT INTO alert_events(id,kind,subject_key,workspace_id,level,severity,summary,details) VALUES(gen_random_uuid(),'aged_unknown_hold','workspace:'||ws,ws,1,'warning','Holds with unknown cost are over 24 hours old','{"threshold_hours":24}'); RAISE EXCEPTION 'duplicate aged incident allowed'; EXCEPTION WHEN unique_violation THEN NULL; END;
+   BEGIN INSERT INTO alert_events(id,kind,subject_key,level,severity,summary,details) VALUES(gen_random_uuid(),'aged_unknown_hold','personal',3,'warning','x','{}'); RAISE EXCEPTION 'bad aged level allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+   BEGIN INSERT INTO alert_events(id,kind,subject_key,workspace_id,level,severity,summary,details) VALUES(gen_random_uuid(),'aged_unknown_hold','workspace:'||personal,personal,1,'warning','Holds with unknown cost are over 24 hours old','{"threshold_hours":24}'); RAISE EXCEPTION 'personal identity in aged incident'; EXCEPTION WHEN check_violation THEN NULL; END;
+   INSERT INTO alert_events(id,kind,subject_key,level,severity,summary,details) VALUES(pev,'aged_unknown_hold','personal',2,'critical','Holds with unknown cost are over 168 hours old','{"threshold_hours":168}');
+   IF alert_webhook_payload(gen_random_uuid(),aev,'fired') IS NOT NULL THEN RAISE EXCEPTION 'workspace aged incident exported'; END IF;
+   envelope=alert_webhook_payload(gen_random_uuid(),pev,'fired')::jsonb;
+   IF envelope IS NULL OR envelope->'event'->>'summary'<>'Holds with unknown cost need review' OR (SELECT count(*) FROM jsonb_object_keys(envelope->'event'))<>6 THEN RAISE EXCEPTION 'unsafe installation aged projection'; END IF;
+   IF alert_webhook_payload(gen_random_uuid(),pev,'resolved') IS NOT NULL THEN RAISE EXCEPTION 'resolved aged webhook allowed'; END IF;
+   PERFORM id FROM alert_events WHERE id=aev FOR UPDATE;
+   UPDATE alert_events SET resolved_at=clock_timestamp(),resolution='cleared' WHERE id=aev;
+   BEGIN UPDATE alert_events SET details='{}' WHERE id=aev; RAISE EXCEPTION 'aged details rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+   BEGIN DELETE FROM alert_events WHERE id=aev; RAISE EXCEPTION 'aged incident deletion allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  END;
   -- Key-expiry reminders (0049/#100): built in (no rule, no builtin label),
   -- permanent dedup, resolution never re-enables attribution UPDATE, and the
   -- scope trigger refuses a mismatched workspace.
