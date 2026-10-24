@@ -10,7 +10,7 @@ pub(super) fn routes() -> Router<Store> {
             get(item).patch(update).delete(remove),
         )
 }
-const STATUS: &str = "jsonb_build_object('id',d.id,'label',d.label,'enabled',d.enabled,'created_at',d.created_at,'updated_at',d.updated_at,'signing_configured',true,'overlap_active',coalesce(d.previous_secret_until>clock_timestamp(),false),'previous_secret_until',d.previous_secret_until,'waiting',(SELECT count(*) FROM alert_webhook_outbox q WHERE q.destination_id=d.id AND q.state='waiting'),'exhausted',(SELECT count(*) FROM alert_webhook_outbox q WHERE q.destination_id=d.id AND q.state='exhausted'),'last_success_at',(SELECT max(completed_at) FROM alert_webhook_outbox q WHERE q.destination_id=d.id AND q.state='sent'),'last_error',(SELECT last_error FROM alert_webhook_outbox q WHERE q.destination_id=d.id AND q.last_error IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 1)) || CASE WHEN $1 THEN jsonb_build_object('url',d.url,'current_secret_ref',d.current_secret_ref,'previous_secret_ref',d.previous_secret_ref) ELSE '{}'::jsonb END";
+const STATUS: &str = "jsonb_build_object('id',d.id,'label',d.label,'enabled',d.enabled,'created_at',d.created_at,'updated_at',d.updated_at,'signing_configured',true,'overlap_active',coalesce(d.previous_secret_until>clock_timestamp(),false),'previous_secret_until',d.previous_secret_until,'waiting',(SELECT count(*) FROM alert_webhook_outbox q WHERE q.destination_id=d.id AND q.state='waiting'),'exhausted',(SELECT count(*) FROM alert_webhook_outbox q WHERE q.destination_id=d.id AND q.state='exhausted'),'last_success_at',(SELECT completed_at FROM alert_webhook_outbox q WHERE q.destination_id=d.id AND q.state='sent' ORDER BY completed_at DESC LIMIT 1),'last_error',(SELECT last_error FROM alert_webhook_outbox q WHERE q.destination_id=d.id AND q.last_error IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 1)) || CASE WHEN $1 THEN jsonb_build_object('url',d.url,'current_secret_ref',d.current_secret_ref,'previous_secret_ref',d.previous_secret_ref) ELSE '{}'::jsonb END";
 async fn read_tx(
     s: &Store,
     u: &ManagementPrincipal,
@@ -19,7 +19,9 @@ async fn read_tx(
     let mut tx = crate::db::begin(&s.pool).await?;
     resources::catalog_lock(&mut tx, false).await?;
     resources::platform_read(&mut tx, u).await?;
-    let admin = resources::platform_role(&mut tx, u.user_id()).await? == "admin";
+    let admin = resources::platform_role(&mut tx, u.user_id()).await? == "admin"
+        && u.as_admin_token()
+            .is_none_or(|token| token.scopes.iter().any(|scope| scope == "settings:write"));
     Ok((tx, admin))
 }
 async fn status(

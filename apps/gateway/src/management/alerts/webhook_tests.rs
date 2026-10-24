@@ -30,7 +30,7 @@ async fn webhook_running_gateway_sessions_scopes_rotation_and_revocation(pool: P
             &mut tx,
             owner,
             "webhook test",
-            &[scope.into()],
+            &scope.split(',').map(str::to_owned).collect::<Vec<_>>(),
             30,
             None,
         )
@@ -42,6 +42,7 @@ async fn webhook_running_gateway_sessions_scopes_rotation_and_revocation(pool: P
     let (write_id, write) = mint(&pool, f.admin.user_id, "settings:write").await;
     let (_, read) = mint(&pool, f.admin.user_id, "platform:read").await;
     let (_, wrong) = mint(&pool, f.admin.user_id, "governance:write").await;
+    let (_, read_write) = mint(&pool, f.admin.user_id, "platform:read,settings:write").await;
     let mock = crate::identity::tests::MockProvider::start(None).await;
     let identity = mock.state(pool.clone()).await;
     let engine = crate::inference::Engine::new(
@@ -123,6 +124,47 @@ async fn webhook_running_gateway_sessions_scopes_rotation_and_revocation(pool: P
     let path = format!("{WEBHOOKS}/{id}");
     assert_eq!(created["enabled"], false);
     assert_eq!(created["url"], "https://example.test/private-path");
+    for route in [WEBHOOKS, path.as_str()] {
+        let redacted: Value = client
+            .get(format!("{base}{route}"))
+            .bearer_auth(&read)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(
+            !redacted.to_string().contains("private-path"),
+            "read scope leaked URL"
+        );
+        assert!(
+            !redacted.to_string().contains("HOOK_MISSING"),
+            "read scope leaked reference"
+        );
+        let record = if route == WEBHOOKS {
+            &redacted["data"][0]
+        } else {
+            &redacted
+        };
+        for field in ["url", "current_secret_ref", "previous_secret_ref"] {
+            assert!(
+                record.get(field).is_none(),
+                "read-only status returned {field}"
+            );
+        }
+    }
+    let detailed: Value = client
+        .get(format!("{base}{path}"))
+        .bearer_auth(&read_write)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(detailed["url"], "https://example.test/private-path");
+    assert_eq!(detailed["current_secret_ref"], "env:HOOK_MISSING");
     assert_eq!(
         client
             .get(format!("{base}{WEBHOOKS}"))

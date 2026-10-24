@@ -45,7 +45,12 @@ async fn webhook_cap_survives_concurrent_and_stale_snapshots(pool: PgPool) {
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn webhook_payload_attempt_and_terminal_bounds(pool: PgPool) {
     let dest = destination(&pool).await;
-    let insert = "INSERT INTO alert_webhook_outbox(destination_id,test,payload) VALUES($1,true,$2) RETURNING id";
+    sqlx::query("UPDATE alert_webhook_destinations SET enabled=true WHERE id=$1")
+        .bind(dest)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let insert = "WITH e AS (INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,summary) VALUES(gen_random_uuid(),'scim_last_admin','scim_last_admin',gen_random_uuid()::text,1,'critical','safe') RETURNING id) INSERT INTO alert_webhook_outbox(destination_id,event_id,transition,payload) SELECT $1,e.id,'fired',$2 FROM e RETURNING id";
     assert!(
         sqlx::query(insert)
             .bind(dest)
@@ -77,7 +82,19 @@ async fn webhook_payload_attempt_and_terminal_bounds(pool: PgPool) {
             .await
             .is_err()
     );
-    refuses(&pool, "UPDATE alert_webhook_outbox SET attempt_count=2").await;
+    let error = sqlx::query("UPDATE alert_webhook_outbox SET attempt_count=2 WHERE id=$1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.as_database_error().unwrap().code().as_deref(),
+        Some("P0001")
+    );
+    assert_eq!(
+        error.as_database_error().unwrap().message(),
+        "immutable webhook payload, identity or terminal outcome"
+    );
     sqlx::query("UPDATE alert_webhook_outbox SET state='leased',attempt_count=1,lease_owner=gen_random_uuid(),lease_token=gen_random_uuid(),lease_expires_at=clock_timestamp()+interval '90 seconds' WHERE id=$1").bind(id).execute(&pool).await.unwrap();
     refuses(&pool, "UPDATE alert_webhook_outbox SET attempt_count=0").await;
     for state in ["sent", "failed", "exhausted", "ineligible"] {
@@ -116,7 +133,7 @@ async fn webhook_payload_attempt_and_terminal_bounds(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
-async fn webhook_enqueue_serializes_with_disablement(pool: PgPool) {
+async fn webhook_enqueue_does_not_hold_management_locks(pool: PgPool) {
     let dest = destination(&pool).await;
     sqlx::query("UPDATE alert_webhook_destinations SET enabled=true WHERE id=$1")
         .bind(dest)
@@ -134,42 +151,26 @@ async fn webhook_enqueue_serializes_with_disablement(pool: PgPool) {
     .await
     .unwrap();
     let mut disable = pool.begin().await.unwrap();
-    let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
-        .fetch_one(&mut *disable)
+    sqlx::query("SET LOCAL statement_timeout='1s'")
+        .execute(&mut *disable)
         .await
         .unwrap();
-    let task = tokio::spawn(async move {
-        sqlx::query("UPDATE alert_webhook_destinations SET enabled=false WHERE id=$1")
-            .bind(dest)
-            .execute(&mut *disable)
-            .await
-            .unwrap();
-        disable.commit().await.unwrap();
-    });
-    tokio::time::timeout(std::time::Duration::from_secs(2), async {
-        loop {
-            if sqlx::query_scalar::<_, bool>("SELECT cardinality(pg_blocking_pids($1))>0")
-                .bind(pid)
-                .fetch_one(&pool)
-                .await
-                .unwrap()
-            {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("disable must wait for the transactional destination snapshot");
+    sqlx::query("UPDATE alert_webhook_destinations SET enabled=false WHERE id=$1")
+        .bind(dest)
+        .execute(&mut *disable)
+        .await
+        .expect("enqueue must not stall management");
+    disable.commit().await.unwrap();
     enqueue.commit().await.unwrap();
-    task.await.unwrap();
+    // A concurrent enqueue may commit after disable: slice 2 must recheck at
+    // claim time and make this row ineligible without sending it.
     assert_eq!(
         sqlx::query_scalar::<_, String>("SELECT state FROM alert_webhook_outbox WHERE event_id=$1")
             .bind(event)
             .fetch_one(&pool)
             .await
             .unwrap(),
-        "ineligible"
+        "waiting"
     );
 }
 
