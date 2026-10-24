@@ -720,3 +720,84 @@ async fn queue_cursor_outside_postgres_timestamp_range_is_400_not_503(pool: PgPo
         }
     }
 }
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn queue_personal_workspace_predicate_hides_foreign_scopes(pool: PgPool) {
+    let f = fixture(pool).await;
+    let personal = f.principal.workspace_id;
+    hold(
+        &f,
+        personal,
+        f.principal.key_id,
+        "unknown",
+        Some(7),
+        3,
+        None,
+    )
+    .await;
+    // Handlers refuse these callers first; the SQL predicate is the backstop
+    // if a future caller builds a scope wrongly. Cover it directly.
+    let run = |user: Uuid, admin: bool| {
+        let f = &f;
+        async move {
+            let scope = holds::Scope {
+                user,
+                workspace: Some(personal),
+                own: None,
+                admin,
+            };
+            let mut tx = f.store.pool.begin().await.unwrap();
+            let v = holds::page(&mut tx, &scope, holds::Filters::parse(None).unwrap())
+                .await
+                .unwrap();
+            tx.rollback().await.unwrap();
+            v
+        }
+    };
+    let owner = run(f.owner, false).await;
+    assert_eq!(owner["data"].as_array().unwrap().len(), 1, "{owner}");
+    assert_eq!(owner["totals"]["count"], "1");
+    for (who, admin) in [(f.other, false), (f.other, true)] {
+        let v = run(who, admin).await;
+        assert!(v["data"].as_array().unwrap().is_empty(), "{v}");
+        assert_eq!(v["totals"]["count"], "0", "{v}");
+        assert!(v["totals"]["known_floor_microusd"].is_null(), "{v}");
+        assert!(v["personal"].is_null(), "{v}");
+    }
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn queue_personal_aggregate_is_platform_route_only(pool: PgPool) {
+    let f = fixture(pool).await;
+    let personal = f.principal.workspace_id;
+    let ws = f.team.workspace_id;
+    hold(
+        &f,
+        personal,
+        f.principal.key_id,
+        "unknown",
+        Some(7),
+        3,
+        None,
+    )
+    .await;
+    hold(&f, ws, f.team.key_id, "unknown", Some(5), 3, None).await;
+    for path in [
+        format!("/api/v1/workspaces/{personal}/holds"),
+        format!("/api/v1/workspaces/{ws}/holds"),
+    ] {
+        let (status, v) = call(&f, f.owner, &path).await;
+        assert_eq!(status, StatusCode::OK, "{v}");
+        assert_eq!(v["totals"]["count"], "1", "{path}");
+        assert!(
+            v.as_object()
+                .unwrap()
+                .get("personal")
+                .is_some_and(Value::is_null),
+            "{path}: {v}"
+        );
+    }
+    let (_, platform) = call(&f, f.owner, "/api/v1/platform/holds").await;
+    assert_eq!(platform["personal"]["count"], "1");
+    assert_eq!(platform["personal"]["known_floor_microusd"], "7");
+}
