@@ -5,6 +5,8 @@ use super::*;
 use crate::email::mock::{self, Behaviour};
 use sqlx::PgPool;
 
+#[path = "aged_hold_tests.rs"]
+mod aged_hold;
 #[path = "fair_dispatch_tests.rs"]
 mod fair_dispatch;
 
