@@ -47,15 +47,17 @@ impl ApprovedEndpoints {
         Self::parse(&value, environment)
             .map_err(|_| anyhow::anyhow!("Invalid local endpoint approvals"))
     }
-    /// Parse already-trusted, server-controlled approval configuration: the
-    /// `GATEWAY_LOCAL_UPSTREAMS` JSON that [`Self::from_env`] reads from the
-    /// environment, or that same JSON supplied directly by a trusted
-    /// caller (for example, a test harness that owns its own loopback mock
-    /// and wants to avoid mutating process-wide environment state). Never
-    /// call this with client request data; applies identical validation to
-    /// `from_env`, which is only a thin environment-variable read in front
-    /// of it.
-    pub fn parse(value: &str, environment: &str) -> Result<Self, InferenceError> {
+    /// Test-only constructor for fixtures that own their approval JSON.
+    /// Runs the production validator without mutating process environment.
+    #[cfg(feature = "integration-tests")]
+    #[doc(hidden)]
+    pub fn parse_for_integration_tests(
+        value: &str,
+        environment: &str,
+    ) -> Result<Self, InferenceError> {
+        Self::parse(value, environment)
+    }
+    pub(super) fn parse(value: &str, environment: &str) -> Result<Self, InferenceError> {
         let invalid = InferenceError::Configuration;
         if value.len() > 65536 {
             return Err(invalid);

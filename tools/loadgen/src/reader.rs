@@ -250,7 +250,12 @@ mod tests {
         let not_before = Instant::now() + Duration::from_millis(150);
         let until = not_before + Duration::from_millis(500);
         let samples = reader(
-            reqwest::Client::new(),
+            reqwest::Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .retry(reqwest::retry::never())
+                .build()
+                .unwrap(),
             vec![format!("http://{addr}")],
             cycle,
             "session".into(),

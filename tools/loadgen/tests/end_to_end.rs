@@ -92,12 +92,9 @@ where
     }
 }
 
-/// Owned test fixture only (never production gateway code): delay every GET
-/// on the identity/management router by `delay` (zero is a no-op). Every
-/// inference call in this harness is a POST to `/v1/chat/completions`
-/// against the mock upstream on a separate router entirely, so this never
-/// touches inference/provider latency, cost or upstream call accounting, and
-/// never incurs a paid call.
+/// Owned fixture only: delay reader GETs, including `/v1/models` metadata.
+/// Never delays POST inference or the separate mock provider, and never
+/// changes cost or upstream-call accounting. Zero disables the delay.
 async fn delay_management_reads(delay: Duration, req: Request, next: Next) -> Response {
     if req.method() == Method::GET && !delay.is_zero() {
         tokio::time::sleep(delay).await;
@@ -181,11 +178,12 @@ async fn harness(
     // approval parser is public precisely so trusted, owned-fixture callers
     // like this one can pass it configuration directly).
     let engine = {
-        let approvals = providers::local::endpoints::ApprovedEndpoints::parse(
-            &format!(r#"[{{"endpoint":"{mock_base}/v1","addresses":["127.0.0.1"]}}]"#),
-            "development",
-        )
-        .unwrap();
+        let approvals =
+            providers::local::endpoints::ApprovedEndpoints::parse_for_integration_tests(
+                &format!(r#"[{{"endpoint":"{mock_base}/v1","addresses":["127.0.0.1"]}}]"#),
+                "development",
+            )
+            .unwrap();
         let mut registry = providers::ProviderRegistry::default();
         for adapter in providers::local::adapters(
             Arc::new(providers::secrets::EnvSecrets::new(Vec::new())),
@@ -353,9 +351,8 @@ async fn scenario_main(options: PgConnectOptions) {
 }
 
 /// Issue #273 RED/GREEN proof, kept as a permanent regression: one
-/// concurrent reader per endpoint, no warmup, and a ~300 ms owned-fixture
-/// delay on every management GET (never on inference/provider traffic, no
-/// paid calls). The run's measured window closes (`until`) well before a
+/// concurrent reader per endpoint, no warmup, and a 1.5 s owned-fixture
+/// delay on every reader GET (never on POST inference/provider traffic). The run's measured window closes (`until`) well before a
 /// delayed response plus the fixed 50 ms pre-start gap could complete a
 /// *second* request, so each reader gets exactly one counted sample if and
 /// only if that first request is not excluded for starting before the run's
@@ -378,17 +375,15 @@ async fn readers_cover_every_endpoint_despite_slow_management_responses() {
 }
 
 async fn scenario_slow_management(options: PgConnectOptions) {
-    let (h, _seeded) = harness(options, "e2eslow", 1, 1, 4, 0, Duration::from_millis(300)).await;
+    let (h, _seeded) = harness(options, "e2eslow", 1, 1, 4, 0, Duration::from_millis(1500)).await;
     for attempt in 0..3u64 {
         let report = run(RunConfig {
             targets: vec![h.gateway.clone()],
-            rate: 40.0,
-            // Common start is 50 ms after scheduling; a ~300 ms delayed
-            // response plus a second round trip cannot land inside a
-            // 200 ms-after-start window, so coverage depends entirely on
-            // each reader's *first* request being counted, not on how many
-            // laps fit.
-            duration_s: 0.2,
+            rate: 8.0,
+            // A 1.5 s response cannot permit a second request within this
+            // 1 s window. The larger scheduling margin tolerates busy hosts
+            // without relaxing the exact-eight coverage assertion.
+            duration_s: 1.0,
             warmup_s: 0.0,
             stream_ratio: 0.0,
             key_seed: "e2eslow".into(),
