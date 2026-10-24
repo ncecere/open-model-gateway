@@ -7,9 +7,40 @@ async fn fire(s: &Seed, workspace: Uuid, key: Uuid, hours: i64) {
     assert_eq!(tick(s, now).await.fired, 1);
 }
 
+fn decode_quoted_printable(raw: &str) -> String {
+    let joined = raw.replace("=\r\n", "");
+    let bytes = joined.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = bytes
+            .get(i + 1..i + 3)
+            .and_then(|h| std::str::from_utf8(h).ok())
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match (bytes[i], hex) {
+            (b'=', Some(byte)) => {
+                out.push(byte);
+                i += 3;
+            }
+            (byte, _) => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).expect("UTF-8 body")
+}
+
 pub(super) async fn assert_aged_email(s: &Seed, data: &str, hours: i64, critical: bool) {
-    let (headers, body) = data.split_once("\r\n\r\n").expect("SMTP headers/body");
+    let (headers, raw_body) = data.split_once("\r\n\r\n").expect("SMTP headers/body");
     let headers = headers.replace("\r\n ", " ").replace("\r\n\t", " ");
+    // The encoder switches to quoted-printable when any line is long; mail
+    // clients decode it, so assertions read the decoded text.
+    let decoded = headers
+        .to_ascii_lowercase()
+        .contains("content-transfer-encoding: quoted-printable")
+        .then(|| decode_quoted_printable(raw_body));
+    let body = decoded.as_deref().unwrap_or(raw_body);
     let subject = headers
         .lines()
         .find(|line| line.starts_with("Subject:"))
@@ -47,7 +78,7 @@ pub(super) async fn assert_aged_email(s: &Seed, data: &str, hours: i64, critical
         "Local upstream".into(),
     ]) {
         assert!(
-            !data.contains(&sentinel),
+            !data.contains(&sentinel) && !body.contains(&sentinel),
             "private identifier in aged-hold email"
         );
     }
