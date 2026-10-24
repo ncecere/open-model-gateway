@@ -32,6 +32,7 @@ use prometheus_client::{
 
 use crate::{inference::error::InferenceError, store::Store};
 
+type L0 = [(&'static str, String); 0];
 type L1 = [(&'static str, String); 1];
 type L2 = [(&'static str, String); 2];
 type L3 = [(&'static str, String); 3];
@@ -45,7 +46,7 @@ const RESERVATION_REFRESH: Duration = Duration::from_secs(15);
 
 // Pending work is bounded by its admission window; terminal failures must
 // remain visible for a full observation window after completion/cleanup.
-const ALERT_DELIVERY_COUNTS: &str = "SELECT count(*) FILTER(WHERE retrying),count(*) FILTER(WHERE exhausted>0),count(*) FILTER(WHERE status IN ('failed','partial')) FROM alert_deliveries WHERE (status='pending' AND created_at>clock_timestamp()-interval '24 hours') OR (status<>'pending' AND completed_at>clock_timestamp()-interval '24 hours')";
+const ALERT_DELIVERY_COUNTS: &str = "SELECT recent.*,pending.* FROM (SELECT count(*) FILTER(WHERE retrying),count(*) FILTER(WHERE exhausted>0),count(*) FILTER(WHERE status IN ('failed','partial')) FROM alert_deliveries WHERE (status='pending' AND created_at>clock_timestamp()-interval '24 hours') OR (status<>'pending' AND completed_at>clock_timestamp()-interval '24 hours')) recent CROSS JOIN (SELECT count(DISTINCT bucket_id),floor(greatest(0,coalesce(extract(epoch FROM clock_timestamp()-min(created_at)),0)))::bigint FROM alert_deliveries WHERE status='pending') pending";
 
 pub const CONTENT_TYPE: &str = "application/openmetrics-text; version=1.0.0; charset=utf-8";
 
@@ -184,6 +185,8 @@ pub struct Metrics {
     alert_rule_failures: Counter,
     alert_delivery_attempts: Family<L1, Counter>,
     alert_delivery_queue: Family<L1, Gauge>,
+    alert_pending_buckets: Family<L0, Gauge>,
+    alert_oldest_pending_age: Family<L0, Gauge>,
     deadlock_retries: Family<L1, Counter>,
     scope_lock_wait: Histograms<L2>,
     scope_lock_waiting: Family<L1, Gauge>,
@@ -335,6 +338,8 @@ impl Metrics {
             alert_rule_failures: Counter::default(),
             alert_delivery_attempts: Family::default(),
             alert_delivery_queue: Family::default(),
+            alert_pending_buckets: Family::default(),
+            alert_oldest_pending_age: Family::default(),
             deadlock_retries: Family::default(),
             scope_lock_wait: Family::new_with_constructor(phase_buckets),
             scope_lock_waiting: Family::default(),
@@ -637,6 +642,18 @@ impl Metrics {
             "usage_rollup_hours",
             "Hours the rollups job (re)computed on this replica, by reason (new, changed)",
             metrics.rollup_hours.clone(),
+        );
+        // Empty-label families can be cleared on replicas that do not hold
+        // the metrics lease, rather than exporting stale data.
+        registry.register(
+            "alert_delivery_pending_buckets",
+            "Distinct pending delivery buckets, including overdue work awaiting cleanup",
+            metrics.alert_pending_buckets.clone(),
+        );
+        registry.register(
+            "alert_delivery_oldest_pending_age_seconds",
+            "Age in seconds of the oldest pending delivery, or zero for an empty queue",
+            metrics.alert_oldest_pending_age.clone(),
         );
         Self {
             registry,
@@ -1143,6 +1160,8 @@ impl Metrics {
         {
             self.reservations.clear();
             self.alert_delivery_queue.clear();
+            self.alert_pending_buckets.clear();
+            self.alert_oldest_pending_age.clear();
             *self
                 .reservations_refreshed
                 .lock()
@@ -1161,11 +1180,15 @@ impl Metrics {
         }
         match tokio::time::timeout(
             Duration::from_secs(2),
-            sqlx::query_as::<_, (i64, i64, i64)>(ALERT_DELIVERY_COUNTS).fetch_one(pool),
+            sqlx::query_as::<_, (i64, i64, i64, i64, i64)>(ALERT_DELIVERY_COUNTS).fetch_one(pool),
         )
         .await
         {
-            Ok(Ok((retrying, exhausted, failed))) => {
+            Ok(Ok((retrying, exhausted, failed, buckets, oldest_age))) => {
+                self.alert_pending_buckets.get_or_create(&[]).set(buckets);
+                self.alert_oldest_pending_age
+                    .get_or_create(&[])
+                    .set(oldest_age);
                 for (state, count) in [
                     ("retrying", retrying),
                     ("exhausted", exhausted),
@@ -1494,6 +1517,61 @@ mod tests {
 
     #[cfg(feature = "integration-tests")]
     #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn fair_dispatch_metrics_include_overdue_pending_and_no_workspace_labels(
+        pool: sqlx::PgPool,
+    ) {
+        let store = Store::new(pool.clone());
+        let ws = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO workspaces(id,name,kind) VALUES($1,'Metrics','team')")
+            .bind(ws)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let rule = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO alert_rules(id,scope,workspace_id,kind,name,budget_layers,thresholds) VALUES($1,'workspace',$2,'budget_threshold','Metrics',ARRAY['local'],ARRAY[100])")
+            .bind(rule).bind(ws).execute(&pool).await.unwrap();
+        sqlx::query("WITH events AS (INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary) SELECT gen_random_uuid(),$1,'budget_threshold',i::text,100,'warning',$2,'Metrics' FROM generate_series(1,2) i RETURNING id) INSERT INTO alert_deliveries(id,event_id,transition,created_at) SELECT gen_random_uuid(),id,'fired',clock_timestamp()-interval '1 hour' FROM events")
+            .bind(rule).bind(ws).execute(&pool).await.unwrap();
+        sqlx::raw_sql("WITH event AS (INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,summary) VALUES(gen_random_uuid(),'scim_last_admin','scim_last_admin','user',100,'critical','Metrics') RETURNING id) INSERT INTO alert_deliveries(id,event_id,transition,created_at) SELECT gen_random_uuid(),id,'fired',clock_timestamp()-interval '25 hours' FROM event")
+            .execute(&pool).await.unwrap();
+        let m = Metrics::new();
+        let scrape = m.render(Some(&store)).await;
+        assert!(
+            scrape.contains("gateway_alert_delivery_pending_buckets{} 2"),
+            "{scrape}"
+        );
+        let age = scrape
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("gateway_alert_delivery_oldest_pending_age_seconds{} ")
+            })
+            .unwrap()
+            .parse::<i64>()
+            .unwrap();
+        assert!((90000..90010).contains(&age));
+        assert!(!scrape.contains(&ws.to_string()));
+        let unleased = store
+            .clone()
+            .with_leases(std::sync::Arc::new(crate::leases::Leases::new()));
+        let scrape = m.render(Some(&unleased)).await;
+        assert!(
+            !scrape
+                .lines()
+                .any(|line| line.starts_with("gateway_alert_delivery_pending_buckets{"))
+        );
+        assert!(
+            !scrape
+                .lines()
+                .any(|line| line.starts_with("gateway_alert_delivery_oldest_pending_age_seconds{"))
+        );
+        crate::alerts::deliver_pending(&store, 25).await;
+        let scrape = Metrics::new().render(Some(&store)).await;
+        assert!(scrape.contains("gateway_alert_delivery_pending_buckets{} 0"));
+        assert!(scrape.contains("gateway_alert_delivery_oldest_pending_age_seconds{} 0"));
+    }
+
+    #[cfg(feature = "integration-tests")]
+    #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn expired_outbox_cleanup_remains_visible_past_failure_alert_window(pool: sqlx::PgPool) {
         let store = Store::new(pool.clone());
         let event = uuid::Uuid::new_v4();
@@ -1541,8 +1619,10 @@ mod tests {
                 "clock_timestamp()",
                 &format!("(clock_timestamp()+interval '{age}')"),
             );
-            let counts: (i64, i64, i64) = sqlx::query_as(&later).fetch_one(&pool).await.unwrap();
-            assert_eq!(counts, expected);
+            let counts: (i64, i64, i64, i64, i64) =
+                sqlx::query_as(&later).fetch_one(&pool).await.unwrap();
+            assert_eq!((counts.0, counts.1, counts.2), expected);
+            assert_eq!((counts.3, counts.4), (0, 0));
         }
     }
 

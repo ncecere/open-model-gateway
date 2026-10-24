@@ -25,6 +25,10 @@ pub struct Store {
     /// `governance::LockGate`): waiters queue here instead of holding pooled
     /// connections, so authentication and settlement are not starved.
     pub(crate) lock_gates: std::sync::Arc<crate::governance::LockGates>,
+    /// Bounded per-process alert dispatch history, shared across ticks/clones.
+    /// Advisory scheduling only: no recipient or durable lease authority.
+    pub(crate) alert_dispatch:
+        std::sync::Arc<std::sync::Mutex<std::collections::HashMap<uuid::Uuid, std::time::Instant>>>,
     /// Admission protocol (`GATEWAY_ADMISSION_MODE`, see
     /// `governance::locks`): scoped locks (default) or the former
     /// installation row lock.
@@ -203,7 +207,10 @@ async fn migration_lock(connection: &mut PgConnection) -> sqlx::Result<()> {
 /// interrupted build leaves an INVALID index of the same name that `IF NOT
 /// EXISTS` would skip. [`drop_invalid_concurrent_indexes`] removes such a
 /// leftover first.
-const CONCURRENT_INDEXES: &[&str] = &["api_keys_workspace_created"];
+const CONCURRENT_INDEXES: &[&str] = &[
+    "api_keys_workspace_created",
+    "alert_deliveries_pending_bucket",
+];
 
 /// Before the migrations run, drops any [`CONCURRENT_INDEXES`] entry that is
 /// invalid, with a standalone `DROP INDEX CONCURRENTLY` (never inside a
@@ -327,6 +334,7 @@ impl Store {
             provider_secrets: Default::default(),
             smtp_secrets: Default::default(),
             lock_gates: std::sync::Arc::new(gates),
+            alert_dispatch: Default::default(),
             admission_mode: mode,
             reporting: None,
             reporting_max_lag: std::time::Duration::from_secs(30),
