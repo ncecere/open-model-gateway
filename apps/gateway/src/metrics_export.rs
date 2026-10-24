@@ -69,6 +69,7 @@ macro_rules! classes {
 classes! {
     "gateway_admission_denials" => (Traffic, Counter, "1", ["code", "scope"]),
     "gateway_admission_seconds" => (Traffic, Histogram, "s", ["outcome", "phase"]),
+    "gateway_aged_hold_alerts" => (System, Counter, "1", ["result"]),
     "gateway_alert_delivery_oldest_pending_age_seconds" => (Traffic, Gauge, "s", []),
     "gateway_alert_delivery_pending_buckets" => (Traffic, Gauge, "1", []),
     "gateway_alert_email_attempts" => (Traffic, Counter, "1", ["outcome"]),

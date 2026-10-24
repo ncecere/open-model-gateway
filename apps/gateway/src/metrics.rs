@@ -183,6 +183,7 @@ pub struct Metrics {
     reservations: Family<L1, Gauge>,
     alert_runs: Family<L1, Counter>,
     alert_rule_failures: Counter,
+    aged_hold_alerts: Family<L1, Counter>,
     alert_delivery_attempts: Family<L1, Counter>,
     alert_delivery_queue: Family<L1, Gauge>,
     alert_webhook_attempts: Family<L1, Counter>,
@@ -359,6 +360,7 @@ impl Metrics {
             reservations: Family::default(),
             alert_runs: Family::default(),
             alert_rule_failures: Counter::default(),
+            aged_hold_alerts: Family::default(),
             alert_delivery_attempts: Family::default(),
             alert_delivery_queue: Family::default(),
             alert_webhook_attempts: Family::default(),
@@ -481,6 +483,11 @@ impl Metrics {
             "alert_evaluations",
             "Alert evaluator runs by result (ok, skipped, failed)",
             metrics.alert_runs.clone(),
+        );
+        registry.register(
+            "aged_hold_alerts",
+            "Committed aged unknown-hold fires, escalations, clears, deferred ticks and email suppressions",
+            metrics.aged_hold_alerts.clone(),
         );
         registry.register(
             "alert_rule_failures",
@@ -1073,6 +1080,18 @@ impl Metrics {
         self.alert_webhook_attempts
             .get_or_create(&[("outcome", outcome.to_owned())])
             .inc();
+    }
+
+    /// System-health signal, never labeled by workspace, owner or recipient.
+    pub(crate) fn observe_aged_hold_alerts(&self, result: &'static str, count: u64) {
+        if matches!(
+            result,
+            "fired" | "escalated" | "cleared" | "deferred" | "suppressed"
+        ) {
+            self.aged_hold_alerts
+                .get_or_create(&[("result", result.to_owned())])
+                .inc_by(count);
+        }
     }
 
     pub fn observe_alert_delivery(&self, outcome: &'static str) {

@@ -1306,15 +1306,20 @@ pub async fn evaluate_once_fenced(
                 .fetch_one(&mut *tx)
                 .await?;
             match kind {
-                Kind::KeyExpiring => key_expiring_tick(&mut tx, now).await,
+                Kind::KeyExpiring => key_expiring_tick(&mut tx, now)
+                    .await
+                    .map(|changes| (changes, aged_hold::AgedHoldCounts::default())),
                 Kind::AgedUnknownHold => aged_hold_tick(&mut tx, now).await,
                 _ => unreachable!(),
             }
         }
         .await;
         match outcome {
-            Ok(changes) => {
+            Ok((changes, counts)) => {
                 tx.commit().await?;
+                if kind == Kind::AgedUnknownHold {
+                    counts.record(&crate::metrics::METRICS);
+                }
                 report.fired += changes.fired;
                 report.resolved += changes.resolved;
             }
