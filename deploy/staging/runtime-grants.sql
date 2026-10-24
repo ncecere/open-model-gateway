@@ -162,7 +162,7 @@ GRANT SELECT ON public.alert_recipient_outbox TO gateway_runtime;
 GRANT INSERT(delivery_id,fingerprint,internal_user_id) ON public.alert_recipient_outbox TO gateway_runtime;
 GRANT UPDATE(state,attempt_count,next_attempt_at,lease_owner,lease_token,lease_expires_at,error)
  ON public.alert_recipient_outbox TO gateway_runtime;
--- 0055 platform webhook destinations and retained outbox. Generated identity,
+-- 0057 platform webhook destinations and retained outbox. Generated identity,
 -- capacity slots, creation clocks and initial queue state are default/trigger-only.
 GRANT SELECT ON public.alert_webhook_destinations,public.alert_webhook_outbox TO gateway_runtime;
 -- The envelope constructor and its summary projection run as the inserting

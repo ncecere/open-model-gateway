@@ -107,7 +107,7 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "alert_deliveries",
     "alert_reads",
     "alert_recipient_outbox",
-    // 0055 platform alert webhooks (#45)
+    // 0057 platform alert webhooks (#45)
     "alert_webhook_destinations",
     "alert_webhook_outbox",
     // 0014 SCIM

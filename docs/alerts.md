@@ -83,7 +83,7 @@ Apply explicit migration `0050_alert_recipient_outbox.sql` (after 0049's key-exp
 
 ## Saved platform webhooks (#45, slice 1)
 
-Migration **0055** adds saved destinations and a separate retained outbox. **There is no HTTP delivery worker, signing, test-send, delivery-status endpoint or Webhooks UI yet.** Enabling a destination in this slice queues future eligible transitions only; it does not send them.
+Migration **0057** adds saved destinations and a separate retained outbox. **There is no HTTP delivery worker, signing, test-send, delivery-status endpoint or Webhooks UI yet.** Enabling a destination in this slice queues future eligible transitions only; it does not send them.
 
 Platform Admins manage up to ten nondeleted destinations through the [management API](management-api.md#saved-alert-webhooks). Auditors and `platform:read`-only tokens read redacted status without URLs or secret references. Configuration details require a browser-session Platform Admin or an admin token also holding `settings:write`. Destinations start disabled; live URLs are immutable (create another destination to change receivers). Final soft deletion scrubs the URL and signing references while retaining the destination identity and history. Disable and delete make committed `waiting` rows terminal `ineligible`. Re-enabling does the same for every `waiting` row of an older enable generation (see below); a label edit changes nothing. A terminal row never reopens, so re-enabling does not replay. An already-authorized leased send may finish once delivery is implemented.
 

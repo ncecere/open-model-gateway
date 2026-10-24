@@ -183,11 +183,18 @@ async fn webhook_enqueue_does_not_hold_management_locks(pool: PgPool) {
 #[sqlx::test(migrations = false)]
 async fn webhook_explicit_upgrade_has_no_backfill_and_preserves_old_evaluator_path(pool: PgPool) {
     use open_model_gateway::store::{MIGRATOR, Store};
+    // Everything before the webhook migration, whatever the numbering: other
+    // slices' migrations may be inserted ahead of it.
+    let webhooks = MIGRATOR
+        .iter()
+        .find(|migration| migration.description == "alert webhooks")
+        .expect("the alert webhooks migration")
+        .version;
     sqlx::migrate::Migrator {
         migrations: std::borrow::Cow::Owned(
             MIGRATOR
                 .iter()
-                .filter(|migration| migration.version <= 54)
+                .filter(|migration| migration.version < webhooks)
                 .cloned()
                 .collect(),
         ),
@@ -234,7 +241,7 @@ async fn webhook_explicit_upgrade_has_no_backfill_and_preserves_old_evaluator_pa
     .execute(&pool)
     .await
     .unwrap();
-    // The same INSERT issued by pre-0055 evaluators, without webhook awareness.
+    // The same INSERT issued by pre-webhook evaluators, without webhook awareness.
     sqlx::query("INSERT INTO alert_deliveries(id,event_id,transition) VALUES(gen_random_uuid(),$1,'resolved')").bind(event).execute(&pool).await.unwrap();
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM alert_webhook_outbox")
