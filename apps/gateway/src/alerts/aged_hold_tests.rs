@@ -4,6 +4,8 @@
 use super::*;
 use sqlx::PgPool;
 
+use super::generation::{GENERATE, generation_events, generation_rule};
+
 async fn tick(s: &Seed, now: DateTime<Utc>) -> Changes {
     let mut tx = s.pool.begin().await.unwrap();
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
@@ -20,6 +22,220 @@ async fn hold_since(s: &Seed, ws: Uuid, key: Uuid, since: DateTime<Utc>) {
     attempt(s, ws, key, "failed", None, "unknown", None, 12000).await;
     sqlx::query("INSERT INTO monetary_ledger(id,execution_id,admitted_at,kind,created_at) SELECT gen_random_uuid(),r.execution_id,r.admitted_at,'unknown',$2 FROM governance_reservations r WHERE r.workspace_id=$1 AND r.state='unknown' AND NOT EXISTS(SELECT 1 FROM monetary_ledger l WHERE l.execution_id=r.execution_id AND l.admitted_at=r.admitted_at AND l.kind='unknown')")
         .bind(ws).bind(since).execute(&s.pool).await.unwrap();
+}
+
+async fn generation_project(s: &Seed) -> (Uuid, Uuid) {
+    let (workspace, key) = (Uuid::new_v4(), Uuid::new_v4());
+    sqlx::query("INSERT INTO workspaces(id,name,kind) VALUES($1,'Generation project','project')")
+        .bind(workspace)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash) VALUES($1,$2,$3,'sentinel',decode(repeat('39',32),'hex'))")
+        .bind(key).bind(workspace).bind(s.owner).execute(&s.pool).await.unwrap();
+    (workspace, key)
+}
+
+/// Exercise the producer bodies without EVALUATION_LOCK: that outer lock
+/// normally serializes jobs, but must not hide a bucket-order regression.
+/// The trigger makes this RED deterministically before the union prelock,
+/// regardless of which concurrent task the scheduler happens to run first.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn aged_hold_generation_prelocks_before_retirement_and_opposite_rule_order(pool: PgPool) {
+    let s = seed(pool).await;
+    let now = expiry_now(&s).await;
+    let (project, project_key) = generation_project(&s).await;
+    let buckets: Vec<Uuid> =
+        sqlx::query_scalar("SELECT b FROM unnest($1::uuid[]) b ORDER BY omg_scope_key(b)")
+            .bind(vec![s.team, project, Uuid::nil()])
+            .fetch_all(&s.pool)
+            .await
+            .unwrap();
+    for (index, bucket) in buckets.iter().enumerate() {
+        let (workspace, key) = if bucket.is_nil() {
+            (s.personal, s.personal_key)
+        } else if *bucket == project {
+            (project, project_key)
+        } else {
+            (s.team, s.key)
+        };
+        // Higher lock keys are older: aged-hold visits the opposite order
+        // from rule reconciliation below, including the anonymous bucket.
+        hold_since(
+            &s,
+            workspace,
+            key,
+            now - TimeDelta::hours(169) - TimeDelta::seconds(index as i64),
+        )
+        .await;
+    }
+    // Escalation must free the existing subject only AFTER the union lock.
+    sqlx::query("INSERT INTO alert_events(id,kind,subject_key,workspace_id,level,severity,summary,details,fired_at) VALUES(gen_random_uuid(),'aged_unknown_hold','workspace:'||$1::uuid::text,$1::uuid,1,'warning','Holds with unknown cost are over 24 hours old','{\"threshold_hours\":24}',$2)")
+        .bind(s.team).bind(now-TimeDelta::hours(25)).execute(&s.pool).await.unwrap();
+    sqlx::raw_sql("CREATE TABLE aged_expected_buckets(bucket uuid PRIMARY KEY); CREATE FUNCTION aged_assert_bucket_union() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF EXISTS(SELECT FROM aged_expected_buckets b WHERE NOT EXISTS(SELECT FROM pg_locks l WHERE l.pid=pg_backend_pid() AND l.locktype='advisory' AND l.classid=72419556 AND l.objsubid=2 AND l.granted AND l.objid::bigint=(omg_scope_key(b.bucket)::bigint+4294967296)%4294967296)) THEN RAISE EXCEPTION 'aged producer wrote before locking its complete bucket union'; END IF; RETURN NEW; END $$; CREATE TRIGGER aged_assert_bucket_union BEFORE INSERT OR UPDATE ON alert_events FOR EACH ROW WHEN (NEW.kind='aged_unknown_hold') EXECUTE FUNCTION aged_assert_bucket_union();")
+        .execute(&s.pool).await.unwrap();
+    sqlx::query("INSERT INTO aged_expected_buckets SELECT * FROM unnest($1::uuid[])")
+        .bind(&buckets)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    let rule = generation_rule(&s, None).await;
+    let conditions = buckets
+        .iter()
+        .map(|bucket| Condition {
+            subject: bucket.to_string(),
+            level: 100,
+            critical: true,
+            workspace_id: (!bucket.is_nil()).then_some(*bucket),
+            connection_id: None,
+            summary: "Bucket order test".into(),
+            details: json!({}),
+        })
+        .collect();
+    let barrier = tokio::sync::Barrier::new(2);
+    let aged = async {
+        let mut tx = s.pool.begin().await.unwrap();
+        sqlx::query("SET LOCAL statement_timeout='5s'")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        barrier.wait().await;
+        let changes = aged_hold_tick(&mut tx, now).await.unwrap();
+        tx.commit().await.unwrap();
+        changes
+    };
+    let rules = async {
+        let mut tx = s.pool.begin().await.unwrap();
+        sqlx::query("SET LOCAL statement_timeout='5s'")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        barrier.wait().await;
+        let changes = reconcile(&mut tx, Source::Rule(rule), Kind::Budget, conditions)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        changes
+    };
+    let (aged, rules) =
+        tokio::time::timeout(Duration::from_secs(10), async { tokio::join!(aged, rules) })
+            .await
+            .unwrap();
+    assert_eq!(
+        aged,
+        Changes {
+            fired: 3,
+            resolved: 1
+        }
+    );
+    assert_eq!(
+        rules,
+        Changes {
+            fired: 3,
+            resolved: 0
+        }
+    );
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM alert_deliveries WHERE quota_charged"
+        )
+        .await,
+        6
+    );
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM alert_events WHERE resolution='superseded'"
+        )
+        .await,
+        1
+    );
+}
+
+type AgedGenerationRow = (Option<Uuid>, Uuid, String, bool);
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn aged_hold_generation_quota_consumption_suppression_and_personal_nil_bucket(pool: PgPool) {
+    let s = seed(pool).await;
+    let now = expiry_now(&s).await;
+    let (project, project_key) = generation_project(&s).await;
+    for (workspace, n) in [(Some(s.team), 99), (Some(project), 100), (None, 100)] {
+        let events = generation_events(&s, workspace, n).await;
+        sqlx::query(GENERATE)
+            .bind(events)
+            .execute(&s.pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query("INSERT INTO alert_webhook_destinations(label,url,current_secret_ref) VALUES('test','https://receiver.invalid/','env:HOOK')").execute(&s.pool).await.unwrap();
+    sqlx::query("UPDATE alert_webhook_destinations SET enabled=true")
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    for (workspace, key) in [
+        (s.team, s.key),
+        (project, project_key),
+        (s.personal, s.personal_key),
+    ] {
+        hold_since(&s, workspace, key, now - TimeDelta::hours(169)).await;
+    }
+    assert_eq!(
+        tick(&s, now).await,
+        Changes {
+            fired: 3,
+            resolved: 0
+        }
+    );
+    let rows: Vec<AgedGenerationRow> = sqlx::query_as("SELECT e.workspace_id,d.bucket_id,d.status,d.quota_charged FROM alert_events e JOIN alert_deliveries d ON d.event_id=e.id WHERE e.kind='aged_unknown_hold'")
+        .fetch_all(&s.pool).await.unwrap();
+    assert_eq!(rows.len(), 3, "suppression never removes incidents");
+    assert!(rows.contains(&(Some(s.team), s.team, "pending".into(), true)));
+    assert!(rows.contains(&(Some(project), project, "suppressed".into(), false)));
+    assert!(
+        rows.contains(&(None, Uuid::nil(), "suppressed".into(), false)),
+        "anonymous aggregate has NULL event workspace, never a personal workspace bucket"
+    );
+    assert_eq!(count(&s, "SELECT count(*) FROM alert_deliveries d JOIN alert_events e ON e.id=d.event_id WHERE e.kind='aged_unknown_hold' AND d.status='suppressed' AND d.suppression_reason='workspace_generation_limit' AND d.completed_at IS NOT NULL AND d.recipients=0 AND d.attempt_count=0 AND NOT d.initialized").await, 2);
+    assert_eq!(
+        count(&s, "SELECT count(*) FROM alert_recipient_outbox").await,
+        0
+    );
+    assert_eq!(count(&s, "SELECT count(*) FROM alert_webhook_outbox q JOIN alert_events e ON e.id=q.event_id WHERE e.kind='aged_unknown_hold' AND e.workspace_id IS NULL").await, 1,
+        "suppressed aggregate email still enqueues the privacy-projected webhook");
+    // The admitted aged event spends the last team slot; another rule loses
+    // it, while the personal owner's own bucket remains independent of nil.
+    for (workspace, expected) in [(Some(s.team), false), (Some(s.personal), true)] {
+        let events = generation_events(&s, workspace, 1).await;
+        sqlx::query(GENERATE)
+            .bind(&events)
+            .execute(&s.pool)
+            .await
+            .unwrap();
+        let charged: bool =
+            sqlx::query_scalar("SELECT quota_charged FROM alert_deliveries WHERE event_id=$1")
+                .bind(events[0])
+                .fetch_one(&s.pool)
+                .await
+                .unwrap();
+        assert_eq!(charged, expected);
+    }
+    assert_eq!(
+        tick(&s, now).await,
+        Changes::default(),
+        "suppression does not erase incident cooldown/dedup"
+    );
+    sqlx::query("UPDATE governance_reservations SET state='settled',actual_microusd=1,input_tokens=1,output_tokens=1 WHERE state='unknown'")
+        .execute(&s.pool).await.unwrap();
+    assert_eq!(
+        tick(&s, now).await,
+        Changes {
+            fired: 0,
+            resolved: 3
+        }
+    );
+    assert_eq!(count(&s, "SELECT count(*) FROM alert_deliveries d JOIN alert_events e ON e.id=d.event_id WHERE e.kind='aged_unknown_hold'").await, 3,
+        "retirement remains silent, even at email capacity");
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]

@@ -1,7 +1,7 @@
 //! #277: real PostgreSQL admission, concurrency and rolling-upgrade oracles.
 use super::*;
 
-async fn generation_rule(s: &Seed, workspace: Option<Uuid>) -> Uuid {
+pub(super) async fn generation_rule(s: &Seed, workspace: Option<Uuid>) -> Uuid {
     match workspace {
         Some(ws) => {
             rule(
@@ -22,7 +22,7 @@ async fn generation_rule(s: &Seed, workspace: Option<Uuid>) -> Uuid {
     }
 }
 
-async fn generation_events(s: &Seed, workspace: Option<Uuid>, n: i32) -> Vec<Uuid> {
+pub(super) async fn generation_events(s: &Seed, workspace: Option<Uuid>, n: i32) -> Vec<Uuid> {
     if workspace == Some(s.personal) {
         return sqlx::query_scalar("INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,workspace_id,summary) SELECT gen_random_uuid(),'personal_budget','budget_threshold',gen_random_uuid()::text,100,'critical',$1,'Generation test' FROM generate_series(1,$2) RETURNING id")
             .bind(s.personal).bind(n).fetch_all(&s.pool).await.unwrap();
@@ -31,7 +31,7 @@ async fn generation_events(s: &Seed, workspace: Option<Uuid>, n: i32) -> Vec<Uui
     sqlx::query_scalar("INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary) SELECT gen_random_uuid(),$1,'budget_threshold',i::text,100,'critical',$2,'Generation test' FROM generate_series(1,$3) i RETURNING id")
         .bind(r).bind(workspace).bind(n).fetch_all(&s.pool).await.unwrap()
 }
-const GENERATE: &str = "INSERT INTO alert_deliveries(id,event_id,transition) SELECT gen_random_uuid(),id,'fired' FROM unnest($1::uuid[]) id ON CONFLICT(event_id,transition) DO NOTHING";
+pub(super) const GENERATE: &str = "INSERT INTO alert_deliveries(id,event_id,transition) SELECT gen_random_uuid(),id,'fired' FROM unnest($1::uuid[]) id ON CONFLICT(event_id,transition) DO NOTHING";
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn alert_generation_across_rules_transitions_buckets_and_webhooks(pool: PgPool) {
