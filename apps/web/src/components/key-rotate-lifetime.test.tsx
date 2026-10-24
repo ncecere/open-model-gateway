@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { StrictMode, useEffect, useLayoutEffect, type FormEvent } from "react";
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -184,6 +184,31 @@ afterEach(() => {
 });
 
 describe("ActionDialog rotation submit lifetime", () => {
+  it("sends exactly one rotation for two submits dispatched in the same React batch", async () => {
+    const view = await setup(), pending = deferPost(view), form = mountedForm();
+    act(() => { fireEvent.submit(form); fireEvent.submit(form); });
+    expect(view.writes()).toHaveLength(1);
+    expectRequest(view);
+    await act(async () => { pending.resolve(Response.json({ id: "synthetic-batch-replacement", token: secret })); });
+    await expectDisclosure();
+    expect(view.writes()).toHaveLength(1);
+    expectNoSecretPersistence(view);
+  });
+
+  it("blocks the live-captured submit binding retained after a successful rotation from rotating again", async () => {
+    const view = await setup(), form = mountedForm(), submit = retainedSubmit(form);
+    // Positive control: this very capture is a live handler that admits the first rotation.
+    await act(async () => { submit(); });
+    await expectDisclosure();
+    expect(view.writes()).toHaveLength(1);
+    expect(form.isConnected).toBe(false);
+    // The owner is mounted and not retired: a second rotation would invalidate the disclosed key.
+    await act(async () => { submit(); });
+    expect(view.writes()).toHaveLength(1);
+    await expectDisclosure();
+    expectNoSecretPersistence(view);
+  });
+
   for (const strict of [false, true]) {
     for (const via of ["ordinary", "retained"] as const) {
       it(`admits the valid untouched rotation default via ${via} submission${strict ? " under StrictMode" : ""}`, async () => {
