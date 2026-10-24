@@ -601,6 +601,10 @@ pub(super) fn platform_routes() -> Router<Store> {
                 .patch(update_deployment)
                 .delete(delete_deployment),
         )
+        .route(
+            "/api/v1/platform/deployments/{id}/configuration/preview",
+            post(super::deployment_configuration::preview),
+        )
         .route("/api/v1/platform/audit", get(platform_audit))
         .route("/api/v1/platform/server-policy", get(server_policy))
 }
@@ -1017,7 +1021,8 @@ async fn toggle(
 ) -> DetailedResult {
     let mut tx = catalog_tx(&s, &u, true).await?;
     if table == "deployments" {
-        let change = super::deployment_configuration::DeploymentChange::prepare(&mut tx, &u, id, &b).await?;
+        let change =
+            super::deployment_configuration::DeploymentChange::prepare(&mut tx, &u, id, &b).await?;
         change.apply(&mut tx).await?;
     } else if sqlx::query(&format!("UPDATE {table} SET enabled=$2 WHERE id=$1"))
         .bind(id)

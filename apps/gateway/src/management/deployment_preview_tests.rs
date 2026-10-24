@@ -14,15 +14,26 @@ fn path(id: Uuid) -> String {
     format!("/api/v1/platform/deployments/{id}/configuration/preview")
 }
 async fn preview(f: &Fixture, id: Uuid, enabled: bool) -> Value {
-    let (status, body) = call(&f.s, &f.admin, "POST", &path(id), json!({"enabled":enabled})).await;
+    let (status, body) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        &path(id),
+        json!({"enabled":enabled}),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     body
 }
 async fn state(pool: &PgPool) -> Value {
     // Include every public table, including audit, configuration versions,
     // notifications, quota and ledger. This detects updates as well as inserts.
-    let tables: Vec<String> = sqlx::query_scalar("SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename")
-        .fetch_all(pool).await.unwrap();
+    let tables: Vec<String> = sqlx::query_scalar(
+        "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
     let mut result = serde_json::Map::new();
     for table in tables {
         let rows: Value = sqlx::query_scalar(&format!("SELECT coalesce(jsonb_agg(v ORDER BY v::text),'[]'::jsonb) FROM (SELECT to_jsonb(t) v FROM public.\"{table}\" t) rows"))
@@ -40,38 +51,79 @@ async fn deployment_preview_last_route_multi_catalog_visibility_and_no_writes(po
     route(&pool, other, true).await;
     for name in ["One", "Two"] {
         let catalog = Uuid::new_v4();
-        sqlx::query("INSERT INTO catalogs(id,name) VALUES($1,$2)").bind(catalog).bind(name).execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO catalog_models(catalog_id,model_id) VALUES($1,$2),($1,$3)").bind(catalog).bind(m).bind(other).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO catalogs(id,name) VALUES($1,$2)")
+            .bind(catalog)
+            .bind(name)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO catalog_models(catalog_id,model_id) VALUES($1,$2),($1,$3)")
+            .bind(catalog)
+            .bind(m)
+            .bind(other)
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query("INSERT INTO workspace_type_catalogs(kind,catalog_id) VALUES('team',$1),('personal',$1)").bind(catalog).execute(&pool).await.unwrap();
     }
     for ws in [f.team, f.project, f.personal] {
-        sqlx::query("INSERT INTO workspace_model_grants(workspace_id,model_id,source) VALUES($1,$2,$3)")
-            .bind(ws).bind(m).bind(if ws == f.project { "direct" } else { "catalog" }).execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO workspace_model_grants(workspace_id,model_id,source) VALUES($1,$2,$3)",
+        )
+        .bind(ws)
+        .bind(m)
+        .bind(if ws == f.project { "direct" } else { "catalog" })
+        .execute(&pool)
+        .await
+        .unwrap();
     }
     // Catalog availability without a selection is not an affected workspace.
     workspace(&pool, "Unselected", "team", f.owner.user_id).await;
-    let mut listener = sqlx::postgres::PgListener::connect_with(&pool).await.unwrap();
+    let mut listener = sqlx::postgres::PgListener::connect_with(&pool)
+        .await
+        .unwrap();
     listener.listen("omg_config").await.unwrap();
     let before = state(&pool).await;
     let p = preview(&f, d, false).await;
     assert_eq!(p["target"], json!({"kind":"deployment","id":d}));
-    assert_eq!(p["diff"], json!([{"field":"enabled","before":true,"after":false}]));
+    assert_eq!(
+        p["diff"],
+        json!([{"field":"enabled","before":true,"after":false}])
+    );
     assert_eq!(p["serving_routes_lost"], json!([d]));
     assert_eq!(p["serving_routes_gained"], json!([]));
-    assert_eq!(p["models_losing_last_serving_route"], json!([{"id":m,"public_name":"preview-model"}]));
+    assert_eq!(
+        p["models_losing_last_serving_route"],
+        json!([{"id":m,"public_name":"preview-model"}])
+    );
     assert_eq!(p["affected_workspaces"]["total"], 2);
     let details = p["affected_workspaces"]["data"].as_array().unwrap();
     assert_eq!(details.len(), 2);
     assert!(details.iter().any(|w| w["id"] == f.team.to_string()));
     assert!(details.iter().any(|w| w["id"] == f.project.to_string()));
     let text = p.to_string();
-    for hidden in [f.personal.to_string(), f.owner.user_id.to_string(), f.owner.email.clone(), "credential_ref".into(), "NOT_RESOLVED".into()] {
+    for hidden in [
+        f.personal.to_string(),
+        f.owner.user_id.to_string(),
+        f.owner.email.clone(),
+        "credential_ref".into(),
+        "NOT_RESOLVED".into(),
+    ] {
         assert!(!text.contains(&hidden), "leaked {hidden}: {text}");
     }
-    assert!(p["expected_revision"].as_str().unwrap().starts_with("catalog:"));
+    assert!(
+        p["expected_revision"]
+            .as_str()
+            .unwrap()
+            .starts_with("catalog:")
+    );
     assert!(p["observed_at"].is_string());
     assert_eq!(before, state(&pool).await);
-    assert!(tokio::time::timeout(std::time::Duration::from_millis(100), listener.recv()).await.is_err());
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), listener.recv())
+            .await
+            .is_err()
+    );
     let unchanged = preview(&f, d, true).await;
     assert_eq!(unchanged["diff"], json!([]));
     assert_eq!(unchanged["affected_workspaces"]["total"], 0);
@@ -82,28 +134,102 @@ async fn deployment_preview_gained_alternative_routes_and_apply_behavior(pool: P
     let f = fixture(&pool).await;
     let m = model(&pool, "preview-enable").await;
     let d = route(&pool, m, false).await;
-    assert_eq!(preview(&f, d, true).await["serving_routes_gained"], json!([d]));
-    assert_eq!(call(&f.s, &f.admin, "PATCH", &format!("/api/v1/platform/deployments/{d}"), json!({"enabled":true})).await.0, StatusCode::OK);
-    let audit: Value = sqlx::query_scalar("SELECT metadata FROM audit_events WHERE resource_id=$1 AND action='configuration.updated'").bind(d).fetch_one(&pool).await.unwrap();
+    assert_eq!(
+        preview(&f, d, true).await["serving_routes_gained"],
+        json!([d])
+    );
+    assert_eq!(
+        call(
+            &f.s,
+            &f.admin,
+            "PATCH",
+            &format!("/api/v1/platform/deployments/{d}"),
+            json!({"enabled":true})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let audit: Value = sqlx::query_scalar(
+        "SELECT metadata FROM audit_events WHERE resource_id=$1 AND action='configuration.updated'",
+    )
+    .bind(d)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert_eq!(audit, json!({"enabled":true}));
     route(&pool, m, true).await;
-    assert_eq!(preview(&f, d, false).await["models_losing_last_serving_route"], json!([]));
+    assert_eq!(
+        preview(&f, d, false).await["models_losing_last_serving_route"],
+        json!([])
+    );
     sqlx::query("UPDATE provider_connections SET enabled=false WHERE id=(SELECT provider_connection_id FROM deployments WHERE id=$1)").bind(d).execute(&pool).await.unwrap();
-    assert_eq!(preview(&f, d, false).await["serving_routes_lost"], json!([]));
+    assert_eq!(
+        preview(&f, d, false).await["serving_routes_lost"],
+        json!([])
+    );
     sqlx::query("UPDATE provider_connections SET provider='vllm' WHERE id=(SELECT provider_connection_id FROM deployments WHERE id=$1)").bind(d).execute(&pool).await.unwrap();
-    sqlx::query("UPDATE models SET supported_protocols=ARRAY['responses'] WHERE id=$1").bind(m).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE models SET supported_protocols=ARRAY['responses'] WHERE id=$1")
+        .bind(m)
+        .execute(&pool)
+        .await
+        .unwrap();
     for endpoint in [path(d), format!("/api/v1/platform/deployments/{d}")] {
-        let method = if endpoint.ends_with("preview") { "POST" } else { "PATCH" };
+        let method = if endpoint.ends_with("preview") {
+            "POST"
+        } else {
+            "PATCH"
+        };
         let (status, body) = call(&f.s, &f.admin, method, &endpoint, json!({"enabled":true})).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
         assert_eq!(body["error"]["code"], "route_unsupported_capability");
     }
-    assert_eq!(call(&f.s, &f.admin, "DELETE", &format!("/api/v1/platform/deployments/{d}"), Value::Null).await.0, StatusCode::OK);
-    assert_eq!(call(&f.s, &f.admin, "POST", &path(Uuid::new_v4()), json!({"enabled":false})).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(
+        call(
+            &f.s,
+            &f.admin,
+            "DELETE",
+            &format!("/api/v1/platform/deployments/{d}"),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(
+            &f.s,
+            &f.admin,
+            "POST",
+            &path(Uuid::new_v4()),
+            json!({"enabled":false})
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
     for actor in [&f.auditor, &f.owner, &f.outsider] {
-        assert_eq!(call(&f.s, actor, "POST", &path(d), json!({"enabled":false})).await.0, StatusCode::FORBIDDEN);
+        assert_eq!(
+            call(&f.s, actor, "POST", &path(d), json!({"enabled":false}))
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
     }
 }
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn deployment_preview_does_not_wait_for_management_locks(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let m = model(&pool, "preview-lock-free").await;
+    let d = route(&pool, m, true).await;
+    let lock = resources::catalog_tx(&f.s, &f.admin, true).await.unwrap();
+    let p = tokio::time::timeout(std::time::Duration::from_secs(2), preview(&f, d, false))
+        .await
+        .expect("preview must not acquire catalog/installation locks");
+    assert_eq!(p["serving_routes_lost"], json!([d]));
+    lock.rollback().await.unwrap();
+}
+
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn deployment_preview_bounds_after_visibility_filter(pool: PgPool) {
     let f = fixture(&pool).await;
@@ -113,7 +239,10 @@ async fn deployment_preview_bounds_after_visibility_filter(pool: PgPool) {
     sqlx::query("INSERT INTO workspace_model_grants(workspace_id,model_id,source) SELECT id,$1,'direct' FROM workspaces WHERE name LIKE 'Shared %' OR kind='personal'").bind(m).execute(&pool).await.unwrap();
     let p = preview(&f, d, false).await;
     assert_eq!(p["affected_workspaces"]["total"], 103);
-    assert_eq!(p["affected_workspaces"]["data"].as_array().unwrap().len(), 100);
+    assert_eq!(
+        p["affected_workspaces"]["data"].as_array().unwrap().len(),
+        100
+    );
     assert_eq!(p["affected_workspaces"]["truncated"], true);
     assert!(!p.to_string().contains(&f.personal.to_string()));
 }
