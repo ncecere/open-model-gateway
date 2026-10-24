@@ -9,10 +9,10 @@
 //! judged as is a decision specific to each caller's purpose) and its own
 //! mapping from a [`Category`] to an accept/refuse decision, because the two
 //! callers have legitimately different rules for the same category (for
-//! example: `egress.rs` refuses the whole AWS IPv6 metadata `/32` outright,
-//! while `providers/local/endpoints.rs` refuses only the exact metadata
-//! address today and accepts the rest of the `/32`, with a startup warning,
-//! until #203's next release).
+//! example: `egress.rs` lets a private allowlist reach carrier-grade NAT,
+//! while an approved local upstream never may). Everything that is refused
+//! for *every* caller is decided once, by [`Category::disposition`], so the
+//! two callers cannot drift on which ranges are refused (#203).
 //!
 //! The table covers IANA's special-purpose address registries (RFC 6890 and
 //! its IPv6 counterpart) plus the translation/benchmarking/documentation
@@ -53,8 +53,7 @@ pub(crate) enum Category {
     /// only, apart from the Alibaba metadata address carved out above.
     Cgnat,
     /// `fd00:ec2::/32` apart from the exact metadata address `fd00:ec2::254`
-    /// (IPv6 only): AWS's unique-local block, approved today, refused by
-    /// egress, pending refusal in `endpoints.rs` (#203).
+    /// (IPv6 only): AWS's unique-local block, refused everywhere (#203).
     AwsMetadataRange,
     /// RFC 2544 benchmarking: `198.18.0.0/15` (IPv4), `2001:2::/48` (IPv6).
     Benchmarking,
@@ -69,8 +68,8 @@ pub(crate) enum Category {
 }
 
 impl Category {
-    /// A short, operator-facing name: a log field and a readiness label,
-    /// never a secret.
+    /// A short, operator-facing name for a startup error message, never a
+    /// secret.
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Public => "public",
@@ -87,6 +86,48 @@ impl Category {
             Self::Documentation => "documentation",
             Self::IetfProtocolAssignments => "IETF protocol assignments",
             Self::Deprecated6to4Relay => "deprecated 6to4 relay",
+        }
+    }
+}
+
+/// What every caller must do with a [`Category`], before its own settings
+/// (a private allowlist, the development flag, the URL scheme) apply.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Disposition {
+    /// Never reachable, whatever the configuration: link-local, multicast,
+    /// broadcast, reserved, metadata (including the whole AWS `fd00:ec2::/32`),
+    /// benchmarking, documentation, IETF protocol assignments and the
+    /// deprecated 6to4 relay.
+    Refused,
+    Loopback,
+    /// RFC 1918 and IPv6 unique-local.
+    Private,
+    /// `100.64.0.0/10`: private for egress (the allowlist decides), never an
+    /// approved local upstream.
+    Cgnat,
+    Public,
+}
+
+impl Category {
+    /// The single place that says which categories are refused outright.
+    /// The match is exhaustive on purpose: a new category must be decided
+    /// here, for both callers at once.
+    pub(crate) fn disposition(self) -> Disposition {
+        match self {
+            Self::Public => Disposition::Public,
+            Self::Private => Disposition::Private,
+            Self::Loopback => Disposition::Loopback,
+            Self::Cgnat => Disposition::Cgnat,
+            Self::LinkLocal
+            | Self::Multicast
+            | Self::Broadcast
+            | Self::Reserved
+            | Self::Metadata
+            | Self::AwsMetadataRange
+            | Self::Benchmarking
+            | Self::Documentation
+            | Self::IetfProtocolAssignments
+            | Self::Deprecated6to4Relay => Disposition::Refused,
         }
     }
 }
@@ -192,44 +233,6 @@ pub(crate) fn classify_v6(ip: Ipv6Addr) -> Category {
     Category::Reserved
 }
 
-/// The exact ranges #203 lists as approved today but already refused by
-/// `egress.rs` for every other client, pending refusal in the next minor
-/// release. Deliberately independent of [`Category`]/[`classify_v4`]/
-/// [`classify_v6`]: this keeps its own exact-range check rather than
-/// matching on [`Category::Documentation`] (or any other category), so a
-/// future change to what a category groups together can't silently widen
-/// or narrow which approvals get this warning. (Historical note: before
-/// #244, `classify_v6` used a `3ff0::/12` mask for `Category::Documentation`
-/// that was wider than the `3fff::/20` RFC 9637 block named here; #244
-/// narrowed `classify_v6` to the exact `/20`, so the two now agree for this
-/// range too, but this function's independence from `Category` is kept on
-/// principle.) Callers pass the address they have already decided to judge
-/// (each caller's own translation step:
-/// mapped/compatible/6to4/Teredo embedded IPv4, under its own rules for
-/// when to do so).
-pub(crate) fn is_pending_refusal_v4(ip: Ipv4Addr) -> bool {
-    let o = ip.octets();
-    (o[0] == 198 && (o[1] == 18 || o[1] == 19)) // 198.18.0.0/15, benchmarking
-        || (o[0] == 192 && o[1] == 0 && o[2] == 0) // 192.0.0.0/24, IETF protocol assignments
-        || (o[0] == 192 && o[1] == 88 && o[2] == 99) // 192.88.99.0/24, deprecated 6to4 relay
-        || (o[0] == 192 && o[1] == 0 && o[2] == 2) // 192.0.2.0/24, documentation
-        || (o[0] == 198 && o[1] == 51 && o[2] == 100) // 198.51.100.0/24, documentation
-        || (o[0] == 203 && o[1] == 0 && o[2] == 113) // 203.0.113.0/24, documentation
-}
-
-/// See [`is_pending_refusal_v4`]. `fd00:ec2::254` is excluded: it is already
-/// refused today (`Category::Metadata`), not pending.
-pub(crate) fn is_pending_refusal_v6(ip: Ipv6Addr) -> bool {
-    if ip == AWS_METADATA {
-        return false;
-    }
-    let s = ip.segments();
-    (s[0] == 0x2001 && s[1] == 0xdb8) // 2001:db8::/32, documentation
-        || (s[0] == 0x3fff && (s[1] & 0xf000) == 0) // 3fff::/20 (RFC 9637), documentation
-        || (s[0] == 0x2001 && s[1] == 2 && s[2] == 0) // 2001:2::/48, benchmarking
-        || (s[0] == 0xfd00 && s[1] == 0x0ec2) // fd00:ec2::/32, AWS metadata range
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,6 +242,31 @@ mod tests {
     }
     fn v6(s: &str) -> Ipv6Addr {
         s.parse().unwrap()
+    }
+
+    /// Only these categories are not refused outright; every other one is
+    /// refused for every caller (#203). CGNAT is its own disposition because
+    /// egress gates it on a private allowlist while approvals never accept it.
+    #[test]
+    fn disposition_refuses_every_special_use_category() {
+        for (category, expected) in [
+            (Category::Public, Disposition::Public),
+            (Category::Private, Disposition::Private),
+            (Category::Loopback, Disposition::Loopback),
+            (Category::Cgnat, Disposition::Cgnat),
+            (Category::LinkLocal, Disposition::Refused),
+            (Category::Multicast, Disposition::Refused),
+            (Category::Broadcast, Disposition::Refused),
+            (Category::Reserved, Disposition::Refused),
+            (Category::Metadata, Disposition::Refused),
+            (Category::AwsMetadataRange, Disposition::Refused),
+            (Category::Benchmarking, Disposition::Refused),
+            (Category::Documentation, Disposition::Refused),
+            (Category::IetfProtocolAssignments, Disposition::Refused),
+            (Category::Deprecated6to4Relay, Disposition::Refused),
+        ] {
+            assert_eq!(category.disposition(), expected, "{category:?}");
+        }
     }
 
     #[test]
@@ -299,15 +327,18 @@ mod tests {
         }
     }
 
-    /// #203 review finding: the warning's pending-refusal membership must be
-    /// exactly the issue's ranges, exercised here independently of
-    /// `classify_v6` (which, since #244, also uses the exact `/20`).
-    /// `3fff::1` and the last address of `3fff::/20` warn; `3fff:1000::1`
-    /// (just outside `/20`), `3ff0::1` and `3ffe:ffff::1` (outside the
-    /// `/20`, and since #244 also outside `classify_v6`'s `Documentation`)
-    /// do not.
+    fn refused4(addr: &str) -> bool {
+        classify_v4(v4(addr)).disposition() == Disposition::Refused
+    }
+    fn refused6(addr: &str) -> bool {
+        classify_v6(v6(addr)).disposition() == Disposition::Refused
+    }
+
+    /// The refused set is exactly `3fff::/20` here: `3fff::1` and the last
+    /// address of the `/20` are refused; `3fff:1000::1` (just outside),
+    /// `3ff0::1` and `3ffe:ffff::1` are ordinary global unicast.
     #[test]
-    fn pending_refusal_v6_3fff_boundary_is_exactly_the_20_not_the_legacy_12() {
+    fn refused_v6_3fff_boundary_is_exactly_the_20_not_the_legacy_12() {
         for (addr, expected) in [
             ("3fff::1", true),
             ("3fff:0fff:ffff:ffff:ffff:ffff:ffff:ffff", true),
@@ -315,26 +346,26 @@ mod tests {
             ("3ff0::1", false),
             ("3ffe:ffff::1", false),
         ] {
-            assert_eq!(is_pending_refusal_v6(v6(addr)), expected, "{addr}");
+            assert_eq!(refused6(addr), expected, "{addr}");
         }
     }
 
     /// #244: the address just outside `3fff::/20` is `Category::Public`
     /// (ordinary global unicast, like the rest of `2000::/3`), not
-    /// `Category::Documentation` as the pre-#244 `3ff0::/12` mask gave it;
-    /// and it never triggered the pending-refusal warning, before or after.
+    /// `Category::Documentation` as the pre-#244 `3ff0::/12` mask gave it,
+    /// and is not refused.
     #[test]
-    fn classification_outside_3fff_20_is_public_and_never_warned_244() {
+    fn classification_outside_3fff_20_is_public_and_not_refused_244() {
         for addr in ["3ff0::1", "3ffe:ffff::1"] {
             assert_eq!(classify_v6(v6(addr)), Category::Public, "{addr}");
-            assert!(!is_pending_refusal_v6(v6(addr)), "{addr}");
+            assert!(!refused6(addr), "{addr}");
         }
     }
 
     /// First and last address of every IPv4 range the issue lists, and the
-    /// address just outside each boundary.
+    /// address just outside each boundary, as the shared table refuses them.
     #[test]
-    fn pending_refusal_v4_boundaries_match_the_issue_exactly() {
+    fn refused_v4_boundaries_match_the_issue_exactly() {
         let cases: &[(&str, bool)] = &[
             ("198.18.0.0", true),
             ("198.19.255.255", true),
@@ -362,7 +393,7 @@ mod tests {
             ("203.0.114.0", false),
         ];
         for (addr, expected) in cases {
-            assert_eq!(is_pending_refusal_v4(v4(addr)), *expected, "{addr}");
+            assert_eq!(refused4(addr), *expected, "{addr}");
         }
     }
 
@@ -392,9 +423,9 @@ mod tests {
 
     /// First and last address of every IPv6 range the issue lists (apart
     /// from `3fff::/20`, covered above), and the address just outside each
-    /// boundary; plus the already-refused AWS metadata exception.
+    /// boundary; plus the exact AWS metadata address, refused too.
     #[test]
-    fn pending_refusal_v6_boundaries_match_the_issue_exactly() {
+    fn refused_v6_boundaries_match_the_issue_exactly() {
         let cases: &[(&str, bool)] = &[
             ("2001:db8::", true),
             ("2001:db8:ffff:ffff:ffff:ffff:ffff:ffff", true),
@@ -406,12 +437,12 @@ mod tests {
             ("2001:2:1::", false),
             ("fd00:ec2::", true),
             ("fd00:ec2:ffff:ffff:ffff:ffff:ffff:ffff", true),
-            ("fd00:ec2::254", false),
+            ("fd00:ec2::254", true),
             ("fd00:ec1:ffff:ffff:ffff:ffff:ffff:ffff", false),
             ("fd00:ec3::", false),
         ];
         for (addr, expected) in cases {
-            assert_eq!(is_pending_refusal_v6(v6(addr)), *expected, "{addr}");
+            assert_eq!(refused6(addr), *expected, "{addr}");
         }
     }
 }

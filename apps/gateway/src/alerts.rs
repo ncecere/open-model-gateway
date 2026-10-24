@@ -29,6 +29,7 @@ use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 mod outbox;
+pub(crate) mod webhooks;
 pub use outbox::deliver_pending;
 mod aged_hold;
 pub(crate) use aged_hold::{aged_hold_tick, aged_hold_visible};
@@ -1584,6 +1585,7 @@ pub fn start(store: Store, every: Duration) -> tokio::task::JoinHandle<()> {
                     tracing::warn!("alert evaluation incomplete; retrying next interval")
                 }
             }
+            webhooks::deliver(&store).await;
             // `deliver_pending_within` stops claiming once a further send could
             // overrun SEND_BUDGET, and its cleanup has its own bound. The worst
             // case is cleanup, then one send started just inside the budget, so

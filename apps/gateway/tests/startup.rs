@@ -594,3 +594,161 @@ fn a_refused_trace_collector_destination_fails_real_startup_without_echoing_it()
         assert!(!stderr.contains("never-dialed-marker"), "{case}");
     }
 }
+
+/// #203 release N+1: an approval in a special-use range the egress policy
+/// refuses stops the real binary's `serve` before any database connection,
+/// naming the approval's host, address and category and the setting to
+/// change, never a credential.
+#[test]
+fn a_refused_local_upstream_approval_fails_real_startup_naming_it() {
+    let f = Fixture::new();
+    let database = "postgres://gateway:never-dialed-marker@127.0.0.1:1/gateway";
+    let cases = [
+        ("https", "198.18.0.1", "benchmarking"),
+        ("https", "198.19.255.255", "benchmarking"),
+        ("https", "192.0.0.1", "IETF protocol assignments"),
+        ("https", "192.88.99.1", "deprecated 6to4 relay"),
+        ("https", "192.0.2.1", "documentation"),
+        ("https", "198.51.100.1", "documentation"),
+        ("https", "203.0.113.1", "documentation"),
+        ("https", "2001:db8::1", "documentation"),
+        ("https", "3fff::1", "documentation"),
+        ("https", "2001:2::1", "benchmarking"),
+        ("https", "fd00:ec2::1", "AWS metadata range (fd00:ec2::/32)"),
+        // Plain HTTP used to be accepted for this one range.
+        ("http", "fd00:ec2::1", "AWS metadata range (fd00:ec2::/32)"),
+        // Carried by another address form.
+        ("https", "::ffff:198.18.0.1", "benchmarking"),
+        ("https", "2002:c612:1::1", "benchmarking"),
+    ];
+    for (scheme, address, category) in cases {
+        let upstreams = serde_json::json!([{
+            "endpoint": format!("{scheme}://affected-host.example:8443/v1"),
+            "addresses": [address],
+        }])
+        .to_string();
+        let output = f.run(
+            &["serve"],
+            [
+                ("DATABASE_URL", database),
+                ("GATEWAY_LOCAL_UPSTREAMS", upstreams.as_str()),
+            ],
+        );
+        let case = format!("{scheme} {address}");
+        assert_eq!(output.status.code(), Some(1), "{case}");
+        assert!(output.stdout.is_empty(), "{case}");
+        let stderr = text(&output.stderr);
+        for expected in [
+            "GATEWAY_LOCAL_UPSTREAMS",
+            "affected-host.example",
+            address,
+            category,
+        ] {
+            assert!(stderr.contains(expected), "{case}: {expected}: {stderr}");
+        }
+        assert!(
+            !stderr.contains("could not connect"),
+            "{case}: the database must never be dialed first: {stderr}"
+        );
+        assert!(!stderr.contains("never-dialed-marker"), "{case}");
+        assert!(
+            !stderr.contains("https://affected-host"),
+            "{case}: host only"
+        );
+    }
+}
+
+/// Every affected approval is named in one message, so an operator fixes
+/// them all in one pass.
+#[test]
+fn every_refused_local_upstream_approval_is_named_in_one_failure() {
+    let f = Fixture::new();
+    let upstreams = serde_json::json!([
+        {"endpoint": "https://first.example/v1", "addresses": ["198.18.0.1"]},
+        {"endpoint": "https://fine.example/v1", "addresses": ["8.8.8.8"]},
+        {"endpoint": "https://second.example/v1", "addresses": ["10.0.0.1", "2001:db8::1"]},
+    ])
+    .to_string();
+    let output = f.run(
+        &["serve"],
+        [
+            ("DATABASE_URL", "postgres://gateway@127.0.0.1:1/gateway"),
+            ("GATEWAY_LOCAL_UPSTREAMS", upstreams.as_str()),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = text(&output.stderr);
+    for expected in [
+        "first.example",
+        "198.18.0.1",
+        "second.example",
+        "2001:db8::1",
+    ] {
+        assert!(stderr.contains(expected), "{expected}: {stderr}");
+    }
+    assert!(!stderr.contains("fine.example"), "{stderr}");
+    assert!(!stderr.contains("8.8.8.8"), "{stderr}");
+}
+
+/// Credentials in an approval URL are never echoed: such a URL is invalid
+/// before its address is even judged.
+#[test]
+fn a_refused_approval_with_url_credentials_never_echoes_them() {
+    let f = Fixture::new();
+    let upstreams = serde_json::json!([{
+        "endpoint": "https://operator:credential-canary@affected-host.example/v1",
+        "addresses": ["198.18.0.1"],
+    }])
+    .to_string();
+    let output = f.run(
+        &["serve"],
+        [
+            ("DATABASE_URL", "postgres://gateway@127.0.0.1:1/gateway"),
+            ("GATEWAY_LOCAL_UPSTREAMS", upstreams.as_str()),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = text(&output.stderr);
+    assert!(!stderr.contains("credential-canary"), "{stderr}");
+    assert!(!stderr.contains("operator:"), "{stderr}");
+    assert!(!stderr.contains("could not connect"), "{stderr}");
+}
+
+/// Approvals that are only public, RFC 1918 or loopback-in-development reach
+/// the database as before, and commands other than `serve` never judge them.
+#[test]
+fn ordinary_local_upstream_approvals_are_unaffected_at_startup() {
+    let f = Fixture::new();
+    let database = ("DATABASE_URL", "postgres://gateway@127.0.0.1:1/gateway");
+    let ordinary = serde_json::json!([
+        {"endpoint": "https://public.example/v1", "addresses": ["8.8.8.8"]},
+        {"endpoint": "http://private.example:8000/v1", "addresses": ["10.1.2.3"]},
+        {"endpoint": "https://private6.example/v1", "addresses": ["fd12::1"]},
+        {"endpoint": "https://near.example/v1", "addresses": ["198.20.0.1", "3fff:1000::1"]},
+    ])
+    .to_string();
+    let output = f.run(
+        &["serve"],
+        [database, ("GATEWAY_LOCAL_UPSTREAMS", ordinary.as_str())],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = text(&output.stderr);
+    assert!(
+        stderr.contains("could not connect to PostgreSQL"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("GATEWAY_LOCAL_UPSTREAMS"), "{stderr}");
+
+    // Only `serve` loads approvals: other commands reach the database.
+    let refused = r#"[{"endpoint":"https://x.example/v1","addresses":["198.18.0.1"]}]"#;
+    let output = f.run(
+        &["migrate"],
+        [database, ("GATEWAY_LOCAL_UPSTREAMS", refused)],
+    );
+    let stderr = text(&output.stderr);
+    assert!(
+        stderr.contains("could not connect to PostgreSQL"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("GATEWAY_LOCAL_UPSTREAMS"), "{stderr}");
+}

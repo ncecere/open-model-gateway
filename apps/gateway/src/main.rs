@@ -372,6 +372,16 @@ async fn run(cli: Cli) -> Result<()> {
     {
         return wait_for_database(&config, schema, timeout_seconds).await;
     }
+    // Operator-approved local upstreams (#203): a refused approval stops
+    // `serve` here, before any database connection, naming the approval and
+    // GATEWAY_LOCAL_UPSTREAMS. Other commands never use the approvals.
+    let mut local_approvals = matches!(cli.command, None | Some(Command::Serve))
+        .then(|| {
+            open_model_gateway::providers::local::endpoints::ApprovedEndpoints::from_env(
+                config.environment.as_str(),
+            )
+        })
+        .transpose()?;
     let pool = config.connect().await?;
     // Reports, usage and logs only (never admission, settlement or writes).
     let provider_secrets = EnvSecrets::new(config.secret_env_allowlist.clone());
@@ -727,19 +737,9 @@ async fn run(cli: Cli) -> Result<()> {
                 secrets.clone(),
                 OpenRouterConfig::from_env()?,
             )?))?;
-            let approvals =
-                open_model_gateway::providers::local::endpoints::ApprovedEndpoints::from_env(
-                    config.environment.as_str(),
-                )?;
-            // #203, release N: some installations approved local upstreams in
-            // ranges the egress policy already refuses for every other
-            // client; those ranges will be refused at startup from the next
-            // minor release. Named here (once, for the approvals this
-            // replica actually uses) and surfaced in /health/ready; startup
-            // still succeeds.
-            open_model_gateway::providers::local::endpoints::log_pending_refusal_warnings(
-                &approvals,
-            );
+            let approvals = local_approvals
+                .take()
+                .context("local upstream approvals are loaded before serving")?;
             for adapter in open_model_gateway::providers::local::adapters(secrets, approvals) {
                 registry.register(adapter)?;
             }

@@ -1391,13 +1391,13 @@ async fn store_at(pool: &PgPool, level: &'static str) -> Store {
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
-async fn issuance_fails_closed_outside_read_committed(pool: PgPool) {
+async fn issuance_normalizes_elevated_session_defaults(pool: PgPool) {
     let f = fixture(&pool).await;
-    type_limits(&pool, "team", Some(5), Some(500)).await;
-    let keys = seed(&pool, f.team, f.member.user_id, 1, 60).await;
+    type_limits(&pool, "team", Some(4), Some(500)).await;
     for level in ["repeatable read", "serializable"] {
         let strict = store_at(&pool, level).await;
-        // Well under the limit, yet never admitted: the count could not be trusted.
+        // Operator defaults must not prevent otherwise valid create/rotate
+        // requests: their transactions explicitly choose READ COMMITTED.
         let (status, _, v) = call_h(
             &strict,
             &f.member,
@@ -1406,44 +1406,75 @@ async fn issuance_fails_closed_outside_read_committed(pool: PgPool) {
             json!({"name":"Strict","expires_in_days":1}),
         )
         .await;
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{level}: {v}");
-        let text = v.to_string();
-        assert!(
-            !text.contains("isolation") && !text.contains(&f.member.user_id.to_string()),
-            "{text}"
-        );
+        assert_eq!(status, StatusCode::OK, "{level}: {v}");
         let (status, _, v) = call_h(
             &strict,
             &f.member,
             "POST",
-            &format!("/api/v1/workspaces/{}/keys/{}/rotate", f.team, keys[0]),
+            &format!("/api/v1/workspaces/{}/keys/{}/rotate", f.team, id(&v)),
             json!({"expires_in_days":1}),
         )
         .await;
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{level}: {v}");
-        assert_eq!(
-            keys_of(&pool, f.team).await,
-            1,
-            "{level}: nothing was issued"
-        );
-        let revoked: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM api_keys WHERE revoked_at IS NOT NULL")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(revoked, 0, "{level}: a refused rotation revokes nothing");
+        assert_eq!(status, StatusCode::OK, "{level}: {v}");
+        if level == "serializable" {
+            let before = keys_of(&pool, f.team).await;
+            let (status, _, refused) = call_h(
+                &strict,
+                &f.member,
+                "POST",
+                &format!("/api/v1/workspaces/{}/keys/{}/rotate", f.team, id(&v)),
+                json!({"expires_in_days":1}),
+            )
+            .await;
+            assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{refused}");
+            assert_eq!(reason(&refused), "key_issuance_limit_exceeded");
+            assert_eq!(keys_of(&pool, f.team).await, before);
+        }
+        strict.pool.close().await;
     }
-    // The same requests at READ COMMITTED are admitted.
-    let committed = store_at(&pool, "read committed").await;
-    let (status, _, v) = call_h(
-        &committed,
-        &f.member,
-        "POST",
-        &format!("/api/v1/workspaces/{}/keys", f.team),
-        json!({"name":"Committed","expires_in_days":1}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(keys_of(&pool, f.team).await, 4);
+    let revoked: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM api_keys WHERE revoked_at IS NOT NULL")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(revoked, 2, "a refused rotation revokes nothing");
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn issuance_fails_closed_under_explicit_elevated_isolation(pool: PgPool) {
+    use crate::management::keys::issuance::{Holder, Operation, check};
+    let f = fixture(&pool).await;
+    type_limits(&pool, "team", Some(5), Some(500)).await;
+    seed(&pool, f.team, f.member.user_id, 1, 60).await;
+    for setup in [
+        "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+        "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+    ] {
+        for operation in [Operation::Create, Operation::Rotate] {
+            let mut tx = crate::db::begin_with_setup(&pool, setup).await.unwrap();
+            // An explicit caller override still reaches the fail-closed guard,
+            // even though the transaction helper now pins the default baseline.
+            let error = check(&mut tx, f.team, Holder::User(f.member.user_id), operation)
+                .await
+                .unwrap_err();
+            match error {
+                ManagementError::Api(ApiError(status, message)) => {
+                    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+                    assert_eq!(message, "Management storage unavailable");
+                }
+                other => panic!("expected a sanitized isolation refusal: {other:?}"),
+            }
+            tx.rollback().await.unwrap();
+        }
+    }
+    assert_eq!(keys_of(&pool, f.team).await, 1);
+    let revoked: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM api_keys WHERE revoked_at IS NOT NULL")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(revoked, 0);
 }
 
 /// Two transactions on separate connections hold only the workspace row lock
