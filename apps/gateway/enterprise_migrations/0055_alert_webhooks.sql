@@ -120,7 +120,10 @@ CREATE TRIGGER alert_webhook_outbox_no_truncate BEFORE TRUNCATE ON alert_webhook
 
 CREATE FUNCTION alert_webhook_destination_ineligible() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
- IF NOT NEW.enabled OR NEW.deleted_at IS NOT NULL THEN
+ -- Unless the destination stays enabled, any waiting row is stale: a disable
+ -- or delete ends it, and so does re-enabling (a row that outlived a disable
+ -- because its enqueue committed later). Re-enabling never replays.
+ IF NOT (NEW.enabled AND OLD.enabled) OR NEW.deleted_at IS NOT NULL THEN
   -- An already authorized send may finish; unclaimed rows never replay.
   UPDATE alert_webhook_outbox SET state='ineligible',completed_at=clock_timestamp()
    WHERE destination_id=NEW.id AND state='waiting';
