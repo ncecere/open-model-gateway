@@ -397,9 +397,10 @@ async fn webhook_patch_in_flight_does_not_stall_alert_enqueue(pool: PgPool) {
         .await
         .unwrap();
     let (s, admin, p) = (f.s.clone(), f.admin.clone(), path.clone());
-    let patch = tokio::spawn(async move {
-        call(&s, &admin, "PATCH", &p, json!({"label":"renamed"})).await
-    });
+    let patch =
+        tokio::spawn(
+            async move { call(&s, &admin, "PATCH", &p, json!({"label":"renamed"})).await },
+        );
     let mut blocked = 0_i64;
     for _ in 0..100 {
         blocked = sqlx::query_scalar("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'").fetch_one(&pool).await.unwrap();

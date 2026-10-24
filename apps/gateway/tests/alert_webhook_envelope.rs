@@ -160,11 +160,12 @@ async fn event_payloads_must_be_the_exact_canonical_bytes(pool: PgPool) {
         .fetch_one(&pool)
         .await
         .unwrap();
-    let stored: Vec<u8> = sqlx::query_scalar("SELECT payload FROM alert_webhook_outbox WHERE id=$1")
-        .bind(id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    let stored: Vec<u8> =
+        sqlx::query_scalar("SELECT payload FROM alert_webhook_outbox WHERE id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(stored, constructor.as_bytes());
 }
 
@@ -206,11 +207,41 @@ async fn runtime_role_cannot_queue_excluded_events_or_forged_payloads(pool: PgPo
     sqlx::query("INSERT INTO alert_rules(id,scope,kind,name,window_minutes,ceiling_requests_per_second,notify_platform_admins) VALUES($1,'installation','admission_ceiling','ceiling',5,1,true)").bind(ceiling).execute(&pool).await.unwrap();
     let mut excluded: Vec<(&str, Uuid, &str)> = Vec::new();
     for (name, rule, builtin, kind, ws) in [
-        ("workspace rule", Some(workspace), None, "spend_spike", Some(team)),
-        ("rule not notifying admins", Some(silent), None, "spend_spike", None),
-        ("personal workspace", Some(install), None, "spend_spike", Some(personal)),
-        ("ceiling", Some(ceiling), None, "admission_ceiling", Some(team)),
-        ("personal budget", None, Some("personal_budget"), "budget_threshold", Some(personal)),
+        (
+            "workspace rule",
+            Some(workspace),
+            None,
+            "spend_spike",
+            Some(team),
+        ),
+        (
+            "rule not notifying admins",
+            Some(silent),
+            None,
+            "spend_spike",
+            None,
+        ),
+        (
+            "personal workspace",
+            Some(install),
+            None,
+            "spend_spike",
+            Some(personal),
+        ),
+        (
+            "ceiling",
+            Some(ceiling),
+            None,
+            "admission_ceiling",
+            Some(team),
+        ),
+        (
+            "personal budget",
+            None,
+            Some("personal_budget"),
+            "budget_threshold",
+            Some(personal),
+        ),
     ] {
         let event = Uuid::new_v4();
         sqlx::query("INSERT INTO alert_events(id,rule_id,builtin,kind,subject_key,level,severity,workspace_id,summary) VALUES($1,$2,$3,$4,$1::text,1,'warning',$5,'safe')").bind(event).bind(rule).bind(builtin).bind(kind).bind(ws).execute(&pool).await.unwrap();

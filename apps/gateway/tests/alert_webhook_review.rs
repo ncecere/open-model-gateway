@@ -235,7 +235,8 @@ async fn webhook_disabled_fast_path_never_reads_event_projection(pool: PgPool) {
             .await
             .unwrap();
     assert!(
-        definition.find("IF NOT EXISTS").unwrap() < definition.find("alert_webhook_payload(").unwrap(),
+        definition.find("IF NOT EXISTS").unwrap()
+            < definition.find("alert_webhook_payload(").unwrap(),
         "the disabled fast path must return before any event projection"
     );
     assert!(!definition.contains("FROM alert_events"));

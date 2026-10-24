@@ -45,8 +45,14 @@ async fn event(pool: &PgPool) -> Uuid {
         .fetch_one(pool).await.unwrap()
 }
 async fn rows(pool: &PgPool, event: Uuid, destination: Uuid) -> i64 {
-    sqlx::query_scalar("SELECT count(*) FROM alert_webhook_outbox WHERE event_id=$1 AND destination_id=$2")
-        .bind(event).bind(destination).fetch_one(pool).await.unwrap()
+    sqlx::query_scalar(
+        "SELECT count(*) FROM alert_webhook_outbox WHERE event_id=$1 AND destination_id=$2",
+    )
+    .bind(event)
+    .bind(destination)
+    .fetch_one(pool)
+    .await
+    .unwrap()
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
