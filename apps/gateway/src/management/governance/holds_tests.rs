@@ -314,7 +314,16 @@ async fn queue_visibility_privacy_pagination_and_strict_parameters(pool: PgPool)
         .unwrap();
     assert_eq!(call(&f, f.owner, &path).await.0, StatusCode::NOT_FOUND);
     let (_, p) = call(&f, f.owner, "/api/v1/platform/holds").await;
-    assert!(p["data"].as_array().unwrap().is_empty());
+    // Disabling a workspace never hides or releases its retained money.
+    // Platform Logs visibility includes it, but reconciliation needs re-enable.
+    assert_eq!(p["data"].as_array().unwrap().len(), 3);
+    assert!(
+        p["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["can_reconcile"] == false)
+    );
     sqlx::query("UPDATE users SET disabled_at=now() WHERE id=$1")
         .bind(f.owner)
         .execute(&f.store.pool)
