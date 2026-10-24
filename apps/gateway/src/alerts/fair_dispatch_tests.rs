@@ -12,7 +12,12 @@ async fn backlog(s: &Seed, workspace: Option<Uuid>, n: i32, age_seconds: i32) {
     } else {
         "scope,kind,budget_layers,thresholds,notify_emails"
     };
-    let r = rule(s, columns, &format!("{scope},'budget_threshold',ARRAY['local'],ARRAY[100],ARRAY['fair@example.test']")).await;
+    let r = rule(
+        s,
+        columns,
+        &format!("{scope},'budget_threshold',ARRAY['local'],ARRAY[100],ARRAY['fair@example.test']"),
+    )
+    .await;
     sqlx::query("WITH events AS (INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary) SELECT gen_random_uuid(),$1,'budget_threshold',i::text,100,'warning',$2,'Fair dispatch' FROM generate_series(1,$3) i RETURNING id) INSERT INTO alert_deliveries(id,event_id,transition,created_at) SELECT gen_random_uuid(),id,'fired',clock_timestamp()-make_interval(secs=>$4) FROM events")
         .bind(r).bind(workspace).bind(n).bind(age_seconds).execute(&s.pool).await.unwrap();
 }
@@ -21,19 +26,33 @@ async fn backlog(s: &Seed, workspace: Option<Uuid>, n: i32, age_seconds: i32) {
 async fn fair_dispatch_upgrade_backfills_only_pending_and_recovers_index(pool: PgPool) {
     let all = sqlx::migrate!("./enterprise_migrations");
     sqlx::migrate::Migrator {
-        migrations: std::borrow::Cow::Owned(all.iter().filter(|m| m.version <= 54).cloned().collect()),
+        migrations: std::borrow::Cow::Owned(
+            all.iter().filter(|m| m.version <= 54).cloned().collect(),
+        ),
         ignore_missing: false,
         locking: true,
         no_tx: false,
-    }.run(&pool).await.unwrap();
+    }
+    .run(&pool)
+    .await
+    .unwrap();
     let s = seed(pool).await;
     backlog(&s, Some(s.team), 2, 60).await;
     sqlx::query("UPDATE alert_deliveries SET status='not_configured',completed_at=clock_timestamp() WHERE id=(SELECT id FROM alert_deliveries ORDER BY id LIMIT 1)")
         .execute(&s.pool).await.unwrap();
     s.store.migrate_enterprise().await.unwrap();
-    let buckets: Vec<(String,Uuid)> = sqlx::query_as("SELECT status,bucket_id FROM alert_deliveries ORDER BY status")
-        .fetch_all(&s.pool).await.unwrap();
-    assert_eq!(buckets,vec![("not_configured".into(),Uuid::nil()),("pending".into(),s.team)]);
+    let buckets: Vec<(String, Uuid)> =
+        sqlx::query_as("SELECT status,bucket_id FROM alert_deliveries ORDER BY status")
+            .fetch_all(&s.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        buckets,
+        vec![
+            ("not_configured".into(), Uuid::nil()),
+            ("pending".into(), s.team)
+        ]
+    );
     // Simulate an interrupted concurrent build (0057 not recorded, invalid index).
     sqlx::raw_sql("DELETE FROM _sqlx_migrations WHERE version=57; UPDATE pg_index SET indisvalid=false WHERE indexrelid='public.alert_deliveries_pending_bucket'::regclass")
         .execute(&s.pool).await.unwrap();
@@ -47,7 +66,10 @@ async fn fair_dispatch_upgrade_backfills_only_pending_and_recovers_index(pool: P
 async fn workspace(s: &Seed) -> Uuid {
     let id = Uuid::new_v4();
     sqlx::query("INSERT INTO workspaces(id,name,kind) VALUES($1,'Fair dispatch','team')")
-        .bind(id).execute(&s.pool).await.unwrap();
+        .bind(id)
+        .execute(&s.pool)
+        .await
+        .unwrap();
     id
 }
 
@@ -66,9 +88,14 @@ async fn fair_dispatch_quiet_workspaces_get_slots_in_first_tick(pool: PgPool) {
         .fetch_all(&s.pool).await.unwrap();
     let mut expected = vec![(s.team, 23), (b, 1), (c, 1)];
     expected.sort();
-    assert_eq!(sent, expected, "a noisy workspace must not consume the quiet buckets' slots");
+    assert_eq!(
+        sent, expected,
+        "a noisy workspace must not consume the quiet buckets' slots"
+    );
     let mut received = 0;
-    while rx.try_recv().is_ok() { received += 1; }
+    while rx.try_recv().is_ok() {
+        received += 1;
+    }
     assert_eq!(received, 25);
 }
 
@@ -81,14 +108,21 @@ async fn fair_dispatch_forty_buckets_drain_oldest_first_in_two_ticks(pool: PgPoo
     for i in 0..40 {
         let ws = workspace(&s).await;
         ordered.push(ws);
-        backlog(&s, Some(ws), 1, 4000-i*60).await;
+        backlog(&s, Some(ws), 1, 4000 - i * 60).await;
     }
     assert_eq!(deliver_pending(&s.store, 25).await, 25);
     let pending: Vec<Uuid> = sqlx::query_scalar("SELECT e.workspace_id FROM alert_deliveries d JOIN alert_events e ON e.id=d.event_id WHERE d.status='pending' ORDER BY d.created_at,d.id")
         .fetch_all(&s.pool).await.unwrap();
     assert_eq!(pending, ordered[25..]);
     assert_eq!(deliver_pending(&s.store, 25).await, 15);
-    assert_eq!(count(&s,"SELECT count(*) FROM alert_deliveries WHERE status='sent'").await,40);
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM alert_deliveries WHERE status='sent'"
+        )
+        .await,
+        40
+    );
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
@@ -100,9 +134,85 @@ async fn fair_dispatch_installation_bucket_and_legacy_insert(pool: PgPool) {
     backlog(&s, None, 1, 30).await;
     let buckets: Vec<(Option<Uuid>, Uuid)> = sqlx::query_as("SELECT e.workspace_id,d.bucket_id FROM alert_deliveries d JOIN alert_events e ON e.id=d.event_id ORDER BY e.workspace_id NULLS LAST")
         .fetch_all(&s.pool).await.unwrap();
-    assert_eq!(buckets, vec![(Some(s.team),s.team),(None,Uuid::nil())]);
+    assert_eq!(buckets, vec![(Some(s.team), s.team), (None, Uuid::nil())]);
     assert_eq!(deliver_pending(&s.store, 25).await, 2);
-    assert_eq!(count(&s,"SELECT count(*) FROM alert_deliveries WHERE status='sent'").await,2);
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM alert_deliveries WHERE status='sent'"
+        )
+        .await,
+        2
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn fair_dispatch_not_configured_steps_also_share_slots(pool: PgPool) {
+    let s = seed(pool).await;
+    let quiet = workspace(&s).await;
+    backlog(&s, Some(s.team), 200, 3600).await;
+    backlog(&s, Some(quiet), 1, 60).await;
+    assert_eq!(deliver_pending(&s.store, 25).await, 25);
+    let quiet_done: bool = sqlx::query_scalar(
+        "SELECT status='not_configured' FROM alert_deliveries WHERE bucket_id=$1",
+    )
+    .bind(quiet)
+    .fetch_one(&s.pool)
+    .await
+    .unwrap();
+    assert!(quiet_done);
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn fair_dispatch_locked_bucket_does_not_block_other_candidates(pool: PgPool) {
+    let s = seed(pool).await;
+    relay(&s, 25).await;
+    backlog(&s, Some(s.team), 1, 3600).await;
+    let quiet = workspace(&s).await;
+    backlog(&s, Some(quiet), 1, 60).await;
+    let mut locked = s.pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM alert_deliveries WHERE bucket_id=$1 FOR UPDATE")
+        .bind(s.team)
+        .execute(&mut *locked)
+        .await
+        .unwrap();
+    let (_, claim, bucket) = tokio::time::timeout(
+        Duration::from_secs(3),
+        outbox::claim(&s.store, Uuid::new_v4(), &Default::default()),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .unwrap();
+    assert_eq!(bucket, quiet);
+    assert!(claim.is_some());
+    locked.rollback().await.unwrap();
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn fair_dispatch_bucket_index_is_usable_for_large_backlog(pool: PgPool) {
+    let s = seed(pool).await;
+    backlog(&s, Some(s.team), 30000, 3600).await;
+    backlog(&s, Some(workspace(&s).await), 1, 60).await;
+    sqlx::query("ANALYZE alert_deliveries")
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    let mut tx = s.pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL enable_seqscan=off")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let plan: Vec<String> =
+        sqlx::query_scalar(&format!("EXPLAIN {}", outbox::bucket_candidates_sql()))
+            .bind(Vec::<Uuid>::new())
+            .bind(Vec::<i32>::new())
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap();
+    let plan = plan.join("\n");
+    assert!(plan.contains("alert_deliveries_pending_bucket"), "{plan}");
+    assert!(!plan.contains("Seq Scan on alert_deliveries"), "{plan}");
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
@@ -117,7 +227,11 @@ async fn fair_dispatch_concurrent_claimers_never_duplicate_lease(pool: PgPool) {
         let store = s.store.clone();
         workers.spawn(async move {
             let mut claimed = Vec::new();
-            while let Some((id, claim)) = outbox::claim(&store, Uuid::new_v4()).await.unwrap() {
+            while let Some((id, claim, _)) =
+                outbox::claim(&store, Uuid::new_v4(), &Default::default())
+                    .await
+                    .unwrap()
+            {
                 assert!(claim.is_some());
                 claimed.push(id);
             }
@@ -125,10 +239,19 @@ async fn fair_dispatch_concurrent_claimers_never_duplicate_lease(pool: PgPool) {
         });
     }
     let mut ids = Vec::new();
-    while let Some(result) = workers.join_next().await { ids.extend(result.unwrap()); }
+    while let Some(result) = workers.join_next().await {
+        ids.extend(result.unwrap());
+    }
     assert_eq!(ids.len(), 8);
     ids.sort();
     ids.dedup();
     assert_eq!(ids.len(), 8);
-    assert_eq!(count(&s,"SELECT count(*) FROM alert_recipient_outbox WHERE state='leased' AND attempt_count=1").await,8);
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM alert_recipient_outbox WHERE state='leased' AND attempt_count=1"
+        )
+        .await,
+        8
+    );
 }

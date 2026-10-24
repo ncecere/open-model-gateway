@@ -1,7 +1,7 @@
 //! Durable recipient queue. All database transactions end before SMTP I/O.
 //! A lease fences database results, not the relay: a crash after acceptance can
 //! duplicate mail. Fingerprints are pseudonymous and must never be formatted.
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use sha2::{Digest, Sha256};
 
@@ -97,26 +97,64 @@ pub(super) async fn cleanup(tx: &mut Transaction<'_, Postgres>) -> sqlx::Result<
     Ok(())
 }
 
+// Shared verbatim by the lock-free head lookup and the locking claim. Keep
+// the cutoff and recipient due predicates identical in both selection steps.
+const DUE_DELIVERY: &str = "d.status='pending' AND d.created_at>clock_timestamp()-interval '24 hours'+interval '45 seconds' AND (NOT d.initialized OR EXISTS(SELECT 1 FROM alert_recipient_outbox q WHERE q.delivery_id=d.id AND q.attempt_count<5 AND ((q.state='waiting' AND q.next_attempt_at<=clock_timestamp()) OR (q.state='leased' AND q.lease_expires_at<=clock_timestamp()))))";
+
+pub(super) fn bucket_candidates_sql() -> String {
+    format!("WITH RECURSIVE buckets(bucket_id) AS (
+ (SELECT bucket_id FROM alert_deliveries WHERE status='pending' ORDER BY bucket_id LIMIT 1)
+ UNION ALL
+ SELECT next.bucket_id FROM buckets b CROSS JOIN LATERAL
+  (SELECT bucket_id FROM alert_deliveries WHERE status='pending' AND bucket_id>b.bucket_id ORDER BY bucket_id LIMIT 1) next
+), served AS (SELECT * FROM unnest($1::uuid[],$2::integer[]) AS s(bucket_id,slots))
+SELECT b.bucket_id FROM buckets b CROSS JOIN LATERAL
+ (SELECT d.created_at FROM alert_deliveries d WHERE d.bucket_id=b.bucket_id AND {DUE_DELIVERY} ORDER BY d.created_at,d.id LIMIT 1) head
+LEFT JOIN served s ON s.bucket_id=b.bucket_id
+ORDER BY coalesce(s.slots,0),head.created_at,b.bucket_id LIMIT 32")
+}
+
 // One short claim transaction; None means no due work (not a network result).
-// `Some((id,None))` advances initialization/revocation without sending.
+// The tuple returns (delivery, optional send, bucket), including init-only and
+// not-configured steps: every successful step consumes one fair tick slot.
 pub(super) async fn claim(
     store: &Store,
     owner: Uuid,
-) -> sqlx::Result<Option<(Uuid, Option<Claim>)>> {
-    claim_with_hook(store, owner, std::future::ready(())).await
+    served: &HashMap<Uuid, u32>,
+) -> sqlx::Result<Option<(Uuid, Option<Claim>, Uuid)>> {
+    claim_with_hook(store, owner, served, std::future::ready(())).await
 }
 
 // The hook permits a deterministic READ COMMITTED interleaving in tests.
 pub(super) async fn claim_with_hook(
     store: &Store,
     owner: Uuid,
+    served: &HashMap<Uuid, u32>,
     after_eligibility_read: impl std::future::Future<Output = ()>,
-) -> sqlx::Result<Option<(Uuid, Option<Claim>)>> {
+) -> sqlx::Result<Option<(Uuid, Option<Claim>, Uuid)>> {
     let mut tx =
         crate::db::begin_with_setup(&store.pool, "SET LOCAL statement_timeout='10s'").await?;
-    let row: Option<(Uuid, bool)> = sqlx::query_as("SELECT d.id,d.initialized FROM alert_deliveries d WHERE d.status='pending' AND d.created_at>clock_timestamp()-interval '24 hours'+interval '45 seconds' AND (NOT d.initialized OR EXISTS(SELECT 1 FROM alert_recipient_outbox q WHERE q.delivery_id=d.id AND q.attempt_count<5 AND ((q.state='waiting' AND q.next_attempt_at<=clock_timestamp()) OR (q.state='leased' AND q.lease_expires_at<=clock_timestamp())))) ORDER BY d.created_at,d.id LIMIT 1 FOR UPDATE OF d SKIP LOCKED")
-        .fetch_optional(&mut *tx).await?;
-    let Some((id, initialized)) = row else {
+    let (buckets, slots): (Vec<_>, Vec<_>) = served
+        .iter()
+        .map(|(bucket, n)| (*bucket, *n as i32))
+        .unzip();
+    // Loose/distinct index walk: one seek per pending bucket, never a full
+    // backlog scan merely to discover bucket ids. No row locks in step one.
+    let candidates: Vec<Uuid> = sqlx::query_scalar(&bucket_candidates_sql())
+        .bind(&buckets)
+        .bind(&slots)
+        .fetch_all(&mut *tx)
+        .await?;
+    let mut row = None;
+    for bucket in candidates {
+        let head: Option<(Uuid, bool)> = sqlx::query_as(&format!("SELECT d.id,d.initialized FROM alert_deliveries d WHERE d.bucket_id=$1 AND {DUE_DELIVERY} ORDER BY d.created_at,d.id LIMIT 1 FOR UPDATE OF d SKIP LOCKED"))
+            .bind(bucket).fetch_optional(&mut *tx).await?;
+        if let Some((id, initialized)) = head {
+            row = Some((id, initialized, bucket));
+            break;
+        }
+    }
+    let Some((id, initialized, bucket)) = row else {
         return Ok(None);
     };
     let (settings, installation) = relay(&mut tx).await?;
@@ -133,7 +171,7 @@ pub(super) async fn claim_with_hook(
             sqlx::query("UPDATE alert_deliveries SET status='not_configured',recipients=$2,retrying=false,waiting=0,next_attempt_at=NULL,completed_at=clock_timestamp() WHERE id=$1").bind(id).bind(count).execute(&mut *tx).await?;
         }
         tx.commit().await?;
-        return Ok(Some((id, None)));
+        return Ok(Some((id, None, bucket)));
     };
     let addresses = recipients(&mut tx, id, !initialized).await?;
     after_eligibility_read.await;
@@ -168,7 +206,7 @@ pub(super) async fn claim_with_hook(
     refresh(&mut tx, id).await?;
     let Some((fp, remaining)) = fp else {
         tx.commit().await?;
-        return Ok(Some((id, None)));
+        return Ok(Some((id, None, bucket)));
     };
     let pending: Pending = sqlx::query_as("SELECT d.transition,e.summary,e.severity,e.fired_at,e.resolved_at,e.rule_id,r.name rule_name,w.name workspace_name,w.kind workspace_kind,p.name connection_name,e.id event_id,e.builtin,e.kind,e.key_expires_at FROM alert_deliveries d JOIN alert_events e ON e.id=d.event_id LEFT JOIN alert_rules r ON r.id=e.rule_id LEFT JOIN workspaces w ON w.id=e.workspace_id LEFT JOIN provider_connections p ON p.id=e.provider_connection_id WHERE d.id=$1")
         .bind(id).fetch_one(&mut *tx).await?;
@@ -190,6 +228,7 @@ pub(super) async fn claim_with_hook(
             email: OutgoingEmail { to, subject, body },
             send_until: before_claim + Duration::from_secs_f64((remaining - 5.0).max(0.0)),
         }),
+        bucket,
     )))
 }
 
@@ -251,6 +290,7 @@ pub async fn deliver_pending(store: &Store, limit: i64) -> usize {
 pub(super) async fn deliver_pending_within(store: &Store, limit: i64, budget: Duration) -> usize {
     let started = tokio::time::Instant::now();
     let mut touched = HashSet::new();
+    let mut served = HashMap::new();
     let owner = Uuid::new_v4();
     let outcome = async {
         // Cleanup counts against the budget (`started` is taken before it) and
@@ -268,9 +308,10 @@ pub(super) async fn deliver_pending_within(store: &Store, limit: i64, budget: Du
             if started.elapsed() + SEND_DEADLINE > budget {
                 break;
             }
-            let Some((id, claim)) = claim(store, owner).await? else {
+            let Some((id, claim, bucket)) = claim(store, owner, &served).await? else {
                 break;
             };
+            *served.entry(bucket).or_insert(0) += 1;
             touched.insert(id);
             if let Some(claim) = claim {
                 let now = tokio::time::Instant::now();

@@ -203,7 +203,10 @@ async fn migration_lock(connection: &mut PgConnection) -> sqlx::Result<()> {
 /// interrupted build leaves an INVALID index of the same name that `IF NOT
 /// EXISTS` would skip. [`drop_invalid_concurrent_indexes`] removes such a
 /// leftover first.
-const CONCURRENT_INDEXES: &[&str] = &["api_keys_workspace_created"];
+const CONCURRENT_INDEXES: &[&str] = &[
+    "api_keys_workspace_created",
+    "alert_deliveries_pending_bucket",
+];
 
 /// Before the migrations run, drops any [`CONCURRENT_INDEXES`] entry that is
 /// invalid, with a standalone `DROP INDEX CONCURRENTLY` (never inside a

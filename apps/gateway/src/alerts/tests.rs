@@ -1456,7 +1456,7 @@ async fn evaluation_alone_never_runs_outbox_cleanup(pool: PgPool) {
     tx.commit().await.unwrap();
     // Hold a live lease on the sole recipient, as a concurrent delivery
     // worker would: the first claim initializes and leases it in one pass.
-    let (_, claim) = outbox::claim(&s.store, Uuid::new_v4())
+    let (_, claim, _) = outbox::claim(&s.store, Uuid::new_v4(), &Default::default())
         .await
         .unwrap()
         .unwrap();
@@ -1545,7 +1545,7 @@ async fn old_binary_finalizing_a_delivery_with_live_outbox_rows_is_refused(pool:
     outbox_incident(&s, "'one@example.test','two@example.test'").await;
     // One claim initializes both recipients and leases exactly one,
     // leaving the other 'waiting'.
-    let (id, claim) = outbox::claim(&s.store, Uuid::new_v4())
+    let (id, claim, _) = outbox::claim(&s.store, Uuid::new_v4(), &Default::default())
         .await
         .unwrap()
         .unwrap();
@@ -1678,13 +1678,13 @@ async fn outbox_live_lease_excludes_replicas_and_fences_stale_completion(pool: P
     let (port, mut rx) = mock::serve(Behaviour::default()).await;
     relay(&s, port).await;
     outbox_incident(&s, "").await;
-    let (_, old) = outbox::claim(&s.store, Uuid::new_v4())
+    let (_, old, _) = outbox::claim(&s.store, Uuid::new_v4(), &Default::default())
         .await
         .unwrap()
         .unwrap();
     let old = old.unwrap();
     assert!(
-        outbox::claim(&s.store, Uuid::new_v4())
+        outbox::claim(&s.store, Uuid::new_v4(), &Default::default())
             .await
             .unwrap()
             .is_none()
@@ -1700,7 +1700,7 @@ async fn outbox_live_lease_excludes_replicas_and_fences_stale_completion(pool: P
         .unwrap();
     assert!(!retrying, "the first live attempt is not a retry yet");
     sqlx::query("UPDATE alert_recipient_outbox SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE state='leased'").execute(&s.pool).await.unwrap();
-    let (_, new) = outbox::claim(&s.store, Uuid::new_v4())
+    let (_, new, _) = outbox::claim(&s.store, Uuid::new_v4(), &Default::default())
         .await
         .unwrap()
         .unwrap();
@@ -1834,7 +1834,7 @@ async fn outbox_snapshot_race_keeps_internal_identity(pool: PgPool) {
     let persist = std::sync::Arc::new(tokio::sync::Notify::new());
     let (seen, resume, store) = (read.clone(), persist.clone(), s.store.clone());
     let worker = tokio::spawn(async move {
-        outbox::claim_with_hook(&store, Uuid::new_v4(), async move {
+        outbox::claim_with_hook(&store, Uuid::new_v4(), &Default::default(), async move {
             seen.notify_one();
             resume.notified().await;
         })
@@ -1913,7 +1913,7 @@ async fn outbox_unsetting_smtp_preserves_a_live_claim_result(pool: PgPool) {
     let s = seed(pool).await;
     relay(&s, 25).await;
     outbox_incident(&s, "'finance@example.test'").await;
-    let (_, claim) = outbox::claim(&s.store, Uuid::new_v4())
+    let (_, claim, _) = outbox::claim(&s.store, Uuid::new_v4(), &Default::default())
         .await
         .unwrap()
         .unwrap();
@@ -1964,7 +1964,7 @@ async fn outbox_unset_smtp_and_expired_fifth_claim_never_loop(pool: PgPool) {
         deliver_pending(&s.store, 25).await;
         outbox_due(&s).await;
     }
-    let (_, fifth) = outbox::claim(&s.store, Uuid::new_v4())
+    let (_, fifth, _) = outbox::claim(&s.store, Uuid::new_v4(), &Default::default())
         .await
         .unwrap()
         .unwrap();
@@ -1989,7 +1989,7 @@ async fn outbox_24h_cleanup_preserves_success_and_exhausts_leases(pool: PgPool) 
     outbox_incident(&s, "'finance@example.test'").await;
     deliver_pending(&s.store, 25).await;
     outbox_due(&s).await;
-    let (_, claim) = outbox::claim(&s.store, Uuid::new_v4())
+    let (_, claim, _) = outbox::claim(&s.store, Uuid::new_v4(), &Default::default())
         .await
         .unwrap()
         .unwrap();
