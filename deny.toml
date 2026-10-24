@@ -30,6 +30,15 @@ ignore = [
     # signatures with the issuer's public JWKS keys, and client
     # authentication is a client secret or none (PKCE), never private_key_jwt.
     { id = "RUSTSEC-2023-0071", reason = "rsa is used for public-key ID-token verification only; no fixed rsa release" },
+    # crypto-bigint 0.5 (via elliptic-curve 0.13 / p256 0.13 / p384 0.13,
+    # pulled in by openidconnect 4.0.1, the latest release): some operations
+    # meant to be constant-time may branch on secret values. The gateway uses
+    # these curves only to verify ES256/ES384 ID-token signatures with the
+    # issuer's public JWKS keys (identity.rs signing-algorithm list); it never
+    # holds an EC private key or performs secret-scalar arithmetic. The fix is
+    # crypto-bigint 0.7.6, which needs the elliptic-curve 0.14 generation that
+    # openidconnect has not adopted; remove this when it does.
+    { id = "RUSTSEC-2026-0387", reason = "EC curves are used for public-key ID-token verification only; fix needs openidconnect on elliptic-curve 0.14" },
     # lru 0.16 (via aws-sdk-s3, pinned =1.122.0 with the Bedrock SDK
     # generation): LruCache::pop is not panic-safe when a key's Drop panics
     # under catch_unwind. The SDK's keys are plain strings/identities with

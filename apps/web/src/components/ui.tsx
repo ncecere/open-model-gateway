@@ -133,7 +133,7 @@ function ActionDialog({ action, onClose }: { action: Action; onClose: (success: 
   // Closing/unmounting permanently invalidates retained Copy bindings and feedback.
   const copyGeneration = useRef(0), displayedGeneration = copyGeneration.current;
   // StrictMode may replay mount liveness, but retirement never resets.
-  const mounted = useRef(true), retired = useRef(false), inFlight = useRef(false), completed = useRef(false), controller = useRef<AbortController | undefined>(undefined);
+  const mounted = useRef(true), retired = useRef(false), inFlight = useRef(false), completed = useRef(false), sealed = useRef(false), controller = useRef<AbortController | undefined>(undefined);
   useLayoutEffect(() => {
     mounted.current = true;
     // Home's checking/removal render is asynchronous; retire before dispatch returns.
@@ -166,7 +166,7 @@ function ActionDialog({ action, onClose }: { action: Action; onClose: (success: 
   const discard = () => { retired.current = true; copyGeneration.current++; controller.current?.abort(); setToken(undefined); setValues({}); onClose(!!token); };
   const close = () => { if (busy) return; if (!token && dirty) setDiscarding(true); else discard(); };
   async function submit(event: React.FormEvent) {
-    event.preventDefault(); if (!mounted.current || retired.current || inFlight.current) return;
+    event.preventDefault(); if (!mounted.current || retired.current || inFlight.current || sealed.current) return;
     const validation = validateFields(fields, values); setErrors(validation);
     if (Object.keys(validation).length) { document.getElementById(`${id}-${Object.keys(validation)[0]}`)?.focus(); return; }
     const request = new AbortController(); controller.current = request; inFlight.current = true; setBusy(true); setError(undefined);
@@ -176,7 +176,7 @@ function ActionDialog({ action, onClose }: { action: Action; onClose: (success: 
       if (!mounted.current || request.signal.aborted) return;
       void client.invalidateQueries({ queryKey: ["api"] }); void client.invalidateQueries({ queryKey: ["session"] });
       completed.current = true;
-      if (action.secretLabel) { const secret = result as OneTimeToken; if (typeof secret?.token !== "string" || !secret.token) throw new Error("No token was returned. Check the list before trying again."); setValues({}); setToken(secret.token); }
+      if (action.secretLabel) { const secret = result as OneTimeToken; if (typeof secret?.token !== "string" || !secret.token) throw new Error("No token was returned. Check the list before trying again."); sealed.current = true; /* A disclosed secret seals this dialog: a retained submit must not rotate again. */ setValues({}); setToken(secret.token); }
       else { action.after?.(result); onClose(true); }
     } catch (caught) { if (mounted.current && !request.signal.aborted) { setError(caught); if (caught instanceof ApiError && caught.status === 403) void client.invalidateQueries({ queryKey: ["session"] }); } }
     finally { inFlight.current = false; if (mounted.current) setBusy(false); }
