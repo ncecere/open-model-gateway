@@ -1526,6 +1526,12 @@ fn the_window_index_is_built_concurrently_outside_the_alter_transaction() {
         ),
         "{statement}"
     );
-    // No later migration repairs it (a transactional DROP INDEX would block key reads).
-    assert_eq!(migrator.iter().map(|m| m.version).max(), Some(54));
+    // No later migration touches it (a transactional DROP INDEX would block key reads);
+    // recovery lives in the migrator.
+    assert!(
+        !migrator
+            .iter()
+            .any(|m| m.version > 54 && m.sql.contains("api_keys_workspace_created")),
+        "a later migration mentions the window index"
+    );
 }

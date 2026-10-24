@@ -880,26 +880,45 @@ mod tests {
         .unwrap()
     }
 
-    /// A no-transaction migration that fails is not recorded, and an interrupted
-    /// CREATE INDEX CONCURRENTLY leaves an INVALID index of its name, which the
-    /// rerun's IF NOT EXISTS would skip. `migrate` drops it (concurrently) first.
+    /// A database migrated up to 0053: the state `migrate` finds when the build of
+    /// 0054's index was interrupted (a failed no-transaction migration is not
+    /// recorded). Independent of any later migration.
+    async fn migrated_to_0053(pool: &PgPool) {
+        sqlx::migrate::Migrator {
+            migrations: std::borrow::Cow::Owned(
+                MIGRATOR
+                    .iter()
+                    .filter(|m| m.version <= 53)
+                    .cloned()
+                    .collect(),
+            ),
+            ignore_missing: false,
+            locking: true,
+            no_tx: false,
+        }
+        .run(pool)
+        .await
+        .unwrap();
+        assert_eq!(index_valid(pool).await, None);
+    }
+    /// What an interrupted CREATE INDEX CONCURRENTLY leaves: an INVALID index of the name.
+    async fn leave_an_invalid_index(pool: &PgPool) {
+        sqlx::raw_sql("CREATE INDEX api_keys_workspace_created ON api_keys(workspace_id, created_at); UPDATE pg_index SET indisvalid=false WHERE indexrelid='public.api_keys_workspace_created'::regclass")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(index_valid(pool).await, Some(false));
+    }
+
+    /// An interrupted CREATE INDEX CONCURRENTLY leaves an INVALID index of its
+    /// name, which the rerun's IF NOT EXISTS would skip. `migrate` drops it
+    /// (concurrently) first, then 0054 builds the index.
     #[sqlx::test(migrations = false)]
     async fn migrate_recovers_from_an_interrupted_concurrent_index_build(pool: PgPool) {
-        let store = Store::new(pool.clone());
-        store.migrate_enterprise().await.unwrap();
-        assert_eq!(index_valid(&pool).await, Some(true));
-        let last = MIGRATOR.iter().map(|m| m.version).max().unwrap();
         assert!(MIGRATOR.iter().any(|m| m.version == 54 && m.no_tx));
-        // The interruption: an invalid index, and its migration not recorded.
-        sqlx::raw_sql("UPDATE pg_index SET indisvalid=false WHERE indexrelid='public.api_keys_workspace_created'::regclass")
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("DELETE FROM _sqlx_migrations WHERE version=54")
-            .execute(&pool)
-            .await
-            .unwrap();
-        assert_eq!((index_valid(&pool).await, last), (Some(false), 54));
+        migrated_to_0053(&pool).await;
+        leave_an_invalid_index(&pool).await;
+        let store = Store::new(pool.clone());
         store.migrate_enterprise().await.unwrap();
         assert_eq!(index_valid(&pool).await, Some(true));
         assert!(applied(&pool, 54).await && store.is_ready().await);
@@ -917,25 +936,17 @@ mod tests {
         assert_eq!(oid().await, before, "a valid index is never rebuilt");
     }
 
-    /// Interrupted after the drop and before the rebuild: still recoverable.
+    /// Interrupted after the drop and before the rebuild (the index is gone and
+    /// 0054 is not recorded, the state of a database at 0053): still recoverable.
     #[sqlx::test(migrations = false)]
     async fn migrate_builds_the_index_when_interrupted_between_the_drop_and_the_rebuild(
         pool: PgPool,
     ) {
+        migrated_to_0053(&pool).await;
         let store = Store::new(pool.clone());
         store.migrate_enterprise().await.unwrap();
-        sqlx::raw_sql("DROP INDEX public.api_keys_workspace_created")
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("DELETE FROM _sqlx_migrations WHERE version=54")
-            .execute(&pool)
-            .await
-            .unwrap();
-        assert_eq!(index_valid(&pool).await, None);
-        store.migrate_enterprise().await.unwrap();
         assert_eq!(index_valid(&pool).await, Some(true));
-        assert!(store.is_ready().await);
+        assert!(applied(&pool, 54).await && store.is_ready().await);
     }
 
     /// Recovery waits for older transactions (a concurrent drop and build do), but
@@ -943,12 +954,9 @@ mod tests {
     /// and key writes of api_keys proceed.
     #[sqlx::test(migrations = false)]
     async fn recovery_never_blocks_reads_or_writes_of_api_keys(pool: PgPool) {
+        migrated_to_0053(&pool).await;
+        leave_an_invalid_index(&pool).await;
         let store = Store::new(pool.clone());
-        store.migrate_enterprise().await.unwrap();
-        sqlx::raw_sql("UPDATE pg_index SET indisvalid=false WHERE indexrelid='public.api_keys_workspace_created'::regclass; DELETE FROM _sqlx_migrations WHERE version=54")
-            .execute(&pool)
-            .await
-            .unwrap();
         // An older transaction: the recovery's concurrent drop must wait for it.
         let mut old = pool.begin().await.unwrap();
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM api_keys")
@@ -956,13 +964,24 @@ mod tests {
             .await
             .unwrap();
         let during = async {
-            tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-            // Still recovering: the invalid index has not been replaced yet.
-            assert_eq!(
-                index_valid(&pool).await,
-                Some(false),
-                "recovery must wait for the older transaction"
+            // Wait until the drop is actually waiting for `old`.
+            let mut waiting = false;
+            for _ in 0..200 {
+                waiting = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM pg_stat_activity WHERE query LIKE 'DROP INDEX CONCURRENTLY%' AND wait_event_type='Lock'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+                    > 0;
+                if waiting {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            assert!(
+                waiting,
+                "the recovery's drop never waited for the older transaction"
             );
+            assert_eq!(index_valid(&pool).await, Some(false), "still recovering");
             let bound = std::time::Duration::from_secs(3);
             tokio::time::timeout(
                 bound,
