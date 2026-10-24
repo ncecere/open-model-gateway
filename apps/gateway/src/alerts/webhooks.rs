@@ -237,13 +237,16 @@ async fn send_with(
     let previous = active_previous(d, Utc::now())
         .map(|r| resolve(r).ok_or(Failure::Credential))
         .transpose()?;
-    let egress = crate::egress::policy().permit_loopback(policy.development);
+    let mut egress = crate::egress::policy().permit_loopback(policy.development);
+    if url.scheme() == "http" {
+        egress = egress.only_loopback();
+    }
     crate::egress::check_url(&egress, crate::egress::Purpose::AlertWebhook, &url)
         .map_err(|_| Failure::HostNotAllowed)?;
-    let client = crate::otlp::export_http_client(
+    let client = crate::otlp::export_http_client_with_policy(
         &url,
         crate::egress::Purpose::AlertWebhook,
-        policy.development,
+        egress,
         Duration::from_secs(5),
         REQUEST,
     )

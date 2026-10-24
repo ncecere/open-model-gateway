@@ -221,6 +221,7 @@ fn masked(ip: IpAddr, prefix: u8) -> IpAddr {
 pub struct Policy {
     development: bool,
     private_allow: Networks,
+    loopback_only: bool,
 }
 
 impl Policy {
@@ -228,7 +229,15 @@ impl Policy {
         Self {
             development,
             private_allow,
+            loopback_only: false,
         }
+    }
+
+    /// Tighten development HTTP to actual loopback connections, even when
+    /// a hostname approved as `localhost` resolves to a different address.
+    pub(crate) fn only_loopback(mut self) -> Self {
+        self.loopback_only = true;
+        self
     }
 
     /// `GATEWAY_ENV=development` and `GATEWAY_EGRESS_PRIVATE_ALLOW`.
@@ -248,10 +257,14 @@ impl Policy {
         Self {
             development: self.development || loopback,
             private_allow: self.private_allow.clone(),
+            loopback_only: self.loopback_only,
         }
     }
 
     pub fn allows(&self, ip: IpAddr) -> bool {
+        if self.loopback_only && !canonical(ip).is_loopback() {
+            return false;
+        }
         match classify(ip) {
             Class::Refused => false,
             Class::Loopback => self.development,
@@ -262,6 +275,9 @@ impl Policy {
 
     /// Why `ip` is refused, in words an operator can act on.
     fn refusal(&self, ip: IpAddr) -> &'static str {
+        if self.loopback_only && !canonical(ip).is_loopback() {
+            return "not a loopback address (required for development HTTP)";
+        }
         match classify(ip) {
             Class::Refused => "a reserved, link-local or metadata address, never allowed",
             Class::Loopback => "loopback, allowed only with GATEWAY_ENV=development",
@@ -482,6 +498,16 @@ mod tests {
         s.parse().unwrap()
     }
 
+    #[test]
+    fn development_http_is_loopback_only_after_resolution() {
+        let p = Policy::new(true, Networks::parse("test", "10.0.0.0/8").unwrap()).only_loopback();
+        for addr in ["127.0.0.1", "::1", "::ffff:127.0.0.1"] {
+            assert!(p.allows(ip(addr)));
+        }
+        for addr in ["8.8.8.8", "10.0.0.1", "169.254.169.254"] {
+            assert!(!p.allows(ip(addr)));
+        }
+    }
     #[test]
     fn addresses_are_classified_strictly() {
         let strict = Policy::default();
