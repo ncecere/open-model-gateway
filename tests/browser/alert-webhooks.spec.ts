@@ -32,9 +32,10 @@ test("Admin create → enable → signed test → deliveries; Auditor read-only;
     });
   });
   await new Promise<void>((resolve, reject) => { receiver.once("error", reject); receiver.listen(PORTS.webhook, "127.0.0.1", resolve); });
-  const operator = await signIn(browser, "operator"), auditor = await signIn(browser, "auditor");
+  let operator: Awaited<ReturnType<typeof signIn>> | undefined, auditor: Awaited<ReturnType<typeof signIn>> | undefined;
   let id: string | undefined;
   try {
+    operator = await signIn(browser, "operator"); auditor = await signIn(browser, "auditor");
     const page = operator.page;
     await page.goto(location);
     await expect(page.getByRole("tab", { name: "Webhooks", selected: true })).toBeVisible();
@@ -98,7 +99,7 @@ test("Admin create → enable → signed test → deliveries; Auditor read-only;
     await expect(row).toHaveCount(0);
     expect((await api(page, "GET", `/platform/alerts/webhooks/${id}`)).status()).toBe(404); id = undefined;
   } finally {
-    try { if (id) expect((await api(operator.page, "DELETE", `/platform/alerts/webhooks/${id}`)).ok()).toBe(true); }
-    finally { await operator.context.close(); await auditor.context.close(); await new Promise<void>(resolve => receiver.close(() => resolve())); }
+    try { if (id && operator) expect((await api(operator.page, "DELETE", `/platform/alerts/webhooks/${id}`)).ok()).toBe(true); }
+    finally { await operator?.context.close(); await auditor?.context.close(); await new Promise<void>(resolve => receiver.close(() => resolve())); }
   }
 });

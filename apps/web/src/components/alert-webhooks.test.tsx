@@ -25,7 +25,7 @@ function serve(who: Session = admin) {
     if (path === "/api/v1/me") return Response.json(who);
     if (path.startsWith(webhookPath)) {
       if (failure?.method === method) return Response.json({ error: { code: String(failure.status), message: failure.message, reason: failure.reason } }, { status: failure.status });
-      if (path.endsWith("/deliveries")) return Response.json({ destination: rows[0], counts: { waiting: 1, leased: 0, sent: 0, failed: 0, exhausted: 0, ineligible: 0 }, data: [{ id: "delivery1", state: "waiting", test: true, attempt_count: 0, created_at: saved.created_at, completed_at: null, next_attempt_at: saved.created_at, last_error: null, payload: "PRIVATE_PAYLOAD_CANARY", signature: "PRIVATE_SIGNATURE_CANARY" }] });
+      if (path.endsWith("/deliveries")) return Response.json({ destination: rows[0], counts: { waiting: 1, leased: 0, sent: 0, failed: 0, exhausted: 0, ineligible: 0 }, data: [{ id: "delivery1", state: "waiting", test: true, attempt_count: 0, created_at: saved.created_at, completed_at: null, next_attempt_at: saved.created_at, last_error: null, payload: "PRIVATE_PAYLOAD_CANARY", signature: "PRIVATE_SIGNATURE_CANARY", secret: "PRIVATE_SECRET_CANARY" }] });
       if (path.endsWith("/test")) return Response.json({ id: "delivery1", state: "waiting" });
       if (method === "POST") { rows.push({ ...saved, id: "hook2", ...JSON.parse(String(init?.body)) }); return Response.json(rows[1]); }
       if (method === "PATCH") { rows[0] = { ...rows[0]!, ...JSON.parse(String(init?.body)) }; return Response.json(rows[0]); }
@@ -62,6 +62,7 @@ describe("Admin Alerts Webhooks", () => {
     expect(document.body.textContent).toContain("Waiting: 1");
     expect(document.body.textContent).not.toContain("PRIVATE_PAYLOAD_CANARY");
     expect(document.body.textContent).not.toContain("PRIVATE_SIGNATURE_CANARY");
+    expect(document.body.textContent).not.toContain("PRIVATE_SECRET_CANARY");
   });
   it("gives Auditors redacted status with no mutating controls even if extra fields arrive", async () => {
     await mount(auditor);
@@ -116,6 +117,16 @@ describe("Admin Alerts Webhooks", () => {
     await confirm("Save webhook");
     await waitFor(() => expect(writes(fetch, "PATCH")).toEqual([[`${webhookPath}/hook1`, { previous_secret_ref: null, previous_secret_until: null }]]));
   });
+  it("saves a live signing rotation with a bounded previous-key overlap", async () => {
+    rows[0]!.enabled = true; const { fetch } = await mount(); const user = await action("Edit…");
+    const dialog = within(screen.getByRole("dialog")), until = new Date(Date.now() + 23 * 3600000).toISOString();
+    await user.clear(dialog.getByRole("textbox", { name: "Signing reference", exact: true }));
+    await user.type(dialog.getByRole("textbox", { name: "Signing reference", exact: true }), "env:NEW_KEY");
+    await user.type(dialog.getByRole("textbox", { name: "Previous signing reference", exact: true }), saved.current_secret_ref!);
+    await user.type(dialog.getByRole("textbox", { name: /Overlap ends/ }), until);
+    await confirm("Save webhook");
+    await waitFor(() => expect(writes(fetch, "PATCH")).toEqual([[`${webhookPath}/hook1`, { current_secret_ref: "env:NEW_KEY", previous_secret_ref: saved.current_secret_ref, previous_secret_until: until }]]));
+  });
   it("maps 429, re-enables Send test, and never automatically retries", async () => {
     rows[0]!.enabled = true; const { fetch } = await mount();
     failure = { method: "POST", status: 429, message: "Too many webhook tests; try again later" };
@@ -125,7 +136,7 @@ describe("Admin Alerts Webhooks", () => {
     await action("Send test");
     await waitFor(() => expect(writes(fetch, "POST")).toHaveLength(2));
   });
-  it.each([
+  it.each<[number, string, RegExp]>([
     [400, "Invalid request", /Check the name, operator-approved URL and signing references/],
     [409, "Maximum ten webhook destinations", /Ten webhooks already exist/],
     [409, "An enabled saved destination is required", /Enable the saved webhook/],

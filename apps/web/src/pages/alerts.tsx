@@ -7,7 +7,8 @@
  */
 import { useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { BellRing, CheckCheck, History, Plus } from "lucide-react";
+import { BellRing, CheckCheck, History, Plus, Webhook } from "lucide-react";
+import { AlertWebhooks } from "./alert-webhooks";
 import { api, platformPath, type Provider, type Session, type Workspace } from "../lib/api";
 import { conditionText, draftOf, emailStatusText, eventsPath, kindHints, kindLabels, kindsFor, layerLabels, layersFor, lockWaitChoices, newDraft, notificationsPath, recipientsText, resolutionLabels, ruleBody, sourceText, ruleErrors, rulePath, rulesPath, spendPeriodLabels, unknownCostNote, whereText, type AlertEvent, type AlertKind, type AlertRule, type AlertScope, type BudgetLayer, type Notification, type RuleDraft, type RuleList, type SpendPeriod } from "../lib/alerts";
 import { permissions, type DashboardSearch } from "../lib/permissions";
@@ -84,9 +85,10 @@ export function AlertHistory({ scope }: { scope: AlertScope }) {
 /** Admin › Settings › Alerts. */
 export function AdminAlertsPage({ session, tab, onTabChange }: { session: Session; tab?: string; onTabChange: (tab: string) => void }) {
   const scope: AlertScope = { kind: "platform" }, writable = session.capabilities.platform_write;
-  return <ResourcePage title="Alerts" description="Budget, spend, error and connection alerts for the installation." actions={writable && <NewRuleButton scope={scope} />} tab={tab} onTabChange={onTabChange} tabs={[
+  return <ResourcePage title="Alerts" description="Budget, spend, error and connection alerts for the installation." actions={writable && (!tab || tab === "rules") && <NewRuleButton scope={scope} />} tab={tab} onTabChange={onTabChange} tabs={[
     { value: "rules", label: "Rules", icon: <BellRing aria-hidden />, content: <AlertRules scope={scope} writable={writable} /> },
     { value: "history", label: "History", icon: <History aria-hidden />, content: <AlertHistory scope={scope} /> },
+    { value: "webhooks", label: "Webhooks", icon: <Webhook aria-hidden />, content: <AlertWebhooks session={session} /> },
   ]} />;
 }
 
