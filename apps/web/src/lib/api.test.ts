@@ -78,6 +78,33 @@ describe("management API", () => {
     await expect(api(`${API}/workspaces/id/models`)).rejects.toBeInstanceOf(ApiError);
     expect(dispatchEvent.mock.calls[0][0].type).toBe("omg:unauthorized");
   });
+  it("tags an automatic resource GET refusal separately from a bare manual authority event", async () => {
+    const dispatchEvent = vi.fn(); vi.stubGlobal("window", { dispatchEvent });
+    const fetch = vi.fn().mockImplementation(() => Promise.resolve(Response.json({ error: { code: "403", message: "Denied" } }, { status: 403 })));
+    vi.stubGlobal("fetch", fetch);
+    await expect(api(`${API}/platform/models`)).rejects.toMatchObject({ status: 403 });
+    expect(fetch).toHaveBeenCalledTimes(1); // transport itself must not retry
+    expect(dispatchEvent).toHaveBeenCalledTimes(1);
+    const event = dispatchEvent.mock.calls[0][0];
+    expect(event.type).toBe("omg:access-refresh");
+    expect(event).toBeInstanceOf(CustomEvent);
+    // Do not prescribe the detail's schema, but Home must be able to distinguish
+    // this automatic request from new Event("omg:access-refresh") authority changes.
+    expect(event.detail).not.toBeNull();
+    expect(event.detail).toBeTypeOf("object");
+  });
+  it.each([
+    ["GET", "/me"], ["POST", "/platform/models"], ["PUT", "/platform/models/model"],
+    ["PATCH", "/platform/models/model"], ["DELETE", "/platform/models/model"],
+  ] as const)("does not automatically refresh or retry a 403 from %s %s", async (method, path) => {
+    cookie();
+    const dispatchEvent = vi.fn(); vi.stubGlobal("window", { dispatchEvent });
+    const fetch = vi.fn().mockImplementation(() => Promise.resolve(Response.json({ error: { code: "403", message: "Denied" } }, { status: 403 })));
+    vi.stubGlobal("fetch", fetch);
+    await expect(api(`${API}${path}`, { method })).rejects.toMatchObject({ status: 403 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(dispatchEvent).not.toHaveBeenCalled();
+  });
   it("sanitizes network errors while preserving cancellation", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("private details")));
     await expect(api(`${API}/me`)).rejects.toMatchObject({ code: "network_error" });

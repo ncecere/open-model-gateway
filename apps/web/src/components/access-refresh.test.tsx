@@ -1,0 +1,199 @@
+// @vitest-environment jsdom
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { dashboardRouteTree } from "../router";
+import { abortRequests, type Session } from "../lib/api";
+import { admin, auditor, testClient } from "../lib/test-fixtures";
+
+const clients: ReturnType<typeof testClient>[] = [];
+const unexpected: string[] = [];
+const mePath = "/api/v1/me", modelsPath = "/api/v1/platform/models";
+const denied = () => Response.json({ error: { code: "403", message: "This resource is not permitted." } }, { status: 403 });
+const empty = () => Response.json({ data: [], has_more: false });
+
+beforeEach(() => {
+  document.cookie = "omg_csrf=test-csrf; Path=/";
+  localStorage.clear(); sessionStorage.clear();
+  Object.defineProperty(Element.prototype, "getAnimations", { configurable: true, value: () => [] });
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  Object.defineProperty(window, "matchMedia", { configurable: true, value: () => ({ matches: false, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent() { return false; } }) });
+});
+afterEach(() => {
+  cleanup(); abortRequests();
+  for (const client of clients.splice(0)) client.clear();
+  vi.unstubAllGlobals(); vi.restoreAllMocks();
+  expect(unexpected.splice(0)).toEqual([]);
+});
+
+// Flush Query notifications and React remount tasks after a refused response.
+// The transport budget below bounds the OLD loop independently of these turns.
+async function flushNotifications() {
+  for (let turn = 0; turn < 4; turn++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+}
+function pendingResponse(options?: RequestInit) {
+  let answer!: (response: Response) => void;
+  const promise = new Promise<Response>((resolve, reject) => {
+    const signal = options?.signal;
+    const abort = () => reject(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+    answer = response => { signal?.removeEventListener("abort", abort); resolve(response); };
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort, { once: true });
+  });
+  return { promise, answer };
+}
+async function setup({ policy = "deny", refuseOnce = false, freezeRefresh = false } = {}) {
+  const client = testClient();
+  // Keep unobserved private rows alive, so their disappearance proves retirement,
+  // not the fixture's default zero-time garbage collection.
+  client.setDefaultOptions({ queries: { ...client.getDefaultOptions().queries, gcTime: Infinity } });
+  clients.push(client);
+  let current: Session = admin, forbidden = true, unauthorized = false;
+  const held: ReturnType<typeof pendingResponse>[] = [];
+  const resourceCalls: string[] = [], sessionCalls: RequestInit[] = [];
+  const fetch = vi.fn((input: RequestInfo | URL, options?: RequestInit): Promise<Response> => {
+    const path = String(input), url = new URL(path, window.location.origin);
+    if (options?.method === "GET") {
+      if (path === mePath) {
+        sessionCalls.push(options);
+        // Initial probe succeeds. Hold revalidation when requested; also stop a
+        // regressed implementation after four refreshes without returning a fake
+        // 200/401 or suppressing its access-refresh events/counts.
+        if ((sessionCalls.length > 1 && freezeRefresh) || sessionCalls.length > 5) {
+          const response = pendingResponse(options); held.push(response); return response.promise;
+        }
+        return Promise.resolve(Response.json(current));
+      }
+      if (url.pathname === modelsPath) {
+        resourceCalls.push(path);
+        if (unauthorized) return Promise.resolve(Response.json({ error: { code: "401", message: "Sign in" } }, { status: 401 }));
+        if (!forbidden) return Promise.resolve(empty());
+        if (refuseOnce) forbidden = false;
+        // Four real 403s are enough to expose the loop. Further fetches remain
+        // abortable until cleanup: never weaken the expected ONE refresh count.
+        if (resourceCalls.length > 4) return pendingResponse(options).promise;
+        return Promise.resolve(denied());
+      }
+      if (url.pathname === "/api/v1/platform/providers") return Promise.resolve(empty());
+      if (path === "/api/v1/platform/server-policy") return Promise.resolve(Response.json({ openrouter: { data_collection: "deny", free_models_available: false } }));
+      if (path === "/api/v1/me/notifications/summary") return Promise.resolve(Response.json({ unread: 0 }));
+      if (path === "/api/v1/auth/config") return Promise.resolve(Response.json({ enabled: true }));
+    }
+    unexpected.push(`${options?.method} ${path}`);
+    throw new Error(`Unexpected synthetic request: ${options?.method} ${path}. No real network permitted.`);
+  });
+  vi.stubGlobal("fetch", fetch);
+  const router = createRouter({ routeTree: dashboardRouteTree, history: createMemoryHistory({ initialEntries: [`/admin/models?policy=${policy}`] }) });
+  await router.load();
+  render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>);
+  return {
+    client, router, resourceCalls, sessionCalls,
+    authority: (next: Session) => { current = next; },
+    expire: () => { unauthorized = true; },
+    resume: async () => {
+      freezeRefresh = false;
+      await act(async () => { for (const response of held.splice(0)) response.answer(Response.json(current)); });
+    },
+  };
+}
+type View = Awaited<ReturnType<typeof setup>>;
+async function stableDenied(view: View, probes: number) {
+  await waitFor(() => {
+    expect(view.sessionCalls).toHaveLength(probes);
+    expect(screen.queryByText("Checking current access…")).toBeNull();
+    expect(screen.queryAllByText(/^(Access denied|Access not available|You don't have access)$/).length).toBeGreaterThan(0);
+    expect(view.client.isFetching()).toBe(0);
+  });
+  const requests = view.resourceCalls.length;
+  await flushNotifications();
+  expect(view.sessionCalls).toHaveLength(probes);
+  expect(view.resourceCalls).toHaveLength(requests);
+  expect(screen.queryByText("Checking current access…")).toBeNull();
+  expect(screen.queryAllByText(/^(Access denied|Access not available|You don't have access)$/).length).toBeGreaterThan(0);
+}
+async function recoveredOnce(view: View) {
+  await waitFor(() => {
+    expect(view.sessionCalls).toHaveLength(2); // initial probe + ONE automatic refresh
+    expect(view.client.isFetching()).toBe(0);
+    expect(screen.getByRole("link", { name: "Add model" })).toBeTruthy();
+  });
+  await flushNotifications();
+  expect(view.sessionCalls).toHaveLength(2);
+}
+function seedPrivate(view: View) {
+  view.client.setQueryData(["api", JSON.stringify(admin), "/api/v1/workspaces/team/keys"], { data: [{ name: "synthetic-private-key-metadata" }] });
+  expect(JSON.stringify(view.client.getQueryData(["api", JSON.stringify(admin), "/api/v1/workspaces/team/keys"]))).toContain("synthetic-private-key-metadata");
+}
+function expectPrivateGone(view: View) {
+  expect(JSON.stringify(view.client.getQueryCache().getAll().map(query => query.state.data))).not.toContain("synthetic-private-key-metadata");
+}
+
+describe("bounded automatic access refresh on the actual dashboard router", () => {
+  it("refreshes unchanged /me exactly once, then leaves a stable resource permission notice", async () => {
+    const view = await setup();
+    await stableDenied(view, 2); // includes the initial /me probe, not two refreshes
+    expect(view.client.getQueryData(["session"])).toEqual(admin);
+    expect(view.router.state.location.pathname).toBe("/admin/models");
+    expect(screen.queryByRole("link", { name: "Sign in with single sign-on" })).toBeNull();
+  });
+
+  it("singleflights concurrent resource 403s while /me is pending, then settles denied", async () => {
+    const view = await setup({ policy: "deny,allow", freezeRefresh: true });
+    await waitFor(() => {
+      expect(view.resourceCalls.some(path => new URL(path, window.location.origin).searchParams.get("data_policy") === "deny")).toBe(true);
+      expect(view.resourceCalls.some(path => new URL(path, window.location.origin).searchParams.get("data_policy") === "allow")).toBe(true);
+      expect(view.sessionCalls.length).toBeGreaterThanOrEqual(2);
+    });
+    await flushNotifications();
+    expect(view.sessionCalls).toHaveLength(2);
+    expect(view.sessionCalls[1].signal?.aborted).toBe(false);
+    expect(screen.getByText("Checking current access…")).toBeTruthy();
+    await view.resume();
+    await stableDenied(view, 2);
+  });
+
+  it("allows one fresh automatic refresh on a subsequent same-path router navigation", async () => {
+    const view = await setup();
+    await stableDenied(view, 2);
+    // ParsedLocation.state is ParsedHistoryState: the published history 1.162.4
+    // type exposes __TSR_key (not an invented location.key). Use real navigation.
+    const key = view.router.state.location.state.__TSR_key;
+    expect(key).toBeTypeOf("string");
+    await act(async () => { await view.router.navigate({ to: "/admin/models", search: { policy: "allow" } }); });
+    expect(view.router.state.location.pathname).toBe("/admin/models");
+    expect(view.router.state.location.search.policy).toBe("allow");
+    expect(view.router.state.location.state.__TSR_key).not.toBe(key);
+    await stableDenied(view, 3); // initial probe + one refresh for EACH navigation
+    expect(view.resourceCalls.some(path => new URL(path, window.location.origin).searchParams.get("data_policy") === "allow")).toBe(true);
+  });
+
+  it("still honors a bare manual authority event after automatic refresh, clearing private data", async () => {
+    const view = await setup({ refuseOnce: true });
+    await recoveredOnce(view);
+    seedPrivate(view);
+    view.authority(auditor);
+    await act(async () => { window.dispatchEvent(new Event("omg:access-refresh")); });
+    await screen.findByText("Read-only");
+    await flushNotifications();
+    expect(view.sessionCalls).toHaveLength(3);
+    expect(view.client.getQueryData(["session"])).toEqual(auditor);
+    expect(screen.queryByRole("link", { name: "Add model" })).toBeNull();
+    expectPrivateGone(view);
+  });
+
+  it("still terminates the session on a real protected 401 after automatic refresh", async () => {
+    const view = await setup({ refuseOnce: true });
+    await recoveredOnce(view);
+    seedPrivate(view); view.expire();
+    const resources = view.resourceCalls.length;
+    await act(async () => { await view.client.invalidateQueries({ predicate: query => query.queryKey[0] === "api" && String(query.queryKey[2]).startsWith(modelsPath) }); });
+    await screen.findByRole("link", { name: "Sign in with single sign-on" });
+    await flushNotifications();
+    expect(view.sessionCalls).toHaveLength(2);
+    expect(view.resourceCalls).toHaveLength(resources + 1);
+    expect(view.client.getQueryData(["session"])).toBeUndefined();
+    expectPrivateGone(view);
+    expect(screen.queryByRole("link", { name: "Add model" })).toBeNull();
+  });
+});
