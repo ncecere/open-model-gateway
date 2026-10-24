@@ -20,4 +20,15 @@ describe("key issuance rows (#253)", () => {
     expect(html).not.toContain("10,000 (maximum)");
     expect(html).toContain("Storage");
   });
+  it("reads an empty override field as inheriting the type default, not as a ceiling", () => {
+    const parent = { ...base, key_issuances_per_holder: 50, key_issuances_per_workspace: 500 };
+    const readOnly = table({ ...base, key_issuances_per_holder: null, key_issuances_per_workspace: 20 }, { editing: false, inherited: { label: "Team default", limits: parent }, issuanceBlank: "inherits" });
+    expect(readOnly).toContain("Inherits type default");
+    expect(readOnly).not.toContain("10,000 (maximum)");
+    const editing = table({ ...base, key_issuances_per_holder: null, key_issuances_per_workspace: null }, { inherited: { label: "Team default", limits: parent }, issuanceBlank: "inherits" });
+    expect(editing).toContain("Inherits: 50");
+    expect(editing).toContain("Inherits: 500");
+    // Without a parent, a blank field still reads as the ceiling.
+    expect(table({ ...base, key_issuances_per_holder: null, key_issuances_per_workspace: null }, { editing: false, emptyText: "No limit" })).toContain("10,000 (maximum)");
+  });
 });

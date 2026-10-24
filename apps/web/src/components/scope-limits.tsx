@@ -25,7 +25,7 @@ import { Plus, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api, platformWorkspacePath, type WorkspaceKind } from "../lib/api";
 import { dollarsToMicroUsd, effectiveBudgetHeadroom, formatMicroUsd, hasBudgetFacts, windowHeadroom, type BudgetHeadroom, type BudgetPeriod, type BudgetWindow, type PolicyResponse } from "../lib/governance";
-import { budgetFor, composeLimits, draftErrors, draftLimits, draftLimitsValid, draftOf, hasErrors, issuanceRows, MAX_KEY_ISSUANCES, limitsBody, limitsOf, limitsSaveError, limitsSummary, lockedBudget, mergeErrors, newBudgetKey, nextPeriod, noLimits, periodName, rateRows, rateText, rejectionErrors, resetText, sameDraft, stackPeriods, storageText, type DraftErrors, type InvalidRows, type Limits, type LimitsDraft, type Parent, type RateKey } from "../lib/limits";
+import { budgetFor, composeLimits, draftErrors, draftLimits, draftLimitsValid, draftOf, hasErrors, inheritIssuance, issuanceRows, MAX_KEY_ISSUANCES, limitsBody, limitsOf, limitsSaveError, limitsSummary, lockedBudget, mergeErrors, newBudgetKey, nextPeriod, noLimits, periodName, rateRows, rateText, rejectionErrors, resetText, sameDraft, stackPeriods, storageText, type DraftErrors, type InvalidRows, type Limits, type LimitsDraft, type Parent, type RateKey } from "../lib/limits";
 import { StorageBar } from "./templates/storage-bar";
 import { resetsAt } from "../lib/usage";
 import { kindLabels } from "../lib/people";
@@ -71,10 +71,15 @@ export type LimitsTableProps = {
   placeholder?: (key: RateKey) => string;
   /** Show the "Storage" quota row (workspace layers: type default, override, workspace). */
   storage?: boolean;
+  /**
+   * What a blank key issuance field means here: `ceiling` (the default: the 10,000 maximum) or, in a platform override,
+   * `inherits` (the type default; every other limit's blank override field means no limit).
+   */
+  issuanceBlank?: "ceiling" | "inherits";
 };
 
 /** Rate rows plus stacked budget rows (period + amount) with inherited and effective columns. */
-export function LimitsTable({ caption, scopeLabel, draft, onChange, editing, busy, errors, inherited, effective, mode = "free", stored = noLimits, emptyText = "Not set", placeholder, storage = false }: LimitsTableProps) {
+export function LimitsTable({ caption, scopeLabel, draft, onChange, editing, busy, errors, inherited, effective, mode = "free", stored = noLimits, emptyText = "Not set", placeholder, storage = false, issuanceBlank = "ceiling" }: LimitsTableProps) {
   const set = (patch: Partial<LimitsDraft>) => onChange?.({ ...draft, ...patch });
   const setBudget = (key: string, patch: Partial<LimitsDraft["budgets"][number]>) => set({ budgets: draft.budgets.map(b => b.key === key ? { ...b, ...patch } : b) });
   const columns: TableColumn[] = ["Limit", ...(inherited ? [{ label: inherited.label, width: "10rem" }] : []), { label: scopeLabel, width: "15rem" }, ...(effective ? [{ label: "Effective", width: "10rem" }] : [])];
@@ -105,7 +110,7 @@ export function LimitsTable({ caption, scopeLabel, draft, onChange, editing, bus
       {storage && issuanceSupported && issuanceRows.map(r => <Tr key={r.key}>
         <Td><span className={s.primary} title={r.description}>{r.label}</span></Td>
         {inherited && <Td>{inherited.limits ? issuanceText(inherited.limits[r.key]) : "—"}</Td>}
-        <Td>{editing ? <Field label={`${r.label} · ${scopeLabel}`} hideLabel error={errors?.issuance?.[r.key]} className={l.amountField}><span className={l.amount}><GroupedIntegerInput className={l.amountInput} placeholder={inherited?.limits?.[r.key] != null ? `Inherited: ${inherited.limits[r.key]!.toLocaleString("en-US")}` : `Up to ${MAX_KEY_ISSUANCES.toLocaleString("en-US")}`} value={draft[r.key] ?? ""} disabled={busy} onChange={value => set({ [r.key]: value })} /><span aria-hidden className={l.unit}>{r.unit}</span></span></Field> : draft[r.key]?.trim() ? Number(draft[r.key]).toLocaleString("en-US") : <span className={s.muted}>{emptyText === "No limit" ? issuanceText(null) : emptyText}</span>}</Td>
+        <Td>{editing ? <Field label={`${r.label} · ${scopeLabel}`} hideLabel error={errors?.issuance?.[r.key]} className={l.amountField}><span className={l.amount}><GroupedIntegerInput className={l.amountInput} placeholder={issuanceBlank === "inherits" ? inherited?.limits?.[r.key] != null ? `Inherits: ${inherited.limits[r.key]!.toLocaleString("en-US")}` : "Inherits type default" : inherited?.limits?.[r.key] != null ? `Inherited: ${inherited.limits[r.key]!.toLocaleString("en-US")}` : `Up to ${MAX_KEY_ISSUANCES.toLocaleString("en-US")}`} value={draft[r.key] ?? ""} disabled={busy} onChange={value => set({ [r.key]: value })} /><span aria-hidden className={l.unit}>{r.unit}</span></span></Field> : draft[r.key]?.trim() ? Number(draft[r.key]).toLocaleString("en-US") : <span className={s.muted}>{issuanceBlank === "inherits" ? "Inherits type default" : emptyText === "No limit" ? issuanceText(null) : emptyText}</span>}</Td>
         {effective && <Td>{effective.limits && !effective.invalid?.issuance?.includes(r.key) ? issuanceText(effective.limits[r.key]) : "—"}</Td>}
       </Tr>)}
       {rows.map(({ period, row }) => {
@@ -184,7 +189,7 @@ export function ReplacementLimitsDialog({ workspaceId, name, onClose }: { worksp
   const form = draft ?? saved, errors = form ? draftErrors(form, "free") : undefined, invalid = !!errors && hasErrors(errors);
   const local = provenance ? limitsOf(provenance.local) : undefined;
   // Valid rows keep their live preview while others are being fixed.
-  const valid = form && errors ? draftLimitsValid(form, errors) : undefined, effective = valid ? composeLimits(valid.limits, local) : undefined;
+  const valid = form && errors ? draftLimitsValid(form, errors) : undefined, effective = valid ? composeLimits(inheritIssuance(valid.limits, typeDefault), local) : undefined;
   const dirty = !!draft && !!saved && (!sameDraft(draft, saved) || data?.mode !== "replace");
   async function save() {
     if (!form || invalid || busy) return;
@@ -194,14 +199,14 @@ export function ReplacementLimitsDialog({ workspaceId, name, onClose }: { worksp
     finally { setBusy(false); }
   }
   return <><Dialog open size="lg" title={`Set custom limits · ${name}`} hideClose={busy} onOpenChange={open => { if (!open && !busy) onClose(); }}
-    description="Replaces the type defaults for this workspace only. A blank field means no limit here (it doesn't fall back to the default). Workspace caps, key limits and spending so far still apply."
+    description="Replaces the type defaults for this workspace only. A blank field means no limit here (it doesn't fall back to the default), except key issuance, where a blank field keeps the type default. Workspace caps, key limits and spending so far still apply."
     footer={<><Button variant="secondary" disabled={busy} onClick={onClose}>Cancel</Button><Button type="submit" form={formId} loading={busy} disabled={!form || invalid}>Save custom limits</Button></>}>
     <form id={formId} noValidate aria-busy={busy} onSubmit={event => { event.preventDefault(); void save(); }}>
       {query.isPending ? <p role="status">Loading limits…</p> : query.isError ? <ErrorNotice error={query.error} retry={() => void query.refetch()} /> : !form || !errors ? <ErrorNotice error={new Error("Limit sources are unavailable from this gateway.")} /> : <Stack gap={4}>
         {data?.mode === "replace" ? <p className={s.note}>This workspace already has custom limits. Saving replaces them.</p> : <p className={s.note}>This workspace follows its type defaults; they're filled in below as a starting point.</p>}
         {error !== undefined && <ErrorNotice error={error} />}
         <LimitsTable caption={`Custom limits for ${name}`} scopeLabel="Custom limits" draft={form} onChange={next => { setDraft(next); setRejected(undefined); }} editing busy={busy} errors={mergeErrors(errors, rejected)}
-          inherited={{ label: "Type default", limits: typeDefault }} effective={{ limits: effective, invalid: valid?.invalid }} emptyText="No limit" storage placeholder={key => `No limit${typeDefault?.[key] != null ? ` · default ${typeDefault[key]!.toLocaleString("en-US")}` : ""}`} />
+          inherited={{ label: "Type default", limits: typeDefault }} effective={{ limits: effective, invalid: valid?.invalid }} emptyText="No limit" storage issuanceBlank="inherits" placeholder={key => `No limit${typeDefault?.[key] != null ? ` · default ${typeDefault[key]!.toLocaleString("en-US")}` : ""}`} />
       </Stack>}
     </form>
   </Dialog><NavigationGuard dirty={dirty && !busy} /></>;
@@ -243,7 +248,7 @@ export function ScopeLimits({ path, mode, writable, kind = "team", scopeLabel, r
   const draftLayer = picked === "defaults" ? typeDefault : valid!.limits;
   const inherited = mode === "replacement" ? typeDefault : mode === "local" ? platform : composeLimits(platform, local);
   // Live preview of every layer that applies (there are no installation-wide limits).
-  const effective = !draftLayer ? undefined : mode === "replacement" ? composeLimits(draftLayer, local) : mode === "local" ? composeLimits(platform, draftLayer) : composeLimits(platform, local, draftLayer);
+  const effective = !draftLayer ? undefined : mode === "replacement" ? composeLimits(picked === "defaults" ? draftLayer : inheritIssuance(draftLayer, typeDefault), local) : mode === "local" ? composeLimits(platform, draftLayer) : composeLimits(platform, local, draftLayer);
   const scopeName = scopeLabel ?? (mode === "replacement" ? `This ${lower}` : mode === "key" ? "This key" : "This workspace");
   const reset = () => { setDraft(undefined); setChoice(undefined); setError(undefined); setRejected(undefined); };
   async function save() {
@@ -262,7 +267,7 @@ export function ScopeLimits({ path, mode, writable, kind = "team", scopeLabel, r
     finally { setBusy(false); }
   }
   const description = mode === "replacement"
-    ? picked === "defaults" ? "Workspace caps and key limits still apply on top." : "Blank means no limit. Workspace caps and key limits still apply on top."
+    ? picked === "defaults" ? "Workspace caps and key limits still apply on top." : "Blank means no limit, except key issuance, where blank keeps the type default. Workspace caps and key limits still apply on top."
     : writable ? "Blank inherits. The lowest limit applies; saved caps can only be lowered." : `${readOnlyReason ? `${readOnlyReason} ` : ""}The lowest limit applies.`;
   return <Stack gap={6}>
     {mode === "replacement" && <RadioGroup legend="Limits source" variant="card" orientation="horizontal" value={picked} disabled={!writable || busy} onValueChange={value => { setChoice(value as "defaults" | "override"); if (value === "override" && !replaced && !draft) setDraft(draftOf(typeDefault ?? noLimits)); }} options={[
@@ -273,7 +278,7 @@ export function ScopeLimits({ path, mode, writable, kind = "team", scopeLabel, r
     <Card title={mode === "replacement" ? `${noun} limits` : mode === "key" ? "Key limits" : "Workspace limits"} description={description} flush>
       <LimitsTable caption={`${scopeName} limits`} scopeLabel={scopeName} draft={picked === "defaults" ? draftOf(typeDefault ?? noLimits) : form} onChange={edit} editing={editing} busy={busy} errors={picked === "override" ? mergeErrors(errors, rejected) : undefined}
         inherited={{ label: mode === "replacement" ? `${noun} default` : "Inherited", limits: inherited }} effective={{ limits: effective, invalid: valid?.invalid }} mode={mode === "replacement" ? "free" : "tighten"} stored={mode === "replacement" ? noLimits : stored}
-        emptyText={picked === "defaults" ? "Default" : mode === "replacement" ? "No limit" : "Not set"} storage={mode !== "key"} placeholder={mode === "replacement" ? key => `No limit${typeDefault?.[key] != null ? ` · default ${typeDefault[key]!.toLocaleString("en-US")}` : ""}` : undefined} />
+        emptyText={picked === "defaults" ? "Default" : mode === "replacement" ? "No limit" : "Not set"} storage={mode !== "key"} issuanceBlank={mode === "replacement" ? "inherits" : "ceiling"} placeholder={mode === "replacement" ? key => `No limit${typeDefault?.[key] != null ? ` · default ${typeDefault[key]!.toLocaleString("en-US")}` : ""}` : undefined} />
     </Card>
     {mode !== "key" && data.storage && <Card title="Storage used" description="Files, batch inputs and outputs kept in this workspace.">
       <div className={l.meters}><StorageBar used={data.storage.used_bytes} quota={data.storage.quota_bytes} /></div>

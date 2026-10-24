@@ -52,6 +52,16 @@ export function policyBudgets(policy: Pick<Policy, "budgets" | "monthly_budget_m
   if (Array.isArray(policy.budgets)) return sortBudgets(policy.budgets.filter(b => stackPeriods.includes(b.period)));
   return policy.monthly_budget_microusd === null ? [] : [{ period: policy.budget_period ?? "month", amount_microusd: policy.monthly_budget_microusd }];
 }
+/**
+ * A platform override's empty issuance field inherits the type default (a field it sets replaces it), unlike every
+ * other limit, where an empty override field means no limit. For previews: the layer with its empty issuance fields
+ * taken from `parent`; fields neither carries stay absent (older gateways).
+ */
+export function inheritIssuance(layer: Limits, parent: Limits | undefined): Limits {
+  if (!parent) return layer;
+  const filled = Object.fromEntries(issuanceRows.filter(r => layer[r.key] == null && parent[r.key] != null).map(r => [r.key, parent[r.key]]));
+  return { ...layer, ...filled };
+}
 /** The issuance fields a policy carries; absent from older gateways and on key layers. */
 const issuanceOf = (policy: Partial<Record<IssuanceKey, number | null>>) => Object.fromEntries(issuanceRows.filter(r => policy[r.key] !== undefined).map(r => [r.key, policy[r.key] ?? null])) as Partial<Record<IssuanceKey, number | null>>;
 export function limitsOf(policy: Policy): Limits {

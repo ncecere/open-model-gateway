@@ -25,8 +25,11 @@
 //! old or the new limit atomically.
 //!
 //! Effective limit = `least(coalesce(platform, 10000), coalesce(local, 10000))`,
-//! where platform is the override row if one exists, else the type default (as
-//! `filestore::files::QUOTA_SQL` does). A missing value is never unlimited.
+//! where platform is `coalesce(override, type default)`: an override field that
+//! is set replaces the type default, and one that is NULL inherits it (unlike
+//! `filestore::files::QUOTA_SQL`, where a NULL override means no cap). That
+//! makes override rows written without these columns by a replica that predates
+//! migration 0053 harmless. A missing value is never unlimited.
 use super::*;
 use chrono::{DateTime, Utc};
 
@@ -88,8 +91,9 @@ fn window_start(now: DateTime<Utc>) -> DateTime<Utc> {
 /// `$1` workspace, `$2` holder, `$3` start of the window.
 pub(in crate::management) fn usage_sql(holder: Holder) -> String {
     let col = holder.column();
-    let platform =
-        |c: &str| format!("CASE WHEN o.workspace_id IS NOT NULL THEN o.{c} ELSE t.{c} END");
+    // The override's value replaces the type default; an empty override field
+    // inherits it (so a row written by a pre-0053 replica never loosens it).
+    let platform = |c: &str| format!("coalesce(o.{c},t.{c})");
     let (ph, pw) = (
         platform("key_issuances_per_holder"),
         platform("key_issuances_per_workspace"),

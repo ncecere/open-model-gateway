@@ -796,15 +796,145 @@ async fn a_missing_platform_value_means_the_10000_ceiling_not_unlimited(pool: Pg
     // The holder budget is exhausted at the ceiling; so is the workspace's.
     let (_, _, v) = create(&f, &f.member, f.team).await;
     assert_eq!(v["error"]["scope"], "workspace");
-    // An override row with a NULL value is the same ceiling, not the type default.
+    // An override row whose field is NULL inherits the type default (a field the
+    // override sets replaces it): here the project's default of 1 applies.
     sqlx::query("INSERT INTO workspace_platform_policy_overrides(workspace_id) VALUES($1)")
         .bind(f.project)
         .execute(&pool)
         .await
         .unwrap();
     type_limits(&pool, "project", Some(1), Some(1)).await;
-    seed(&pool, f.project, f.owner.user_id, 5, 60).await;
+    seed(&pool, f.project, f.owner.user_id, 1, 60).await;
+    let (status, _, v) = create(&f, &f.owner, f.project).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{v}");
+    assert_eq!(v["error"]["scope"], "holder");
+    // NULL type default and NULL override together are the 10000 ceiling.
+    type_limits(&pool, "project", None, None).await;
+    seed(&pool, f.project, f.owner.user_id, 9_998, 60).await;
     assert_eq!(create(&f, &f.owner, f.project).await.0, StatusCode::OK);
+    assert_eq!(
+        create(&f, &f.owner, f.project).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+}
+
+/// An old replica still running during the migrate overlap writes override rows
+/// without the new columns (NULL). Those rows must inherit the type default,
+/// never loosen the workspace to the 10000 ceiling.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn an_override_written_by_an_old_replica_still_gets_the_type_default(pool: PgPool) {
+    let f = fixture(&pool).await;
+    type_limits(&pool, "team", Some(2), Some(500)).await;
+    // The exact statement of the pre-0053 `put_layer`: the columns it knew, upserted.
+    sqlx::query("INSERT INTO workspace_platform_policy_overrides(workspace_id,requests_per_minute,tokens_per_minute,concurrent_requests,concurrent_jobs,storage_bytes) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(workspace_id) DO UPDATE SET requests_per_minute=excluded.requests_per_minute,tokens_per_minute=excluded.tokens_per_minute,concurrent_requests=excluded.concurrent_requests,concurrent_jobs=excluded.concurrent_jobs,storage_bytes=excluded.storage_bytes")
+        .bind(f.team)
+        .bind(Some(100_i64))
+        .bind(None::<i64>)
+        .bind(None::<i64>)
+        .bind(Some(7_i64))
+        .bind(None::<i64>)
+        .execute(&pool)
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        assert_eq!(create(&f, &f.member, f.team).await.0, StatusCode::OK);
+    }
+    let (status, _, v) = create(&f, &f.member, f.team).await;
+    assert_eq!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "the override must not loosen to 10000: {v}"
+    );
+    assert_eq!(v["error"]["scope"], "holder");
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn empty_override_fields_report_and_compose_as_the_type_default_without_snapshotting_it(
+    pool: PgPool,
+) {
+    let f = fixture(&pool).await;
+    type_limits(&pool, "team", Some(7), Some(70)).await;
+    sqlx::query("INSERT INTO workspace_platform_policy_overrides(workspace_id,concurrent_jobs) VALUES($1,3)")
+        .bind(f.team)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let platform = format!("/api/v1/platform/workspaces/{}/policy", f.team);
+    let (_, _, v) = call_h(&f.s, &f.admin, "GET", &platform, Value::Null).await;
+    // The override's own fields are empty; the platform layer and the result are not.
+    assert_eq!(v["policy"]["key_issuances_per_holder"], Value::Null, "{v}");
+    assert_eq!(v["policy"]["key_issuances_per_workspace"], Value::Null);
+    assert_eq!(v["provenance"]["platform"]["key_issuances_per_holder"], 7);
+    assert_eq!(v["effective"]["key_issuances_per_workspace"], 70);
+    // The workspace's own view and the tighten-only parent see the inherited value.
+    let local = format!("/api/v1/workspaces/{}/policy", f.team);
+    let (_, _, v) = call_h(&f.s, &f.owner, "GET", &local, Value::Null).await;
+    assert_eq!(
+        v["provenance"]["platform"]["key_issuances_per_holder"], 7,
+        "{v}"
+    );
+    let (status, _, v) = call_h(
+        &f.s,
+        &f.owner,
+        "PUT",
+        &local,
+        policy(json!({"key_issuances_per_holder":8})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{v}");
+    assert_eq!(v["error"]["limit"], "key_issuances_per_holder");
+    // Saving the override without naming the fields leaves them empty (no snapshot of the default)...
+    let (status, _) = put(
+        &f,
+        &f.admin,
+        &platform,
+        policy(json!({"requests_per_minute":50})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let stored: (Option<i64>, Option<i64>) = sqlx::query_as("SELECT key_issuances_per_holder,key_issuances_per_workspace FROM workspace_platform_policy_overrides WHERE workspace_id=$1")
+        .bind(f.team)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, (None, None));
+    // ...so a later change of the type default still applies to this workspace.
+    type_limits(&pool, "team", Some(9), Some(90)).await;
+    let (_, _, v) = call_h(&f.s, &f.admin, "GET", &platform, Value::Null).await;
+    assert_eq!(v["effective"]["key_issuances_per_holder"], 9, "{v}");
+    // An explicit value replaces the default; null clears it back to inheriting.
+    let (status, _) = put(
+        &f,
+        &f.admin,
+        &platform,
+        policy(json!({"key_issuances_per_holder":3})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, _, v) = call_h(&f.s, &f.admin, "GET", &platform, Value::Null).await;
+    assert_eq!(
+        (
+            v["policy"]["key_issuances_per_holder"].clone(),
+            v["effective"]["key_issuances_per_holder"].clone()
+        ),
+        (json!(3), json!(3))
+    );
+    let (status, _) = put(
+        &f,
+        &f.admin,
+        &platform,
+        policy(json!({"key_issuances_per_holder":null})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, _, v) = call_h(&f.s, &f.admin, "GET", &platform, Value::Null).await;
+    assert_eq!(
+        (
+            v["policy"]["key_issuances_per_holder"].clone(),
+            v["effective"]["key_issuances_per_holder"].clone()
+        ),
+        (Value::Null, json!(9))
+    );
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
@@ -1357,77 +1487,80 @@ async fn the_workspace_lock_alone_serializes_check_and_insert(pool: PgPool) {
     }
 }
 
-#[sqlx::test(migrations = false)]
-async fn migration_0053_backfills_existing_overrides_from_their_type_default(pool: PgPool) {
-    let first = sqlx::migrate::Migrator {
-        migrations: std::borrow::Cow::Owned(
-            crate::store::MIGRATOR
-                .iter()
-                .filter(|m| m.version < 53)
-                .cloned()
-                .collect(),
-        ),
-        ignore_missing: false,
-        locking: true,
-        no_tx: false,
+/// 0053's ALTERs hold ACCESS EXCLUSIVE locks until its transaction ends, so the
+/// index build must not share that transaction: it is its own no-transaction
+/// migration and builds CONCURRENTLY (readers of api_keys, which authenticates
+/// every request, are never blocked by it).
+#[test]
+fn the_window_index_is_built_concurrently_outside_the_alter_transaction() {
+    let migrator = &crate::store::MIGRATOR;
+    let by_version = |v: i64| migrator.iter().find(|m| m.version == v).unwrap();
+    let alters = by_version(53);
+    assert!(!alters.no_tx && alters.description.contains("key issuance limits"));
+    assert!(
+        !alters.sql.to_uppercase().contains("CREATE INDEX"),
+        "0053 must not build an index"
+    );
+    let build = by_version(54);
+    assert!(
+        build.no_tx,
+        "the index build must run outside a transaction"
+    );
+    let sql = build.sql.to_uppercase();
+    assert!(sql.contains("CREATE INDEX CONCURRENTLY IF NOT EXISTS API_KEYS_WORKSPACE_CREATED"));
+    // One statement: CREATE INDEX CONCURRENTLY cannot share a multi-statement query.
+    let code: Vec<&str> = build
+        .sql
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("--"))
+        .collect();
+    assert_eq!(code.join("\n").matches(';').count(), 1, "{code:?}");
+    // A later transactional migration repairs an invalid leftover of an interrupted build.
+    let repair = by_version(55);
+    assert!(!repair.no_tx && repair.sql.contains("indisvalid"));
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn an_invalid_leftover_index_from_an_interrupted_build_is_repaired(pool: PgPool) {
+    let valid = || async {
+        sqlx::query_scalar::<_, bool>("SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid WHERE c.relname='api_keys_workspace_created'")
+            .fetch_optional(&pool)
+            .await
+            .unwrap()
     };
-    first.run(&pool).await.unwrap();
-    // Overrides that predate 0053 (replacement semantics: they replace the type default).
-    let owner = Uuid::new_v4();
-    sqlx::query("INSERT INTO users(id,email) VALUES($1,'owner@example.test')")
-        .bind(owner)
+    assert_eq!(valid().await, Some(true));
+    // An interrupted CREATE INDEX CONCURRENTLY leaves an invalid index of this name.
+    sqlx::raw_sql("UPDATE pg_index SET indisvalid=false WHERE indexrelid='public.api_keys_workspace_created'::regclass")
         .execute(&pool)
         .await
         .unwrap();
-    let (team, project, plain) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
-    for (id, kind) in [(team, "team"), (project, "project"), (plain, "team")] {
-        sqlx::query("INSERT INTO workspaces(id,name,kind) VALUES($1,$2,$3)")
-            .bind(id)
-            .bind(format!("{kind} {id}"))
-            .bind(kind)
-            .execute(&pool)
-            .await
-            .unwrap();
-    }
-    for id in [team, project] {
-        sqlx::query("INSERT INTO workspace_platform_policy_overrides(workspace_id,concurrent_jobs) VALUES($1,7)")
-            .bind(id)
-            .execute(&pool)
-            .await
-            .unwrap();
-    }
-    sqlx::query("INSERT INTO workspace_local_policies(workspace_id,concurrent_jobs) VALUES($1,3)")
-        .bind(team)
-        .execute(&pool)
-        .await
+    assert_eq!(valid().await, Some(false));
+    // Retrying the build skips the existing name (IF NOT EXISTS)...
+    let build = crate::store::MIGRATOR
+        .iter()
+        .find(|m| m.version == 54)
         .unwrap();
-    Store::new(pool.clone()).migrate_enterprise().await.unwrap();
-    type OverrideRow = (Uuid, Option<i64>, Option<i64>, Option<i64>);
-    let rows: Vec<OverrideRow> = sqlx::query_as("SELECT workspace_id,key_issuances_per_holder,key_issuances_per_workspace,concurrent_jobs FROM workspace_platform_policy_overrides ORDER BY workspace_id")
-        .fetch_all(&pool)
-        .await
+    sqlx::raw_sql(&build.sql).execute(&pool).await.unwrap();
+    assert_eq!(valid().await, Some(false));
+    // ...and the repair migration leaves a valid index of the same definition.
+    let repair = crate::store::MIGRATOR
+        .iter()
+        .find(|m| m.version == 55)
         .unwrap();
-    assert_eq!(rows.len(), 2);
-    for (id, holder, workspace, jobs) in rows {
-        assert_eq!(
-            (holder, workspace, jobs),
-            (Some(50), Some(500), Some(7)),
-            "{id}: an override must keep the type default's budgets, not the 10000 ceiling"
-        );
-    }
-    // Local layers inherit (NULL), and type defaults are unchanged.
-    let local: (Option<i64>, Option<i64>) = sqlx::query_as("SELECT key_issuances_per_holder,key_issuances_per_workspace FROM workspace_local_policies WHERE workspace_id=$1")
-        .bind(team)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(local, (None, None));
-    let types: Vec<(Option<i64>, Option<i64>)> = sqlx::query_as(
-        "SELECT key_issuances_per_holder,key_issuances_per_workspace FROM workspace_type_policies",
+    sqlx::raw_sql(&repair.sql).execute(&pool).await.unwrap();
+    assert_eq!(valid().await, Some(true));
+    let def: String = sqlx::query_scalar(
+        "SELECT indexdef FROM pg_indexes WHERE indexname='api_keys_workspace_created'",
     )
-    .fetch_all(&pool)
+    .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(types.len(), 3);
-    assert!(types.iter().all(|t| *t == (Some(50), Some(500))));
+    assert!(def.contains("(workspace_id, created_at)"), "{def}");
+    // And with the index missing altogether, the repair builds it.
+    sqlx::raw_sql("DROP INDEX api_keys_workspace_created")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(&repair.sql).execute(&pool).await.unwrap();
+    assert_eq!(valid().await, Some(true));
 }

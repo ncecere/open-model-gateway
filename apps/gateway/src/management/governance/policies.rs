@@ -611,7 +611,14 @@ async fn platform_tx<'a>(
     Ok(tx)
 }
 pub(crate) struct Layers {
+    /// The platform layer as it applies: the override if the workspace has one,
+    /// else the type default; an override's empty key issuance fields inherit the
+    /// type default (see [`inherit_issuance`]).
     pub(crate) platform: Limits,
+    /// The platform layer as stored: the override's own fields (empty key issuance
+    /// fields stay empty), or, with no override, the type default with empty
+    /// issuance fields. What an override edit starts from; never used to compose.
+    pub(crate) platform_own: Limits,
     pub(crate) local: Limits,
     pub(crate) type_default: Limits,
     pub(crate) override_present: bool,
@@ -647,16 +654,25 @@ pub(crate) async fn layers_with(
     .fetch_one(&mut **tx)
     .await?;
     let type_default = get_layer(tx, &Scope::Type(kind.clone())).await?;
-    let (platform, source) = if over {
+    let (platform_own, source) = if over {
         (
             get_layer(tx, &Scope::Override(ws)).await?,
             "workspace_override",
         )
     } else {
-        (type_default.clone(), "type_default")
+        (
+            Limits {
+                key_issuances_per_holder: None,
+                key_issuances_per_workspace: None,
+                ..type_default.clone()
+            },
+            "type_default",
+        )
     };
+    let platform = inherit_issuance(platform_own.clone(), &type_default);
     Ok(Layers {
         platform,
+        platform_own,
         local: get_layer(tx, &Scope::Local(ws)).await?,
         type_default,
         override_present: over,
@@ -664,6 +680,20 @@ pub(crate) async fn layers_with(
         kind,
         created_at,
     })
+}
+/// A platform override's key issuance fields that are empty inherit the type
+/// default; a field it sets replaces it. (Every other limit's empty override
+/// field means no limit.) This makes a row written without the columns, by a
+/// replica that predates migration 0053, harmless: the workspace keeps its type
+/// default instead of being loosened to the 10,000 ceiling.
+fn inherit_issuance(mut platform: Limits, type_default: &Limits) -> Limits {
+    platform.key_issuances_per_holder = platform
+        .key_issuances_per_holder
+        .or(type_default.key_issuances_per_holder);
+    platform.key_issuances_per_workspace = platform
+        .key_issuances_per_workspace
+        .or(type_default.key_issuances_per_workspace);
+    platform
 }
 pub(crate) async fn key_limits(
     tx: &mut Transaction<'_, Postgres>,
@@ -853,6 +883,7 @@ async fn response(
 ) -> Result<Value, ApiError> {
     let Layers {
         platform: p,
+        platform_own: po,
         local: l,
         type_default,
         source,
@@ -876,7 +907,7 @@ async fn response(
     }
     let budgets = budget_windows(tx, ws, &entries).await?;
     let storage = storage_json(tx, ws, workspace_usage).await?;
-    let mut value = json!({"storage":storage,"policy":json_limits(if key.is_some(){&k}else if local_response{&l}else{&p}),"effective":json_limits(&compose(&compose(&p,&l),&k)),"mode":if source=="workspace_override"{"replace"}else{"inherit"},"provenance":{"platform_source":source,"platform":json_limits(&p),"local":json_limits(&l),"key":key.map(|_|json_limits(&k))},"budgets":budgets});
+    let mut value = json!({"storage":storage,"policy":json_limits(if key.is_some(){&k}else if local_response{&l}else{&po}),"effective":json_limits(&compose(&compose(&p,&l),&k)),"mode":if source=="workspace_override"{"replace"}else{"inherit"},"provenance":{"platform_source":source,"platform":json_limits(&p),"local":json_limits(&l),"key":key.map(|_|json_limits(&k))},"budgets":budgets});
     // Platform readers also see the live type default behind an override.
     if platform {
         value["provenance"]["type_default"] = json_limits(&type_default);
@@ -955,7 +986,7 @@ pub(super) async fn put_platform_workspace_policy(
     // A new override starts from the layer it replaces (legacy single budget period).
     let current = layers(&mut tx, ws).await?;
     let l = p.limits(
-        &current.platform,
+        &current.platform_own,
         current
             .platform
             .legacy()
