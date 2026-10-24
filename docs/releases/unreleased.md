@@ -208,3 +208,4 @@ Source change: the crate's breaking 0.x release replaces the deprecated `AeadInP
 ## Fixes
 
 - **Key Budgets card spacing (#242).** The key detail page's Limits tab Budgets card now gives "Effective headroom" its own spaced section instead of it sitting directly under the last budget line above it. Cosmetic only; data and accessibility are unchanged.
+- **Duplicate key creation and rotation guard (#272).** Creating an API key now refuses a second submit in the same React batch as the first (the old guard used React state, which both submits read as idle), so one form can no longer create two active keys while showing only one secret. After a new or replacement key is shown, both creation and rotation dialogs are sealed: a retained submit callback cannot create another key or rotate again (which would invalidate the key you were shown). A failed request still allows an explicit retry; nothing retries automatically. No API or data changes.
