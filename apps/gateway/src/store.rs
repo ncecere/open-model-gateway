@@ -179,6 +179,24 @@ pub const PARTITIONED_RELATIONS: &[&str] = &[
 /// `installation_policy` is dropped by 0026 (installation limits removed).
 const RETIRED_RELATIONS: &[&str] = &["installation_policy"];
 
+/// Takes the session lock that serializes `migrate` and `grants apply`, polling
+/// `pg_try_advisory_lock` instead of blocking in `pg_advisory_lock`. A blocked
+/// lock statement is a running transaction, and a migration that builds an index
+/// CONCURRENTLY (0054) waits for every transaction older than it: a second
+/// migrator parked in a blocking lock call would wait on the first, which waits
+/// on it, a deadlock. A poller holds no transaction between attempts.
+async fn migration_lock(connection: &mut PgConnection) -> sqlx::Result<()> {
+    loop {
+        let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock(72419503)")
+            .fetch_one(&mut *connection)
+            .await?;
+        if acquired {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
 fn lineage_matches(
     applied: &[(i64, Vec<u8>, bool)],
     expected: &[(i64, &[u8])],
@@ -448,9 +466,7 @@ impl Store {
         // Detached connection closes on drop, including cancellation/panic. Neither our
         // session lock nor SQLx's migration lock can leak back into the runtime pool.
         let mut connection = self.pool.acquire().await?.detach();
-        sqlx::query("SELECT pg_advisory_lock(72419503)")
-            .execute(&mut connection)
-            .await?;
+        migration_lock(&mut connection).await?;
         let result = async {
             preflight(&mut connection, true).await?;
             MIGRATOR.run(&mut connection).await?;
@@ -471,9 +487,7 @@ impl Store {
     /// silently revoke runtime access to newer tables.
     pub async fn apply_runtime_grants(&self) -> anyhow::Result<()> {
         let mut connection = self.pool.acquire().await?.detach();
-        sqlx::query("SELECT pg_advisory_lock(72419503)")
-            .execute(&mut connection)
-            .await?;
+        migration_lock(&mut connection).await?;
         preflight(&mut connection, false).await?;
         sqlx::raw_sql(RUNTIME_GRANTS_SQL)
             .execute(&mut connection)

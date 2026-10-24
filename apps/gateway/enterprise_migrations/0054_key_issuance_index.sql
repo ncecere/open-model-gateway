@@ -1,0 +1,11 @@
+-- no-transaction
+-- #253: the rolling-window index of the key issuance budgets (0053), built
+-- CONCURRENTLY so that it never blocks key authentication (reads of api_keys)
+-- or key writes while it builds. It is the only statement of this file:
+-- CREATE INDEX CONCURRENTLY cannot run in a multi-statement query.
+--
+-- If a build is interrupted (a cancel, a crash), PostgreSQL leaves an INVALID
+-- index of this name; IF NOT EXISTS then skips it on a retry, and 0055 (next)
+-- drops and rebuilds an invalid one, so rerunning `migrate` always ends with a
+-- valid index. Explicit operator upgrade only (`migrate`); never run by serve.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS api_keys_workspace_created ON api_keys(workspace_id, created_at);
