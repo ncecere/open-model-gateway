@@ -354,5 +354,5 @@ fn issue_313_real_http_client_constructor_refuses_public_literal_before_transpor
     .expect_err("HTTP public literal must fail during client construction");
     let reason = error.to_string();
     assert!(reason.contains("telemetry URL refused"));
-    assert!(reason.contains("not a loopback address, required by this transport"));
+    assert!(reason.contains("not a loopback address (required for development HTTP)"));
 }

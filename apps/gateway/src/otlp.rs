@@ -213,7 +213,21 @@ pub(crate) fn export_http_client(
     connect_timeout: Duration,
     exchange_timeout: Duration,
 ) -> anyhow::Result<reqwest::Client> {
-    let policy = export_http_policy(url, crate::egress::policy().permit_loopback(development));
+    let policy = crate::egress::policy().permit_loopback(development);
+    export_http_client_with_policy(url, purpose, policy, connect_timeout, exchange_timeout)
+}
+
+/// Same checked transport, with a caller's tighten-only address restriction.
+pub(crate) fn export_http_client_with_policy(
+    url: &reqwest::Url,
+    purpose: crate::egress::Purpose,
+    policy: crate::egress::Policy,
+    connect_timeout: Duration,
+    exchange_timeout: Duration,
+) -> anyhow::Result<reqwest::Client> {
+    // Every caller (traces, metrics, audit, webhooks) gets the same tightening:
+    // plain HTTP may only reach canonical loopback after DNS (#313).
+    let policy = export_http_policy(url, policy);
     crate::egress::check_url(&policy, purpose, url)?;
     let client = reqwest::Client::builder()
         .no_proxy()
