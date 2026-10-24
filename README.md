@@ -20,7 +20,7 @@ The dashboard follows Grounded's Bitop UI and Workspace/Admin composition, with 
 - **Admin:** Users, Teams, Projects, SSO group mappings, Connections (OpenAI, Anthropic, OpenRouter, AWS Bedrock with default/profile/role access modes, approved local endpoints), Models with routes and immutable prices, Catalogs and defaults, limits and budgets, cost centers, Logs and Usage (Team/Project rows only), key safety, audit, Settings (general, limits, data & privacy, email, sign-in) and Alerts (budget thresholds, spend spikes, error rates, failing connections; in-app and email). Auditors get the same views read-only.
 - **Checks:** Rust unit/integration tests on real PostgreSQL, mock-provider and SDK contracts, Vitest, and a Playwright journey with axe accessibility scans for every persona ([verification](docs/verification.md), [accessibility](docs/accessibility.md)).
 
-**Planned, not implemented:** an OpenRouter video adapter (video has no supported provider: OpenAI shut down the Sora 2 models and the Videos API on 2026-09-24), video remix/edits/references, native batches beyond OpenAI and Anthropic, image edits and vision input, token-by-token Responses/Messages streaming, active health probes, webhooks and key-expiry notifications, provider-invoice reconciliation. See [roadmap](docs/roadmap.md).
+**Planned, not implemented:** an OpenRouter video adapter (video has no supported provider: OpenAI shut down the Sora 2 models and the Videos API on 2026-09-24), video remix/edits/references, native batches beyond OpenAI and Anthropic, image edits and vision input, token-by-token Responses/Messages streaming, active health probes, webhooks, provider-invoice reconciliation. See [roadmap](docs/roadmap.md).
 
 ## Local account picker
 
