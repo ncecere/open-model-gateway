@@ -664,7 +664,9 @@ async fn model_id(pool: &PgPool, name: &str) -> Uuid {
         .unwrap()
 }
 async fn team_catalog(pool: &PgPool, models: &[Uuid]) -> Uuid {
-    let c = Uuid::new_v4();
+    // Each caller has its own SQLx database. A valid UUID can contain "acc-e"
+    // across a hyphen; force that collision to exercise the access-list oracle.
+    let c = Uuid::parse_str("00000acc-e000-4000-8000-000000000000").unwrap();
     sqlx::query("INSERT INTO catalogs(id,name) VALUES($1,'Approved')")
         .bind(c)
         .execute(pool)
