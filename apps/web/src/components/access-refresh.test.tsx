@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, type Query } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dashboardRouteTree } from "../router";
@@ -12,6 +12,8 @@ import { adminTokensPath } from "../pages/admin-tokens";
 const clients: ReturnType<typeof testClient>[] = [];
 const unexpected: string[] = [];
 const mePath = "/api/v1/me", modelsPath = "/api/v1/platform/models";
+const summaryPath = "/api/v1/me/notifications/summary", jumpKeysPath = "/api/v1/me/keys?status=all&limit=200";
+const privateJumpKey = "synthetic-private-jump-key", privateJumpEmail = "synthetic-private-jump-user@demo.invalid";
 const denied = () => Response.json({ error: { code: "403", message: "This resource is not permitted." } }, { status: 403 });
 const empty = () => Response.json({ data: [], has_more: false });
 
@@ -51,9 +53,9 @@ async function setup({ policy = "deny", refuseOnce = false, freezeRefresh = fals
   // not the fixture's default zero-time garbage collection.
   client.setDefaultOptions({ queries: { ...client.getDefaultOptions().queries, gcTime: Infinity } });
   clients.push(client);
-  let current: Session = admin, forbidden = true, unauthorized = false;
+  let current: Session = admin, forbidden = true, unauthorized = false, summaryForbidden = false;
   const held: ReturnType<typeof pendingResponse>[] = [];
-  const resourceCalls: string[] = [], sessionCalls: RequestInit[] = [];
+  const resourceCalls: string[] = [], sessionCalls: RequestInit[] = [], entityCalls: string[] = [], notificationCalls: string[] = [];
   const resourcePath = tokenPage ? adminTokensPath : modelsPath;
   let tokensCreated = 0;
   const fetch = vi.fn((input: RequestInfo | URL, options?: RequestInit): Promise<Response> => {
@@ -69,6 +71,20 @@ async function setup({ policy = "deny", refuseOnce = false, freezeRefresh = fals
         }
         return Promise.resolve(Response.json(current));
       }
+      // The real JumpSearch's existing sources/row shapes (jump-search.test.tsx),
+      // served by transport rather than seeding an unobserved cache entry. These
+      // can succeed even when the current page has already reached its denied gate.
+      if (path === jumpKeysPath) {
+        entityCalls.push(path);
+        return Promise.resolve(Response.json({ data: [{ id: "private-jump-key", name: privateJumpKey, status: "active", workspace: { id: "team", name: "Product", kind: "team" } }] }));
+      }
+      if ((url.pathname === modelsPath && url.searchParams.get("limit") === "8") || (["/api/v1/platform/users", "/api/v1/platform/workspaces"].includes(url.pathname) && url.searchParams.has("q"))) {
+        entityCalls.push(path);
+        return Promise.resolve(url.pathname === "/api/v1/platform/users"
+          ? Response.json({ data: [{ id: "private-jump-user", email: privateJumpEmail, disabled_at: null }] })
+          : empty());
+      }
+      if (path === "/api/v1/platform/providers?limit=200") { entityCalls.push(path); return Promise.resolve(empty()); }
       if (url.pathname === resourcePath) {
         resourceCalls.push(path);
         if (unauthorized) return Promise.resolve(Response.json({ error: { code: "401", message: "Sign in" } }, { status: 401 }));
@@ -81,7 +97,10 @@ async function setup({ policy = "deny", refuseOnce = false, freezeRefresh = fals
       }
       if (url.pathname === "/api/v1/platform/providers") return Promise.resolve(empty());
       if (path === "/api/v1/platform/server-policy") return Promise.resolve(Response.json({ openrouter: { data_collection: "deny", free_models_available: false } }));
-      if (path === "/api/v1/me/notifications/summary") return Promise.resolve(Response.json({ unread: 0 }));
+      if (url.pathname === summaryPath) {
+        notificationCalls.push(path);
+        return Promise.resolve(summaryForbidden ? denied() : Response.json({ unread: 0 }));
+      }
       if (path === "/api/v1/auth/config") return Promise.resolve(Response.json({ enabled: true }));
     }
     if (tokenPage && path === adminTokensPath && options?.method === "POST") {
@@ -96,7 +115,8 @@ async function setup({ policy = "deny", refuseOnce = false, freezeRefresh = fals
   await router.load();
   render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>);
   return {
-    client, router, resourceCalls, sessionCalls,
+    client, router, resourceCalls, sessionCalls, entityCalls, notificationCalls,
+    refuseSummary: () => { summaryForbidden = true; },
     authority: (next: Session) => { current = next; },
     expire: () => { unauthorized = true; },
     forbidAgain: () => { forbidden = true; refuseOnce = false; },
@@ -139,6 +159,86 @@ function seedPrivate(view: View) {
 function expectPrivateGone(view: View) {
   expect(JSON.stringify(view.client.getQueryCache().getAll().map(query => query.state.data))).not.toContain("synthetic-private-key-metadata");
 }
+
+describe("stable denied shell privacy on the actual dashboard router", () => {
+  it("keeps the denied shell query-free when entity search is requested by keyboard", async () => {
+    const user = userEvent.setup(), view = await setup();
+    await stableDenied(view, 2);
+    expect(view.entityCalls).toEqual([]);
+    expect(screen.getByRole("link", { name: "Audit log", exact: true })).toBeTruthy();
+    await user.keyboard("{Control>}k{/Control}");
+    await flushNotifications();
+    expect(view.entityCalls).toEqual([]);
+    expect(screen.queryByRole("button", { name: "Search or jump to…" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Search or jump to" })).toBeNull();
+    expect(document.body.textContent).not.toContain(privateJumpKey);
+    expect(document.body.textContent).not.toContain(privateJumpEmail);
+    expect(view.client.getQueryCache().findAll({ predicate: query => query.queryKey[0] === "api" })).toEqual([]);
+    expect(view.sessionCalls).toHaveLength(2);
+  });
+
+  it("retires completed private palette DOM and observers on a repeated tagged refusal", async () => {
+    const user = userEvent.setup(), view = await setup();
+    await stableDenied(view, 2);
+    const navKey = view.router.state.location.state.__TSR_key;
+    const navigationLink = screen.getByRole("link", { name: "Audit log", exact: true });
+    // Exercise the old leak if the denied shell still exposes search. The fixed
+    // shell removes it entirely, so do not require opening a removed widget.
+    const trigger = screen.queryByRole("button", { name: "Search or jump to…" });
+    const observedPrivate: Query[] = [];
+    if (trigger) {
+      await user.click(trigger);
+      await user.type(screen.getByRole("combobox", { name: "Search or jump to" }), "synthetic");
+      await screen.findByText(privateJumpKey);
+      await screen.findByText(privateJumpEmail);
+      await waitFor(() => expect(view.client.isFetching()).toBe(0));
+      expect(view.entityCalls).toContain(jumpKeysPath);
+      expect(view.entityCalls).toContain("/api/v1/platform/users?q=synthetic&limit=5");
+      observedPrivate.push(...view.client.getQueryCache().getAll().filter(query => {
+        const data = JSON.stringify(query.state.data) ?? "";
+        return data.includes(privateJumpKey) || data.includes(privateJumpEmail);
+      }));
+      expect(observedPrivate).toHaveLength(2);
+      expect(observedPrivate.every(query => query.getObserversCount() > 0)).toBe(true);
+    }
+    // A real api() response dispatches the tagged event. No hand-built event or
+    // cache-only assertion: removeQueries alone leaves mounted observers' DOM.
+    view.refuseSummary();
+    await act(async () => { await expect(api(`${summaryPath}?repeated=true`)).rejects.toMatchObject({ status: 403 }); });
+    await flushNotifications();
+    expect(view.sessionCalls).toHaveLength(2);
+    expect(view.router.state.location.state.__TSR_key).toBe(navKey);
+    expect(navigationLink.isConnected).toBe(true); // do not remount the whole shell
+    expect(view.client.getQueryCache().findAll({ predicate: query => query.queryKey[0] === "api" })).toEqual([]);
+    expect(document.body.textContent).not.toContain(privateJumpKey);
+    expect(document.body.textContent).not.toContain(privateJumpEmail);
+    expect(screen.queryByRole("dialog", { name: "Search or jump to" })).toBeNull();
+    expect(observedPrivate.every(query => query.getObserversCount() === 0)).toBe(true);
+  });
+
+  it("stops notification polling after stable denial across three virtual minutes", async () => {
+    // Keep React/Query notification timeouts real. Fake only the interval used
+    // by the real NotificationBell, installed before it mounts.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+      const view = await setup();
+      await stableDenied(view, 2);
+      const calls = view.notificationCalls.length;
+      for (let minute = 0; minute < 3; minute++) {
+        await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+        await flushNotifications();
+      }
+      expect(view.notificationCalls).toHaveLength(calls);
+      expect(view.sessionCalls).toHaveLength(2);
+      expect(screen.queryByText("Checking current access…")).toBeNull();
+      expect(screen.getByRole("link", { name: "Audit log", exact: true })).toBeTruthy();
+    } finally {
+      cleanup(); // dispose fake interval handles before restoring the real clock
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe("bounded automatic access refresh on the actual dashboard router", () => {
   it("refreshes unchanged /me exactly once, then leaves a stable resource permission notice", async () => {
