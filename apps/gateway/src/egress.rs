@@ -312,6 +312,17 @@ fn filter(
     )
 }
 
+/// Exercise the production post-DNS filter with deterministic answers, no DNS I/O.
+#[cfg(test)]
+pub(crate) fn filter_for_test(
+    policy: &Policy,
+    purpose: Purpose,
+    host: &str,
+    found: Vec<SocketAddr>,
+) -> anyhow::Result<Vec<SocketAddr>> {
+    filter(policy, purpose, host, found)
+}
+
 /// Resolve `host`, keep only the addresses the policy allows. An error when
 /// none remain names the setting to change.
 pub async fn resolve(
