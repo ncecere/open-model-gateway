@@ -26,6 +26,13 @@ pub struct Warning {
     pub endpoint: String,
     pub category: &'static str,
 }
+/// Pinned local-upstream approvals, loaded from operator configuration.
+/// Raw approval JSON is not a public production constructor:
+///
+/// ```compile_fail
+/// use open_model_gateway::providers::local::endpoints::ApprovedEndpoints;
+/// let _ = ApprovedEndpoints::parse("[]", "development");
+/// ```
 pub struct ApprovedEndpoints {
     endpoints: BTreeMap<String, Endpoint>,
     warnings: Vec<Warning>,
