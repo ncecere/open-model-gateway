@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, cleanup, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
 import { dashboardRouteTree } from "../router";
 import { abortRequests } from "../lib/api";
@@ -20,9 +20,9 @@ afterEach(() => { cleanup(); abortRequests(); vi.unstubAllGlobals(); vi.restoreA
 
 async function mount(href: string, client = testClient()) { const router = createRouter({ routeTree: dashboardRouteTree, history: createMemoryHistory({ initialEntries: [href] }) }); await router.load(); const ui = render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>); return { router, client, ...ui }; }
 type Handler = (path: string, init?: RequestInit) => unknown | Response | Promise<Response>;
-function serve(me: object | (() => object), handler: Handler) {
+function serve(me: object | (() => object | Promise<Response>), handler: Handler) {
   const fetch = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
-    if (path === "/api/v1/me") return Promise.resolve(Response.json(typeof me === "function" ? me() : me));
+    if (path === "/api/v1/me") { const who = typeof me === "function" ? me() : me; return who instanceof Promise ? who : Promise.resolve(Response.json(who)); }
     const body = handler(path, init);
     if (body instanceof Promise) return body;
     if (body instanceof Response) return Promise.resolve(body);
@@ -234,69 +234,120 @@ describe("Holds cache scope", () => {
   const deferred = () => { let resolve!: (r: Response) => void; const promise = new Promise<Response>(r => { resolve = r; }); return { promise, resolve }; };
   const bodyText = () => document.body.textContent ?? "";
 
-  it("workspace A to B: A's rows, totals and cursor never appear under B, even when A's next page arrives late", async () => {
-    const user = userEvent.setup(), late = deferred();
-    const fetch = serve(session, p => {
-      if (p.startsWith("/api/v1/workspaces/team/holds")) return p.includes("cursor=") ? late.promise : page({ data: [row({ ...rowsOf("team", "A1"), execution_id: "a1", root_request_id: "ra1" })], has_more: true, next_cursor: cursor, totals: { count: "5", known_floor_microusd: "111", unbounded_count: "2", oldest_age_hours: 50 } });
-      if (p.startsWith("/api/v1/workspaces/project/holds")) return page({ data: [row({ ...rowsOf("project", "B1"), execution_id: "b1", root_request_id: "rb1" })], totals: { count: "1", known_floor_microusd: "7", unbounded_count: "0", oldest_age_hours: 26 } });
+  // Automatic eviction (gcTime 0) must not stand in for isolation: keep every query for the whole test.
+  const persistent = () => new QueryClient({ defaultOptions: { queries: { retry: false, retryOnMount: false, staleTime: Infinity, gcTime: Infinity } } });
+  const totals = () => Object.fromEntries([...screen.getByRole("group", { name: "Aged unknown hold totals" }).querySelectorAll("dl")].map(dl => [dl.querySelector("dt")!.textContent, dl.querySelector("dd")!.textContent]));
+  const shown = () => within(screen.getByRole("table", { name: "Aged unknown holds" })).getAllByRole("row").slice(1).map(r => /model-[A-Z0-9]+/.exec(r.textContent ?? "")?.[0]);
+  const totalsOf = (count: string, floor: string | null, unbounded: string, oldest: number | null): HoldsPage["totals"] => ({ count, known_floor_microusd: floor, unbounded_count: unbounded, oldest_age_hours: oldest });
+  const rowFor = (ws: string, tag: string, canReconcile = false) => row({ ...rowsOf(ws, tag), execution_id: `x-${tag}`, root_request_id: `r-${tag}`, can_reconcile: canReconcile });
+  const cacheText = (client: QueryClient) => JSON.stringify(client.getQueryCache().getAll().filter(q => q.queryKey[0] !== "session").map(q => [q.queryKey, q.state.data ?? null]));
+  const reconcileButtons = () => screen.queryAllByRole("button", { name: /^Reconcile/ });
+
+  it("workspace A to B: two populated A pages and a deferred third; B's rows, exact totals, cursor and controls hold before and after the late page", async () => {
+    const user = userEvent.setup(), late = deferred(), A = totalsOf("5", "111", "2", 50), B = totalsOf("3", "7", "0", 26);
+    const fetch = serve(admin, p => {
+      if (p.startsWith("/api/v1/workspaces/team/holds")) return p.includes("cursor=cA2") ? late.promise : p.includes("cursor=cA1") ? page({ data: [rowFor("team", "A2", true)], has_more: true, next_cursor: "cA2", totals: A }) : page({ data: [rowFor("team", "A1", true)], has_more: true, next_cursor: "cA1", totals: A });
+      if (p.startsWith("/api/v1/workspaces/project/holds")) return p.includes("cursor=cB1") ? page({ data: [rowFor("project", "B2")], has_more: false, next_cursor: null, totals: B }) : page({ data: [rowFor("project", "B1")], has_more: true, next_cursor: "cB1", totals: B });
       return undefined;
     });
-    const { router, client } = await mount("/workspaces/team/costs?tab=holds");
+    const { router, client } = await mount("/workspaces/team/costs?tab=holds", persistent());
     await loadedTable();
-    expect(bodyText()).toContain("model-A1");
     await user.click(screen.getByRole("button", { name: "Load more" }));
-    await waitFor(() => expect(urls(fetch).some(u => u.includes(`cursor=${cursor}`))).toBe(true));
+    await waitFor(() => expect(shown()).toEqual(["model-A1", "model-A2"]));
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    await waitFor(() => expect(urls(fetch).some(u => u.includes("cursor=cA2"))).toBe(true)); // the third page is in flight
+    expect(reconcileButtons()).toHaveLength(2);
+    expect(totals()).toMatchObject({ "Aged unknown holds": "5", "Known floor (at least)": "$0.000111", "Unbounded": "2", "Oldest": "2 days 2 hours" });
     await router.navigate({ to: "/workspaces/$ws/costs", params: { ws: "project" }, search: { tab: "holds" } as never });
-    await waitFor(() => expect(bodyText()).toContain("model-B1"));
-    expect(bodyText()).not.toContain("model-A1");
-    late.resolve(Response.json(page({ data: [row({ ...rowsOf("team", "A2"), execution_id: "a2", root_request_id: "ra2" })], totals: { count: "5", known_floor_microusd: "111", unbounded_count: "2", oldest_age_hours: 50 } })));
-    await new Promise(resolve => setTimeout(resolve, 100));
-    const text = bodyText();
-    for (const leaked of ["model-A1", "model-A2", "Product"]) expect(text, leaked).not.toContain(leaked);
-    expect(within(screen.getByRole("table", { name: "Aged unknown holds" })).getAllByRole("row")).toHaveLength(2);
+    // Destination, before the late page: only B, B's exact totals, B's cursor, and no Reconcile (B's row isn't reconcilable).
+    await waitFor(() => expect(shown()).toEqual(["model-B1"]));
+    const expectDestination = (rows: (string | undefined)[]) => {
+      expect(shown()).toEqual(rows);
+      expect(totals()).toMatchObject({ "Aged unknown holds": "3", "Known floor (at least)": "$0.000007", "Unbounded": "0", "Oldest": "1 day 2 hours" });
+      expect(reconcileButtons()).toHaveLength(0);
+      expect(bodyText()).not.toContain("Product"); expect(bodyText()).not.toMatch(/model-A\d/);
+    };
+    expectDestination(["model-B1"]);
+    expect(screen.getByRole("button", { name: "Load more" })).toBeTruthy();
+    late.resolve(Response.json(page({ data: [rowFor("team", "A3", true)], has_more: true, next_cursor: "cA3", totals: totalsOf("9", "999", "9", 99) })));
+    await new Promise(resolve => setTimeout(resolve, 150));
+    expectDestination(["model-B1"]);
+    expect(screen.getByRole("button", { name: "Load more" })).toBeTruthy();
+    // Load more continues B's own position, never A's cursors.
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    await waitFor(() => expect(shown()).toEqual(["model-B1", "model-B2"]));
+    expect(urls(fetch).filter(u => u.startsWith("/api/v1/workspaces/project/holds"))).toEqual(["/api/v1/workspaces/project/holds?limit=50", "/api/v1/workspaces/project/holds?limit=50&cursor=cB1"]);
     expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
-    // B only ever asked for its own first page: A's cursor was never reused.
-    expect(urls(fetch).filter(u => u.startsWith("/api/v1/workspaces/project/holds"))).toEqual(["/api/v1/workspaces/project/holds?limit=50"]);
+    // B's cache entry holds none of A's data.
+    const projectEntry = JSON.stringify(client.getQueryCache().getAll().filter(q => String(q.queryKey[2]).includes("/workspaces/project/holds")).map(q => q.state.data));
+    expect(projectEntry).not.toMatch(/model-A\d|cA\d|"count":"5"|"count":"9"/);
     client.clear();
   });
 
-  it("admin to member: the previous authority's rows, totals and Reconcile controls are gone while the new answer is pending", async () => {
+  it("admin to member: two populated admin pages and a deferred third; the member's rows, exact totals, cursor and no Reconcile before and after the late page", async () => {
+    const user = userEvent.setup(), late = deferred(), ADMIN = totalsOf("40", "999", "3", 80), OWN = totalsOf("2", "5", "0", 30);
     let me: object = admin;
-    const pending = deferred();
-    serve(() => me, p => {
+    const fetch = serve(() => me, p => {
       if (!p.startsWith("/api/v1/workspaces/team/holds")) return undefined;
-      return me === admin ? page({ data: [row({ ...rowsOf("team", "ADMIN"), can_reconcile: true })], totals: { count: "9", known_floor_microusd: "999", unbounded_count: "0", oldest_age_hours: 80 } }) : pending.promise;
+      if (me === admin) return p.includes("cursor=cAd2") ? late.promise : p.includes("cursor=cAd1") ? page({ data: [rowFor("team", "ADMIN2", true)], has_more: true, next_cursor: "cAd2", totals: ADMIN }) : page({ data: [rowFor("team", "ADMIN1", true)], has_more: true, next_cursor: "cAd1", totals: ADMIN });
+      return p.includes("cursor=cM1") ? page({ data: [rowFor("team", "OWN2")], has_more: false, next_cursor: null, totals: OWN }) : page({ data: [rowFor("team", "OWN1")], has_more: true, next_cursor: "cM1", totals: OWN });
     });
-    const { client } = await mount("/workspaces/team/costs?tab=holds");
+    const { client } = await mount("/workspaces/team/costs?tab=holds", persistent());
     await loadedTable();
-    expect(screen.getAllByRole("button", { name: /^Reconcile/ })).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    await waitFor(() => expect(shown()).toEqual(["model-ADMIN1", "model-ADMIN2"]));
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    await waitFor(() => expect(urls(fetch).some(u => u.includes("cursor=cAd2"))).toBe(true));
+    expect(reconcileButtons()).toHaveLength(2); expect(totals()).toMatchObject({ "Aged unknown holds": "40", "Known floor (at least)": "$0.000999" });
     me = { ...session, workspaces: [personal, member] };
     await client.invalidateQueries({ queryKey: ["session"] });
-    await waitFor(() => expect(document.body.textContent).toContain("Only holds from your own keys in Product"));
-    expect(screen.queryByRole("button", { name: /^Reconcile/ })).toBeNull();
-    expect(bodyText()).not.toContain("model-ADMIN"); expect(bodyText()).not.toContain("999");
-    pending.resolve(Response.json(page({ data: [row({ ...rowsOf("team", "OWN"), can_reconcile: false })], totals: { count: "1", known_floor_microusd: "5", unbounded_count: "0", oldest_age_hours: 30 } })));
-    await waitFor(() => expect(bodyText()).toContain("model-OWN"));
-    expect(bodyText()).not.toContain("model-ADMIN"); expect(screen.queryByRole("button", { name: /^Reconcile/ })).toBeNull();
+    const expectMember = (rows: (string | undefined)[]) => {
+      expect(shown()).toEqual(rows);
+      expect(totals()).toMatchObject({ "Aged unknown holds": "2", "Known floor (at least)": "$0.000005", "Unbounded": "0", "Oldest": "1 day 6 hours" });
+      expect(reconcileButtons()).toHaveLength(0);
+      expect(bodyText()).toContain("Only holds from your own keys in Product"); expect(bodyText()).not.toMatch(/model-ADMIN\d/);
+    };
+    await waitFor(() => expect(shown()).toEqual(["model-OWN1"]));
+    expectMember(["model-OWN1"]);
+    expect(screen.getByRole("button", { name: "Load more" })).toBeTruthy();
+    late.resolve(Response.json(page({ data: [rowFor("team", "ADMIN3", true)], has_more: true, next_cursor: "cAd3", totals: totalsOf("77", "7777", "7", 700) })));
+    await new Promise(resolve => setTimeout(resolve, 150));
+    expectMember(["model-OWN1"]);
+    expect(screen.getByRole("button", { name: "Load more" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    await waitFor(() => expect(shown()).toEqual(["model-OWN1", "model-OWN2"]));
+    expectMember(["model-OWN1", "model-OWN2"]);
+    expect(urls(fetch).filter(u => u.includes("cursor=")).filter(u => u.includes("cAd") && me !== admin && !["cursor=cAd1", "cursor=cAd2"].some(c => u.includes(c)))).toEqual([]);
+    expect(urls(fetch).at(-1)).toBe("/api/v1/workspaces/team/holds?limit=50&cursor=cM1");
     client.clear();
   });
 
-  it("revoked access: when the gateway refuses a refresh and the session loses the workspace, the cached rows, totals and Reconcile controls are gone", async () => {
-    let revoked = false;
-    serve(() => revoked ? { ...session, workspaces: [personal], capabilities: { ...session.capabilities } } : admin, p => {
+  it("revoked access: a refused refresh drops the cached rows and entries while /me is still pending, and nothing returns once it answers", async () => {
+    const meLate = deferred(), SECRET = totalsOf("7", "777", "0", 80);
+    let revoked = false, meCalls = 0;
+    serve(() => { if (!revoked) return admin; meCalls++; return meLate.promise; }, p => {
       if (!p.startsWith("/api/v1/workspaces/team/holds")) return undefined;
-      return revoked ? Response.json({ error: { code: "403", message: "Forbidden" } }, { status: 403 }) : page({ data: [row({ ...rowsOf("team", "SECRET"), can_reconcile: true })], totals: { count: "7", known_floor_microusd: "777", unbounded_count: "0", oldest_age_hours: 80 } });
+      if (revoked) return Response.json({ error: { code: "403", message: "Forbidden" } }, { status: 403 });
+      return p.includes("cursor=cS1") ? page({ data: [rowFor("team", "SECRET2", true)], has_more: true, next_cursor: "cS2", totals: SECRET }) : page({ data: [rowFor("team", "SECRET1", true)], has_more: true, next_cursor: "cS1", totals: SECRET });
     });
-    const { client } = await mount("/workspaces/team/costs?tab=holds");
+    const user = userEvent.setup();
+    const { client } = await mount("/workspaces/team/costs?tab=holds", persistent());
     await loadedTable();
-    expect(screen.getAllByRole("button", { name: /^Reconcile/ })).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    await waitFor(() => expect(shown()).toEqual(["model-SECRET1", "model-SECRET2"]));
+    expect(reconcileButtons()).toHaveLength(2); expect(cacheText(client)).toContain("model-SECRET1");
     revoked = true;
     await client.invalidateQueries({ queryKey: ["api"] });
+    // The 403 alone (re-authorization still pending): no rows, totals, cursor or controls on screen, nothing of them cached.
+    await waitFor(() => expect(meCalls).toBeGreaterThan(0));
     await waitFor(() => expect(screen.queryByRole("table", { name: "Aged unknown holds" })).toBeNull());
-    expect(bodyText()).not.toContain("model-SECRET"); expect(bodyText()).not.toContain("777");
-    expect(screen.queryByRole("button", { name: /^Reconcile/ })).toBeNull(); expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
-    // The cache holds nothing of the revoked scope that a later render could show.
-    expect(JSON.stringify(client.getQueryCache().getAll().map(q => q.state.data ?? null))).not.toContain("model-SECRET");
+    for (const secret of ["model-SECRET1", "model-SECRET2", "777"]) expect(bodyText(), secret).not.toContain(secret);
+    expect(reconcileButtons()).toHaveLength(0); expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+    expect(cacheText(client)).not.toMatch(/model-SECRET|cS1|cS2|"count":"7"/);
+    meLate.resolve(Response.json({ ...session, workspaces: [personal] }));
+    await waitFor(() => expect(screen.queryByRole("tab", { name: "Holds" })).toBeNull());
+    for (const secret of ["model-SECRET1", "model-SECRET2", "777"]) expect(bodyText(), secret).not.toContain(secret);
+    expect(reconcileButtons()).toHaveLength(0); expect(cacheText(client)).not.toMatch(/model-SECRET|cS1|cS2/);
     client.clear();
   });
 
