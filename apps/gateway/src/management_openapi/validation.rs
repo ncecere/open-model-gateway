@@ -184,8 +184,29 @@ fn inline_schema_pointers(value: &Value, pointer: &str, result: &mut BTreeSet<St
         _ => {}
     }
 }
+/// Response Links name operations by `operationId`/`operationRef`, which the
+/// reference checks above do not resolve. None are needed yet, so refuse them
+/// outright rather than let a fragment point at a nonexistent operation.
+fn no_links(document: &Value) -> Result<()> {
+    ensure!(
+        document.pointer("/components/links").is_none(),
+        "response links are not supported in the management contract"
+    );
+    for (path, item) in document["paths"].as_object().context("paths missing")? {
+        for (method, operation) in item.as_object().into_iter().flatten() {
+            for (status, response) in operation["responses"].as_object().into_iter().flatten() {
+                ensure!(
+                    response.get("links").is_none(),
+                    "response links are not supported: {method} {path} {status}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
 pub(super) fn validate_document(document: &Value) -> Result<()> {
     local_references(document, document)?;
+    no_links(document)?;
     let validator = compile_schema(&json!({"$ref":OPENAPI_META}))?;
     validator
         .validate(document)

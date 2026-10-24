@@ -181,6 +181,31 @@ mod tests {
     }
 
     #[test]
+    fn management_openapi_rejects_response_links() {
+        let good = generated();
+        let (path, item) = good["paths"].as_object().unwrap().iter().next().unwrap();
+        let (method, operation) = item.as_object().unwrap().iter().next().unwrap();
+        let status = operation["responses"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .next()
+            .unwrap()
+            .clone();
+        let mut bad = good.clone();
+        bad["paths"][path][method]["responses"][&status]["links"] =
+            json!({"Next":{"operationId":"doesNotExist"}});
+        assert!(
+            v::validate_document(&bad).is_err(),
+            "accepted a dangling link"
+        );
+        let mut components = good.clone();
+        components["components"]["links"] = json!({"Next":{"operationId":"doesNotExist"}});
+        assert!(v::validate_document(&components).is_err());
+        v::validate_document(&good).unwrap();
+    }
+
+    #[test]
     fn management_openapi_rejects_undocumented_reasons() {
         let mut bad = generated();
         bad["components"]["schemas"]["ErrorEnvelope"]["properties"]["error"]["properties"]["reason"]["enum"]
