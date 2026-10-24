@@ -137,7 +137,7 @@ async fn deployment_preview_runs_as_runtime(pool: &PgPool) {
     assert_eq!(role, "admin");
     sqlx::query("SELECT d.id,d.model_id,m.public_name,d.enabled,m.enabled model_enabled,p.enabled connection_enabled,p.provider,m.supported_protocols FROM deployments d JOIN models m ON m.id=d.model_id JOIN provider_connections p ON p.id=d.provider_connection_id WHERE d.id=$1").bind(deployment).fetch_one(&mut *tx).await.unwrap();
     let versions: Value =
-        sqlx::query_scalar("SELECT jsonb_object_agg(topic,version::text) FROM config_versions")
+        sqlx::query_scalar("SELECT jsonb_object_agg(topic,version::text) FROM config_versions WHERE topic IN ('catalog','access')")
             .fetch_one(&mut *tx)
             .await
             .unwrap();

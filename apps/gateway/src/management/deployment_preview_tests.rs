@@ -118,6 +118,8 @@ async fn deployment_preview_last_route_multi_catalog_visibility_and_no_writes(po
             .starts_with("catalog:")
     );
     assert!(p["observed_at"].is_string());
+    assert_eq!(p["dependency_versions"].as_object().unwrap().len(), 2);
+    assert!(p["dependency_versions"]["keys"].is_null());
     assert_eq!(before, state(&pool).await);
     assert!(
         tokio::time::timeout(std::time::Duration::from_millis(100), listener.recv())
@@ -182,7 +184,7 @@ async fn deployment_preview_gained_alternative_routes_and_apply_behavior(pool: P
         };
         let (status, body) = call(&f.s, &f.admin, method, &endpoint, json!({"enabled":true})).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-        assert_eq!(body["error"]["code"], "route_unsupported_capability");
+        assert_eq!(body["error"]["reason"], "route_unsupported_capability");
     }
     assert_eq!(
         call(
@@ -217,6 +219,81 @@ async fn deployment_preview_gained_alternative_routes_and_apply_behavior(pool: P
         );
     }
 }
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn deployment_preview_live_replacement_and_disabled_model_effects(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let m = model(&pool, "preview-replacement").await;
+    let d = route(&pool, m, false).await;
+    let catalog = Uuid::new_v4();
+    sqlx::query("INSERT INTO catalogs(id,name) VALUES($1,'Default')")
+        .bind(catalog)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO catalog_models(catalog_id,model_id) VALUES($1,$2)")
+        .bind(catalog)
+        .bind(m)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO workspace_type_catalogs(kind,catalog_id) VALUES('team',$1)")
+        .bind(catalog)
+        .execute(&pool)
+        .await
+        .unwrap();
+    for ws in [f.team, f.project] {
+        sqlx::query("INSERT INTO workspace_model_grants(workspace_id,model_id,source) VALUES($1,$2,'catalog')").bind(ws).bind(m).execute(&pool).await.unwrap();
+    }
+    // Project's stale catalog selection is not eligible; team inherits.
+    assert_eq!(
+        preview(&f, d, true).await["affected_workspaces"]["total"],
+        1
+    );
+    // Empty replacement removes the team's eligibility without touching grants.
+    sqlx::query("INSERT INTO workspace_catalog_overrides(workspace_id) VALUES($1)")
+        .bind(f.team)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        preview(&f, d, true).await["affected_workspaces"]["total"],
+        0
+    );
+    sqlx::query(
+        "INSERT INTO workspace_model_grants(workspace_id,model_id,source) VALUES($1,$2,'direct')",
+    )
+    .bind(f.team)
+    .bind(m)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        preview(&f, d, true).await["affected_workspaces"]["total"],
+        1
+    );
+    sqlx::query("UPDATE models SET enabled=false WHERE id=$1")
+        .bind(m)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let p = preview(&f, d, true).await;
+    assert_eq!(p["serving_routes_gained"], json!([]));
+    assert_eq!(p["affected_workspaces"]["total"], 0);
+    // Existing apply accepts enabling a route on a disabled model/connection.
+    assert_eq!(
+        call(
+            &f.s,
+            &f.admin,
+            "PATCH",
+            &format!("/api/v1/platform/deployments/{d}"),
+            json!({"enabled":true})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+}
+
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn deployment_preview_does_not_wait_for_management_locks(pool: PgPool) {
     let f = fixture(&pool).await;

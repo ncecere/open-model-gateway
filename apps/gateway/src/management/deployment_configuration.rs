@@ -22,6 +22,8 @@ struct DeploymentState {
 pub(super) struct DeploymentChange {
     before: DeploymentState,
     enabled: bool,
+    serving_before: bool,
+    serving_after: bool,
 }
 
 const WORKSPACE_LIMIT: i64 = 100;
@@ -47,7 +49,7 @@ impl PreviewSnapshot {
         change: DeploymentChange,
     ) -> Result<Self, ApiError> {
         let (observed_at, catalog_version, dependency_versions) = sqlx::query_as::<_, (chrono::DateTime<chrono::Utc>, i64, Value)>(
-            "SELECT transaction_timestamp(),(SELECT version FROM config_versions WHERE topic='catalog'),(SELECT jsonb_object_agg(topic,version::text) FROM config_versions)",
+            "SELECT transaction_timestamp(),(SELECT version FROM config_versions WHERE topic='catalog'),(SELECT jsonb_object_agg(topic,version::text) FROM config_versions WHERE topic IN ('catalog','access'))",
         ).fetch_one(&mut **tx).await?;
         let other_serving_routes = sqlx::query_scalar(&format!(
             "SELECT count(*) FROM deployments d WHERE d.model_id=$1 AND d.id<>$2 AND {}",
@@ -57,7 +59,7 @@ impl PreviewSnapshot {
         .bind(change.before.id)
         .fetch_one(&mut **tx)
         .await?;
-        let changed = change.serving(change.before.enabled) != change.serving(change.enabled);
+        let changed = change.serving_before != change.serving_after;
         // Platform configuration authority covers shared metadata only. Do not
         // read foreign personal IDs/owners/keys, even to paginate or count them.
         // workspace_model_allowed applies live catalog replacement/inheritance
@@ -90,10 +92,8 @@ impl PreviewSnapshot {
     /// No database, locks, side effects, inference simulation or provider calls.
     fn evaluate(self) -> Value {
         let c = self.change;
-        let before_serving = c.serving(c.before.enabled);
-        let after_serving = c.serving(c.enabled);
-        let lost = before_serving && !after_serving;
-        let gained = !before_serving && after_serving;
+        let lost = c.serving_before && !c.serving_after;
+        let gained = !c.serving_before && c.serving_after;
         json!({
             "target": {"kind":"deployment","id":c.before.id},
             "expected_revision": format!("catalog:{}", self.catalog_version),
@@ -154,15 +154,20 @@ impl DeploymentChange {
         {
             return Err(ManagementError::route_unsupported(format!("{reason}.")));
         }
-        Ok(Self { before, enabled })
-    }
-    /// Configuration serving eligibility, using the same capability table as
-    /// validation and `resources::SERVING_ROUTE` (not price/health/admission).
-    fn serving(&self, enabled: bool) -> bool {
-        enabled
-            && self.before.model_enabled
-            && self.before.connection_enabled
-            && capabilities::route_serves(&self.before.provider, &self.before.supported_protocols)
+        // Both preview and apply prepare the same serving transition. These
+        // are estimates, not additional apply restrictions: enabling a route
+        // on a disabled model/connection remains a valid existing operation.
+        let eligible = before.model_enabled
+            && before.connection_enabled
+            && capabilities::route_serves(&before.provider, &before.supported_protocols);
+        let serving_before = before.enabled && eligible;
+        let serving_after = enabled && eligible;
+        Ok(Self {
+            before,
+            enabled,
+            serving_before,
+            serving_after,
+        })
     }
     pub(super) async fn apply(&self, tx: &mut Transaction<'_, Postgres>) -> Result<(), ApiError> {
         if sqlx::query("UPDATE deployments SET enabled=$2 WHERE id=$1")
