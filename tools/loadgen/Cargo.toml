@@ -29,7 +29,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 
 [features]
 # Database end-to-end test (tests/end_to_end.rs): needs DATABASE_URL.
-integration-tests = []
+integration-tests = ["open-model-gateway/integration-tests"]
 
 [dev-dependencies]
 axum = "0.8"
