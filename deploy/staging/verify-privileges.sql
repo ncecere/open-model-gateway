@@ -967,4 +967,23 @@ BEGIN
   BEGIN DELETE FROM work_leases; RAISE EXCEPTION 'lease removal allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  END;
 END $$;
+-- 0059 executable admission probes, as runtime, on a fresh isolated bucket.
+DO $$ DECLARE ws uuid:=gen_random_uuid(); r uuid:=gen_random_uuid(); d uuid; suppressed_id uuid; BEGIN
+ INSERT INTO workspaces(id,name,kind) VALUES(ws,'Generation ACL probe','team');
+ INSERT INTO alert_rules(id,scope,workspace_id,kind,name,budget_layers,thresholds)
+  VALUES(r,'workspace',ws,'budget_threshold','Generation ACL probe',ARRAY['local'],ARRAY[100]);
+ WITH events AS (INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary)
+  SELECT gen_random_uuid(),r,'budget_threshold',i::text,100,'critical',ws,'Generation probe' FROM generate_series(1,101) i RETURNING id)
+ INSERT INTO alert_deliveries(id,event_id,transition) SELECT gen_random_uuid(),id,'fired' FROM events;
+ IF (SELECT count(*) FROM alert_deliveries WHERE bucket_id=ws AND quota_charged)<>100
+  OR (SELECT count(*) FROM alert_deliveries WHERE bucket_id=ws AND status='pending')<>100 THEN RAISE EXCEPTION 'runtime generation limit bypass'; END IF;
+ SELECT id INTO STRICT suppressed_id FROM alert_deliveries WHERE bucket_id=ws AND status='suppressed'
+  AND suppression_reason='workspace_generation_limit' AND NOT quota_charged AND recipients=0 AND attempt_count=0 AND completed_at IS NOT NULL;
+ SELECT id INTO STRICT d FROM alert_deliveries WHERE bucket_id=ws AND status='pending' LIMIT 1;
+ INSERT INTO alert_recipient_outbox(delivery_id,fingerprint) SELECT d,sha256(i::text::bytea) FROM generate_series(1,50) i;
+ BEGIN INSERT INTO alert_recipient_outbox(delivery_id,fingerprint) VALUES(d,sha256('51'::bytea)); RAISE EXCEPTION '51st alert recipient allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+ BEGIN INSERT INTO alert_recipient_outbox(delivery_id,fingerprint) VALUES(suppressed_id,sha256('suppressed'::bytea)); RAISE EXCEPTION 'suppressed recipient snapshot allowed'; EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'alert recipient snapshot already closed' THEN RAISE; END IF; END;
+ BEGIN UPDATE alert_deliveries SET quota_charged=false WHERE id=d; RAISE EXCEPTION 'runtime quota refund allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN UPDATE alert_deliveries SET suppression_reason=NULL WHERE id=suppressed_id; RAISE EXCEPTION 'runtime suppression rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+END $$;
 ROLLBACK;

@@ -212,6 +212,7 @@ pub(crate) async fn reconcile_alert(
     full: bool,
 ) -> Result<(bool, bool), sqlx::Error> {
     use crate::alerts::HISTORY_ORPHANS;
+    crate::alerts::lock_delivery_buckets(tx, &[Uuid::nil()]).await?;
     let open: Vec<Uuid> = sqlx::query_scalar(
         "SELECT id FROM alert_events WHERE builtin=$1 AND resolved_at IS NULL FOR UPDATE",
     )

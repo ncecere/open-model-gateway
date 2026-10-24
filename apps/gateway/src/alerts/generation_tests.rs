@@ -23,6 +23,10 @@ async fn generation_rule(s: &Seed, workspace: Option<Uuid>) -> Uuid {
 }
 
 async fn generation_events(s: &Seed, workspace: Option<Uuid>, n: i32) -> Vec<Uuid> {
+    if workspace == Some(s.personal) {
+        return sqlx::query_scalar("INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,workspace_id,summary) SELECT gen_random_uuid(),'personal_budget','budget_threshold',gen_random_uuid()::text,100,'critical',$1,'Generation test' FROM generate_series(1,$2) RETURNING id")
+            .bind(s.personal).bind(n).fetch_all(&s.pool).await.unwrap();
+    }
     let r = generation_rule(s, workspace).await;
     sqlx::query_scalar("INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary) SELECT gen_random_uuid(),$1,'budget_threshold',i::text,100,'critical',$2,'Generation test' FROM generate_series(1,$3) i RETURNING id")
         .bind(r).bind(workspace).bind(n).fetch_all(&s.pool).await.unwrap()
@@ -46,7 +50,9 @@ async fn alert_generation_across_rules_transitions_buckets_and_webhooks(pool: Pg
         .execute(&s.pool)
         .await
         .unwrap();
-    let last = generation_events(&s, Some(s.team), 2).await;
+    let second_rule = generation_rule(&s, None).await;
+    let last: Vec<Uuid> = sqlx::query_scalar("INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,workspace_id,summary) SELECT gen_random_uuid(),$1,'budget_threshold',i::text,100,'critical',$2,'Generation test' FROM generate_series(1,2) i RETURNING id")
+        .bind(second_rule).bind(s.team).fetch_all(&s.pool).await.unwrap();
     sqlx::query(GENERATE)
         .bind(&last)
         .execute(&s.pool)
@@ -58,7 +64,7 @@ async fn alert_generation_across_rules_transitions_buckets_and_webhooks(pool: Pg
     assert_eq!(count(&s, "SELECT count(*) FROM alert_events").await, 101);
     assert_eq!(
         count(&s, "SELECT count(*) FROM alert_webhook_outbox").await,
-        99
+        101
     );
     // Both clearing transitions are suppressed separately, but enqueue webhooks.
     sqlx::query("UPDATE alert_events SET resolved_at=clock_timestamp(),resolution='cleared' WHERE id=ANY($1)").bind(&ids[..2]).execute(&s.pool).await.unwrap();
@@ -73,7 +79,7 @@ async fn alert_generation_across_rules_transitions_buckets_and_webhooks(pool: Pg
     );
     assert_eq!(
         count(&s, "SELECT count(*) FROM alert_webhook_outbox").await,
-        101
+        103
     );
     for ws in [Some(s.personal), None] {
         let quiet = generation_events(&s, ws, 1).await;
@@ -218,6 +224,100 @@ async fn alert_generation_canonical_locks_opposite_bucket_orders(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
+async fn alert_generation_real_reconcile_and_key_expiry_lock_order(pool: PgPool) {
+    let s = seed(pool).await;
+    let ws = Uuid::new_v4();
+    let key = Uuid::new_v4();
+    sqlx::query("INSERT INTO workspaces(id,name,kind) VALUES($1,'Other','team')")
+        .bind(ws)
+        .execute(&s.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source) VALUES($1,$2,'owner','manual')").bind(ws).bind(s.owner).execute(&s.pool).await.unwrap();
+    let now = expiry_now(&s).await;
+    sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash,expires_at) VALUES($1,$2,$3,'Other',decode(repeat('42',32),'hex'),$4)")
+        .bind(key).bind(ws).bind(s.owner).bind(now+chrono::Duration::days(2)).execute(&s.pool).await.unwrap();
+    set_expiry(&s, s.key, Some(now + chrono::Duration::days(3))).await;
+    let r = generation_rule(&s, None).await;
+    // Key expiry visits ws then team (expiry order); reconciliation visits
+    // team then ws. Neither may lock incrementally in that visit order.
+    let conditions = [s.team, ws]
+        .map(|workspace| Condition {
+            subject: workspace.to_string(),
+            level: 100,
+            critical: true,
+            workspace_id: Some(workspace),
+            connection_id: None,
+            summary: "Order test".into(),
+            details: json!({}),
+        })
+        .to_vec();
+    let barrier = tokio::sync::Barrier::new(2);
+    let rules = async {
+        let mut tx = s.pool.begin().await.unwrap();
+        sqlx::query("SET LOCAL statement_timeout='5s'")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        barrier.wait().await;
+        let changes = reconcile(&mut tx, Source::Rule(r), Kind::Budget, conditions)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        changes
+    };
+    let expiry = async {
+        let mut tx = s.pool.begin().await.unwrap();
+        sqlx::query("SET LOCAL statement_timeout='5s'")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        barrier.wait().await;
+        let changes = key_expiring_tick(&mut tx, now).await.unwrap();
+        tx.commit().await.unwrap();
+        changes
+    };
+    let (a, b) = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::join!(rules, expiry)
+    })
+    .await
+    .unwrap();
+    assert_eq!((a.fired, b.fired), (2, 2));
+    assert_eq!(
+        count(
+            &s,
+            "SELECT count(*) FROM alert_deliveries WHERE quota_charged"
+        )
+        .await,
+        4
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn alert_generation_old_sql_inverted_bucket_wait_is_refused(pool: PgPool) {
+    let low = Uuid::parse_str("00000001-0000-0000-0000-000000000000").unwrap();
+    let high = Uuid::parse_str("00000002-0000-0000-0000-000000000000").unwrap();
+    let mut a = pool.begin().await.unwrap();
+    let mut b = pool.begin().await.unwrap();
+    lock_delivery_buckets(&mut a, &[high]).await.unwrap();
+    lock_delivery_buckets(&mut b, &[low]).await.unwrap();
+    let error = tokio::time::timeout(
+        Duration::from_secs(2),
+        lock_delivery_buckets(&mut a, &[low]),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert_eq!(
+        error.as_database_error().unwrap().code().as_deref(),
+        Some("40001")
+    );
+    a.rollback().await.unwrap();
+    lock_delivery_buckets(&mut b, &[high]).await.unwrap();
+    b.commit().await.unwrap();
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
 async fn alert_generation_clock_boundary_forgery_and_isolation(pool: PgPool) {
     let s = seed(pool).await;
     let ids = generation_events(&s, Some(s.team), 3).await;
@@ -235,29 +335,37 @@ async fn alert_generation_clock_boundary_forgery_and_isolation(pool: PgPool) {
     assert!(at >= before);
     assert!(charged);
     assert!(reason.is_none());
+    sqlx::query(
+        "UPDATE alert_deliveries SET status='not_configured',completed_at=clock_timestamp()",
+    )
+    .execute(&s.pool)
+    .await
+    .unwrap();
     // Exact open lower / closed upper bound, including terminal charged rows.
     let inside: i64 = sqlx::query_scalar(
-        "SELECT alert_delivery_recent_count($1,$2+interval '24 hours'-interval '1 microsecond')",
+        "SELECT alert_delivery_recent_count($1,$2::timestamptz+interval '24 hours'-interval '1 microsecond')",
     )
     .bind(s.team)
     .bind(at)
     .fetch_one(&s.pool)
     .await
     .unwrap();
-    let boundary: i64 =
-        sqlx::query_scalar("SELECT alert_delivery_recent_count($1,$2+interval '24 hours')")
-            .bind(s.team)
-            .bind(at)
-            .fetch_one(&s.pool)
-            .await
-            .unwrap();
-    let future: i64 =
-        sqlx::query_scalar("SELECT alert_delivery_recent_count($1,$2-interval '1 microsecond')")
-            .bind(s.team)
-            .bind(at)
-            .fetch_one(&s.pool)
-            .await
-            .unwrap();
+    let boundary: i64 = sqlx::query_scalar(
+        "SELECT alert_delivery_recent_count($1,$2::timestamptz+interval '24 hours')",
+    )
+    .bind(s.team)
+    .bind(at)
+    .fetch_one(&s.pool)
+    .await
+    .unwrap();
+    let future: i64 = sqlx::query_scalar(
+        "SELECT alert_delivery_recent_count($1,$2::timestamptz-interval '1 microsecond')",
+    )
+    .bind(s.team)
+    .bind(at)
+    .fetch_one(&s.pool)
+    .await
+    .unwrap();
     assert_eq!((inside, boundary, future), (1, 0, 0));
     for level in ["REPEATABLE READ", "SERIALIZABLE"] {
         let mut tx = s.pool.begin().await.unwrap();
@@ -276,14 +384,14 @@ async fn alert_generation_clock_boundary_forgery_and_isolation(pool: PgPool) {
         );
         tx.rollback().await.unwrap();
     }
-    for col in [
-        "quota_charged",
-        "suppression_reason",
-        "bucket_id",
-        "created_at",
+    for assignment in [
+        "quota_charged=false",
+        "suppression_reason='workspace_generation_limit'",
+        "bucket_id=gen_random_uuid()",
+        "created_at='2000-01-01'",
     ] {
         assert!(
-            sqlx::query(&format!("UPDATE alert_deliveries SET {col}=DEFAULT"))
+            sqlx::query(&format!("UPDATE alert_deliveries SET {assignment}"))
                 .execute(&s.pool)
                 .await
                 .is_err()
@@ -317,11 +425,18 @@ async fn alert_generation_recipient_50_51_and_suppressed_terminal(pool: PgPool) 
         .await
         .is_err()
     );
+    // Neither critical severity nor the urgent 1-day reminder bypasses quota.
+    let now = expiry_now(&s).await;
+    set_expiry(&s, s.key, Some(now + chrono::Duration::hours(12))).await;
+    assert_eq!(expiry_tick(&s, now).await.fired, 1);
+    let urgent: (String,i32,i32) = sqlx::query_as("SELECT d.status,d.recipients,d.attempt_count FROM alert_deliveries d JOIN alert_events e ON e.id=d.event_id WHERE e.kind='key_expiring'").fetch_one(&s.pool).await.unwrap();
+    assert_eq!(urgent, ("suppressed".into(), 0, 0));
 }
 
 #[sqlx::test(migrations = false)]
 async fn alert_generation_upgrade_0057_old_sql_and_concurrent_index_recovery(pool: PgPool) {
     let all = sqlx::migrate!("./enterprise_migrations");
+    assert!(all.iter().any(|m| m.version == 60 && m.no_tx));
     sqlx::migrate::Migrator {
         migrations: std::borrow::Cow::Owned(
             all.iter().filter(|m| m.version <= 57).cloned().collect(),
@@ -364,9 +479,11 @@ async fn alert_generation_upgrade_0057_old_sql_and_concurrent_index_recovery(poo
         .await,
         1
     );
-    assert_eq!(deliver_pending(&s.store, 25).await, 2);
-    // Pre-0059 worker final UPDATE still works; suppressed never matches pending.
-    sqlx::query("UPDATE alert_deliveries SET status='not_configured',completed_at=clock_timestamp() WHERE status='pending'").execute(&s.pool).await.unwrap();
+    // Exact pre-0059 worker finalization shape, unaware of quota metadata.
+    let finalized = sqlx::query("UPDATE alert_deliveries SET status='not_configured',completed_at=clock_timestamp() WHERE event_id=$1 AND status='pending'")
+        .bind(ids[2]).execute(&s.pool).await.unwrap().rows_affected();
+    assert_eq!(finalized, 1);
+    assert_eq!(deliver_pending(&s.store, 25).await, 1);
     sqlx::raw_sql("DELETE FROM _sqlx_migrations WHERE version=60; UPDATE pg_index SET indisvalid=false WHERE indexrelid='public.alert_deliveries_generation_window'::regclass").execute(&s.pool).await.unwrap();
     s.store.migrate_enterprise().await.unwrap();
     assert!(s.store.is_ready().await);

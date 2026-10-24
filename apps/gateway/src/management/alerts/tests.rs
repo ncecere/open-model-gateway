@@ -549,7 +549,12 @@ async fn notifications_follow_live_authority_and_never_leak_private_details(pool
     assert_eq!(mine.len(), 2, "{mine:?}");
     for event in &mine {
         let email = event["email"].as_object().unwrap();
-        assert_eq!(email.len(), 10, "aggregate allowlist only");
+        assert_eq!(
+            email.len(),
+            11,
+            "aggregate allowlist plus suppression reason only"
+        );
+        assert_eq!(email["suppression_reason"], Value::Null);
         assert_eq!(email["retrying"], true);
         assert_eq!(email["waiting"], 1);
         assert!(email["next_attempt_at"].is_string());
