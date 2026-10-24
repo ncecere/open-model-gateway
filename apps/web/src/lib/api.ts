@@ -43,7 +43,9 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
       const code = error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "request_failed";
       const plain = response.headers.get("content-type")?.includes("text/plain") && text.length <= 2000 ? text.trim() : "";
       const message = error && typeof error === "object" && "message" in error && typeof error.message === "string" ? error.message : plain || `Request failed (${response.status}).`;
-      if (response.status === 403 && method === "GET" && path !== `${API}/me` && typeof window !== "undefined") window.dispatchEvent(new Event("omg:access-refresh"));
+      // Automatic refusals are distinct from bare manual authority-change events.
+      // Carry only the cause and resource path, never query values or response text.
+      if (response.status === 403 && method === "GET" && path !== `${API}/me` && typeof window !== "undefined") window.dispatchEvent(new CustomEvent("omg:access-refresh", { detail: { cause: "forbidden", path: path.split("?")[0] } }));
       const reason = error && typeof error === "object" && "reason" in error && typeof error.reason === "string" ? error.reason : undefined;
       const field = (name: "period" | "limit" | "scope" | "operation") => error && typeof error === "object" && name in error && typeof (error as Record<string, unknown>)[name] === "string" && /^[a-z_]{1,40}$/.test((error as Record<string, string>)[name]!) ? (error as Record<string, string>)[name] : undefined;
       const period = field("period"), limit = field("limit"), scope = field("scope"), operation = field("operation");
