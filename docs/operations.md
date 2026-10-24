@@ -61,7 +61,7 @@ The gateway's own HTTP clients (OpenAI, Anthropic, OpenRouter, Bedrock requests,
 - **Private:** RFC 1918, `100.64.0.0/10` (carrier-grade NAT, which includes Tailscale) and IPv6 unique-local addresses, only inside `GATEWAY_EGRESS_PRIVATE_ALLOW`.
 - **Public:** allowed.
 
-Names are resolved by the gateway, refused addresses are dropped, and the connection goes only to an address that passed (so a DNS answer can't change between the check and the connection). Configured IP-literal URLs are checked at startup: `GATEWAY_S3_ENDPOINT`, `GATEWAY_BEDROCK_ENDPOINT_ALLOWLIST`, the OIDC issuer and the endpoints it publishes. A refused OIDC issuer stops startup with a message naming `GATEWAY_EGRESS_PRIVATE_ALLOW`. A refused request fails like an unreachable upstream; the log names the purpose, host and reason, and `gateway_egress_denied_total{purpose}` counts it. Approved local upstreams (`GATEWAY_LOCAL_UPSTREAMS`), including their vLLM metrics, keep their own pinned approval and need no entry here.
+Names are resolved by the gateway, refused addresses are dropped, and the connection goes only to an address that passed (so a DNS answer can't change between the check and the connection). Configured IP-literal URLs are checked at startup: `GATEWAY_S3_ENDPOINT`, `GATEWAY_BEDROCK_ENDPOINT_ALLOWLIST`, the OIDC issuer and the endpoints it publishes. A refused OIDC issuer stops startup with a message naming `GATEWAY_EGRESS_PRIVATE_ALLOW`. A refused request fails like an unreachable upstream; the log names the purpose, host and reason, and `gateway_egress_denied_total{purpose}` counts it. Approved local upstreams (`GATEWAY_LOCAL_UPSTREAMS`), including their vLLM metrics, keep their own pinned approval and need no entry here; they are refused in the same special-use ranges as above (#203), and an approval in one stops startup.
 
 List a private network when you use one of these:
 
@@ -196,12 +196,13 @@ Both endpoints are on the public listener. They are not authenticated and never 
 - `GET /health/ready` returns 200 only when every check passes, and 503 otherwise:
 
   ```json
-  {"status":"ready","checks":{"database":"ok","schema":"ok","web":"ok"}}
+  {"status":"ready","checks":{"database":"ok","schema":"ok","web":"ok","local_upstream_approvals":"ok"}}
   ```
 
   - `database`: a pooled connection answered within 2 seconds.
   - `schema`: the installation family and the full migration lineage (versions and checksums) match this binary exactly. It reports `unknown` when the database is unreachable.
   - `web`: `disabled` when `GATEWAY_WEB_DIR` is unset. Otherwise it checks that the loaded build's `index.html` still exists, which catches an unmounted volume.
+  - `local_upstream_approvals`: always `ok` (#203). v0.8.0 reported `warning` while an approval in `GATEWAY_LOCAL_UPSTREAMS` was in a range v0.9.0 would refuse; that warning phase has ended. A refused approval now stops `serve` at startup (before any database connection, with a message naming the approval's host, address and category), so a replica that answers readiness has loaded only permitted approvals. The field stays so dashboards and alerts that read it keep working; `ok` carries no information beyond "this replica started". Never added to the ready/not-ready decision. To check an installation before upgrading, see [the upgrade note](releases/unreleased.md#local-upstream-approvals-in-special-use-ranges-are-now-refused-203).
 
   Use readiness for load-balancer membership and the container `HEALTHCHECK`. The service never migrates by itself, so a release whose schema does not match stays unready until you run `migrate`.
 
