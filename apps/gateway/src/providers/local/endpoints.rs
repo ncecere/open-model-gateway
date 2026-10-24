@@ -26,6 +26,13 @@ pub struct Warning {
     pub endpoint: String,
     pub category: &'static str,
 }
+/// Pinned local-upstream approvals, loaded from operator configuration.
+/// Raw approval JSON is not a public production constructor:
+///
+/// ```compile_fail
+/// use open_model_gateway::providers::local::endpoints::ApprovedEndpoints;
+/// let _ = ApprovedEndpoints::parse("[]", "development");
+/// ```
 pub struct ApprovedEndpoints {
     endpoints: BTreeMap<String, Endpoint>,
     warnings: Vec<Warning>,
@@ -39,6 +46,16 @@ impl ApprovedEndpoints {
         };
         Self::parse(&value, environment)
             .map_err(|_| anyhow::anyhow!("Invalid local endpoint approvals"))
+    }
+    /// Test-only constructor for fixtures that own their approval JSON.
+    /// Runs the production validator without mutating process environment.
+    #[cfg(feature = "integration-tests")]
+    #[doc(hidden)]
+    pub fn parse_for_integration_tests(
+        value: &str,
+        environment: &str,
+    ) -> Result<Self, InferenceError> {
+        Self::parse(value, environment)
     }
     pub(super) fn parse(value: &str, environment: &str) -> Result<Self, InferenceError> {
         let invalid = InferenceError::Configuration;
