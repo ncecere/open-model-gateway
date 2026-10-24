@@ -67,7 +67,7 @@ impl AgedHoldCounts {
     }
 }
 
-type AgedHoldCandidate = (String, Option<Uuid>, DateTime<Utc>);
+type AgedHoldCandidate = (String, Option<Uuid>, DateTime<Utc>, bool);
 type AgedHoldRetirement = (Uuid, String);
 
 /// One serialized/fenced job. All time comes from the post-lock database
@@ -106,10 +106,13 @@ pub(crate) async fn aged_hold_tick(
     // Ignore only the selected retirements for open-incident dedup; their
     // fired_at still counts for cooldown. This preserves escalation and
     // the 500-retirement cap while probing candidates before any writes.
+    // Classify critical incidents from immutable warning HISTORY, not only
+    // this tick's retirements: cooldown/caps may split superseding and firing
+    // across ticks. History probes use the existing subject/fired partial index.
     // One extra probe detects deferred work, including when the daily
     // allowance is exhausted. Never materialize an unbounded telemetry count.
     let mut candidates: Vec<AgedHoldCandidate> = if unknown > 0 {
-        sqlx::query_as("WITH candidates AS (SELECT CASE WHEN w.kind='personal' THEN 'personal' ELSE 'workspace:'||w.id END subject, CASE WHEN w.kind='personal' THEN NULL ELSE w.id END workspace_id, first.unknown_since FROM budget_totals t JOIN workspaces w ON w.id=t.scope_id CROSS JOIN LATERAL (SELECT coalesce(l.created_at,r.admitted_at) unknown_since FROM governance_reservations r LEFT JOIN monetary_ledger l ON l.execution_id=r.execution_id AND l.admitted_at=r.admitted_at AND l.kind='unknown' WHERE r.workspace_id=w.id AND r.state='unknown' AND r.admitted_at<=$1-interval '24 hours' AND coalesce(l.created_at,r.admitted_at)<=$1-interval '24 hours' ORDER BY 1,r.execution_id LIMIT 1) first WHERE t.scope_kind='workspace' AND t.period='lifetime' AND t.period_start='epoch' AND t.unknown>0 AND w.disabled_at IS NULL), scopes AS (SELECT subject,workspace_id,min(unknown_since) unknown_since FROM candidates GROUP BY subject,workspace_id) SELECT subject,workspace_id,unknown_since FROM scopes s WHERE NOT EXISTS(SELECT 1 FROM alert_events e WHERE e.kind='aged_unknown_hold' AND e.subject_key=s.subject AND ((e.resolved_at IS NULL AND NOT(e.id=ANY($3::uuid[]))) OR e.fired_at>$1-interval '24 hours')) ORDER BY unknown_since,subject LIMIT $2")
+        sqlx::query_as("WITH candidates AS (SELECT CASE WHEN w.kind='personal' THEN 'personal' ELSE 'workspace:'||w.id END subject, CASE WHEN w.kind='personal' THEN NULL ELSE w.id END workspace_id, first.unknown_since FROM budget_totals t JOIN workspaces w ON w.id=t.scope_id CROSS JOIN LATERAL (SELECT coalesce(l.created_at,r.admitted_at) unknown_since FROM governance_reservations r LEFT JOIN monetary_ledger l ON l.execution_id=r.execution_id AND l.admitted_at=r.admitted_at AND l.kind='unknown' WHERE r.workspace_id=w.id AND r.state='unknown' AND r.admitted_at<=$1-interval '24 hours' AND coalesce(l.created_at,r.admitted_at)<=$1-interval '24 hours' ORDER BY 1,r.execution_id LIMIT 1) first WHERE t.scope_kind='workspace' AND t.period='lifetime' AND t.period_start='epoch' AND t.unknown>0 AND w.disabled_at IS NULL), scopes AS (SELECT subject,workspace_id,min(unknown_since) unknown_since FROM candidates GROUP BY subject,workspace_id) SELECT subject,workspace_id,unknown_since,EXISTS(SELECT 1 FROM alert_events history WHERE history.kind='aged_unknown_hold' AND history.subject_key=s.subject AND history.level=1) had_warning FROM scopes s WHERE NOT EXISTS(SELECT 1 FROM alert_events e WHERE e.kind='aged_unknown_hold' AND e.subject_key=s.subject AND ((e.resolved_at IS NULL AND NOT(e.id=ANY($3::uuid[]))) OR e.fired_at>$1-interval '24 hours')) ORDER BY unknown_since,subject LIMIT $2")
             .bind(now).bind(allowance + 1).bind(&retired_ids).fetch_all(&mut **tx).await?
     } else {
         Vec::new()
@@ -132,16 +135,11 @@ pub(crate) async fn aged_hold_tick(
         .iter()
         .filter(|(_, resolution)| resolution == "cleared")
         .count() as u64;
-    let superseded: std::collections::HashSet<_> = retired
-        .iter()
-        .filter(|(_, resolution)| resolution == "superseded")
-        .map(|(subject, _)| subject.as_str())
-        .collect();
     let mut changes = Changes {
         resolved: retired.len(),
         ..Changes::default()
     };
-    for (subject, workspace, since) in candidates {
+    for (subject, workspace, since, had_warning) in candidates {
         let critical = since <= now - TimeDelta::hours(AGED_HOLD_CRITICAL_HOURS);
         let hours = if critical {
             AGED_HOLD_CRITICAL_HOURS
@@ -163,7 +161,7 @@ pub(crate) async fn aged_hold_tick(
             .bind(id)
             .fetch_one(&mut **tx)
             .await?;
-            if critical && superseded.contains(subject.as_str()) {
+            if critical && had_warning {
                 counts.escalated += 1;
             } else {
                 counts.fired += 1;

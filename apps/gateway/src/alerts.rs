@@ -1499,6 +1499,14 @@ struct Pending {
 // claim is leased, with the same narrow claimed-then-authority-changes race
 // window the outbox documents for every other rule kind.
 fn email_message(row: Pending, installation: String) -> (String, String) {
+    email_message_with_link(row, installation, public_url().as_deref())
+}
+
+fn email_message_with_link(
+    row: Pending,
+    installation: String,
+    link: Option<&str>,
+) -> (String, String) {
     let Pending {
         transition,
         summary,
@@ -1537,13 +1545,20 @@ fn email_message(row: Pending, installation: String) -> (String, String) {
     let (subject, mut body) = email_text(
         &EmailFacts {
             installation,
-            summary,
+            summary: if kind == "aged_unknown_hold" {
+                format!("Aged unknown hold: {summary}")
+            } else {
+                summary
+            },
             resolved,
             critical: severity == "critical",
             scope,
             rule: rule_name.or_else(|| {
                 if kind == "key_expiring" {
                     return Some("Built-in key-expiry reminder".to_owned());
+                }
+                if kind == "aged_unknown_hold" {
+                    return Some("Built-in aged unknown-hold alert".to_owned());
                 }
                 match builtin.as_deref() {
                     Some(SCIM_LAST_ADMIN) => Some("Built-in SCIM safeguard".to_owned()),
@@ -1558,8 +1573,17 @@ fn email_message(row: Pending, installation: String) -> (String, String) {
                 fired_at
             },
         },
-        public_url().as_deref(),
+        link,
     );
+    if kind == "aged_unknown_hold" {
+        // All aged-hold mail is platform-admin-only. Even the personal
+        // aggregate links to the authorized, anonymous platform Holds view;
+        // no workspace, owner, key or request identifier enters these links.
+        let base = link.unwrap_or_default();
+        body.push_str(&format!(
+            "\r\nRetained floors are not upper bounds.\r\nAn unbounded hold has no known limit.\r\nNothing is refunded or released here; these amounts are never added to spend.\r\nA hold settles only when a Platform Admin reconciles it with evidence.\r\n\r\nNotifications: {base}/notifications\r\nOpen holds: {base}/admin/costs?tab=holds\r\n"
+        ));
+    }
     if kind == "key_expiring"
         && let Some(expiry) = key_expires_at
     {

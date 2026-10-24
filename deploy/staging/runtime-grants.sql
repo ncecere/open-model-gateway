@@ -137,6 +137,8 @@ GRANT UPDATE(consecutive_failures,open_until,last_observed_at) ON public.deploym
 -- scopes/unknown-ledger age and effective_platform_roles, using existing
 -- SELECT grants. Delivery INSERT RETURNING status and resolution UPDATE
 -- RETURNING subject/resolution also use existing alert table SELECT grants.
+-- Escalation classification reads warning history with the existing
+-- alert_events SELECT grant, including when firing is deferred across ticks.
 -- The recipient outbox's snapshot/retry/fencing writes are unchanged.
 -- Alerts (0011). Rules are soft-deleted (deleted_at), never removed; scope,
 -- workspace and kind are fixed at creation. Incidents are inserted by the
