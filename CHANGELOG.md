@@ -6,7 +6,11 @@ The project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). 
 
 ## [Unreleased]
 
-Changes after v0.7.2: [unreleased notes](docs/releases/unreleased.md).
+Changes after v0.8.0: [unreleased notes](docs/releases/unreleased.md).
+
+## [0.8.0]
+
+Alerts, machine administration and tracing. Durable per-recipient alert email outbox with bounded retries (#46); authorized 7-day and 1-day key-expiry reminders (#100); scoped, expiring, audited admin API tokens with a browser-only management API and dashboard page (#37); opt-in OpenTelemetry traces for interactive generation with a Logs `trace_id` (#98); Helm CNPG backups through the Barman Cloud plugin (#261); per-period budget headroom (#103); Logs Refresh (#232); batch planning no longer reserves budget for lines an adapter always rejects (#238, #243, #245); a duplicate key-creation guard (#272); `aes-gcm` 0.11.1 with an unchanged file format (#17) and other dependency updates; a documented RUSTSEC-2026-0387 exception (#284). **Migrations `0049` to `0052`** (schema now 0052): apply `migrate` then `grants apply` explicitly, and stop old alert email workers first (set `GATEWAY_ALERT_INTERVAL_SECONDS=0` or scale to zero; unset still means enabled). Management requests carrying an `Authorization` header are now refused. Local-upstream approvals in some special-use ranges will be refused at startup in v0.9.0 (#203). See [release and upgrade notes](docs/releases/v0.8.0.md), which cover upgrades from v0.7.1 and v0.7.2.
 
 ## [0.7.2]
 
@@ -58,7 +62,8 @@ Alerts, key safety, model compare, SCIM, JWKS refresh, metrics and backup toolin
 
 The single-enterprise rebuild: Team, Project and personal workspaces, OIDC platform roles, catalogs, multimodal workloads across five provider families, immutable micro-USD accounting, logs and Admin settings. Migrations `0001` to `0010`. Notes: [`docs/releases/v0.1.0.md`](docs/releases/v0.1.0.md).
 
-[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/ncecere/open-model-gateway/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/ncecere/open-model-gateway/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/ncecere/open-model-gateway/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/ncecere/open-model-gateway/compare/v0.7.0...v0.7.1
 [0.4.0]: https://github.com/ncecere/open-model-gateway/compare/v0.3.2...v0.4.0

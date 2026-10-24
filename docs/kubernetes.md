@@ -342,7 +342,7 @@ backup to be lost — see #146 and `docs/operations.md` "Backups and restore" fo
   single-platform archive:
 
   ```sh
-  IMAGE=ghcr.io/ncecere/open-model-gateway:v0.7.2
+  IMAGE=ghcr.io/ncecere/open-model-gateway:v0.8.0
   docker pull "$IMAGE"
   docker save --platform "linux/$(docker version --format '{{.Server.Arch}}')" "$IMAGE" -o omg.tar
   kind load image-archive omg.tar --name <your-kind-cluster>
