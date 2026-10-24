@@ -128,6 +128,11 @@ test("create -> copy -> dismiss -> revoke", async ({ browser }) => {
     const row = page.getByRole("row", { name: new RegExp(name) });
     await expect(row).toBeVisible();
     await expect(row.getByText("Active")).toBeVisible();
+    // Metadata tables may scroll internally, never the whole viewport.
+    for (const width of [390, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    }
     await row.getByRole("button", { name: `Actions for ${name}` }).click();
     await page.getByRole("menuitem", { name: "Revoke token…" }).click();
     await page.getByRole("dialog").locator('button[type="submit"]').click();
