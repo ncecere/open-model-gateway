@@ -1062,6 +1062,123 @@ fn assert_no_attacker(world: &World, label: &str, case: &str) {
 
 // ---------------------------------------------------------------- tests ----
 
+/// Holding the caller's only connection must not starve the world's store.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn steering_world_dispatch_is_independent_of_the_provided_pool(pool: PgPool) {
+    // No SQLx parent: exhausting this pool cannot consume the shared test pool's
+    // capacity or starve unrelated fixtures running alongside this regression.
+    let provided = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_millis(100))
+        .connect_with((*pool.connect_options()).clone())
+        .await
+        .unwrap();
+    let w = world(provided.clone()).await;
+    let held = provided.acquire().await.unwrap();
+    let (status, text) = send(
+        &w.app,
+        json_request(
+            &w.keys.personal_key.token,
+            "/v1/embeddings",
+            &[],
+            &json!({"model":"t/ollama-embed","input":"hi"}),
+        ),
+    )
+    .await;
+    let approved = w.approved.take();
+    let attacker = w.attacker.take();
+
+    // Clean up before the outcome assertions, including on the expected RED.
+    drop(held);
+    drop(w);
+    provided.close().await;
+
+    assert_eq!(
+        (status.as_u16(), reason(&text)),
+        (400, "upstream_rejected".to_owned()),
+        "the clean Ollama embedding dispatch must not depend on the held pool: {text}"
+    );
+    assert_eq!(approved.len(), 1, "exactly one approved upstream hop");
+    assert!(attacker.is_empty(), "the attacker must not be contacted");
+}
+
+/// A real upstream hop does not make an accounting failure a usable baseline.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn steering_control_rejects_accounting_unavailable_after_a_real_upstream_hop(pool: PgPool) {
+    use axum::middleware::{Next, from_fn};
+    use futures_util::FutureExt;
+    use std::panic::AssertUnwindSafe;
+
+    let mut w = world(pool).await;
+    let request = || {
+        json_request(
+            &w.keys.personal_key.token,
+            "/v1/embeddings",
+            &[],
+            &json!({"model":"t/ollama-embed","input":"hi"}),
+        )
+    };
+    let clean = control(&w, "clean Ollama embedding", request()).await;
+    assert_eq!(
+        (clean.status, clean.reason.as_str()),
+        (400, "upstream_rejected"),
+        "the unwrapped dispatch must be a valid clean control"
+    );
+    let wrapped_request = request();
+    let observed = Arc::new(Mutex::new(None));
+    let observation = observed.clone();
+    let approved_hits = w.approved.hits.clone();
+    w.app = w
+        .app
+        .clone()
+        .layer(from_fn(move |request: Request, next: Next| {
+            let observation = observation.clone();
+            let approved_hits = approved_hits.clone();
+            async move {
+                // Run the actual router/admission/adapter before replacing anything.
+                let response = next.run(request).await;
+                let status = response.status();
+                let bytes = to_bytes(response.into_body(), 16 << 20).await.unwrap();
+                let text = String::from_utf8_lossy(&bytes).into_owned();
+                *observation.lock().unwrap() =
+                    Some((status, text, approved_hits.lock().unwrap().clone()));
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    axum::Json(json!({"error":{"code":"accounting_unavailable"}})),
+                )
+                    .into_response()
+            }
+        }));
+
+    let outcome = AssertUnwindSafe(control(&w, "injected accounting failure", wrapped_request))
+        .catch_unwind()
+        .await;
+
+    // These checks are outside catch_unwind: a broken dispatch or middleware
+    // must not be mistaken for the control helper rejecting the injected error.
+    let (status, text, hits) = observed.lock().unwrap().take().expect("middleware ran");
+    assert_eq!(
+        (status.as_u16(), reason(&text)),
+        (400, "upstream_rejected".to_owned()),
+        "the wrapped dispatch must still reach the real clean outcome: {text}"
+    );
+    assert_eq!(hits.len(), 1, "exactly one approved upstream hop");
+    assert_clean(
+        "Ollama embedding",
+        "injected accounting failure",
+        &hits[0],
+        &clean.hit,
+        &w,
+    );
+    assert_eq!(hits[0].body, clean.hit.body, "the clean body is unchanged");
+    assert_no_attacker(&w, "Ollama embedding", "injected accounting failure");
+    drop(w);
+    assert!(
+        outcome.is_err(),
+        "control must panic, not accept 503/accounting_unavailable as its baseline"
+    );
+}
+
 /// Every JSON inference protocol, on every adapter and local profile that serves it.
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn no_json_inference_input_can_steer_the_upstream(pool: PgPool) {
