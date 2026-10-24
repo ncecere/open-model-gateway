@@ -10,7 +10,7 @@ mod catalogs;
 mod compare;
 mod directory;
 mod files;
-mod governance;
+pub(crate) mod governance;
 mod key_safety;
 mod keys;
 mod legal_holds;

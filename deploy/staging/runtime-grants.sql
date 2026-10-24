@@ -165,8 +165,8 @@ GRANT SELECT ON public.alert_recipient_outbox TO gateway_runtime;
 GRANT INSERT(delivery_id,fingerprint,internal_user_id) ON public.alert_recipient_outbox TO gateway_runtime;
 GRANT UPDATE(state,attempt_count,next_attempt_at,lease_owner,lease_token,lease_expires_at,error)
  ON public.alert_recipient_outbox TO gateway_runtime;
--- 0061 scheduled report configuration only. No run/snapshot/delivery writes.
--- Scope, creator, creation time, revision and scheduler cursor are not writable.
+-- 0061/0063 report configuration and generation only. No delivery writes.
+-- Scope, creator, creation time and configuration revision are not writable.
 GRANT SELECT ON public.report_schedules,public.report_schedule_recipients TO gateway_runtime;
 GRANT INSERT(scope_kind,workspace_id,cost_center_id,created_by,cadence,timezone,delivery_time,state)
  ON public.report_schedules TO gateway_runtime;
@@ -174,6 +174,16 @@ GRANT INSERT(scope_kind,workspace_id,cost_center_id,created_by,cadence,timezone,
 -- scheduler cursor; configuration_revision itself stays trigger-owned.
 GRANT UPDATE(cadence,timezone,delivery_time,state,deleted_at,recipient_revision) ON public.report_schedules TO gateway_runtime;
 GRANT INSERT(schedule_id,slot,user_id),DELETE ON public.report_schedule_recipients TO gateway_runtime;
+GRANT UPDATE(next_run_at,next_period_end,last_period_end) ON public.report_schedules TO gateway_runtime;
+GRANT SELECT ON public.report_generation_claims,public.report_runs,public.report_snapshots TO gateway_runtime;
+GRANT INSERT(schedule_id,token,configuration_revision,period_start,period_end,skipped_intervals,expires_at),
+ UPDATE(token,configuration_revision,period_start,period_end,skipped_intervals,expires_at)
+ ON public.report_generation_claims TO gateway_runtime;
+GRANT INSERT(schedule_id,period_start,period_end,configuration_revision,claim_token,lease_holder,lease_epoch,skipped_intervals,observed_at)
+ ON public.report_runs TO gateway_runtime;
+GRANT INSERT(run_id,body) ON public.report_snapshots TO gateway_runtime;
+-- Only expired payloads, <=100/tick. Deduplication metadata is never removed.
+GRANT EXECUTE ON FUNCTION public.omg_report_prune_snapshots(integer) TO gateway_runtime;
 -- 0057 platform webhook destinations and retained outbox. Generated identity,
 -- capacity slots, creation clocks and initial queue state are default/trigger-only.
 GRANT SELECT ON public.alert_webhook_destinations,public.alert_webhook_outbox TO gateway_runtime;

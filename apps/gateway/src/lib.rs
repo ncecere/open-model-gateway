@@ -48,6 +48,7 @@ pub mod reporting;
 pub mod rollups;
 mod route_policy;
 pub mod routing;
+pub mod scheduled_reports;
 #[cfg(test)]
 mod scheduled_reports_tests;
 pub mod scim;

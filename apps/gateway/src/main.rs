@@ -834,6 +834,8 @@ async fn run(cli: Cli) -> Result<()> {
             let batch_runner = open_model_gateway::jobs::runner::start(batch_jobs);
             let alerts =
                 alert_interval.map(|every| open_model_gateway::alerts::start(store.clone(), every));
+            // Generation only: no report outbox or email sending in #102B.
+            let reports = open_model_gateway::scheduled_reports::start(store.clone());
             let audit_export = audit_exporter
                 .map(|exporter| open_model_gateway::audit_export::start(store.clone(), exporter));
             // History partitions (hourly) and usage rollups (every minute):
@@ -959,6 +961,8 @@ async fn run(cli: Cli) -> Result<()> {
                 alerts.abort();
                 let _ = alerts.await;
             }
+            reports.abort();
+            let _ = reports.await;
             if let Some(audit_export) = audit_export {
                 audit_export.abort();
                 let _ = audit_export.await;

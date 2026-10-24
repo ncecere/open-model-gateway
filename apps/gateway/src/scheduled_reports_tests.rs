@@ -22,6 +22,12 @@ fn scheduled_reports_calendar_month_ends_leap_year_and_utc_windows() {
     assert_eq!(o.end, at("2024-12-30T00:00:00Z"));
     assert_eq!(o.due, at("2024-12-30T19:00:00Z"));
     assert!(Calendar::new("daily", "UTC", "09:00").is_err());
+    // Latest-complete catch-up waits for its delivery preference rather than
+    // emitting the prior week and then another report a few hours later.
+    let c = Calendar::new("weekly", "UTC", "09:00").unwrap();
+    let latest = c.latest_complete(at("2024-12-30T01:00:00Z")).unwrap();
+    assert_eq!(latest.end, at("2024-12-30T00:00:00Z"));
+    assert_eq!(latest.due, at("2024-12-30T09:00:00Z"));
 }
 #[test]
 fn scheduled_reports_calendar_delivery_dst_gaps_forward_and_folds_earlier_once() {
@@ -104,6 +110,16 @@ mod db {
         a.unwrap();
         b.unwrap();
         assert_eq!(count(&pool).await, 1);
+        let replica = Leases::new();
+        replica.renew_once(&pool).await;
+        assert!(replica.held(Lease::ReportScheduler).is_none());
+        let stale = Fence {
+            holder: replica.holder(),
+            ..f
+        };
+        assert!(crate::leases::is_fenced(
+            &tick(&s, &stale).await.unwrap_err()
+        ));
         tick(&s, &f).await.unwrap();
         assert_eq!(count(&pool).await, 1);
         let (start,end,revision,skipped,epoch,expires):(DateTime<Utc>,DateTime<Utc>,i64,i64,i64,bool) = sqlx::query_as("SELECT period_start,period_end,configuration_revision,skipped_intervals,lease_epoch,expires_at=created_at+interval '90 days' FROM report_runs WHERE schedule_id=$1").bind(id).fetch_one(&pool).await.unwrap();
@@ -163,6 +179,29 @@ mod db {
         assert_eq!(count(&pool).await, 0);
     }
     #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn scheduled_reports_generation_snapshot_cap_rolls_back_cursor_and_occurrence(
+        pool: PgPool,
+    ) {
+        let (s, f, id, _) = setup(&pool).await;
+        let c = claim(&s, &f, id).await.unwrap().unwrap();
+        let body = snapshot(&s, &c).await.unwrap();
+        let mut oversized = body.clone();
+        oversized["oversized"] = serde_json::json!("x".repeat(1_048_576));
+        assert!(complete(&s, &f, &c, &oversized).await.is_err());
+        assert_eq!(count(&pool).await, 0);
+        assert!(
+            sqlx::query_scalar::<_, bool>(
+                "SELECT last_period_end IS NULL FROM report_schedules WHERE id=$1"
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        );
+        assert!(complete(&s, &f, &c, &body).await.unwrap());
+        assert_eq!(count(&pool).await, 1);
+    }
+    #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn scheduled_reports_generation_authority_loss_pauses_audited(pool: PgPool) {
         let (s, f, id, user) = setup(&pool).await;
         let c = claim(&s, &f, id).await.unwrap().unwrap();
@@ -182,6 +221,43 @@ mod db {
         assert_eq!(state, "paused");
         let audit:Value=sqlx::query_scalar("SELECT metadata FROM audit_events WHERE resource_id=$1 AND action='report_schedule.authority_paused'").bind(id).fetch_one(&pool).await.unwrap();
         assert_eq!(audit["category"], "creator_authority_lost");
+    }
+    #[sqlx::test(migrations = "./enterprise_migrations")]
+    async fn scheduled_reports_generation_workspace_and_personal_live_authority(pool: PgPool) {
+        let (s, f, _, user) = setup(&pool).await;
+        for kind in ["team", "personal"] {
+            let ws = Uuid::new_v4();
+            sqlx::query("INSERT INTO workspaces(id,name,kind,owner_user_id) VALUES($1,'Report scope',$2,$3)")
+                .bind(ws).bind(kind).bind((kind=="personal").then_some(user)).execute(&pool).await.unwrap();
+            if kind == "team" {
+                sqlx::query("INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source) VALUES($1,$2,'admin','manual')").bind(ws).bind(user).execute(&pool).await.unwrap();
+            }
+            let id:Uuid=sqlx::query_scalar("INSERT INTO report_schedules(scope_kind,workspace_id,created_by,cadence,timezone,delivery_time,state) VALUES($1,$2,$3,'weekly','UTC','00:01','active') RETURNING id")
+                .bind(if kind=="personal" {"personal"} else {"workspace"}).bind(ws).bind(user).fetch_one(&pool).await.unwrap();
+            sqlx::query("UPDATE report_schedules SET next_period_end=date_trunc('week',clock_timestamp(),'UTC')-interval '7 days',next_run_at=clock_timestamp()-interval '1 day' WHERE id=$1").bind(id).execute(&pool).await.unwrap();
+            let c = claim(&s, &f, id).await.unwrap().unwrap();
+            let body = snapshot(&s, &c).await.unwrap();
+            if kind == "team" {
+                // Platform Admin does not substitute for live human membership.
+                sqlx::query("UPDATE workspace_membership_grants SET revoked_at=now() WHERE workspace_id=$1 AND user_id=$2").bind(ws).bind(user).execute(&pool).await.unwrap();
+            } else {
+                sqlx::query("UPDATE workspaces SET disabled_at=now() WHERE id=$1")
+                    .bind(ws)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+            }
+            assert!(!complete(&s, &f, &c, &body).await.unwrap());
+            assert_eq!(
+                sqlx::query_scalar::<_, String>("SELECT state FROM report_schedules WHERE id=$1")
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap(),
+                "paused"
+            );
+        }
+        assert_eq!(count(&pool).await, 0);
     }
     #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn scheduled_reports_generation_immutable_snapshot_retention_and_dedup(pool: PgPool) {
@@ -210,5 +286,35 @@ mod db {
             .unwrap();
         assert_eq!(body["totals"]["known_cost_microusd"], "0");
         assert!(body["totals"]["root_requests"].is_null());
+        // Migrator-only fixture aging. Runtime never receives these privileges;
+        // the immutable UPDATE refusal was proved above before changing age.
+        sqlx::raw_sql("ALTER TABLE report_runs DISABLE TRIGGER report_runs_immutable; UPDATE report_runs SET created_at=clock_timestamp()-interval '91 days',expires_at=clock_timestamp()-interval '1 day'; ALTER TABLE report_runs ENABLE TRIGGER report_runs_immutable;")
+            .execute(&pool).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT omg_report_prune_snapshots(100)")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            count(&pool).await,
+            1,
+            "deduplication survives payload expiry"
+        );
+        assert!(
+            sqlx::query("INSERT INTO report_snapshots(run_id,body) SELECT id,$1 FROM report_runs")
+                .bind(&body)
+                .execute(&pool)
+                .await
+                .is_err(),
+            "expired payload cannot be resurrected"
+        );
+        tick(&s, &f).await.unwrap();
+        assert_eq!(
+            count(&pool).await,
+            1,
+            "expiry must not replay an occurrence"
+        );
     }
 }

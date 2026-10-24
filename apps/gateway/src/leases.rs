@@ -54,7 +54,7 @@ pub enum Lease {
     HistoryVerify,
     /// Audit export deliveries (0044, #106).
     AuditExport,
-    /// Reserved report scheduling lease (0061, #102); no job in slice A.
+    /// Scheduled aggregate report generation (0061/0063, #102); never SMTP.
     ReportScheduler,
 }
 

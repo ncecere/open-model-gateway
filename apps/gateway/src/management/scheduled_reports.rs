@@ -1,4 +1,4 @@
-//! #102 slice A: browser-only configuration. No scheduler or email side effects.
+//! #102: browser-only configuration. Calendar initialization, never email.
 use super::*;
 
 pub(super) fn routes() -> Router<Store> {
@@ -224,6 +224,7 @@ async fn create(
     let id:Uuid = sqlx::query_scalar("INSERT INTO report_schedules(scope_kind,workspace_id,cost_center_id,created_by,cadence,timezone,delivery_time,state) VALUES($1,$2,$3,$4,$5,$6,$7::text::time,$8) RETURNING id")
         .bind(&kind).bind(ws).bind(b.cost_center_id).bind(u.user_id).bind(&b.cadence).bind(&b.timezone).bind(&b.delivery_time).bind(&b.state).fetch_one(&mut *tx).await?;
     recipients(&mut tx, id, &b.recipient_user_ids).await?;
+    crate::scheduled_reports::initialize(&mut tx, id).await?;
     audit(
         &mut tx,
         &u,
@@ -292,6 +293,7 @@ async fn update(
     if recipients_changed {
         recipients(&mut tx, id, &users).await?;
     }
+    crate::scheduled_reports::initialize(&mut tx, id).await?;
     let action = if old["state"] != state {
         if state == "paused" {
             "report_schedule.paused"

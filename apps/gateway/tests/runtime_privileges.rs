@@ -147,12 +147,36 @@ async fn scheduled_reports_run_as_runtime(pool: &PgPool) {
     .await
     .unwrap();
     tx.rollback().await.unwrap();
+    // Exercise the actual fenced generator through the runtime pool, not only
+    // the migrator/owner fixtures or static has_*_privilege assertions.
+    sqlx::query(
+        "INSERT INTO platform_role_grants(user_id,role,source) VALUES($1,'admin','manual')",
+    )
+    .bind(user)
+    .execute(pool)
+    .await
+    .unwrap();
+    let id:uuid::Uuid=sqlx::query_scalar("INSERT INTO report_schedules(scope_kind,created_by,cadence,timezone,delivery_time,state) VALUES('installation',$1,'weekly','UTC','00:01','active') RETURNING id").bind(user).fetch_one(&runtime).await.unwrap();
+    let leases = open_model_gateway::leases::Leases::new();
+    leases.renew_once(&runtime).await;
+    let fence = leases
+        .held(open_model_gateway::leases::Lease::ReportScheduler)
+        .unwrap();
+    let store = open_model_gateway::store::Store::new(runtime.clone());
+    open_model_gateway::scheduled_reports::tick(&store, &fence)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE report_schedules SET next_period_end=date_trunc('week',clock_timestamp(),'UTC')-interval '7 days',next_run_at=clock_timestamp()-interval '1 day' WHERE id=$1").bind(id).execute(&runtime).await.unwrap();
+    open_model_gateway::scheduled_reports::tick(&store, &fence)
+        .await
+        .unwrap();
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM report_runs r JOIN report_snapshots p ON p.run_id=r.id WHERE r.schedule_id=$1").bind(id).fetch_one(&runtime).await.unwrap(),1);
+    leases.release_all(&runtime).await;
     for statement in [
         "UPDATE report_schedules SET id=gen_random_uuid()",
         "UPDATE report_schedules SET created_by=gen_random_uuid()",
         "UPDATE report_schedules SET scope_kind='installation'",
         "UPDATE report_schedules SET configuration_revision=4",
-        "UPDATE report_schedules SET next_run_at=now()",
         "DELETE FROM report_schedules",
         "TRUNCATE report_schedules CASCADE",
         "UPDATE report_schedule_recipients SET user_id=gen_random_uuid()",

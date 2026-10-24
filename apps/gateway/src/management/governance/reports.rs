@@ -5,6 +5,34 @@ use std::collections::HashMap;
 #[cfg(all(test, feature = "integration-tests"))]
 #[path = "scheduled_snapshot_tests.rs"]
 mod scheduled_snapshot_tests;
+/// Supported additive projection of the live cost report. Authorization is
+/// performed by the generator before aggregation, in this same primary snapshot.
+/// Detailed/non-additive measures are explicitly unavailable, not fabricated
+/// from archived raw history or summed across rollup groups.
+pub(crate) async fn scheduled_snapshot(
+    tx: &mut Transaction<'_, Postgres>,
+    start: chrono::DateTime<Utc>,
+    end: chrono::DateTime<Utc>,
+    workspace: Option<Uuid>,
+    cost_center: Option<Uuid>,
+    platform: bool,
+) -> Result<Value, sqlx::Error> {
+    let unavailable: bool = sqlx::query_scalar("SELECT EXISTS(SELECT FROM archived_partitions a CROSS JOIN LATERAL generate_series(greatest($1,a.lower_bound),least($2,a.upper_bound)-interval '1 microsecond',interval '1 hour') h WHERE a.archive_group='history' AND a.lower_bound<$2 AND a.upper_bound>$1 AND (NOT EXISTS(SELECT FROM usage_rollup_hours u WHERE u.hour_start=h) OR EXISTS(SELECT FROM usage_rollup_dirty d WHERE d.hour_start=h)))")
+        .bind(start).bind(end).fetch_one(&mut **tx).await?;
+    if unavailable {
+        return Err(sqlx::Error::Protocol(
+            "report additive history unavailable".into(),
+        ));
+    }
+    sqlx::query_scalar(include_str!("scheduled_aggregate.sql"))
+        .bind(start)
+        .bind(end)
+        .bind(workspace)
+        .bind(cost_center)
+        .bind(platform)
+        .fetch_one(&mut **tx)
+        .await
+}
 #[derive(Default)]
 struct Filters {
     start: NaiveDate,

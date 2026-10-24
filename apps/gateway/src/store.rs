@@ -111,9 +111,12 @@ const ENTERPRISE_RELATIONS: &[&str] = &[
     "alert_deliveries",
     "alert_reads",
     "alert_recipient_outbox",
-    // 0061 scheduled report configuration (#102); no worker in this slice.
+    // 0061/0063 scheduled reports (#102): configuration and fenced generation.
     "report_schedules",
     "report_schedule_recipients",
+    "report_generation_claims",
+    "report_runs",
+    "report_snapshots",
     // 0057 platform alert webhooks (#45)
     "alert_webhook_destinations",
     "alert_webhook_outbox",

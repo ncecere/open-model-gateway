@@ -14,7 +14,7 @@ pub(super) use policies::{
 #[cfg(all(test, feature = "integration-tests"))]
 mod holds_tests;
 pub(super) mod prices;
-mod reports;
+pub(crate) mod reports;
 pub(crate) mod suggestion;
 #[cfg(test)]
 mod tests;
