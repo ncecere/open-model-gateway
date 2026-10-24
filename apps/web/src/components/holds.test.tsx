@@ -6,7 +6,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
 import { dashboardRouteTree } from "../router";
 import { abortRequests } from "../lib/api";
-import { admin, auditor, member, personal, report, session, testClient } from "../lib/test-fixtures";
+import { admin, auditor, member, personal, project, report, session, testClient } from "../lib/test-fixtures";
 import type { HoldRow, HoldsPage } from "../lib/holds";
 
 const ROOT = "11111111-1111-4111-8111-111111111111", EXEC = "22222222-2222-4222-8222-222222222222";
@@ -19,11 +19,12 @@ beforeEach(() => { document.cookie = "omg_csrf=test-csrf; Path=/"; localStorage.
 afterEach(() => { cleanup(); abortRequests(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 async function mount(href: string, client = testClient()) { const router = createRouter({ routeTree: dashboardRouteTree, history: createMemoryHistory({ initialEntries: [href] }) }); await router.load(); const ui = render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>); return { router, client, ...ui }; }
-type Handler = (path: string, init?: RequestInit) => unknown | Response;
-function serve(me: object, handler: Handler) {
+type Handler = (path: string, init?: RequestInit) => unknown | Response | Promise<Response>;
+function serve(me: object | (() => object), handler: Handler) {
   const fetch = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
-    if (path === "/api/v1/me") return Promise.resolve(Response.json(me));
+    if (path === "/api/v1/me") return Promise.resolve(Response.json(typeof me === "function" ? me() : me));
     const body = handler(path, init);
+    if (body instanceof Promise) return body;
     if (body instanceof Response) return Promise.resolve(body);
     return Promise.resolve(body === undefined ? Response.json({ data: [], has_more: false }) : Response.json(body));
   });
@@ -202,6 +203,111 @@ describe("Usage & costs › Holds tab", () => {
     expect(screen.queryByRole("combobox", { name: /Period/ })).toBeNull();
     expect(urls(fetch).filter(u => u.includes("/holds")).every(u => !u.includes("start_date"))).toBe(true);
     expect(document.body.textContent).toContain("aren't filtered by period");
+    client.clear();
+  });
+
+  // The filter bar is hidden on this tab, so nothing may populate it: no model, key, service-account, member, cost-center or name lookups.
+  const filterLookups = /\/models|\/keys|\/service-accounts|\/usage\/|\/cost-centers|\/cost-report|\/policy|\/costs\?/;
+  it.each([
+    ["a workspace admin", session, "/workspaces/team/costs?tab=holds&key_id=k1&model_id=m1&service_account_id=s1", "/api/v1/workspaces/team/holds"],
+    ["Admin", admin, "/admin/costs?tab=holds&model_id=m1&workspace_id=w1", "/api/v1/platform/holds"],
+  ])("fetches nothing for the filter bar on the Holds tab (%s)", async (_who, me, href, holdsUrl) => {
+    const fetch = serve(me, p => p.startsWith(holdsUrl) ? page() : undefined);
+    const { client } = await mount(href);
+    await loadedTable();
+    await new Promise(resolve => setTimeout(resolve, 400)); // past the option search debounce
+    const requested = urls(fetch).filter(u => u !== "/api/v1/me");
+    expect(requested.filter(u => filterLookups.test(u))).toEqual([]);
+    expect(requested.filter(u => u.startsWith(holdsUrl))).toHaveLength(1);
+    client.clear();
+  });
+});
+
+/*
+ * One persistent QueryClient across navigation and session changes, as in the app: a different workspace or authority
+ * must never show the previous scope's rows, totals, cursors or reconcile controls, including a pagination response
+ * that arrives late.
+ */
+describe("Holds cache scope", () => {
+  const cursor = "1790000000000000_33333333-3333-4333-8333-333333333333";
+  const rowsOf = (ws: string, tag: string) => ({ workspace: { id: ws, name: ws === "team" ? "Product" : "Research", kind: ws === "team" ? "team" as const : "project" as const }, public_model: `model-${tag}` });
+  const deferred = () => { let resolve!: (r: Response) => void; const promise = new Promise<Response>(r => { resolve = r; }); return { promise, resolve }; };
+  const bodyText = () => document.body.textContent ?? "";
+
+  it("workspace A to B: A's rows, totals and cursor never appear under B, even when A's next page arrives late", async () => {
+    const user = userEvent.setup(), late = deferred();
+    const fetch = serve(session, p => {
+      if (p.startsWith("/api/v1/workspaces/team/holds")) return p.includes("cursor=") ? late.promise : page({ data: [row({ ...rowsOf("team", "A1"), execution_id: "a1", root_request_id: "ra1" })], has_more: true, next_cursor: cursor, totals: { count: "5", known_floor_microusd: "111", unbounded_count: "2", oldest_age_hours: 50 } });
+      if (p.startsWith("/api/v1/workspaces/project/holds")) return page({ data: [row({ ...rowsOf("project", "B1"), execution_id: "b1", root_request_id: "rb1" })], totals: { count: "1", known_floor_microusd: "7", unbounded_count: "0", oldest_age_hours: 26 } });
+      return undefined;
+    });
+    const { router, client } = await mount("/workspaces/team/costs?tab=holds");
+    await loadedTable();
+    expect(bodyText()).toContain("model-A1");
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    await waitFor(() => expect(urls(fetch).some(u => u.includes(`cursor=${cursor}`))).toBe(true));
+    await router.navigate({ to: "/workspaces/$ws/costs", params: { ws: "project" }, search: { tab: "holds" } as never });
+    await waitFor(() => expect(bodyText()).toContain("model-B1"));
+    expect(bodyText()).not.toContain("model-A1");
+    late.resolve(Response.json(page({ data: [row({ ...rowsOf("team", "A2"), execution_id: "a2", root_request_id: "ra2" })], totals: { count: "5", known_floor_microusd: "111", unbounded_count: "2", oldest_age_hours: 50 } })));
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const text = bodyText();
+    for (const leaked of ["model-A1", "model-A2", "Product"]) expect(text, leaked).not.toContain(leaked);
+    expect(within(screen.getByRole("table", { name: "Aged unknown holds" })).getAllByRole("row")).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+    // B only ever asked for its own first page: A's cursor was never reused.
+    expect(urls(fetch).filter(u => u.startsWith("/api/v1/workspaces/project/holds"))).toEqual(["/api/v1/workspaces/project/holds?limit=50"]);
+    client.clear();
+  });
+
+  it("admin to member: the previous authority's rows, totals and Reconcile controls are gone while the new answer is pending", async () => {
+    let me: object = admin;
+    const pending = deferred();
+    serve(() => me, p => {
+      if (!p.startsWith("/api/v1/workspaces/team/holds")) return undefined;
+      return me === admin ? page({ data: [row({ ...rowsOf("team", "ADMIN"), can_reconcile: true })], totals: { count: "9", known_floor_microusd: "999", unbounded_count: "0", oldest_age_hours: 80 } }) : pending.promise;
+    });
+    const { client } = await mount("/workspaces/team/costs?tab=holds");
+    await loadedTable();
+    expect(screen.getAllByRole("button", { name: /^Reconcile/ })).toHaveLength(1);
+    me = { ...session, workspaces: [personal, member] };
+    await client.invalidateQueries({ queryKey: ["session"] });
+    await waitFor(() => expect(document.body.textContent).toContain("Only holds from your own keys in Product"));
+    expect(screen.queryByRole("button", { name: /^Reconcile/ })).toBeNull();
+    expect(bodyText()).not.toContain("model-ADMIN"); expect(bodyText()).not.toContain("999");
+    pending.resolve(Response.json(page({ data: [row({ ...rowsOf("team", "OWN"), can_reconcile: false })], totals: { count: "1", known_floor_microusd: "5", unbounded_count: "0", oldest_age_hours: 30 } })));
+    await waitFor(() => expect(bodyText()).toContain("model-OWN"));
+    expect(bodyText()).not.toContain("model-ADMIN"); expect(screen.queryByRole("button", { name: /^Reconcile/ })).toBeNull();
+    client.clear();
+  });
+
+  it("revoked access: when the gateway refuses a refresh and the session loses the workspace, the cached rows, totals and Reconcile controls are gone", async () => {
+    let revoked = false;
+    serve(() => revoked ? { ...session, workspaces: [personal], capabilities: { ...session.capabilities } } : admin, p => {
+      if (!p.startsWith("/api/v1/workspaces/team/holds")) return undefined;
+      return revoked ? Response.json({ error: { code: "403", message: "Forbidden" } }, { status: 403 }) : page({ data: [row({ ...rowsOf("team", "SECRET"), can_reconcile: true })], totals: { count: "7", known_floor_microusd: "777", unbounded_count: "0", oldest_age_hours: 80 } });
+    });
+    const { client } = await mount("/workspaces/team/costs?tab=holds");
+    await loadedTable();
+    expect(screen.getAllByRole("button", { name: /^Reconcile/ })).toHaveLength(1);
+    revoked = true;
+    await client.invalidateQueries({ queryKey: ["api"] });
+    await waitFor(() => expect(screen.queryByRole("table", { name: "Aged unknown holds" })).toBeNull());
+    expect(bodyText()).not.toContain("model-SECRET"); expect(bodyText()).not.toContain("777");
+    expect(screen.queryByRole("button", { name: /^Reconcile/ })).toBeNull(); expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+    // The cache holds nothing of the revoked scope that a later render could show.
+    expect(JSON.stringify(client.getQueryCache().getAll().map(q => q.state.data ?? null))).not.toContain("model-SECRET");
+    client.clear();
+  });
+
+  it("a failed Load more keeps the rows already shown and reports the failure", async () => {
+    const user = userEvent.setup();
+    serve(session, p => !p.startsWith("/api/v1/workspaces/team/holds") ? undefined : p.includes("cursor=") ? Response.json({ error: { code: "503", message: "The hold queue took too long; try again later" } }, { status: 503 }) : page({ data: [row(rowsOf("team", "KEEP"))], has_more: true, next_cursor: cursor }));
+    const { client } = await mount("/workspaces/team/costs?tab=holds");
+    await loadedTable();
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    await screen.findByText(/took too long/);
+    expect(bodyText()).toContain("model-KEEP");
     client.clear();
   });
 });

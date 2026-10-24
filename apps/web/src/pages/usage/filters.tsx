@@ -38,18 +38,19 @@ function useTop(base: string, period: UsagePeriod | undefined, groupBy: Top, ena
 const label = (name: string, publicName: string) => name === publicName ? publicName : `${name} · ${publicName}`;
 
 /** Filter options for this scope; see the file comment for where each list comes from. */
-export function useFilterOptions(workspace: Workspace | undefined, ctx: UsageContext, period: UsagePeriod | undefined, workspaceFilter?: string, keyId?: string, modelId?: string): FilterOptions {
+/** `active: false` (the Holds tab has no filters) fetches nothing: no model, key, service-account or name lookups. */
+export function useFilterOptions(workspace: Workspace | undefined, ctx: UsageContext, period: UsagePeriod | undefined, workspaceFilter?: string, keyId?: string, modelId?: string, active = true): FilterOptions {
   const ws = workspace ? wsPath(workspace.id) : "", base = workspace ? ws : platformPath, platform = !workspace;
   // Disabled lists get no path at all, so nothing is even addressed for callers who may not see it.
   const useList = <T,>(path: string, on: boolean) => useChoices<T>(on ? path : "", on);
-  const grants = useList<Grant>(`${ws}/models`, !!workspace);
-  const models = useServerOptions<Model>(platform ? `${platformPath}/models` : undefined, m => ({ value: m.id, label: label(m.display_name, m.public_name) }));
-  const modelName = useSelectedName<Model>(platform && modelId ? `${platformPath}/models/${encodeURIComponent(modelId)}` : undefined, m => label(m.display_name, m.public_name), "Selected model");
-  const keys = useServerOptions<KeyRow>(workspace ? `${ws}/keys` : undefined, k => ({ value: k.id, label: k.name, group: k.service_account_id ? "Service accounts" : "People" }));
-  const keyName = useSelectedName<KeyRow>(workspace && keyId ? `${ws}/keys/${encodeURIComponent(keyId)}` : undefined, k => k.name, "Selected key");
-  const accounts = useList<ServiceAccount>(`${ws}/service-accounts`, !!workspace && ctx.members && workspace.capabilities.manage_service_accounts);
-  const topKeys = useTop(base, period, "key", platform, workspaceFilter), topMembers = useTop(base, period, "member", platform || ctx.members, workspaceFilter);
-  const centers = useTop(base, period, "cost_center", ctx.members, workspaceFilter);
+  const grants = useList<Grant>(`${ws}/models`, !!workspace && active);
+  const models = useServerOptions<Model>(platform && active ? `${platformPath}/models` : undefined, m => ({ value: m.id, label: label(m.display_name, m.public_name) }));
+  const modelName = useSelectedName<Model>(platform && active && modelId ? `${platformPath}/models/${encodeURIComponent(modelId)}` : undefined, m => label(m.display_name, m.public_name), "Selected model");
+  const keys = useServerOptions<KeyRow>(workspace && active ? `${ws}/keys` : undefined, k => ({ value: k.id, label: k.name, group: k.service_account_id ? "Service accounts" : "People" }));
+  const keyName = useSelectedName<KeyRow>(workspace && active && keyId ? `${ws}/keys/${encodeURIComponent(keyId)}` : undefined, k => k.name, "Selected key");
+  const accounts = useList<ServiceAccount>(`${ws}/service-accounts`, active && !!workspace && ctx.members && workspace.capabilities.manage_service_accounts);
+  const topKeys = useTop(base, period, "key", platform && active, workspaceFilter), topMembers = useTop(base, period, "member", (platform || ctx.members) && active, workspaceFilter);
+  const centers = useTop(base, period, "cost_center", ctx.members && active, workspaceFilter);
   const named = (res: ExploreResponse | undefined) => res?.rows.flatMap(r => r.group.id && r.group.name ? [{ value: r.group.id, label: r.group.name }] : []) ?? [];
   return {
     models: workspace ? [...new Map((grants.data ?? []).map(g => [g.model_id, { value: g.model_id, label: label(g.display_name, g.public_name) }])).values()] : withSelected(models.options, modelId ? { value: modelId, label: modelName } : undefined),

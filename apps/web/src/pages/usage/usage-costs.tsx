@@ -42,7 +42,7 @@ export function UsageCosts({ session, workspace }: { session: Session; workspace
   // One inline filter bar for every tab and the chart page (URL-backed; Records adds the accounting state).
   // Holds has no period or filters: it fetches none of their option lists.
   const periodData = tab === "holds" ? undefined : period;
-  const options = useFilterOptions(workspace, ctx, periodData, workspaceFilter, nav.search.key_id, nav.search.model_id);
+  const options = useFilterOptions(workspace, ctx, periodData, workspaceFilter, nav.search.key_id, nav.search.model_id, tab !== "holds");
   // Workspace scope: the cost center is a fact about the page (the platform assigns it), not a filter.
   const centers = options.costCenters.filter(c => c.value !== "unallocated"), centerFact = workspace && centers.length ? centers.length === 1 ? `Cost center: ${String(centers[0]!.label)}` : `${centers.length} cost centers` : undefined;
   // One plain line that wraps like text (separate "· …" spans started wrapped lines with a dot on a phone).
