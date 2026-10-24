@@ -1,5 +1,5 @@
 //! #313: exercise the policy actually selected by export_http_client, using
-//! the production literal check and post-DNS filter without network or env I/O.
+//! the production literal check and post-DNS filter, plus a local TCP collector.
 use super::export_http_policy;
 use crate::egress::{Networks, Policy, Purpose, check_url, filter_for_test};
 use std::net::{IpAddr, SocketAddr};
@@ -223,4 +223,136 @@ fn issue_313_https_preserves_input_policy_decisions_for_every_address_class() {
             );
         }
     }
+}
+
+#[tokio::test]
+async fn issue_313_real_http_client_posts_once_to_localhost_and_accepts_bounded_ack() {
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    const BODY: &[u8] = br#"{"resourceSpans":[]}"#;
+    const ACK: &[u8] = br#"{"partialSuccess":{"rejectedSpans":"0"}}"#;
+    const EXCHANGE: Duration = Duration::from_secs(2);
+
+    // Both futures and all sockets are owned by this bounded scope. No spawned
+    // collector task survives a failure or timeout, and no host/env override is
+    // used: localhost goes through the actual export client's DNS resolver.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let listener = loop {
+            let candidate = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                .await
+                .unwrap();
+            if ![54339, 54349, 54369].contains(&candidate.local_addr().unwrap().port()) {
+                break candidate;
+            }
+        };
+        let port = listener.local_addr().unwrap().port();
+        let url = reqwest::Url::parse(&format!("http://localhost:{port}/v1/traces")).unwrap();
+        let client = super::export_http_client(
+            &url,
+            Purpose::Telemetry,
+            true,
+            Duration::from_secs(1),
+            EXCHANGE,
+        )
+        .expect("development localhost export client must construct");
+        let headers = super::parse_otlp_headers(
+            "synthetic test headers",
+            "Authorization=Bearer synthetic-issue-313",
+        )
+        .unwrap();
+
+        let collector = async {
+            let (mut stream, peer) = listener.accept().await.unwrap();
+            assert!(peer.ip().is_loopback());
+            // Read only through the header delimiter, with a strict size cap;
+            // the fixed body below cannot be mistaken for another request.
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                assert!(head.len() < 8192, "collector request headers exceeded cap");
+                head.push(stream.read_u8().await.unwrap());
+            }
+            let text = std::str::from_utf8(&head).unwrap();
+            let mut lines = text.split("\r\n");
+            assert_eq!(lines.next(), Some("POST /v1/traces HTTP/1.1"));
+            let mut received = reqwest::header::HeaderMap::new();
+            for line in lines.take_while(|line| !line.is_empty()) {
+                let (name, value) = line.split_once(':').unwrap();
+                received.append(
+                    reqwest::header::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                    reqwest::header::HeaderValue::from_str(value.trim()).unwrap(),
+                );
+            }
+            for (name, expected) in [
+                ("host", format!("localhost:{port}")),
+                ("content-type", "application/json".to_owned()),
+                ("content-length", BODY.len().to_string()),
+                ("authorization", "Bearer synthetic-issue-313".to_owned()),
+            ] {
+                assert_eq!(received.get_all(name).iter().count(), 1, "{name}");
+                assert_eq!(received[name].to_str().unwrap(), expected, "{name}");
+            }
+            assert!(!received.contains_key("transfer-encoding"));
+            let mut body = vec![0; BODY.len()];
+            stream.read_exact(&mut body).await.unwrap();
+            assert_eq!(body, BODY);
+
+            // A small, complete OTLP acknowledgement exercises post's bounded
+            // response reader, not just a successful TCP handshake/status.
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                ACK.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+            stream.write_all(ACK).await.unwrap();
+            stream.shutdown().await.unwrap();
+            let mut extra = [0];
+            assert_eq!(stream.read(&mut extra).await.unwrap(), 0, "extra request bytes");
+        };
+        let delivery = async {
+            let result = crate::otlp::post(
+                &client,
+                &url,
+                &headers,
+                BODY.to_vec(),
+                1,
+                "rejectedSpans",
+                EXCHANGE,
+            )
+            .await;
+            drop(client);
+            result
+        };
+        let ((), result) = tokio::join!(collector, delivery);
+        assert_eq!(result, Ok(0), "collector must accept the synthetic export");
+        // The exchange has finished: neither a second connection nor a second
+        // request on the first connection may have been emitted.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "export emitted an extra collector connection"
+        );
+    })
+    .await
+    .expect("localhost export and collector cleanup must finish within five seconds");
+}
+
+#[test]
+fn issue_313_real_http_client_constructor_refuses_public_literal_before_transport() {
+    use std::time::Duration;
+
+    // Construction only: never send, resolve, or connect to this public IP,
+    // even if the regression returns a client instead of a policy refusal.
+    let error = super::export_http_client(
+        &url("http", "8.8.8.8"),
+        Purpose::Telemetry,
+        true,
+        Duration::from_secs(1),
+        Duration::from_secs(2),
+    )
+    .expect_err("HTTP public literal must fail during client construction");
+    let reason = error.to_string();
+    assert!(reason.contains("telemetry URL refused"));
+    assert!(reason.contains("not a loopback address, required by this transport"));
 }
