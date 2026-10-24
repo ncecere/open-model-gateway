@@ -367,7 +367,9 @@ async fn every_route_refuses_lower_principals_and_unverified_mutations(pool: PgP
                     }
                     Access::WorkspaceKey => !matches!(label, "owner" | "workspace-admin"),
                     Access::WorkspaceKeyRotate => label != "owner",
-                    Access::WorkspaceAdmin => !matches!(label, "owner" | "workspace-admin"),
+                    Access::WorkspaceAdmin | Access::WorkspaceReportAdmin => {
+                        !matches!(label, "owner" | "workspace-admin")
+                    }
                     Access::WorkspaceAdminOrReader => {
                         matches!(label, "member" | "other-workspace-member")
                     }
@@ -403,6 +405,7 @@ async fn every_route_refuses_lower_principals_and_unverified_mutations(pool: PgP
                     | Access::WorkspaceKey
                     | Access::WorkspaceKeyRotate
                     | Access::WorkspaceAdmin
+                    | Access::WorkspaceReportAdmin
                     | Access::WorkspaceAdminOrReader
                     | Access::WorkspacePlatformWrite
             ) {
@@ -410,7 +413,11 @@ async fn every_route_refuses_lower_principals_and_unverified_mutations(pool: PgP
                 for (s, label) in sessions.into_iter().filter(|(_, label)| *label != "owner") {
                     assert_eq!(
                         request(&app, method, &personal_path, Some(s), None, true, ORIGIN).await,
-                        StatusCode::FORBIDDEN,
+                        if access == Access::WorkspaceReportAdmin {
+                            StatusCode::NOT_FOUND
+                        } else {
+                            StatusCode::FORBIDDEN
+                        },
                         "{method} {} foreign personal {label}",
                         route.path
                     );

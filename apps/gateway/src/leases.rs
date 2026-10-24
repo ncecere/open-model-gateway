@@ -54,10 +54,12 @@ pub enum Lease {
     HistoryVerify,
     /// Audit export deliveries (0044, #106).
     AuditExport,
+    /// Reserved report scheduling lease (0061, #102); no job in slice A.
+    ReportScheduler,
 }
 
 impl Lease {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Alerts,
         Self::Compaction,
         Self::FileSweep,
@@ -68,6 +70,7 @@ impl Lease {
         Self::Rollups,
         Self::HistoryVerify,
         Self::AuditExport,
+        Self::ReportScheduler,
     ];
     pub fn as_str(self) -> &'static str {
         match self {
@@ -81,6 +84,7 @@ impl Lease {
             Self::Rollups => "rollups",
             Self::HistoryVerify => "history_verify",
             Self::AuditExport => "audit_export",
+            Self::ReportScheduler => "report_scheduler",
         }
     }
     fn index(self) -> usize {

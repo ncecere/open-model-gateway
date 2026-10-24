@@ -83,6 +83,18 @@ impl Targets {
         ]);
         for (name, actor, path, body) in [
             (
+                "platform-report-schedule",
+                &f.admin,
+                "/api/v1/platform/report-schedules".to_owned(),
+                json!({"cadence":"weekly","timezone":"UTC","delivery_time":"09:00","recipient_user_ids":[f.admin.user_id]}),
+            ),
+            (
+                "workspace-report-schedule",
+                &f.owner,
+                format!("/api/v1/workspaces/{}/report-schedules", f.team),
+                json!({"cadence":"monthly","timezone":"UTC","delivery_time":"09:00","recipient_user_ids":[f.owner.user_id]}),
+            ),
+            (
                 "catalog",
                 &f.admin,
                 "/api/v1/platform/catalogs".to_owned(),
@@ -136,7 +148,13 @@ impl Targets {
         Self(rows)
     }
     pub(super) fn concrete(&self, path: &str, f: &Fixture) -> String {
-        let id = if path.contains("/alerts/webhooks") {
+        let id = if path.contains("/report-schedules") {
+            &self.0[if path.contains("/platform/") {
+                "platform-report-schedule"
+            } else {
+                "workspace-report-schedule"
+            }]
+        } else if path.contains("/alerts/webhooks") {
             &self.0["webhook"]
         } else if path.contains("/files") {
             &self.0["file"]

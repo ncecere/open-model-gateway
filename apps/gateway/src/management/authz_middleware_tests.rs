@@ -91,6 +91,10 @@ const EXPECTED: &[(Access, [(u16, u16); 15])] = &[
         [U, U, U, F, F, F, F, F, F, A, A, A, F, F, C],
     ),
     (
+        Access::WorkspaceReportAdmin,
+        [U, U, U, F, F, F, F, F, F, A, A, A, N, N, C],
+    ),
+    (
         Access::WorkspaceAdminOrReader,
         [U, U, U, F, A, A, F, F, F, A, A, A, F, F, C],
     ),
@@ -370,7 +374,9 @@ async fn every_route_middleware_has_exact_positive_and_negative_outcomes(pool: P
                         Access::PlatformRead
                         | Access::PlatformWrite
                         | Access::WorkspacePlatformWrite => &admin,
-                        Access::WorkspaceAdmin | Access::WorkspaceAdminOrReader => &administrator,
+                        Access::WorkspaceAdmin
+                        | Access::WorkspaceReportAdmin
+                        | Access::WorkspaceAdminOrReader => &administrator,
                         _ => &holder,
                     }),
                     Actor::KeyHolder => Some(&holder),

@@ -334,6 +334,13 @@ async fn scheduled_reports_historical_cost_center_scope_and_recipient_cap(pool: 
             .0,
         StatusCode::BAD_REQUEST
     );
+    let mut active = input(&[f.admin.user_id]);
+    active["state"] = json!("active");
+    assert_eq!(
+        call(&f.s, &f.admin, "POST", PLATFORM, active).await.0,
+        StatusCode::CONFLICT,
+        "active configuration needs the startup-validated operator origin, not a request destination"
+    );
     let mut recipients = vec![f.admin.user_id];
     for n in 0..49 {
         recipients.push(
@@ -469,6 +476,48 @@ async fn scheduled_reports_every_route_real_sessions_csrf_origin_and_admin_token
             response.status(),
             StatusCode::OK,
             "validated operator public URL allows active inert configuration"
+        );
+        let created: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await.unwrap())
+                .unwrap();
+        let id = created["id"].as_str().unwrap();
+        for (method, body) in [
+            ("PATCH", json!({"state":"paused"})),
+            ("PATCH", json!({"state":"active"})),
+            ("DELETE", Value::Null),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(format!("{base}/{id}"))
+                        .header("cookie", format!("omg_session={cookie}"))
+                        .header("origin", "http://127.0.0.1:3000")
+                        .header("x-csrf-token", &csrf)
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        let actions: Vec<String> = sqlx::query_scalar(
+            "SELECT action FROM audit_events WHERE resource_id=$1 ORDER BY created_at,id",
+        )
+        .bind(id.parse::<Uuid>().unwrap())
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            actions,
+            [
+                "report_schedule.created",
+                "report_schedule.paused",
+                "report_schedule.resumed",
+                "report_schedule.deleted"
+            ]
         );
     }
     assert_eq!(

@@ -4,17 +4,17 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 #[sqlx::test(migrations = false)]
-async fn scheduled_reports_explicit_0060_upgrade_and_readiness(pool: PgPool) {
+async fn scheduled_reports_explicit_0061_upgrade_and_readiness(pool: PgPool) {
     let report = MIGRATOR
         .iter()
-        .find(|m| m.version == 60)
-        .expect("0060 report schedules, not reserved 0058/0059");
+        .find(|m| m.version == 61)
+        .expect("0061 report schedules, not reserved 0058/0059/0060");
     assert_eq!(report.description, "report schedules");
     sqlx::migrate::Migrator {
         migrations: std::borrow::Cow::Owned(
             MIGRATOR
                 .iter()
-                .filter(|m| m.version < 60)
+                .filter(|m| m.version < 61)
                 .cloned()
                 .collect(),
         ),
@@ -37,7 +37,7 @@ async fn scheduled_reports_explicit_0060_upgrade_and_readiness(pool: PgPool) {
     assert!(store.readiness().await.schema);
     assert_eq!(
         sqlx::query_as::<_, (i64, Vec<u8>)>(
-            "SELECT version,checksum FROM _sqlx_migrations WHERE version<60 ORDER BY version"
+            "SELECT version,checksum FROM _sqlx_migrations WHERE version<61 ORDER BY version"
         )
         .fetch_all(&pool)
         .await
@@ -60,7 +60,7 @@ async fn scheduled_reports_explicit_0060_upgrade_and_readiness(pool: PgPool) {
         0
     );
     store.migrate_enterprise().await.unwrap();
-    sqlx::query("UPDATE _sqlx_migrations SET checksum=decode('00','hex') WHERE version=60")
+    sqlx::query("UPDATE _sqlx_migrations SET checksum=decode('00','hex') WHERE version=61")
         .execute(&pool)
         .await
         .unwrap();

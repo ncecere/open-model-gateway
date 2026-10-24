@@ -16,6 +16,8 @@ pub(crate) enum Access {
     WorkspaceKey,
     WorkspaceKeyRotate,
     WorkspaceAdmin,
+    /// Actual admin membership; foreign personal scopes are missing (#102/#282).
+    WorkspaceReportAdmin,
     WorkspaceAdminOrReader,
     WorkspacePlatformWrite,
 }
@@ -98,6 +100,42 @@ macro_rules! route {
     };
 }
 pub(crate) const ROUTES: &[Route] = &[
+    route!(
+        "GET",
+        "/api/v1/platform/report-schedules",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "POST",
+        "/api/v1/platform/report-schedules",
+        PlatformWrite,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/report-schedules/{id}",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "PATCH DELETE",
+        "/api/v1/platform/report-schedules/{id}",
+        PlatformWrite,
+        DENIED
+    ),
+    route!(
+        "GET POST",
+        "/api/v1/workspaces/{ws}/report-schedules",
+        WorkspaceReportAdmin,
+        DENIED
+    ),
+    route!(
+        "GET PATCH DELETE",
+        "/api/v1/workspaces/{ws}/report-schedules/{id}",
+        WorkspaceReportAdmin,
+        DENIED
+    ),
     route!("GET", "/api/v1/auth/config", Anonymous, DENIED),
     route!("GET", "/api/v1/auth/login", Anonymous, DENIED),
     route!("GET", "/api/v1/auth/callback", Anonymous, DENIED),
