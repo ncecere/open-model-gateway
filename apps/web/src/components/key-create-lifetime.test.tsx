@@ -8,6 +8,7 @@ import { ActionProvider } from "./ui";
 import { CreateKeyDialog } from "../pages/keys";
 import { session, team, testClient } from "../lib/test-fixtures";
 import { abortRequests } from "../lib/api";
+import * as apiModule from "../lib/api";
 
 const keysPath = "/api/v1/workspaces/team/keys";
 const policyPath = "/api/v1/workspaces/team/policy";
@@ -161,6 +162,44 @@ afterEach(() => {
 });
 
 describe("CreateKeyDialog submit lifetime", () => {
+  it("ignores an API completion handed off before retirement but resumed afterward", async () => {
+    const view = await setup(), form = await view.validDraft(), submit = retainedSubmit(form);
+    // Keep the real transport, but retire after api() has checked its signal and
+    // returned the token, before the dialog's await continuation can disclose it.
+    const realApi = apiModule.api;
+    const apiSpy = vi.spyOn(apiModule, "api").mockImplementationOnce(async <T,>(path: string, options?: apiModule.RequestOptions) => {
+      const result = await realApi<T>(path, options);
+      window.dispatchEvent(new Event("omg:access-refresh"));
+      expect(form.isConnected).toBe(true);
+      return result;
+    });
+    await act(async () => { submit(); });
+    expect(view.writes()).toHaveLength(1);
+    expectRequest(view);
+    expect(screen.queryByRole("textbox", { name: "API key" })).toBeNull();
+    await waitFor(() => expect(view.client.getQueryState(keysQuery)?.isInvalidated).toBe(true));
+    await act(async () => { submit(); });
+    expect(apiSpy).toHaveBeenCalledTimes(1);
+    expect(view.writes()).toHaveLength(1);
+    expectNoSecretPersistence(view);
+  });
+
+  it("shows a tokenless 2xx error without disclosure or automatic retry and allows an explicit creation retry", async () => {
+    const view = await setup(), form = await view.validDraft();
+    view.fetchSpy.mockResolvedValueOnce(Response.json({ id: "synthetic-tokenless-key" }));
+    await act(async () => { retainedSubmit(form)(); });
+    await screen.findByText("No token was returned. Check the list before trying again.");
+    expect(screen.queryByRole("textbox", { name: "API key" })).toBeNull();
+    expect(form.getAttribute("aria-busy")).toBe("false");
+    await act(async () => {});
+    expect(view.writes()).toHaveLength(1);
+    await view.user.click(screen.getByRole("button", { name: "Create key" }));
+    await expectDisclosure();
+    expect(view.writes()).toHaveLength(2);
+    expectRequest(view, 1);
+    expectNoSecretPersistence(view);
+  });
+
   it("sends exactly one POST and one disclosure for two submits dispatched in the same React batch", async () => {
     const view = await setup(), pending = deferPost(view), form = await view.validDraft();
     // Both dispatches run before React re-renders, so each handler closes over busy === false:
