@@ -45,7 +45,7 @@ Watch these System metrics (Prometheus names below; OTLP counters omit `_total`)
 - `gateway_otlp_metrics_rejected_points_total`: collector-rejected points reported by partial success, bounded by the sent point count; they are not retried.
 - `gateway_otlp_metrics_dropped_total{reason="series_limit|body_limit|label|unclassified|invalid_value"}`: points omitted locally. These and delivery outcomes appear in the **next** snapshot, never a recursive export.
 
-Only transitions into or out of an outage produce the fixed-enum `metrics exporter state changed` warning, not every failed push. Diagnostics never include the collector URL, header names/values, transport error text or collector response text. Monitor silence at the receiver too: a failed exporter cannot report its current failure through that same destination.
+The metrics exporter's own diagnostics are fixed-enum `metrics exporter state changed` warnings only on transitions into or out of an outage, not every failed push. Those warnings include no destination, header names/values, transport error text or collector response text. A DNS/egress policy refusal is additionally logged at WARN by the shared egress layer with purpose, host and resolved address, one warning per attempt (see [#321](https://github.com/ncecere/open-model-gateway/issues/321)). Monitor silence at the receiver too: a failed exporter cannot report its current failure through that same destination.
 
 ## Configuration reference
 
@@ -217,13 +217,13 @@ Recording never waits for a collector: 256 active contexts, 64 spans/request, 24
   curl http://127.0.0.1:3200/api/traces/<trace_id>
   ```
 
-**Not supported (by design, #98's approved scope):**
+**Trace exporter scope (#98):**
 
 - **No `OTEL_*` environment variables.** The standard OpenTelemetry SDK variables (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME`, `OTEL_TRACES_SAMPLER`, and the rest) are never read; only the `GATEWAY_TRACES_*` settings above configure this exporter.
 - **JSON only, no protobuf.** The wire format is OTLP/HTTP with a JSON body (`Content-Type: application/json`), not OTLP/HTTP protobuf or OTLP/gRPC. A collector must accept the JSON encoding on its `/v1/traces` HTTP endpoint.
 - **No client trace-context propagation.** An inbound `traceparent`, `tracestate` or `baggage` header is never read: sampling and the trace ID are always the gateway's own deterministic decision from its own request ID, not a caller's. The gateway also never forwards its own trace context upstream to a provider.
-- **No automatic resource/host discovery and no general tracing-event export.** Resource attributes are a fixed set (service name, package version, configured environment); there is no automatic hostname, process or environment-variable discovery, and the existing `tracing`/`RUST_LOG` structured log events are never turned into spans.
-- **No metrics or logs over OTLP from this exporter.** Metrics stay Prometheus-only ([below](#metrics)); OTLP/HTTP logs are audit export's own, separately configured destination ([above](#otlp-logs)), unrelated to this trace exporter and its settings.
+- **No automatic resource/host discovery and no general tracing-event export.** Trace resource attributes are a fixed set (service name, package version, configured environment); there is no automatic hostname, process or environment-variable discovery, and the existing `tracing`/`RUST_LOG` structured log events are never turned into spans.
+- **Separate OTLP signals.** This exporter sends traces only. [OTLP metrics](#otlp-metrics-99) and [audit OTLP/HTTP logs](#otlp-logs) have their own destinations and settings, independent of tracing. [Prometheus scraping](#metrics) remains available independently.
 
 ## Health endpoints
 

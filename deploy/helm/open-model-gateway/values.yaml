@@ -86,6 +86,9 @@ gateway:
   # above (4318 if used), plus GATEWAY_EGRESS_PRIVATE_ALLOW for private IPs.
   # One worker per replica; no retries/spool; one 3s exporter shutdown budget.
   # Collector outages never gate readiness. HTTP is development-loopback-only.
+  # Exporter-owned warnings are fixed-enum outage transitions without destination,
+  # headers or server text. Shared-egress DNS/policy refusals additionally WARN
+  # with purpose, host and resolved address on every attempt (#321).
   extraEnvFrom: []
   secretEnvAllowlist: []
   # Names the SMTP password reference may read (GATEWAY_SMTP_SECRET_ENV_ALLOWLIST).
