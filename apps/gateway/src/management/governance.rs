@@ -15,6 +15,8 @@ mod reports;
 pub(crate) mod suggestion;
 #[cfg(test)]
 mod tests;
+#[cfg(all(test, feature = "integration-tests"))]
+mod holds_tests;
 pub(super) fn routes() -> Router<Store> {
     Router::new()
         .route(
