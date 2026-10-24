@@ -15,6 +15,8 @@ async fn db_collector_label_keys_match_golden(pool: sqlx::PgPool) {
         "gateway_db_pool_connections",
         "gateway_reservations_held",
         "gateway_alert_email_deliveries",
+        "gateway_alert_delivery_pending_buckets",
+        "gateway_alert_delivery_oldest_pending_age_seconds",
     ] {
         let golden = include_str!("metrics_families.golden")
             .lines()
@@ -33,20 +35,66 @@ async fn db_collector_label_keys_match_golden(pool: sqlx::PgPool) {
             let labels = line.split_once('{').unwrap().1.split_once('}').unwrap().0;
             let keys = labels
                 .split(',')
+                .filter(|label| !label.is_empty())
                 .map(|label| label.split_once('=').unwrap().0)
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect::<Vec<_>>()
                 .join(",");
-            assert_eq!(keys, expected, "{family}");
+            assert_eq!(
+                if keys.is_empty() { "-" } else { &keys },
+                expected,
+                "{family}"
+            );
         }
     }
 }
 
 #[tokio::test]
-async fn prometheus_family_types_and_label_keys_match_golden() {
-    // Isolated registry: parallel tests cannot add or remove fixture series.
-    let m: &'static Metrics = Box::leak(Box::new(Metrics::new()));
+async fn otlp_self_metrics_are_precreated_fixed_enums_and_record_counts() {
+    use crate::metrics_export::{Delivery, DropReason};
+    let m = Metrics::new();
+    let before = m.render(None).await;
+    for outcome in Delivery::ALL {
+        assert!(before.contains(&format!(
+            "gateway_otlp_metrics_pushes_total{{outcome=\"{}\"}} 0",
+            outcome.as_str()
+        )));
+        m.otlp_metrics_push(*outcome);
+    }
+    for reason in DropReason::ALL {
+        assert!(before.contains(&format!(
+            "gateway_otlp_metrics_dropped_total{{reason=\"{}\"}} 0",
+            reason.as_str()
+        )));
+        m.otlp_metrics_drop(*reason, 3);
+    }
+    m.otlp_metrics_rejected(9007199254740993);
+    let after = m.render(None).await;
+    for outcome in Delivery::ALL {
+        assert!(after.contains(&format!(
+            "gateway_otlp_metrics_pushes_total{{outcome=\"{}\"}} 1",
+            outcome.as_str()
+        )));
+    }
+    for reason in DropReason::ALL {
+        assert!(after.contains(&format!(
+            "gateway_otlp_metrics_dropped_total{{reason=\"{}\"}} 3",
+            reason.as_str()
+        )));
+    }
+    assert!(after.contains("gateway_otlp_metrics_rejected_points_total 9007199254740993"));
+}
+
+pub(crate) fn fresh_registry() -> &'static Metrics {
+    // ScopeLockWait requires a static registry; each caller gets its own.
+    Box::leak(Box::new(Metrics::new()))
+}
+
+/// Private, fully populated registry shared by characterization and encoder
+/// tests. Parallel gateway tests cannot introduce caps or privacy drops here.
+pub(crate) fn populated_registry() -> &'static Metrics {
+    let m = fresh_registry();
     m.observe_http(
         &axum::http::Method::POST,
         "/v1/chat/completions",
@@ -92,7 +140,7 @@ async fn prometheus_family_types_and_label_keys_match_golden() {
     m.observe_background_run("metrics", "ok");
     m.set_partition_months("requests", 2);
     m.observe_rollup_hours("new", 1);
-    // These three families are populated only by the DB refresh; prime their
+    // These five families are populated only by the DB refresh; prime their
     // known state labels without requiring a DB for this characterization.
     m.pool_connections
         .get_or_create(&[("state", "idle".into())])
@@ -103,7 +151,14 @@ async fn prometheus_family_types_and_label_keys_match_golden() {
     m.alert_delivery_queue
         .get_or_create(&[("state", "retrying".into())])
         .set(0);
+    m.alert_pending_buckets.get_or_create(&[]).set(0);
+    m.alert_oldest_pending_age.get_or_create(&[]).set(0);
+    m
+}
 
+#[tokio::test]
+async fn prometheus_family_types_and_label_keys_match_golden() {
+    let m = populated_registry();
     // This small reader handles only our controlled fixture (no escaped label
     // values). Histograms contribute family labels, not the synthetic `le`.
     let text = m.render(None).await;
@@ -124,7 +179,7 @@ async fn prometheus_family_types_and_label_keys_match_golden() {
             observed.insert(name.clone());
             if let Some((_, rest)) = line.split_once('{') {
                 let (labels, _) = rest.split_once('}').unwrap();
-                for label in labels.split(',') {
+                for label in labels.split(',').filter(|label| !label.is_empty()) {
                     let (key, _) = label.split_once('=').unwrap();
                     if key != "le" {
                         families.get_mut(name).unwrap().1.insert(key.into());

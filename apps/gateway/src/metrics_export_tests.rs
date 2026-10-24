@@ -1,0 +1,603 @@
+use super::*;
+use serde_json::{Value, json};
+use std::collections::BTreeSet;
+
+fn encoder() -> Encoder {
+    Encoder::new(crate::config::Environment::Development, 123).unwrap()
+}
+fn encode(text: &str, traffic: bool) -> (Value, Drops) {
+    let encoded = encoder().encode(Snapshot::parse(text, traffic), 456);
+    (
+        serde_json::from_slice(&encoded.body).unwrap(),
+        encoded.dropped,
+    )
+}
+fn metrics(body: &Value) -> &[Value] {
+    body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
+        .as_array()
+        .unwrap()
+}
+fn points(metric: &Value) -> &[Value] {
+    ["sum", "gauge", "histogram"]
+        .into_iter()
+        .find_map(|kind| metric[kind]["dataPoints"].as_array())
+        .unwrap()
+}
+
+#[test]
+fn registration_inventory_includes_families_without_instantiated_series() {
+    use syn::visit::Visit;
+    #[derive(Default)]
+    struct Registrations(BTreeSet<String>);
+    impl<'ast> Visit<'ast> for Registrations {
+        fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+            if call.method == "register" {
+                if let Some(syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(name),
+                    ..
+                })) = call.args.first()
+                {
+                    assert!(self.0.insert(format!("gateway_{}", name.value())));
+                } else {
+                    panic!("metric registrations must have literal names");
+                }
+            }
+            syn::visit::visit_expr_method_call(self, call);
+        }
+    }
+    let mut registrations = Registrations::default();
+    registrations.visit_file(&syn::parse_file(include_str!("metrics.rs")).unwrap());
+    assert_eq!(
+        registrations.0,
+        CLASSES.iter().map(|c| c.name.to_owned()).collect()
+    );
+}
+
+#[test]
+fn every_registered_family_classified_once_with_exact_type_and_keys() {
+    let golden = include_str!("metrics_families.golden");
+    assert_eq!(CLASSES.len(), golden.lines().count());
+    let mut names = BTreeSet::new();
+    for class in CLASSES {
+        assert!(names.insert(class.name));
+        let keys = if class.labels.is_empty() {
+            "-".into()
+        } else {
+            class.labels.join(",")
+        };
+        assert!(
+            golden
+                .lines()
+                .any(|line| line == format!("{} {} {}", class.name, class.kind.as_str(), keys)),
+            "{}",
+            class.name
+        );
+    }
+}
+
+#[test]
+fn denylist_covers_all_classes_including_excluded_with_exact_path_exception() {
+    assert_eq!(
+        PATH_FAMILIES,
+        &[
+            "gateway_scope_lock_waiting",
+            "gateway_scope_lock_wait_seconds",
+            "gateway_lock_deadlock_retries"
+        ]
+    );
+    for class in CLASSES {
+        for key in class.labels {
+            let denied = ["workspace", "user", "key", "api_key", "session"]
+                .iter()
+                .any(|prefix| key.starts_with(prefix))
+                || [
+                    "request_id",
+                    "trace_id",
+                    "execution_id",
+                    "email",
+                    "host",
+                    "url",
+                    "path",
+                    "ip",
+                ]
+                .contains(key);
+            assert!(
+                !denied || (*key == "path" && PATH_FAMILIES.contains(&class.name)),
+                "{} {key}",
+                class.name
+            );
+        }
+        for key in [
+            "workspace_id",
+            "user_id",
+            "key_id",
+            "api_key",
+            "request_id",
+            "trace_id",
+            "execution_id",
+            "email",
+            "session_id",
+            "host",
+            "url",
+            "ip",
+            "path",
+        ] {
+            let labels = vec![(key.into(), "admission".into())];
+            assert_eq!(
+                labels_allowed(class, &labels),
+                key == "path" && PATH_FAMILIES.contains(&class.name)
+            );
+        }
+    }
+}
+
+#[test]
+fn exact_wire_shape_and_large_integer_preserved() {
+    let (body, dropped) = encode(
+        "# TYPE gateway_config_changes counter\ngateway_config_changes_total{topic=\"models\"} 9007199254740993\n",
+        false,
+    );
+    assert_eq!(dropped.total(), 0);
+    let resource = &body["resourceMetrics"][0];
+    let attrs = resource["resource"]["attributes"].as_array().unwrap();
+    assert_eq!(attrs.len(), 4);
+    assert_eq!(
+        &attrs[..3],
+        &[
+            json!({"key":"service.name","value":{"stringValue":"open-model-gateway"}}),
+            json!({"key":"service.version","value":{"stringValue":env!("CARGO_PKG_VERSION")}}),
+            json!({"key":"deployment.environment.name","value":{"stringValue":"development"}}),
+        ]
+    );
+    assert_eq!(attrs[3]["key"], "service.instance.id");
+    let id = uuid::Uuid::parse_str(attrs[3]["value"]["stringValue"].as_str().unwrap()).unwrap();
+    assert_eq!(id.get_version_num(), 4);
+    assert_eq!(id.get_variant(), uuid::Variant::RFC4122);
+    assert_eq!(
+        resource["scopeMetrics"][0]["scope"],
+        json!({"name":"omg.metrics","version":env!("CARGO_PKG_VERSION")})
+    );
+    assert_eq!(
+        metrics(&body),
+        &[json!({"name":"gateway_config_changes","unit":"1","sum":{
+            "aggregationTemporality":2,"isMonotonic":true,"dataPoints":[{
+                "attributes":[{"key":"topic","value":{"stringValue":"models"}}],
+                "startTimeUnixNano":"123","timeUnixNano":"456","asInt":"9007199254740993"
+            }]
+        }})]
+    );
+    let (again, _) = encode("", false);
+    assert_eq!(
+        again["resourceMetrics"][0]["resource"],
+        resource["resource"]
+    );
+}
+
+#[test]
+fn histogram_arithmetic_and_gauge_shape() {
+    let text = "gateway_scope_lock_wait_seconds_sum{path=\"admission\",lock=\"rows\"} 4.5\ngateway_scope_lock_wait_seconds_count{lock=\"rows\",path=\"admission\"} 7\ngateway_scope_lock_wait_seconds_bucket{lock=\"rows\",path=\"admission\",le=\"+Inf\"} 7\ngateway_scope_lock_wait_seconds_bucket{lock=\"rows\",path=\"admission\",le=\"2\"} 5\ngateway_scope_lock_wait_seconds_bucket{lock=\"rows\",path=\"admission\",le=\"1\"} 2\ngateway_db_pool_max_connections -2\n";
+    let (body, dropped) = encode(text, true);
+    assert_eq!(dropped.total(), 0);
+    let histogram = metrics(&body)
+        .iter()
+        .find(|m| m["histogram"].is_object())
+        .unwrap();
+    assert_eq!(histogram["unit"], "s");
+    assert_eq!(histogram["histogram"]["aggregationTemporality"], 2);
+    let point = &points(histogram)[0];
+    assert_eq!(point["explicitBounds"], json!([1.0, 2.0]));
+    assert_eq!(point["bucketCounts"], json!(["2", "3", "2"]));
+    assert_eq!(point["sum"], 4.5);
+    assert_eq!(point["count"], "7");
+    assert_eq!(
+        point["explicitBounds"].as_array().unwrap().len() + 1,
+        point["bucketCounts"].as_array().unwrap().len()
+    );
+    let count: u64 = point["bucketCounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().parse::<u64>().unwrap())
+        .sum();
+    assert_eq!(
+        count,
+        point["count"].as_str().unwrap().parse::<u64>().unwrap()
+    );
+    assert_eq!(points(&metrics(&body)[0])[0]["asInt"], "-2");
+    assert!(
+        metrics(&body)[0]["gauge"]
+            .get("aggregationTemporality")
+            .is_none()
+    );
+}
+
+#[test]
+fn traffic_default_and_build_info_are_absent() {
+    let text = "gateway_http_requests_total{method=\"POST\",route=\"/v1/chat/completions\",status=\"200\"} 1\ngateway_build_info{version=\"x\"} 1\ngateway_config_listener_up 1\n";
+    let (body, dropped) = encode(text, false);
+    assert_eq!(metrics(&body).len(), 1);
+    assert_eq!(metrics(&body)[0]["name"], "gateway_config_listener_up");
+    assert_eq!(dropped.total(), 0);
+    assert_eq!(metrics(&encode(text, true).0).len(), 2);
+}
+
+#[test]
+fn labels_escape_safely_and_identity_canaries_never_escape() {
+    let canary = "07980fdd-1f4a-4716-bff3-20317aa86598";
+    for class in CLASSES {
+        let name = match class.kind {
+            Kind::Counter => format!("{}_total", class.name),
+            Kind::Histogram => format!("{}_count", class.name),
+            Kind::Gauge => class.name.into(),
+        };
+        for key in [
+            "workspace_id",
+            "user_id",
+            "api_key",
+            "email",
+            "request_id",
+            "trace_id",
+            "host",
+            "url",
+            "path",
+        ] {
+            let (body, drops) = encode(&format!("{name}{{{key}=\"{canary}\"}} 1\n"), true);
+            assert!(metrics(&body).is_empty());
+            assert!(!body.to_string().contains(canary));
+            assert_eq!(drops.get(DropReason::Label), 1, "{} {key}", class.name);
+        }
+    }
+    let (body, drops) = encode(
+        "gateway_config_changes_total{topic=\"a\\\"b\\\\c\"} 1\n",
+        false,
+    );
+    assert_eq!(drops.total(), 0);
+    assert_eq!(
+        points(&metrics(&body)[0])[0]["attributes"][0]["value"]["stringValue"],
+        "a\"b\\c"
+    );
+    for value in [
+        "/actual/path".into(),
+        "x".repeat(97),
+        "a\\nb".into(),
+        "a\rb".into(),
+    ] {
+        let (_, dropped) = encode(
+            &format!("gateway_lock_deadlock_retries_total{{path=\"{value}\"}} 1\n"),
+            true,
+        );
+        assert_eq!(dropped.get(DropReason::Label), 1);
+    }
+    for value in ["admission", "settlement", "reconciliation"] {
+        assert_eq!(
+            metrics(
+                &encode(
+                    &format!("gateway_lock_deadlock_retries_total{{path=\"{value}\"}} 1\n"),
+                    false
+                )
+                .0
+            )
+            .len(),
+            1
+        );
+    }
+}
+
+#[test]
+fn invalid_histogram_labels_count_one_logical_series_not_each_component() {
+    let (body, drops) = encode(
+        "gateway_scope_lock_wait_seconds_bucket{path=\"/private\",le=\"1\"} 1\ngateway_scope_lock_wait_seconds_bucket{path=\"/private\",le=\"+Inf\"} 1\ngateway_scope_lock_wait_seconds_count{path=\"/private\"} 1\ngateway_scope_lock_wait_seconds_sum{path=\"/private\"} 1\n",
+        true,
+    );
+    assert!(metrics(&body).is_empty());
+    assert_eq!(drops.get(DropReason::Label), 1);
+}
+
+#[test]
+fn ordinary_label_length_is_in_characters_and_controls_are_refused() {
+    for value in ["x".repeat(96), "é".repeat(96)] {
+        let (body, drops) = encode(
+            &format!("gateway_config_changes_total{{topic=\"{value}\"}} 1\n"),
+            false,
+        );
+        assert_eq!(drops.total(), 0);
+        assert_eq!(metrics(&body).len(), 1);
+    }
+    for value in [
+        "x".repeat(97),
+        "é".repeat(97),
+        "x\\ny".into(),
+        "x\ty".into(),
+        "x\u{7f}y".into(),
+    ] {
+        let (body, drops) = encode(
+            &format!("gateway_config_changes_total{{topic=\"{value}\"}} 1\n"),
+            false,
+        );
+        assert!(metrics(&body).is_empty());
+        assert_eq!(drops.get(DropReason::Label), 1);
+    }
+    for class in CLASSES {
+        if class.labels.contains(&"path") {
+            for value in ["admission", "settlement", "reconciliation"] {
+                assert!(labels_allowed(class, &vec![("path".into(), value.into())]));
+            }
+            assert!(!labels_allowed(
+                class,
+                &vec![("path".into(), "/secret".into())]
+            ));
+        }
+    }
+}
+
+#[test]
+fn histogram_unsigned_counts_remain_exact_above_f64_precision() {
+    let (body, drops) = encode(
+        "gateway_scope_lock_wait_seconds_bucket{le=\"1\"} 9007199254740993\ngateway_scope_lock_wait_seconds_bucket{le=\"+Inf\"} 18446744073709551615\ngateway_scope_lock_wait_seconds_count 18446744073709551615\ngateway_scope_lock_wait_seconds_sum 1\n",
+        true,
+    );
+    assert_eq!(drops.total(), 0);
+    let point = &points(&metrics(&body)[0])[0];
+    assert_eq!(point["count"], "18446744073709551615");
+    assert_eq!(
+        point["bucketCounts"],
+        json!(["9007199254740993", "18437736874454810622"])
+    );
+}
+
+#[test]
+fn invalid_values_and_unclassified_are_counted() {
+    for value in ["NaN", "+Inf", "-Inf", "-1", "1.2", "18446744073709551615"] {
+        let (body, drops) = encode(
+            &format!("gateway_config_poll_failures_total {value}\n"),
+            false,
+        );
+        assert!(metrics(&body).is_empty());
+        assert_eq!(drops.get(DropReason::InvalidValue), 1);
+    }
+    let (_, drops) = encode("gateway_future_total 1\n", false);
+    assert_eq!(drops.get(DropReason::Unclassified), 1);
+}
+
+#[test]
+fn caps_are_sorted_and_deterministic() {
+    let lines = (0..305)
+        .map(|i| format!("gateway_config_changes_total{{topic=\"{i:03}\"}} {i}\n"))
+        .collect::<Vec<_>>();
+    let (first, drops) = encode(&lines.concat(), false);
+    let (second, again) = encode(&lines.into_iter().rev().collect::<String>(), false);
+    assert_eq!(first, second);
+    assert_eq!(drops, again);
+    assert_eq!(drops.get(DropReason::SeriesLimit), 5);
+    assert_eq!(points(&metrics(&first)[0]).len(), 300);
+    let text = CLASSES
+        .iter()
+        .filter(|c| {
+            !c.labels.is_empty()
+                && c.class != Class::Excluded
+                && c.kind == Kind::Counter
+                && !c.labels.contains(&"path")
+        })
+        .take(8)
+        .flat_map(|c| {
+            (0..300).map(move |i| format!("{}_total{{{}=\"{i:03}\"}} 1\n", c.name, c.labels[0]))
+        })
+        .collect::<String>();
+    let (body, drops) = encode(&text, true);
+    assert_eq!(
+        metrics(&body)
+            .iter()
+            .map(|m| points(m).len())
+            .sum::<usize>(),
+        2000
+    );
+    assert_eq!(drops.get(DropReason::SeriesLimit), 400);
+    let snapshot = Snapshot::parse(&text, true);
+    let limited = encoder().encode_with_limit(snapshot, 456, 2048);
+    assert!(limited.body.len() <= 2048);
+    assert!(limited.dropped.get(DropReason::BodyLimit) > 0);
+    let standard = encoder().encode(Snapshot::parse(&text, true), 456);
+    assert!(standard.body.len() <= 1024 * 1024);
+}
+
+#[test]
+fn malformed_histograms_are_not_fabricated() {
+    for buckets in [
+        "",
+        "le=\"1\"} 2\n",
+        "le=\"+Inf\"} 2\n",
+        "le=\"1\"} 3\ngateway_scope_lock_wait_seconds_bucket{le=\"+Inf\"} 2\n",
+    ] {
+        let prefix = if buckets.is_empty() {
+            "".into()
+        } else {
+            format!("gateway_scope_lock_wait_seconds_bucket{{{buckets}")
+        };
+        let (body, drops) = encode(
+            &format!(
+                "{prefix}gateway_scope_lock_wait_seconds_count 1\ngateway_scope_lock_wait_seconds_sum 1\n"
+            ),
+            true,
+        );
+        assert!(metrics(&body).is_empty());
+        assert_eq!(drops.get(DropReason::InvalidValue), 1);
+    }
+}
+
+#[tokio::test]
+async fn actual_prometheus_render_round_trips_without_value_loss() {
+    let m = crate::metrics::characterization_tests::populated_registry();
+    m.observe_config_change("otlp-roundtrip");
+    m.observe_deadlock_retry("settlement");
+    drop(m.scope_lock_wait("rows", "reconciliation"));
+    m.observe_http(
+        &axum::http::Method::GET,
+        "/health/live",
+        200,
+        std::time::Duration::from_millis(5),
+    );
+    let text = m.render(None).await;
+    for traffic in [false, true] {
+        let encoded = encoder().encode(Snapshot::parse(&text, traffic), 456);
+        assert_eq!(encoded.dropped.total(), 0, "{text}");
+        let body: Value = serde_json::from_slice(&encoded.body).unwrap();
+        assert_eq!(
+            metrics(&body)
+                .iter()
+                .map(|metric| metric["name"].as_str().unwrap())
+                .collect::<BTreeSet<_>>(),
+            CLASSES
+                .iter()
+                .filter(|class| class.class == Class::System
+                    || (traffic && class.class == Class::Traffic))
+                .map(|class| class.name)
+                .collect(),
+            "the populated render must export exactly the selected families"
+        );
+        for metric in metrics(&body) {
+            let name = metric["name"].as_str().unwrap();
+            let class = CLASSES.iter().find(|c| c.name == name).unwrap();
+            assert!(traffic || class.class == Class::System);
+            assert_eq!(metric["unit"], class.unit);
+            for point in points(metric) {
+                let mut labels = point["attributes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|a| {
+                        (
+                            a["key"].as_str().unwrap(),
+                            a["value"]["stringValue"].as_str().unwrap(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                labels.sort();
+                assert_eq!(
+                    labels.iter().map(|(key, _)| *key).collect::<Vec<_>>(),
+                    class.labels,
+                    "{name}: exported label keys must match the golden inventory"
+                );
+                let sample_name = if class.kind == Kind::Counter {
+                    format!("{name}_total")
+                } else if class.kind == Kind::Histogram {
+                    format!("{name}_count")
+                } else {
+                    name.into()
+                };
+                let expected = if class.kind == Kind::Histogram {
+                    point["count"].as_str().unwrap().parse::<f64>().unwrap()
+                } else if let Some(n) = point.get("asInt") {
+                    n.as_str().unwrap().parse::<f64>().unwrap()
+                } else {
+                    point["asDouble"].as_f64().unwrap()
+                };
+                assert!(
+                    text.lines().any(|line| {
+                        if !line.starts_with(&sample_name) {
+                            return false;
+                        }
+                        let Ok((source_labels, value)) = sample(&line[sample_name.len()..]) else {
+                            return false;
+                        };
+                        source_labels
+                            .iter()
+                            .map(|(k, v)| (k.as_str(), v.as_str()))
+                            .collect::<Vec<_>>()
+                            == labels
+                            && value.parse::<f64>().ok() == Some(expected)
+                    }),
+                    "{name}: {point}"
+                );
+            }
+        }
+    }
+}
+
+// Reproduce the all-features-only failure: DB refresh instantiates two gauges
+// absent from the old table, even when Traffic is off. A private registry keeps
+// unrelated lease tests from clearing those gauges during the render, while
+// global recording continues throughout refresh, parsing and encoding.
+#[cfg(feature = "integration-tests")]
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn db_refresh_round_trips_with_concurrent_global_recording(pool: sqlx::PgPool) {
+    let m = crate::metrics::characterization_tests::fresh_registry();
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let (stop, stopped) = std::sync::mpsc::channel();
+    let writer = tokio::task::spawn_blocking(move || {
+        crate::metrics::METRICS.observe_config_change("otlp-concurrent");
+        started.send(()).unwrap();
+        while matches!(
+            stopped.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ) {
+            crate::metrics::METRICS.observe_config_change("otlp-concurrent");
+            m.observe_config_change("otlp-concurrent");
+            m.observe_http(
+                &axum::http::Method::GET,
+                "/health/live",
+                200,
+                std::time::Duration::from_millis(5),
+            );
+            std::thread::yield_now();
+        }
+    });
+    ready.await.unwrap();
+    let text = m.render(Some(&crate::store::Store::new(pool))).await;
+    // Compare one render against its own parse, never a later counter read.
+    let encoded = encoder().encode(Snapshot::parse(&text, false), 456);
+    stop.send(()).unwrap();
+    writer.await.unwrap();
+    for name in [
+        "gateway_alert_delivery_pending_buckets",
+        "gateway_alert_delivery_oldest_pending_age_seconds",
+    ] {
+        assert!(text.contains(&format!("{name}{{}} ")));
+    }
+    assert_eq!(encoded.dropped.total(), 0, "{:?}", encoded.dropped);
+    let body: Value = serde_json::from_slice(&encoded.body).unwrap();
+    assert!(metrics(&body).iter().all(|metric| {
+        CLASSES
+            .iter()
+            .any(|class| metric["name"] == class.name && class.class == Class::System)
+    }));
+}
+
+#[test]
+fn real_body_limit_keeps_a_sorted_prefix_of_histogram_points() {
+    let families = CLASSES.iter().filter(|c| c.kind == Kind::Histogram);
+    let mut lines = Vec::new();
+    for class in families {
+        let key = class.labels.iter().find(|key| **key != "path").unwrap();
+        for i in 0..300 {
+            let label = format!("{key}=\"{i:03}{}\"", "x".repeat(90));
+            for bound in 0..100 {
+                lines.push(format!(
+                    "{}_bucket{{{label},le=\"{bound}\"}} {bound}\n",
+                    class.name
+                ));
+            }
+            lines.push(format!("{}_bucket{{{label},le=\"+Inf\"}} 100\n{}_count{{{label}}} 100\n{}_sum{{{label}}} 100\n", class.name, class.name, class.name));
+        }
+    }
+    let first = encoder().encode(Snapshot::parse(&lines.concat(), true), 456);
+    let second = encoder().encode(
+        Snapshot::parse(&lines.into_iter().rev().collect::<String>(), true),
+        456,
+    );
+    assert_eq!(first.body, second.body);
+    assert_eq!(first.dropped, second.dropped);
+    assert!(first.body.len() <= MAX_BODY);
+    assert!(first.dropped.get(DropReason::BodyLimit) > 0);
+    assert_eq!(first.dropped.get(DropReason::InvalidValue), 0);
+    assert_eq!(first.points as u64 + first.dropped.total(), 1800);
+}
+
+proptest::proptest! {
+    #[test]
+    fn hostile_exposition_never_panics(text in "(?s).{0,4096}", label in "(?s).{0,120}", value in proptest::sample::select(vec!["NaN", "+Inf", "-Inf", "1", "9007199254740993"])) {
+        let text = format!("{text}\ngateway_config_changes_total{{topic=\"{label}\"}} {value}\n");
+        let encoded = encoder().encode(Snapshot::parse(&text, true), 456);
+        proptest::prop_assert!(encoded.body.len() <= MAX_BODY);
+        let _: Value = serde_json::from_slice(&encoded.body).unwrap();
+    }
+}

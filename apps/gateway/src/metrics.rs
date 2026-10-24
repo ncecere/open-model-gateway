@@ -214,6 +214,9 @@ pub struct Metrics {
     trace_dropped_spans: [Counter; crate::telemetry::DropReason::COUNT],
     trace_deliveries: [Counter; crate::telemetry::Delivery::COUNT],
     trace_rejected_spans: Counter,
+    otlp_metrics_pushes: [Counter; crate::otlp::Delivery::COUNT],
+    otlp_metrics_dropped: [Counter; crate::metrics_export::DropReason::COUNT],
+    otlp_metrics_rejected_points: Counter,
     audit_export_queued: Gauge,
     audit_export_oldest:
         prometheus_client::metrics::gauge::Gauge<f64, std::sync::atomic::AtomicU64>,
@@ -321,6 +324,23 @@ impl Metrics {
                 )])
                 .clone()
         });
+        let metric_pushes = Family::<L1, Counter>::default();
+        let otlp_metrics_pushes = std::array::from_fn(|i| {
+            metric_pushes
+                .get_or_create(&[("outcome", crate::otlp::Delivery::ALL[i].as_str().to_owned())])
+                .clone()
+        });
+        let metric_drops = Family::<L1, Counter>::default();
+        let otlp_metrics_dropped = std::array::from_fn(|i| {
+            metric_drops
+                .get_or_create(&[(
+                    "reason",
+                    crate::metrics_export::DropReason::ALL[i]
+                        .as_str()
+                        .to_owned(),
+                )])
+                .clone()
+        });
         let metrics = Self {
             http_requests: Family::default(),
             http_duration: Family::new_with_constructor(request_buckets),
@@ -367,6 +387,9 @@ impl Metrics {
             trace_dropped_spans,
             trace_deliveries,
             trace_rejected_spans: Counter::default(),
+            otlp_metrics_pushes,
+            otlp_metrics_dropped,
+            otlp_metrics_rejected_points: Counter::default(),
             audit_export_queued: Gauge::default(),
             audit_export_oldest: Default::default(),
             config_listener: Gauge::default(),
@@ -579,6 +602,21 @@ impl Metrics {
             metrics.trace_rejected_spans.clone(),
         );
         registry.register(
+            "otlp_metrics_pushes",
+            "Metrics export exchanges, by fixed outcome (no retries)",
+            metric_pushes,
+        );
+        registry.register(
+            "otlp_metrics_dropped",
+            "Metrics export points dropped locally, by fixed reason",
+            metric_drops,
+        );
+        registry.register(
+            "otlp_metrics_rejected_points",
+            "Metrics points rejected by the collector partialSuccess acknowledgement",
+            metrics.otlp_metrics_rejected_points.clone(),
+        );
+        registry.register(
             "audit_export_queued",
             "Audit events queued for export, not yet accepted by the receiver",
             metrics.audit_export_queued.clone(),
@@ -703,6 +741,19 @@ impl Metrics {
         self.config_changes
             .get_or_create(&[("topic", topic.to_owned())])
             .inc();
+    }
+
+    /// Fixed outcomes shared with the trace transport; never a destination or error string.
+    pub fn otlp_metrics_push(&self, outcome: crate::metrics_export::Delivery) {
+        self.otlp_metrics_pushes[outcome as usize].inc();
+    }
+
+    pub fn otlp_metrics_drop(&self, reason: crate::metrics_export::DropReason, n: u64) {
+        self.otlp_metrics_dropped[reason as usize].inc_by(n);
+    }
+
+    pub fn otlp_metrics_rejected(&self, n: u64) {
+        self.otlp_metrics_rejected_points.inc_by(n);
     }
 
     pub(crate) fn trace_drop(&self, reason: crate::telemetry::DropReason, n: u64) {
@@ -1293,7 +1344,7 @@ pub fn listen_from(value: Option<&str>, public: SocketAddr) -> anyhow::Result<Op
 
 #[cfg(test)]
 #[path = "metrics_characterization_tests.rs"]
-mod characterization_tests;
+pub(crate) mod characterization_tests;
 
 #[cfg(test)]
 mod tests {

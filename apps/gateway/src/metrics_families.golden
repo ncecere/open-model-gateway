@@ -1,5 +1,7 @@
 gateway_admission_denials counter code,scope
 gateway_admission_seconds histogram outcome,phase
+gateway_alert_delivery_oldest_pending_age_seconds gauge -
+gateway_alert_delivery_pending_buckets gauge -
 gateway_alert_email_attempts counter outcome
 gateway_alert_email_deliveries gauge state
 gateway_alert_evaluations counter result
@@ -37,6 +39,9 @@ gateway_inference_tokens counter direction,model,provider
 gateway_key_issuance_refused counter operation,scope
 gateway_lock_deadlock_retries counter path
 gateway_metrics_collection_errors counter collector
+gateway_otlp_metrics_dropped counter reason
+gateway_otlp_metrics_pushes counter outcome
+gateway_otlp_metrics_rejected_points counter -
 gateway_reservations_held gauge state
 gateway_scope_lock_wait_seconds histogram lock,path
 gateway_scope_lock_waiting gauge path
