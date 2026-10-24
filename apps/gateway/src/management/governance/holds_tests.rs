@@ -17,10 +17,13 @@ fn user(id: Uuid) -> BrowserPrincipal {
     }
 }
 async fn call(f: &Fixture, who: Uuid, path: &str) -> (StatusCode, Value) {
+    call_store(&f.store, who, path).await
+}
+async fn call_store(store: &Store, who: Uuid, path: &str) -> (StatusCode, Value) {
     let r = routes()
         .merge(platform_routes())
         .layer(Extension(ManagementPrincipal::Browser(user(who))))
-        .with_state(f.store.clone())
+        .with_state(store.clone())
         .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
         .await
         .unwrap();
@@ -54,6 +57,172 @@ async fn hold(
     }
     id
 }
+// This helper runs only in a separate test-runner process, invoked by the
+// parent below. A fresh Store alone cannot expose the old process-global KEY.
+#[tokio::test]
+#[ignore = "invoked by queue_cursor_survives_independent_replica with its isolated database"]
+async fn queue_cursor_replica_worker() {
+    let pool = PgPool::connect(&std::env::var("OMG_HOLDS_REPLICA_DATABASE").unwrap())
+        .await
+        .unwrap();
+    let who: Uuid = std::env::var("OMG_HOLDS_REPLICA_ACTOR")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let expected: Uuid = std::env::var("OMG_HOLDS_REPLICA_EXPECTED")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let path = std::env::var("OMG_HOLDS_REPLICA_PATH").unwrap();
+    let store = Store::new(pool);
+    let (status, next) = call_store(&store, who, &path).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "second replica must accept the first replica's position"
+    );
+    assert_eq!(next["data"].as_array().unwrap().len(), 1);
+    assert_eq!(next["data"][0]["execution_id"], expected.to_string());
+    assert_eq!(next["totals"]["count"], "2");
+    assert_eq!(next["has_more"], false);
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn queue_cursor_survives_independent_replica(pool: PgPool) {
+    use sqlx::ConnectOptions;
+    let f = fixture(pool).await;
+    let ws = f.team.workspace_id;
+    hold(&f, ws, f.team.key_id, "unknown", Some(10), 4, None).await;
+    let second = hold(&f, ws, f.team.key_id, "unknown", Some(20), 3, None).await;
+    let path = format!("/api/v1/workspaces/{ws}/holds?limit=1");
+    let (status, first) = call(&f, f.owner, &path).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(first["has_more"], true);
+    let cursor = first["next_cursor"].as_str().unwrap();
+    let second_path = format!("{path}&cursor={cursor}");
+    let second_pool = sqlx::postgres::PgPoolOptions::new()
+        .connect_with(f.store.pool.connect_options().as_ref().clone())
+        .await
+        .unwrap();
+    let second_store = Store::new(second_pool);
+    let (status, next) = call_store(&second_store, f.owner, &second_path).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(next["data"][0]["execution_id"], second.to_string());
+    let output = tokio::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "management::governance::holds_tests::queue_cursor_replica_worker",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env(
+            "OMG_HOLDS_REPLICA_DATABASE",
+            f.store.pool.connect_options().to_url_lossy().as_str(),
+        )
+        .env("OMG_HOLDS_REPLICA_ACTOR", f.owner.to_string())
+        .env("OMG_HOLDS_REPLICA_EXPECTED", second.to_string())
+        .env("OMG_HOLDS_REPLICA_PATH", second_path)
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "independent replica failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn queue_foreign_workspace_cursor_never_expands_visibility(pool: PgPool) {
+    let f = fixture(pool).await;
+    let personal = f.principal.workspace_id;
+    let private_first = hold(
+        &f,
+        personal,
+        f.principal.key_id,
+        "unknown",
+        Some(101),
+        6,
+        None,
+    )
+    .await;
+    let private_second = hold(
+        &f,
+        personal,
+        f.principal.key_id,
+        "unknown",
+        Some(102),
+        5,
+        None,
+    )
+    .await;
+    let ws = f.team.workspace_id;
+    let key = crate::auth::NewApiKey::generate().unwrap();
+    sqlx::query("INSERT INTO api_keys(id,workspace_id,issued_to_user_id,name,secret_hash) VALUES($1,$2,$3,'foreign-cursor-member',$4)").bind(key.id).bind(ws).bind(f.other).bind(key.digest.as_slice()).execute(&f.store.pool).await.unwrap();
+    hold(&f, ws, f.team.key_id, "unknown", Some(20), 4, None).await;
+    let mine = hold(&f, ws, key.id, "unknown", Some(10), 3, None).await;
+    let (status, private_page) = call(
+        &f,
+        f.owner,
+        &format!("/api/v1/workspaces/{personal}/holds?limit=1"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        private_page["data"][0]["execution_id"],
+        private_first.to_string()
+    );
+    let cursor = private_page["next_cursor"].as_str().unwrap();
+    let (status, member) = call(
+        &f,
+        f.other,
+        &format!("/api/v1/workspaces/{ws}/holds?cursor={cursor}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(member["data"].as_array().unwrap().len(), 1);
+    assert_eq!(member["data"][0]["execution_id"], mine.to_string());
+    assert_eq!(member["totals"]["count"], "1");
+    assert_eq!(member["totals"]["known_floor_microusd"], "10");
+    let (status, platform) = call(
+        &f,
+        f.owner,
+        &format!("/api/v1/platform/holds?cursor={cursor}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(platform["data"].as_array().unwrap().len(), 2);
+    assert!(
+        platform["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["workspace"]["id"] == ws.to_string())
+    );
+    assert_eq!(platform["personal"]["count"], "2");
+    assert_eq!(platform["personal"]["known_floor_microusd"], "203");
+    for id in [personal, private_first, private_second] {
+        assert!(!platform.to_string().contains(&id.to_string()));
+    }
+    // Visibility is live even when an old position survives a role change.
+    sqlx::query("UPDATE workspace_membership_grants SET revoked_at=now() WHERE user_id=$1")
+        .bind(f.other)
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        call(
+            &f,
+            f.other,
+            &format!("/api/v1/workspaces/{ws}/holds?cursor={cursor}")
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+}
+
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn queue_age_boundary_uses_database_clock(pool: PgPool) {
     let query = format!(
@@ -149,7 +318,7 @@ async fn queue_visibility_privacy_pagination_and_strict_parameters(pool: PgPool)
         .unwrap();
     sqlx::query("INSERT INTO api_keys(id,workspace_id,service_account_id,name,secret_hash) VALUES($1,$2,$3,'queue-sentinel-service-key',$4)").bind(service.id).bind(ws).bind(account).bind(service.digest.as_slice()).execute(&f.store.pool).await.unwrap();
     let mine = hold(&f, ws, own.id, "unknown", Some(10), 3, None).await;
-    hold(&f, ws, f.team.key_id, "unknown", Some(20), 3, None).await;
+    hold(&f, ws, f.team.key_id, "unknown", Some(20), 4, None).await;
     hold(&f, ws, service.id, "unknown", None, 3, None).await;
     let private = hold(
         &f,
@@ -224,23 +393,88 @@ async fn queue_visibility_privacy_pagination_and_strict_parameters(pool: PgPool)
         first["data"][0]["execution_id"],
         second["data"][0]["execution_id"]
     );
-    for rejected in [
-        format!("{path}?cursor={cursor}x"),
-        format!("/api/v1/workspaces/{personal}/holds?cursor={cursor}"),
-        format!("/api/v1/platform/holds?cursor={cursor}"),
-    ] {
-        assert_eq!(
-            call(&f, f.owner, &rejected).await.0,
-            StatusCode::BAD_REQUEST,
-            "{rejected}"
-        );
-    }
     assert_eq!(
-        call(&f, f.other, &format!("{path}?cursor={cursor}"))
+        call(&f, f.owner, &format!("{path}?cursor={cursor}x"))
             .await
             .0,
         StatusCode::BAD_REQUEST
     );
+    // A foreign position is not authority. The current caller's SQL scope
+    // filters both detail rows AND totals, independently of cursor origin.
+    let (status, member_page) = call(&f, f.other, &format!("{path}?cursor={cursor}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(member_page["data"].as_array().unwrap().len(), 1);
+    assert_eq!(member_page["data"][0]["execution_id"], mine.to_string());
+    assert_eq!(member_page["totals"]["count"], "1");
+    assert_eq!(member_page["totals"]["known_floor_microusd"], "10");
+    let (status, personal_page) = call(
+        &f,
+        f.owner,
+        &format!("/api/v1/workspaces/{personal}/holds?cursor={cursor}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(personal_page["data"].as_array().unwrap().is_empty());
+    assert_eq!(personal_page["totals"]["count"], "1");
+    assert_eq!(
+        personal_page["totals"]["known_floor_microusd"],
+        "9007199254740993"
+    );
+    let (status, platform_page) = call(
+        &f,
+        f.owner,
+        &format!("/api/v1/platform/holds?cursor={cursor}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(platform_page["data"].as_array().unwrap().len(), 2);
+    assert!(
+        platform_page["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["workspace"]["id"] == ws.to_string())
+    );
+    assert_eq!(platform_page["totals"]["count"], "3");
+    assert_eq!(platform_page["personal"]["count"], "1");
+    assert!(!platform_page.to_string().contains(&private.to_string()));
+    assert!(!platform_page.to_string().contains(&personal.to_string()));
+    assert!(!platform_page.to_string().contains("queue-sentinel"));
+    // Changing a valid position to before every row still cannot reveal an
+    // admin's/service key or a different workspace's row to a member.
+    let edited = format!("0_{}", Uuid::nil());
+    let (status, edited_page) = call(&f, f.other, &format!("{path}?cursor={edited}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(edited_page["data"].as_array().unwrap().len(), 1);
+    assert_eq!(edited_page["data"][0]["execution_id"], mine.to_string());
+    assert_eq!(edited_page["totals"]["count"], "1");
+    assert_eq!(
+        call(
+            &f,
+            f.other,
+            &format!("/api/v1/workspaces/{personal}/holds?cursor={cursor}")
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    for malformed in [
+        "bad",
+        "0",
+        "0_bad",
+        "0_00000000000000000000000000000000",
+        "00_00000000-0000-0000-0000-000000000000",
+        "9223372036854775808_00000000-0000-0000-0000-000000000000",
+        "0_00000000-0000-0000-0000-000000000000_extra",
+    ] {
+        assert_eq!(
+            call(&f, f.owner, &format!("{path}?cursor={malformed}"))
+                .await
+                .0,
+            StatusCode::BAD_REQUEST,
+            "{malformed}"
+        );
+    }
     for query in [
         "offset=1",
         "limit=0",
