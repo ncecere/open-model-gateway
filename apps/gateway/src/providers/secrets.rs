@@ -12,6 +12,7 @@ pub const SECRET_POINTERS: &[&str] = &[
     "GATEWAY_AUDIT_WEBHOOK_SECRET_ENV",
     "GATEWAY_AUDIT_OTLP_HEADERS_ENV",
     "GATEWAY_TRACES_OTLP_HEADERS_ENV",
+    "GATEWAY_METRICS_OTLP_HEADERS_ENV",
 ];
 
 /// A gateway-owned variable must never be directed to a provider or SMTP.

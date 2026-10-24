@@ -169,6 +169,21 @@ fn reserved_allowlists_stop_before_database_access_without_disclosure() {
                 assert_eq!(output.status.code(), Some(1), "{args:?}");
                 assert!(output.stdout.is_empty());
                 let stderr = text(&output.stderr);
+                // #99's newly inventoried pointer has stricter diagnostics:
+                // setting only, not even the selected variable's name. Keep
+                // every pre-existing pointer's assertions below unchanged.
+                if pointer == Some("GATEWAY_METRICS_OTLP_HEADERS_ENV") {
+                    assert!(stderr.contains("GATEWAY_METRICS_OTLP_HEADERS_ENV"));
+                    for forbidden in [
+                        name,
+                        "could not connect",
+                        "private-database-marker",
+                        "private-value-marker",
+                    ] {
+                        assert!(!stderr.contains(forbidden), "{stderr}");
+                    }
+                    continue;
+                }
                 assert!(stderr.contains(allowlist));
                 assert!(stderr.contains(name), "{args:?}");
                 if let Some(pointer) = pointer {
@@ -316,7 +331,37 @@ fn metrics_otlp_refusals_use_the_real_startup_path_without_disclosure() {
     const TRAFFIC: &str = "GATEWAY_METRICS_OTLP_TRAFFIC";
     let f = Fixture::new();
     let valid = "https://collector.invalid/v1/metrics";
+    let too_many = (0..17)
+        .map(|i| format!("X-{i}=canary-secret"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let too_long = format!("X={}", "a".repeat(4095));
     let mut cases = vec![
+        (HEADERS, vec![(URL, valid), (HEADERS, "PRIVATE_MATERIAL")]),
+        (
+            HEADERS,
+            vec![
+                (URL, valid),
+                (HEADERS, "PRIVATE_MATERIAL"),
+                ("PRIVATE_MATERIAL", "canary-no-equals"),
+            ],
+        ),
+        (
+            HEADERS,
+            vec![
+                (URL, valid),
+                (HEADERS, "PRIVATE_MATERIAL"),
+                ("PRIVATE_MATERIAL", too_many.as_str()),
+            ],
+        ),
+        (
+            HEADERS,
+            vec![
+                (URL, valid),
+                (HEADERS, "PRIVATE_MATERIAL"),
+                ("PRIVATE_MATERIAL", too_long.as_str()),
+            ],
+        ),
         (URL, vec![(URL, "https://10.1.1.1/v1/metrics")]),
         (
             URL,
@@ -390,8 +435,12 @@ fn metrics_otlp_refusals_use_the_real_startup_path_without_disclosure() {
         ),
         (URL, vec![(URL, valid)]),
     ];
-    for setting in [HEADERS, INTERVAL, TRAFFIC] {
-        cases.push((setting, vec![(setting, "canary-orphan")]));
+    for (setting, value) in [
+        (HEADERS, "PRIVATE_MATERIAL"),
+        (INTERVAL, "60"),
+        (TRAFFIC, "off"),
+    ] {
+        cases.push((setting, vec![(setting, value)]));
     }
     for pointer in open_model_gateway::providers::secrets::SECRET_POINTERS {
         if *pointer != HEADERS {

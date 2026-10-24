@@ -98,17 +98,8 @@ pub fn root_sampled(request: Uuid, ratio: f64) -> bool {
     fraction < ratio
 }
 
-macro_rules! fixed_enum {
-    ($name:ident { $($variant:ident => $text:literal),+ $(,)? }) => {
-        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-        pub enum $name { $($variant),+ }
-        impl $name {
-            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
-            pub const COUNT: usize = Self::ALL.len();
-            pub fn as_str(self) -> &'static str { match self { $(Self::$variant => $text),+ } }
-        }
-    };
-}
+pub use crate::otlp::Delivery;
+use crate::otlp::fixed_enum;
 fixed_enum!(SpanName {
     InferenceRequest => "inference.request", Routing => "routing", Admission => "admission",
     UpstreamAttempt => "upstream.attempt", Settlement => "settlement",
@@ -134,7 +125,6 @@ fixed_enum!(ErrorKind { InvalidRequest => "invalid_request", Unauthorized => "un
 // hand at the failed construction, so "every span is either delivered or
 // counted" also covers construction, not just export.
 fixed_enum!(DropReason { Contexts => "contexts", RequestLimit => "request_limit", SpanLimit => "span_limit", QueueFull => "queue_full", Shutdown => "shutdown", Ineligible => "ineligible", Delivery => "delivery", Invalid => "invalid" });
-fixed_enum!(Delivery { Accepted => "accepted", HttpStatus => "http_status", Transport => "transport", Timeout => "timeout", Acknowledgement => "acknowledgement" });
 
 /// Constructed only after primary admission has proved shared-workspace
 /// eligibility. Intentionally has no production constructor in PR 1: PR 2
@@ -727,61 +717,16 @@ impl Exporter {
         }]})).expect("bounded JSON values serialize")
     }
     async fn send(&self, body: Vec<u8>, count: usize) -> Result<u64, Delivery> {
-        // Explicit outer deadline covers connect, headers AND bounded ack reads.
-        tokio::time::timeout(EXCHANGE, async {
-            let mut response = self
-                .client
-                .post(self.url.clone())
-                .headers(self.headers.clone())
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(body)
-                .send()
-                .await
-                .map_err(|e| {
-                    if e.is_timeout() {
-                        Delivery::Timeout
-                    } else {
-                        Delivery::Transport
-                    }
-                })?;
-            if !response.status().is_success() {
-                return Err(Delivery::HttpStatus);
-            }
-            let mut ack = Vec::new();
-            while let Some(chunk) = response.chunk().await.map_err(|error| {
-                if error.is_timeout() {
-                    Delivery::Timeout
-                } else {
-                    Delivery::Acknowledgement
-                }
-            })? {
-                if ack.len() + chunk.len() > MAX_BODY {
-                    return Err(Delivery::Acknowledgement);
-                }
-                ack.extend_from_slice(&chunk);
-            }
-            if ack.is_empty() {
-                return Ok(0);
-            }
-            let value: Value =
-                serde_json::from_slice(&ack).map_err(|_| Delivery::Acknowledgement)?;
-            if !value.is_object()
-                || (!value["partialSuccess"].is_null() && !value["partialSuccess"].is_object())
-            {
-                return Err(Delivery::Acknowledgement);
-            }
-            let rejected = &value["partialSuccess"]["rejectedSpans"];
-            if rejected.is_null() {
-                return Ok(0);
-            }
-            let n = rejected
-                .as_u64()
-                .or_else(|| rejected.as_str()?.parse().ok())
-                .ok_or(Delivery::Acknowledgement)?;
-            Ok(n.min(count as u64))
-        })
+        crate::otlp::post(
+            &self.client,
+            &self.url,
+            &self.headers,
+            body,
+            count,
+            "rejectedSpans",
+            EXCHANGE,
+        )
         .await
-        .unwrap_or(Err(Delivery::Timeout))
     }
 }
 
