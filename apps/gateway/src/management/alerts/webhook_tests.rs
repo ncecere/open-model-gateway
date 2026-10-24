@@ -1,5 +1,7 @@
 use super::*;
 const WEBHOOKS: &str = "/api/v1/platform/alerts/webhooks";
+#[path = "webhook_delivery_api_tests.rs"]
+mod delivery_api;
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn webhook_running_gateway_sessions_scopes_rotation_and_revocation(pool: PgPool) {

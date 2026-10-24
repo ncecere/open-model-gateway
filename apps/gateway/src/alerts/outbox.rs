@@ -338,6 +338,7 @@ pub(super) async fn complete(
 pub(crate) const CLEANUP_BOUND: Duration = Duration::from_secs(30);
 
 pub async fn deliver_pending(store: &Store, limit: i64) -> usize {
+    super::webhooks::deliver(store).await;
     // Effectively unlimited: preserves the historical unbounded behaviour
     // for the CLI/report callers and the large existing test suite, while
     // still routing through the one budget-aware implementation.

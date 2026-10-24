@@ -69,6 +69,11 @@ async fn prometheus_family_types_and_label_keys_match_golden() {
     m.observe_settlement_phases(PhaseTimer::start(), "settled");
     m.observe_alert_run("ok", 0);
     m.observe_alert_delivery("delivered");
+    m.observe_alert_webhook("sent");
+    m.alert_webhook_queue
+        .get_or_create(&[("state", "waiting".into())])
+        .set(0);
+    m.alert_webhook_oldest.get_or_create(&[]).set(0);
     m.observe_deadlock_retry("reconciliation");
     drop(m.scope_lock_wait("rows", "admission"));
     m.observe_collection_error("reservations");

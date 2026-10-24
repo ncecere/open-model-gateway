@@ -4,6 +4,9 @@ gateway_alert_email_attempts counter outcome
 gateway_alert_email_deliveries gauge state
 gateway_alert_evaluations counter result
 gateway_alert_rule_failures counter -
+gateway_alert_webhook_attempts counter outcome
+gateway_alert_webhook_deliveries gauge state
+gateway_alert_webhook_oldest_waiting_seconds gauge -
 gateway_audit_export_deliveries counter outcome
 gateway_audit_export_oldest_seconds gauge -
 gateway_audit_export_queued gauge -

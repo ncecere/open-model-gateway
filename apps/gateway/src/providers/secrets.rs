@@ -85,6 +85,15 @@ impl EnvSecrets {
                 .collect(),
         }
     }
+    /// Signing material has a separate byte contract from provider headers.
+    /// Resolve directly into a zeroizing owner; never format the value.
+    pub(crate) fn signing_bytes(&self, reference: &str) -> Option<zeroize::Zeroizing<Vec<u8>>> {
+        let name = reference
+            .strip_prefix("env:")
+            .filter(|_| self.allows(reference))?;
+        let bytes = zeroize::Zeroizing::new(std::env::var(name).ok()?.into_bytes());
+        (32..=4096).contains(&bytes.len()).then_some(bytes)
+    }
     /// Validate a reference without resolving or exposing its credential.
     pub fn allows(&self, reference: &str) -> bool {
         reference

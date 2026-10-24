@@ -36,6 +36,7 @@ pub enum Purpose {
     Smtp,
     Audit,
     Telemetry,
+    AlertWebhook,
 }
 impl Purpose {
     pub fn as_str(self) -> &'static str {
@@ -47,6 +48,7 @@ impl Purpose {
             Self::Smtp => "smtp",
             Self::Audit => "audit",
             Self::Telemetry => "telemetry",
+            Self::AlertWebhook => "alert_webhook",
         }
     }
 }
@@ -412,6 +414,17 @@ pub fn check_configured_endpoints(
     Ok(())
 }
 
+/// Typed sentinel retained through reqwest's source chain. Policy refusals
+/// must never be retried as connection failures (nor classified by text).
+#[derive(Debug)]
+pub(crate) struct PolicyRefusal;
+impl std::fmt::Display for PolicyRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("outbound address policy refused destination")
+    }
+}
+impl std::error::Error for PolicyRefusal {}
+
 /// A reqwest DNS resolver that applies the policy.
 pub struct Resolver {
     purpose: Purpose,
@@ -440,7 +453,14 @@ impl Resolve for Resolver {
         let (purpose, policy) = (self.purpose, self.policy.clone().unwrap_or_else(policy));
         let host = name.as_str().to_owned();
         Box::pin(async move {
-            let addrs = resolve(&policy, purpose, &host, 0).await?;
+            let addrs = resolve_classified(&policy, purpose, &host, 0)
+                .await
+                .map_err(|error| match error {
+                    ResolveError::Policy => {
+                        Box::new(PolicyRefusal) as Box<dyn std::error::Error + Send + Sync>
+                    }
+                    ResolveError::Dns => Box::new(std::io::Error::other("DNS resolution failed")),
+                })?;
             Ok(Box::new(addrs.into_iter()) as Addrs)
         })
     }
