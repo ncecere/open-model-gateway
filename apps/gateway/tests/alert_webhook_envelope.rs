@@ -362,3 +362,86 @@ async fn payload_bytes_match_the_golden_literals(pool: PgPool) {
         )
     );
 }
+
+/// The runtime role may create temporary tables. A same-named temp table must
+/// never stand in for the guard's and constructor's reads.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn temp_table_shadows_cannot_bypass_the_guard(pool: PgPool) {
+    let on = receiver(&pool).await;
+    let dest = receiver(&pool).await;
+    let role = format!("w45a_{}", Uuid::new_v4().simple());
+    sqlx::raw_sql(&format!("CREATE ROLE {role}; GRANT USAGE ON SCHEMA public TO {role}; GRANT SELECT ON ALL TABLES IN SCHEMA public TO {role}; GRANT INSERT(id,event_id,transition,destination_id,destination_generation,test,payload) ON alert_webhook_outbox TO {role};")).execute(&pool).await.unwrap();
+    // A real destination that is disabled, and a real event whose rule does
+    // not notify Platform Admins: neither may be queued.
+    sqlx::query("UPDATE alert_webhook_destinations SET enabled=false WHERE id=$1")
+        .bind(dest)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let rule = Uuid::new_v4();
+    sqlx::query("INSERT INTO alert_rules(id,scope,kind,name,spike_factor_percent,min_spend_microusd,notify_platform_admins) VALUES($1,'installation','spend_spike','silent',200,1,false)").bind(rule).execute(&pool).await.unwrap();
+    let silent = Uuid::new_v4();
+    sqlx::query("INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,summary) VALUES($1,$2,'spend_spike',$1::text,1,'warning','safe')").bind(silent).bind(rule).execute(&pool).await.unwrap();
+    let scim = scim_event(&pool).await;
+    let generation_of = |id: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT enable_generation FROM alert_webhook_destinations WHERE id=$1",
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let id = Uuid::new_v4();
+    let forged_silent = forged(&pool, id, silent, "fired").await;
+    let forged_scim = forged(&pool, id, scim, "fired").await;
+    let insert = "INSERT INTO alert_webhook_outbox(id,event_id,transition,destination_id,destination_generation,payload) VALUES($1,$2,'fired',$3,$4,$5)";
+    let dest_generation = generation_of(dest).await;
+    for (name, shadow, event, target, payload) in [
+        (
+            "destination shadow",
+            format!(
+                "CREATE TEMP TABLE alert_webhook_destinations(id uuid,enabled boolean,deleted_at timestamptz,enable_generation bigint); INSERT INTO pg_temp.alert_webhook_destinations VALUES('{dest}',true,NULL,{dest_generation});"
+            ),
+            scim,
+            dest,
+            forged_scim,
+        ),
+        (
+            "rule shadow",
+            format!(
+                "CREATE TEMP TABLE alert_rules(id uuid,scope text,enabled boolean,deleted_at timestamptz,notify_platform_admins boolean); INSERT INTO pg_temp.alert_rules VALUES('{rule}','installation',true,NULL,true);"
+            ),
+            silent,
+            on,
+            forged_silent,
+        ),
+    ] {
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query(&format!("SET LOCAL ROLE {role}"))
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::raw_sql(&shadow).execute(&mut *tx).await.unwrap();
+        let result = sqlx::query(insert)
+            .bind(id)
+            .bind(event)
+            .bind(target)
+            .bind(generation_of(target).await)
+            .bind(payload)
+            .execute(&mut *tx)
+            .await;
+        assert!(
+            result.is_err(),
+            "a {name} let a forged insert pass the guard"
+        );
+        tx.rollback().await.unwrap();
+    }
+    sqlx::raw_sql(&format!("DROP OWNED BY {role}; DROP ROLE {role};"))
+        .execute(&pool)
+        .await
+        .unwrap();
+}

@@ -57,13 +57,13 @@ CREATE INDEX alert_webhook_outbox_dead_letters ON alert_webhook_outbox(destinati
 CREATE INDEX alert_webhook_outbox_success ON alert_webhook_outbox(destination_id,completed_at DESC) WHERE state='sent';
 CREATE INDEX alert_webhook_outbox_error ON alert_webhook_outbox(destination_id,created_at DESC,id DESC) WHERE last_error IS NOT NULL;
 
-CREATE FUNCTION alert_webhook_destination_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+CREATE FUNCTION alert_webhook_destination_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
 BEGIN
  IF TG_OP='INSERT' THEN
   -- This lock belongs only to destination management, never admission.
   PERFORM pg_advisory_xact_lock(72419555);
   SELECT slot INTO NEW.capacity_slot FROM generate_series(1,10) slot
-   WHERE NOT EXISTS(SELECT FROM alert_webhook_destinations d WHERE d.deleted_at IS NULL AND d.capacity_slot=slot)
+   WHERE NOT EXISTS(SELECT FROM public.alert_webhook_destinations d WHERE d.deleted_at IS NULL AND d.capacity_slot=slot)
    ORDER BY slot LIMIT 1;
   IF NEW.capacity_slot IS NULL THEN
    RAISE EXCEPTION 'maximum ten nondeleted webhook destinations' USING ERRCODE='23514';
@@ -101,13 +101,13 @@ CREATE TRIGGER alert_webhook_destination_guard BEFORE INSERT OR UPDATE ON alert_
 CREATE TRIGGER alert_webhook_destinations_no_delete BEFORE DELETE ON alert_webhook_destinations FOR EACH ROW EXECUTE FUNCTION immutable_history();
 CREATE TRIGGER alert_webhook_destinations_no_truncate BEFORE TRUNCATE ON alert_webhook_destinations FOR EACH STATEMENT EXECUTE FUNCTION immutable_history();
 
-CREATE FUNCTION alert_webhook_outbox_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+CREATE FUNCTION alert_webhook_outbox_guard() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE expected text;
 BEGIN
  IF TG_OP='INSERT' THEN
   -- A plain live read, never a destination row lock. Slice 2 must repeat
   -- eligibility at claim time; a later disable may race this snapshot.
-  IF NOT EXISTS(SELECT FROM alert_webhook_destinations d WHERE d.id=NEW.destination_id AND d.enabled AND d.deleted_at IS NULL AND d.enable_generation=NEW.destination_generation) THEN
+  IF NOT EXISTS(SELECT FROM public.alert_webhook_destinations d WHERE d.id=NEW.destination_id AND d.enabled AND d.deleted_at IS NULL AND d.enable_generation=NEW.destination_generation) THEN
    RAISE EXCEPTION 'webhook destination is not eligible' USING ERRCODE='23514';
   END IF;
   -- The signed bytes are the queued bytes: exact text equality with the one
@@ -115,12 +115,12 @@ BEGIN
   -- and, for events, eligibility recomputed from the event itself so a direct
   -- INSERT by any role cannot queue an excluded event or an arbitrary body.
   IF NEW.test THEN
-   expected=CASE WHEN NEW.event_id IS NULL AND NEW.transition IS NULL THEN alert_webhook_payload(NEW.id,NULL,NULL) END;
+   expected=CASE WHEN NEW.event_id IS NULL AND NEW.transition IS NULL THEN public.alert_webhook_payload(NEW.id,NULL,NULL) END;
    IF expected IS NULL OR convert_from(NEW.payload,'UTF8') IS DISTINCT FROM expected THEN
     RAISE EXCEPTION 'invalid webhook test envelope' USING ERRCODE='23514';
    END IF;
   ELSE
-   expected=CASE WHEN NEW.event_id IS NOT NULL THEN alert_webhook_payload(NEW.id,NEW.event_id,NEW.transition) END;
+   expected=CASE WHEN NEW.event_id IS NOT NULL THEN public.alert_webhook_payload(NEW.id,NEW.event_id,NEW.transition) END;
    IF expected IS NULL OR convert_from(NEW.payload,'UTF8') IS DISTINCT FROM expected THEN
     RAISE EXCEPTION 'invalid webhook payload' USING ERRCODE='23514';
    END IF;
@@ -139,18 +139,18 @@ CREATE TRIGGER alert_webhook_outbox_guard BEFORE INSERT OR UPDATE ON alert_webho
 CREATE TRIGGER alert_webhook_outbox_no_delete BEFORE DELETE ON alert_webhook_outbox FOR EACH ROW EXECUTE FUNCTION immutable_history();
 CREATE TRIGGER alert_webhook_outbox_no_truncate BEFORE TRUNCATE ON alert_webhook_outbox FOR EACH STATEMENT EXECUTE FUNCTION immutable_history();
 
-CREATE FUNCTION alert_webhook_destination_ineligible() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+CREATE FUNCTION alert_webhook_destination_ineligible() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
 BEGIN
  IF NOT NEW.enabled OR NEW.deleted_at IS NOT NULL THEN
   -- An already authorized send may finish; unclaimed rows never replay.
-  UPDATE alert_webhook_outbox SET state='ineligible',completed_at=clock_timestamp()
+  UPDATE public.alert_webhook_outbox SET state='ineligible',completed_at=clock_timestamp()
    WHERE destination_id=NEW.id AND state='waiting';
  ELSIF NEW.enable_generation<>OLD.enable_generation THEN
   -- Re-enabled: a waiting row of an older generation outlived a disable
   -- because its enqueue committed later. A label edit changes no generation.
   -- Rows still uncommitted here are invisible; slice 2's claim refuses them
   -- by generation.
-  UPDATE alert_webhook_outbox SET state='ineligible',completed_at=clock_timestamp()
+  UPDATE public.alert_webhook_outbox SET state='ineligible',completed_at=clock_timestamp()
    WHERE destination_id=NEW.id AND state='waiting' AND destination_generation<NEW.enable_generation;
  END IF;
  RETURN NULL;
@@ -158,7 +158,7 @@ END $$;
 CREATE TRIGGER alert_webhook_destination_ineligible AFTER UPDATE ON alert_webhook_destinations FOR EACH ROW EXECUTE FUNCTION alert_webhook_destination_ineligible();
 
 -- Explicit kind-only projection. Future kinds remain ineligible until reviewed.
-CREATE FUNCTION alert_webhook_summary(text) RETURNS text LANGUAGE sql IMMUTABLE STRICT SET search_path = pg_catalog, public AS $$
+CREATE FUNCTION alert_webhook_summary(text) RETURNS text LANGUAGE sql IMMUTABLE STRICT SET search_path = pg_catalog, public, pg_temp AS $$
  SELECT CASE $1
   WHEN 'budget_threshold' THEN 'A shared workspace budget threshold was reached'
   WHEN 'spend_threshold' THEN 'An installation spend threshold was reached'
@@ -178,29 +178,29 @@ $$;
 -- guard and the test-send path. With no event it is the fixed test envelope.
 -- With an event it is NULL unless that event is eligible for a webhook. The
 -- text is jsonb's canonical output, so the signed bytes are fully determined.
-CREATE FUNCTION alert_webhook_payload(p_delivery uuid, p_event uuid, p_transition text) RETURNS text LANGUAGE plpgsql STABLE SET search_path = pg_catalog, public AS $$
-DECLARE e alert_events; installation_id uuid; safe_summary text;
+CREATE FUNCTION alert_webhook_payload(p_delivery uuid, p_event uuid, p_transition text) RETURNS text LANGUAGE plpgsql STABLE SET search_path = pg_catalog, public, pg_temp AS $$
+DECLARE e public.alert_events; installation_id uuid; safe_summary text;
 BEGIN
  IF p_delivery IS NULL THEN RETURN NULL; END IF;
- SELECT id INTO installation_id FROM installation WHERE singleton;
+ SELECT id INTO installation_id FROM public.installation WHERE singleton;
  IF installation_id IS NULL THEN RETURN NULL; END IF;
  IF p_event IS NULL THEN
   IF p_transition IS NOT NULL THEN RETURN NULL; END IF;
   RETURN jsonb_build_object('schema','omg.alert.v1','installation_id',installation_id,'delivery_id',p_delivery,'test',true,'event',NULL)::text;
  END IF;
  IF p_transition IS NULL OR p_transition NOT IN ('fired','resolved') THEN RETURN NULL; END IF;
- SELECT * INTO e FROM alert_events WHERE id=p_event;
+ SELECT * INTO e FROM public.alert_events WHERE id=p_event;
  IF NOT FOUND THEN RETURN NULL; END IF;
  -- Deliberately narrower than platform history. Never copy summary, details
  -- or subject_key: even installation rules can refer to individual objects.
  IF e.kind IN ('key_expiring','admission_ceiling')
   OR (p_transition='resolved' AND e.resolution IS DISTINCT FROM 'cleared')
-  OR (e.workspace_id IS NOT NULL AND NOT EXISTS(SELECT FROM workspaces w WHERE w.id=e.workspace_id AND w.kind IN ('team','project') AND w.disabled_at IS NULL))
+  OR (e.workspace_id IS NOT NULL AND NOT EXISTS(SELECT FROM public.workspaces w WHERE w.id=e.workspace_id AND w.kind IN ('team','project') AND w.disabled_at IS NULL))
   OR NOT (
-   (e.rule_id IS NOT NULL AND EXISTS(SELECT FROM alert_rules r WHERE r.id=e.rule_id AND r.scope='installation' AND r.enabled AND r.deleted_at IS NULL AND r.notify_platform_admins))
+   (e.rule_id IS NOT NULL AND EXISTS(SELECT FROM public.alert_rules r WHERE r.id=e.rule_id AND r.scope='installation' AND r.enabled AND r.deleted_at IS NULL AND r.notify_platform_admins))
    OR (e.rule_id IS NULL AND e.workspace_id IS NULL AND e.builtin IN ('scim_last_admin','partitions_missing','history_orphans'))
   ) THEN RETURN NULL; END IF;
- safe_summary=alert_webhook_summary(e.kind);
+ safe_summary=public.alert_webhook_summary(e.kind);
  -- Fail closed for future kinds until their projection is reviewed.
  IF safe_summary IS NULL THEN RETURN NULL; END IF;
  RETURN jsonb_build_object(
@@ -210,7 +210,7 @@ BEGIN
    'summary',safe_summary))::text;
 END $$;
 
-CREATE FUNCTION alert_webhook_enqueue() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+CREATE FUNCTION alert_webhook_enqueue() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE d record; delivery uuid;
 BEGIN
  -- Webhooks are best effort and cannot break email or built-in evaluation,
@@ -218,22 +218,22 @@ BEGIN
  -- rolls back setup failures without undoing the delivery; each destination
  -- below has its own, so one racing destination skips only itself.
  BEGIN
- IF NOT EXISTS(SELECT FROM alert_webhook_destinations WHERE enabled AND deleted_at IS NULL) THEN
+ IF NOT EXISTS(SELECT FROM public.alert_webhook_destinations WHERE enabled AND deleted_at IS NULL) THEN
   RETURN NULL;
  END IF;
  -- Ineligible events (see alert_webhook_payload) are never queued.
- IF alert_webhook_payload(gen_random_uuid(),NEW.event_id,NEW.transition) IS NULL THEN RETURN NULL; END IF;
+ IF public.alert_webhook_payload(gen_random_uuid(),NEW.event_id,NEW.transition) IS NULL THEN RETURN NULL; END IF;
  -- No explicit destination locks (the outbox foreign key takes FOR KEY
  -- SHARE, which management's FOR NO KEY UPDATE does not conflict with).
  -- A concurrent disable/delete is resolved by slice 2's mandatory
  -- claim-time recheck. If a claim locks both resources, destination
  -- precedes outbox row.
  -- One SELECT reads both the enabled filter and the generation the row is stamped with.
- FOR d IN SELECT id,enable_generation FROM alert_webhook_destinations WHERE enabled AND deleted_at IS NULL ORDER BY id LOOP
+ FOR d IN SELECT id,enable_generation FROM public.alert_webhook_destinations WHERE enabled AND deleted_at IS NULL ORDER BY id LOOP
   BEGIN
   delivery=gen_random_uuid();
-  INSERT INTO alert_webhook_outbox(id,event_id,transition,destination_id,destination_generation,payload)
-   VALUES(delivery,NEW.event_id,NEW.transition,d.id,d.enable_generation,convert_to(alert_webhook_payload(delivery,NEW.event_id,NEW.transition),'UTF8'))
+  INSERT INTO public.alert_webhook_outbox(id,event_id,transition,destination_id,destination_generation,payload)
+   VALUES(delivery,NEW.event_id,NEW.transition,d.id,d.enable_generation,convert_to(public.alert_webhook_payload(delivery,NEW.event_id,NEW.transition),'UTF8'))
    ON CONFLICT(event_id,transition,destination_id) DO NOTHING;
   EXCEPTION WHEN OTHERS THEN
    -- Never interpolate error text, destination ids or payloads: they may
