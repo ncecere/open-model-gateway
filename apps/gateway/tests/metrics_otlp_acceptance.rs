@@ -52,7 +52,8 @@ use uuid::Uuid;
 
 const BINARY: &str = env!("CARGO_BIN_EXE_open-model-gateway");
 const BODY_LIMIT: usize = 1024 * 1024;
-const OUTPUT_LIMIT: usize = 64 * 1024;
+// Each served request logs one line; fault tests poll health while waiting.
+const OUTPUT_LIMIT: usize = 256 * 1024;
 const HEADER_SECRET: &str = "metrics-header-canary-99c";
 const HEADER_NAME: &str = "x-metrics-canary-99c";
 const SERVER_CANARY: &str = "collector-error-text-canary-99c";
@@ -484,7 +485,8 @@ impl Gateway {
                 if seen[expected_outcome] >= count {
                     break;
                 }
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                // Pushes are 10s apart; frequent polling would only add request logs.
+                tokio::time::sleep(Duration::from_millis(500)).await;
             }
         })
         .await
@@ -913,7 +915,7 @@ database_checkpoint!(
 );
 #[cfg(unix)]
 database_checkpoint!(
-    serve_isolates_metrics_collector_connection_refusal,
+    serve_isolates_metrics_collector_connection_failure,
     refused_checkpoint
 );
 #[cfg(unix)]
@@ -983,11 +985,17 @@ async fn http_failure_checkpoint(pool: PgPool) {
 async fn refused_checkpoint(pool: PgPool) {
     tokio::time::timeout(Duration::from_secs(45), async {
         seed_canaries(&pool).await;
-        // A bound but NOT listening TCP socket reserves the port throughout
-        // the test while the OS refuses connects (no ephemeral-port race).
-        let refused = tokio::net::TcpSocket::new_v4().unwrap();
-        refused.bind("127.0.0.1:0".parse().unwrap()).unwrap();
-        let url = format!("http://{}/v1/metrics", refused.local_addr().unwrap());
+        // A collector that accepts and immediately closes every connection.
+        // (A bound but non-listening socket is platform-dependent: macOS lets
+        // the connect attempt time out instead of refusing it.) The port stays
+        // reserved for the whole test, so there is no ephemeral-port race.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1/metrics", listener.local_addr().unwrap());
+        let refused = tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                drop(socket);
+            }
+        });
         let mut gateway =
             Gateway::spawn_with_scrape(&fresh_child_url(&pool), &url, true, true).await;
         gateway.ready("refusing collector").await;
@@ -995,7 +1003,7 @@ async fn refused_checkpoint(pool: PgPool) {
         gateway.assert_serving().await;
         gateway.terminate().await;
         gateway.assert_fixed_warning("transport", &url);
-        drop(refused);
+        refused.abort();
     })
     .await
     .expect("bounded connection-refusal acceptance");
