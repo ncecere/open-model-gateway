@@ -1,7 +1,6 @@
 import { LegalHolds } from "./legal-holds";
 import { AuditExportSettingsPage } from "./settings/audit-export";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { flushSync } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { abortRequests, api, ApiError, API, type AuthConfig, type Session, type Workspace } from "../lib/api";
@@ -178,7 +177,9 @@ export function Home() {
       const next: AccessState = { ...access.current, phase: "ended" };
       access.current = next;
       abortRequests(); void client.cancelQueries(); client.clear();
-      flushSync(() => { setAccessView(next); setConfirmLogout(false); setEnded(true); });
+      // Batch the render so every event listener can fence its live controls
+      // before React unmounts them; the authority/cache fences above are immediate.
+      setAccessView(next); setConfirmLogout(false); setEnded(true);
     };
     const refreshAccess = (event: Event) => {
       const current = access.current;
@@ -198,7 +199,7 @@ export function Home() {
       const cancelled = client.cancelQueries();
       client.removeQueries({ predicate: nonSession });
       client.getMutationCache().clear();
-      if (next !== current) flushSync(() => { setAccessView(next); setConfirmLogout(false); });
+      if (next !== current) { setAccessView(next); setConfirmLogout(false); }
       if (denied) return;
       void (async () => {
         await cancelled;
@@ -250,5 +251,5 @@ export function Home() {
   const current = session.data;
   // The complete live authorization snapshot keys all content and dialogs. Revocation remounts the
   // scope, aborts transport, and drops query entries before another identity can inspect them.
-  return <ApiScopeProvider session={current}><DashboardNavigationProvider search={search} navigate={navigate}><CrumbProvider><ActionProvider key={`${authorization}:${location.pathname}:${accessPhase === "denied" ? "denied" : "ready"}`}><DashboardShell session={current} search={search} workspace={workspace} navigate={navigate} logout={() => void logout()} refresh={() => window.dispatchEvent(new Event("omg:access-refresh"))}>{accessPhase === "denied" ? <PermissionNotice /> : <DashboardContent key={`${location.pathname}:${workspace?.id ?? "platform"}`} session={current} search={search} workspace={workspace} navigate={navigate} />}</DashboardShell><AlertDialog open={confirmLogout} onOpenChange={setConfirmLogout} title="Sign out without saving?" description="Unsaved changes and one-time credentials will be cleared. In-flight requests will be aborted." confirmLabel="Sign out" cancelLabel="Keep editing" onConfirm={() => void logout(true)} /></ActionProvider></CrumbProvider></DashboardNavigationProvider></ApiScopeProvider>;
+  return <ApiScopeProvider session={current}><DashboardNavigationProvider search={search} navigate={navigate}><CrumbProvider><ActionProvider key={`${authorization}:${location.pathname}:${accessPhase === "denied" ? "denied" : "ready"}`}><DashboardShell session={current} search={search} workspace={workspace} accessDenied={accessPhase === "denied"} navigate={navigate} logout={() => void logout()} refresh={() => window.dispatchEvent(new Event("omg:access-refresh"))}>{accessPhase === "denied" ? <PermissionNotice /> : <DashboardContent key={`${location.pathname}:${workspace?.id ?? "platform"}`} session={current} search={search} workspace={workspace} navigate={navigate} />}</DashboardShell><AlertDialog open={confirmLogout} onOpenChange={setConfirmLogout} title="Sign out without saving?" description="Unsaved changes and one-time credentials will be cleared. In-flight requests will be aborted." confirmLabel="Sign out" cancelLabel="Keep editing" onConfirm={() => void logout(true)} /></ActionProvider></CrumbProvider></DashboardNavigationProvider></ApiScopeProvider>;
 }
