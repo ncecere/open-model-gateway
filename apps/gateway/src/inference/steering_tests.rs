@@ -166,9 +166,16 @@ impl SecretResolver for Secrets {
 
 struct World {
     app: Router,
+    pool: PgPool,
     keys: DevelopmentKeys,
     approved: Upstream,
     attacker: Upstream,
+}
+impl World {
+    async fn close(self) {
+        drop(self.app);
+        self.pool.close().await;
+    }
 }
 
 const NA_METERS: [&str; 11] = [
@@ -262,7 +269,16 @@ async fn connection(pool: &PgPool, provider: &str, endpoint: Option<&str>) -> Uu
 
 /// The routes: one model per protocol, on the adapter that serves it.
 /// (public name, client path, protocol, provider, upstream model, price)
-async fn world(pool: PgPool) -> World {
+async fn world(provided: PgPool) -> World {
+    // These callers use fresh databases, without session SETs or pool callbacks.
+    // Keep their connection options, but not SQLx's shared parent capacity or
+    // short test-pool idle expiry. Open connections only as needed, up to five.
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .min_connections(0)
+        .connect_with((*provided.connect_options()).clone())
+        .await
+        .unwrap();
     let (approved, attacker) = (Upstream::start().await, Upstream::start().await);
     let store = Store::new(pool.clone());
     let keys = bootstrap::seed(&store, Environment::Development)
@@ -508,6 +524,7 @@ async fn world(pool: PgPool) -> World {
         .layer(axum::Extension(FileStoreRuntime::memory()));
     World {
         app,
+        pool,
         keys,
         approved,
         attacker,
@@ -588,10 +605,21 @@ async fn control(w: &World, label: &str, request: Request) -> Control {
         );
     }
     assert_no_attacker(w, label, "control");
+    // This fixture needs no 5xx baseline; Anthropic storage errors have no code.
+    assert!(
+        !status.is_server_error(),
+        "{label}: a server error is not a clean control ({})",
+        status.as_u16()
+    );
+    let reason = reason(&text);
+    assert_ne!(
+        reason, "accounting_unavailable",
+        "{label}: an accounting failure is not a clean control ({status})"
+    );
     Control {
         hit,
         status: status.as_u16(),
-        reason: reason(&text),
+        reason,
     }
 }
 
@@ -1062,6 +1090,167 @@ fn assert_no_attacker(world: &World, label: &str, case: &str) {
 
 // ---------------------------------------------------------------- tests ----
 
+/// Holding the caller's only connection must not starve the world's store.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn steering_world_dispatch_is_independent_of_the_provided_pool(pool: PgPool) {
+    // No SQLx parent: exhausting this pool cannot consume the shared test pool's
+    // capacity or starve unrelated fixtures running alongside this regression.
+    let provided = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_millis(100))
+        .connect_with((*pool.connect_options()).clone())
+        .await
+        .unwrap();
+    let w = world(provided.clone()).await;
+    let held = provided.acquire().await.unwrap();
+    let (status, text) = send(
+        &w.app,
+        json_request(
+            &w.keys.personal_key.token,
+            "/v1/embeddings",
+            &[],
+            &json!({"model":"t/ollama-embed","input":"hi"}),
+        ),
+    )
+    .await;
+    let approved = w.approved.take();
+    let attacker = w.attacker.take();
+
+    // Clean up before the outcome assertions, including on the expected RED.
+    drop(held);
+    w.close().await;
+    provided.close().await;
+
+    assert_eq!(
+        (status.as_u16(), reason(&text)),
+        (400, "upstream_rejected".to_owned()),
+        "the clean Ollama embedding dispatch must not depend on the held pool: {text}"
+    );
+    assert_eq!(approved.len(), 1, "exactly one approved upstream hop");
+    assert!(attacker.is_empty(), "the attacker must not be contacted");
+}
+
+/// Neither protocol's storage-error envelope is a baseline, even after a real hop.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn steering_control_rejects_accounting_unavailable_after_a_real_upstream_hop(pool: PgPool) {
+    use axum::middleware::{Next, from_fn};
+    use futures_util::FutureExt;
+    use std::panic::AssertUnwindSafe;
+
+    let mut w = world(pool).await;
+    let mut outcomes = Vec::new();
+    for (target_label, clean_reason, envelope) in [
+        (
+            "embeddings/ollama",
+            "upstream_rejected",
+            json!({"error":{"message":InferenceError::Storage.message(),"type":"accounting_unavailable","code":"accounting_unavailable","param":null}}),
+        ),
+        (
+            "messages/anthropic",
+            "invalid_request_error",
+            // Match messages::error_body(Storage): api_error, without error.code.
+            json!({"type":"error","error":{"type":"api_error","message":InferenceError::Storage.message()}}),
+        ),
+    ] {
+        let t = targets()
+            .into_iter()
+            .find(|t| t.label == target_label)
+            .expect("the real protocol target exists");
+        let request = || {
+            json_request(
+                &w.keys.personal_key.token,
+                t.path,
+                &t.base(),
+                &(t.body)(t.model),
+            )
+        };
+        let clean = control(&w, t.label, request()).await;
+        assert_eq!(
+            (clean.status, clean.reason.as_str()),
+            (400, clean_reason),
+            "{}: the unwrapped dispatch must be a valid clean control",
+            t.label
+        );
+        let wrapped_request = request();
+        let observed = Arc::new(Mutex::new(None));
+        let observation = observed.clone();
+        let approved_hits = w.approved.hits.clone();
+        let attacker_hits = w.attacker.hits.clone();
+        let unwrapped = w.app.clone();
+        w.app = unwrapped
+            .clone()
+            .layer(from_fn(move |request: Request, next: Next| {
+                let observation = observation.clone();
+                let approved_hits = approved_hits.clone();
+                let attacker_hits = attacker_hits.clone();
+                let envelope = envelope.clone();
+                async move {
+                    // Run the actual router/admission/adapter before replacing anything.
+                    let response = next.run(request).await;
+                    let status = response.status();
+                    let bytes = to_bytes(response.into_body(), 16 << 20).await.unwrap();
+                    let text = String::from_utf8_lossy(&bytes).into_owned();
+                    // Snapshot both logs before control's assertions can drain either.
+                    *observation.lock().unwrap() = Some((
+                        status,
+                        text,
+                        approved_hits.lock().unwrap().clone(),
+                        attacker_hits.lock().unwrap().clone(),
+                    ));
+                    (StatusCode::SERVICE_UNAVAILABLE, axum::Json(envelope)).into_response()
+                }
+            }));
+
+        let label = format!("{} injected accounting failure", t.label);
+        let outcome = AssertUnwindSafe(control(&w, &label, wrapped_request))
+            .catch_unwind()
+            .await;
+        // Remove the wrapper between cases; no spare router may retain the pool.
+        w.app = unwrapped;
+
+        // These checks are outside catch_unwind: a broken dispatch or middleware
+        // must not be mistaken for the control helper rejecting the injected error.
+        let (status, text, hits, attacker) =
+            observed.lock().unwrap().take().expect("middleware ran");
+        assert_eq!(
+            (status.as_u16(), reason(&text)),
+            (400, clean_reason.to_owned()),
+            "{}: the wrapped dispatch must still reach the real clean outcome: {text}",
+            t.label
+        );
+        assert_eq!(hits.len(), 1, "exactly one approved upstream hop");
+        assert_clean(
+            t.label,
+            "injected accounting failure",
+            &hits[0],
+            &clean.hit,
+            &w,
+        );
+        assert_eq!(hits[0].body, clean.hit.body, "the clean body is unchanged");
+        assert!(
+            attacker.is_empty(),
+            "{}: the pre-assertion snapshot must contain no attacker requests",
+            t.label
+        );
+        assert_no_attacker(&w, t.label, "injected accounting failure");
+        outcomes.push((label, outcome));
+    }
+    w.close().await;
+    for (label, outcome) in outcomes {
+        let panic_message = outcome.as_ref().err().and_then(|payload| {
+            payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+        });
+        let expected = format!("{label}: a server error is not a clean control (503)");
+        assert!(
+            panic_message == Some(expected.as_str()),
+            "{label}: control must fail specifically at the server-error baseline guard"
+        );
+    }
+}
+
 /// Every JSON inference protocol, on every adapter and local profile that serves it.
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn no_json_inference_input_can_steer_the_upstream(pool: PgPool) {
@@ -1207,6 +1396,7 @@ async fn no_json_inference_input_can_steer_the_upstream(pool: PgPool) {
             check(case.to_owned(), post(&[], &labelled(extra)), want).await;
         }
     }
+    w.close().await;
 }
 
 const BOUNDARY: &str = "steering-boundary";
@@ -1359,6 +1549,7 @@ async fn no_multipart_audio_input_can_steer_the_upstream(pool: PgPool) {
             .await;
         }
     }
+    w.close().await;
 }
 
 async fn upload(w: &World, fields: &[(&str, &str)], name: &str, content: &[u8]) -> (u16, String) {
@@ -1555,6 +1746,7 @@ async fn files_and_batches_cannot_steer_the_upstream(pool: PgPool) {
         is(&post(body).await, 400, "invalid_batch_input", case);
         silent(case);
     }
+    w.close().await;
 }
 
 /// Model resolution is exact: whatever string a request carries (arbitrary
@@ -1565,9 +1757,9 @@ async fn only_an_exact_configured_name_ever_resolves(pool: PgPool) {
     use crate::inference::repository::InferenceRepository;
     use proptest::{prelude::*, strategy::ValueTree, test_runner::TestRunner};
 
-    let w = world(pool.clone()).await;
+    let w = world(pool).await;
     let user: Uuid = sqlx::query_scalar("SELECT id FROM users LIMIT 1")
-        .fetch_one(&pool)
+        .fetch_one(&w.pool)
         .await
         .unwrap();
     let principal = crate::auth::Principal {
@@ -1575,7 +1767,7 @@ async fn only_an_exact_configured_name_ever_resolves(pool: PgPool) {
         workspace_id: w.keys.personal_workspace_id,
         user_id: Some(user),
     };
-    let store = Store::new(pool);
+    let store = Store::new(w.pool.clone());
     let configured: Vec<String> = targets().iter().map(|t| t.model.to_owned()).collect();
     // Mixed case, dots, colons: valid names that differ from others only slightly.
     for name in [
@@ -1654,6 +1846,8 @@ async fn only_an_exact_configured_name_ever_resolves(pool: PgPool) {
         }
     }
     assert!(resolved >= known.len(), "the configured names resolved");
+    drop(store);
+    w.close().await;
 }
 
 /// Names inserted by SQL outside the management charset (a space, `@`, an
@@ -1663,9 +1857,9 @@ async fn only_an_exact_configured_name_ever_resolves(pool: PgPool) {
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn names_outside_the_management_charset_keep_resolving(pool: PgPool) {
     use crate::inference::repository::InferenceRepository;
-    let w = world(pool.clone()).await;
+    let w = world(pool).await;
     let user: Uuid = sqlx::query_scalar("SELECT id FROM users LIMIT 1")
-        .fetch_one(&pool)
+        .fetch_one(&w.pool)
         .await
         .unwrap();
     let principal = crate::auth::Principal {
@@ -1673,7 +1867,7 @@ async fn names_outside_the_management_charset_keep_resolving(pool: PgPool) {
         workspace_id: w.keys.personal_workspace_id,
         user_id: Some(user),
     };
-    let store = Store::new(pool);
+    let store = Store::new(w.pool.clone());
     let legacy = ["team model", "team@model", "caf\u{e9}", "a#b%2F", "x/../y"];
     for name in legacy {
         let c = connection(&store.pool, "openai", None).await;
@@ -1729,4 +1923,6 @@ async fn names_outside_the_management_charset_keep_resolving(pool: PgPool) {
             "{name:?}"
         );
     }
+    drop(store);
+    w.close().await;
 }
