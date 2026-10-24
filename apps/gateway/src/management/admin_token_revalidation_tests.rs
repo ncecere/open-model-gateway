@@ -397,16 +397,16 @@ async fn bearer_delete(app: &Router, path: &str, token: &str) -> StatusCode {
         .status()
 }
 
-/// The one `admin_token_id`-attributed `role.revoked` audit row for
-/// `target`, if any: actor, token and the role named in its metadata.
-async fn role_revoked_audit(pool: &PgPool, target: Uuid) -> Option<(Uuid, Option<Uuid>, String)> {
+/// All `role.revoked` audit rows for `target`: actor, token and role.
+/// Fetch every row so exact-one assertions also reject duplicate auditing.
+async fn role_revoked_audit(pool: &PgPool, target: Uuid) -> Vec<(Uuid, Option<Uuid>, String)> {
     sqlx::query_as(
         "SELECT actor_user_id,admin_token_id,metadata->>'role' FROM audit_events \
          WHERE action='role.revoked' AND resource_type='user' AND resource_id=$1 \
-         ORDER BY created_at DESC LIMIT 1",
+         ORDER BY created_at DESC",
     )
     .bind(target)
-    .fetch_optional(pool)
+    .fetch_all(pool)
     .await
     .unwrap()
 }
@@ -470,7 +470,7 @@ async fn self_demotion_via_own_token_commits_then_the_token_is_revoked_next_requ
     let audit = role_revoked_audit(&pool, f.admin.user_id).await;
     assert_eq!(
         audit,
-        Some((f.admin.user_id, Some(token_id), "admin".to_string())),
+        vec![(f.admin.user_id, Some(token_id), "admin".to_string())],
         "the audit row must attribute this self-demotion to the actor's own token, against the actor as its own target"
     );
     let second = bounded_bearer_delete(&app, &path, &token).await;
@@ -567,7 +567,7 @@ async fn cross_admin_role_demotion_via_tokens_is_bounded_and_the_loser_is_refuse
     let audit = role_revoked_audit(&pool, loser).await;
     assert_eq!(
         audit,
-        Some((winner, Some(winner_token), "admin".to_string())),
+        vec![(winner, Some(winner_token), "admin".to_string())],
         "exactly one token-attributed role.revoked audit row, correctly attributing the winner's token against the loser as its target"
     );
 }
