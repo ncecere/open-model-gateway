@@ -30,6 +30,8 @@ use uuid::Uuid;
 
 mod outbox;
 pub use outbox::deliver_pending;
+mod aged_hold;
+pub(crate) use aged_hold::{aged_hold_tick, aged_hold_visible};
 
 use crate::{
     email::{SmtpSettings, TlsMode},
@@ -173,6 +175,8 @@ pub enum Kind {
     /// (no `alert_rules` row, like `Source::Builtin`'s personal budget
     /// alerts): never a rule kind, never accepted by rule validation.
     KeyExpiring,
+    /// Fixed 24h/168h unknown-hold review; built in, never a rule.
+    AgedUnknownHold,
 }
 impl Kind {
     pub fn parse(value: &str) -> Option<Self> {
@@ -186,6 +190,7 @@ impl Kind {
             "spend_threshold" => Some(Self::Spend),
             "admission_ceiling" => Some(Self::AdmissionCeiling),
             "key_expiring" => Some(Self::KeyExpiring),
+            "aged_unknown_hold" => Some(Self::AgedUnknownHold),
             _ => None,
         }
     }
@@ -200,6 +205,7 @@ impl Kind {
             Self::Spend => "spend_threshold",
             Self::AdmissionCeiling => "admission_ceiling",
             Self::KeyExpiring => "key_expiring",
+            Self::AgedUnknownHold => "aged_unknown_hold",
         }
     }
 }
@@ -879,7 +885,7 @@ async fn evaluate_rule(
         Some(Kind::AdmissionCeiling) => ceiling_conditions(tx, rule, now).await,
         // Never a rule kind (no `alert_rules` row can have it); evaluated by
         // `key_expiring_tick` instead, outside the rule/builtin job loop.
-        Some(Kind::KeyExpiring) => Ok(vec![]),
+        Some(Kind::KeyExpiring | Kind::AgedUnknownHold) => Ok(vec![]),
         None => Ok(vec![]),
     }
 }
@@ -1250,10 +1256,9 @@ pub async fn evaluate_once_fenced(
             }
         }
     }
-    // Key-expiry reminders (#100): built in, evaluated once per tick, in its
-    // own fenced transaction that waits for the same lock, exactly like
-    // every other job above.
-    {
+    // Built-ins each get their OWN fenced transaction and post-lock DB
+    // timestamp. A missing migration fails only this job, not the loop.
+    for kind in [Kind::KeyExpiring, Kind::AgedUnknownHold] {
         report.rules += 1;
         let mut tx = crate::db::begin(&store.pool).await?;
         crate::leases::fence(&mut tx, fence).await?;
@@ -1270,7 +1275,11 @@ pub async fn evaluate_once_fenced(
             let now = sqlx::query_scalar("SELECT clock_timestamp()")
                 .fetch_one(&mut *tx)
                 .await?;
-            key_expiring_tick(&mut tx, now).await
+            match kind {
+                Kind::KeyExpiring => key_expiring_tick(&mut tx, now).await,
+                Kind::AgedUnknownHold => aged_hold_tick(&mut tx, now).await,
+                _ => unreachable!(),
+            }
         }
         .await;
         match outcome {
