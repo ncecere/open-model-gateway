@@ -5,9 +5,12 @@
 //! Each reader repeatedly GETs the next endpoint of a fixed cycle with the
 //! seeded reader's browser session (user 1: a platform Auditor that owns
 //! shared workspace 1 and personal workspace 1; see `seed.sql`) and
-//! `/v1/models` with key 0. Latency is measured per endpoint. Readers stop
-//! issuing new requests when the inference schedule ends; samples that start
-//! during the warmup are excluded like inference requests.
+//! `/v1/models` with key 0. Latency is measured per endpoint. A reader waits
+//! for the run's common scheduled start before issuing its first request, so
+//! it never contributes a sample the measured-window filter below would
+//! exclude for starting early; it then stops issuing new requests when the
+//! inference schedule ends. Samples that start during the warmup are
+//! excluded like inference requests.
 use std::{
     collections::BTreeMap,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -122,7 +125,10 @@ pub struct Sample {
     pub started: Instant,
 }
 
-/// One reader: issue `cycle[offset..]` round-robin until `until`.
+/// One reader: wait for the common scheduled `not_before` start, then issue
+/// `cycle[offset..]` round-robin until `until`. Waiting first means the
+/// initial, endpoint-guaranteeing request of every reader is never started
+/// before the run's measured window and so is never excluded by it.
 #[allow(clippy::too_many_arguments)]
 pub async fn reader(
     client: reqwest::Client,
@@ -131,9 +137,11 @@ pub async fn reader(
     session: String,
     key: String,
     offset: usize,
+    not_before: Instant,
     until: Instant,
     timeout: Duration,
 ) -> Vec<Sample> {
+    tokio::time::sleep_until(not_before.into()).await;
     let mut out = Vec::new();
     let mut i = offset;
     while Instant::now() < until {
@@ -211,6 +219,48 @@ pub fn summarize(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Positive control for the common-start guard: a reader given a
+    /// `not_before` in the near future against a trivial, instantly-
+    /// responding local server must not record a sample that started
+    /// before it. Removing the `sleep_until` guard in `reader` makes this
+    /// fail, since the reader would otherwise fire its first request at
+    /// spawn time, long before `not_before`.
+    #[tokio::test]
+    async fn reader_never_sends_its_first_request_before_the_common_start() {
+        let app = axum::Router::new().route("/ping", axum::routing::get(|| async { "ok" }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let cycle = vec![Endpoint {
+            name: "ping",
+            path: "/ping".into(),
+            bearer: false,
+        }];
+        let not_before = Instant::now() + Duration::from_millis(150);
+        let until = not_before + Duration::from_millis(500);
+        let samples = reader(
+            reqwest::Client::new(),
+            vec![format!("http://{addr}")],
+            cycle,
+            "session".into(),
+            "key".into(),
+            0,
+            not_before,
+            until,
+            Duration::from_secs(5),
+        )
+        .await;
+        assert!(!samples.is_empty(), "expected at least one sample");
+        assert!(
+            samples[0].started >= not_before,
+            "first sample started {:?} before common start {:?}",
+            samples[0].started,
+            not_before
+        );
+    }
 
     #[test]
     fn civil_dates() {
