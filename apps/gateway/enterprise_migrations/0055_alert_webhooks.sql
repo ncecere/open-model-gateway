@@ -154,7 +154,8 @@ DECLARE e alert_events; d record; delivery uuid; installation_id uuid; safe_summ
 BEGIN
  -- Webhooks are best effort and cannot break email or built-in evaluation,
  -- including the explicit migrate-to-grants window. This subtransaction
- -- rolls back all webhook inserts on failure, without undoing the delivery.
+ -- rolls back setup failures without undoing the delivery; each destination
+ -- below has its own, so one racing destination skips only itself.
  BEGIN
  IF NOT EXISTS(SELECT FROM alert_webhook_destinations WHERE enabled AND deleted_at IS NULL) THEN
   RETURN NULL;
@@ -173,10 +174,13 @@ BEGIN
  -- Fail closed for future kinds until their projection is reviewed.
  IF safe_summary IS NULL THEN RETURN NULL; END IF;
  SELECT id INTO STRICT installation_id FROM installation WHERE singleton;
- -- READ COMMITTED snapshots do not lock destinations. A concurrent
- -- disable/delete is resolved by slice 2's mandatory claim-time recheck.
- -- If a claim locks both resources, destination precedes outbox row.
+ -- No explicit destination locks (the outbox foreign key takes FOR KEY
+ -- SHARE, which management's FOR NO KEY UPDATE does not conflict with).
+ -- A concurrent disable/delete is resolved by slice 2's mandatory
+ -- claim-time recheck. If a claim locks both resources, destination
+ -- precedes outbox row.
  FOR d IN SELECT id FROM alert_webhook_destinations WHERE enabled AND deleted_at IS NULL ORDER BY id LOOP
+  BEGIN
   delivery=gen_random_uuid();
   INSERT INTO alert_webhook_outbox(id,event_id,transition,destination_id,payload)
    VALUES(delivery,e.id,NEW.transition,d.id,convert_to(jsonb_build_object(
@@ -184,10 +188,14 @@ BEGIN
     'event',jsonb_build_object('id',e.id,'transition',NEW.transition,'kind',e.kind,'severity',e.severity,
      'occurred_at',to_char((CASE WHEN NEW.transition='resolved' THEN e.resolved_at ELSE e.fired_at END) AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
      'summary',safe_summary))::text,'UTF8')) ON CONFLICT(event_id,transition,destination_id) DO NOTHING;
+  EXCEPTION WHEN OTHERS THEN
+   -- Never interpolate error text, destination ids or payloads: they may
+   -- contain URLs, references or bodies. The event id is a bare UUID.
+   RAISE WARNING 'alert webhook enqueue skipped one destination for event %; email delivery preserved', NEW.event_id;
+  END;
  END LOOP;
  EXCEPTION WHEN OTHERS THEN
-  -- Never interpolate error text: it may contain URLs, references or bodies.
-  RAISE WARNING 'alert webhook enqueue failed; email delivery preserved';
+  RAISE WARNING 'alert webhook enqueue failed for event %; email delivery preserved', NEW.event_id;
  END;
  RETURN NULL;
 END $$;
