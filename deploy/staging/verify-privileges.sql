@@ -98,6 +98,9 @@ DO $$ DECLARE r record; t text; BEGIN
   IF has_column_privilege('gateway_runtime','public.alert_recipient_outbox',t,'INSERT') THEN RAISE EXCEPTION 'outbox initial state bypass'; END IF;
   IF NOT has_column_privilege('gateway_runtime','public.alert_recipient_outbox',t,'UPDATE') THEN RAISE EXCEPTION 'outbox not maintainable'; END IF;
  END LOOP;
+ FOREACH t IN ARRAY ARRAY['quota_charged','suppression_reason','created_at'] LOOP
+  IF has_column_privilege('gateway_runtime','public.alert_deliveries',t,'UPDATE') THEN RAISE EXCEPTION 'mutable alert generation metadata'; END IF;
+ END LOOP;
  IF has_any_column_privilege('gateway_runtime','public.alert_reads','UPDATE') THEN RAISE EXCEPTION 'read marks rewritable'; END IF;
  FOREACH t IN ARRAY ARRAY['id','scope','workspace_id','kind','created_by','created_at'] LOOP
   IF has_column_privilege('gateway_runtime','public.alert_rules',t,'UPDATE') THEN RAISE EXCEPTION 'mutable alert rule identity: %',t; END IF;
@@ -573,6 +576,10 @@ BEGIN
   INSERT INTO alert_deliveries(id,event_id,transition) VALUES(gen_random_uuid(),ev,'fired');
   IF EXISTS(SELECT 1 FROM alert_deliveries WHERE event_id=ev AND bucket_id<>ws) THEN RAISE EXCEPTION 'legacy insert missed workspace bucket'; END IF;
   BEGIN UPDATE alert_deliveries SET bucket_id=gen_random_uuid() WHERE event_id=ev; RAISE EXCEPTION 'delivery bucket rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  IF NOT EXISTS(SELECT FROM alert_deliveries WHERE event_id=ev AND quota_charged AND suppression_reason IS NULL) THEN RAISE EXCEPTION 'runtime generation admission not charged'; END IF;
+  BEGIN UPDATE alert_deliveries SET quota_charged=false WHERE event_id=ev; RAISE EXCEPTION 'quota refund allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE alert_deliveries SET suppression_reason=NULL WHERE event_id=ev; RAISE EXCEPTION 'suppression rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE alert_deliveries SET created_at=clock_timestamp()-interval '25 hours' WHERE event_id=ev; RAISE EXCEPTION 'generation clock rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   INSERT INTO alert_recipient_outbox(delivery_id,fingerprint) SELECT id,sha256('probe'::bytea) FROM alert_deliveries WHERE event_id=ev;
   UPDATE alert_deliveries SET initialized=true WHERE event_id=ev;
   UPDATE alert_recipient_outbox SET state='leased',attempt_count=1,lease_owner=gen_random_uuid(),lease_token=gen_random_uuid(),lease_expires_at=now()+interval '90 seconds' WHERE delivery_id IN(SELECT id FROM alert_deliveries WHERE event_id=ev);

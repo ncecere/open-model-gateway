@@ -7,6 +7,8 @@ use sqlx::PgPool;
 
 #[path = "fair_dispatch_tests.rs"]
 mod fair_dispatch;
+#[path = "generation_tests.rs"]
+mod generation;
 
 async fn expiry_now(s: &Seed) -> DateTime<Utc> {
     sqlx::query_scalar("SELECT clock_timestamp()")
