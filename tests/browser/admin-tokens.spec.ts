@@ -79,11 +79,20 @@ test.describe("Admin API tokens role authority", () => {
     } finally { await operator.context.close(); await auditor.context.close(); }
   });
 
-  test("a plain workspace member (no platform role) cannot reach the page or the API", async ({ browser }) => {
+  test("a workspace member without platform Admin or Auditor is redirected and the API refuses", async ({ browser }) => {
     const alex = await signIn(browser, "alex");
+    let metadataFetches = 0;
+    alex.page.on("request", request => {
+      if (new URL(request.url()).pathname === "/api/v1/platform/admin-tokens") metadataFetches++;
+    });
     try {
       await alex.page.goto(ADMIN_TOKENS_PATH);
-      await expect(alex.page.getByText("Access not available")).toBeVisible();
+      // Home redirects users without platform_read out of the entire Admin portal.
+      // Auditors stay in Admin and see PermissionNotice instead (the case above).
+      await expect(alex.page).toHaveURL(`${BASE_URL}/home`);
+      await expect(alex.page.getByRole("heading", { name: "Admin API tokens" })).toHaveCount(0);
+      await expect(alex.page.getByRole("link", { name: "Admin API tokens" })).toHaveCount(0);
+      expect(metadataFetches).toBe(0);
       expect((await api(alex.page, "GET", "/platform/admin-tokens")).status()).toBe(403);
     } finally { await alex.context.close(); }
   });
