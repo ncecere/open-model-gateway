@@ -1402,7 +1402,8 @@ async fn migration_0053_backfills_existing_overrides_from_their_type_default(poo
         .await
         .unwrap();
     Store::new(pool.clone()).migrate_enterprise().await.unwrap();
-    let rows: Vec<(Uuid, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as("SELECT workspace_id,key_issuances_per_holder,key_issuances_per_workspace,concurrent_jobs FROM workspace_platform_policy_overrides ORDER BY workspace_id")
+    type OverrideRow = (Uuid, Option<i64>, Option<i64>, Option<i64>);
+    let rows: Vec<OverrideRow> = sqlx::query_as("SELECT workspace_id,key_issuances_per_holder,key_issuances_per_workspace,concurrent_jobs FROM workspace_platform_policy_overrides ORDER BY workspace_id")
         .fetch_all(&pool)
         .await
         .unwrap();
