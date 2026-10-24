@@ -16,6 +16,7 @@
 //!   request content. Read state is per user.
 use super::*;
 use crate::alerts::{self as core, BUDGET_LAYERS, Kind, PERSONAL_THRESHOLDS};
+mod webhooks;
 
 pub(super) const PERSONAL_BUILTIN_ONLY: &str =
     "Personal workspaces have built-in budget alerts only";
@@ -36,6 +37,7 @@ pub(super) fn routes() -> Router<Store> {
                 .put(update_platform_rule)
                 .delete(delete_platform_rule),
         )
+        .merge(webhooks::routes())
         .route("/api/v1/platform/alerts/events", get(platform_events))
         .route(
             "/api/v1/workspaces/{ws}/alerts/rules",

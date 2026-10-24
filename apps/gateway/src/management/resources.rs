@@ -516,6 +516,28 @@ pub(crate) async fn audit(
     let mut safe = serde_json::Map::new();
     if let Some(object) = metadata.as_object() {
         for (k, v) in object {
+            if k == "changed_fields"
+                && action.starts_with("alert_webhook.")
+                && v.as_array().is_some_and(|fields| {
+                    fields.len() <= 8
+                        && fields.iter().all(|field| {
+                            field.as_str().is_some_and(|field| {
+                                matches!(
+                                    field,
+                                    "label"
+                                        | "url"
+                                        | "current_secret_ref"
+                                        | "previous_secret_ref"
+                                        | "previous_secret_until"
+                                        | "enabled"
+                                        | "deleted_at"
+                                )
+                            })
+                        })
+                })
+            {
+                safe.insert(k.clone(), v.clone());
+            }
             if matches!(
                 k.as_str(),
                 "enabled"
