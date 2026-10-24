@@ -271,7 +271,7 @@ async fn personal_details_are_owner_only_even_platform_admin_and_auditor(pool: P
                 )
                 .await
                 .0,
-                StatusCode::FORBIDDEN
+                StatusCode::NOT_FOUND
             );
         }
     }

@@ -358,7 +358,7 @@ mod db {
                 )
                 .await
                 .0,
-                StatusCode::FORBIDDEN
+                StatusCode::NOT_FOUND
             );
         }
     }
@@ -1756,7 +1756,7 @@ mod db {
                     )
                     .await
                     .0,
-                    StatusCode::FORBIDDEN
+                    StatusCode::NOT_FOUND
                 );
             }
         }

@@ -287,7 +287,7 @@ async fn key_expiry_history_and_feed_use_real_router_authorization(pool: PgPool)
             )
             .await
             .0,
-            StatusCode::FORBIDDEN
+            StatusCode::NOT_FOUND
         );
         for path in [
             "/api/v1/me/notifications",
@@ -557,7 +557,11 @@ async fn every_route_refuses_lower_principals_and_unverified_mutations(pool: PgP
                 for (s, label) in sessions.into_iter().filter(|(_, label)| *label != "owner") {
                     assert_eq!(
                         request(&app, method, &personal_path, Some(s), None, true, ORIGIN).await,
-                        StatusCode::FORBIDDEN,
+                        if access == Access::WorkspacePlatformWrite && label != "admin" {
+                            StatusCode::FORBIDDEN
+                        } else {
+                            StatusCode::NOT_FOUND
+                        },
                         "{method} {} foreign personal {label}",
                         route.path
                     );
