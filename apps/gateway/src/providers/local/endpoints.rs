@@ -17,6 +17,32 @@ struct Endpoint {
     client: reqwest::Client,
     base: String,
 }
+/// Why approvals failed to load.
+enum Rejected {
+    /// Malformed, duplicated, out of bounds, a setting mismatch (loopback
+    /// outside development, plain HTTP to a public address) or an address
+    /// that is not the host's literal.
+    Invalid,
+    /// Every approval address in a range the gateway never connects to.
+    Refused(Vec<Refused>),
+}
+/// One approval address in a range the gateway never connects to. Only the
+/// URL's host (`canonical` already rejects userinfo, query and fragment),
+/// the operator-configured address and a category label: never a credential.
+struct Refused {
+    host: String,
+    address: IpAddr,
+    category: &'static str,
+}
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "host {} pins {} (category: {})",
+            self.host, self.address, self.category
+        )
+    }
+}
 /// Pinned local-upstream approvals, loaded from operator configuration.
 /// Raw approval JSON is not a public production constructor:
 ///
@@ -34,8 +60,18 @@ impl ApprovedEndpoints {
             Err(std::env::VarError::NotPresent) => "[]".into(),
             Err(_) => anyhow::bail!("Invalid local endpoint approvals"),
         };
-        Self::parse(&value, environment)
-            .map_err(|_| anyhow::anyhow!("Invalid local endpoint approvals"))
+        Self::parse_detailed(&value, environment).map_err(|rejected| match rejected {
+            Rejected::Invalid => anyhow::anyhow!("Invalid local endpoint approvals"),
+            Rejected::Refused(refused) => anyhow::anyhow!(
+                "GATEWAY_LOCAL_UPSTREAMS: refused approval(s), each pins an address in a range the gateway never connects to: {}. \
+                 Change each approval's address to a public or RFC 1918 (private) address, or remove the approval (#203; see the release notes).",
+                refused
+                    .iter()
+                    .map(Refused::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
+        })
     }
     /// Test-only constructor for fixtures that own their approval JSON.
     /// Runs the production validator without mutating process environment.
@@ -48,36 +84,60 @@ impl ApprovedEndpoints {
         Self::parse(value, environment)
     }
     pub(super) fn parse(value: &str, environment: &str) -> Result<Self, InferenceError> {
-        let invalid = InferenceError::Configuration;
+        Self::parse_detailed(value, environment).map_err(|_| InferenceError::Configuration)
+    }
+    /// Like [`Self::parse`], but a refusal because an address is in a range
+    /// the gateway never connects to is reported with the approval's host,
+    /// address and category (never anything else from the URL). Every such
+    /// approval is collected so an operator can fix them in one pass; any
+    /// other invalidity is only "invalid".
+    fn parse_detailed(value: &str, environment: &str) -> Result<Self, Rejected> {
+        let invalid = Rejected::Invalid;
         if value.len() > 65536 {
             return Err(invalid);
         }
-        let approvals: Vec<Approval> = serde_json::from_str(value).map_err(|_| invalid)?;
+        let approvals: Vec<Approval> =
+            serde_json::from_str(value).map_err(|_| Rejected::Invalid)?;
         if approvals.len() > 64 {
             return Err(invalid);
         }
         let mut endpoints = BTreeMap::new();
+        let mut refused = Vec::new();
         for approval in approvals {
-            let (base, url) = canonical(&approval.endpoint)?;
+            let (base, url) = canonical(&approval.endpoint).map_err(|_| Rejected::Invalid)?;
             if endpoints.contains_key(&base)
                 || approval.addresses.is_empty()
                 || approval.addresses.len() > 16
             {
-                return Err(invalid);
+                return Err(Rejected::Invalid);
             }
             let mut seen = BTreeSet::new();
-            let host = url.host_str().ok_or(invalid)?;
+            let host = url.host_str().ok_or(Rejected::Invalid)?;
             let literal = host.trim_matches(['[', ']']).parse::<IpAddr>().ok();
-            let port = url.port_or_known_default().ok_or(invalid)?;
+            let port = url.port_or_known_default().ok_or(Rejected::Invalid)?;
             let mut destinations = Vec::new();
+            let mut approval_refused = false;
             for ip in approval.addresses {
-                if !allowed(ip, environment == "development", url.scheme() == "http")
-                    || literal.is_some_and(|host| host != ip)
-                    || !seen.insert(ip)
-                {
-                    return Err(invalid);
+                match refusal(ip, environment == "development", url.scheme() == "http") {
+                    Some(Refusal::Range(category)) => {
+                        refused.push(Refused {
+                            host: host.to_owned(),
+                            address: ip,
+                            category: category.label(),
+                        });
+                        approval_refused = true;
+                        continue;
+                    }
+                    Some(Refusal::Setting) => return Err(Rejected::Invalid),
+                    None => {}
+                }
+                if literal.is_some_and(|host| host != ip) || !seen.insert(ip) {
+                    return Err(Rejected::Invalid);
                 }
                 destinations.push(SocketAddr::new(ip, port));
+            }
+            if approval_refused {
+                continue;
             }
             let client = reqwest::Client::builder()
                 .no_proxy()
@@ -86,8 +146,11 @@ impl ApprovedEndpoints {
                 .connect_timeout(Duration::from_secs(10))
                 .resolve_to_addrs(host, &destinations)
                 .build()
-                .map_err(|_| invalid)?;
+                .map_err(|_| Rejected::Invalid)?;
             endpoints.insert(base.clone(), Endpoint { client, base });
+        }
+        if !refused.is_empty() {
+            return Err(Rejected::Refused(refused));
         }
         Ok(Self { endpoints })
     }
@@ -184,6 +247,15 @@ fn canonical(endpoint: &str) -> Result<(String, reqwest::Url), InferenceError> {
     }
     Ok((url.as_str().trim_end_matches('/').to_owned(), url))
 }
+/// Why an approval address is refused.
+enum Refusal {
+    /// The address is in a range the gateway never connects to (decided by
+    /// the shared special-use table, plus carrier-grade NAT).
+    Range(crate::special_use::Category),
+    /// A setting forbids it: loopback outside development, or plain HTTP to a
+    /// public address.
+    Setting,
+}
 /// This file's own mapping from the shared special-use disposition (#203) to
 /// an accept/refuse decision, the same for IPv4 and IPv6. Everything the
 /// shared table refuses outright (`Disposition::Refused`, decided once for
@@ -192,26 +264,26 @@ fn canonical(endpoint: &str) -> Result<(String, reqwest::Url), InferenceError> {
 /// unconditionally, as it always was here (egress alone lets a private
 /// allowlist reach it); loopback only in development; private addresses over
 /// either scheme; public addresses over HTTPS only.
-fn decide(category: crate::special_use::Category, development: bool, http: bool) -> bool {
+fn judge(category: crate::special_use::Category, development: bool, http: bool) -> Option<Refusal> {
     use crate::special_use::Disposition;
     match category.disposition() {
-        Disposition::Loopback => development,
-        Disposition::Private => true,
-        Disposition::Public => !http,
-        Disposition::Refused | Disposition::Cgnat => false,
+        Disposition::Loopback => (!development).then_some(Refusal::Setting),
+        Disposition::Private => None,
+        Disposition::Public => http.then_some(Refusal::Setting),
+        Disposition::Refused | Disposition::Cgnat => Some(Refusal::Range(category)),
     }
 }
-
-fn allowed(ip: IpAddr, development: bool, http: bool) -> bool {
+fn refusal(ip: IpAddr, development: bool, http: bool) -> Option<Refusal> {
+    use crate::special_use::{classify_v4, classify_v6};
     match ip {
-        IpAddr::V4(ip) => decide(crate::special_use::classify_v4(ip), development, http),
+        IpAddr::V4(ip) => judge(classify_v4(ip), development, http),
         IpAddr::V6(ip) => {
             if ip.is_loopback() {
-                return development;
+                return (!development).then_some(Refusal::Setting);
             }
             // Include deprecated IPv4-compatible encodings, not only mapped ones.
             if let Some(v4) = ip.to_ipv4() {
-                return decide(crate::special_use::classify_v4(v4), development, http);
+                return judge(classify_v4(v4), development, http);
             }
             // Deny translation/special-use ranges that can obscure a forbidden
             // IPv4 destination (including NAT64); ordinary global v6 is 2000::/3.
@@ -222,13 +294,19 @@ fn allowed(ip: IpAddr, development: bool, http: bool) -> bool {
             // hide behind them (#196). NAT64 is not in 2000::/3 and stays refused.
             if global
                 && let Some(v4) = crate::egress::translated_v4(ip)
-                && !decide(crate::special_use::classify_v4(v4), development, http)
+                && let Some(refusal) = judge(classify_v4(v4), development, http)
             {
-                return false;
+                return Some(refusal);
             }
-            decide(crate::special_use::classify_v6(ip), development, http)
+            judge(classify_v6(ip), development, http)
         }
     }
+}
+/// The accept/refuse decision, as the tests state it; loading uses
+/// [`refusal`] directly to name the reason.
+#[cfg(test)]
+fn allowed(ip: IpAddr, development: bool, http: bool) -> bool {
+    refusal(ip, development, http).is_none()
 }
 #[cfg(test)]
 mod tests {
@@ -998,6 +1076,49 @@ mod refused_range_tests {
             for address in [below, above] {
                 assert!(everything.allows(ip(address)), "{address}");
             }
+        }
+    }
+
+    /// The refusal names each affected approval's host, address and
+    /// category, and nothing else from the URL; other invalidity stays a
+    /// plain "invalid".
+    #[test]
+    fn a_refused_range_is_reported_with_host_address_and_category_only() {
+        let value = serde_json::json!([
+            {"endpoint": "https://first.example:8443/prefix/v1", "addresses": ["198.18.0.1"]},
+            {"endpoint": "https://fine.example/v1", "addresses": ["8.8.8.8"]},
+            {"endpoint": "http://[fd00:ec2::1]/v1", "addresses": ["fd00:ec2::1"]},
+        ])
+        .to_string();
+        let Err(Rejected::Refused(refused)) =
+            ApprovedEndpoints::parse_detailed(&value, "production")
+        else {
+            panic!("expected a refusal naming the approvals");
+        };
+        let lines: Vec<String> = refused.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            lines,
+            [
+                "host first.example pins 198.18.0.1 (category: benchmarking)",
+                "host [fd00:ec2::1] pins fd00:ec2::1 (category: AWS metadata range (fd00:ec2::/32))",
+            ]
+        );
+        for line in &lines {
+            assert!(!line.contains("8443") && !line.contains("prefix") && !line.contains("://"));
+        }
+        // Not a range refusal: plain "invalid".
+        for value in [
+            r#"[{"endpoint":"http://public.example/v1","addresses":["8.8.8.8"]}]"#, // http to public
+            r#"[{"endpoint":"https://x.example/v1","addresses":["127.0.0.1"]}]"#, // loopback, production
+            r#"[{"endpoint":"https://u:p@x.example/v1","addresses":["198.18.0.1"]}]"#, // credentials
+        ] {
+            assert!(
+                matches!(
+                    ApprovedEndpoints::parse_detailed(value, "production"),
+                    Err(Rejected::Invalid)
+                ),
+                "{value}"
+            );
         }
     }
 

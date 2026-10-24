@@ -67,6 +67,29 @@ pub(crate) enum Category {
     Deprecated6to4Relay,
 }
 
+impl Category {
+    /// A short, operator-facing name for a startup error message, never a
+    /// secret.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Private => "private",
+            Self::Loopback => "loopback",
+            Self::LinkLocal => "link-local",
+            Self::Multicast => "multicast",
+            Self::Broadcast => "broadcast",
+            Self::Reserved => "reserved",
+            Self::Metadata => "metadata",
+            Self::Cgnat => "carrier-grade NAT",
+            Self::AwsMetadataRange => "AWS metadata range (fd00:ec2::/32)",
+            Self::Benchmarking => "benchmarking",
+            Self::Documentation => "documentation",
+            Self::IetfProtocolAssignments => "IETF protocol assignments",
+            Self::Deprecated6to4Relay => "deprecated 6to4 relay",
+        }
+    }
+}
+
 /// What every caller must do with a [`Category`], before its own settings
 /// (a private allowlist, the development flag, the URL scheme) apply.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
