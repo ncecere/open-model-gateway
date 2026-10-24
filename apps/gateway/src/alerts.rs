@@ -1712,6 +1712,38 @@ mod unit_tests {
     }
 
     #[test]
+    fn aged_hold_email_copy_and_absolute_or_relative_navigation_are_explicit() {
+        for link in [None, Some("https://gateway.example.test")] {
+            for (severity, hours) in [("warning", 24), ("critical", 168)] {
+                let row = Pending {
+                    transition: "fired".into(),
+                    summary: format!("Holds with unknown cost are over {hours} hours old"),
+                    severity: severity.into(),
+                    fired_at: DateTime::<Utc>::UNIX_EPOCH,
+                    resolved_at: None,
+                    rule_name: None,
+                    workspace_name: None,
+                    workspace_kind: None,
+                    connection_name: None,
+                    builtin: None,
+                    kind: "aged_unknown_hold".into(),
+                    key_expires_at: None,
+                };
+                let (subject, body) = email_message_with_link(row, "Enterprise".into(), link);
+                assert!(subject.contains("Aged unknown hold:"));
+                assert!(subject.contains("Installation"));
+                assert!(body.contains("Built-in aged unknown-hold alert"));
+                assert!(!body.contains("Built-in budget alert"));
+                assert!(body.contains("Retained floors are not upper bounds."));
+                assert!(body.contains("Nothing is refunded or released here"));
+                let base = link.unwrap_or_default();
+                assert!(body.contains(&format!("Notifications: {base}/notifications")));
+                assert!(body.contains(&format!("Open holds: {base}/admin/costs?tab=holds")));
+            }
+        }
+    }
+
+    #[test]
     fn emails_carry_only_scope_labels_and_strip_controls() {
         let facts = EmailFacts {
             installation: "Acme AI".into(),

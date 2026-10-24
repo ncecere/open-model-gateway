@@ -10,6 +10,8 @@ use super::generation::{GENERATE, generation_events, generation_rule};
 mod email;
 #[path = "aged_hold_metrics_tests.rs"]
 mod metrics;
+#[path = "aged_hold_reconciliation_tests.rs"]
+mod reconciliation;
 
 async fn tick(s: &Seed, now: DateTime<Utc>) -> Changes {
     let mut tx = s.pool.begin().await.unwrap();

@@ -7,6 +7,52 @@ async fn fire(s: &Seed, workspace: Uuid, key: Uuid, hours: i64) {
     assert_eq!(tick(s, now).await.fired, 1);
 }
 
+pub(super) async fn assert_aged_email(s: &Seed, data: &str, hours: i64, critical: bool) {
+    let (headers, body) = data.split_once("\r\n\r\n").expect("SMTP headers/body");
+    let headers = headers.replace("\r\n ", " ").replace("\r\n\t", " ");
+    let subject = headers
+        .lines()
+        .find(|line| line.starts_with("Subject:"))
+        .expect("subject");
+    assert!(
+        subject.contains("Aged unknown hold:"),
+        "dedicated aged-hold subject"
+    );
+    assert!(subject.contains(if critical { "Critical:" } else { "Alert:" }));
+    assert!(body.contains("Rule: Built-in aged unknown-hold alert"));
+    assert!(!body.contains("Built-in budget alert"));
+    assert!(body.contains(&format!("over {hours} hours old")));
+    assert!(body.contains("Retained floors are not upper bounds."));
+    assert!(body.contains("Nothing is refunded or released here"));
+    assert!(body.contains("these amounts are never added to spend"));
+    assert!(body.contains("a Platform Admin reconciles it with evidence"));
+    let base = public_url().unwrap_or_default();
+    assert!(body.contains(&format!("Notifications: {base}/notifications")));
+    assert!(body.contains(&format!("Open holds: {base}/admin/costs?tab=holds")));
+    let executions: Vec<Uuid> =
+        sqlx::query_scalar("SELECT execution_id FROM governance_reservations")
+            .fetch_all(&s.pool)
+            .await
+            .unwrap();
+    for sentinel in executions.into_iter().map(|id| id.to_string()).chain([
+        s.team.to_string(),
+        s.personal.to_string(),
+        s.owner.to_string(),
+        s.key.to_string(),
+        s.personal_key.to_string(),
+        s.deployment.to_string(),
+        "owner@example.test".into(),
+        "Secret key name".into(),
+        "Private key name".into(),
+        "Local upstream".into(),
+    ]) {
+        assert!(
+            !data.contains(&sentinel),
+            "private identifier in aged-hold email"
+        );
+    }
+}
+
 async fn user(s: &Seed, email: &str, role: Option<&str>) -> Uuid {
     let id = Uuid::new_v4();
     sqlx::query("INSERT INTO users(id,email) VALUES($1,$2)")
@@ -74,6 +120,7 @@ async fn aged_hold_email_recipient_set_is_platform_admin_only_in_every_scope(poo
         let message = rx.try_recv().expect("one email per incident");
         assert_eq!(message.rcpt_to.len(), 1);
         assert!(message.rcpt_to[0].contains("admin@example.test"));
+        assert_aged_email(&s, &message.data, 24, false).await;
     }
     assert!(rx.try_recv().is_err());
     assert_eq!(
@@ -96,7 +143,7 @@ async fn aged_hold_email_personal_aggregate_loopback_acceptance_is_identity_free
     let message = rx.try_recv().expect("accepted personal aggregate email");
     assert_eq!(message.rcpt_to.len(), 1);
     assert!(message.rcpt_to[0].contains("admin@example.test"));
-    assert!(message.data.contains("168 hours"));
+    assert_aged_email(&s, &message.data, 168, true).await;
     assert!(message.data.contains("Installation"));
     for sentinel in [
         s.personal.to_string(),
