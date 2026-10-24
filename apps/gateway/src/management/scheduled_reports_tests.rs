@@ -1,6 +1,8 @@
 //! #102 slice A: real PostgreSQL and served-router authorization, no SMTP worker.
 use super::*;
 use crate::route_policy::{self, TokenPolicy};
+#[path = "scheduled_reports_review_tests.rs"]
+mod review;
 const PLATFORM: &str = "/api/v1/platform/report-schedules";
 fn input(recipients: &[Uuid]) -> Value {
     json!({"cadence":"weekly","timezone":"UTC","delivery_time":"09:00","state":"paused","recipient_user_ids":recipients})
