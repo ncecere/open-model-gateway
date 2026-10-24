@@ -37,8 +37,7 @@ async fn test_envelope_must_be_the_exact_canonical_bytes(pool: PgPool) {
     let dest = receiver(&pool).await;
     let id = Uuid::new_v4();
     let canonical = canonical_test(&pool, id).await;
-    let insert =
-        "INSERT INTO alert_webhook_outbox(id,destination_id,test,payload) VALUES($1,$2,true,$3)";
+    let insert = "INSERT INTO alert_webhook_outbox(id,destination_id,destination_generation,test,payload) VALUES($1,$2,(SELECT enable_generation FROM alert_webhook_destinations WHERE id=$2),true,$3)";
     let compact = canonical.replace(": ", ":").replace(", ", ",");
     let envelope: serde_json::Value = serde_json::from_str(&canonical).unwrap();
     for (name, payload) in [
@@ -97,7 +96,7 @@ async fn event_payloads_must_be_the_exact_canonical_bytes(pool: PgPool) {
     let dest = receiver(&pool).await;
     let event = scim_event(&pool).await;
     let id = Uuid::new_v4();
-    let insert = "INSERT INTO alert_webhook_outbox(id,destination_id,event_id,transition,payload) VALUES($1,$2,$3,'fired',$4)";
+    let insert = "INSERT INTO alert_webhook_outbox(id,destination_id,destination_generation,event_id,transition,payload) VALUES($1,$2,(SELECT enable_generation FROM alert_webhook_destinations WHERE id=$2),$3,'fired',$4)";
     let try_insert = |id: Uuid, payload: Vec<u8>| {
         let pool = pool.clone();
         async move {
@@ -173,7 +172,7 @@ async fn event_payloads_must_be_the_exact_canonical_bytes(pool: PgPool) {
 async fn runtime_role_cannot_queue_excluded_events_or_forged_payloads(pool: PgPool) {
     let dest = receiver(&pool).await;
     let role = format!("w45a_{}", Uuid::new_v4().simple());
-    sqlx::raw_sql(&format!("CREATE ROLE {role}; GRANT USAGE ON SCHEMA public TO {role}; GRANT SELECT ON ALL TABLES IN SCHEMA public TO {role}; GRANT INSERT(id,event_id,transition,destination_id,test,payload) ON alert_webhook_outbox TO {role};")).execute(&pool).await.unwrap();
+    sqlx::raw_sql(&format!("CREATE ROLE {role}; GRANT USAGE ON SCHEMA public TO {role}; GRANT SELECT ON ALL TABLES IN SCHEMA public TO {role}; GRANT INSERT(id,event_id,transition,destination_id,destination_generation,test,payload) ON alert_webhook_outbox TO {role};")).execute(&pool).await.unwrap();
     let owner = Uuid::new_v4();
     let personal = Uuid::new_v4();
     let team = Uuid::new_v4();
@@ -260,7 +259,7 @@ async fn runtime_role_cannot_queue_excluded_events_or_forged_payloads(pool: PgPo
     let unresolved = Uuid::new_v4();
     sqlx::query("INSERT INTO alert_events(id,rule_id,kind,subject_key,level,severity,summary) VALUES($1,$2,'spend_spike',$1::text,1,'warning','safe')").bind(unresolved).bind(install).execute(&pool).await.unwrap();
     excluded.push(("resolved before cleared", unresolved, "resolved"));
-    let insert = "INSERT INTO alert_webhook_outbox(id,event_id,transition,destination_id,payload) VALUES($1,$2,$3,$4,$5)";
+    let insert = "INSERT INTO alert_webhook_outbox(id,event_id,transition,destination_id,destination_generation,payload) VALUES($1,$2,$3,$4,(SELECT enable_generation FROM alert_webhook_destinations WHERE id=$4),$5)";
     let as_role = |id: Uuid, event: Uuid, transition: String, payload: Vec<u8>| {
         let (pool, role) = (pool.clone(), role.clone());
         async move {
@@ -320,4 +319,46 @@ async fn runtime_role_cannot_queue_excluded_events_or_forged_payloads(pool: PgPo
         .execute(&pool)
         .await
         .unwrap();
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn payload_bytes_match_the_golden_literals(pool: PgPool) {
+    let installation: Uuid = sqlx::query_scalar("SELECT id FROM installation WHERE singleton")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let (event, delivery) = (Uuid::new_v4(), Uuid::new_v4());
+    sqlx::query("INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,summary,fired_at) VALUES($1,'scim_last_admin','scim_last_admin','golden',1,'critical','PRIVATE-CANARY','2026-01-02 03:04:05.678901+00')").bind(event).execute(&pool).await.unwrap();
+    let payload = |transition: Option<&'static str>, event: Option<Uuid>| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>("SELECT alert_webhook_payload($1,$2,$3)")
+                .bind(delivery)
+                .bind(event)
+                .bind(transition)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    // Literal bytes: jsonb's canonical text (keys by length, then bytewise).
+    assert_eq!(
+        payload(Some("fired"), Some(event)).await,
+        format!(
+            r#"{{"test": false, "event": {{"id": "{event}", "kind": "scim_last_admin", "summary": "SCIM tried to remove the last Platform Admin", "severity": "critical", "transition": "fired", "occurred_at": "2026-01-02T03:04:05.678901Z"}}, "schema": "omg.alert.v1", "delivery_id": "{delivery}", "installation_id": "{installation}"}}"#
+        )
+    );
+    sqlx::query("UPDATE alert_events SET resolved_at='2026-01-02 04:05:06.000007+00',resolution='cleared' WHERE id=$1").bind(event).execute(&pool).await.unwrap();
+    assert_eq!(
+        payload(Some("resolved"), Some(event)).await,
+        format!(
+            r#"{{"test": false, "event": {{"id": "{event}", "kind": "scim_last_admin", "summary": "SCIM tried to remove the last Platform Admin", "severity": "critical", "transition": "resolved", "occurred_at": "2026-01-02T04:05:06.000007Z"}}, "schema": "omg.alert.v1", "delivery_id": "{delivery}", "installation_id": "{installation}"}}"#
+        )
+    );
+    assert_eq!(
+        payload(None, None).await,
+        format!(
+            r#"{{"test": true, "event": null, "schema": "omg.alert.v1", "delivery_id": "{delivery}", "installation_id": "{installation}"}}"#
+        )
+    );
 }

@@ -434,6 +434,15 @@ async fn webhook_patch_in_flight_does_not_stall_alert_enqueue(pool: PgPool) {
             .unwrap(),
         1
     );
+    // A label-only PATCH on an enabled destination ends nothing.
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT state FROM alert_webhook_outbox WHERE event_id=$1")
+            .bind(event)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        "waiting"
+    );
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]

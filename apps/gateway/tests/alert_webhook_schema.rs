@@ -62,7 +62,7 @@ async fn webhook_payload_attempt_and_terminal_bounds(pool: PgPool) {
         .execute(&mut *bounds)
         .await
         .unwrap();
-    let raw = "INSERT INTO alert_webhook_outbox(destination_id,event_id,transition,payload) VALUES($1,$2,'fired',$3)";
+    let raw = "INSERT INTO alert_webhook_outbox(destination_id,destination_generation,event_id,transition,payload) VALUES($1,0,$2,'fired',$3)";
     for (payload, accepted, what) in [
         (vec![255_u8], false, "payload must be UTF-8"),
         (vec![b' '; 65537], false, "payload above 64 KiB"),
@@ -121,7 +121,7 @@ async fn webhook_payload_attempt_and_terminal_bounds(pool: PgPool) {
     // Duplicate event/transition/destination snapshots cannot be inserted manually either.
     let event = Uuid::new_v4();
     sqlx::query("INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,summary) VALUES($1,'scim_last_admin','scim_last_admin','dedup',1,'critical','safe')").bind(event).execute(&pool).await.unwrap();
-    let dedup = "INSERT INTO alert_webhook_outbox(id,event_id,transition,destination_id,payload) SELECT i,$1,'fired',$2,convert_to((SELECT alert_webhook_payload(i,$1,'fired')),'UTF8') FROM (SELECT gen_random_uuid() AS i) x";
+    let dedup = "INSERT INTO alert_webhook_outbox(id,event_id,transition,destination_id,destination_generation,payload) SELECT i,$1,'fired',$2,(SELECT enable_generation FROM alert_webhook_destinations WHERE id=$2),convert_to((SELECT alert_webhook_payload(i,$1,'fired')),'UTF8') FROM (SELECT gen_random_uuid() AS i) x";
     sqlx::query(dedup)
         .bind(event)
         .bind(dest)
@@ -252,7 +252,7 @@ async fn destination(pool: &PgPool) -> Uuid {
 /// Queues the exact canonical envelope of a fresh eligible event.
 async fn queue(pool: &PgPool, dest: Uuid) -> Uuid {
     let event: Uuid = sqlx::query_scalar("INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,summary) VALUES(gen_random_uuid(),'scim_last_admin','scim_last_admin',gen_random_uuid()::text,1,'critical','safe') RETURNING id").fetch_one(pool).await.unwrap();
-    sqlx::query_scalar("INSERT INTO alert_webhook_outbox(id,destination_id,event_id,transition,payload) SELECT i,$1,$2,'fired',convert_to(alert_webhook_payload(i,$2,'fired'),'UTF8') FROM (SELECT gen_random_uuid() AS i) x RETURNING id").bind(dest).bind(event).fetch_one(pool).await.unwrap()
+    sqlx::query_scalar("INSERT INTO alert_webhook_outbox(id,destination_id,destination_generation,event_id,transition,payload) SELECT i,$1,(SELECT enable_generation FROM alert_webhook_destinations WHERE id=$1),$2,'fired',convert_to(alert_webhook_payload(i,$2,'fired'),'UTF8') FROM (SELECT gen_random_uuid() AS i) x RETURNING id").bind(dest).bind(event).fetch_one(pool).await.unwrap()
 }
 async fn refuses(pool: &PgPool, sql: &str) {
     assert!(
@@ -351,6 +351,7 @@ async fn webhook_transactional_projection_and_guards(pool: PgPool) {
         "payload='x'::bytea",
         "event_id=gen_random_uuid()",
         "destination_id=gen_random_uuid()",
+        "destination_generation=destination_generation+1",
         "transition='resolved'",
         "attempt_count=6",
         "state='leased'",

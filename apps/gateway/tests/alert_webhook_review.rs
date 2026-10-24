@@ -11,13 +11,41 @@ async fn event(pool: &PgPool, builtin: &str) -> Uuid {
     sqlx::query_scalar("INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,summary) VALUES(gen_random_uuid(),$1,$1,gen_random_uuid()::text,1,'critical','safe') RETURNING id")
         .bind(builtin).fetch_one(pool).await.unwrap()
 }
+/// What the current transaction has read and inserted so far, per table.
+async fn touched(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Vec<(String, i64, i64)> {
+    sqlx::query_as("SELECT relname::text,coalesce(seq_scan,0)+coalesce(idx_scan,0),n_tup_ins FROM pg_stat_xact_user_tables WHERE relname IN ('alert_webhook_destinations','alert_webhook_outbox','alert_rules','workspaces','installation') ORDER BY 1").fetch_all(&mut **tx).await.unwrap()
+}
+/// The counters this statement added: the view also carries this backend's
+/// not yet flushed counts from earlier transactions, so take a baseline.
+async fn delivery_touches(pool: &PgPool, event: Uuid) -> Vec<(String, i64, i64)> {
+    let mut tx = pool.begin().await.unwrap();
+    let before = touched(&mut tx).await;
+    sqlx::query(DELIVERY)
+        .bind(event)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let after = touched(&mut tx).await;
+    tx.rollback().await.unwrap();
+    after
+        .into_iter()
+        .map(|(table, scans, inserts)| {
+            let base = before.iter().find(|row| row.0 == table);
+            (
+                table,
+                scans - base.map_or(0, |row| row.1),
+                inserts - base.map_or(0, |row| row.2),
+            )
+        })
+        .collect()
+}
 const DELIVERY: &str = "INSERT INTO alert_deliveries(id,event_id,transition) VALUES(gen_random_uuid(),$1,'fired') RETURNING id";
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn webhook_normal_attempts_increment_exactly_once_through_five(pool: PgPool) {
     let dest = receiver(&pool, true).await;
     let event = event(&pool, "scim_last_admin").await;
-    let id:Uuid=sqlx::query_scalar("INSERT INTO alert_webhook_outbox(id,destination_id,event_id,transition,payload) SELECT i,$1,$2,'fired',convert_to(alert_webhook_payload(i,$2,'fired'),'UTF8') FROM (SELECT gen_random_uuid() AS i) x RETURNING id").bind(dest).bind(event).fetch_one(&pool).await.unwrap();
+    let id:Uuid=sqlx::query_scalar("INSERT INTO alert_webhook_outbox(id,destination_id,destination_generation,event_id,transition,payload) SELECT i,$1,(SELECT enable_generation FROM alert_webhook_destinations WHERE id=$1),$2,'fired',convert_to(alert_webhook_payload(i,$2,'fired'),'UTF8') FROM (SELECT gen_random_uuid() AS i) x RETURNING id").bind(dest).bind(event).fetch_one(&pool).await.unwrap();
     let update = "UPDATE alert_webhook_outbox SET attempt_count=$2 WHERE id=$1";
     let error = sqlx::query(update)
         .bind(id)
@@ -229,17 +257,53 @@ async fn webhook_disabled_fast_path_never_reads_event_projection(pool: PgPool) {
         .execute(&pool)
         .await
         .unwrap();
+    // Behavioral: with no enabled destination the trigger reads the
+    // destination list and nothing else (no event projection, no rule,
+    // workspace or installation read) and writes no outbox row. The
+    // transaction-local statistics measure what the statement touched.
+    let fresh = self::event(&pool, "scim_last_admin").await;
+    let stats = delivery_touches(&pool, fresh).await;
+    let scans = |stats: &[(String, i64, i64)], table: &str| {
+        stats
+            .iter()
+            .find(|row| row.0 == table)
+            .map_or(0, |row| row.1)
+    };
+    assert!(
+        scans(&stats, "alert_webhook_destinations") > 0,
+        "control: the destination list is read: {stats:?}"
+    );
+    for table in [
+        "alert_webhook_outbox",
+        "alert_rules",
+        "workspaces",
+        "installation",
+    ] {
+        assert_eq!(
+            scans(&stats, table),
+            0,
+            "{table} read on the fast path: {stats:?}"
+        );
+    }
+    assert!(stats.iter().all(|row| row.2 == 0), "{stats:?}");
+    // Control: once a destination is enabled the same measurement sees the work.
+    sqlx::query("UPDATE alert_webhook_destinations SET enabled=true")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let fresh = self::event(&pool, "scim_last_admin").await;
+    let stats = delivery_touches(&pool, fresh).await;
+    assert!(
+        stats
+            .iter()
+            .any(|row| row.0 == "alert_webhook_outbox" && row.2 == 1),
+        "control: an outbox row is inserted: {stats:?}"
+    );
     let definition: String =
         sqlx::query_scalar("SELECT pg_get_functiondef('alert_webhook_enqueue()'::regprocedure)")
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert!(
-        definition.find("IF NOT EXISTS").unwrap()
-            < definition.find("alert_webhook_payload(").unwrap(),
-        "the disabled fast path must return before any event projection"
-    );
-    assert!(!definition.contains("FROM alert_events"));
     assert!(
         !definition.contains("SQLERRM"),
         "warning must not contain error text"
@@ -253,8 +317,7 @@ async fn webhook_insert_rechecks_destination_and_fixed_test_shape(pool: PgPool) 
         .fetch_one(&pool)
         .await
         .unwrap();
-    let insert =
-        "INSERT INTO alert_webhook_outbox(id,destination_id,test,payload) VALUES($1,$2,true,$3)";
+    let insert = "INSERT INTO alert_webhook_outbox(id,destination_id,destination_generation,test,payload) VALUES($1,$2,(SELECT enable_generation FROM alert_webhook_destinations WHERE id=$2),true,$3)";
     let id = Uuid::new_v4();
     let envelope = serde_json::json!({"schema":"omg.alert.v1","installation_id":installation,"delivery_id":id,"test":true,"event":null});
     let canonical = |id: Uuid| {
@@ -286,7 +349,7 @@ async fn webhook_insert_rechecks_destination_and_fixed_test_shape(pool: PgPool) 
             error.as_database_error().unwrap().message(),
             "webhook destination is not eligible"
         );
-        let error = sqlx::query("INSERT INTO alert_webhook_outbox(destination_id,event_id,transition,payload) VALUES($1,$2,'fired','{}'::bytea)").bind(destination).bind(normal_event).execute(&pool).await.unwrap_err();
+        let error = sqlx::query("INSERT INTO alert_webhook_outbox(destination_id,destination_generation,event_id,transition,payload) VALUES($1,0,$2,'fired','{}'::bytea)").bind(destination).bind(normal_event).execute(&pool).await.unwrap_err();
         assert_eq!(
             error.as_database_error().unwrap().code().as_deref(),
             Some("23514")

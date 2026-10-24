@@ -74,13 +74,13 @@ DO $$ DECLARE r record; t text; BEGIN
  FOREACH t IN ARRAY ARRAY['alert_webhook_destinations','alert_webhook_outbox'] LOOP
   IF NOT has_table_privilege('gateway_runtime','public.'||t,'SELECT') OR has_table_privilege('gateway_runtime','public.'||t,'INSERT,UPDATE,DELETE,TRUNCATE') THEN RAISE EXCEPTION 'webhook table privileges: %',t; END IF;
  END LOOP;
- FOREACH t IN ARRAY ARRAY['id','capacity_slot','url','created_at','updated_at'] LOOP
+ FOREACH t IN ARRAY ARRAY['id','capacity_slot','url','created_at','updated_at','enable_generation'] LOOP
   IF has_column_privilege('gateway_runtime','public.alert_webhook_destinations',t,'UPDATE') THEN RAISE EXCEPTION 'mutable webhook destination identity: %',t; END IF;
  END LOOP;
- FOREACH t IN ARRAY ARRAY['id','capacity_slot','created_at','updated_at','enabled','previous_secret_ref','previous_secret_until','deleted_at'] LOOP
+ FOREACH t IN ARRAY ARRAY['id','capacity_slot','created_at','updated_at','enabled','enable_generation','previous_secret_ref','previous_secret_until','deleted_at'] LOOP
   IF has_column_privilege('gateway_runtime','public.alert_webhook_destinations',t,'INSERT') THEN RAISE EXCEPTION 'webhook destination initial state bypass: %',t; END IF;
  END LOOP;
- FOREACH t IN ARRAY ARRAY['id','event_id','transition','destination_id','test','payload','created_at'] LOOP
+ FOREACH t IN ARRAY ARRAY['id','event_id','transition','destination_id','destination_generation','test','payload','created_at'] LOOP
   IF has_column_privilege('gateway_runtime','public.alert_webhook_outbox',t,'UPDATE') THEN RAISE EXCEPTION 'mutable webhook outbox evidence: %',t; END IF;
  END LOOP;
  FOREACH t IN ARRAY ARRAY['state','attempt_count','next_attempt_at','lease_owner','lease_token','lease_expires_at','completed_at','last_error','created_at'] LOOP
@@ -271,7 +271,7 @@ SELECT version,checksum,success FROM public._sqlx_migrations ORDER BY version;
 -- saved destination (including the rollback-only full-capacity case).
 SELECT lock_installation();
 -- Webhook executable probes run as runtime and roll back with everything below.
-DO $$ DECLARE receiver uuid; ev uuid:=gen_random_uuid(); col text; BEGIN
+DO $$ DECLARE receiver uuid; ev uuid:=gen_random_uuid(); col text; gen bigint; BEGIN
  -- Make one capacity slot available in this rollback-only probe even on a full installation.
  UPDATE alert_webhook_destinations SET enabled=false,deleted_at=clock_timestamp() WHERE id=(SELECT id FROM alert_webhook_destinations WHERE deleted_at IS NULL ORDER BY id LIMIT 1);
  INSERT INTO alert_webhook_destinations(label,url,current_secret_ref) VALUES('ACL probe','https://receiver.invalid/hook','env:HOOK') RETURNING id INTO receiver;
@@ -279,16 +279,19 @@ DO $$ DECLARE receiver uuid; ev uuid:=gen_random_uuid(); col text; BEGIN
  INSERT INTO alert_events(id,builtin,kind,subject_key,level,severity,summary) VALUES(ev,'scim_last_admin','scim_last_admin','webhook-'||ev,1,'critical','safe');
  INSERT INTO alert_deliveries(id,event_id,transition) VALUES(gen_random_uuid(),ev,'fired');
  IF (SELECT count(*) FROM alert_webhook_outbox WHERE destination_id=receiver AND event_id=ev)<>1 THEN RAISE EXCEPTION 'runtime webhook enqueue failed'; END IF;
- FOREACH col IN ARRAY ARRAY['id','capacity_slot','url','created_at','updated_at'] LOOP
+ SELECT enable_generation INTO gen FROM alert_webhook_destinations WHERE id=receiver;
+ IF gen<>1 OR (SELECT destination_generation FROM alert_webhook_outbox WHERE destination_id=receiver AND event_id=ev)<>gen THEN RAISE EXCEPTION 'webhook enable generation not stamped'; END IF;
+ BEGIN INSERT INTO alert_webhook_outbox(id,event_id,transition,destination_id,destination_generation,payload) VALUES(gen_random_uuid(),ev,'fired',receiver,gen-1,'{}'::bytea); RAISE EXCEPTION 'webhook stale generation insert allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+ FOREACH col IN ARRAY ARRAY['id','capacity_slot','url','created_at','updated_at','enable_generation'] LOOP
   BEGIN EXECUTE format('UPDATE alert_webhook_destinations SET %1$I=%1$I WHERE id=$1',col) USING receiver; RAISE EXCEPTION 'webhook destination identity update allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  END LOOP;
- FOREACH col IN ARRAY ARRAY['id','event_id','transition','destination_id','test','payload','created_at'] LOOP
+ FOREACH col IN ARRAY ARRAY['id','event_id','transition','destination_id','destination_generation','test','payload','created_at'] LOOP
   BEGIN EXECUTE format('UPDATE alert_webhook_outbox SET %1$I=%1$I WHERE destination_id=$1',col) USING receiver; RAISE EXCEPTION 'webhook payload or identity update allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  END LOOP;
  -- The runtime can insert outbox rows, but only the exact canonical envelope of an eligible event.
- BEGIN INSERT INTO alert_webhook_outbox(id,event_id,transition,destination_id,payload) VALUES(gen_random_uuid(),ev,'fired',receiver,'{}'::bytea); RAISE EXCEPTION 'webhook arbitrary payload insert allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
- BEGIN INSERT INTO alert_webhook_outbox(id,event_id,transition,destination_id,payload) VALUES(gen_random_uuid(),ev,'resolved',receiver,convert_to(alert_webhook_payload(gen_random_uuid(),ev,'fired'),'UTF8')); RAISE EXCEPTION 'webhook forged transition insert allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
- BEGIN INSERT INTO alert_webhook_outbox(id,destination_id,test,payload) VALUES(gen_random_uuid(),receiver,true,'{}'::bytea); RAISE EXCEPTION 'webhook arbitrary test payload insert allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+ BEGIN INSERT INTO alert_webhook_outbox(id,event_id,transition,destination_id,destination_generation,payload) VALUES(gen_random_uuid(),ev,'fired',receiver,gen,'{}'::bytea); RAISE EXCEPTION 'webhook arbitrary payload insert allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+ BEGIN INSERT INTO alert_webhook_outbox(id,event_id,transition,destination_id,destination_generation,payload) VALUES(gen_random_uuid(),ev,'resolved',receiver,gen,convert_to(alert_webhook_payload(gen_random_uuid(),ev,'fired'),'UTF8')); RAISE EXCEPTION 'webhook forged transition insert allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+ BEGIN INSERT INTO alert_webhook_outbox(id,destination_id,destination_generation,test,payload) VALUES(gen_random_uuid(),receiver,gen,true,'{}'::bytea); RAISE EXCEPTION 'webhook arbitrary test payload insert allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
  BEGIN INSERT INTO alert_webhook_destinations(label,url,current_secret_ref,enabled) VALUES('bypass','https://receiver.invalid/','env:HOOK',true); RAISE EXCEPTION 'webhook enabled insert allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  BEGIN INSERT INTO alert_webhook_outbox(destination_id,test,payload,state) VALUES(receiver,true,'{}'::bytea,'sent'); RAISE EXCEPTION 'webhook initial state insert allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
  BEGIN DELETE FROM alert_webhook_outbox WHERE destination_id=receiver; RAISE EXCEPTION 'webhook deletion allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
