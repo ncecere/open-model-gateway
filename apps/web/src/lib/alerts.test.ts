@@ -62,6 +62,11 @@ describe("alert rule form", () => {
     expect(sourceText({ rule: null, kind: "key_expiring" })).toBe("Built-in key-expiry reminder");
     expect(whereText({ builtin: false, connection: null, workspace: { id: "team", name: "Product", kind: "team" } })).toBe("Product");
   });
+  it("labels the aged unknown-hold alert as a built-in and names no personal workspace (#101)", () => {
+    expect(sourceText({ rule: null, kind: "aged_unknown_hold" })).toBe("Built-in aged-hold review");
+    expect(whereText({ builtin: false, kind: "aged_unknown_hold", connection: null, workspace: { id: "team", name: "Product", kind: "team" } })).toBe("Product");
+    expect(whereText({ builtin: false, kind: "aged_unknown_hold", connection: null, workspace: null })).toBe("Personal workspaces");
+  });
   it("admission ceiling rules are installation-only, 5–10 min, Platform admins only", () => {
     expect(kindsFor(platform)).toContain("admission_ceiling"); expect(kindsFor(workspace)).not.toContain("admission_ceiling");
     const d = { ...newDraft(platform, "admission_ceiling"), name: "Hot scopes", emails: "ops@example.com" };
