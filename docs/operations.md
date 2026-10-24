@@ -10,6 +10,16 @@ Use incident History's Waiting/Retrying/Exhausted, waiting count and next due ti
 
 `gateway_alert_email_attempts_total{outcome="sent|transient_failure|permanent_failure"}` counts recorded attempt outcomes. `gateway_alert_email_deliveries{state="retrying|failed|exhausted"}` counts pending deliveries created in the last 24 hours and terminal failures/exhaustion completed in the last 24 hours (the metrics lease holder exports the installation aggregate). The completion window keeps newly expired/cleaned-up failures visible beyond the 15-minute alert window, even when they were created over 24 hours ago. Cleanup without a send does not increment the attempt counter. Failed and exhausted overlap; do not add them. The [example Prometheus rules](../deploy/monitoring/prometheus-rules.yml) include `GatewayAlertEmailPersistentFailure`. Send it through an independent operations channel, not a recursive email-failure incident inside the gateway. Missing SMTP is `not_configured`, not a retry loop. No metric labels, incident API fields or logs contain outbox fingerprints/recipient addresses. Fingerprints are pseudonymous personal data; restrict database access and backups accordingly.
 
+## OTLP metrics groundwork (#99, slice 2)
+
+The scrape-derived snapshot and encoder are implemented, but no metrics worker is wired yet; a configured metrics OTLP URL still refuses startup. Leave the metrics OTLP settings unset until the runtime slice ships. Prometheus scraping is unchanged.
+
+The golden inventory pins every family's System, Traffic or Excluded class. System families are encoded first, then opt-in Traffic, with deterministic family/series ordering within each class. This keeps Traffic from consuming the 2,000-point or 1 MiB body allowance ahead of System health metrics. Disabled Traffic and Excluded families are skipped before label validation and do not count as drops.
+
+Coordinator decision: the DB-only `gateway_alert_delivery_pending_buckets` and `gateway_alert_delivery_oldest_pending_age_seconds` gauges are **Traffic**, the same data class as `gateway_alert_email_deliveries`, despite having no labels. Traffic includes personal-workspace work as identity-free aggregates and is off by default. Only Traffic families carry `model`/`provider` labels: `model` contains platform-catalog public model aliases, not arbitrary request model strings; `provider` contains provider kinds. Each dynamic label inventory is bounded to 200 values of at most 96 characters (overflow uses a fixed fallback).
+
+Runtime/acceptance requirements for slice 3: failure to obtain entropy for the per-process instance ID must quietly disable metrics export, without a predictable fallback or a startup failure. The UUID privacy canary must exempt exactly the `service.instance.id` resource attribute, not UUID-shaped values elsewhere.
+
 ## Configuration reference
 
 | Variable | Default | Purpose |

@@ -1,52 +1,57 @@
-gateway_admission_denials counter code,scope
-gateway_admission_seconds histogram outcome,phase
-gateway_alert_email_attempts counter outcome
-gateway_alert_email_deliveries gauge state
-gateway_alert_evaluations counter result
-gateway_alert_rule_failures counter -
-gateway_audit_export_deliveries counter outcome
-gateway_audit_export_oldest_seconds gauge -
-gateway_audit_export_queued gauge -
-gateway_audit_export_rejected_records counter -
-gateway_auth_throttled counter endpoint,reason
-gateway_background_runs counter job,result
-gateway_batch_lines counter mode,outcome,provider
-gateway_batch_paused_routes gauge reason
-gateway_batch_queue_depth gauge mode
-gateway_batch_route_lines gauge provider,state
-gateway_batch_route_pauses counter reason
-gateway_batch_workers gauge state
-gateway_batches counter event,mode
-gateway_build_info gauge version
-gateway_cache_lookups counter cache,result
-gateway_config_changes counter topic
-gateway_config_listener_up gauge -
-gateway_config_poll_failures counter -
-gateway_db_pool_connections gauge state
-gateway_db_pool_max_connections gauge -
-gateway_egress_denied counter purpose
-gateway_file_store_bytes counter backend,op
-gateway_file_store_operations counter backend,op,outcome
-gateway_history_partition_months_ahead gauge table
-gateway_history_verify_findings gauge -
-gateway_http_request_duration_seconds histogram method,route
-gateway_http_requests counter method,route,status
-gateway_inference_attempt_errors counter code,provider
-gateway_inference_attempts counter model,outcome,provider
-gateway_inference_tokens counter direction,model,provider
-gateway_key_issuance_refused counter operation,scope
-gateway_lock_deadlock_retries counter path
-gateway_metrics_collection_errors counter collector
-gateway_reservations_held gauge state
-gateway_scope_lock_wait_seconds histogram lock,path
-gateway_scope_lock_waiting gauge path
-gateway_settlement_seconds histogram outcome,phase
-gateway_settlements counter outcome
-gateway_trace_deliveries counter outcome
-gateway_trace_dropped_spans counter reason
-gateway_trace_rejected_spans counter -
-gateway_upstream_duration_seconds histogram model,provider
-gateway_upstream_time_to_first_token_seconds histogram model,provider
-gateway_usage_rollup_hours counter reason
-gateway_work_lease_terms counter lease
-gateway_work_leases_held gauge lease
+gateway_admission_denials counter code,scope Traffic
+gateway_admission_seconds histogram outcome,phase Traffic
+gateway_alert_delivery_oldest_pending_age_seconds gauge - Traffic
+gateway_alert_delivery_pending_buckets gauge - Traffic
+gateway_alert_email_attempts counter outcome Traffic
+gateway_alert_email_deliveries gauge state Traffic
+gateway_alert_evaluations counter result System
+gateway_alert_rule_failures counter - System
+gateway_audit_export_deliveries counter outcome System
+gateway_audit_export_oldest_seconds gauge - System
+gateway_audit_export_queued gauge - System
+gateway_audit_export_rejected_records counter - System
+gateway_auth_throttled counter endpoint,reason Traffic
+gateway_background_runs counter job,result System
+gateway_batch_lines counter mode,outcome,provider Traffic
+gateway_batch_paused_routes gauge reason Traffic
+gateway_batch_queue_depth gauge mode Traffic
+gateway_batch_route_lines gauge provider,state Traffic
+gateway_batch_route_pauses counter reason Traffic
+gateway_batch_workers gauge state Traffic
+gateway_batches counter event,mode Traffic
+gateway_build_info gauge version Excluded
+gateway_cache_lookups counter cache,result Traffic
+gateway_config_changes counter topic System
+gateway_config_listener_up gauge - System
+gateway_config_poll_failures counter - System
+gateway_db_pool_connections gauge state System
+gateway_db_pool_max_connections gauge - System
+gateway_egress_denied counter purpose System
+gateway_file_store_bytes counter backend,op Traffic
+gateway_file_store_operations counter backend,op,outcome Traffic
+gateway_history_partition_months_ahead gauge table System
+gateway_history_verify_findings gauge - System
+gateway_http_request_duration_seconds histogram method,route Traffic
+gateway_http_requests counter method,route,status Traffic
+gateway_inference_attempt_errors counter code,provider Traffic
+gateway_inference_attempts counter model,outcome,provider Traffic
+gateway_inference_tokens counter direction,model,provider Traffic
+gateway_key_issuance_refused counter operation,scope Traffic
+gateway_lock_deadlock_retries counter path System
+gateway_metrics_collection_errors counter collector System
+gateway_otlp_metrics_dropped counter reason System
+gateway_otlp_metrics_pushes counter outcome System
+gateway_otlp_metrics_rejected_points counter - System
+gateway_reservations_held gauge state Traffic
+gateway_scope_lock_wait_seconds histogram lock,path Traffic
+gateway_scope_lock_waiting gauge path Traffic
+gateway_settlement_seconds histogram outcome,phase Traffic
+gateway_settlements counter outcome Traffic
+gateway_trace_deliveries counter outcome System
+gateway_trace_dropped_spans counter reason System
+gateway_trace_rejected_spans counter - System
+gateway_upstream_duration_seconds histogram model,provider Traffic
+gateway_upstream_time_to_first_token_seconds histogram model,provider Traffic
+gateway_usage_rollup_hours counter reason System
+gateway_work_lease_terms counter lease System
+gateway_work_leases_held gauge lease System

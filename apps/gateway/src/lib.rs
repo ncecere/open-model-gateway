@@ -38,6 +38,7 @@ pub mod lifecycle;
 pub mod maintenance;
 pub mod management;
 pub mod metrics;
+pub mod metrics_export;
 pub mod notify;
 pub(crate) mod otlp;
 pub mod partitions;
