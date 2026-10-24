@@ -51,10 +51,8 @@ mod db {
     use sqlx::PgPool;
     use uuid::Uuid;
     fn inspect(v: &Value, found: &mut bool, work: &mut f64) {
-        if let Some(name) = v["Index Name"].as_str() {
-            if name == "report_schedules_dispatch_due" {
-                *found = true;
-            }
+        if v["Index Name"].as_str() == Some("report_schedules_dispatch_due") {
+            *found = true;
         }
         if v["Node Type"].as_str().is_some_and(|s| s.contains("Scan")) {
             *work += (v["Actual Rows"].as_f64().unwrap_or(0.)
