@@ -102,8 +102,83 @@ test("CNPG backups render the barmanObjectStore map as given, and the chart name
   const [cluster] = docsOfKind(helmTemplate(["-f", join(chart, "ci/cnpg-values.yaml"), "--set", "cnpg.cluster.backup.enabled=true",
     "--set", "cnpg.cluster.backup.barmanObjectStore.destinationPath=s3://bucket/omg"]), "Cluster");
   assert.match(cluster, /barmanObjectStore:\s+destinationPath: s3:\/\/bucket\/omg/);
-  const rendered = helmTemplate(["-f", join(chart, "ci/cnpg-values.yaml")]);
+  assert.doesNotMatch(cluster, /plugins:/, "default method is barmanObjectStore, not the plugin");
+  const rendered = helmTemplate(["-f", join(chart, "ci/cnpg-values.yaml"), "--set", "cnpg.cluster.backup.enabled=true",
+    "--set", "cnpg.cluster.backup.barmanObjectStore.destinationPath=s3://bucket/omg"]);
   assert.doesNotMatch(rendered, /GATEWAY_DRAIN_SECONDS/);
+  assert.equal(docsOfKind(rendered, "ObjectStore").length, 0, "barmanObjectStore mode renders no plugin ObjectStore");
+  const [scheduled] = docsOfKind(rendered, "ScheduledBackup");
+  assert.doesNotMatch(scheduled, /method: plugin|pluginConfiguration/, "default mode's ScheduledBackup is unchanged");
+  assert.match(scheduled, /backupOwnerReference: self/);
+});
+
+function pluginBackupArgs(extra = []) {
+  return ["-f", join(chart, "ci/cnpg-values.yaml"),
+    "--set", "cnpg.cluster.backup.enabled=true",
+    "--set", "cnpg.cluster.backup.method=plugin",
+    "--set", "cnpg.cluster.backup.plugin.objectStore.destinationPath=s3://omg-backups/omg",
+    "--set", "cnpg.cluster.backup.plugin.objectStore.endpointURL=http://rustfs-svc.object-storage.svc.cluster.local:9000",
+    "--set", "cnpg.cluster.backup.plugin.objectStore.retentionPolicy=14d",
+    "--set-json", 'cnpg.cluster.backup.plugin.objectStore.s3Credentials.accessKeyId={"name":"omg-backup-s3","key":"ACCESS_KEY_ID"}',
+    "--set-json", 'cnpg.cluster.backup.plugin.objectStore.s3Credentials.secretAccessKey={"name":"omg-backup-s3","key":"ACCESS_SECRET_KEY"}',
+    "--set-json", 'cnpg.cluster.backup.plugin.objectStore.wal={"compression":"gzip","maxParallel":2}',
+    "--set-json", 'cnpg.cluster.backup.plugin.objectStore.data={"compression":"gzip","jobs":2}',
+    "--set-json", 'cnpg.cluster.backup.plugin.objectStore.instanceSidecarConfiguration={"resources":{"requests":{"cpu":"10m","memory":"64Mi"},"limits":{"memory":"256Mi"}}}',
+    ...extra];
+}
+
+test("CNPG backups in plugin mode render an ObjectStore, Cluster plugins block and ScheduledBackup method: plugin (#261)", () => {
+  const rendered = helmTemplate(pluginBackupArgs());
+
+  const [store] = docsOfKind(rendered, "ObjectStore");
+  assert.ok(store, "no ObjectStore rendered in plugin mode");
+  assert.match(store, /^apiVersion: barmancloud\.cnpg\.io\/v1$/m);
+  assert.match(store, /name: omg-test[\w-]*-db-backup-store$/m);
+  assert.match(store, /retentionPolicy: "14d"/);
+  assert.match(store, /destinationPath: s3:\/\/omg-backups\/omg/);
+  assert.match(store, /endpointURL: http:\/\/rustfs-svc\.object-storage\.svc\.cluster\.local:9000/);
+  assert.match(store, /accessKeyId:\s+name: omg-backup-s3\s+key: ACCESS_KEY_ID/);
+  assert.match(store, /secretAccessKey:\s+name: omg-backup-s3\s+key: ACCESS_SECRET_KEY/);
+  assert.match(store, /wal:\s+compression: gzip\s+maxParallel: 2/);
+  assert.match(store, /data:\s+compression: gzip\s+jobs: 2/);
+  assert.match(store, /instanceSidecarConfiguration:\s+resources:/);
+  assert.doesNotMatch(store, /ACCESS_KEY_ID_VALUE|AKIA|secretAccessKey:\s*\n\s*-/, "no literal credential value, only secret refs");
+
+  const [cluster] = docsOfKind(rendered, "Cluster");
+  assert.match(cluster, /plugins:\s+- name: barman-cloud\.cloudnative-pg\.io\s+isWALArchiver: true\s+parameters:\s+barmanObjectName: omg-test[\w-]*-db-backup-store/);
+  assert.doesNotMatch(cluster, /^\s+backup:\s*$/m, "plugin mode renders no in-tree backup: block");
+
+  const [scheduled] = docsOfKind(rendered, "ScheduledBackup");
+  assert.match(scheduled, /backupOwnerReference: self/);
+  assert.match(scheduled, /method: plugin/);
+  assert.match(scheduled, /pluginConfiguration:\s+name: barman-cloud\.cloudnative-pg\.io/);
+  assert.match(scheduled, /schedule: "0 0 3 \* \* \*"/);
+});
+
+test("CNPG backup plugin mode refuses inline S3 credential strings; only secret refs validate (#261)", () => {
+  const inline = spawnSync("helm", ["template", "omg-test", chart,
+    ...pluginBackupArgs(["--set", "cnpg.cluster.backup.plugin.objectStore.s3Credentials.accessKeyId=AKIAEXAMPLE"])],
+    { encoding: "utf8", timeout: 30_000 });
+  assert.notEqual(inline.status, 0, "an inline accessKeyId string must be refused by the schema");
+  assert.match(inline.stderr, /accessKeyId|s3Credentials|values don't meet the specifications/i);
+});
+
+test("CNPG backup plugin mode without S3 credentials fails with the required-value message, not a template panic (#261)", () => {
+  const missing = spawnSync("helm", ["template", "omg-test", chart, "-f", join(chart, "ci/cnpg-values.yaml"),
+    "--set", "cnpg.cluster.backup.enabled=true", "--set", "cnpg.cluster.backup.method=plugin",
+    "--set", "cnpg.cluster.backup.plugin.objectStore.destinationPath=s3://omg-backups/omg"],
+    { encoding: "utf8", timeout: 30_000 });
+  assert.notEqual(missing.status, 0, "missing credentials must be refused");
+  assert.doesNotMatch(missing.stderr, /nil pointer/, "must not be a raw template panic");
+  assert.match(missing.stderr, /s3Credentials\.accessKeyId\.name is required when cnpg\.cluster\.backup\.method is "plugin"/);
+});
+
+test("cnpg.cluster.backup.method is validated against its enum (#261)", () => {
+  const invalid = spawnSync("helm", ["template", "omg-test", chart, "-f", join(chart, "ci/cnpg-values.yaml"),
+    "--set", "cnpg.cluster.backup.enabled=true", "--set", "cnpg.cluster.backup.method=rsync"],
+    { encoding: "utf8", timeout: 30_000 });
+  assert.notEqual(invalid.status, 0, "an unknown backup method must be refused");
+  assert.match(invalid.stderr, /method|values don't meet the specifications/i);
 });
 
 test("the default image tag is the release this chart belongs to (v + appVersion)", () => {
@@ -252,4 +327,73 @@ test("HTTPS egress can be narrowed to CIDRs or to anywhere-except; the default s
   // Both together could put an exception outside its CIDR, which the API server rejects.
   assert.throws(() => egress(["--set-json", 'networkPolicy.egress.httpsCidrs=["10.0.0.0/8"]', "--set-json", 'networkPolicy.egress.httpsExceptCidrs=["169.254.169.254/32"]']), /applies only when httpsCidrs is empty/);
   for (const doc of [open, narrowed, publicOnly]) assert.doesNotMatch(doc, /port: 587/, "SMTP is opened only through extraEgress");
+});
+
+test("trace export settings (#98 PR 3) reach the gateway container only, never the migrate Job", () => {
+  const base = ["-f", join(chart, "ci/external-db-values.yaml")];
+  const unset = helmTemplate(base);
+  assert.doesNotMatch(unset, /GATEWAY_TRACES_/);
+
+  const set = helmTemplate([
+    ...base,
+    "--set", "migrations.run=true",
+    "--set", "gateway.env.GATEWAY_TRACES_OTLP_URL=https://collector.observability.svc.cluster.local:4318/v1/traces",
+    "--set", "gateway.env.GATEWAY_TRACES_SAMPLE_RATIO=0.05",
+    "--set", "gateway.env.GATEWAY_TRACES_OTLP_HEADERS_ENV=GATEWAY_TRACES_HEADERS",
+  ]);
+  const [configMap] = docsOfKind(set, "ConfigMap");
+  assert.match(configMap, /GATEWAY_TRACES_OTLP_URL: "https:\/\/collector\.observability\.svc\.cluster\.local:4318\/v1\/traces"/);
+  assert.match(configMap, /GATEWAY_TRACES_SAMPLE_RATIO: "0\.05"/);
+  assert.match(configMap, /GATEWAY_TRACES_OTLP_HEADERS_ENV: "GATEWAY_TRACES_HEADERS"/);
+
+  const [deployment] = docsOfKind(set, "Deployment").filter((d) => /component: migrate/.test(d) === false);
+  assert.match(deployment, /configMapRef:\s+name: omg-test[\w-]*/, "the gateway container must read the ConfigMap via envFrom");
+
+  // The migrate Job never uses envFrom/configMapRef at all (AGENTS.md: the
+  // migrator Secret is separate and the Job never shares the gateway's
+  // non-secret ConfigMap), so a trace setting placed in gateway.env can
+  // never reach it - the one existing jobs/cronjob template in this chart.
+  const [job] = docsOfKind(set, "Job");
+  assert.ok(job, "no migrate Job rendered");
+  assert.doesNotMatch(job, /GATEWAY_TRACES_/, "trace settings must never leak into the migrate Job");
+  assert.doesNotMatch(job, /configMapRef/, "the migrate Job must never read the shared ConfigMap");
+});
+
+test("the actual secret header value for GATEWAY_TRACES_OTLP_HEADERS_ENV reaches the gateway only through extraEnvFrom, never the ConfigMap", () => {
+  const base = ["-f", join(chart, "ci/external-db-values.yaml")];
+  const rendered = helmTemplate([
+    ...base,
+    "--set", "gateway.env.GATEWAY_TRACES_OTLP_HEADERS_ENV=GATEWAY_TRACES_HEADERS",
+    "--set-json", 'gateway.extraEnvFrom=[{"secretRef":{"name":"omg-trace-headers"}}]',
+  ]);
+  const [configMap] = docsOfKind(rendered, "ConfigMap");
+  // The ConfigMap may name the variable (GATEWAY_TRACES_OTLP_HEADERS_ENV's
+  // value), but must never define GATEWAY_TRACES_HEADERS itself as a key:
+  // that would mean the chart put the secret-bearing value in the shared,
+  // unencrypted ConfigMap instead of a Secret.
+  assert.doesNotMatch(configMap, /^\s*GATEWAY_TRACES_HEADERS:/m, "the header value's own variable must never become a ConfigMap key");
+  assert.match(configMap, /GATEWAY_TRACES_OTLP_HEADERS_ENV: "GATEWAY_TRACES_HEADERS"/, "the ConfigMap may still name which variable carries the secret");
+  const [deployment] = docsOfKind(rendered, "Deployment");
+  assert.match(deployment, /secretRef:\s+name: omg-trace-headers/);
+});
+
+test("values.yaml documents the trace exporter settings and a 4318 collector egress example (#98 PR 3)", () => {
+  const raw = readFileSync(join(chart, "values.yaml"), "utf8");
+  assert.match(raw, /GATEWAY_TRACES_OTLP_URL/, "values.yaml must document the trace endpoint setting");
+  assert.match(raw, /GATEWAY_TRACES_SAMPLE_RATIO/, "values.yaml must document the sample ratio setting");
+  assert.match(raw, /GATEWAY_TRACES_OTLP_HEADERS_ENV/, "values.yaml must document the headers-variable-name setting");
+  assert.match(raw, /extraEnvFrom/, "values.yaml must point the headers value at extraEnvFrom/a Secret");
+  assert.match(raw, /4318/, "values.yaml must document the OTLP collector's port for extraEgress");
+});
+
+test("an extraEgress rule for the OTLP collector port renders in the egress NetworkPolicy", () => {
+  const base = ["-f", join(chart, "ci/cnpg-values.yaml")];
+  const rendered = helmTemplate([
+    ...base,
+    "--set-json", 'networkPolicy.egress.extraEgress=[{"to":[{"ipBlock":{"cidr":"10.50.0.10/32"}}],"ports":[{"protocol":"TCP","port":4318}]}]',
+  ]);
+  const policies = docsOfKind(rendered, "NetworkPolicy");
+  const egress = policies.find((p) => /name: omg-test[\w-]*-egress$/m.test(p));
+  assert.match(egress, /cidr: 10\.50\.0\.10\/32/);
+  assert.match(egress, /port: 4318/);
 });

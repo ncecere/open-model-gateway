@@ -59,12 +59,66 @@ spec:
     nodeSelector:
       {{- toYaml . | nindent 6 }}
     {{- end }}
-  {{- if .Values.cnpg.cluster.backup.enabled }}
+  {{- $backup := .Values.cnpg.cluster.backup }}
+  {{- if $backup.enabled }}
+  {{- if eq $backup.method "plugin" }}
+  plugins:
+    - name: {{ $backup.plugin.name | default "barman-cloud.cloudnative-pg.io" }}
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: {{ include "omg.cnpg.backupObjectStoreName" . }}
+  {{- else if eq $backup.method "barmanObjectStore" }}
   backup:
     barmanObjectStore:
-      {{- toYaml .Values.cnpg.cluster.backup.barmanObjectStore | nindent 6 }}
+      {{- toYaml $backup.barmanObjectStore | nindent 6 }}
+  {{- else }}
+  {{- fail (printf "cnpg.cluster.backup.method must be \"barmanObjectStore\" or \"plugin\", got %q" $backup.method) }}
   {{- end }}
-{{- if .Values.cnpg.cluster.backup.enabled }}
+  {{- end }}
+{{- if $backup.enabled }}
+{{- if eq $backup.method "plugin" }}
+{{- $store := $backup.plugin.objectStore }}
+---
+# The Barman Cloud plugin's ObjectStore (barmancloud.cnpg.io/v1), referenced
+# by the Cluster's plugins[].parameters.barmanObjectName above. Credentials
+# are Secret references only, read by the plugin sidecar at runtime; this
+# chart never generates or stores the Secret itself.
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: {{ include "omg.cnpg.backupObjectStoreName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "omg.labels" . | nindent 4 }}
+spec:
+  {{- with $store.retentionPolicy }}
+  retentionPolicy: {{ . | quote }}
+  {{- end }}
+  configuration:
+    destinationPath: {{ required "cnpg.cluster.backup.plugin.objectStore.destinationPath is required when cnpg.cluster.backup.method is \"plugin\"" $store.destinationPath }}
+    {{- with $store.endpointURL }}
+    endpointURL: {{ . }}
+    {{- end }}
+    s3Credentials:
+      accessKeyId:
+        name: {{ required "cnpg.cluster.backup.plugin.objectStore.s3Credentials.accessKeyId.name is required when cnpg.cluster.backup.method is \"plugin\"" (dig "accessKeyId" "name" "" ($store.s3Credentials | default dict)) }}
+        key: {{ required "cnpg.cluster.backup.plugin.objectStore.s3Credentials.accessKeyId.key is required when cnpg.cluster.backup.method is \"plugin\"" (dig "accessKeyId" "key" "" ($store.s3Credentials | default dict)) }}
+      secretAccessKey:
+        name: {{ required "cnpg.cluster.backup.plugin.objectStore.s3Credentials.secretAccessKey.name is required when cnpg.cluster.backup.method is \"plugin\"" (dig "secretAccessKey" "name" "" ($store.s3Credentials | default dict)) }}
+        key: {{ required "cnpg.cluster.backup.plugin.objectStore.s3Credentials.secretAccessKey.key is required when cnpg.cluster.backup.method is \"plugin\"" (dig "secretAccessKey" "key" "" ($store.s3Credentials | default dict)) }}
+    {{- with $store.wal }}
+    wal:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with $store.data }}
+    data:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+  {{- with $store.instanceSidecarConfiguration }}
+  instanceSidecarConfiguration:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
 ---
 apiVersion: postgresql.cnpg.io/v1
 kind: ScheduledBackup
@@ -74,9 +128,14 @@ metadata:
   labels:
     {{- include "omg.labels" . | nindent 4 }}
 spec:
-  schedule: {{ .Values.cnpg.cluster.backup.scheduledBackup.schedule | quote }}
+  schedule: {{ $backup.scheduledBackup.schedule | quote }}
   backupOwnerReference: self
   cluster:
     name: {{ include "omg.cnpg.clusterName" . }}
+  {{- if eq $backup.method "plugin" }}
+  method: plugin
+  pluginConfiguration:
+    name: {{ $backup.plugin.name | default "barman-cloud.cloudnative-pg.io" }}
+  {{- end }}
 {{- end }}
 {{- end }}

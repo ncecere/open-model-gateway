@@ -477,15 +477,25 @@ async fn run(cli: Cli) -> Result<()> {
                 "pass --once; `serve` evaluates alerts every GATEWAY_ALERT_INTERVAL_SECONDS"
             );
             store.preflight_enterprise().await?;
-            match open_model_gateway::alerts::evaluate_once(&store).await? {
-                Some(report) => {
-                    let emails = open_model_gateway::alerts::deliver_pending(&store, 1000).await;
-                    println!(
-                        "Evaluated {} alert rules: {} fired, {} resolved, {} failed; {} email deliveries processed.",
-                        report.rules, report.fired, report.resolved, report.failed_rules, emails
-                    );
-                }
-                None => println!("Another replica is evaluating alerts right now; nothing done."),
+            let report = open_model_gateway::alerts::evaluate_once(&store).await?;
+            // Delivery is fenced per recipient claim, not by the evaluation
+            // lease, so draining is safe (and useful) even when another
+            // replica is evaluating. Bounded so a hanging relay cannot hang
+            // the command.
+            let emails = tokio::time::timeout(
+                std::time::Duration::from_secs(25 * 40 + 60),
+                open_model_gateway::alerts::deliver_pending(&store, 1000),
+            )
+            .await
+            .unwrap_or(0);
+            match report {
+                Some(report) => println!(
+                    "Evaluated {} alert rules: {} fired, {} resolved, {} failed; {} email deliveries processed.",
+                    report.rules, report.fired, report.resolved, report.failed_rules, emails
+                ),
+                None => println!(
+                    "Another replica is evaluating alerts right now; {emails} email deliveries processed."
+                ),
             }
         }
         Command::Budget {
@@ -695,6 +705,13 @@ async fn run(cli: Cli) -> Result<()> {
                 store.is_ready().await,
                 "database schema is not ready; run `open-model-gateway migrate` with the matching release"
             );
+            // Started early so both Store (background-root spans,
+            // maintenance.rs) and Engine (interactive-generation spans) can
+            // carry the same recorder. A collector failure never fails
+            // inference.
+            let traces = open_model_gateway::telemetry::Runtime::start(config.traces.clone());
+            let recorder = traces.as_ref().map(|t| t.recorder());
+            let store = store.with_traces(recorder.clone());
             let web = config
                 .web_directory
                 .as_deref()
@@ -727,10 +744,11 @@ async fn run(cli: Cli) -> Result<()> {
             }
             let engine = Engine::new(Arc::new(store.clone()), registry, config.inference_limits)?
                 .with_realtime_limits(
-                open_model_gateway::inference::realtime::RealtimeLimits::from_lookup(|name| {
-                    std::env::var(name).ok()
-                })?,
-            )?;
+                    open_model_gateway::inference::realtime::RealtimeLimits::from_lookup(|name| {
+                        std::env::var(name).ok()
+                    })?,
+                )?
+                .with_telemetry(recorder.clone());
             let identity = IdentityState::new(store.clone(), IdentityConfig::from_env()?)
                 .await?
                 .with_scim(open_model_gateway::scim::ScimConfig::from_env()?)?;
@@ -933,6 +951,9 @@ async fn run(cli: Cli) -> Result<()> {
             )
             .with_graceful_shutdown(shutdown_signal())
             .await;
+            if let Some(traces) = traces {
+                traces.shutdown().await;
+            }
             if let Some(alerts) = alerts {
                 alerts.abort();
                 let _ = alerts.await;
@@ -1170,6 +1191,11 @@ mod demo {
             admission_mode: Default::default(),
             listen_database_url: None,
             config_cache: true,
+            traces: open_model_gateway::config::TraceConfig::from_lookup(
+                |_| None,
+                open_model_gateway::config::Environment::Development,
+            )
+            .unwrap(),
         };
         assert!(ensure_demo_config(&config).is_ok());
         for url in [

@@ -102,6 +102,11 @@ jobs:
         with:
           tool: cargo-deny@0.20.2
       - run: cargo deny --all-features check
+      - uses: ./.github/actions/setup-node
+      - name: Verify vendored advisory coverage (offline synthetic database)
+        run: node --test tests/vendored-advisories.test.mjs
+      - name: Vendored upstream-base advisories only (temporary metadata projection)
+        run: node .github/scripts/vendored-advisories.mjs
 
   # Helm chart (deploy/helm/open-model-gateway, scale plan P7): lint and
   # render every values profile, kubeconform-validate the rendered output,

@@ -25,10 +25,334 @@ use tokio::{
 };
 use uuid::Uuid;
 
-use crate::{auth::Principal, providers::ProviderRegistry};
+use crate::{auth::Principal, providers::ProviderRegistry, telemetry};
 use error::InferenceError;
 use repository::{AttemptTelemetry, ExecutionFinish, ExecutionStart, InferenceRepository, Outcome};
 use types::{ApiProtocol, ChatEvent, ChatRequest, ProviderOutput, Usage};
+
+/// `gen_ai.operation.name` of a protocol routed through the shared engine.
+fn operation_of(protocol: ApiProtocol) -> telemetry::Operation {
+    match protocol {
+        ApiProtocol::ChatCompletions => telemetry::Operation::Chat,
+        ApiProtocol::Responses => telemetry::Operation::Responses,
+        ApiProtocol::Messages => telemetry::Operation::Messages,
+        // Every other protocol is a non-generation workload, never routed
+        // through `execute_protocol`. Caught here only as a safety net:
+        // debug builds and tests fail loudly instead of silently mislabeling
+        // the operation if that assumption is ever violated.
+        other => {
+            debug_assert!(
+                false,
+                "operation_of called for non-generation protocol {other:?}"
+            );
+            telemetry::Operation::Chat
+        }
+    }
+}
+/// `http.route` of a protocol routed through the shared engine.
+fn route_of(protocol: ApiProtocol) -> telemetry::Route {
+    match protocol {
+        ApiProtocol::ChatCompletions => telemetry::Route::Chat,
+        ApiProtocol::Responses => telemetry::Route::Responses,
+        ApiProtocol::Messages => telemetry::Route::Messages,
+        other => {
+            debug_assert!(
+                false,
+                "route_of called for non-generation protocol {other:?}"
+            );
+            telemetry::Route::Chat
+        }
+    }
+}
+/// `gen_ai.provider.name`, or `None` for a provider kind outside the fixed
+/// allowlist (never guessed, never a free-form fallback).
+fn provider_of(provider: &str) -> Option<telemetry::Provider> {
+    telemetry::Provider::ALL
+        .iter()
+        .copied()
+        .find(|p| p.as_str() == provider)
+}
+/// `error.type` of a safe, already-public [`InferenceError`] variant. A
+/// coarse, fixed mapping: several variants intentionally share one bucket.
+fn error_kind_of(error: InferenceError) -> telemetry::ErrorKind {
+    use telemetry::ErrorKind;
+    match error {
+        InferenceError::InvalidRequest => ErrorKind::InvalidRequest,
+        InferenceError::Unauthenticated => ErrorKind::Unauthorized,
+        InferenceError::ModelUnavailable => ErrorKind::NotFound,
+        InferenceError::Unsupported => ErrorKind::Unsupported,
+        InferenceError::Configuration | InferenceError::PriceUnbounded => ErrorKind::Configuration,
+        InferenceError::Busy | InferenceError::RouteCoolingDown(_) => ErrorKind::Busy,
+        InferenceError::BudgetExceeded(_)
+        | InferenceError::UnresolvedUsage(_)
+        | InferenceError::TokenReservationExceedsLimit(_)
+        | InferenceError::JobLimitExceeded(_) => ErrorKind::Forbidden,
+        InferenceError::Timeout => ErrorKind::Timeout,
+        InferenceError::UpstreamRejected
+        | InferenceError::UpstreamUnavailable
+        | InferenceError::InvalidUpstream => ErrorKind::Upstream,
+        InferenceError::Storage => ErrorKind::Storage,
+    }
+}
+
+/// Request-scoped trace context: created at engine entry (`inference.request`
+/// is reserved before anything else, so routing/admission/attempt/settlement
+/// spans can all name it as `parent`), carried across every failover attempt
+/// and finished exactly once. Export never happens without a prior
+/// [`telemetry::mark_shared`] commit deep in `governance.rs` for a shared
+/// (team/project) workspace: a personal request, or one that never reaches
+/// admission, just drops its buffered spans uncounted as exported
+/// (`telemetry::Context`'s own `Drop` counts them `ineligible`).
+struct RequestTelemetry {
+    context: Option<telemetry::Context>,
+    eligibility: Option<telemetry::SharedAdmission>,
+    root: Option<[u8; 8]>,
+    start: u64,
+    operation: telemetry::Operation,
+    streamed: bool,
+    finished: bool,
+}
+impl RequestTelemetry {
+    fn new(
+        recorder: Option<&telemetry::Recorder>,
+        request_id: Uuid,
+        operation: telemetry::Operation,
+        streamed: bool,
+    ) -> Self {
+        let context = recorder.and_then(|r| r.begin(request_id));
+        let root = context.is_some().then(telemetry::reserve_span_id).flatten();
+        Self {
+            context,
+            eligibility: None,
+            root,
+            start: telemetry::now_unix_nanos(),
+            operation,
+            streamed,
+            finished: false,
+        }
+    }
+    fn active(&self) -> bool {
+        self.context.is_some()
+    }
+    fn trace(&self) -> Option<[u8; 16]> {
+        self.context.as_ref().map(telemetry::Context::trace_id)
+    }
+    fn root(&self) -> Option<[u8; 8]> {
+        self.root
+    }
+    fn record(&mut self, span: telemetry::Span) {
+        if let Some(context) = self.context.as_mut() {
+            context.record(span);
+        }
+    }
+    /// Counts one span that could never be built at all (#98 PR 2 review
+    /// item 5), a no-op while telemetry is inactive for this request.
+    fn drop_invalid(&self) {
+        if let Some(context) = self.context.as_ref() {
+            context.drop_invalid();
+        }
+    }
+    /// Keeps the most recent eligibility a committed admission resolved for
+    /// this request; never overwritten back to `None` by a later attempt
+    /// that did not itself commit for a shared workspace.
+    fn note_eligibility(&mut self, eligibility: Option<telemetry::SharedAdmission>) {
+        if eligibility.is_some() {
+            self.eligibility = eligibility;
+        }
+    }
+    /// The admitted public alias, only once a commit has already proved
+    /// shared eligibility for this exact request.
+    fn alias(&self) -> Option<telemetry::PublicAlias> {
+        self.context
+            .as_ref()?
+            .admitted_alias(self.eligibility.as_ref()?)
+    }
+    /// This request's trace id, only once a commit has already proved
+    /// shared eligibility for it (log-line correlation, #98): `None` for a
+    /// personal workspace or while telemetry is inactive.
+    fn trace_from_eligibility(&self) -> Option<[u8; 16]> {
+        self.eligibility.as_ref()?;
+        self.context.as_ref().map(telemetry::Context::trace_id)
+    }
+    /// Finishes exactly once: the first call (explicit, at a terminal return
+    /// in `execute_protocol`, or `Drop` for every other path) wins.
+    fn finish(&mut self, outcome: telemetry::Outcome, error: Option<InferenceError>) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
+        let Some(mut context) = self.context.take() else {
+            return;
+        };
+        if let Some(root) = self.root {
+            let end = telemetry::now_unix_nanos().max(self.start);
+            match telemetry::Span::reserved(
+                telemetry::SpanName::InferenceRequest,
+                context.trace_id(),
+                root,
+                None,
+                self.start,
+                end,
+            ) {
+                Some(mut span) => {
+                    span.attribute(telemetry::Attribute::Operation(self.operation));
+                    span.attribute(telemetry::Attribute::Streamed(self.streamed));
+                    span.attribute(telemetry::Attribute::Outcome(outcome));
+                    if let Some(error) = error {
+                        span.attribute(telemetry::Attribute::Error(error_kind_of(error)));
+                    }
+                    // Reserved outside the ordinary per-request child-span
+                    // budget (#98 PR 2 review item 6): this is the
+                    // request's sole root span, recorded exactly once here
+                    // (guarded by `self.finished` above), so it must never
+                    // be the span a full budget of children drops.
+                    context.record_root(span);
+                }
+                // #98 PR 2 review item 5: the root span could not be built
+                // at all (a malformed shape, or entropy exhaustion) -
+                // counted, never a silent, uncounted loss.
+                None => context.drop_invalid(),
+            }
+        }
+        if let Some(eligibility) = self.eligibility.take() {
+            context.export(eligibility);
+        }
+    }
+}
+impl Drop for RequestTelemetry {
+    fn drop(&mut self) {
+        // Every path that reaches here without an explicit `finish()` call
+        // (a settlement write that failed or timed out, the request's own
+        // timeout, or the stream simply being dropped, including before its
+        // first poll) is one this crate does not treat as the request
+        // durably completing its own work.
+        self.finish(telemetry::Outcome::Cancelled, None);
+    }
+}
+
+/// One ambient admission/settlement phase group: a reserved wrapper span id,
+/// its start, and the [`telemetry::PhaseBuffer`] governance.rs's real phase
+/// boundaries (`telemetry::mark_phase`) record into inside [`telemetry::with_phases`].
+/// `None` is the allocation-free path when telemetry is inactive.
+type PhaseGroup = Option<(Arc<Mutex<telemetry::PhaseBuffer>>, [u8; 8], u64)>;
+fn begin_phase_group(telemetry: &RequestTelemetry) -> PhaseGroup {
+    let trace = telemetry.trace()?;
+    let id = telemetry::reserve_span_id()?;
+    let start = telemetry::now_unix_nanos();
+    Some((
+        Arc::new(Mutex::new(telemetry::PhaseBuffer::new(trace, id, start))),
+        id,
+        start,
+    ))
+}
+/// Merges one [`begin_phase_group`]'s collected sub-phase spans and any
+/// [`telemetry::SharedAdmission`] eligibility into `telemetry`, then records
+/// the wrapper span itself (`name`), with `attempt` as `gateway.attempt`
+/// when it is `1..=3`.
+fn end_phase_group(
+    telemetry: &mut RequestTelemetry,
+    group: PhaseGroup,
+    name: telemetry::SpanName,
+    attempt: usize,
+) {
+    let Some((buffer, id, start)) = group else {
+        return;
+    };
+    if let Ok(mutex) = Arc::try_unwrap(buffer) {
+        let (spans, eligibility) = mutex
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        for span in spans {
+            telemetry.record(span);
+        }
+        telemetry.note_eligibility(eligibility);
+    }
+    let Some(trace) = telemetry.trace() else {
+        return;
+    };
+    let mut span = match telemetry::Span::reserved(
+        name,
+        trace,
+        id,
+        telemetry.root(),
+        start,
+        telemetry::now_unix_nanos(),
+    ) {
+        Some(span) => span,
+        // #98 PR 2 review item 5: counted, never a silent, uncounted loss.
+        None => {
+            telemetry.drop_invalid();
+            return;
+        }
+    };
+    if let Ok(n) = u8::try_from(attempt) {
+        span.attribute(telemetry::Attribute::Attempt(n));
+    }
+    telemetry.record(span);
+}
+/// Builds one `upstream.attempt` span: dispatch through its terminal
+/// outcome. `None` when telemetry is inactive for this request.
+#[allow(clippy::too_many_arguments)]
+fn attempt_span(
+    telemetry: &RequestTelemetry,
+    start: u64,
+    end: u64,
+    attempt_number: usize,
+    provider: &str,
+    streamed: bool,
+    attempt_id: Uuid,
+    outcome: telemetry::Outcome,
+    error: Option<InferenceError>,
+    usage: Usage,
+    timings: &AttemptTelemetry,
+) -> Option<telemetry::Span> {
+    let trace = telemetry.trace()?;
+    let mut span = match telemetry::Span::new(
+        telemetry::SpanName::UpstreamAttempt,
+        trace,
+        telemetry.root(),
+        start,
+        end,
+    ) {
+        Some(span) => span,
+        // #98 PR 2 review item 5: counted, never a silent, uncounted loss.
+        None => {
+            telemetry.drop_invalid();
+            return None;
+        }
+    };
+    if let Ok(n) = u8::try_from(attempt_number) {
+        span.attribute(telemetry::Attribute::Attempt(n));
+    }
+    if let Some(provider) = provider_of(provider) {
+        span.attribute(telemetry::Attribute::Provider(provider));
+    }
+    span.attribute(telemetry::Attribute::Streamed(streamed));
+    span.attribute(telemetry::Attribute::Outcome(outcome));
+    if let Some(error) = error {
+        span.attribute(telemetry::Attribute::Error(error_kind_of(error)));
+    }
+    if let Some(alias) = telemetry.alias() {
+        span.attribute(telemetry::Attribute::Model(alias));
+    }
+    if let Some(n) = usage.input_tokens {
+        span.attribute(telemetry::Attribute::InputTokens(n));
+    }
+    if let Some(n) = usage.output_tokens {
+        span.attribute(telemetry::Attribute::OutputTokens(n));
+    }
+    if let Some(ms) = timings.time_to_first_token_ms {
+        span.attribute(telemetry::Attribute::FirstContent(Duration::from_millis(
+            ms,
+        )));
+    }
+    if let Some(ms) = timings.generation_ms {
+        span.attribute(telemetry::Attribute::Generation(Duration::from_millis(ms)));
+    }
+    span.attribute(telemetry::Attribute::AttemptId(attempt_id));
+    Some(span)
+}
 
 #[derive(Clone, Copy)]
 pub struct EngineLimits {
@@ -56,6 +380,10 @@ pub struct Engine {
     limits: EngineLimits,
     /// Realtime session limits (`Engine::with_realtime_limits`).
     realtime: realtime::RealtimeLimits,
+    /// Bounded trace recorder (`Engine::with_telemetry`); None disables
+    /// tracing, in which case the request path never allocates a
+    /// RequestTelemetry context or hashes a request id.
+    recorder: Option<telemetry::Recorder>,
 }
 
 impl Engine {
@@ -78,7 +406,15 @@ impl Engine {
             capacity: Arc::new(Semaphore::new(limits.max_concurrent)),
             limits,
             realtime: realtime::RealtimeLimits::default(),
+            recorder: None,
         })
+    }
+
+    /// Attaches the bounded trace recorder (#98). None disables tracing for
+    /// every request through this engine.
+    pub fn with_telemetry(mut self, recorder: Option<telemetry::Recorder>) -> Self {
+        self.recorder = recorder;
+        self
     }
 
     /// The same engine (adapters, limits, deadlines) with another repository
@@ -98,6 +434,10 @@ impl Engine {
             )),
             limits: self.limits,
             realtime: self.realtime,
+            // Background work (gateway-run batch lines) is out of scope for
+            // interactive-generation tracing: never wrapped in telemetry,
+            // same as every other non-interactive admission path.
+            recorder: None,
         }
     }
 
@@ -127,6 +467,16 @@ impl Engine {
         let started = Instant::now();
         let deadline = started + self.limits.request_timeout;
         let labels = client::current();
+        // Reserved before anything else: routing/admission/attempt/
+        // settlement spans all name this as `parent`. Export never happens
+        // without a later shared-workspace admission commit (#98).
+        let mut telemetry = RequestTelemetry::new(
+            self.recorder.as_ref(),
+            request_id,
+            operation_of(protocol),
+            request.stream,
+        );
+        let routing_start = telemetry.active().then(telemetry::now_unix_nanos);
         let deployments = timeout_at(
             deadline,
             self.repository
@@ -229,6 +579,25 @@ impl Engine {
         if !(1..=3).contains(&plan.max_attempts) {
             return Err(InferenceError::Configuration);
         }
+        if let Some(start) = routing_start
+            && let Some(trace) = telemetry.trace()
+        {
+            match telemetry::Span::new(
+                telemetry::SpanName::Routing,
+                trace,
+                telemetry.root(),
+                start,
+                telemetry::now_unix_nanos(),
+            ) {
+                Some(mut span) => {
+                    span.attribute(telemetry::Attribute::Route(route_of(protocol)));
+                    telemetry.record(span);
+                }
+                // #98 PR 2 review item 5: counted, never a silent,
+                // uncounted loss.
+                None => telemetry.drop_invalid(),
+            }
+        }
         let streamed = request.stream;
         for (attempt, id) in plan
             .deployment_ids
@@ -236,35 +605,54 @@ impl Engine {
             .take(plan.max_attempts)
             .enumerate()
         {
-            let deployment = candidates
-                .iter()
-                .find(|d| d.id == *id)
-                .ok_or(InferenceError::Configuration)?;
-            let adapter = self
-                .registry
-                .get(&deployment.provider)
-                .ok_or(InferenceError::Configuration)?;
+            let deployment = match candidates.iter().find(|d| d.id == *id) {
+                Some(deployment) => deployment,
+                None => {
+                    // #98 PR 2 review item 2: an early return must still
+                    // finish telemetry explicitly, exactly like every other
+                    // terminal path below, so Drop never mislabels a real
+                    // denial `cancelled` with no `error.type`.
+                    telemetry.finish(
+                        telemetry::Outcome::Error,
+                        Some(InferenceError::Configuration),
+                    );
+                    return Err(InferenceError::Configuration);
+                }
+            };
+            let adapter = match self.registry.get(&deployment.provider) {
+                Some(adapter) => adapter,
+                None => {
+                    telemetry.finish(
+                        telemetry::Outcome::Error,
+                        Some(InferenceError::Configuration),
+                    );
+                    return Err(InferenceError::Configuration);
+                }
+            };
             let execution_id = if attempt == 0 {
                 request_id
             } else {
                 Uuid::now_v7()
             };
             let attempt_started = Instant::now();
-            let admission = timeout_at(
+            let attempt_wall_start = telemetry.active().then(telemetry::now_unix_nanos);
+            let admission_group = begin_phase_group(&telemetry);
+            let execution_start = ExecutionStart {
+                id: execution_id,
+                root_request_id: request_id,
+                attempt_number: (attempt + 1) as i32,
+                principal,
+                deployment_id: deployment.id,
+                provider: deployment.provider.clone(),
+                model: request.model.clone(),
+                streamed,
+                upstream_model: upstream_snapshot(&deployment.upstream_model),
+                client: labels.clone(),
+            };
+            let admission_future = timeout_at(
                 deadline,
                 self.repository.admit(
-                    &ExecutionStart {
-                        id: execution_id,
-                        root_request_id: request_id,
-                        attempt_number: (attempt + 1) as i32,
-                        principal,
-                        deployment_id: deployment.id,
-                        provider: deployment.provider.clone(),
-                        model: request.model.clone(),
-                        streamed,
-                        upstream_model: upstream_snapshot(&deployment.upstream_model),
-                        client: labels.clone(),
-                    },
+                    &execution_start,
                     &request,
                     self.limits
                         .request_timeout
@@ -274,15 +662,46 @@ impl Engine {
                     deployment,
                     adapter.generation_output_limit(),
                 ),
-            )
-            .await
-            .map_err(|_| InferenceError::Timeout)??;
+            );
+            let admission_result = match admission_group.as_ref().map(|(b, _, _)| b.clone()) {
+                Some(buffer) => telemetry::with_phases(buffer, admission_future).await,
+                None => admission_future.await,
+            };
+            end_phase_group(
+                &mut telemetry,
+                admission_group,
+                telemetry::SpanName::Admission,
+                attempt + 1,
+            );
+            let admission = match admission_result.map_err(|_| InferenceError::Timeout) {
+                Err(error) => {
+                    // #98 PR 2 review item 2: the timeout and the admission's
+                    // own error (e.g. a team-workspace rate or budget
+                    // denial) both return here, before any
+                    // `ExecutionGuard`/settlement path exists for this
+                    // attempt - so, like every other terminal return in this
+                    // function, telemetry must be finished explicitly here
+                    // rather than left for Drop to mislabel `cancelled`.
+                    telemetry.finish(telemetry::Outcome::Error, Some(error));
+                    return Err(error);
+                }
+                Ok(Err(error)) => {
+                    telemetry.finish(telemetry::Outcome::Error, Some(error));
+                    return Err(error);
+                }
+                Ok(Ok(admission)) => admission,
+            };
+            // Logging-only correlation (#98): known only once a
+            // shared-workspace admission has already committed for this
+            // request; never for personal workspaces.
+            let log_trace_id = telemetry.trace_from_eligibility().map(hex::encode);
             let mut guard = ExecutionGuard::new(
                 self.repository.clone(),
                 execution_id,
                 deployment.id,
                 attempt_started,
                 permit.clone(),
+                log_trace_id,
             );
             // This clone belongs only to this attempt. A failover resolves its
             // own default from its own immutable price, never from this cap.
@@ -307,26 +726,74 @@ impl Engine {
             };
             match output {
                 Err(error) => {
-                    guard.finish(Outcome::Failed, Some(error)).await?;
-                    if attempt + 1 < plan.max_attempts
+                    let settled = settle_attempt(
+                        &mut telemetry,
+                        &mut guard,
+                        Outcome::Failed,
+                        Some(error),
+                        attempt + 1,
+                        attempt_wall_start,
+                        execution_id,
+                        &deployment.provider,
+                        streamed,
+                    )
+                    .await;
+                    let failing_over = settled.is_ok()
+                        && attempt + 1 < plan.max_attempts
                         && attempt + 1 < plan.deployment_ids.len()
-                        && crate::routing::may_failover(&plan, error)
-                    {
+                        && crate::routing::may_failover(&plan, error);
+                    if failing_over {
                         continue;
                     }
+                    if let Err(settlement_error) = settled {
+                        telemetry.finish(telemetry::Outcome::Error, Some(settlement_error));
+                        return Err(settlement_error);
+                    }
+                    telemetry.finish(telemetry::Outcome::Error, Some(error));
                     return Err(error);
                 }
                 Ok(ProviderOutput::Complete(response)) if !streamed => {
                     if !valid_usage(response.usage) {
-                        guard
-                            .finish(Outcome::Failed, Some(InferenceError::InvalidUpstream))
-                            .await?;
-                        return Err(InferenceError::InvalidUpstream);
+                        let settled = settle_attempt(
+                            &mut telemetry,
+                            &mut guard,
+                            Outcome::Failed,
+                            Some(InferenceError::InvalidUpstream),
+                            attempt + 1,
+                            attempt_wall_start,
+                            execution_id,
+                            &deployment.provider,
+                            streamed,
+                        )
+                        .await;
+                        let returned = settled.err().unwrap_or(InferenceError::InvalidUpstream);
+                        telemetry.finish(telemetry::Outcome::Error, Some(returned));
+                        return Err(returned);
                     }
                     guard.usage = response.usage;
                     guard.telemetry.finish_reason = Some(response.finish_reason.into());
-                    guard.finish(Outcome::Succeeded, None).await?;
-                    return Ok(ProviderOutput::Complete(response));
+                    let settled = settle_attempt(
+                        &mut telemetry,
+                        &mut guard,
+                        Outcome::Succeeded,
+                        None,
+                        attempt + 1,
+                        attempt_wall_start,
+                        execution_id,
+                        &deployment.provider,
+                        streamed,
+                    )
+                    .await;
+                    match settled {
+                        Ok(()) => {
+                            telemetry.finish(telemetry::Outcome::Completed, None);
+                            return Ok(ProviderOutput::Complete(response));
+                        }
+                        Err(error) => {
+                            telemetry.finish(telemetry::Outcome::Error, Some(error));
+                            return Err(error);
+                        }
+                    }
                 }
                 Ok(ProviderOutput::Stream(upstream)) if streamed => {
                     // The watchdog drops transport at the deadline even if a slow
@@ -336,9 +803,14 @@ impl Engine {
                         deadline,
                         Some(permit.clone()),
                     );
+                    let streaming_provider = deployment.provider.clone();
                     let tracked = async_stream::stream! {
-                        // Capturing guard outside the generator accounts for drops even before first poll.
+                        // Capturing guard and telemetry outside the generator
+                        // accounts for drops even before the first poll: both
+                        // finish/export or drop-count exactly once via their
+                        // own Drop.
                         let mut guard = guard;
+                        let mut telemetry = telemetry;
                         let mut finished_choice = false;
                         let mut reported_usage = false;
                         loop {
@@ -364,15 +836,24 @@ impl Engine {
                             };
                             match item {
                                 Ok(ChatEvent::Done) => {
-                                    match guard.finish(Outcome::Succeeded, None).await {
-                                        Ok(()) => yield Ok(ChatEvent::Done),
-                                        Err(error) => yield Err(error),
+                                    let settled = settle_attempt(&mut telemetry, &mut guard, Outcome::Succeeded, None, attempt + 1, attempt_wall_start, execution_id, &streaming_provider, streamed).await;
+                                    match settled {
+                                        Ok(()) => {
+                                            telemetry.finish(telemetry::Outcome::Completed, None);
+                                            yield Ok(ChatEvent::Done);
+                                        }
+                                        Err(error) => {
+                                            telemetry.finish(telemetry::Outcome::Error, Some(error));
+                                            yield Err(error);
+                                        }
                                     }
                                     break;
                                 }
                                 Ok(event) => yield Ok(event),
                                 Err(error) => {
-                                    let error = guard.finish(Outcome::Failed, Some(error)).await.err().unwrap_or(error);
+                                    let settled = settle_attempt(&mut telemetry, &mut guard, Outcome::Failed, Some(error), attempt + 1, attempt_wall_start, execution_id, &streaming_provider, streamed).await;
+                                    let error = settled.err().unwrap_or(error);
+                                    telemetry.finish(telemetry::Outcome::Error, Some(error));
                                     yield Err(error);
                                     break;
                                 }
@@ -382,13 +863,25 @@ impl Engine {
                     return Ok(ProviderOutput::Stream(Box::pin(tracked)));
                 }
                 Ok(_) => {
-                    guard
-                        .finish(Outcome::Failed, Some(InferenceError::InvalidUpstream))
-                        .await?;
-                    return Err(InferenceError::InvalidUpstream);
+                    let settled = settle_attempt(
+                        &mut telemetry,
+                        &mut guard,
+                        Outcome::Failed,
+                        Some(InferenceError::InvalidUpstream),
+                        attempt + 1,
+                        attempt_wall_start,
+                        execution_id,
+                        &deployment.provider,
+                        streamed,
+                    )
+                    .await;
+                    let returned = settled.err().unwrap_or(InferenceError::InvalidUpstream);
+                    telemetry.finish(telemetry::Outcome::Error, Some(returned));
+                    return Err(returned);
                 }
             }
         }
+        telemetry.finish(telemetry::Outcome::Error, Some(InferenceError::Busy));
         Err(InferenceError::Busy)
     }
 }
@@ -424,6 +917,65 @@ fn valid_token_usage(usage: Usage) -> bool {
         })
 }
 
+/// Settles one attempt's durable write (wrapping its real phase boundaries
+/// as a `settlement` span, via [`begin_phase_group`]/[`end_phase_group`])
+/// and records its `upstream.attempt` span, regardless of whether the
+/// settlement write itself succeeded. Returns settlement's own result
+/// unchanged, so callers keep deciding failover/return exactly as before.
+#[allow(clippy::too_many_arguments)]
+async fn settle_attempt(
+    telemetry: &mut RequestTelemetry,
+    guard: &mut ExecutionGuard,
+    outcome: Outcome,
+    error: Option<InferenceError>,
+    attempt_number: usize,
+    attempt_wall_start: Option<u64>,
+    attempt_id: Uuid,
+    provider: &str,
+    streamed: bool,
+) -> Result<(), InferenceError> {
+    let telemetry_outcome = match outcome {
+        Outcome::Succeeded => telemetry::Outcome::Completed,
+        Outcome::Failed => telemetry::Outcome::Error,
+        Outcome::Cancelled => telemetry::Outcome::Cancelled,
+    };
+    let usage = guard.usage;
+    let timings = guard.telemetry_now();
+    // Captured here, before settlement's own (possibly slow, up to its 3s
+    // timeout) write: `upstream.attempt` ends at the terminal upstream
+    // outcome, never inflated by settlement's own duration (#98 PR 2 review
+    // item 1). `settlement` is recorded separately below with its own real
+    // start/end from `begin_phase_group`/`end_phase_group`.
+    let attempt_end = telemetry::now_unix_nanos();
+    let group = begin_phase_group(telemetry);
+    let buffer = group.as_ref().map(|(b, _, _)| b.clone());
+    let result = guard.finish(outcome, error, buffer).await;
+    end_phase_group(
+        telemetry,
+        group,
+        telemetry::SpanName::Settlement,
+        attempt_number,
+    );
+    if let Some(start) = attempt_wall_start
+        && let Some(span) = attempt_span(
+            telemetry,
+            start,
+            attempt_end,
+            attempt_number,
+            provider,
+            streamed,
+            attempt_id,
+            telemetry_outcome,
+            error,
+            usage,
+            &timings,
+        )
+    {
+        telemetry.record(span);
+    }
+    result
+}
+
 struct ExecutionGuard {
     repository: Arc<dyn InferenceRepository>,
     id: Uuid,
@@ -436,6 +988,12 @@ struct ExecutionGuard {
     finished: bool,
     health_observation: bool,
     _permit: SharedPermit,
+    /// The request's correlation id (#98), for the reconciliation log lines
+    /// below only: `Some` only once a shared-workspace admission has
+    /// already committed for this request, `None` for a personal workspace
+    /// (never logged) or while telemetry is disabled. Never affects
+    /// accounting; `x-request-id` is unchanged.
+    log_trace_id: Option<String>,
 }
 fn millis(d: Duration) -> u64 {
     d.as_millis().min(u64::MAX as u128) as u64
@@ -448,6 +1006,7 @@ impl ExecutionGuard {
         deployment_id: Uuid,
         started: Instant,
         permit: SharedPermit,
+        log_trace_id: Option<String>,
     ) -> Self {
         Self {
             repository,
@@ -460,6 +1019,7 @@ impl ExecutionGuard {
             finished: false,
             health_observation: true,
             _permit: permit,
+            log_trace_id,
         }
     }
     /// Streams: the first delta carrying text or a tool call sets time to first token.
@@ -493,14 +1053,20 @@ impl ExecutionGuard {
         &mut self,
         outcome: Outcome,
         error: Option<InferenceError>,
+        phases: Option<Arc<Mutex<telemetry::PhaseBuffer>>>,
     ) -> Result<(), InferenceError> {
         // Mark attempted finalization first: failed writes remain 'started' for reconciliation.
         self.finished = true;
-        let result = timeout(
-            Duration::from_secs(3),
-            self.repository
-                .finish_attempt(&self.record(outcome, error), &self.telemetry_now()),
-        )
+        let record = self.record(outcome, error);
+        let attempt_telemetry = self.telemetry_now();
+        let repository = self.repository.clone();
+        let result = timeout(Duration::from_secs(3), async move {
+            let settle = repository.finish_attempt(&record, &attempt_telemetry);
+            match phases {
+                Some(buffer) => telemetry::with_phases(buffer, settle).await,
+                None => settle.await,
+            }
+        })
         .await
         .map_err(|_| {
             // A write that fails fast counts itself as held inside
@@ -510,7 +1076,7 @@ impl ExecutionGuard {
         })
         .and_then(|result| result);
         if result.is_err() {
-            tracing::error!(execution_id = %self.id, "inference finalization failed; reconciliation required");
+            tracing::error!(execution_id = %self.id, trace_id = self.log_trace_id.as_deref(), "inference finalization failed; reconciliation required");
         }
         // Health is advisory; a failed health write never discards a durably accounted response.
         if self.health_observation
@@ -524,7 +1090,7 @@ impl ExecutionGuard {
                 Ok(Ok(()))
             )
         {
-            tracing::warn!(execution_id=%self.id,"routing health update failed");
+            tracing::warn!(execution_id=%self.id, trace_id = self.log_trace_id.as_deref(), "routing health update failed");
         }
         result
     }
@@ -537,6 +1103,7 @@ impl Drop for ExecutionGuard {
         let repository = self.repository.clone();
         let record = self.record(Outcome::Cancelled, None);
         let telemetry = self.telemetry_now();
+        let log_trace_id = self.log_trace_id.clone();
         // Network work is dropped synchronously. Only best-effort accounting is detached.
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
@@ -545,7 +1112,7 @@ impl Drop for ExecutionGuard {
                     crate::metrics::METRICS.observe_settlement(crate::metrics::Settlement::Held);
                 }
                 if !matches!(finished, Ok(Ok(()))) {
-                    tracing::error!(execution_id = %record.id, "cancelled inference finalization failed; reconciliation required");
+                    tracing::error!(execution_id = %record.id, trace_id = log_trace_id.as_deref(), "cancelled inference finalization failed; reconciliation required");
                 }
             });
         }
@@ -556,5 +1123,7 @@ impl Drop for ExecutionGuard {
 mod admission_validation_tests;
 #[cfg(all(test, feature = "integration-tests"))]
 mod steering_tests;
+#[cfg(test)]
+mod telemetry_tests;
 #[cfg(test)]
 mod tests;

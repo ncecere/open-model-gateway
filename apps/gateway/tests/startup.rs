@@ -305,3 +305,45 @@ fn healthcheck_exit_status_follows_readiness() {
         assert_eq!(output.status.code(), Some(1), "{args:?}");
     }
 }
+
+/// #98 PR 3 acceptance: a refused trace-collector destination fails the
+/// real binary's startup (`serve`, before any database connection is even
+/// attempted - `Config::from_env` validates `GATEWAY_TRACES_*` ahead of
+/// `connect()`) without ever echoing the destination, matching every other
+/// reserved/secret refusal this file already proves. The unit-level
+/// equivalent (`telemetry::tests::configuration_refuses_invalid_values_without_echoing_them`)
+/// proves `TraceConfig::from_lookup` alone; this proves the same refusal
+/// survives the real `main()` startup path end to end.
+#[test]
+fn a_refused_trace_collector_destination_fails_real_startup_without_echoing_it() {
+    let f = Fixture::new();
+    let database = "postgres://gateway:never-dialed-marker@127.0.0.1:1/gateway";
+    for (case, url) in [
+        // Private destination, production mode, no GATEWAY_EGRESS_PRIVATE_ALLOW.
+        ("private", "https://10.1.1.1/v1/traces"),
+        // Cloud metadata: refused in every mode, even with private allowed.
+        ("metadata", "https://169.254.169.254/v1/traces"),
+    ] {
+        let mut env = vec![("DATABASE_URL", database), ("GATEWAY_TRACES_OTLP_URL", url)];
+        if case == "metadata" {
+            env.push(("GATEWAY_EGRESS_PRIVATE_ALLOW", "0.0.0.0/0"));
+        }
+        let output = f.run(&["serve"], env);
+        assert_eq!(output.status.code(), Some(1), "{case}");
+        assert!(output.stdout.is_empty(), "{case}");
+        let stderr = text(&output.stderr);
+        assert!(
+            stderr.contains("GATEWAY_TRACES") || stderr.contains("trace"),
+            "{case}: {stderr}"
+        );
+        assert!(
+            !stderr.contains(url),
+            "{case}: must never echo the refused URL: {stderr}"
+        );
+        assert!(
+            !stderr.contains("could not connect"),
+            "{case}: the database must never be dialed before trace config is validated: {stderr}"
+        );
+        assert!(!stderr.contains("never-dialed-marker"), "{case}");
+    }
+}

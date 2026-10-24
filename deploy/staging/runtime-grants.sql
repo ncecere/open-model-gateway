@@ -134,7 +134,25 @@ GRANT UPDATE(name,enabled,budget_layers,thresholds,spike_factor_percent,min_spen
  spend_period,spend_amount_microusd,ceiling_requests_per_second,ceiling_lock_wait_ms)
  ON public.alert_rules TO gateway_runtime;
 GRANT UPDATE(resolved_at,resolution) ON public.alert_events TO gateway_runtime;
-GRANT UPDATE(status,recipients,sent,failed,error,completed_at) ON public.alert_deliveries TO gateway_runtime;
+GRANT UPDATE(status,recipients,sent,failed,error,completed_at,initialized,attempt_count,retrying,next_attempt_at,waiting,exhausted) ON public.alert_deliveries TO gateway_runtime;
+-- Key-expiry reminders (0049/#100): reviewed, no new grant needed. The table-
+-- level SELECT/INSERT above already covers the new api_key_id/key_expires_at/
+-- threshold_days columns (table-level grants apply to every column, present
+-- and future); resolving a reminder (silently or not) only ever needs
+-- resolved_at/resolution, already granted above. No UPDATE is granted on
+-- api_key_id/key_expires_at/threshold_days: that attribution is immutable
+-- (also enforced by a trigger; see 0049 and verify-privileges.sql).
+-- 0050 recipient outbox (#46): immutable identity/eligibility link, default-only
+-- initial state. Used by both rule-based alerts and key-expiry reminders.
+-- Eligibility captures users.id with its normalized address in one SELECT;
+-- INSERT uses that captured identity, never a later email lookup. Existing
+-- users/role/membership SELECT grants cover this snapshot and live rechecks.
+-- Scrape-time delivery counts also read completed_at (existing SELECT above)
+-- so 24h cleanup failures retain a full terminal observation window.
+GRANT SELECT ON public.alert_recipient_outbox TO gateway_runtime;
+GRANT INSERT(delivery_id,fingerprint,internal_user_id) ON public.alert_recipient_outbox TO gateway_runtime;
+GRANT UPDATE(state,attempt_count,next_attempt_at,lease_owner,lease_token,lease_expires_at,error)
+ ON public.alert_recipient_outbox TO gateway_runtime;
 -- SCIM (0014). Directory attributes are upserted per user and cleared at cleanup;
 -- the user link is never re-keyed or removed. Groups and memberships are directory
 -- state (DELETE allowed); group-derived grants keep their own revocation history.
@@ -339,6 +357,37 @@ GRANT UPDATE(next_seq,last_heartbeat_at) ON public.audit_export_state TO gateway
 -- path reads them. Never deleted (a trigger refuses it for every role).
 GRANT SELECT,INSERT ON public.legal_holds TO gateway_runtime;
 GRANT UPDATE(released_at,released_by_user_id) ON public.legal_holds TO gateway_runtime;
+-- Admin API tokens (0051/#37 PR1: storage and lifecycle only). Identity,
+-- digest, scopes, expiry and the allowlist are immutable (a trigger refuses
+-- every role); only revocation (final, like every other revocation) and
+-- successful-use tracking are runtime-writable. No DELETE/TRUNCATE. The
+-- owner-invalidation triggers on platform_role_grants/users run as the
+-- invoking runtime role, which already holds the grants below.
+--
+-- INSERT is granted only on the columns a creation actually supplies
+-- (adversarial re-review of #37 PR1, issue 1): created_at, revoked_at,
+-- last_used_at and last_used_address are deliberately absent, so the
+-- runtime role cannot even attempt to supply a forged creation instant
+-- (or a pre-revoked/pre-used row) on a whole-row INSERT -- it gets a
+-- column-level permission-denied error before the row ever reaches
+-- migration 0051's own creation guard, which forces created_at itself
+-- regardless, as a second, independent backstop.
+GRANT SELECT,INSERT(id,owner_user_id,name,secret_hash,scopes,ip_allowlist,expires_at) ON public.admin_api_tokens TO gateway_runtime;
+GRANT UPDATE(revoked_at,last_used_at,last_used_address) ON public.admin_api_tokens TO gateway_runtime;
+-- The owner-invalidation trigger functions on platform_role_grants/users call
+-- this helper directly (not only through the trigger mechanism, which needs
+-- no grant of its own); it needs EXECUTE like the other PL/pgSQL helpers above.
+GRANT EXECUTE ON FUNCTION public.omg_admin_tokens_revoke_owner(uuid) TO gateway_runtime;
+-- Both authority guards (role-loss and creation) call this isolation check
+-- directly for the same reason.
+GRANT EXECUTE ON FUNCTION public.omg_admin_tokens_require_read_committed() TO gateway_runtime;
+-- The creation guard calls this lock-holding check directly for the same
+-- reason (adversarial re-review of #37 PR1, issue 6).
+GRANT EXECUTE ON FUNCTION public.omg_admin_tokens_require_owner_lock(uuid) TO gateway_runtime;
+-- The scopes/allowlist CHECK constraints call these at every INSERT/UPDATE,
+-- like valid_model_protocols and friends above.
+GRANT EXECUTE ON FUNCTION public.valid_admin_token_scopes(text[]),
+ public.valid_admin_token_allowlist(cidr[]) TO gateway_runtime;
 -- No UPDATE/DELETE/TRUNCATE of immutable prices, ledger or audit; no removal of
 -- users/workspaces/keys/history and no rewrite of immutable admission snapshots.
 COMMIT;

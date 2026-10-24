@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex};
 
 use aes_gcm::{
     Aes256Gcm, KeyInit, Nonce,
-    aead::{Aead, AeadInPlace, Payload},
+    aead::{Aead, AeadInOut, Payload},
 };
 use base64::Engine as _;
 use bytes::{Bytes, BytesMut};
@@ -249,7 +249,7 @@ impl Sealer {
         let mut out = Vec::with_capacity(plain.len() + TAG);
         out.extend_from_slice(plain);
         self.cipher
-            .encrypt_in_place(Nonce::from_slice(&n), &self.aad, &mut out)
+            .encrypt_in_place(&Nonce::from(n), &self.aad, &mut out)
             .map_err(|_| FileStoreError::Integrity)?;
         if !last {
             self.counter = self
@@ -279,7 +279,7 @@ fn begin(keys: &KeyRing, key: &ObjectKey) -> Result<(Bytes, Sealer), FileStoreEr
     let wrapped = master
         .cipher
         .encrypt(
-            Nonce::from_slice(&wrap_nonce),
+            &Nonce::from(wrap_nonce),
             Payload {
                 msg: dek.as_ref(),
                 aad: &wrap_aad(&kid, kid_len, &prefix, key),
@@ -339,13 +339,17 @@ fn unwrap_header(
     let mut prefix = [0u8; PREFIX];
     prefix.copy_from_slice(&header[at..at + PREFIX]);
     at += PREFIX;
-    let wrap_nonce = &header[at..at + 12];
+    // A checked, panic-free conversion: a slice of any other length is an
+    // integrity failure, never a `cipher::array` panic.
+    let wrap_nonce: [u8; 12] = header[at..at + 12]
+        .try_into()
+        .map_err(|_| FileStoreError::Integrity)?;
     at += 12;
     let dek = Zeroizing::new(
         master
             .cipher
             .decrypt(
-                Nonce::from_slice(wrap_nonce),
+                &Nonce::from(wrap_nonce),
                 Payload {
                     msg: &header[at..],
                     aad: &wrap_aad(&kid, kid_len, &prefix, key),
@@ -390,7 +394,7 @@ pub(crate) fn rewrap(
     let wrapped = master
         .cipher
         .encrypt(
-            Nonce::from_slice(&wrap_nonce),
+            &Nonce::from(wrap_nonce),
             Payload {
                 msg: dek.as_ref(),
                 aad: &wrap_aad(&kid, kid_len, &prefix, key),
@@ -413,7 +417,7 @@ impl Sealer {
         let n = nonce(&self.prefix, self.counter, last);
         let mut buf = chunk.to_vec();
         self.cipher
-            .decrypt_in_place(Nonce::from_slice(&n), &self.aad, &mut buf)
+            .decrypt_in_place(&Nonce::from(n), &self.aad, &mut buf)
             .map_err(|_| FileStoreError::Integrity)?;
         if !last {
             self.counter = self

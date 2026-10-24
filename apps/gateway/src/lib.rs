@@ -1,6 +1,7 @@
 #![deny(unsafe_code)]
 // Test code may begin transactions directly; production code uses `db::begin`.
 #![cfg_attr(test, allow(clippy::disallowed_methods))]
+pub mod admin_tokens;
 pub mod alerts;
 pub mod archive;
 pub mod audit_export;
@@ -49,5 +50,6 @@ pub mod scim;
 pub(crate) mod special_use;
 pub mod startup;
 pub mod store;
+pub mod telemetry;
 pub mod visibility;
 pub mod web;

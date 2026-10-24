@@ -9,7 +9,7 @@ import { useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { BellRing, CheckCheck, History, Plus } from "lucide-react";
 import { api, platformPath, type Provider, type Session, type Workspace } from "../lib/api";
-import { conditionText, draftOf, emailLabels, eventsPath, kindHints, kindLabels, kindsFor, layerLabels, layersFor, lockWaitChoices, newDraft, notificationsPath, recipientsText, resolutionLabels, ruleBody, sourceText, ruleErrors, rulePath, rulesPath, spendPeriodLabels, unknownCostNote, whereText, type AlertEvent, type AlertKind, type AlertRule, type AlertScope, type BudgetLayer, type Notification, type RuleDraft, type RuleList, type SpendPeriod } from "../lib/alerts";
+import { conditionText, draftOf, emailStatusText, eventsPath, kindHints, kindLabels, kindsFor, layerLabels, layersFor, lockWaitChoices, newDraft, notificationsPath, recipientsText, resolutionLabels, ruleBody, sourceText, ruleErrors, rulePath, rulesPath, spendPeriodLabels, unknownCostNote, whereText, type AlertEvent, type AlertKind, type AlertRule, type AlertScope, type BudgetLayer, type Notification, type RuleDraft, type RuleList, type SpendPeriod } from "../lib/alerts";
 import { permissions, type DashboardSearch } from "../lib/permissions";
 import { Button, ErrorNotice, FormField, Heading, Input, NativeSelect, Stack, Textarea, useAction, useApi, useChoices } from "../components/ui";
 import { ResourcePage } from "../components/resource-page";
@@ -38,7 +38,9 @@ function EventState({ event }: { event: AlertEvent }) {
   if (event.state === "firing") return <StatusBadge tone={event.severity === "critical" ? "danger" : "warning"}>Firing</StatusBadge>;
   return <StatusBadge tone="neutral" title={event.resolution ? resolutionLabels[event.resolution] : undefined}>Resolved</StatusBadge>;
 }
-const eventSecondary = (e: AlertEvent) => [sourceText(e), unknownCostNote(e) ? "Some cost unknown" : ""].filter(Boolean).join(" · ");
+const eventSecondary = (e: AlertEvent) => e.kind === "key_expiring"
+  ? <>{sourceText(e)} · Expires <TableTime value={typeof e.details.expires_at === "string" ? e.details.expires_at : null} />{e.email && <> · Email: {emailStatusText(e.email)}</>}</>
+  : [sourceText(e), unknownCostNote(e) ? "Some cost unknown" : ""].filter(Boolean).join(" · ");
 
 export function NewRuleButton({ scope }: { scope: AlertScope }) {
   return <Button render={<ResourceLink search={recordSearch(scope, "new")} />}><Plus aria-hidden /> New rule</Button>;
@@ -71,7 +73,7 @@ export function AlertHistory({ scope }: { scope: AlertScope }) {
     { id: "state", header: "State", accessor: e => e.state, cell: e => <EventState event={e} /> },
     { id: "fired", header: "Fired", accessor: e => e.fired_at, cell: e => <TableTime value={e.fired_at} /> },
     { id: "resolved", header: "Resolved", accessor: e => e.resolved_at ?? "", cell: e => <TableTime value={e.resolved_at} /> },
-    { id: "email", header: "Email", accessor: e => e.email?.status ?? "", cell: e => e.email ? <span title={e.email.error ?? undefined}>{emailLabels[e.email.status]}</span> : "—" },
+    { id: "email", header: "Email", accessor: e => e.email?.status ?? "", cell: e => e.email ? <span title={e.email.error ?? undefined}>{emailStatusText(e.email)}{e.email.next_attempt_at && <span className="text-muted-foreground"> · next <TableTime value={e.email.next_attempt_at} /></span>}</span> : "—" },
   ];
   return <DirectoryTable<AlertEvent> path={eventsPath(scope)} label="Alert history" storageKey={`alert-history-${scope.kind}`} columns={columns} rowKey={e => e.id} rowLabel={e => e.summary}
     facets={[{ id: "status", label: "State", options: [{ value: "firing", label: "Firing" }, { value: "resolved", label: "Resolved" }] }]}
@@ -218,6 +220,9 @@ export function NotificationsPage({ session }: { session: Session }) {
     const ws = n.workspace && session.workspaces.find(w => w.id === n.workspace!.id);
     return n.rule && ws && permissions(session, ws).managePolicy ? { page: "workspace-alert-detail", ws: ws.id, record: n.rule.id } : undefined;
   };
+  // Key-expiry reminders (#100) have no rule: the action opens the workspace's
+  // keys list, never a key identifier.
+  const keysLink = (n: Notification): DashboardSearch | undefined => n.kind === "key_expiring" && n.workspace ? { page: "keys", ws: n.workspace.id } : undefined;
   const columns: DataTableColumn<Notification>[] = [
     { id: "alert", header: "Alert", accessor: n => n.summary, rowHeader: true, hideable: false, cell: n => <CellText primary={n.read ? n.summary : <strong>{n.summary}</strong>} secondary={eventSecondary(n)} title={unknownCostNote(n)} /> },
     { id: "where", header: "Where", accessor: n => whereText(n), cell: n => whereText(n) },
@@ -228,9 +233,10 @@ export function NotificationsPage({ session }: { session: Session }) {
     <Heading title="Notifications" description="Alerts for what you look after." actions={<Button variant="secondary" loading={busy} onClick={() => void markRead({ all: true })}><CheckCheck aria-hidden /> Mark all read</Button>} />
     <DirectoryTable<Notification> path={notificationsPath} label="Notifications" storageKey="notifications" columns={columns} rowKey={n => n.id} rowLabel={n => n.summary}
       facets={[{ id: "status", label: "Show", allLabel: "All", options: [{ value: "unread", label: "Unread" }] }]}
-      rowActions={n => { const link = ruleLink(n); return [
+      rowActions={n => { const link = ruleLink(n), keys = keysLink(n); return [
         { label: "Mark as read", hidden: n.read, onSelect: () => void markRead({ ids: [n.id] }) },
         { label: "Open rule", hidden: !link, render: link ? <ResourceLink search={link} /> : undefined },
+        { label: "Open keys", hidden: !keys, render: keys ? <ResourceLink search={keys} /> : undefined },
       ]; }}
       empty={{ icon: <BellRing />, title: "No notifications.", description: "Alerts for your budgets and workspaces show up here." }} />
   </Stack>;

@@ -39,7 +39,41 @@ gateway:
   extraEnv: []
   # Secret env vars sourced via envFrom/secretKeyRef from existing Secrets,
   # for provider keys not covered by the four `_FILE` names below
-  # (GATEWAY_SECRET_ENV_ALLOWLIST must list every name used this way).
+  # (GATEWAY_SECRET_ENV_ALLOWLIST must list every name used this way), and
+  # for the trace exporter's header secret below.
+  #
+  # OpenTelemetry trace export (#98; see docs/operations.md#traces) is off
+  # unless GATEWAY_TRACES_OTLP_URL is set. All three settings are plain,
+  # non-secret values and go in `env` above like any other setting, for
+  # example:
+  #   env:
+  #     GATEWAY_TRACES_OTLP_URL: "https://otel-collector.observability.svc.cluster.local:4318/v1/traces"
+  #     GATEWAY_TRACES_SAMPLE_RATIO: "0.01"
+  #     GATEWAY_TRACES_OTLP_HEADERS_ENV: "GATEWAY_TRACES_HEADERS"
+  # GATEWAY_TRACES_OTLP_HEADERS_ENV only *names* the variable holding the
+  # collector's auth header(s) (e.g. "Authorization=Bearer ..."); that named
+  # variable is itself secret-bearing and must never go in `env` above.
+  # Source it from a Secret through extraEnvFrom instead, for example:
+  #   extraEnvFrom:
+  #     - secretRef:
+  #         name: omg-trace-headers
+  # with the Secret's own key named GATEWAY_TRACES_HEADERS (matching the
+  # name given to GATEWAY_TRACES_OTLP_HEADERS_ENV above). The chart's
+  # NetworkPolicy opens only 443 egress by default: add a
+  # `networkPolicy.egress.extraEgress` rule for the collector's port
+  # (typically TCP 4318) to the destination you set in
+  # GATEWAY_TRACES_OTLP_URL, for example:
+  #   networkPolicy:
+  #     egress:
+  #       extraEgress:
+  #         - to:
+  #             - namespaceSelector:
+  #                 matchLabels:
+  #                   kubernetes.io/metadata.name: observability
+  #               podSelector:
+  #                 matchLabels:
+  #                   app: otel-collector
+  #           ports: [{ protocol: TCP, port: 4318 }]
   extraEnvFrom: []
   secretEnvAllowlist: []
   # Names the SMTP password reference may read (GATEWAY_SMTP_SECRET_ENV_ALLOWLIST).
@@ -342,12 +376,47 @@ cnpg:
         deadlock_timeout: 1s
     backup:
       enabled: false
+      # "barmanObjectStore" (default, CNPG's in-tree backup, unchanged from
+      # earlier releases) or "plugin" (the Barman Cloud plugin, CNPG's
+      # current recommendation; see docs/kubernetes.md#backups).
+      method: barmanObjectStore
       scheduledBackup:
         schedule: "0 0 3 * * *"
       # CloudNativePG's in-tree `barmanObjectStore` spec, rendered as-is
-      # (including its destinationPath). Upstream CNPG now prefers the Barman
-      # Cloud plugin; check your CNPG version's documentation.
+      # (including its destinationPath). Used only when method is
+      # "barmanObjectStore". Upstream CNPG now prefers the Barman Cloud
+      # plugin below; check your CNPG version's documentation.
       barmanObjectStore: {}
+      # Used only when method is "plugin". Renders a barmancloud.cnpg.io/v1
+      # ObjectStore plus the Cluster's plugins[] entry and the
+      # ScheduledBackup's method/pluginConfiguration (docs/kubernetes.md#backups).
+      plugin:
+        # The installed Barman Cloud plugin's name (CNPG 1.26+ convention).
+        name: barman-cloud.cloudnative-pg.io
+        # ObjectStore metadata.name; empty uses "<cluster>-backup".
+        objectStoreName: ""
+        objectStore:
+          # s3://bucket[/path]; required when method is "plugin".
+          destinationPath: ""
+          # S3-compatible endpoint, e.g. an in-cluster object store. Empty
+          # uses the plugin's default (AWS S3).
+          endpointURL: ""
+          # Barman's retention expression, e.g. "14d".
+          retentionPolicy: ""
+          # Secret references only (never literal keys): each is
+          # {name: <Secret>, key: <data key>}, read by the plugin sidecar at
+          # runtime. The chart never generates or stores these Secrets.
+          # Example: {name: omg-backup-s3, key: ACCESS_KEY_ID}.
+          s3Credentials: {}
+          # WAL archiving tuning, rendered as given (e.g. compression: gzip,
+          # maxParallel: 2). See the Barman Cloud plugin's ObjectStore CRD.
+          wal: {}
+          # Base backup tuning, rendered as given (e.g. compression: gzip,
+          # jobs: 2).
+          data: {}
+          # Resources for the plugin's sidecar container injected into each
+          # instance pod, rendered as given (e.g. requests/limits).
+          instanceSidecarConfiguration: {}
   pooler:
     enabled: true
     type: rw
