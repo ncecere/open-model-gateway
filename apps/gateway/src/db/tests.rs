@@ -107,6 +107,37 @@ async fn timeout_setup_pins_read_committed_under_role_login_defaults(pool: PgPoo
 }
 
 #[sqlx::test(migrations = false)]
+async fn begin_preserves_session_read_only_policy(pool: PgPool) {
+    let database: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    sqlx::query(&format!(
+        "ALTER DATABASE \"{}\" SET default_transaction_read_only=on",
+        database.replace('"', "\"\"")
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let fresh = elevated_pool(&pool, "serializable", false).await;
+    for timeout_setup in [false, true] {
+        let mut tx = start(&fresh, timeout_setup).await;
+        let settings: (String, String, String) = sqlx::query_as(
+            "SELECT current_setting('default_transaction_read_only'),current_setting('transaction_read_only'),current_setting('transaction_isolation')",
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        assert_eq!(
+            settings,
+            ("on".into(), "on".into(), "read committed".into())
+        );
+        tx.commit().await.unwrap();
+    }
+    fresh.close().await;
+}
+
+#[sqlx::test(migrations = false)]
 async fn explicit_reporting_snapshot_keeps_its_isolation_and_old_rows(pool: PgPool) {
     sqlx::raw_sql(
         "CREATE TABLE snapshot_probe(value integer NOT NULL); INSERT INTO snapshot_probe VALUES(0)",
