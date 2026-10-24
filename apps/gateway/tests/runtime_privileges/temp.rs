@@ -1,38 +1,19 @@
-#![cfg(feature = "integration-tests")]
-// Test probes may begin transactions directly (see `src/db.rs`).
-#![allow(clippy::disallowed_methods)]
-//! Opt in only on a dedicated disposable PostgreSQL cluster. SQLx creates fresh
-//! migrated databases; these probes never reset or migrate an existing installation.
+//! Called by the existing runtime ACL test on its fresh migrated database,
+//! under its role-setup lock. Never reset or migrate an existing installation.
 //! The gateway database must be dedicated: revoking PUBLIC TEMP affects every
 //! role relying on that grant in this database, not just gateway_runtime.
 //! Owner/migrator privileges and all unrelated databases must be preserved.
 use open_model_gateway::store::Store;
 use sqlx::PgPool;
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
-#[ignore = "runtime TEMP ACL probe: run only on a disposable test PostgreSQL cluster"]
-async fn runtime_temp_is_revoked_from_public_default(pool: PgPool) {
-    check_runtime_temp_grants(pool, false).await;
+pub(super) async fn check_runtime_temp_grants(pool: &PgPool) {
+    // PUBLIC-only default and upgrade from explicit runtime + PUBLIC TEMP.
+    for explicit_runtime_grant in [false, true] {
+        check_runtime_temp_grants_case(pool.clone(), explicit_runtime_grant).await;
+    }
 }
 
-#[sqlx::test(migrations = "./enterprise_migrations")]
-#[ignore = "runtime TEMP ACL probe: run only on a disposable test PostgreSQL cluster"]
-async fn runtime_temp_upgrade_revokes_explicit_and_public_grants(pool: PgPool) {
-    check_runtime_temp_grants(pool, true).await;
-}
-
-async fn check_runtime_temp_grants(pool: PgPool, explicit_runtime_grant: bool) {
-    // Share the role-setup lock used by runtime_privileges.rs. Detaching ensures
-    // a panic closes the session instead of returning a locked session to the pool.
-    let mut lock = pool.acquire().await.unwrap().detach();
-    sqlx::query("SELECT pg_advisory_lock(72419505)")
-        .execute(&mut lock)
-        .await
-        .unwrap();
-    sqlx::raw_sql("DO $$ BEGIN IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='gateway_runtime') THEN CREATE ROLE gateway_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS; END IF; END $$;")
-        .execute(&mut lock)
-        .await
-        .unwrap();
+async fn check_runtime_temp_grants_case(pool: PgPool, explicit_runtime_grant: bool) {
     // Target only the database SQLx created for this test. PUBLIC TEMP models a
     // normal PostgreSQL database, unlike staging's already-hardened initializer.
     sqlx::raw_sql("DO $$ BEGIN EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM gateway_runtime', current_database()); EXECUTE format('GRANT TEMPORARY ON DATABASE %I TO PUBLIC', current_database()); END $$;")
@@ -111,10 +92,6 @@ async fn check_runtime_temp_grants(pool: PgPool, explicit_runtime_grant: bool) {
             assert_eq!(Some(acl), first_acl, "grants apply must be idempotent");
         }
     }
-    sqlx::query("SELECT pg_advisory_unlock(72419505)")
-        .execute(&mut lock)
-        .await
-        .unwrap();
 }
 
 async fn unrelated_database_acls(pool: &PgPool) -> Vec<(String, Option<String>)> {
