@@ -377,6 +377,23 @@ describe("CreateAdminTokenDialog submit lifetime", () => {
     });
   }
 
+  it("allows a retired owner to close after its aborted request settles without disclosing", async () => {
+    const view = await setup(), pending = deferPost(view);
+    await view.validDraft();
+    await view.user.click(screen.getByRole("button", { name: "Create token" }));
+    const signal = view.writes()[0]![1]?.signal;
+    expect(signal?.aborted).toBe(false);
+    await act(async () => { window.dispatchEvent(new Event("omg:access-refresh")); });
+    expect(signal?.aborted).toBe(true);
+    await act(async () => { pending.resolve(Response.json({ id: "retired", token: secret, scopes: ["platform:read"] })); });
+    expect(screen.queryByRole("textbox", { name: "Admin API token" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Cancel" }).hasAttribute("disabled")).toBe(false);
+    await view.user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(view.writes()).toHaveLength(1);
+    expectNoSecretPersistence(view);
+  });
+
   for (const event of ["omg:unauthorized", "omg:access-refresh"] as const) {
     it(`retires the lifetime on a live ${event} event: a retained submit after it never posts`, async () => {
       const view = await setup();
