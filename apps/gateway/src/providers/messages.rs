@@ -9,22 +9,39 @@ pub(crate) enum ProviderClass {
     Local,
 }
 
-/// Reviewed client-side tool/thinking/context features only. Adding a beta
-/// requires a capability, price/bound and wire-contract review; no wildcards.
-pub(crate) const ALLOWED_BETAS: &[&str] = &[
-    "interleaved-thinking-2025-05-14",
-    "fine-grained-tool-streaming-2025-05-14",
-    "context-management-2025-06-27",
-    "token-efficient-tools-2025-02-19",
+/// Open beta list, except unpriced long-context premiums and unsupported
+/// hosted/file capabilities. Body capabilities and cache TTL prices are gated
+/// independently; never reject extended-cache-ttl merely for being a beta.
+pub(crate) const DENIED_BETA_PREFIXES: &[&str] = &[
+    "context-1m-",
+    "code-execution-",
+    "web-search-",
+    "web-fetch-",
+    "files-api-",
+    "mcp-client-",
+    "computer-use-",
 ];
+
+/// Denied names are reflected only by the Messages HTTP codec to support
+/// Claude Code's capability recovery. Never put them in inference telemetry.
+pub(crate) enum BetaHeaderError {
+    Invalid,
+    Denied(Vec<String>),
+}
+impl std::fmt::Debug for BetaHeaderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Invalid or denied anthropic-beta header")
+    }
+}
 
 /// Validate every comma-separated token while retaining original header bytes.
 /// Shared by the HTTP frontend and the pre-admission/dispatch adapter policy.
 pub(crate) fn validate_beta_headers<'a>(
     values: impl IntoIterator<Item = &'a str>,
-) -> Result<(), InferenceError> {
-    let invalid = || InferenceError::InvalidField("anthropic-beta");
+) -> Result<(), BetaHeaderError> {
+    let invalid = || BetaHeaderError::Invalid;
     let mut tokens = 0_usize;
+    let mut denied = Vec::new();
     for (index, value) in values.into_iter().enumerate() {
         if index >= 16
             || value.is_empty()
@@ -36,14 +53,24 @@ pub(crate) fn validate_beta_headers<'a>(
             return Err(invalid());
         }
         tokens = value.split(',').try_fold(tokens, |count, token| {
-            if count >= 32 || !ALLOWED_BETAS.contains(&token.trim_matches([' ', '\t'])) {
-                Err(invalid())
-            } else {
-                Ok(count + 1)
+            let token = token.trim_matches([' ', '\t']);
+            if count >= 32 || token.is_empty() {
+                return Err(invalid());
             }
+            if DENIED_BETA_PREFIXES
+                .iter()
+                .any(|prefix| token.starts_with(*prefix))
+            {
+                denied.push(token.to_owned());
+            }
+            Ok(count + 1)
         })?;
     }
-    Ok(())
+    if denied.is_empty() {
+        Ok(())
+    } else {
+        Err(BetaHeaderError::Denied(denied))
+    }
 }
 
 pub(crate) fn validate(request: &ChatRequest, class: ProviderClass) -> Result<(), InferenceError> {
@@ -87,4 +114,5 @@ pub(crate) fn validate(request: &ChatRequest, class: ProviderClass) -> Result<()
         }
     }
     validate_beta_headers(options.beta_headers.iter().map(String::as_str))
+        .map_err(|_| InferenceError::InvalidField("anthropic-beta"))
 }

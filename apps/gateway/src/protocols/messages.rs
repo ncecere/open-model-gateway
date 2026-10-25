@@ -4,6 +4,7 @@ use crate::{
     auth::Principal,
     http::RequestId,
     inference::{Engine, error::InferenceError, types::*},
+    providers::messages::BetaHeaderError,
 };
 use axum::{
     Extension, Json,
@@ -27,17 +28,27 @@ fn valid_version(headers: &HeaderMap) -> bool {
             == Some("2023-06-01")
         && beta_headers(headers).is_ok()
 }
-fn beta_headers(headers: &HeaderMap) -> Result<Vec<String>> {
+fn beta_headers(headers: &HeaderMap) -> std::result::Result<Vec<String>, BetaHeaderError> {
     let values = headers
         .get_all("anthropic-beta")
         .iter()
-        .map(|v| {
-            v.to_str()
-                .map_err(|_| InferenceError::InvalidField("anthropic-beta"))
-        })
-        .collect::<Result<Vec<_>>>()?;
+        .map(|v| v.to_str().map_err(|_| BetaHeaderError::Invalid))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     crate::providers::messages::validate_beta_headers(values.iter().copied())?;
     Ok(values.into_iter().map(str::to_owned).collect())
+}
+fn beta_error_response(tokens: &[String]) -> Response {
+    // Exact Anthropic wording triggers Claude Code's retry without rejected
+    // betas. Only bounded client token names are reflected; never upstream
+    // bodies or diagnostic text, and never dynamic inference/log error values.
+    let message = format!(
+        "Unexpected value(s) `{}` for the `anthropic-beta` header. Please consult our documentation at docs.anthropic.com or try again without the header.",
+        tokens.join(", ")
+    );
+    super::error_with_body(
+        InferenceError::InvalidField("anthropic-beta"),
+        json!({"type":"error","error":{"type":"invalid_request_error","message":message}}),
+    )
 }
 pub async fn handle(
     Extension(engine): Extension<Engine>,
@@ -48,7 +59,10 @@ pub async fn handle(
 ) -> Response {
     let betas = match beta_headers(&headers) {
         Ok(v) => v,
-        Err(e) => return error_response(e),
+        Err(BetaHeaderError::Denied(tokens)) => return beta_error_response(&tokens),
+        Err(BetaHeaderError::Invalid) => {
+            return error_response(InferenceError::InvalidField("anthropic-beta"));
+        }
     };
     if !valid_version(&headers) {
         return error_response(InferenceError::InvalidRequest);
