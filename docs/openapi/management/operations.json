@@ -336,6 +336,18 @@
       "scope": "platform:read",
       "token_policy": "Scope"
     },
+    "GET /api/v1/platform/deployments/{id}/configuration/history": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/platform/deployments/{id}/configuration/history/{change}": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
     "GET /api/v1/platform/holds": {
       "access": "PlatformRead",
       "operation": {},

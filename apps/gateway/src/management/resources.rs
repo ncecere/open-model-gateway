@@ -258,6 +258,18 @@ pub(crate) async fn catalog_tx<'a>(
     }
     Ok(tx)
 }
+/// Transaction-local attribution for database-enforced deployment history.
+/// Only called after live authorization; empty token explicitly clears context.
+async fn configuration_actor(
+    tx: &mut Transaction<'_, Postgres>,
+    u: &impl Actor,
+) -> Result<(), ApiError> {
+    sqlx::query("SELECT set_config('omg.configuration_actor',$1,true),set_config('omg.configuration_token',$2,true)")
+        .bind(u.user_id().to_string())
+        .bind(u.token_id().map(|id| id.to_string()).unwrap_or_default())
+        .execute(&mut **tx).await?;
+    Ok(())
+}
 /// Workspace authority comes only from actual membership (or personal
 /// ownership). Platform Admins/Auditors without membership keep read-only
 /// metadata access (`platform_reader`), never owner powers, keys or requests.
@@ -618,6 +630,14 @@ pub(super) fn platform_routes() -> Router<Store> {
         .route(
             "/api/v1/platform/deployments/{id}/configuration/preview",
             post(super::deployment_configuration::preview),
+        )
+        .route(
+            "/api/v1/platform/deployments/{id}/configuration/history",
+            get(super::deployment_history::list),
+        )
+        .route(
+            "/api/v1/platform/deployments/{id}/configuration/history/{change}",
+            get(super::deployment_history::detail),
         )
         .route("/api/v1/platform/audit", get(platform_audit))
         .route("/api/v1/platform/server-policy", get(server_policy))
@@ -1035,6 +1055,7 @@ async fn toggle(
 ) -> DetailedResult {
     let mut tx = catalog_tx(&s, &u, true).await?;
     if table == "deployments" {
+        configuration_actor(&mut tx, &u).await?;
         let change =
             super::deployment_configuration::DeploymentChange::prepare(&mut tx, &u, id, &b).await?;
         change.apply(&mut tx).await?;
@@ -1051,16 +1072,21 @@ async fn toggle(
     if table == "models" && !b.enabled {
         catalogs::retire(&mut tx).await?;
     }
-    audit(
-        &mut tx,
-        &u,
-        None,
-        "configuration.updated",
-        table,
-        Some(id),
-        json!({"enabled":b.enabled}),
-    )
-    .await?;
+    // Deployment changes and their audit identity are captured exactly once by
+    // the database trigger, including DELETE-as-disable. No-op writes do not
+    // invent a change. Other resource kinds retain their existing audit path.
+    if table != "deployments" {
+        audit(
+            &mut tx,
+            &u,
+            None,
+            "configuration.updated",
+            table,
+            Some(id),
+            json!({"enabled":b.enabled}),
+        )
+        .await?;
+    }
     tx.commit().await?;
     Ok(ok())
 }
@@ -1226,18 +1252,10 @@ pub(super) async fn insert_deployment(
     {
         return Err(ManagementError::route_unsupported(format!("{reason}.")));
     }
+    configuration_actor(tx, u).await?;
     let id = Uuid::new_v4();
     sqlx::query("INSERT INTO deployments(id,model_id,provider_connection_id,upstream_model,enabled) VALUES($1,$2,$3,$4,$5)").bind(id).bind(b.model_id).bind(b.provider_connection_id).bind(b.upstream_model).bind(b.enabled).execute(&mut **tx).await?;
-    audit(
-        tx,
-        u,
-        None,
-        "deployment.created",
-        "deployment",
-        Some(id),
-        json!({}),
-    )
-    .await?;
+    // The deployment trigger atomically records creation, revision and audit.
     Ok(id)
 }
 /// Audit actions recorded as a side effect of a person signing in (not changes they made).

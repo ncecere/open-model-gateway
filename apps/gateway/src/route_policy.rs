@@ -1128,6 +1128,18 @@ pub(crate) const ROUTES: &[Route] = &[
         PlatformWrite,
         DENIED
     ),
+    route!(
+        "GET",
+        "/api/v1/platform/deployments/{id}/configuration/history",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/deployments/{id}/configuration/history/{change}",
+        PlatformRead,
+        DENIED
+    ),
     route!("GET", "/api/v1/platform/holds", PlatformRead, PLATFORM_READ),
     route!("GET", "/api/v1/platform/audit", PlatformRead, PLATFORM_READ),
     route!(

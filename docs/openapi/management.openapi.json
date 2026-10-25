@@ -586,6 +586,22 @@
         "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
         "x-omg-schema-status": "incomplete"
       },
+      "get_api_v1_platform_deployments_by_id_configuration_historyRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_api_v1_platform_deployments_by_id_configuration_historyResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_api_v1_platform_deployments_by_id_configuration_history_by_changeRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "get_api_v1_platform_deployments_by_id_configuration_history_by_changeResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
       "get_api_v1_platform_holdsRequest": {
         "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
         "x-omg-schema-status": "incomplete"
@@ -4255,6 +4271,80 @@
           "$ref": "#/components/schemas/patch_api_v1_platform_deployments_by_idResponse"
         },
         "x-omg-token-policy": "Scope"
+      }
+    },
+    "/api/v1/platform/deployments/{id}/configuration/history": {
+      "get": {
+        "operationId": "get_api_v1_platform_deployments_by_id_configuration_history",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          }
+        },
+        "security": [
+          {
+            "browserSession": []
+          }
+        ],
+        "x-omg-access": "PlatformRead",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_api_v1_platform_deployments_by_id_configuration_historyRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_api_v1_platform_deployments_by_id_configuration_historyResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
+    "/api/v1/platform/deployments/{id}/configuration/history/{change}": {
+      "get": {
+        "operationId": "get_api_v1_platform_deployments_by_id_configuration_history_by_change",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "change",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          }
+        },
+        "security": [
+          {
+            "browserSession": []
+          }
+        ],
+        "x-omg-access": "PlatformRead",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/get_api_v1_platform_deployments_by_id_configuration_history_by_changeRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/get_api_v1_platform_deployments_by_id_configuration_history_by_changeResponse"
+        },
+        "x-omg-token-policy": "Denied"
       }
     },
     "/api/v1/platform/deployments/{id}/configuration/preview": {

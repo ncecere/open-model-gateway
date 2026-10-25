@@ -45,6 +45,8 @@ GRANT SELECT ON public.installation,public.users,public.oidc_identities,
  public.inference_executions,public.governance_reservations,public.monetary_ledger,
  public.routing_policies,public.deployment_routing,public.deployment_health,public.audit_events
  TO gateway_runtime;
+-- #86: append-only deployment configuration evidence; revision is trigger-only.
+GRANT SELECT,INSERT ON public.configuration_changes TO gateway_runtime;
 -- Aged unknown-hold review queue (#101 A): reviewed, no grant change. Its
 -- read-only snapshot uses the existing SELECT on workspaces, keys, executions,
 -- reservations, monetary_ledger and deployment_prices; no new write operation.

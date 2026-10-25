@@ -32,6 +32,10 @@ mod catalogs_token_guard_tests;
 mod configuration_matrix_tests;
 #[path = "configuration_tests.rs"]
 mod configuration_tests;
+#[path = "deployment_history_atomicity_tests.rs"]
+mod deployment_history_atomicity_tests;
+#[path = "deployment_history_tests.rs"]
+mod deployment_history_tests;
 #[path = "deployment_preview_tests.rs"]
 mod deployment_preview_tests;
 #[path = "directory/tests.rs"]

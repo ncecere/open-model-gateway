@@ -112,12 +112,7 @@ async fn deployment_preview_last_route_multi_catalog_visibility_and_no_writes(po
         // Never echo the hidden value (an email) into test output.
         assert!(!text.contains(&hidden), "the preview leaked a hidden value");
     }
-    assert!(
-        p["expected_revision"]
-            .as_str()
-            .unwrap()
-            .starts_with("catalog:")
-    );
+    assert_eq!(p["expected_revision"], "1");
     assert!(p["observed_at"].is_string());
     assert_eq!(p["dependency_versions"].as_object().unwrap().len(), 2);
     assert!(p["dependency_versions"]["keys"].is_null());

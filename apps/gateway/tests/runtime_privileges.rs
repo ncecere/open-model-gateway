@@ -53,6 +53,7 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         "inference_executions",
         "monetary_ledger",
         "audit_events",
+        "configuration_changes",
         "budget_totals",
         "rate_minute_counters",
         "inflight_counters",
@@ -288,6 +289,65 @@ async fn deployment_preview_runs_as_runtime(pool: &PgPool) {
     sqlx::query("SELECT w.id,w.name,w.kind FROM workspaces w WHERE w.kind IN ('team','project') AND w.disabled_at IS NULL AND workspace_model_allowed(w.id,$1) ORDER BY w.name,w.id LIMIT 100").bind(model).fetch_all(&mut *tx).await.unwrap();
     sqlx::query(&format!("SELECT count(*) FROM deployments d WHERE d.model_id=$1 AND d.id<>$2 AND d.enabled AND EXISTS(SELECT 1 FROM provider_connections p WHERE p.id=d.provider_connection_id AND p.enabled) AND {}", open_model_gateway::providers::capabilities::route_serves_sql())).bind(model).bind(deployment).fetch_one(&mut *tx).await.unwrap();
     tx.commit().await.unwrap();
+    // #86: invoker-rights triggers must maintain evidence with no revision or
+    // history UPDATE grant. These are real SQL writes, not mocked assertions.
+    sqlx::query("UPDATE deployments SET enabled=false WHERE id=$1")
+        .bind(deployment)
+        .execute(&runtime)
+        .await
+        .unwrap();
+    let recorded: (i64, Option<bool>, bool) = sqlx::query_as("SELECT c.revision,c.before_enabled,c.after_enabled FROM configuration_changes c JOIN audit_events a ON (a.id,a.created_at)=(c.audit_event_id,c.audit_created_at) WHERE c.deployment_id=$1 ORDER BY c.revision DESC LIMIT 1").bind(deployment).fetch_one(&runtime).await.unwrap();
+    assert_eq!(recorded, (2, Some(true), false));
+    for sql in [
+        "UPDATE configuration_changes SET after_enabled=false",
+        "DELETE FROM configuration_changes",
+        "TRUNCATE configuration_changes",
+        "UPDATE deployments SET revision=0",
+    ] {
+        assert!(
+            sqlx::query(sql).execute(&runtime).await.is_err(),
+            "runtime accepted {sql}"
+        );
+    }
+    // Execute both production history SELECTs with a real browser session and
+    // the deployed runtime role, including labels and composite audit joins.
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+    let cookie = uuid::Uuid::new_v4().simple().to_string().repeat(2);
+    sqlx::query("INSERT INTO browser_sessions(token_hash,user_id,csrf_hash,expires_at,verified_email) VALUES(sha256(convert_to($1,'UTF8')),$2,sha256('csrf'::bytea),now()+interval '1 hour','preview-acl@example.test')")
+        .bind(&cookie).bind(user).execute(&runtime).await.unwrap();
+    let identity = open_model_gateway::identity::IdentityState::new(store.clone(), None)
+        .await
+        .unwrap();
+    let app = open_model_gateway::management::router(identity).with_state(store);
+    let path = format!("/api/v1/platform/deployments/{deployment}/configuration/history");
+    let mut detail: Option<String> = None;
+    for _ in 0..2 {
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(detail.as_deref().unwrap_or(path.as_str()))
+                    .header("cookie", format!("omg_session={cookie}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        if detail.is_none() {
+            assert_eq!(body["data"][0]["revision"], "2");
+            detail = Some(format!(
+                "{path}/{}",
+                body["data"][0]["id"].as_str().unwrap()
+            ));
+        } else {
+            assert_eq!(body["before"]["enabled"], true);
+            assert_eq!(body["after"]["enabled"], false);
+        }
+    }
     runtime.close().await;
 }
 

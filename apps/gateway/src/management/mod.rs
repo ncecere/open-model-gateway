@@ -10,6 +10,7 @@ pub(crate) mod branding;
 mod catalogs;
 mod compare;
 mod deployment_configuration;
+mod deployment_history;
 mod directory;
 mod files;
 pub(crate) mod governance;
