@@ -1,0 +1,1271 @@
+{
+  "operations": {
+    "DELETE /api/v1/me/sessions/{session}": {
+      "access": "Browser",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "DELETE /api/v1/platform/admin-tokens/{token}": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": null,
+      "token_policy": "BrowserAdminOnly"
+    },
+    "DELETE /api/v1/platform/alerts/rules/{id}": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "governance:write",
+      "token_policy": "Scope"
+    },
+    "DELETE /api/v1/platform/alerts/webhooks/{id}": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "settings:write",
+      "token_policy": "Scope"
+    },
+    "DELETE /api/v1/platform/catalogs/{id}": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "DELETE /api/v1/platform/cost-centers/{id}": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "governance:write",
+      "token_policy": "Scope"
+    },
+    "DELETE /api/v1/platform/deployments/{id}": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "DELETE /api/v1/platform/models/{id}": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "DELETE /api/v1/platform/oidc/group-mappings/{id}": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "access:write",
+      "token_policy": "Scope"
+    },
+    "DELETE /api/v1/platform/providers/{id}": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "DELETE /api/v1/platform/settings/general/logo": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "settings:write",
+      "token_policy": "Scope"
+    },
+    "DELETE /api/v1/platform/users/{user}/roles/{role}": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "access:write",
+      "token_policy": "Scope"
+    },
+    "DELETE /api/v1/platform/workspaces/{ws}/catalogs": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "DELETE /api/v1/platform/workspaces/{ws}/members/{user}": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "access:write",
+      "token_policy": "Scope"
+    },
+    "DELETE /api/v1/platform/workspaces/{ws}/models/{model}": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "DELETE /api/v1/platform/workspaces/{ws}/policy": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "governance:write",
+      "token_policy": "Scope"
+    },
+    "DELETE /api/v1/workspaces/{ws}/alerts/rules/{id}": {
+      "access": "WorkspaceAdmin",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "DELETE /api/v1/workspaces/{ws}/files/{id}": {
+      "access": "WorkspaceMember",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "DELETE /api/v1/workspaces/{ws}/invitations/{id}": {
+      "access": "WorkspaceAdmin",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "DELETE /api/v1/workspaces/{ws}/keys/{key}": {
+      "access": "WorkspaceKey",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "DELETE /api/v1/workspaces/{ws}/members/{user}": {
+      "access": "WorkspaceAdmin",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "DELETE /api/v1/workspaces/{ws}/models/{model}": {
+      "access": "WorkspaceAdmin",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/auth/callback": {
+      "access": "Anonymous",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/auth/config": {
+      "access": "Anonymous",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/auth/login": {
+      "access": "Anonymous",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/branding/logo": {
+      "access": "Anonymous",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/me": {
+      "access": "Browser",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/me/export": {
+      "access": "Browser",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/me/keys": {
+      "access": "Browser",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/me/models": {
+      "access": "Browser",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/me/notifications": {
+      "access": "Browser",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/me/notifications/summary": {
+      "access": "Browser",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/me/sessions": {
+      "access": "Browser",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/me/summary": {
+      "access": "Browser",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/platform/admin-tokens": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": null,
+      "token_policy": "BrowserAdminOnly"
+    },
+    "GET /api/v1/platform/alerts/events": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/alerts/rules": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/alerts/rules/{id}": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/alerts/webhooks": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/alerts/webhooks/{id}": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/alerts/webhooks/{id}/deliveries": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/audit": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/batches": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/catalog-defaults": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/catalogs": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/catalogs/{id}": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/catalogs/{id}/models": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/cost-centers": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/cost-centers/{id}": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/cost-report": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/deployments": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/deployments/{deployment}/batch-scheduling": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/deployments/{deployment}/price-suggestion": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/deployments/{deployment}/prices": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/deployments/{deployment}/routing": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/deployments/{id}": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/holds": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/installation/policy": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/key-safety": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/legal-holds": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/logs/generations": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/logs/metrics": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/logs/requests": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/logs/requests/{root}": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/logs/sessions": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/logs/sessions/{ws}/{session}": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/models": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/models/compare": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/models/{id}": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/models/{id}/catalogs": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/models/{model}/routing": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/oidc/group-mappings": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/overview": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/providers": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/providers/{id}": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/server-policy": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/settings/audit-export": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/settings/email": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/settings/general": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/settings/privacy": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/settings/sign-in": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/settings/storage": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/usage/explore": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/usage/overview": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/usage/storage": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/users": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/users/{user}": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/users/{user}/export": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/workspace-types/{kind}/catalogs": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/workspace-types/{kind}/policy": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/workspaces": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/workspaces/{ws}": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/workspaces/{ws}/catalogs": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/workspaces/{ws}/member-candidates": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/workspaces/{ws}/members": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/platform/workspaces/{ws}/policy": {
+      "access": "PlatformRead",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/workspaces/{ws}": {
+      "access": "WorkspaceMetadata",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/workspaces/{ws}/access": {
+      "access": "WorkspaceMetadata",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/workspaces/{ws}/alerts/events": {
+      "access": "WorkspaceAdminOrReader",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/workspaces/{ws}/alerts/rules": {
+      "access": "WorkspaceAdminOrReader",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/workspaces/{ws}/alerts/rules/{id}": {
+      "access": "WorkspaceAdminOrReader",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/workspaces/{ws}/audit": {
+      "access": "WorkspaceMember",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/available-models": {
+      "access": "WorkspaceMetadata",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/workspaces/{ws}/batches": {
+      "access": "WorkspaceMember",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/batches/{id}": {
+      "access": "WorkspaceMember",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/catalog": {
+      "access": "WorkspaceMetadata",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/workspaces/{ws}/cost-report": {
+      "access": "WorkspaceMetadata",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/workspaces/{ws}/cost-summary": {
+      "access": "WorkspaceMetadata",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/workspaces/{ws}/costs": {
+      "access": "WorkspaceMetadata",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/workspaces/{ws}/executions": {
+      "access": "WorkspaceMember",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/files": {
+      "access": "WorkspaceMember",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/files/{id}/content": {
+      "access": "WorkspaceMember",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/generations": {
+      "access": "WorkspaceMember",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/holds": {
+      "access": "WorkspaceMetadata",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/invitations": {
+      "access": "WorkspaceAdmin",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/key-issuance": {
+      "access": "WorkspaceMember",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/key-safety": {
+      "access": "WorkspaceMember",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/keys": {
+      "access": "WorkspaceMember",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/keys/{key}": {
+      "access": "WorkspaceKey",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/keys/{key}/access": {
+      "access": "WorkspaceKey",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/keys/{key}/policy": {
+      "access": "WorkspaceKey",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/keys/{key}/stats": {
+      "access": "WorkspaceKey",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/logs/metrics": {
+      "access": "WorkspaceMember",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/member-candidates": {
+      "access": "WorkspaceAdmin",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/members": {
+      "access": "WorkspaceAdminOrReader",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/workspaces/{ws}/models": {
+      "access": "WorkspaceMetadata",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/workspaces/{ws}/models/compare": {
+      "access": "WorkspaceMember",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/policy": {
+      "access": "WorkspaceMetadata",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/workspaces/{ws}/requests": {
+      "access": "WorkspaceMember",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/requests/{root}": {
+      "access": "WorkspaceMember",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/service-accounts": {
+      "access": "WorkspaceAdmin",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/sessions": {
+      "access": "WorkspaceMember",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/sessions/{session}": {
+      "access": "WorkspaceMember",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/usage": {
+      "access": "WorkspaceMember",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "GET /api/v1/workspaces/{ws}/usage-export": {
+      "access": "WorkspaceMetadata",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/workspaces/{ws}/usage/explore": {
+      "access": "WorkspaceMetadata",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/workspaces/{ws}/usage/overview": {
+      "access": "WorkspaceMetadata",
+      "operation": {},
+      "scope": "platform:read",
+      "token_policy": "Scope"
+    },
+    "GET /api/v1/workspaces/{ws}/usage/storage": {
+      "access": "WorkspaceAdmin",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "PATCH /api/v1/platform/alerts/webhooks/{id}": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "settings:write",
+      "token_policy": "Scope"
+    },
+    "PATCH /api/v1/platform/catalogs/{id}": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "PATCH /api/v1/platform/cost-centers/{id}": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "governance:write",
+      "token_policy": "Scope"
+    },
+    "PATCH /api/v1/platform/deployments/{id}": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "PATCH /api/v1/platform/models/{id}": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "PATCH /api/v1/platform/oidc/group-mappings/{id}": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "access:write",
+      "token_policy": "Scope"
+    },
+    "PATCH /api/v1/platform/providers/{id}": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "PATCH /api/v1/platform/users/{user}": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "access:write",
+      "token_policy": "Scope"
+    },
+    "PATCH /api/v1/platform/workspaces/{ws}": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "access:write",
+      "token_policy": "Scope"
+    },
+    "PATCH /api/v1/workspaces/{ws}": {
+      "access": "WorkspaceAdmin",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "PATCH /api/v1/workspaces/{ws}/keys/{key}": {
+      "access": "WorkspaceKey",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "PATCH /api/v1/workspaces/{ws}/service-accounts/{id}": {
+      "access": "WorkspaceAdmin",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/auth/logout": {
+      "access": "BrowserLogout",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/invitations/accept": {
+      "access": "Browser",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/me/notifications/read": {
+      "access": "Browser",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/me/sessions/revoke-others": {
+      "access": "Browser",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/platform/admin-tokens": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": null,
+      "token_policy": "BrowserAdminOnly"
+    },
+    "POST /api/v1/platform/alerts/rules": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "governance:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/alerts/webhooks": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "settings:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/alerts/webhooks/{id}/test": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "settings:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/catalogs": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/cost-centers": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "governance:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/deployments": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/deployments/{deployment}/prices": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/deployments/{id}/configuration/preview": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/platform/legal-holds": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "governance:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/legal-holds/{hold}/release": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "governance:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/model-setup": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/models": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/oidc/group-mappings": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "access:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/oidc/group-mappings/preview": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/platform/oidc/group-mappings/{id}/preview": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/platform/providers": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/settings/audit-export/test": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "settings:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/settings/email/test": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "settings:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/settings/storage/test": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "settings:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/users": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "access:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/users/{user}/remove-personal-data": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "access:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/users/{user}/roles": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "access:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/users/{user}/sessions/revoke": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "access:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/workspaces": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "access:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/workspaces/{ws}/members": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "access:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/platform/workspaces/{ws}/models": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/workspaces/{ws}/alerts/rules": {
+      "access": "WorkspaceAdmin",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/workspaces/{ws}/batches/{id}/cancel": {
+      "access": "WorkspaceMember",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/workspaces/{ws}/costs/{execution}/reconcile": {
+      "access": "WorkspacePlatformWrite",
+      "operation": {},
+      "scope": "governance:write",
+      "token_policy": "Scope"
+    },
+    "POST /api/v1/workspaces/{ws}/files/upload": {
+      "access": "WorkspaceMember",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/workspaces/{ws}/invitations": {
+      "access": "WorkspaceAdmin",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/workspaces/{ws}/keys": {
+      "access": "WorkspaceMember",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/workspaces/{ws}/keys/{key}/rotate": {
+      "access": "WorkspaceKeyRotate",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/workspaces/{ws}/members": {
+      "access": "WorkspaceAdmin",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/workspaces/{ws}/models": {
+      "access": "WorkspaceAdmin",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/workspaces/{ws}/service-accounts": {
+      "access": "WorkspaceAdmin",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "PUT /api/v1/platform/alerts/rules/{id}": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "governance:write",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/catalog-defaults": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/catalogs/{id}/models": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/deployments/{deployment}/batch-scheduling": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "governance:write",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/deployments/{deployment}/routing": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/installation/policy": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "governance:write",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/models/{id}/catalogs": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/models/{model}/routing": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/settings/email": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "settings:write",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/settings/general": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "settings:write",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/settings/general/logo": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "settings:write",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/settings/privacy": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "settings:write",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/settings/storage": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "settings:write",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/workspace-types/{kind}/catalogs": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/workspace-types/{kind}/policy": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "governance:write",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/workspaces/{ws}/catalogs": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "catalog:write",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/platform/workspaces/{ws}/policy": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": "governance:write",
+      "token_policy": "Scope"
+    },
+    "PUT /api/v1/workspaces/{ws}/alerts/rules/{id}": {
+      "access": "WorkspaceAdmin",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "PUT /api/v1/workspaces/{ws}/keys/{key}/policy": {
+      "access": "WorkspaceKey",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "PUT /api/v1/workspaces/{ws}/policy": {
+      "access": "WorkspaceAdmin",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    }
+  },
+  "schemas": {}
+}

@@ -56,6 +56,225 @@ async fn request(
         .status()
 }
 
+/// Every declared workspace route must hide a foreign personal workspace just
+/// like an unknown UUID, before handler extraction (including mutations).
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn every_workspace_route_hides_foreign_personal_like_unknown(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let owner = session(&pool, &f.owner).await;
+    let (status, key_value) = key(&f, &f.owner, f.team, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    let targets = targets::Targets::new(&pool, &f, id(&key_value), &owner).await;
+    let mock = MockProvider::start(None).await;
+    let identity = mock.state(pool.clone()).await;
+    let engine = crate::inference::Engine::new(
+        std::sync::Arc::new(f.s.clone()),
+        crate::providers::ProviderRegistry::default(),
+        crate::inference::EngineLimits::default(),
+    )
+    .unwrap();
+    let app = crate::http::router_with_identity(f.s.clone(), None, engine, identity);
+    let unknown = Uuid::new_v4();
+    let sessions = [
+        (session(&pool, &f.outsider).await, "user"),
+        (session(&pool, &f.auditor).await, "auditor"),
+        (session(&pool, &f.admin).await, "admin"),
+    ];
+    let mut checked = std::collections::BTreeSet::new();
+    let mut failures = Vec::new();
+    for route in ROUTES.iter().filter(|r| {
+        r.path == "/api/v1/workspaces/{ws}" || r.path.starts_with("/api/v1/workspaces/{ws}/")
+    }) {
+        let concrete = targets.concrete(route.path, &f);
+        let personal_path = concrete.replace(&f.team.to_string(), &f.personal.to_string());
+        let unknown_path = concrete.replace(&f.team.to_string(), &unknown.to_string());
+        assert!(!personal_path.contains('{'), "unexpanded {}", route.path);
+        for method in route.methods.split_whitespace().flat_map(|m| {
+            if m == "GET" {
+                vec!["GET", "HEAD"]
+            } else {
+                vec![m]
+            }
+        }) {
+            for (session, label) in &sessions {
+                let mut replies = Vec::new();
+                for path in [&personal_path, &unknown_path] {
+                    let response = app
+                        .clone()
+                        .oneshot(
+                            Request::builder()
+                                .method(method)
+                                .uri(path)
+                                .header("content-type", "application/json")
+                                .header("origin", ORIGIN)
+                                .header("cookie", format!("omg_session={}", session.cookie))
+                                .header("x-csrf-token", &session.csrf)
+                                .body(Body::from("{}"))
+                                .unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                    let status = response.status();
+                    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+                    replies.push((status, body));
+                }
+                // Compare the complete body, not only its keys: a distinguishing
+                // message or reason would leave the existence oracle intact.
+                // Preserve the existing role-first refusal without turning any
+                // other unknown-workspace answer into 403 to equalize statuses.
+                let expected_status =
+                    if route.access == Access::WorkspacePlatformWrite && *label != "admin" {
+                        StatusCode::FORBIDDEN
+                    } else {
+                        StatusCode::NOT_FOUND
+                    };
+                if replies[0] != replies[1] || replies[1].0 != expected_status {
+                    failures.push(format!(
+                        "{method} {} {label}: personal={:?}, unknown={:?}",
+                        route.path, replies[0], replies[1]
+                    ));
+                }
+                if method == "HEAD" {
+                    assert!(replies.iter().all(|(_, body)| body.is_empty()));
+                } else {
+                    for (_, body) in &replies {
+                        let error: Value = serde_json::from_slice(body).unwrap();
+                        assert!(
+                            error["error"].is_object(),
+                            "{method} {} {label}: {error}",
+                            route.path
+                        );
+                    }
+                }
+                checked.insert((route.path, method, *label));
+            }
+        }
+    }
+    let expected: usize = ROUTES
+        .iter()
+        .filter(|r| {
+            r.path == "/api/v1/workspaces/{ws}" || r.path.starts_with("/api/v1/workspaces/{ws}/")
+        })
+        .map(|r| {
+            r.methods
+                .split_whitespace()
+                .map(|m| if m == "GET" { 2 } else { 1 })
+                .sum::<usize>()
+        })
+        .sum();
+    // Positive controls: the same real middleware still admits the personal
+    // owner for a representative read and a write, not a blanket refusal.
+    assert_eq!(
+        request(
+            &app,
+            "GET",
+            &format!("/api/v1/workspaces/{}", f.personal),
+            Some(&owner),
+            None,
+            true,
+            ORIGIN
+        )
+        .await,
+        StatusCode::OK
+    );
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/workspaces/{}/keys", f.personal))
+                .header("content-type", "application/json")
+                .header("origin", ORIGIN)
+                .header("cookie", format!("omg_session={}", owner.cookie))
+                .header("x-csrf-token", &owner.csrf)
+                .body(Body::from(
+                    json!({"name":"Owner control", "expires_in_days":1}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(expected > 0, "workspace route inventory must not be empty");
+    assert_eq!(checked.len(), expected * sessions.len());
+    assert!(
+        failures.is_empty(),
+        "workspace existence oracle:\n{}",
+        failures.join("\n")
+    );
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn deployment_preview_browser_only_origin_csrf_and_live_roles(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let mock = MockProvider::start(None).await;
+    let identity = mock.state(pool.clone()).await;
+    let engine = crate::inference::Engine::new(
+        std::sync::Arc::new(f.s.clone()),
+        crate::providers::ProviderRegistry::default(),
+        crate::inference::EngineLimits::default(),
+    )
+    .unwrap();
+    let app = crate::http::router_with_identity(f.s.clone(), None, engine, identity);
+    let path = format!(
+        "/api/v1/platform/deployments/{}/configuration/preview",
+        Uuid::new_v4()
+    );
+    let admin = session(&pool, &f.admin).await;
+    // An authorized empty body reaches typed extraction; refusals happen first.
+    assert_eq!(
+        request(&app, "POST", &path, Some(&admin), None, true, ORIGIN).await,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        request(&app, "POST", &path, Some(&admin), None, false, ORIGIN).await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        request(
+            &app,
+            "POST",
+            &path,
+            Some(&admin),
+            None,
+            true,
+            "https://foreign.example"
+        )
+        .await,
+        StatusCode::FORBIDDEN
+    );
+    for actor in [&f.auditor, &f.owner] {
+        let s = session(&pool, actor).await;
+        assert_eq!(
+            request(&app, "POST", &path, Some(&s), None, true, ORIGIN).await,
+            StatusCode::FORBIDDEN
+        );
+    }
+    let (status, created) = call(&f.s, &f.admin, "POST", "/api/v1/platform/admin-tokens", json!({"name":"Preview denied","scopes":["platform:read","catalog:write"],"expires_in_days":1})).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    assert_eq!(
+        request(
+            &app,
+            "POST",
+            &path,
+            None,
+            created["token"].as_str(),
+            false,
+            ORIGIN
+        )
+        .await,
+        StatusCode::FORBIDDEN
+    );
+    sqlx::query("DELETE FROM platform_role_grants WHERE user_id=$1")
+        .bind(f.admin.user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        request(&app, "POST", &path, Some(&admin), None, true, ORIGIN).await,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
 #[sqlx::test(migrations = "./enterprise_migrations")]
 async fn key_expiry_history_and_feed_use_real_router_authorization(pool: PgPool) {
     let f = fixture(&pool).await;
@@ -140,7 +359,7 @@ async fn key_expiry_history_and_feed_use_real_router_authorization(pool: PgPool)
             )
             .await
             .0,
-            StatusCode::FORBIDDEN
+            StatusCode::NOT_FOUND
         );
         for path in [
             "/api/v1/me/notifications",
@@ -413,10 +632,10 @@ async fn every_route_refuses_lower_principals_and_unverified_mutations(pool: PgP
                 for (s, label) in sessions.into_iter().filter(|(_, label)| *label != "owner") {
                     assert_eq!(
                         request(&app, method, &personal_path, Some(s), None, true, ORIGIN).await,
-                        if access == Access::WorkspaceReportAdmin {
-                            StatusCode::NOT_FOUND
-                        } else {
+                        if access == Access::WorkspacePlatformWrite && label != "admin" {
                             StatusCode::FORBIDDEN
+                        } else {
+                            StatusCode::NOT_FOUND
                         },
                         "{method} {} foreign personal {label}",
                         route.path
