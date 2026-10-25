@@ -189,7 +189,11 @@ test("an unrevoked token can never manage its own kind, see another owner's pers
     // platform:read covers this existing PlatformRead route.
     expect((await bearerRequest(bearer, body.token, "/platform/users")).status()).toBe(200);
     // The same scope reaches the workspace list route, but personal-workspace privacy still
-    // applies underneath it: never another owner's keys or request details.
+    // applies underneath it: never another owner's keys or request details. #337: these two
+    // routes are TokenPolicy::Denied, refused before `ws` is even read from the path, so this
+    // 403 is identical to what an unknown workspace id gets too - not an existence oracle
+    // (apps/gateway/src/management/authz_admin_token_tests.rs's
+    // admin_token_principals_hide_foreign_personal_like_unknown proves this on the server side).
     expect((await bearerRequest(bearer, body.token, `/workspaces/${alexPersonal}/keys`)).status()).toBe(403);
     expect((await bearerRequest(bearer, body.token, `/workspaces/${alexPersonal}/requests`)).status()).toBe(403);
 
