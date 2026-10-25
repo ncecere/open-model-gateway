@@ -57,6 +57,7 @@
                   "personal_workspace_name_fixed",
                   "personal_workspace_visibility_fixed",
                   "plaintext_requires_loopback",
+                  "precondition_failed",
                   "price_meters_incomplete",
                   "route_unsupported_capability",
                   "setting_locked_by_environment",
@@ -1428,6 +1429,22 @@
         "x-omg-schema-status": "incomplete"
       },
       "post_api_v1_platform_oidc_group_mappingsResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_api_v1_platform_oidc_group_mappings_by_id_previewRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_api_v1_platform_oidc_group_mappings_by_id_previewResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_api_v1_platform_oidc_group_mappings_previewRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_api_v1_platform_oidc_group_mappings_previewResponse": {
         "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
         "x-omg-schema-status": "incomplete"
       },
@@ -4565,6 +4582,32 @@
         "x-omg-token-policy": "Scope"
       }
     },
+    "/api/v1/platform/oidc/group-mappings/preview": {
+      "post": {
+        "operationId": "post_api_v1_platform_oidc_group_mappings_preview",
+        "parameters": [],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          }
+        },
+        "security": [
+          {
+            "browserSession": [],
+            "csrfToken": [],
+            "origin": []
+          }
+        ],
+        "x-omg-access": "PlatformWrite",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_oidc_group_mappings_previewRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_oidc_group_mappings_previewResponse"
+        },
+        "x-omg-token-policy": "Denied"
+      }
+    },
     "/api/v1/platform/oidc/group-mappings/{id}": {
       "delete": {
         "operationId": "delete_api_v1_platform_oidc_group_mappings_by_id",
@@ -4639,6 +4682,41 @@
           "$ref": "#/components/schemas/patch_api_v1_platform_oidc_group_mappings_by_idResponse"
         },
         "x-omg-token-policy": "Scope"
+      }
+    },
+    "/api/v1/platform/oidc/group-mappings/{id}/preview": {
+      "post": {
+        "operationId": "post_api_v1_platform_oidc_group_mappings_by_id_preview",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          }
+        },
+        "security": [
+          {
+            "browserSession": [],
+            "csrfToken": [],
+            "origin": []
+          }
+        ],
+        "x-omg-access": "PlatformWrite",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_oidc_group_mappings_by_id_previewRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_oidc_group_mappings_by_id_previewResponse"
+        },
+        "x-omg-token-policy": "Denied"
       }
     },
     "/api/v1/platform/overview": {
