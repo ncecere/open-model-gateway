@@ -123,7 +123,10 @@ const REASONS: &[(&str, &str)] = &[
     (alerts::RULE_LIMIT, "alert_rule_limit"),
     (alerts::KIND_FIXED, "alert_rule_kind_fixed"),
     (INSTALLATION_LIMITS_REMOVED, "installation_limits_removed"),
+    (PRECONDITION_FAILED, "precondition_failed"),
 ];
+const PRECONDITION_FAILED: &str =
+    "The mapping was changed since this proposal was reviewed; re-check it and try again";
 /// Installation-wide limits were removed (0026): the former installation
 /// policy endpoint answers `410` and an alert rule watching the
 /// `installation` budget layer is `400`, both with this reason.

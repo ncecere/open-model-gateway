@@ -1,4 +1,5 @@
 use super::*;
+use axum::http::HeaderMap;
 
 pub(super) fn routes() -> Router<Store> {
     Router::new()
@@ -730,11 +731,13 @@ async fn deactivate_unentitled(
     }
     Ok(())
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, sqlx::FromRow)]
 #[serde(deny_unknown_fields)]
 // `pub(super)`: the preview evaluator (#89, `group_mapping_preview.rs`)
 // reuses this exact shape and its validation so a proposal is rejected the
 // same way create/update would reject it, never a parallel relaxed check.
+// `sqlx::FromRow`: `delete_mapping` reads the stored row directly into this
+// shape to compute its digest for `If-Match` (review #89 item 6).
 pub(super) struct MappingInput {
     pub(super) issuer: String,
     pub(super) group_value: String,
@@ -790,6 +793,56 @@ pub(super) async fn validate_mapping(
     }
     if let Some(ws) = b.workspace_id {
         sqlx::query_scalar::<_,Uuid>("SELECT id FROM workspaces WHERE id=$1 AND kind IN ('team','project') AND disabled_at IS NULL").bind(ws).fetch_optional(&mut **tx).await?.ok_or_else(missing)?;
+    }
+    Ok(())
+}
+/// A stable identifier for one mapping definition (#89 review item 6): the
+/// preview evaluator returns this for the client to send back as an
+/// `If-Match` header on the following PATCH/DELETE, so a mapping changed
+/// between review and apply is refused with `412` instead of silently
+/// acting on a stale proposal. `pub(super)`: shared with
+/// `group_mapping_preview.rs`.
+pub(super) fn mapping_digest(
+    issuer: &str,
+    group_value: &str,
+    target_kind: &str,
+    platform_role: Option<&str>,
+    workspace_id: Option<Uuid>,
+    workspace_role: Option<&str>,
+    enabled: bool,
+) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    for part in [
+        issuer,
+        group_value,
+        target_kind,
+        platform_role.unwrap_or(""),
+        workspace_id
+            .map(|w| w.to_string())
+            .unwrap_or_default()
+            .as_str(),
+        workspace_role.unwrap_or(""),
+        if enabled { "1" } else { "0" },
+    ] {
+        h.update(part.as_bytes());
+        h.update([0u8]);
+    }
+    format!("{:x}", h.finalize())
+}
+/// `If-Match`, when present, must equal [`mapping_digest`] of the row as it
+/// stands right now (under the same `FOR UPDATE` lock the caller already
+/// holds); absent is the pre-existing behavior (no precondition). Additive:
+/// an older client that never sends it is unaffected.
+fn check_if_match(headers: &HeaderMap, digest: &str) -> Result<(), ApiError> {
+    let Some(expected) = headers.get("if-match").and_then(|v| v.to_str().ok()) else {
+        return Ok(());
+    };
+    if expected.trim().trim_matches('"') != digest {
+        return Err(ApiError(
+            StatusCode::PRECONDITION_FAILED,
+            PRECONDITION_FAILED,
+        ));
     }
     Ok(())
 }
@@ -850,11 +903,26 @@ async fn update_mapping(
     State(s): State<Store>,
     Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
+    headers: HeaderMap,
     Json(patch): Json<Value>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, true).await?;
     let mut current:Value=sqlx::query_scalar("SELECT jsonb_build_object('issuer',issuer,'group_value',group_value,'target_kind',target_kind,'platform_role',platform_role,'workspace_id',workspace_id,'workspace_role',workspace_role,'enabled',enabled) FROM oidc_group_mappings WHERE id=$1 FOR UPDATE").bind(id).fetch_optional(&mut *tx).await?.ok_or_else(missing)?;
     let before = current.clone();
+    let before_mapping: MappingInput =
+        serde_json::from_value(before.clone()).map_err(|_| invalid())?;
+    check_if_match(
+        &headers,
+        &mapping_digest(
+            &before_mapping.issuer,
+            &before_mapping.group_value,
+            &before_mapping.target_kind,
+            before_mapping.platform_role.as_deref(),
+            before_mapping.workspace_id,
+            before_mapping.workspace_role.as_deref(),
+            before_mapping.enabled,
+        ),
+    )?;
     let fields = patch.as_object().ok_or_else(invalid)?;
     for (k, v) in fields {
         if !matches!(
@@ -897,13 +965,26 @@ async fn delete_mapping(
     State(s): State<Store>,
     Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
+    headers: HeaderMap,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, true).await?;
-    sqlx::query_scalar::<_, Uuid>("SELECT id FROM oidc_group_mappings WHERE id=$1 FOR UPDATE")
+    let current: MappingInput = sqlx::query_as("SELECT issuer,group_value,target_kind,platform_role,workspace_id,workspace_role,enabled FROM oidc_group_mappings WHERE id=$1 FOR UPDATE")
         .bind(id)
         .fetch_optional(&mut *tx)
         .await?
         .ok_or_else(missing)?;
+    check_if_match(
+        &headers,
+        &mapping_digest(
+            &current.issuer,
+            &current.group_value,
+            &current.target_kind,
+            current.platform_role.as_deref(),
+            current.workspace_id,
+            current.workspace_role.as_deref(),
+            current.enabled,
+        ),
+    )?;
     revoke_mapping_grants(&mut tx, id).await?;
     // Retain mapping provenance on revoked grants while deleting control-plane definition.
     sqlx::query("DELETE FROM oidc_group_mappings WHERE id=$1")
