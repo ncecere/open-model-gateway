@@ -3,6 +3,9 @@
 #![allow(clippy::disallowed_methods)]
 //! Explicitly opt in only on the dedicated disposable PostgreSQL test cluster.
 use sqlx::PgPool;
+#[path = "runtime_privileges/temp.rs"]
+mod temp;
+
 #[sqlx::test(migrations = "./enterprise_migrations")]
 #[ignore = "role/maintenance ACL probe: run only on a disposable test PostgreSQL cluster"]
 async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
@@ -13,6 +16,10 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         .unwrap();
     sqlx::raw_sql("DO $$ BEGIN IF NOT EXISTS(SELECT FROM pg_roles WHERE rolname='gateway_runtime') THEN CREATE ROLE gateway_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS; END IF; END $$; REVOKE CONNECT ON DATABASE postgres FROM PUBLIC,gateway_runtime; REVOKE CONNECT ON DATABASE template1 FROM PUBLIC,gateway_runtime;")
         .execute(&mut *connection).await.unwrap();
+    // Run TEMP regressions before this fixture's legacy REVOKE ALL below can
+    // mask grants apply's responsibility for PostgreSQL's default PUBLIC TEMP.
+    // The existing dedicated PostgreSQL CI step exercises this suite explicitly.
+    temp::check_runtime_temp_grants(&pool).await;
     let database: String = sqlx::query_scalar("SELECT current_database()")
         .fetch_one(&mut *connection)
         .await

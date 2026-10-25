@@ -109,7 +109,8 @@ async fn deployment_preview_last_route_multi_catalog_visibility_and_no_writes(po
         "credential_ref".into(),
         "NOT_RESOLVED".into(),
     ] {
-        assert!(!text.contains(&hidden), "leaked {hidden}: {text}");
+        // Never echo the hidden value (an email) into test output.
+        assert!(!text.contains(&hidden), "the preview leaked a hidden value");
     }
     assert_eq!(p["expected_revision"], "1");
     assert!(p["observed_at"].is_string());

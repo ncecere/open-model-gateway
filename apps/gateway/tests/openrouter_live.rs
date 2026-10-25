@@ -75,6 +75,7 @@ async fn openrouter_live_chat_embeddings_rerank_systemone() {
     };
 
     let chat = ChatRequest {
+        messages_options: None,
         model: "live/glm".into(),
         messages: vec![Message {
             role: Role::User,

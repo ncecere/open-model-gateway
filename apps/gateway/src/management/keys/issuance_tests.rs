@@ -1320,7 +1320,7 @@ async fn key_issuance_view_shows_the_callers_budget_and_admins_the_workspace(poo
         call_h(&f.s, &f.admin, "GET", &personal, Value::Null)
             .await
             .0,
-        StatusCode::FORBIDDEN
+        StatusCode::NOT_FOUND
     );
     // A disabled workspace is not found.
     sqlx::query("UPDATE workspaces SET disabled_at=now() WHERE id=$1")
