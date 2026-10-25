@@ -273,6 +273,7 @@ impl Request {
             }
         };
         validate(ChatRequest {
+            messages_options: None,
             model: self.model,
             messages,
             tools,
@@ -459,8 +460,15 @@ pub(super) struct Accumulator {
     reason: Option<FinishReason>,
     usage: Usage,
     bytes: usize,
+    limit: Option<usize>,
 }
 impl Accumulator {
+    pub(super) fn with_limit(limit: usize) -> Self {
+        Self {
+            limit: Some(limit),
+            ..Self::default()
+        }
+    }
     pub(super) fn push(&mut self, event: ChatEvent) -> Result<bool> {
         match event {
             ChatEvent::Delta { text, tool_calls } if self.reason.is_none() => {
@@ -477,7 +485,7 @@ impl Accumulator {
                     .bytes
                     .checked_add(size)
                     .ok_or(InferenceError::InvalidUpstream)?;
-                if self.bytes > OUTPUT_LIMIT {
+                if self.bytes > self.limit.unwrap_or(OUTPUT_LIMIT) {
                     return Err(InferenceError::InvalidUpstream);
                 }
                 if let Some(text) = text {

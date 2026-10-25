@@ -237,6 +237,16 @@ pub(crate) fn transport_policy(development: bool, scheme: &str) -> crate::egress
     }
 }
 
+/// Select the export transport's policy from an explicit base policy.
+/// Kept pure so address decisions can be tested without process-wide state.
+fn export_http_policy(url: &reqwest::Url, policy: crate::egress::Policy) -> crate::egress::Policy {
+    if url.scheme() == "http" {
+        policy.only_loopback()
+    } else {
+        policy
+    }
+}
+
 /// Shared export transport, never a durable queue or retry policy.
 pub(crate) fn export_http_client(
     url: &reqwest::Url,
@@ -265,6 +275,9 @@ pub(crate) fn export_http_client_with_policy(
     connect_timeout: Duration,
     exchange_timeout: Duration,
 ) -> anyhow::Result<reqwest::Client> {
+    // Every caller (traces, metrics, audit, webhooks) gets the same tightening:
+    // plain HTTP may only reach canonical loopback after DNS (#313).
+    let policy = export_http_policy(url, policy);
     crate::egress::check_url(&policy, purpose, url)?;
     let client = reqwest::Client::builder()
         .no_proxy()
@@ -347,6 +360,10 @@ fn acknowledgement(ack: &[u8], count: usize, rejected_key: &str) -> Result<u64, 
         .ok_or(Delivery::Acknowledgement)?;
     Ok(n.min(count as u64))
 }
+
+#[cfg(test)]
+#[path = "otlp_http_policy_tests.rs"]
+mod http_policy_tests;
 
 #[cfg(test)]
 mod tests {

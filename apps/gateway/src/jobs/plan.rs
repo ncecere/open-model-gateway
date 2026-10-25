@@ -199,7 +199,9 @@ impl Jobs {
                 .entry(deployment.provider.clone())
                 .or_insert_with(|| match adapter.validate_chat_request(request) {
                     Ok(()) => Ok(()),
-                    Err(InferenceError::InvalidRequest) => Err(InferenceError::InvalidRequest),
+                    Err(e @ (InferenceError::InvalidRequest | InferenceError::InvalidField(_))) => {
+                        Err(e)
+                    }
                     Err(InferenceError::Unsupported) => Err(InferenceError::Unsupported),
                     // Outside the adapter's contract (#228): never silently
                     // admitted, logged for the operator, same as the engine.
@@ -244,14 +246,15 @@ impl Jobs {
                 ids
             }
         };
-        let invalid = refused
-            .iter()
-            .any(|(d, error)| *error == InferenceError::InvalidRequest && usable.contains(&d.id));
-        Ok(Some(if invalid {
-            InferenceError::InvalidRequest
-        } else {
-            InferenceError::Unsupported
-        }))
+        let invalid = refused.iter().find(|(d, error)| {
+            matches!(
+                error,
+                InferenceError::InvalidRequest | InferenceError::InvalidField(_)
+            ) && usable.contains(&d.id)
+        });
+        Ok(Some(
+            invalid.map_or(InferenceError::Unsupported, |(_, e)| *e),
+        ))
     }
 
     /// Validate `input` (already opened) and copy it to the batch's private
@@ -597,7 +600,9 @@ impl Jobs {
             // instead of admitting an empty batch.
             for (line, error) in deterministic_rejects.iter().copied() {
                 let error = match error {
-                    InferenceError::InvalidRequest => LineError::InvalidBody,
+                    InferenceError::InvalidRequest | InferenceError::InvalidField(_) => {
+                        LineError::InvalidBody
+                    }
                     InferenceError::Unsupported => LineError::UnsupportedFeature,
                     other => {
                         tracing::warn!(error = ?other, "adapter request validation returned an error outside its contract");

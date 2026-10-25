@@ -56,9 +56,11 @@ fn error_with_body(error: InferenceError, body: serde_json::Value) -> Response {
 
 fn http_status(error: InferenceError) -> StatusCode {
     match error {
-        InferenceError::InvalidRequest | InferenceError::UpstreamRejected => {
-            StatusCode::BAD_REQUEST
-        }
+        InferenceError::InvalidRequest
+        | InferenceError::InvalidField(_)
+        | InferenceError::UnknownField(_)
+        | InferenceError::ContextLength
+        | InferenceError::UpstreamRejected => StatusCode::BAD_REQUEST,
         InferenceError::Unauthenticated => StatusCode::UNAUTHORIZED,
         InferenceError::ModelUnavailable => StatusCode::NOT_FOUND,
         InferenceError::Unsupported => StatusCode::NOT_IMPLEMENTED,
@@ -68,6 +70,7 @@ fn http_status(error: InferenceError) -> StatusCode {
         | InferenceError::TokenReservationExceedsLimit(_)
         | InferenceError::JobLimitExceeded(_) => StatusCode::TOO_MANY_REQUESTS,
         InferenceError::Timeout => StatusCode::GATEWAY_TIMEOUT,
+        InferenceError::Overloaded => StatusCode::from_u16(529).unwrap(),
         InferenceError::InvalidUpstream | InferenceError::UpstreamUnavailable => {
             StatusCode::BAD_GATEWAY
         }
@@ -106,7 +109,12 @@ pub(crate) fn batch_line_error(anthropic: bool, error: InferenceError) -> (u16, 
     } else {
         openai_error_body(error)
     };
-    (responses::status(error).as_u16(), body)
+    let status = if anthropic {
+        messages::status(error)
+    } else {
+        responses::status(error)
+    };
+    (status.as_u16(), body)
 }
 
 /// OpenAI-wire error envelope. Budget denials use `insufficient_quota` as the

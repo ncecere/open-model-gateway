@@ -104,12 +104,17 @@ fn provider_of(provider: &str) -> Option<telemetry::Provider> {
 fn error_kind_of(error: InferenceError) -> telemetry::ErrorKind {
     use telemetry::ErrorKind;
     match error {
-        InferenceError::InvalidRequest => ErrorKind::InvalidRequest,
+        InferenceError::InvalidRequest
+        | InferenceError::InvalidField(_)
+        | InferenceError::UnknownField(_)
+        | InferenceError::ContextLength => ErrorKind::InvalidRequest,
         InferenceError::Unauthenticated => ErrorKind::Unauthorized,
         InferenceError::ModelUnavailable => ErrorKind::NotFound,
         InferenceError::Unsupported => ErrorKind::Unsupported,
         InferenceError::Configuration | InferenceError::PriceUnbounded => ErrorKind::Configuration,
-        InferenceError::Busy | InferenceError::RouteCoolingDown(_) => ErrorKind::Busy,
+        InferenceError::Busy | InferenceError::Overloaded | InferenceError::RouteCoolingDown(_) => {
+            ErrorKind::Busy
+        }
         InferenceError::BudgetExceeded(_)
         | InferenceError::UnresolvedUsage(_)
         | InferenceError::TokenReservationExceedsLimit(_)
@@ -549,9 +554,11 @@ impl Engine {
                 .entry(deployment.provider.clone())
                 .or_insert_with(|| match adapter.validate_chat_request(&request) {
                     Ok(()) => Ok(()),
-                    Err(InferenceError::InvalidRequest) => Err(InferenceError::InvalidRequest),
+                    Err(e @ (InferenceError::InvalidRequest | InferenceError::InvalidField(_))) => {
+                        Err(e)
+                    }
                     Err(InferenceError::Unsupported) => Err(InferenceError::Unsupported),
-                    // The contract allows only InvalidRequest/Unsupported. A
+                    // The contract allows only InvalidRequest/InvalidField/Unsupported. A
                     // nonconforming adapter is treated as a capability refusal,
                     // never silently admitted, and reported for the operator.
                     Err(other) => {
@@ -587,14 +594,13 @@ impl Engine {
             )
             .await
             .map_err(|_| InferenceError::Timeout)??;
-            let invalid = refused.iter().any(|(d, error)| {
-                *error == InferenceError::InvalidRequest && usable.deployment_ids.contains(&d.id)
+            let invalid = refused.iter().find(|(d, error)| {
+                matches!(
+                    error,
+                    InferenceError::InvalidRequest | InferenceError::InvalidField(_)
+                ) && usable.deployment_ids.contains(&d.id)
             });
-            return Err(if invalid {
-                InferenceError::InvalidRequest
-            } else {
-                InferenceError::Unsupported
-            });
+            return Err(invalid.map_or(InferenceError::Unsupported, |(_, error)| *error));
         }
         let plan = timeout_at(
             deadline,

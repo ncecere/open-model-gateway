@@ -4,7 +4,7 @@
  * A disabled action can say why (`disabledReason`), shown after its label.
  */
 import { MoreHorizontal } from "lucide-react";
-import { Fragment, type ReactElement, type ReactNode } from "react";
+import { Fragment, useRef, type ReactElement, type ReactNode } from "react";
 import { IconButton } from "@/components/ui/button/button";
 import { Menu, MenuItem, MenuLinkItem, MenuSeparator } from "@/components/ui/menu/menu";
 import styles from "./templates.module.css";
@@ -14,6 +14,8 @@ export type ActionItem = {
   icon?: ReactNode;
   /** Runs the action (buttons). */
   onSelect?: () => void;
+  /** Dialog flows retain the actual trigger, including a collapsed header menu. */
+  onSelectWithTrigger?: (trigger: HTMLButtonElement) => void;
   /** Renders a link instead, e.g. <Link to="…" />. */
   render?: ReactElement;
   /** Deletes, revokes, suspends…: shown in red, last. */
@@ -36,15 +38,18 @@ export type ActionMenuProps = {
   /** The trigger's accessible name, e.g. "More actions" or "Actions for Handbook". */
   label: string;
   size?: "sm" | "md";
+  /** Stable identity for focus recovery if a table row is regrouped. */
+  triggerId?: string;
 };
 
 /** A "…" icon button opening the actions; renders nothing without actions. */
-export function ActionMenu({ actions, label, size = "sm" }: ActionMenuProps) {
+export function ActionMenu({ actions, label, size = "sm", triggerId }: ActionMenuProps) {
+  const trigger = useRef<HTMLButtonElement>(null);
   const ordered = orderActions(actions);
   if (ordered.length === 0) return null;
   const firstDanger = ordered.findIndex((a) => a.danger);
   return (
-    <Menu align="end" trigger={<IconButton size={size} variant="ghost" icon={<MoreHorizontal aria-hidden />} label={label} />}>
+    <Menu align="end" trigger={<IconButton ref={trigger} id={triggerId} size={size} variant="ghost" icon={<MoreHorizontal aria-hidden />} label={label} />}>
       {ordered.map((a, i) => {
         const text = a.disabled && a.disabledReason ? <ItemText label={a.label} reason={a.disabledReason} /> : a.label;
         return (
@@ -55,7 +60,7 @@ export function ActionMenu({ actions, label, size = "sm" }: ActionMenuProps) {
                 {text}
               </MenuLinkItem>
             ) : (
-              <MenuItem icon={a.icon} tone={a.danger ? "danger" : "default"} disabled={a.disabled} onClick={a.onSelect}>
+              <MenuItem icon={a.icon} tone={a.danger ? "danger" : "default"} disabled={a.disabled} onClick={a.onSelectWithTrigger ? () => { if (trigger.current) a.onSelectWithTrigger?.(trigger.current); } : a.onSelect}>
                 {text}
               </MenuItem>
             )}

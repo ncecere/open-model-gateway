@@ -140,6 +140,27 @@ fn every_variant_has_a_fixed_severity_body_name_and_slug() {
 }
 
 #[test]
+fn telemetry_and_audit_otlp_egress_events_are_destination_free() {
+    for purpose in [
+        crate::egress::Purpose::Telemetry,
+        crate::egress::Purpose::AuditOtlp,
+    ] {
+        let record = log_record(&OpsEvent::EgressRefused { purpose }, 1, 0);
+        assert_eq!(
+            record["body"],
+            serde_json::json!({"stringValue": "Egress refused"})
+        );
+        assert_eq!(
+            record["attributes"],
+            serde_json::json!([
+                {"key": "purpose", "value": {"stringValue": purpose.as_str()}},
+                {"key": "event.name", "value": {"stringValue": "omg.ops.egress_refused"}}
+            ])
+        );
+    }
+}
+
+#[test]
 fn only_generation_finish_may_carry_a_trace_id_and_it_is_hexadecimal() {
     let with_trace = OpsEvent::FinalizationNeedsReconciliation {
         finalizer: Finalizer::GenerationFinish,
@@ -232,6 +253,7 @@ fn no_variant_attribute_value_is_free_text_or_identity() {
             "catalog",
             "smtp",
             "audit",
+            "audit_otlp",
             "telemetry",
             "alert_webhook",
         ])

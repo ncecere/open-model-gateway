@@ -14,6 +14,7 @@ use crate::jobs::types::{
 };
 
 const BASE: &str = "https://api.openai.com/v1";
+#[cfg(test)]
 const BODY_LIMIT: usize = 4 * 1024 * 1024;
 const SSE_LIMIT: usize = 1024 * 1024;
 const MAX_TOOL_CALLS: usize = 128;
@@ -76,6 +77,10 @@ impl ProviderAdapter for OpenAiAdapter {
     /// wire code below stays for jobs created before the shutdown.
     fn supports_protocol(&self, protocol: ApiProtocol) -> bool {
         super::capabilities::serves(self.id(), protocol)
+    }
+
+    fn validate_chat_request(&self, request: &ChatRequest) -> Result<()> {
+        super::messages::validate(request, super::messages::ProviderClass::OpenAi)
     }
 
     async fn connect_realtime(
@@ -218,7 +223,9 @@ impl ProviderAdapter for OpenAiAdapter {
         protocol: ApiProtocol,
     ) -> Result<ProviderOutput> {
         match protocol {
-            ApiProtocol::ChatCompletions => self.execute(target, request).await,
+            ApiProtocol::ChatCompletions | ApiProtocol::Messages => {
+                self.execute(target, request).await
+            }
             ApiProtocol::Responses => super::openai_responses::execute(self, target, request).await,
             _ => Err(InferenceError::Unsupported),
         }
@@ -257,6 +264,7 @@ impl ProviderAdapter for OpenAiAdapter {
     }
 
     async fn execute(&self, target: &Deployment, request: ChatRequest) -> Result<ProviderOutput> {
+        self.validate_chat_request(&request)?;
         // Validate before resolving credentials, even when using the test transport.
         if target.provider != self.id()
             || target.credential_ref == "none"
@@ -281,7 +289,12 @@ impl ProviderAdapter for OpenAiAdapter {
             .send()
             .await
             .map_err(transport_error)?;
-        check_status(response.status())?;
+        let response = if request.messages_options.is_some() {
+            super::framing::generation_status(response).await?
+        } else {
+            check_status(response.status())?;
+            response
+        };
         if request.stream {
             let is_sse = response
                 .headers()
@@ -295,11 +308,14 @@ impl ProviderAdapter for OpenAiAdapter {
             if !is_sse {
                 return Err(InferenceError::InvalidUpstream);
             }
-            Ok(ProviderOutput::Stream(decode_stream(response)))
+            Ok(ProviderOutput::Stream(decode_stream(
+                response,
+                request.messages_options.is_some(),
+            )))
         } else {
             if response
                 .content_length()
-                .is_some_and(|n| n > BODY_LIMIT as u64)
+                .is_some_and(|n| n > request.response_limit() as u64)
             {
                 return Err(InferenceError::InvalidUpstream);
             }
@@ -307,14 +323,18 @@ impl ProviderAdapter for OpenAiAdapter {
             let mut chunks = response.bytes_stream();
             while let Some(chunk) = chunks.next().await {
                 let chunk = chunk.map_err(transport_error)?;
-                if chunk.len() > BODY_LIMIT - body.len() {
+                if chunk.len() > request.response_limit().saturating_sub(body.len()) {
                     return Err(InferenceError::InvalidUpstream);
                 }
                 body.extend_from_slice(&chunk);
             }
             let value =
                 serde_json::from_slice(&body).map_err(|_| InferenceError::InvalidUpstream)?;
-            Ok(ProviderOutput::Complete(decode_complete(&value)?))
+            Ok(ProviderOutput::Complete(decode_complete_protocol(
+                &value,
+                None,
+                request.messages_options.is_some(),
+            )?))
         }
     }
 }
@@ -375,6 +395,15 @@ pub(super) fn encode(model: &str, request: &ChatRequest) -> Value {
     }
     if let Some(temperature) = request.temperature {
         value["temperature"] = json!(temperature);
+    }
+    if let Some(options) = &request.messages_options {
+        if let Some(p) = options.top_p {
+            value["top_p"] = json!(p);
+        }
+        if let Some(stops) = &options.stop_sequences {
+            value["stop"] = json!(stops);
+        }
+        // user_id is a client label, never an authority/provider identity.
     }
     if let Some(tokens) = request.max_output_tokens {
         value["max_completion_tokens"] = json!(tokens);
@@ -533,7 +562,14 @@ pub(super) fn decode_complete_profile(
     value: &Value,
     profile: Option<&str>,
 ) -> Result<ChatResponse> {
-    crate::inference::evidence::preserve(decode_shape(value, profile), || {
+    decode_complete_protocol(value, profile, false)
+}
+pub(super) fn decode_complete_protocol(
+    value: &Value,
+    profile: Option<&str>,
+    messages: bool,
+) -> Result<ChatResponse> {
+    crate::inference::evidence::preserve(decode_shape(value, profile, messages), || {
         value["usage"].is_object().then(|| {
             match profile {
                 Some(profile) => local_usage(&value["usage"], profile),
@@ -543,10 +579,17 @@ pub(super) fn decode_complete_profile(
         })
     })
 }
-fn decode_shape(value: &Value, profile: Option<&str>) -> Result<ChatResponse> {
+fn wire_error(value: &Value, messages: bool) -> InferenceError {
+    if messages {
+        super::framing::classified_error(value).unwrap_or(InferenceError::InvalidUpstream)
+    } else {
+        InferenceError::InvalidUpstream
+    }
+}
+fn decode_shape(value: &Value, profile: Option<&str>, messages: bool) -> Result<ChatResponse> {
     object(value)?;
     if !empty(&value["error"]) {
-        return Err(InferenceError::InvalidUpstream);
+        return Err(wire_error(value, messages));
     }
     let choices = array(&value["choices"])?;
     if choices.len() != 1 {
@@ -614,6 +657,7 @@ fn decode_shape(value: &Value, profile: Option<&str>) -> Result<ChatResponse> {
 #[derive(Default)]
 pub(super) struct StreamState {
     profile: Option<&'static str>,
+    messages: bool,
     finished: bool,
     used: bool,
     /// First valid `model` any chunk reported; carried on the usage event.
@@ -632,7 +676,7 @@ impl StreamState {
             serde_json::from_slice(data).map_err(|_| InferenceError::InvalidUpstream)?;
         object(&value)?;
         if !empty(&value["error"]) {
-            return Err(InferenceError::InvalidUpstream);
+            return Err(wire_error(&value, self.messages));
         }
         if self.model.is_none() {
             self.model = ReportedModel::from_json(&value["model"]);
@@ -788,17 +832,18 @@ impl SseDecoder {
     }
 }
 
-fn decode_stream(response: reqwest::Response) -> EventStream {
-    decode_stream_profile(response, None)
+fn decode_stream(response: reqwest::Response, messages: bool) -> EventStream {
+    decode_stream_profile(response, None, messages)
 }
 pub(super) fn decode_stream_profile(
     response: reqwest::Response,
     profile: Option<&'static str>,
+    messages: bool,
 ) -> EventStream {
     Box::pin(async_stream::try_stream! {
         let mut chunks = response.bytes_stream();
         let mut decoder = SseDecoder::new();
-        let mut state = StreamState { profile, ..StreamState::default() };
+        let mut state = StreamState { profile, messages, ..StreamState::default() };
         while let Some(chunk) = chunks.next().await {
             let chunk = chunk.map_err(transport_error)?;
             for &byte in chunk.iter() {

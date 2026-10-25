@@ -126,6 +126,73 @@ pub fn no_argument_tool_requests() -> Vec<ChatRequest> {
     requests
 }
 
+/// A Claude Code turn with parallel calls, reversed results, and distinct
+/// follow-up turns. Text blocks in one message must not create extra turns.
+pub fn parallel_messages_request() -> ChatRequest {
+    crate::protocols::messages::batch_request(serde_json::json!({
+        "model":"public", "max_tokens":32,
+        "messages":[
+            {"role":"user","content":[{"type":"text","text":"hello"},{"type":"text","text":" there"}]},
+            {"role":"assistant","content":[
+                {"type":"text","text":"checking "},
+                {"type":"tool_use","id":"first-call","name":"ping","input":{"value":1}},
+                {"type":"text","text":"both"},
+                {"type":"tool_use","id":"second-call","name":"pong","input":{"value":2}},
+                {"type":"text","text":"!"}
+            ]},
+            {"role":"user","content":[
+                {"type":"tool_result","tool_use_id":"second-call","content":"second result"},
+                {"type":"tool_result","tool_use_id":"first-call","content":"first result"}
+            ]},
+            {"role":"assistant","content":"done"},
+            {"role":"user","content":"continue"}
+        ],
+        "tools":[
+            {"name":"ping","input_schema":{"type":"object","properties":{"value":{"type":"integer"}}}},
+            {"name":"pong","input_schema":{"type":"object","properties":{"value":{"type":"integer"}}}}
+        ]
+    })).unwrap()
+}
+
+pub fn assert_parallel_chat_wire(body: &serde_json::Value) {
+    use serde_json::json;
+    let messages = body["messages"].as_array().unwrap();
+    assert_eq!(
+        messages.len(),
+        6,
+        "original turns, with one canonical result per call"
+    );
+    assert_eq!(messages[0]["content"], "hello there");
+    assert_eq!(messages[1]["role"], "assistant");
+    assert_eq!(messages[1]["content"], "checking both!");
+    let calls = messages[1]["tool_calls"].as_array().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0]["id"], "first-call");
+    assert_eq!(calls[0]["function"]["name"], "ping");
+    assert_eq!(
+        calls[0]["function"]["arguments"],
+        json!({"value":1}).to_string()
+    );
+    assert_eq!(calls[1]["id"], "second-call");
+    assert_eq!(calls[1]["function"]["name"], "pong");
+    assert_eq!(
+        calls[1]["function"]["arguments"],
+        json!({"value":2}).to_string()
+    );
+    for (index, id, text) in [
+        (2, "second-call", "second result"),
+        (3, "first-call", "first result"),
+    ] {
+        assert_eq!(messages[index]["role"], "tool");
+        assert_eq!(messages[index]["tool_call_id"], id);
+        assert_eq!(messages[index]["content"], text);
+    }
+    assert_eq!(messages[4]["role"], "assistant");
+    assert_eq!(messages[4]["content"], "done");
+    assert_eq!(messages[5]["role"], "user");
+    assert_eq!(messages[5]["content"], "continue");
+}
+
 pub async fn assert_text_chat_contract(
     adapter: &dyn ProviderAdapter,
     target: &Deployment,

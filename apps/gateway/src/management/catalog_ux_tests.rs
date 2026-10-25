@@ -142,7 +142,7 @@ async fn platform_readers_read_disabled_workspace_configuration_read_only(pool: 
         )
         .await
         .0,
-        StatusCode::FORBIDDEN
+        StatusCode::NOT_FOUND
     );
 }
 
