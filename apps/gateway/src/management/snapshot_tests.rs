@@ -264,7 +264,7 @@ async fn snapshot_reads_keep_personal_activity_owner_private(pool: PgPool) {
         ] {
             assert_eq!(
                 status(&f.s, u, &format!("/api/v1/workspaces/{personal}/{path}")).await,
-                StatusCode::FORBIDDEN,
+                StatusCode::NOT_FOUND,
                 "{path}"
             );
         }

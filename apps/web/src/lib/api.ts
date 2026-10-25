@@ -94,6 +94,19 @@ export type PlatformOverviewData = {
   glance: { entitled_users: number; teams: number; projects: number; ready_models: number; attempts_7d: string; known_cost_7d_microusd: string };
 };
 export type Deployment = { id: string; model_id: string; model_public_name?: string; provider_connection_id: string; provider_name?: string; upstream_model: string; enabled: boolean };
+/** Browser-only configuration observation, not an apply authorization or reservation. */
+export type DeploymentPreview = {
+  target: { kind: "deployment"; id: string };
+  expected_revision: string;
+  diff: { field: "enabled"; before: boolean; after: boolean }[];
+  serving_routes_gained: string[];
+  serving_routes_lost: string[];
+  models_losing_last_serving_route: { id: string; public_name: string }[];
+  affected_workspaces: { data: { id: string; name: string; kind: "team" | "project" }[]; total: number; limit: number; truncated: boolean };
+  observed_at: string;
+  dependency_versions: Record<string, string>;
+  warnings: string[];
+};
 export type Catalog = { id: string; name: string; description: string | null; created_at?: string };
 export type CatalogAvailability = { mode: "inherit" | "replace"; catalog_ids: string[]; effective_catalog_ids: string[] };
 export type Grant = Pick<Model, "public_name" | "display_name"> & { model_id: string; sources?: ("catalog" | "direct")[]; source?: "catalog" | "direct"; catalog_ids?: string[]; selected: boolean; enabled: boolean; catalog_granted: boolean; direct_granted: boolean; available_from_catalog: boolean; supported_protocols: ModelProtocol[] };
