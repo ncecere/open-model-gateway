@@ -71,7 +71,7 @@ export function useChoices<T>(path: string, enabled = true) {
 }
 export type Column<T> = { title: string; render: (row: T) => ReactNode; hidden?: boolean; narrow?: boolean; numeric?: boolean };
 const columnsOf = <T,>(columns: Column<T>[]): DataTableColumn<T>[] => columns.map((col, i) => ({ id: col.title, header: col.title, cell: col.render, rowHeader: i === 0, hideable: i !== 0, defaultHidden: col.hidden, defaultHiddenNarrow: col.narrow, numeric: col.numeric }));
-export function Table<T>({ rows, columns, rowKey, label }: { rows: T[]; columns: Column<T>[]; rowKey: (row: T) => string; label: string }) { return <DataTable caption={label} stack columns={columnsOf(columns)} data={rows} getRowId={rowKey} columnsMenu columnsMenuMin={5} />; }
+export function Table<T>({ rows, columns, rowKey, label, empty }: { rows: T[]; columns: Column<T>[]; rowKey: (row: T) => string; label: string; /** Replaces the default "No rows." message with the shared empty-state component. */ empty?: ReactNode }) { return <DataTable caption={label} stack columns={columnsOf(columns)} data={rows} getRowId={rowKey} columnsMenu columnsMenuMin={5} empty={empty} />; }
 /** An offset-paged collection; with search and/or the status filter, a FilterToolbar above it (both in the URL). */
 export function CollectionTable<T>({ path, columns, rowKey, label, empty, pageSize = 50, searchable = false, statusFilter = false }: { path: string; columns: Column<T>[]; rowKey: (row: T) => string; label: string; empty: string; pageSize?: number; searchable?: boolean; statusFilter?: boolean }) {
   const navigation = useDashboardNavigation();

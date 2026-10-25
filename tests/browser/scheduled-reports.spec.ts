@@ -108,6 +108,8 @@ test("create → fenced generation → immutable report → CSV, workspace and p
     await owner.page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
     expect((await api(operator.page, "GET", `/workspaces/${personal}/report-schedules`)).status()).toBe(404);
     await owner.page.goto(`/workspaces/${ws}/costs?tab=scheduled-reports`);
+    // Wait past the initial "Loading schedules…" state so the screenshot shows the created schedule, not a loading placeholder.
+    await expect(owner.page.getByRole("table", { name: "Report schedules" }).getByText(scoped.schedule.slice(0, 8))).toBeVisible();
     await screenshots(owner.page, "workspace-list");
     await owner.page.getByRole("button", { name: "Pause", exact: true }).click();
     await owner.page.getByRole("dialog").getByRole("button", { name: "Pause schedule", exact: true }).click();

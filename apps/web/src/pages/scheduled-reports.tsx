@@ -1,9 +1,13 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, ApiError, type Session, type Workspace } from "../lib/api";
-import { canReadReports, reportsPath, scheduleBody, scheduleFields, type Aggregate, type ReportRun, type Schedule, type ScheduleList } from "../lib/scheduled-reports";
+import { aggregateMeasureLabel, canReadReports, coverageLabel, countOrUnavailable, deliveryStatusLabel, deliveryStatusTone, dimensionLabel, recipientLabel, reportsPath, scheduleBody, scheduleFields, unavailableLabel, unavailableReasonLabel, type Aggregate, type ReportRun, type Schedule, type ScheduleList } from "../lib/scheduled-reports";
 import { formatMicroUsd } from "../lib/governance";
 import { Button, Alert, Empty, ErrorNotice, FormField, Heading, Inline, NativeSelect, Panel, Stack, Table, useAction, useApi, useApiScope } from "../components/ui";
+import { StatusBadge } from "../components/ui/badge/badge";
+import { StatTile, StatTileGrid } from "../components/templates/stat-tile";
+import { DescriptionList } from "../components/ui/description-list/description-list";
+import { EmptyState } from "../components/ui/empty-state/empty-state";
 import { ResourceLink } from "../components/navigation-link";
 import { TextLink } from "../components/ui/text-link/text-link";
 import { detailTime, utcPeriod } from "../lib/format";
@@ -12,7 +16,10 @@ import s from "./shared.module.css";
 const listSearch = (workspace?: Workspace): DashboardSearch => ({ page: workspace ? "costs" : "platform-costs", ws: workspace?.id, tab: "scheduled-reports" });
 const runSearch = (workspace: Workspace | undefined, schedule: string, run: string): DashboardSearch => ({ page: workspace ? "workspace-report-run" : "platform-report-run", ws: workspace?.id, record: schedule, run });
 const when = (value?: string | null) => value ? detailTime(value) : "Not initialized";
-function Delivery({ value }: { value: ReportRun["delivery"] }) { return value ? <span>{value.status.replaceAll("_", " ")} · {value.sent} sent · {value.failed} failed · {value.waiting} waiting / {value.recipients} recipients</span> : <span>Delivery status unavailable</span>; }
+function Delivery({ value }: { value: ReportRun["delivery"] }) {
+  if (!value) return <span>Delivery status unavailable</span>;
+  return <Inline gap={2} align="center"><StatusBadge tone={deliveryStatusTone(value.status)} size="sm">{deliveryStatusLabel(value.status)}</StatusBadge><span className={s.secondary}>{value.sent} sent · {value.failed} failed · {value.waiting} waiting / {recipientLabel(value.recipients)}</span></Inline>;
+}
 export function ScheduledReports({ session, workspace }: { session: Session; workspace?: Workspace }) {
   if (!canReadReports(session, workspace)) return <Alert title="Access not available">Scheduled reports require workspace owner/admin access.</Alert>;
   return <ScheduleListView session={session} workspace={workspace} />;
@@ -72,13 +79,19 @@ function ReportRunView({ workspace, schedule, run }: { workspace?: Workspace; sc
       <Inline><TextLink href={`${path}/csv`} download>Download aggregate CSV</TextLink><Button variant="secondary" size="sm" onClick={() => void q.refetch()}>Refresh report</Button></Inline>
       <Delivery value={r.delivery} /><Alert title="Holds and unknowns">Held amounts are retained floors, not additional settled charges or proven upper bounds. Unavailable values are never zero. Later reconciliation does not change this snapshot.</Alert>
       <Panel title="Full totals"><AggregateValues totals={snapshot.totals} /></Panel>
-      <Panel title="Coverage"><dl>{Object.entries(snapshot.coverage).map(([key, value]) => <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{value ?? "Unavailable"}</dd></div>)}</dl></Panel>
-      {snapshot.breakdowns_truncated && <Alert tone="warning" title="Dimensions truncated">{snapshot.truncated_dimensions.map(d => `${d}: first 100 entries`).join("; ")}. Full totals above are not truncated.</Alert>}
-      {Object.entries(snapshot.breakdowns).map(([dimension, entries]) => <Stack key={dimension} gap={3}><h2>{dimension.replaceAll("_", " ")}</h2><Table label={`${dimension} aggregates`} rows={entries} rowKey={r => r.id ?? "aggregate"} columns={[
-        { title: "Allocation", render: r => r.name }, { title: "Settled estimate", render: r => formatMicroUsd(r.totals.known_cost_microusd) }, { title: "Held floor", render: r => formatMicroUsd(r.totals.held_microusd) }, { title: "Attempts", render: r => r.totals.attempts ?? "Unavailable" }, { title: "Unresolved", render: r => r.totals.unresolved_attempts ?? "Unavailable" },
+      <Panel title="Coverage"><DescriptionList layout="stacked" columns={3} items={Object.entries(snapshot.coverage).map(([key, value]) => ({ label: coverageLabel(key), value: countOrUnavailable(value) }))} /></Panel>
+      {snapshot.breakdowns_truncated && <Alert tone="warning" title="Dimensions truncated">{snapshot.truncated_dimensions.map(d => `${dimensionLabel(d)}: first 100 entries`).join("; ")}. Full totals above are not truncated.</Alert>}
+      {Object.entries(snapshot.breakdowns).map(([dimension, entries]) => <Stack key={dimension} gap={3}><h2>{dimensionLabel(dimension)}</h2><Table label={`${dimensionLabel(dimension)} aggregates`} rows={entries} rowKey={r => r.id ?? "aggregate"} empty={<EmptyState size="compact" title="No rows" />} columns={[
+        { title: "Allocation", render: r => r.name }, { title: "Settled estimate", render: r => formatMicroUsd(r.totals.known_cost_microusd) }, { title: "Held floor", render: r => formatMicroUsd(r.totals.held_microusd) }, { title: "Attempts", render: r => countOrUnavailable(r.totals.attempts) }, { title: "Unresolved", render: r => countOrUnavailable(r.totals.unresolved_attempts) },
       ]} /></Stack>)}
-      <Panel title="Unavailable measures"><dl>{Object.entries(snapshot.unavailable).map(([key, reason]) => <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>Unavailable · {reason.replaceAll("_", " ")}</dd></div>)}</dl></Panel>
+      <Panel title="Unavailable measures"><DescriptionList layout="stacked" columns={2} items={Object.entries(snapshot.unavailable).map(([key, reason]) => ({ label: unavailableLabel(key), value: `Unavailable · ${unavailableReasonLabel(reason)}` }))} /></Panel>
     </>}
   </Stack>;
 }
-function AggregateValues({ totals }: { totals: Aggregate }) { return <dl><div><dt>Settled configured-rate estimate</dt><dd>{formatMicroUsd(totals.known_cost_microusd)}</dd></div><div><dt>Held floor</dt><dd>{formatMicroUsd(totals.held_microusd)}</dd></div>{(["attempts", "unresolved_attempts", "root_requests"] as const).map(key => <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{totals[key] ?? "Unavailable"}</dd></div>)}</dl>; }
+function AggregateValues({ totals }: { totals: Aggregate }) {
+  return <StatTileGrid columns={3}>
+    <StatTile label="Settled configured-rate estimate" value={formatMicroUsd(totals.known_cost_microusd)} />
+    <StatTile label="Held floor" value={formatMicroUsd(totals.held_microusd)} />
+    {(["attempts", "unresolved_attempts", "root_requests"] as const).map(key => <StatTile key={key} label={aggregateMeasureLabel(key)} value={countOrUnavailable(totals[key])} />)}
+  </StatTileGrid>;
+}
