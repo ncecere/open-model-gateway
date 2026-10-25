@@ -178,8 +178,23 @@ async fn scheduled_reports_run_as_runtime(pool: &PgPool) {
         .await
         .unwrap();
     assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM report_runs r JOIN report_snapshots p ON p.run_id=r.id WHERE r.schedule_id=$1").bind(id).fetch_one(&runtime).await.unwrap(),1);
-    let deliveries: i64 = sqlx::query_scalar("SELECT count(*) FROM alert_deliveries d JOIN report_runs r ON r.id=d.report_run_id WHERE r.schedule_id=$1 AND d.status='report_pending'").bind(id).fetch_one(&runtime).await.unwrap();
+    let deliveries: i64 = sqlx::query_scalar("SELECT count(*) FROM alert_deliveries d JOIN report_runs r ON r.id=d.report_run_id WHERE r.schedule_id=$1 AND d.status='report_pending' AND NOT d.quota_charged AND d.suppression_reason IS NULL").bind(id).fetch_one(&runtime).await.unwrap();
     assert_eq!(deliveries, 1);
+    // Exemption is only from bucket quota, never from snapshot isolation.
+    for isolation in ["REPEATABLE READ", "SERIALIZABLE"] {
+        let mut tx = runtime.begin().await.unwrap();
+        sqlx::query(&format!("SET TRANSACTION ISOLATION LEVEL {isolation}"))
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let error = sqlx::query("INSERT INTO alert_recipient_outbox(delivery_id,fingerprint,internal_user_id) SELECT d.id,sha256('isolation'::bytea),$2 FROM alert_deliveries d JOIN report_runs r ON r.id=d.report_run_id WHERE r.schedule_id=$1")
+            .bind(id).bind(user).execute(&mut *tx).await.unwrap_err();
+        assert_eq!(
+            error.as_database_error().unwrap().code().as_deref(),
+            Some("25001")
+        );
+        tx.rollback().await.unwrap();
+    }
     sqlx::query("UPDATE installation_settings SET smtp_host=NULL WHERE singleton")
         .execute(&runtime)
         .await
@@ -190,6 +205,9 @@ async fn scheduled_reports_run_as_runtime(pool: &PgPool) {
     leases.release_all(&runtime).await;
     for statement in [
         "UPDATE alert_deliveries SET report_run_id=gen_random_uuid()",
+        "UPDATE alert_deliveries SET quota_charged=true",
+        "UPDATE alert_deliveries SET suppression_reason=NULL",
+        "UPDATE alert_deliveries SET created_at=clock_timestamp()",
         "UPDATE alert_deliveries SET event_id=gen_random_uuid()",
         "UPDATE alert_deliveries SET bucket_id=gen_random_uuid()",
         "DELETE FROM alert_recipient_outbox",

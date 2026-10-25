@@ -292,10 +292,12 @@ async fn scheduled_reports_delivery_expired_lease_24h_is_fenced(pool: PgPool) {
     let (store, _, _, _, _) = published(&pool, "installation").await;
     configured(&pool).await;
     let c = report_claim(&store).await.unwrap();
-    sqlx::query("UPDATE alert_deliveries SET created_at=clock_timestamp()-interval '25 hours'")
-        .execute(&pool)
-        .await
-        .unwrap();
+    // Owner-only clock fixture, as in #277's alert outbox tests. Production
+    // callers cannot rewrite the immutable generation timestamp.
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::raw_sql("ALTER TABLE alert_deliveries DISABLE TRIGGER alert_delivery_generation_immutable; UPDATE alert_deliveries SET created_at=clock_timestamp()-interval '25 hours'; ALTER TABLE alert_deliveries ENABLE TRIGGER alert_delivery_generation_immutable")
+        .execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
     deliver_pending(&store, 25).await;
     assert_eq!(state(&pool).await, "exhausted");
     assert!(!complete(&store, &c, Ok(())).await.unwrap());
