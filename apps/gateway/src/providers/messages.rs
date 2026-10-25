@@ -9,6 +9,43 @@ pub(crate) enum ProviderClass {
     Local,
 }
 
+/// Reviewed client-side tool/thinking/context features only. Adding a beta
+/// requires a capability, price/bound and wire-contract review; no wildcards.
+pub(crate) const ALLOWED_BETAS: &[&str] = &[
+    "interleaved-thinking-2025-05-14",
+    "fine-grained-tool-streaming-2025-05-14",
+    "context-management-2025-06-27",
+    "token-efficient-tools-2025-02-19",
+];
+
+/// Validate every comma-separated token while retaining original header bytes.
+/// Shared by the HTTP frontend and the pre-admission/dispatch adapter policy.
+pub(crate) fn validate_beta_headers<'a>(
+    values: impl IntoIterator<Item = &'a str>,
+) -> Result<(), InferenceError> {
+    let invalid = || InferenceError::InvalidField("anthropic-beta");
+    let mut tokens = 0_usize;
+    for (index, value) in values.into_iter().enumerate() {
+        if index >= 16
+            || value.is_empty()
+            || value.len() > 1024
+            || !value
+                .bytes()
+                .all(|b| b == b'\t' || b == b' ' || b.is_ascii_graphic())
+        {
+            return Err(invalid());
+        }
+        tokens = value.split(',').try_fold(tokens, |count, token| {
+            if count >= 32 || !ALLOWED_BETAS.contains(&token.trim_matches([' ', '\t'])) {
+                Err(invalid())
+            } else {
+                Ok(count + 1)
+            }
+        })?;
+    }
+    Ok(())
+}
+
 pub(crate) fn validate(request: &ChatRequest, class: ProviderClass) -> Result<(), InferenceError> {
     let Some(options) = &request.messages_options else {
         return Ok(());
@@ -49,12 +86,5 @@ pub(crate) fn validate(request: &ChatRequest, class: ProviderClass) -> Result<()
             return refuse("top_k");
         }
     }
-    if options.beta_headers.len() > 16
-        || options.beta_headers.iter().any(|s| {
-            s.is_empty() || s.len() > 1024 || !s.bytes().all(|b| b == b' ' || b.is_ascii_graphic())
-        })
-    {
-        return refuse("anthropic-beta");
-    }
-    Ok(())
+    validate_beta_headers(options.beta_headers.iter().map(String::as_str))
 }

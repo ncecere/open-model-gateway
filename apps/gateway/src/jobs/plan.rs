@@ -338,7 +338,9 @@ impl Jobs {
         let mut issues: Vec<Issue> = Vec::new();
         let mut ids: HashSet<String> = HashSet::new();
         let mut models: HashMap<String, Result<Resolved, LineError>> = HashMap::new();
-        let mut previews: HashMap<(Uuid, Option<u32>), LinePreview> = HashMap::new();
+        // Cache TTL requirements are part of the memoization key: a clean
+        // line must not authorize a later cached line at an incompatible price.
+        let mut previews: HashMap<(Uuid, Option<u32>, u8), LinePreview> = HashMap::new();
         let mut prices: HashMap<Uuid, Uuid> = HashMap::new();
         // deployment id -> (group, first line number using it)
         let mut groups: Vec<(LineGroup, u64, Arc<dyn ProviderAdapter>, bool)> = Vec::new();
@@ -413,7 +415,18 @@ impl Jobs {
                 BatchRequest::Chat(r) => r.max_output_tokens,
                 BatchRequest::Embeddings(_) => Some(0),
             };
-            let key = (resolved.deployment.id, requested);
+            let cache_controls = match &line.request {
+                BatchRequest::Chat(r) if resolved.deployment.provider == "anthropic" => r
+                    .messages_options
+                    .as_ref()
+                    .map(|o| o.cache_controls.as_slice())
+                    .unwrap_or_default(),
+                _ => &[],
+            };
+            let cache_mask = cache_controls
+                .iter()
+                .fold(0_u8, |mask, c| mask | if c["ttl"] == "1h" { 2 } else { 1 });
+            let key = (resolved.deployment.id, requested, cache_mask);
             if let std::collections::hash_map::Entry::Vacant(slot) = previews.entry(key) {
                 slot.insert(
                     crate::governance::batch::preview_line(
@@ -423,6 +436,7 @@ impl Jobs {
                         requested,
                         prices.get(&resolved.deployment.id).copied(),
                         resolved.adapter.generation_output_limit(),
+                        cache_controls,
                     )
                     .await?,
                 );

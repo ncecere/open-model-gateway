@@ -28,25 +28,16 @@ fn valid_version(headers: &HeaderMap) -> bool {
         && beta_headers(headers).is_ok()
 }
 fn beta_headers(headers: &HeaderMap) -> Result<Vec<String>> {
-    let values = headers.get_all("anthropic-beta").iter().collect::<Vec<_>>();
-    if values.len() > 16 {
-        return Err(InferenceError::InvalidField("anthropic-beta"));
-    }
-    values
-        .into_iter()
+    let values = headers
+        .get_all("anthropic-beta")
+        .iter()
         .map(|v| {
-            let s = v
-                .to_str()
-                .map_err(|_| InferenceError::InvalidField("anthropic-beta"))?;
-            if s.is_empty()
-                || s.len() > 1024
-                || !s.bytes().all(|b| b == b' ' || b.is_ascii_graphic())
-            {
-                return Err(InferenceError::InvalidField("anthropic-beta"));
-            }
-            Ok(s.to_owned())
+            v.to_str()
+                .map_err(|_| InferenceError::InvalidField("anthropic-beta"))
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    crate::providers::messages::validate_beta_headers(values.iter().copied())?;
+    Ok(values.into_iter().map(str::to_owned).collect())
 }
 pub async fn handle(
     Extension(engine): Extension<Engine>,
@@ -55,6 +46,10 @@ pub async fn handle(
     headers: HeaderMap,
     input: std::result::Result<Json<Request>, JsonRejection>,
 ) -> Response {
+    let betas = match beta_headers(&headers) {
+        Ok(v) => v,
+        Err(e) => return error_response(e),
+    };
     if !valid_version(&headers) {
         return error_response(InferenceError::InvalidRequest);
     }
@@ -81,10 +76,7 @@ pub async fn handle(
         Err(e) => return error_response(e),
     };
     if let Some(options) = &mut request.messages_options {
-        options.beta_headers = match beta_headers(&headers) {
-            Ok(v) => v,
-            Err(e) => return error_response(e),
-        };
+        options.beta_headers = betas;
     }
     let model = request.model.clone();
     let id = format!("msg_{}", request_id.0.simple());
@@ -218,7 +210,9 @@ fn render(output: ProviderOutput, id: String, model: String) -> Response {
                         Ok(finished) => {
                             if let Some(block) = block {
                                 native = true;
-                                let kind = block["type"].as_str().unwrap();
+                                let Some(kind) = block.get("type").and_then(Value::as_str) else {
+                                    yield Ok(event("error", error_body(InferenceError::InvalidUpstream))); return;
+                                };
                                 yield Ok(event(kind, block.clone()));
                             }
                             if let Some(delta) = delta.filter(|_| !native) {
@@ -235,7 +229,10 @@ fn render(output: ProviderOutput, id: String, model: String) -> Response {
                 }
                 if !done { yield Ok(event("error", error_body(InferenceError::InvalidUpstream))); return; }
                 let terminal = match accumulator.finish().and_then(|r| snapshot(&id, &model, &r)) { Ok(v) => v, Err(e) => { yield Ok(event("error", error_body(e))); return; } };
-                for (index, block) in terminal["content"].as_array().unwrap().iter().enumerate().filter(|_| !native) {
+                let Some(content) = terminal["content"].as_array() else {
+                    yield Ok(event("error", error_body(InferenceError::InvalidUpstream))); return;
+                };
+                for (index, block) in content.iter().enumerate().filter(|_| !native) {
                     if block["type"] != "text" {
                         let mut start = block.clone(); start["input"] = json!({});
                         yield Ok(event("content_block_start", json!({"index":index,"content_block":start})));

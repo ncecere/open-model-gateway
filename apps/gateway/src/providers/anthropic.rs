@@ -144,8 +144,9 @@ impl ProviderAdapter for AnthropicAdapter {
             response
         };
         if !request.stream {
-            return Ok(ProviderOutput::Complete(decode(
+            return Ok(ProviderOutput::Complete(decode_for(
                 &super::framing::body_limit(response, request.response_limit()).await?,
+                request.messages_options.is_some(),
             )?));
         }
         check_sse(&response)?;
@@ -277,14 +278,18 @@ fn finish(value: &Value) -> Result<FinishReason> {
     }
 }
 /// Structural failure still fails, but a valid usage object is kept as evidence.
+#[cfg(test)]
 fn decode(value: &Value) -> Result<ChatResponse> {
-    crate::inference::evidence::preserve(decode_shape(value), || {
+    decode_for(value, false)
+}
+fn decode_for(value: &Value, messages: bool) -> Result<ChatResponse> {
+    crate::inference::evidence::preserve(decode_shape(value, messages), || {
         value["usage"].is_object().then(|| {
             usage(&value["usage"]).map(|u| super::metering::with_model(u, &value["model"]))
         })
     })
 }
-fn decode_shape(value: &Value) -> Result<ChatResponse> {
+fn decode_shape(value: &Value, messages: bool) -> Result<ChatResponse> {
     fields(
         value,
         &[
@@ -330,12 +335,12 @@ fn decode_shape(value: &Value) -> Result<ChatResponse> {
                     arguments: block["input"].to_string(),
                 });
             }
-            Some("thinking") => {
+            Some("thinking") if messages => {
                 fields(block, &["type", "thinking", "signature"])?;
                 string(&block["thinking"])?;
                 string(&block["signature"])?;
             }
-            Some("redacted_thinking") => {
+            Some("redacted_thinking") if messages => {
                 fields(block, &["type", "data"])?;
                 string(&block["data"])?;
             }
@@ -343,7 +348,7 @@ fn decode_shape(value: &Value) -> Result<ChatResponse> {
         }
     }
     Ok(ChatResponse {
-        messages_content: Some(blocks.clone()),
+        messages_content: messages.then(|| blocks.clone()),
         content: if text.is_empty() { None } else { Some(text) },
         tool_calls: calls,
         finish_reason: finish(&value["stop_reason"])?,
