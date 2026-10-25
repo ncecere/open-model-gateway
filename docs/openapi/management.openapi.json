@@ -1383,6 +1383,14 @@
         "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
         "x-omg-schema-status": "incomplete"
       },
+      "post_api_v1_platform_deployments_by_id_configuration_previewRequest": {
+        "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
+        "x-omg-schema-status": "incomplete"
+      },
+      "post_api_v1_platform_deployments_by_id_configuration_previewResponse": {
+        "description": "Response statuses, headers, media types and body schemas have not been inventoried. This is not a promise of a JSON response.",
+        "x-omg-schema-status": "incomplete"
+      },
       "post_api_v1_platform_legal_holdsRequest": {
         "description": "Request body presence, media types and schema have not been inventoried. This is not a promise that a body is accepted.",
         "x-omg-schema-status": "incomplete"
@@ -3690,6 +3698,41 @@
           "$ref": "#/components/schemas/patch_api_v1_platform_deployments_by_idResponse"
         },
         "x-omg-token-policy": "Scope"
+      }
+    },
+    "/api/v1/platform/deployments/{id}/configuration/preview": {
+      "post": {
+        "operationId": "post_api_v1_platform_deployments_by_id_configuration_preview",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Incomplete response contract; see x-omg-response-schema. Framework extraction errors can differ from the shared ErrorEnvelope."
+          }
+        },
+        "security": [
+          {
+            "browserSession": [],
+            "csrfToken": [],
+            "origin": []
+          }
+        ],
+        "x-omg-access": "PlatformWrite",
+        "x-omg-request-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_deployments_by_id_configuration_previewRequest"
+        },
+        "x-omg-response-schema": {
+          "$ref": "#/components/schemas/post_api_v1_platform_deployments_by_id_configuration_previewResponse"
+        },
+        "x-omg-token-policy": "Denied"
       }
     },
     "/api/v1/platform/holds": {
