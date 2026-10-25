@@ -25,6 +25,7 @@ fn target() -> Deployment {
 }
 pub(super) fn request(stream: bool) -> ChatRequest {
     ChatRequest {
+        messages_options: None,
         model: "public".into(),
         messages: vec![Message {
             role: Role::User,
@@ -39,6 +40,67 @@ pub(super) fn request(stream: bool) -> ChatRequest {
         stream,
     }
 }
+#[tokio::test]
+async fn messages_frontend_safe_errors_through_mock_upstream() {
+    for (status, body, expected) in [
+        (
+            400,
+            json!({"error":{"type":"invalid_request_error","message":"prompt is too long: SECRET_BODY"}}),
+            InferenceError::ContextLength,
+        ),
+        (
+            529,
+            json!({"error":{"message":"SECRET_KEY"}}),
+            InferenceError::Overloaded,
+        ),
+        (
+            429,
+            json!({"error":{"message":"SECRET_PROMPT"}}),
+            InferenceError::Busy,
+        ),
+    ] {
+        let mock = Mock::new(status, Some(body.to_string().into_bytes())).await;
+        let mut r = request(false);
+        r.messages_options = Some(Box::default());
+        let result = mock.adapter.execute(&target(), r).await;
+        assert!(matches!(result, Err(e) if e == expected));
+        assert!(!expected.message().contains("SECRET"));
+    }
+}
+
+#[test]
+fn non_messages_stream_errors_keep_legacy_adapter_behavior() {
+    let value =
+        json!({"type":"error","error":{"type":"overloaded_error","message":"provider diagnostic"}});
+    assert!(matches!(
+        State::default().push(value.clone()),
+        Err(InferenceError::InvalidUpstream)
+    ));
+    let mut state = State {
+        messages: true,
+        ..State::default()
+    };
+    assert!(matches!(state.push(value), Err(InferenceError::Overloaded)));
+}
+
+#[test]
+fn messages_sampling_is_forwarded_and_client_labels_are_not() {
+    let mut r = request(false);
+    r.messages_options = Some(Box::new(MessagesOptions {
+        top_p: Some(0.7),
+        top_k: Some(20),
+        stop_sequences: Some(vec!["STOP".into()]),
+        ..Default::default()
+    }));
+    let body = encode("upstream", &r).unwrap();
+    assert_eq!(body["top_p"], 0.7);
+    assert_eq!(body["top_k"], 20);
+    assert_eq!(body["stop_sequences"], json!(["STOP"]));
+    // `metadata.user_id` is a gateway client label, never sent upstream.
+    assert!(body.get("metadata").is_none());
+    assert!(body.get("authorization").is_none());
+}
+
 #[tokio::test]
 async fn unpriced_omission_keeps_legacy_anthropic_wire_fallback() {
     for stream in [false, true] {

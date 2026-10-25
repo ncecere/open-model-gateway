@@ -20,6 +20,7 @@ pub const PROFILES: &[(&str, &[P])] = &[
         &[
             P::ChatCompletions,
             P::Responses,
+            P::Messages,
             P::Embeddings,
             P::Images,
             P::AudioTranscriptions,
@@ -34,6 +35,7 @@ pub const PROFILES: &[(&str, &[P])] = &[
         "openrouter",
         &[
             P::ChatCompletions,
+            P::Messages,
             P::Embeddings,
             P::Rerank,
             P::Systemone,
@@ -48,11 +50,26 @@ pub const PROFILES: &[(&str, &[P])] = &[
     // SGLang serve no System One route.
     (
         "openai_compatible",
-        &[P::ChatCompletions, P::Embeddings, P::Rerank, P::Systemone],
+        &[
+            P::ChatCompletions,
+            P::Messages,
+            P::Embeddings,
+            P::Rerank,
+            P::Systemone,
+        ],
     ),
-    ("vllm", &[P::ChatCompletions, P::Embeddings, P::Rerank]),
-    ("sglang", &[P::ChatCompletions, P::Embeddings, P::Rerank]),
-    ("ollama", &[P::ChatCompletions, P::Embeddings, P::Systemone]),
+    (
+        "vllm",
+        &[P::ChatCompletions, P::Messages, P::Embeddings, P::Rerank],
+    ),
+    (
+        "sglang",
+        &[P::ChatCompletions, P::Messages, P::Embeddings, P::Rerank],
+    ),
+    (
+        "ollama",
+        &[P::ChatCompletions, P::Messages, P::Embeddings, P::Systemone],
+    ),
 ];
 
 /// Protocols a registered profile serves; `None` for an unknown profile.
