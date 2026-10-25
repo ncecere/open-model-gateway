@@ -1,7 +1,9 @@
 //! Shared OTLP validation and bounded HTTP delivery, not a worker, queue or
 //! retry policy. Signal-specific config, deadlines and wire bodies stay with
 //! the caller. Never expose destinations, header material or transport errors.
-use std::time::Duration;
+use std::{sync::LazyLock, time::Duration};
+
+use serde_json::{Value, json};
 
 macro_rules! fixed_enum {
     ($name:ident { $($variant:ident => $text:literal),+ $(,)? }) => {
@@ -31,12 +33,40 @@ const OTLP_RESERVED_HEADERS: [&str; 9] = [
 ];
 const ACK_LIMIT: usize = 64 * 1024;
 
+/// One id for the entire process, shared by every OTLP signal's resource
+/// attributes. Cache failure too: a signal that cannot draw this identity
+/// stays quietly disabled, never a predictable fallback or another draw.
+pub(crate) static INSTANCE: LazyLock<Result<uuid::Uuid, crate::entropy::EntropyUnavailable>> =
+    LazyLock::new(|| {
+        Ok(uuid::Builder::from_random_bytes(crate::entropy::bytes_quiet::<16>()?).into_uuid())
+    });
+
+/// `service.name`, `service.version`, `deployment.environment.name` and
+/// `service.instance.id`: the resource attributes shared by metrics and
+/// operational logs (traces use the first three only). Only this attribute
+/// carries the per-process UUID; it is never an installation or user id.
+/// `version` is the caller's own `env!("CARGO_PKG_VERSION")`: this module
+/// stays free of process configuration, including compile-time env macros.
+pub(crate) fn resource_attributes(
+    environment: crate::config::Environment,
+    instance: uuid::Uuid,
+    version: &str,
+) -> Value {
+    json!([
+        {"key":"service.name","value":{"stringValue":"open-model-gateway"}},
+        {"key":"service.version","value":{"stringValue":version}},
+        {"key":"deployment.environment.name","value":{"stringValue":environment.as_str()}},
+        {"key":"service.instance.id","value":{"stringValue":instance.to_string()}}
+    ])
+}
+
 pub(crate) fn endpoint(
     setting: &str,
     value: &str,
     path: &str,
     environment: crate::config::Environment,
     exchange: Duration,
+    ops_events: bool,
 ) -> anyhow::Result<(reqwest::Url, reqwest::Client)> {
     let invalid = || {
         anyhow::anyhow!(
@@ -71,9 +101,7 @@ pub(crate) fn endpoint(
         host.trim_matches(['[', ']'])
             .parse::<std::net::IpAddr>()
             .ok()
-    }) && !crate::egress::policy()
-        .permit_loopback(development)
-        .allows(ip)
+    }) && !transport_policy(development, url.scheme()).allows(ip)
     {
         crate::metrics::METRICS.egress_denied(crate::egress::Purpose::Telemetry.as_str());
         return Err(invalid());
@@ -84,6 +112,7 @@ pub(crate) fn endpoint(
         development,
         Duration::from_secs(1),
         exchange,
+        ops_events,
     )
     .map_err(|_| invalid())?;
     Ok((url, client))
@@ -195,6 +224,19 @@ pub(crate) fn parse_otlp_headers(
     Ok(headers)
 }
 
+/// Development plaintext HTTP is approved for loopback only (#313/#325): a
+/// mixed or non-loopback DNS answer for `localhost` (or any other host) must
+/// never succeed, regardless of `GATEWAY_EGRESS_PRIVATE_ALLOW`. HTTPS is
+/// unaffected. Shared by every OTLP signal (traces, metrics and logs).
+pub(crate) fn transport_policy(development: bool, scheme: &str) -> crate::egress::Policy {
+    let policy = crate::egress::policy().permit_loopback(development);
+    if scheme == "http" {
+        policy.only_loopback()
+    } else {
+        policy
+    }
+}
+
 /// Select the export transport's policy from an explicit base policy.
 /// Kept pure so address decisions can be tested without process-wide state.
 fn export_http_policy(url: &reqwest::Url, policy: crate::egress::Policy) -> crate::egress::Policy {
@@ -212,8 +254,16 @@ pub(crate) fn export_http_client(
     development: bool,
     connect_timeout: Duration,
     exchange_timeout: Duration,
+    ops_events: bool,
 ) -> anyhow::Result<reqwest::Client> {
-    let policy = crate::egress::policy().permit_loopback(development);
+    let policy = transport_policy(development, url.scheme());
+    // The logs exporter's own resolver never emits the typed operational
+    // event it transports (no feedback); every other signal is unaffected.
+    let policy = if ops_events {
+        policy
+    } else {
+        policy.without_ops_events()
+    };
     export_http_client_with_policy(url, purpose, policy, connect_timeout, exchange_timeout)
 }
 
@@ -318,6 +368,88 @@ mod http_policy_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ip(s: &str) -> std::net::IpAddr {
+        s.parse().unwrap()
+    }
+
+    /// #313/#325: development plaintext HTTP for any OTLP signal (traces,
+    /// metrics, logs) is loopback-only, even once a private network is
+    /// allowlisted; HTTPS is unaffected.
+    #[test]
+    fn transport_policy_is_loopback_only_for_http_regardless_of_private_allow() {
+        let http = transport_policy(true, "http");
+        assert!(http.allows(ip("127.0.0.1")));
+        assert!(http.allows(ip("::1")));
+        for refused in ["8.8.8.8", "10.1.2.3", "169.254.169.254"] {
+            assert!(!http.allows(ip(refused)), "{refused}");
+        }
+        let https = transport_policy(true, "https");
+        assert!(https.allows(ip("8.8.8.8")), "https stays unaffected");
+        assert!(
+            !transport_policy(false, "http").allows(ip("127.0.0.1")),
+            "never outside development"
+        );
+    }
+
+    /// A real-transport proof, like the traces/metrics mixed-answer test in
+    /// `egress.rs`: for `http`, a DNS answer mixing a loopback record with an
+    /// otherwise-allowed one is refused in full, not narrowed down to the
+    /// loopback subset (a `localhost` rebinding or poisoned answer must
+    /// never partially succeed just because one record happens to be
+    /// loopback). HTTPS filtering is unaffected.
+    #[test]
+    fn mixed_dns_answers_for_http_are_refused_in_full() {
+        let sock = |s: &str| std::net::SocketAddr::new(ip(s), 4318);
+        let policy = transport_policy(true, "http");
+        assert!(
+            crate::egress::filter(
+                &policy,
+                crate::egress::Purpose::Telemetry,
+                "localhost",
+                vec![sock("127.0.0.1"), sock("8.8.8.8")]
+            )
+            .is_err(),
+            "a single non-loopback record refuses the whole answer"
+        );
+        assert!(
+            crate::egress::filter(
+                &policy,
+                crate::egress::Purpose::Telemetry,
+                "localhost",
+                vec![sock("8.8.8.8")]
+            )
+            .is_err()
+        );
+        assert_eq!(
+            crate::egress::filter(
+                &policy,
+                crate::egress::Purpose::Telemetry,
+                "localhost",
+                vec![sock("127.0.0.1"), sock("::1")]
+            )
+            .unwrap(),
+            vec![sock("127.0.0.1"), sock("::1")],
+            "an all-loopback answer is unaffected"
+        );
+        // HTTPS keeps the ordinary mixed-answer behaviour (narrow to the
+        // allowed subset), confirming only `http`/loopback_only changed.
+        // `development: false` so the loopback record is actually refused
+        // (not just un-narrowed) and the public one kept.
+        let https = transport_policy(false, "https");
+        assert_eq!(
+            crate::egress::filter(
+                &https,
+                crate::egress::Purpose::Telemetry,
+                "example.invalid",
+                vec![sock("127.0.0.1"), sock("8.8.8.8")]
+            )
+            .unwrap(),
+            vec![sock("8.8.8.8")],
+            "https: the loopback record is dropped, the public one kept"
+        );
+    }
+
     #[test]
     fn acknowledgement_uses_only_the_selected_signals_count_key() {
         let ack = br#"{"partialSuccess":{"rejectedSpans":"1","rejectedDataPoints":"999","errorMessage":"never returned"}}"#;

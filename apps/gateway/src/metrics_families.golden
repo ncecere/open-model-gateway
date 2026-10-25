@@ -43,6 +43,10 @@ gateway_inference_tokens counter direction,model,provider Traffic
 gateway_key_issuance_refused counter operation,scope Traffic
 gateway_lock_deadlock_retries counter path System
 gateway_metrics_collection_errors counter collector System
+gateway_otlp_logs_dropped counter reason System
+gateway_otlp_logs_pushes counter outcome System
+gateway_otlp_logs_rejected_records counter - System
+gateway_otlp_logs_suppressed counter event System
 gateway_otlp_metrics_dropped counter reason System
 gateway_otlp_metrics_pushes counter outcome System
 gateway_otlp_metrics_rejected_points counter - System

@@ -6,7 +6,6 @@
 //! The static table is both the privacy boundary and the units/type inventory.
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::LazyLock,
     time::Duration,
 };
 
@@ -113,6 +112,10 @@ classes! {
     "gateway_key_issuance_refused" => (Traffic, Counter, "1", ["operation", "scope"]),
     "gateway_lock_deadlock_retries" => (System, Counter, "1", ["path"]),
     "gateway_metrics_collection_errors" => (System, Counter, "1", ["collector"]),
+    "gateway_otlp_logs_dropped" => (System, Counter, "1", ["reason"]),
+    "gateway_otlp_logs_pushes" => (System, Counter, "1", ["outcome"]),
+    "gateway_otlp_logs_rejected_records" => (System, Counter, "1", []),
+    "gateway_otlp_logs_suppressed" => (System, Counter, "1", ["event"]),
     "gateway_otlp_metrics_dropped" => (System, Counter, "1", ["reason"]),
     "gateway_otlp_metrics_pushes" => (System, Counter, "1", ["outcome"]),
     "gateway_otlp_metrics_rejected_points" => (System, Counter, "1", []),
@@ -426,13 +429,6 @@ fn sample(mut rest: &str) -> Result<(Labels, &str), DropReason> {
     Ok((labels.into_iter().collect(), value))
 }
 
-// One id for the entire process, across encoder instances. Cache failure too:
-// export stays quietly disabled, never a predictable fallback or another draw.
-static INSTANCE: LazyLock<Result<uuid::Uuid, crate::entropy::EntropyUnavailable>> =
-    LazyLock::new(|| {
-        Ok(uuid::Builder::from_random_bytes(crate::entropy::bytes_quiet::<16>()?).into_uuid())
-    });
-
 pub struct Encoder {
     environment: Environment,
     start: u64,
@@ -453,7 +449,7 @@ impl Encoder {
         Ok(Self {
             environment,
             start: process_start_unix_nano,
-            instance: (*INSTANCE)?,
+            instance: (*crate::otlp::INSTANCE)?,
         })
     }
     pub fn encode(&self, snapshot: Snapshot, now_unix_nano: u64) -> Encoded {
@@ -461,12 +457,7 @@ impl Encoder {
     }
     fn envelope(&self, metrics: Vec<Value>) -> Value {
         json!({"resourceMetrics":[{
-            "resource":{"attributes":[
-                {"key":"service.name","value":{"stringValue":"open-model-gateway"}},
-                {"key":"service.version","value":{"stringValue":env!("CARGO_PKG_VERSION")}},
-                {"key":"deployment.environment.name","value":{"stringValue":self.environment.as_str()}},
-                {"key":"service.instance.id","value":{"stringValue":self.instance.to_string()}}
-            ]},
+            "resource":{"attributes":crate::otlp::resource_attributes(self.environment, self.instance, env!("CARGO_PKG_VERSION"))},
             "scopeMetrics":[{"scope":{"name":"omg.metrics","version":env!("CARGO_PKG_VERSION")},"metrics":metrics}]
         }]})
     }
@@ -594,7 +585,7 @@ struct Exporter {
     traffic: bool,
 }
 impl Exporter {
-    async fn push(&self, store: &crate::store::Store, outage: &mut bool) {
+    async fn push(&self, store: &crate::store::Store, outage: &mut bool, ops_degraded: &mut bool) {
         let encoded = {
             let text = crate::metrics::METRICS.render(Some(store)).await;
             self.encoder.encode(
@@ -616,12 +607,12 @@ impl Exporter {
         // Self-observations are visible only in the NEXT snapshot, never a
         // recursive export. Outcomes/drops are already precreated at zero.
         encoded.dropped.record(&crate::metrics::METRICS);
-        let outcome = match result {
+        let (outcome, rejected) = match result {
             Ok(rejected) => {
                 crate::metrics::METRICS.otlp_metrics_rejected(rejected);
-                Delivery::Accepted
+                (Delivery::Accepted, rejected)
             }
-            Err(outcome) => outcome,
+            Err(outcome) => (outcome, 0),
         };
         crate::metrics::METRICS.otlp_metrics_push(outcome);
         let failed = outcome != Delivery::Accepted;
@@ -630,6 +621,25 @@ impl Exporter {
             tracing::warn!(outcome = outcome.as_str(), "metrics exporter state changed");
         }
         *outage = failed;
+        // A separate typed-event transition: partial rejection also degrades,
+        // and recovery (INFO) only fires on a fully accepted exchange.
+        let degraded = failed || rejected > 0;
+        if degraded && !*ops_degraded {
+            let failure = if failed {
+                crate::ops_log::ExportFailure::from_delivery(outcome)
+            } else {
+                crate::ops_log::ExportFailure::Rejected
+            };
+            crate::ops_log::emit(crate::ops_log::OpsEvent::ExporterDegraded {
+                signal: crate::ops_log::Signal::Metrics,
+                failure,
+            });
+        } else if !degraded && *ops_degraded {
+            crate::ops_log::emit(crate::ops_log::OpsEvent::ExporterRecovered {
+                signal: crate::ops_log::Signal::Metrics,
+            });
+        }
+        *ops_degraded = degraded;
     }
 }
 
@@ -640,6 +650,7 @@ async fn worker(
     mut stop: tokio::sync::oneshot::Receiver<()>,
 ) {
     let mut outage = false;
+    let mut ops_degraded = false;
     let mut next = tokio::time::Instant::now() + interval;
     loop {
         tokio::select! {
@@ -651,7 +662,7 @@ async fn worker(
         tokio::select! {
             biased;
             _ = &mut stop => break,
-            _ = exporter.push(&store, &mut outage) => {}
+            _ = exporter.push(&store, &mut outage, &mut ops_degraded) => {}
         }
         next = started + interval;
         let now = tokio::time::Instant::now();
@@ -661,7 +672,7 @@ async fn worker(
         }
     }
     // The owning Runtime bounds collection AND HTTP with its single deadline.
-    exporter.push(&store, &mut outage).await;
+    exporter.push(&store, &mut outage, &mut ops_degraded).await;
 }
 
 #[cfg(test)]

@@ -209,6 +209,9 @@ impl Leases {
             .into_iter()
             .filter(|l| !self.excluded.contains(l))
         {
+            // Observed takeover/expiry only: a graceful `release_all` never
+            // goes through this comparison.
+            let was_held = self.held(lease).is_some();
             let sent = Instant::now();
             let acquired: Result<Option<i64>, sqlx::Error> = tokio::time::timeout(
                 Duration::from_secs(5),
@@ -244,10 +247,11 @@ impl Leases {
                     }
                 }
             }
-            crate::metrics::METRICS.set_lease_held(
-                lease.as_str(),
-                slot.is_some_and(|t| t.trusted_until > Instant::now()),
-            );
+            let now_held = slot.is_some_and(|t| t.trusted_until > Instant::now());
+            crate::metrics::METRICS.set_lease_held(lease.as_str(), now_held);
+            if was_held && !now_held {
+                crate::ops_log::emit(crate::ops_log::OpsEvent::LeaseLost { lease });
+            }
         }
         held
     }
@@ -290,7 +294,7 @@ impl Leases {
 pub async fn run_singleton<T, F, Fut>(
     leases: &Leases,
     lease: Lease,
-    job: &'static str,
+    job: crate::ops_log::Job,
     timeout: Duration,
     work: F,
 ) -> Option<T>
@@ -301,17 +305,39 @@ where
     let fence = leases.held(lease)?;
     match tokio::time::timeout(timeout, work(fence)).await {
         Ok(Ok(value)) => {
-            crate::metrics::METRICS.observe_background_run(job, "ok");
+            crate::metrics::METRICS.observe_background_run(job.as_str(), "ok");
             Some(value)
         }
         Ok(Err(error)) if is_fenced(&error) => {
-            crate::metrics::METRICS.observe_background_run(job, "fenced");
-            tracing::info!(job, "work lease term ended during a run; nothing committed");
+            crate::metrics::METRICS.observe_background_run(job.as_str(), "fenced");
+            tracing::info!(
+                job = job.as_str(),
+                "work lease term ended during a run; nothing committed"
+            );
             None
         }
-        _ => {
-            crate::metrics::METRICS.observe_background_run(job, "failed");
-            tracing::warn!(job, "background job run incomplete; retrying next interval");
+        Ok(Err(_)) => {
+            crate::metrics::METRICS.observe_background_run(job.as_str(), "failed");
+            tracing::warn!(
+                job = job.as_str(),
+                "background job run incomplete; retrying next interval"
+            );
+            crate::ops_log::emit(crate::ops_log::OpsEvent::BackgroundJobFailed {
+                job,
+                failure: crate::ops_log::BackgroundFailure::Error,
+            });
+            None
+        }
+        Err(_) => {
+            crate::metrics::METRICS.observe_background_run(job.as_str(), "failed");
+            tracing::warn!(
+                job = job.as_str(),
+                "background job run incomplete; retrying next interval"
+            );
+            crate::ops_log::emit(crate::ops_log::OpsEvent::BackgroundJobFailed {
+                job,
+                failure: crate::ops_log::BackgroundFailure::Timeout,
+            });
             None
         }
     }

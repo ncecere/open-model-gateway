@@ -109,7 +109,7 @@ pub fn start(db: Store, runtime: FileStoreRuntime) -> Option<tokio::task::JoinHa
                     Some(leases) => crate::leases::run_singleton(
                         leases,
                         crate::leases::Lease::FileSweep,
-                        "file_sweep",
+                        crate::ops_log::Job::FileSweep,
                         Duration::from_secs(50),
                         |fence| {
                             let (db, runtime) = (db.clone(), runtime.clone());

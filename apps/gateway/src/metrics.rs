@@ -254,6 +254,10 @@ pub struct Metrics {
     otlp_metrics_pushes: [Counter; crate::otlp::Delivery::COUNT],
     otlp_metrics_dropped: [Counter; crate::metrics_export::DropReason::COUNT],
     otlp_metrics_rejected_points: Counter,
+    otlp_logs_pushes: [Counter; crate::otlp::Delivery::COUNT],
+    otlp_logs_dropped: [Counter; crate::ops_log::DropReason::COUNT],
+    otlp_logs_rejected_records: Counter,
+    otlp_logs_suppressed: [Counter; crate::ops_log::OpsEvent::COUNT],
     audit_export_queued: Gauge,
     audit_export_oldest:
         prometheus_client::metrics::gauge::Gauge<f64, std::sync::atomic::AtomicU64>,
@@ -384,6 +388,27 @@ impl Metrics {
                 )])
                 .clone()
         });
+        let logs_pushes = Family::<L1, Counter>::default();
+        let otlp_logs_pushes = std::array::from_fn(|i| {
+            logs_pushes
+                .get_or_create(&[("outcome", crate::otlp::Delivery::ALL[i].as_str().to_owned())])
+                .clone()
+        });
+        let logs_drops = Family::<L1, Counter>::default();
+        let otlp_logs_dropped = std::array::from_fn(|i| {
+            logs_drops
+                .get_or_create(&[(
+                    "reason",
+                    crate::ops_log::DropReason::ALL[i].as_str().to_owned(),
+                )])
+                .clone()
+        });
+        let logs_suppressed = Family::<L1, Counter>::default();
+        let otlp_logs_suppressed = std::array::from_fn(|i| {
+            logs_suppressed
+                .get_or_create(&[("event", crate::ops_log::OpsEvent::SLUGS[i].to_owned())])
+                .clone()
+        });
         let metrics = Self {
             http_requests: Family::default(),
             http_duration: Family::new_with_constructor(request_buckets),
@@ -437,6 +462,10 @@ impl Metrics {
             otlp_metrics_pushes,
             otlp_metrics_dropped,
             otlp_metrics_rejected_points: Counter::default(),
+            otlp_logs_pushes,
+            otlp_logs_dropped,
+            otlp_logs_rejected_records: Counter::default(),
+            otlp_logs_suppressed,
             audit_export_queued: Gauge::default(),
             audit_export_oldest: Default::default(),
             config_listener: Gauge::default(),
@@ -690,6 +719,26 @@ impl Metrics {
             metrics.otlp_metrics_rejected_points.clone(),
         );
         registry.register(
+            "otlp_logs_pushes",
+            "Operational-log export exchanges, by fixed outcome (no retries)",
+            logs_pushes,
+        );
+        registry.register(
+            "otlp_logs_dropped",
+            "Operational-log records dropped locally, by fixed reason",
+            logs_drops,
+        );
+        registry.register(
+            "otlp_logs_rejected_records",
+            "Operational-log records rejected by the collector partialSuccess acknowledgement",
+            metrics.otlp_logs_rejected_records.clone(),
+        );
+        registry.register(
+            "otlp_logs_suppressed",
+            "Operational-log events suppressed by the per-variant rate limiter, by fixed event",
+            logs_suppressed,
+        );
+        registry.register(
             "audit_export_queued",
             "Audit events queued for export, not yet accepted by the receiver",
             metrics.audit_export_queued.clone(),
@@ -859,6 +908,45 @@ impl Metrics {
 
     pub fn otlp_metrics_rejected(&self, n: u64) {
         self.otlp_metrics_rejected_points.inc_by(n);
+    }
+
+    /// Fixed outcomes shared with the trace/metrics transports; never a destination or error string.
+    pub(crate) fn otlp_logs_push(&self, outcome: crate::otlp::Delivery) {
+        self.otlp_logs_pushes[outcome as usize].inc();
+    }
+
+    pub(crate) fn otlp_logs_drop(&self, reason: crate::ops_log::DropReason, n: u64) {
+        self.otlp_logs_dropped[reason as usize].inc_by(n);
+    }
+
+    pub(crate) fn otlp_logs_rejected(&self, n: u64) {
+        self.otlp_logs_rejected_records.inc_by(n);
+    }
+
+    /// `index` is an `OpsEvent` discriminant (see `OpsEvent::SLUGS`), not an
+    /// arbitrary caller-chosen string.
+    pub(crate) fn otlp_logs_suppressed(&self, index: usize, n: u64) {
+        self.otlp_logs_suppressed[index].inc_by(n);
+    }
+
+    /// Pushes so far for one outcome (tests).
+    pub fn otlp_logs_push_count(&self, outcome: crate::otlp::Delivery) -> u64 {
+        self.otlp_logs_pushes[outcome as usize].get()
+    }
+
+    /// Drops so far for one reason (tests).
+    pub fn otlp_logs_drop_count(&self, reason: crate::ops_log::DropReason) -> u64 {
+        self.otlp_logs_dropped[reason as usize].get()
+    }
+
+    /// Collector-rejected records so far (tests).
+    pub fn otlp_logs_rejected_count(&self) -> u64 {
+        self.otlp_logs_rejected_records.get()
+    }
+
+    /// Suppressed-by-the-limiter count so far for one `OpsEvent` index (tests).
+    pub fn otlp_logs_suppressed_count(&self, index: usize) -> u64 {
+        self.otlp_logs_suppressed[index].get()
     }
 
     pub(crate) fn trace_drop(&self, reason: crate::telemetry::DropReason, n: u64) {

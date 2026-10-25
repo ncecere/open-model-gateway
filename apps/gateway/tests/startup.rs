@@ -172,8 +172,12 @@ fn reserved_allowlists_stop_before_database_access_without_disclosure() {
                 // #99's newly inventoried pointer has stricter diagnostics:
                 // setting only, not even the selected variable's name. Keep
                 // every pre-existing pointer's assertions below unchanged.
-                if pointer == Some("GATEWAY_METRICS_OTLP_HEADERS_ENV") {
-                    assert!(stderr.contains("GATEWAY_METRICS_OTLP_HEADERS_ENV"));
+                // #294's logs pointer uses the same strict diagnostics.
+                if let Some(
+                    strict @ ("GATEWAY_METRICS_OTLP_HEADERS_ENV" | "GATEWAY_LOGS_OTLP_HEADERS_ENV"),
+                ) = pointer
+                {
+                    assert!(stderr.contains(strict));
                     for forbidden in [
                         name,
                         "could not connect",
