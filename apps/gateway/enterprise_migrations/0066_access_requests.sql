@@ -18,6 +18,10 @@ CREATE TABLE access_requests (
  payload_digest bytea NOT NULL CHECK (octet_length(payload_digest)=32),
  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
  expires_at timestamptz NOT NULL DEFAULT (clock_timestamp()+interval '7 days'),
+ -- Frozen submitted reference (UX fix, #83): the requester's own history must never disclose
+ -- a workspace's current/renamed name after it becomes non-discoverable or is renamed, so the
+ -- name is captured once, server-side, at INSERT time and never updated afterward.
+ workspace_name_at_request text NOT NULL DEFAULT '',
  decided_by uuid REFERENCES users(id),
  decided_at timestamptz,
  UNIQUE(requester,idempotency_digest),
@@ -71,6 +75,9 @@ BEGIN
    RAISE EXCEPTION 'pending initial state required' USING ERRCODE='23514';
   END IF;
   NEW.created_at:=t; NEW.expires_at:=t+interval '7 days';
+  -- Table-level only: the runtime has no INSERT(workspace_name_at_request) privilege, so a
+  -- caller-supplied value is always overwritten here, same as created_at/expires_at above.
+  NEW.workspace_name_at_request:=coalesce((SELECT w.name FROM workspaces w WHERE w.id=NEW.workspace_id),'');
   IF NOT EXISTS(SELECT FROM workspaces WHERE id=NEW.workspace_id AND kind IN ('team','project') AND discoverable AND disabled_at IS NULL) THEN
    RAISE EXCEPTION 'ineligible target' USING ERRCODE='23514';
   END IF;

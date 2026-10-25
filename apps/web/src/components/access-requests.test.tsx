@@ -18,7 +18,7 @@ beforeEach(() => {
 afterEach(() => { cleanup(); abortRequests(); document.cookie = "omg_csrf=; Max-Age=0; Path=/"; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 const target = (patch: Partial<AccessRequestTarget> = {}): AccessRequestTarget => ({ id: "ws-research", name: "Research", kind: "team", ...patch });
-const request = (patch: Partial<AccessRequest> = {}): AccessRequest => ({ id: "req-1", requester: "outsider", target_kind: "workspace", workspace_id: "ws-research", requested_role: "member", status: "pending", reason: "Need it for an incident", created_at: "2026-10-14T08:00:00Z", expires_at: "2026-10-21T08:00:00Z", decided_by: null, decided_at: null, membership_grant_id: null, ...patch });
+const request = (patch: Partial<AccessRequest> = {}): AccessRequest => ({ id: "req-1", requester: "outsider", requester_display_name: "Outsider Person", requester_email: "outsider@demo.invalid", target_kind: "workspace", workspace_id: "ws-research", workspace_name_at_request: "Research", requested_role: "member", status: "pending", reason: "Need it for an incident", created_at: "2026-10-14T08:00:00Z", expires_at: "2026-10-21T08:00:00Z", decided_by: null, decided_at: null, membership_grant_id: null, ...patch });
 function mount(node: React.ReactElement) { const client = testClient(); const user = userEvent.setup(); const mounted = render(<QueryClientProvider client={client}><ActionProvider>{node}</ActionProvider></QueryClientProvider>); return { client, user, mounted }; }
 function serve(routes: Record<string, (init?: RequestInit) => Response | Promise<Response>>) {
   const fetch = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
@@ -92,6 +92,9 @@ describe("Request access (#83 slice A): discover and submit", () => {
     const { user } = mount(<AccessRequestsPage onTabChange={() => {}} tab="mine" />);
     await screen.findByText("No reason given"); // reason is optional; never a blank/misleading cell
     expect(screen.getByRole("table", { name: "My requests" })).toBeTruthy();
+    // Shows the workspace's name (frozen at submission time), never its raw ID (#83 UX fix).
+    expect(screen.getAllByText("Research").length).toBeGreaterThan(0);
+    expect(screen.queryByText("ws-research")).toBeNull();
     const menus = await screen.findAllByRole("button", { name: /^Actions for/ });
     expect(menus).toHaveLength(1); // only the pending row offers an action
     await user.click(menus[0]);
@@ -111,8 +114,12 @@ describe("Workspace access requests queue (#83 slice A): owner/admin approval", 
       [`${workspaceAccessRequestsPath(team.id)}*`]: init => init?.method === "POST" ? Response.json(request({ status: "approved", decided_by: "me" })) : Response.json({ data: [request()] }),
     });
     const { user } = mount(<WorkspaceAccessRequestQueue session={session} workspace={team} />);
-    await screen.findByText("outsider");
-    const trigger = screen.getByRole("button", { name: "Actions for outsider" });
+    // Shows the requester's display name/email (#83 UX fix), matching what the Members picker
+    // already discloses to this owner/admin, never a raw requester ID.
+    await screen.findByText("Outsider Person");
+    expect(screen.getByText("outsider@demo.invalid")).toBeTruthy();
+    expect(screen.queryByText("outsider")).toBeNull();
+    const trigger = screen.getByRole("button", { name: "Actions for Outsider Person" });
     await user.click(trigger);
     await user.click(await screen.findByRole("menuitem", { name: "Approve…" }));
     await screen.findByRole("dialog", { name: "Approve this request?" });
@@ -126,8 +133,8 @@ describe("Workspace access requests queue (#83 slice A): owner/admin approval", 
       [`${workspaceAccessRequestsPath(team.id)}*`]: init => init?.method === "POST" ? Response.json({ error: { code: "409", message: "Request is no longer applicable" } }, { status: 409 }) : Response.json({ data: [request()] }),
     });
     const { user } = mount(<WorkspaceAccessRequestQueue session={session} workspace={team} />);
-    await screen.findByText("outsider");
-    await user.click(screen.getByRole("button", { name: "Actions for outsider" }));
+    await screen.findByText("Outsider Person");
+    await user.click(screen.getByRole("button", { name: "Actions for Outsider Person" }));
     await user.click(await screen.findByRole("menuitem", { name: "Deny…" }));
     const dialog = await screen.findByRole("dialog", { name: "Deny this request?" });
     await user.click(within(dialog).getByRole("button", { name: "Deny" }));
@@ -136,9 +143,9 @@ describe("Workspace access requests queue (#83 slice A): owner/admin approval", 
   it("never lets a workspace admin approve or deny their own request", async () => {
     serve({ [workspaceAccessRequestsPath(team.id)]: () => Response.json({ data: [request({ requester: session.user.id })] }) });
     mount(<WorkspaceAccessRequestQueue session={session} workspace={team} />);
-    await screen.findByText(session.user.id);
+    await screen.findByText("outsider@demo.invalid"); // the row's secondary line, unambiguous even with a "(you)" suffix on the name
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: `Actions for ${session.user.id}` }));
+    await user.click(screen.getByRole("button", { name: "Actions for Outsider Person" }));
     const approve = await screen.findByRole("menuitem", { name: /^Approve…/ });
     expect(approve.getAttribute("aria-disabled")).toBe("true");
   });
@@ -150,8 +157,10 @@ describe("Admin access requests (#83 slice A): platform queue, Auditor read-only
       [platformAccessRequestsPath]: init => init?.method === "POST" ? Response.json(request({ status: "denied", decided_by: admin.user.id })) : Response.json({ data: [request()] }),
     });
     const { user } = mount(<PlatformAccessRequestsPage session={admin} />);
-    await screen.findByText("outsider");
-    await user.click(screen.getByRole("button", { name: "Actions for outsider" }));
+    // Same identity disclosure as GET /platform/users for this Platform Admin (#83 UX fix).
+    await screen.findByText("Outsider Person");
+    expect(screen.getByText("outsider@demo.invalid")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Actions for Outsider Person" }));
     await user.click(await screen.findByRole("menuitem", { name: "Deny…" }));
     await user.click(await screen.findByRole("button", { name: "Deny" }));
     await waitFor(() => expect(writes(fetch)).toEqual([`POST ${platformAccessRequestsPath}/req-1/deny`]));
@@ -159,7 +168,7 @@ describe("Admin access requests (#83 slice A): platform queue, Auditor read-only
   it("gives an Auditor the same history with no action menu at all", async () => {
     serve({ [platformAccessRequestsPath]: () => Response.json({ data: [request()] }) });
     mount(<PlatformAccessRequestsPage session={auditor} />);
-    await screen.findByText("outsider");
+    await screen.findByText("Outsider Person");
     expect(screen.queryByRole("button", { name: /^Actions for/ })).toBeNull();
   });
 });

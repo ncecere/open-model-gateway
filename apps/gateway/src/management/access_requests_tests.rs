@@ -749,3 +749,113 @@ async fn access_requests_served_router_csrf_retry_after_and_token_denial(pool: P
         }
     }
 }
+
+/// UX fix (#83): approver queues show the requester's identity, matching what the Members
+/// picker (`members::candidates`) and the platform user directory already disclose to those
+/// same approvers; the requester's own history never gets it. "My requests" shows the
+/// workspace name frozen at submission time, never a later rename, so history never discloses
+/// new workspace metadata.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn access_requests_queue_identity_and_frozen_workspace_name(pool: PgPool) {
+    let f = fixture(&pool).await;
+    discover(&pool, f.team).await;
+    let (_, r) = submit(&f, &f.outsider, f.team, "identity-check").await;
+    let id = request_id(&r);
+    assert_eq!(r["workspace_name_at_request"], json!("Team"));
+    assert!(r.get("requester_display_name").is_none());
+    assert!(r.get("requester_email").is_none());
+
+    // The requester's own history: never any identity fields, even for their own request.
+    let (_, mine) = call(
+        &f.s,
+        &f.outsider,
+        "GET",
+        "/api/v1/me/access-requests",
+        Value::Null,
+    )
+    .await;
+    let row = &mine["data"][0];
+    assert_eq!(row["workspace_name_at_request"], json!("Team"));
+    assert!(row.get("requester_display_name").is_none());
+    assert!(row.get("requester_email").is_none());
+    let (_, detail) = call(
+        &f.s,
+        &f.outsider,
+        "GET",
+        &format!("/api/v1/me/access-requests/{id}"),
+        Value::Null,
+    )
+    .await;
+    assert!(detail.get("requester_display_name").is_none());
+    assert!(detail.get("requester_email").is_none());
+
+    // The workspace owner/admin approval queue: identity disclosed, matching the Members picker
+    // they already have for any entitled user.
+    let (_, queue) = call(
+        &f.s,
+        &f.owner,
+        "GET",
+        &format!("/api/v1/workspaces/{}/access-requests", f.team),
+        Value::Null,
+    )
+    .await;
+    let row = &queue["data"][0];
+    assert_eq!(row["requester"], json!(f.outsider.user_id));
+    assert_eq!(row["requester_email"], json!(f.outsider.email));
+    assert!(row["requester_display_name"].is_null());
+    assert_eq!(row["workspace_name_at_request"], json!("Team"));
+
+    // The platform queue: same identity disclosure for Platform Admin and (read-only) Auditor,
+    // matching GET /platform/users for those same roles.
+    for actor in [&f.admin, &f.auditor] {
+        let (_, queue) = call(
+            &f.s,
+            actor,
+            "GET",
+            "/api/v1/platform/access-requests",
+            Value::Null,
+        )
+        .await;
+        let row = queue["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == json!(id))
+            .unwrap();
+        assert_eq!(row["requester_email"], json!(f.outsider.email));
+        assert!(row["requester_display_name"].is_null());
+    }
+
+    // A plain member cannot reach the workspace queue at all, so no identity is ever returned.
+    assert_eq!(
+        call(
+            &f.s,
+            &f.member,
+            "GET",
+            &format!("/api/v1/workspaces/{}/access-requests", f.team),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+
+    // Renaming the workspace after submission never changes the frozen reference; a later
+    // request captures the new name instead.
+    sqlx::query("UPDATE workspaces SET name='Team Renamed' WHERE id=$1")
+        .bind(f.team)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (_, after_rename) = call(
+        &f.s,
+        &f.outsider,
+        "GET",
+        &format!("/api/v1/me/access-requests/{id}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(after_rename["workspace_name_at_request"], json!("Team"));
+    let (_, r2) = submit(&f, &f.outsider, f.team, "identity-check-after-rename").await;
+    assert_eq!(r2["workspace_name_at_request"], json!("Team Renamed"));
+}

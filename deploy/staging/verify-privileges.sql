@@ -2,10 +2,10 @@
 DO $$ DECLARE c text; BEGIN
  IF NOT has_table_privilege('gateway_runtime','public.access_requests','SELECT') OR NOT has_column_privilege('gateway_runtime','public.access_requests','status','UPDATE') OR NOT has_column_privilege('gateway_runtime','public.workspaces','discoverable','UPDATE') THEN RAISE EXCEPTION 'request operations unavailable'; END IF;
  IF has_table_privilege('gateway_runtime','public.access_requests','INSERT,UPDATE,DELETE,TRUNCATE') OR has_table_privilege('gateway_runtime','public.access_request_applications','INSERT,UPDATE,DELETE,TRUNCATE') OR has_any_column_privilege('gateway_runtime','public.access_request_applications','UPDATE') THEN RAISE EXCEPTION 'request history mutable'; END IF;
- FOREACH c IN ARRAY ARRAY['id','requester','workspace_id','target_kind','requested_role','reason','idempotency_digest','payload_digest','created_at','expires_at'] LOOP
+ FOREACH c IN ARRAY ARRAY['id','requester','workspace_id','target_kind','requested_role','reason','idempotency_digest','payload_digest','created_at','expires_at','workspace_name_at_request'] LOOP
   IF has_column_privilege('gateway_runtime','public.access_requests',c,'UPDATE') THEN RAISE EXCEPTION 'mutable request identity: %',c; END IF;
  END LOOP;
- FOREACH c IN ARRAY ARRAY['id','status','target_kind','requested_role','created_at','expires_at','decided_by','decided_at'] LOOP
+ FOREACH c IN ARRAY ARRAY['id','status','target_kind','requested_role','created_at','expires_at','decided_by','decided_at','workspace_name_at_request'] LOOP
   IF has_column_privilege('gateway_runtime','public.access_requests',c,'INSERT') THEN RAISE EXCEPTION 'request initialization bypass: %',c; END IF;
  END LOOP;
  IF has_function_privilege('gateway_runtime','public.access_request_reason_cleanup()','EXECUTE') THEN RAISE EXCEPTION 'cleanup trigger callable'; END IF;
@@ -980,6 +980,9 @@ BEGIN
   INSERT INTO users(id,email) VALUES(ru,'request-'||ru||'@example.invalid'),(decider,'decider-'||decider||'@example.invalid');
   INSERT INTO workspaces(id,name,kind,discoverable) VALUES(ws,'Request probe','team',true);
   INSERT INTO access_requests(requester,workspace_id,reason,idempotency_digest,payload_digest) VALUES(ru,ws,'Probe',decode(repeat('ab',32),'hex'),decode(repeat('cd',32),'hex')) RETURNING id INTO req;
+  -- UX fix (#83): the server, not the runtime caller, captures the workspace name at INSERT.
+  IF (SELECT workspace_name_at_request FROM access_requests WHERE id=req)<>'Request probe' THEN RAISE EXCEPTION 'workspace name not captured at request'; END IF;
+  BEGIN UPDATE access_requests SET workspace_name_at_request='rewrite' WHERE id=req; RAISE EXCEPTION 'workspace name at request mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   IF scrub_access_request_reasons()<>0 THEN RAISE EXCEPTION 'active requester reason scrubbed'; END IF;
   BEGIN UPDATE workspace_membership_grants SET access_request_changed_at=now(); RAISE EXCEPTION 'membership clock rewrite allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   BEGIN UPDATE access_requests SET reason='rewrite' WHERE id=req; RAISE EXCEPTION 'request reason mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;

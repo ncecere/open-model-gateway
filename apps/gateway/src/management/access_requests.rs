@@ -4,7 +4,19 @@ use super::*;
 use sha2::{Digest, Sha256};
 
 type RequestResult = Result<Json<Value>, ManagementError>;
-const PROJECTION: &str = "jsonb_build_object('id',r.id,'requester',r.requester,'target_kind',r.target_kind,'workspace_id',r.workspace_id,'requested_role',r.requested_role,'status',r.status,'reason',r.reason,'created_at',r.created_at,'expires_at',r.expires_at,'decided_by',r.decided_by,'decided_at',r.decided_at,'membership_grant_id',(SELECT membership_grant_id FROM access_request_applications a WHERE a.request_id=r.id))";
+/// Common fields for every viewer: the requester's own `member`/`admin` and the two approver
+/// queues. `workspace_name_at_request` is a frozen submitted reference (UX fix, #83): it is
+/// captured once at INSERT and never updated, so it never discloses a later rename or a
+/// workspace becoming non-discoverable. It is not the live workspace name.
+const PROJECTION: &str = "jsonb_build_object('id',r.id,'requester',r.requester,'target_kind',r.target_kind,'workspace_id',r.workspace_id,'workspace_name_at_request',r.workspace_name_at_request,'requested_role',r.requested_role,'status',r.status,'reason',r.reason,'created_at',r.created_at,'expires_at',r.expires_at,'decided_by',r.decided_by,'decided_at',r.decided_at,'membership_grant_id',(SELECT membership_grant_id FROM access_request_applications a WHERE a.request_id=r.id))";
+/// Approver-only: adds the requester's display name/email (requires a `JOIN users ru ON
+/// ru.id=r.requester` in the FROM clause). Workspace owners/admins already see this pair for
+/// any entitled user through the Members "Add member" picker (`members::candidates`), and
+/// Platform Admins/Auditors through `GET /platform/users`; this projection discloses nothing
+/// beyond what those existing, equally scoped reads already show the same viewers. It is used
+/// only for the workspace- and platform-scoped queues, never for the requester's own `mine`/
+/// `detail` reads, so a non-approver never receives another requester's identity.
+const PROJECTION_WITH_REQUESTER: &str = "jsonb_build_object('id',r.id,'requester',r.requester,'requester_display_name',ru.display_name,'requester_email',ru.email,'target_kind',r.target_kind,'workspace_id',r.workspace_id,'workspace_name_at_request',r.workspace_name_at_request,'requested_role',r.requested_role,'status',r.status,'reason',r.reason,'created_at',r.created_at,'expires_at',r.expires_at,'decided_by',r.decided_by,'decided_at',r.decided_at,'membership_grant_id',(SELECT membership_grant_id FROM access_request_applications a WHERE a.request_id=r.id))";
 fn conflict() -> ApiError {
     ApiError(StatusCode::CONFLICT, "Request is no longer applicable")
 }
@@ -295,7 +307,17 @@ async fn queue(
     let ids:Vec<Uuid>=sqlx::query_scalar(&format!("SELECT r.id FROM access_requests r WHERE {filter} ORDER BY r.created_at DESC,r.id LIMIT $1 OFFSET $2"))
         .bind(l).bind(o).bind(scope).fetch_all(&mut *tx).await?;
     expire(&mut tx, u, &ids).await?;
-    let data:Vec<Value>=sqlx::query_scalar(&format!("SELECT {PROJECTION} FROM access_requests r WHERE r.id=ANY($1) ORDER BY r.created_at DESC,r.id"))
+    // Only the approver-scoped workspace/platform queues join the requester's identity; the
+    // requester's own `mine` queue never needs or receives it (see PROJECTION_WITH_REQUESTER).
+    let (projection, join) = if platform || ws.is_some() {
+        (
+            PROJECTION_WITH_REQUESTER,
+            "JOIN users ru ON ru.id=r.requester ",
+        )
+    } else {
+        (PROJECTION, "")
+    };
+    let data:Vec<Value>=sqlx::query_scalar(&format!("SELECT {projection} FROM access_requests r {join}WHERE r.id=ANY($1) ORDER BY r.created_at DESC,r.id"))
         .bind(&ids).fetch_all(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(json!({"data":data})))

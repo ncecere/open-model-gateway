@@ -12,14 +12,26 @@ export type AccessRequestStatus = "pending" | "approved" | "denied" | "withdrawn
 /** Only Teams/Projects are ever offered; personal workspaces never appear. */
 export type AccessRequestTarget = { id: string; name: string; kind: Exclude<WorkspaceKind, "personal"> };
 /**
- * Minimal submitted references only: `requester`/`workspace_id`/`decided_by` stay opaque IDs.
- * History never adds newly disclosed workspace names or membership data (docs/management-api.md).
+ * `requester`/`workspace_id`/`decided_by` stay opaque IDs; the server never adds newly disclosed
+ * live workspace/membership data to history (docs/management-api.md). Two UX-fix fields narrow
+ * that rule, by viewer:
+ * - `workspace_name_at_request`: the name captured once, server-side, at submission. Present on
+ *   every read (requester and approver), it is a frozen reference, never the workspace's current
+ *   (possibly renamed, possibly now-hidden) name.
+ * - `requester_display_name`/`requester_email`: present **only** on the workspace- and
+ *   platform-scoped approval queues (never on the requester's own `mine`/detail reads). Approvers
+ *   there already see the same pair for any entitled user, through the Members "Add member"
+ *   picker (owner/admin) or the platform user directory (Platform Admin/Auditor); this only
+ *   avoids forcing them to look a raw requester ID up separately.
  */
 export type AccessRequest = {
   id: string;
   requester: string;
+  requester_display_name?: string | null;
+  requester_email?: string | null;
   target_kind: "workspace";
   workspace_id: string;
+  workspace_name_at_request: string;
   requested_role: "member";
   status: AccessRequestStatus;
   reason: string | null;

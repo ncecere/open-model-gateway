@@ -14,7 +14,7 @@ import { accessRequestStatusLabels, accessRequestStatusTone, accessRequestTarget
 import { permissions } from "../lib/permissions";
 import { Heading, Id, Stack, useAction, useChoices } from "../components/ui";
 import { ResourcePage } from "../components/resource-page";
-import { DirectoryTable, LocalTable } from "../components/people";
+import { DirectoryTable, LocalTable, PersonIdentity } from "../components/people";
 import { StatusBadge } from "../components/ui/badge/badge";
 import { CellText, type DataTableColumn } from "../components/ui/data-table/data-table";
 import { kindLabels } from "../lib/people";
@@ -48,16 +48,20 @@ function DiscoverTargets() {
     rowActions={t => [{ label: "Request access…", icon: <UserPlus aria-hidden />, onSelect: () => request(t) }]}
     empty={{ icon: <Inbox />, title: "No discoverable workspaces.", description: "A platform admin makes a Team or Project discoverable before you can ask to join it." }} />;
 }
-/** Workspace portal: the caller's own requests. Only submitted references are shown; no newly disclosed workspace name or membership data (docs/management-api.md). */
+/**
+ * Workspace portal: the caller's own requests. Only submitted references are shown; the
+ * workspace name shown here is `workspace_name_at_request`, frozen at submission time, never
+ * a live/renamed name or other newly disclosed membership data (docs/management-api.md).
+ */
 function MyRequests() {
   const ask = useAction();
   const withdraw = (r: AccessRequest) => ask({ title: "Withdraw this request?", description: "You can send a new request later.", submitLabel: "Withdraw", successNotice: "Request withdrawn.", run: (_, signal) => api<AccessRequest>(withdrawAccessRequestPath(r.id), { method: "POST", signal }) });
   const columns: DataTableColumn<AccessRequest>[] = [
-    { id: "target", header: "Workspace", accessor: r => r.workspace_id, rowHeader: true, hideable: false, cell: r => <CellText primary={<Id value={r.workspace_id} />} secondary={<ReasonCell reason={r.reason} />} /> },
+    { id: "target", header: "Workspace", accessor: r => r.workspace_name_at_request, rowHeader: true, hideable: false, cell: r => <CellText primary={r.workspace_name_at_request} secondary={<ReasonCell reason={r.reason} />} /> },
     { id: "status", header: "Status", accessor: r => r.status, cell: r => <StatusCell status={r.status} /> },
     { id: "created", header: "Submitted", accessor: r => r.created_at, cell: r => <span className={s.secondary}>{new Date(r.created_at).toLocaleString()}</span> },
   ];
-  return <DirectoryTable<AccessRequest> path={myAccessRequestsPath} label="My requests" storageKey="my-access-requests" columns={columns} rowKey={r => r.id} rowLabel={r => r.workspace_id}
+  return <DirectoryTable<AccessRequest> path={myAccessRequestsPath} label="My requests" storageKey="my-access-requests" columns={columns} rowKey={r => r.id} rowLabel={r => r.workspace_name_at_request}
     rowActions={r => [{ label: "Withdraw…", danger: true, hidden: r.status !== "pending", onSelect: () => withdraw(r) }]}
     empty={{ icon: <Inbox />, title: "No requests yet.", description: "Requests you send from Request access appear here." }} />;
 }
@@ -69,6 +73,11 @@ export function AccessRequestsPage({ tab, onTabChange }: { tab?: string; onTabCh
   ]} />;
 }
 
+/**
+ * The requester's label for an approval queue row: display name, else email, else the opaque
+ * ID as a last resort for an older gateway that hasn't deployed this field yet.
+ */
+const requesterLabel = (r: AccessRequest) => r.requester_display_name?.trim() || r.requester_email || r.requester;
 /** A pending request's decision row actions: never the requester, approve/deny only while pending. */
 function decisionActions(r: AccessRequest, selfId: string, writable: boolean, decide: (r: AccessRequest, approve: boolean) => void) {
   if (r.status !== "pending") return [];
@@ -92,15 +101,19 @@ export function WorkspaceAccessRequestQueue({ session, workspace }: { session: S
     submitLabel: approve ? "Approve" : "Deny", successNotice: approve ? "Request approved." : "Request denied.",
     run: (_, signal) => api<AccessRequest>(workspaceAccessRequestDecisionPath(workspace.id, r.id, approve), { method: "POST", signal }),
   });
+  // An owner/admin already sees any entitled user's display name/email through the Members
+  // "Add member" picker, so showing the same pair here (instead of a raw requester ID) discloses
+  // nothing new (docs/management-api.md#self-service-membership-requests-83-slice-a).
   const columns: DataTableColumn<AccessRequest>[] = [
-    { id: "requester", header: "Requester", accessor: r => r.requester, rowHeader: true, hideable: false, cell: r => <CellText primary={<Id value={r.requester} />} secondary={<ReasonCell reason={r.reason} />} /> },
+    { id: "requester", header: "Requester", accessor: requesterLabel, rowHeader: true, hideable: false, cell: r => <PersonIdentity person={{ display_name: r.requester_display_name, email: r.requester_email ?? null }} self={r.requester === session.user.id} /> },
+    { id: "reason", header: "Reason", accessor: r => r.reason ?? "", cell: r => <ReasonCell reason={r.reason} /> },
     { id: "status", header: "Status", accessor: r => r.status, cell: r => <StatusCell status={r.status} /> },
     { id: "created", header: "Submitted", accessor: r => r.created_at, cell: r => <span className={s.secondary}>{new Date(r.created_at).toLocaleString()}</span> },
   ];
   const choices = useChoices<AccessRequest>(workspaceAccessRequestsPath(workspace.id));
   const pending = (choices.data ?? []).filter(r => r.status === "pending");
   return <LocalTable<AccessRequest> rows={pending} loading={choices.isFetching} error={choices.error} retry={() => void choices.refetch()}
-    label="Access requests" storageKey="workspace-access-requests" columns={columns} rowKey={r => r.id} rowLabel={r => r.requester}
+    label="Access requests" storageKey="workspace-access-requests" columns={columns} rowKey={r => r.id} rowLabel={requesterLabel}
     rowActions={r => decisionActions(r, session.user.id, writable, decide)}
     empty={{ icon: <Inbox />, title: "No access requests.", description: "Requests to join this workspace appear here." }} />;
 }
@@ -113,15 +126,19 @@ export function PlatformAccessRequestsPage({ session }: { session: Session }) {
     submitLabel: approve ? "Approve" : "Deny", successNotice: approve ? "Request approved." : "Request denied.",
     run: (_, signal) => api<AccessRequest>(platformAccessRequestDecisionPath(r.id, approve), { method: "POST", signal }),
   });
+  // A Platform Admin/Auditor already sees any user's display name/email through the platform
+  // user directory, so showing the same pair here (instead of a raw requester ID) discloses
+  // nothing new (docs/management-api.md#self-service-membership-requests-83-slice-a).
   const columns: DataTableColumn<AccessRequest>[] = [
-    { id: "requester", header: "Requester", accessor: r => r.requester, rowHeader: true, hideable: false, cell: r => <CellText primary={<Id value={r.requester} />} secondary={<ReasonCell reason={r.reason} />} /> },
+    { id: "requester", header: "Requester", accessor: requesterLabel, rowHeader: true, hideable: false, cell: r => <PersonIdentity person={{ display_name: r.requester_display_name, email: r.requester_email ?? null }} self={r.requester === session.user.id} /> },
+    { id: "reason", header: "Reason", accessor: r => r.reason ?? "", cell: r => <ReasonCell reason={r.reason} /> },
     { id: "workspace", header: "Workspace", accessor: r => r.workspace_id, cell: r => <Id value={r.workspace_id} /> },
     { id: "status", header: "Status", accessor: r => r.status, cell: r => <StatusCell status={r.status} /> },
     { id: "created", header: "Submitted", accessor: r => r.created_at, cell: r => <span className={s.secondary}>{new Date(r.created_at).toLocaleString()}</span> },
   ];
   return <Stack gap={6} className={s.page}>
     <Heading title="Access requests" description="Membership requests across every Team and Project." />
-    <DirectoryTable<AccessRequest> path={platformAccessRequestsPath} label="Access requests" storageKey="platform-access-requests" columns={columns} rowKey={r => r.id} rowLabel={r => r.requester}
+    <DirectoryTable<AccessRequest> path={platformAccessRequestsPath} label="Access requests" storageKey="platform-access-requests" columns={columns} rowKey={r => r.id} rowLabel={requesterLabel}
       rowActions={r => decisionActions(r, session.user.id, writable, decide)}
       empty={{ icon: <Inbox />, title: "No access requests yet.", description: "Requests to join a Team or Project appear here." }} />
   </Stack>;

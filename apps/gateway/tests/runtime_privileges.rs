@@ -125,6 +125,36 @@ async fn access_requests_run_as_runtime(pool: &PgPool) {
     sqlx::query("INSERT INTO platform_role_grants(user_id,role,source) VALUES($1,'user','manual'),($2,'admin','manual')").bind(requester).bind(decider).execute(&mut *tx).await.unwrap();
     sqlx::query("INSERT INTO workspaces(id,name,kind,discoverable) VALUES($1,'Request runtime','team',true)").bind(ws).execute(&mut *tx).await.unwrap();
     let id:Uuid=sqlx::query_scalar("INSERT INTO access_requests(requester,workspace_id,reason,idempotency_digest,payload_digest) VALUES($1,$2,'Join',sha256('runtime'::bytea),sha256('payload'::bytea)) RETURNING id").bind(requester).bind(ws).fetch_one(&mut *tx).await.unwrap();
+    // UX fix (#83): the server captures the workspace name at INSERT; runtime never gets
+    // UPDATE(workspace_name_at_request), same as created_at/expires_at above.
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT workspace_name_at_request FROM access_requests WHERE id=$1"
+        )
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap(),
+        "Request runtime"
+    );
+    // A SAVEPOINT isolates the expected privilege error so the surrounding rollback-only
+    // transaction (committed statements below) is not left aborted by it.
+    sqlx::query("SAVEPOINT probe_workspace_name")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    assert!(
+        sqlx::query("UPDATE access_requests SET workspace_name_at_request='rewrite' WHERE id=$1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .is_err(),
+        "runtime must not be able to rewrite the frozen workspace name"
+    );
+    sqlx::query("ROLLBACK TO SAVEPOINT probe_workspace_name")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
     let grant:Uuid=sqlx::query_scalar("INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source) VALUES($1,$2,'member','manual') RETURNING id").bind(ws).bind(requester).fetch_one(&mut *tx).await.unwrap();
     sqlx::query("INSERT INTO access_request_applications(request_id,workspace_id,requester,membership_grant_id) VALUES($1,$2,$3,$4)").bind(id).bind(ws).bind(requester).bind(grant).execute(&mut *tx).await.unwrap();
     sqlx::query("UPDATE access_requests SET status='approved',decided_by=$2 WHERE id=$1")

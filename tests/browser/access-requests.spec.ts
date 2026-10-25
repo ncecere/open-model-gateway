@@ -70,18 +70,27 @@ for (const width of [1440, 390]) {
       await submit.getByRole("button", { name: "Send request" }).click();
       await expect(submit).toBeHidden();
 
-      // "My requests" shows the pending status, the submitted reason as plain text, and a Withdraw action.
+      // "My requests" shows the pending status, the submitted reason as plain text, the
+      // workspace's name (never its raw ID), and a Withdraw action.
       await blair.page.getByRole("tab", { name: "My requests" }).click();
       const mine = rowWith(myRequests(blair.page), reasonFor(team));
       await expect(mine).toContainText("Pending");
+      await expect(mine).toContainText(team.name);
+      await expect(mine).not.toContainText(team.id);
       await expectNoHorizontalScroll(blair.page);
       await shot(blair.page, `my-requests-${width}`);
       await expectAccessible(blair.page, `access requests requester ${width}`);
 
-      // Alex, the workspace owner, approves it from Workspace Settings › Access requests.
+      // Alex, the workspace owner, approves it from Workspace Settings › Access requests. The
+      // queue shows Blair's display name and email (#83 UX fix), never the raw requester ID; an
+      // owner/admin already sees this pair for any entitled user through the Members picker.
+      const blairId = (await (await api(blair.page, "GET", "/me")).json()).user.id as string;
       await alex.page.goto(`/workspaces/${team.id}/settings?tab=access-requests`);
       const row = rowWith(queueTable(alex.page), reasonFor(team));
       await expect(row).toBeVisible();
+      await expect(row).toContainText("Blair Kim");
+      await expect(row).toContainText("blair@demo.invalid");
+      await expect(row).not.toContainText(blairId);
       await expectNoHorizontalScroll(alex.page);
       await shot(alex.page, `admin-queue-${width}`);
       await row.getByRole("button", { name: /^Actions for/ }).click();
@@ -165,6 +174,8 @@ test("an Auditor reads the platform queue but is never offered a decision, by th
   try {
     await auditor.page.goto("/admin/access-requests");
     await expect(queueTable(auditor.page)).toBeVisible();
+    // Same requester identity disclosure as GET /platform/users for this role (#83 UX fix).
+    await expect(rowWith(queueTable(auditor.page), reasonFor(team))).toContainText("Blair Kim");
     await expect(queueTable(auditor.page).getByRole("button", { name: /^Actions for/ })).toHaveCount(0);
     const list = await (await api(auditor.page, "GET", "/platform/access-requests")).json();
     const pending = list.data.find((r: { status: string; workspace_id: string }) => r.status === "pending" && r.workspace_id === team.id);
