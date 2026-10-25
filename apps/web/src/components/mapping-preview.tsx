@@ -1,10 +1,10 @@
 import { useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api, type MappingPreview, type MappingPreviewEntry, type MappingPreviewImmediate } from "../lib/api";
-import { Button, ErrorNotice, Stack, useAction } from "./ui";
+import { Button, Stack, useAction } from "./ui";
 import { Dialog } from "./ui/dialog/dialog";
 import { DescriptionList } from "./ui/description-list/description-list";
-import { Alert } from "./ui/alert/alert";
+import { Alert, ErrorAlert, errorMessage } from "./ui/alert/alert";
 
 /**
  * A fully-prepared mapping proposal (#89): the field editor (create/edit) or
@@ -101,6 +101,16 @@ function ImmediateSection({ immediate }: { immediate: MappingPreviewImmediate })
   );
 }
 
+/** `ErrorNotice`'s generic per-status title (components/ui.tsx) can read
+ * identically to the server's own message (a plain 403 "Access denied" is
+ * common) -- showing both then repeats the same text twice in one alert.
+ * This keeps the same title mapping but drops the message body when it
+ * would only restate the title, so the preview's refusal renders once. */
+function PreviewError({ error, retry }: { error: unknown; retry: () => void }) {
+  const title = error instanceof ApiError && error.status === 403 ? "Access denied" : error instanceof ApiError && error.status === 404 ? "Not found" : "Unable to complete request";
+  return <ErrorAlert error={error} title={title} describe={e => (errorMessage(e) === title ? { message: "" } : undefined)} onRetry={retry} />;
+}
+
 /** Mounted only while open: every review fetches a fresh observation (mirrors #85's `DeploymentReviewDialog`). */
 export function MappingReviewDialog({ request, onClose }: { request: MappingReviewRequest; onClose: () => void }) {
   const ask = useAction(), client = useQueryClient(), confirming = useRef(false);
@@ -186,7 +196,7 @@ export function MappingReviewDialog({ request, onClose }: { request: MappingRevi
       }
     >
       {q.isFetching && <p role="status">Loading impact preview…</p>}
-      {q.isError && <ErrorNotice error={q.error} retry={() => void q.refetch()} />}
+      {q.isError && <PreviewError error={q.error} retry={() => void q.refetch()} />}
       {preview && (
         <Stack gap={4}>
           <DescriptionList

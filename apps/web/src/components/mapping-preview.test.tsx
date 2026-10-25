@@ -138,11 +138,15 @@ describe("group-mapping review", () => {
     await user.click(screen.getByRole("button", { name: /^Continue to confirmation$/ }));
     await screen.findByRole("dialog", { name: /^Create this SSO group mapping\?$/ });
     await user.click(screen.getByRole("button", { name: /^Create mapping$/ }));
-    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    // The apply (call 2) and onStale's remount-triggered re-preview (call 3)
+    // land in the same React commit, so "exactly 2 calls" is never an
+    // observable intermediate state here -- wait for the stale-error text
+    // (proof the apply settled) before inspecting call 2's request.
+    await screen.findByText(/was changed since this proposal was reviewed/);
+    expect(fetch.mock.calls[1][0]).toBe(createRequest.applyPath);
     // The server requires a quoted ETag-shaped value (directory.rs's
     // `check_if_match`); an unquoted digest is refused as malformed.
     expect((fetch.mock.calls[1][1] as RequestInit).headers).toMatchObject({ "If-Match": `"${DIGEST_A}"` });
-    await screen.findByText(/was changed since this proposal was reviewed/);
     // onStale reopened a fresh review behind the error dialog.
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
     expect(fetch.mock.calls[2][1]).toMatchObject({ method: "POST" });
