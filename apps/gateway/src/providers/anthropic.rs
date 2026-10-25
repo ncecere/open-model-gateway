@@ -214,9 +214,6 @@ fn encode(model: &str, request: &ChatRequest) -> Result<Value> {
         if let Some(stops) = &options.stop_sequences {
             value["stop_sequences"] = json!(stops);
         }
-        if let Some(user_id) = &options.user_id {
-            value["metadata"] = json!({"user_id":user_id});
-        }
     }
     if !request.tools.is_empty() {
         value["tools"] = Value::Array(

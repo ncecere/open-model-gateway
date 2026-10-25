@@ -245,6 +245,8 @@ impl Request {
             .as_ref()
             .and_then(|v| v.get("task_budget"))
             .cloned();
+        // `metadata.user_id` is a client label only (recorded as the session
+        // label by the protocol layer); it is validated, never forwarded.
         let user_id = self.metadata.and_then(|m| m.user_id);
         if user_id.as_ref().is_some_and(|u| u.chars().count() > 256) {
             return Err(invalid("metadata.user_id"));
@@ -253,7 +255,6 @@ impl Request {
             top_p: self.top_p,
             top_k: self.top_k,
             stop_sequences: self.stop_sequences,
-            user_id,
             system: self.system.clone(),
             thinking: self.thinking,
             output_config: self.output_config,

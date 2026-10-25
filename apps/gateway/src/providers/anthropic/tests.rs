@@ -84,20 +84,20 @@ fn non_messages_stream_errors_keep_legacy_adapter_behavior() {
 }
 
 #[test]
-fn messages_sampling_and_metadata_are_forwarded_without_authority() {
+fn messages_sampling_is_forwarded_and_client_labels_are_not() {
     let mut r = request(false);
     r.messages_options = Some(Box::new(MessagesOptions {
         top_p: Some(0.7),
         top_k: Some(20),
         stop_sequences: Some(vec!["STOP".into()]),
-        user_id: Some("client-label".into()),
         ..Default::default()
     }));
     let body = encode("upstream", &r).unwrap();
     assert_eq!(body["top_p"], 0.7);
     assert_eq!(body["top_k"], 20);
     assert_eq!(body["stop_sequences"], json!(["STOP"]));
-    assert_eq!(body["metadata"], json!({"user_id":"client-label"}));
+    // `metadata.user_id` is a gateway client label, never sent upstream.
+    assert!(body.get("metadata").is_none());
     assert!(body.get("authorization").is_none());
 }
 

@@ -173,7 +173,6 @@ pub struct MessagesOptions {
     pub top_p: Option<f64>,
     pub top_k: Option<u32>,
     pub stop_sequences: Option<Vec<String>>,
-    pub user_id: Option<String>,
 }
 impl ChatRequest {
     pub fn response_limit(&self) -> usize {

@@ -189,7 +189,6 @@ fn system_text_and_sampling_are_not_lost() {
         options.stop_sequences.as_deref(),
         Some(&["STOP".to_string()][..])
     );
-    assert_eq!(options.user_id.as_deref(), Some("client-label"));
     assert!(crate::providers::messages::validate(&r, ProviderClass::Anthropic).is_ok());
     for class in [
         ProviderClass::OpenAi,
