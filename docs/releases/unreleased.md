@@ -2,11 +2,21 @@
 
 Notes for changes on `main` after [v0.8.0](v0.8.0.md). They become the next release's notes.
 
+## Readable deployment configuration history (#86)
+
+Admin route pages gain a browser-only **History** tab for Platform Admins/Auditors, with enabled-state before/after diffs, actor/token attribution, immutable IDs and cursor pagination. New GET `/api/v1/platform/deployments/{id}/configuration/history` and `/history/{change}` recheck live platform-reader authority; all admin tokens and ordinary users are refused. Legacy audit events show **Values unavailable**, never reconstructed snapshots. No restore or bulk operation is included.
+
+Additive migration **0067_configuration_history** adds an append-only, schema-versioned `configuration_changes` table linked to audit `(id,created_at)` and a database-owned per-deployment revision. All deployment creation/state writers, including setup and DELETE-as-disable, atomically capture actual before/after values with audit identity; no-op writes no longer emit deployment change audits. Existing rows start at revision `0` without backfill. New rows start at `1`. Runtime history access is SELECT/INSERT only, with database immutability guards and privilege probes. Audit partition archival is not blocked; retained snapshots keep IDs/values but may lose readable actor attribution.
+
+**API compatibility:** preview `expected_revision` changes from `catalog:<version>` to the decimal-string deployment enablement revision. Dependency topic versions remain separate. This is still observation-only: existing apply routes do not enforce revision preconditions (#87 follows).
+
+**Rollout:** this stacked draft reserves 0067; migrations 0059–0066 belong to other PRs. Do not deploy it until the ordered migration prefix is present and all coordinator gates/reviews pass. Apply `migrate` and `grants apply` explicitly to an approved target before serving; never reset, backfill or auto-migrate an existing installation. This is a minor-release schema/API change, not a standalone release claim.
+
 ## Deployment configuration impact previews (#85)
 
 Platform Admins can review deployment enable/disable changes before confirming: the allowlisted state diff, serving routes gained/lost, last-serving-route warnings and bounded affected Team/Project metadata. The new browser-only `POST /api/v1/platform/deployments/{id}/configuration/preview` requires Origin/CSRF and denies all admin tokens. It shares the typed deployment operation with existing PATCH/DELETE, reads one read-only primary snapshot and writes no configuration, audit, notifications or cache state. Personal effects are omitted, including from counts; no foreign personal IDs, owners, keys or request details are exposed.
 
-No migration or new runtime privilege is required. `expected_revision` is the existing monotonic **catalog configuration version**, not a new deployment revision. It is an observation token only: existing apply behavior, statuses and audit remain unchanged and do not enforce preview preconditions. History/per-target revisions, rollback and bulk actions remain later slices. See [management API](../management-api.md) and [platform administration](../platform-administration.md).
+The preview itself requires no additional write privilege and does not enforce preview preconditions. Its original catalog-version observation has been replaced by the per-deployment revision in #86 above. History/per-target revisions are included there; rollback and bulk actions remain later slices. See [management API](../management-api.md) and [platform administration](../platform-administration.md).
 
 ## Signed alert webhook delivery (#45, slice 2)
 
