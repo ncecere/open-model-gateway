@@ -52,6 +52,8 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
         "admin_api_tokens",
         "alert_webhook_destinations",
         "alert_webhook_outbox",
+        "access_requests",
+        "access_request_applications",
     ] {
         assert_eq!(
             sqlx::query_scalar::<_, i64>(&format!("SELECT count(*) FROM {table}"))
@@ -89,12 +91,54 @@ async fn enterprise_runtime_allowlist_and_rollback_probes(pool: PgPool) {
     admin_tokens_run_as_runtime(&pool).await;
     alert_webhooks_run_as_runtime(&pool).await;
     key_issuance_runs_as_runtime(&pool).await;
+    access_requests_run_as_runtime(&pool).await;
     // Last: its unknown batch hold would change the installation-wide totals above.
     async_jobs_run_as_runtime(&pool).await;
     sqlx::query("SELECT pg_advisory_unlock(72419505)")
         .execute(&mut *connection)
         .await
         .unwrap();
+}
+
+/// #83: the same INSERT, transition and linkage SQL as the handler. The
+/// rollback probe file also refuses identity/reason mutation and self-decision.
+async fn access_requests_run_as_runtime(pool: &PgPool) {
+    use uuid::Uuid;
+    let runtime = runtime_pool(pool).await;
+    let (requester, decider, ws) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let mut tx = runtime.begin().await.unwrap();
+    sqlx::query("INSERT INTO users(id,email) VALUES($1,'request-runtime@example.test'),($2,'decide-runtime@example.test')").bind(requester).bind(decider).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO platform_role_grants(user_id,role,source) VALUES($1,'user','manual'),($2,'admin','manual')").bind(requester).bind(decider).execute(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO workspaces(id,name,kind,discoverable) VALUES($1,'Request runtime','team',true)").bind(ws).execute(&mut *tx).await.unwrap();
+    let id:Uuid=sqlx::query_scalar("INSERT INTO access_requests(requester,workspace_id,reason,idempotency_digest,payload_digest) VALUES($1,$2,'Join',sha256('runtime'::bytea),sha256('payload'::bytea)) RETURNING id").bind(requester).bind(ws).fetch_one(&mut *tx).await.unwrap();
+    let grant:Uuid=sqlx::query_scalar("INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source) VALUES($1,$2,'member','manual') RETURNING id").bind(ws).bind(requester).fetch_one(&mut *tx).await.unwrap();
+    sqlx::query("INSERT INTO access_request_applications(request_id,workspace_id,requester,membership_grant_id) VALUES($1,$2,$3,$4)").bind(id).bind(ws).bind(requester).bind(grant).execute(&mut *tx).await.unwrap();
+    sqlx::query("UPDATE access_requests SET status='approved',decided_by=$2 WHERE id=$1")
+        .bind(id)
+        .bind(decider)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::raw_sql("SET CONSTRAINTS ALL IMMEDIATE")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE users SET cleaned_at=now(),disabled_at=now() WHERE id=$1")
+        .bind(requester)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, Option<String>>("SELECT reason FROM access_requests WHERE id=$1")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap(),
+        None,
+        "owner-run cleanup scrubs reasons without runtime UPDATE(reason)"
+    );
+    tx.rollback().await.unwrap();
+    runtime.close().await;
 }
 
 /// #79: "Your sessions" as the runtime role. The real session middleware
