@@ -22,7 +22,7 @@ describe("scheduled report pages", () => {
   });
   it("renders immutable exact totals, unavailable values, truncation and authenticated CSV link", () => {
     const html = markup(<ReportRunPage session={admin} schedule="schedule" run="run" />, [[`${base}/schedule/runs/run`, run]]);
-    expect(html).toContain("Configured-rate estimates, not invoices"); expect(html).toContain("9007199254.740993");
+    expect(html).toContain("Configured-rate estimates, not invoices"); expect(html).toContain("9,007,199,254.740993");
     expect(html).toContain("Unavailable"); expect(html).toContain("models: first 100 entries");
     expect(html).toContain(`href="${base}/schedule/runs/run/csv"`); expect(html).toContain("Download aggregate CSV");
   });

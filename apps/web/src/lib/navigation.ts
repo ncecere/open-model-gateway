@@ -34,9 +34,9 @@ export function workspaceSections(session: Session, active?: Workspace): { id: s
   return sections;
 }
 /** Labels of pages outside the sidebar: create forms, records and legacy deep links. */
-export const hiddenPages: Partial<Record<Page, string>> = { "batch-detail": "Batch", "alert-rule-detail": "Alert rule", "workspace-alert-detail": "Alert rule", notifications: "Notifications", "model-new": "Add model", pricing: "Pricing", deployments: "All routes", routing: "Routing", "deployment-detail": "Route", "request-detail": "Request", "session-detail": "Session", "platform-log-detail": "Request", "platform-log-session": "Session", "key-detail": "API key", "workspace-model": "Model", "model-compare": "Compare models", "platform-model-compare": "Compare models" };
+export const hiddenPages: Partial<Record<Page, string>> = { "platform-report-run": "Scheduled report", "workspace-report-run": "Scheduled report", "batch-detail": "Batch", "alert-rule-detail": "Alert rule", "workspace-alert-detail": "Alert rule", notifications: "Notifications", "model-new": "Add model", pricing: "Pricing", deployments: "All routes", routing: "Routing", "deployment-detail": "Route", "request-detail": "Request", "session-detail": "Session", "platform-log-detail": "Request", "platform-log-session": "Session", "key-detail": "API key", "workspace-model": "Model", "model-compare": "Compare models", "platform-model-compare": "Compare models" };
 /** The sidebar item (and breadcrumb parent) a record, form or legacy page belongs to. */
-export const navParents: Partial<Record<Page, Page>> = { "batch-detail": "requests", "alert-rule-detail": "settings-alerts", "workspace-alert-detail": "workspace-settings", "workspace-detail": "platform-teams", "model-new": "models", "model-detail": "models", "provider-detail": "providers", deployments: "models", routing: "models", pricing: "models", "deployment-detail": "models", "catalog-detail": "catalogs", "user-detail": "users", "request-detail": "requests", "session-detail": "requests", "platform-log-detail": "platform-logs", "platform-log-session": "platform-logs", "key-detail": "keys", "workspace-model": "grants", "model-compare": "grants", "platform-model-compare": "models" };
+export const navParents: Partial<Record<Page, Page>> = { "platform-report-run": "platform-costs", "workspace-report-run": "costs", "batch-detail": "requests", "alert-rule-detail": "settings-alerts", "workspace-alert-detail": "workspace-settings", "workspace-detail": "platform-teams", "model-new": "models", "model-detail": "models", "provider-detail": "providers", deployments: "models", routing: "models", pricing: "models", "deployment-detail": "models", "catalog-detail": "catalogs", "user-detail": "users", "request-detail": "requests", "session-detail": "requests", "platform-log-detail": "platform-logs", "platform-log-session": "platform-logs", "key-detail": "keys", "workspace-model": "grants", "model-compare": "grants", "platform-model-compare": "models" };
 export function activeAdminGroup(page: Page): string | undefined {
   return navigation.find(item => item.page === (navParents[page] ?? page))?.group || undefined;
 }
@@ -66,8 +66,8 @@ const key = (session: Session, portal: "admin" | "workspace") => `${prefix}${ses
 const contextKey = (session: Session) => `${prefix}${session.user.id}:context`;
 export function rememberPortal(storage: Pick<Storage, "setItem">, session: Session, search: DashboardSearch) {
   if (!authorizedLocation(search, session) || search.page === "profile" || search.page === "accept-invitation") return;
-  const { page, ws, record, tab, kind } = canonicalSearch(search);
-  try { storage.setItem(key(session, isAdminPage(page!) ? "admin" : "workspace"), dashboardHref({ page, ws, record, tab, kind })); } catch { /* Storage is optional. */ }
+  const { page, ws, record, run, tab, kind } = canonicalSearch(search);
+  try { storage.setItem(key(session, isAdminPage(page!) ? "admin" : "workspace"), dashboardHref({ page, ws, record, run, tab, kind })); } catch { /* Storage is optional. */ }
 }
 export function rememberedPortal(storage: Pick<Storage, "getItem" | "removeItem">, session: Session, portal: "admin" | "workspace") {
   const k = key(session, portal); let saved: string | null; try { saved = storage.getItem(k); } catch { return; } const parsed = parseDashboardLocation(saved ?? "");

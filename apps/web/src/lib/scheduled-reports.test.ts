@@ -28,7 +28,7 @@ describe("scheduled reports", () => {
       const href = ws ? `/workspaces/${ws}/report-schedules/schedule/runs/run` : "/admin/report-schedules/schedule/runs/run";
       expect(dashboardHref(search)).toBe(href);
       expect(parseDashboardLocation(href)).toMatchObject(search);
-      expect(reportsPath(ws && { ...team, id: ws })).toBe(ws ? `/api/v1/workspaces/${ws}/report-schedules` : "/api/v1/platform/report-schedules");
+      expect(reportsPath(ws ? { ...team, id: ws } : undefined)).toBe(ws ? `/api/v1/workspaces/${ws}/report-schedules` : "/api/v1/platform/report-schedules");
     }
   });
   it("denies members and foreign personal owners before fetching", () => {
