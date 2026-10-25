@@ -23,6 +23,7 @@ mod models_ux;
 #[cfg(test)]
 #[path = "../management_openapi/mod.rs"]
 mod openapi;
+mod provider_costs;
 mod requests;
 pub(crate) mod resources;
 mod scheduled_reports;
@@ -619,6 +620,7 @@ pub fn public_router() -> Router<Store> {
 /// 2 MiB request limit.
 pub fn upload_router(identity: IdentityState) -> Router<Store> {
     files::upload_routes()
+        .merge(provider_costs::upload_routes())
         .route_layer(middleware::from_fn_with_state(
             identity.store().clone(),
             authorization::require_route_access,
@@ -632,6 +634,7 @@ fn routes() -> Router<Store> {
     Router::new()
         .merge(scheduled_reports::routes())
         .merge(admin_tokens::routes())
+        .merge(provider_costs::routes())
         .merge(directory::routes())
         .merge(group_mapping_preview::routes())
         .merge(resources::platform_routes())

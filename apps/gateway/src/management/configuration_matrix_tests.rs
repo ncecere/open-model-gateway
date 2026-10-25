@@ -20,11 +20,44 @@ fn json_handlers() -> BTreeSet<String> {
             if crate::configuration_source_tests::test_only(&node.attrs) {
                 return;
             }
+            // `Json<T>`, or a handler that inspects the rejection itself
+            // (`Result<Json<T>, JsonRejection>`, `Option<Json<T>>`) so it can
+            // refuse without echoing input: both are JSON write extractors.
+            // A helper generic over the body type (`fn f<T>(Result<Json<T>, _>)`)
+            // is not a route handler: Axum handlers extract a concrete DTO.
+            let generic: BTreeSet<String> = node
+                .sig
+                .generics
+                .type_params()
+                .map(|t| t.ident.to_string())
+                .collect();
+            fn is_json(ty: &syn::Type, generic: &BTreeSet<String>) -> bool {
+                let syn::Type::Path(p) = ty else {
+                    return false;
+                };
+                let Some(last) = p.path.segments.last() else {
+                    return false;
+                };
+                if last.ident == "Json" {
+                    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+                        return true;
+                    };
+                    return !matches!(
+                        args.args.first(),
+                        Some(syn::GenericArgument::Type(syn::Type::Path(inner)))
+                            if inner.path.get_ident().is_some_and(|i| generic.contains(&i.to_string()))
+                    );
+                }
+                if last.ident != "Result" && last.ident != "Option" {
+                    return false;
+                }
+                let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+                    return false;
+                };
+                matches!(args.args.first(), Some(syn::GenericArgument::Type(inner)) if is_json(inner, generic))
+            }
             let json = node.sig.inputs.iter().any(|arg| match arg {
-                syn::FnArg::Typed(p) => match p.ty.as_ref() {
-                    syn::Type::Path(p) => p.path.segments.last().is_some_and(|s| s.ident == "Json"),
-                    _ => false,
-                },
+                syn::FnArg::Typed(p) => is_json(&p.ty, &generic),
                 _ => false,
             });
             if json {
@@ -613,6 +646,52 @@ async fn every_json_management_write_rejects_unknown_fields_after_valid_control(
         format!("{workspace}/costs/{execution}/reconcile"),
         &f.admin,
         json!({"input_tokens":"1","output_tokens":"1","billing_usage":null,"evidence":"configuration control"})
+    );
+    let cost_upload = super::provider_cost_tests::upload();
+    let (status, cost_import) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        "/api/v1/platform/provider-cost-imports",
+        cost_upload.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{cost_import}");
+    let cost_connection = Uuid::new_v4();
+    sqlx::query("INSERT INTO provider_connections(id,name,provider,credential_ref) VALUES($1,'Cost matrix','anthropic','env:PLACEHOLDER')")
+        .bind(cost_connection).execute(&pool).await.unwrap();
+    let cost_mapping = super::provider_cost_tests::mapping(cost_connection, Some(ws));
+    let (status, cost_map) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        "/api/v1/platform/provider-cost-mappings",
+        cost_mapping.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{cost_map}");
+    let mut next_mapping = cost_mapping;
+    next_mapping["supersedes"] = cost_map["id"].clone();
+    case!(
+        "provider_costs::import",
+        "POST",
+        "/api/v1/platform/provider-cost-imports",
+        &f.admin,
+        cost_upload
+    );
+    case!(
+        "provider_costs::create_mapping",
+        "POST",
+        "/api/v1/platform/provider-cost-mappings",
+        &f.admin,
+        next_mapping
+    );
+    case!(
+        "provider_costs::reconcile",
+        "POST",
+        "/api/v1/platform/provider-reconciliations",
+        &f.admin,
+        json!({"import_id":id(&cost_import),"mapping_id":id(&cost_map)})
     );
     let covered: BTreeSet<String> = cases.iter().map(|c| c.handler.to_owned()).collect();
     assert_eq!(

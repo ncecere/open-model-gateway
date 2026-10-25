@@ -145,6 +145,24 @@ impl Targets {
         ] {
             rows.insert(name, create(f, actor, &path, body).await);
         }
+        let imported = create(
+            f,
+            &f.admin,
+            "/api/v1/platform/provider-cost-imports",
+            super::super::provider_cost_tests::upload(),
+        )
+        .await;
+        let mapped = create(f, &f.admin, "/api/v1/platform/provider-cost-mappings", json!({"account_id":"organization_placeholder","supersedes":null,"evidence_reference":"matrix:empty","bindings":[]})).await;
+        let reconciled = create(
+            f,
+            &f.admin,
+            "/api/v1/platform/provider-reconciliations",
+            json!({"import_id":imported,"mapping_id":mapped}),
+        )
+        .await;
+        rows.insert("provider-cost-import", imported);
+        rows.insert("provider-cost-mapping", mapped);
+        rows.insert("provider-reconciliation", reconciled);
         Self(rows)
     }
     pub(super) fn concrete(&self, path: &str, f: &Fixture) -> String {
@@ -154,6 +172,12 @@ impl Targets {
             } else {
                 "workspace-report-schedule"
             }]
+        } else if path.contains("/provider-cost-imports") {
+            &self.0["provider-cost-import"]
+        } else if path.contains("/provider-cost-mappings") {
+            &self.0["provider-cost-mapping"]
+        } else if path.contains("/provider-reconciliations") {
+            &self.0["provider-reconciliation"]
         } else if path.contains("/alerts/webhooks") {
             &self.0["webhook"]
         } else if path.contains("/files") {

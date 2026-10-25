@@ -2,6 +2,8 @@
 
 Reports answer “what configured-rate activity can I see for this UTC period?” They are live estimates, not provider invoices, complete billing guarantees or frozen financial statements. Unknown charges and conservative holds are separate from settled cost.
 
+For the separate browser-session API that imports Anthropic Cost Report JSON and freezes aggregate comparisons, see [provider-reported cost reconciliation](provider-cost-reconciliation.md). It does not rewrite these estimates or establish a verified invoice.
+
 ## Scope and date range
 
 Browser-session endpoints:

@@ -60,6 +60,10 @@ mod personal_data_tests;
 mod portal_tests;
 #[path = "project_tests.rs"]
 mod project_tests;
+#[path = "provider_cost_matching_tests.rs"]
+mod provider_cost_matching_tests;
+#[path = "provider_cost_tests.rs"]
+mod provider_cost_tests;
 #[path = "read_scale_tests.rs"]
 mod read_scale_tests;
 #[path = "resources/tests.rs"]
@@ -168,6 +172,7 @@ async fn call(
     body: Value,
 ) -> (StatusCode, Value) {
     let response = routes()
+        .merge(super::provider_costs::upload_routes())
         // Both extensions: a real browser session's middleware inserts both
         // (identity::authenticate_management), and this bypasses that
         // middleware entirely to call a handler directly.
