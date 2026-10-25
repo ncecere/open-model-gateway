@@ -59,6 +59,7 @@
                   "plaintext_requires_loopback",
                   "precondition_failed",
                   "price_meters_incomplete",
+                  "report_schedule_limit_reached",
                   "route_unsupported_capability",
                   "setting_locked_by_environment",
                   "stacked_budgets_require_budgets_field",
