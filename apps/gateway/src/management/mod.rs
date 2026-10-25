@@ -18,6 +18,9 @@ mod logs;
 mod me;
 mod members;
 mod models_ux;
+#[cfg(test)]
+#[path = "../management_openapi/mod.rs"]
+mod openapi;
 mod requests;
 pub(crate) mod resources;
 mod sessions;
