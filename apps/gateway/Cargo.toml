@@ -80,6 +80,8 @@ uuid = { version = "1", features = ["v4", "v7", "serde"] }
 [dev-dependencies]
 # Offline OpenAPI 3.1/Draft 2020-12 gates only (#81); no fetchers or schema-generator macros.
 jsonschema = { version = "=0.60.1", default-features = false }
+# Deterministic paused-time coverage of the metrics worker's missed ticks.
+tokio = { version = "1", features = ["test-util"] }
 proc-macro2 = "1"
 # Parse source inventories for route declarations and the configuration surface.
 syn = { version = "2", features = ["full", "visit"] }

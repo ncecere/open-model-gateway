@@ -321,8 +321,8 @@ fn healthcheck_exit_status_follows_readiness() {
     }
 }
 
-/// #99 slice 1: config is validated before any DB access. Even valid metrics
-/// export settings are refused explicitly until the worker ships (slice 3).
+/// Metrics config is validated before any DB access. Malformed settings
+/// refuse without disclosure; valid settings proceed to the database.
 #[test]
 fn metrics_otlp_refusals_use_the_real_startup_path_without_disclosure() {
     const URL: &str = "GATEWAY_METRICS_OTLP_URL";
@@ -433,7 +433,6 @@ fn metrics_otlp_refusals_use_the_real_startup_path_without_disclosure() {
                 ("GATEWAY_SMTP_SECRET_ENV_ALLOWLIST", "PRIVATE_MATERIAL"),
             ],
         ),
-        (URL, vec![(URL, valid)]),
     ];
     for (setting, value) in [
         (HEADERS, "PRIVATE_MATERIAL"),
@@ -476,9 +475,26 @@ fn metrics_otlp_refusals_use_the_real_startup_path_without_disclosure() {
         ] {
             assert!(!stderr.contains(value), "disclosure: {stderr}");
         }
-        if env.contains(&(URL, valid)) && env.len() == 2 {
-            assert!(stderr.contains("not implemented"), "{stderr}");
-        }
+    }
+    let output = f.run(
+        &["serve"],
+        [
+            (URL, valid),
+            (
+                "DATABASE_URL",
+                "postgres://gateway:never-dialed-marker@127.0.0.1:1/gateway",
+            ),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = text(&output.stderr);
+    assert!(
+        stderr.contains("could not connect to PostgreSQL"),
+        "{stderr}"
+    );
+    for value in [valid, "never-dialed-marker", "not implemented"] {
+        assert!(!stderr.contains(value), "{stderr}");
     }
 }
 
