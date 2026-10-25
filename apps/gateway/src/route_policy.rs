@@ -808,6 +808,21 @@ pub(crate) const ROUTES: &[Route] = &[
         PlatformWrite,
         ACCESS_WRITE
     ),
+    // Dry-run diff only (#89): never writes, so an admin token -- whose only
+    // purpose is unattended automation of real changes -- has no use for it.
+    // Browser session only, like every other preview surface.
+    route!(
+        "POST",
+        "/api/v1/platform/oidc/group-mappings/preview",
+        PlatformWrite,
+        DENIED
+    ),
+    route!(
+        "POST",
+        "/api/v1/platform/oidc/group-mappings/{id}/preview",
+        PlatformWrite,
+        DENIED
+    ),
     route!(
         "GET",
         "/api/v1/platform/cost-centers",
