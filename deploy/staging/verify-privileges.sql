@@ -986,6 +986,9 @@ BEGIN
   BEGIN UPDATE access_requests SET expires_at=now() WHERE id=req; RAISE EXCEPTION 'request expiry mutable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   BEGIN DELETE FROM access_requests WHERE id=req; RAISE EXCEPTION 'request removable'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   BEGIN UPDATE access_requests SET status='approved',decided_by=ru WHERE id=req; RAISE EXCEPTION 'request self-decision allowed'; EXCEPTION WHEN check_violation THEN NULL; END;
+  -- The configuration probe above forced ALL constraints IMMEDIATE; the
+  -- application pair is checked as the gateway commits it: deferred, then once.
+  SET CONSTRAINTS access_requests_application,access_request_applications_check DEFERRED;
   INSERT INTO workspace_membership_grants(id,workspace_id,user_id,role,source) VALUES(grant_id,ws,ru,'member','manual');
   INSERT INTO access_request_applications(request_id,workspace_id,requester,membership_grant_id) VALUES(req,ws,ru,grant_id);
   UPDATE access_requests SET status='approved',decided_by=decider WHERE id=req;
