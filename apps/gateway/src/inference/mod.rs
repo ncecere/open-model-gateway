@@ -694,7 +694,10 @@ impl Engine {
             // Logging-only correlation (#98): known only once a
             // shared-workspace admission has already committed for this
             // request; never for personal workspaces.
-            let log_trace_id = telemetry.trace_from_eligibility().map(hex::encode);
+            let log_trace_id = telemetry
+                .trace_from_eligibility()
+                .map(hex::encode)
+                .map(crate::ops_log::LogTraceId::from_provenance);
             let mut guard = ExecutionGuard::new(
                 self.repository.clone(),
                 execution_id,
@@ -993,7 +996,7 @@ struct ExecutionGuard {
     /// already committed for this request, `None` for a personal workspace
     /// (never logged) or while telemetry is disabled. Never affects
     /// accounting; `x-request-id` is unchanged.
-    log_trace_id: Option<String>,
+    log_trace_id: Option<crate::ops_log::LogTraceId>,
 }
 fn millis(d: Duration) -> u64 {
     d.as_millis().min(u64::MAX as u128) as u64
@@ -1006,7 +1009,7 @@ impl ExecutionGuard {
         deployment_id: Uuid,
         started: Instant,
         permit: SharedPermit,
-        log_trace_id: Option<String>,
+        log_trace_id: Option<crate::ops_log::LogTraceId>,
     ) -> Self {
         Self {
             repository,
@@ -1076,15 +1079,13 @@ impl ExecutionGuard {
         })
         .and_then(|result| result);
         if result.is_err() {
-            tracing::error!(execution_id = %self.id, trace_id = self.log_trace_id.as_deref(), "inference finalization failed; reconciliation required");
+            tracing::error!(execution_id = %self.id, trace_id = self.log_trace_id.as_ref().map(crate::ops_log::LogTraceId::as_str), "inference finalization failed; reconciliation required");
             // Only generation finalization (this call) may carry a trace id,
-            // from the same already shared-admission-proven provenance.
+            // from the same already shared-admission-proven provenance; the
+            // value is already the opaque type, never re-minted here.
             crate::ops_log::emit(crate::ops_log::OpsEvent::FinalizationNeedsReconciliation {
                 finalizer: crate::ops_log::Finalizer::GenerationFinish,
-                trace: self
-                    .log_trace_id
-                    .clone()
-                    .map(crate::ops_log::LogTraceId::from_provenance),
+                trace: self.log_trace_id.clone(),
             });
         }
         // Health is advisory; a failed health write never discards a durably accounted response.
@@ -1099,7 +1100,7 @@ impl ExecutionGuard {
                 Ok(Ok(()))
             )
         {
-            tracing::warn!(execution_id=%self.id, trace_id = self.log_trace_id.as_deref(), "routing health update failed");
+            tracing::warn!(execution_id=%self.id, trace_id = self.log_trace_id.as_ref().map(crate::ops_log::LogTraceId::as_str), "routing health update failed");
         }
         result
     }
@@ -1121,9 +1122,9 @@ impl Drop for ExecutionGuard {
                     crate::metrics::METRICS.observe_settlement(crate::metrics::Settlement::Held);
                 }
                 if !matches!(finished, Ok(Ok(()))) {
-                    tracing::error!(execution_id = %record.id, trace_id = log_trace_id.as_deref(), "cancelled inference finalization failed; reconciliation required");
+                    tracing::error!(execution_id = %record.id, trace_id = log_trace_id.as_ref().map(crate::ops_log::LogTraceId::as_str), "cancelled inference finalization failed; reconciliation required");
                     // Cancellation never carries a trace id (#294): only the
-                    // explicit `finish` path is generation-finalization-proven.
+                    // explicit `finish` path above is generation-finalization-proven.
                     crate::ops_log::emit(crate::ops_log::OpsEvent::FinalizationNeedsReconciliation {
                         finalizer: crate::ops_log::Finalizer::GenerationCancel,
                         trace: None,

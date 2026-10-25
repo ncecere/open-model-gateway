@@ -323,7 +323,7 @@ fn denied(purpose: Purpose, host: &str, ip: IpAddr, policy: &Policy) {
 /// Keep the addresses the policy allows. Refusal is counted and logged only
 /// when none remain (a dual-stack host with one refused record still works,
 /// and that's not an incident); partial drops are debug logs.
-fn filter(
+pub(crate) fn filter(
     policy: &Policy,
     purpose: Purpose,
     host: &str,

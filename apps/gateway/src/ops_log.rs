@@ -130,16 +130,26 @@ impl Severity {
 }
 
 /// Opaque proof that a trace id came from existing shared-admission-proven
-/// `log_trace_id` provenance (#98). No public constructor from an arbitrary
-/// string or UUID: only generation finalization may mint one, from the
-/// value that provenance already computed.
+/// `log_trace_id` provenance (#98). No crate-wide raw constructor: only code
+/// inside `crate::inference` (where that provenance is computed, right
+/// after admission commits) may mint one, from the value provenance already
+/// computed; no arbitrary string or UUID is accepted elsewhere. `as_str` is
+/// read-only and does not let a caller forge a new value from it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LogTraceId(String);
 impl LogTraceId {
-    pub(crate) fn from_provenance(hex: String) -> Self {
+    pub(in crate::inference) fn from_provenance(hex: String) -> Self {
         Self(hex)
     }
-    fn hex(&self) -> &str {
+    /// Test fixtures only: compiled out of every production build, so this
+    /// is never a production forgery path.
+    #[cfg(test)]
+    pub(crate) fn for_test(hex: &str) -> Self {
+        Self(hex.to_owned())
+    }
+    /// Read-only: the existing hexadecimal value, for stderr diagnostics and
+    /// the wire `traceId` field. Never lets a caller mint a new value.
+    pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
 }
@@ -275,19 +285,12 @@ struct Queued {
     suppressed: u64,
 }
 
+#[derive(Default)]
 struct Limiter {
     /// Milliseconds (offset, never zero) since process start of the last
     /// admitted event per variant; zero means "never admitted".
     last: [AtomicU64; OpsEvent::COUNT],
     suppressed: [AtomicU64; OpsEvent::COUNT],
-}
-impl Default for Limiter {
-    fn default() -> Self {
-        Self {
-            last: Default::default(),
-            suppressed: Default::default(),
-        }
-    }
 }
 /// Burst one, refill every 30 seconds, independent of severity filtering
 /// (which runs first and never touches the limiter).
@@ -299,16 +302,28 @@ fn now_ms() -> u64 {
 }
 impl Limiter {
     /// `Some(suppressed_count)` to admit (and reset that count to zero), or
-    /// `None` to suppress (and count it).
+    /// `None` to suppress (and count it). A compare-exchange claims the
+    /// admission atomically: concurrent callers in the same refill window
+    /// can never all observe "ready" and all admit (a burst beyond one), and
+    /// the suppressed-count swap belongs only to whichever caller actually
+    /// won the admission.
     fn admit(&self, index: usize) -> Option<u64> {
         let now = now_ms();
-        let last = self.last[index].load(Ordering::Acquire);
-        if last != 0 && now.saturating_sub(last) < REFILL.as_millis() as u64 {
-            self.suppressed[index].fetch_add(1, Ordering::AcqRel);
-            return None;
+        loop {
+            let last = self.last[index].load(Ordering::Acquire);
+            if last != 0 && now.saturating_sub(last) < REFILL.as_millis() as u64 {
+                self.suppressed[index].fetch_add(1, Ordering::AcqRel);
+                return None;
+            }
+            if self.last[index]
+                .compare_exchange(last, now, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return Some(self.suppressed[index].swap(0, Ordering::AcqRel));
+            }
+            // Lost the race to another admitting caller: re-read `last` (it
+            // now reflects the winner) rather than admit a second time.
         }
-        self.last[index].store(now, Ordering::Release);
-        Some(self.suppressed[index].swap(0, Ordering::AcqRel))
     }
 }
 
@@ -318,28 +333,34 @@ struct Shared {
     /// limiter, uncounted (not a `DropReason`, like disabled Traffic families).
     threshold: AtomicU8,
     limiter: Limiter,
-    sender: Mutex<Option<mpsc::Sender<Queued>>>,
+    /// A reader-writer lock, never a plain `Mutex`: `emit` (every request
+    /// and background-job path) only ever takes a non-blocking `try_read`,
+    /// so any number of concurrent producers can read the sender without
+    /// contending each other; only `configure` (Runtime start/shutdown,
+    /// never a hot path) takes the rare blocking write lock.
+    sender: std::sync::RwLock<Option<mpsc::Sender<Queued>>>,
 }
 const DISABLED: u8 = u8::MAX;
 static SHARED: LazyLock<Shared> = LazyLock::new(|| Shared {
     threshold: AtomicU8::new(DISABLED),
     limiter: Limiter::default(),
-    sender: Mutex::new(None),
+    sender: std::sync::RwLock::new(None),
 });
 
 /// Runtime-only: attach (enabled) or detach (disabled/shutdown) the process
 /// singleton. Detaching first closes admission before any drain.
 fn configure(sender: Option<mpsc::Sender<Queued>>, min_severity: Option<Severity>) {
-    *SHARED.sender.lock().unwrap_or_else(|e| e.into_inner()) = sender;
+    *SHARED.sender.write().unwrap_or_else(|e| e.into_inner()) = sender;
     SHARED.threshold.store(
         min_severity.map_or(DISABLED, Severity::number),
         Ordering::Release,
     );
 }
 
-/// The only production entry point. Bounded atomic operations and
-/// `try_send` only: no encoding, allocation beyond one small struct, or
-/// network I/O happens on the caller's thread.
+/// The only production entry point. Bounded atomic operations, a
+/// non-blocking read and `try_send` only: no encoding, allocation beyond one
+/// small struct, or network I/O happens on the caller's thread, and this
+/// never blocks a request or background-job path.
 pub fn emit(event: OpsEvent) {
     let threshold = SHARED.threshold.load(Ordering::Acquire);
     if threshold == DISABLED || event.severity().number() < threshold {
@@ -350,11 +371,15 @@ pub fn emit(event: OpsEvent) {
         crate::metrics::METRICS.otlp_logs_suppressed(index, 1);
         return;
     };
-    let sender = SHARED
-        .sender
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone();
+    // try_read never blocks: a momentary contention with the rare `configure`
+    // writer (Runtime start/shutdown) is counted exactly like a closed queue,
+    // never awaited.
+    let Ok(guard) = SHARED.sender.try_read() else {
+        crate::metrics::METRICS.otlp_logs_drop(DropReason::Shutdown, 1);
+        return;
+    };
+    let sender = guard.clone();
+    drop(guard);
     let Some(sender) = sender else {
         // Enabled but detached mid-emit (a shutdown race): never panics or
         // blocks; counted the same as a closed queue.
@@ -405,7 +430,7 @@ fn log_record(event: &OpsEvent, at: u64, suppressed: u64) -> Value {
         "attributes": attributes,
     });
     if let Some(trace) = event.trace() {
-        record["traceId"] = json!(trace.hex());
+        record["traceId"] = json!(trace.as_str());
     }
     record
 }
@@ -450,16 +475,41 @@ impl Exporter {
     }
 }
 
+/// Owns the queue receiver and how many records are mid-exchange right now.
+/// Dropping it (a normal return, *or* a cancelled/aborted task) accounts
+/// every record that was never explicitly counted: the `in_flight` ones
+/// bracketing the one cancellable `.await` in [`send_batch`], plus whatever
+/// is still queued. Cancellation (a forced shutdown abort) can therefore
+/// never lose a record uncounted.
+struct Pending {
+    receiver: mpsc::Receiver<Queued>,
+    in_flight: usize,
+}
+impl Drop for Pending {
+    fn drop(&mut self) {
+        self.receiver.close();
+        let mut n = self.in_flight as u64;
+        while self.receiver.try_recv().is_ok() {
+            n += 1;
+        }
+        if n > 0 {
+            crate::metrics::METRICS.otlp_logs_drop(DropReason::Shutdown, n);
+        }
+    }
+}
+
 /// One immediate batch of whatever is currently queued (never a retry/spool):
 /// at most [`MAX_BATCH`] records within [`MAX_BODY`], oversized or
 /// already-malformed records dropped and counted, never fabricated.
-async fn send_batch(exporter: &Exporter, receiver: &mut mpsc::Receiver<Queued>) -> usize {
+/// `pending.in_flight` brackets the exchange so a cancellation mid-`.await`
+/// is still accounted by [`Pending::drop`], never silently lost.
+async fn send_batch(exporter: &Exporter, pending: &mut Pending) {
     let overhead = json_size(&exporter.envelope(&[]));
     let mut records = Vec::new();
     let mut size = overhead;
     let mut count = 0;
     while count < MAX_BATCH {
-        let Ok(queued) = receiver.try_recv() else {
+        let Ok(queued) = pending.receiver.try_recv() else {
             break;
         };
         let record = log_record(&queued.event, queued.at, queued.suppressed);
@@ -478,12 +528,15 @@ async fn send_batch(exporter: &Exporter, receiver: &mut mpsc::Receiver<Queued>) 
         count += 1;
     }
     if records.is_empty() {
-        return 0;
+        return;
     }
     let sent = records.len();
     let body = exporter.body(&records);
     debug_assert!(body.len() <= MAX_BODY);
-    match exporter.send(body, sent).await {
+    pending.in_flight = sent;
+    let result = exporter.send(body, sent).await;
+    pending.in_flight = 0;
+    match result {
         Ok(rejected) => {
             crate::metrics::METRICS.otlp_logs_push(Delivery::Accepted);
             crate::metrics::METRICS.otlp_logs_rejected(rejected);
@@ -493,15 +546,19 @@ async fn send_batch(exporter: &Exporter, receiver: &mut mpsc::Receiver<Queued>) 
             crate::metrics::METRICS.otlp_logs_drop(DropReason::Delivery, sent as u64);
         }
     }
-    sent
 }
 
 async fn worker(
     exporter: Exporter,
-    mut receiver: mpsc::Receiver<Queued>,
+    receiver: mpsc::Receiver<Queued>,
+    interval: Duration,
     mut stop: oneshot::Receiver<()>,
 ) {
-    let mut tick = tokio::time::interval(BATCH_INTERVAL);
+    let mut pending = Pending {
+        receiver,
+        in_flight: 0,
+    };
+    let mut tick = tokio::time::interval(interval);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
@@ -509,18 +566,12 @@ async fn worker(
             _ = &mut stop => break,
             _ = tick.tick() => {}
         }
-        send_batch(&exporter, &mut receiver).await;
+        send_batch(&exporter, &mut pending).await;
     }
     // Shutdown: one immediate final batch of whatever is already queued.
-    send_batch(&exporter, &mut receiver).await;
-    receiver.close();
-    let mut leftover = 0u64;
-    while receiver.try_recv().is_ok() {
-        leftover += 1;
-    }
-    if leftover > 0 {
-        crate::metrics::METRICS.otlp_logs_drop(DropReason::Shutdown, leftover);
-    }
+    // Pending::drop (below, at end of scope) accounts anything still left,
+    // including a cancelled/aborted in-flight exchange.
+    send_batch(&exporter, &mut pending).await;
 }
 
 /// Owns one worker and the process-wide `emit` attachment. Disabled (no
@@ -546,7 +597,7 @@ impl Runtime {
         let (sender, receiver) = mpsc::channel(QUEUE);
         configure(Some(sender), Some(config.min_severity));
         let (stop, stopping) = oneshot::channel();
-        let task = tokio::spawn(worker(exporter, receiver, stopping));
+        let task = tokio::spawn(worker(exporter, receiver, BATCH_INTERVAL, stopping));
         Some(Self {
             stop: Some(stop),
             task,

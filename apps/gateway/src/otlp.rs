@@ -98,9 +98,7 @@ pub(crate) fn endpoint(
         host.trim_matches(['[', ']'])
             .parse::<std::net::IpAddr>()
             .ok()
-    }) && !crate::egress::policy()
-        .permit_loopback(development)
-        .allows(ip)
+    }) && !transport_policy(development, url.scheme()).allows(ip)
     {
         crate::metrics::METRICS.egress_denied(crate::egress::Purpose::Telemetry.as_str());
         return Err(invalid());
@@ -223,6 +221,19 @@ pub(crate) fn parse_otlp_headers(
     Ok(headers)
 }
 
+/// Development plaintext HTTP is approved for loopback only (#313/#325): a
+/// mixed or non-loopback DNS answer for `localhost` (or any other host) must
+/// never succeed, regardless of `GATEWAY_EGRESS_PRIVATE_ALLOW`. HTTPS is
+/// unaffected. Shared by every OTLP signal (traces, metrics and logs).
+pub(crate) fn transport_policy(development: bool, scheme: &str) -> crate::egress::Policy {
+    let policy = crate::egress::policy().permit_loopback(development);
+    if scheme == "http" {
+        policy.only_loopback()
+    } else {
+        policy
+    }
+}
+
 /// Shared export transport, never a durable queue or retry policy.
 pub(crate) fn export_http_client(
     url: &reqwest::Url,
@@ -232,7 +243,7 @@ pub(crate) fn export_http_client(
     exchange_timeout: Duration,
     ops_events: bool,
 ) -> anyhow::Result<reqwest::Client> {
-    let policy = crate::egress::policy().permit_loopback(development);
+    let policy = transport_policy(development, url.scheme());
     // The logs exporter's own resolver never emits the typed operational
     // event it transports (no feedback); every other signal is unaffected.
     let policy = if ops_events {
@@ -337,6 +348,65 @@ fn acknowledgement(ack: &[u8], count: usize, rejected_key: &str) -> Result<u64, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ip(s: &str) -> std::net::IpAddr {
+        s.parse().unwrap()
+    }
+
+    /// #313/#325: development plaintext HTTP for any OTLP signal (traces,
+    /// metrics, logs) is loopback-only, even once a private network is
+    /// allowlisted; HTTPS is unaffected.
+    #[test]
+    fn transport_policy_is_loopback_only_for_http_regardless_of_private_allow() {
+        let http = transport_policy(true, "http");
+        assert!(http.allows(ip("127.0.0.1")));
+        assert!(http.allows(ip("::1")));
+        for refused in ["8.8.8.8", "10.1.2.3", "169.254.169.254"] {
+            assert!(!http.allows(ip(refused)), "{refused}");
+        }
+        let https = transport_policy(true, "https");
+        assert!(https.allows(ip("8.8.8.8")), "https stays unaffected");
+        assert!(
+            !transport_policy(false, "http").allows(ip("127.0.0.1")),
+            "never outside development"
+        );
+    }
+
+    /// A real-transport proof, like the traces/metrics mixed-answer test in
+    /// `egress.rs`: a DNS answer mixing a loopback and an otherwise-allowed
+    /// address keeps only the loopback one for `http`, the exact bypass this
+    /// fixes (a `localhost` rebinding or poisoned answer could otherwise
+    /// include a public or allowlisted-private address).
+    #[test]
+    fn mixed_dns_answers_for_http_keep_only_the_loopback_address() {
+        let sock = |s: &str| std::net::SocketAddr::new(ip(s), 4318);
+        let policy = transport_policy(true, "http");
+        assert_eq!(
+            crate::egress::filter(
+                &policy,
+                crate::egress::Purpose::Telemetry,
+                "localhost",
+                vec![sock("127.0.0.1"), sock("8.8.8.8")]
+            )
+            .unwrap(),
+            vec![sock("127.0.0.1")]
+        );
+        assert!(
+            crate::egress::filter(
+                &policy,
+                crate::egress::Purpose::Telemetry,
+                "localhost",
+                vec![sock("8.8.8.8")]
+            )
+            .is_err()
+        );
+        // Without the fix, a plain `permit_loopback` policy would accept the
+        // public answer too: confirm that IS the unfixed behaviour, so this
+        // test documents the exact bypass closed above.
+        let unfixed = crate::egress::policy().permit_loopback(true);
+        assert!(unfixed.allows(ip("8.8.8.8")));
+    }
+
     #[test]
     fn acknowledgement_uses_only_the_selected_signals_count_key() {
         let ack = br#"{"partialSuccess":{"rejectedSpans":"1","rejectedDataPoints":"999","errorMessage":"never returned"}}"#;
