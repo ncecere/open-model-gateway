@@ -66,6 +66,7 @@ Workspace entries include `id,name,kind,owner_user_id,role,membership_source,cap
 | `DELETE /platform/users/{user}/roles/{role}` | Revokes manual/bootstrap grants only, not group grants. |
 | `GET/POST /platform/oidc/group-mappings` | List/create generic mappings. List rows add `workspace_name` and `workspace_kind` for workspace targets. |
 | `PATCH/DELETE /platform/oidc/group-mappings/{id}` | Patch supplied mapping fields/delete; changed/deleted definitions revoke their existing group grants immediately. New matching grants arrive at sign-in. Not an IdP provisioning call. |
+| `POST /platform/oidc/group-mappings/preview`, `POST /platform/oidc/group-mappings/{id}/preview` | Read-only dry-run diff for a proposed mapping (create/edit) or, with an omitted body or `{"delete":true}`, a delete (#89). Same validation as create/update (`422` on an unknown field, `400` on a missing required one). Platform Admin, browser session only -- no admin token, whatever its scopes. Never writes anything, never audits, never bumps a config version; bounded to 200 rows per list. See [identity.md](identity.md#authentication-is-not-entitlement) for `membership_basis` and the `expected_revision` omission. |
 
 Platform reads allow Admin/Auditor; writes require Admin. No API creates someone else's personal workspace: entitled sign-in creates it.
 
