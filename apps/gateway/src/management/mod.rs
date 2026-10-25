@@ -25,6 +25,7 @@ mod models_ux;
 mod openapi;
 mod requests;
 pub(crate) mod resources;
+mod scheduled_reports;
 mod sessions;
 mod settings;
 mod setup;
@@ -625,6 +626,7 @@ pub fn upload_router(identity: IdentityState) -> Router<Store> {
 }
 fn routes() -> Router<Store> {
     Router::new()
+        .merge(scheduled_reports::routes())
         .merge(admin_tokens::routes())
         .merge(directory::routes())
         .merge(group_mapping_preview::routes())

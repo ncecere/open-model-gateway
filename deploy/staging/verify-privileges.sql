@@ -70,6 +70,18 @@ DO $$ DECLARE r record; t text; BEGIN
  IF has_table_privilege('gateway_runtime','public.scim_users','DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.scim_users','user_id','UPDATE') OR has_column_privilege('gateway_runtime','public.scim_users','created_at','UPDATE') THEN RAISE EXCEPTION 'scim user link removable or re-keyable'; END IF;
  IF has_column_privilege('gateway_runtime','public.scim_groups','id','UPDATE') OR has_any_column_privilege('gateway_runtime','public.scim_group_members','UPDATE') OR has_table_privilege('gateway_runtime','public.scim_groups','TRUNCATE') OR has_table_privilege('gateway_runtime','public.scim_group_members','TRUNCATE') THEN RAISE EXCEPTION 'scim group identity rewritable'; END IF;
  IF has_table_privilege('gateway_runtime','public.scim_state','INSERT,DELETE,TRUNCATE') OR has_column_privilege('gateway_runtime','public.scim_state','singleton','UPDATE') THEN RAISE EXCEPTION 'scim state row replaceable'; END IF;
+ -- Scheduled reports (0061): configuration only; retained, immutable scope/creator.
+ IF NOT has_table_privilege('gateway_runtime','public.report_schedules','SELECT') OR has_table_privilege('gateway_runtime','public.report_schedules','INSERT,UPDATE,DELETE,TRUNCATE') THEN RAISE EXCEPTION 'report schedule table ACL'; END IF;
+ FOREACH t IN ARRAY ARRAY['id','scope_kind','workspace_id','cost_center_id','created_by','configuration_revision','created_at','updated_at','next_run_at','last_period_end'] LOOP
+  IF has_column_privilege('gateway_runtime','public.report_schedules',t,'UPDATE') THEN RAISE EXCEPTION 'mutable report schedule identity/cursor: %',t; END IF;
+ END LOOP;
+ FOREACH t IN ARRAY ARRAY['id','configuration_revision','recipient_revision','created_at','updated_at','deleted_at','next_run_at','last_period_end'] LOOP
+  IF has_column_privilege('gateway_runtime','public.report_schedules',t,'INSERT') THEN RAISE EXCEPTION 'report schedule initial state bypass: %',t; END IF;
+ END LOOP;
+ IF NOT has_column_privilege('gateway_runtime','public.report_schedules','cadence','UPDATE') OR NOT has_column_privilege('gateway_runtime','public.report_schedules','deleted_at','UPDATE') OR NOT has_column_privilege('gateway_runtime','public.report_schedules','recipient_revision','UPDATE') OR NOT has_column_privilege('gateway_runtime','public.report_schedules','created_by','INSERT') THEN RAISE EXCEPTION 'report schedules not maintainable'; END IF;
+ IF NOT has_table_privilege('gateway_runtime','public.report_schedule_recipients','SELECT,DELETE') OR NOT has_column_privilege('gateway_runtime','public.report_schedule_recipients','user_id','INSERT') OR has_any_column_privilege('gateway_runtime','public.report_schedule_recipients','UPDATE') OR has_table_privilege('gateway_runtime','public.report_schedule_recipients','TRUNCATE') THEN RAISE EXCEPTION 'report recipient ACL'; END IF;
+ IF (SELECT count(*) FROM pg_trigger WHERE tgname IN ('report_schedules_guard','report_schedules_no_delete','report_schedules_no_truncate','report_schedule_recipients_no_update','report_schedule_recipients_no_truncate') AND tgenabled='O' AND NOT tgisinternal)<>5 THEN RAISE EXCEPTION 'report schedule guards missing or disabled'; END IF;
+ IF NOT EXISTS(SELECT FROM work_leases WHERE name='report_scheduler') THEN RAISE EXCEPTION 'report scheduler lease missing'; END IF;
  -- Webhooks (0057): explicit column ACLs, generated identity and frozen bytes.
  FOREACH t IN ARRAY ARRAY['alert_webhook_destinations','alert_webhook_outbox'] LOOP
   IF NOT has_table_privilege('gateway_runtime','public.'||t,'SELECT') OR has_table_privilege('gateway_runtime','public.'||t,'INSERT,UPDATE,DELETE,TRUNCATE') THEN RAISE EXCEPTION 'webhook table privileges: %',t; END IF;
@@ -284,6 +296,33 @@ SELECT version,checksum,success FROM public._sqlx_migrations ORDER BY version;
 -- Take the normal management lock before any probe can touch an existing
 -- saved destination (including the rollback-only full-capacity case).
 SELECT lock_installation();
+-- Report configuration probes: runtime may manage configuration, never identity,
+-- cursors, retained tombstones or a recipient outside the fifty scoped slots.
+DO $$ DECLARE who uuid:=gen_random_uuid(); schedule uuid; col text; BEGIN
+ INSERT INTO users(id,email) VALUES(who,'report-acl-'||who||'@example.invalid');
+ INSERT INTO report_schedules(scope_kind,created_by,cadence,timezone,delivery_time) VALUES('installation',who,'weekly','UTC','09:00') RETURNING id INTO schedule;
+ INSERT INTO report_schedule_recipients(schedule_id,slot,user_id) VALUES(schedule,1,who);
+ UPDATE report_schedules SET cadence='monthly',state='paused' WHERE id=schedule;
+ IF (SELECT configuration_revision FROM report_schedules WHERE id=schedule)<>2 THEN RAISE EXCEPTION 'report revision not advanced'; END IF;
+ UPDATE report_schedules SET state=state WHERE id=schedule;
+ IF (SELECT configuration_revision FROM report_schedules WHERE id=schedule)<>2 THEN RAISE EXCEPTION 'report no-op advanced revision'; END IF;
+ UPDATE report_schedules SET recipient_revision=recipient_revision+1 WHERE id=schedule;
+ IF (SELECT configuration_revision FROM report_schedules WHERE id=schedule)<>3 THEN RAISE EXCEPTION 'report recipient change not versioned'; END IF;
+ BEGIN UPDATE report_schedules SET recipient_revision=recipient_revision-1 WHERE id=schedule; RAISE EXCEPTION 'report recipient revision decreased'; EXCEPTION WHEN raise_exception THEN IF SQLERRM NOT LIKE 'report recipient revision must%' THEN RAISE; END IF; END;
+ FOREACH col IN ARRAY ARRAY['id','scope_kind','workspace_id','cost_center_id','created_by','configuration_revision','created_at','updated_at','next_run_at','last_period_end'] LOOP
+  BEGIN EXECUTE format('UPDATE report_schedules SET %1$I=%1$I WHERE id=$1',col) USING schedule; RAISE EXCEPTION 'report identity/cursor update allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ END LOOP;
+ BEGIN INSERT INTO report_schedules(scope_kind,created_by,cadence,timezone,delivery_time,configuration_revision) VALUES('installation',who,'weekly','UTC','09:00',5); RAISE EXCEPTION 'report revision insert allowed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN INSERT INTO report_schedule_recipients(schedule_id,slot,user_id) VALUES(schedule,51,who); RAISE EXCEPTION 'report recipient cap bypass'; EXCEPTION WHEN check_violation THEN NULL; END;
+ BEGIN INSERT INTO report_schedule_recipients(schedule_id,slot,user_id) VALUES(schedule,2,who); RAISE EXCEPTION 'report duplicate recipient allowed'; EXCEPTION WHEN unique_violation THEN NULL; END;
+ BEGIN INSERT INTO report_schedule_recipients(schedule_id,slot,user_id) VALUES(schedule,2,gen_random_uuid()); RAISE EXCEPTION 'report external recipient allowed'; EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+ BEGIN UPDATE report_schedule_recipients SET slot=2 WHERE schedule_id=schedule; RAISE EXCEPTION 'report recipient rewritten'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN DELETE FROM report_schedules WHERE id=schedule; RAISE EXCEPTION 'report schedule removed'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN TRUNCATE report_schedules CASCADE; RAISE EXCEPTION 'report schedule truncated'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ DELETE FROM report_schedule_recipients WHERE schedule_id=schedule;
+ UPDATE report_schedules SET state='paused',deleted_at=clock_timestamp() WHERE id=schedule;
+ BEGIN UPDATE report_schedules SET deleted_at=NULL WHERE id=schedule; RAISE EXCEPTION 'deleted schedule resurrected'; EXCEPTION WHEN raise_exception THEN IF SQLERRM NOT LIKE 'immutable report schedule%' THEN RAISE; END IF; END;
+END $$;
 -- Webhook executable probes run as runtime and roll back with everything below.
 DO $$ DECLARE receiver uuid; ev uuid:=gen_random_uuid(); col text; gen bigint; BEGIN
  -- Make one capacity slot available in this rollback-only probe even on a full installation.

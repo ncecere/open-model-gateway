@@ -183,6 +183,15 @@ GRANT SELECT ON public.alert_recipient_outbox TO gateway_runtime;
 GRANT INSERT(delivery_id,fingerprint,internal_user_id) ON public.alert_recipient_outbox TO gateway_runtime;
 GRANT UPDATE(state,attempt_count,next_attempt_at,lease_owner,lease_token,lease_expires_at,error)
  ON public.alert_recipient_outbox TO gateway_runtime;
+-- 0061 scheduled report configuration only. No run/snapshot/delivery writes.
+-- Scope, creator, creation time, revision and scheduler cursor are not writable.
+GRANT SELECT ON public.report_schedules,public.report_schedule_recipients TO gateway_runtime;
+GRANT INSERT(scope_kind,workspace_id,cost_center_id,created_by,cadence,timezone,delivery_time,state)
+ ON public.report_schedules TO gateway_runtime;
+-- recipient_revision is the internal normalized-set change marker, not a
+-- scheduler cursor; configuration_revision itself stays trigger-owned.
+GRANT UPDATE(cadence,timezone,delivery_time,state,deleted_at,recipient_revision) ON public.report_schedules TO gateway_runtime;
+GRANT INSERT(schedule_id,slot,user_id),DELETE ON public.report_schedule_recipients TO gateway_runtime;
 -- 0057 platform webhook destinations and retained outbox. Generated identity,
 -- capacity slots, creation clocks and initial queue state are default/trigger-only.
 GRANT SELECT ON public.alert_webhook_destinations,public.alert_webhook_outbox TO gateway_runtime;

@@ -136,6 +136,26 @@ async fn every_json_management_write_rejects_unknown_fields_after_valid_control(
     .await;
     assert_eq!(status, StatusCode::OK);
     let workspace_rule = id(&rule);
+    let (status, schedule) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        "/api/v1/platform/report-schedules",
+        json!({"cadence":"weekly","timezone":"UTC","delivery_time":"09:00","state":"paused","recipient_user_ids":[f.admin.user_id]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let platform_schedule = id(&schedule);
+    let (status, schedule) = call(
+        &f.s,
+        &f.owner,
+        "POST",
+        &format!("/api/v1/workspaces/{ws}/report-schedules"),
+        json!({"cadence":"weekly","timezone":"UTC","delivery_time":"09:00","state":"paused","recipient_user_ids":[f.owner.user_id]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let workspace_schedule = id(&schedule);
     let policy = json!({"requests_per_minute":null,"tokens_per_minute":null,"concurrent_requests":null,"budgets":[]});
     let price = json!({"input_microusd_per_million":"1000000","output_microusd_per_million":"1000000","input_token_limit":100,"output_token_limit":100});
     let platform = "/api/v1/platform";
@@ -494,6 +514,34 @@ async fn every_json_management_write_rejects_unknown_fields_after_valid_control(
         format!("{platform}/legal-holds"),
         &f.admin,
         json!({"user_id":f.outsider.user_id,"reference":"MATRIX-1"})
+    );
+    case!(
+        "scheduled_reports::platform_create",
+        "POST",
+        format!("{platform}/report-schedules"),
+        &f.admin,
+        json!({"cadence":"weekly","timezone":"UTC","delivery_time":"09:00","state":"paused","recipient_user_ids":[f.admin.user_id]})
+    );
+    case!(
+        "scheduled_reports::platform_update",
+        "PATCH",
+        format!("{platform}/report-schedules/{platform_schedule}"),
+        &f.admin,
+        json!({"cadence":"monthly","recipient_user_ids":[f.admin.user_id]})
+    );
+    case!(
+        "scheduled_reports::workspace_create",
+        "POST",
+        format!("{workspace}/report-schedules"),
+        &f.owner,
+        json!({"cadence":"weekly","timezone":"UTC","delivery_time":"09:00","state":"paused","recipient_user_ids":[f.owner.user_id]})
+    );
+    case!(
+        "scheduled_reports::workspace_update",
+        "PATCH",
+        format!("{workspace}/report-schedules/{workspace_schedule}"),
+        &f.owner,
+        json!({"cadence":"monthly","recipient_user_ids":[f.owner.user_id]})
     );
     case!(
         "alerts::create_platform_rule",

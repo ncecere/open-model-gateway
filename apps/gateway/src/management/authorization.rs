@@ -49,6 +49,10 @@ async fn database_access(
                     Err(denied())
                 }
             }
+            Access::WorkspaceReportAdmin => {
+                scheduled_reports::workspace_authority(&mut tx, u, ws.ok_or_else(missing)?).await?;
+                Ok(())
+            }
             Access::WorkspacePlatformWrite => {
                 resources::workspace_platform_write_snapshot(&mut tx, u, ws.ok_or_else(missing)?)
                     .await
@@ -493,6 +497,7 @@ fn workspace_scoped(access: Access) -> bool {
             | Access::WorkspaceKey
             | Access::WorkspaceKeyRotate
             | Access::WorkspaceAdmin
+            | Access::WorkspaceReportAdmin
             | Access::WorkspaceAdminOrReader
             | Access::WorkspacePlatformWrite
     )
