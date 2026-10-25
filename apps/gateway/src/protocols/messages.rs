@@ -25,10 +25,28 @@ fn valid_version(headers: &HeaderMap) -> bool {
             .get("anthropic-version")
             .and_then(|v| v.to_str().ok())
             == Some("2023-06-01")
-        && headers
-            .get_all("anthropic-beta")
-            .iter()
-            .all(|v| v.to_str().is_ok())
+        && beta_headers(headers).is_ok()
+}
+fn beta_headers(headers: &HeaderMap) -> Result<Vec<String>> {
+    let values = headers.get_all("anthropic-beta").iter().collect::<Vec<_>>();
+    if values.len() > 16 {
+        return Err(InferenceError::InvalidField("anthropic-beta"));
+    }
+    values
+        .into_iter()
+        .map(|v| {
+            let s = v
+                .to_str()
+                .map_err(|_| InferenceError::InvalidField("anthropic-beta"))?;
+            if s.is_empty()
+                || s.len() > 1024
+                || !s.bytes().all(|b| b == b' ' || b.is_ascii_graphic())
+            {
+                return Err(InferenceError::InvalidField("anthropic-beta"));
+            }
+            Ok(s.to_owned())
+        })
+        .collect()
 }
 pub async fn handle(
     Extension(engine): Extension<Engine>,
@@ -63,7 +81,10 @@ pub async fn handle(
         Err(e) => return error_response(e),
     };
     if let Some(options) = &mut request.messages_options {
-        options.beta = headers.contains_key("anthropic-beta");
+        options.beta_headers = match beta_headers(&headers) {
+            Ok(v) => v,
+            Err(e) => return error_response(e),
+        };
     }
     let model = request.model.clone();
     let id = format!("msg_{}", request_id.0.simple());
@@ -149,6 +170,16 @@ fn snapshot(id: &str, model: &str, response: &ChatResponse) -> Result<Value> {
         }
         content.push(json!({"type":"tool_use","id":call.id,"name":call.name,"input":input}));
     }
+    if let Some(blocks) = &response.messages_content {
+        if serde_json::to_vec(blocks)
+            .map_err(|_| InferenceError::InvalidUpstream)?
+            .len()
+            > OUTPUT_LIMIT
+        {
+            return Err(InferenceError::InvalidUpstream);
+        }
+        content.clone_from(blocks);
+    }
     let stop = match response.finish_reason {
         FinishReason::Stop => "end_turn",
         FinishReason::Length => "max_tokens",
@@ -176,15 +207,21 @@ fn render(output: ProviderOutput, id: String, model: String) -> Response {
                 // clients merge usage, so a start value that message_delta never replaces would
                 // turn unknown output into zero. Gateway accounting never uses these values.
                 yield Ok::<_, Infallible>(event("message_start", json!({"message":{"id":id,"type":"message","role":"assistant","model":model,"content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0}}})));
-                // Text streams live in block 0 (text precedes tools in the snapshot). Tool
-                // calls stay buffered and are emitted whole after it, so parallel calls never
-                // interleave. Every event is validated before anything is forwarded.
-                let mut accumulator = Accumulator::with_limit(OUTPUT_LIMIT); let mut done = false; let mut text_open = false;
+                // Native Anthropic preserves validated block lifecycles. Translated
+                // streams put text in block 0 and buffer tools after it, retaining
+                // their previous behavior. Both paths wait for engine Done.
+                let mut accumulator = Accumulator::with_limit(OUTPUT_LIMIT); let mut done = false; let mut text_open = false; let mut native = false;
                 while let Some(next) = stream.next().await {
+                    let block = match &next { Ok(ChatEvent::MessagesBlock(v)) => Some(v.clone()), _ => None };
                     let delta = match &next { Ok(ChatEvent::Delta { text: Some(text), .. }) => Some(text.clone()), _ => None };
                     match next.and_then(|e| accumulator.push(e)) {
                         Ok(finished) => {
-                            if let Some(delta) = delta {
+                            if let Some(block) = block {
+                                native = true;
+                                let kind = block["type"].as_str().unwrap();
+                                yield Ok(event(kind, block.clone()));
+                            }
+                            if let Some(delta) = delta.filter(|_| !native) {
                                 if !text_open {
                                     text_open = true;
                                     yield Ok(event("content_block_start", json!({"index":0,"content_block":{"type":"text","text":""}})));
@@ -198,7 +235,7 @@ fn render(output: ProviderOutput, id: String, model: String) -> Response {
                 }
                 if !done { yield Ok(event("error", error_body(InferenceError::InvalidUpstream))); return; }
                 let terminal = match accumulator.finish().and_then(|r| snapshot(&id, &model, &r)) { Ok(v) => v, Err(e) => { yield Ok(event("error", error_body(e))); return; } };
-                for (index, block) in terminal["content"].as_array().unwrap().iter().enumerate() {
+                for (index, block) in terminal["content"].as_array().unwrap().iter().enumerate().filter(|_| !native) {
                     if block["type"] != "text" {
                         let mut start = block.clone(); start["input"] = json!({});
                         yield Ok(event("content_block_start", json!({"index":index,"content_block":start})));

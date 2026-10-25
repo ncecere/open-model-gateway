@@ -1,4 +1,4 @@
-//! Frontend delivery policy (#70). Provider fidelity is opt-in, never passthrough.
+//! Explicit Messages provider policy. Native fidelity is opt-in, never passthrough.
 use crate::inference::{error::InferenceError, types::ChatRequest};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -14,7 +14,7 @@ pub(crate) fn validate(request: &ChatRequest, class: ProviderClass) -> Result<()
         return Ok(());
     };
     let refuse = |field| Err(InferenceError::InvalidField(field));
-    if !options.images.is_empty() {
+    if class != ProviderClass::Anthropic && !options.images.is_empty() {
         return refuse("image");
     }
     if options
@@ -24,54 +24,37 @@ pub(crate) fn validate(request: &ChatRequest, class: ProviderClass) -> Result<()
     {
         return refuse("output_config.format");
     }
-    // This is a Messages wire-field refusal, not a new rule for shared
-    // FunctionTool.strict values supplied by existing canonical adapter callers.
     if options.strict_tools {
         return refuse("strict");
     }
-    if class == ProviderClass::Anthropic {
-        // These MUST be forwarded on native routes. Until PR 2 can represent
-        // them faithfully, refusal is the only safe conservative rule.
-        if options.beta {
-            return refuse("anthropic-beta");
+    if class != ProviderClass::Anthropic {
+        // Error-marked results cannot be represented faithfully by shared text
+        // results. Native Anthropic retains the original boolean, including false.
+        if options.error_results {
+            return Err(InferenceError::Unsupported);
         }
-        if !options.cache_controls.is_empty() {
-            return refuse("cache_control");
-        }
-        if options.thinking.is_some()
-            || options
-                .history_thinking
+        if !options.history_thinking.is_empty()
+            && request
+                .messages
                 .iter()
-                .any(|b| b["type"] == "thinking")
+                .all(|m| m.content.is_none() && m.tool_calls.is_empty())
         {
-            return refuse("thinking");
+            // Preserve the previous translated refusal when removing foreign
+            // history leaves no text/tool conversation at all.
+            return Err(InferenceError::InvalidRequest);
         }
-        if !options.history_thinking.is_empty() {
-            return refuse("redacted_thinking");
-        }
-        if options
-            .output_config
-            .as_ref()
-            .is_some_and(|v| v.get("effort").is_some())
-        {
-            return refuse("output_config.effort");
-        }
-        if options.context_management.is_some() {
-            return refuse("context_management");
-        }
-        if !options.defer_loading.is_empty() {
-            return refuse("defer_loading");
-        }
-        if options.task_budget.is_some() {
-            return refuse("output_config.task_budget");
-        }
-    } else {
-        // No adapter in this delivery declares a reasoning control. Validated
-        // thinking/effort, cache/context/task hints and foreign thinking history
-        // are intentionally not encoded. PR 3 opts into reasoning mapping.
+        // Reasoning mapping is delivery 3. Hints and foreign signed thinking
+        // are deliberately omitted by translated providers, not forwarded.
         if options.top_k.is_some() {
             return refuse("top_k");
         }
+    }
+    if options.beta_headers.len() > 16
+        || options.beta_headers.iter().any(|s| {
+            s.is_empty() || s.len() > 1024 || !s.bytes().all(|b| b == b' ' || b.is_ascii_graphic())
+        })
+    {
+        return refuse("anthropic-beta");
     }
     Ok(())
 }
