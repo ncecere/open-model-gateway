@@ -40,8 +40,8 @@ function ScheduleListView({ session, workspace }: { session: Session; workspace?
       { title: "Allocation", render: r => r.cost_center_id ? `Historical cost center ${r.cost_center_id}` : "All allocations (including Unallocated)" },
       { title: "Delivery time", render: r => `${r.delivery_time} · ${r.timezone}` },
       { title: "Next occurrence", render: r => <span>{when(r.next_run_at)}{r.state === "paused" && " (paused; will be recalculated on resume)"}</span> },
-      { title: "State", render: r => r.state },
-      { title: "Recipients", render: r => `${r.recipient_user_ids.length} internal users` },
+      { title: "State", render: r => r.state === "active" ? <StatusBadge tone="success">Active</StatusBadge> : <StatusBadge tone="neutral">Paused</StatusBadge> },
+      { title: "Recipients", render: r => `${r.recipient_user_ids.length} internal user${r.recipient_user_ids.length === 1 ? "" : "s"}` },
       { title: "Actions", hidden: !write, render: r => write && <Inline gap={2}><Button size="sm" variant="secondary" onClick={() => editor(r)}>Edit schedule</Button><Button size="sm" variant="secondary" onClick={() => change(r, r.state === "active" ? "pause" : "resume")}>{r.state === "active" ? "Pause" : "Resume"}</Button><Button size="sm" variant="ghost" onClick={() => change(r, "delete")}>Delete</Button></Inline> },
     ]} />}
     {q.data && !schedules.length && <Empty title="No scheduled reports yet">Create a paused schedule to get started.</Empty>}
