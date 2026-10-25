@@ -2,6 +2,10 @@
 
 Notes for changes on `main` after [v0.8.0](v0.8.0.md). They become the next release's notes.
 
+## Development HTTP telemetry exports are loopback-only after DNS (#313)
+
+**Behavior change for development installations.** Plain-HTTP OTLP traces, audit OTLP logs and audit webhooks (allowed only with `GATEWAY_ENV=development`) now connect only to canonical loopback addresses after name resolution, including IPv4-mapped loopback. If any resolved address is not loopback, the whole answer is refused, even when other answers are loopback or the address is covered by `GATEWAY_EGRESS_PRIVATE_ALLOW`. Literal non-loopback HTTP endpoints are refused before any connection. HTTPS exports keep the general egress policy, and production (non-development) installations are unaffected: they never allowed plain HTTP. To export to another host, use HTTPS. See [operations](../operations.md#outbound-connections).
+
 ## Signed alert webhook delivery (#45, slice 2)
 
 Saved enabled receivers now receive `omg.alert.v1` envelopes signed with HMAC-SHA256 over timestamp plus exact queued bytes, with optional dual signatures during the saved overlap (at most 24 hours). Signing variables are resolved only by the dedicated allowlist and require 32–4096 bytes. Short destination-before-outbox claims use generation checks and 90-second owner/token leases; fenced completion preserves terminal outcomes. Dispatch is bounded to 25 steps, a 60-second claiming budget and a 70-second hard timeout, with 1m/5m/30m/2h backoff and at most five attempts in 24 hours. Only connection failures, timeouts, 408/429 and 5xx retry. TLS, credentials, redirects and policy refusals are terminal. Egress checks include literals and checked DNS; proxies, redirects and implicit retries are disabled, requests time out after 10 seconds and response bodies are not read.
