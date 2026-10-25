@@ -1472,12 +1472,32 @@ mod tests {
         let m = Metrics::new();
         m.observe_report_outcome(crate::scheduled_reports::Outcome::Timeout);
         m.set_report_queue(1024, true, 42);
+        m.observe_report_delivery("permanent_failure", 1);
+        for state in ["exhausted", "ineligible"] {
+            m.report_delivery_queue
+                .get_or_create(&[("state", state.into())])
+                .set(1);
+        }
         let mut out = String::new();
         encode(&mut out, &m.registry).unwrap();
         assert!(out.contains("gateway_report_generation_outcomes_total{category=\"timeout\"} 1"));
         assert!(out.contains("gateway_report_due_backlog{} 1024"));
         assert!(out.contains("gateway_report_due_backlog_capped{} 1"));
         assert!(out.contains("gateway_report_oldest_due_lag_seconds{} 42"));
+        assert!(
+            out.contains("gateway_report_email_attempts_total{outcome=\"permanent_failure\"} 1")
+        );
+        for state in ["exhausted", "ineligible"] {
+            assert!(out.contains(&format!(
+                "gateway_report_email_recipients{{state=\"{state}\"}} 1"
+            )));
+        }
+        let report_families: Vec<_> = include_str!("metrics_families.golden")
+            .lines()
+            .filter(|line| line.starts_with("gateway_report_"))
+            .collect();
+        assert_eq!(report_families.len(), 6);
+        assert!(report_families.iter().all(|line| line.ends_with(" System")));
     }
     #[test]
     fn listener_is_optional_and_never_the_public_port() {

@@ -199,6 +199,9 @@ GRANT INSERT(scope_kind,workspace_id,cost_center_id,created_by,cadence,timezone,
 GRANT UPDATE(cadence,timezone,delivery_time,state,deleted_at,recipient_revision) ON public.report_schedules TO gateway_runtime;
 GRANT INSERT(schedule_id,slot,user_id),DELETE ON public.report_schedule_recipients TO gateway_runtime;
 GRANT UPDATE(next_run_at,next_period_end,last_period_end) ON public.report_schedules TO gateway_runtime;
+-- #102D recent-run/outcome and immutable snapshot/CSV reads reuse these SELECTs
+-- plus installation_settings/alert_deliveries SELECT; no new write authority.
+-- runtime_privileges exercises the live browser handlers under this role.
 GRANT SELECT ON public.report_generation_claims,public.report_runs,public.report_snapshots TO gateway_runtime;
 GRANT INSERT(schedule_id,token,configuration_revision,period_start,period_end,skipped_intervals,expires_at),
  UPDATE(token,configuration_revision,period_start,period_end,skipped_intervals,expires_at)

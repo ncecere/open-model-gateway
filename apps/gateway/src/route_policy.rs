@@ -102,6 +102,30 @@ macro_rules! route {
 pub(crate) const ROUTES: &[Route] = &[
     route!(
         "GET",
+        "/api/v1/platform/report-schedules/{id}/runs",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/workspaces/{ws}/report-schedules/{id}/runs",
+        WorkspaceReportAdmin,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/platform/report-schedules/{id}/runs/{run}/csv",
+        PlatformRead,
+        DENIED
+    ),
+    route!(
+        "GET",
+        "/api/v1/workspaces/{ws}/report-schedules/{id}/runs/{run}/csv",
+        WorkspaceReportAdmin,
+        DENIED
+    ),
+    route!(
+        "GET",
         "/api/v1/platform/report-schedules/{id}/runs/{run}",
         PlatformRead,
         DENIED

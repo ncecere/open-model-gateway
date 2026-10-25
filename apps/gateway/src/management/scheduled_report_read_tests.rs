@@ -39,7 +39,15 @@ pub(super) async fn occurrence_body(
         .unwrap()
         .unwrap();
     let body = match body {
-        Some(body) => body,
+        Some(mut body) => {
+            let observed: chrono::DateTime<chrono::Utc> =
+                sqlx::query_scalar("SELECT clock_timestamp()")
+                    .fetch_one(pool)
+                    .await
+                    .unwrap();
+            body["observed_at"] = json!(observed);
+            body
+        }
         None => crate::scheduled_reports::snapshot(&f.s, &c).await.unwrap(),
     };
     assert!(

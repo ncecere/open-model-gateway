@@ -42,11 +42,11 @@ mod tests {
         );
         // Intentionally not acceptance of #81: later slices must reduce this count to zero.
         assert_eq!(
-            operations, 209,
+            operations, 225,
             "review route additions and update this progress baseline"
         );
         assert_eq!(
-            placeholders, 418,
+            placeholders, 450,
             "review schema completion and update this progress baseline"
         );
     }
