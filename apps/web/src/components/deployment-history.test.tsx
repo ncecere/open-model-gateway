@@ -3,12 +3,25 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { DeploymentHistory } from "./deployment-history";
+import { DeploymentConfigurationTabs, DeploymentHistory } from "./deployment-history";
 import { testClient } from "../lib/test-fixtures";
 const change = { id: "change", created_at: "2026-10-21T12:00:00Z", target: { kind: "deployment", id: "route" }, actor: { id: "actor", label: "Operator", admin_token_id: null }, action: "configuration.updated", schema_version: 1, revision: "2", values_available: true, before: { enabled: true }, after: { enabled: false } };
 function view() { render(<QueryClientProvider client={testClient()}><DeploymentHistory id="route" /></QueryClientProvider>); return userEvent.setup(); }
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 describe("deployment History", () => {
+  it("opens the route History tab lazily and supports keyboard navigation", async () => {
+    const fetch = vi.fn().mockResolvedValue(Response.json({ data: [change], next_cursor: null }));
+    vi.stubGlobal("fetch", fetch);
+    render(<QueryClientProvider client={testClient()}><DeploymentConfigurationTabs id="route"><p>Route settings</p></DeploymentConfigurationTabs></QueryClientProvider>);
+    expect(screen.getByRole("tab", { name: "Configuration" }).getAttribute("aria-selected")).toBe("true");
+    expect(fetch).not.toHaveBeenCalled();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("tab", { name: "History" }));
+    await screen.findByText("Enabled → Disabled");
+    expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe(screen.getByRole("tab", { name: "History" }).id);
+    await user.keyboard("{ArrowLeft}{Enter}");
+    expect(screen.getByRole("tab", { name: "Configuration" }).getAttribute("aria-selected")).toBe("true");
+  });
   it("shows readable diffs, actors and cursor pagination without writes", async () => {
     const fetch = vi.fn().mockResolvedValueOnce(Response.json({ data: [change], next_cursor: "cursor" })).mockResolvedValueOnce(Response.json({ data: [{ ...change, id: "old", values_available: false, before: null, after: null, revision: null }], next_cursor: null }));
     vi.stubGlobal("fetch", fetch);
