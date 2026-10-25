@@ -218,6 +218,7 @@ const CONCURRENT_INDEXES: &[&str] = &[
     "api_keys_workspace_created",
     "alert_deliveries_pending_bucket",
     "alert_deliveries_generation_window",
+    "alert_webhook_outbox_completed",
 ];
 
 /// Before the migrations run, drops any [`CONCURRENT_INDEXES`] entry that is
