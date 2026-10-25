@@ -1344,6 +1344,7 @@ mod tests {
             .json()
             .with_writer(out.clone())
             .with_ansi(false)
+            .with_max_level(tracing::Level::DEBUG)
             .finish();
         let _guard = tracing::subscriber::set_default(subscriber);
         tracing::callsite::rebuild_interest_cache();
