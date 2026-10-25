@@ -22,7 +22,7 @@ claude
 
 Names are resolved exactly as for other gateway requests. They do not need to contain `claude` or identify an Anthropic model. Claude Code's automatic model discovery only lists ids containing `claude`, so configure other models by name rather than relying on discovery. Changing a name does not grant model access or change which provider a deployment uses.
 
-Send one inference credential, not both Bearer and `x-api-key`. The gateway consumes it; upstream requests use the provider connection's own credential. `anthropic-version: 2023-06-01` and beta headers are accepted on translated routes and never forwarded there. Beta headers currently produce a named 400 on native Anthropic routes until delivery 2 can forward their exact values.
+Send one inference credential, not both Bearer and `x-api-key`. The gateway consumes it; upstream requests use the provider connection's own credential. `anthropic-version: 2023-06-01` and beta headers are accepted on translated routes and never forwarded there. Translated providers work now within the documented field rules. **Claude Code against Anthropic-backed models still fails until delivery 2:** Claude Code sends `anthropic-beta` on nearly every request, and native Anthropic routes return a named 400 rather than discard it. This is the same limitation as before this PR; delivery 2 must forward the exact beta values before native Anthropic Claude Code use works.
 
 ## Current behavior and limits
 
