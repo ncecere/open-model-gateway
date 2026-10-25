@@ -218,6 +218,19 @@ impl ProviderAdapter for Fake {
             script.maxima.push(request.max_output_tokens);
         }
         match text.as_str() {
+            "cache-hit" => {
+                let mut cached = usage(7, 1);
+                let billing = cached.billing.as_mut().unwrap();
+                billing.uncached_input_tokens = Some(2);
+                billing.cache_read_input_tokens = Some(5);
+                Ok(ProviderOutput::Complete(ChatResponse {
+                    messages_content: None,
+                    content: Some("cached answer".into()),
+                    tool_calls: vec![],
+                    finish_reason: FinishReason::Stop,
+                    usage: cached,
+                }))
+            }
             "fail" => Err(InferenceError::UpstreamUnavailable),
             "busy" => Err(InferenceError::Busy),
             "slow" => {
@@ -3018,6 +3031,81 @@ async fn cache_ttl_price_refusal_cannot_reuse_a_clean_batch_line_preview(pool: P
     assert!(w.anthropic.executed().is_empty());
     assert!(w.anthropic.calls().is_empty());
     consistent(f).await;
+}
+
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn gateway_cache_lines_require_read_prices_and_settle_repeated_hits(pool: PgPool) {
+    use crate::billing::CacheRate;
+    let w = world(pool, false, false, 1).await;
+    let f = &w.f;
+    for version in [2, 3] {
+        let clean = json!({"custom_id":"clean","method":"POST","url":"/v1/messages","body":{"model":"company/claude","max_tokens":10,"messages":[{"role":"user","content":"hello"}]}});
+        let mut cached = clean.clone();
+        cached["custom_id"] = json!("cached");
+        cached["body"]["system"] = json!([{"type":"text","text":"cache-hit","cache_control":{"type":"ephemeral","ttl":"1h"}}]);
+        let mut repeated = cached.clone();
+        repeated["custom_id"] = json!("repeated");
+        for read in [
+            CacheRate::NotApplicable,
+            CacheRate::Unknown,
+            crate::governance::tests::db::rates().read,
+        ] {
+            let mut rates = crate::governance::tests::db::rates();
+            rates.read = read;
+            let price = f.cache_price(w.claude_deployment, version, rates).await;
+            let file = w
+                .upload(
+                    &f.principal,
+                    &[clean.clone(), cached.clone(), repeated.clone()],
+                )
+                .await;
+            let before = admission_rowcounts(f).await;
+            let dispatched = w.anthropic.executed().len();
+            let result = w
+                .create(f.principal, &file, BatchEndpoint::Messages, None)
+                .await;
+            if !matches!(read, CacheRate::Priced { .. }) {
+                assert!(matches!(
+                    result,
+                    Err(CreateError::Job(JobError::Inference(
+                        InferenceError::InvalidField("cache_control")
+                    )))
+                ));
+                assert_eq!(
+                    admission_rowcounts(f).await,
+                    before,
+                    "no envelope or line reservation at v{version}"
+                );
+                assert_eq!(w.anthropic.executed().len(), dispatched);
+            } else {
+                let job = result.unwrap();
+                assert_eq!(job.mode(), Some(BatchMode::Gateway));
+                assert!(Runner::new(w.jobs.clone()).run_next().await.unwrap());
+                let job = w.reload(&job).await;
+                assert_eq!(job.state, "completed");
+                assert_eq!(
+                    (job.request_completed, job.request_failed),
+                    (Some(3), Some(0))
+                );
+                let lines: Vec<(Uuid, String, Option<i64>)> = sqlx::query_as("SELECT r.price_id,r.state,r.actual_microusd FROM inference_executions e JOIN governance_reservations r ON r.execution_id=e.id WHERE e.batch_job_id=$1 ORDER BY r.actual_microusd")
+                    .bind(job.id).fetch_all(&f.store.pool).await.unwrap();
+                assert_eq!(
+                    lines,
+                    vec![
+                        (price, "settled".into(), Some(4)),
+                        (price, "settled".into(), Some(4)),
+                        (price, "settled".into(), Some(15))
+                    ]
+                );
+                assert_eq!(w.anthropic.executed().len(), dispatched + 3);
+            }
+            assert!(
+                w.anthropic.calls().is_empty(),
+                "no native Message Batches calls"
+            );
+            consistent(f).await;
+        }
+    }
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]

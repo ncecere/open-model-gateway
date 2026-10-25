@@ -38,48 +38,16 @@ async fn publish(f: &Fixture, version: i32, denied: Option<&str>) -> Uuid {
     if denied == Some("1h") {
         rates.write_1h = CacheRate::NotApplicable;
     }
+    if denied == Some("read") {
+        rates.read = CacheRate::NotApplicable;
+    }
     if denied == Some("unknown-read") {
         rates.read = CacheRate::Unknown;
     }
     if denied == Some("unknown-5m") {
         rates.write_5m = CacheRate::Unknown;
     }
-    if version == 2 {
-        return f.v2(rates).await;
-    }
-    let mut lines = vec![
-        json!({"meter":"input_tokens","microusd_per_batch":"1000000","batch":1000000,"unit_label":"/M","sku_label":"input"}),
-        json!({"meter":"output_tokens","microusd_per_batch":"1000000","batch":1000000,"unit_label":"/M","sku_label":"output"}),
-    ];
-    for (meter, rate) in [
-        "cache_read_tokens",
-        "cache_write_tokens",
-        "cache_write_5m_tokens",
-        "cache_write_1h_tokens",
-    ]
-    .into_iter()
-    .zip(rates.rates())
-    {
-        lines.push(match rate {
-            CacheRate::Priced { microusd_per_million } => json!({"meter":meter,"microusd_per_batch":microusd_per_million.to_string(),"batch":1000000,"unit_label":"/M","sku_label":"cache"}),
-            CacheRate::NotApplicable => json!({"meter":meter,"not_applicable":true}),
-            CacheRate::Unknown => unreachable!(),
-        });
-    }
-    lines.push(json!({"meter":"requests","microusd_per_batch":"0","batch":1,"unit_label":"/request","sku_label":"request"}));
-    for meter in [
-        "output_images",
-        "input_characters",
-        "input_audio_seconds_ms",
-        "output_audio_seconds_ms",
-        "search_units",
-    ] {
-        lines.push(json!({"meter":meter,"not_applicable":true}));
-    }
-    let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO deployment_prices(id,deployment_id,input_token_limit,output_token_limit,pricing_version,price_lines,max_units) VALUES($1,$2,100,50,3,$3,'{}')")
-        .bind(id).bind(f.deployment).bind(json!(lines)).execute(&f.store.pool).await.unwrap();
-    id
+    f.cache_price(f.deployment, version, rates).await
 }
 
 #[sqlx::test(migrations = "./enterprise_migrations")]
@@ -109,10 +77,14 @@ async fn native_cache_requires_pinned_ttl_prices_before_reserving_or_dispatching
             let blocks = body["system"].as_array().unwrap();
             let five = blocks.iter().any(|b| b["cache_control"]["ttl"] != "1h");
             let hour = blocks.iter().any(|b| b["cache_control"]["ttl"] == "1h");
-            let (five_tokens, hour_tokens) = (if five {3} else {0}, if hour {4} else {0});
-            capture.lock().unwrap().push(reservation);
+            let mut seen = capture.lock().unwrap();
+            let hit = seen.iter().any(|r: &(Uuid, i64)| r.0 == reservation.0);
+            seen.push(reservation);
+            drop(seen);
+            let read_tokens = if hit { (if five {3} else {0}) + (if hour {4} else {0}) } else {0};
+            let (five_tokens, hour_tokens) = (if five && !hit {3} else {0}, if hour && !hit {4} else {0});
             Json(json!({"id":"upstream","type":"message","role":"assistant","model":"private","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","stop_sequence":null,
-                "usage":{"input_tokens":2,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":five_tokens+hour_tokens,"cache_creation":{"ephemeral_5m_input_tokens":five_tokens,"ephemeral_1h_input_tokens":hour_tokens}}}))
+                "usage":{"input_tokens":2,"output_tokens":1,"cache_read_input_tokens":read_tokens,"cache_creation_input_tokens":five_tokens+hour_tokens,"cache_creation":{"ephemeral_5m_input_tokens":five_tokens,"ephemeral_1h_input_tokens":hour_tokens}}}))
         }
     });
     let mut servers = Servers(vec![]);
@@ -145,6 +117,11 @@ async fn native_cache_requires_pinned_ttl_prices_before_reserving_or_dispatching
         (2, Some("1h"), vec![Some("1h")], false),
         (2, Some("unknown-5m"), vec![Some("5m")], false),
         (2, Some("unknown-read"), vec![Some("1h")], false),
+        (2, Some("read"), vec![None], false),
+        (2, Some("read"), vec![Some("1h")], false),
+        (3, Some("read"), vec![Some("5m")], false),
+        (3, Some("read"), vec![Some("1h")], false),
+        (3, Some("unknown-read"), vec![Some("1h")], false),
         (3, Some("5m"), vec![Some("5m")], false),
         (3, Some("1h"), vec![Some("5m"), Some("1h")], false),
         (2, None, vec![None], true),
@@ -155,12 +132,14 @@ async fn native_cache_requires_pinned_ttl_prices_before_reserving_or_dispatching
         (3, None, vec![Some("5m"), Some("1h")], true),
     ] {
         let price = publish(&f, version, denied).await;
-        let before = seen.lock().unwrap().len();
-        let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM governance_reservations")
-            .fetch_one(&f.store.pool)
-            .await
-            .unwrap();
-        let blocks: Vec<_> = ttls
+        // The identical second prompt returns cache reads instead of writes.
+        for repeat in 0..2 {
+            let before = seen.lock().unwrap().len();
+            let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM governance_reservations")
+                .fetch_one(&f.store.pool)
+                .await
+                .unwrap();
+            let blocks: Vec<_> = ttls
             .iter()
             .map(|ttl| {
                 let mut block =
@@ -171,58 +150,72 @@ async fn native_cache_requires_pinned_ttl_prices_before_reserving_or_dispatching
                 block
             })
             .collect();
-        let response = client.post(format!("{base}/v1/messages")).bearer_auth(&key.token).header("anthropic-version","2023-06-01")
+            let response = client.post(format!("{base}/v1/messages")).bearer_auth(&key.token).header("anthropic-version","2023-06-01")
             .header("anthropic-beta", "claude-code-20250219, extended-cache-ttl-2025-04-11")
             .json(&json!({"model":"company/smart","max_tokens":10,"system":blocks,"messages":[{"role":"user","content":"hello"}]})).send().await.unwrap();
-        let status = response.status();
-        let body: Value = response.json().await.unwrap();
-        assert_eq!(
-            status.as_u16(),
-            if accepted { 200 } else { 400 },
-            "v{version} {ttls:?}: {body}"
-        );
-        let after: i64 = sqlx::query_scalar("SELECT count(*) FROM governance_reservations")
-            .fetch_one(&f.store.pool)
-            .await
-            .unwrap();
-        if !accepted {
-            assert!(
-                body["error"]["message"]
-                    .as_str()
-                    .unwrap()
-                    .contains("cache_control")
+            let status = response.status();
+            let body: Value = response.json().await.unwrap();
+            assert_eq!(
+                status.as_u16(),
+                if accepted { 200 } else { 400 },
+                "v{version} {ttls:?}: {body}"
             );
-            assert_eq!(after, rows);
-            assert_eq!(seen.lock().unwrap().len(), before);
-        } else {
-            assert_eq!(after, rows + 1);
-            let has_hour = ttls.contains(&Some("1h"));
-            {
-                let seen = seen.lock().unwrap();
-                assert_eq!(seen.len(), before + 1);
-                assert_eq!(
-                    seen[before].0, price,
-                    "the checked price is the pinned price"
-                );
+            let after: i64 = sqlx::query_scalar("SELECT count(*) FROM governance_reservations")
+                .fetch_one(&f.store.pool)
+                .await
+                .unwrap();
+            if !accepted {
                 assert!(
-                    seen[before].1 >= if has_hour { 210 } else { 135 },
-                    "full input at the highest requested write rate plus output"
+                    body["error"]["message"]
+                        .as_str()
+                        .unwrap()
+                        .contains("cache_control")
                 );
-            }
-            let (state, actual): (String, Option<i64>) = sqlx::query_as(
-                "SELECT state,actual_microusd FROM governance_reservations WHERE price_id=$1",
+                assert_eq!(after, rows);
+                assert_eq!(seen.lock().unwrap().len(), before);
+            } else {
+                assert_eq!(after, rows + 1);
+                let has_hour = ttls.contains(&Some("1h"));
+                {
+                    let seen = seen.lock().unwrap();
+                    assert_eq!(seen.len(), before + 1);
+                    assert_eq!(
+                        seen[before].0, price,
+                        "the checked price is the pinned price"
+                    );
+                    assert!(
+                        seen[before].1 >= if has_hour { 210 } else { 135 },
+                        "full input at the highest requested write rate plus output"
+                    );
+                }
+                let settled: Vec<(String, Option<i64>)> = sqlx::query_as(
+                "SELECT state,actual_microusd FROM governance_reservations WHERE price_id=$1 ORDER BY admitted_at",
             )
             .bind(price)
-            .fetch_one(&f.store.pool)
+            .fetch_all(&f.store.pool)
             .await
             .unwrap();
-            let has_five = ttls.iter().any(|t| *t != Some("1h"));
-            assert_eq!(state, "settled");
-            assert_eq!(
-                actual,
-                Some(3 + if has_five { 4 } else { 0 } + if has_hour { 8 } else { 0 }),
-                "write aggregate is not charged in addition to TTL allocations"
-            );
+                let has_five = ttls.iter().any(|t| *t != Some("1h"));
+                assert_eq!(settled.len(), repeat + 1);
+                assert_eq!(settled[repeat].0, "settled");
+                assert_eq!(
+                    settled[repeat].1,
+                    Some(if repeat == 0 {
+                        3 + if has_five { 4 } else { 0 } + if has_hour { 8 } else { 0 }
+                    } else {
+                        4 // 2 uncached input + 1 output + ceil(3..7 cache reads * 0.1)
+                    }),
+                    "writes and repeated-prompt cache hits settle exactly, without double charging"
+                );
+                assert_eq!(
+                    body["usage"]["cache_read_input_tokens"],
+                    if repeat == 0 {
+                        0
+                    } else {
+                        (if has_five { 3 } else { 0 }) + (if has_hour { 4 } else { 0 })
+                    }
+                );
+            }
         }
     }
 }

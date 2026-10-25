@@ -187,6 +187,11 @@ async fn denied_betas_use_anthropic_retry_wording_before_admission() {
     let (app, repository) = frontend_adapter(Arc::new(adapter));
     for (values, denied) in [
         (vec!["context-1m-2025-08-07"], "context-1m-2025-08-07"),
+        (vec!["CONTEXT-1M-2025-08-07"], "CONTEXT-1M-2025-08-07"),
+        (
+            vec!["claude-code-20250219, Web-Search-2025-03-05"],
+            "Web-Search-2025-03-05",
+        ),
         (
             vec![
                 "claude-code-20250219",

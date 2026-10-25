@@ -259,7 +259,7 @@ fn beta_is_accepted_with_bounded_verbatim_values() {
 
 #[test]
 fn beta_denylist_checks_every_token_across_repeated_headers() {
-    for beta in [
+    for original in [
         "context-1m-2025-08-07",
         "files-api-2025-04-14",
         "code-execution-2025-05-22",
@@ -268,26 +268,39 @@ fn beta_denylist_checks_every_token_across_repeated_headers() {
         "mcp-client-2025-11-20",
         "computer-use-2025-01-24",
     ] {
-        let mut h = HeaderMap::new();
-        h.append(
-            "anthropic-beta",
-            "interleaved-thinking-2025-05-14".parse().unwrap(),
-        );
-        h.append("anthropic-beta", beta.parse().unwrap());
-        assert!(
-            matches!(
-                beta_headers(&h),
-                Err(crate::providers::messages::BetaHeaderError::Denied(_))
-            ),
-            "{beta}"
-        );
-        let mut r = request(json!({})).unwrap();
-        r.messages_options.as_mut().unwrap().beta_headers =
-            vec![format!("context-management-2025-06-27, {beta}")];
-        assert!(matches!(
-            crate::providers::messages::validate(&r, ProviderClass::Anthropic),
-            Err(InferenceError::InvalidField("anthropic-beta"))
-        ));
+        let mixed: String = original
+            .chars()
+            .enumerate()
+            .map(|(i, c)| {
+                if i % 2 == 0 {
+                    c.to_ascii_uppercase()
+                } else {
+                    c
+                }
+            })
+            .collect();
+        for beta in [original.to_owned(), original.to_ascii_uppercase(), mixed] {
+            let mut h = HeaderMap::new();
+            h.append(
+                "anthropic-beta",
+                "interleaved-thinking-2025-05-14".parse().unwrap(),
+            );
+            h.append("anthropic-beta", beta.parse().unwrap());
+            assert!(
+                matches!(
+                    beta_headers(&h),
+                    Err(crate::providers::messages::BetaHeaderError::Denied(_))
+                ),
+                "{beta}"
+            );
+            let mut r = request(json!({})).unwrap();
+            r.messages_options.as_mut().unwrap().beta_headers =
+                vec![format!("context-management-2025-06-27, {beta}")];
+            assert!(matches!(
+                crate::providers::messages::validate(&r, ProviderClass::Anthropic),
+                Err(InferenceError::InvalidField("anthropic-beta"))
+            ));
+        }
     }
     for (last_count, accepted) in [(2, true), (3, false)] {
         let mut h = HeaderMap::new();
