@@ -664,7 +664,9 @@ async fn model_id(pool: &PgPool, name: &str) -> Uuid {
         .unwrap()
 }
 async fn team_catalog(pool: &PgPool, models: &[Uuid]) -> Uuid {
-    let c = Uuid::new_v4();
+    // Each caller has its own SQLx database. A valid UUID can contain "acc-e"
+    // across a hyphen; force that collision to exercise the access-list oracle.
+    let c = Uuid::parse_str("00000acc-e000-4000-8000-000000000000").unwrap();
     sqlx::query("INSERT INTO catalogs(id,name) VALUES($1,'Approved')")
         .bind(c)
         .execute(pool)
@@ -741,9 +743,16 @@ async fn access_layers_explain_why_models_are_unavailable(pool: PgPool) {
     assert_eq!(reasons(&v, "acc-b"), ["not_selected"]);
     assert_eq!(reasons(&v, "acc-c"), ["model_disabled"]);
     assert_eq!(reasons(&v, "acc-d"), ["no_enabled_route"]);
-    assert!(
-        !v.to_string().contains("acc-e"),
-        "uncatalogued models are not listed"
+    let listed: Vec<Uuid> = v["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| Uuid::parse_str(m["model_id"].as_str().unwrap()).unwrap())
+        .collect();
+    assert_eq!(
+        listed,
+        [a, b, c, d],
+        "only catalogued or directly granted models are listed: {v}"
     );
     assert_eq!(
         v["summary"],
