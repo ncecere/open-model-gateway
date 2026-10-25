@@ -10,6 +10,34 @@ Use incident History's Waiting/Retrying/Exhausted, waiting count and next due ti
 
 `gateway_alert_email_attempts_total{outcome="sent|transient_failure|permanent_failure"}` counts recorded attempt outcomes. `gateway_alert_email_deliveries{state="retrying|failed|exhausted|suppressed"}` counts pending deliveries created in the last 24 hours and terminal failures/exhaustion/suppression completed in the last 24 hours (the metrics lease holder exports the installation aggregate). The completion window keeps newly expired/cleaned-up failures visible beyond the 15-minute alert window, even when they were created over 24 hours ago. Cleanup without a send does not increment the attempt counter. Failed and exhausted overlap; do not add them. The [example Prometheus rules](../deploy/monitoring/prometheus-rules.yml) include `GatewayAlertEmailPersistentFailure`. Send it through an independent operations channel, not a recursive email-failure incident inside the gateway. Missing SMTP is `not_configured`, not a retry loop. `suppressed` means the workspace's [email generation allowance](alerts.md#workspace-email-generation-limit-277) was full; the incident remains in-app, and no email retry is scheduled. It is not an SMTP failure and is not included in the persistent-failure rule. No metric labels, incident API fields or logs contain outbox fingerprints/recipient addresses. Fingerprints are pseudonymous personal data; restrict database access and backups accordingly.
 
+## Scheduled report rollout and rehearsal (#102)
+
+Scheduled reports reuse SMTP and the shared alert/email dispatcher. Configure **Admin → Settings → Email**, its host/secret allowlists and TLS policy, and the operator-controlled HTTPS `GATEWAY_PUBLIC_URL` before resuming schedules (loopback HTTP is development/test only). The dashboard's missing-configuration warning reports presence, not successful relay acceptance; use the existing Email test. `GATEWAY_ALERT_INTERVAL_SECONDS=0` stops report delivery as well as alerts, **not report generation**. Pause schedules to stop both future generation and remaining unclaimed deliveries. Claimed SMTP attempts may finish. Do not send operational failure alerts through this report queue.
+
+Deploy the complete migration lineage, including **0061 schedules, 0063 generation and 0065 delivery**, on the explicitly selected database only. Apply with the matching migrator, then `grants apply` and `grants verify`; run gateways with `gateway_runtime`, never owner credentials. This UI/CSV slice has no new migration or write grant; new reads reuse explicit SELECT ACLs and are covered by the runtime-role handler probe. Stop old workers before the schema upgrade; mixed-schema binaries are unsupported. 0065 preserves #277 quota admission for alerts and makes report envelopes quota-exempt, not recipient-guard-exempt. Large existing outboxes need a maintenance window for its transactional indexes. `serve` never migrates, resets or replays history. After a migration, rollback requires the backup/restore procedure, not an old image against the new schema.
+
+**Coordinator rehearsal gate (not a claim of completed execution):**
+
+1. Use a fresh disposable PostgreSQL 17 database or the isolated `dev-omg` environment; never an existing installation or another namespace. Back up and rehearse the full ordered prefix, grants/refusal probes and exact-lineage readiness. Exercise two replicas, stale generation fencing and lease takeover; retain results in CI/the PR, not bespoke evidence files.
+2. Run the real-PostgreSQL scheduled-report tests, including CSV bounds, hostile CSV labels, expiry/pruning, cross-scope IDs, member/Auditor refusals and live revocation; run `enterprise_runtime_allowlist_and_rollback_probes` explicitly on the disposable cluster. Run both independent security reviews (one adversarial) before merge.
+3. Run `npx playwright test -c tests/browser/playwright.config.ts --project=scheduled-reports`. It includes the `journey` dependency, creates paused schedules through the real UI, resumes them, seeds only the disposable schedule's due cursor, and waits for the normal fenced worker. It opens **both exact email routes**, downloads CSV, checks Auditor read-only/member/personal refusals, pause/delete and accessibility. Screenshots are written under `target/browser-tests/scheduled-reports/` at 1440 and 390 pixels. This is not a unit-test substitute.
+4. With a disposable loopback SMTP receiver, complete the delivery acceptance tests: generic link-only body, unchanged address identity, revocation suppression, partial success, bounded retry/exhaustion, crash-after-acceptance duplicates and alert/report fairness. Follow a link through sign-in, then revoke access and confirm a fresh page read/download is refused. No paid provider is needed.
+5. Inspect the metrics below with a backlog/failure/suppression fixture. Verify unknown values and full totals against the recorded snapshot, never current live usage. Confirm a 90-day-expired payload is not returned before or after pruning. Pause or delete every rehearsal schedule; remove the disposable cluster environment with `dev-env down`.
+
+The browser fixture's due-cursor SQL is test-only, guarded to the `omg_browser_` database family. There is no operator replay/generate API and no reason to rewrite production cursors.
+
+Existing report metric families are low-cardinality **System** in the golden inventory; none label schedule, workspace, user, address or snapshot content:
+
+| Family | Interpretation |
+| --- | --- |
+| `gateway_report_due_backlog`, `gateway_report_due_backlog_capped` | Due active schedules sampled by the scheduler holder, saturated at 1,024; capped=1 means a lower bound. |
+| `gateway_report_oldest_due_lag_seconds` | Oldest initialized due lag at the database cutoff; missing calendars do not invent a lag. |
+| `gateway_report_generation_outcomes_total{category}` | Process-observed committed `success`, `timeout`, `snapshot_too_large`, `history_unavailable`, `authority_lost`, `other`. |
+| `gateway_report_email_attempts_total{outcome}` | Fixed `sent`, `transient_failure`, `permanent_failure` send outcomes. |
+| `gateway_report_email_recipients{state}` | Latest 1,024 envelopes created within 24 hours, exported by the metrics holder: waiting/leased backlog, failed/exhausted failure, ineligible authorization suppression, sent/not_configured. Not an unlimited queue total. |
+
+Counter resets and gauge sampling/lease ownership matter when alerting; aggregate across replicas appropriately and pair absence with lease/collector-health signals. See [snapshot and authorization semantics](cost-reporting.md#scheduled-reports).
+
 ## OTLP metrics groundwork (#99, slice 2)
 
 The scrape-derived snapshot and encoder are implemented, but no metrics worker is wired yet; a configured metrics OTLP URL still refuses startup. Leave the metrics OTLP settings unset until the runtime slice ships. Prometheus scraping is unchanged.
