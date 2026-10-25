@@ -144,6 +144,40 @@ fn parallel_calls_share_one_assistant_turn_without_collapsing_neighbor_turns() {
 }
 
 #[test]
+fn wire_strict_presence_does_not_reinterpret_shared_adapter_tool_settings() {
+    let mut r =
+        request(json!({"tools":[{"name":"lookup","input_schema":{"type":"object"}}]})).unwrap();
+    for strict in [None, Some(false), Some(true)] {
+        r.tools[0].strict = strict;
+        for class in [
+            ProviderClass::Anthropic,
+            ProviderClass::OpenAi,
+            ProviderClass::Bedrock,
+            ProviderClass::Local,
+        ] {
+            assert!(crate::providers::messages::validate(&r, class).is_ok());
+        }
+    }
+    for strict in [false, true] {
+        let r = request(
+            json!({"tools":[{"name":"lookup","input_schema":{"type":"object"},"strict":strict}]}),
+        )
+        .unwrap();
+        for class in [
+            ProviderClass::Anthropic,
+            ProviderClass::OpenAi,
+            ProviderClass::Bedrock,
+            ProviderClass::Local,
+        ] {
+            assert!(matches!(
+                crate::providers::messages::validate(&r, class),
+                Err(InferenceError::InvalidField("strict"))
+            ));
+        }
+    }
+}
+
+#[test]
 fn system_text_and_sampling_are_not_lost() {
     let r = request(json!({"system":[{"type":"text","text":"one"},{"type":"text","text":"two"}],"top_p":0.8,"top_k":40,"stop_sequences":["STOP"],"metadata":{"user_id":"client-label"}})).unwrap();
     assert_eq!(r.messages[0].content.as_deref(), Some("one"));

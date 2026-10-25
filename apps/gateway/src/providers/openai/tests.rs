@@ -188,6 +188,27 @@ async fn messages_parallel_calls_and_results_preserve_openai_turns() {
     super::super::contract::assert_parallel_chat_wire(&capture[0].body);
 }
 
+#[test]
+fn non_messages_error_decoding_preserves_shared_adapter_behavior() {
+    let value = json!({"error":{"code":"rate_limit_exceeded","message":"prompt is too long"}});
+    for profile in [None, Some("vllm"), Some("ollama")] {
+        assert_error(
+            decode_complete_profile(&value, profile),
+            InferenceError::InvalidUpstream,
+        );
+    }
+    let bytes = serde_json::to_vec(&value).unwrap();
+    assert_error(
+        StreamState::default().decode(&bytes),
+        InferenceError::InvalidUpstream,
+    );
+    let mut messages = StreamState {
+        messages: true,
+        ..StreamState::default()
+    };
+    assert_error(messages.decode(&bytes), InferenceError::Busy);
+}
+
 #[tokio::test]
 async fn messages_embedded_error_codes_override_quoted_context_phrases() {
     let mock = Mock::json(

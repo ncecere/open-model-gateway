@@ -159,6 +159,40 @@ async fn messages_parallel_calls_and_results_preserve_openrouter_turns() {
 }
 
 #[tokio::test]
+async fn non_messages_named_errors_keep_legacy_adapter_behavior() {
+    let value = json!({"error":{"code":"rate_limit_exceeded","message":"prompt is too long"}});
+    for messages in [false, true] {
+        let mock = Mock::json(value.clone()).await;
+        let mut request = chat(false);
+        if messages {
+            request.messages_options = Some(Box::default());
+        }
+        let expected = if messages {
+            InferenceError::Busy
+        } else {
+            InferenceError::UpstreamUnavailable
+        };
+        assert!(
+            matches!(mock.adapter().execute(&target("private"), request).await, Err(error) if error == expected)
+        );
+        let mock = Mock::sse(format!("data: {value}\n\n"), 1).await;
+        let mut request = chat(true);
+        if messages {
+            request.messages_options = Some(Box::default());
+        }
+        let ProviderOutput::Stream(mut stream) = mock
+            .adapter()
+            .execute(&target("private"), request)
+            .await
+            .unwrap()
+        else {
+            panic!("stream expected");
+        };
+        assert!(matches!(stream.next().await, Some(Err(error)) if error == expected));
+    }
+}
+
+#[tokio::test]
 async fn messages_openrouter_status_meanings_survive_body_classification() {
     for (status, expected) in [
         (402, InferenceError::Configuration),
@@ -994,6 +1028,7 @@ fn registry_protocols() {
     assert_eq!(adapter.id(), "openrouter");
     for p in [
         ApiProtocol::ChatCompletions,
+        ApiProtocol::Messages,
         ApiProtocol::Embeddings,
         ApiProtocol::Rerank,
         ApiProtocol::Systemone,
@@ -1003,9 +1038,7 @@ fn registry_protocols() {
     ] {
         assert!(adapter.supports_protocol(p));
     }
-    for p in [ApiProtocol::Responses, ApiProtocol::Messages] {
-        assert!(!adapter.supports_protocol(p));
-    }
+    assert!(!adapter.supports_protocol(ApiProtocol::Responses));
     let mut registry = crate::providers::ProviderRegistry::default();
     registry.register(Arc::new(adapter)).unwrap();
     assert!(registry.get("openrouter").is_some());

@@ -69,6 +69,21 @@ async fn messages_frontend_safe_errors_through_mock_upstream() {
 }
 
 #[test]
+fn non_messages_stream_errors_keep_legacy_adapter_behavior() {
+    let value =
+        json!({"type":"error","error":{"type":"overloaded_error","message":"provider diagnostic"}});
+    assert!(matches!(
+        State::default().push(value.clone()),
+        Err(InferenceError::InvalidUpstream)
+    ));
+    let mut state = State {
+        messages: true,
+        ..State::default()
+    };
+    assert!(matches!(state.push(value), Err(InferenceError::Overloaded)));
+}
+
+#[test]
 fn messages_sampling_and_metadata_are_forwarded_without_authority() {
     let mut r = request(false);
     r.messages_options = Some(Box::new(MessagesOptions {
