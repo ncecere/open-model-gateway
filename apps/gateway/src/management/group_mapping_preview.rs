@@ -21,7 +21,9 @@
 //!   gained (a new entitlement or a role upgrade) or lost (a downgrade or
 //!   total loss, for example a manual `member` grant left behind after a
 //!   group `admin` mapping is deleted).
-use super::directory::{MappingInput, mapping_digest, validate_mapping};
+use super::directory::{
+    MAPPING_PATCH_FIELDS, MappingInput, mapping_digest, merge_mapping_patch, validate_mapping,
+};
 use super::settings::SignIn;
 use super::*;
 use crate::lifecycle;
@@ -50,11 +52,13 @@ const ROSTER_LIMIT: i64 = 5000;
 #[cfg(test)]
 const ROSTER_LIMIT: i64 = 3;
 
+/// The new-mapping preview's own body: unlike the existing-mapping preview
+/// (which must mirror `PATCH`'s partial-merge semantics, review #89 round
+/// 5), there is no stored row to merge against, so this is always a full
+/// replacement -- every field required, exactly like `create_mapping`.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct PreviewInput {
-    #[serde(default)]
-    delete: bool,
     issuer: Option<String>,
     group_value: Option<String>,
     target_kind: Option<String>,
@@ -64,25 +68,10 @@ pub(super) struct PreviewInput {
     enabled: Option<bool>,
 }
 impl PreviewInput {
-    /// Every optional field absent (an empty `{}` body, standing in for an
-    /// omitted body) or an explicit `delete`.
-    fn is_delete_request(&self) -> bool {
-        self.delete
-            || (self.issuer.is_none()
-                && self.group_value.is_none()
-                && self.target_kind.is_none()
-                && self.platform_role.is_none()
-                && self.workspace_id.is_none()
-                && self.workspace_role.is_none()
-                && self.enabled.is_none())
-    }
-    /// The same shape create/update validate. Missing required fields (or
-    /// `delete` itself) are the same `invalid()` a malformed create/update
-    /// body would get, never a distinct, more permissive error.
+    /// The same shape create/update validate. A missing required field is
+    /// the same `invalid()` a malformed create/update body would get,
+    /// never a distinct, more permissive error.
     fn into_mapping(self) -> Result<MappingInput, ApiError> {
-        if self.delete {
-            return Err(invalid());
-        }
         Ok(MappingInput {
             issuer: self.issuer.ok_or_else(invalid)?,
             group_value: self.group_value.ok_or_else(invalid)?,
@@ -101,14 +90,20 @@ fn target_kind_of(target_kind: &str) -> lifecycle::GroupTargetKind {
         lifecycle::GroupTargetKind::Workspace
     }
 }
-fn mapping_fields_equal(existing: &ExistingMapping, b: &MappingInput) -> bool {
-    existing.issuer == b.issuer
-        && existing.group_value == b.group_value
-        && existing.target_kind == b.target_kind
-        && existing.platform_role == b.platform_role
-        && existing.workspace_id == b.workspace_id
-        && existing.workspace_role == b.workspace_role
-        && existing.enabled == b.enabled
+/// [`ExistingMapping`] as the same jsonb shape [`MappingInput`]
+/// deserializes, for [`merge_mapping_patch`] -- the exact projection
+/// `update_mapping`'s own `current` query builds, just assembled from an
+/// already-fetched row instead of a second `SELECT`.
+fn existing_as_value(existing: &ExistingMapping) -> Value {
+    json!({
+        "issuer": existing.issuer,
+        "group_value": existing.group_value,
+        "target_kind": existing.target_kind,
+        "platform_role": existing.platform_role,
+        "workspace_id": existing.workspace_id,
+        "workspace_role": existing.workspace_role,
+        "enabled": existing.enabled,
+    })
 }
 
 async fn require_platform_admin(
@@ -181,17 +176,46 @@ struct ExistingMapping {
     enabled: bool,
 }
 
+/// `delete:true`, or no mapping field present at all (an empty `{}` body,
+/// standing in for an omitted body): the delete-preview request, exactly
+/// `PreviewInput`'s old `is_delete_request`. Any other top-level key is
+/// refused up front (`422`), the same way [`merge_mapping_patch`] refuses
+/// one for the merge branch -- one allowed-field check either branch ends
+/// up taking, not two that could drift.
+fn classify_existing_mapping_body(
+    body: &Value,
+) -> Result<(bool, serde_json::Map<String, Value>), ApiError> {
+    let object = body.as_object().ok_or_else(invalid)?;
+    let mut delete_flag = false;
+    let mut patch = serde_json::Map::new();
+    for (k, v) in object {
+        if k == "delete" {
+            delete_flag = v.as_bool().ok_or_else(invalid)?;
+            continue;
+        }
+        if !MAPPING_PATCH_FIELDS.contains(&k.as_str()) {
+            return Err(ApiError(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Unknown group mapping field",
+            ));
+        }
+        patch.insert(k.clone(), v.clone());
+    }
+    let is_delete = delete_flag || patch.is_empty();
+    Ok((is_delete, patch))
+}
+
 async fn preview_existing_mapping(
     State(s): State<Store>,
     Extension(u): Extension<ManagementPrincipal>,
     Path(id): Path<Uuid>,
     config: Option<Extension<SignIn>>,
-    Json(input): Json<PreviewInput>,
+    Json(body): Json<Value>,
 ) -> DetailedResult {
     if u.token_id().is_some() {
         return Err(denied().into());
     }
-    let is_delete = input.is_delete_request();
+    let (is_delete, patch) = classify_existing_mapping_body(&body)?;
     let mut tx = resources::read_snapshot(&s).await?;
     require_platform_admin(&mut tx, &u).await?;
     let existing: ExistingMapping = sqlx::query_as(
@@ -210,7 +234,7 @@ async fn preview_existing_mapping(
         existing.workspace_role.as_deref(),
         existing.enabled,
     );
-    // Owns the proposed mapping so the borrowed proposal outlives the branch.
+    // Owns the merged mapping so the borrowed proposal outlives the branch.
     let proposed;
     let (issuer, group_value, proposal, fields_changed) = if is_delete {
         let proposal = lifecycle::GroupGrantProposal {
@@ -230,10 +254,14 @@ async fn preview_existing_mapping(
             true,
         )
     } else {
-        proposed = input.into_mapping()?;
+        // `PATCH`'s own merge semantics (review #89 round 5), not a full
+        // replacement: a field this body omits keeps its stored value.
+        let current = existing_as_value(&existing);
+        let (merged, b) =
+            merge_mapping_patch(&mut tx, current.clone(), &Value::Object(patch)).await?;
+        proposed = b;
         let b = &proposed;
-        validate_mapping(&mut tx, b).await?;
-        let changed = !mapping_fields_equal(&existing, b);
+        let changed = merged != current;
         let proposal = lifecycle::GroupGrantProposal {
             existing_mapping_id: Some(id),
             target_kind: target_kind_of(&b.target_kind),

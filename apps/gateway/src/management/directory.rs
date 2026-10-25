@@ -796,6 +796,54 @@ pub(super) async fn validate_mapping(
     }
     Ok(())
 }
+/// The only fields a mapping `PATCH` body may name. Shared by
+/// [`merge_mapping_patch`] and the edit preview's own up-front scan
+/// (`group_mapping_preview.rs`, review #89 round 5), so "what counts as a
+/// known mapping field" is one list, never two that could drift.
+pub(super) const MAPPING_PATCH_FIELDS: [&str; 7] = [
+    "issuer",
+    "group_value",
+    "target_kind",
+    "platform_role",
+    "workspace_id",
+    "workspace_role",
+    "enabled",
+];
+/// `PATCH`'s merge semantics (review #89 round 5): `patch`'s fields
+/// overlaid onto `current` (the same jsonb shape [`MappingInput`]
+/// deserializes -- a field *absent* from `patch` keeps its current value;
+/// a field explicitly `null` in `patch` clears it, exactly the way
+/// turning a platform mapping into a workspace one must send
+/// `"platform_role":null` to drop the no-longer-allowed field), then
+/// parsed and validated exactly as a fresh proposal would be. An
+/// unrecognized top-level key is refused the same way `update_mapping`
+/// refuses one (`422`), not a distinct, more permissive check. Shared by
+/// `update_mapping` (the real write) and the edit preview
+/// (`group_mapping_preview.rs`) so a preview of any patch body -- partial
+/// or full -- yields exactly the acceptance or refusal `PATCH` would,
+/// never a parallel "treat the body as a full replacement" reading that
+/// can diverge from the real merge. Returns the merged jsonb (for the
+/// caller's own before/after change detection) alongside the validated
+/// `MappingInput`.
+pub(super) async fn merge_mapping_patch(
+    tx: &mut Transaction<'_, Postgres>,
+    mut current: Value,
+    patch: &Value,
+) -> Result<(Value, MappingInput), ApiError> {
+    let fields = patch.as_object().ok_or_else(invalid)?;
+    for (k, v) in fields {
+        if !MAPPING_PATCH_FIELDS.contains(&k.as_str()) {
+            return Err(ApiError(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Unknown group mapping field",
+            ));
+        }
+        current[k] = v.clone();
+    }
+    let b: MappingInput = serde_json::from_value(current.clone()).map_err(|_| invalid())?;
+    validate_mapping(tx, &b).await?;
+    Ok((current, b))
+}
 /// A stable identifier for one mapping definition (#89 review item 6): the
 /// preview evaluator returns this for the client to send back as an
 /// `If-Match` header on the following PATCH/DELETE, so a mapping changed
@@ -928,7 +976,7 @@ async fn update_mapping(
     Json(patch): Json<Value>,
 ) -> ApiResult {
     let mut tx = resources::catalog_tx(&s, &u, true).await?;
-    let mut current:Value=sqlx::query_scalar("SELECT jsonb_build_object('issuer',issuer,'group_value',group_value,'target_kind',target_kind,'platform_role',platform_role,'workspace_id',workspace_id,'workspace_role',workspace_role,'enabled',enabled) FROM oidc_group_mappings WHERE id=$1 FOR UPDATE").bind(id).fetch_optional(&mut *tx).await?.ok_or_else(missing)?;
+    let current:Value=sqlx::query_scalar("SELECT jsonb_build_object('issuer',issuer,'group_value',group_value,'target_kind',target_kind,'platform_role',platform_role,'workspace_id',workspace_id,'workspace_role',workspace_role,'enabled',enabled) FROM oidc_group_mappings WHERE id=$1 FOR UPDATE").bind(id).fetch_optional(&mut *tx).await?.ok_or_else(missing)?;
     let before = current.clone();
     let before_mapping: MappingInput =
         serde_json::from_value(before.clone()).map_err(|_| invalid())?;
@@ -944,28 +992,8 @@ async fn update_mapping(
             before_mapping.enabled,
         ),
     )?;
-    let fields = patch.as_object().ok_or_else(invalid)?;
-    for (k, v) in fields {
-        if !matches!(
-            k.as_str(),
-            "issuer"
-                | "group_value"
-                | "target_kind"
-                | "platform_role"
-                | "workspace_id"
-                | "workspace_role"
-                | "enabled"
-        ) {
-            return Err(ApiError(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "Unknown group mapping field",
-            ));
-        }
-        current[k] = v.clone();
-    }
-    let b: MappingInput = serde_json::from_value(current.clone()).map_err(|_| invalid())?;
-    validate_mapping(&mut tx, &b).await?;
-    if current != before {
+    let (merged, b) = merge_mapping_patch(&mut tx, current, &patch).await?;
+    if merged != before {
         revoke_mapping_grants(&mut tx, id).await?;
     }
     sqlx::query("UPDATE oidc_group_mappings SET issuer=$2,group_value=$3,target_kind=$4,platform_role=$5,workspace_id=$6,workspace_role=$7,enabled=$8 WHERE id=$1").bind(id).bind(b.issuer).bind(b.group_value).bind(b.target_kind).bind(b.platform_role).bind(b.workspace_id).bind(b.workspace_role).bind(b.enabled).execute(&mut *tx).await?;

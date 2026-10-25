@@ -882,8 +882,58 @@ async fn scim_roster_is_never_trusted_for_a_different_issuer(pool: PgPool) {
         members.push(inert_user(&pool, &format!("scim-member-{i}@example.test")).await);
     }
     scim_group(&pool, "staff", &members).await;
-
     let foreign_issuer = "https://not-the-configured-issuer.example.test";
+
+    // A brand-new mapping proposed under the foreign (but otherwise
+    // valid HTTPS) issuer, enabled and targeting the real SCIM group: a
+    // false "gained" here would prove roster trust leaked across
+    // issuers, not merely that the proposal was disabled (round 5 LOW
+    // finding -- create/edit coverage, not just delete-mode).
+    let (status, created_preview) = call_with_sign_in(
+        &f.s,
+        &f.admin,
+        identity.clone(),
+        "POST",
+        PATH,
+        json!({"issuer":foreign_issuer,"group_value":"staff","target_kind":"platform","platform_role":"user","enabled":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created_preview}");
+    assert_eq!(
+        created_preview["membership_basis"], "last_sign_in_derived",
+        "a new mapping proposed under a different issuer must never trust the SCIM roster: {created_preview}"
+    );
+    assert_eq!(created_preview["complete"], true, "{created_preview}");
+    assert_eq!(created_preview["diff"]["platform_role_gained"], json!([]));
+
+    // The same issuer isolation for an *edit* of an existing mapping
+    // (merge semantics, review #89 round 5): a partial patch that only
+    // changes `issuer` keeps the enabled platform/staff definition that
+    // would otherwise show every SCIM member as gained.
+    let edited_map = Uuid::new_v4();
+    sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role,enabled) VALUES($1,$2,'staff','platform','user',true)")
+        .bind(edited_map)
+        .bind(&real_issuer)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (status, edited_preview) = call_with_sign_in(
+        &f.s,
+        &f.admin,
+        identity.clone(),
+        "POST",
+        &path_for(edited_map),
+        json!({"issuer":foreign_issuer}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{edited_preview}");
+    assert_eq!(
+        edited_preview["membership_basis"], "last_sign_in_derived",
+        "editing a mapping's issuer to one SCIM is not bound to must never trust the roster: {edited_preview}"
+    );
+    assert_eq!(edited_preview["complete"], true, "{edited_preview}");
+    assert_eq!(edited_preview["diff"]["platform_role_gained"], json!([]));
+
     let foreign_map = Uuid::new_v4();
     sqlx::query("INSERT INTO oidc_group_mappings(id,issuer,group_value,target_kind,platform_role,enabled) VALUES($1,$2,'staff','platform','user',true)")
         .bind(foreign_map)
@@ -909,7 +959,10 @@ async fn scim_roster_is_never_trusted_for_a_different_issuer(pool: PgPool) {
         foreign["complete"], true,
         "the untrusted fallback roster (no existing group grants) never overflows: {foreign}"
     );
-    assert_eq!(foreign["diff"]["platform_role_gained"], json!([]));
+    // (Not asserting an empty `platform_role_gained` here: a delete
+    // preview forces `enabled:false`, so it would be empty either way --
+    // the create/edit previews above are the non-vacuous version of this
+    // check, with `enabled:true` genuinely at stake.)
 
     // The same group value under the real configured issuer is trusted.
     let real_map = Uuid::new_v4();
@@ -1042,12 +1095,17 @@ async fn changing_a_sole_platform_mapping_into_a_workspace_mapping_shows_no_work
         .unwrap();
     scim_group(&pool, "staff", &[user]).await;
 
+    // `platform_role` must be sent explicitly as `null`: merge semantics
+    // (review #89 round 5) keep an omitted field at its stored value, and
+    // a workspace-target mapping with a leftover `platform_role` fails
+    // validation (the same way a real `PATCH` would), so this exercises
+    // the intended "switch target kind" path instead of an accidental 400.
     let (status, preview) = call(
         &f.s,
         &f.admin,
         "POST",
         &path_for(map),
-        json!({"issuer":issuer,"group_value":"staff","target_kind":"workspace","workspace_id":f.team,"workspace_role":"member","enabled":true}),
+        json!({"issuer":issuer,"group_value":"staff","target_kind":"workspace","platform_role":null,"workspace_id":f.team,"workspace_role":"member","enabled":true}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{preview}");
@@ -1066,7 +1124,7 @@ async fn changing_a_sole_platform_mapping_into_a_workspace_mapping_shows_no_work
             &f.admin,
             "PATCH",
             &format!("/api/v1/platform/oidc/group-mappings/{map}"),
-            json!({"issuer":issuer,"group_value":"staff","target_kind":"workspace","workspace_id":f.team,"workspace_role":"member","enabled":true}),
+            json!({"issuer":issuer,"group_value":"staff","target_kind":"workspace","platform_role":null,"workspace_id":f.team,"workspace_role":"member","enabled":true}),
             &digest,
         )
         .await
@@ -1097,6 +1155,147 @@ async fn changing_a_sole_platform_mapping_into_a_workspace_mapping_shows_no_work
     assert_eq!(
         membership, None,
         "matches the preview: no effective workspace access despite a mechanically-inserted group grant row"
+    );
+}
+
+/// Round 5 regression: previewing a patch the real `PATCH` would reject
+/// returns the identical refusal, not a `200` that only surfaces the
+/// problem once the real write is attempted. Omitting `platform_role`
+/// while switching to a workspace target leaves the stored `platform_role`
+/// in place -- merge semantics keep an absent field at its current value
+/// -- which `validate_mapping` refuses for a workspace-target mapping,
+/// exactly as it would for the real `PATCH`.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn previewing_a_patch_the_real_patch_would_reject_returns_the_same_status(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let issuer = "https://idp.example.test";
+    let (status, created) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        "/api/v1/platform/oidc/group-mappings",
+        json!({"issuer":issuer,"group_value":"staff","target_kind":"platform","platform_role":"user","enabled":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let map = id(&created);
+    let bad_patch =
+        json!({"target_kind":"workspace","workspace_id":f.team,"workspace_role":"member"});
+
+    let (status, preview) = call(&f.s, &f.admin, "POST", &path_for(map), bad_patch.clone()).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "a leftover platform_role on a workspace-target mapping is invalid, exactly like a real PATCH: {preview}"
+    );
+
+    // An empty body ("delete"-shaped, but never applied here) is the
+    // cheapest way to read the current digest without changing anything.
+    let (status, snapshot) = call(&f.s, &f.admin, "POST", &path_for(map), json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{snapshot}");
+    let digest = snapshot["digest"].as_str().unwrap().to_owned();
+    assert_eq!(
+        call_if_match(
+            &f.s,
+            &f.admin,
+            "PATCH",
+            &format!("/api/v1/platform/oidc/group-mappings/{map}"),
+            bad_patch,
+            &digest,
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST,
+        "the real PATCH rejects exactly the same patch the preview rejected"
+    );
+}
+
+/// Round 5 regression: a partial patch naming only `enabled` previews
+/// correctly -- every other field (merge semantics) keeps its stored
+/// value, never reinterpreted as a full replacement that would otherwise
+/// fail validation (a workspace mapping with no `workspace_id`) or silently
+/// drop the existing workspace/role.
+#[sqlx::test(migrations = "./enterprise_migrations")]
+async fn a_partial_patch_naming_only_enabled_previews_correctly(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let issuer = "https://idp.example.test";
+    let holder = inert_user(&pool, "partial-patch@example.test").await;
+    sqlx::query("INSERT INTO platform_role_grants(user_id,role,source) VALUES($1,'user','manual')")
+        .bind(holder)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (status, created) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        "/api/v1/platform/oidc/group-mappings",
+        json!({"issuer":issuer,"group_value":"staff","target_kind":"workspace","workspace_id":f.team,"workspace_role":"admin","enabled":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let map = id(&created);
+    sqlx::query("INSERT INTO workspace_membership_grants(workspace_id,user_id,role,source,mapping_id) VALUES($1,$2,'admin','group',$3)")
+        .bind(f.team)
+        .bind(holder)
+        .bind(map)
+        .execute(&pool)
+        .await
+        .unwrap();
+    scim_group(&pool, "staff", &[holder]).await;
+
+    let (status, preview) = call(
+        &f.s,
+        &f.admin,
+        "POST",
+        &path_for(map),
+        json!({"enabled": false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["immediate"]["applies"], true, "{preview}");
+    assert_eq!(
+        users_in(&preview["immediate"]["workspace_membership_revoked"]),
+        [holder].into_iter().collect()
+    );
+    let lost = entry_for(&preview["diff"]["workspace_membership_lost"], holder);
+    assert_eq!(lost["before"], "admin");
+    assert_eq!(lost["after"], Value::Null);
+    let digest = preview["digest"].as_str().unwrap().to_owned();
+
+    // Apply for real: a real PATCH naming only `enabled` keeps every other
+    // field (issuer/group_value/target/workspace) exactly as stored.
+    assert_eq!(
+        call_if_match(
+            &f.s,
+            &f.admin,
+            "PATCH",
+            &format!("/api/v1/platform/oidc/group-mappings/{map}"),
+            json!({"enabled": false}),
+            &digest,
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let stored: (String, String, bool) =
+        sqlx::query_as("SELECT issuer,group_value,enabled FROM oidc_group_mappings WHERE id=$1")
+            .bind(map)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored, (issuer.to_owned(), "staff".to_owned(), false));
+    let role: Option<String> = sqlx::query_scalar(
+        "SELECT role FROM effective_workspace_memberships WHERE workspace_id=$1 AND user_id=$2",
+    )
+    .bind(f.team)
+    .bind(holder)
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        role, None,
+        "matches the preview: the revoke really happened"
     );
 }
 
