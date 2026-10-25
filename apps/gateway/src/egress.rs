@@ -36,6 +36,7 @@ pub enum Purpose {
     Smtp,
     Audit,
     Telemetry,
+    AlertWebhook,
 }
 impl Purpose {
     pub fn as_str(self) -> &'static str {
@@ -47,6 +48,7 @@ impl Purpose {
             Self::Smtp => "smtp",
             Self::Audit => "audit",
             Self::Telemetry => "telemetry",
+            Self::AlertWebhook => "alert_webhook",
         }
     }
 }
@@ -207,6 +209,7 @@ fn masked(ip: IpAddr, prefix: u8) -> IpAddr {
 pub struct Policy {
     development: bool,
     private_allow: Networks,
+    loopback_only: bool,
 }
 
 impl Policy {
@@ -214,7 +217,15 @@ impl Policy {
         Self {
             development,
             private_allow,
+            loopback_only: false,
         }
+    }
+
+    /// Tighten development HTTP to actual loopback connections, even when
+    /// a hostname approved as `localhost` resolves to a different address.
+    pub(crate) fn only_loopback(mut self) -> Self {
+        self.loopback_only = true;
+        self
     }
 
     /// `GATEWAY_ENV=development` and `GATEWAY_EGRESS_PRIVATE_ALLOW`.
@@ -234,10 +245,14 @@ impl Policy {
         Self {
             development: self.development || loopback,
             private_allow: self.private_allow.clone(),
+            loopback_only: self.loopback_only,
         }
     }
 
     pub fn allows(&self, ip: IpAddr) -> bool {
+        if self.loopback_only && !canonical(ip).is_loopback() {
+            return false;
+        }
         match classify(ip) {
             Class::Refused => false,
             Class::Loopback => self.development,
@@ -248,6 +263,9 @@ impl Policy {
 
     /// Why `ip` is refused, in words an operator can act on.
     fn refusal(&self, ip: IpAddr) -> &'static str {
+        if self.loopback_only && !canonical(ip).is_loopback() {
+            return "not a loopback address (required for development HTTP)";
+        }
         match classify(ip) {
             Class::Refused => "a reserved, link-local or metadata address, never allowed",
             Class::Loopback => "loopback, allowed only with GATEWAY_ENV=development",
@@ -283,9 +301,9 @@ fn denied(purpose: Purpose, host: &str, ip: IpAddr, policy: &Policy) {
     );
 }
 
-/// Keep the addresses the policy allows. Refusal is counted and logged only
-/// when none remain (a dual-stack host with one refused record still works,
-/// and that's not an incident); partial drops are debug logs.
+/// Keep the addresses the policy allows. Loopback-only policies reject the
+/// entire answer if any address is refused. Otherwise, refusal is counted and
+/// logged only when none remain (dual-stack partial drops are debug logs).
 fn filter(
     policy: &Policy,
     purpose: Purpose,
@@ -294,7 +312,7 @@ fn filter(
 ) -> anyhow::Result<Vec<SocketAddr>> {
     let (allowed, refused): (Vec<_>, Vec<_>) =
         found.iter().copied().partition(|a| policy.allows(a.ip()));
-    if !allowed.is_empty() {
+    if !allowed.is_empty() && (!policy.loopback_only || refused.is_empty()) {
         for addr in &refused {
             tracing::debug!(purpose = purpose.as_str(), host, address = %addr.ip(), reason = policy.refusal(addr.ip()), "egress policy dropped one resolved address");
         }
@@ -310,6 +328,17 @@ fn filter(
         first.ip(),
         policy.refusal(first.ip())
     )
+}
+
+/// Exercise the production post-DNS filter with deterministic answers, no DNS I/O.
+#[cfg(test)]
+pub(crate) fn filter_for_test(
+    policy: &Policy,
+    purpose: Purpose,
+    host: &str,
+    found: Vec<SocketAddr>,
+) -> anyhow::Result<Vec<SocketAddr>> {
+    filter(policy, purpose, host, found)
 }
 
 /// Resolve `host`, keep only the addresses the policy allows. An error when
@@ -400,6 +429,17 @@ pub fn check_configured_endpoints(
     Ok(())
 }
 
+/// Typed sentinel retained through reqwest's source chain. Policy refusals
+/// must never be retried as connection failures (nor classified by text).
+#[derive(Debug)]
+pub(crate) struct PolicyRefusal;
+impl std::fmt::Display for PolicyRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("outbound address policy refused destination")
+    }
+}
+impl std::error::Error for PolicyRefusal {}
+
 /// A reqwest DNS resolver that applies the policy.
 pub struct Resolver {
     purpose: Purpose,
@@ -428,7 +468,14 @@ impl Resolve for Resolver {
         let (purpose, policy) = (self.purpose, self.policy.clone().unwrap_or_else(policy));
         let host = name.as_str().to_owned();
         Box::pin(async move {
-            let addrs = resolve(&policy, purpose, &host, 0).await?;
+            let addrs = resolve_classified(&policy, purpose, &host, 0)
+                .await
+                .map_err(|error| match error {
+                    ResolveError::Policy => {
+                        Box::new(PolicyRefusal) as Box<dyn std::error::Error + Send + Sync>
+                    }
+                    ResolveError::Dns => Box::new(std::io::Error::other("DNS resolution failed")),
+                })?;
             Ok(Box::new(addrs.into_iter()) as Addrs)
         })
     }
@@ -450,6 +497,16 @@ mod tests {
         s.parse().unwrap()
     }
 
+    #[test]
+    fn development_http_is_loopback_only_after_resolution() {
+        let p = Policy::new(true, Networks::parse("test", "10.0.0.0/8").unwrap()).only_loopback();
+        for addr in ["127.0.0.1", "::1", "::ffff:127.0.0.1"] {
+            assert!(p.allows(ip(addr)));
+        }
+        for addr in ["8.8.8.8", "10.0.0.1", "169.254.169.254"] {
+            assert!(!p.allows(ip(addr)));
+        }
+    }
     #[test]
     fn addresses_are_classified_strictly() {
         let strict = Policy::default();
@@ -573,6 +630,44 @@ mod tests {
         for bad in ["10.0.0.1/8", "10.0.0.0/33", "nope", "::ffff:10.0.0.0/104"] {
             assert!(Networks::parse(PRIVATE_ALLOW_ENV, bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn loopback_only_never_grants_access_and_survives_policy_derivation() {
+        let strict = Policy::default().only_loopback();
+        for address in ["127.0.0.1", "::1", "::ffff:127.0.0.1"] {
+            assert!(!strict.allows(ip(address)), "{address}");
+        }
+        let narrowed = Policy::new(
+            true,
+            Networks::parse(PRIVATE_ALLOW_ENV, "0.0.0.0/0,::/0").unwrap(),
+        )
+        .only_loopback();
+        for policy in [
+            narrowed.clone(),
+            narrowed.permit_loopback(false),
+            narrowed.permit_loopback(true),
+            strict.permit_loopback(true),
+        ] {
+            for address in ["127.0.0.1", "::1", "::ffff:127.0.0.1"] {
+                assert!(policy.allows(ip(address)), "{address}");
+            }
+            for address in [
+                "8.8.8.8",
+                "10.1.2.3",
+                "fd12::1",
+                "64:ff9b::7f00:1",
+                "2002:7f00:1::1",
+            ] {
+                assert!(!policy.allows(ip(address)), "{address}");
+            }
+        }
+        assert!(
+            filter(&narrowed, Purpose::Telemetry, "empty.example", vec![])
+                .unwrap_err()
+                .to_string()
+                .contains("could not resolve")
+        );
     }
 
     #[test]

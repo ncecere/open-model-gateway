@@ -18,6 +18,8 @@ The golden inventory pins every family's System, Traffic or Excluded class. Syst
 
 Coordinator decision: the DB-only `gateway_alert_delivery_pending_buckets` and `gateway_alert_delivery_oldest_pending_age_seconds` gauges are **Traffic**, the same data class as `gateway_alert_email_deliveries`, despite having no labels. Traffic includes personal-workspace work as identity-free aggregates and is off by default. Only Traffic families carry `model`/`provider` labels: `model` contains platform-catalog public model aliases, not arbitrary request model strings; `provider` contains provider kinds. Each dynamic label inventory is bounded to 200 values of at most 96 characters (overflow uses a fixed fallback).
 
+Coordinator decision (#45): `gateway_alert_webhook_attempts`, `gateway_alert_webhook_deliveries` and `gateway_alert_webhook_oldest_waiting_seconds` are also **Traffic**: notification-activity aggregates, not System health. They fail closed with Traffic off by default, even the label-free oldest-waiting gauge. Only fixed `outcome`/`state` labels are permitted; never destination identifiers, URLs or signing-secret references. This classification does not enable OTLP delivery; the metrics worker is still pending.
+
 Runtime/acceptance requirements for slice 3: failure to obtain entropy for the per-process instance ID must quietly disable metrics export, without a predictable fallback or a startup failure. The UUID privacy canary must exempt exactly the `service.instance.id` resource attribute, not UUID-shaped values elsewhere.
 
 ## Configuration reference
@@ -72,6 +74,8 @@ The gateway's own HTTP clients (OpenAI, Anthropic, OpenRouter, Bedrock requests,
 - **Public:** allowed.
 
 Names are resolved by the gateway, refused addresses are dropped, and the connection goes only to an address that passed (so a DNS answer can't change between the check and the connection). Configured IP-literal URLs are checked at startup: `GATEWAY_S3_ENDPOINT`, `GATEWAY_BEDROCK_ENDPOINT_ALLOWLIST`, the OIDC issuer and the endpoints it publishes. A refused OIDC issuer stops startup with a message naming `GATEWAY_EGRESS_PRIVATE_ALLOW`. A refused request fails like an unreachable upstream; the log names the purpose, host and reason, and `gateway_egress_denied_total{purpose}` counts it. Approved local upstreams (`GATEWAY_LOCAL_UPSTREAMS`), including their vLLM metrics, keep their own pinned approval and need no entry here; they are refused in the same special-use ranges as above (#203), and an approval in one stops startup.
+
+The development HTTP exception for OTLP exports (traces and audit logs) and the shared audit webhook transport is stricter: every DNS answer must be canonical loopback, including IPv4-mapped loopback. Any non-loopback answer rejects the entire result, even alongside loopback or when covered by `GATEWAY_EGRESS_PRIVATE_ALLOW`. HTTPS retains the general policy above.
 
 List a private network when you use one of these:
 

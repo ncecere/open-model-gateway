@@ -489,7 +489,7 @@ async fn request_logs_group_attempts_paginate_and_respect_privacy(pool: PgPool) 
             )
             .await
             .0,
-            StatusCode::FORBIDDEN
+            StatusCode::NOT_FOUND
         );
     }
 }
@@ -640,7 +640,7 @@ async fn usage_overview_and_explore_are_exact_scoped_and_bounded(pool: PgPool) {
         )
         .await
         .0,
-        StatusCode::FORBIDDEN
+        StatusCode::NOT_FOUND
     );
 }
 
@@ -824,7 +824,7 @@ async fn access_layers_explain_why_models_are_unavailable(pool: PgPool) {
         )
         .await
         .0,
-        StatusCode::FORBIDDEN
+        StatusCode::NOT_FOUND
     );
     // Non-member platform readers see the same layers (read-only metadata).
     let (status, v) = get(&f, &f.auditor, &path).await;

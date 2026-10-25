@@ -226,6 +226,47 @@ fn traffic_default_and_build_info_are_absent() {
     assert_eq!(metrics(&encode(text, true).0).len(), 2);
 }
 
+#[tokio::test]
+async fn webhook_notification_aggregates_require_traffic_opt_in() {
+    let m = crate::metrics::characterization_tests::populated_registry();
+    let text = m.render(None).await;
+    for traffic in [false, true] {
+        let (body, drops) = encode(&text, traffic);
+        assert_eq!(drops.total(), 0);
+        for (name, unit, value, attributes) in [
+            (
+                "gateway_alert_webhook_attempts",
+                "1",
+                "1",
+                json!([{"key":"outcome","value":{"stringValue":"sent"}}]),
+            ),
+            (
+                "gateway_alert_webhook_deliveries",
+                "1",
+                "3",
+                json!([{"key":"state","value":{"stringValue":"waiting"}}]),
+            ),
+            (
+                "gateway_alert_webhook_oldest_waiting_seconds",
+                "s",
+                "17",
+                json!([]),
+            ),
+        ] {
+            let metric = metrics(&body).iter().find(|metric| metric["name"] == name);
+            if !traffic {
+                assert!(metric.is_none(), "{name} must be opt-in");
+                continue;
+            }
+            let metric = metric.unwrap_or_else(|| panic!("missing {name}"));
+            assert_eq!(metric["unit"], unit);
+            assert_eq!(points(metric).len(), 1);
+            assert_eq!(points(metric)[0]["asInt"], value);
+            assert_eq!(points(metric)[0]["attributes"], attributes);
+        }
+    }
+}
+
 #[test]
 fn disabled_families_skip_even_malformed_labels_without_drops() {
     for sample in [
@@ -260,6 +301,11 @@ fn labels_escape_safely_and_identity_canaries_never_escape() {
             "host",
             "url",
             "path",
+            "destination",
+            "destination_id",
+            "secret_ref",
+            "current_secret_ref",
+            "previous_secret_ref",
         ] {
             let (body, drops) = encode(&format!("{name}{{{key}=\"{canary}\"}} 1\n"), true);
             assert!(metrics(&body).is_empty());
@@ -628,6 +674,7 @@ async fn db_refresh_round_trips_with_concurrent_global_recording(pool: sqlx::PgP
     stop.send(()).unwrap();
     writer.await.unwrap();
     for name in [
+        "gateway_alert_webhook_oldest_waiting_seconds",
         "gateway_alert_delivery_pending_buckets",
         "gateway_alert_delivery_oldest_pending_age_seconds",
     ] {
@@ -645,6 +692,8 @@ async fn db_refresh_round_trips_with_concurrent_global_recording(pool: sqlx::PgP
         for name in [
             "gateway_reservations_held",
             "gateway_alert_email_deliveries",
+            "gateway_alert_webhook_deliveries",
+            "gateway_alert_webhook_oldest_waiting_seconds",
             "gateway_alert_delivery_pending_buckets",
             "gateway_alert_delivery_oldest_pending_age_seconds",
         ] {

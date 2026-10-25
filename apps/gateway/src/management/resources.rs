@@ -458,7 +458,9 @@ fn workspace_authority(
     }
     if kind == "personal" {
         if owner_user != Some(user) {
-            return Err(denied());
+            // Shared by preflight and transactional checks: platform roles
+            // never reveal whether another owner's personal workspace exists.
+            return Err(missing());
         }
         return Ok(WorkspaceAccess {
             kind,
