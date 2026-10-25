@@ -133,14 +133,21 @@ impl ProviderAdapter for AnthropicAdapter {
             .send()
             .await
             .map_err(transport)?;
-        status(response.status())?;
+        let response = if request.messages_options.is_some() {
+            super::framing::generation_status(response).await?
+        } else {
+            status(response.status())?;
+            response
+        };
         if !request.stream {
-            return Ok(ProviderOutput::Complete(decode(&body(response).await?)?));
+            return Ok(ProviderOutput::Complete(decode(
+                &super::framing::body_limit(response, request.response_limit()).await?,
+            )?));
         }
         check_sse(&response)?;
         Ok(ProviderOutput::Stream(Box::pin(
             async_stream::try_stream! {
-                let frames = frames(response); futures_util::pin_mut!(frames); let mut state = State::default();
+                let frames = frames(response); futures_util::pin_mut!(frames); let mut state = State { limit: Some(request.response_limit()), ..State::default() };
                 while let Some(value) = frames.next().await {
                     for event in state.push(value?)? { let done = matches!(event, ChatEvent::Done); yield event; if done { return; } }
                 }
@@ -149,6 +156,7 @@ impl ProviderAdapter for AnthropicAdapter {
     }
 }
 fn encode(model: &str, request: &ChatRequest) -> Result<Value> {
+    super::messages::validate(request, super::messages::ProviderClass::Anthropic)?;
     if request
         .temperature
         .is_some_and(|t| !(0.0..=1.0).contains(&t))
@@ -195,6 +203,20 @@ fn encode(model: &str, request: &ChatRequest) -> Result<Value> {
     }
     if let Some(t) = request.temperature {
         value["temperature"] = json!(t);
+    }
+    if let Some(options) = &request.messages_options {
+        if let Some(p) = options.top_p {
+            value["top_p"] = json!(p);
+        }
+        if let Some(k) = options.top_k {
+            value["top_k"] = json!(k);
+        }
+        if let Some(stops) = &options.stop_sequences {
+            value["stop_sequences"] = json!(stops);
+        }
+        if let Some(user_id) = &options.user_id {
+            value["metadata"] = json!({"user_id":user_id});
+        }
     }
     if !request.tools.is_empty() {
         value["tools"] = Value::Array(
@@ -305,6 +327,7 @@ struct State {
     tools: u32,
     usage: Usage,
     arguments: String,
+    limit: Option<usize>,
 }
 impl State {
     fn push(&mut self, value: Value) -> Result<Vec<ChatEvent>> {
@@ -312,6 +335,11 @@ impl State {
             return Err(InferenceError::InvalidUpstream);
         }
         let mut events = vec![];
+        if value["type"] == "error" {
+            return Err(
+                super::framing::classified_error(&value).unwrap_or(InferenceError::InvalidUpstream)
+            );
+        }
         match value["type"].as_str() {
             Some("ping") => {}
             Some("message_start") if !self.started => {
@@ -403,7 +431,12 @@ impl State {
                         return Err(InferenceError::InvalidUpstream);
                     }
                     let partial = string(&delta["partial_json"])?;
-                    if partial.len() > BODY_LIMIT - self.arguments.len() {
+                    if partial.len()
+                        > self
+                            .limit
+                            .unwrap_or(BODY_LIMIT)
+                            .saturating_sub(self.arguments.len())
+                    {
                         return Err(InferenceError::InvalidUpstream);
                     }
                     self.arguments.push_str(partial);

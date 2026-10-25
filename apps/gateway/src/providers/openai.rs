@@ -14,6 +14,7 @@ use crate::jobs::types::{
 };
 
 const BASE: &str = "https://api.openai.com/v1";
+#[cfg(test)]
 const BODY_LIMIT: usize = 4 * 1024 * 1024;
 const SSE_LIMIT: usize = 1024 * 1024;
 const MAX_TOOL_CALLS: usize = 128;
@@ -76,6 +77,10 @@ impl ProviderAdapter for OpenAiAdapter {
     /// wire code below stays for jobs created before the shutdown.
     fn supports_protocol(&self, protocol: ApiProtocol) -> bool {
         super::capabilities::serves(self.id(), protocol)
+    }
+
+    fn validate_chat_request(&self, request: &ChatRequest) -> Result<()> {
+        super::messages::validate(request, super::messages::ProviderClass::OpenAi)
     }
 
     async fn connect_realtime(
@@ -218,7 +223,9 @@ impl ProviderAdapter for OpenAiAdapter {
         protocol: ApiProtocol,
     ) -> Result<ProviderOutput> {
         match protocol {
-            ApiProtocol::ChatCompletions => self.execute(target, request).await,
+            ApiProtocol::ChatCompletions | ApiProtocol::Messages => {
+                self.execute(target, request).await
+            }
             ApiProtocol::Responses => super::openai_responses::execute(self, target, request).await,
             _ => Err(InferenceError::Unsupported),
         }
@@ -257,6 +264,7 @@ impl ProviderAdapter for OpenAiAdapter {
     }
 
     async fn execute(&self, target: &Deployment, request: ChatRequest) -> Result<ProviderOutput> {
+        self.validate_chat_request(&request)?;
         // Validate before resolving credentials, even when using the test transport.
         if target.provider != self.id()
             || target.credential_ref == "none"
@@ -281,7 +289,12 @@ impl ProviderAdapter for OpenAiAdapter {
             .send()
             .await
             .map_err(transport_error)?;
-        check_status(response.status())?;
+        let response = if request.messages_options.is_some() {
+            super::framing::generation_status(response).await?
+        } else {
+            check_status(response.status())?;
+            response
+        };
         if request.stream {
             let is_sse = response
                 .headers()
@@ -299,7 +312,7 @@ impl ProviderAdapter for OpenAiAdapter {
         } else {
             if response
                 .content_length()
-                .is_some_and(|n| n > BODY_LIMIT as u64)
+                .is_some_and(|n| n > request.response_limit() as u64)
             {
                 return Err(InferenceError::InvalidUpstream);
             }
@@ -307,7 +320,7 @@ impl ProviderAdapter for OpenAiAdapter {
             let mut chunks = response.bytes_stream();
             while let Some(chunk) = chunks.next().await {
                 let chunk = chunk.map_err(transport_error)?;
-                if chunk.len() > BODY_LIMIT - body.len() {
+                if chunk.len() > request.response_limit().saturating_sub(body.len()) {
                     return Err(InferenceError::InvalidUpstream);
                 }
                 body.extend_from_slice(&chunk);
@@ -375,6 +388,15 @@ pub(super) fn encode(model: &str, request: &ChatRequest) -> Value {
     }
     if let Some(temperature) = request.temperature {
         value["temperature"] = json!(temperature);
+    }
+    if let Some(options) = &request.messages_options {
+        if let Some(p) = options.top_p {
+            value["top_p"] = json!(p);
+        }
+        if let Some(stops) = &options.stop_sequences {
+            value["stop"] = json!(stops);
+        }
+        // user_id is a client label, never an authority/provider identity.
     }
     if let Some(tokens) = request.max_output_tokens {
         value["max_completion_tokens"] = json!(tokens);
@@ -546,7 +568,9 @@ pub(super) fn decode_complete_profile(
 fn decode_shape(value: &Value, profile: Option<&str>) -> Result<ChatResponse> {
     object(value)?;
     if !empty(&value["error"]) {
-        return Err(InferenceError::InvalidUpstream);
+        return Err(
+            super::framing::classified_error(value).unwrap_or(InferenceError::InvalidUpstream)
+        );
     }
     let choices = array(&value["choices"])?;
     if choices.len() != 1 {
@@ -632,7 +656,9 @@ impl StreamState {
             serde_json::from_slice(data).map_err(|_| InferenceError::InvalidUpstream)?;
         object(&value)?;
         if !empty(&value["error"]) {
-            return Err(InferenceError::InvalidUpstream);
+            return Err(
+                super::framing::classified_error(&value).unwrap_or(InferenceError::InvalidUpstream)
+            );
         }
         if self.model.is_none() {
             self.model = ReportedModel::from_json(&value["model"]);

@@ -216,6 +216,7 @@ fn build_router(
 pub(crate) struct PublicCache;
 
 async fn request_context(mut request: Request, next: Next) -> Response {
+    let messages = request.uri().path() == "/v1/messages";
     // Generate our own ID; do not reflect arbitrary client-supplied values into logs.
     // UUIDv7: time-ordered ids append to the partitioned history indexes.
     let id = Uuid::now_v7();
@@ -232,6 +233,18 @@ async fn request_context(mut request: Request, next: Next) -> Response {
     async {
         let started = Instant::now();
         let mut response = next.run(request).await;
+        if messages
+            && matches!(
+                response.status(),
+                StatusCode::PAYLOAD_TOO_LARGE | StatusCode::METHOD_NOT_ALLOWED
+            )
+        {
+            let allow = response.headers().get(header::ALLOW).cloned();
+            response = crate::protocols::messages::http_error(response.status());
+            if let Some(allow) = allow {
+                response.headers_mut().insert(header::ALLOW, allow);
+            }
+        }
         crate::metrics::METRICS.observe_http(
             &method,
             &route,

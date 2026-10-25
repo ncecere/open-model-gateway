@@ -171,8 +171,11 @@ impl ProviderAdapter for BedrockAdapter {
                 .set_tool_config(input.tools)
                 .send()
                 .await
-                .map_err(sdk_error)?;
-            Ok(ProviderOutput::Stream(stream::decode(output.stream)))
+                .map_err(|e| sdk_messages_error(e, request.messages_options.is_some()))?;
+            Ok(ProviderOutput::Stream(stream::decode(
+                output.stream,
+                request.response_limit(),
+            )))
         } else {
             let output = client
                 .converse()
@@ -183,8 +186,11 @@ impl ProviderAdapter for BedrockAdapter {
                 .set_tool_config(input.tools)
                 .send()
                 .await
-                .map_err(sdk_error)?;
-            Ok(ProviderOutput::Complete(decode_complete(output)?))
+                .map_err(|e| sdk_messages_error(e, request.messages_options.is_some()))?;
+            Ok(ProviderOutput::Complete(decode_complete_limit(
+                output,
+                request.response_limit(),
+            )?))
         }
     }
 }
@@ -197,6 +203,7 @@ struct Input {
 }
 
 fn encode(request: &ChatRequest) -> Result<Input> {
+    super::messages::validate(request, super::messages::ProviderClass::Bedrock)?;
     let invalid = || InferenceError::InvalidRequest;
     if request.messages.is_empty()
         || request.messages.len() > 1024
@@ -406,6 +413,19 @@ fn encode(request: &ChatRequest) -> Result<Input> {
         tools,
         inference: aws::InferenceConfiguration::builder()
             .set_temperature(request.temperature.map(|n| n as f32))
+            .set_top_p(
+                request
+                    .messages_options
+                    .as_ref()
+                    .and_then(|o| o.top_p)
+                    .map(|p| p as f32),
+            )
+            .set_stop_sequences(
+                request
+                    .messages_options
+                    .as_ref()
+                    .and_then(|o| o.stop_sequences.clone()),
+            )
             .set_max_tokens(request.max_output_tokens.map(|n| n as i32))
             .build(),
     })
@@ -491,8 +511,15 @@ fn usage(value: &aws::TokenUsage) -> Result<Usage> {
     }
     super::metering::bedrock(&wire)
 }
+#[cfg(test)]
 fn decode_complete(
     output: aws_sdk_bedrockruntime::operation::converse::ConverseOutput,
+) -> Result<ChatResponse> {
+    decode_complete_limit(output, OUTPUT_LIMIT)
+}
+fn decode_complete_limit(
+    output: aws_sdk_bedrockruntime::operation::converse::ConverseOutput,
+    limit: usize,
 ) -> Result<ChatResponse> {
     let Some(aws::ConverseOutput::Message(message)) = output.output else {
         return Err(InferenceError::InvalidUpstream);
@@ -533,7 +560,7 @@ fn decode_complete(
             }
             _ => return Err(InferenceError::InvalidUpstream),
         }
-        if size > OUTPUT_LIMIT {
+        if size > limit {
             return Err(InferenceError::InvalidUpstream);
         }
     }
@@ -565,6 +592,35 @@ fn invoked_model(trace: Option<&aws::PromptRouterTrace>) -> Option<ReportedModel
         .and_then(ReportedModel::parse)
 }
 
+fn sdk_messages_error<E: ProvideErrorMetadata>(
+    error: SdkError<E>,
+    messages: bool,
+) -> InferenceError {
+    if messages && let Some(service) = error.as_service_error() {
+        if matches!(
+            service.code(),
+            Some("ValidationException" | "validationException")
+        ) && service.message().is_some_and(|m| {
+            [
+                "too many input tokens",
+                "input is too long",
+                "prompt is too long",
+                "maximum context length",
+            ]
+            .iter()
+            .any(|s| m.to_ascii_lowercase().contains(s))
+        }) {
+            return InferenceError::ContextLength;
+        }
+        if matches!(
+            service.code(),
+            Some("ServiceUnavailableException" | "ModelNotReadyException")
+        ) {
+            return InferenceError::Overloaded;
+        }
+    }
+    sdk_error(error)
+}
 fn sdk_error<E: ProvideErrorMetadata>(error: SdkError<E>) -> InferenceError {
     if matches!(error, SdkError::TimeoutError(_)) {
         return InferenceError::Timeout;

@@ -234,6 +234,15 @@ impl OpenRouterAdapter {
         path: &str,
         body: &Value,
     ) -> Result<reqwest::Response> {
+        self.post_inner(target, path, body, false).await
+    }
+    async fn post_inner(
+        &self,
+        target: &Deployment,
+        path: &str,
+        body: &Value,
+        messages: bool,
+    ) -> Result<reqwest::Response> {
         if target.provider != self.id()
             || !target.credential_ref.starts_with("env:")
             || target
@@ -261,6 +270,9 @@ impl OpenRouterAdapter {
             builder = builder.header("X-Title", title.clone());
         }
         let response = builder.send().await.map_err(transport)?;
+        if messages {
+            return super::framing::generation_status(response).await;
+        }
         if !response.status().is_success() {
             // Dropping the response without reading it: error bodies are never
             // parsed, logged or forwarded.
@@ -311,6 +323,9 @@ fn embedded_error(value: &Value) -> Result<()> {
     if empty(&value["error"]) {
         return Ok(());
     }
+    if let Some(error) = super::framing::classified_error(value) {
+        return Err(error);
+    }
     Err(value["error"]["code"]
         .as_u64()
         .and_then(|c| u16::try_from(c).ok())
@@ -318,17 +333,17 @@ fn embedded_error(value: &Value) -> Result<()> {
 }
 
 async fn read(response: reqwest::Response) -> Result<Vec<u8>> {
-    if response
-        .content_length()
-        .is_some_and(|n| n > BODY_LIMIT as u64)
-    {
+    read_limit(response, BODY_LIMIT).await
+}
+async fn read_limit(response: reqwest::Response, limit: usize) -> Result<Vec<u8>> {
+    if response.content_length().is_some_and(|n| n > limit as u64) {
         return Err(InferenceError::InvalidUpstream);
     }
     let mut bytes = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(transport)?;
-        if chunk.len() > BODY_LIMIT - bytes.len() {
+        if chunk.len() > limit.saturating_sub(bytes.len()) {
             return Err(InferenceError::InvalidUpstream);
         }
         bytes.extend_from_slice(&chunk);
@@ -500,6 +515,10 @@ impl ProviderAdapter for OpenRouterAdapter {
         super::capabilities::serves(self.id(), protocol)
     }
 
+    fn validate_chat_request(&self, request: &ChatRequest) -> Result<()> {
+        super::messages::validate(request, super::messages::ProviderClass::OpenAi)
+    }
+
     fn supports_transcription_request(
         &self,
         _target: &Deployment,
@@ -550,19 +569,27 @@ impl ProviderAdapter for OpenRouterAdapter {
     }
 
     async fn execute(&self, target: &Deployment, request: ChatRequest) -> Result<ProviderOutput> {
+        super::messages::validate(&request, super::messages::ProviderClass::OpenAi)?;
         if !self.supports_chat_request(&request) {
             return Err(InferenceError::Unsupported);
         }
         let mut body = openai::encode(&target.upstream_model, &request);
         body["provider"] = self.provider_preferences();
         body["usage"] = json!({"include": true});
-        let response = self.post(target, "/chat/completions", &body).await?;
+        let response = self
+            .post_inner(
+                target,
+                "/chat/completions",
+                &body,
+                request.messages_options.is_some(),
+            )
+            .await?;
         if request.stream {
             super::framing::check_sse(&response)?;
             Ok(ProviderOutput::Stream(decode_chat_stream(response)))
         } else {
             Ok(ProviderOutput::Complete(decode_chat(
-                &read(response).await?,
+                &read_limit(response, request.response_limit()).await?,
             )?))
         }
     }

@@ -26,22 +26,72 @@ pub(super) fn status(status: reqwest::StatusCode) -> Result<()> {
     })
 }
 pub(super) async fn body(response: reqwest::Response) -> Result<Value> {
-    if response
-        .content_length()
-        .is_some_and(|n| n > BODY_LIMIT as u64)
-    {
+    body_limit(response, BODY_LIMIT).await
+}
+pub(super) async fn body_limit(response: reqwest::Response, limit: usize) -> Result<Value> {
+    if response.content_length().is_some_and(|n| n > limit as u64) {
         return Err(InferenceError::InvalidUpstream);
     }
     let mut bytes = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(transport)?;
-        if chunk.len() > BODY_LIMIT - bytes.len() {
+        if chunk.len() > limit.saturating_sub(bytes.len()) {
             return Err(InferenceError::InvalidUpstream);
         }
         bytes.extend_from_slice(&chunk);
     }
     serde_json::from_slice(&bytes).map_err(|_| InferenceError::InvalidUpstream)
+}
+/// Read only a small bounded error envelope to classify context overflow.
+/// Never return, log or retain upstream text; all public messages are constants.
+pub(super) async fn generation_status(response: reqwest::Response) -> Result<reqwest::Response> {
+    if response.status().is_success() {
+        return Ok(response);
+    }
+    let code = response.status().as_u16();
+    if code == 529 || code == 503 {
+        return Err(InferenceError::Overloaded);
+    }
+    if matches!(code, 400 | 413 | 422) {
+        if let Ok(value) = body_limit(response, 16 * 1024).await
+            && let Some(error) = classified_error(&value)
+        {
+            return Err(error);
+        }
+        return Err(InferenceError::UpstreamRejected);
+    }
+    status(response.status())?;
+    Err(InferenceError::InvalidUpstream)
+}
+/// Classify known error semantics, discarding all diagnostic text immediately.
+pub(super) fn classified_error(value: &Value) -> Option<InferenceError> {
+    let error = &value["error"];
+    let code = error["code"].as_str().or_else(|| error["type"].as_str());
+    let message = error["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if matches!(
+        code,
+        Some("context_length_exceeded" | "prompt_too_long" | "too_many_tokens")
+    ) || [
+        "prompt is too long",
+        "maximum context length",
+        "context length exceeded",
+        "too many input tokens",
+        "input is too long",
+    ]
+    .iter()
+    .any(|s| message.contains(s))
+    {
+        return Some(InferenceError::ContextLength);
+    }
+    match code {
+        Some("overloaded_error" | "overloaded") => Some(InferenceError::Overloaded),
+        Some("rate_limit_error" | "rate_limit_exceeded") => Some(InferenceError::Busy),
+        _ => None,
+    }
 }
 pub(super) fn check_sse(response: &reqwest::Response) -> Result<()> {
     if !response

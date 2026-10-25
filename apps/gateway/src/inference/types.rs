@@ -143,6 +143,8 @@ pub struct EmbeddingResponse {
 // No Debug on prompt-bearing or credential-reference-bearing structures.
 #[derive(Clone)]
 pub struct ChatRequest {
+    /// Validated Messages semantics, never serialized as an upstream payload.
+    pub messages_options: Option<Box<MessagesOptions>>,
     pub model: String,
     pub messages: Vec<Message>,
     pub tools: Vec<FunctionTool>,
@@ -150,6 +152,34 @@ pub struct ChatRequest {
     pub temperature: Option<f64>,
     pub max_output_tokens: Option<u32>,
     pub stream: bool,
+}
+
+/// Prompt-bearing options intentionally have no Debug/Serialize implementation.
+#[derive(Clone, Default)]
+pub struct MessagesOptions {
+    pub beta: bool,
+    pub system: Option<serde_json::Value>,
+    pub cache_controls: Vec<serde_json::Value>,
+    pub thinking: Option<serde_json::Value>,
+    pub history_thinking: Vec<serde_json::Value>,
+    pub images: Vec<serde_json::Value>,
+    pub output_config: Option<serde_json::Value>,
+    pub context_management: Option<serde_json::Value>,
+    pub defer_loading: Vec<serde_json::Value>,
+    pub task_budget: Option<serde_json::Value>,
+    pub top_p: Option<f64>,
+    pub top_k: Option<u32>,
+    pub stop_sequences: Option<Vec<String>>,
+    pub user_id: Option<String>,
+}
+impl ChatRequest {
+    pub fn response_limit(&self) -> usize {
+        if self.messages_options.is_some() {
+            16 * 1024 * 1024
+        } else {
+            4 * 1024 * 1024
+        }
+    }
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
