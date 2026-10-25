@@ -30,6 +30,8 @@ mod catalogs_token_guard_tests;
 mod configuration_matrix_tests;
 #[path = "configuration_tests.rs"]
 mod configuration_tests;
+#[path = "deployment_preview_tests.rs"]
+mod deployment_preview_tests;
 #[path = "directory/tests.rs"]
 mod directory_tests;
 #[path = "entropy_tests.rs"]
@@ -38,6 +40,8 @@ mod entropy_tests;
 mod files_tests;
 #[path = "filter_scale_tests.rs"]
 mod filter_scale_tests;
+#[path = "group_mapping_preview_tests.rs"]
+mod group_mapping_preview_tests;
 #[path = "keys/issuance_tests.rs"]
 mod key_issuance_tests;
 #[path = "key_safety_tests.rs"]
@@ -276,7 +280,7 @@ async fn personal_details_are_owner_only_even_platform_admin_and_auditor(pool: P
                 )
                 .await
                 .0,
-                StatusCode::FORBIDDEN
+                StatusCode::NOT_FOUND
             );
         }
     }

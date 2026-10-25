@@ -259,6 +259,7 @@ enum BudgetCommand {
 }
 
 fn main() -> Result<()> {
+    let process_start_unix_nano = open_model_gateway::telemetry::now_unix_nanos();
     // Arguments only: no clap argument reads the environment.
     let cli = Cli::parse();
     if let Some(Command::Healthcheck {
@@ -303,7 +304,7 @@ fn main() -> Result<()> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
-        .block_on(run(cli))
+        .block_on(run(cli, process_start_unix_nano))
 }
 
 fn healthcheck(url: Option<&str>, timeout: &str, allow_non_loopback: bool) -> Result<()> {
@@ -350,13 +351,25 @@ async fn wait_for_database(config: &Config, schema: bool, timeout_seconds: u64) 
     }
 }
 
-async fn run(cli: Cli) -> Result<()> {
+/// The log filter used when `RUST_LOG` is unset (or invalid): only this
+/// crate, at `info`. #321 (reqwest's own DEBUG instrumentation, e.g.
+/// "starting new connection", names the destination it's connecting to -
+/// see docs/operations.md#outbound-connections): a single targeted
+/// directive with no bare/global level enables nothing for any other
+/// target, including `reqwest` and `hyper`, at any level - see
+/// `default_log_filter_cannot_enable_dependency_debug_logs` below. An
+/// operator who overrides `RUST_LOG` (e.g. `RUST_LOG=debug` or
+/// `RUST_LOG=reqwest=debug`) can re-enable them; that must never be done in
+/// production.
+const DEFAULT_LOG_FILTER: &str = "open_model_gateway=info";
+
+async fn run(cli: Cli, process_start_unix_nano: u64) -> Result<()> {
     tracing_subscriber::fmt()
         .json()
         .with_writer(std::io::stderr)
         .with_env_filter(
             EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("open_model_gateway=info")),
+                .unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER)),
         )
         .init();
     let config = Config::from_env()?;
@@ -942,6 +955,14 @@ async fn run(cli: Cli) -> Result<()> {
                     .await;
                 }
             });
+            // Independent of the Prometheus listener and traces; the Store
+            // already carries leases and all configured listeners are bound.
+            let metrics_export = open_model_gateway::metrics_export::Runtime::start(
+                config.metrics_export,
+                config.environment,
+                process_start_unix_nano,
+                store.clone(),
+            );
             let served = axum::serve(
                 listener,
                 http::router_with_identity(store, web, engine, identity)
@@ -952,9 +973,19 @@ async fn run(cli: Cli) -> Result<()> {
             )
             .with_graceful_shutdown(shutdown_signal())
             .await;
-            if let Some(traces) = traces {
-                traces.shutdown().await;
-            }
+            // Both exporters share the same shutdown window, not serial 3s drains.
+            tokio::join!(
+                async {
+                    if let Some(traces) = traces {
+                        traces.shutdown().await;
+                    }
+                },
+                async {
+                    if let Some(metrics_export) = metrics_export {
+                        metrics_export.shutdown().await;
+                    }
+                },
+            );
             if let Some(alerts) = alerts {
                 alerts.abort();
                 let _ = alerts.await;
@@ -1092,6 +1123,65 @@ mod demo {
         );
     }
 
+    /// #321: reqwest's own DEBUG instrumentation (and hyper's) names the
+    /// destination it connects to - a diagnostic that bypasses the egress
+    /// layer's per-purpose, destination-free logging policy entirely
+    /// (docs/operations.md#outbound-connections). The production default
+    /// (`RUST_LOG` unset) must never be able to show it: a single targeted
+    /// `open_model_gateway=info` directive with no bare/global level
+    /// enables nothing for `reqwest`/`hyper`, at any level, including
+    /// `ERROR`. Only an operator who explicitly overrides `RUST_LOG` (never
+    /// supported in production) can re-enable them.
+    #[test]
+    fn default_log_filter_cannot_enable_dependency_debug_logs() {
+        #[derive(Clone, Default)]
+        struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Captured {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(b);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+            type Writer = Captured;
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let out = Captured::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_writer(out.clone())
+            .with_ansi(false)
+            .with_env_filter(EnvFilter::new(DEFAULT_LOG_FILTER))
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        tracing::callsite::rebuild_interest_cache();
+
+        tracing::error!(target: "reqwest::connect", host = "collector.example.org", "starting new connection");
+        tracing::error!(target: "hyper::client::connect", "test");
+        // Sanity: this crate's own target at `info` does come through, so an
+        // empty capture above means the dependency targets were filtered,
+        // not that nothing in this subscriber is enabled at all.
+        tracing::info!(target: "open_model_gateway::egress", "test");
+
+        let logged = String::from_utf8_lossy(&out.0.lock().unwrap()).into_owned();
+        assert!(
+            logged.contains("open_model_gateway::egress"),
+            "sanity check failed, the filter enabled nothing: {logged}"
+        );
+        for forbidden in ["reqwest", "hyper", "collector.example.org"] {
+            assert!(
+                !logged.contains(forbidden),
+                "the default log filter must never enable dependency debug/error logs (found {forbidden:?}): {logged}"
+            );
+        }
+    }
+
     #[test]
     fn alert_evaluation_is_an_explicit_one_shot_command() {
         assert!(matches!(
@@ -1187,6 +1277,11 @@ mod demo {
             alert_webhooks: Default::default(),
             inference_limits: Default::default(),
             metrics_listen: None,
+            metrics_export: open_model_gateway::config::MetricsExportConfig::from_lookup(
+                |_| None,
+                open_model_gateway::config::Environment::Development,
+            )
+            .unwrap(),
             database_max_connections: 10,
             reporting_database_url: None,
             reporting_max_lag: std::time::Duration::from_secs(30),

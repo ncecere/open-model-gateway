@@ -16,12 +16,12 @@ export function csrfCookie(cookie: string): string | undefined {
 }
 const requests = new Set<AbortController>();
 export function abortRequests() { for (const request of requests) request.abort(); requests.clear(); }
-export type RequestOptions = { method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; body?: unknown; signal?: AbortSignal };
+export type RequestOptions = { method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; body?: unknown; signal?: AbortSignal; /** Extra request headers (for example `If-Match`); never a way to set `Content-Type`, `Accept` or the CSRF header, which the client always controls itself. */ headers?: Record<string, string> };
 // Relative paths, browser Origin, exact CSRF cookie, no redirects or response cache.
 export async function api<T>(path: string, options: RequestOptions = {}): Promise<T> {
   if (!path.startsWith(`${API}/`) || path.includes("://") || path.includes("#") || path.includes("\\") || /(?:^|\/)\.\.(?:\/|$)/.test(path)) throw new Error("Invalid API path");
   const method = options.method ?? "GET";
-  const headers: Record<string, string> = { Accept: "application/json" };
+  const headers: Record<string, string> = { Accept: "application/json", ...options.headers };
   if (method !== "GET") {
     const csrf = csrfCookie(document.cookie);
     if (!csrf) throw new ApiError(403, "csrf_missing", "Your security token is missing. Reload this page and sign in again.");
@@ -78,6 +78,37 @@ export type Key = { model_ids?: string[] | null; id: string; name: string; issue
 export type ServiceAccount = { id: string; name: string; disabled_at: string | null };
 export type Invitation = { id: string; email: string; workspace_id: string; role: Role; expires_at: string; accepted_at: string | null; revoked_at: string | null };
 export type GroupMapping = { id: string; issuer: string; group_value: string; target_kind: "platform" | "workspace"; platform_role: PlatformRole | null; workspace_id: string | null; workspace_role: "admin" | "member" | null; enabled: boolean; /** The target Team or Project, named by the gateway. */ workspace_name?: string | null; workspace_kind?: WorkspaceKind | null };
+/**
+ * POST .../oidc/group-mappings/preview or .../{id}/preview (#89): a
+ * read-only dry-run, never an apply authorization. `immediate` is what the
+ * real PATCH/DELETE does synchronously the instant it commits (every
+ * grant the existing mapping currently produces, revoked unconditionally,
+ * whatever the new definition would be); `diff` is the net effective-role
+ * change (gained: an upgrade or new entitlement; lost: a downgrade or total
+ * loss) once sign-in/SCIM reconciliation has caught up. `digest`, present
+ * only for an existing mapping, identifies its reviewed definition for an
+ * `If-Match` header on the following PATCH/DELETE; `complete: false` means
+ * the group's membership exceeded the roster evaluation cap and this
+ * preview may undercount.
+ */
+export type MappingPreviewEntry = { user_id: string; email: string | null; display_name: string | null; before: string | null; after: string | null; workspace_id: string | null; reactivated?: boolean; would_be_suspended?: boolean };
+export type MappingPreviewImmediate = {
+  applies: boolean;
+  blocked_by_last_admin: boolean;
+  platform_role_revoked: { user_id: string; email: string | null; display_name: string | null; role: string }[];
+  workspace_membership_revoked: { user_id: string; email: string | null; display_name: string | null; role: string; workspace_id: string }[];
+  users_suspended: { user_id: string; email: string | null; display_name: string | null }[];
+  keys_revoked_count: number;
+};
+export type MappingPreview = {
+  membership_basis: "scim" | "last_sign_in_derived";
+  complete: boolean;
+  digest: string | null;
+  immediate: MappingPreviewImmediate;
+  diff: { platform_role_gained: MappingPreviewEntry[]; platform_role_lost: MappingPreviewEntry[]; workspace_membership_gained: MappingPreviewEntry[]; workspace_membership_lost: MappingPreviewEntry[] };
+  counts: { gained: number; lost: number; truncated: boolean };
+  warnings: string[];
+};
 export type Provider = { id: string; name: string; provider: string; endpoint: string | null; region: string | null; enabled: boolean; auth_mode: "none" | "credential"; /** Bedrock identity mode; the reference itself is never returned. */ aws_auth?: "default" | "profile" | "role" | null; model_count?: number };
 export type ModelProtocol = "chat_completions" | "responses" | "messages" | "embeddings" | "images" | "audio_transcriptions" | "audio_speech" | "rerank" | "systemone" | "realtime" | "videos" | "batches";
 /** Server-computed aggregate counts (contract §2). Absent from older gateways: never assume zero. */
@@ -94,6 +125,19 @@ export type PlatformOverviewData = {
   glance: { entitled_users: number; teams: number; projects: number; ready_models: number; attempts_7d: string; known_cost_7d_microusd: string };
 };
 export type Deployment = { id: string; model_id: string; model_public_name?: string; provider_connection_id: string; provider_name?: string; upstream_model: string; enabled: boolean };
+/** Browser-only configuration observation, not an apply authorization or reservation. */
+export type DeploymentPreview = {
+  target: { kind: "deployment"; id: string };
+  expected_revision: string;
+  diff: { field: "enabled"; before: boolean; after: boolean }[];
+  serving_routes_gained: string[];
+  serving_routes_lost: string[];
+  models_losing_last_serving_route: { id: string; public_name: string }[];
+  affected_workspaces: { data: { id: string; name: string; kind: "team" | "project" }[]; total: number; limit: number; truncated: boolean };
+  observed_at: string;
+  dependency_versions: Record<string, string>;
+  warnings: string[];
+};
 export type Catalog = { id: string; name: string; description: string | null; created_at?: string };
 export type CatalogAvailability = { mode: "inherit" | "replace"; catalog_ids: string[]; effective_catalog_ids: string[] };
 export type Grant = Pick<Model, "public_name" | "display_name"> & { model_id: string; sources?: ("catalog" | "direct")[]; source?: "catalog" | "direct"; catalog_ids?: string[]; selected: boolean; enabled: boolean; catalog_granted: boolean; direct_granted: boolean; available_from_catalog: boolean; supported_protocols: ModelProtocol[] };

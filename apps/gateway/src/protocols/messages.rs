@@ -1,5 +1,5 @@
-//! Anthropic Messages version 2023-06-01: stateless text and function tools only.
-use super::responses::{Accumulator, Result, event, fields, message, name, string, validate};
+//! Anthropic Messages / Claude Code frontend; adapter-specific field rules.
+use super::responses::{Accumulator, Result, event};
 use crate::{
     auth::Principal,
     http::RequestId,
@@ -12,183 +12,23 @@ use axum::{
     response::{IntoResponse, Response, Sse, sse::KeepAlive},
 };
 use futures_util::StreamExt;
-use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{convert::Infallible, time::Duration};
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Request {
-    model: String,
-    messages: Vec<WireMessage>,
-    system: Option<Value>,
-    max_tokens: u32,
-    #[serde(default)]
-    stream: bool,
-    temperature: Option<f64>,
-    #[serde(default)]
-    tools: Vec<Tool>,
-    tool_choice: Option<Value>,
-    /// Client label only (session id source for Logs); not forwarded upstream.
-    metadata: Option<WireMetadata>,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WireMetadata {
-    user_id: Option<String>,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WireMessage {
-    role: String,
-    content: Value,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Tool {
-    name: String,
-    description: Option<String>,
-    input_schema: Value,
-}
-fn text(value: &Value) -> Result<String> {
-    match value {
-        Value::String(v) => Ok(v.clone()),
-        Value::Array(parts) => {
-            let mut text = String::new();
-            for part in parts {
-                fields(part, &["type", "text"])?;
-                if part["type"] != "text" {
-                    return Err(InferenceError::InvalidRequest);
-                }
-                text.push_str(&string(&part["text"])?);
-            }
-            Ok(text)
-        }
-        _ => Err(InferenceError::InvalidRequest),
-    }
-}
-impl Request {
-    fn normalize(self) -> Result<ChatRequest> {
-        if self.messages.is_empty()
-            || self.messages.len() > 4096
-            || self.temperature.is_some_and(|v| !(0.0..=1.0).contains(&v))
-        {
-            return Err(InferenceError::InvalidRequest);
-        }
-        let mut messages = vec![];
-        if let Some(system) = self.system {
-            messages.push(message(Role::System, text(&system)?));
-        }
-        for wire in self.messages {
-            let role = match wire.role.as_str() {
-                "user" => Role::User,
-                "assistant" => Role::Assistant,
-                _ => return Err(InferenceError::InvalidRequest),
-            };
-            if let Value::String(s) = wire.content {
-                messages.push(message(role, s));
-                continue;
-            }
-            let blocks = wire
-                .content
-                .as_array()
-                .ok_or(InferenceError::InvalidRequest)?;
-            if blocks.is_empty() || blocks.len() > 256 {
-                return Err(InferenceError::InvalidRequest);
-            }
-            // Preserve block order by representing each block as one typed message.
-            for block in blocks {
-                match block["type"].as_str() {
-                    Some("text") => {
-                        fields(block, &["type", "text"])?;
-                        messages.push(message(role, string(&block["text"])?));
-                    }
-                    Some("tool_use") if role == Role::Assistant => {
-                        fields(block, &["type", "id", "name", "input"])?;
-                        let id = string(&block["id"])?;
-                        let n = string(&block["name"])?;
-                        if id.is_empty() || !name(&n) || !block["input"].is_object() {
-                            return Err(InferenceError::InvalidRequest);
-                        }
-                        messages.push(Message {
-                            role,
-                            content: None,
-                            tool_call_id: None,
-                            tool_calls: vec![ToolCall {
-                                id,
-                                name: n,
-                                arguments: block["input"].to_string(),
-                            }],
-                        });
-                    }
-                    Some("tool_result") if role == Role::User => {
-                        fields(block, &["type", "tool_use_id", "content", "is_error"])?;
-                        let id = string(&block["tool_use_id"])?;
-                        if id.is_empty() {
-                            return Err(InferenceError::InvalidRequest);
-                        }
-                        if let Some(flag) = block.get("is_error")
-                            && flag.as_bool().ok_or(InferenceError::InvalidRequest)?
-                        {
-                            // The shared result type cannot represent failure. Never
-                            // silently downgrade an error-marked result to success.
-                            return Err(InferenceError::Unsupported);
-                        }
-                        let content = block
-                            .get("content")
-                            .map(text)
-                            .transpose()?
-                            .unwrap_or_default();
-                        messages.push(Message {
-                            role: Role::Tool,
-                            content: Some(content),
-                            tool_call_id: Some(id),
-                            tool_calls: vec![],
-                        });
-                    }
-                    _ => return Err(InferenceError::InvalidRequest),
-                }
-            }
-        }
-        let tool_choice = match self.tool_choice {
-            None => None,
-            Some(v) => {
-                fields(&v, &["type", "name"])?;
-                Some(match v["type"].as_str() {
-                    Some("auto") if v.get("name").is_none() => ToolChoice::Auto,
-                    Some("none") if v.get("name").is_none() => ToolChoice::None,
-                    Some("any") if v.get("name").is_none() => ToolChoice::Required,
-                    Some("tool") => ToolChoice::Function(string(&v["name"])?),
-                    _ => return Err(InferenceError::InvalidRequest),
-                })
-            }
-        };
-        validate(ChatRequest {
-            model: self.model,
-            messages,
-            tools: self
-                .tools
-                .into_iter()
-                .map(|t| FunctionTool {
-                    name: t.name,
-                    description: t.description,
-                    parameters: t.input_schema,
-                    strict: None,
-                })
-                .collect(),
-            tool_choice,
-            max_output_tokens: Some(self.max_tokens),
-            temperature: self.temperature,
-            stream: self.stream,
-        })
-    }
-}
+mod request;
+pub use request::Request;
+#[cfg(test)]
+use request::parse_request;
+pub(crate) const OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
 fn valid_version(headers: &HeaderMap) -> bool {
     headers.get_all("anthropic-version").iter().count() == 1
         && headers
             .get("anthropic-version")
             .and_then(|v| v.to_str().ok())
             == Some("2023-06-01")
-        && !headers.contains_key("anthropic-beta")
+        && headers
+            .get_all("anthropic-beta")
+            .iter()
+            .all(|v| v.to_str().is_ok())
 }
 pub async fn handle(
     Extension(engine): Extension<Engine>,
@@ -203,13 +43,9 @@ pub async fn handle(
     let wire = match input {
         Ok(Json(v)) => v,
         Err(e) if e.status() == StatusCode::PAYLOAD_TOO_LARGE => {
-            return (
-                StatusCode::PAYLOAD_TOO_LARGE,
-                Json(error_body(InferenceError::InvalidRequest)),
-            )
-                .into_response();
+            return http_error(StatusCode::PAYLOAD_TOO_LARGE);
         }
-        Err(_) => return error_response(InferenceError::InvalidRequest),
+        Err(e) => return rejection(e),
     };
     // Anthropic bounds metadata.user_id to 256 characters.
     if wire
@@ -222,10 +58,13 @@ pub async fn handle(
     }
     let labels = crate::inference::client::current()
         .with_body_session([wire.metadata.as_ref().and_then(|m| m.user_id.as_deref())]);
-    let request = match wire.normalize() {
+    let mut request = match wire.normalize() {
         Ok(v) => v,
         Err(e) => return error_response(e),
     };
+    if let Some(options) = &mut request.messages_options {
+        options.beta = headers.contains_key("anthropic-beta");
+    }
     let model = request.model.clone();
     let id = format!("msg_{}", request_id.0.simple());
     let output = match labels
@@ -289,6 +128,15 @@ pub(crate) fn batch_error_body(e: InferenceError) -> Value {
     error_body(e)
 }
 fn snapshot(id: &str, model: &str, response: &ChatResponse) -> Result<Value> {
+    let size = response.content.as_ref().map_or(0, String::len)
+        + response
+            .tool_calls
+            .iter()
+            .map(|c| c.id.len() + c.name.len() + c.arguments.len())
+            .sum::<usize>();
+    if size > OUTPUT_LIMIT {
+        return Err(InferenceError::InvalidUpstream);
+    }
     let mut content = vec![];
     if let Some(text) = &response.content {
         content.push(json!({"type":"text","text":text}));
@@ -331,7 +179,7 @@ fn render(output: ProviderOutput, id: String, model: String) -> Response {
                 // Text streams live in block 0 (text precedes tools in the snapshot). Tool
                 // calls stay buffered and are emitted whole after it, so parallel calls never
                 // interleave. Every event is validated before anything is forwarded.
-                let mut accumulator = Accumulator::default(); let mut done = false; let mut text_open = false;
+                let mut accumulator = Accumulator::with_limit(OUTPUT_LIMIT); let mut done = false; let mut text_open = false;
                 while let Some(next) = stream.next().await {
                     let delta = match &next { Ok(ChatEvent::Delta { text: Some(text), .. }) => Some(text.clone()), _ => None };
                     match next.and_then(|e| accumulator.push(e)) {
@@ -367,9 +215,40 @@ fn render(output: ProviderOutput, id: String, model: String) -> Response {
         }
     }
 }
+/// Outer transport rejections must not become plain text/OpenAI errors.
+pub(crate) fn http_error(status: StatusCode) -> Response {
+    let (kind, message) = if status == StatusCode::PAYLOAD_TOO_LARGE {
+        ("request_too_large", "Request body too large")
+    } else {
+        ("invalid_request_error", "Method not allowed")
+    };
+    (
+        status,
+        Json(json!({"type":"error","error":{"type":kind,"message":message}})),
+    )
+        .into_response()
+}
+fn rejection(e: JsonRejection) -> Response {
+    // Never echo serde's value/type diagnostics (they may include prompt text).
+    // Only an identifier from its unknown-field diagnostic is safe to expose.
+    let diagnostic = e.body_text();
+    let field = diagnostic
+        .split("unknown field `")
+        .nth(1)
+        .and_then(|v| v.split('`').next());
+    if let Some(field) = field.filter(|v| {
+        !v.is_empty() && v.len() <= 64 && v.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    }) {
+        return (StatusCode::BAD_REQUEST, Json(json!({"type":"error","error":{"type":"invalid_request_error","message":format!("Unknown field: {field}")}}))).into_response();
+    }
+    error_response(InferenceError::InvalidRequest)
+}
 fn error_body(e: InferenceError) -> Value {
     let kind = match e {
         InferenceError::InvalidRequest
+        | InferenceError::InvalidField(_)
+        | InferenceError::UnknownField(_)
+        | InferenceError::ContextLength
         | InferenceError::UpstreamRejected
         | InferenceError::Unsupported => "invalid_request_error",
         InferenceError::ModelUnavailable => "not_found_error",
@@ -380,15 +259,33 @@ fn error_body(e: InferenceError) -> Value {
         | InferenceError::UnresolvedUsage(_)
         | InferenceError::TokenReservationExceedsLimit(_)
         | InferenceError::JobLimitExceeded(_) => "rate_limit_error",
-        InferenceError::UpstreamUnavailable | InferenceError::RouteCoolingDown(_) => {
-            "overloaded_error"
-        }
+        InferenceError::UpstreamUnavailable
+        | InferenceError::Overloaded
+        | InferenceError::RouteCoolingDown(_) => "overloaded_error",
         _ => "api_error",
     };
-    json!({"type":"error","error":{"type":kind,"message":e.message()}})
+    let message = match e {
+        InferenceError::UnknownField(field) => format!("Unknown field: {}", field.as_str()),
+        InferenceError::InvalidField(field) => format!("Unsupported or invalid field: {field}"),
+        _ => e.message().to_owned(),
+    };
+    json!({"type":"error","error":{"type":kind,"message":message}})
+}
+pub(super) fn status(e: InferenceError) -> StatusCode {
+    match e {
+        // Only a provider-reported overload is Anthropic's 529; an unavailable
+        // upstream or a cooling route keeps the gateway status the official
+        // SDK retry contracts depend on.
+        InferenceError::Overloaded => StatusCode::from_u16(529).unwrap(),
+        _ => super::http_status(e),
+    }
 }
 fn error_response(e: InferenceError) -> Response {
-    super::error_with_body(e, error_body(e))
+    let mut response = super::error_with_body(e, error_body(e));
+    *response.status_mut() = status(e);
+    response
 }
+#[cfg(test)]
+mod frontend_tests;
 #[cfg(test)]
 mod tests;

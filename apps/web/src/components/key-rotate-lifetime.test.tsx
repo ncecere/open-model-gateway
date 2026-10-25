@@ -8,6 +8,7 @@ import { ActionProvider, Button, useAction, type Action } from "./ui";
 import { keyActions } from "../pages/keys";
 import { team, testClient } from "../lib/test-fixtures";
 import { abortRequests, api } from "../lib/api";
+import * as apiModule from "../lib/api";
 import { nameField } from "../lib/forms";
 
 const key = { id: "synthetic-key", name: "CLI", issued_to_user_id: "me", service_account_id: null, created_at: "2026-01-01T00:00:00Z", expires_at: "2099-01-01T00:00:00Z", revoked_at: null };
@@ -18,8 +19,9 @@ const secret = "synthetic-rotate-lifetime-secret", freshSecret = "synthetic-fres
 const failure = "Synthetic rotation failure.";
 const clients: ReturnType<typeof testClient>[] = [];
 
-function Open({ action }: { action: Action }) {
+function Open({ action, onAsk }: { action: Action; onAsk?: (ask: ReturnType<typeof useAction>) => void }) {
   const ask = useAction();
+  useLayoutEffect(() => { onAsk?.(ask); }, [ask, onAsk]);
   return <Button onClick={() => ask(action)}>Open action</Button>;
 }
 // A removed sibling witnesses passive cleanup; the surviving observer runs in
@@ -72,7 +74,7 @@ function deferred() {
 function failedResponse() {
   return Response.json({ error: { code: "500", reason: "synthetic_failure", message: failure } }, { status: 500 });
 }
-async function setup(strict = false, action = keyActions.rotate(team.id, key), onPassive?: () => void) {
+async function setup(strict = false, action = keyActions.rotate(team.id, key), onPassive?: () => void, onAsk?: (ask: ReturnType<typeof useAction>) => void) {
   const user = userEvent.setup(), client = testClient();
   clients.push(client);
   client.setQueryDefaults(keysQuery, { gcTime: Infinity });
@@ -85,7 +87,7 @@ async function setup(strict = false, action = keyActions.rotate(team.id, key), o
   vi.stubGlobal("fetch", fetchSpy);
   function tree(owner: number | null = 0, observe?: () => void) {
     const content = <QueryClientProvider client={client}>
-      {owner !== null && <ActionProvider key={owner}><Open action={action} /><PassiveWitness onCleanup={onPassive} /></ActionProvider>}
+      {owner !== null && <ActionProvider key={owner}><Open action={action} onAsk={onAsk} /><PassiveWitness onCleanup={onPassive} /></ActionProvider>}
       <LayoutObserver observe={observe} />
     </QueryClientProvider>;
     return strict ? <StrictMode>{content}</StrictMode> : content;
@@ -184,6 +186,73 @@ afterEach(() => {
 });
 
 describe("ActionDialog rotation submit lifetime", () => {
+  for (const previous of ["sealed", "retired"] as const) {
+    it(`gives another ask of the same action a fresh lifetime after the open dialog is ${previous}`, async () => {
+      const action = keyActions.rotate(team.id, key);
+      let ask!: ReturnType<typeof useAction>;
+      const view = await setup(false, action, undefined, value => { ask = value; });
+      const oldForm = mountedForm(), oldSubmit = retainedSubmit(oldForm);
+      if (previous === "sealed") {
+        await act(async () => { oldSubmit(); });
+        await expectDisclosure();
+      } else act(() => { window.dispatchEvent(new Event("omg:access-refresh")); });
+      const previousWrites = view.writes().length;
+      // The provider stays mounted and receives the exact same Action object.
+      act(() => { ask(action); });
+      const freshForm = mountedForm();
+      expect(freshForm).not.toBe(oldForm);
+      expect(screen.queryByRole("textbox", { name: "One-time key" })).toBeNull();
+      freshPosts(view);
+      await act(async () => { oldSubmit(); });
+      expect(view.writes()).toHaveLength(previousWrites);
+      await act(async () => { retainedSubmit(freshForm)(); });
+      await expectDisclosure(freshSecret);
+      expect(view.writes()).toHaveLength(previousWrites + 1);
+      expectNoSecretPersistence(view);
+    });
+  }
+
+  it("ignores a rotation API completion handed off before retirement but resumed afterward", async () => {
+    const view = await setup(), form = mountedForm(), submit = retainedSubmit(form);
+    // Retire after the real transport completes, before ActionDialog resumes.
+    const realApi = apiModule.api;
+    const apiSpy = vi.spyOn(apiModule, "api").mockImplementationOnce(async <T,>(path: string, options?: apiModule.RequestOptions) => {
+      const result = await realApi<T>(path, options);
+      window.dispatchEvent(new Event("omg:access-refresh"));
+      expect(form.isConnected).toBe(true);
+      return result;
+    });
+    await act(async () => { submit(); });
+    expect(view.writes()).toHaveLength(1);
+    expectRequest(view);
+    expect(screen.queryByRole("textbox", { name: "One-time key" })).toBeNull();
+    await waitFor(() => expect(view.client.getQueryState(keysQuery)?.isInvalidated).toBe(true));
+    await act(async () => { submit(); });
+    // The required list invalidation refetches through api(); only one write may occur.
+    expect(apiSpy.mock.calls.filter(([, options]) => options?.method === "POST")).toHaveLength(1);
+    expect(view.writes()).toHaveLength(1);
+    expectNoSecretPersistence(view);
+  });
+
+  it("shows a tokenless 2xx error without disclosure or automatic retry and allows an explicit rotation retry", async () => {
+    const view = await setup();
+    view.fetchSpy.mockResolvedValueOnce(Response.json({ id: "synthetic-tokenless-replacement" }));
+    await act(async () => { retainedSubmit(mountedForm())(); });
+    await screen.findByText("No token was returned. Check the list before trying again.");
+    expect(screen.queryByRole("textbox", { name: "One-time key" })).toBeNull();
+    expect(mountedForm().getAttribute("aria-busy")).toBe("false");
+    await act(async () => {});
+    expect(view.writes()).toHaveLength(1);
+    // The 2xx may have rotated the key: the list must refresh before any retry.
+    await waitFor(() => expect(view.client.getQueryState(keysQuery)?.isInvalidated).toBe(true));
+    freshPosts(view);
+    await view.user.click(screen.getByRole("button", { name: "Rotate key" }));
+    await expectDisclosure(freshSecret);
+    expect(view.writes()).toHaveLength(2);
+    expectRequest(view, 1);
+    expectNoSecretPersistence(view);
+  });
+
   it("sends exactly one rotation for two submits dispatched in the same React batch", async () => {
     const view = await setup(), pending = deferPost(view), form = mountedForm();
     act(() => { fireEvent.submit(form); fireEvent.submit(form); });
@@ -428,6 +497,25 @@ function resourceAction(after: Action["after"]): Action {
   return { title: "Rename resource", fields: [nameField], run: (values, signal) => api(resourcePath, { method: "PATCH", body: { name: values.name }, signal }), after };
 }
 describe("shared non-secret ActionDialog controls", () => {
+  it("seals a successful non-secret action before unmount so a retained submit cannot repeat it", async () => {
+    const settled = deferred(), after = vi.fn(() => { settled.resolve(Response.json({ saved: true })); });
+    const view = await setup(false, resourceAction(after));
+    await view.user.type(screen.getByRole("textbox", { name: "Name" }), "One rename");
+    const form = mountedForm(true), submit = retainedSubmit(form);
+    await act(async () => {
+      submit();
+      await settled.promise;
+      // The successful handler has run its finally, but React has not committed removal.
+      expect(form.isConnected).toBe(true);
+      expect(after).toHaveBeenCalledTimes(1);
+      submit();
+    });
+    expect(view.writes()).toHaveLength(1);
+    expect(after).toHaveBeenCalledExactlyOnceWith({ saved: true });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expectNoSecretPersistence(view);
+  });
+
   it("preserves untouched invalid validation and corrected completion/after under StrictMode", async () => {
     const after = vi.fn(), view = await setup(true, resourceAction(after));
     const untouched = retainedSubmit(mountedForm(true));

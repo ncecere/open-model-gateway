@@ -321,6 +321,7 @@ impl World {
         let engine = self.jobs.engine.clone().unwrap();
         let principal = self.f.principal;
         let request = ChatRequest {
+            messages_options: None,
             model: "company/gemma".into(),
             messages: vec![Message {
                 role: Role::User,

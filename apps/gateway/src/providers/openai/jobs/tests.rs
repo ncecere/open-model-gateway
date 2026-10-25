@@ -311,6 +311,7 @@ fn records(lines: &[&'static [u8]]) -> ByteStream {
 }
 fn chat_request() -> BatchRequest {
     BatchRequest::Chat(crate::inference::types::ChatRequest {
+        messages_options: None,
         model: "company/chat".into(),
         messages: vec![crate::inference::types::Message {
             role: crate::inference::types::Role::User,
