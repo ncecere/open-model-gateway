@@ -78,6 +78,14 @@ export type Key = { model_ids?: string[] | null; id: string; name: string; issue
 export type ServiceAccount = { id: string; name: string; disabled_at: string | null };
 export type Invitation = { id: string; email: string; workspace_id: string; role: Role; expires_at: string; accepted_at: string | null; revoked_at: string | null };
 export type GroupMapping = { id: string; issuer: string; group_value: string; target_kind: "platform" | "workspace"; platform_role: PlatformRole | null; workspace_id: string | null; workspace_role: "admin" | "member" | null; enabled: boolean; /** The target Team or Project, named by the gateway. */ workspace_name?: string | null; workspace_kind?: WorkspaceKind | null };
+/** POST .../oidc/group-mappings/preview or .../{id}/preview (#89): a read-only dry-run diff, never an apply authorization. */
+export type MappingPreviewEntry = { user_id: string; email: string | null; display_name: string | null; role: string; workspace_id: string | null };
+export type MappingPreview = {
+  membership_basis: "scim" | "last_sign_in_derived";
+  diff: { platform_role_gained: MappingPreviewEntry[]; platform_role_lost: MappingPreviewEntry[]; workspace_membership_gained: MappingPreviewEntry[]; workspace_membership_lost: MappingPreviewEntry[] };
+  counts: { gained: number; lost: number; truncated: boolean };
+  warnings: string[];
+};
 export type Provider = { id: string; name: string; provider: string; endpoint: string | null; region: string | null; enabled: boolean; auth_mode: "none" | "credential"; /** Bedrock identity mode; the reference itself is never returned. */ aws_auth?: "default" | "profile" | "role" | null; model_count?: number };
 export type ModelProtocol = "chat_completions" | "responses" | "messages" | "embeddings" | "images" | "audio_transcriptions" | "audio_speech" | "rerank" | "systemone" | "realtime" | "videos" | "batches";
 /** Server-computed aggregate counts (contract §2). Absent from older gateways: never assume zero. */

@@ -6,7 +6,9 @@
  * {users,user,teams}.tsx and group-mapping/rules.tsx (read-only reference).
  * Identifiers are never shown as text; "Copy ID" lives in the "…" menus.
  */
+import { useId, useState } from "react";
 import { toast } from "../components/ui/toast/toast";
+import { MappingReviewDialog, type MappingReviewRequest } from "../components/mapping-preview";
 import { downloadExport } from "../lib/subject-export";
 import { placeHold } from "./legal-holds";
 import { DetailTime } from "../components/templates/when";
@@ -154,7 +156,16 @@ export function mappingBody(v: Record<string, string>) { return { issuer: v.issu
 export function OidcMappings({ session }: { session: Session }) {
   const ask = useAction(), path = `${platformPath}/oidc/group-mappings`, writable = session.capabilities.platform_write;
   const [syncNoteHidden, hideSyncNote] = useDismissed("sso-sync", session.user.id);
-  const create = writable && <Button onClick={() => ask({ title: "Create SSO group mapping", fields: mappingFields(session), submitLabel: "Create mapping", run: (v, signal) => api(path, { method: "POST", body: mappingBody(v), signal }) })}><Plus aria-hidden /> Create mapping</Button>;
+  const [review, setReview] = useState<MappingReviewRequest | null>(null);
+  const createId = useId();
+  // Review changes before Save (#89): a field submission never writes by
+  // itself (`run: async v => v`, no network call) -- it only hands the
+  // proposed body to the preview dialog, whose own "Continue to
+  // confirmation" reuses this exact existing save path (the same ask()
+  // mechanism, same POST/PATCH/DELETE, same audit) as a second, explicit step.
+  const reviewFields = (title: string, fields: Field[], build: (previewPath: string, body: Record<string, unknown>) => MappingReviewRequest, trigger: HTMLElement) =>
+    ask({ title, fields, submitLabel: "Review changes", successNotice: "Proposal checked. Review its impact before saving.", returnFocus: trigger, run: async v => v, after: v => setReview(build(path, mappingBody(v as Record<string, string>))) });
+  const create = writable && <Button id={createId} onClick={event => reviewFields("Create SSO group mapping", mappingFields(session), (previewPath, body) => ({ previewPath: `${previewPath}/preview`, body, title: "Create SSO group mapping", confirmTitle: "Create this SSO group mapping?", confirmLabel: "Create mapping", applyPath: previewPath, applyMethod: "POST", returnFocus: event.currentTarget, fallbackFocus: () => document.getElementById(createId) }), event.currentTarget)}><Plus aria-hidden /> Create mapping</Button>;
   const target = (m: GroupMapping) => m.target_kind === "platform" ? (m.platform_role ? platformRoleLabels[m.platform_role] : "Platform") : m.workspace_name ?? "Unknown workspace";
   const columns: DataTableColumn<GroupMapping>[] = [
     { id: "group", header: "IdP group", accessor: m => m.group_value, rowHeader: true, hideable: false, cell: m => <span className={s.mono}>{m.group_value}</span> },
@@ -168,11 +179,12 @@ export function OidcMappings({ session }: { session: Session }) {
     <LocalTable<GroupMapping> path={path} label="SSO group mappings" storageKey="sso-groups" search={{ placeholder: "Group or target" }} rowKey={m => m.id} rowLabel={m => m.group_value} columns={columns}
       facets={[{ id: "status", label: "Status", options: [{ value: "enabled", label: "Enabled" }, { value: "disabled", label: "Disabled" }], accessor: m => m.enabled ? "enabled" : "disabled" }]}
       rowActions={m => [
-        { label: "Edit mapping…", hidden: !writable, onSelect: () => ask({ title: "Edit SSO group mapping", fields: mappingFields(session, m), run: (v, signal) => api(`${path}/${enc(m.id)}`, { method: "PATCH", body: mappingBody(v), signal }) }) },
+        { label: "Edit mapping…", hidden: !writable, onSelect: () => { const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : undefined; if (trigger) reviewFields("Edit SSO group mapping", mappingFields(session, m), (previewPath, body) => ({ previewPath: `${previewPath}/${enc(m.id)}/preview`, body, title: "Edit SSO group mapping", confirmTitle: "Save this SSO group mapping?", confirmLabel: "Save changes", applyPath: `${previewPath}/${enc(m.id)}`, applyMethod: "PATCH", returnFocus: trigger }), trigger); } },
         copyIdAction(m.id),
-        { label: "Delete mapping…", danger: true, hidden: !writable, onSelect: () => ask({ title: "Delete group mapping?", description: "Mapped grants are reconciled at the next sign-in. Independently assigned manual grants are preserved. Use suspension for immediate access revocation.", danger: true, submitLabel: "Delete mapping", run: (_, signal) => api(`${path}/${enc(m.id)}`, { method: "DELETE", signal }) }) },
+        { label: "Delete mapping…", danger: true, hidden: !writable, onSelect: () => { const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : undefined; setReview({ previewPath: `${path}/${enc(m.id)}/preview`, body: {}, title: "Delete SSO group mapping", confirmTitle: "Delete this SSO group mapping?", confirmDescription: "Mapped grants are reconciled immediately. Independently assigned manual grants are preserved. Use suspension for immediate access revocation.", confirmLabel: "Delete mapping", danger: true, applyPath: `${path}/${enc(m.id)}`, applyMethod: "DELETE", returnFocus: trigger }); } },
       ]}
       empty={{ icon: <Network />, title: "No SSO group mappings.", description: "Create provider-neutral mappings. Authentication alone must never infer a platform role.", action: create || undefined }} />
+    {review && <MappingReviewDialog request={review} onClose={() => setReview(null)} />}
   </Stack>;
 }
 
