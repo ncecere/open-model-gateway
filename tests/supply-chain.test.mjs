@@ -534,8 +534,11 @@ function withToolchainOverrides(file, where, withBlock, channel) {
 }
 
 export function allRustOverrideViolations(files, channel) {
+  // No path-based filter here: `files` is already scoped to workflows and local composite
+  // actions by whoever builds the list (repoFiles() in the real check; an in-memory fixture
+  // list in tests), and a fixture's path does not need to look like a real workflow path.
   const out = [];
-  for (const { file, text } of files.filter(f => f.file.includes("workflows/") || f.file.includes("actions/"))) {
+  for (const { file, text } of files) {
     const data = toData(parseStrict(text, file));
     out.push(...envRustOverrides(file, data.env, "workflow env"));
     for (const [name, job] of jobsOf(data)) {
