@@ -444,23 +444,34 @@ function substituteArgs(target, args) {
   });
 }
 
-// Recognizes any reference to an image literally named `rust` as the final path segment,
-// case-insensitively, with any registry/path prefix (`rust:...`, `docker.io/rust:...`,
-// `mirror.gcr.io/library/rust:...`). Returns the bare tag, the version it names if the tag is
-// an exact `x.y.z[-suffix]` version (null for a floating or otherwise unsupported form such as
-// `stable`, `stable-bookworm`, `latest`, a date-stamped nightly, or no tag at all), and whether
-// it carries a valid `@sha256:<64 hex>` digest. Returns null for anything that is not a `rust`
-// image reference at all.
+// Recognizes any reference whose repository is exactly `rust` (the final path segment, up to
+// but not including any `:tag` or `@digest`), case-insensitively, with any registry/path prefix
+// (`rust`, `rust:1.99.1`, `rust@sha256:...`, `docker.io/rust:...`,
+// `mirror.gcr.io/library/rust@sha256:...`). An untagged reference (`rust`, or a digest-only
+// reference such as `rust@sha256:...`, with or without a registry prefix) is still a `rust`
+// image: its tag/version are null, which `rustVersionViolations` flags as missing a version.
+// Returns the bare tag (null if untagged), the version it names if the tag is an exact
+// `x.y.z[-suffix]` version (null for a floating or otherwise unsupported form such as `stable`,
+// `stable-bookworm`, `latest`, a date-stamped nightly, or no tag at all), and whether it carries
+// a valid `@sha256:<64 hex>` digest. Returns null for anything that is not a `rust` image
+// reference at all.
 export function extractRustImageRef(ref) {
-  const m = typeof ref === "string" ? ref.match(/(^|\/)rust:(.+)$/i) : null;
-  if (!m) return null;
-  const [tag, digest] = m[2].split("@");
-  const vm = tag.match(/^(\d+\.\d+\.\d+)(-\S+)?$/);
+  if (typeof ref !== "string") return null;
+  const atIndex = ref.indexOf("@");
+  const beforeDigest = atIndex === -1 ? ref : ref.slice(0, atIndex);
+  const digestRaw = atIndex === -1 ? null : ref.slice(atIndex + 1);
+  const slash = beforeDigest.lastIndexOf("/");
+  const lastSegment = slash === -1 ? beforeDigest : beforeDigest.slice(slash + 1);
+  const colon = lastSegment.indexOf(":");
+  const repo = colon === -1 ? lastSegment : lastSegment.slice(0, colon);
+  if (!/^rust$/i.test(repo)) return null;
+  const tag = colon === -1 ? null : lastSegment.slice(colon + 1);
+  const vm = tag ? tag.match(/^(\d+\.\d+\.\d+)(-\S+)?$/) : null;
   return {
     tag,
     version: vm ? vm[1] : null,
-    digestOk: !!digest && /^sha256:[0-9a-f]{64}$/.test(digest),
-    digest: digest ? digest.replace(/^sha256:/, "") : null,
+    digestOk: !!digestRaw && /^sha256:[0-9a-f]{64}$/i.test(digestRaw),
+    digest: digestRaw ? digestRaw.replace(/^sha256:/i, "") : null,
   };
 }
 
@@ -471,7 +482,7 @@ export function parseDockerfileRustStages(file, text) {
   const out = [];
   const args = resolveDockerfileArgs(text);
   text.split("\n").forEach((line, i) => {
-    const m = line.match(/^FROM\s+(?:--platform=\S+\s+)?(\S+)/i);
+    const m = line.match(/^\s*FROM\s+(?:--platform=\S+\s+)?(\S+)/i);
     if (!m) return;
     const target = substituteArgs(m[1], args);
     const parsed = extractRustImageRef(target);
@@ -507,13 +518,22 @@ export function rustStagesFromWorkflowContainers(file, data) {
   });
 }
 
-// Compose files CI actually invokes: a literal `-f <path>` (or `--file <path>`) argument next
-// to `docker compose`/`docker-compose` in a run: script. A path built from a shell variable
+// Compose files CI actually invokes: every `-f <path>` / `--file <path>` / `-f=<path>` /
+// `--file=<path>` argument (any number of them) found on the same line as a `docker
+// compose`/`docker-compose` invocation in a run: script. A path built from a shell variable
 // cannot be resolved here and is skipped, same limitation as the fetch-verified.sh literal-URL
 // check elsewhere in this file.
-const COMPOSE_FILE_FLAG = /\bdocker(?:\s+|-)compose\b[^\n]*?(?:-f|--file)\s+"?([^\s"']+\.ya?ml)"?/g;
 export function composeFilesReferencedIn(script) {
-  return [...new Set([...script.matchAll(COMPOSE_FILE_FLAG)].map(m => m[1]))];
+  const files = new Set();
+  const invocationRe = /\bdocker(?:\s+|-)compose\b/gi;
+  let m;
+  while ((m = invocationRe.exec(script))) {
+    const lineEnd = script.indexOf("\n", m.index);
+    const line = lineEnd === -1 ? script.slice(m.index) : script.slice(m.index, lineEnd);
+    const flagRe = /(?:-f|--file)(?:=|\s+)"?([^\s"']+\.ya?ml)"?/g;
+    for (const fm of line.matchAll(flagRe)) files.add(fm[1]);
+  }
+  return [...files];
 }
 
 export function rustImagesInCompose(file, text) {
@@ -552,7 +572,8 @@ export function rustVersionViolations(stages, channel) {
   const digestByVersion = new Map();
   for (const s of stages) {
     if (!s.version) {
-      out.push(`${s.file}:${s.line}: rust image tag '${s.tag}' is not an exact version (floating or unsupported form)`);
+      const label = s.tag ? `'${s.tag}'` : "(no tag at all)";
+      out.push(`${s.file}:${s.line}: rust image tag ${label} is not an exact version (floating, unsupported, or missing)`);
       continue;
     }
     if (!s.digestOk) out.push(`${s.file}:${s.line}: rust:${s.tag} is not pinned by digest`);
@@ -744,6 +765,56 @@ test("fixtures: a job container, a service image, or an image in a CI-invoked co
   assert.equal(rustVersionViolations(composeStages, channel).length, 1, "compose service image, wrong version");
   const goodComposeText = `services:\n  build:\n    image: mirror.gcr.io/library/rust:1.99.1-bookworm@sha256:${digest}\n`;
   assert.deepEqual(rustVersionViolations(rustImagesInCompose("deploy/fixture/compose.yaml", goodComposeText), channel), [], "correctly pinned compose image passes");
+});
+
+test("fixtures: an untagged container: rust or a digest-only rust ref does not bypass the pin check (#354 review)", () => {
+  const channel = "1.99.1";
+  const digest = "a".repeat(64);
+  const dataOf = text => toData(parseStrict(text, "fixture.yml"));
+  const job = body => `name: f\non: push\njobs:\n  j:\n    runs-on: ubuntu-24.04\n${body}    steps:\n      - run: echo hi\n`;
+
+  let stages = rustStagesFromWorkflowContainers("fixture.yml", dataOf(job("    container: rust\n")));
+  assert.equal(stages.length, 1, "bare untagged 'container: rust' must be recognized as a rust image");
+  assert.ok(rustVersionViolations(stages, channel).length > 0, "untagged container: rust must not bypass the pin check");
+
+  stages = rustStagesFromWorkflowContainers("fixture.yml", dataOf(job(`    container: rust@sha256:${digest}\n`)));
+  assert.equal(stages.length, 1, "digest-only 'rust@sha256:...' must be recognized as a rust image");
+  assert.ok(rustVersionViolations(stages, channel).length > 0, "digest-only rust ref without a version tag must not bypass the pin check");
+
+  stages = rustStagesFromWorkflowContainers("fixture.yml", dataOf(job(`    container: mirror.gcr.io/library/rust@sha256:${digest}\n`)));
+  assert.equal(stages.length, 1, "registry-prefixed digest-only rust ref must be recognized as a rust image");
+  assert.ok(rustVersionViolations(stages, channel).length > 0, "registry-prefixed digest-only rust ref must not bypass the pin check");
+
+  stages = rustStagesFromWorkflowContainers("fixture.yml", dataOf(job(`    container: mirror.gcr.io/library/rust:${channel}-bookworm@sha256:${digest}\n`)));
+  assert.deepEqual(rustVersionViolations(stages, channel), [], "correctly pinned container: still passes");
+});
+
+test("fixtures: an indented or lowercase FROM line is still recognized as a rust stage (#354 review)", () => {
+  const channel = "1.99.1";
+  const digest = "a".repeat(64);
+  const stagesOf = text => parseDockerfileRustStages("fixture/Dockerfile", text);
+
+  let stages = stagesOf(`  FROM rust:1.98.0-bookworm@sha256:${digest} AS build\n`);
+  assert.equal(stages.length, 1, "indented FROM line must be recognized as a rust stage");
+  assert.ok(rustVersionViolations(stages, channel).length > 0, "indented, wrongly pinned FROM must not bypass the pin check");
+
+  stages = stagesOf(`from rust:1.98.0-bookworm@sha256:${digest} as build\n`);
+  assert.equal(stages.length, 1, "lowercase from line must be recognized as a rust stage");
+  assert.ok(rustVersionViolations(stages, channel).length > 0, "lowercase from, wrongly pinned, must not bypass the pin check");
+
+  stages = stagesOf(`\tFROM mirror.gcr.io/library/rust:${channel}-bookworm@sha256:${digest} AS build\n`);
+  assert.deepEqual(rustVersionViolations(stages, channel), [], "indented, correctly pinned FROM still passes");
+});
+
+test("fixtures: every docker compose -f/--file form, and every file argument, is parsed (#354 review)", () => {
+  assert.deepEqual(composeFilesReferencedIn("docker compose --file=compose.yaml up -d\n"), ["compose.yaml"], "--file=path form");
+  assert.deepEqual(composeFilesReferencedIn("docker compose -f=compose.yaml up -d\n"), ["compose.yaml"], "-f=path form");
+  assert.deepEqual(composeFilesReferencedIn("docker compose --file compose.yaml up -d\n"), ["compose.yaml"], "--file path form");
+  assert.deepEqual(
+    [...composeFilesReferencedIn("docker compose -f a.yaml -f b.yaml up -d\n")].sort(),
+    ["a.yaml", "b.yaml"],
+    "multiple -f arguments on one invocation must all be checked"
+  );
 });
 
 test("fixtures: duplicate keys and duplicate [toolchain] tables in rust-toolchain.toml are rejected", () => {
