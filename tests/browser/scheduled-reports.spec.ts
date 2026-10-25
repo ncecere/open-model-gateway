@@ -29,7 +29,7 @@ async function create(page: Page, route: string, base: string) {
   await row.getByRole("button", { name: "Resume", exact: true }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Resume schedule", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(row.getByText("active", { exact: true })).toBeVisible();
+  await expect(row.getByText("Active", { exact: true })).toBeVisible();
   await makeDue(schedule.id);
   await expect.poll(async () => (await (await api(page, "GET", `${base}/${schedule.id}/runs`)).json()).data.length, { timeout: 100_000, intervals: [1000, 2000] }).toBe(1);
   await page.getByRole("button", { name: "Refresh runs", exact: true }).click();
