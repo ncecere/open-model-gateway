@@ -1008,6 +1008,18 @@
       "scope": "access:write",
       "token_policy": "Scope"
     },
+    "POST /api/v1/platform/oidc/group-mappings/preview": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
+    "POST /api/v1/platform/oidc/group-mappings/{id}/preview": {
+      "access": "PlatformWrite",
+      "operation": {},
+      "scope": null,
+      "token_policy": "Denied"
+    },
     "POST /api/v1/platform/providers": {
       "access": "PlatformWrite",
       "operation": {},
