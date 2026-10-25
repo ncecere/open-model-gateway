@@ -250,6 +250,9 @@ proptest! {
 /// normalised by the URL parser to the address the policy judges.
 #[test]
 fn obfuscated_ip_literals_in_urls_are_refused() {
+    // #352: refuses many Purpose::Provider destinations; see
+    // `log_capture_test`'s doc comment.
+    let _lock = crate::log_capture_test::exclusive();
     let strict = Policy::default();
     for host in [
         "169.254.169.254",

@@ -1702,6 +1702,9 @@ mod tests {
 
     #[test]
     fn configuration_is_operator_only_and_strict() {
+        // #352: the "metadata address" case below refuses a Purpose::Audit
+        // destination; see `log_capture_test`'s doc comment.
+        let _lock = crate::log_capture_test::exclusive();
         let secret = "s".repeat(32);
         let env = |pairs: Vec<(&'static str, String)>| {
             move |name: &str| {
@@ -1862,6 +1865,10 @@ mod tests {
     /// checked at startup and never printed; `OTEL_*` is never read.
     #[test]
     fn otlp_configuration_is_one_destination_with_checked_headers_and_no_otel_variables() {
+        // #352: the "metadata address" case below refuses a
+        // Purpose::AuditOtlp destination; see `log_capture_test`'s doc
+        // comment.
+        let _lock = crate::log_capture_test::exclusive();
         // A header value that must never appear in Debug output or an error.
         const TOKEN: &str = "c2VjcmV0LWNvbGxlY3Rvci10b2tlbg";
         let otlp = |url: &str| (OTLP_URL_ENV, url.to_owned());
@@ -3505,6 +3512,9 @@ mod database {
 
     #[sqlx::test(migrations = "./enterprise_migrations")]
     async fn syslog_connects_only_where_the_egress_policy_allows(pool: sqlx::PgPool) {
+        // #352: refuses a Purpose::Audit destination; see
+        // `log_capture_test`'s doc comment.
+        let _lock = crate::log_capture_test::exclusive();
         let store = Store::new(pool.clone());
         let receiver = syslog_receiver(pki::SERVER_CERT, None).await;
         // Address literals the policy refuses stop startup.
