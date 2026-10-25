@@ -1,0 +1,64 @@
+{
+  "files": [
+    {
+      "file": "draft2020-12-applicator.json",
+      "sha256": "bf273b26f9f735b93ece78f2b61b36676e1d122ce78ab37ad5a2e45dfa1ca2b1",
+      "uri": "https://json-schema.org/draft/2020-12/meta/applicator"
+    },
+    {
+      "file": "draft2020-12-content.json",
+      "sha256": "a10456605b2b5bb12a1b4dcfc0300f02f54d3e8bb3646bed7724583866627682",
+      "uri": "https://json-schema.org/draft/2020-12/meta/content"
+    },
+    {
+      "file": "draft2020-12-core.json",
+      "sha256": "21f79d143fab1f180245c331e5657057045b36794d41fe151e6e4fed65035299",
+      "uri": "https://json-schema.org/draft/2020-12/meta/core"
+    },
+    {
+      "file": "draft2020-12-format-annotation.json",
+      "sha256": "5c79404f831dd905c0f40fefac7c6f3e51bf3729b4a876a5c2020178d97f3bcc",
+      "uri": "https://json-schema.org/draft/2020-12/meta/format-annotation"
+    },
+    {
+      "file": "draft2020-12-meta-data.json",
+      "sha256": "c664d438a84d58889c8edecd248ce2f945a4bc0e3b087323b11303dc136abfbe",
+      "uri": "https://json-schema.org/draft/2020-12/meta/meta-data"
+    },
+    {
+      "file": "draft2020-12-unevaluated.json",
+      "sha256": "fc99f32188da41689a9382af174dd42e8b255e4374965c157b8286556b4ab2bc",
+      "uri": "https://json-schema.org/draft/2020-12/meta/unevaluated"
+    },
+    {
+      "file": "draft2020-12-validation.json",
+      "sha256": "e921c5b79264d3689af01c1af1ffdf692e09f1c45df90a0f08eb7288c9acdeab",
+      "uri": "https://json-schema.org/draft/2020-12/meta/validation"
+    },
+    {
+      "file": "draft2020-12.json",
+      "sha256": "41da76f5afb7ce062d248f762463a92f7ca47e4e0f905b224ba6afeef91ded0f",
+      "uri": "https://json-schema.org/draft/2020-12/schema"
+    },
+    {
+      "file": "oas-dialect.json",
+      "sha256": "8a0e89e365dadbebce2921ce6244340c1090e9d544c60d977e9ad6b97a61227b",
+      "uri": "https://spec.openapis.org/oas/3.1/dialect/base"
+    },
+    {
+      "file": "oas-meta.json",
+      "sha256": "267a88226e64e96dfc8c89dbd7e863160c84715e0fb893ca1d9fbf9f830f1f54",
+      "uri": "https://spec.openapis.org/oas/3.1/meta/base"
+    },
+    {
+      "file": "openapi-3.1-2022-10-07.json",
+      "sha256": "da01ba28852cac0de53893797cb8d1942bc3b05084f526dcc216717dec314ed0",
+      "uri": "https://spec.openapis.org/oas/3.1/schema/2022-10-07"
+    },
+    {
+      "file": "openapi-3.1-base-2022-10-07.json",
+      "sha256": "14cd42cfaba6b4700b5995e60b6e0bf8ed9d800f996b00d22fa91fad21b4442c",
+      "uri": "https://spec.openapis.org/oas/3.1/schema-base/2022-10-07"
+    }
+  ]
+}

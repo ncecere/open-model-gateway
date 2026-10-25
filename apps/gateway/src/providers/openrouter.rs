@@ -3,9 +3,10 @@
 //! - The key is a server-held `env:` reference; inference credentials are
 //!   never forwarded. Optional `HTTP-Referer`/`X-Title` come from server config.
 //! - Redirects, ambient proxies and implicit retries are disabled.
-//! - Non-success bodies are never read: OpenRouter error bodies carry the
-//!   account `user_id` and embedded provider errors. 200 bodies carrying an
-//!   `error` object are mapped by code only.
+//! - Non-success bodies are dropped except bounded structured context-error
+//!   classification for Messages validation responses. Error bodies can carry
+//!   account `user_id` and provider diagnostics: never log or forward them.
+//!   HTTP status meanings and embedded error codes outrank diagnostic text.
 //! - Every request sets `provider.data_collection` (default `"deny"`). Free
 //!   (`:free`) endpoints may train on prompts and are unavailable under deny
 //!   (upstream 404 → `upstream_rejected`).
@@ -234,6 +235,15 @@ impl OpenRouterAdapter {
         path: &str,
         body: &Value,
     ) -> Result<reqwest::Response> {
+        self.post_inner(target, path, body, false).await
+    }
+    async fn post_inner(
+        &self,
+        target: &Deployment,
+        path: &str,
+        body: &Value,
+        messages: bool,
+    ) -> Result<reqwest::Response> {
         if target.provider != self.id()
             || !target.credential_ref.starts_with("env:")
             || target
@@ -262,9 +272,15 @@ impl OpenRouterAdapter {
         }
         let response = builder.send().await.map_err(transport)?;
         if !response.status().is_success() {
-            // Dropping the response without reading it: error bodies are never
-            // parsed, logged or forwarded.
-            return Err(status_error(response.status().as_u16()));
+            let code = response.status().as_u16();
+            // Keep this provider's status meanings (notably account credit,
+            // moderation and timeout) before considering an error body. Only
+            // validation envelopes may refine a refusal to context overflow.
+            if messages && matches!(code, 400 | 413 | 422) {
+                return super::framing::generation_status(response).await;
+            }
+            // Other error bodies are never parsed, logged or forwarded.
+            return Err(status_error(code));
         }
         Ok(response)
     }
@@ -308,27 +324,37 @@ fn empty(value: &Value) -> bool {
 
 /// A 200 body (or stream frame) carrying `error` is a failure, mapped by code.
 fn embedded_error(value: &Value) -> Result<()> {
+    embedded_error_protocol(value, false)
+}
+fn embedded_error_protocol(value: &Value, messages: bool) -> Result<()> {
     if empty(&value["error"]) {
         return Ok(());
     }
-    Err(value["error"]["code"]
+    if let Some(code) = value["error"]["code"]
         .as_u64()
         .and_then(|c| u16::try_from(c).ok())
-        .map_or(InferenceError::UpstreamUnavailable, status_error))
+    {
+        return Err(status_error(code));
+    }
+    Err(if messages {
+        super::framing::classified_error(value).unwrap_or(InferenceError::UpstreamUnavailable)
+    } else {
+        InferenceError::UpstreamUnavailable
+    })
 }
 
 async fn read(response: reqwest::Response) -> Result<Vec<u8>> {
-    if response
-        .content_length()
-        .is_some_and(|n| n > BODY_LIMIT as u64)
-    {
+    read_limit(response, BODY_LIMIT).await
+}
+async fn read_limit(response: reqwest::Response, limit: usize) -> Result<Vec<u8>> {
+    if response.content_length().is_some_and(|n| n > limit as u64) {
         return Err(InferenceError::InvalidUpstream);
     }
     let mut bytes = Vec::new();
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(transport)?;
-        if chunk.len() > BODY_LIMIT - bytes.len() {
+        if chunk.len() > limit.saturating_sub(bytes.len()) {
             return Err(InferenceError::InvalidUpstream);
         }
         bytes.extend_from_slice(&chunk);
@@ -359,12 +385,15 @@ fn provider_cost(bytes: &[u8]) -> Result<Option<i64>> {
 
 /// JSON object body plus exact provider cost evidence.
 fn parse(bytes: &[u8]) -> Result<(Value, Option<i64>)> {
+    parse_protocol(bytes, false)
+}
+fn parse_protocol(bytes: &[u8], messages: bool) -> Result<(Value, Option<i64>)> {
     let value: Value =
         serde_json::from_slice(bytes).map_err(|_| InferenceError::InvalidUpstream)?;
     if !value.is_object() {
         return Err(InferenceError::InvalidUpstream);
     }
-    embedded_error(&value)?;
+    embedded_error_protocol(&value, messages)?;
     Ok((value, provider_cost(bytes)?))
 }
 
@@ -401,8 +430,8 @@ fn normalize_choices(value: &mut Value) -> Result<()> {
     Ok(())
 }
 
-fn decode_chat(bytes: &[u8]) -> Result<ChatResponse> {
-    let (mut value, cost) = parse(bytes)?;
+fn decode_chat(bytes: &[u8], messages: bool) -> Result<ChatResponse> {
+    let (mut value, cost) = parse_protocol(bytes, messages)?;
     normalize_choices(&mut value)?;
     let mut response = openai::decode_complete(&value)?;
     response.usage.provider_cost_microusd = cost;
@@ -410,11 +439,15 @@ fn decode_chat(bytes: &[u8]) -> Result<ChatResponse> {
 }
 
 /// Normalize one SSE data frame. `finish` is the first finish reason seen.
-fn normalize_frame(data: &[u8], finish: &mut Option<String>) -> Result<(Vec<u8>, Option<i64>)> {
+fn normalize_frame(
+    data: &[u8],
+    finish: &mut Option<String>,
+    messages: bool,
+) -> Result<(Vec<u8>, Option<i64>)> {
     if data == b"[DONE]" {
         return Ok((data.to_vec(), None));
     }
-    let (mut value, cost) = parse(data)?;
+    let (mut value, cost) = parse_protocol(data, messages)?;
     normalize_choices(&mut value)?;
     if let Some(previous) = finish.as_deref()
         && !value["usage"].is_null()
@@ -445,7 +478,7 @@ fn normalize_frame(data: &[u8], finish: &mut Option<String>) -> Result<(Vec<u8>,
     ))
 }
 
-fn decode_chat_stream(response: reqwest::Response) -> EventStream {
+fn decode_chat_stream(response: reqwest::Response, messages: bool) -> EventStream {
     Box::pin(async_stream::try_stream! {
         let mut chunks = response.bytes_stream();
         let mut decoder = openai::SseDecoder::new();
@@ -455,7 +488,7 @@ fn decode_chat_stream(response: reqwest::Response) -> EventStream {
             let chunk = chunk.map_err(transport)?;
             for &byte in chunk.iter() {
                 if let Some(data) = decoder.push(byte)? {
-                    let (frame, cost) = normalize_frame(&data, &mut finish)?;
+                    let (frame, cost) = normalize_frame(&data, &mut finish, messages)?;
                     for event in state.decode(&frame)? {
                         let event = match event {
                             ChatEvent::Usage(mut usage) => {
@@ -498,6 +531,10 @@ impl ProviderAdapter for OpenRouterAdapter {
 
     fn supports_protocol(&self, protocol: ApiProtocol) -> bool {
         super::capabilities::serves(self.id(), protocol)
+    }
+
+    fn validate_chat_request(&self, request: &ChatRequest) -> Result<()> {
+        super::messages::validate(request, super::messages::ProviderClass::OpenAi)
     }
 
     fn supports_transcription_request(
@@ -550,19 +587,31 @@ impl ProviderAdapter for OpenRouterAdapter {
     }
 
     async fn execute(&self, target: &Deployment, request: ChatRequest) -> Result<ProviderOutput> {
+        super::messages::validate(&request, super::messages::ProviderClass::OpenAi)?;
         if !self.supports_chat_request(&request) {
             return Err(InferenceError::Unsupported);
         }
         let mut body = openai::encode(&target.upstream_model, &request);
         body["provider"] = self.provider_preferences();
         body["usage"] = json!({"include": true});
-        let response = self.post(target, "/chat/completions", &body).await?;
+        let response = self
+            .post_inner(
+                target,
+                "/chat/completions",
+                &body,
+                request.messages_options.is_some(),
+            )
+            .await?;
         if request.stream {
             super::framing::check_sse(&response)?;
-            Ok(ProviderOutput::Stream(decode_chat_stream(response)))
+            Ok(ProviderOutput::Stream(decode_chat_stream(
+                response,
+                request.messages_options.is_some(),
+            )))
         } else {
             Ok(ProviderOutput::Complete(decode_chat(
-                &read(response).await?,
+                &read_limit(response, request.response_limit()).await?,
+                request.messages_options.is_some(),
             )?))
         }
     }

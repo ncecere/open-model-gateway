@@ -203,6 +203,7 @@ async fn shared_global_deployment_requires_each_workspace_grant_and_uses_pinned_
         client: Default::default(),
     };
     let request = ChatRequest {
+        messages_options: None,
         model: "company/smart".into(),
         messages: vec![],
         tools: vec![],

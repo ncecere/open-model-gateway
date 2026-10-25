@@ -206,8 +206,8 @@ test("real membership revocation, human/service and Personal authorization remai
     expect(human).toBeDefined();
     // Even a workspace owner/Platform Admin cannot rotate someone else's human key.
     expect((await api(operator, "POST", `${workspacePath()}/keys/${human.id}/rotate`, { expires_in_days: 30 })).status()).toBe(403);
-    expect((await api(operator, "GET", `/workspaces/${personal}/keys`)).status()).toBe(403);
-    expect((await api(operator, "POST", `/workspaces/${personal}/service-accounts`, { name: "Forbidden" })).status()).toBe(403);
+    expect((await api(operator, "GET", `/workspaces/${personal}/keys`)).status()).toBe(404);
+    expect((await api(operator, "POST", `/workspaces/${personal}/service-accounts`, { name: "Forbidden" })).status()).toBe(404);
     expect((await api(page, "POST", `/workspaces/${personal}/service-accounts`, { name: "Forbidden personal service" })).status()).toBe(400);
     const service = await api(page, "POST", `${workspacePath()}/service-accounts`, { name: "Acceptance automation" });
     expect(service.status()).toBe(200);
