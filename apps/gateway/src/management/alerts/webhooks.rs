@@ -9,8 +9,13 @@ pub(super) fn routes() -> Router<Store> {
             "/api/v1/platform/alerts/webhooks/{id}",
             get(item).patch(update).delete(remove),
         )
+        .route("/api/v1/platform/alerts/webhooks/{id}/test", post(test))
+        .route(
+            "/api/v1/platform/alerts/webhooks/{id}/deliveries",
+            get(deliveries),
+        )
 }
-const STATUS: &str = "jsonb_build_object('id',d.id,'label',d.label,'enabled',d.enabled,'created_at',d.created_at,'updated_at',d.updated_at,'signing_configured',true,'overlap_active',coalesce(d.previous_secret_until>clock_timestamp(),false),'previous_secret_until',d.previous_secret_until,'waiting',(SELECT count(*) FROM alert_webhook_outbox q WHERE q.destination_id=d.id AND q.state='waiting'),'exhausted',(SELECT count(*) FROM alert_webhook_outbox q WHERE q.destination_id=d.id AND q.state='exhausted'),'last_success_at',(SELECT completed_at FROM alert_webhook_outbox q WHERE q.destination_id=d.id AND q.state='sent' ORDER BY completed_at DESC LIMIT 1),'last_error',(SELECT last_error FROM alert_webhook_outbox q WHERE q.destination_id=d.id AND q.last_error IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 1)) || CASE WHEN $1 THEN jsonb_build_object('url',d.url,'current_secret_ref',d.current_secret_ref,'previous_secret_ref',d.previous_secret_ref) ELSE '{}'::jsonb END";
+const STATUS: &str = "jsonb_build_object('id',d.id,'label',d.label,'enabled',d.enabled,'created_at',d.created_at,'updated_at',d.updated_at,'signing_configured',true,'overlap_active',coalesce(d.previous_secret_until>clock_timestamp(),false),'previous_secret_until',d.previous_secret_until,'waiting',(SELECT count(*) FROM alert_webhook_outbox q WHERE q.destination_id=d.id AND q.state='waiting' AND q.destination_generation=d.enable_generation),'exhausted',(SELECT count(*) FROM alert_webhook_outbox q WHERE q.destination_id=d.id AND q.state='exhausted'),'last_success_at',(SELECT completed_at FROM alert_webhook_outbox q WHERE q.destination_id=d.id AND q.state='sent' ORDER BY completed_at DESC LIMIT 1),'last_error',(SELECT last_error FROM alert_webhook_outbox q WHERE q.destination_id=d.id AND q.last_error IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 1)) || CASE WHEN $1 THEN jsonb_build_object('url',d.url,'current_secret_ref',d.current_secret_ref,'previous_secret_ref',d.previous_secret_ref) ELSE '{}'::jsonb END";
 async fn read_tx(
     s: &Store,
     u: &ManagementPrincipal,
@@ -55,6 +60,65 @@ async fn item(
     tx.commit().await?;
     Ok(Json(value))
 }
+/// Saved receivers only. The installation management lock in write_tx
+/// serializes the audit-log allowance across replicas, including token callers.
+async fn test(
+    State(s): State<Store>,
+    Extension(u): Extension<ManagementPrincipal>,
+    Path(id): Path<Uuid>,
+    body: axum::body::Bytes,
+) -> ApiResult {
+    let mut tx = super::super::settings::write_tx(&s, &u).await?;
+    super::super::settings::no_configuration(&body)?;
+    let saved: Option<(i64,)> = sqlx::query_as("SELECT enable_generation FROM alert_webhook_destinations d WHERE id=$1 AND enabled AND deleted_at IS NULL AND url IS NOT NULL FOR SHARE OF d")
+        .bind(id).fetch_optional(&mut *tx).await?;
+    let (generation,) = saved.ok_or(ApiError(
+        StatusCode::CONFLICT,
+        "An enabled saved destination is required",
+    ))?;
+    let (mine,destination,all): (i64,i64,i64) = sqlx::query_as("SELECT count(*) FILTER(WHERE actor_user_id=$1 AND created_at>clock_timestamp()-interval '1 minute'),count(*) FILTER(WHERE resource_id=$2 AND created_at>clock_timestamp()-interval '1 minute'),count(*) FROM audit_events WHERE action='alert_webhook.tested' AND created_at>clock_timestamp()-interval '1 hour'")
+        .bind(u.user_id()).bind(id).fetch_one(&mut *tx).await?;
+    if mine >= 2 || destination >= 2 || all >= 20 {
+        return Err(ApiError(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many webhook tests; try again later",
+        ));
+    }
+    let delivery = Uuid::new_v4();
+    sqlx::query("INSERT INTO alert_webhook_outbox(id,destination_id,destination_generation,test,payload) VALUES($1,$2,$3,true,convert_to(alert_webhook_payload($1,NULL,NULL),'UTF8'))")
+        .bind(delivery).bind(id).bind(generation).execute(&mut *tx).await?;
+    audit(
+        &mut tx,
+        &u,
+        None,
+        "alert_webhook.tested",
+        "alert_webhook",
+        Some(id),
+        json!({}),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(Json(json!({"id":delivery,"state":"waiting"})))
+}
+
+/// Bounded metadata only, never payloads, incident ids, URLs or references.
+async fn deliveries(
+    State(s): State<Store>,
+    Extension(u): Extension<ManagementPrincipal>,
+    Path(id): Path<Uuid>,
+) -> ApiResult {
+    let (mut tx, admin) = read_tx(&s, &u).await?;
+    let destination = status(&mut tx, id, admin).await?;
+    let counts: Value = sqlx::query_scalar("SELECT jsonb_object_agg(state,n) FROM (SELECT states.state,count(q.id) n FROM unnest(ARRAY['waiting','leased','sent','failed','exhausted','ineligible']) states(state) LEFT JOIN (alert_webhook_outbox q JOIN alert_webhook_destinations d ON d.id=q.destination_id) ON q.destination_id=$1 AND q.state=states.state AND (q.state<>'waiting' OR q.destination_generation=d.enable_generation) GROUP BY states.state) totals")
+        .bind(id).fetch_one(&mut *tx).await?;
+    let rows: Vec<Value> = sqlx::query_scalar("SELECT jsonb_build_object('id',q.id,'state',q.state,'test',q.test,'attempt_count',q.attempt_count,'created_at',q.created_at,'completed_at',q.completed_at,'next_attempt_at',CASE WHEN q.state='waiting' THEN q.next_attempt_at END,'last_error',q.last_error) FROM alert_webhook_outbox q JOIN alert_webhook_destinations d ON d.id=q.destination_id WHERE q.destination_id=$1 AND (q.state<>'waiting' OR q.destination_generation=d.enable_generation) ORDER BY q.created_at DESC,q.id DESC LIMIT 50")
+        .bind(id).fetch_all(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(Json(
+        json!({"destination":destination,"counts":counts,"data":rows}),
+    ))
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Create {

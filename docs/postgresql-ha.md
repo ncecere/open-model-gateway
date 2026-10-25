@@ -13,6 +13,125 @@ Measurements come from the bitop-talos homelab on 2026-10-14 (UTC, #25): CloudNa
 - Take base backups with WAL archiving for point-in-time recovery, and encrypted logical backups with `scripts/backup.py` ([backups](#backups)).
 - Run the [restore drill](operations.md#restore-drill-quarterly-and-after-schema-changes) quarterly and after schema changes.
 
+## Existing CNPG cluster ACL remediation (#315)
+
+Older chart-created CNPG clusters inherited PUBLIC CONNECT on `postgres`/`template1`
+and PUBLIC TEMPORARY on `gateway`. With every gateway stopped, the strict tagged
+`open-model-gateway grants verify` can therefore fail with `maintenance database access`
+(and application TEMP is independently forbidden). A chart upgrade does **not** rerun
+[initdb ACL hooks](kubernetes.md#cnpg-bootstrap-database-acls-315). Neither `serve` nor the
+migration Job repairs maintenance database ACLs; do not weaken the verifier.
+
+This is an **explicit operator maintenance procedure**, following the production v0.8.0
+repair on CNPG/PostgreSQL 17. Review the SQL, role inventory and operator version with
+another operator before execution. It is not a general-purpose migration: the example
+requires database `gateway`, owner `gateway_migrator`, runtime `gateway_runtime`, and the
+three named CNPG roles. For different names or additional consumers, stop and prepare a
+separately reviewed grant plan; do not skip failed preconditions or create missing roles
+as part of this existing-cluster repair.
+
+1. Select the exact namespace/Cluster/primary and database explicitly. Take a current
+   backup and record database ACLs, ownership, role attributes/memberships and consumers
+   (pooler, metrics, replicas, backups, other applications). Keep a superuser maintenance
+   connection available. A shared cluster may have other roles depending on PUBLIC
+   CONNECT: preserve their previously approved access explicitly or stop.
+2. Drain and stop **every** gateway replica, suspend autoscaling/reconciliation that could
+   restart it, and stop runtime jobs/CLI sessions. Revoking CONNECT does not disconnect
+   existing sessions. Confirm no runtime sessions remain.
+3. Connect directly to that primary's `postgres` database **as a PostgreSQL superuser**, not
+   through PgBouncer or with migrator/runtime credentials. Run the following as one script
+   with `psql -X -v ON_ERROR_STOP=1` using your approved connection method. Any failed
+   assertion must abort/roll back; investigate rather than broadening privileges.
+
+```sql
+BEGIN;
+DO $preconditions$
+BEGIN
+  IF current_database() <> 'postgres'
+     OR NOT (SELECT rolsuper FROM pg_catalog.pg_roles WHERE rolname = current_user) THEN
+    RAISE EXCEPTION 'select the primary postgres database as a superuser';
+  END IF;
+  IF pg_catalog.pg_is_in_recovery() THEN
+    RAISE EXCEPTION 'must run on the selected primary';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_catalog.pg_database d JOIN pg_catalog.pg_roles r ON r.oid = d.datdba
+    WHERE d.datname = 'gateway' AND r.rolname = 'gateway_migrator'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM pg_catalog.pg_roles
+    WHERE rolname = 'gateway_runtime' AND NOT rolsuper AND NOT rolcreatedb
+      AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls
+  ) THEN
+    RAISE EXCEPTION 'unexpected application owner or runtime role; review inventory';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_stat_activity WHERE usename = 'gateway_runtime') THEN
+    RAISE EXCEPTION 'stop all runtime sessions first';
+  END IF;
+  IF (SELECT count(*) FROM pg_catalog.pg_roles WHERE rolname IN
+      ('cnpg_pooler_pgbouncer', 'cnpg_metrics_exporter', 'streaming_replica')) <> 3 THEN
+    RAISE EXCEPTION 'missing CNPG operational role; do not create it in this repair';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.pg_roles r
+    CROSS JOIN (VALUES ('postgres'), ('template1')) AS d(name)
+    WHERE r.rolname IN ('cnpg_pooler_pgbouncer', 'cnpg_metrics_exporter', 'streaming_replica')
+      AND NOT pg_catalog.has_database_privilege(r.oid, d.name, 'CONNECT')
+  ) THEN
+    RAISE EXCEPTION 'CNPG roles must already have effective maintenance CONNECT';
+  END IF;
+  IF NOT pg_catalog.has_database_privilege('gateway_runtime', 'gateway', 'CONNECT') THEN
+    RAISE EXCEPTION 'runtime must already have application CONNECT';
+  END IF;
+END;
+$preconditions$;
+
+-- Preserve existing effective access explicitly BEFORE removing PUBLIC access.
+GRANT CONNECT ON DATABASE postgres, template1
+  TO cnpg_pooler_pgbouncer, cnpg_metrics_exporter, streaming_replica;
+REVOKE CONNECT ON DATABASE postgres, template1 FROM PUBLIC, gateway_runtime;
+REVOKE TEMPORARY ON DATABASE gateway FROM PUBLIC, gateway_runtime;
+-- Deliberately leave PUBLIC CONNECT on gateway unchanged.
+
+DO $postconditions$
+BEGIN
+  IF pg_catalog.has_database_privilege('gateway_runtime', 'postgres', 'CONNECT')
+     OR pg_catalog.has_database_privilege('gateway_runtime', 'template1', 'CONNECT')
+     OR pg_catalog.has_database_privilege('gateway_runtime', 'gateway', 'TEMPORARY')
+     OR NOT pg_catalog.has_database_privilege('gateway_runtime', 'gateway', 'CONNECT') THEN
+    RAISE EXCEPTION 'runtime ACL boundary failed (check inherited memberships); roll back';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.pg_roles r
+    CROSS JOIN (VALUES ('postgres'), ('template1')) AS d(name)
+    WHERE r.rolname IN ('cnpg_pooler_pgbouncer', 'cnpg_metrics_exporter', 'streaming_replica')
+      AND NOT pg_catalog.has_database_privilege(r.oid, d.name, 'CONNECT')
+  ) THEN
+    RAISE EXCEPTION 'CNPG operational CONNECT lost; roll back';
+  END IF;
+END;
+$postconditions$;
+COMMIT;
+```
+
+4. While gateways remain stopped, run the **same tagged** `open-model-gateway grants verify`
+   directly against `gateway`, with the approved verifier credential that can SET ROLE to
+   runtime. It must pass without exceptions/whitelists. Also use actual runtime credentials:
+   direct connections to `postgres` and `template1` must fail with permission denied;
+   connection to `gateway` must succeed, and `CREATE TEMP TABLE acl_probe (id integer)`
+   must fail. Run that TEMP probe in a disposable session (no application writes).
+5. Check new pooled authentication/query connections (not merely already-open pooler
+   sessions), metrics collection without database permission errors, and streaming/synchronous
+   standby health. Restart gateways only after verification passes, restore the previous
+   scaling configuration, then check every replica's readiness and LISTEN reconnection.
+   Recheck operational health after reconciliation and a planned failover. If any check fails,
+   keep gateways stopped and investigate; do not restore PUBLIC maintenance access as a
+   workaround or reset/rebootstrap the database.
+
+This procedure does not change application table/column grants or schema. Issue #295's
+separate `grants apply` TEMP hardening overlaps the application TEMP revoke only; the CNPG
+bootstrap and this explicit existing-cluster maintenance procedure also cover maintenance
+CONNECT and operational-role access. Neither requires changing the privilege verifier.
+
 ## What happens during a primary failover
 
 The gateway has no failover logic of its own. It reaches the primary through a host name (the CNPG `-rw` service, the Pooler service, or a managed writer endpoint) and relies on that name moving to the new primary. While no primary is reachable, it refuses new work instead of serving it unaccounted.
