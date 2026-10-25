@@ -38,7 +38,7 @@
 //!   are not retried (the OTLP rule): they are counted, recorded as
 //!   `otlp_rejected`, and show as a `seq` gap.
 
-use std::{net::Ipv6Addr, sync::Arc, time::Duration};
+use std::{cell::Cell, net::Ipv6Addr, sync::Arc, time::Duration};
 
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, pem::PemObject};
 use serde_json::{Value, json};
@@ -1205,12 +1205,30 @@ pub async fn status(store: &Store) -> Result<Value, sqlx::Error> {
     Ok(v)
 }
 
+/// The `start` loop's per-delivery log, factored out so its test can drive
+/// it directly with synthetic [`Outcome`]s. `otlp_failing` is accepted but
+/// not yet used by this (pre-#321-round-2) behavior: every `Failed`
+/// outcome names the host, for every transport, exactly as the inline code
+/// it replaces did.
+fn log_delivery_outcome(outcome: &Outcome, exporter: &Exporter, otlp_failing: &Cell<bool>) {
+    let _ = otlp_failing;
+    if let Outcome::Failed(category) = *outcome {
+        tracing::warn!(
+            category,
+            host = exporter.host(),
+            transport = exporter.transport(),
+            "audit export delivery failed; retrying with backoff"
+        );
+    }
+}
+
 /// The exporter loop for `serve`: only the `audit_export` lease holder
 /// delivers; a full batch goes again at once, otherwise every 2 seconds.
 pub fn start(store: Store, exporter: std::sync::Arc<Exporter>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(2));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let otlp_failing = Cell::new(false);
         loop {
             tick.tick().await;
             // The backlog gauges come from the delivering replica only.
@@ -1237,13 +1255,8 @@ pub fn start(store: Store, exporter: std::sync::Arc<Exporter>) -> tokio::task::J
                     Ok(Ok(Outcome::Delivered(n))) if i64::try_from(n).unwrap_or(0) == BATCH => {
                         continue;
                     }
-                    Ok(Ok(Outcome::Failed(category))) => {
-                        tracing::warn!(
-                            category,
-                            host = exporter.host(),
-                            transport = exporter.transport(),
-                            "audit export delivery failed; retrying with backoff"
-                        );
+                    Ok(Ok(outcome @ Outcome::Failed(_))) => {
+                        log_delivery_outcome(&outcome, &exporter, &otlp_failing);
                         break;
                     }
                     Ok(Err(error)) if crate::leases::is_fenced(&error) => break,
@@ -2198,6 +2211,198 @@ mod tests {
             (r#"{"partialSuccess":{"rejectedLogRecords":3}}"#, 3),
         ] {
             assert_eq!(rejected_records(body.as_bytes()), rejected, "{body}");
+        }
+    }
+
+    /// Captures formatted JSON log lines for one test (same shape as
+    /// `egress::tests::Captured`, duplicated locally: it's private to its
+    /// own module).
+    #[derive(Clone, Default)]
+    struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Captured {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+        type Writer = Captured;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+    impl Captured {
+        fn text(&self) -> String {
+            String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
+        }
+    }
+
+    /// #321 round 2 (LOW finding 2, adversarial review): the OTLP audit
+    /// exporter's collector is a distinct `Purpose::AuditOtlp` (not the
+    /// webhook/syslog `Purpose::Audit`) built through `https_client`, with
+    /// the same real DNS, real `reqwest::Client` path telemetry export
+    /// uses: `localhost`, refused by a strict (production-like, non-dev)
+    /// policy. Repeated refused attempts through one OTLP exporter's own
+    /// (reused) client must log the refusal only once, host-free; an
+    /// identical webhook exporter must keep naming the host on every
+    /// attempt (unaffected).
+    #[tokio::test]
+    async fn otlp_audit_refusals_are_transition_only_and_host_free_but_webhook_refusals_still_name_the_host()
+     {
+        let out = Captured::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_writer(out.clone())
+            .with_ansi(false)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        tracing::callsite::rebuild_interest_cache();
+
+        let otlp = Exporter::otlp("https://localhost/v1/logs", None, false).unwrap();
+        let webhook = Exporter::new("https://localhost/x", vec![b's'; MIN_SECRET_BYTES], false)
+            .unwrap()
+            .unwrap();
+
+        for attempt in 0..3 {
+            assert!(
+                otlp.send(Payload::Test {
+                    installation: Uuid::new_v4()
+                })
+                .await
+                .is_err(),
+                "attempt {attempt}"
+            );
+            assert!(
+                webhook
+                    .send(Payload::Test {
+                        installation: Uuid::new_v4()
+                    })
+                    .await
+                    .is_err(),
+                "attempt {attempt}"
+            );
+        }
+
+        let logged = out.text();
+        let otlp_warnings: Vec<&str> = logged
+            .lines()
+            .filter(|line| line.contains("\"purpose\":\"audit_otlp\""))
+            .collect();
+        assert_eq!(
+            otlp_warnings.len(),
+            1,
+            "3 repeated OTLP-audit refusals of the same destination must log only the one transition into refusal: {logged}"
+        );
+        for forbidden in ["localhost", "\"host\"", "\"address\""] {
+            assert!(
+                !otlp_warnings[0].contains(forbidden),
+                "OTLP audit refusal must never name the destination (found {forbidden:?}): {}",
+                otlp_warnings[0]
+            );
+        }
+
+        let webhook_warnings: Vec<&str> = logged
+            .lines()
+            .filter(|line| line.contains("\"purpose\":\"audit\""))
+            .collect();
+        assert_eq!(
+            webhook_warnings.len(),
+            3,
+            "webhook refusal logging is unchanged: every attempt logs: {logged}"
+        );
+        for line in &webhook_warnings {
+            assert!(
+                line.contains("localhost"),
+                "webhook refusal must still name the host: {line}"
+            );
+        }
+    }
+
+    /// #321 round 2 (LOW finding 2): `log_delivery_outcome`, the `start`
+    /// loop's own per-delivery log, in isolation. An OTLP destination logs
+    /// one host-free warning on the transition into failure and one on the
+    /// transition back (never on `Idle`, which just means still backing
+    /// off, not a successful attempt); a webhook destination keeps naming
+    /// the host on every failure.
+    #[test]
+    fn otlp_delivery_log_is_transition_only_and_host_free_but_webhook_delivery_log_still_names_the_host()
+     {
+        let out = Captured::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_writer(out.clone())
+            .with_ansi(false)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        tracing::callsite::rebuild_interest_cache();
+
+        let otlp = Exporter::otlp("https://collector.example.org/v1/logs", None, false).unwrap();
+        let webhook = Exporter::new(
+            "https://siem.example.org/x",
+            vec![b's'; MIN_SECRET_BYTES],
+            false,
+        )
+        .unwrap()
+        .unwrap();
+        let otlp_failing = Cell::new(false);
+        let webhook_failing = Cell::new(false);
+
+        // Idle (still backing off, nothing attempted) must never be treated
+        // as a recovery.
+        log_delivery_outcome(&Outcome::Idle, &otlp, &otlp_failing);
+        assert!(!otlp_failing.get(), "Idle must not set the failing flag");
+
+        for attempt in 0..3 {
+            log_delivery_outcome(&Outcome::Failed("connection"), &otlp, &otlp_failing);
+            log_delivery_outcome(&Outcome::Failed("connection"), &webhook, &webhook_failing);
+            assert!(otlp_failing.get(), "attempt {attempt}");
+        }
+        // Idle while already failing (still backing off) must not log a
+        // false recovery or clear the flag.
+        log_delivery_outcome(&Outcome::Idle, &otlp, &otlp_failing);
+        assert!(
+            otlp_failing.get(),
+            "Idle while backing off must not clear the failing flag"
+        );
+
+        log_delivery_outcome(&Outcome::Delivered(1), &otlp, &otlp_failing);
+        assert!(!otlp_failing.get(), "a real delivery clears the flag");
+        log_delivery_outcome(&Outcome::Delivered(1), &otlp, &otlp_failing);
+        log_delivery_outcome(&Outcome::Delivered(1), &webhook, &webhook_failing);
+
+        let logged = out.text();
+        let otlp_warnings: Vec<&str> = logged
+            .lines()
+            .filter(|line| line.contains("\"transport\":\"otlp\""))
+            .collect();
+        assert_eq!(
+            otlp_warnings.len(),
+            2,
+            "one failure transition and one recovery transition, never one per attempt or on Idle: {logged}"
+        );
+        for line in &otlp_warnings {
+            for forbidden in ["collector.example.org", "\"host\""] {
+                assert!(!line.contains(forbidden), "{forbidden} leaked: {line}");
+            }
+        }
+
+        let webhook_warnings: Vec<&str> = logged
+            .lines()
+            .filter(|line| line.contains("\"transport\":\"webhook\""))
+            .collect();
+        assert_eq!(
+            webhook_warnings.len(),
+            3,
+            "webhook delivery-failure logging is unchanged: every failed attempt logs: {logged}"
+        );
+        for line in &webhook_warnings {
+            assert!(
+                line.contains("siem.example.org"),
+                "webhook failure must still name the host: {line}"
+            );
         }
     }
 }

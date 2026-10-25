@@ -1296,4 +1296,76 @@ mod tests {
             }
         }
     }
+
+    /// #321 round 2 (LOW finding 1, adversarial review): a mixed
+    /// allowed/refused DNS answer logs its dropped addresses at DEBUG even
+    /// when the overall answer succeeds. Before this fix that DEBUG line
+    /// named the telemetry/audit-OTLP collector host and the refused
+    /// address on every attempt, bypassing the destination-free policy
+    /// `denied` already applies to a full refusal. A provider-purpose
+    /// client's identical partial drop is unaffected.
+    #[test]
+    fn telemetry_partial_drop_is_destination_free_but_provider_partial_drop_still_names_it() {
+        let out = Captured::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_writer(out.clone())
+            .with_ansi(false)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        tracing::callsite::rebuild_interest_cache();
+
+        let refused = SocketAddr::new(ip("127.0.0.1"), 4318);
+        let allowed = SocketAddr::new(ip("8.8.8.8"), 4318);
+        assert!(
+            filter_tracked(
+                &Policy::default(),
+                Purpose::Telemetry,
+                "collector.invalid",
+                vec![allowed, refused],
+                &AtomicBool::new(false)
+            )
+            .is_ok()
+        );
+        assert!(
+            filter_tracked(
+                &Policy::default(),
+                Purpose::Provider,
+                "collector.invalid",
+                vec![allowed, refused],
+                &AtomicBool::new(false)
+            )
+            .is_ok()
+        );
+
+        let logged = out.text();
+        let telemetry_drops: Vec<&str> = logged
+            .lines()
+            .filter(|line| line.contains("\"purpose\":\"telemetry\""))
+            .collect();
+        assert_eq!(
+            telemetry_drops.len(),
+            1,
+            "one partial-drop debug line: {logged}"
+        );
+        for forbidden in ["127.0.0.1", "collector.invalid", "\"host\"", "\"address\""] {
+            assert!(
+                !telemetry_drops[0].contains(forbidden),
+                "telemetry partial-drop must not name the destination (found {forbidden:?}): {}",
+                telemetry_drops[0]
+            );
+        }
+
+        let provider_drops: Vec<&str> = logged
+            .lines()
+            .filter(|line| line.contains("\"purpose\":\"provider\""))
+            .collect();
+        assert_eq!(provider_drops.len(), 1, "{logged}");
+        assert!(
+            provider_drops[0].contains("127.0.0.1")
+                && provider_drops[0].contains("collector.invalid"),
+            "provider partial-drop logging is unchanged: {}",
+            provider_drops[0]
+        );
+    }
 }
