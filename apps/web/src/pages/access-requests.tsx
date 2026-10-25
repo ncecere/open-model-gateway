@@ -39,7 +39,7 @@ function DiscoverTargets() {
     const idempotencyKey = newIdempotencyKey();
     ask({
       title: `Request to join ${t.name}?`, description: "A workspace owner or admin reviews your request. You'll see the outcome in My requests.",
-      fields: [{ name: "reason", label: "Reason", type: "text", placeholder: "Why do you need access?", validate: reasonError }],
+      fields: [{ name: "reason", label: "Reason", type: "textarea", placeholder: "Why do you need access?", validate: reasonError }],
       submitLabel: "Send request", successNotice: "Request sent.",
       run: (v, signal) => api<AccessRequest>(myAccessRequestsPath, { method: "POST", body: { workspace_id: t.id, idempotency_key: idempotencyKey, reason: v.reason || undefined }, signal }),
     });

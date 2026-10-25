@@ -90,8 +90,8 @@ describe("Request access (#83 slice A): discover and submit", () => {
       [`${myAccessRequestsPath}/req-1/withdraw`]: () => Response.json(request({ status: "withdrawn" })),
     });
     const { user } = mount(<AccessRequestsPage onTabChange={() => {}} tab="mine" />);
-    await screen.findByRole("table", { name: "My requests" });
-    expect(screen.getByText("No reason given")).toBeTruthy(); // reason is optional; never a blank/misleading cell
+    await screen.findByText("No reason given"); // reason is optional; never a blank/misleading cell
+    expect(screen.getByRole("table", { name: "My requests" })).toBeTruthy();
     const menus = await screen.findAllByRole("button", { name: /^Actions for/ });
     expect(menus).toHaveLength(1); // only the pending row offers an action
     await user.click(menus[0]);
@@ -108,7 +108,7 @@ describe("Workspace access requests queue (#83 slice A): owner/admin approval", 
   });
   it("approves a pending request and refreshes the queue", async () => {
     const fetch = serve({
-      [workspaceAccessRequestsPath(team.id)]: init => init?.method === "POST" ? Response.json(request({ status: "approved", decided_by: "me" })) : Response.json({ data: [request()] }),
+      [`${workspaceAccessRequestsPath(team.id)}*`]: init => init?.method === "POST" ? Response.json(request({ status: "approved", decided_by: "me" })) : Response.json({ data: [request()] }),
     });
     const { user } = mount(<WorkspaceAccessRequestQueue session={session} workspace={team} />);
     await screen.findByText("outsider");
@@ -123,7 +123,7 @@ describe("Workspace access requests queue (#83 slice A): owner/admin approval", 
   });
   it("shows a generic conflict message, without touching anything, when the request went stale underneath", async () => {
     serve({
-      [workspaceAccessRequestsPath(team.id)]: init => init?.method === "POST" ? Response.json({ error: { code: "409", message: "Request is no longer applicable" } }, { status: 409 }) : Response.json({ data: [request()] }),
+      [`${workspaceAccessRequestsPath(team.id)}*`]: init => init?.method === "POST" ? Response.json({ error: { code: "409", message: "Request is no longer applicable" } }, { status: 409 }) : Response.json({ data: [request()] }),
     });
     const { user } = mount(<WorkspaceAccessRequestQueue session={session} workspace={team} />);
     await screen.findByText("outsider");
@@ -139,8 +139,8 @@ describe("Workspace access requests queue (#83 slice A): owner/admin approval", 
     await screen.findByText(session.user.id);
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: `Actions for ${session.user.id}` }));
-    const approve = await screen.findByRole("menuitem", { name: "Approve…" });
-    expect(approve).toHaveAttribute("aria-disabled", "true");
+    const approve = await screen.findByRole("menuitem", { name: /^Approve…/ });
+    expect(approve.getAttribute("aria-disabled")).toBe("true");
   });
 });
 
