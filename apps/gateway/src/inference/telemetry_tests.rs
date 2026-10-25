@@ -207,6 +207,7 @@ fn principal() -> Principal {
 }
 fn request(stream: bool) -> ChatRequest {
     ChatRequest {
+        messages_options: None,
         model: "public/alias".into(),
         messages: vec![Message {
             role: Role::User,

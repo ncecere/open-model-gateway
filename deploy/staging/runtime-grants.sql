@@ -1,6 +1,12 @@
 -- Run as gateway_migrator after EVERY enterprise migration, never as runtime.
 -- Reviewed enterprise operation/column allowlist. New tables/functions fail closed.
 BEGIN;
+-- Only the connected, dedicated gateway database: PostgreSQL grants TEMP to
+-- PUBLIC by default, so revoking the runtime role's explicit grant is not enough.
+-- Run as the database/schema owner; preserve its privileges for migrations.
+DO $$ BEGIN
+ EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC, gateway_runtime', current_database());
+END $$;
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM gateway_runtime;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM gateway_runtime;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, gateway_runtime;
@@ -42,6 +48,9 @@ GRANT UPDATE(support_url,logo_url,human_key_max_lifetime_days,openrouter_data_co
  request_log_retention_days,smtp_host,smtp_port,smtp_tls,smtp_username,smtp_password_ref,
  smtp_from_address,smtp_from_name,smtp_last_test_at,smtp_last_test_ok,smtp_last_test_error,
  updated_at,updated_by) ON public.installation_settings TO gateway_runtime;
+-- Deployment configuration previews (#85) use only the SELECT grants above,
+-- config_versions SELECT below and workspace_model_allowed. No additional write
+-- or lock privileges: the primary preview transaction is READ ONLY.
 GRANT EXECUTE ON FUNCTION public.lock_installation(),public.workspace_model_allowed(uuid,uuid),
  public.valid_model_protocols(text[]),public.valid_i64_string(jsonb,boolean),
  public.valid_cache_pricing(jsonb),public.valid_billing_usage(jsonb),
@@ -129,6 +138,10 @@ GRANT UPDATE(state,actual_microusd,input_tokens,output_tokens,billing_usage,cost
 GRANT UPDATE(strategy,max_attempts,allow_ambiguous_failover,required_residency) ON public.routing_policies TO gateway_runtime;
 GRANT UPDATE(priority,weight,residency,failure_threshold,cooldown_seconds) ON public.deployment_routing TO gateway_runtime;
 GRANT UPDATE(consecutive_failures,open_until,last_observed_at) ON public.deployment_health TO gateway_runtime;
+-- #101 C (0058): reviewed, no grant changes. Existing alert_events
+-- SELECT/INSERT and resolution-only UPDATE cover the new kind; existing
+-- SELECT on reservations, ledger and budget_totals covers read-only probes.
+-- No new reservation/ledger UPDATE or DELETE authority is introduced.
 -- Alerts (0011). Rules are soft-deleted (deleted_at), never removed; scope,
 -- workspace and kind are fixed at creation. Incidents are inserted by the
 -- evaluator and only ever resolved once (resolved_at/resolution; a trigger

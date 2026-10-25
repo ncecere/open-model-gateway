@@ -80,32 +80,32 @@ const EXPECTED: &[(Access, [(u16, u16); 15])] = &[
     ),
     (
         Access::WorkspaceMetadata,
-        [U, U, U, F, A, A, F, A, A, A, A, A, F, F, C],
+        [U, U, U, F, A, A, F, A, A, A, A, A, N, N, C],
     ),
     (
         Access::WorkspaceMember,
-        [U, U, U, F, F, F, F, A, A, A, A, A, F, F, C],
+        [U, U, U, F, F, F, F, A, A, A, A, A, N, N, C],
     ),
     (
         Access::WorkspaceAdmin,
-        [U, U, U, F, F, F, F, F, F, A, A, A, F, F, C],
+        [U, U, U, F, F, F, F, F, F, A, A, A, N, N, C],
     ),
     (
         Access::WorkspaceAdminOrReader,
-        [U, U, U, F, A, A, F, F, F, A, A, A, F, F, C],
+        [U, U, U, F, A, A, F, F, F, A, A, A, N, N, C],
     ),
     (
         Access::WorkspacePlatformWrite,
-        [U, U, U, F, F, A, F, F, F, F, F, F, F, F, C],
+        [U, U, U, F, F, A, F, F, F, F, F, F, F, N, C],
     ),
     (
         Access::WorkspaceKey,
-        [U, U, U, F, F, F, F, A, N, A, A, A, F, F, C],
+        [U, U, U, F, F, F, F, A, N, A, A, A, N, N, C],
     ),
     (
         Access::WorkspaceKeyRotate,
         // Workspace admins and owners see every key: refused rotation is 403.
-        [U, U, U, F, F, F, F, A, N, F, F, A, F, F, C],
+        [U, U, U, F, F, F, F, A, N, F, F, A, N, N, C],
     ),
 ];
 fn expected(access: Access, actor: Actor, method: &str) -> StatusCode {

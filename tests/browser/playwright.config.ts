@@ -26,12 +26,14 @@ export default defineConfig({
   projects: [
     { name: "journey", testMatch: /journey\.spec\.ts/ },
     { name: "alert-email", testMatch: /alert-email\.spec\.ts/ },
+    { name: "alert-webhooks", testMatch: /alert-webhooks\.spec\.ts/, dependencies: ["journey"] },
     { name: "key-safety", testMatch: /key-safety\.spec\.ts/, dependencies: ["journey"] },
     { name: "key-expiry", testMatch: /key-expiry\.spec\.ts/, dependencies: ["journey"] },
     { name: "key-issuance", testMatch: /key-issuance\.spec\.ts/, dependencies: ["journey"] },
     { name: "budget-headroom", testMatch: /budget-headroom\.spec\.ts/, dependencies: ["journey"] },
     { name: "admin-tokens", testMatch: /admin-tokens\.spec\.ts/, dependencies: ["journey"] },
     { name: "holds", testMatch: /holds\.spec\.ts/, dependencies: ["journey"] },
+    { name: "access-refresh", testMatch: /access-refresh\.spec\.ts/ },
     { name: "accessibility", testMatch: /accessibility\.spec\.ts/, dependencies: ["journey"] },
   ],
 });

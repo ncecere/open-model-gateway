@@ -209,7 +209,7 @@ async fn key_safety_members_see_own_keys_and_personal_keys_stay_private(pool: Pg
     let personal = format!("/api/v1/workspaces/{}/key-safety", f.personal);
     assert!(row(&get(&f, &f.owner, &personal).await.1, pk).is_some());
     for u in [&f.admin, &f.auditor, &f.outsider] {
-        assert_eq!(get(&f, u, &personal).await.0, StatusCode::FORBIDDEN);
+        assert_eq!(get(&f, u, &personal).await.0, StatusCode::NOT_FOUND);
         // Non-member platform staff have no workspace key list either.
         assert_eq!(get(&f, u, &team).await.0, StatusCode::FORBIDDEN);
     }
@@ -400,7 +400,7 @@ async fn model_compare_prices_metrics_and_visibility(pool: PgPool) {
     for u in [&f.admin, &f.outsider] {
         assert_eq!(
             get(&f, u, &ws(f.personal, pair.clone())).await.0,
-            StatusCode::FORBIDDEN
+            StatusCode::NOT_FOUND
         );
     }
     assert_eq!(
